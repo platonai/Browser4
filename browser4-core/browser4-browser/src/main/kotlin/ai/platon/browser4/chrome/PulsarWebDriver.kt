@@ -973,14 +973,14 @@ open class PulsarWebDriver constructor(
     }
 
     @Throws(WebDriverException::class)
-    override suspend fun ariaSnapshot(): String {
-        return rpc.invokeDeferredSilently("ariaSnapshot") { page.ariaSnapshot() } ?: ""
+    override suspend fun ariaSnapshot(boxes: Boolean): String {
+        return rpc.invokeDeferredSilently("ariaSnapshot") { page.ariaSnapshot(boxes = boxes) } ?: ""
     }
 
     @Throws(WebDriverException::class)
-    override suspend fun ariaSnapshot(viewports: String): String {
-        val viewportIndices = ViewportSpec.parse(viewports) ?: return ariaSnapshot()
-        return rpc.invokeDeferredSilently("ariaSnapshot") { page.ariaSnapshot(viewportIndices) } ?: ""
+    override suspend fun ariaSnapshot(viewports: String, boxes: Boolean): String {
+        val viewportIndices = ViewportSpec.parse(viewports) ?: return ariaSnapshot(boxes = boxes)
+        return rpc.invokeDeferredSilently("ariaSnapshot") { page.ariaSnapshot(viewportIndices, boxes = boxes) } ?: ""
     }
 
     @Beta

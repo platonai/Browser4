@@ -50,7 +50,7 @@ class PageStateTracker(
     fun calculatePageStateHash(browserUseState: BrowserUseState): Int {
         // Combine URL, scroll state, DOM structure for fingerprint
         val urlHash = browserUseState.browserState.url.hashCode()
-        val domHash = browserUseState.domState.ariaSnapshot.hashCode()
+        val domHash = browserUseState.domState.ariaSnapshot().hashCode()
         // Quantize scroll ratio to reduce noise from tiny jitters (bucket to percentage 0..100)
         val scrollBucket = (browserUseState.browserState.scrollState.scrollYRatio * 100).toInt()
         val scrollHash = scrollBucket

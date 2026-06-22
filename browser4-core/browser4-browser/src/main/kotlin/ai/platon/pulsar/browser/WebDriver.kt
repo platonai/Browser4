@@ -1944,7 +1944,7 @@ interface WebDriver : Closeable {
 
     @Throws(WebDriverException::class)
     @MCP
-    suspend fun ariaSnapshot(): String
+    suspend fun ariaSnapshot(boxes: Boolean = false): String
 
     /**
      * Return the ARIA snapshot (accessibility tree in YAML format) for the specified viewports. @mcp
@@ -1959,11 +1959,12 @@ interface WebDriver : Closeable {
      * current viewport DimIs.
      *
      * @param viewports A viewport specification string (e.g., `"3"`, `"1,3,5"`, `"2-4"`, `"all"`).
+     * @param boxes When true, includes each element's bounding box as [box=x,y,width,height].
      * @return The ARIA snapshot YAML covering only the requested viewports.
      */
     @Throws(WebDriverException::class)
     @MCP
-    suspend fun ariaSnapshot(viewports: String): String = ariaSnapshot()
+    suspend fun ariaSnapshot(viewports: String, boxes: Boolean = false): String = ariaSnapshot(boxes = boxes)
 
     /**
      * Calculate the clickable point of an element located by [selector]. @mcp

@@ -383,7 +383,7 @@ $userProvidedInstructions
 
 - The screenshot below was captured after a browser-interaction action (e.g., click, navigate, scroll, fill, switchTab).
 - Screenshots are not captured after non-browser actions (e.g., file I/O, data extraction, system queries) to save tokens.
-- If you need visual confirmation after a non-browser action, use `tab.ariaSnapshot()` or request a screenshot explicitly.
+- If you need visual confirmation after a non-browser action, use `tab.ariaSnapshot()()` or request a screenshot explicitly.
 
 [Current page screenshot provided as base64 image]
 
@@ -535,7 +535,7 @@ $viewPortJson
 - `ref` is a unique node reference that can be used for tab tools to locate the node, e.g., click node with [ref=e123] -> tab.click('e123')
 
 ```yaml
-${nanoTree.ariaSnapshot}
+${nanoTree.ariaSnapshot()}
 ```
 
 ---
@@ -736,7 +736,7 @@ $viewPortInfo
 Focused on nodes in viewport ${processingViewport}.
 
 ```yaml
-${nanoTree.ariaSnapshot}
+${nanoTree.ariaSnapshot()}
 ```
 
 ---

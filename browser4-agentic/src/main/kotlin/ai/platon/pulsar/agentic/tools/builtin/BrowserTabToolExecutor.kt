@@ -646,9 +646,10 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
             }
 
             "ariaSnapshot" -> {
-                validateArgs(args, allowed("viewports"), emptySet(), functionName)
+                validateArgs(args, allowed("viewports", "boxes"), emptySet(), functionName)
                 val viewports = paramString(args, "viewports", functionName, required = false)
-                if (viewports.isNullOrBlank()) driver.ariaSnapshot() else driver.ariaSnapshot(viewports)
+                val boxes = paramBool(args, "boxes", functionName, required = false, default = false) ?: false
+                if (viewports.isNullOrBlank()) driver.ariaSnapshot(boxes = boxes) else driver.ariaSnapshot(viewports, boxes = boxes)
             }
 
             "title" -> {

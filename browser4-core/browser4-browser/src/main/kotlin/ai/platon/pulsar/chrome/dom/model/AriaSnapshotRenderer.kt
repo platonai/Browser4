@@ -1,16 +1,17 @@
 package ai.platon.pulsar.chrome.dom.model
 
+import ai.platon.pulsar.chrome.dom.model.DOMRect
 import ai.platon.pulsar.chrome.dom.model.MergedDOMTreeNode
 import ai.platon.pulsar.chrome.dom.model.NodeType
 import ai.platon.pulsar.chrome.dom.model.OptimizedDOMTreeNode
 import java.util.*
 
 object AriaSnapshotRenderer {
-    fun render(root: OptimizedDOMTreeNode): String {
-        return AriaSnapshotFormatting.render(toRenderChildren(root))
+    fun render(root: OptimizedDOMTreeNode, boxes: Boolean = false): String {
+        return AriaSnapshotFormatting.render(toRenderChildren(root, boxes))
     }
 
-    private fun toRenderChildren(node: OptimizedDOMTreeNode): List<AriaSnapshotFormatting.RenderChild> {
+    private fun toRenderChildren(node: OptimizedDOMTreeNode, boxes: Boolean): List<AriaSnapshotFormatting.RenderChild> {
         val original = node.originalNode
         if (shouldIgnoreNode(original)) {
             return emptyList()
@@ -24,12 +25,13 @@ object AriaSnapshotRenderer {
 
         val accessibleName = accessibleName(node)
         val children = node.children
-            .flatMap { child -> toRenderChildren(child) }
+            .flatMap { child -> toRenderChildren(child, boxes) }
             .let { AriaSnapshotFormatting.normalizeChildren(it, accessibleName) }
 
         val role = role(node) ?: return children
         val props = renderProps(node, role, accessibleName)
         val ref = original.backendNodeId.takeIf { it != null && it > 0 }?.let { "e$it" }
+        val box = if (boxes) formatBox(original.snapshotNode?.bounds) else null
 
         if (children.isEmpty() && props.isEmpty() && ref == null && accessibleName.isNullOrEmpty()) {
             return emptyList()
@@ -52,11 +54,18 @@ object AriaSnapshotRenderer {
                     selected = AriaSnapshotFormatting.booleanAttribute(rawState(node, "selected", "aria-selected")),
                     ref = ref,
                     cursorPointer = hasCursorPointer(node),
+                    box = box,
                     props = props,
                     children = children
                 )
             )
         )
+    }
+
+    private fun formatBox(bounds: DOMRect?): String? {
+        if (bounds == null) return null
+        val r = bounds.roundTo(1)
+        return "${r.x},${r.y},${r.width},${r.height}"
     }
 
     private fun renderProps(

@@ -543,8 +543,8 @@ data class NanoDOMTreeNode(
     @JsonIgnore
     val serializableTreeNode: SerializableDOMTree? = null,
 ) {
-    @get:JsonIgnore
-    val ariaSnapshot: String by lazy { NanoAriaSnapshotRenderer.render(this) }
+    @JsonIgnore
+    fun ariaSnapshot(boxes: Boolean = false): String = NanoAriaSnapshotRenderer.render(this, boxes)
 
     @get:JsonIgnore
     val ref: Int get() = FBNLocator.parseRelaxed(locator)?.backendNodeId ?: 0
@@ -561,9 +561,9 @@ data class DOMState constructor(
     @get:JsonIgnore
     val optimizedDOMTree: OptimizedDOMTree? = null
 ) {
-    @get:JsonIgnore
-    val ariaSnapshot: String get() = optimizedDOMTree?.let(AriaSnapshotRenderer::render)
-        ?: serializableTree.toNanoTreeUnfiltered().ariaSnapshot
+    @JsonIgnore
+    fun ariaSnapshot(boxes: Boolean = false): String = optimizedDOMTree?.let { AriaSnapshotRenderer.render(it, boxes) }
+        ?: serializableTree.toNanoTreeUnfiltered().ariaSnapshot(boxes)
 
     fun getAbsoluteFBNLocator(locator: String?): FBNLocator? {
         if (locator == null) {

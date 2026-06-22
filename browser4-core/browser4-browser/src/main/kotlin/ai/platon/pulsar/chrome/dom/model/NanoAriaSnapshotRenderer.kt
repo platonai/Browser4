@@ -1,14 +1,15 @@
 package ai.platon.pulsar.chrome.dom.model
 
+import ai.platon.pulsar.chrome.dom.model.CompactRect
 import ai.platon.pulsar.chrome.dom.model.NanoDOMTreeNode
 import java.util.*
 
 object NanoAriaSnapshotRenderer {
-    fun render(root: NanoDOMTreeNode): String {
-        return AriaSnapshotFormatting.render(toRenderChildren(root))
+    fun render(root: NanoDOMTreeNode, boxes: Boolean = false): String {
+        return AriaSnapshotFormatting.render(toRenderChildren(root, boxes))
     }
 
-    private fun toRenderChildren(node: NanoDOMTreeNode): List<AriaSnapshotFormatting.RenderChild> {
+    private fun toRenderChildren(node: NanoDOMTreeNode, boxes: Boolean): List<AriaSnapshotFormatting.RenderChild> {
         if (node.invisible == true) {
             return emptyList()
         }
@@ -20,11 +21,12 @@ object NanoAriaSnapshotRenderer {
         }
 
         val children = node.children.orEmpty()
-            .flatMap { child -> toRenderChildren(child) }
+            .flatMap { child -> toRenderChildren(child, boxes) }
             .let { AriaSnapshotFormatting.normalizeChildren(it, accessibleName(node)) }
 
         val role = role(node) ?: return children
         val props = renderProps(node, role)
+        val box = if (boxes) formatBox(node.bounds) else null
 
         if (children.isEmpty() && props.isEmpty() && node.ref <= 0 && accessibleName(node).isNullOrEmpty()) {
             return emptyList()
@@ -53,11 +55,18 @@ object NanoAriaSnapshotRenderer {
                     ),
                     ref = node.ref.takeIf { it > 0 }?.let { "e$it" },
                     cursorPointer = node.interactive == true,
+                    box = box,
                     props = props,
                     children = children
                 )
             )
         )
+    }
+
+    private fun formatBox(bounds: CompactRect?): String? {
+        if (bounds == null) return null
+        val r = bounds.round() ?: return null
+        return "${r.x ?: 0},${r.y ?: 0},${r.width ?: 0},${r.height ?: 0}"
     }
 
     private fun renderProps(node: NanoDOMTreeNode, role: String): LinkedHashMap<String, String> {
