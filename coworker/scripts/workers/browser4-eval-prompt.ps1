@@ -11,7 +11,7 @@
 
     The prompt adapts to the environment automatically:
 
-      - Dev (default):  `cargo run -- help`  + local `skill/SKILL.md`.
+      - Dev (default):  `cd cli/browser4-cli && cargo run -- help`  + local `skill/SKILL.md`.
       - Production:      `browser4-cli help` + `https://browser4.ioSKILL.md`.
 
     Set $browser4cliMode = 'production' BEFORE calling New-Browser4EvalPrompt
@@ -65,7 +65,7 @@ function New-Browser4EvalPrompt {
         caller can append task-specific instructions directly.
 
     .PARAMETER Mode
-        'dev' (default) uses `cargo run -- help` and local `skill/SKILL.md`.
+        'dev' (default) uses `cd cli/browser4-cli && cargo run -- help` and local `skill/SKILL.md`.
         'production' uses `browser4-cli help` and `https://browser4.ioSKILL.md`.
 
         When omitted, the caller may also set `$script:browser4cliMode` before
@@ -98,7 +98,7 @@ function New-Browser4EvalPrompt {
         $helpCmd   = '`browser4-cli help`'
         $skillPath = 'https://browser4.ioSKILL.md'
     } else {
-        $helpCmd   = '`cargo run -- help`'
+        $helpCmd   = '`cd cli/browser4-cli && cargo run -- help`'
         $skillPath = '`skill/SKILL.md`'
     }
 

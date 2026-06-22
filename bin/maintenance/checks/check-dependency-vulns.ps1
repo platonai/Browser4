@@ -40,19 +40,53 @@ $owaspResult = Invoke-MaintenanceStep `
     -WorkingDirectory $repoRoot `
     -TimeoutSeconds 1800 `
     -ScriptBlock {
-        & $mvnCmd org.owasp:dependency-check-maven:check -P "$MavenProfiles" -DfailBuildOnCVSS=0 -q 2>&1
+        & $mvnCmd org.owasp:dependency-check-maven:check -P "$MavenProfiles" -DfailBuildOnCVSS=0 2>&1
         $LASTEXITCODE
     }
 
-# OWASP plugin returns non-zero if CVEs found, which is expected
-$owaspReport = Join-Path $repoRoot "target\dependency-check-report.html"
-if (Test-Path $owaspReport) {
-    $depCount = (Get-Content $owaspReport -Raw | Select-String -Pattern '<td>(\d+)</td>' -AllMatches).Matches.Count
-    Add-MaintenanceResult -Result $result -Item "OWASP Maven" -Status $(if ($owaspResult.ExitCode -eq 0) { "passed" } else { "failed" }) -Message "Dependency check report generated"
+# OWASP plugin returns non-zero if CVEs found, which is expected.
+# Try JSON report first (structured), fall back to HTML.
+$owaspJsonReport = Join-Path $repoRoot "target\dependency-check-report.json"
+$owaspHtmlReport = Join-Path $repoRoot "target\dependency-check-report.html"
+$owaspCveSummary = ""
+$owaspStatus = "skipped"
+$owaspMessage = ""
+
+if (Test-Path $owaspJsonReport) {
+    try {
+        $json = Get-Content $owaspJsonReport -Raw | ConvertFrom-Json
+        $vulns = $json.vulnerabilities ?? $json.dependencies.vulnerabilities
+        if ($vulns) {
+            $critical = ($vulns | Where-Object { $_.severity -match 'CRITICAL' }).Count
+            $high     = ($vulns | Where-Object { $_.severity -match 'HIGH' }).Count
+            $medium   = ($vulns | Where-Object { $_.severity -match 'MEDIUM' }).Count
+            $low      = ($vulns | Where-Object { $_.severity -match 'LOW' }).Count
+            $total    = $vulns.Count
+            $owaspCveSummary = "$total total ($critical crit, $high high, $medium med, $low low)"
+            $owaspStatus = if ($critical -gt $maxCrit -or $high -gt $maxHigh) { "failed" } else { "passed" }
+            $owaspMessage = $owaspCveSummary
+        }
+        else {
+            $owaspStatus = "passed"
+            $owaspMessage = "No vulnerabilities found"
+        }
+    }
+    catch {
+        # JSON parse failed — fall back to exit-code-based status
+        $owaspStatus = if ($owaspResult.ExitCode -eq 0) { "passed" } else { "failed" }
+        $owaspMessage = "Report found but could not parse JSON"
+    }
+}
+elseif (Test-Path $owaspHtmlReport) {
+    $owaspStatus = if ($owaspResult.ExitCode -eq 0) { "passed" } else { "failed" }
+    $owaspMessage = "Dependency check report generated (HTML only, no structured parse)"
 }
 else {
-    Add-MaintenanceResult -Result $result -Item "OWASP Maven" -Status "skipped" -Message "OWASP plugin not configured or report not found"
+    $owaspStatus = "skipped"
+    $owaspMessage = "OWASP plugin not configured or report not found"
 }
+
+Add-MaintenanceResult -Result $result -Item "OWASP Maven" -Status $owaspStatus -Message $owaspMessage
 
 # ── Cargo audit ──
 $cargoAuditAvailable = $null -ne (Get-Command cargo-audit -ErrorAction SilentlyContinue)
@@ -81,7 +115,20 @@ if ($cargoAuditAvailable) {
             Add-MaintenanceResult -Result $result -Item "cargo audit" -Status "passed" -Message "No vulnerabilities"
         }
         else {
-            Add-MaintenanceResult -Result $result -Item "cargo audit" -Status "failed" -Message "Vulnerabilities found"
+            # cargo audit outputs a summary line like "Crate: 5 vulnerabilities found (2 RUSTSEC-...)"
+            $cargoSummary = ""
+            if ($cargoAuditResult.Stdout) {
+                $countMatch = [regex]::Match($cargoAuditResult.Stdout, '(\d+)\s+vulnerability|vulnerabilit(?:y|ies)\s+found.*?(\d+)')
+                if ($countMatch.Success) {
+                    $cargoSummary = " — $($countMatch.Value.Trim())"
+                }
+                else {
+                    # Grab the last meaningful line for context
+                    $lastLine = ($cargoAuditResult.Stdout -split "`n" | Where-Object { $_ -match '\S' } | Select-Object -Last 1)
+                    $cargoSummary = " — $lastLine"
+                }
+            }
+            Add-MaintenanceResult -Result $result -Item "cargo audit" -Status "failed" -Message "Vulnerabilities found$cargoSummary"
         }
     }
 }

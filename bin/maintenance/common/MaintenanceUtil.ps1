@@ -273,7 +273,10 @@ function Invoke-MaintenanceStep {
             Write-MaintenanceLog -Level "INFO" -Component $StepName -Message "Completed successfully"
         }
         else {
-            Write-MaintenanceLog -Level "ERROR" -Component $StepName -Message "Failed with exit code $exitCode"
+            $outputSummary = if ($stdout) {
+                ($stdout -split "`n" | Where-Object { $_ -match '\S' } | Select-Object -Last 3) -join " | "
+            } else { "(no output)" }
+            Write-MaintenanceLog -Level "ERROR" -Component $StepName -Message "Failed with exit code $exitCode — $outputSummary"
         }
     }
     catch {

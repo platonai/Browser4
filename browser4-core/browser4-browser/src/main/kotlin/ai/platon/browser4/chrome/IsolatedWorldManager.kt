@@ -70,6 +70,9 @@ class IsolatedWorldManager constructor(
         var lastError: Exception? = null
         repeat(DEFAULT_CREATE_WORLD_RETRIES) { attempt ->
             try {
+                // createIsolatedWorld delegates to a Java API that returns java.lang.Integer;
+                // a null return (e.g. when the frame does not exist) triggers a NullPointerException
+                // during Kotlin's auto-unboxing to Int. Catch it and treat it as a failed attempt.
                 val executionContextId = browserProtocol.createIsolatedWorld(
                     frameId = resolvedFrameId ?: "main",
                     worldName = RUNTIME_WORLD_NAME,

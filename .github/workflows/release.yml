@@ -302,7 +302,7 @@ jobs:
       - name: Update Version
         shell: bash
         run: |
-          bin/release/update-versions.sh
+          node bin/version.mjs release
 
       - name: Maven Build
         id: maven-build
@@ -748,7 +748,7 @@ jobs:
 
       - name: Sync CLI version metadata
         shell: bash
-        run: node cli/scripts/sync-version.js
+        run: node bin/version.mjs cli sync
 
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9  # v1
@@ -939,7 +939,7 @@ jobs:
 
       - name: Sync CLI version metadata
         shell: bash
-        run: node cli/scripts/sync-version.js
+        run: node bin/version.mjs cli sync
 
       - name: Re-check npm version before publish
         id: cli_publish_check

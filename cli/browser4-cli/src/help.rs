@@ -32,6 +32,7 @@ const CATEGORIES: &[(&str, &str)] = &[
     ("devtools", "DevTools"),
     ("agent", "Agent"),
     ("snapshot", "Snapshot"),
+    ("agent", "Agent"),
     ("swarm", "Swarm"),
     ("install", "Install"),
     ("config", "Configuration"),

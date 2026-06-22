@@ -62,6 +62,83 @@ if ($version -notmatch "^\d+\.\d+\.\d+(?:-rc\.\d+)?$") {
     exit 1
 }
 
+# ═══════════════════════════════════════════════════════════════════
+# Version guard: verify current version is exactly the next patch
+# after the last GitHub release. If not, ask for confirmation.
+# ═══════════════════════════════════════════════════════════════════
+
+function Get-SemverBase {
+    param([string]$V)
+    # Strip leading 'v' and trailing -rc.N / -SNAPSHOT suffix
+    $v = $V -replace '^v', ''
+    $v = $v -replace '-(rc\.\d+|SNAPSHOT)$', ''
+    return $v
+}
+
+function Get-LastReleaseTag {
+    # Try GitHub Releases first
+    try {
+        $tag = gh release list --limit 1 --json tagName --jq '.[0].tagName' 2>$null
+        if ($tag) { return $tag.Trim() }
+    } catch { }
+
+    # Fallback: git tags sorted by version (only stable semver tags)
+    try {
+        $tag = git tag --list 'v*' --sort=-v:refname 2>$null |
+            Where-Object { $_ -match '^v\d+\.\d+\.\d+$' } |
+            Select-Object -First 1
+        if ($tag) { return $tag.Trim() }
+    } catch { }
+
+    # Last resort: git describe
+    try {
+        $tag = git describe --tags --abbrev=0 2>$null
+        if ($tag) { return $tag.Trim() }
+    } catch { }
+
+    return $null
+}
+
+$lastReleaseTag = Get-LastReleaseTag
+
+if ($lastReleaseTag) {
+    $lastBase = Get-SemverBase $lastReleaseTag
+    $currentBase = Get-SemverBase $version
+
+    Write-Host "`nLast GitHub release: $lastReleaseTag"
+    Write-Host "Current version:     v$version"
+
+    if ($lastBase -match '^(\d+)\.(\d+)\.(\d+)') {
+        $expectedNext = "$($matches[1]).$($matches[2]).$([int]$matches[3] + 1)"
+
+        if ($currentBase -ne $expectedNext) {
+            Write-Host ""
+            Write-Warning "Version mismatch: current version is not the next patch after the last release"
+            Write-Host "  Last release:         $lastReleaseTag  (base: $lastBase)"
+            Write-Host "  Expected next patch:  v$expectedNext"
+            Write-Host "  Current version:      v$version  (base: $currentBase)"
+            Write-Host ""
+            $confirm = Read-Host "Continue anyway? (y/n)"
+            if ($confirm -ne 'y') {
+                Write-Host "Cancelled"
+                exit 0
+            }
+            Write-Host "Proceeding despite version mismatch..."
+        } else {
+            Write-Host "[OK] v$version is exactly the next patch after $lastReleaseTag"
+        }
+    } else {
+        Write-Warning "Could not parse last release version: $lastReleaseTag"
+        $confirm = Read-Host "Continue anyway? (y/n)"
+        if ($confirm -ne 'y') {
+            Write-Host "Cancelled"
+            exit 0
+        }
+    }
+} else {
+    Write-Host "`nNo previous GitHub release found (first release?). Proceeding..."
+}
+
 $newTag = "v$version"
 
 # Check if tag already exists

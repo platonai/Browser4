@@ -1,9 +1,8 @@
 package ai.platon.browser4.chrome
 
 import ai.platon.browser4.chrome.handler.RemoteChromeProtocol
-import ai.platon.pulsar.browser.ChromeOptions
-import ai.platon.pulsar.browser.LauncherOptions
-import ai.platon.pulsar.browser.protocol.BrowserProtocol
+import ai.platon.browser4.chrome.util.LauncherOptions
+import ai.platon.pulsar.browser.impl.BrowserProtocol
 import ai.platon.pulsar.common.browser.BrowserFiles
 import ai.platon.pulsar.common.serialize.json.Pson
 import ai.platon.pulsar.common.sleepSeconds

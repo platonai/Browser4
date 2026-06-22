@@ -2542,7 +2542,8 @@ async fn verify_element_text(
             return el \
                 ? (el.value !== undefined ? (el.value || '') : (el.textContent || '')) \
                 : ''; \
-        })()".to_string()
+        })()"
+            .to_string()
     };
 
     let mut params = json!({
@@ -2596,25 +2597,31 @@ async fn handle_text_input_command(
         .get("text")
         .and_then(|v| v.as_str())
         .unwrap_or("");
-    let element_ref = tool_params
-        .get("ref")
-        .and_then(|v| v.as_str());
+    let element_ref = tool_params.get("ref").and_then(|v| v.as_str());
+
+    // Warn when `type` (browser_press_sequentially) is used without a ref —
+    // text may go nowhere if no element is currently focused on the page.
+    if tool_name == "browser_press_sequentially"
+        && element_ref.is_none()
+        && !expected_text.is_empty()
+    {
+        eprintln!(
+            "Warning: No element ref specified for 'type' command. \
+             Text will be typed into whatever element currently has focus. \
+             If nothing is focused, the text will go nowhere. \
+             Use 'type <text> <ref>' or 'type <text> --ref=<css-selector>' for reliable targeting."
+        );
+    }
 
     // Step 1: Call the text input tool.
-    let tool_result = with_session(
-        client,
-        base_url,
-        session_name,
-        false,
-        |session_id| {
-            let client = client.clone();
-            let base_url = base_url.to_string();
-            let tool_name = tool_name.to_string();
-            let mut params = tool_params.clone();
-            params["sessionId"] = json!(session_id);
-            async move { call_tool(&client, &base_url, &tool_name, params).await }
-        },
-    )
+    let tool_result = with_session(client, base_url, session_name, false, |session_id| {
+        let client = client.clone();
+        let base_url = base_url.to_string();
+        let tool_name = tool_name.to_string();
+        let mut params = tool_params.clone();
+        params["sessionId"] = json!(session_id);
+        async move { call_tool(&client, &base_url, &tool_name, params).await }
+    })
     .await;
 
     match tool_result {
@@ -2628,24 +2635,15 @@ async fn handle_text_input_command(
             if verify {
                 let state = require_session(session_name)?;
                 let session_id = get_session_id(&state)?.to_string();
-                match verify_element_text(
-                    client,
-                    base_url,
-                    &session_id,
-                    element_ref,
-                    expected_text,
-                )
-                .await
+                match verify_element_text(client, base_url, &session_id, element_ref, expected_text)
+                    .await
                 {
                     Ok(report) => {
                         cli_println!("{}", report);
                         json_field("verification", json!(&report));
                     }
                     Err(verify_err) => {
-                        cli_println!(
-                            "Verification could not be completed: {}",
-                            verify_err
-                        );
+                        cli_println!("Verification could not be completed: {}", verify_err);
                         json_field("verification_error", json!(&verify_err));
                     }
                 }
@@ -2702,29 +2700,21 @@ async fn handle_press_command(
         .get("key")
         .and_then(|v| v.as_str())
         .unwrap_or("");
-    let element_ref = tool_params
-        .get("ref")
-        .and_then(|v| v.as_str());
+    let element_ref = tool_params.get("ref").and_then(|v| v.as_str());
 
     // Build the expected check for printable single-character keys.
-    let is_printable = key_pressed.chars().count() == 1
-        && !key_pressed.chars().all(|c| c.is_control());
+    let is_printable =
+        key_pressed.chars().count() == 1 && !key_pressed.chars().all(|c| c.is_control());
 
     // Step 1: Call the press tool.
-    let tool_result = with_session(
-        client,
-        base_url,
-        session_name,
-        false,
-        |session_id| {
-            let client = client.clone();
-            let base_url = base_url.to_string();
-            let tool_name = tool_name.to_string();
-            let mut params = tool_params.clone();
-            params["sessionId"] = json!(session_id);
-            async move { call_tool(&client, &base_url, &tool_name, params).await }
-        },
-    )
+    let tool_result = with_session(client, base_url, session_name, false, |session_id| {
+        let client = client.clone();
+        let base_url = base_url.to_string();
+        let tool_name = tool_name.to_string();
+        let mut params = tool_params.clone();
+        params["sessionId"] = json!(session_id);
+        async move { call_tool(&client, &base_url, &tool_name, params).await }
+    })
     .await;
 
     match tool_result {
@@ -2751,10 +2741,7 @@ async fn handle_press_command(
                         json_field("verification", json!(&report));
                     }
                     Err(verify_err) => {
-                        cli_println!(
-                            "Verification could not be completed: {}",
-                            verify_err
-                        );
+                        cli_println!("Verification could not be completed: {}", verify_err);
                         json_field("verification_error", json!(&verify_err));
                     }
                 }
@@ -2808,7 +2795,8 @@ async fn verify_press_result(
             return el \
                 ? (el.value !== undefined ? (el.value || '') : (el.textContent || '')) \
                 : ''; \
-        })()".to_string()
+        })()"
+            .to_string()
     };
 
     let mut params = json!({
@@ -2858,24 +2846,16 @@ async fn handle_select_command(
         .get("val")
         .and_then(|v| v.as_str())
         .unwrap_or("");
-    let element_ref = tool_params
-        .get("ref")
-        .and_then(|v| v.as_str());
+    let element_ref = tool_params.get("ref").and_then(|v| v.as_str());
 
-    let tool_result = with_session(
-        client,
-        base_url,
-        session_name,
-        false,
-        |session_id| {
-            let client = client.clone();
-            let base_url = base_url.to_string();
-            let tool_name = tool_name.to_string();
-            let mut params = tool_params.clone();
-            params["sessionId"] = json!(session_id);
-            async move { call_tool(&client, &base_url, &tool_name, params).await }
-        },
-    )
+    let tool_result = with_session(client, base_url, session_name, false, |session_id| {
+        let client = client.clone();
+        let base_url = base_url.to_string();
+        let tool_name = tool_name.to_string();
+        let mut params = tool_params.clone();
+        params["sessionId"] = json!(session_id);
+        async move { call_tool(&client, &base_url, &tool_name, params).await }
+    })
     .await;
 
     match tool_result {
@@ -2901,10 +2881,7 @@ async fn handle_select_command(
                         json_field("verification", json!(&report));
                     }
                     Err(verify_err) => {
-                        cli_println!(
-                            "Verification could not be completed: {}",
-                            verify_err
-                        );
+                        cli_println!("Verification could not be completed: {}", verify_err);
                         json_field("verification_error", json!(&verify_err));
                     }
                 }
@@ -5443,7 +5420,55 @@ async fn run(
             )
             .await?;
         }
-        "type" | "fill" => {
+        "type" => {
+            // --focus flag: click the target element first so it is in an
+            // interactive state before typing (needed for elements that
+            // require a real click, not just programmatic focus).
+            let focus = parsed
+                .get("focus")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let has_ref = tool_params
+                .get("ref")
+                .and_then(|v| v.as_str())
+                .map(|s| !s.is_empty())
+                .unwrap_or(false);
+
+            if focus {
+                if !has_ref {
+                    return Err(CliError(
+                        ExitCode::Usage,
+                        "--focus requires a target ref. Provide a CSS selector, element reference (e5), or --ref=X.".to_string(),
+                    ));
+                }
+                let ref_val = tool_params.get("ref").cloned().unwrap();
+                let click_params = json!({ "ref": ref_val });
+                handle_tool_command(
+                    &client,
+                    &base_url,
+                    "browser_click",
+                    &click_params,
+                    false,
+                    global.session_name.as_deref(),
+                )
+                .await?;
+            }
+
+            let verify = parsed
+                .get("verify")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            handle_text_input_command(
+                &client,
+                &base_url,
+                &tool_name,
+                &tool_params,
+                global.session_name.as_deref(),
+                verify,
+            )
+            .await?;
+        }
+        "fill" => {
             let verify = parsed
                 .get("verify")
                 .and_then(|v| v.as_bool())

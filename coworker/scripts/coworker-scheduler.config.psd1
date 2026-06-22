@@ -34,7 +34,7 @@
         @{
             Name            = 'commit-github-issues'
             Description     = 'Scan for pending GitHub issue files and create them via gh CLI.'
-            Enabled         = $true
+            Enabled         = $false
             IntervalSeconds = 15
             WindowStyle     = 'Minimized'
             PendingPaths    = @('coworker\tasks\200issues\github\commit\ready')

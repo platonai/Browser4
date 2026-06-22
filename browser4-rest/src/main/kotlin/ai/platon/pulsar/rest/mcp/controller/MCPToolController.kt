@@ -17,6 +17,7 @@ import com.fasterxml.jackson.annotation.JsonInclude
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.fasterxml.jackson.annotation.JsonSetter
 import com.fasterxml.jackson.annotation.Nulls
+import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import jakarta.servlet.http.HttpServletResponse
 import org.slf4j.LoggerFactory
@@ -82,6 +83,7 @@ class MCPToolController(
     private val sessionManager: PulsarSessionManager,
     private val commandExecutor: UserCommandExecutor,
     private val scrapeService: ScrapeService? = null,
+    private val objectMapper: ObjectMapper,
 ) {
     companion object {
         private val FRONTEND_TOOL_NAME_ALIASES: Map<String, String> = mapOf(
@@ -798,7 +800,7 @@ class MCPToolController(
 
         return try {
             val response = scrapeService.executeQuery(ScrapeRequest(processedSql))
-            val json = jacksonObjectMapper().writeValueAsString(response)
+            val json = objectMapper.writeValueAsString(response)
             ResponseEntity.ok(textResponse(json))
         } catch (e: Exception) {
             logger.error("dom_snapshot_query failed | {}", e.message, e)
