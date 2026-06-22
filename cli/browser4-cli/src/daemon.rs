@@ -814,7 +814,7 @@ pub async fn ensure_server_running(base_url: &str) -> Result<(), String> {
 
     let port = extract_port(base_url);
     if !is_local_port_open(base_url) {
-        eprintln!("Browser4 server not running. Starting...");
+        print_server_starting_message();
         let launch_spec = resolve_server_launch_spec(port).await?;
         eprintln!("{}", launch_spec.description);
         return start_server(&launch_spec, base_url, port).await;
@@ -863,7 +863,7 @@ pub async fn ensure_server_running(base_url: &str) -> Result<(), String> {
         }
     }
 
-    eprintln!("Browser4 server not running. Starting...");
+    print_server_starting_message();
 
     let launch_spec = resolve_server_launch_spec(port).await?;
     eprintln!("{}", launch_spec.description);
@@ -877,6 +877,11 @@ fn extract_port(base_url: &str) -> u16 {
     } else {
         8182
     }
+}
+
+fn print_server_starting_message() {
+    eprintln!("Starting Java backend (first launch may take 30-60s)...");
+    eprintln!("Giving the server up to 2 minutes to start.");
 }
 
 fn is_local_port_open(base_url: &str) -> bool {
@@ -3108,6 +3113,11 @@ fn build_jar_launch_spec(runtime: &InstalledBrowser4Runtime, port: u16) -> Serve
         jvm_opts.push(format!("-Dchrome.path={}", path_str));
     }
 
+    // Limit JIT compilation to C1 (client) tier for faster startup.
+    // Placed before BROWSER4_SERVER_OPTS so users can override with
+    // -XX:TieredStopAtLevel=4 in the env var for peak throughput.
+    jvm_opts.push("-XX:TieredStopAtLevel=1".to_string());
+
     if let Ok(raw) = std::env::var(BROWSER4_SERVER_OPTS_ENV) {
         for token in raw
             .split_whitespace()
@@ -3578,6 +3588,7 @@ async fn start_server(
     base_url: &str,
     port: u16,
 ) -> Result<(), String> {
+    let server_start = Instant::now();
     let startup_log = create_server_startup_log(launch_spec, port).map_err(|error| {
         eprintln!("Failed to initialize Browser4 startup log: {error}");
         error
@@ -3683,7 +3694,8 @@ async fn start_server(
         format!("Browser4 reported ready at {base_url}; managed pid {managed_pid}"),
     );
     eprintln!(
-        "Server is up and running. Startup log: {}",
+        "Server is up and running in {:.1}s. Startup log: {}",
+        server_start.elapsed().as_secs_f64(),
         startup_log.path.display()
     );
     Ok(())
@@ -4022,11 +4034,13 @@ async fn wait_for_server_ready(
         };
 
         if last_progress_log_at.elapsed() >= Duration::from_secs(10) {
+            let elapsed = start.elapsed().as_secs();
+            let remaining = timeout.as_secs().saturating_sub(elapsed);
             eprintln!(
-                "Waiting for Browser4 server at {} ({}s/{}s): {}",
+                "Waiting for Browser4 server at {} ({}s elapsed, ~{}s remaining): {}",
                 base_url,
-                start.elapsed().as_secs(),
-                timeout.as_secs(),
+                elapsed,
+                remaining,
                 progress_status
             );
             last_progress_log_at = Instant::now();
@@ -4052,10 +4066,10 @@ fn format_server_wait_progress(state: &ServerState) -> String {
     match state {
         ServerState::Ready => "ready".to_string(),
         ServerState::Starting(status) => match truncate_status_for_log(status) {
-            message if message.is_empty() => "still starting".to_string(),
-            message => format!("still starting ({message})"),
+            message if message.is_empty() => "JVM is starting, waiting for Spring Boot...".to_string(),
+            message => format!("Spring Boot is UP, waiting for MCP tools ({message})"),
         },
-        ServerState::Unreachable(_) => "not reachable yet".to_string(),
+        ServerState::Unreachable(_) => "TCP port not open yet, JVM may still be loading...".to_string(),
     }
 }
 
@@ -4099,6 +4113,7 @@ fn format_server_startup_failure_message(
     } else {
         suggestions.push("confirm Java/Browser4 dependencies are available, then retry.");
     }
+    suggestions.push("common causes: insufficient JVM heap memory, missing native dependencies, port conflicts, or corrupt Browser4 runtime installation.");
 
     message.push(String::new());
     message.push("💡 What to try".to_string());
