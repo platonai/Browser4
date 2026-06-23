@@ -18,6 +18,7 @@ Installs browser4-cli globally using npm (Requires Node.js):
 
 ```shell
 npm install -g browser4-cli
+browser4-cli install
 ```
 
 Bootstrap the native binary directly with a single command:
@@ -25,49 +26,16 @@ Bootstrap the native binary directly with a single command:
 **Windows (PowerShell):**
 ```powershell
 irm https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.ps1 | iex
+browser4-cli install
 ```
 
 **Linux / macOS (bash):**
 ```bash
 curl -fsSL https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.sh | bash
-```
-
-Optional backend runtime install: `browser4-cli install`
-
-## Quick start
-
-```bash
-# install the self-contained Browser4 backend runtime (Browser4.jar + bundled JRE)
 browser4-cli install
-# open new browser
-browser4-cli open
-# navigate to a page with the current active session
-browser4-cli goto https://browser4.io
-# take a snapshot
-browser4-cli snapshot
-# interact with the page using refs from the snapshot
-browser4-cli click e15
-browser4-cli type "page.click"
-browser4-cli press Enter
-# take a screenshot
-browser4-cli screenshot
-# close the browser
-browser4-cli close
 ```
-
-`browser4-cli open` reuses the saved session for the current slot only when the backend still reports it
-as active. If the saved session is stale or missing, `open` refreshes it by creating a new session.
-
-`browser4-cli goto` first tries to reuse the current active session. If no active session is available,
-or the saved session is no longer active, it automatically starts or refreshes the session before
-navigating.
-
-When `browser4-cli install` has been run, `browser4-cli open` uses the bundled `jlink` JRE and
-installed `Browser4.jar` from the CLI state directory instead of requiring a separately installed Java runtime.
 
 ## Commands
-
-The sections below cover the standard browser workflow commands that are surfaced in the global `browser4-cli help` overview.
 
 ### Core
 
