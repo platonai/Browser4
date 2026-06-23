@@ -4152,6 +4152,11 @@ fn should_ensure_server_running(command: &str) -> bool {
 fn rewrite_prefixed_command(args: &[String]) -> Option<Vec<String>> {
     let prefix = args.first().map(|s| s.as_str())?;
     let sub = args.get(1)?;
+    // Do not rewrite when the second argument looks like a flag (e.g. --help)
+    // rather than a subcommand name.
+    if sub.starts_with('-') {
+        return None;
+    }
     let rewritten_command = match prefix {
         "swarm" => format!("swarm-{}", sub),
         "agent" => format!("agent-{}", sub),
@@ -4190,7 +4195,9 @@ fn preferred_prefixed_group_form(command: &str) -> Option<&'static str> {
         "agent" => Some("agent <subcommand>"),
         "swarm" => Some("swarm <subcommand>"),
         "co" => Some("swarm <subcommand>"),
-        "domsnapshot" => Some("domsnapshot <subcommand>"),
+        // `domsnapshot` is a valid standalone command (captures a DOM snapshot
+        // and returns metadata), not just a prefix group — so it is intentionally
+        // absent here.  Use `browser4-cli domsnapshot --help` to see subcommands.
         _ => None,
     }
 }
@@ -5046,6 +5053,13 @@ async fn run(
 
     if command == "batch" {
         return handle_batch(global).await;
+    }
+
+    // When the user passes --help/-h after a command (e.g. `domsnapshot --help`),
+    // print the help for that command instead of complaining about the form.
+    if global.args.iter().any(|a| a == "--help" || a == "-h") {
+        print_help(Some(command));
+        return Ok(());
     }
 
     if !from_spaced_prefix {
@@ -6306,6 +6320,8 @@ mod tests {
             Some("swarm <subcommand>")
         );
         assert_eq!(preferred_prefixed_group_form("open"), None);
+        // `domsnapshot` is a valid standalone command — not just a prefix group.
+        assert_eq!(preferred_prefixed_group_form("domsnapshot"), None);
     }
 
     #[test]

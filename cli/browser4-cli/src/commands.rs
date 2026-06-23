@@ -1653,7 +1653,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         // ---- Snapshot ----
         CommandDef {
             name: "domsnapshot",
-            description: "Capture a static DOM snapshot of the current page",
+            description: "Capture a static DOM snapshot of the current page and return metadata (URL, title, timestamp, content type, size)",
             category: Category::Snapshot,
             hidden: false,
             batch_supported: false,
