@@ -798,7 +798,9 @@ class MCPToolController(
 
         return try {
             val response = scrapeService.executeQuery(ScrapeRequest(processedSql))
-            val json = jacksonObjectMapper().writeValueAsString(response)
+            val json = jacksonObjectMapper()
+                .registerModule(com.fasterxml.jackson.datatype.jsr310.JavaTimeModule())
+                .writeValueAsString(response)
             ResponseEntity.ok(textResponse(json))
         } catch (e: Exception) {
             logger.error("dom_snapshot_query failed | {}", e.message, e)
