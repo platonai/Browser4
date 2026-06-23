@@ -34,28 +34,21 @@
             <groupId>ai.platon.pulsar</groupId>
             <artifactId>pulsar-jsoup</artifactId>
         </dependency>
+
         <dependency>
             <groupId>ai.platon.pulsar</groupId>
             <artifactId>pulsar-persist</artifactId>
             <exclusions>
-                <!-- gora-core pulls in spark-core_2.13 which pulls the entire Hadoop+Scala+ZooKeeper
-                     ecosystem (approx 100 MB). Browser4 uses only the Gora persistency API (PersistentBase)
-                     for GWebPage and Avro serialization; it does not need Spark's RDD/DataFrame engine. -->
                 <exclusion>
-                    <groupId>org.apache.spark</groupId>
-                    <artifactId>spark-core_2.13</artifactId>
-                </exclusion>
-                <!-- Avro 1.8 pulls in Jackson 1.x (org.codehaus.jackson) which is redundant
-                     with Jackson 2.x and Jackson 3.x already on the classpath. -->
-                <exclusion>
-                    <groupId>org.codehaus.jackson</groupId>
-                    <artifactId>jackson-core-asl</artifactId>
-                </exclusion>
-                <exclusion>
-                    <groupId>org.codehaus.jackson</groupId>
-                    <artifactId>jackson-mapper-asl</artifactId>
+                    <groupId>ai.platon.gora</groupId>
+                    <artifactId>gora-core</artifactId>
                 </exclusion>
             </exclusions>
+        </dependency>
+        <dependency>
+            <groupId>ai.platon.gora</groupId>
+            <artifactId>gora-core</artifactId>
+            <version>1.0.1-slim</version>
         </dependency>
 
         <dependency>
