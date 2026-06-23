@@ -483,27 +483,27 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("Subcommands:".to_string());
         lines.push(format_with_gap(
             "  domsnapshot get <field> [selector] [name]",
-            "Extract elements from the static DOM snapshot (text, html, attr)",
+            "Extract elements from the DOM snapshot stored in Browser4's page storage (text, html, attr)",
             50,
         ));
         lines.push(format_with_gap(
             "  domsnapshot query [url]",
-            "Run X-SQL against the DOM snapshot via the scrape API",
+            "Run X-SQL against the DOM snapshot stored in Browser4's page storage via the scrape API",
             50,
         ));
         lines.push(format_with_gap(
             "  domsnapshot export",
-            "Save full snapshot HTML content to a local file",
+            "Export snapshot HTML from Browser4's page storage to a local file",
             50,
         ));
         lines.push(String::new());
         lines.push("Notes:".to_string());
         lines.push(
-            "  - The base `domsnapshot` command captures a static DOM snapshot and returns metadata (URL, title, timestamp)."
+            "  - The base `domsnapshot` command captures a static DOM snapshot, saves it in Browser4's page storage, and returns metadata (URL, title, timestamp)."
                 .to_string(),
         );
         lines.push(
-            "  - After capturing, extract elements by CSS selector with `domsnapshot get <field> [selector]`."
+            "  - After capturing, extract elements from the stored snapshot by CSS selector with `domsnapshot get <field> [selector]`."
                 .to_string(),
         );
         lines.push(
@@ -523,7 +523,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(
-            "  - Export the full HTML snapshot for offline processing with `domsnapshot export --file <path>`."
+            "  - Export the full HTML snapshot from Browser4's page storage to a local file with `domsnapshot export --file <path>`."
                 .to_string(),
         );
         lines.push(String::new());
@@ -835,17 +835,17 @@ mod tests {
         let help = generate_command_help(cmd);
         // Header
         assert!(help.contains("browser4-cli domsnapshot"));
-        assert!(help.contains("Capture a static DOM snapshot of the current page"));
+        assert!(help.contains("Capture a static DOM snapshot, save it in Browser4's page storage"));
         // Subcommands listing
         assert!(help.contains("Subcommands:"));
         assert!(help.contains("domsnapshot get <field> [selector] [name]"));
-        assert!(help.contains("Extract elements from the static DOM snapshot (text, html, attr)"));
+        assert!(help.contains("Extract elements from the DOM snapshot stored in Browser4's page storage (text, html, attr)"));
         assert!(help.contains("domsnapshot query [url]"));
-        assert!(help.contains("Run X-SQL against the DOM snapshot via the scrape API"));
+        assert!(help.contains("Run X-SQL against the DOM snapshot stored in Browser4's page storage via the scrape API"));
         assert!(help.contains("domsnapshot export"));
-        assert!(help.contains("Save full snapshot HTML content to a local file"));
+        assert!(help.contains("Export snapshot HTML from Browser4's page storage to a local file"));
         // Notes
-        assert!(help.contains("static DOM snapshot and returns metadata"));
+        assert!(help.contains("static DOM snapshot, saves it in Browser4's page storage, and returns metadata"));
         assert!(help.contains("CSS selectors only"));
         assert!(help.contains("@url"));
         assert!(help.contains("SQLTemplate handles escaping"));
@@ -866,7 +866,7 @@ mod tests {
         let cmd = cmds.iter().find(|c| c.name == "domsnapshot-get").unwrap();
         let help = generate_command_help(cmd);
         assert!(help.contains("browser4-cli domsnapshot get <field> [selector] [name]"));
-        assert!(help.contains("Extract elements from the static DOM snapshot (text, html, attr)"));
+        assert!(help.contains("Extract elements from the DOM snapshot stored in Browser4's page storage (text, html, attr)"));
         assert!(help.contains("What to extract: text, html, or attr"));
         assert!(help.contains("Attribute name (required for attr field)"));
         assert!(!help.contains("browser4-cli domsnapshot-get"));
@@ -878,7 +878,7 @@ mod tests {
         let cmd = cmds.iter().find(|c| c.name == "domsnapshot-query").unwrap();
         let help = generate_command_help(cmd);
         assert!(help.contains("browser4-cli domsnapshot query [url]"));
-        assert!(help.contains("Run X-SQL against the DOM snapshot via the scrape API"));
+        assert!(help.contains("Run X-SQL against the DOM snapshot stored in Browser4's page storage via the scrape API"));
         assert!(help.contains("--sql"));
         assert!(!help.contains("browser4-cli domsnapshot-query"));
     }
@@ -889,7 +889,7 @@ mod tests {
         let cmd = cmds.iter().find(|c| c.name == "domsnapshot-export").unwrap();
         let help = generate_command_help(cmd);
         assert!(help.contains("browser4-cli domsnapshot export"));
-        assert!(help.contains("Save full snapshot HTML content to a local file"));
+        assert!(help.contains("Export snapshot HTML from Browser4's page storage to a local file"));
         assert!(help.contains("--file"));
         assert!(!help.contains("browser4-cli domsnapshot-export"));
     }

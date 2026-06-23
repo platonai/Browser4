@@ -1653,7 +1653,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         // ---- Snapshot ----
         CommandDef {
             name: "domsnapshot",
-            description: "Capture a static DOM snapshot of the current page and return metadata (URL, title, timestamp, content type, size)",
+            description: "Capture a static DOM snapshot, save it in Browser4's page storage, and return metadata (URL, title, timestamp, content type, size)",
             category: Category::Snapshot,
             hidden: false,
             batch_supported: false,
@@ -1664,7 +1664,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "domsnapshot-get",
-            description: "Extract elements from the static DOM snapshot (text, html, attr)",
+            description: "Extract elements from the DOM snapshot stored in Browser4's page storage (text, html, attr)",
             category: Category::Snapshot,
             hidden: false,
             batch_supported: false,
@@ -1685,7 +1685,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "domsnapshot-query",
-            description: "Run X-SQL against the DOM snapshot via the scrape API",
+            description: "Run X-SQL against the DOM snapshot stored in Browser4's page storage via the scrape API",
             category: Category::Snapshot,
             hidden: false,
             batch_supported: false,
@@ -1709,7 +1709,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "domsnapshot-export",
-            description: "Save full snapshot HTML content to a local file",
+            description: "Export snapshot HTML from Browser4's page storage to a local file",
             category: Category::Snapshot,
             hidden: false,
             batch_supported: false,
