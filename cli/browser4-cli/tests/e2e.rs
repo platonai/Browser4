@@ -457,17 +457,19 @@ struct FixtureDownloadServer {
     shutdown: Arc<AtomicBool>,
     /// Recorded request paths.
     requests: Arc<Mutex<Vec<String>>>,
+    /// Release tag served by this fixture (reported in /latest-release.json).
+    tag: String,
     /// Artificial latency applied before serving each request (for speed-test
     /// scenarios that need one mirror to appear slower than another).
     latency: Duration,
 }
 
 impl FixtureDownloadServer {
-    fn start(bundle_bytes: Vec<u8>) -> Self {
-        Self::start_with_latency(bundle_bytes, Duration::ZERO)
+    fn start(bundle_bytes: Vec<u8>, tag: &str) -> Self {
+        Self::start_with_latency(bundle_bytes, tag, Duration::ZERO)
     }
 
-    fn start_with_latency(bundle_bytes: Vec<u8>, latency: Duration) -> Self {
+    fn start_with_latency(bundle_bytes: Vec<u8>, tag: &str, latency: Duration) -> Self {
         let listener =
             TcpListener::bind("127.0.0.1:0").expect("fixture download server bind failed");
         let port = listener.local_addr().unwrap().port();
@@ -476,7 +478,9 @@ impl FixtureDownloadServer {
         let flag = shutdown.clone();
         let reqs = requests.clone();
         let bytes = Arc::new(bundle_bytes);
+        let tag_owned = tag.to_string();
 
+        let tag_for_thread = tag_owned.clone();
         thread::spawn(move || {
             listener
                 .set_nonblocking(true)
@@ -489,7 +493,8 @@ impl FixtureDownloadServer {
                     Ok((stream, _)) => {
                         let b = bytes.clone();
                         let r = reqs.clone();
-                        thread::spawn(move || serve_download_request(stream, b, r, latency));
+                        let t = tag_for_thread.clone();
+                        thread::spawn(move || serve_download_request(stream, b, r, t, latency));
                     }
                     Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                         thread::sleep(Duration::from_millis(5));
@@ -506,6 +511,7 @@ impl FixtureDownloadServer {
             port,
             shutdown,
             requests,
+            tag: tag_owned,
             latency,
         }
     }
@@ -532,6 +538,7 @@ fn serve_download_request(
     mut stream: TcpStream,
     bundle_bytes: Arc<Vec<u8>>,
     requests: Arc<Mutex<Vec<String>>>,
+    tag: String,
     latency: Duration,
 ) {
     if !latency.is_zero() {
@@ -556,6 +563,19 @@ fn serve_download_request(
     let method = first_line.split_whitespace().next().unwrap_or("");
     if method != "GET" {
         write_http_response(&mut stream, "405 Method Not Allowed", "text/plain", "");
+        return;
+    }
+
+    // Serve /latest-release.json metadata endpoint (simulating OSS metadata).
+    if path == "/releases/latest-release.json" {
+        let body = format!(
+            r#"{{"tag":"{}","version":"{}","published_at":"2026-01-01T00:00:00Z","release_url":"https://github.com/platonai/Browser4/releases/tag/{}","assets":[]}}"#,
+            tag,
+            tag.trim_start_matches('v'),
+            tag
+        );
+        let content_type = "application/json";
+        write_http_response(&mut stream, "200 OK", content_type, &body);
         return;
     }
 

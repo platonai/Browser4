@@ -163,6 +163,7 @@ browser4-cli get attr e5 href       # HTML attribute value
 
 - Output distinguishes `null` (element/attribute missing), `""` (exists but empty), and normal values.
 - `property` and `attr` modes require a third positional argument (the property/attribute name).
+- Use `get attr <ref> id` and `get attr <ref> class` to discover identifying attributes from a snapshot ref, then use those values as CSS selectors with `domsnapshot get` (see [references/css-selector-bridge.md](references/css-selector-bridge.md)).
 
 ### Scroll
 
@@ -286,6 +287,33 @@ browser4-cli domsnapshot export [--file <path>]         # save snapshot HTML to 
 ```
 
 See **[references/domsnapshot.md](references/domsnapshot.md)** for the full command reference, field tables, X-SQL query examples, and the comparison with interactive `snapshot`.
+
+### Bridging Snapshot Refs to CSS Selectors
+
+`domsnapshot get` and `domsnapshot query` require CSS selectors — they reject interactive snapshot refs (`e5`). To bridge from a compact interactive snapshot to a `domsnapshot` query **without ever reading the full DOM snapshot**, use one of these approaches:
+
+1. **Construct from snapshot info** — the interactive snapshot already shows tag, attributes, and text:
+   `@e10 [input type="email"] placeholder="Email"` → use `[placeholder="Email"]`
+2. **Extract attributes from the ref** — `browser4-cli get attr e5 id` or `get attr e5 class`
+3. **Generate a unique selector via eval** — `browser4-cli eval --file=get-unique-selector.js e5`
+
+```bash
+# Tier 1 example: construct selector from snapshot output
+browser4-cli snapshot
+# @e13 [span class="price"] "$19.99"
+browser4-cli domsnapshot get text ".price"
+
+# Tier 2 example: discover class from ref, then query
+CARD_CLASS=$(browser4-cli get attr e11 class)
+browser4-cli domsnapshot query --sql "
+  SELECT dom_first_text(dom, '.price') AS price
+  FROM load_and_select(@url, '.${CARD_CLASS}')
+"
+```
+
+> **Core rule:** Never `cat` the full snapshot file or use `domsnapshot export` just to read it. Always use targeted `domsnapshot get` or `domsnapshot query` to extract only the data you need.
+
+Full reference: **[references/css-selector-bridge.md](references/css-selector-bridge.md)** — three-tier approach, reusable `get-unique-selector.js` script, and anti-patterns to avoid.
 
 ## Browser Sessions
 
@@ -435,6 +463,7 @@ browser4-cli close
 ## Specific tasks
 
 * **DOM Snapshot** [references/domsnapshot.md](references/domsnapshot.md)
+* **CSS Selector Bridge** [references/css-selector-bridge.md](references/css-selector-bridge.md)
 * **Smarm command** [references/swarm.md](references/swarm.md)
 * **Storage state (cookies, localStorage)** [references/storage-state.md](references/storage-state.md)
 * **X-SQL** [references/x-sql.md](references/x-sql.md)

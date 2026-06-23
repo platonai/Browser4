@@ -2238,7 +2238,7 @@ pub(super) fn test_install_downloads_and_installs(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
 
     let (bundle_bytes, _dir_name) = build_fake_runtime_bundle("v4.10.0");
-    let download_server = FixtureDownloadServer::start(bundle_bytes);
+    let download_server = FixtureDownloadServer::start(bundle_bytes, "v4.10.0");
     ctx.set_env("BROWSER4_RELEASES_BASE_URL", &download_server.base_url());
 
     // Use --tag so the download URL contains the real tag (without a GitHub
@@ -2289,7 +2289,7 @@ pub(super) fn test_install_skips_when_already_installed(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
 
     let (bundle_bytes, _dir_name) = build_fake_runtime_bundle("v4.10.0");
-    let download_server = FixtureDownloadServer::start(bundle_bytes);
+    let download_server = FixtureDownloadServer::start(bundle_bytes, "v4.10.0");
     ctx.set_env("BROWSER4_RELEASES_BASE_URL", &download_server.base_url());
 
     // First install.
@@ -2310,7 +2310,7 @@ pub(super) fn test_install_force_re_downloads(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
 
     let (bundle_bytes, _dir_name) = build_fake_runtime_bundle("v4.10.0");
-    let download_server = FixtureDownloadServer::start(bundle_bytes);
+    let download_server = FixtureDownloadServer::start(bundle_bytes, "v4.10.0");
     ctx.set_env("BROWSER4_RELEASES_BASE_URL", &download_server.base_url());
 
     // First install.
@@ -2338,7 +2338,7 @@ pub(super) fn test_install_specific_tag(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
 
     let (bundle_bytes, _dir_name) = build_fake_runtime_bundle("v4.9.3");
-    let download_server = FixtureDownloadServer::start(bundle_bytes);
+    let download_server = FixtureDownloadServer::start(bundle_bytes, "v4.9.3");
     ctx.set_env("BROWSER4_RELEASES_BASE_URL", &download_server.base_url());
 
     let result = run_command(ctx, &["install", "--tag=v4.9.3"]);
@@ -2367,7 +2367,7 @@ pub(super) fn test_upgrade_already_latest(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
 
     let (bundle_bytes, _dir_name) = build_fake_runtime_bundle("v4.10.0");
-    let download_server = FixtureDownloadServer::start(bundle_bytes);
+    let download_server = FixtureDownloadServer::start(bundle_bytes, "v4.10.0");
     ctx.set_env("BROWSER4_RELEASES_BASE_URL", &download_server.base_url());
 
     // Install first.
@@ -2388,14 +2388,14 @@ pub(super) fn test_upgrade_to_new_version(ctx: &mut E2ECtx) {
 
     // Install an older version first.
     let (old_bundle, _) = build_fake_runtime_bundle("v4.9.0");
-    let server1 = FixtureDownloadServer::start(old_bundle);
+    let server1 = FixtureDownloadServer::start(old_bundle, "v4.9.0");
     ctx.set_env("BROWSER4_RELEASES_BASE_URL", &server1.base_url());
     run_command(ctx, &["install", "--tag=v4.9.0"]);
     drop(server1);
 
     // Now upgrade to a newer version.
     let (new_bundle, _) = build_fake_runtime_bundle("v4.10.0");
-    let server2 = FixtureDownloadServer::start(new_bundle);
+    let server2 = FixtureDownloadServer::start(new_bundle, "v4.10.0");
     ctx.set_env("BROWSER4_RELEASES_BASE_URL", &server2.base_url());
 
     let result = run_command(ctx, &["upgrade"]);
@@ -2446,7 +2446,7 @@ pub(super) fn test_install_mirror_failover(ctx: &mut E2ECtx) {
 
     let (bundle_bytes, _dir_name) = build_fake_runtime_bundle("v4.10.0");
     // Start the reachable mirror (serves the fake runtime bundle).
-    let download_server = FixtureDownloadServer::start(bundle_bytes);
+    let download_server = FixtureDownloadServer::start(bundle_bytes, "v4.10.0");
     // Find a free port that will be unreachable (nothing listening).
     let dead_port = find_free_port();
 
@@ -2535,7 +2535,7 @@ pub(super) fn test_install_loads_mirrors_json_from_runtime_dir(ctx: &mut E2ECtx)
     reset_cli_artifacts(ctx);
 
     let (bundle_bytes, _dir_name) = build_fake_runtime_bundle("v4.10.0");
-    let download_server = FixtureDownloadServer::start(bundle_bytes);
+    let download_server = FixtureDownloadServer::start(bundle_bytes, "v4.10.0");
 
     // Write mirrors.json at the default location: {runtime_data_dir}/mirrors.json.
     // ctx.runtime_dir IS the runtime data dir (set via BROWSER4_RUNTIME_DIR).
@@ -2588,9 +2588,9 @@ pub(super) fn test_install_speed_test_selects_fastest_mirror(ctx: &mut E2ECtx) {
     let (bundle_bytes, _dir_name) = build_fake_runtime_bundle("v4.10.0");
 
     // Two download servers: one fast, one slow.
-    let fast_server = FixtureDownloadServer::start(bundle_bytes.clone());
+    let fast_server = FixtureDownloadServer::start(bundle_bytes.clone(), "v4.10.0");
     let slow_server =
-        FixtureDownloadServer::start_with_latency(bundle_bytes.clone(), Duration::from_secs(2));
+        FixtureDownloadServer::start_with_latency(bundle_bytes.clone(), "v4.10.0", Duration::from_secs(2));
 
     // Put the SLOW mirror FIRST in the list so we can verify that the
     // speed test overrides simple list-order selection.
@@ -2647,7 +2647,7 @@ pub(super) fn test_install_mirror_preference_cache_hit(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
 
     let (bundle_bytes, _dir_name) = build_fake_runtime_bundle("v4.10.0");
-    let server = FixtureDownloadServer::start(bundle_bytes);
+    let server = FixtureDownloadServer::start(bundle_bytes, "v4.10.0");
 
     let mirrors_path = ctx.runtime_dir.join("mirrors.json");
     let mirrors_json = serde_json::json!({
@@ -2714,7 +2714,7 @@ pub(super) fn test_install_speed_test_disabled_env_var(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
 
     let (bundle_bytes, _dir_name) = build_fake_runtime_bundle("v4.10.0");
-    let server = FixtureDownloadServer::start(bundle_bytes);
+    let server = FixtureDownloadServer::start(bundle_bytes, "v4.10.0");
 
     let mirrors_path = ctx.runtime_dir.join("mirrors.json");
     let mirrors_json = serde_json::json!({
