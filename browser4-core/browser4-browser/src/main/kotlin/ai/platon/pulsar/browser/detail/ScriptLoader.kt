@@ -31,10 +31,14 @@ open class ScriptLoader(
         val RESOURCES = """
             stealth.js
             configs.js
-            node_ext.js
-            node_traversor.js
+            tree_walker.js
+            node_ops.js
+            node_ext_data.js
             feature_calculator.js
             __pulsar_utils__.js
+            dom_rect.js
+            dom_style.js
+            dom_text.js
         """.trimIndent().split("\n").map { "js/" + it.trim() }.toMutableList()
     }
 

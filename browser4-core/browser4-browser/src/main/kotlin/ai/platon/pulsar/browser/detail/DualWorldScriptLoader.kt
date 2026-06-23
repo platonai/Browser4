@@ -45,10 +45,14 @@ open class DualWorldScriptLoader(
          */
         val ISOLATED_WORLD_RESOURCES = listOf(
             "js/configs.js",
-            "js/node_ext.js",
-            "js/node_traversor.js",
+            "js/tree_walker.js",
+            "js/node_ops.js",
+            "js/node_ext_data.js",
             "js/feature_calculator.js",
-            "js/__pulsar_utils__.js"
+            "js/__pulsar_utils__.js",
+            "js/dom_rect.js",
+            "js/dom_style.js",
+            "js/dom_text.js"
         )
 
         /**

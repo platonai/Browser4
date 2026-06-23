@@ -1,0 +1,13 @@
+{
+  "name": "browser4-browser-js-tests",
+  "private": true,
+  "description": "Unit tests for Browser4 browser-side JavaScript runtime",
+  "scripts": {
+    "test": "jest",
+    "test:watch": "jest --watch"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0",
+    "jest-environment-jsdom": "^29.7.0"
+  }
+}
