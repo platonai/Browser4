@@ -63,16 +63,9 @@
                     <groupId>org.apache.spark</groupId>
                     <artifactId>spark-core_2.13</artifactId>
                 </exclusion>
-                <!-- Avro 1.8 pulls in Jackson 1.x (org.codehaus.jackson) which is redundant
-                     with Jackson 2.x and Jackson 3.x already on the classpath. -->
-                <exclusion>
-                    <groupId>org.codehaus.jackson</groupId>
-                    <artifactId>jackson-core-asl</artifactId>
-                </exclusion>
-                <exclusion>
-                    <groupId>org.codehaus.jackson</groupId>
-                    <artifactId>jackson-mapper-asl</artifactId>
-                </exclusion>
+                <!-- Keep Jackson 1.x (org.codehaus.jackson) — Avro 1.x requires it at
+                     runtime for schema parsing (e.g. org.codehaus.jackson.JsonParseException).
+                     Jackson 1.x and 2.x/3.x use different Java packages so they coexist. -->
             </exclusions>
         </dependency>
         <dependency>

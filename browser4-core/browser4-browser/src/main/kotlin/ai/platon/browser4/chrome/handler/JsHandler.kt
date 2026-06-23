@@ -3,6 +3,7 @@ package ai.platon.browser4.chrome.handler
 import ai.platon.browser4.chrome.IsolatedWorldManager
 import ai.platon.browser4.chrome.handler.util.releaseNodeObjectIfNeeded
 import ai.platon.browser4.chrome.handler.util.resolveNodeObjectId
+import ai.platon.browser4.chrome.util.CDPReturnError
 import ai.platon.browser4.chrome.util.ChromeDriverException
 import ai.platon.cdt.kt.protocol.types.runtime.CallFunctionOn
 import ai.platon.cdt.kt.protocol.types.runtime.Evaluate
@@ -35,7 +36,16 @@ class JsHandler(
         val isolatedContextId = isolatedWorldManager
             .getContextId(runCatching { bp.mainFrame().id }.getOrNull())
         if (isolatedContextId != null && isolatedContextId > 0) {
-            val isolatedResult = evaluateInContext(confusedExpr, isolatedContextId, returnByValue = false)
+            val isolatedResult = runCatching {
+                evaluateInContext(confusedExpr, isolatedContextId, returnByValue = false)
+            }.onFailure { e ->
+                if (e is CDPReturnError && e.errorMessage?.lowercase()?.contains("cannot find context") == true) {
+                    logger.debug("Isolated world context {} not found, falling back to default context", isolatedContextId)
+                    isolatedWorldManager.clearContexts()
+                } else {
+                    logger.debug("Failed to evaluate in isolated world: {}", e.message)
+                }
+            }.getOrNull()
             if (isolatedResult != null) {
                 return isolatedResult
             }
@@ -100,7 +110,16 @@ class JsHandler(
         val isolatedContextId = isolatedWorldManager
             .getContextId(runCatching { bp.mainFrame().id }.getOrNull())
         if (isolatedContextId != null && isolatedContextId > 0) {
-            val isolatedResult = evaluateInContext(confusedExpr, isolatedContextId, returnByValue = true)
+            val isolatedResult = runCatching {
+                evaluateInContext(confusedExpr, isolatedContextId, returnByValue = true)
+            }.onFailure { e ->
+                if (e is CDPReturnError && e.errorMessage?.lowercase()?.contains("cannot find context") == true) {
+                    logger.debug("Isolated world context {} not found, falling back to default context", isolatedContextId)
+                    isolatedWorldManager.clearContexts()
+                } else {
+                    logger.debug("Failed to evaluate in isolated world: {}", e.message)
+                }
+            }.getOrNull()
             if (isolatedResult != null) {
                 return isolatedResult
             }
