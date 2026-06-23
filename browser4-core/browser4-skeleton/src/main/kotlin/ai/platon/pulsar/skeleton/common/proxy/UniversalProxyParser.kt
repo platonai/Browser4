@@ -16,7 +16,7 @@ import java.time.Instant
 
 class UniversalProxyParser : ProxyParser() {
     private val logger = getLogger(this)
-    private val session = PulsarContexts.createSession()
+    private val session = PulsarContexts.getOrCreateSession()
     private val prompt = """
 Extract proxies from the text, and return them in JSON format:
 

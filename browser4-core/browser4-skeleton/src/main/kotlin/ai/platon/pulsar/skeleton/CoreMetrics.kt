@@ -64,7 +64,6 @@ class CoreMetrics(
                 "loadCompDbGets" to Gauge { LoadComponent.dbGetCount },
                 "loadCompDbGets/s" to Gauge { 1.0 * LoadComponent.dbGetCount.get() / DateTimes.elapsedSeconds() },
 
-                // TODO: dbGets/dbPuts should be a multiMetric
                 "dbGets" to Gauge { WebDb.dbGetCount },
                 "dbGets/s" to Gauge { 1.0 * WebDb.dbGetCount.get() / DateTimes.elapsedSeconds() },
                 "dbGetAveMillis" to Gauge { WebDb.dbGetAveMillis },
