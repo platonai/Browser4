@@ -212,12 +212,14 @@ class RobustRPC(
             val errorMessage = e.errorMessage?.lowercase() ?: ""
             val message = e.message?.lowercase() ?: ""
 
-            // List of error messages that indicate permanent failures
+            // List of error messages that indicate permanent failures.
+            // NOTE: "cannot find context" is intentionally NOT in this list — it is a transient
+            // error that occurs during frame navigation when an old execution context is destroyed
+            // and a new one is being created. Retrying (possibly with a fresh context id) succeeds.
             val permanentErrorPatterns = listOf(
                 "cannot navigate to invalid url",
                 "invalid url",
                 "unsupported url scheme",
-                "cannot find context",
                 "invalid parameter",
                 "unsupported operation",
                 "target closed"
