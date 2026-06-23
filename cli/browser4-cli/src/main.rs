@@ -233,6 +233,7 @@ fn no_snapshot_commands() -> HashSet<&'static str> {
         "pdf",
         "get",
         "wait",
+        "scroll",
         "agent-run",
         "agent-status",
         "agent-result",
@@ -5777,6 +5778,11 @@ mod tests {
     #[test]
     fn no_snapshot_commands_include_wait() {
         assert!(no_snapshot_commands().contains("wait"));
+    }
+
+    #[test]
+    fn no_snapshot_commands_include_scroll() {
+        assert!(no_snapshot_commands().contains("scroll"));
     }
 
     #[test]

@@ -219,6 +219,7 @@ class CommandHandler(
             "mousedown" -> return ToolCall("tab", "mouseDown", args1)
             "mouseup" -> return ToolCall("tab", "mouseUp", args1)
             "mousewheel" -> return ToolCall("tab", "mouseWheel", args1)
+            "scroll_by" -> return ToolCall("tab", "scrollBy", args1)
         }
 
         // 2. Generic mapping

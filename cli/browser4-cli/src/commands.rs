@@ -1806,6 +1806,8 @@ mod tests {
             "screenshot",
             "extract",
             "summarize",
+            "scroll",
+            "wait",
             "agent-run",
             "agent-status",
             "agent-result",
