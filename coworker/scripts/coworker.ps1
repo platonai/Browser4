@@ -65,6 +65,7 @@ $targetRepoRoot = $repoRoot
 $agentCommand = $null
 $agentExecutable = $null
 $agentBaseArgs = @()
+$agentBackend = 'copilot'
 $agentWorkingDirectory = $repoRoot
 
 $logsDir = Get-LogDirectory
@@ -72,13 +73,13 @@ $memoryDir = $logsDir
 
 $taskRoots = @(
     @{
-        Prepare = (Join-Path $tasksRoot "0draft")
-        Created = (Join-Path $tasksRoot "1ready")
-        Working = (Join-Path $tasksRoot "2working")
-        Finished = (Join-Path $tasksRoot "3done")
-        Review = (Join-Path $tasksRoot "4review")
-        Approved = (Join-Path $tasksRoot "5approved")
-        Pushed = (Join-Path $tasksRoot "6git-pushed")
+        Prepare = (Join-Path $tasksRoot "main\0draft")
+        Created = (Join-Path $tasksRoot "main\1ready")
+        Working = (Join-Path $tasksRoot "main\2working")
+        Finished = (Join-Path $tasksRoot "main\3done")
+        Review = (Join-Path $tasksRoot "main\4review")
+        Approved = (Join-Path $tasksRoot "main\5approved")
+        Pushed = (Join-Path $tasksRoot "main\6git-pushed")
         Logs = $logsDir
         Label = "tasks"
     }
@@ -128,6 +129,7 @@ try {
     $agentCommand = Get-AgentCommand -RepoRoot $targetRepoRoot
     $agentExecutable = $agentCommand.Executable
     $agentBaseArgs = $agentCommand.BaseArgs
+    $agentBackend = $agentCommand.Backend
     $agentWorkingDirectory = $agentCommand.WorkingDirectory
 }
 catch {
@@ -411,7 +413,7 @@ Agent Execution Output:
 
             # Execute agent tool with the task prompt
             # Capture both standard output and error output to separate files
-            $process = Start-AgentProcess -Executable $agentExecutable -BaseArgs $agentBaseArgs -Prompt $prompt -AdditionalArguments @('--allow-all-tools', '--allow-all-paths') -WorkingDirectory $agentWorkingDirectory -StdOutPath $stdOutLog -StdErrPath $stdErrLog -NoNewWindow
+            $process = Start-AgentProcess -Executable $agentExecutable -BaseArgs $agentBaseArgs -Prompt $prompt -AdditionalArguments @('--allow-all-tools', '--allow-all-paths') -WorkingDirectory $agentWorkingDirectory -StdOutPath $stdOutLog -StdErrPath $stdErrLog -NoNewWindow -Backend $agentCommand.Backend
 
             $lastOutputLineCount = 0
 
@@ -544,6 +546,39 @@ Agent Log: $agentLogPath
         } else {
             Write-LogMessage "Task file not found at working path (may have been moved/deleted by agent): $workingPath" WARN
         }
+
+        # Auto-commit changes for finished tasks (3done) without pushing.
+        # Tasks with #auto-approve go to 5approved and are committed+ pushed
+        # later by git-sync.ps1 — skip those here to avoid a double commit.
+        if ($targetDir -eq $finishedDir) {
+            try {
+                $gitAvailable = Get-Command git -ErrorAction Stop
+                Push-Location $targetRepoRoot
+                try {
+                    # Stage all changes the agent made while working on this task
+                    & git add -A 2>&1 | Out-Null
+
+                    # Check whether there is anything staged to commit
+                    & git diff --cached --quiet 2>&1 | Out-Null
+                    if ($LASTEXITCODE -ne 0) {
+                        $commitMsg = "fix(done): $workingBaseName"
+                        & git commit -m $commitMsg 2>&1 | Out-Null
+                        if ($LASTEXITCODE -eq 0) {
+                            Write-LogMessage "Auto-committed changes for finished task: $workingBaseName" INFO
+                        } else {
+                            Write-LogMessage "Git commit failed for task: $workingBaseName" WARN
+                        }
+                    } else {
+                        Write-LogVerbose "No changes to commit for task: $workingBaseName"
+                    }
+                } finally {
+                    Pop-Location
+                }
+            } catch {
+                Write-LogMessage "Git unavailable, skipping auto-commit for task: $workingBaseName" WARN
+            }
+        }
+
         Ensure-DraftPlaceholders -DraftDirectory $draftDir
 
         Write-LogMessage "---" INFO

@@ -6,29 +6,29 @@ It processes task files that you create, executes them, and can commit changes b
 ## How to Use
 
 1. run `coworker-scheduler.ps1` to start recurring automation
-2. draft tasks in `0draft` (or anywhere)
-3. copy ready tasks to `1ready` for execution
-4. once executed, you can find results in `3_1complete` and detailed logs in `coworker/tasks/300logs`
+2. draft tasks in `main/0draft` (or anywhere)
+3. copy ready tasks to `main/1ready` for execution
+4. once executed, you can find results in `main/3done` and detailed logs in `~\.browser4-coworker\tasks\300logs`
 5. review results if needed
-6. move task file from `3_1complete` to `5approved` to trigger git pushing
+6. move task file from `main/3done` to `main/5approved` to trigger git pushing
 
 ## How It Works
 
-Task files flow through a pipeline of numbered folders inside `coworker/tasks/`:
+Task files flow through a pipeline of numbered folders inside `coworker/tasks/`. See `coworker/tasks/README.md` for the full state-machine documentation with all pipelines, transitions, and directory maps.
 
 ### Main task pipeline
 
 | Stage | Folder | Description |
 |-------|--------|-------------|
-| Draft | `0draft` | Create and draft your task files here |
-| Queue | `1ready` | Move tasks here when ready for execution |
-| Plan | `200plan` | Agent planning phase (managed automatically) |
-| Work | `2working` | Agent is actively executing the task |
-| Complete | `3_1complete` | Execution finished — review the changes |
-| Review | `4review` | Optional manual review stage |
-| Approved | `5approved` | Approved tasks awaiting commit/push |
-| Pushed | `6git-pushed` | Successfully committed and pushed |
-| Archive | `700archive` | Archived completed tasks |
+| Draft | `main/0draft` | Create and draft your task files here |
+| Queue | `main/1ready` | Move tasks here when ready for execution |
+| Work | `main/2working` | Agent is actively executing the task |
+| Complete | `main/3done` | Execution finished — review the changes (date-stamped: `YYYY/MMDD/<file>`) |
+| Review | `main/4review` | Optional manual review stage |
+| Approved | `main/5approved` | Approved tasks awaiting commit/push (date-stamped: `YYYY/MMDD/<file>`) |
+| Pushed | `main/6git-pushed` | Successfully committed and pushed (date-stamped: `YYYY/MMDD/<file>`) |
+
+Tasks in stages `3done`, `5approved`, and `6git-pushed` are organized by date via `organize-task-files.ps1`.
 
 ### GitHub issues pipeline
 
@@ -40,26 +40,39 @@ Task files flow through a pipeline of numbered folders inside `coworker/tasks/`:
 | Error | `200issues/draft/refine/0error` | Extraction failed after max retries |
 | Open | `200issues/github/commit/ready` | Refined issue files ready for creation via `gh` CLI |
 
-### Draft refinement pipeline (sub-pipeline of `0draft`)
+### Draft refinement pipeline (sub-pipeline of `main/0draft`)
 
 | Stage | Folder | Description |
 |-------|--------|-------------|
-| Ready | `0draft/refine/1ready` | Drafts waiting to be refined |
-| Working | `0draft/refine/2working` | Drafts currently being refined |
-| Done | `0draft/refine/3done` | Refined drafts ready for review |
+| Ready | `main/0draft/refine/1ready` | Drafts waiting to be refined |
+| Working | `main/0draft/refine/2working` | Drafts currently being refined |
+| Done | `main/0draft/refine/3done` | Refined drafts ready for review |
+| Error | `main/0draft/refine/0error` | Refinement failed after max retries |
 
 ## Quick Start
 
-1. **Draft** — Create your task file in `coworker/tasks/0draft/`.
-2. **Queue** — Move it to `coworker/tasks/1ready/` when ready.
+1. **Draft** — Create your task file in `coworker/tasks/main/0draft/`.
+2. **Queue** — Move it to `coworker/tasks/main/1ready/` when ready.
 3. **Execute** — Run the scheduler or the worker script directly:
    ```powershell
    .\coworker\scripts\coworker-scheduler.ps1
    # or single-shot:
    .\coworker\scripts\coworker.ps1
    ```
-4. **Review** — Task moves to `3_1complete` after execution. Review the changes.
-5. **Approve** — Move the task to `5approved` to have it automatically committed and pushed by the periodic runner.
+4. **Review** — Task moves to `main/3done` after execution. Review the changes.
+5. **Approve** — Move the task to `main/5approved` to have it automatically committed and pushed by the periodic runner.
+
+## Task Manager GUI
+
+A web-based GUI for managing the task pipeline is available at `coworker/gui/`. It provides a visual interface for browsing, creating, moving, and deleting tasks across pipeline stages — no command-line required.
+
+```bash
+cd coworker/gui
+npm install
+npm start -- --tasks-root ../tasks/
+```
+
+Then open **http://127.0.0.1:8090**. The GUI exposes a REST API (`/api/stats`, `/api/tasks`, `/api/move`) and binds to localhost only by default. See `coworker/gui/README.md` for the full API reference and CLI options.
 
 ## Prerequisites
 
@@ -80,7 +93,7 @@ You can use tags in task files to provide additional context or control behavior
 
 Supported tags:
 
-- `#auto-approve` — Automatically move the task to `5approved` after completion instead of `3_1complete`. Useful for trusted, low-risk tasks that can be committed without manual review.
+- `#auto-approve` — Automatically move the task to `main/5approved` after completion instead of `main/3done`. Useful for trusted, low-risk tasks that can be committed without manual review.
 
 ## Mentions
 
@@ -111,13 +124,14 @@ Default scheduled tasks:
 
 | Task | Worker Script | Trigger Path |
 |------|--------------|--------------|
-| `coworker` | `coworker.ps1` | `1ready` or `5approved` |
-| `draft-refinement` | `workers/refine-drafts.ps1` | `0draft/refine/1ready` |
+| `coworker` | `coworker.ps1` | `main/1ready` or `main/5approved` |
+| `draft-refinement` | `workers/refine-drafts.ps1` | `main/0draft/refine/1ready` |
 | `commit-github-issues` | `workers/commit-github-issues.ps1` | `200issues/github/commit/ready` |
 | `refine-github-issues` | `workers/refine-github-issues.ps1` | `200issues/draft/refine/0ready` |
-| `fetch-github-issues` | `workers/fetch-github-issues.ps1` | _(always runs)_ |
+| `fetch-github-issues` | `workers/fetch-github-issues.ps1` | _(always runs, every 10 min)_ |
+| `triage-github-issues` | `workers/triage-github-issues.ps1` | `main/0draft/issues/github` (every 30 min) |
+| `organize-task-files` | `workers/organize-task-files.ps1` | _(always runs, every 5 min)_ |
 | `update-readmes` | `workers/update-readmes.ps1` | _(always runs, every 1h)_ |
-| `process-task-source` | `process-task-source.ps1` | _(disabled by default)_ |
 
 ## Queue Processors
 
@@ -134,7 +148,7 @@ For recurring automation, prefer `coworker-scheduler.ps1`.
 
 ## Draft Refinement
 
-Draft refinement uses a dedicated pipeline under `coworker/tasks/0draft/refine/`:
+Draft refinement uses a dedicated pipeline under `coworker/tasks/main/0draft/refine/`:
 
 - `1ready` — drafts waiting to be refined
 - `2working` — drafts currently being refined
@@ -143,7 +157,7 @@ Draft refinement uses a dedicated pipeline under `coworker/tasks/0draft/refine/`
 You can refine a single file or every file in a folder. When a folder is provided, files are processed one by one.
 
 ```powershell
-.\coworker\scripts\workers\refine-drafts.ps1 -Path .\coworker\tasks\0draft\refine\1ready
+.\coworker\scripts\workers\refine-drafts.ps1 -Path .\coworker\tasks\main\0draft\refine\1ready
 ```
 
 ## GitHub Issues Pipeline
@@ -175,6 +189,4 @@ Repo: owner/repo
 # Create issues on GitHub
 .\coworker\scripts\workers\commit-github-issues.ps1
 ```
-
-
 

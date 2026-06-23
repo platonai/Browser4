@@ -11,8 +11,8 @@ import ai.platon.cdt.kt.protocol.types.page.Navigate
 import ai.platon.cdt.kt.protocol.types.page.ReferrerPolicy
 import ai.platon.cdt.kt.protocol.types.page.TransitionType
 import ai.platon.pulsar.browser.common.BrowserSettings
-import ai.platon.pulsar.browser.impl.BrowserProtocol
-import ai.platon.pulsar.browser.impl.NodeRef
+import ai.platon.pulsar.browser.protocol.BrowserProtocol
+import ai.platon.pulsar.browser.protocol.NodeRef
 import ai.platon.pulsar.chrome.dom.SnapshotService
 import ai.platon.pulsar.chrome.dom.model.BrowserUseState
 import ai.platon.pulsar.chrome.dom.model.PageTarget
@@ -70,10 +70,12 @@ class PageHandler constructor(
 
     /**
      * Fetches the current ARIA snapshot of the page, which is a YAML representation of the accessibility tree.
+     *
+     * @param boxes When true, includes each element's bounding box as [box=x,y,width,height].
      * */
-    suspend fun ariaSnapshot(): String {
+    suspend fun ariaSnapshot(boxes: Boolean = false): String {
         val buState = snapshot.getBrowserUseState(PageTarget(), SnapshotOptions())
-        val snapshot = buState.domState.ariaSnapshot
+        val snapshot = buState.domState.ariaSnapshot(boxes)
         lastBrowserUseState = buState
         return snapshot
     }
@@ -82,9 +84,10 @@ class PageHandler constructor(
      * Fetches the ARIA snapshot for the specified viewports only.
      *
      * @param viewportIndices The 1-based viewport indices to include.
+     * @param boxes When true, includes each element's bounding box as [box=x,y,width,height].
      * @return The ARIA snapshot YAML covering only the requested viewports.
      */
-    suspend fun ariaSnapshot(viewportIndices: List<Int>): String {
+    suspend fun ariaSnapshot(viewportIndices: List<Int>, boxes: Boolean = false): String {
         val buState = snapshot.getBrowserUseState(PageTarget(), SnapshotOptions())
         lastBrowserUseState = buState
 
@@ -101,7 +104,7 @@ class PageHandler constructor(
         }
 
         // Join snapshots from disjoint viewport ranges using YAML document separator
-        return nanoTrees.joinToString("\n---\n") { it.ariaSnapshot }
+        return nanoTrees.joinToString("\n---\n") { it.ariaSnapshot(boxes) }
     }
 
     /**

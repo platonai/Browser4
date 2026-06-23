@@ -91,9 +91,9 @@ $builtinExcludeGlobs = @(
     '**/.git/**'            # git internals
     '**/logs/**'            # log directories
     '**/.claude/**'         # Claude Code harness
-    '**/coworker/tasks/3_1complete/**'
-    '**/coworker/tasks/5approved/**'
-    '**/coworker/tasks/6git-pushed/**'
+    '**/coworker/tasks/main/3complete/**'
+    '**/coworker/tasks/main/5approved/**'
+    '**/coworker/tasks/main/6git-pushed/**'
     '**/coworker/tasks/700archive/**'
     '**/coworker/tasks/200issues/github/commit/ready/**'
     '**/coworker/tasks/200issues/draft/refine/2done/**'
@@ -517,7 +517,7 @@ function Invoke-ReadmeUpdateCycle {
             return @{ Scanned = $results.Count; Stale = 0; Queued = 0 }
         }
 
-        $tasksDir = Resolve-TasksPath '1ready'
+        $tasksDir = Resolve-TasksPath 'main\1ready'
         $queued = 0
         foreach ($r in $stale) {
             if ($queued -ge $MaxTasks) {

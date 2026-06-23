@@ -7,7 +7,7 @@ $agentHelper = Join-Path $PSScriptRoot "agent.ps1"
 $repoRoot = Get-WorkspaceRoot
 $agentCommand = Get-AgentCommand -RepoRoot $repoRoot
 
-$draftDir = Resolve-TasksPath '0draft'
+$draftDir = Resolve-TasksPath 'main\0draft'
 
 if (-not (Test-Path $draftDir)) {
     Write-Host "Draft directory not found: $draftDir"
@@ -29,6 +29,6 @@ $prompt = "Refine the content of the draft file: $draftPath. Improve the writing
 
 Write-Host "Starting agent to refine the draft..."
 
-$process = Start-AgentProcess -Executable $agentCommand.Executable -BaseArgs $agentCommand.BaseArgs -Prompt $prompt -AdditionalArguments @('--allow-all-tools', '--allow-all-paths') -WorkingDirectory $repoRoot -NoNewWindow
+$process = Start-AgentProcess -Executable $agentCommand.Executable -BaseArgs $agentCommand.BaseArgs -Prompt $prompt -AdditionalArguments @('--allow-all-tools', '--allow-all-paths') -WorkingDirectory $repoRoot -NoNewWindow -Backend $agentCommand.Backend
 $process.WaitForExit()
 exit $process.ExitCode

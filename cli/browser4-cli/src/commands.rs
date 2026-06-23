@@ -150,6 +150,19 @@ pub fn is_element_reference(value: &str) -> bool {
         || trimmed.starts_with("backend:")
 }
 
+/// Returns true if the value is a bare CSS selector (e.g. "#id", ".class", "[attr]")
+/// that does not already have a known prefix (`css:`, `backend:`, `xpath:`, `text=`).
+/// These selectors need a `css:` prefix so the backend can distinguish them from
+/// backend node references.
+pub fn is_bare_css_selector(value: &str) -> bool {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    (trimmed.starts_with('#') || trimmed.starts_with('.') || trimmed.starts_with('[') || trimmed.starts_with("//"))
+        && !is_element_reference(trimmed)
+}
+
 fn resolve_key_and_ref(map: &HashMap<String, Value>) -> (String, Option<String>) {
     let positionals = raw_positionals(map);
     match positionals.as_slice() {
@@ -419,7 +432,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "type",
-            description: "Type text into the focused element or an optional target ref",
+            description: "Type text into the focused element or an optional target ref. Passing a ref is recommended for reliable targeting; without a ref, text may go nowhere if no element is currently focused.",
             category: Category::Keyboard,
             hidden: false,
             batch_supported: true,
@@ -430,6 +443,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             options: &[
                 OptionDef { name: "submit", description: "Whether to submit entered text (press Enter after)", is_bool: true, short: None },
                 OptionDef { name: "verify", description: "Verify text was correctly typed after completion", is_bool: true, short: None },
+                OptionDef { name: "focus", description: "Click the target element to focus it before typing, ensuring the element is in an interactive state", is_bool: true, short: None },
             ],
             tool_name_fn: |_| "browser_press_sequentially".to_string(),
             tool_params_fn: |args| {
@@ -824,11 +838,13 @@ pub fn all_commands() -> Vec<CommandDef> {
             args: &[],
             options: &[
                 OptionDef { name: "filename", description: "Save snapshot to file instead of returning it in the response", is_bool: false, short: None },
+                OptionDef { name: "boxes", description: "Include each element's bounding box as [box=x,y,width,height]", is_bool: true, short: None },
             ],
             tool_name_fn: |_| "browser_snapshot".to_string(),
             tool_params_fn: |args| {
                 let mut p = json!({});
                 if let Some(f) = get_opt_str(args, "filename") { p["filename"] = json!(f); }
+                if let Some(true) = get_bool(args, "boxes") { p["boxes"] = json!(true); }
                 p
             },
         },
@@ -856,7 +872,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             name: "console",
             description: "List console messages",
             category: Category::DevTools,
-            hidden: true,
+            hidden: false,
             batch_supported: false,
             args: &[
                 ArgDef { name: "min-level", description: "Level of the console messages to return. Defaults to \"info\"", optional: true },
@@ -1288,7 +1304,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             name: "pdf",
             description: "Save page as PDF",
             category: Category::Export,
-            hidden: true,
+            hidden: false,
             batch_supported: true,
             args: &[],
             options: &[
@@ -1486,7 +1502,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             name: "summarize",
             description: "Summarize page content using AI",
             category: Category::Agent,
-            hidden: true,
+            hidden: false,
             batch_supported: false,
             args: &[ArgDef { name: "instruction", description: "Summarization instruction, e.g. 'summarize the product reviews'", optional: true }],
             options: &[
@@ -1504,7 +1520,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             name: "agent-run",
             description: "Run an autonomous agent task (async, returns task ID)",
             category: Category::Agent,
-            hidden: true,
+            hidden: false,
             batch_supported: false,
             args: &[ArgDef { name: "task", description: "Natural language task for the agent to execute", optional: false }],
             options: &[],
@@ -1517,7 +1533,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             name: "agent-status",
             description: "Check the status of a running agent task",
             category: Category::Agent,
-            hidden: true,
+            hidden: false,
             batch_supported: false,
             args: &[ArgDef { name: "id", description: "Task ID returned by agent run", optional: false }],
             options: &[],
@@ -1530,7 +1546,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             name: "agent-result",
             description: "Get the result of a completed agent task",
             category: Category::Agent,
-            hidden: true,
+            hidden: false,
             batch_supported: false,
             args: &[ArgDef { name: "id", description: "Task ID returned by agent run", optional: false }],
             options: &[],
@@ -2395,7 +2411,7 @@ mod tests {
     }
 
     #[test]
-    fn test_advanced_commands_are_hidden_from_global_help() {
+    fn test_advanced_commands_are_visible_in_global_help() {
         let map = commands_map();
         for name in [
             "console",
@@ -2403,8 +2419,9 @@ mod tests {
             "agent-status",
             "agent-result",
             "summarize",
+            "pdf",
         ] {
-            assert!(map.get(name).unwrap().hidden, "{name} should stay hidden");
+            assert!(!map.get(name).unwrap().hidden, "{name} should be visible in global help");
         }
     }
 
@@ -2915,7 +2932,10 @@ mod tests {
         let args = HashMap::new();
         assert_eq!((cmd.tool_name_fn)(&args), "dom_snapshot_capture");
         let params = (cmd.tool_params_fn)(&args);
-        assert!(params.as_object().unwrap().is_empty(), "capture params should be empty");
+        assert!(
+            params.as_object().unwrap().is_empty(),
+            "capture params should be empty"
+        );
     }
 
     #[test]

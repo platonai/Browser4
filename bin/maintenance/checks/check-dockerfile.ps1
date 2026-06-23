@@ -69,7 +69,10 @@ foreach ($df in $Dockerfiles) {
             Add-MaintenanceResult -Result $result -Item $df -Status "passed" -Message "Syntax OK"
         }
         else {
-            Add-MaintenanceResult -Result $result -Item $df -Status "failed" -Message "Syntax errors"
+            $errTail = if ($valResult.Stdout) {
+                ($valResult.Stdout -split "`n" | Where-Object { $_ -match '\S' } | Select-Object -Last 2) -join " | "
+            } else { "unknown error" }
+            Add-MaintenanceResult -Result $result -Item $df -Status "failed" -Message "Syntax errors — $errTail"
         }
     }
     else {
@@ -91,7 +94,10 @@ foreach ($df in $Dockerfiles) {
             Add-MaintenanceResult -Result $result -Item $df -Status "passed" -Message "Build succeeded ($($buildResult.DurationMs)ms)"
         }
         else {
-            Add-MaintenanceResult -Result $result -Item $df -Status "failed" -Message "Build failed"
+            $errTail = if ($buildResult.Stdout) {
+                ($buildResult.Stdout -split "`n" | Where-Object { $_ -match '\S' } | Select-Object -Last 2) -join " | "
+            } else { "unknown error" }
+            Add-MaintenanceResult -Result $result -Item $df -Status "failed" -Message "Build failed — $errTail"
         }
     }
 }

@@ -53,7 +53,7 @@ $workerDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repoRoot = Get-WorkspaceRoot
 
 # ── Directories ──────────────────────────────────────────────────────────────
-$refineRoot = Resolve-TasksPath '0draft\refine'
+$refineRoot = Resolve-TasksPath 'main\0draft\refine'
 $readyDir   = Join-Path $refineRoot '1ready'
 $workingDir = Join-Path $refineRoot '2working'
 $doneDir    = Join-Path $refineRoot '3done'

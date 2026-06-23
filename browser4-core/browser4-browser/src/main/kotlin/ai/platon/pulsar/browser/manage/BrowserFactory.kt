@@ -1,7 +1,7 @@
 package ai.platon.pulsar.browser.manage
 
-import ai.platon.browser4.chrome.util.ChromeOptions
-import ai.platon.browser4.chrome.util.LauncherOptions
+import ai.platon.pulsar.browser.ChromeOptions
+import ai.platon.pulsar.browser.LauncherOptions
 import ai.platon.pulsar.browser.Browser
 import ai.platon.pulsar.browser.BrowserId
 import ai.platon.pulsar.browser.common.BrowserLaunchException

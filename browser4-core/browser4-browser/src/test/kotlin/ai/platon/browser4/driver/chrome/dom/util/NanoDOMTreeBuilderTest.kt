@@ -1,6 +1,6 @@
 package ai.platon.browser4.driver.chrome.dom.util
 
-import ai.platon.browser4.chrome.dom.util.NanoDOMTreeBuilder
+import ai.platon.pulsar.chrome.dom.util.NanoDOMTreeBuilder
 import ai.platon.pulsar.chrome.dom.model.CleanedDOMTreeNode
 import ai.platon.pulsar.chrome.dom.model.CompactRect
 import ai.platon.pulsar.chrome.dom.model.NodeType

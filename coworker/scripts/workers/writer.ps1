@@ -104,7 +104,8 @@ Output only the content of the article.
                     -WorkingDirectory $repoRoot `
                     -StdOutPath $tempOut `
                     -StdErrPath $tempErr `
-                    -NoNewWindow
+                    -NoNewWindow `
+                    -Backend $agentCommand.Backend
                 
                 $process.WaitForExit()
                 

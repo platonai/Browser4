@@ -1,15 +1,16 @@
 package ai.platon.pulsar.apps
 
-import ai.platon.browser4.boot.autoconfigure.AgenticContextInitializer
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.external.ChatModelFactory
 import ai.platon.pulsar.rest.ApiApplication
 import ai.platon.pulsar.skeleton.session.PulsarSession
-import jakarta.annotation.PostConstruct
+import kotlin.concurrent.thread
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.boot.autoconfigure.SpringBootApplication
+import org.springframework.boot.context.event.ApplicationReadyEvent
 import org.springframework.boot.runApplication
 import org.springframework.context.annotation.Import
+import org.springframework.context.event.EventListener
 
 @SpringBootApplication
 @Import(ApiApplication::class)
@@ -27,25 +28,27 @@ class Browser4BundleApplication(
     @Value("\${server.hostname:localhost}")
     lateinit var hostname: String
 
-    @PostConstruct
+    @EventListener(ApplicationReadyEvent::class)
     fun showHelp() {
-        try {
-            val llmHelp = getLLMStatusMessage()
-            val help = buildHelpMessage(llmHelp)
+        thread(isDaemon = true) {
+            try {
+                val llmHelp = getLLMStatusMessage()
+                val help = buildHelpMessage(llmHelp)
 
-            val pid = try {
-                ProcessHandle.current().pid()
-            } catch (_: Throwable) {
-                -1L
+                val pid = try {
+                    ProcessHandle.current().pid()
+                } catch (_: Throwable) {
+                    -1L
+                }
+
+                logger.info("Welcome to Browser4! (pid={}) \n{}", pid, help)
+                logger.info(
+                    "To stop Browser4: press Ctrl+C in the console, or send a SIGTERM/stop the process (pid={}).",
+                    pid
+                )
+            } catch (e: Exception) {
+                logger.error("Failed to display help message", e)
             }
-
-            logger.info("Welcome to Browser4! (pid={}) \n{}", pid, help)
-            logger.info(
-                "To stop Browser4: press Ctrl+C in the console, or send a SIGTERM/stop the process (pid={}).",
-                pid
-            )
-        } catch (e: Exception) {
-            logger.error("Failed to display help message", e)
         }
     }
 
@@ -74,7 +77,6 @@ class Browser4BundleApplication(
 
 fun runBrowser4BundleApplication(args: Array<String>) {
     runApplication<Browser4BundleApplication>(*args) {
-        addInitializers(AgenticContextInitializer())
         setAdditionalProfiles("bundle", "private", "advanced")
         setLogStartupInfo(true)
     }

@@ -13,7 +13,7 @@
 
     <groupId>ai.platon.pulsar</groupId>
     <artifactId>browser4-dependencies</artifactId>
-    <version>4.11.8-SNAPSHOT</version>
+    <version>4.12.0-rc1</version>
     <name>Browser4 Dependencies</name>
 
     <packaging>pom</packaging>
@@ -547,7 +547,7 @@
         <!-- Pulsar dependency -->
         <pulsar-h2.version>1.4.197</pulsar-h2.version>
         <pulsar-jsoup.version>1.14.3</pulsar-jsoup.version>
-        <browser4-base.version>4.8.5</browser4-base.version>
+        <browser4-base.version>4.9.2</browser4-base.version>
         <cdt-kotlin-client.version>4.8.0</cdt-kotlin-client.version>
     </properties>
 

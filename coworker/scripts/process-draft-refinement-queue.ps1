@@ -60,7 +60,7 @@ function Wait-ForDraftRefinementSignal {
 }
 
 $refineScript = Join-Path $PSScriptRoot 'workers\refine-drafts.ps1'
-$defaultReadyDir = Resolve-TasksPath '0draft\refine\1ready'
+$defaultReadyDir = Resolve-TasksPath 'main\0draft\refine\1ready'
 $scanPath = if ([string]::IsNullOrWhiteSpace($Path)) { $defaultReadyDir } else { [System.IO.Path]::GetFullPath($Path) }
 $watchRegistrations = @()
 

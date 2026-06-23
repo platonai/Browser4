@@ -2,7 +2,7 @@ package ai.platon.browser4.chrome.dom
 
 import ai.platon.browser4.chrome.PulsarWebDriver
 import ai.platon.pulsar.WebDriverTestBase
-import ai.platon.pulsar.browser.impl.BrowserProtocol
+import ai.platon.pulsar.browser.protocol.BrowserProtocol
 import ai.platon.pulsar.chrome.dom.model.PageTarget
 import ai.platon.pulsar.chrome.dom.model.SnapshotOptions
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -81,8 +81,8 @@ class AriaSnapshotRendererE2ETest : WebDriverTestBase() {
         val optimizedTree = service.buildOptimizedDOMTreeNode(enhancedRoot)
         val domState = service.buildDOMState(optimizedTree)
 
-        assertTrue(domState.ariaSnapshot.isNotBlank(), "Aria snapshot should not be blank")
-        return domState.ariaSnapshot
+        assertTrue(domState.ariaSnapshot().isNotBlank(), "Aria snapshot should not be blank")
+        return domState.ariaSnapshot()
     }
 
     private fun normalizeRefs(snapshot: String): String {

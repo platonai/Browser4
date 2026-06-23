@@ -1,6 +1,5 @@
 package ai.platon.browser4.boot.autoconfigure.test
 
-import ai.platon.browser4.boot.autoconfigure.AgenticContextInitializer
 import ai.platon.pulsar.browser.common.BrowserSettings
 import ai.platon.pulsar.common.browser.BrowserProfileMode
 import ai.platon.pulsar.common.browser.BrowserType
@@ -14,8 +13,6 @@ class PulsarTestContextInitializer : ApplicationContextInitializer<AbstractAppli
 
         // Use temporary browsers to avoid browser conflicts, and also gain better performance
         BrowserSettings.withBrowserContextMode(BrowserProfileMode.TEMPORARY)
-
-        AgenticContextInitializer().initialize(applicationContext)
 
         /**
          * Load options are in webpage scope, so it should be initialized after PulsarContextInitializer

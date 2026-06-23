@@ -59,7 +59,7 @@ function Get-GeneratedTaskName {
         $nameStdErr = [System.IO.Path]::GetTempFileName()
 
         try {
-            $nameProcess = Start-AgentProcess -Executable $agentCommand.Executable -BaseArgs $agentCommand.BaseArgs -Prompt $namingPrompt -WorkingDirectory $repoRoot -StdOutPath $nameStdOut -StdErrPath $nameStdErr -NoNewWindow
+            $nameProcess = Start-AgentProcess -Executable $agentCommand.Executable -BaseArgs $agentCommand.BaseArgs -Prompt $namingPrompt -WorkingDirectory $repoRoot -StdOutPath $nameStdOut -StdErrPath $nameStdErr -NoNewWindow -Backend $agentCommand.Backend
         } catch {
             Write-Host "DEBUG: Start-Process failed: $_"
             return "Error: Start-Process failed"

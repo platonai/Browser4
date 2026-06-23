@@ -15,7 +15,7 @@
     <parent>
         <groupId>ai.platon.pulsar</groupId>
         <artifactId>browser4</artifactId>
-        <version>4.11.8-SNAPSHOT</version>
+        <version>4.12.0-rc1</version>
         <relativePath>../../pom.xml</relativePath>
     </parent>
 
@@ -81,14 +81,9 @@
         </dependency>
 
         <!--
-        Fix the following error:
-        ERROR StatusLogger Log4j2 could not find a logging implementation.
-        Please add log4j-core to the classpath. Using SimpleLogger to log to the console...
+        log4j-to-slf4j (brought transitively) routes log4j API calls to SLF4J → logback,
+        so log4j-core is not needed. Keep it excluded to avoid ~2.5 MB of redundant JARs.
         -->
-        <dependency>
-            <groupId>org.apache.logging.log4j</groupId>
-            <artifactId>log4j-core</artifactId>
-        </dependency>
 
         <!-- Testing -->
         <!-- Testing (augment with explicit JUnit API / Engine for local module isolation) -->

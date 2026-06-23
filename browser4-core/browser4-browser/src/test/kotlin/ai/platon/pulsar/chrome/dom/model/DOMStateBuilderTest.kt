@@ -1,6 +1,6 @@
 package ai.platon.pulsar.chrome.dom.model
 
-import ai.platon.browser4.chrome.dom.DOMSerializer
+import ai.platon.pulsar.chrome.dom.DOMSerializer
 import ai.platon.browser4.chrome.dom.DOMStateBuilder
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import org.junit.jupiter.api.Assertions.*
@@ -397,7 +397,7 @@ class DOMStateBuilderTest {
 
         val domState = DOMState(root)
 
-        val ariaSnapshot = domState.ariaSnapshot
+        val ariaSnapshot = domState.ariaSnapshot()
 
         assertEquals(
             """
@@ -445,7 +445,7 @@ class DOMStateBuilderTest {
             children = listOf(OptimizedDOMTreeNode(originalNode = anchorNode, interactiveIndex = 1))
         )
 
-        val ariaSnapshot = DOMStateBuilder.build(root).ariaSnapshot
+        val ariaSnapshot = DOMStateBuilder.build(root).ariaSnapshot()
 
         assertTrue(ariaSnapshot.contains("- link \"Example Link\" [ref=e101] [cursor=pointer]:"))
         assertTrue(ariaSnapshot.contains("- /url: https://example.com"))
@@ -557,7 +557,7 @@ class DOMStateBuilderTest {
             )
         )
 
-        val ariaSnapshot = DOMStateBuilder.build(root).ariaSnapshot
+        val ariaSnapshot = DOMStateBuilder.build(root).ariaSnapshot()
 
         assertEquals(
             """
@@ -605,7 +605,7 @@ class DOMStateBuilderTest {
             )
         )
 
-        val ariaSnapshot = DOMState(root).ariaSnapshot
+        val ariaSnapshot = DOMState(root).ariaSnapshot()
 
         assertEquals(
             """
@@ -656,8 +656,8 @@ class DOMStateBuilderTest {
         )
 
         val domState = DOMStateBuilder.build(root)
-        val ariaSnapshot = domState.ariaSnapshot
-        val legacySnapshot = domState.serializableTree.toNanoTreeUnfiltered().ariaSnapshot
+        val ariaSnapshot = domState.ariaSnapshot()
+        val legacySnapshot = domState.serializableTree.toNanoTreeUnfiltered().ariaSnapshot()
 
         assertTrue(ariaSnapshot.contains("- textbox \"Search\" [ref=e101] [cursor=pointer]:"), ariaSnapshot)
         assertTrue(ariaSnapshot.contains("- /placeholder: Search docs"), ariaSnapshot)
@@ -700,7 +700,7 @@ class DOMStateBuilderTest {
         )
 
         val domState = DOMStateBuilder.build(root)
-        val nanoSnapshot = domState.serializableTree.toNanoTreeUnfiltered().ariaSnapshot
+        val nanoSnapshot = domState.serializableTree.toNanoTreeUnfiltered().ariaSnapshot()
 
         assertTrue(
             nanoSnapshot.contains("- button \"Load Users (2s delay)\" [ref=e101] [cursor=pointer]"),
@@ -767,7 +767,7 @@ class DOMStateBuilderTest {
             )
         )
 
-        val ariaSnapshot = DOMState(root).ariaSnapshot
+        val ariaSnapshot = DOMState(root).ariaSnapshot()
 
         assertTrue(ariaSnapshot.contains("- RootWebArea \"Dynamic Content Test\" [ref=e2]:"))
         assertTrue(ariaSnapshot.contains("- heading \"Dynamic Content Test Page\" [level=1] [ref=e5]"))

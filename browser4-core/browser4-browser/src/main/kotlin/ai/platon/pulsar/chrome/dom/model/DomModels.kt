@@ -1,13 +1,13 @@
 package ai.platon.pulsar.chrome.dom.model
 
-import ai.platon.browser4.chrome.dom.DOMSerializer
-import ai.platon.browser4.chrome.dom.model.AriaSnapshotRenderer
-import ai.platon.browser4.chrome.dom.model.NanoAriaSnapshotRenderer
-import ai.platon.browser4.chrome.dom.util.CSSSelectorUtils
-import ai.platon.browser4.chrome.dom.util.DOMUtils
-import ai.platon.browser4.chrome.dom.util.InteractiveNodeListBuilder
-import ai.platon.browser4.chrome.dom.util.InteractiveNodeListBuilder.Companion.estimatedSize
-import ai.platon.browser4.chrome.dom.util.NanoDOMTreeBuilder
+import ai.platon.pulsar.chrome.dom.DOMSerializer
+import ai.platon.pulsar.chrome.dom.model.AriaSnapshotRenderer
+import ai.platon.pulsar.chrome.dom.model.NanoAriaSnapshotRenderer
+import ai.platon.pulsar.chrome.dom.util.CSSSelectorUtils
+import ai.platon.pulsar.chrome.dom.util.DOMUtils
+import ai.platon.pulsar.chrome.dom.util.InteractiveNodeListBuilder
+import ai.platon.pulsar.chrome.dom.util.InteractiveNodeListBuilder.Companion.estimatedSize
+import ai.platon.pulsar.chrome.dom.util.NanoDOMTreeBuilder
 import ai.platon.pulsar.browser.common.BrowserSettings.Companion.VIEWPORT
 import ai.platon.pulsar.browser.common.FBNLocator
 import ai.platon.pulsar.browser.common.LocatorMap
@@ -543,8 +543,8 @@ data class NanoDOMTreeNode(
     @JsonIgnore
     val serializableTreeNode: SerializableDOMTree? = null,
 ) {
-    @get:JsonIgnore
-    val ariaSnapshot: String by lazy { NanoAriaSnapshotRenderer.render(this) }
+    @JsonIgnore
+    fun ariaSnapshot(boxes: Boolean = false): String = NanoAriaSnapshotRenderer.render(this, boxes)
 
     @get:JsonIgnore
     val ref: Int get() = FBNLocator.parseRelaxed(locator)?.backendNodeId ?: 0
@@ -561,9 +561,9 @@ data class DOMState constructor(
     @get:JsonIgnore
     val optimizedDOMTree: OptimizedDOMTree? = null
 ) {
-    @get:JsonIgnore
-    val ariaSnapshot: String get() = optimizedDOMTree?.let(AriaSnapshotRenderer::render)
-        ?: serializableTree.toNanoTreeUnfiltered().ariaSnapshot
+    @JsonIgnore
+    fun ariaSnapshot(boxes: Boolean = false): String = optimizedDOMTree?.let { AriaSnapshotRenderer.render(it, boxes) }
+        ?: serializableTree.toNanoTreeUnfiltered().ariaSnapshot(boxes)
 
     fun getAbsoluteFBNLocator(locator: String?): FBNLocator? {
         if (locator == null) {

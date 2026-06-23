@@ -14,7 +14,7 @@
     <parent>
         <groupId>ai.platon.pulsar</groupId>
         <artifactId>browser4</artifactId>
-        <version>4.11.8-SNAPSHOT</version>
+        <version>4.12.0-rc1</version>
         <relativePath>../../pom.xml</relativePath>
     </parent>
 
@@ -46,11 +46,34 @@
                     <groupId>org.jetbrains.kotlin</groupId>
                     <artifactId>kotlin-gradle-plugin-api</artifactId>
                 </exclusion>
+                <exclusion>
+                    <groupId>org.apache.logging.log4j</groupId>
+                    <artifactId>log4j-core</artifactId>
+                </exclusion>
             </exclusions>
         </dependency>
         <dependency>
             <groupId>ai.platon.pulsar</groupId>
             <artifactId>pulsar-persist</artifactId>
+            <exclusions>
+                <!-- gora-core pulls in spark-core_2.13 which pulls the entire Hadoop+Scala+ZooKeeper
+                     ecosystem (approx 100 MB). Browser4 uses only the Gora persistency API (PersistentBase)
+                     for GWebPage and Avro serialization; it does not need Spark's RDD/DataFrame engine. -->
+                <exclusion>
+                    <groupId>org.apache.spark</groupId>
+                    <artifactId>spark-core_2.13</artifactId>
+                </exclusion>
+                <!-- Avro 1.8 pulls in Jackson 1.x (org.codehaus.jackson) which is redundant
+                     with Jackson 2.x and Jackson 3.x already on the classpath. -->
+                <exclusion>
+                    <groupId>org.codehaus.jackson</groupId>
+                    <artifactId>jackson-core-asl</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>org.codehaus.jackson</groupId>
+                    <artifactId>jackson-mapper-asl</artifactId>
+                </exclusion>
+            </exclusions>
         </dependency>
         <dependency>
             <groupId>ai.platon.pulsar</groupId>
@@ -63,15 +86,31 @@
         <dependency>
             <groupId>ai.platon.pulsar</groupId>
             <artifactId>pulsar-h2</artifactId>
+            <exclusions>
+                <!-- lucene-core (~3.2 MB) is pulled by pulsar-h2 for full-text search.
+                     Browser4 does not use H2's FTS features; no code imports Lucene. -->
+                <exclusion>
+                    <groupId>org.apache.lucene</groupId>
+                    <artifactId>lucene-core</artifactId>
+                </exclusion>
+            </exclusions>
         </dependency>
         <dependency>
             <groupId>ai.platon.pulsar</groupId>
             <artifactId>pulsar-llm</artifactId>
+            <exclusions>
+                <!-- langchain4j-open-ai is optional in browser4; users who need LLM can add it explicitly -->
+                <exclusion>
+                    <groupId>dev.langchain4j</groupId>
+                    <artifactId>langchain4j-open-ai</artifactId>
+                </exclusion>
+            </exclusions>
         </dependency>
 
         <dependency>
             <groupId>dev.langchain4j</groupId>
             <artifactId>langchain4j-open-ai</artifactId>
+            <optional>true</optional>
         </dependency>
 
         <!-- Requires org.springframework.context.support.AbstractApplicationContext -->
@@ -95,6 +134,13 @@
             <groupId>com.google.code.crawler-commons</groupId>
             <artifactId>crawler-commons</artifactId>
             <version>0.5</version>
+            <exclusions>
+                <!-- browser4 uses httpclient5; exclude the old httpclient 4.x -->
+                <exclusion>
+                    <groupId>org.apache.httpcomponents</groupId>
+                    <artifactId>httpclient</artifactId>
+                </exclusion>
+            </exclusions>
         </dependency>
         <dependency>
             <groupId>com.google.guava</groupId>

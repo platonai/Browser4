@@ -1,6 +1,6 @@
 package ai.platon.browser4.chrome
 
-import ai.platon.browser4.chrome.detail.*
+import ai.platon.browser4.chrome.network.*
 import ai.platon.browser4.chrome.dom.model.ViewportSpec
 import ai.platon.browser4.chrome.handler.ClickableDOM
 import ai.platon.browser4.chrome.handler.EmulationHandler
@@ -25,10 +25,10 @@ import ai.platon.cdt.kt.protocol.types.runtime.CallArgument
 import ai.platon.pulsar.browser.AbstractWebDriver
 import ai.platon.pulsar.browser.WebDriver
 import ai.platon.pulsar.browser.common.*
-import ai.platon.pulsar.browser.impl.BrowserProtocol
-import ai.platon.pulsar.browser.impl.BrowserTab
-import ai.platon.pulsar.browser.impl.NetworkResourceResponse
-import ai.platon.pulsar.browser.impl.NodeRef
+import ai.platon.pulsar.browser.protocol.BrowserProtocol
+import ai.platon.pulsar.browser.protocol.BrowserTab
+import ai.platon.pulsar.browser.protocol.NetworkResourceResponse
+import ai.platon.pulsar.browser.protocol.NodeRef
 import ai.platon.pulsar.chrome.dom.SnapshotService
 import ai.platon.pulsar.chrome.dom.model.BrowserUseState
 import ai.platon.pulsar.chrome.dom.model.NanoDOMTree
@@ -105,6 +105,13 @@ open class PulsarWebDriver constructor(
     private val driverHelper get() = WebDriverHelper(this, rpc, page, browserProtocol)
 
     private val closed = AtomicBoolean()
+
+    /**
+     * The last ChromeDriverException that was caught and swallowed (returning null to the caller).
+     * Callers can check this field to distinguish "no result" from "error occurred".
+     * */
+    @Volatile
+    var lastError: ChromeDriverException? = null
 
     var userTypedUrl: String? = null
     var navigateUrl: String? = chromeTab.url
@@ -966,14 +973,14 @@ open class PulsarWebDriver constructor(
     }
 
     @Throws(WebDriverException::class)
-    override suspend fun ariaSnapshot(): String {
-        return rpc.invokeDeferredSilently("ariaSnapshot") { page.ariaSnapshot() } ?: ""
+    override suspend fun ariaSnapshot(boxes: Boolean): String {
+        return rpc.invokeDeferredSilently("ariaSnapshot") { page.ariaSnapshot(boxes = boxes) } ?: ""
     }
 
     @Throws(WebDriverException::class)
-    override suspend fun ariaSnapshot(viewports: String): String {
-        val viewportIndices = ViewportSpec.parse(viewports) ?: return ariaSnapshot()
-        return rpc.invokeDeferredSilently("ariaSnapshot") { page.ariaSnapshot(viewportIndices) } ?: ""
+    override suspend fun ariaSnapshot(viewports: String, boxes: Boolean): String {
+        val viewportIndices = ViewportSpec.parse(viewports) ?: return ariaSnapshot(boxes = boxes)
+        return rpc.invokeDeferredSilently("ariaSnapshot") { page.ariaSnapshot(viewportIndices, boxes = boxes) } ?: ""
     }
 
     @Beta
@@ -1114,6 +1121,8 @@ function() {
                 ClickableDOM.create(browserProtocol, node)?.clickablePoint()?.value
             }
         } catch (e: ChromeDriverException) {
+            lastError = e
+            logger.warn("Failed to get clickablePoint for [{}] | {}", selector, e.message)
             rpc.interceptChromeException(e, "clickablePoint")
         }
 
@@ -1128,6 +1137,8 @@ function() {
                 ClickableDOM.create(browserProtocol, node)?.boundingBox()
             }
         } catch (e: ChromeDriverException) {
+            lastError = e
+            logger.warn("Failed to get boundingBox for [{}] | {}", selector, e.message)
             rpc.interceptChromeException(e, "boundingBox")
         }
 
@@ -1146,6 +1157,8 @@ function() {
                 screenshot.screenshot(fullPage)
             }
         } catch (e: ChromeDriverException) {
+            lastError = e
+            logger.warn("Failed to take screenshot (fullPage=$fullPage) | {}", e.message)
             rpc.interceptChromeException(e, "screenshot")
             null
         }
@@ -1163,6 +1176,8 @@ function() {
             // Force the page stop all navigations and pending resource fetches.
             rpc.invokeOnPage("screenshot") { screenshot.screenshot(selector) }
         } catch (e: ChromeDriverException) {
+            lastError = e
+            logger.warn("Failed to take screenshot for [{}] | {}", selector, e.message)
             rpc.interceptChromeException(e, "screenshot")
             null
         }
@@ -1174,6 +1189,8 @@ function() {
             // Force the page stop all navigations and pending resource fetches.
             rpc.invokeOnPage("screenshot") { screenshot.screenshot(rect) }
         } catch (e: ChromeDriverException) {
+            lastError = e
+            logger.warn("Failed to take screenshot for rect {} | {}", rect, e.message)
             rpc.interceptChromeException(e, "screenshot")
             null
         }

@@ -2,7 +2,7 @@ package ai.platon.pulsar.rest.config
 
 import ai.platon.pulsar.agent.tool.UserCommandExecutor
 import ai.platon.pulsar.agentic.context.AgenticContext
-import ai.platon.pulsar.common.PulsarSessionManager
+import ai.platon.pulsar.rest.session.PulsarSessionManager
 import ai.platon.pulsar.rest.api.service.ConversationService
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration

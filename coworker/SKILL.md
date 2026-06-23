@@ -14,13 +14,13 @@ This repository contains a **file-queue automation system** called **Coworker**.
 ### 1. Main task execution
 
 - **Primary entrypoint:** `./coworker/scripts/coworker.ps1`
-- It ensures the task directories exist, optionally accepts a task file path, moves that file into `coworker/tasks/1ready`, generates a descriptive kebab-case filename, moves it to `2working`, runs Copilot, writes logs, then moves the task to `3_1complete` or `5approved`. (`coworker/scripts/coworker.ps1:22-35`, `coworker/scripts/coworker.ps1:82-95`, `coworker/scripts/coworker.ps1:417-500`, `coworker/scripts/coworker.ps1:551-713`)
+- It ensures the task directories exist, optionally accepts a task file path, moves that file into `coworker/tasks/main/1ready`, generates a descriptive kebab-case filename, moves it to `2working`, runs Copilot, writes logs, then moves the task to `main/3complete` or `5approved`. (`coworker/scripts/coworker.ps1:22-35`, `coworker/scripts/coworker.ps1:82-95`, `coworker/scripts/coworker.ps1:417-500`, `coworker/scripts/coworker.ps1:551-713`)
 - The prompt given to Copilot explicitly says: **finish the task described in the file, but do not move that task file yourself**. The script handles routing after execution. (`coworker/scripts/coworker.ps1:531-545`)
 
 ### 2. Queue processor / watchdog
 
 - **Recommended wrapper for one-shot or recurring checks:** `./coworker/scripts/process-coworker-queue.ps1`
-- It checks for pending files in `1ready` or `5approved`, avoids duplicate coworker runners, can optionally run task-source monitoring first, and has loop-detection logic that can kill a stuck coworker process and move the task from `2working` to `3_5aborted`. (`coworker/scripts/process-coworker-queue.ps1:28-37`, `coworker/scripts/process-coworker-queue.ps1:55-69`, `coworker/scripts/process-coworker-queue.ps1:71-174`, `coworker/scripts/process-coworker-queue.ps1:176-250`)
+- It checks for pending files in `1ready` or `5approved`, avoids duplicate coworker runners, can optionally run task-source monitoring first, and has loop-detection logic that can kill a stuck coworker process and move the task from `2working` to `main/3aborted`. (`coworker/scripts/process-coworker-queue.ps1:28-37`, `coworker/scripts/process-coworker-queue.ps1:55-69`, `coworker/scripts/process-coworker-queue.ps1:71-174`, `coworker/scripts/process-coworker-queue.ps1:176-250`)
 
 ### 3. Unified scheduler
 
@@ -38,9 +38,9 @@ This repository contains a **file-queue automation system** called **Coworker**.
 
 - Draft refinement is separate from main task execution.
 - Queue:
-  - `coworker/tasks/0draft/refine/1ready`
-  - `coworker/tasks/0draft/refine/2working`
-  - `coworker/tasks/0draft/refine/3done`
+  - `coworker/tasks/main/0draft/refine/1ready`
+  - `coworker/tasks/main/0draft/refine/2working`
+  - `coworker/tasks/main/0draft/refine/3done`
 - Main scripts:
   - `coworker/scripts/workers/refine-drafts.ps1`
   - `coworker/scripts/process-draft-refinement-queue.ps1`
@@ -57,7 +57,7 @@ This repository contains a **file-queue automation system** called **Coworker**.
 
 ### 6. Task-source ingestion
 
-- `coworker/scripts/process-task-source.ps1` can create new task files in `coworker/tasks/1ready` from:
+- `coworker/scripts/process-task-source.ps1` can create new task files in `coworker/tasks/main/1ready` from:
   - GitHub issues assigned to a configured user
   - a polled URL containing a keyword
 - Defaults are repo `platonai/Browser4`, assignee `galaxyeye`, and keyword `@galaxyeye`. (`coworker/scripts/process-task-source.ps1:18-25`, `coworker/scripts/process-task-source.ps1:40-58`, `coworker/scripts/process-task-source.ps1:61-106`, `coworker/scripts/process-task-source.ps1:109-151`)
@@ -77,17 +77,17 @@ This repository contains a **file-queue automation system** called **Coworker**.
 
 ### Main task lifecycle
 
-1. **Draft** in `coworker/tasks/0draft` (manual authoring area). (`coworker/README.md:16-28`, `coworker/tasks/0draft/README.md:1-37`)
-2. **Queue** by moving/copying the task file to `coworker/tasks/1ready`. (`coworker/README.md:30-40`)
-3. **Rename + start work**: Coworker generates a descriptive kebab-case name and moves the file to `coworker/tasks/2working`. (`coworker/scripts/coworker.ps1:417-500`, `coworker/scripts/workers/rename.ps1:30-60`, `coworker/scripts/workers/rename.ps1:153-178`)
+1. **Draft** in `coworker/tasks/main/0draft` (manual authoring area). (`coworker/README.md:16-28`, `coworker/tasks/main/0draft/README.md:1-37`)
+2. **Queue** by moving/copying the task file to `coworker/tasks/main/1ready`. (`coworker/README.md:30-40`)
+3. **Rename + start work**: Coworker generates a descriptive kebab-case name and moves the file to `coworker/tasks/main/2working`. (`coworker/scripts/coworker.ps1:417-500`, `coworker/scripts/workers/rename.ps1:30-60`, `coworker/scripts/workers/rename.ps1:153-178`)
 4. **Execute**: Copilot works against the repo; logs are written under `coworker/tasks/300logs/YYYY/MM/DD`. (`coworker/scripts/coworker.ps1:548-552`, `coworker/scripts/coworker.ps1:575-687`)
 5. **Finish**:
-   - normal tasks -> `coworker/tasks/3_1complete/YYYY/MMDD/...`
-   - tasks containing `#auto-approve` -> `coworker/tasks/5approved/YYYY/MMDD/...` (`coworker/scripts/coworker.ps1:696-713`, `coworker/README.md:48-55`)
+   - normal tasks -> `coworker/tasks/main/3complete/YYYY/MMDD/...`
+   - tasks containing `#auto-approve` -> `coworker/tasks/main/5approved/YYYY/MMDD/...` (`coworker/scripts/coworker.ps1:696-713`, `coworker/README.md:48-55`)
 6. **Approval / push**:
-   - human review can happen in `3_1complete` and optionally `4review`
+   - human review can happen in `main/3complete` and optionally `4review`
    - moving a reviewed task to `5approved` causes the next run to move it into `6git-pushed/YYYY/MMDD/...` and invoke git sync. (`coworker/README.md:7-12`, `coworker/scripts/coworker.ps1:348-399`)
-7. **Failure path**: stuck/aborted tasks can end up in `coworker/tasks/3_5aborted`. (`coworker/scripts/process-coworker-queue.ps1:133-174`)
+7. **Failure path**: stuck/aborted tasks can end up in `coworker/tasks/main/3aborted`. (`coworker/scripts/process-coworker-queue.ps1:133-174`)
 
 ### Separate draft-refinement lifecycle
 
@@ -123,7 +123,7 @@ From repository root in PowerShell:
 .\coworker\scripts\process-draft-refinement-queue.ps1 -Once
 
 # Refine all ready drafts
-.\coworker\scripts\workers\refine-drafts.ps1 -Path .\coworker\tasks\0draft\refine\1ready
+.\coworker\scripts\workers\refine-drafts.ps1 -Path .\coworker\tasks\main\0draft\refine\1ready
 
 # Extract and refine GitHub issues from drafts
 .\coworker\scripts\workers\refine-github-issues.ps1
@@ -146,7 +146,7 @@ References: `coworker/README.md:34-40`, `coworker/README.md:85-90`, `coworker/RE
 - `coworker/scripts/config.ps1` — loads `config.psd1` and exposes `$COPILOT`. (`coworker/scripts/config.ps1:1-12`)
 - `coworker/scripts/coworker-scheduler.config.psd1` — scheduler tasks, intervals, pending paths, and status/log paths. (`coworker/scripts/coworker-scheduler.config.psd1:1-41`)
 - `coworker/tasks/100templates/*.prompt.md` — prompt templates for the older orchestrator pipeline, not the normal file-runner path. (`coworker/docs/architect/orchestrator.md:23-38`, `coworker/scripts/architect/orchestrator.ps1:17-23`, `coworker/tasks/100templates/analysis.prompt.md:1-8`, `coworker/tasks/100templates/implementation.prompt.md:1-15`)
-- `coworker/README.md` and `coworker/tasks/0draft/README.md` — the clearest human-facing usage docs. (`coworker/README.md:1-153`, `coworker/tasks/0draft/README.md:1-37`)
+- `coworker/README.md` and `coworker/tasks/main/0draft/README.md` — the clearest human-facing usage docs. (`coworker/README.md:1-153`, `coworker/tasks/main/0draft/README.md:1-37`)
 
 ## Conventions and safety notes
 
@@ -172,7 +172,7 @@ Treat Coworker as a **filesystem-backed state machine** around GitHub Copilot:
 If you need to use Coworker safely, the normal path is:
 
 1. draft a Markdown task
-2. queue it in `coworker/tasks/1ready`
+2. queue it in `coworker/tasks/main/1ready`
 3. run `process-coworker-queue.ps1 -Once` or the scheduler
-4. inspect `3_1complete` and `300logs`
+4. inspect `main/3complete` and `300logs`
 5. only then move the task to `5approved` if you want automated commit/push

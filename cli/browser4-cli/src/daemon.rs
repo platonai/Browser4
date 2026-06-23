@@ -841,7 +841,7 @@ pub async fn ensure_server_running(base_url: &str) -> Result<(), String> {
 
     let port = extract_port(base_url);
     if !is_local_port_open(base_url) {
-        eprintln!("Browser4 server not running. Starting...");
+        print_server_starting_message();
         let launch_spec = resolve_server_launch_spec(port).await?;
         eprintln!("{}", launch_spec.description);
         return start_server(&launch_spec, base_url, port).await;
@@ -890,7 +890,7 @@ pub async fn ensure_server_running(base_url: &str) -> Result<(), String> {
         }
     }
 
-    eprintln!("Browser4 server not running. Starting...");
+    print_server_starting_message();
 
     let launch_spec = resolve_server_launch_spec(port).await?;
     eprintln!("{}", launch_spec.description);
@@ -904,6 +904,11 @@ fn extract_port(base_url: &str) -> u16 {
     } else {
         8182
     }
+}
+
+fn print_server_starting_message() {
+    eprintln!("Starting Java backend (first launch may take 30-60s)...");
+    eprintln!("Giving the server up to 2 minutes to start.");
 }
 
 fn is_local_port_open(base_url: &str) -> bool {
@@ -2925,6 +2930,165 @@ pub async fn install_browser4_runtime(
 // ---------------------------------------------------------------------------
 
 /// Try to locate an installed Google Chrome or Chromium executable.
+// ---------------------------------------------------------------------------
+// Playwright browser discovery
+// ---------------------------------------------------------------------------
+//
+// Playwright installs browsers under a platform-specific cache directory:
+//   Windows: %USERPROFILE%\AppData\Local\ms-playwright\
+//   macOS:   ~/Library/Caches/ms-playwright/
+//   Linux:   ~/.cache/ms-playwright/
+//
+// Each browser lives in a versioned subdirectory:
+//   chromium-1114/chrome-win/chrome.exe       (Windows)
+//   chromium-1114/chrome-mac/Chromium.app/…   (macOS)
+//   chromium-1114/chrome-linux/chrome         (Linux)
+//
+// The `PLAYWRIGHT_BROWSERS_PATH` env var overrides the default root.
+// ---------------------------------------------------------------------------
+
+/// Return the list of root directories where Playwright may have installed
+/// browsers.  The `PLAYWRIGHT_BROWSERS_PATH` env var takes precedence;
+/// otherwise the platform default is returned.
+fn playwright_install_roots() -> Vec<PathBuf> {
+    // 1. Explicit env var override — can contain multiple paths separated by
+    //    the platform path separator (":" on Unix, ";" on Windows).
+    if let Ok(raw) = env::var("PLAYWRIGHT_BROWSERS_PATH") {
+        let trimmed = raw.trim().to_string();
+        if !trimmed.is_empty() {
+            return env::split_paths(&trimmed).collect();
+        }
+    }
+
+    // 2. Platform default.
+    let home = match dirs::home_dir() {
+        Some(h) => h,
+        None => return vec![],
+    };
+
+    if cfg!(target_os = "windows") {
+        vec![home.join("AppData").join("Local").join("ms-playwright")]
+    } else if cfg!(target_os = "macos") {
+        vec![home.join("Library").join("Caches").join("ms-playwright")]
+    } else {
+        // Linux: both XDG and legacy locations.
+        vec![
+            home.join(".cache").join("ms-playwright"),
+            home.join("ms-playwright"),
+        ]
+    }
+}
+
+/// Platform-specific relative path from a Playwright browser version directory
+/// to the Chromium / Chrome binary.
+fn playwright_chromium_relative_exe_path() -> &'static [&'static str] {
+    if cfg!(target_os = "windows") {
+        // Playwright on 64-bit Windows uses "chrome-win64"; the 32-bit
+        // "chrome-win" is also possible.  Prefer the full browser, then
+        // the headless shell variant.
+        &[
+            "chrome-win64\\chrome.exe",
+            "chrome-win\\chrome.exe",
+            "chrome-headless-shell-win64\\chrome-headless-shell.exe",
+            "chrome-headless-shell-win\\chrome-headless-shell.exe",
+        ]
+    } else if cfg!(target_os = "macos") {
+        &["chrome-mac/Chromium.app/Contents/MacOS/Chromium"]
+    } else {
+        // Linux
+        &["chrome-linux/chrome", "chrome-headless-shell-linux/chrome-headless-shell"]
+    }
+}
+
+/// Platform-specific relative path from a Playwright browser version directory
+/// to the Microsoft Edge binary.
+fn playwright_edge_relative_exe_path() -> &'static [&'static str] {
+    if cfg!(target_os = "windows") {
+        &["chrome-win64\\msedge.exe", "chrome-win\\msedge.exe"]
+    } else if cfg!(target_os = "macos") {
+        &["chrome-mac/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"]
+    } else {
+        &["chrome-linux/msedge"]
+    }
+}
+
+/// Search Playwright install directories for a browser binary matching
+/// `browser_prefixes` (e.g. `["chromium", "chrome"]`) and the given
+/// platform-specific relative exe paths.
+fn find_browser_in_playwright(
+    browser_prefixes: &[&str],
+    relative_exe_paths: &[&str],
+) -> Option<PathBuf> {
+    for root in playwright_install_roots() {
+        let entries = match fs::read_dir(&root) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+
+        let mut version_dirs: Vec<PathBuf> = entries
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
+            .map(|e| e.path())
+            .collect();
+
+        // Sort descending so newer versions (higher build numbers) are tried
+        // first.  Build numbers are monotonic integers.
+        version_dirs.sort_by(|a, b| {
+            let a_name = a
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("");
+            let b_name = b
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("");
+            // Reverse: higher build number → tried first.
+            b_name.cmp(a_name)
+        });
+
+        for version_dir in &version_dirs {
+            let dir_name = version_dir
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("");
+
+            // Check whether this directory matches one of the requested browser
+            // prefixes (e.g. "chromium-1114" matches prefix "chromium").
+            let matches_prefix = browser_prefixes.iter().any(|prefix| {
+                dir_name == *prefix || dir_name.starts_with(&format!("{prefix}-"))
+            });
+            if !matches_prefix {
+                continue;
+            }
+
+            for rel in relative_exe_paths {
+                let candidate = version_dir.join(rel);
+                if candidate.is_file() {
+                    return Some(candidate);
+                }
+            }
+        }
+    }
+
+    None
+}
+
+/// Locate a Chromium / Chrome executable installed by Playwright.
+fn find_chrome_in_playwright() -> Option<PathBuf> {
+    find_browser_in_playwright(
+        &["chromium", "chrome"],
+        playwright_chromium_relative_exe_path(),
+    )
+}
+
+/// Locate a Microsoft Edge executable installed by Playwright.
+fn find_edge_in_playwright() -> Option<PathBuf> {
+    find_browser_in_playwright(
+        &["msedge", "edge"],
+        playwright_edge_relative_exe_path(),
+    )
+}
+
 pub fn find_chrome_executable() -> Option<std::path::PathBuf> {
     let candidates: &[&str] = if cfg!(target_os = "windows") {
         &[
@@ -2954,6 +3118,11 @@ pub fn find_chrome_executable() -> Option<std::path::PathBuf> {
         if std::path::Path::new(path).exists() {
             return Some(std::path::PathBuf::from(path));
         }
+    }
+
+    // Playwright-installed Chromium / Chrome (cross-platform)
+    if let Some(path) = find_chrome_in_playwright() {
+        return Some(path);
     }
 
     // Linux / fallback: check PATH
@@ -2994,6 +3163,11 @@ fn find_edge_executable() -> Option<PathBuf> {
         if Path::new(path).exists() {
             return Some(PathBuf::from(path));
         }
+    }
+
+    // Playwright-installed Microsoft Edge (cross-platform)
+    if let Some(path) = find_edge_in_playwright() {
+        return Some(path);
     }
 
     // Linux / fallback: check PATH
@@ -3354,6 +3528,11 @@ fn build_jar_launch_spec(runtime: &InstalledBrowser4Runtime, port: u16) -> Serve
         let path_str = browser_path.to_string_lossy().to_string();
         jvm_opts.push(format!("-Dchrome.path={}", path_str));
     }
+
+    // Limit JIT compilation to C1 (client) tier for faster startup.
+    // Placed before BROWSER4_SERVER_OPTS so users can override with
+    // -XX:TieredStopAtLevel=4 in the env var for peak throughput.
+    jvm_opts.push("-XX:TieredStopAtLevel=1".to_string());
 
     if let Ok(raw) = std::env::var(BROWSER4_SERVER_OPTS_ENV) {
         for token in raw
@@ -3825,6 +4004,7 @@ async fn start_server(
     base_url: &str,
     port: u16,
 ) -> Result<(), String> {
+    let server_start = Instant::now();
     let startup_log = create_server_startup_log(launch_spec, port).map_err(|error| {
         eprintln!("Failed to initialize Browser4 startup log: {error}");
         error
@@ -3930,7 +4110,8 @@ async fn start_server(
         format!("Browser4 reported ready at {base_url}; managed pid {managed_pid}"),
     );
     eprintln!(
-        "Server is up and running. Startup log: {}",
+        "Server is up and running in {:.1}s. Startup log: {}",
+        server_start.elapsed().as_secs_f64(),
         startup_log.path.display()
     );
     Ok(())
@@ -4269,12 +4450,11 @@ async fn wait_for_server_ready(
         };
 
         if last_progress_log_at.elapsed() >= Duration::from_secs(10) {
+            let elapsed = start.elapsed().as_secs();
+            let remaining = timeout.as_secs().saturating_sub(elapsed);
             eprintln!(
-                "Waiting for Browser4 server at {} ({}s/{}s): {}",
-                base_url,
-                start.elapsed().as_secs(),
-                timeout.as_secs(),
-                progress_status
+                "Waiting for Browser4 server at {} ({}s elapsed, ~{}s remaining): {}",
+                base_url, elapsed, remaining, progress_status
             );
             last_progress_log_at = Instant::now();
         }
@@ -4299,10 +4479,14 @@ fn format_server_wait_progress(state: &ServerState) -> String {
     match state {
         ServerState::Ready => "ready".to_string(),
         ServerState::Starting(status) => match truncate_status_for_log(status) {
-            message if message.is_empty() => "still starting".to_string(),
-            message => format!("still starting ({message})"),
+            message if message.is_empty() => {
+                "JVM is starting, waiting for Spring Boot...".to_string()
+            }
+            message => format!("Spring Boot is UP, waiting for MCP tools ({message})"),
         },
-        ServerState::Unreachable(_) => "not reachable yet".to_string(),
+        ServerState::Unreachable(_) => {
+            "TCP port not open yet, JVM may still be loading...".to_string()
+        }
     }
 }
 
@@ -4346,6 +4530,7 @@ fn format_server_startup_failure_message(
     } else {
         suggestions.push("confirm Java/Browser4 dependencies are available, then retry.");
     }
+    suggestions.push("common causes: insufficient JVM heap memory, missing native dependencies, port conflicts, or corrupt Browser4 runtime installation.");
 
     message.push(String::new());
     message.push("💡 What to try".to_string());
@@ -6126,5 +6311,238 @@ mod tests {
 
         delete_mirror_preference_cache();
         assert!(!path.exists(), "cache file should be deleted");
+    }
+
+    // ------------------------------------------------------------------
+    // Playwright browser search tests
+    // ------------------------------------------------------------------
+
+    /// Create a mock Playwright browser directory with a fake executable.
+    /// Returns the expected binary path.
+    fn create_mock_playwright_chromium(playwright_root: &Path) -> PathBuf {
+        let version_dir = playwright_root.join("chromium-1150");
+        let exe_path = if cfg!(target_os = "windows") {
+            version_dir.join("chrome-win64").join("chrome.exe")
+        } else if cfg!(target_os = "macos") {
+            let mac_bundle = version_dir
+                .join("chrome-mac")
+                .join("Chromium.app")
+                .join("Contents")
+                .join("MacOS");
+            create_dir_all(&mac_bundle).unwrap();
+            mac_bundle.join("Chromium")
+        } else {
+            version_dir.join("chrome-linux").join("chrome")
+        };
+        if let Some(parent) = exe_path.parent() {
+            create_dir_all(parent).unwrap();
+        }
+        write(&exe_path, "fake-binary").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = fs::metadata(&exe_path).unwrap().permissions();
+            perms.set_mode(0o755);
+            fs::set_permissions(&exe_path, perms).unwrap();
+        }
+        exe_path
+    }
+
+    /// Create a mock Playwright Edge directory with a fake executable.
+    fn create_mock_playwright_edge(playwright_root: &Path) -> PathBuf {
+        let version_dir = playwright_root.join("msedge-1150");
+        let exe_path = if cfg!(target_os = "windows") {
+            version_dir.join("chrome-win64").join("msedge.exe")
+        } else if cfg!(target_os = "macos") {
+            let mac_bundle = version_dir
+                .join("chrome-mac")
+                .join("Microsoft Edge.app")
+                .join("Contents")
+                .join("MacOS");
+            create_dir_all(&mac_bundle).unwrap();
+            mac_bundle.join("Microsoft Edge")
+        } else {
+            version_dir.join("chrome-linux").join("msedge")
+        };
+        if let Some(parent) = exe_path.parent() {
+            create_dir_all(parent).unwrap();
+        }
+        write(&exe_path, "fake-binary").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = fs::metadata(&exe_path).unwrap().permissions();
+            perms.set_mode(0o755);
+            fs::set_permissions(&exe_path, perms).unwrap();
+        }
+        exe_path
+    }
+
+    /// Guard that sets `PLAYWRIGHT_BROWSERS_PATH` and restores on drop.
+    struct PlaywrightPathGuard {
+        prev: Option<String>,
+    }
+
+    impl PlaywrightPathGuard {
+        fn lock(path: &Path) -> Self {
+            let prev = env::var("PLAYWRIGHT_BROWSERS_PATH").ok();
+            unsafe {
+                env::set_var(
+                    "PLAYWRIGHT_BROWSERS_PATH",
+                    path.as_os_str(),
+                );
+            }
+            Self { prev }
+        }
+    }
+
+    impl Drop for PlaywrightPathGuard {
+        fn drop(&mut self) {
+            match &self.prev {
+                Some(v) => unsafe {
+                    env::set_var("PLAYWRIGHT_BROWSERS_PATH", v)
+                },
+                None => unsafe {
+                    env::remove_var("PLAYWRIGHT_BROWSERS_PATH")
+                },
+            }
+        }
+    }
+
+    #[test]
+    fn test_find_chrome_in_playwright_discovers_chromium_binary() {
+        let _lock = lock_env_mutex();
+        let tmp = test_temp_dir();
+        let playwright_root = tmp.path().join("ms-playwright");
+        let expected = create_mock_playwright_chromium(&playwright_root);
+        let _guard = PlaywrightPathGuard::lock(&playwright_root);
+
+        let found = find_chrome_in_playwright();
+        assert_eq!(found, Some(expected), "should discover Playwright Chromium");
+    }
+
+    #[test]
+    fn test_find_edge_in_playwright_discovers_edge_binary() {
+        let _lock = lock_env_mutex();
+        let tmp = test_temp_dir();
+        let playwright_root = tmp.path().join("ms-playwright");
+        let expected = create_mock_playwright_edge(&playwright_root);
+        let _guard = PlaywrightPathGuard::lock(&playwright_root);
+
+        let found = find_edge_in_playwright();
+        assert_eq!(found, Some(expected), "should discover Playwright Edge");
+    }
+
+    #[test]
+    fn test_find_chrome_in_playwright_returns_none_when_empty() {
+        let _lock = lock_env_mutex();
+        let tmp = test_temp_dir();
+        let playwright_root = tmp.path().join("ms-playwright-empty");
+        create_dir_all(&playwright_root).unwrap();
+        let _guard = PlaywrightPathGuard::lock(&playwright_root);
+
+        let found = find_chrome_in_playwright();
+        assert_eq!(found, None, "empty dir should return None");
+    }
+
+    #[test]
+    fn test_find_chrome_in_playwright_prefers_newer_version() {
+        let _lock = lock_env_mutex();
+        let tmp = test_temp_dir();
+        let playwright_root = tmp.path().join("ms-playwright");
+
+        // Create an older version first (lower build number).
+        let older_dir = playwright_root.join("chromium-1000");
+        let older_exe = if cfg!(target_os = "windows") {
+            older_dir.join("chrome-win64").join("chrome.exe")
+        } else if cfg!(target_os = "macos") {
+            let mac_bundle = older_dir
+                .join("chrome-mac")
+                .join("Chromium.app")
+                .join("Contents")
+                .join("MacOS");
+            create_dir_all(&mac_bundle).unwrap();
+            mac_bundle.join("Chromium")
+        } else {
+            older_dir.join("chrome-linux").join("chrome")
+        };
+        if let Some(parent) = older_exe.parent() {
+            create_dir_all(parent).unwrap();
+        }
+        write(&older_exe, "older").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = fs::metadata(&older_exe).unwrap().permissions();
+            perms.set_mode(0o755);
+            fs::set_permissions(&older_exe, perms).unwrap();
+        }
+
+        // Create a newer version (higher build number).
+        let expected = create_mock_playwright_chromium(&playwright_root); // chromium-1150
+
+        let _guard = PlaywrightPathGuard::lock(&playwright_root);
+
+        let found = find_chrome_in_playwright();
+        assert_eq!(
+            found, Some(expected),
+            "should prefer the newer version directory (1150 > 1000)"
+        );
+    }
+
+    #[test]
+    fn test_find_browser_in_playwright_respects_custom_env_var() {
+        let _lock = lock_env_mutex();
+        let tmp = test_temp_dir();
+        let custom_dir = tmp.path().join("custom-playwright-cache");
+        let expected = create_mock_playwright_chromium(&custom_dir);
+        let _guard = PlaywrightPathGuard::lock(&custom_dir);
+
+        let found = find_chrome_in_playwright();
+        assert_eq!(
+            found, Some(expected),
+            "should respect PLAYWRIGHT_BROWSERS_PATH env var"
+        );
+    }
+
+    #[test]
+    fn test_playwright_install_roots_uses_env_var_over_default() {
+        let _lock = lock_env_mutex();
+        let tmp = test_temp_dir();
+        let custom = tmp.path().join("pw-custom");
+        let _guard = PlaywrightPathGuard::lock(&custom);
+
+        let roots = playwright_install_roots();
+        assert!(
+            roots.contains(&custom),
+            "roots should contain the custom path from PLAYWRIGHT_BROWSERS_PATH"
+        );
+    }
+
+    #[test]
+    fn test_find_chrome_executable_includes_playwright() {
+        let _lock = lock_env_mutex();
+        let tmp = test_temp_dir();
+        let playwright_root = tmp.path().join("ms-playwright");
+        let playwright_exe = create_mock_playwright_chromium(&playwright_root);
+        let _guard = PlaywrightPathGuard::lock(&playwright_root);
+
+        // find_chrome_executable() should discover a browser.  If a system
+        // Chrome is already installed it may be found first (before the
+        // Playwright fallback), which is fine — the point is that the
+        // function succeeds.
+        let found = find_chrome_executable();
+        assert!(
+            found.is_some(),
+            "find_chrome_executable should find a browser (system or Playwright)"
+        );
+
+        // When no system Chrome exists, the Playwright binary should be found.
+        // Verify the Playwright binary is discoverable on its own.
+        let playwright_found = find_chrome_in_playwright();
+        assert_eq!(
+            playwright_found, Some(playwright_exe),
+            "Playwright binary should be independently discoverable"
+        );
     }
 }

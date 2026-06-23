@@ -15,8 +15,8 @@
             IntervalSeconds = 15
             WindowStyle     = 'Minimized'
             PendingPaths    = @(
-                'coworker\tasks\1ready'
-                'coworker\tasks\5approved'
+                'coworker\tasks\main\1ready'
+                'coworker\tasks\main\5approved'
             )
             ScriptPath      = 'coworker\scripts\coworker.ps1'
             Arguments       = @()
@@ -27,14 +27,14 @@
             Enabled         = $true
             IntervalSeconds = 15
             WindowStyle     = 'Minimized'
-            PendingPaths    = @('coworker\tasks\0draft\refine\1ready')
+            PendingPaths    = @('coworker\tasks\main\0draft\refine\1ready')
             ScriptPath      = 'coworker\scripts\workers\refine-drafts.ps1'
-            Arguments       = @('-Path', 'coworker\tasks\0draft\refine\1ready')
+            Arguments       = @('-Path', 'coworker\tasks\main\0draft\refine\1ready')
         }
         @{
             Name            = 'commit-github-issues'
             Description     = 'Scan for pending GitHub issue files and create them via gh CLI.'
-            Enabled         = $true
+            Enabled         = $false
             IntervalSeconds = 15
             WindowStyle     = 'Minimized'
             PendingPaths    = @('coworker\tasks\200issues\github\commit\ready')
@@ -55,10 +55,30 @@
             Name            = 'fetch-github-issues'
             Description     = 'Fetch latest GitHub issues, save them locally, and self-assign unassigned ones.'
             Enabled         = $true
-            IntervalSeconds = 3600
+            IntervalSeconds = 600
             WindowStyle     = 'Minimized'
             PendingPaths    = @()
             ScriptPath      = 'coworker\scripts\workers\fetch-github-issues.ps1'
+            Arguments       = @()
+        }
+        @{
+            Name            = 'organize-task-files'
+            Description     = 'Reorganize task directories with more than 10 files into YYYY/MMDD subdirectories.'
+            Enabled         = $true
+            IntervalSeconds = 300
+            WindowStyle     = 'Minimized'
+            PendingPaths    = @()
+            ScriptPath      = 'coworker\scripts\workers\organize-task-files.ps1'
+            Arguments       = @()
+        }
+        @{
+            Name            = 'triage-github-issues'
+            Description     = 'Scan fetched GitHub issues and auto-queue low-risk, high-relevance ones for AI execution.'
+            Enabled         = $true
+            IntervalSeconds = 1800
+            WindowStyle     = 'Minimized'
+            PendingPaths    = @('coworker\tasks\main\0draft\issues\github')
+            ScriptPath      = 'coworker\scripts\workers\triage-github-issues.ps1'
             Arguments       = @()
         }
         @{
