@@ -27,5 +27,6 @@
     <modules>
         <module>browser4-protocol</module>
         <module>browser4-parse</module>
+        <module>browser4-captcha</module>
     </modules>
 </project>
