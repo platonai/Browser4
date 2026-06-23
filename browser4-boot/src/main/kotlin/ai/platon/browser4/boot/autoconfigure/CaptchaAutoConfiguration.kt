@@ -15,15 +15,25 @@
  */
 package ai.platon.browser4.boot.autoconfigure
 
-import ai.platon.pulsar.captcha.*
-import ai.platon.pulsar.captcha.detection.*
-import ai.platon.pulsar.captcha.inject.*
+import ai.platon.pulsar.agentic.tools.CustomToolRegistry
+import ai.platon.pulsar.captcha.CaptchaConfig
+import ai.platon.pulsar.captcha.CaptchaServiceProvider
+import ai.platon.pulsar.captcha.CaptchaType
+import ai.platon.pulsar.captcha.ChainedCaptchaSolver
+import ai.platon.pulsar.captcha.detection.ChainedCaptchaDetector
+import ai.platon.pulsar.captcha.detection.HCaptchaDetector
+import ai.platon.pulsar.captcha.detection.ImageCaptchaDetector
+import ai.platon.pulsar.captcha.detection.RecaptchaDetector
+import ai.platon.pulsar.captcha.detection.TurnstileDetector
+import ai.platon.pulsar.captcha.inject.CaptchaTokenInjector
+import ai.platon.pulsar.captcha.inject.HCaptchaTokenInjector
+import ai.platon.pulsar.captcha.inject.RecaptchaTokenInjector
+import ai.platon.pulsar.captcha.inject.TurnstileTokenInjector
 import ai.platon.pulsar.captcha.integration.CaptchaBrowseEventHandler
 import ai.platon.pulsar.captcha.integration.CaptchaPageCategorySniffer
 import ai.platon.pulsar.captcha.provider.AntiCaptchaProvider
 import ai.platon.pulsar.captcha.provider.CapSolverProvider
 import ai.platon.pulsar.captcha.provider.TwoCaptchaProvider
-import ai.platon.pulsar.agentic.tools.CustomToolRegistry
 import ai.platon.pulsar.captcha.tools.CaptchaToolExecutor
 import ai.platon.pulsar.common.config.MutableConfig
 import ai.platon.pulsar.common.getLogger

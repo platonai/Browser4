@@ -40,6 +40,10 @@
             <artifactId>spring-boot-test</artifactId>
             <scope>test</scope>
         </dependency>
+        <dependency>
+            <groupId>ai.platon.pulsar</groupId>
+            <artifactId>browser4-agentic</artifactId>
+        </dependency>
     </dependencies>
 
 </project>
