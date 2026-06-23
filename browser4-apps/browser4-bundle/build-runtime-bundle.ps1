@@ -18,6 +18,7 @@ This script builds a platform-native runtime bundle for Browser4.  It:
 The output is a .zip (Windows) or .tar.gz (Linux/macOS) archive containing:
   runtime/           - bundled JRE (stripped, compressed)
   lib/               - application and dependency JARs
+  plugins/           - optional plugin JARs (auto-discovered via classpath wildcard)
   bin/               - launch scripts (start.sh, start.bat)
   runtime-bundle.json - metadata
 
@@ -598,6 +599,7 @@ function Get-BundleMetadataJson(
         mainClass = $mainClass
         runtimeDirectoryName = 'runtime'
         libDirectoryName = 'lib'
+        pluginsDirectoryName = 'plugins'
         modules = $modules
         builtAtUtc = [DateTime]::UtcNow.ToString('o')
     }
@@ -719,8 +721,9 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BUNDLE_DIR="$(dirname "$DIR")"
 RUNTIME="$BUNDLE_DIR/runtime/bin/java"
 LIB_CP="$BUNDLE_DIR/lib/*"
+PLUGINS_CP="$BUNDLE_DIR/plugins/*"
 MAIN_CLASS="{mainClass}"
-exec "$RUNTIME" -cp "$LIB_CP" "$MAIN_CLASS" "$@"
+exec "$RUNTIME" -cp "$LIB_CP:$PLUGINS_CP" "$MAIN_CLASS" "$@"
 '@ -replace '\{mainClass\}', $mainClass
     $startShContent = $startShContent -replace "`r`n", "`n"
     Set-Content -LiteralPath $startShPath -Value $startShContent -Encoding UTF8 -NoNewline
@@ -735,8 +738,9 @@ set "DIR=%~dp0"
 set "BUNDLE_DIR=%DIR%.."
 set "RUNTIME=%BUNDLE_DIR%\runtime\bin\java.exe"
 set "LIB_CP=%BUNDLE_DIR%\lib\*"
+set "PLUGINS_CP=%BUNDLE_DIR%\plugins\*"
 set "MAIN_CLASS=$mainClass"
-"%RUNTIME%" -cp "%LIB_CP%" %MAIN_CLASS% %*
+"%RUNTIME%" -cp "%LIB_CP%;%PLUGINS_CP%" %MAIN_CLASS% %*
 "@
     Set-Content -LiteralPath $startBatPath -Value $startBatContent -Encoding ASCII
 }
@@ -792,6 +796,7 @@ $workDirectory = Join-Path $resolvedOutputDirectory (Join-Path '_work' $bundleBa
 $bundleDirectory = Join-Path $workDirectory $bundleBaseName
 $runtimeDirectory = Join-Path $bundleDirectory 'runtime'
 $libDirectory = Join-Path $bundleDirectory 'lib'
+$pluginsDirectory = Join-Path $bundleDirectory 'plugins'
 $jdepsLogDirectory = Join-Path $workDirectory 'jdeps-logs'
 $assetPath = Join-Path $resolvedOutputDirectory $AssetName
 
@@ -803,6 +808,7 @@ New-Item -ItemType Directory -Force -Path $resolvedOutputDirectory | Out-Null
 Ensure-CleanDirectory $workDirectory
 Ensure-CleanDirectory $bundleDirectory
 Ensure-CleanDirectory $libDirectory
+Ensure-CleanDirectory $pluginsDirectory
 Ensure-CleanDirectory $jdepsLogDirectory
 
 # Auto-detect best JDK before resolving jdeps/jlink.

@@ -39,6 +39,7 @@ import ai.platon.pulsar.common.config.MutableConfig
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.skeleton.event.PulsarEventBus
 import org.springframework.boot.autoconfigure.AutoConfiguration
+import org.springframework.boot.autoconfigure.condition.ConditionalOnClass
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty
 import org.springframework.context.annotation.Bean
@@ -57,6 +58,7 @@ import org.springframework.context.annotation.Lazy
  * - Page category sniffer
  */
 @AutoConfiguration
+@ConditionalOnClass(name = ["ai.platon.pulsar.captcha.CaptchaConfig"])
 @ConditionalOnProperty(name = ["captcha.auto.solve.enabled"], havingValue = "true", matchIfMissing = true)
 @Lazy
 open class CaptchaAutoConfiguration {

@@ -183,6 +183,56 @@ docker run -d -p 8182:8182 `
 
 ---
 
+## 🤖 CAPTCHA Solving (Optional Plugin)
+
+The CAPTCHA solving feature is an **optional plugin** — it only activates when
+`browser4-captcha.jar` is on the classpath. Without the JAR, the application
+starts normally with no captcha functionality.
+
+### Enabling CAPTCHA
+
+1. **Runtime bundle**: drop `browser4-captcha.jar` into the `plugins/` directory
+   (or `lib/`) — picked up automatically via the `lib/*:plugins/*` classpath
+   wildcard. No rebuild needed.
+2. **Development** (`spring-boot:run`): add as a Maven dependency.
+3. **Fat JAR**: add `browser4-captcha` as a dependency before building.
+
+### Configuration Properties
+
+| Property | Default | Description |
+|---|---|---|
+| `captcha.auto.solve.enabled` | `true` | Master switch; set to `false` to disable even when JAR is present |
+| `captcha.service.provider` | `CAPSOLVER` | Primary solving service: `CAPSOLVER`, `TWO_CAPTCHA`, `ANTI_CAPTCHA` |
+| `captcha.capsolver.api.key` | (none) | API key for CapSolver |
+| `captcha.twocaptcha.api.key` | (none) | API key for 2Captcha |
+| `captcha.anticaptcha.api.key` | (none) | API key for Anti-Captcha |
+| `captcha.solve.timeout.seconds` | `120` | Max wait for a solution |
+| `captcha.poll.interval.ms` | `1000` | Interval between status polls |
+| `captcha.detection.enabled` | `true` | Auto-detect CAPTCHAs on page load |
+| `captcha.auto.solve.types` | `RECAPTCHA_V2,HCAPTCHA,TURNSTILE` | CAPTCHA types to auto-solve (comma-separated, or `ALL`) |
+| `captcha.report.failed.enabled` | `true` | Report failed solves for refund (2Captcha / Anti-Captcha only) |
+| `captcha.solve.max.retries` | `3` | Max retry attempts per solve |
+
+### Example
+
+```properties
+captcha.auto.solve.enabled=true
+captcha.service.provider=CAPSOLVER
+captcha.capsolver.api.key=CAP-XXXXXXXXXXXX
+captcha.solve.timeout.seconds=180
+captcha.auto.solve.types=RECAPTCHA_V2,RECAPTCHA_V3,HCAPTCHA,TURNSTILE
+```
+
+### Behavior Matrix
+
+| JAR on classpath | `auto.solve.enabled` | Result |
+|---|---|---|
+| Yes | `true` (or absent) | CAPTCHA fully active |
+| Yes | `false` | CAPTCHA disabled (property blocks it) |
+| No | any value | CAPTCHA silently skipped (no error) |
+
+---
+
 ## 💡 Configuration Best Practices
 
 1. 🔐 Use **environment variables** for credentials or sensitive values.

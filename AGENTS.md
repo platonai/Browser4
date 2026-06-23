@@ -93,9 +93,64 @@ mvnw.cmd -q -DskipTests
 | `browser4-rest`                        | Spring Boot REST layer & command endpoints |
 | `cli/*`                                | Browser4 CLI + skill assets (`cli/browser4-cli`, `cli/skill`) |
 | `browser4-apps/*`                       | Product packaging and the unified launcher (`browser4-apps/browser4-standalone`, `target/Browser4.jar`) |
+| `browser4-core/browser4-plugins/*`     | Optional plugins: `browser4-captcha` (CAPTCHA solving), activated by classpath presence |
 | `examples/*`                           | Runnable examples (`examples/browser4-examples`) |
 | `browser4-tests`                       | E2E & heavy integration & scenario tests |
 | `browser4-tests/browser4-tests-common` | Shared test base classes and utilities |
+
+## Optional/Pluggable Modules
+
+Browser4 supports optional modules that activate **by classpath presence** — drop the JAR on
+the classpath and the feature lights up; remove it and the app starts normally without it.
+
+### Architecture
+
+Each optional module follows the same Spring Boot pattern:
+
+1. **Maven**: declared as `<optional>true</optional>` in `browser4-boot/pom.xml` —
+   available for compilation, but NOT pulled transitively by downstream modules.
+2. **Auto-configuration**: a Spring `@AutoConfiguration` class guarded by
+   `@ConditionalOnClass(name = ["com.example.SentinelClass"])` — the string form is
+   read from bytecode metadata via ASM *before* class loading, so Spring skips the
+   entire configuration class (and all its imports) when the sentinel class is absent.
+3. **Discovery**: registered in
+   `browser4-boot/src/main/resources/META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports` —
+   Spring Boot's `AutoConfigurationImportSelector` evaluates the `@ConditionalOnClass`
+   guard and only loads the class when the condition passes.
+4. **Runtime**: the bundle launch scripts (`start.sh` / `start.bat`) include both
+   `lib/*` and `plugins/*` on the classpath — drop optional JARs into `plugins/`
+   with no rebuild.
+
+### Current Optional Modules
+
+| Module | Sentinel class | Property kill-switch |
+|---|---|---|
+| `browser4-captcha` | `ai.platon.pulsar.captcha.CaptchaConfig` | `captcha.auto.solve.enabled=false` |
+
+### Adding Captcha to the Runtime Bundle
+
+```bash
+# Copy the captcha JAR into the plugins directory
+cp browser4-captcha-4.12.0-rc1.jar bundle/plugins/
+
+# Or place it alongside core JARs (both directories are on the classpath)
+cp browser4-captcha-4.12.0-rc1.jar bundle/lib/
+
+# Restart — no rebuild needed
+bundle/bin/start.sh
+```
+
+### Adding a New Optional Module
+
+1. Create the module under `browser4-core/browser4-plugins/` and add it to the parent POM.
+2. Add the dependency as `<optional>true</optional>` in `browser4-boot/pom.xml`.
+3. Create a Spring `@AutoConfiguration` class annotated with
+   `@ConditionalOnClass(name = ["com.example.SentinelClass"])` and
+   `@ConditionalOnProperty` for a runtime kill-switch.
+4. Register the auto-configuration class in
+   `browser4-boot/src/main/resources/META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports`.
+5. For the runtime bundle, the `plugins/` directory is already on the classpath —
+   no script changes needed. Users drop the JAR into `plugins/` at runtime.
 
 ## Key APIs and Concepts
 
@@ -213,6 +268,18 @@ Default: 8182
 - `application-*.properties` — Profile-specific overrides
 - `application-private.properties` — Private overrides (ignored by Git), secrets should be set here or via environment variables
 
+**Runtime Bundle (fat JAR alternative):**
+```
+bundle/
+  bin/start.sh        # -cp "lib/*:plugins/*"
+  bin/start.bat       # -cp "lib/*;plugins/*"
+  lib/                # core + Maven dependency JARs
+  plugins/            # drop-in directory for optional plugin JARs
+  runtime/            # bundled JRE (jlink)
+```
+To add optional plugins (e.g. CAPTCHA), drop their JARs into `plugins/` —
+no rebuild required. See [Optional/Pluggable Modules](#optionalpluggable-modules).
+
 ### Key Configuration Properties
 ```properties
 # LLM API Key
@@ -223,6 +290,19 @@ browser.profile.mode=DEFAULT  # DEFAULT | SYSTEM_DEFAULT | SEQUENTIAL | TEMPORAR
 
 # Display mode
 browser.display.mode=GUI  # GUI | HEADLESS | SUPERVISED
+
+# ---- CAPTCHA (optional, requires browser4-captcha.jar on classpath) ----
+captcha.auto.solve.enabled=true
+captcha.service.provider=CAPSOLVER  # CAPSOLVER | TWO_CAPTCHA | ANTI_CAPTCHA
+# captcha.capsolver.api.key=${CAPSOLVER_KEY}
+# captcha.twocaptcha.api.key=${TWOCAPTCHA_KEY}
+# captcha.anticaptcha.api.key=${ANTICAPTCHA_KEY}
+captcha.solve.timeout.seconds=120
+captcha.poll.interval.ms=1000
+captcha.detection.enabled=true
+captcha.auto.solve.types=RECAPTCHA_V2,HCAPTCHA,TURNSTILE
+captcha.report.failed.enabled=true
+captcha.solve.max.retries=3
 ```
 
 ## Development Principles

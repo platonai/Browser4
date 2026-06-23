@@ -49,7 +49,7 @@ import org.springframework.context.annotation.Lazy
 import org.springframework.core.env.Environment
 
 @AutoConfiguration
-@Import(AgenticContextConfiguration::class, CaptchaAutoConfiguration::class)
+@Import(AgenticContextConfiguration::class)
 @Lazy
 class Browser4AutoConfiguration {
     @Bean(name = ["conf"])
