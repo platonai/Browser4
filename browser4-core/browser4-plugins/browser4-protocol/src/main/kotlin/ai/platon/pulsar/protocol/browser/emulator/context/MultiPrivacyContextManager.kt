@@ -41,7 +41,6 @@ import ai.platon.pulsar.skeleton.common.AppSystemInfo
 import ai.platon.pulsar.skeleton.common.metrics.MetricsSystem
 import ai.platon.pulsar.skeleton.workflow.fetch.FetchResult
 import ai.platon.pulsar.skeleton.workflow.fetch.FetchTask
-import com.google.common.collect.Iterables
 import java.io.IOException
 import java.time.Duration
 import java.time.Instant
@@ -75,16 +74,10 @@ open class MultiPrivacyContextManager(
     private val tracer = logger.takeIf { it.isTraceEnabled }
     private val throttlingLogger = ThrottlingLogger(logger)
     private var numTasksAtLastReportTime = 0L
-    private val allowedPrivacyContextCount: Int
+    internal val allowedPrivacyContextCount: Int
         get() {
-            // PRIVACY_CONTEXT_NUMBER is deprecated, use BROWSER_CONTEXT_NUMBER instead
-//        val defaultValue = conf.getInt(PRIVACY_CONTEXT_NUMBER, 2)
-//        return conf.getInt(BROWSER_CONTEXT_NUMBER, defaultValue)
-
             return conf.getWithFallback(BROWSER_CONTEXT_NUMBER, PRIVACY_CONTEXT_NUMBER)?.toIntOrNull() ?: 2
         }
-
-    val maxAllowedBadContexts = 10
 
     internal val maintainCount = AtomicInteger()
     private var lastMaintainTime = Instant.now()
@@ -99,7 +92,7 @@ open class MultiPrivacyContextManager(
 
     private var driverAbsenceReportTime = Instant.EPOCH
 
-    private val iterator = Iterables.cycle(temporaryContexts.values).iterator()
+    private var roundRobinIndex = 0
 
     val metrics = Metrics()
 
@@ -282,7 +275,10 @@ open class MultiPrivacyContextManager(
             try {
                 return tryGetNextUnderLoadedPrivacyContext()
             } catch (e: NoSuchElementException) {
-                throw PrivacyException("No under-loaded privacy context available", e)
+                throw PrivacyException(
+                    "No under-loaded privacy context available (temporary: ${temporaryContexts.size}, allowed: $allowedPrivacyContextCount)",
+                    e
+                )
             }
         }
     }
@@ -320,7 +316,8 @@ open class MultiPrivacyContextManager(
         }
         lastMaintainTime = Instant.now()
 
-        if (maintainCount.getAndIncrement() == 0) {
+        val count = maintainCount.getAndUpdate { if (it >= Int.MAX_VALUE - 1) 0 else it + 1 }
+        if (count == 0) {
             logger.info("Maintaining service is started, minimal maintain interval: {}", minMaintainInterval)
         }
 
@@ -372,11 +369,16 @@ open class MultiPrivacyContextManager(
      * */
     @Throws(NoSuchElementException::class)
     private fun tryGetNextUnderLoadedPrivacyContext(): PrivacyContext {
-        var n = temporaryContexts.size
+        val contexts = temporaryContexts.values.toList()
+        if (contexts.isEmpty()) {
+            throw NoSuchElementException("No temporary privacy contexts available (active: $activeContextCount, allowed: $allowedPrivacyContextCount)")
+        }
 
-        var pc = iterator.next()
+        var n = contexts.size
+        var pc = contexts[roundRobinIndex.coerceAtMost(contexts.size - 1)]
         while (n-- > 0 && pc.isFullCapacity) {
-            pc = iterator.next()
+            roundRobinIndex = (roundRobinIndex + 1) % contexts.size
+            pc = contexts[roundRobinIndex]
         }
 
         return pc
@@ -389,8 +391,6 @@ open class MultiPrivacyContextManager(
     }
 
     private fun reserveResourceForcefully() {
-        doMaintain()
-
         if (AppSystemInfo.isSystemOverCriticalLoad) {
             logger.info(
                 "Critical resource, closing a temporary context | availableMem: {}, memToReserve: {}, shortage: {}",
@@ -403,44 +403,55 @@ open class MultiPrivacyContextManager(
     }
 
     private fun closeDyingContexts() {
-        // weak consistency, which is OK
-        activeContexts.filterValues { !it.isActive }.values.forEach {
-            permanentContexts.remove(it.profile)
-            temporaryContexts.remove(it.profile)
+        // Single pass over active contexts — collect dying ones and close them
+        val toClose = mutableListOf<PrivacyContext>()
 
-            logger.info(
-                "Privacy context is inactive, closing it | {} | {} | {}",
-                it.elapsedTime.readable(), it.display, it.readableState
-            )
-            close(it)
+        activeContexts.values.forEach { ctx ->
+            val reason = when {
+                !ctx.isActive -> {
+                    logger.info(
+                        "Privacy context is inactive, closing it | {} | {} | {}",
+                        ctx.elapsedTime.readable(), ctx.display, ctx.readableState
+                    )
+                    "inactive"
+                }
+
+                ctx.profile.isTemporary && ctx.isIdle -> {
+                    logger.warn(
+                        "Privacy context hangs unexpectedly, closing it | {}/{} | {} | {}",
+                        ctx.idleTime.readable(), ctx.elapsedTime.readable(), ctx.display, ctx.readableState
+                    )
+                    "idle"
+                }
+
+                ctx.profile.isPermanent && ctx.isIdle -> {
+                    logger.warn(
+                        "Permanent privacy context is idle, closing it | {}/{} | {} | {}",
+                        ctx.idleTime.readable(), ctx.elapsedTime.readable(), ctx.display, ctx.readableState
+                    )
+                    "idle"
+                }
+
+                ctx.isHighFailureRate -> {
+                    logger.warn(
+                        "Privacy context has too high failure rate: {}, closing it | {} | {} | {}",
+                        ctx.failureRate, ctx.elapsedTime.readable(), ctx.display, ctx.readableState
+                    )
+                    "highFailure"
+                }
+
+                else -> null
+            }
+
+            if (reason != null) {
+                toClose.add(ctx)
+            }
         }
 
-        temporaryContexts.filterValues { it.isIdle }.values.forEach {
-            temporaryContexts.remove(it.profile)
-            logger.warn(
-                "Privacy context hangs unexpectedly, closing it | {}/{} | {} | {}",
-                it.idleTime.readable(), it.elapsedTime.readable(), it.display, it.readableState
-            )
-            close(it)
-        }
-
-        permanentContexts.filterValues { it.isIdle }.values.forEach {
-            permanentContexts.remove(it.profile)
-            logger.warn(
-                "Permanent privacy context is idle, closing it | {}/{} | {} | {}",
-                it.idleTime.readable(), it.elapsedTime.readable(), it.display, it.readableState
-            )
-            close(it)
-        }
-
-        activeContexts.filterValues { it.isHighFailureRate }.values.forEach {
-            permanentContexts.remove(it.profile)
-            temporaryContexts.remove(it.profile)
-            logger.warn(
-                "Privacy context has too high failure rate: {}, closing it | {} | {} | {}",
-                it.failureRate, it.elapsedTime.readable(), it.display, it.readableState
-            )
-            close(it)
+        toClose.forEach { ctx ->
+            permanentContexts.remove(ctx.profile)
+            temporaryContexts.remove(ctx.profile)
+            close(ctx)
         }
     }
 
@@ -488,15 +499,24 @@ open class MultiPrivacyContextManager(
         privacyContext: PrivacyContext, task: FetchTask, fetchFun: suspend (FetchTask, WebDriver) -> FetchResult
     ): FetchResult {
         val result: FetchResult = try {
-            require(!task.isCanceled)
-            require(task.state.get() == FetchTask.State.NOT_READY)
-            require(task.proxyEntry == null)
+            // Validate task state before running — return canceled instead of throwing
+            val validationError = when {
+                task.isCanceled -> "Task is already canceled"
+                task.state.get() != FetchTask.State.NOT_READY -> "Task is not in NOT_READY state: ${task.state.get()}"
+                task.proxyEntry != null -> "Task already has a proxy entry: ${task.proxyEntry}"
+                else -> null
+            }
 
-            task.markReady()
-            // @Throws(Exception::class)
-            privacyContext.run(task) { _, driver ->
-                task.startWork()
-                fetchFun(task, driver)
+            if (validationError != null) {
+                logger.warn("Task validation failed | #{} | {} | {}", task.id, validationError, task.url)
+                FetchResult.canceled(task, validationError)
+            } else {
+                task.markReady()
+                // @Throws(Exception::class)
+                privacyContext.run(task) { _, driver ->
+                    task.startWork()
+                    fetchFun(task, driver)
+                }
             }
         } finally {
             task.done()
@@ -636,10 +656,6 @@ open class MultiPrivacyContextManager(
 
     private fun dump() {
         try {
-//            if (!Files.exists(SNAPSHOT_PATH)) {
-//                Files.createDirectories(SNAPSHOT_PATH.parent)
-//            }
-
             if (activeContexts.isEmpty()) {
                 return
             }
