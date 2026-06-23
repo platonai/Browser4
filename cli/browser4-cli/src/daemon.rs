@@ -166,6 +166,33 @@ struct DownloadedFile {
 }
 
 // ---------------------------------------------------------------------------
+// Release metadata — used to resolve the latest version tag from mirrors
+// that publish a `latest-release.json` file (Aliyun OSS, custom mirrors).
+// ---------------------------------------------------------------------------
+
+/// Minimal representation of the `latest-release.json` file published by
+/// release workflows.  Contains only public, non-sensitive fields.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct LatestReleaseInfo {
+    tag: String,
+    #[serde(default)]
+    version: Option<String>,
+    #[serde(default)]
+    published_at: Option<String>,
+    #[serde(default)]
+    release_url: Option<String>,
+    #[serde(default)]
+    assets: Vec<ReleaseAssetInfo>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ReleaseAssetInfo {
+    name: String,
+    #[serde(default)]
+    size: Option<u64>,
+}
+
+// ---------------------------------------------------------------------------
 // Download mirror configuration
 // ---------------------------------------------------------------------------
 
@@ -1264,13 +1291,147 @@ fn should_force_remote_bundle() -> bool {
     }
 }
 
+/// Return `true` when `s` looks like a version tag: starts with `v` followed
+/// by a dotted numeric version (e.g. `v4.11.2`, `v4.11.9-rc.1`).
+fn is_valid_version_tag(s: &str) -> bool {
+    let s = s.trim();
+    let rest = match s.strip_prefix('v') {
+        Some(r) => r,
+        None => return false,
+    };
+    if rest.is_empty() || rest.starts_with('.') || rest.ends_with('.') {
+        return false;
+    }
+    let mut has_digit = false;
+    let mut in_prerelease = false;
+    for ch in rest.chars() {
+        if ch.is_ascii_digit() {
+            has_digit = true;
+        } else if ch == '.' {
+            // dots are fine (both in semver and pre-release)
+        } else if ch == '-' {
+            in_prerelease = true;
+        } else if in_prerelease && (ch.is_ascii_lowercase() || ch == '_') {
+            // pre-release labels like -rc.1, -alpha.2, -beta.3, -dry_run.1
+        } else {
+            return false;
+        }
+    }
+    has_digit
+}
+
 fn parse_release_tag_from_url(url: &str) -> Option<String> {
     let parsed = reqwest::Url::parse(url).ok()?;
     let segments = parsed.path_segments()?.collect::<Vec<_>>();
     let download_index = segments.iter().position(|segment| *segment == "download")?;
-    segments
-        .get(download_index + 1)
-        .map(|segment| (*segment).to_string())
+    let candidate = segments.get(download_index + 1)?.to_string();
+    if is_valid_version_tag(&candidate) {
+        Some(candidate)
+    } else {
+        None
+    }
+}
+
+/// Attempt to extract the GitHub owner and repo from a mirror's `base_url`.
+///
+/// Returns `Some((owner, repo))` when the mirror is a GitHub Releases URL
+/// (e.g. `https://github.com/platonai/Browser4/releases`), or `None` for
+/// non-GitHub mirrors.
+fn parse_github_owner_repo(mirror: &DownloadMirror) -> Option<(String, String)> {
+    let parsed = reqwest::Url::parse(&mirror.base_url).ok()?;
+    let host = parsed.host_str()?;
+    if host != "github.com" {
+        return None;
+    }
+    let segments: Vec<&str> = parsed.path_segments()?.collect();
+    // Expected: ["{owner}", "{repo}", "releases"]
+    if segments.len() >= 2 {
+        Some((segments[0].to_string(), segments[1].to_string()))
+    } else {
+        None
+    }
+}
+
+/// Query the GitHub REST API for the latest release tag.
+///
+/// Calls `GET /repos/{owner}/{repo}/releases/latest` and extracts `tag_name`
+/// from the JSON response.  Returns `None` on any error (non-fatal — callers
+/// fall through to the next mirror).
+async fn resolve_latest_tag_from_github_api(owner: &str, repo: &str) -> Option<String> {
+    let url = format!("https://api.github.com/repos/{owner}/{repo}/releases/latest");
+    let client = reqwest::Client::builder()
+        .user_agent("browser4-cli")
+        .build()
+        .ok()?;
+    let response = client
+        .get(&url)
+        .header("Accept", "application/vnd.github+json")
+        .header("X-GitHub-Api-Version", "2022-11-28")
+        .send()
+        .await
+        .ok()?;
+    if !response.status().is_success() {
+        return None;
+    }
+    let body = response.text().await.ok()?;
+    let json: serde_json::Value = serde_json::from_str(&body).ok()?;
+    json.get("tag_name")?.as_str().map(String::from)
+}
+
+/// Fetch `latest-release.json` from a mirror and return the parsed metadata.
+///
+/// The metadata file is published at `{base_url}/latest-release.json` and
+/// contains the latest release tag and other public, non-sensitive fields.
+async fn resolve_latest_tag_from_oss_metadata(
+    mirror: &DownloadMirror,
+) -> Option<LatestReleaseInfo> {
+    let base = mirror.base_url.trim_end_matches('/');
+    let metadata_url = format!("{base}/latest-release.json");
+    let response = reqwest::get(&metadata_url).await.ok()?;
+    if !response.status().is_success() {
+        return None;
+    }
+    response.json::<LatestReleaseInfo>().await.ok()
+}
+
+/// Resolve the latest release tag from the configured mirrors.
+///
+/// Tries each mirror that has `supports_latest_resolution` set:
+/// - GitHub mirrors: uses the REST API (`/repos/{owner}/{repo}/releases/latest`)
+/// - Other mirrors: fetches `{base_url}/latest-release.json`
+///
+/// Returns the first successfully resolved `(tag, full_metadata)` pair, or
+/// `None` when all mirrors fail to report their latest version.
+async fn resolve_latest_tag(
+    mirrors: &[DownloadMirror],
+) -> Option<(String, LatestReleaseInfo)> {
+    for mirror in mirrors {
+        if !mirror.supports_latest_resolution {
+            continue;
+        }
+        // GitHub mirrors — use the REST API (fast, no download overhead).
+        if let Some((owner, repo)) = parse_github_owner_repo(mirror) {
+            if let Some(tag) = resolve_latest_tag_from_github_api(&owner, &repo).await {
+                let info = LatestReleaseInfo {
+                    tag: tag.clone(),
+                    version: Some(tag.trim_start_matches('v').to_string()),
+                    published_at: None,
+                    release_url: Some(format!(
+                        "https://github.com/{owner}/{repo}/releases/tag/{tag}"
+                    )),
+                    assets: Vec::new(),
+                };
+                return Some((tag, info));
+            }
+            continue;
+        }
+        // Non-GitHub mirrors — fetch `latest-release.json`.
+        if let Some(info) = resolve_latest_tag_from_oss_metadata(mirror).await {
+            let tag = info.tag.clone();
+            return Some((tag, info));
+        }
+    }
+    None
 }
 
 /// Build a `reqwest::Proxy` from the given URL string.
@@ -1947,6 +2108,7 @@ fn write_installed_browser4_runtime_metadata(
 fn commit_installed_browser4_runtime(
     extracted_root: &Path,
     metadata: InstalledBrowser4RuntimeMetadata,
+    release_info: Option<&LatestReleaseInfo>,
 ) -> Result<InstalledBrowser4Runtime, String> {
     let install_dir = versioned_install_dir(&metadata.tag);
     let source_runtime = extracted_root.join(BROWSER4_RUNTIME_DIR_NAME);
@@ -1995,6 +2157,15 @@ fn commit_installed_browser4_runtime(
     }
     fs::write(&meta_path, contents).map_err(|e| e.to_string())?;
 
+    // Save a copy of the release metadata alongside the installation metadata
+    // so the versioned install directory is self-describing.
+    if let Some(info) = release_info {
+        let release_meta_path = staging_dir.join("latest-release.json");
+        if let Ok(contents) = serde_json::to_string_pretty(info) {
+            let _ = fs::write(&release_meta_path, contents);
+        }
+    }
+
     // Atomically swap staging → install_dir.  On the same filesystem this is
     // a single directory rename (instantaneous).  If rename fails (e.g.
     // cross-filesystem — extremely rare for temp dirs) fall back to the
@@ -2013,6 +2184,14 @@ fn commit_installed_browser4_runtime(
             copy_dir_recursive(&source_bin, &target_bin)?;
         }
         write_installed_browser4_runtime_metadata(&metadata)?;
+        // Also save release metadata in the fallback path.
+        if let Some(info) = release_info {
+            let release_meta_path =
+                versioned_install_dir(&metadata.tag).join("latest-release.json");
+            if let Ok(contents) = serde_json::to_string_pretty(info) {
+                let _ = fs::write(&release_meta_path, contents);
+            }
+        }
     }
     // Write the current-tag marker *after* install_dir is fully populated so
     // a crash between the rename and this write leaves current.tag pointing
@@ -2392,7 +2571,30 @@ pub async fn install_browser4_runtime(
     force: bool,
 ) -> Result<InstalledBrowser4Runtime, String> {
     let platform = detect_current_runtime_bundle_platform()?;
-    let requested_tag = normalize_release_tag(tag);
+    let mut requested_tag = normalize_release_tag(tag);
+    let mut release_info: Option<LatestReleaseInfo> = None;
+
+    // When the caller asked for "latest" (no explicit --tag), try to resolve
+    // the concrete version tag from the mirror's metadata API.  This avoids
+    // relying on URL redirect parsing (which breaks with CDN-backed mirrors
+    // like GitHub) and enables the download cache and early-exit fast-path.
+    if requested_tag.is_none() {
+        let mirrors = load_mirrors();
+        if let Some((resolved, info)) = resolve_latest_tag(&mirrors).await {
+            eprintln!(
+                "Resolved latest release: {} (from mirror metadata)",
+                resolved
+            );
+            requested_tag = Some(resolved);
+            release_info = Some(info);
+        } else {
+            eprintln!(
+                "Note: could not resolve the latest release tag from mirror metadata. \
+                 Falling back to /latest/download/ URL redirect."
+            );
+        }
+    }
+
     if !force {
         if let Some(requested_tag) = requested_tag.as_deref() {
             let versioned_dir = versioned_install_dir(requested_tag);
@@ -2487,14 +2689,24 @@ pub async fn install_browser4_runtime(
             let resolved_tag = requested_tag
                 .as_deref()
                 .map(String::from)
-                .unwrap_or_else(|| "latest".to_string());
+                .unwrap_or_else(|| {
+                    let fallback = format!(
+                        "unknown-{}",
+                        chrono::Utc::now().format("%Y%m%dT%H%M%S")
+                    );
+                    eprintln!(
+                        "⚠  Could not determine the release version tag (cache-hit path). \
+                         Using fallback identifier: {fallback}"
+                    );
+                    fallback
+                });
             let metadata = InstalledBrowser4RuntimeMetadata {
                 tag: resolved_tag,
                 asset_name: asset_name.clone(),
                 download_url: downloaded.final_url,
                 installed_at: chrono::Utc::now().to_rfc3339(),
             };
-            commit_installed_browser4_runtime(&extracted_root, metadata)
+            commit_installed_browser4_runtime(&extracted_root, metadata, None)
         } else {
             // Build a prioritised list of mirrors to try.
             // The first mirror is either the single override or the result of
@@ -2652,15 +2864,25 @@ pub async fn install_browser4_runtime(
 
             let extracted_root = resolve_runtime_bundle_root(&extraction_dir)?;
             let resolved_tag = parse_release_tag_from_url(&downloaded.final_url)
-                .or(requested_tag)
-                .unwrap_or_else(|| "latest".to_string());
+                .or(requested_tag.clone())
+                .unwrap_or_else(|| {
+                    let fallback = format!(
+                        "unknown-{}",
+                        chrono::Utc::now().format("%Y%m%dT%H%M%S")
+                    );
+                    eprintln!(
+                        "⚠  Could not determine the release version tag from the download URL. \
+                         Using fallback identifier: {fallback}"
+                    );
+                    fallback
+                });
             let metadata = InstalledBrowser4RuntimeMetadata {
                 tag: resolved_tag,
                 asset_name: asset_name.clone(),
                 download_url: downloaded.final_url,
                 installed_at: chrono::Utc::now().to_rfc3339(),
             };
-            commit_installed_browser4_runtime(&extracted_root, metadata)
+            commit_installed_browser4_runtime(&extracted_root, metadata, release_info.as_ref())
         }
     }
     .await;
@@ -5282,13 +5504,13 @@ mod tests {
     #[test]
     fn test_parse_release_tag_from_url_latest_pattern() {
         // When called on a "latest" URL (before redirect), the segment after
-        // "download" is the asset filename, not a tag.  In practice this
-        // function is only called on the redirect-final URL which always has
-        // a real tag, so this edge case is harmless.
+        // "download" is the asset filename, not a version tag.  The validator
+        // rejects non-version-tag strings, returning None so callers fall
+        // through to metadata-based resolution.
         let tag = parse_release_tag_from_url(
             "https://github.com/platonai/Browser4/releases/latest/download/browser4-runtime.zip",
         );
-        assert_eq!(tag.as_deref(), Some("browser4-runtime.zip"));
+        assert_eq!(tag, None);
     }
 
     #[test]
@@ -5307,6 +5529,73 @@ mod tests {
     fn test_parse_release_tag_from_url_malformed_url_returns_none() {
         assert_eq!(parse_release_tag_from_url("not-a-url"), None);
         assert_eq!(parse_release_tag_from_url(""), None);
+    }
+
+    // -------------------------------------------------------------------
+    // is_valid_version_tag
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn test_is_valid_version_tag_accepts_stable_releases() {
+        assert!(is_valid_version_tag("v4.11.2"));
+        assert!(is_valid_version_tag("v4.11.9"));
+        assert!(is_valid_version_tag("v0.1.0"));
+        assert!(is_valid_version_tag("v100.200.300"));
+    }
+
+    #[test]
+    fn test_is_valid_version_tag_accepts_prerelease() {
+        assert!(is_valid_version_tag("v4.11.9-rc.1"));
+        assert!(is_valid_version_tag("v4.11.9-alpha.2"));
+        assert!(is_valid_version_tag("v4.11.9-beta.3"));
+    }
+
+    #[test]
+    fn test_is_valid_version_tag_rejects_non_version_strings() {
+        assert!(!is_valid_version_tag("latest"));
+        assert!(!is_valid_version_tag("browser4-runtime.zip"));
+        assert!(!is_valid_version_tag("browser4-linux-x64.tar.gz"));
+        assert!(!is_valid_version_tag(""));
+        assert!(!is_valid_version_tag("v"));
+        assert!(!is_valid_version_tag("v."));
+        assert!(!is_valid_version_tag(".v4.11"));
+        assert!(!is_valid_version_tag("4.11.2")); // missing 'v' prefix
+    }
+
+    // -------------------------------------------------------------------
+    // parse_github_owner_repo
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn test_parse_github_owner_repo_extracts_owner_and_repo() {
+        let mirror = DownloadMirror {
+            name: "github".to_string(),
+            base_url: "https://github.com/platonai/Browser4/releases".to_string(),
+            supports_latest_resolution: true,
+        };
+        let (owner, repo) = parse_github_owner_repo(&mirror).unwrap();
+        assert_eq!(owner, "platonai");
+        assert_eq!(repo, "Browser4");
+    }
+
+    #[test]
+    fn test_parse_github_owner_repo_rejects_non_github_mirrors() {
+        let mirror = DownloadMirror {
+            name: "aliyun-oss".to_string(),
+            base_url: "https://browser4.oss-cn-beijing.aliyuncs.com/releases".to_string(),
+            supports_latest_resolution: true,
+        };
+        assert!(parse_github_owner_repo(&mirror).is_none());
+    }
+
+    #[test]
+    fn test_parse_github_owner_repo_rejects_non_github_host() {
+        let mirror = DownloadMirror {
+            name: "custom".to_string(),
+            base_url: "https://gitlab.example.com/owner/repo/releases".to_string(),
+            supports_latest_resolution: true,
+        };
+        assert!(parse_github_owner_repo(&mirror).is_none());
     }
 
     // -------------------------------------------------------------------

@@ -243,6 +243,56 @@ jobs:
 
           echo "🔗 All ${created} latest symlinks created"
 
+      - name: Upload latest-release.json metadata
+        env:
+          OSS_ENDPOINT: oss-cn-beijing.aliyuncs.com
+          OSS_REGION: cn-beijing
+          OSS_BUCKET: browser4
+          OSS_ACCESS_KEY_ID: ${{ secrets.OSS_ACCESS_KEY_ID }}
+          OSS_ACCESS_KEY_SECRET: ${{ secrets.OSS_ACCESS_KEY_SECRET }}
+        run: |
+          set -euo pipefail
+          TAG_NAME="${{ steps.resolve.outputs.tag_name }}"
+          VERSION="${TAG_NAME#v}"
+          RELEASE_URL="${{ steps.resolve.outputs.release_url }}"
+          PUBLISHED_AT="${{ github.event.release.published_at || '' }}"
+
+          # Build the asset list (public, non-sensitive fields only).
+          ASSETS_JSON="[]"
+          if [ -d release-assets ]; then
+            ASSETS_JSON=$(
+              ls -l release-assets/ 2>/dev/null \
+                | tail -n +2 \
+                | awk '{printf "{\"name\":\"%s\",\"size\":%s},", $NF, $5}' \
+                | sed 's/,$//'
+            )
+            ASSETS_JSON="[${ASSETS_JSON}]"
+          fi
+
+          # Generate latest-release.json with public metadata only (no tokens, no secrets).
+          cat > latest-release.json << JSONEOF
+          {
+            "tag": "${TAG_NAME}",
+            "version": "${VERSION}",
+            "assets": ${ASSETS_JSON},
+            "published_at": "${PUBLISHED_AT}",
+            "release_url": "${RELEASE_URL}"
+          }
+          JSONEOF
+
+          echo "Generated latest-release.json:"
+          cat latest-release.json
+
+          OSS_META_PATH="oss://${OSS_BUCKET}/releases/latest-release.json"
+          echo "Uploading metadata to ${OSS_META_PATH}"
+          ./ossutil cp latest-release.json "$OSS_META_PATH" \
+            -e "$OSS_ENDPOINT" \
+            --region "$OSS_REGION" \
+            --acl public-read \
+            --retry-times 3
+
+          echo "📋 Release metadata published to OSS"
+
       - name: Sync Summary
         if: always()
         run: |
@@ -254,6 +304,7 @@ jobs:
             echo "- **Assets**: ${{ steps.resolve.outputs.assets_count }}"
             echo "- **OSS Bucket**: \`oss://browser4/releases/download/${{ steps.resolve.outputs.tag_name }}/\`"
             echo "- **Latest symlink**: \`oss://browser4/releases/latest/download/\`"
+            echo "- **Release metadata**: \`https://browser4.oss-cn-beijing.aliyuncs.com/releases/latest-release.json\`"
             echo "- **CLI installer scripts** (convenience — always latest):"
             echo "  - \`https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.ps1\`"
             echo "  - \`https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.sh\`"
