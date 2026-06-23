@@ -997,6 +997,10 @@ fn current_tag_file_path() -> PathBuf {
 
 /// Read the currently active tag from the marker file.  Returns `None` when
 /// no runtime has been installed yet or the file is corrupt.
+///
+/// When `current.tag` is missing, empty, or points to a non-existent version
+/// directory, this function attempts auto-repair by scanning for versioned
+/// install directories and rewriting the marker.
 pub fn read_current_tag() -> Option<String> {
     let path = current_tag_file_path();
     if !path.exists() {
@@ -1008,10 +1012,17 @@ pub fn read_current_tag() -> Option<String> {
     let raw = fs::read_to_string(&path).ok()?;
     let tag = raw.trim().to_string();
     if tag.is_empty() {
-        None
-    } else {
-        Some(tag)
+        // current.tag exists but is empty — treat as missing.
+        return find_newest_versioned_install();
     }
+    // Verify the versioned directory actually exists and is complete.
+    let dir = versioned_install_dir(&tag);
+    if !install_dir_contains_runtime(&dir) {
+        // current.tag points to a non-existent or corrupt directory.
+        // Try to find another valid install and repair the marker.
+        return find_newest_versioned_install();
+    }
+    Some(tag)
 }
 
 /// Record `tag` as the currently active version.
@@ -1044,13 +1055,27 @@ fn write_current_tag(tag: &str) -> Result<(), String> {
 ///
 /// Reads `current.tag`, validates the versioned directory exists, and returns
 /// its path.  Returns `None` when no runtime is installed.
+///
+/// `read_current_tag()` already performs auto-repair when `current.tag` is
+/// missing, empty, or points to a corrupt/non-existent directory.  The
+/// secondary check here handles the race where the directory disappears
+/// between the call to `read_current_tag()` and this function.
 fn resolve_current_install_dir() -> Option<PathBuf> {
     let tag = read_current_tag()?;
     let dir = versioned_install_dir(&tag);
     if install_dir_contains_runtime(&dir) {
         Some(dir)
     } else {
-        None
+        // Race or corruption: the tag was valid a moment ago but the directory
+        // is now broken.  Try one more repair pass.
+        let _ = fs::remove_file(current_tag_file_path());
+        let repaired_tag = find_newest_versioned_install()?;
+        let repaired_dir = versioned_install_dir(&repaired_tag);
+        if install_dir_contains_runtime(&repaired_dir) {
+            Some(repaired_dir)
+        } else {
+            None
+        }
     }
 }
 
