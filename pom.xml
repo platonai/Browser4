@@ -134,9 +134,16 @@
                 <allTestModules>true</allTestModules>
             </properties>
             <modules>
-                <module>examples</module>
+                <module>browser4-tests</module>
+                <module>browser4-tests/browser4-rest-tests</module>
+                <module>browser4-tests/pulsar-it-tests</module>
+                <module>browser4-tests/pulsar-e2e-tests</module>
+
+                <module>browser4-apps</module>
                 <module>browser4-apps/browser4-standalone</module>
                 <module>browser4-apps/browser4-bundle</module>
+
+                <module>examples</module>
             </modules>
         </profile>
 
