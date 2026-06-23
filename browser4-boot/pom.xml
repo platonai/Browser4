@@ -36,10 +36,6 @@
         </dependency>
         <dependency>
             <groupId>ai.platon.pulsar</groupId>
-            <artifactId>browser4-captcha</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>ai.platon.pulsar</groupId>
             <artifactId>browser4-agentic</artifactId>
         </dependency>
 
