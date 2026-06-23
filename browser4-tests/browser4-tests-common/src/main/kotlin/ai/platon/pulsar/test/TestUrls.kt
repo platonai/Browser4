@@ -19,6 +19,16 @@ object TestUrls {
 
     const val MOCK_PRODUCT_DETAIL_URL = "http://localhost:18080/ec/dp/B0E000001"
 
+    // DOM Snapshot scenario mock pages (see DomSnapshotMockController)
+    const val MOCK_DOM_SNAPSHOT_BASE = "http://localhost:18080/domsnapshot-test"
+    const val MOCK_NEWS_URL = "$MOCK_DOM_SNAPSHOT_BASE/news"
+    const val MOCK_SEO_URL = "$MOCK_DOM_SNAPSHOT_BASE/seo"
+    const val MOCK_JOBS_URL = "$MOCK_DOM_SNAPSHOT_BASE/jobs"
+    const val MOCK_COMPLIANCE_URL = "$MOCK_DOM_SNAPSHOT_BASE/compliance"
+    const val MOCK_RESEARCH_URL = "$MOCK_DOM_SNAPSHOT_BASE/research"
+    const val MOCK_REAL_ESTATE_URL = "$MOCK_DOM_SNAPSHOT_BASE/real-estate"
+    const val MOCK_FORM_PAGE_URL = "http://localhost:18080/assets/test-pages/form-page.html"
+
     var urlGroups = mutableMapOf<String, Array<String>>()
 
     init {
