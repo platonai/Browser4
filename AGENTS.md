@@ -131,10 +131,10 @@ Each optional module follows the same Spring Boot pattern:
 
 ```bash
 # Copy the captcha JAR into the plugins directory
-cp browser4-captcha-4.12.0-rc1.jar bundle/plugins/
+cp browser4-captcha-4.12.0.jar bundle/plugins/
 
 # Or place it alongside core JARs (both directories are on the classpath)
-cp browser4-captcha-4.12.0-rc1.jar bundle/lib/
+cp browser4-captcha-4.12.0.jar bundle/lib/
 
 # Restart — no rebuild needed
 bundle/bin/start.sh
