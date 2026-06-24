@@ -101,6 +101,9 @@ browser4-cli goto https://browser4.io
 # 检查页面——注意可交互节点上的 eN 标签
 browser4-cli snapshot
 
+# 在快照中包含元素边界框
+browser4-cli snapshot --boxes
+
 # 使用快照中的 ref 进行交互
 browser4-cli click e15
 browser4-cli type e15 "Hello World"

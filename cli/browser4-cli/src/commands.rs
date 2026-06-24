@@ -825,11 +825,13 @@ pub fn all_commands() -> Vec<CommandDef> {
             args: &[],
             options: &[
                 OptionDef { name: "filename", description: "Save snapshot to file instead of returning it in the response", is_bool: false, short: None },
+                OptionDef { name: "boxes", description: "Include each element's bounding box as [box=x,y,width,height]", is_bool: true, short: None },
             ],
             tool_name_fn: |_| "browser_snapshot".to_string(),
             tool_params_fn: |args| {
                 let mut p = json!({});
                 if let Some(f) = get_opt_str(args, "filename") { p["filename"] = json!(f); }
+                if let Some(true) = get_bool(args, "boxes") { p["boxes"] = json!(true); }
                 p
             },
         },

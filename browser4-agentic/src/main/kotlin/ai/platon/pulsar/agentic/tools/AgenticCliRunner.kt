@@ -714,6 +714,7 @@ class AgenticCliRunner(
             "snapshot" to FixedCommandResolver("browser_snapshot") { args ->
                 val params = mutableMapOf<String, Any?>()
                 args["filename"]?.let { params["filename"] = it }
+                args["boxes"]?.let { params["boxes"] = it }
                 params
             },
             "screenshot" to FixedCommandResolver("browser_take_screenshot") { args ->

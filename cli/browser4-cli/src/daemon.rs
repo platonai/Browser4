@@ -907,8 +907,7 @@ fn extract_port(base_url: &str) -> u16 {
 }
 
 fn print_server_starting_message() {
-    eprintln!("Starting Java backend (first launch may take 30-60s)...");
-    eprintln!("Giving the server up to 2 minutes to start.");
+    eprintln!("Starting Browser4 server...");
 }
 
 fn is_local_port_open(base_url: &str) -> bool {
@@ -1752,13 +1751,25 @@ fn download_file_blocking(url: &str, target_path: &Path) -> Result<DownloadedFil
             let final_url = response.url().to_string();
             let mut file = fs::File::create(target_path).map_err(|e| e.to_string())?;
 
-            // Copy with progress reporting every 30 s so long-running downloads
+            // Copy with frequent progress reporting so long-running downloads
             // don't appear hung.
             let total_size = response.content_length();
             let mut downloaded: u64 = 0;
             let mut last_report = std::time::Instant::now();
-            let report_interval = std::time::Duration::from_secs(30);
+            let report_interval = std::time::Duration::from_secs(5);
+            let download_start = std::time::Instant::now();
             let mut buf = [0u8; 8192];
+
+            // Print the total size up front so the user knows what to expect.
+            if let Some(total) = total_size {
+                eprintln!(
+                    "  Downloading {:.1} MB...",
+                    total as f64 / 1_048_576.0
+                );
+            } else {
+                eprintln!("  Downloading (size unknown)...");
+            }
+
             loop {
                 let n = response.read(&mut buf).map_err(|e| e.to_string())?;
                 if n == 0 {
@@ -1773,12 +1784,21 @@ fn download_file_blocking(url: &str, target_path: &Path) -> Result<DownloadedFil
                         } else {
                             0.0
                         };
+                        let elapsed = download_start.elapsed().as_secs_f64();
+                        let speed_bps = if elapsed > 0.0 {
+                            downloaded as f64 / elapsed
+                        } else {
+                            0.0
+                        };
                         eprintln!(
-                            "  Download progress: {} / {} bytes ({:.0}%)",
-                            downloaded, total, pct
+                            "  Downloaded {:.1} / {:.1} MB ({:.0}%) — {:.1} MB/s",
+                            downloaded as f64 / 1_048_576.0,
+                            total as f64 / 1_048_576.0,
+                            pct,
+                            speed_bps / 1_048_576.0,
                         );
                     } else {
-                        eprintln!("  Download progress: {} bytes", downloaded);
+                        eprintln!("  Downloaded {:.1} MB", downloaded as f64 / 1_048_576.0);
                     }
                     last_report = std::time::Instant::now();
                 }
@@ -1838,8 +1858,16 @@ fn download_file_via_powershell(url: &str, target_path: &Path) -> Result<Downloa
     let ps_url = url.replace('\'', "''");
     let ps_outfile = target_path.to_string_lossy().replace('\'', "''");
 
+    // Runtime bundle is typically ~130 MB.
+    eprintln!(
+        "  Downloading via PowerShell (~{:.0} MB, no progress bar — please wait)...",
+        130.0,
+    );
+
     let ps_script = format!(
-        "$ProgressPreference = 'SilentlyContinue'; \
+        // Use Continue (not SilentlyContinue) so PowerShell shows progress
+        // when the calling terminal supports it.
+        "$ProgressPreference = 'Continue'; \
          Invoke-WebRequest -Uri '{ps_url}' -OutFile '{ps_outfile}' -UseBasicParsing; \
          if (-not (Test-Path '{ps_outfile}')) {{ throw 'Download produced no output file.' }}; \
          $length = (Get-Item '{ps_outfile}').Length; \
@@ -3826,7 +3854,15 @@ async fn find_or_install_runtime() -> Result<InstalledBrowser4Runtime, String> {
         }
     }
 
-    // Download and install the runtime bundle
+    // Download and install the runtime bundle.
+    // This is a one-time setup — subsequent launches use the cached runtime
+    // and start in under 5 seconds.
+    eprintln!(
+        "Browser4 runtime is not installed yet — downloading now (one-time setup, ~130 MB)..."
+    );
+    eprintln!(
+        "Tip: run 'browser4-cli install' beforehand to avoid this download on first use."
+    );
     install_browser4_runtime(None, false).await
 }
 

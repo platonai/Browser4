@@ -56,6 +56,7 @@ browser4-cli check e12
 browser4-cli uncheck e12
 browser4-cli snapshot
 browser4-cli snapshot --filename=after-click.yaml
+browser4-cli snapshot --boxes
 browser4-cli eval "document.title"
 browser4-cli eval --file=script.js
 browser4-cli eval --file=script.js e5
@@ -242,6 +243,8 @@ After commands that modify browser state, browser4-cli usually provides a snapsh
 You can also take a snapshot on demand using `browser4-cli snapshot` command.
 
 If `--filename` is not provided, a new snapshot file is created with a timestamp. Default to automatic file naming, use `--filename=` when artifact is a part of the workflow result.
+
+Use `--boxes` to include each element's bounding box as `[box=x,y,width,height]` in the YAML output. Bounding box coordinates are rounded to 1 decimal place.
 
 ## DOM Snapshot
 
