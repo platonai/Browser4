@@ -1729,6 +1729,20 @@ pub fn all_commands() -> Vec<CommandDef> {
                 p
             },
         },
+        CommandDef {
+            name: "generate-locator",
+            description: "Generate a unique CSS selector path for an element identified by a snapshot ref (e5) or CSS selector",
+            category: Category::Snapshot,
+            hidden: false,
+            batch_supported: false,
+            args: &[ArgDef { name: "ref", description: "Element reference (e5, backend:15) or CSS selector", optional: false }],
+            options: &[],
+            tool_name_fn: |_| "browser_generate_locator".to_string(),
+            tool_params_fn: |args| {
+                let r = get_str(args, "ref").unwrap_or_default();
+                json!({ "ref": r })
+            },
+        },
     ]
 }
 
@@ -3019,5 +3033,72 @@ mod tests {
             let cmd = map.get(*name).unwrap();
             assert_eq!(cmd.category, Category::Snapshot);
         }
+    }
+
+    // -------------------------------------------------------------------
+    // generate-locator tests
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn test_generate_locator_exists_and_not_hidden() {
+        let map = commands_map();
+        let cmd = map.get("generate-locator").unwrap();
+        assert!(!cmd.hidden, "generate-locator should not be hidden from help");
+        assert!(!cmd.batch_supported, "generate-locator should not support batch mode");
+    }
+
+    #[test]
+    fn test_generate_locator_category_is_snapshot() {
+        let map = commands_map();
+        let cmd = map.get("generate-locator").unwrap();
+        assert_eq!(cmd.category, Category::Snapshot);
+    }
+
+    #[test]
+    fn test_generate_locator_args() {
+        let map = commands_map();
+        let cmd = map.get("generate-locator").unwrap();
+        assert_eq!(cmd.args.len(), 1);
+        assert_eq!(cmd.args[0].name, "ref");
+        assert!(!cmd.args[0].optional, "ref argument should be required");
+    }
+
+    #[test]
+    fn test_generate_locator_uses_browser_generate_locator_tool() {
+        let map = commands_map();
+        let cmd = map.get("generate-locator").unwrap();
+        assert_eq!((cmd.tool_name_fn)(&HashMap::new()), "browser_generate_locator");
+    }
+
+    #[test]
+    fn test_generate_locator_params_with_e_ref() {
+        let map = commands_map();
+        let cmd = map.get("generate-locator").unwrap();
+        let mut args = HashMap::new();
+        args.insert("ref".to_string(), json!("e5"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["ref"], "e5");
+        // No embedded JS expression — the backend handles selector generation
+        assert!(params.get("expression").is_none());
+    }
+
+    #[test]
+    fn test_generate_locator_params_with_backend_ref() {
+        let map = commands_map();
+        let cmd = map.get("generate-locator").unwrap();
+        let mut args = HashMap::new();
+        args.insert("ref".to_string(), json!("backend:15"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["ref"], "backend:15");
+    }
+
+    #[test]
+    fn test_generate_locator_params_with_css_selector() {
+        let map = commands_map();
+        let cmd = map.get("generate-locator").unwrap();
+        let mut args = HashMap::new();
+        args.insert("ref".to_string(), json!(".product-card"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["ref"], ".product-card");
     }
 }

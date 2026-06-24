@@ -1898,6 +1898,21 @@ interface WebDriver : Closeable {
     suspend fun evaluateValueDetail(selector: String, functionDeclaration: String): JsEvaluation?
 
     /**
+     * Generates a unique CSS selector path for the element located by [selector]. @mcp
+     *
+     * Walks up the DOM from the target element, building a CSS selector segment for
+     * each ancestor using the best available strategy: `#id`, `tag.stable-classes`,
+     * or `tag:nth-of-type(n)`. The resulting path is joined with `>` separators,
+     * producing a concise, human-readable selector suitable for use in other commands.
+     *
+     * @param selector CSS selector or element reference (e5, backend:15).
+     * @return A CSS selector path string such as `#main > div.content > a:nth-of-type(3)`, or null if not found.
+     */
+    @Throws(WebDriverException::class)
+    @MCP
+    suspend fun generateLocator(selector: String): String?
+
+    /**
      * Capture a screenshot of the current viewport (or primary browsing context) after ensuring any pending layout. @mcp
      *
      * If the backend supports element-centric capture this may represent the full page; implementation specific.

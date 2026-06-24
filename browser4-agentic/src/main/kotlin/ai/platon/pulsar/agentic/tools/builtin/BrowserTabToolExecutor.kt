@@ -1193,6 +1193,11 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
                 }
             }
 
+            "generateLocator" -> {
+                validateArgs(args, allowed("selector"), setOf("selector"), functionName)
+                driver.generateLocator(paramString(args, "selector", functionName)!!)
+            }
+
             // Element geometry
             "clickablePoint" -> {
                 validateArgs(args, allowed("selector"), setOf("selector"), functionName); driver.clickablePoint(

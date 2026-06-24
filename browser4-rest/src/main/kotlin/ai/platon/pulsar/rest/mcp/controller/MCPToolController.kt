@@ -108,6 +108,7 @@ class MCPToolController(
             "browser_check" to "check",
             "browser_uncheck" to "uncheck",
             "browser_evaluate" to "evaluate_value",
+            "browser_generate_locator" to "generate_locator",
             "browser_resize" to "resize",
             "browser_take_screenshot" to "screenshot",
             "browser_save_storage_state" to "save_storage_state",

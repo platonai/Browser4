@@ -338,6 +338,55 @@ open class PulsarWebDriver constructor(
         """.trimIndent()
     }
 
+    @Throws(WebDriverException::class)
+    override suspend fun generateLocator(selector: String): String? {
+        val jsFunction = """
+            element => {
+                if (!element || element.nodeType !== 1) return null;
+
+                function cssEscape(v) {
+                    if (typeof CSS !== 'undefined' && CSS.escape) return CSS.escape(v);
+                    return v.replace(/[!"#${'$'}%&'()*+,./:;<=>?@[\]^`{|}~]/g, '\\${'$'}&');
+                }
+
+                function segmentFor(el) {
+                    var tag = el.tagName.toLowerCase();
+                    if (el.id) return '#' + cssEscape(el.id);
+                    if (el.classList && el.classList.length > 0) {
+                        var classes = Array.from(el.classList).filter(function(c) {
+                            return !/[A-Z]/.test(c) &&
+                                   !/^[a-z]+-[a-z0-9]{6,}${'$'}/.test(c) &&
+                                   c.indexOf('_') === -1 &&
+                                   c.length > 1;
+                        });
+                        if (classes.length > 0) return tag + '.' + classes.map(cssEscape).join('.');
+                    }
+                    if (el.parentNode) {
+                        var siblings = Array.from(el.parentNode.children);
+                        var sameTag = siblings.filter(function(s) { return s.tagName === el.tagName; });
+                        if (sameTag.length > 1) {
+                            return tag + ':nth-of-type(' + (sameTag.indexOf(el) + 1) + ')';
+                        }
+                    }
+                    return tag;
+                }
+
+                var parts = [];
+                var cur = element;
+                while (cur && cur.nodeType === 1) {
+                    parts.unshift(segmentFor(cur));
+                    if (cur.id) break;
+                    if (cur.tagName.toLowerCase() === 'body') break;
+                    cur = cur.parentNode;
+                }
+                return parts.join(' > ');
+            }
+        """.trimIndent()
+
+        val result = evaluateValue(selector, jsFunction)
+        return result?.toString()?.takeIf { it.isNotEmpty() && it != "null" }
+    }
+
     override suspend fun currentUrl(): String {
         val mainFrameUrl = evaluate("document.URL", navigateUrl)
         navigateUrl = mainFrameUrl ?: navigateUrl

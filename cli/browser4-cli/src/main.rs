@@ -210,6 +210,7 @@ fn no_snapshot_commands() -> HashSet<&'static str> {
         "uninstall",
         "help",
         "eval",
+        "generate-locator",
         "summarize",
         "snapshot",
         "screenshot",
@@ -2392,6 +2393,39 @@ async fn handle_dom_snapshot_export(
     snapshot::save_binary(&file_path, result.as_bytes()).map_err(|e| e.to_string())?;
     cli_println!("Snapshot saved to: {}", file_path.display());
     json_field("path", json!(file_path.display().to_string()));
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// generate-locator handler
+// ---------------------------------------------------------------------------
+
+async fn handle_generate_locator(
+    client: &Client,
+    base_url: &str,
+    tool_name: &str,
+    tool_params: &Value,
+    session_name: Option<&str>,
+) -> Result<(), String> {
+    let result = with_session(client, base_url, session_name, false, |session_id| {
+        let client = client.clone();
+        let base_url = base_url.to_string();
+        let tool_name = tool_name.to_string();
+        let mut params = tool_params.clone();
+        params["sessionId"] = json!(session_id);
+        async move { call_tool(&client, &base_url, &tool_name, params).await }
+    })
+    .await?;
+
+    if !result.is_empty() {
+        cli_println!("{}", result);
+    }
+
+    json_field("selector", json!(&result));
+    if let Some(r) = tool_params.get("ref").and_then(|v| v.as_str()) {
+        json_field("ref", json!(r));
+    }
 
     Ok(())
 }
@@ -5629,6 +5663,16 @@ async fn run(
             )
             .await?;
         }
+        "generate-locator" => {
+            handle_generate_locator(
+                &client,
+                &base_url,
+                &tool_name,
+                &tool_params,
+                global.session_name.as_deref(),
+            )
+            .await?;
+        }
         _ => {
             if tool_name.is_empty() {
                 cli_println!("Command '{}' is not yet implemented.", command);
@@ -5776,6 +5820,11 @@ mod tests {
         assert!(no_snapshot_commands().contains("domsnapshot-get"));
         assert!(no_snapshot_commands().contains("domsnapshot-query"));
         assert!(no_snapshot_commands().contains("domsnapshot-export"));
+    }
+
+    #[test]
+    fn no_snapshot_commands_include_generate_locator() {
+        assert!(no_snapshot_commands().contains("generate-locator"));
     }
 
     #[test]
