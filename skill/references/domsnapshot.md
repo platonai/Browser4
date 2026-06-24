@@ -33,12 +33,14 @@ browser4-cli domsnapshot export [--file <path>]         # save snapshot HTML to 
 
 ## Capture
 
+Capture a fresh static DOM snapshot of the current page and cache it in the backend for subsequent `get`/`query`/`export` calls.
+
 ```bash
 # Capture a fresh static DOM snapshot of the current page
 browser4-cli domsnapshot
 ```
 
-Returns a JSON metadata object with the page URL, href, content size, capture time, content type, and title. The snapshot is always captured fresh (no caching).
+Returns a JSON metadata object with the page URL, href, content size, capture time, content type, and title. The capture is always fresh — `domsnapshot` forces a new page capture regardless of any previously cached snapshot. The resulting snapshot is stored in the backend and reused by subsequent `get`, `query`, and `export` calls until the next `domsnapshot` capture or a page navigation.
 
 ## Get — Extract data from the snapshot
 
@@ -123,6 +125,6 @@ browser4-cli domsnapshot export --file=page-snapshot.html
 
 ## Notes
 
-- The snapshot is always captured fresh — there is no caching between `domsnapshot` calls.
+- `domsnapshot` (the capture command) always fetches a fresh page snapshot and caches it in the backend. Subsequent `get`, `query`, and `export` calls reuse this cached snapshot — they do not re-capture the page. The cache is invalidated by the next `domsnapshot` capture or a page navigation (`goto`, `reload`, etc.).
 - `domsnapshot get` only accepts CSS selectors. For interactive element interaction (click, type, fill), use the standard `snapshot` + ref-based commands instead.
 - X-SQL queries through `domsnapshot query` follow the same SQL constraints as `swarm query`. See the [X-SQL reference](x-sql.md) for full function documentation.

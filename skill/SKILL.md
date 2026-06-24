@@ -263,7 +263,7 @@ See **[references/domsnapshot.md](references/domsnapshot.md)** for the full comm
 1. **Construct from snapshot info** — the interactive snapshot already shows tag, attributes, and text:
    `@e10 [input type="email"] placeholder="Email"` → use `[placeholder="Email"]`
 2. **Extract attributes from the ref** — `browser4-cli get attr e5 id` or `get attr e5 class`
-3. **Generate a unique selector via eval** — `browser4-cli eval --file=get-unique-selector.js e5`
+3. **Generate a unique selector** — `browser4-cli generate-locator e5`
 
 ```bash
 # Tier 1 example: construct selector from snapshot output
@@ -281,7 +281,7 @@ browser4-cli domsnapshot query --sql "
 
 > **Core rule:** Never `cat` the full snapshot file or use `domsnapshot export` just to read it. Always use targeted `domsnapshot get` or `domsnapshot query` to extract only the data you need.
 
-Full reference: **[references/css-selector-bridge.md](references/css-selector-bridge.md)** — three-tier approach, reusable `get-unique-selector.js` script, and anti-patterns to avoid.
+Full reference: **[references/css-selector-bridge.md](references/css-selector-bridge.md)** — three-tier approach, `generate-locator` command, and anti-patterns to avoid.
 
 ## Browser Sessions
 
