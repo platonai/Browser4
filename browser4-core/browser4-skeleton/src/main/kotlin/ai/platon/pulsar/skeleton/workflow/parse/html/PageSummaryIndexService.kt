@@ -484,7 +484,7 @@ object PageSummaryIndexService {
     private fun String.toYamlValue(): String {
         val trimmed = this.trim()
         val needsQuoting = trimmed.isEmpty() ||
-                trimmed.any { it in setOf(':', '#', '"', '\'', '&', '*', '!', '|', '>', '%', '@', '`', '{', '}', '[', ']', ' ') } ||
+                trimmed.any { it in setOf(':', '#', '"', '\'', '&', '*', '!', '|', '>', '%', '@', '`', '{', '}', '[', ']', '.', ' ') } ||
                 trimmed.first() != this.first() || trimmed.last() != this.last() ||
                 trimmed.any { it == '\n' || it == '\r' }
         return if (needsQuoting) {

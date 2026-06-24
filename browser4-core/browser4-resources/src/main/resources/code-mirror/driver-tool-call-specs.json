@@ -1593,6 +1593,14 @@
   "cli" : "browser4-cli tab screenshot --rect=<RectD>, default="
 }, {
   "domain" : "tab",
+  "method" : "pdf",
+  "returnType" : "String?",
+  "description" : "Print the current page as PDF.",
+  "help" : "Print the current page as PDF.\n\nReturns a Base64 encoded PDF document generated via Chrome DevTools Protocol Page.printToPDF. Uses A4 paper size, portrait orientation, and prints background graphics by default.",
+  "expression" : "tab.pdf()",
+  "cli" : "browser4-cli tab pdf "
+}, {
+  "domain" : "tab",
   "method" : "ariaSnapshot",
   "returnType" : "String",
   "description" : "Aria Snapshot",
