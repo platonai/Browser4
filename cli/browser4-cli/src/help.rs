@@ -133,7 +133,10 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
     if !cmd.options.is_empty() {
         lines.push("Options:".to_string());
         for opt in cmd.options {
-            let label = format!("  --{}", opt.name);
+            let label = match opt.short {
+                Some(s) => format!("  -{}, --{}", s, opt.name),
+                None => format!("  --{}", opt.name),
+            };
             lines.push(format_with_gap(&label, opt.description, 30));
         }
     }

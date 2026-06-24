@@ -1,6 +1,7 @@
 package ai.platon.pulsar.chrome.dom.model
 
 import ai.platon.browser4.chrome.dom.DOMSerializer
+import ai.platon.browser4.chrome.dom.model.AriaSnapshotOptions
 import ai.platon.browser4.chrome.dom.model.AriaSnapshotRenderer
 import ai.platon.browser4.chrome.dom.model.NanoAriaSnapshotRenderer
 import ai.platon.browser4.chrome.dom.util.CSSSelectorUtils
@@ -562,8 +563,22 @@ data class DOMState constructor(
     val optimizedDOMTree: OptimizedDOMTree? = null
 ) {
     @get:JsonIgnore
-    val ariaSnapshot: String get() = optimizedDOMTree?.let(AriaSnapshotRenderer::render)
-        ?: serializableTree.toNanoTreeUnfiltered().ariaSnapshot
+    val ariaSnapshot: String get() = renderedAriaSnapshot(AriaSnapshotOptions())
+
+    /**
+     * Render the ARIA snapshot (accessibility tree in YAML format) with the given
+     * [options] applied. Uses the optimized tree when available, falling back to
+     * the nano (unfiltered) tree.
+     */
+    fun renderedAriaSnapshot(options: AriaSnapshotOptions = AriaSnapshotOptions()): String {
+        val tree = optimizedDOMTree
+        if (tree != null) {
+            return AriaSnapshotRenderer.render(tree, options)
+        }
+        return serializableTree.toNanoTreeUnfiltered().let {
+            NanoAriaSnapshotRenderer.render(it, options)
+        }
+    }
 
     fun getAbsoluteFBNLocator(locator: String?): FBNLocator? {
         if (locator == null) {

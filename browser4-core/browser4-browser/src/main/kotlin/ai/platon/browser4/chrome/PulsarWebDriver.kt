@@ -1,6 +1,7 @@
 package ai.platon.browser4.chrome
 
 import ai.platon.browser4.chrome.detail.*
+import ai.platon.browser4.chrome.dom.model.AriaSnapshotOptions
 import ai.platon.browser4.chrome.dom.model.ViewportSpec
 import ai.platon.browser4.chrome.handler.ClickableDOM
 import ai.platon.browser4.chrome.handler.EmulationHandler
@@ -1024,6 +1025,11 @@ open class PulsarWebDriver constructor(
     override suspend fun ariaSnapshot(viewports: String): String {
         val viewportIndices = ViewportSpec.parse(viewports) ?: return ariaSnapshot()
         return rpc.invokeDeferredSilently("ariaSnapshot") { page.ariaSnapshot(viewportIndices) } ?: ""
+    }
+
+    @Throws(WebDriverException::class)
+    override suspend fun ariaSnapshot(options: AriaSnapshotOptions): String {
+        return rpc.invokeDeferredSilently("ariaSnapshot") { page.ariaSnapshot(options) } ?: ""
     }
 
     @Beta

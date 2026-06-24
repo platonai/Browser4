@@ -826,12 +826,24 @@ pub fn all_commands() -> Vec<CommandDef> {
             options: &[
                 OptionDef { name: "filename", description: "Save snapshot to file instead of returning it in the response", is_bool: false, short: None },
                 OptionDef { name: "boxes", description: "Include each element's bounding box as [box=x,y,width,height]", is_bool: true, short: None },
+                OptionDef { name: "interactive", description: "Only show interactive elements (buttons, links, inputs)", is_bool: true, short: Some("i") },
+                OptionDef { name: "urls", description: "Include href URLs for link elements", is_bool: true, short: Some("u") },
+                OptionDef { name: "compact", description: "Remove empty structural elements", is_bool: true, short: Some("c") },
+                OptionDef { name: "depth", description: "Limit tree depth to n levels", is_bool: false, short: Some("d") },
+                OptionDef { name: "selector", description: "Scope snapshot to a CSS selector", is_bool: false, short: Some("s") },
             ],
             tool_name_fn: |_| "browser_snapshot".to_string(),
             tool_params_fn: |args| {
                 let mut p = json!({});
                 if let Some(f) = get_opt_str(args, "filename") { p["filename"] = json!(f); }
                 if let Some(true) = get_bool(args, "boxes") { p["boxes"] = json!(true); }
+                if let Some(true) = get_bool(args, "interactive") { p["interactive"] = json!(true); }
+                if let Some(true) = get_bool(args, "urls") { p["urls"] = json!(true); }
+                if let Some(true) = get_bool(args, "compact") { p["compact"] = json!(true); }
+                if let Some(d) = get_opt_str(args, "depth") {
+                    if let Ok(n) = d.parse::<i32>() { p["depth"] = json!(n); }
+                }
+                if let Some(s) = get_opt_str(args, "selector") { p["selector"] = json!(s); }
                 p
             },
         },
@@ -3102,5 +3114,104 @@ mod tests {
         args.insert("ref".to_string(), json!(".product-card"));
         let params = (cmd.tool_params_fn)(&args);
         assert_eq!(params["ref"], ".product-card");
+    }
+
+    // -------------------------------------------------------------------
+    // snapshot filter option tests
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn test_snapshot_interactive_flag() {
+        let map = commands_map();
+        let cmd = map.get("snapshot").unwrap();
+        let mut args = HashMap::new();
+        args.insert("interactive".to_string(), json!(true));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["interactive"], true);
+    }
+
+    #[test]
+    fn test_snapshot_urls_flag() {
+        let map = commands_map();
+        let cmd = map.get("snapshot").unwrap();
+        let mut args = HashMap::new();
+        args.insert("urls".to_string(), json!(true));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["urls"], true);
+    }
+
+    #[test]
+    fn test_snapshot_compact_flag() {
+        let map = commands_map();
+        let cmd = map.get("snapshot").unwrap();
+        let mut args = HashMap::new();
+        args.insert("compact".to_string(), json!(true));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["compact"], true);
+    }
+
+    #[test]
+    fn test_snapshot_depth_param() {
+        let map = commands_map();
+        let cmd = map.get("snapshot").unwrap();
+        let mut args = HashMap::new();
+        args.insert("depth".to_string(), json!("3"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["depth"], 3);
+    }
+
+    #[test]
+    fn test_snapshot_selector_param() {
+        let map = commands_map();
+        let cmd = map.get("snapshot").unwrap();
+        let mut args = HashMap::new();
+        args.insert("selector".to_string(), json!("#main"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["selector"], "#main");
+    }
+
+    #[test]
+    fn test_snapshot_all_flags_compose() {
+        let map = commands_map();
+        let cmd = map.get("snapshot").unwrap();
+        let mut args = HashMap::new();
+        args.insert("boxes".to_string(), json!(true));
+        args.insert("interactive".to_string(), json!(true));
+        args.insert("urls".to_string(), json!(true));
+        args.insert("compact".to_string(), json!(true));
+        args.insert("depth".to_string(), json!("5"));
+        args.insert("selector".to_string(), json!(".content"));
+        args.insert("filename".to_string(), json!("out.yml"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["boxes"], true);
+        assert_eq!(params["interactive"], true);
+        assert_eq!(params["urls"], true);
+        assert_eq!(params["compact"], true);
+        assert_eq!(params["depth"], 5);
+        assert_eq!(params["selector"], ".content");
+        assert_eq!(params["filename"], "out.yml");
+    }
+
+    #[test]
+    fn test_snapshot_depth_not_set_when_non_numeric() {
+        let map = commands_map();
+        let cmd = map.get("snapshot").unwrap();
+        let mut args = HashMap::new();
+        args.insert("depth".to_string(), json!("not-a-number"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert!(params.get("depth").is_none());
+    }
+
+    #[test]
+    fn test_snapshot_no_flags_backward_compat() {
+        let map = commands_map();
+        let cmd = map.get("snapshot").unwrap();
+        let args: HashMap<String, Value> = HashMap::new();
+        let params = (cmd.tool_params_fn)(&args);
+        assert!(params.get("interactive").is_none());
+        assert!(params.get("urls").is_none());
+        assert!(params.get("compact").is_none());
+        assert!(params.get("depth").is_none());
+        assert!(params.get("selector").is_none());
     }
 }
