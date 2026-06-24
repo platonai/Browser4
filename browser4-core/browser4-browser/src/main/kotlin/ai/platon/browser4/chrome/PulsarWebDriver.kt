@@ -1239,9 +1239,9 @@ function() {
     override suspend fun pdf(): String? {
         return try {
             rpc.invokeOnPage("pdf") {
-                val result = rpc.printToPDF(
+                val result = browserProtocol.printToPDF(
                     printBackground = true,
-                    transferMode = PrintToPDFTransferMode.ReturnAsBase64,
+                    transferMode = PrintToPDFTransferMode.RETURN_AS_BASE_64,
                 )
                 result.data
             }

@@ -134,7 +134,7 @@ object AriaSnapshotRenderer {
     ): Boolean {
         if (ref != null) return true
         if (node.interactiveIndex != null) return true
-        if (node.originalNode.isInteractable) return true
+        if (node.originalNode.isInteractable == true) return true
         return role in INTERACTIVE_ROLES
     }
 

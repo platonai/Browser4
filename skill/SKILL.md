@@ -270,6 +270,7 @@ browser4-cli domsnapshot                           # capture a fresh static DOM 
 browser4-cli domsnapshot get <field> [selector] [name]  # extract text/html/attr via CSS selectors
 browser4-cli domsnapshot query [url] --sql <query>       # run X-SQL against the DOM
 browser4-cli domsnapshot export [--file <path>]         # save snapshot HTML to a file
+browser4-cli domsnapshot summary                       # generate a compressed page summary (WPSI)
 ```
 
 See **[references/domsnapshot.md](references/domsnapshot.md)** for the full command reference, field tables, X-SQL query examples, and the comparison with interactive `snapshot`.

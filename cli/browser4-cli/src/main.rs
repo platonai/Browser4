@@ -246,6 +246,7 @@ fn no_snapshot_commands() -> HashSet<&'static str> {
         "domsnapshot-get",
         "domsnapshot-query",
         "domsnapshot-export",
+        "domsnapshot-summary",
     ]
     .into()
 }
@@ -2436,6 +2437,64 @@ async fn handle_dom_snapshot_export(
     Ok(())
 }
 
+async fn handle_dom_snapshot_summary(
+    client: &Client,
+    base_url: &str,
+    tool_name: &str,
+    _tool_params: &Value,
+    session_name: Option<&str>,
+) -> Result<(), String> {
+    let combined = with_session(client, base_url, session_name, false, |session_id| {
+        let client = client.clone();
+        let base_url = base_url.to_string();
+        let tool_name = tool_name.to_string();
+
+        async move {
+            let (url_res, title_res, summary_res) = tokio::join!(
+                call_tool(
+                    &client,
+                    &base_url,
+                    "page_url",
+                    json!({ "sessionId": session_id })
+                ),
+                call_tool(
+                    &client,
+                    &base_url,
+                    "page_title",
+                    json!({ "sessionId": session_id })
+                ),
+                call_tool(&client, &base_url, &tool_name, json!({ "sessionId": session_id })),
+            );
+            let url = url_res?;
+            let title = title_res?;
+            let summary = summary_res?;
+            Ok(format!("{}\n{}\n{}", url, title, summary))
+        }
+    })
+    .await?;
+
+    // The combined result has url, title, and summary separated by newlines
+    let parts: Vec<&str> = combined.splitn(3, '\n').collect();
+    let (url, title, summary) = match parts.as_slice() {
+        [u, t, s] => (*u, *t, *s),
+        _ => ("", "", combined.as_str()),
+    };
+
+    let out_path = resolve_output_path(None, "domsnapshot-summary", "yml");
+    save_snapshot(&out_path, summary).map_err(|e| e.to_string())?;
+
+    json_field("page_url", json!(url));
+    json_field("page_title", json!(title));
+    json_field("summary_path", json!(out_path.display().to_string()));
+
+    cli_println!("### Page");
+    cli_println!("- Page URL: {}", url);
+    cli_println!("- Page Title: {}", title);
+    cli_println!("### Summary");
+    cli_println!("[Summary]({})", out_path.display());
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // generate-locator handler
 // ---------------------------------------------------------------------------
@@ -4259,6 +4318,7 @@ fn preferred_spaced_command_form(command: &str) -> Option<&'static str> {
         "domsnapshot-get" => Some("domsnapshot get"),
         "domsnapshot-query" => Some("domsnapshot query"),
         "domsnapshot-export" => Some("domsnapshot export"),
+        "domsnapshot-summary" => Some("domsnapshot summary"),
         _ => None,
     }
 }
@@ -5746,6 +5806,16 @@ async fn run(
             )
             .await?;
         }
+        "domsnapshot-summary" => {
+            handle_dom_snapshot_summary(
+                &client,
+                &base_url,
+                &tool_name,
+                &tool_params,
+                global.session_name.as_deref(),
+            )
+            .await?;
+        }
         "generate-locator" => {
             handle_generate_locator(
                 &client,
@@ -5903,6 +5973,7 @@ mod tests {
         assert!(no_snapshot_commands().contains("domsnapshot-get"));
         assert!(no_snapshot_commands().contains("domsnapshot-query"));
         assert!(no_snapshot_commands().contains("domsnapshot-export"));
+        assert!(no_snapshot_commands().contains("domsnapshot-summary"));
     }
 
     #[test]

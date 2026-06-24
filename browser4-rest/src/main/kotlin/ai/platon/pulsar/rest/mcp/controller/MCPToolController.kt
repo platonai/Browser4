@@ -9,6 +9,7 @@ import ai.platon.pulsar.agentic.model.ToolCall
 import ai.platon.pulsar.agentic.model.ToolSpec
 import ai.platon.pulsar.agentic.tools.AgentToolManager
 import ai.platon.pulsar.agentic.tools.advanced.crawl.ScrapeRequest
+import ai.platon.pulsar.skeleton.workflow.parse.html.PageSummaryIndexService
 import ai.platon.pulsar.common.PulsarSessionManager
 import ai.platon.pulsar.common.brief
 import ai.platon.pulsar.common.sql.SQLTemplate
@@ -242,6 +243,7 @@ class MCPToolController(
                 "dom_snapshot_scrape" -> handleDomSnapshotScrape(request)
                 "dom_snapshot_query" -> handleDomSnapshotQuery(request)
                 "dom_snapshot_export" -> handleDomSnapshotExport(request)
+                "dom_snapshot_summary" -> handleDomSnapshotSummary(request)
                 // All other tools are dispatched to the session's agent
                 else -> dispatchToAgentToolExecutor(request)
             }
@@ -301,6 +303,7 @@ class MCPToolController(
                     "dom_snapshot_scrape",
                     "dom_snapshot_query",
                     "dom_snapshot_export",
+                    "dom_snapshot_summary",
                 )
             )
 
@@ -848,6 +851,30 @@ class MCPToolController(
         } catch (e: Exception) {
             logger.error("dom_snapshot_export failed | {}", e.message, e)
             ResponseEntity.ok(errorResponse("dom_snapshot_export failed: ${e.message}"))
+        }
+    }
+
+    private suspend fun handleDomSnapshotSummary(
+        request: MCPToolCallRequest
+    ): ResponseEntity<MCPToolCallResponse> {
+        val sessionId = requireSessionId(request)
+        val managed = sessionManager.getSession(sessionId)
+            ?: return ResponseEntity.ok(errorResponse("${MCPConstants.ERROR_SESSION_NOT_FOUND}$sessionId"))
+
+        return try {
+            val summary = managed.withLock {
+                val pulsarSession = managed.agenticSession
+                val url = pulsarSession.normalize(managed.driver.userTypedUrl())
+                val document = pulsarSession.loadDocument(url.urlString)
+                val title = document.title
+                val pageUrl = url.urlString
+
+                PageSummaryIndexService.generate(document, pageUrl, title)
+            }
+            ResponseEntity.ok(textResponse(summary))
+        } catch (e: Exception) {
+            logger.error("dom_snapshot_summary failed | {}", e.message, e)
+            ResponseEntity.ok(errorResponse("dom_snapshot_summary failed: ${e.message}"))
         }
     }
 
