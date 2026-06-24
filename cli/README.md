@@ -25,12 +25,6 @@ npm install browser4-cli
 
 Then use via `package.json` scripts or by invoking `browser4-cli` directly.
 
-### Homebrew (macOS) / Cargo (Rust)
-
-Homebrew and Cargo install methods are **not currently supported**. See the
-[root README](../README.md#-installation) for the supported install methods:
-npm, standalone installer scripts, or building from source.
-
 ### Standalone Installer Scripts (no npm needed)
 
 Bootstrap the native binary directly with a single command:
