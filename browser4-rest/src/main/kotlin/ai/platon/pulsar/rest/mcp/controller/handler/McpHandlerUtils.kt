@@ -18,6 +18,7 @@ data class BatchExecutionResult(
     val pageTitle: String? = null,
     val snapshot: String? = null,
     val screenshot: String? = null,
+    val pdf: String? = null,
 )
 
 data class BatchExecutionResponse(

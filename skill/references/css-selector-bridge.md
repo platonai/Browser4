@@ -17,8 +17,8 @@
 
 | ❌ NEVER | ✅ INSTEAD |
 |----------|------------|
-| `cat .browser4-cli/snapshot/page-*.yml` | `browser4-cli snapshot` (prints compact refs to stdout) |
-| `cat page-snapshot.html` | `browser4-cli domsnapshot get text "selector"` |
+| `browser4-cli domsnapshot get html ":root"` (entire page HTML) | `browser4-cli domsnapshot get text "selector"` (single element) |
+| `cat domsnapshot-export.html` | `browser4-cli domsnapshot get text "selector"` |
 | `grep` through an exported snapshot file | `browser4-cli domsnapshot query --sql "..."` |
 | `browser4-cli domsnapshot export` then `cat` | `browser4-cli domsnapshot get html "form"` (scoped to one element) |
 | Dump entire page HTML into agent context | Use `domsnapshot get text` to pull only the fields you need |
@@ -217,10 +217,7 @@ browser4-cli domsnapshot get text "$SELECTOR"
 ## Anti-Patterns to Avoid
 
 ```bash
-# ❌ BAD: Reading the full snapshot file into context
-cat .browser4-cli/snapshot/page-*.yml
-
-# ❌ BAD: Exporting full HTML then reading it
+# ❌ BAD: Exporting full page HTML then reading it
 browser4-cli domsnapshot export --file=page.html
 cat page.html  # hundreds of MB!
 

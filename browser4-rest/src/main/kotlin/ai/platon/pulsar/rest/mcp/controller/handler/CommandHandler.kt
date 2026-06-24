@@ -98,6 +98,7 @@ class CommandHandler(
             MCPConstants.OP_TOOL -> handleBatchTool(index, step, currentSessionId)
             MCPConstants.OP_SNAPSHOT -> handleBatchSnapshot(index, step, currentSessionId)
             MCPConstants.OP_SCREENSHOT -> handleBatchScreenshot(index, step, currentSessionId)
+            MCPConstants.OP_PDF -> handleBatchPdf(index, step, currentSessionId)
             else -> throw IllegalArgumentException("${MCPConstants.ERROR_UNSUPPORTED_OP}$op")
         }
     }
@@ -166,6 +167,21 @@ class CommandHandler(
         val screenshot = executeAgentToolText(tool, arguments)
 
         return BatchExecutionResult(index = index, ok = true, screenshot = screenshot)
+    }
+
+    private suspend fun handleBatchPdf(
+        index: Int,
+        step: Map<String, Any?>,
+        currentSessionId: String?
+    ): BatchExecutionResult {
+        val sessionId = requireSessionId(currentSessionId)
+        val tool = step[MCPConstants.KEY_TOOL]?.toString()
+            ?: throw IllegalArgumentException(MCPConstants.ERROR_MISSING_TOOL)
+        val arguments =
+            step[MCPConstants.KEY_ARGUMENTS].toAnyMap().orEmpty() + (MCPConstants.KEY_SESSION_ID to sessionId)
+        val pdf = executeAgentToolText(tool, arguments)
+
+        return BatchExecutionResult(index = index, ok = true, pdf = pdf)
     }
 
     // =========================================================================

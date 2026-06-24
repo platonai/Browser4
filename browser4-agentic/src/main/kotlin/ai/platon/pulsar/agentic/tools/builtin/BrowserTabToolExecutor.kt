@@ -948,6 +948,10 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
                 }
             }
 
+            "pdf" -> {
+                validateArgs(args, emptySet(), emptySet(), functionName); driver.pdf()
+            }
+
             // HTML / Text
             "outerHTML" -> {
                 if (args.isEmpty()) {
@@ -1192,6 +1196,11 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
 
                     else -> throw IllegalArgumentException("evaluateValueDetail requires 'expression' or ('selector','functionDeclaration')")
                 }
+            }
+
+            "generateLocator" -> {
+                validateArgs(args, allowed("selector"), setOf("selector"), functionName)
+                driver.generateLocator(paramString(args, "selector", functionName)!!)
             }
 
             // Element geometry

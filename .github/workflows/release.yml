@@ -1194,6 +1194,8 @@ jobs:
       - name: Generate Artifact Attestation
         if: success()
         uses: actions/attest-build-provenance@ef244123eb79f2f7a7e75d99086184180e6d0018  # v1.4.4
+        env:
+          FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: false
         with:
           subject-path: release-assets/${{ env.PRODUCTION_JAR_NAME }}
 

@@ -178,6 +178,40 @@ class RemoteChromeProtocol(
         captureBeyondViewport = captureBeyondViewport,
     )
 
+    override suspend fun printToPDF(
+        landscape: Boolean?,
+        displayHeaderFooter: Boolean?,
+        printBackground: Boolean?,
+        scale: Double?,
+        paperWidth: Double?,
+        paperHeight: Double?,
+        marginTop: Double?,
+        marginBottom: Double?,
+        marginLeft: Double?,
+        marginRight: Double?,
+        pageRanges: String?,
+        headerTemplate: String?,
+        footerTemplate: String?,
+        preferCSSPageSize: Boolean?,
+        transferMode: PrintToPDFTransferMode?,
+    ) = page.printToPDF(
+        landscape = landscape,
+        displayHeaderFooter = displayHeaderFooter,
+        printBackground = printBackground,
+        scale = scale,
+        paperWidth = paperWidth,
+        paperHeight = paperHeight,
+        marginTop = marginTop,
+        marginBottom = marginBottom,
+        marginLeft = marginLeft,
+        marginRight = marginRight,
+        pageRanges = pageRanges,
+        headerTemplate = headerTemplate,
+        footerTemplate = footerTemplate,
+        preferCSSPageSize = preferCSSPageSize,
+        transferMode = transferMode,
+    )
+
     override suspend fun setDeviceMetricsOverride(
         mobile: Boolean,
         width: Int,

@@ -210,6 +210,7 @@ fn no_snapshot_commands() -> HashSet<&'static str> {
         "uninstall",
         "help",
         "eval",
+        "generate-locator",
         "summarize",
         "snapshot",
         "screenshot",
@@ -2103,6 +2104,45 @@ async fn handle_screenshot(
     Ok(())
 }
 
+async fn handle_pdf(
+    client: &Client,
+    base_url: &str,
+    tool_name: &str,
+    tool_params: &Value,
+    session_name: Option<&str>,
+) -> Result<(), String> {
+    let filename = tool_params
+        .get("filename")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let capture_args = {
+        let mut a = tool_params.clone();
+        if let Value::Object(ref mut m) = a {
+            m.remove("filename");
+        }
+        a
+    };
+
+    let base64_data = with_session(client, base_url, session_name, false, |session_id| {
+        let client = client.clone();
+        let base_url = base_url.to_string();
+        let tool_name = tool_name.to_string();
+        let mut args = capture_args.clone();
+        args["sessionId"] = json!(session_id);
+        async move { call_tool(&client, &base_url, &tool_name, args).await }
+    })
+    .await?;
+
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(base64_data.trim())
+        .map_err(|e| format!("Failed to decode PDF: {e}"))?;
+
+    let out_path = resolve_output_path(filename.as_deref(), "pdf", "pdf");
+    save_binary(&out_path, &bytes).map_err(|e| e.to_string())?;
+    cli_println!("[PDF]({})", out_path.display());
+    Ok(())
+}
+
 async fn handle_tool_command(
     client: &Client,
     base_url: &str,
@@ -2399,6 +2439,39 @@ async fn handle_dom_snapshot_export(
     snapshot::save_binary(&file_path, result.as_bytes()).map_err(|e| e.to_string())?;
     cli_println!("Snapshot saved to: {}", file_path.display());
     json_field("path", json!(file_path.display().to_string()));
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// generate-locator handler
+// ---------------------------------------------------------------------------
+
+async fn handle_generate_locator(
+    client: &Client,
+    base_url: &str,
+    tool_name: &str,
+    tool_params: &Value,
+    session_name: Option<&str>,
+) -> Result<(), String> {
+    let result = with_session(client, base_url, session_name, false, |session_id| {
+        let client = client.clone();
+        let base_url = base_url.to_string();
+        let tool_name = tool_name.to_string();
+        let mut params = tool_params.clone();
+        params["sessionId"] = json!(session_id);
+        async move { call_tool(&client, &base_url, &tool_name, params).await }
+    })
+    .await?;
+
+    if !result.is_empty() {
+        cli_println!("{}", result);
+    }
+
+    json_field("selector", json!(&result));
+    if let Some(r) = tool_params.get("ref").and_then(|v| v.as_str()) {
+        json_field("ref", json!(r));
+    }
 
     Ok(())
 }
@@ -4159,6 +4232,11 @@ fn should_ensure_server_running(command: &str) -> bool {
 fn rewrite_prefixed_command(args: &[String]) -> Option<Vec<String>> {
     let prefix = args.first().map(|s| s.as_str())?;
     let sub = args.get(1)?;
+    // Do not rewrite when the second argument looks like a flag (e.g. --help)
+    // rather than a subcommand name.
+    if sub.starts_with('-') {
+        return None;
+    }
     let rewritten_command = match prefix {
         "swarm" => format!("swarm-{}", sub),
         "agent" => format!("agent-{}", sub),
@@ -4197,7 +4275,9 @@ fn preferred_prefixed_group_form(command: &str) -> Option<&'static str> {
         "agent" => Some("agent <subcommand>"),
         "swarm" => Some("swarm <subcommand>"),
         "co" => Some("swarm <subcommand>"),
-        "domsnapshot" => Some("domsnapshot <subcommand>"),
+        // `domsnapshot` is a valid standalone command (captures a DOM snapshot
+        // and returns metadata), not just a prefix group — so it is intentionally
+        // absent here.  Use `browser4-cli domsnapshot --help` to see subcommands.
         _ => None,
     }
 }
@@ -4233,6 +4313,7 @@ enum PlannedBatchOutput {
     Text,
     Snapshot { path: PathBuf },
     Screenshot { path: PathBuf },
+    Pdf { path: PathBuf },
 }
 
 #[derive(Debug, Clone)]
@@ -4275,6 +4356,7 @@ struct BatchExecutionResult {
     page_title: Option<String>,
     snapshot: Option<String>,
     screenshot: Option<String>,
+    pdf: Option<String>,
 }
 
 fn read_batch_stdin() -> Result<String, String> {
@@ -4581,6 +4663,27 @@ fn compile_batch_request(
                     outputs: vec![PlannedBatchOutput::Screenshot { path: output_path }],
                 });
             }
+            "pdf" => {
+                let filename = tool_params.get("filename").and_then(|value| value.as_str());
+                let output_path = resolve_output_path(filename, "pdf", "pdf");
+                let mut arguments = tool_params.clone();
+                if let Value::Object(map) = &mut arguments {
+                    map.remove("filename");
+                }
+
+                let request_index = steps.len();
+                steps.push(json!({
+                    "op": "pdf",
+                    "command": spec.display,
+                    "tool": tool_name,
+                    "arguments": normalize_batch_step_args(&arguments),
+                }));
+                entries.push(PlannedBatchEntry::Backend {
+                    display: spec.display.clone(),
+                    request_indices: vec![request_index],
+                    outputs: vec![PlannedBatchOutput::Pdf { path: output_path }],
+                });
+            }
             "press" => {
                 let selector = tool_params
                     .get("ref")
@@ -4757,6 +4860,17 @@ fn render_batch_result(
                 .map_err(|e| format!("Failed to decode screenshot: {e}"))?;
             save_binary(path, &bytes).map_err(|e| e.to_string())?;
             cli_println!("[Screenshot]({})", path.display());
+        }
+        PlannedBatchOutput::Pdf { path } => {
+            let encoded = result
+                .pdf
+                .as_deref()
+                .ok_or_else(|| "Batch PDF response was missing PDF data.".to_string())?;
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(encoded.trim())
+                .map_err(|e| format!("Failed to decode PDF: {e}"))?;
+            save_binary(path, &bytes).map_err(|e| e.to_string())?;
+            cli_println!("[PDF]({})", path.display());
         }
     }
 
@@ -5053,6 +5167,13 @@ async fn run(
 
     if command == "batch" {
         return handle_batch(global).await;
+    }
+
+    // When the user passes --help/-h after a command (e.g. `domsnapshot --help`),
+    // print the help for that command instead of complaining about the form.
+    if global.args.iter().any(|a| a == "--help" || a == "-h") {
+        print_help(Some(command));
+        return Ok(());
     }
 
     if !from_spaced_prefix {
@@ -5362,6 +5483,16 @@ async fn run(
             )
             .await?;
         }
+        "pdf" => {
+            handle_pdf(
+                &client,
+                &base_url,
+                &tool_name,
+                &tool_params,
+                global.session_name.as_deref(),
+            )
+            .await?;
+        }
         "eval" => {
             // When --file is provided, read the expression from the file.
             if let Some(file_path) = tool_params
@@ -5639,6 +5770,16 @@ async fn run(
             )
             .await?;
         }
+        "generate-locator" => {
+            handle_generate_locator(
+                &client,
+                &base_url,
+                &tool_name,
+                &tool_params,
+                global.session_name.as_deref(),
+            )
+            .await?;
+        }
         _ => {
             if tool_name.is_empty() {
                 cli_println!("Command '{}' is not yet implemented.", command);
@@ -5791,6 +5932,11 @@ mod tests {
         assert!(no_snapshot_commands().contains("domsnapshot-get"));
         assert!(no_snapshot_commands().contains("domsnapshot-query"));
         assert!(no_snapshot_commands().contains("domsnapshot-export"));
+    }
+
+    #[test]
+    fn no_snapshot_commands_include_generate_locator() {
+        assert!(no_snapshot_commands().contains("generate-locator"));
     }
 
     #[test]
@@ -6335,6 +6481,8 @@ mod tests {
             Some("swarm <subcommand>")
         );
         assert_eq!(preferred_prefixed_group_form("open"), None);
+        // `domsnapshot` is a valid standalone command — not just a prefix group.
+        assert_eq!(preferred_prefixed_group_form("domsnapshot"), None);
     }
 
     #[test]

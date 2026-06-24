@@ -17,6 +17,7 @@ import ai.platon.cdt.kt.protocol.events.network.ResponseReceived
 import ai.platon.cdt.kt.protocol.events.page.FrameNavigated
 import ai.platon.cdt.kt.protocol.events.page.WindowOpen
 import ai.platon.cdt.kt.protocol.types.fetch.RequestPattern
+import ai.platon.cdt.kt.protocol.types.page.PrintToPDFTransferMode
 import ai.platon.cdt.kt.protocol.types.network.Cookie
 import ai.platon.cdt.kt.protocol.types.network.ErrorReason
 import ai.platon.cdt.kt.protocol.types.network.LoadNetworkResourceOptions
@@ -343,6 +344,55 @@ open class PulsarWebDriver constructor(
                 return ($callable).call(__browser4Element, __browser4Element);
             }
         """.trimIndent()
+    }
+
+    @Throws(WebDriverException::class)
+    override suspend fun generateLocator(selector: String): String? {
+        val jsFunction = """
+            element => {
+                if (!element || element.nodeType !== 1) return null;
+
+                function cssEscape(v) {
+                    if (typeof CSS !== 'undefined' && CSS.escape) return CSS.escape(v);
+                    return v.replace(/[!"#${'$'}%&'()*+,./:;<=>?@[\]^`{|}~]/g, '\\${'$'}&');
+                }
+
+                function segmentFor(el) {
+                    var tag = el.tagName.toLowerCase();
+                    if (el.id) return '#' + cssEscape(el.id);
+                    if (el.classList && el.classList.length > 0) {
+                        var classes = Array.from(el.classList).filter(function(c) {
+                            return !/[A-Z]/.test(c) &&
+                                   !/^[a-z]+-[a-z0-9]{6,}${'$'}/.test(c) &&
+                                   c.indexOf('_') === -1 &&
+                                   c.length > 1;
+                        });
+                        if (classes.length > 0) return tag + '.' + classes.map(cssEscape).join('.');
+                    }
+                    if (el.parentNode) {
+                        var siblings = Array.from(el.parentNode.children);
+                        var sameTag = siblings.filter(function(s) { return s.tagName === el.tagName; });
+                        if (sameTag.length > 1) {
+                            return tag + ':nth-of-type(' + (sameTag.indexOf(el) + 1) + ')';
+                        }
+                    }
+                    return tag;
+                }
+
+                var parts = [];
+                var cur = element;
+                while (cur && cur.nodeType === 1) {
+                    parts.unshift(segmentFor(cur));
+                    if (cur.id) break;
+                    if (cur.tagName.toLowerCase() === 'body') break;
+                    cur = cur.parentNode;
+                }
+                return parts.join(' > ');
+            }
+        """.trimIndent()
+
+        val result = evaluateValue(selector, jsFunction)
+        return result?.toString()?.takeIf { it.isNotEmpty() && it != "null" }
     }
 
     override suspend fun currentUrl(): String {
@@ -1192,6 +1242,22 @@ function() {
             lastError = e
             logger.warn("Failed to take screenshot for rect {} | {}", rect, e.message)
             rpc.interceptChromeException(e, "screenshot")
+            null
+        }
+    }
+
+    @Throws(WebDriverException::class)
+    override suspend fun pdf(): String? {
+        return try {
+            rpc.invokeOnPage("pdf") {
+                val result = rpc.printToPDF(
+                    printBackground = true,
+                    transferMode = PrintToPDFTransferMode.ReturnAsBase64,
+                )
+                result.data
+            }
+        } catch (e: ChromeDriverException) {
+            rpc.interceptChromeException(e, "pdf")
             null
         }
     }

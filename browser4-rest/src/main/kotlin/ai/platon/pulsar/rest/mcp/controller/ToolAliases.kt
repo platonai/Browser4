@@ -25,8 +25,10 @@ val FRONTEND_TOOL_NAME_ALIASES: Map<String, String> = mapOf(
     "browser_check" to "check",
     "browser_uncheck" to "uncheck",
     "browser_evaluate" to "evaluate_value",
+    "browser_generate_locator" to "generate_locator",
     "browser_resize" to "resize",
     "browser_take_screenshot" to "screenshot",
+    "browser_pdf_save" to "pdf",
     "browser_save_storage_state" to "save_storage_state",
     "browser_load_storage_state" to "load_storage_state",
 )
