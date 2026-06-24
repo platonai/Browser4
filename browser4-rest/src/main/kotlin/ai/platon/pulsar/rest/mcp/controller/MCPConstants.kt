@@ -25,6 +25,7 @@ object MCPConstants {
     const val OP_TOOL = "tool"
     const val OP_SNAPSHOT = "snapshot"
     const val OP_SCREENSHOT = "screenshot"
+    const val OP_PDF = "pdf"
     
     const val TOOL_PAGE_URL = "page_url"
     const val TOOL_PAGE_TITLE = "page_title"

@@ -2097,6 +2097,45 @@ async fn handle_screenshot(
     Ok(())
 }
 
+async fn handle_pdf(
+    client: &Client,
+    base_url: &str,
+    tool_name: &str,
+    tool_params: &Value,
+    session_name: Option<&str>,
+) -> Result<(), String> {
+    let filename = tool_params
+        .get("filename")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let capture_args = {
+        let mut a = tool_params.clone();
+        if let Value::Object(ref mut m) = a {
+            m.remove("filename");
+        }
+        a
+    };
+
+    let base64_data = with_session(client, base_url, session_name, false, |session_id| {
+        let client = client.clone();
+        let base_url = base_url.to_string();
+        let tool_name = tool_name.to_string();
+        let mut args = capture_args.clone();
+        args["sessionId"] = json!(session_id);
+        async move { call_tool(&client, &base_url, &tool_name, args).await }
+    })
+    .await?;
+
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(base64_data.trim())
+        .map_err(|e| format!("Failed to decode PDF: {e}"))?;
+
+    let out_path = resolve_output_path(filename.as_deref(), "pdf", "pdf");
+    save_binary(&out_path, &bytes).map_err(|e| e.to_string())?;
+    cli_println!("[PDF]({})", out_path.display());
+    Ok(())
+}
+
 async fn handle_tool_command(
     client: &Client,
     base_url: &str,
@@ -4267,6 +4306,7 @@ enum PlannedBatchOutput {
     Text,
     Snapshot { path: PathBuf },
     Screenshot { path: PathBuf },
+    Pdf { path: PathBuf },
 }
 
 #[derive(Debug, Clone)]
@@ -4309,6 +4349,7 @@ struct BatchExecutionResult {
     page_title: Option<String>,
     snapshot: Option<String>,
     screenshot: Option<String>,
+    pdf: Option<String>,
 }
 
 fn read_batch_stdin() -> Result<String, String> {
@@ -4615,6 +4656,27 @@ fn compile_batch_request(
                     outputs: vec![PlannedBatchOutput::Screenshot { path: output_path }],
                 });
             }
+            "pdf" => {
+                let filename = tool_params.get("filename").and_then(|value| value.as_str());
+                let output_path = resolve_output_path(filename, "pdf", "pdf");
+                let mut arguments = tool_params.clone();
+                if let Value::Object(map) = &mut arguments {
+                    map.remove("filename");
+                }
+
+                let request_index = steps.len();
+                steps.push(json!({
+                    "op": "pdf",
+                    "command": spec.display,
+                    "tool": tool_name,
+                    "arguments": normalize_batch_step_args(&arguments),
+                }));
+                entries.push(PlannedBatchEntry::Backend {
+                    display: spec.display.clone(),
+                    request_indices: vec![request_index],
+                    outputs: vec![PlannedBatchOutput::Pdf { path: output_path }],
+                });
+            }
             "press" => {
                 let selector = tool_params
                     .get("ref")
@@ -4791,6 +4853,17 @@ fn render_batch_result(
                 .map_err(|e| format!("Failed to decode screenshot: {e}"))?;
             save_binary(path, &bytes).map_err(|e| e.to_string())?;
             cli_println!("[Screenshot]({})", path.display());
+        }
+        PlannedBatchOutput::Pdf { path } => {
+            let encoded = result
+                .pdf
+                .as_deref()
+                .ok_or_else(|| "Batch PDF response was missing PDF data.".to_string())?;
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(encoded.trim())
+                .map_err(|e| format!("Failed to decode PDF: {e}"))?;
+            save_binary(path, &bytes).map_err(|e| e.to_string())?;
+            cli_println!("[PDF]({})", path.display());
         }
     }
 
@@ -5395,6 +5468,16 @@ async fn run(
         }
         "screenshot" => {
             handle_screenshot(
+                &client,
+                &base_url,
+                &tool_name,
+                &tool_params,
+                global.session_name.as_deref(),
+            )
+            .await?;
+        }
+        "pdf" => {
+            handle_pdf(
                 &client,
                 &base_url,
                 &tool_name,

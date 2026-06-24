@@ -17,6 +17,7 @@ import ai.platon.cdt.kt.protocol.events.network.ResponseReceived
 import ai.platon.cdt.kt.protocol.events.page.FrameNavigated
 import ai.platon.cdt.kt.protocol.events.page.WindowOpen
 import ai.platon.cdt.kt.protocol.types.fetch.RequestPattern
+import ai.platon.cdt.kt.protocol.types.page.PrintToPDFTransferMode
 import ai.platon.cdt.kt.protocol.types.network.Cookie
 import ai.platon.cdt.kt.protocol.types.network.ErrorReason
 import ai.platon.cdt.kt.protocol.types.network.LoadNetworkResourceOptions
@@ -1224,6 +1225,22 @@ function() {
             rpc.invokeOnPage("screenshot") { screenshot.screenshot(rect) }
         } catch (e: ChromeDriverException) {
             rpc.interceptChromeException(e, "screenshot")
+            null
+        }
+    }
+
+    @Throws(WebDriverException::class)
+    override suspend fun pdf(): String? {
+        return try {
+            rpc.invokeOnPage("pdf") {
+                val result = rpc.printToPDF(
+                    printBackground = true,
+                    transferMode = PrintToPDFTransferMode.ReturnAsBase64,
+                )
+                result.data
+            }
+        } catch (e: ChromeDriverException) {
+            rpc.interceptChromeException(e, "pdf")
             null
         }
     }

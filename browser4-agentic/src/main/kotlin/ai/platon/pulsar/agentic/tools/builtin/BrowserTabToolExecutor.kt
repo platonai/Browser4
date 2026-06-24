@@ -947,6 +947,10 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
                 }
             }
 
+            "pdf" -> {
+                validateArgs(args, emptySet(), emptySet(), functionName); driver.pdf()
+            }
+
             // HTML / Text
             "outerHTML" -> {
                 if (args.isEmpty()) {

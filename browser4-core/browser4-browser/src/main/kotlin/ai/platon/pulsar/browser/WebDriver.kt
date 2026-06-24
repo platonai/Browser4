@@ -1957,6 +1957,17 @@ interface WebDriver : Closeable {
     @Deprecated("Use screenshot(rect) instead", ReplaceWith("screenshot(rect)"))
     suspend fun captureScreenshot(rect: RectD): String? = screenshot(rect)
 
+    /**
+     * Print the current page as PDF. @mcp
+     *
+     * Returns a Base64 encoded PDF document generated via Chrome DevTools Protocol
+     * Page.printToPDF. Uses A4 paper size, portrait orientation, and prints background
+     * graphics by default.
+     */
+    @Throws(WebDriverException::class)
+    @MCP
+    suspend fun pdf(): String?
+
     @Throws(WebDriverException::class)
     @MCP
     suspend fun ariaSnapshot(): String

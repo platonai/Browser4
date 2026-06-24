@@ -111,6 +111,7 @@ class MCPToolController(
             "browser_generate_locator" to "generate_locator",
             "browser_resize" to "resize",
             "browser_take_screenshot" to "screenshot",
+            "browser_pdf_save" to "pdf",
             "browser_save_storage_state" to "save_storage_state",
             "browser_load_storage_state" to "load_storage_state",
         )
@@ -189,6 +190,7 @@ class MCPToolController(
         val pageTitle: String? = null,
         val snapshot: String? = null,
         val screenshot: String? = null,
+        val pdf: String? = null,
     )
 
     private data class BatchExecutionResponse(
@@ -512,6 +514,7 @@ class MCPToolController(
             MCPConstants.OP_TOOL -> handleBatchTool(index, step, currentSessionId)
             MCPConstants.OP_SNAPSHOT -> handleBatchSnapshot(index, step, currentSessionId)
             MCPConstants.OP_SCREENSHOT -> handleBatchScreenshot(index, step, currentSessionId)
+            MCPConstants.OP_PDF -> handleBatchPdf(index, step, currentSessionId)
             else -> throw IllegalArgumentException("${MCPConstants.ERROR_UNSUPPORTED_OP}$op")
         }
     }
@@ -580,6 +583,21 @@ class MCPToolController(
         val screenshot = executeAgentToolText(tool, arguments)
 
         return BatchExecutionResult(index = index, ok = true, screenshot = screenshot)
+    }
+
+    private suspend fun handleBatchPdf(
+        index: Int,
+        step: Map<String, Any?>,
+        currentSessionId: String?
+    ): BatchExecutionResult {
+        val sessionId = requireSessionId(currentSessionId)
+        val tool = step[MCPConstants.KEY_TOOL]?.toString()
+            ?: throw IllegalArgumentException(MCPConstants.ERROR_MISSING_TOOL)
+        val arguments =
+            step[MCPConstants.KEY_ARGUMENTS].toAnyMap().orEmpty() + (MCPConstants.KEY_SESSION_ID to sessionId)
+        val pdf = executeAgentToolText(tool, arguments)
+
+        return BatchExecutionResult(index = index, ok = true, pdf = pdf)
     }
 
     private suspend fun restoreBatchFocus(sessionId: String, selector: String) {

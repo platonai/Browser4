@@ -112,6 +112,24 @@ interface BrowserProtocol {
         captureBeyondViewport: Boolean? = null,
     ): String
 
+    suspend fun printToPDF(
+        landscape: Boolean? = null,
+        displayHeaderFooter: Boolean? = null,
+        printBackground: Boolean? = null,
+        scale: Double? = null,
+        paperWidth: Double? = null,
+        paperHeight: Double? = null,
+        marginTop: Double? = null,
+        marginBottom: Double? = null,
+        marginLeft: Double? = null,
+        marginRight: Double? = null,
+        pageRanges: String? = null,
+        headerTemplate: String? = null,
+        footerTemplate: String? = null,
+        preferCSSPageSize: Boolean? = null,
+        transferMode: PrintToPDFTransferMode? = null,
+    ): PrintToPDF
+
     suspend fun setDeviceMetricsOverride(
         mobile: Boolean,
         width: Int,

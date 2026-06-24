@@ -1029,10 +1029,16 @@ pub(super) fn test_form_controls_and_exports(ctx: &mut E2ECtx) {
         "Screenshot file is empty"
     );
 
-    run_command_expecting_failure(
-        ctx,
-        &["pdf", "--filename=interactive.pdf"],
-        "Unknown tool: browser_pdf_save",
+    run_command(ctx, &["pdf", "--filename=interactive.pdf"]);
+    let pdf_path = ctx
+        .workspace_dir
+        .join(".browser4-cli")
+        .join("snapshot")
+        .join("interactive.pdf");
+    assert!(pdf_path.exists(), "PDF file not found");
+    assert!(
+        fs::metadata(&pdf_path).unwrap().len() > 0,
+        "PDF file is empty"
     );
 
     run_command(ctx, &["close"]);
