@@ -25,19 +25,13 @@ npm install browser4-cli
 
 Then use via `package.json` scripts or by invoking `browser4-cli` directly.
 
-### Homebrew (macOS)
+### Homebrew (macOS) / Cargo (Rust)
 
-```bash
-brew install browser4-cli
-```
+Homebrew and Cargo install methods are **not currently supported**. See the
+[root README](../README.md#-installation) for the supported install methods:
+npm, standalone installer scripts, or building from source.
 
-### Cargo (Rust)
-
-```bash
-cargo install browser4-cli
-```
-
-### Standalone Installer Scripts (no npm / Rust / Homebrew needed)
+### Standalone Installer Scripts (no npm needed)
 
 Bootstrap the native binary directly with a single command:
 
@@ -246,7 +240,7 @@ Use `close-all` for session cleanup when you want to keep the current Browser4 s
 |---|---|
 | `install` | Download the Browser4 runtime bundle. Supports `--tag=<version>` to pin a release and `--force` to reinstall even when already present. |
 | `upgrade` | Upgrade the Browser4 runtime bundle to the latest version or a specified `--tag` |
-| `uninstall` | Remove globally installed browser4-cli (npm, cargo) and its runtime data. Supports `-y` / `--yes` (skip confirmation) and `--dry-run` (preview). |
+| `uninstall` | Remove globally installed browser4-cli (npm) and its runtime data. Supports `-y` / `--yes` (skip confirmation) and `--dry-run` (preview). |
 | `stop` | Kill the Browser4 backend after closing all sessions |
 | `status` | Check whether the Browser4 backend is reachable and healthy |
 
@@ -262,8 +256,8 @@ When a local Browser4 checkout is detected with the `browser4-bundle` module pre
 `install` and `upgrade` auto-build the runtime bundle from source (via Maven) instead
 of downloading.
 
-`uninstall` attempts to remove browser4-cli from npm global packages and cargo
-installs, and deletes the Browser4 runtime data and cache directories. It prompts
+`uninstall` attempts to remove browser4-cli from npm global packages
+and deletes the Browser4 runtime data and cache directories. It prompts
 for confirmation unless `-y` / `--yes` is passed. Use `--dry-run` to preview what
 would be removed without making changes. Does not require a running server.
 

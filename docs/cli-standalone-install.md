@@ -1,7 +1,9 @@
 # Standalone CLI Installer Scripts
 
-Download and install the `browser4-cli` native binary without npm, Cargo, or
-Homebrew — just `curl` (or `Invoke-WebRequest`) and your OS.
+Download and install the `browser4-cli` native binary without needing npm —
+just `curl` (or `Invoke-WebRequest`) and your OS. (Homebrew and Cargo are
+not currently supported; see the [root README](../README.md#-installation)
+for all supported install methods.)
 
 Two platform scripts are provided:
 
