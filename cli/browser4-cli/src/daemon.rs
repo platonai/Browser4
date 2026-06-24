@@ -3988,7 +3988,34 @@ async fn run_bundle_build_script(
 }
 
 async fn find_or_install_runtime() -> Result<InstalledBrowser4Runtime, String> {
-    // Check for an already-installed runtime (from prior `install` command)
+    let force_remote = should_force_remote_bundle();
+
+    // When running from a Browser4 repository checkout, prefer the local
+    // project build over any globally installed runtime.  The local build
+    // reflects the current source tree, which is what developers expect
+    // when they run `cargo run -- <command>`.
+    //
+    // BROWSER4_CLI_FORCE_REMOTE_BUNDLE skips the local build entirely —
+    // useful in CI / corporate environments where Maven or jlink are
+    // unreliable (e.g. behind a proxy that only allows HTTPS to GitHub).
+    if !force_remote {
+        let project_root = find_browser4_root();
+        if let Some(root) = &project_root {
+            match try_build_local_runtime_bundle(root).await {
+                Ok(Some(runtime)) => return Ok(runtime),
+                Ok(None) => {
+                    eprintln!("Local Browser4 bundle is not available; checking installed runtime.");
+                }
+                Err(error) => {
+                    eprintln!(
+                        "Local Browser4 bundle check failed: {error}; checking installed runtime."
+                    );
+                }
+            }
+        }
+    }
+
+    // Fall back to a globally installed runtime (from a prior `install` command).
     if install_dir_contains_runtime(&browser4_install_dir()) {
         if let Some(metadata) = read_installed_browser4_runtime_metadata() {
             eprintln!(
@@ -3997,29 +4024,6 @@ async fn find_or_install_runtime() -> Result<InstalledBrowser4Runtime, String> {
                 browser4_install_dir().display()
             );
             return Ok(materialize_installed_runtime(metadata, true));
-        }
-    }
-
-    let force_remote = should_force_remote_bundle();
-
-    // When BROWSER4_CLI_FORCE_REMOTE_BUNDLE is set, skip the local build
-    // entirely — useful in CI / corporate environments where Maven or jlink
-    // are unreliable (e.g. behind a proxy that only allows HTTPS to GitHub).
-    if !force_remote {
-        // Check for a local project build (or auto-build it).
-        let project_root = find_browser4_root();
-        if let Some(root) = &project_root {
-            match try_build_local_runtime_bundle(root).await {
-                Ok(Some(runtime)) => return Ok(runtime),
-                Ok(None) => {
-                    eprintln!("Local Browser4 bundle is not available; falling back to download.");
-                }
-                Err(error) => {
-                    eprintln!(
-                        "Local Browser4 bundle check failed: {error}; falling back to download."
-                    );
-                }
-            }
         }
     }
 

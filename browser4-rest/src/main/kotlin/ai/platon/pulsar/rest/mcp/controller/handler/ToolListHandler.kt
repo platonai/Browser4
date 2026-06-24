@@ -57,6 +57,7 @@ class ToolListHandler(
                     "dom_snapshot_scrape",
                     "dom_snapshot_query",
                     "dom_snapshot_export",
+                    "dom_snapshot_summary",
                 )
             )
 

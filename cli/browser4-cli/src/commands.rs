@@ -1763,6 +1763,17 @@ pub fn all_commands() -> Vec<CommandDef> {
             },
         },
         CommandDef {
+            name: "domsnapshot-summary",
+            description: "Generate a compressed Web Page Summary Index (WPSI) from the stored DOM snapshot — preserves page structure, key nodes, and stats in <1% of original HTML size",
+            category: Category::Snapshot,
+            hidden: false,
+            batch_supported: false,
+            args: &[],
+            options: &[],
+            tool_name_fn: |_| "dom_snapshot_summary".to_string(),
+            tool_params_fn: |_| json!({}),
+        },
+        CommandDef {
             name: "generate-locator",
             description: "Generate a unique CSS selector path for an element identified by a snapshot ref (e5) or CSS selector",
             category: Category::Snapshot,

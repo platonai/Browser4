@@ -3,6 +3,157 @@
 Rust CLI binary for controlling a [Browser4](https://github.com/platonai/Browser4) server.
 See [`cli/README.md`](../README.md) for the user-facing documentation.
 
+## Commands
+
+### Browser sessions
+
+| Command | Description |
+|---|---|
+| `open [url]` | Open a browser session or refresh the saved one if it is no longer active |
+| `close` | Close the browser |
+| `list` | List browser sessions with their status and next-open behavior |
+| `close-all` | Close all browser sessions without stopping the Browser4 backend |
+| `kill-all` | Forcefully stop the Browser4 backend and kill all browser processes |
+| `stop` | Gracefully stop the Browser4 server |
+| `status` | Show Browser4 server status (version, port, health) |
+
+### Navigation
+
+| Command | Description |
+|---|---|
+| `goto <url>` | Navigate to a URL, auto-opening or refreshing the session when needed |
+| `go-back` | Go back to the previous page |
+| `go-forward` | Go forward to the next page |
+| `reload` | Reload the current page |
+
+### Keyboard
+
+| Command | Description |
+|---|---|
+| `press <key> [ref]` | Press a key on the focused element or an optional target ref |
+| `type <text> [ref]` | Type text into the focused element or an optional target ref |
+| `keydown <key>` | Press a key down on the keyboard |
+| `keyup <key>` | Press a key up on the keyboard |
+| `fill <ref> <text>` | Fill text into an editable element |
+
+### Mouse
+
+| Command | Description |
+|---|---|
+| `click <ref> [button]` | Perform click on a web page |
+| `dblclick <ref> [button]` | Perform double click on a web page |
+| `hover <ref>` | Hover over element on page |
+| `drag <startRef> <endRef>` | Perform drag and drop between two elements |
+| `mousemove <x> <y>` | Move mouse to a given position |
+| `mousedown [button]` | Press mouse down |
+| `mouseup [button]` | Press mouse up |
+| `mousewheel <dx> <dy>` | Scroll mouse wheel |
+| `scroll <direction> <pixels>` | Scroll the page in a given direction (up, down, left, right) |
+
+### Core
+
+| Command | Description |
+|---|---|
+| `snapshot` | Capture page snapshot to obtain element refs |
+| `get <mode> <selector> [name]` | Extract data from a page element (text, html, box, styles, property, attr) |
+| `eval [expression] [ref]` | Evaluate JavaScript expression on page or element |
+| `wait [target]` | Wait for a condition: element, time, text, URL pattern, page load, or JS expression |
+| `select <ref> <val>` | Select an option in a dropdown |
+| `check <ref>` | Check a checkbox or radio button |
+| `uncheck <ref>` | Uncheck a checkbox or radio button |
+| `dialog-accept [prompt]` | Accept a dialog |
+| `dialog-dismiss` | Dismiss a dialog |
+| `resize <w> <h>` | Resize the browser window |
+| `delete-data` | Delete session data |
+| `batch [command...]` | Execute multiple commands in one invocation |
+
+### Save as
+
+| Command | Description |
+|---|---|
+| `screenshot [ref]` | Screenshot of the current page or element |
+| `pdf` | Save page as PDF |
+
+### Tabs
+
+| Command | Description |
+|---|---|
+| `tab-list` | List all tabs |
+| `tab-new [url]` | Create a new tab |
+| `tab-close [index]` | Close a browser tab |
+| `tab-select <index>` | Select a browser tab |
+
+### Storage
+
+| Command | Description |
+|---|---|
+| `state-save [filename]` | Save cookies and localStorage to a JSON file |
+| `state-load <filename>` | Load cookies and localStorage from a JSON file |
+| `cookie-list` | List browser cookies |
+| `cookie-get <name>` | Get a cookie by name |
+| `cookie-set <name> <value>` | Set a browser cookie |
+| `cookie-delete <name>` | Delete a browser cookie by name |
+| `cookie-clear` | Clear all browser cookies |
+| `localstorage-list` | List localStorage entries |
+| `localstorage-get <key>` | Get a localStorage value by key |
+| `localstorage-set <key> <value>` | Set a localStorage value |
+| `localstorage-delete <key>` | Delete a localStorage entry |
+| `localstorage-clear` | Clear localStorage |
+| `sessionstorage-list` | List sessionStorage entries |
+| `sessionstorage-get <key>` | Get a sessionStorage value by key |
+| `sessionstorage-set <key> <value>` | Set a sessionStorage value |
+| `sessionstorage-delete <key>` | Delete a sessionStorage entry |
+| `sessionstorage-clear` | Clear sessionStorage |
+
+### Agent
+
+| Command | Description |
+|---|---|
+| `extract <instruction>` | Extract structured data from the current page |
+| `agent run <task>` | Run an autonomous agent task (async, returns task ID) |
+| `agent status <id>` | Check the status of a running agent task |
+| `agent result <id>` | Get the result of a completed agent task |
+
+### Swarm
+
+| Command | Description |
+|---|---|
+| `swarm create` | Create a swarm scrape session with parallel browser contexts |
+| `swarm submit [url]` | Submit URL(s) or X-SQL payloads as scrape jobs |
+| `swarm query <url>` | Submit an X-SQL query to extract structured data from a loaded webpage |
+| `swarm status <id>` | Check the status of a scrape job |
+| `swarm result <id>` | Get the result of a completed scrape job |
+
+### Snapshot
+
+| Command | Description |
+|---|---|
+| `domsnapshot` | Capture a static DOM snapshot and return metadata |
+| `domsnapshot get <field> [selector] [name]` | Extract elements from the stored DOM snapshot (text, html, attr) |
+| `domsnapshot query [url]` | Run X-SQL against the stored DOM snapshot |
+| `domsnapshot export` | Export snapshot HTML to a local file |
+| `domsnapshot summary` | Generate a compressed Web Page Summary Index (WPSI) from the stored DOM snapshot |
+| `generate-locator <ref>` | Generate a unique CSS selector path for an element |
+
+### Install / Admin
+
+| Command | Description |
+|---|---|
+| `install` | Install the self-contained Browser4 runtime bundle |
+| `upgrade` | Upgrade Browser4 to the latest version (or a specified release tag) |
+| `uninstall` | Remove all globally installed browser4-cli and its runtime data |
+
+### Global options
+
+| Option | Description |
+|---|---|
+| `--help [command]` | Print help (all commands, or detailed help for a specific command) |
+| `--version` | Print version |
+| `--json` | Emit machine-parseable JSON to stdout |
+| `-q, --quiet` | Suppress normal output, only show errors |
+| `-s=<name>` | Named session label |
+| `--server=<url>` | Override Browser4 server URL |
+
 ## Build
 
 ```bash

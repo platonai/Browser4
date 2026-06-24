@@ -15,6 +15,7 @@ pub fn public_command_name(name: &str) -> &str {
         "domsnapshot-get" => "domsnapshot get",
         "domsnapshot-query" => "domsnapshot query",
         "domsnapshot-export" => "domsnapshot export",
+        "domsnapshot-summary" => "domsnapshot summary",
         _ => name,
     }
 }
@@ -500,6 +501,11 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
             "Export snapshot HTML from Browser4's page storage to a local file",
             50,
         ));
+        lines.push(format_with_gap(
+            "  domsnapshot summary",
+            "Generate a compressed Web Page Summary Index (WPSI) from the stored DOM snapshot",
+            50,
+        ));
         lines.push(String::new());
         lines.push("Notes:".to_string());
         lines.push(
@@ -530,6 +536,10 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
             "  - Export the full HTML snapshot from Browser4's page storage to a local file with `domsnapshot export --file <path>`."
                 .to_string(),
         );
+        lines.push(
+            "  - Generate a compressed page summary (WPSI) from the stored DOM snapshot with `domsnapshot summary`. The summary identifies page type, structure, key content nodes, repeated lists, tables, and stats — typically <1% of the original HTML size."
+                .to_string(),
+        );
         lines.push(String::new());
         lines.push("Examples:".to_string());
         lines.push("  # Capture a DOM snapshot and display metadata".to_string());
@@ -555,6 +565,9 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push(String::new());
         lines.push("  # Export the full snapshot HTML to a file".to_string());
         lines.push("  browser4-cli domsnapshot export --file snapshot.html".to_string());
+        lines.push(String::new());
+        lines.push("  # Generate a compressed page summary from the stored DOM snapshot".to_string());
+        lines.push("  browser4-cli domsnapshot summary".to_string());
     }
 
     lines.join("\n")
@@ -852,6 +865,8 @@ mod tests {
         assert!(help.contains("Run X-SQL against the DOM snapshot stored in Browser4's page storage via the scrape API"));
         assert!(help.contains("domsnapshot export"));
         assert!(help.contains("Export snapshot HTML from Browser4's page storage to a local file"));
+        assert!(help.contains("domsnapshot summary"));
+        assert!(help.contains("Generate a compressed Web Page Summary Index (WPSI) from the stored DOM snapshot"));
         // Notes
         assert!(help.contains("static DOM snapshot, saves it in Browser4's page storage, and returns metadata"));
         assert!(help.contains("CSS selectors only"));
@@ -866,6 +881,7 @@ mod tests {
         assert!(help.contains("browser4-cli domsnapshot query --sql"));
         assert!(help.contains("browser4-cli domsnapshot query --sql @query.sql"));
         assert!(help.contains("browser4-cli domsnapshot export --file snapshot.html"));
+        assert!(help.contains("browser4-cli domsnapshot summary"));
     }
 
     #[test]
@@ -900,6 +916,16 @@ mod tests {
         assert!(help.contains("Export snapshot HTML from Browser4's page storage to a local file"));
         assert!(help.contains("--file"));
         assert!(!help.contains("browser4-cli domsnapshot-export"));
+    }
+
+    #[test]
+    fn test_generate_command_help_domsnapshot_summary() {
+        let cmds = all_commands();
+        let cmd = cmds.iter().find(|c| c.name == "domsnapshot-summary").unwrap();
+        let help = generate_command_help(cmd);
+        assert!(help.contains("browser4-cli domsnapshot summary"));
+        assert!(help.contains("Generate a compressed Web Page Summary Index (WPSI) from the stored DOM snapshot"));
+        assert!(!help.contains("browser4-cli domsnapshot-summary"));
     }
 
     #[test]

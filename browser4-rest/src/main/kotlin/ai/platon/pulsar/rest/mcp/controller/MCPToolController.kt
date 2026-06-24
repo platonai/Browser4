@@ -76,6 +76,7 @@ class MCPToolController(
                 "dom_snapshot_scrape" -> domSnapshotHandler.handleDomSnapshotScrape(request)
                 "dom_snapshot_query" -> domSnapshotHandler.handleDomSnapshotQuery(request)
                 "dom_snapshot_export" -> domSnapshotHandler.handleDomSnapshotExport(request)
+                "dom_snapshot_summary" -> domSnapshotHandler.handleDomSnapshotSummary(request)
                 // All other tools are dispatched to the session's agent
                 else -> dispatchToAgentToolExecutor(request)
             }
@@ -96,6 +97,30 @@ class MCPToolController(
         addRequestId(response)
         val tools = toolListHandler.listToolNames()
         return ResponseEntity.ok(mapOf("tools" to tools))
+    }
+
+    private suspend fun handleDomSnapshotSummary(
+        request: MCPToolCallRequest
+    ): ResponseEntity<MCPToolCallResponse> {
+        val sessionId = requireSessionId(request)
+        val managed = sessionManager.getSession(sessionId)
+            ?: return ResponseEntity.ok(errorResponse("${MCPConstants.ERROR_SESSION_NOT_FOUND}$sessionId"))
+
+        return try {
+            val summary = managed.withLock {
+                val pulsarSession = managed.agenticSession
+                val url = pulsarSession.normalize(managed.driver.userTypedUrl())
+                val document = pulsarSession.loadDocument(url.urlString)
+                val title = document.title
+                val pageUrl = url.urlString
+
+                PageSummaryIndexService.generate(document, pageUrl, title)
+            }
+            ResponseEntity.ok(textResponse(summary))
+        } catch (e: Exception) {
+            logger.error("dom_snapshot_summary failed | {}", e.message, e)
+            ResponseEntity.ok(errorResponse("dom_snapshot_summary failed: ${e.message}"))
+        }
     }
 
     // =========================================================================
