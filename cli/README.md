@@ -155,7 +155,7 @@ The tables below mirror the commands surfaced by the global `browser4-cli help` 
 | `check <ref>` | Check a checkbox or radio button |
 | `uncheck <ref>` | Uncheck a checkbox or radio button |
 | `drag <startRef> <endRef>` | Drag and drop between two elements |
-| `snapshot` | Capture accessibility snapshot. Supports `--filename=<path>` to save snapshot to file. |
+| `snapshot` | Capture accessibility snapshot. Supports `--filename=<path>` to save to file, `--boxes` for bounding boxes, `-i`/`--interactive` for interactive-only, `-u`/`--urls` for link URLs, `-c`/`--compact` for compact output, `-d`/`--depth <n>` for depth limiting, and `-s`/`--selector <sel>` for CSS scoping. |
 | `eval <expression> [ref]` | Evaluate JavaScript on the page or a target element. Use `--file=<path>` to read the expression from a file. |
 | `get <mode> <selector> [name]` | Extract data from a page element. Modes: `text`, `html`, `box`, `styles`, `property`, `attr`. `name` is required for `property` and `attr`. |
 | `scroll <direction> <pixels>` | Scroll the page. Direction: `up`, `down`, `left`, or `right`. |
@@ -611,6 +611,15 @@ browser4-cli goto https://browser4.io
 
 # Inspect the page — note the eN labels on interactive nodes
 browser4-cli snapshot
+
+# Include element bounding boxes in the snapshot
+browser4-cli snapshot --boxes
+
+# Show only interactive elements with compact output, depth-limited
+browser4-cli snapshot -i -c -d 5
+
+# Scope snapshot to a specific CSS selector
+browser4-cli snapshot -s "#main-content"
 
 # Capture a static DOM snapshot and extract data
 browser4-cli domsnapshot

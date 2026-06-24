@@ -105,6 +105,9 @@ browser4-cli goto https://browser4.io
 # Inspect the page — note the eN labels on interactive nodes
 browser4-cli snapshot
 
+# Include element bounding boxes in the snapshot
+browser4-cli snapshot --boxes
+
 # Interact using refs from the snapshot
 browser4-cli click e15
 browser4-cli type e15 "Hello World"

@@ -5,11 +5,20 @@ import ai.platon.pulsar.chrome.dom.model.NanoDOMTreeNode
 import java.util.*
 
 object NanoAriaSnapshotRenderer {
-    fun render(root: NanoDOMTreeNode, boxes: Boolean = false): String {
-        return AriaSnapshotFormatting.render(toRenderChildren(root, boxes))
+    fun render(root: NanoDOMTreeNode, options: AriaSnapshotOptions = AriaSnapshotOptions()): String {
+        return AriaSnapshotFormatting.render(toRenderChildren(root, options))
     }
 
-    private fun toRenderChildren(node: NanoDOMTreeNode, boxes: Boolean): List<AriaSnapshotFormatting.RenderChild> {
+    private fun toRenderChildren(
+        node: NanoDOMTreeNode,
+        options: AriaSnapshotOptions,
+        depth: Int = 0
+    ): List<AriaSnapshotFormatting.RenderChild> {
+        // --depth: stop recursing at max depth
+        if (options.maxDepth >= 0 && depth > options.maxDepth) {
+            return emptyList()
+        }
+
         if (node.invisible == true) {
             return emptyList()
         }
@@ -21,12 +30,21 @@ object NanoAriaSnapshotRenderer {
         }
 
         val children = node.children.orEmpty()
-            .flatMap { child -> toRenderChildren(child, boxes) }
+            .flatMap { child -> toRenderChildren(child, options, depth + 1) }
             .let { AriaSnapshotFormatting.normalizeChildren(it, accessibleName(node)) }
 
         val role = role(node) ?: return children
-        val props = renderProps(node, role)
-        val box = if (boxes) formatBox(node.bounds) else null
+        val props = renderProps(node, role, options)
+
+        // --interactive: skip non-interactive nodes, promote their children
+        if (options.interactive && !isInteractiveNode(node, role, props)) {
+            return children
+        }
+
+        // --compact: skip generic/group/paragraph nodes that carry no semantic info
+        if (options.compact && shouldCompact(node, role, props, children)) {
+            return children
+        }
 
         if (children.isEmpty() && props.isEmpty() && node.ref <= 0 && accessibleName(node).isNullOrEmpty()) {
             return emptyList()
@@ -63,16 +81,18 @@ object NanoAriaSnapshotRenderer {
         )
     }
 
-    private fun formatBox(bounds: CompactRect?): String? {
-        if (bounds == null) return null
-        val r = bounds.round() ?: return null
-        return "${r.x ?: 0},${r.y ?: 0},${r.width ?: 0},${r.height ?: 0}"
-    }
-
-    private fun renderProps(node: NanoDOMTreeNode, role: String): LinkedHashMap<String, String> {
+    private fun renderProps(
+        node: NanoDOMTreeNode,
+        role: String,
+        options: AriaSnapshotOptions
+    ): LinkedHashMap<String, String> {
         val attributes = stringAttributes(node)
         val props = linkedMapOf<String, String>()
         if (role == "link") {
+            attributes["href"]?.takeIf { it.isNotBlank() }?.let { props["url"] = it }
+        }
+        // --urls: always include url for links even when the element would otherwise be collapsed
+        if (options.urls && role == "link" && !props.containsKey("url")) {
             attributes["href"]?.takeIf { it.isNotBlank() }?.let { props["url"] = it }
         }
         if (role == "textbox") {
@@ -82,6 +102,33 @@ object NanoAriaSnapshotRenderer {
             }
         }
         return props
+    }
+
+    private fun isInteractiveNode(
+        node: NanoDOMTreeNode,
+        role: String,
+        props: LinkedHashMap<String, String>
+    ): Boolean {
+        if (node.ref > 0) return true
+        if (node.interactive == true) return true
+        return role in INTERACTIVE_ROLES
+    }
+
+    private fun shouldCompact(
+        node: NanoDOMTreeNode,
+        role: String,
+        props: LinkedHashMap<String, String>,
+        children: List<AriaSnapshotFormatting.RenderChild>
+    ): Boolean {
+        if (role != "generic" && role != "group" && role != "paragraph" && role != "section") {
+            return false
+        }
+        val name = accessibleName(node)
+        if (!name.isNullOrEmpty()) return false
+        if (node.ref > 0) return false
+        if (props.isNotEmpty()) return false
+        // Node carries no identifying information — collapse it
+        return true
     }
 
     private fun accessibleName(node: NanoDOMTreeNode): String? {
@@ -157,4 +204,10 @@ object NanoAriaSnapshotRenderer {
     private fun stringAttributes(node: NanoDOMTreeNode): Map<String, String> {
         return node.attributes.orEmpty().mapValues { (_, value) -> value.toString() }
     }
+
+    private val INTERACTIVE_ROLES = setOf(
+        "button", "link", "textbox", "checkbox", "combobox", "searchbox",
+        "spinbutton", "slider", "radio", "option", "listbox", "menuitem", "tab",
+        "switch", "treeitem", "menuitemcheckbox", "menuitemradio"
+    )
 }

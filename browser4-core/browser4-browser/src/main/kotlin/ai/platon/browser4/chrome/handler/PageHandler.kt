@@ -2,6 +2,9 @@ package ai.platon.browser4.chrome.handler
 
 import ai.platon.browser4.chrome.IsolatedWorldManager
 import ai.platon.browser4.chrome.dom.CDPSnapshotService
+import ai.platon.browser4.chrome.dom.model.AriaSnapshotOptions
+import ai.platon.browser4.chrome.dom.model.NanoAriaSnapshotRenderer
+import ai.platon.browser4.chrome.dom.model.ViewportSpec
 import ai.platon.browser4.chrome.handler.util.CheckableElementJs
 import ai.platon.browser4.chrome.handler.util.withNodeObjectId
 import ai.platon.browser4.chrome.util.ChromeDriverException
@@ -73,11 +76,8 @@ class PageHandler constructor(
      *
      * @param boxes When true, includes each element's bounding box as [box=x,y,width,height].
      * */
-    suspend fun ariaSnapshot(boxes: Boolean = false): String {
-        val buState = snapshot.getBrowserUseState(PageTarget(), SnapshotOptions())
-        val snapshot = buState.domState.ariaSnapshot(boxes)
-        lastBrowserUseState = buState
-        return snapshot
+    suspend fun ariaSnapshot(): String {
+        return ariaSnapshot(AriaSnapshotOptions())
     }
 
     /**
@@ -105,6 +105,47 @@ class PageHandler constructor(
 
         // Join snapshots from disjoint viewport ranges using YAML document separator
         return nanoTrees.joinToString("\n---\n") { it.ariaSnapshot(boxes) }
+    }
+
+    /**
+     * Fetches the ARIA snapshot with filtering [options] applied.
+     *
+     * Supports viewport filtering, CSS selector scoping ([AriaSnapshotOptions.selector]),
+     * interactive-only mode, URL inclusion, compact mode, and depth limiting.
+     *
+     * @param options The filtering and rendering options.
+     * @return The ARIA snapshot YAML with options applied.
+     */
+    suspend fun ariaSnapshot(options: AriaSnapshotOptions): String {
+        // Resolve --selector to a backendNodeId if provided
+        val rootBackendNodeId = options.selector?.let { selector ->
+            dom.queryLocator(selector)?.let { node ->
+                node.backendNodeId.takeIf { it > 0 }
+            }
+        }
+        val resolvedOptions = options.copy(rootBackendNodeId = rootBackendNodeId)
+
+        // Collect the full browser use state (expensive CDP part)
+        val buState = snapshot.getBrowserUseState(PageTarget(), SnapshotOptions())
+        lastBrowserUseState = buState
+
+        // If viewports are specified, use existing viewport filtering then render with options
+        if (resolvedOptions.viewports != null) {
+            val viewportIndices = ViewportSpec.parse(resolvedOptions.viewports) ?: return buState.domState.renderedAriaSnapshot(resolvedOptions)
+            val scrollState = buState.browserState.scrollState
+            val viewportHeight = scrollState.viewportHeight.toDouble()
+            val serializableTree = buState.domState.serializableTree
+
+            val sortedIndices = viewportIndices.distinct().sorted()
+            val nanoTrees = mergeViewportRanges(sortedIndices).map { (startIdx, endIdx) ->
+                val startY = ((startIdx - 1) * viewportHeight).coerceAtLeast(0.0)
+                val endY = endIdx * viewportHeight
+                serializableTree.toNanoTreeInRange(startY, endY)
+            }
+            return nanoTrees.joinToString("\n---\n") { NanoAriaSnapshotRenderer.render(it, resolvedOptions) }
+        }
+
+        return buState.domState.renderedAriaSnapshot(resolvedOptions)
     }
 
     /**

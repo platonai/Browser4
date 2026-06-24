@@ -55,7 +55,7 @@ function Get-Browser4ChromeProcesses {
 }
 
 function Get-PulsarChromeProcesses {
-    Get-CimInstance Win32_Process -Filter "Name = 'chrome.exe'" -ErrorAction SilentlyContinue | Where-Object {
+    Get-CimInstance Win32_Process -Filter "Name = 'chrome.exe' -or Name = 'chromium.exe' -or Name = 'msedge.exe'" -ErrorAction SilentlyContinue | Where-Object {
         -not [string]::IsNullOrWhiteSpace($_.CommandLine) -and $_.CommandLine -match 'PULSAR_CHROME'
     }
 }

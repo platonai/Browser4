@@ -7,14 +7,14 @@ Practical, end-to-end recipes using the `domsnapshot` family of commands. Each s
 | # | Scenario | Primary Commands | Domain |
 |---|----------|------------------|--------|
 | 1 | E-Commerce Product Monitoring | `get`, `query` | Retail |
-| 2 | News Headline Aggregator | `capture`, `get`, `export` | Media |
+| 2 | News Headline Aggregator | `domsnapshot`, `get`, `export` | Media |
 | 3 | SEO Health Audit | `query` (X-SQL) | Marketing |
 | 4 | Competitive Price Tracker | `query` (X-SQL + load options) | Business |
 | 5 | Job Board Scraper | `get`, `query` | HR / Recruiting |
 | 6 | Compliance Verification | `get`, `export` | Legal / Governance |
 | 7 | Academic Literature Metadata Extraction | `query` (X-SQL) | Research |
 | 8 | Real Estate Listing Monitor | `get`, `query` | Property |
-| 9 | CI/E2E Visual Regression Snapshot | `capture`, `export` | Engineering |
+| 9 | CI/E2E Visual Regression Snapshot | `domsnapshot`, `export` | Engineering |
 | 10 | Agent-Assisted Form Discovery | `get` + Agent CLI | AI / Automation |
 
 ---
@@ -28,10 +28,11 @@ Practical, end-to-end recipes using the `domsnapshot` family of commands. Each s
 ### 1a. Extract a single product's details
 
 ```bash
-# Navigate to the product page (capture is automatic on get/query/export)
+# Navigate to the product page and capture a DOM snapshot
 browser4-cli goto "https://www.amazon.com/dp/B08PP5MSVB"
+browser4-cli domsnapshot
 
-# Pull individual fields with CSS selectors (each call captures a fresh snapshot)
+# Pull individual fields from the cached snapshot
 browser4-cli domsnapshot get text "#productTitle"
 browser4-cli domsnapshot get text ".a-price .a-offscreen"
 browser4-cli domsnapshot get text "#acrCustomerReviewText"
@@ -67,6 +68,8 @@ browser4-cli domsnapshot query --sql "
 ### 1c. Export for offline analysis
 
 ```bash
+browser4-cli goto "https://www.amazon.com/dp/B08PP5MSVB"
+browser4-cli domsnapshot
 browser4-cli domsnapshot export --file=product-page-$(date +%Y%m%d).html
 # Later: grep, parse, or diff against yesterday's export
 diff product-page-20260621.html product-page-20260622.html
@@ -109,6 +112,8 @@ browser4-cli domsnapshot get text ".gs-c-promo-heading__title"
 ### 2c. Archive for trend analysis
 
 ```bash
+browser4-cli goto "https://news.ycombinator.com"
+browser4-cli domsnapshot
 browser4-cli domsnapshot export --file="headlines-$(date +%Y%m%d-%H%M).html"
 # Build a corpus over weeks; run NLP pipelines on the exported HTML
 ```
@@ -262,6 +267,8 @@ browser4-cli domsnapshot get text ".jobs-search-results__list-item"
 ### 5c. Save and process
 
 ```bash
+browser4-cli goto "https://www.linkedin.com/jobs/search?keywords=senior%20frontend"
+browser4-cli domsnapshot
 browser4-cli domsnapshot export --file=jobs.html
 # Then feed the exported HTML to your preferred parser, or grep for quick checks:
 grep -oP 'Senior.*Engineer' jobs.html | sort | uniq -c
@@ -279,8 +286,9 @@ grep -oP 'Senior.*Engineer' jobs.html | sort | uniq -c
 
 ```bash
 browser4-cli goto "https://bank.example.com/products/savings"
+browser4-cli domsnapshot
 
-# Each get call captures a fresh snapshot automatically
+# Query the cached snapshot for required elements
 # Check for legal disclaimer
 browser4-cli domsnapshot get text ".legal-disclaimer"
 # Returns the disclaimer text — exit code 0 means it was found
@@ -314,6 +322,7 @@ REQUIRED=(
 
 for page in "${PAGES[@]}"; do
   browser4-cli goto "https://bank.example.com$page"
+  browser4-cli domsnapshot
 
   for selector in "${REQUIRED[@]}"; do
     result=$(browser4-cli domsnapshot get text "$selector" 2>/dev/null)
@@ -329,6 +338,8 @@ done
 ### 6c. Archive for audit trail
 
 ```bash
+browser4-cli goto "https://bank.example.com/products/savings"
+browser4-cli domsnapshot
 browser4-cli domsnapshot export --file="compliance-$(date +%Y%m%d)-savings.html"
 # Store in versioned S3 bucket for regulatory audit
 ```
@@ -361,8 +372,9 @@ browser4-cli domsnapshot query --sql "
 
 ```bash
 browser4-cli goto "https://pubmed.ncbi.nlm.nih.gov/12345678/"
+browser4-cli domsnapshot
 
-# get/query/export implicitly capture a fresh snapshot — no explicit capture needed
+# Extract fields from the cached snapshot
 browser4-cli domsnapshot get text ".abstract-content"
 browser4-cli domsnapshot get text "#full-view-heading"
 ```
@@ -374,6 +386,7 @@ browser4-cli domsnapshot get text "#full-view-heading"
 # Extract metadata from a list of PubMed IDs
 for pmid in 12345678 23456789 34567890; do
   browser4-cli goto "https://pubmed.ncbi.nlm.nih.gov/$pmid/"
+  browser4-cli domsnapshot
   echo "=== PMID: $pmid ==="
   browser4-cli domsnapshot get text ".heading-title"
   browser4-cli domsnapshot get text ".abstract-content"
@@ -409,6 +422,7 @@ browser4-cli domsnapshot query --sql "
 
 ```bash
 browser4-cli goto "https://www.zillow.com/homes/san-francisco_rb/"
+browser4-cli domsnapshot
 browser4-cli domsnapshot get text "[data-test='property-card-address']" > todays-listings.txt
 diff yesterdays-listings.txt todays-listings.txt
 ```
@@ -452,6 +466,7 @@ PAGES=(
 for url in "${PAGES[@]}"; do
   slug=$(echo "$url" | sed 's/[^a-zA-Z0-9]/_/g')
   browser4-cli goto "$url"
+  browser4-cli domsnapshot
   browser4-cli domsnapshot export --file="$CURRENT_DIR/${slug}.html"
 done
 
@@ -480,8 +495,9 @@ git commit -m "chore: update DOM snapshot baselines"
 
 ```bash
 browser4-cli goto "https://staging.example.com/checkout"
+browser4-cli domsnapshot
 
-# Verify critical elements rendered (get captures a fresh snapshot automatically)
+# Verify critical elements rendered (queries the cached snapshot)
 browser4-cli domsnapshot get text "#cart-total"        # Must exist
 browser4-cli domsnapshot get attr "#checkout-btn" href  # Must be /checkout
 browser4-cli domsnapshot get text ".item-count"         # Must be > 0
@@ -499,8 +515,9 @@ browser4-cli domsnapshot get text ".item-count"         # Must be > 0
 
 ```bash
 browser4-cli goto "https://example.com/insurance/application"
+browser4-cli domsnapshot
 
-# List all input names and types (capture is implicit)
+# List all input names and types (reads from the cached snapshot)
 browser4-cli domsnapshot get attr "form input[name]" name
 browser4-cli domsnapshot get attr "form input[name]" type
 browser4-cli domsnapshot get attr "form input[name]" required
@@ -524,7 +541,8 @@ browser4-cli domsnapshot get html "form#application"
 ### 10c. Agent orchestration pattern
 
 ```bash
-# Step 1: Discover the form (get captures a fresh snapshot automatically)
+# Step 1: Capture a DOM snapshot and discover the form
+browser4-cli domsnapshot
 FORM_HTML=$(browser4-cli domsnapshot get html "form")
 
 # Step 2: Ask the LLM to analyze the form and generate fill commands
@@ -543,12 +561,16 @@ browser4-cli select "CA" "#state"
 
 ### Combining commands
 
-Most real workflows chain `goto` → `get`/`query`/`export`. Capture is implicit — every `get`, `query`, or `export` call captures a fresh static DOM snapshot automatically:
+Most real workflows chain `goto` → `domsnapshot` → `get`/`query`/`export`. The standalone `domsnapshot` command captures and caches the DOM snapshot; subsequent `get`, `query`, and `export` calls reuse the cached snapshot:
 
 ```bash
 browser4-cli goto "$URL"
-browser4-cli domsnapshot get text "$SELECTOR"  # implicitly captures + extracts
+browser4-cli domsnapshot                      # capture + cache
+browser4-cli domsnapshot get text "$SELECTOR"  # reads from cache
+browser4-cli domsnapshot get html "$SELECTOR"  # reads from cache
 ```
+
+The cache is invalidated by the next `domsnapshot` capture or a page navigation (`goto`, `reload`, etc.).
 
 ### Error handling
 
@@ -585,7 +607,7 @@ Append these to the URL string in `domsnapshot query`:
 ### Command form notes
 
 - The CLI uses the **spaced form**: `browser4-cli domsnapshot get text "h1"`, not the hyphenated `domsnapshot-get`.
-- There is no standalone `browser4-cli domsnapshot` capture command — capture is implicit when you run `get`, `query`, or `export`. The capture always fetches a fresh snapshot (no caching between calls).
+- `browser4-cli domsnapshot` (with no subcommand) captures a fresh DOM snapshot and caches it in the backend. Subsequent `get`, `query`, and `export` calls reuse this cached snapshot — they do **not** re-capture the page. The cache is invalidated by the next `domsnapshot` capture or a page navigation.
 
 ---
 

@@ -1,5 +1,6 @@
 package ai.platon.pulsar.agentic.tools.builtin
 
+import ai.platon.browser4.chrome.dom.model.AriaSnapshotOptions
 import ai.platon.pulsar.agentic.model.ToolSpec
 import ai.platon.pulsar.agentic.tools.specs.ToolSpecGenerator
 import ai.platon.pulsar.browser.common.NavigateEntry
@@ -646,10 +647,28 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
             }
 
             "ariaSnapshot" -> {
-                validateArgs(args, allowed("viewports", "boxes"), emptySet(), functionName)
+                validateArgs(
+                    args,
+                    allowed("viewports", "interactive", "urls", "compact", "depth", "selector"),
+                    emptySet(),
+                    functionName
+                )
                 val viewports = paramString(args, "viewports", functionName, required = false)
-                val boxes = paramBool(args, "boxes", functionName, required = false, default = false) ?: false
-                if (viewports.isNullOrBlank()) driver.ariaSnapshot(boxes = boxes) else driver.ariaSnapshot(viewports, boxes = boxes)
+                val interactive = paramBool(args, "interactive", functionName, required = false) ?: false
+                val urls = paramBool(args, "urls", functionName, required = false) ?: false
+                val compact = paramBool(args, "compact", functionName, required = false) ?: false
+                val maxDepth = paramInt(args, "depth", functionName, required = false) ?: -1
+                val selector = paramString(args, "selector", functionName, required = false)
+
+                val options = AriaSnapshotOptions(
+                    interactive = interactive,
+                    urls = urls,
+                    compact = compact,
+                    maxDepth = maxDepth,
+                    selector = selector,
+                    viewports = viewports
+                )
+                driver.ariaSnapshot(options)
             }
 
             "title" -> {

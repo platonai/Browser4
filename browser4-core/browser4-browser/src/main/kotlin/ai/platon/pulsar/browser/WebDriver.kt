@@ -1,5 +1,6 @@
 package ai.platon.pulsar.browser
 
+import ai.platon.browser4.chrome.dom.model.AriaSnapshotOptions
 import ai.platon.pulsar.browser.common.JsEvaluation
 import ai.platon.pulsar.browser.common.NavigateEntry
 import ai.platon.pulsar.browser.common.NavigateHistory
@@ -1991,6 +1992,20 @@ interface WebDriver : Closeable {
     @Throws(WebDriverException::class)
     @MCP
     suspend fun ariaSnapshot(viewports: String, boxes: Boolean = false): String = ariaSnapshot(boxes = boxes)
+
+    /**
+     * Return the ARIA snapshot (accessibility tree in YAML format) with filtering
+     * [options] applied. @mcp
+     *
+     * Supports interactive-only mode, URL inclusion, compact mode, depth limiting,
+     * CSS selector scoping, and viewport filtering. All options compose.
+     *
+     * @param options The filtering and rendering options.
+     * @return The ARIA snapshot YAML with options applied.
+     */
+    @Throws(WebDriverException::class)
+    @MCP
+    suspend fun ariaSnapshot(options: AriaSnapshotOptions): String = ariaSnapshot()
 
     /**
      * Calculate the clickable point of an element located by [selector]. @mcp

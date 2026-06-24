@@ -124,15 +124,15 @@ echo "$TITLE costs $PRICE"
 
 ---
 
-### Tier 3: Generate Unique Selector via eval
+### Tier 3: Generate Unique Selector via generate-locator
 
 **Best for:** Complex pages where the element has no `id`, no unique class, and you need a guaranteed-unique, fully-qualified CSS selector.
 
-Use the bundled `get-unique-selector.js` script with `browser4-cli eval`:
+Use the built-in `generate-locator` command:
 
 ```bash
 # Generate a unique CSS selector for element e5
-SELECTOR=$(browser4-cli eval --file=get-unique-selector.js e5)
+SELECTOR=$(browser4-cli generate-locator e5)
 
 # SELECTOR is now something like:
 # "#main-content > div.product-card:nth-child(3) > div.price-container > span.price"
@@ -142,23 +142,21 @@ browser4-cli domsnapshot get text "$SELECTOR"
 browser4-cli domsnapshot get html "$SELECTOR"
 ```
 
-**How the script works:**
+**How it works:**
 
-1. Checks if the element has an `id` → returns `#the-id` (shortest, fastest, most unique)
-2. Walks up from the element, building a selector path segment by segment
-3. For each ancestor, uses `tag#id`, `tag.class1.class2`, or `tag:nth-child(n)` as needed
-4. Stops when it reaches an element with an `id` or the document root
-5. Returns a single CSS selector string
+1. The backend resolves the ref (`e5`, `backend:15`) or CSS selector to a DOM element
+2. Checks if the element has an `id` → returns `#the-id` (shortest, fastest, most unique)
+3. Walks up from the element, building a selector path segment by segment
+4. For each ancestor, uses `tag#id`, `tag.class1.class2`, or `tag:nth-child(n)` as needed
+5. Stops when it reaches an element with an `id` or the document root
+6. Returns a single CSS selector string
 
-**The script location:** `references/get-unique-selector.js` — copy it to your working directory or reference it by path:
+`generate-locator` also accepts CSS selectors — pass one to get a fully-qualified path to that element:
 
 ```bash
-# From the skill directory
-browser4-cli eval --file=./references/get-unique-selector.js e5
-
-# Or copy to your project first
-cp references/get-unique-selector.js ./
-browser4-cli eval --file=get-unique-selector.js e5
+# Resolve a CSS selector to a unique path
+browser4-cli generate-locator ".price"
+# → "body > div.search-results > div.product-card:nth-child(1) > span.price"
 ```
 
 ---
@@ -198,7 +196,7 @@ browser4-cli domsnapshot query --sql "
 #    {"price": "$2,499", "title": "MacBook Pro"}]
 
 # 3. Option C (Tier 3): Get a guaranteed-unique selector for a specific element
-SELECTOR=$(browser4-cli eval --file=get-unique-selector.js e13)
+SELECTOR=$(browser4-cli generate-locator e13)
 browser4-cli domsnapshot get text "$SELECTOR"
 # → "$1,299"
 ```

@@ -212,8 +212,10 @@ pub fn stop_browser4_server_gracefully() -> ShutdownResult {
 
 /// Force-stop all managed Browser4 server processes, then kill all related browser processes.
 pub fn stop_browser4_server_forcibly() -> ForceStopBrowser4ServerResult {
+    let registry_path = managed_server_registry_path(None);
+    let state_dir = resolve_default_state_dir();
     let result = stop_browser4_server_forcibly_with_steps(
-        || notify_close_all_sessions_before_force_stop(None, None),
+        || notify_close_all_sessions_before_force_stop(Some(&registry_path), Some(&state_dir)),
         kill_all_browsers,
         || stop_browser4_server_with_fallback_force_kill(),
         || sleep(std::time::Duration::from_secs(5)),
@@ -331,10 +333,25 @@ fn merge_browser_kill_results(
 }
 
 fn notify_close_all_sessions_before_force_stop(
-    _registry_path: Option<&Path>,
-    _state_dir: Option<&Path>,
+    registry_path: Option<&Path>,
+    state_dir: Option<&Path>,
 ) {
-    // do not notify
+    let base_urls = close_all_base_urls_for_force_stop(registry_path, state_dir);
+    if base_urls.is_empty() {
+        return;
+    }
+
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .unwrap_or_else(|_| reqwest::blocking::Client::new());
+
+    for base_url in &base_urls {
+        match call_close_all_sessions(&client, base_url) {
+            Ok(_) => eprintln!("        Closed sessions on {}", base_url),
+            Err(err) => eprintln!("        Server {} unreachable ({}), skipping", base_url, err),
+        }
+    }
 }
 
 #[allow(dead_code)]
@@ -692,7 +709,7 @@ fn find_pulsar_browser_processes() -> Vec<u32> {
     {
         use std::process::Command;
         let ps_command = r#"
-            Get-CimInstance Win32_Process -Filter "Name = 'chrome.exe' -or Name = 'msedge.exe'" -ErrorAction SilentlyContinue |
+            Get-CimInstance Win32_Process -Filter "Name = 'chrome.exe' -or Name = 'chromium.exe' -or Name = 'msedge.exe'" -ErrorAction SilentlyContinue |
                 Where-Object {
                     -not [string]::IsNullOrWhiteSpace($_.CommandLine) -and
                     $_.CommandLine -match 'PULSAR_CHROME'

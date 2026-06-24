@@ -45,6 +45,15 @@ also include stable `[ref=eN]` markers and `[cursor=pointer]` hints:
     - /url: /docs/intro
 ```
 
+When the `--boxes` flag is passed to `browser4-cli snapshot`, each element also includes a `[box=x,y,width,height]`
+annotation with the element's bounding box coordinates. Coordinates are rounded to 1 decimal place. Elements
+without bounds data omit the annotation.
+
+```yaml title="snapshot with --boxes"
+- link "Get started" [ref=e39] [box=120,80,200,24] [cursor=pointer]:
+    - /url: /docs/intro
+```
+
 These values are derived from ARIA attributes or calculated based on HTML semantics. To inspect the accessibility tree
 structure of a page, use the [Chrome DevTools Accessibility Tab](https://developer.chrome.com/docs/devtools/accessibility/reference#tab).
 

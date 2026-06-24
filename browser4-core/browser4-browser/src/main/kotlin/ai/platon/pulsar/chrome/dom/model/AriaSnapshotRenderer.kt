@@ -7,11 +7,20 @@ import ai.platon.pulsar.chrome.dom.model.OptimizedDOMTreeNode
 import java.util.*
 
 object AriaSnapshotRenderer {
-    fun render(root: OptimizedDOMTreeNode, boxes: Boolean = false): String {
-        return AriaSnapshotFormatting.render(toRenderChildren(root, boxes))
+    fun render(root: OptimizedDOMTreeNode, options: AriaSnapshotOptions = AriaSnapshotOptions()): String {
+        return AriaSnapshotFormatting.render(toRenderChildren(root, options))
     }
 
-    private fun toRenderChildren(node: OptimizedDOMTreeNode, boxes: Boolean): List<AriaSnapshotFormatting.RenderChild> {
+    private fun toRenderChildren(
+        node: OptimizedDOMTreeNode,
+        options: AriaSnapshotOptions,
+        depth: Int = 0
+    ): List<AriaSnapshotFormatting.RenderChild> {
+        // --depth: stop recursing at max depth
+        if (options.maxDepth >= 0 && depth > options.maxDepth) {
+            return emptyList()
+        }
+
         val original = node.originalNode
         if (shouldIgnoreNode(original)) {
             return emptyList()
@@ -25,13 +34,23 @@ object AriaSnapshotRenderer {
 
         val accessibleName = accessibleName(node)
         val children = node.children
-            .flatMap { child -> toRenderChildren(child, boxes) }
+            .flatMap { child -> toRenderChildren(child, options, depth + 1) }
             .let { AriaSnapshotFormatting.normalizeChildren(it, accessibleName) }
 
         val role = role(node) ?: return children
-        val props = renderProps(node, role, accessibleName)
+        val props = renderProps(node, role, accessibleName, options)
         val ref = original.backendNodeId.takeIf { it != null && it > 0 }?.let { "e$it" }
         val box = if (boxes) formatBox(original.snapshotNode?.bounds) else null
+
+        // --interactive: skip non-interactive nodes, promote their children
+        if (options.interactive && !isInteractiveNode(node, role, props, ref)) {
+            return children
+        }
+
+        // --compact: skip generic/group/paragraph nodes that carry no semantic info
+        if (options.compact && shouldCompactNode(role, accessibleName, props, children)) {
+            return children
+        }
 
         if (children.isEmpty() && props.isEmpty() && ref == null && accessibleName.isNullOrEmpty()) {
             return emptyList()
@@ -71,13 +90,23 @@ object AriaSnapshotRenderer {
     private fun renderProps(
         node: OptimizedDOMTreeNode,
         role: String,
-        accessibleName: String?
+        accessibleName: String?,
+        options: AriaSnapshotOptions
     ): LinkedHashMap<String, String> {
         val attributes = node.originalNode.attributes
         val axProperties = axProperties(node)
         val props = linkedMapOf<String, String>()
 
         if (role == "link") {
+            val url = attributes["href"]?.takeIf { it.isNotBlank() }
+                ?: axProperties["url"]?.takeIf { it.isNotBlank() }
+            if (url != null) {
+                props["url"] = url
+            }
+        }
+
+        // --urls: always include url for links even when element would be collapsed
+        if (options.urls && role == "link" && !props.containsKey("url")) {
             val url = attributes["href"]?.takeIf { it.isNotBlank() }
                 ?: axProperties["url"]?.takeIf { it.isNotBlank() }
             if (url != null) {
@@ -104,6 +133,32 @@ object AriaSnapshotRenderer {
         }
 
         return props
+    }
+
+    private fun isInteractiveNode(
+        node: OptimizedDOMTreeNode,
+        role: String,
+        props: LinkedHashMap<String, String>,
+        ref: String?
+    ): Boolean {
+        if (ref != null) return true
+        if (node.interactiveIndex != null) return true
+        if (node.originalNode.isInteractable) return true
+        return role in INTERACTIVE_ROLES
+    }
+
+    private fun shouldCompactNode(
+        role: String,
+        accessibleName: String?,
+        props: Map<String, String>,
+        children: List<AriaSnapshotFormatting.RenderChild>
+    ): Boolean {
+        if (role != "generic" && role != "group" && role != "paragraph" && role != "section") {
+            return false
+        }
+        if (!accessibleName.isNullOrEmpty()) return false
+        if (props.isNotEmpty()) return false
+        return true
     }
 
     private fun accessibleName(node: OptimizedDOMTreeNode): String? {
@@ -204,4 +259,10 @@ object AriaSnapshotRenderer {
         val nodeName = node.nodeName.trim().lowercase(Locale.ROOT)
         return nodeName == "#text" || nodeName == "text"
     }
+
+    private val INTERACTIVE_ROLES = setOf(
+        "button", "link", "textbox", "checkbox", "combobox", "searchbox",
+        "spinbutton", "slider", "radio", "option", "listbox", "menuitem", "tab",
+        "switch", "treeitem", "menuitemcheckbox", "menuitemradio"
+    )
 }
