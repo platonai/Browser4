@@ -6,7 +6,7 @@ Production wrapper for run-tests.ps1 — tests globally installed browser4-cli, 
 .DESCRIPTION
 Sets $browser4cliMode = 'production' before invoking run-tests.ps1 so that common.ps1
 resolves the CLI as `browser4-cli help` and loads the skill reference from the public
-URL (https://browser4.ioSKILL.md) instead of the local dev paths.
+URL (https://browser4.io/SKILL.md) instead of the local dev paths.
 
 Auto-discovers and executes task markdown files in tasks/ sequentially.
 
