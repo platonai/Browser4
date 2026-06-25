@@ -90,7 +90,7 @@ browser4-cli click <ref>           # left-click element
 browser4-cli dblclick <ref>
 browser4-cli hover <ref>
 browser4-cli type "<text>"         # type into focused element
-browser4-cli fill <ref> "<value>"  # clear + type into input/textarea
+browser4-cli fill <ref> <value>  # clear + type into input/textarea
 browser4-cli select <ref> "<val>"  # select dropdown option
 browser4-cli check <ref>           # toggle checkbox on
 browser4-cli uncheck <ref>         # toggle checkbox off
