@@ -431,7 +431,7 @@ curl -L -o PulsarRPAPro.jar https://github.com/platonai/PulsarRPAPro/releases/do
 
 | 模块 | 描述 |
 |------|------|
-| `cli` | 基于 Rust 的 CLI + 技能资源 (`cli/browser4-cli`, `cli/skill`) |
+| `cli` | 基于 Rust 的 CLI + 技能资源 (`cli/browser4-cli`, `skill/`) |
 | `browser4-core` | 核心引擎：会话、调度、DOM、浏览器控制 |
 | `browser4-dependencies` | BOM 与依赖版本对齐 |
 | `browser4-agent-tools` | 高级智能体工具：抓取、爬取和有状态页面交互 |

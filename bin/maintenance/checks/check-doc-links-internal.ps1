@@ -15,7 +15,7 @@ Detects:
 
 .PARAMETER SearchPaths
 Directories/files to scan. Default: "docs/", "README.md", "README.zh.md",
-"cli/skill/", "coworker/", "AGENTS.md"
+"skill/", "coworker/", "AGENTS.md"
 
 .PARAMETER ExcludePatterns
 Patterns to exclude. Default: "node_modules", "target", ".git"
@@ -25,7 +25,7 @@ Standard maintenance result object.
 #>
 
 param(
-    [string[]]$SearchPaths = @("docs", "README.md", "README.zh.md", "cli/skill", "coworker", "AGENTS.md", "browser4-agentic/src/main/resources/skills"),
+    [string[]]$SearchPaths = @("docs", "README.md", "README.zh.md", "skill", "coworker", "AGENTS.md", "browser4-agentic/src/main/resources/skills"),
     [string[]]$ExcludePatterns = @("node_modules", "target", ".git")
 )
 

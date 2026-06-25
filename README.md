@@ -435,7 +435,7 @@ curl -L -o PulsarRPAPro.jar https://github.com/platonai/PulsarRPAPro/releases/do
 
 | Module | Description |
 |--------|-------------|
-| `cli` | CLI in Rust + SKILL assets (`cli/browser4-cli`, `cli/skill`) |
+| `cli` | CLI in Rust + SKILL assets (`cli/browser4-cli`, `skill/`) |
 | `browser4-core` | Core engine: sessions, scheduling, DOM, browser control |
 | `browser4-dependencies` | BOM and dependency version alignment |
 | `browser4-agent-tools` | Advanced agent tools for scraping, crawling, and stateful page interaction |

@@ -27,7 +27,7 @@ Standard maintenance result object.
 #>
 
 param(
-    [string[]]$SearchPaths = @("docs", "README.md", "README.zh.md", "AGENTS.md", "cli/skill"),
+    [string[]]$SearchPaths = @("docs", "README.md", "README.zh.md", "AGENTS.md", "skill"),
     [int]$TimeoutSecs = 10,
     [int]$MaxConcurrency = 10,
     [switch]$SkipLocalhost

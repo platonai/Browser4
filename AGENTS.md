@@ -91,7 +91,7 @@ mvnw.cmd -q -DskipTests
 | `browser4-tools`                       | Operational tools and launch helpers |
 | `browser4-agentic`                     | AI agents implementation, MCP, skills registration |
 | `browser4-rest`                        | Spring Boot REST layer & command endpoints |
-| `cli/*`                                | Browser4 CLI + skill assets (`cli/browser4-cli`, `cli/skill`) |
+| `cli/*`                                | Browser4 CLI + skill assets (`cli/browser4-cli`, `skill/`) |
 | `browser4-apps/*`                       | Product packaging and the unified launcher (`browser4-apps/browser4-standalone`, `target/Browser4.jar`) |
 | `browser4-core/browser4-plugins/*`     | Optional plugins: `browser4-captcha` (CAPTCHA solving), activated by classpath presence |
 | `examples/*`                           | Runnable examples (`examples/browser4-examples`) |
@@ -338,7 +338,6 @@ captcha.solve.max.retries=3
 
 - [Configuration Guide](docs/config.md)
 - [Testing Taxonomy](docs/TESTING.md)
-- [Test Strategy](docs/test-strategy.md)
 - [Browser4 CLI Skill Guide](skill/SKILL.md)
 - [ARIA Snapshots](docs/aria-snapshots.md)
 
