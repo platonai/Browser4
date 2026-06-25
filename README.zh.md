@@ -104,6 +104,14 @@ browser4-cli snapshot
 # 在快照中包含元素边界框
 browser4-cli snapshot --boxes
 
+# 使用标志过滤快照输出
+browser4-cli snapshot -i                 # 仅显示可交互元素（按钮、链接、输入框）
+browser4-cli snapshot -u                 # 包含链接的 href URL
+browser4-cli snapshot -c                 # 紧凑模式：移除空的结构元素
+browser4-cli snapshot -d 5               # 将树深度限制为 5 层
+browser4-cli snapshot -s "#main-content" # 将快照范围限定到 CSS 选择器
+browser4-cli snapshot -i -c -d 3         # 组合标志以获得聚焦输出
+
 # 使用快照中的 ref 进行交互
 browser4-cli click e15
 browser4-cli type e15 "Hello World"
@@ -115,6 +123,14 @@ browser4-cli keyup Shift
 
 # 截图并保存到磁盘
 browser4-cli screenshot
+
+# 将当前页面保存为 PDF
+browser4-cli pdf
+browser4-cli pdf --filename=page.pdf
+
+# 为元素生成唯一的 CSS 选择器（通过 ref 或选择器）
+browser4-cli generate-locator e5
+browser4-cli generate-locator "#my-button"
 
 # 使用自定义服务器 URL
 browser4-cli open --server http://localhost:9090
@@ -155,6 +171,26 @@ Browser4 CLI 专为 AI 智能体通过技能 (SKILLS) + CLI 使用而设计。
 
 [SKILL.md](skill/SKILL.md)
 
+### CLI 超时配置
+
+某些命令可能比默认的 HTTP 超时时间更长，尤其是文本输入（`type`/`fill`）和页面导航（`goto`）。使用以下环境变量按命令类别调整超时时间：
+
+| 变量 | 默认值 | 适用命令 |
+|------|--------|----------|
+| `BROWSER4_CLI_HTTP_TIMEOUT_SECS` | `30` | 大多数命令（`click`、`snapshot`、`screenshot` 等） |
+| `BROWSER4_CLI_INPUT_TIMEOUT_SECS` | `90` | 文本输入命令（`type`、`fill`、`fill-form`） |
+| `BROWSER4_CLI_NAVIGATION_TIMEOUT_SECS` | `120` | 导航命令（`goto`、`reload`、`go-back`、`go-forward`） |
+
+文本输入命令使用较长的默认超时时间，因为在表单字段中输入——尤其是在复杂页面上——可能比简单的交互更慢。如果文本输入命令超时，操作**可能已部分执行**。超时后，请使用 `snapshot` 或 `get-text` 验证字段内容，然后再重试。
+
+```shell
+# 针对重型页面增加输入超时时间
+export BROWSER4_CLI_INPUT_TIMEOUT_SECS=180
+
+# 针对慢速网站增加导航超时时间
+export BROWSER4_CLI_NAVIGATION_TIMEOUT_SECS=300
+```
+
 ### DOM 快照
 
 `domsnapshot` 系列命令提供**静态 DOM 提取** — 将当前页面的原始 HTML 捕获为可查询的文档对象模型。与交互式的 `snapshot` 命令（捕获无障碍树引用用于 `click`/`type`/`fill`）不同，`domsnapshot` 使用 CSS 选择器和 X-SQL 查询提取结构化数据，无需交互式浏览器会话。
@@ -191,6 +227,9 @@ browser4-cli domsnapshot query --sql @query.sql
 
 # 导出快照 HTML 到文件
 browser4-cli domsnapshot export --file=page-snapshot.html
+
+# 生成 Web 页面摘要索引（WPSI）—— 压缩的页面结构，以 YAML 格式输出
+browser4-cli domsnapshot summary
 ```
 
 完整命令参考、X-SQL 查询示例和错误处理，请参见 [DOM 快照参考](cli/skill/references/domsnapshot.md)。
@@ -397,6 +436,54 @@ curl -L -o PulsarRPAPro.jar https://github.com/platonai/PulsarRPAPro/releases/do
 | `browser4-standalone`  | 智能体和爬虫编排，包含产品打包                    |
 | `examples`             | 可运行的示例和演示                              |
 | `browser4-tests`       | 端到端测试、重量级集成测试和场景测试              |
+
+---
+
+## 🧪 测试夹具服务器（MockSite）
+
+Browser4 包含一个轻量级的 **MockSite** 服务器，为测试和演示提供静态 HTML 页面——搜索框、表单、链接列表、交互页面等。当你在任务说明、测试脚本或示例中看到 `http://localhost:18080/...` 引用时，它们期望 MockSite 正在运行。
+
+### 启动 MockSite
+
+从仓库根目录（`submodules/Browser4`），使用默认端口（18080）启动 MockSite：
+
+**Windows (PowerShell):**
+```powershell
+./bin/test.ps1 mock-site -Dmock.site.port=18080
+```
+
+**Linux / macOS (bash):**
+```bash
+./bin/test.sh mock-site -Dmock.site.port=18080
+```
+
+### 关键演示页面
+
+| 页面 | URL |
+|------|-----|
+| 交互式夹具 | `http://localhost:18080/generated/interactive-1.html` |
+| 表单填写夹具 | `http://localhost:18080/generated/form-filling.html` |
+| 其他夹具 | `http://localhost:18080/generated/other-1.html` |
+
+### 环境变量
+
+| 变量 | 默认值 | 描述 |
+|------|--------|------|
+| `MOCK_SITE_PORT` | `18080` | Mock 服务器监听的端口 |
+| `MOCK_SITE_WAIT_SEC` | — | 等待服务器就绪的秒数 |
+
+### 替代方案：使用 Python 提供夹具文件
+
+如果你只需要静态 HTML 夹具而不需要完整的 MockSite，可以直接提供夹具目录：
+
+```bash
+cd browser4-tests/browser4-tests-common/src/main/resources/static
+python3 -m http.server 18080
+```
+
+夹具 HTML 文件（例如 `b4/mcp-tool-controller-form-fixture.html`）将在 `http://localhost:18080/b4/` 下可用。
+
+更多详情，请参见 [MockSite README](browser4-tests/browser4-rest-tests/README.md)。
 
 ---
 

@@ -187,7 +187,7 @@ cargo install --path .
 | `cargo test` | All 3 targets |
 | `cargo test --lib` | Only `#[cfg(test)] mod tests` in `src/lib.rs` |
 | `cargo test --bin browser4-cli` | Only `#[cfg(test)]` blocks in `src/main.rs` and other `src/*.rs` files |
-| `cargo test --test e2e` | Only `tests/e2e.rs` (uses a custom harness) |
+| `cargo test --test e2e` | Only `tests/e2e/mod.rs` (uses a custom harness) |
 
 `--lib` and `--bin` can be combined:
 ```bash
@@ -248,7 +248,7 @@ cargo test -- --test-threads=1
 ### e2e-specific
 
 e2e uses a custom harness (`harness = false`). Arguments after `--` are forwarded to
-`tests/e2e.rs`'s `main()`:
+`tests/e2e/mod.rs`'s `main()`:
 
 ```bash
 # Basics

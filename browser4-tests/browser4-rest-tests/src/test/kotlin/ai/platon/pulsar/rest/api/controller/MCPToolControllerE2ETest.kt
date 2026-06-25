@@ -32,7 +32,7 @@ import kotlin.test.assertTrue
 
 /**
  * Scenario-level E2E tests for [MCPToolController] that mirror the browser
- * behaviors covered by `cli/browser4-cli/tests/e2e.rs`.
+ * behaviors covered by `cli/browser4-cli/tests/e2e/mod.rs`.
  */
 @Tag("E2ETest")
 class MCPToolControllerE2ETest : RestAPITestBase() {

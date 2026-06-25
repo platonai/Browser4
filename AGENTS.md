@@ -229,7 +229,7 @@ See [TESTING.md](docs/TESTING.md) for details and trade-offs.
 - Use `bin/test.ps1` on Windows for scoped runs: `fast`, `it`, `e2e`, `rest`, `skills`, `mcp`, `cli`, `browser4`, `mock-site` (`mocksite` and `mocksiteboot` remain accepted aliases)
 - Maven profile switches in root `pom.xml` are property-driven: `-DrunITs=true`, `-DrunE2ETests=true`, `-DrunCoreTests=true`, `-DrunRestTests=true`
 - Use `bin/test.ps1 mock-site -Dmock.site.port=18080` to launch `MockSiteBoot` from `browser4-tests/browser4-rest-tests`; use `MockSiteLauncher` from `browser4-tests/browser4-tests-common` for in-process startup
-- `cli/browser4-cli/tests/e2e.rs`: all e2e scenarios must start and depend on Browser4.jar; this includes single-scenario runs via `--scenario`.
+- `cli/browser4-cli/tests/e2e/mod.rs`: all e2e scenarios must start and depend on Browser4.jar; this includes single-scenario runs via `--scenario`.
 - `.github/workflows/ci.yml` builds with `all-main-modules`, starts the Dockerized app on port `8182`, runs `cargo test` in `cli/browser4-cli`, and keeps the main Maven test pass limited to fast/unit-style tags by excluding `Slow`, `Heavy`, `Integration`, `E2E`, `SDK`, `Requires*`, and `ManualOnly`.
 
 ### Test Location
@@ -430,7 +430,7 @@ All `.ps1` and `.sh` scripts under `bin/tests-production/` and `bin/test-product
 3. Reuse existing backend tools when possible; if a new browser capability is required, add an `@MCP` method in `WebDriver.kt`, implement it in the concrete driver, and only add an explicit `BrowserTabToolExecutor` case when parameter mapping is non-trivial
 4. Update `cli/browser4-cli/src/main.rs` only when the command needs custom dispatch, dynamic tool-name selection, stale-session recovery, inclusion in `no_snapshot_commands()` for read-only behavior, or custom batch handling in `compile_batch_request()`
 5. Update `skill/SKILL.md` for user-facing command documentation; CLI help is generated from `CommandDef`, so avoid hand-editing help infrastructure
-6. Cover the change with the smallest relevant tests: `cli/browser4-cli/src/commands.rs` unit tests, `browser4-rest` controller mapping tests, `cli/browser4-cli/tests/e2e.rs`, and `browser4-tests/browser4-rest-tests/.../MCPToolControllerE2ETest.kt` when the command changes the end-to-end flow
+6. Cover the change with the smallest relevant tests: `cli/browser4-cli/src/commands.rs` unit tests, `browser4-rest` controller mapping tests, `cli/browser4-cli/tests/e2e/mod.rs`, and `browser4-tests/browser4-rest-tests/.../MCPToolControllerE2ETest.kt` when the command changes the end-to-end flow
 7. Watch the common failure points: missing backend alias, omitted `sessionId` in custom handlers, forgetting `no_snapshot_commands()` for read-only commands, forgetting `batch_supported`/`compile_batch_request()` for batch-safe DOM commands, mismatched element-ref parameter names, broken `activeSelector` / `lastMousePosition` persistence in `cli/browser4-cli/src/state.rs`, and snake_case/camelCase argument normalization
 
 #### Modifying Install / Uninstall / Upgrade Rust Code
