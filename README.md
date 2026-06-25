@@ -108,6 +108,14 @@ browser4-cli snapshot
 # Include element bounding boxes in the snapshot
 browser4-cli snapshot --boxes
 
+# Filter snapshot output with flags
+browser4-cli snapshot -i                 # interactive elements only (buttons, links, inputs)
+browser4-cli snapshot -u                 # include link href URLs
+browser4-cli snapshot -c                 # compact: remove empty structural elements
+browser4-cli snapshot -d 5               # limit tree depth to 5 levels
+browser4-cli snapshot -s "#main-content" # scope snapshot to a CSS selector
+browser4-cli snapshot -i -c -d 3         # combine flags for focused output
+
 # Interact using refs from the snapshot
 browser4-cli click e15
 browser4-cli type e15 "Hello World"
@@ -119,6 +127,14 @@ browser4-cli keyup Shift
 
 # Take a screenshot and save it to disk
 browser4-cli screenshot
+
+# Save the current page as a PDF
+browser4-cli pdf
+browser4-cli pdf --filename=page.pdf
+
+# Generate a unique CSS selector for an element (by ref or selector)
+browser4-cli generate-locator e5
+browser4-cli generate-locator "#my-button"
 
 # Use a custom server URL
 browser4-cli open --server http://localhost:9090
@@ -195,6 +211,9 @@ browser4-cli domsnapshot query --sql @query.sql
 
 # Export snapshot HTML to a file
 browser4-cli domsnapshot export --file=page-snapshot.html
+
+# Generate a Web Page Summary Index (WPSI) — compressed page structure as YAML
+browser4-cli domsnapshot summary
 ```
 
 For the full command reference, X-SQL query examples, and error handling, see the [DOM Snapshot reference](cli/skill/references/domsnapshot.md).
