@@ -17,7 +17,7 @@ path = "src/lib.rs"
 
 [[test]]
 name = "e2e"
-path = "tests/e2e.rs"
+path = "tests/e2e/mod.rs"
 harness = false
 
 [dependencies]

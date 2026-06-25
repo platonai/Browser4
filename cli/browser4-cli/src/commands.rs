@@ -839,22 +839,17 @@ pub fn all_commands() -> Vec<CommandDef> {
             options: &[
                 OptionDef { name: "filename", description: "Save snapshot to file instead of returning it in the response", is_bool: false, short: None },
                 OptionDef { name: "boxes", description: "Include each element's bounding box as [box=x,y,width,height]", is_bool: true, short: None },
-<<<<<<< HEAD
-=======
                 OptionDef { name: "interactive", description: "Only show interactive elements (buttons, links, inputs)", is_bool: true, short: Some("i") },
                 OptionDef { name: "urls", description: "Include href URLs for link elements", is_bool: true, short: Some("u") },
                 OptionDef { name: "compact", description: "Remove empty structural elements", is_bool: true, short: Some("c") },
                 OptionDef { name: "depth", description: "Limit tree depth to n levels", is_bool: false, short: Some("d") },
                 OptionDef { name: "selector", description: "Scope snapshot to a CSS selector", is_bool: false, short: Some("s") },
->>>>>>> origin/4.11.x
             ],
             tool_name_fn: |_| "browser_snapshot".to_string(),
             tool_params_fn: |args| {
                 let mut p = json!({});
                 if let Some(f) = get_opt_str(args, "filename") { p["filename"] = json!(f); }
                 if let Some(true) = get_bool(args, "boxes") { p["boxes"] = json!(true); }
-<<<<<<< HEAD
-=======
                 if let Some(true) = get_bool(args, "interactive") { p["interactive"] = json!(true); }
                 if let Some(true) = get_bool(args, "urls") { p["urls"] = json!(true); }
                 if let Some(true) = get_bool(args, "compact") { p["compact"] = json!(true); }
@@ -862,7 +857,6 @@ pub fn all_commands() -> Vec<CommandDef> {
                     if let Ok(n) = d.parse::<i32>() { p["depth"] = json!(n); }
                 }
                 if let Some(s) = get_opt_str(args, "selector") { p["selector"] = json!(s); }
->>>>>>> origin/4.11.x
                 p
             },
         },

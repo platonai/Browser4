@@ -62,29 +62,13 @@ use std::thread;
 use std::thread::{sleep, JoinHandle};
 use std::time::{Duration, Instant};
 
-#[path = "e2e/scenarios/mod.rs"]
-mod scenarios;
-
-const BROWSER_PROFILE_MODE: &str = "SEQUENTIAL";
-const OPEN_PROFILE_MODE_ARG: &str = "--profile-mode=SEQUENTIAL";
-const OPEN_INTERACT_LEVEL_ARG: &str = "--interact-level=FASTEST";
-const USE_MAVEN_STARTUP_FLAG: &str = "--use-maven-startup";
+pub mod scenarios;
+pub mod constants;
+pub use constants::*;
 
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
-
-const INTERACTIVE_PATH: &str = "/interactive";
-const OTHER_PATH: &str = "/other";
-const FORM_PATH: &str = "/form";
-const INTERACTIVE_TITLE: &str = "Browser4 CLI Interactive Fixture";
-const OTHER_TITLE: &str = "Browser4 CLI Other Fixture";
-const FORM_TITLE: &str = "Browser4 CLI Form Fixture";
-const ROOT_SEARCH_START_DIR_ENV: &str = "BROWSER4_CLI_INVOKE_DIR";
-const USE_MAVEN_STARTUP_ENV: &str = "BROWSER4_E2E_USE_MAVEN_STARTUP";
-const FORCE_REMOTE_BUNDLE_ENV: &str = "BROWSER4_E2E_FORCE_REMOTE_BUNDLE";
-const FORCE_REMOTE_BUNDLE_CLI_ENV: &str = "BROWSER4_CLI_FORCE_REMOTE_BUNDLE";
-const LAST_FAILED_SCENARIOS_FILE: &str = "last-failed-scenarios.json";
 
 // ---------------------------------------------------------------------------
 // Environment helpers
@@ -154,10 +138,6 @@ fn force_remote_bundle_for_local_server() -> bool {
 // ---------------------------------------------------------------------------
 // HTML fixtures
 // ---------------------------------------------------------------------------
-
-const INTERACTIVE_FIXTURE_FILE: &str = "mcp-tool-controller-interactive-fixture.html";
-const OTHER_FIXTURE_FILE: &str = "mcp-tool-controller-other-fixture.html";
-const FORM_FIXTURE_FILE: &str = "mcp-tool-controller-form-fixture.html";
 
 fn load_html_fixture(file_name: &str) -> String {
     let path = fixture_path(env!("CARGO_MANIFEST_DIR"), file_name);
@@ -1968,8 +1948,6 @@ fn run_cli_process_internal(
         exit_code: output.status.code().unwrap_or(-1),
     }
 }
-
-const OUTPUT_COLLECTOR_DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
 
 fn wait_for_cli_output(
     mut child: Child,
@@ -3797,46 +3775,11 @@ struct RunOptions {
     /// finishes faster.  Pass `--level=EXTENDED` (or `--level=all`) to
     /// include longer-running / edge-case tests.
     max_level: scenarios::ScenarioLevel,
+    /// Suppress per-test timing output; only show pass/fail summary.
+    quiet: bool,
+    /// Stream CLI child-process output to the terminal for debugging.
+    verbose: bool,
 }
-
-const HELP_TEXT: &str = r#"browser4-cli e2e test runner
-
-Usage: cargo test --test e2e -- [OPTIONS]
-
-Options:
-  --help                       Print this help message
-  --list                       List all scenario names (dry run)
-  --list-groups                List available groups with scenario counts
-  --group=<name>               Run only scenarios in the specified group
-                               (repeatable; e.g. --group=open --group=eval)
-  --scenario=<name|pattern>    Run only scenarios matching this name or
-                               glob pattern (* and ? wildcards)
-  --scenario-from=<name>       Run scenarios starting from the named one
-  --scenario-limit=<count>     Run at most <count> selected scenarios
-  --failed                     Rerun scenarios that failed in the previous run
-  --fail-fast                  Stop after the first failure
-  --batch-only                 Run only batch-command scenarios
-  --enable-batch-scenario      Include batch-command scenarios in the run
-  --enable-install-scenario    Include install/upgrade scenarios
-  --force-remote-bundle        Download the Browser4 runtime bundle from a
-                               remote release instead of building locally
-                               (sets BROWSER4_CLI_FORCE_REMOTE_BUNDLE=1).
-  --level=<BASIC|EXTENDED|all> Max scenario level to run (default: BASIC).
-                               Use EXTENDED or all to include edge-case and
-                               longer-running tests.
-
-Environment variables:
-  BROWSER4_E2E_SERVICE_URL     Connect to an already-running Browser4 service
-  BROWSER4_E2E_SERVER_URL      Alias for BROWSER4_E2E_SERVICE_URL
-  BROWSER4_E2E_FIXTURE_HOST    Host the Browser4 container uses to reach the
-                               fixture HTTP server (default: 127.0.0.1)
-  BROWSER4_E2E_CLI_TIMEOUT_SECS Override per-command timeout in seconds
-  BROWSER4_E2E_USE_MAVEN_STARTUP Set to 1/true/yes/on for Maven startup
-  BROWSER4_E2E_FORCE_REMOTE_BUNDLE Set to 1/true/yes/on to download runtime
-                               bundle from GitHub (equiv. --force-remote-bundle)
-  BROWSER4_CLI_FORCE_REMOTE_BUNDLE Set to 1/true/yes/on in the CLI process
-                               to skip local Maven/jlink build
-"#;
 
 fn parse_scenario_limit(raw: &str) -> usize {
     let normalized = raw.trim();
@@ -3871,10 +3814,43 @@ fn apply_scenario_limit_filter(
     selected_scenarios.into_iter().take(limit).collect()
 }
 
-fn parse_named_flag_value(args: &mut impl Iterator<Item = String>, flag: &str) -> String {
-    args.next().unwrap_or_else(|| {
-        panic!("Missing value for {flag}. Use {flag}=<scenario-name> or {flag} <scenario-name>")
-    })
+/// Parse a value from `--flag=value` or `--flag value` syntax.
+/// Returns `Some(parsed_value)` if the current arg matches the flag,
+/// or `None` if it doesn't.
+fn parse_value_flag<T>(
+    arg: &str,
+    flag: &str,
+    args: &mut impl Iterator<Item = String>,
+    parse: impl FnOnce(String) -> T,
+) -> Option<T> {
+    if let Some(value) = arg.strip_prefix(&format!("--{flag}=")) {
+        return Some(parse(value.to_string()));
+    }
+    if arg == format!("--{flag}") {
+        let value = args.next().unwrap_or_else(|| {
+            panic!("Missing value for --{flag}. Use --{flag}=<value> or --{flag} <value>")
+        });
+        return Some(parse(value));
+    }
+    None
+}
+
+/// Check if `arg` matches a boolean flag `--name` or its short alias `-X`.
+fn match_bool_flag(arg: &str, long: &str, short: &str) -> bool {
+    arg == format!("--{long}") || arg == short
+}
+
+/// Check if `arg` starts a value flag (either `--name=...` or `--name` or `-X`).
+/// Returns the value if the next-arg form (`--name value` or `-X value`) is used,
+/// otherwise returns the =value or short-alias next-arg.
+fn match_value_flag_start(arg: &str, long: &str, short: &str) -> Option<String> {
+    if let Some(value) = arg.strip_prefix(&format!("--{long}=")) {
+        return Some(value.to_string());
+    }
+    if arg == format!("--{long}") || arg == short {
+        return Some(String::new()); // caller reads next arg
+    }
+    None
 }
 
 fn parse_run_options() -> RunOptions {
@@ -3891,111 +3867,137 @@ fn parse_run_options() -> RunOptions {
     let mut enable_batch_scenario = false;
     let mut enable_install_scenario = false;
     let mut force_remote_bundle = false;
+    let mut quiet = false;
+    let mut verbose = false;
     let mut groups: Vec<String> = Vec::new();
     let mut max_level = scenarios::ScenarioLevel::Basic;
 
     while let Some(arg) = args.next() {
-        if arg == "--help" || arg == "-h" {
+        // --help / -h
+        if match_bool_flag(&arg, "help", "-h") {
             print!("{HELP_TEXT}");
             std::process::exit(0);
         }
 
-        if arg == "--force-remote-bundle" {
-            force_remote_bundle = true;
+        // --list / -l
+        if match_bool_flag(&arg, "list", "-l") {
+            list_only = true;
             continue;
         }
 
-        if let Some(value) = arg.strip_prefix("--level=") {
-            max_level = scenarios::ScenarioLevel::from_arg(value).unwrap_or_else(|error| {
-                panic!("{error}");
-            });
-            continue;
-        }
-        if arg == "--level" {
-            let value = parse_named_flag_value(&mut args, "--level");
-            max_level = scenarios::ScenarioLevel::from_arg(&value).unwrap_or_else(|error| {
-                panic!("{error}");
-            });
+        // --list-groups / -G
+        if match_bool_flag(&arg, "list-groups", "-G") {
+            list_groups = true;
             continue;
         }
 
-        if let Some(value) = arg.strip_prefix("--scenario=") {
-            scenario = Some(value.to_string());
-            continue;
-        }
-        if arg == "--scenario" {
-            scenario = Some(parse_named_flag_value(&mut args, "--scenario"));
+        // --fail-fast / -F
+        if match_bool_flag(&arg, "fail-fast", "-F") {
+            fail_fast = true;
             continue;
         }
 
-        if let Some(value) = arg.strip_prefix("--scenario-from=") {
-            scenario_from = Some(value.to_string());
-            continue;
-        }
-        if arg == "--scenario-from" {
-            scenario_from = Some(parse_named_flag_value(&mut args, "--scenario-from"));
-            continue;
-        }
-
-        if let Some(value) = arg.strip_prefix("--scenario-limit=") {
-            scenario_limit = Some(parse_scenario_limit(value));
-            continue;
-        }
-        if arg == "--scenario-limit" {
-            scenario_limit = Some(parse_scenario_limit(&parse_named_flag_value(
-                &mut args,
-                "--scenario-limit",
-            )));
-            continue;
-        }
-
-        if arg == "--scenario-range" || arg.starts_with("--scenario-range=") {
-            panic!(
-                "--scenario-range has been removed. Use --scenario-limit=<count> together with existing selectors (for example --scenario-from=... --scenario-limit=5)."
-            );
-        }
-
+        // --failed
         if arg == "--failed" {
             rerun_failed = true;
             continue;
         }
 
-        if arg == "--fail-fast" {
-            fail_fast = true;
-            continue;
-        }
-
-        if arg == "--list" {
-            list_only = true;
-            continue;
-        }
-
+        // --batch-only
         if arg == "--batch-only" {
             batch_only = true;
             continue;
         }
 
-        if arg == "--enable-batch-scenario" {
+        // --enable-batch-scenario / -b
+        if match_bool_flag(&arg, "enable-batch-scenario", "-b") {
             enable_batch_scenario = true;
             continue;
         }
 
-        if arg == "--enable-install-scenario" {
+        // --enable-install-scenario / -i
+        if match_bool_flag(&arg, "enable-install-scenario", "-i") {
             enable_install_scenario = true;
             continue;
         }
 
-        if arg == "--list-groups" {
-            list_groups = true;
+        // --force-remote-bundle / -R
+        if match_bool_flag(&arg, "force-remote-bundle", "-R") {
+            force_remote_bundle = true;
             continue;
         }
 
-        if let Some(value) = arg.strip_prefix("--group=") {
-            groups.push(value.to_string());
+        // --quiet / -q
+        if match_bool_flag(&arg, "quiet", "-q") {
+            quiet = true;
             continue;
         }
-        if arg == "--group" {
-            groups.push(parse_named_flag_value(&mut args, "--group"));
+
+        // --verbose / -v
+        if match_bool_flag(&arg, "verbose", "-v") {
+            verbose = true;
+            continue;
+        }
+
+        // --level / -L
+        if let Some(value) = match_value_flag_start(&arg, "level", "-L") {
+            let val = if value.is_empty() { args.next().unwrap_or_else(|| {
+                panic!("Missing value for --level. Use --level=<BASIC|EXTENDED|all> or --level <BASIC|EXTENDED|all>")
+            })} else { value };
+            max_level = scenarios::ScenarioLevel::from_arg(&val).unwrap_or_else(|error| {
+                panic!("{error}");
+            });
+            continue;
+        }
+
+        // --scenario / -s
+        if let Some(value) = match_value_flag_start(&arg, "scenario", "-s") {
+            let val = if value.is_empty() { args.next().unwrap_or_else(|| {
+                panic!("Missing value for --scenario. Use --scenario=<name|pattern> or --scenario <name|pattern>")
+            })} else { value };
+            scenario = Some(val);
+            continue;
+        }
+
+        // --scenario-from / -f
+        if let Some(value) = match_value_flag_start(&arg, "scenario-from", "-f") {
+            let val = if value.is_empty() { args.next().unwrap_or_else(|| {
+                panic!("Missing value for --scenario-from. Use --scenario-from=<name> or --scenario-from <name>")
+            })} else { value };
+            scenario_from = Some(val);
+            continue;
+        }
+
+        // --scenario-limit / -n
+        if let Some(value) = match_value_flag_start(&arg, "scenario-limit", "-n") {
+            let val = if value.is_empty() { args.next().unwrap_or_else(|| {
+                panic!("Missing value for --scenario-limit. Use --scenario-limit=<count> or --scenario-limit <count>")
+            })} else { value };
+            scenario_limit = Some(parse_scenario_limit(&val));
+            continue;
+        }
+
+        // --group / -g
+        if let Some(value) = match_value_flag_start(&arg, "group", "-g") {
+            let val = if value.is_empty() { args.next().unwrap_or_else(|| {
+                panic!("Missing value for --group. Use --group=<name> or --group <name>")
+            })} else { value };
+            groups.push(val);
+            continue;
+        }
+
+        // --scenario-range (deprecated)
+        if arg == "--scenario-range" || arg.starts_with("--scenario-range=") {
+            eprintln!(
+                "--scenario-range has been removed. Use --scenario-limit=<count> together with \
+                 existing selectors (for example --scenario-from=... --scenario-limit=5)."
+            );
+            std::process::exit(1);
+        }
+
+        // Warn about unrecognized --flags
+        if arg.starts_with("--") {
+            eprintln!("[e2e] warning: unrecognized flag '{}', ignoring", arg);
             continue;
         }
 
@@ -4019,7 +4021,9 @@ fn parse_run_options() -> RunOptions {
         _ => unreachable!("unexpected scenario filter argument combination"),
     };
 
-    println!("[e2e] max scenario level: {}", max_level);
+    if !quiet {
+        println!("[e2e] max scenario level: {}", max_level);
+    }
 
     RunOptions {
         scenario_filter,
@@ -4034,6 +4038,8 @@ fn parse_run_options() -> RunOptions {
         force_remote_bundle,
         groups,
         max_level,
+        quiet,
+        verbose,
     }
 }
 
@@ -4110,8 +4116,6 @@ fn resolve_scenarios_by_filter(filter: &str) -> Vec<scenarios::ScenarioDef> {
         .collect()
 }
 
-const MAX_ALLOWED_FAILED_SCENARIOS: usize = 5;
-
 #[derive(Clone, Copy)]
 struct PlannedScenarioRun {
     scenario: scenarios::ScenarioDef,
@@ -4133,8 +4137,6 @@ impl PlannedScenarioRun {
         }
     }
 }
-
-const COVERAGE_TEST_NAME: &str = "test_e2e_command_coverage";
 
 fn total_declared_e2e_tests() -> usize {
     scenarios::all_scenarios()
@@ -4456,6 +4458,13 @@ fn main() {
                 ScenarioCleanupMode::None
             };
 
+            if run_options.verbose {
+                if let Some(group) = planned_run.scenario.group {
+                    println!("  [verbose] running scenario: {} (group: {})", planned_run.scenario.name, group);
+                } else {
+                    println!("  [verbose] running scenario: {}", planned_run.scenario.name);
+                }
+            }
             let outcome = run_named_scenario(
                 &display_name,
                 &mut resources,
@@ -4546,10 +4555,12 @@ fn main() {
                     MAX_ALLOWED_FAILED_SCENARIOS
                 );
             }
-            println!("per-test timing:");
-            for report in timings {
-                println!("  {}: {}", report.name, format_duration(report.total));
-                print_timing_steps(&report.steps);
+            if !run_options.quiet {
+                println!("per-test timing:");
+                for report in timings {
+                    println!("  {}: {}", report.name, format_duration(report.total));
+                    print_timing_steps(&report.steps);
+                }
             }
             if !scenario_failures.is_empty() {
                 println!("failure summary (grouped by scenario):");
@@ -4573,8 +4584,10 @@ fn main() {
                     }
                 }
             }
-            println!("final cleanup:");
-            print_timing_steps(&final_cleanup_steps);
+            if !run_options.quiet {
+                println!("final cleanup:");
+                print_timing_steps(&final_cleanup_steps);
+            }
             if failed_scenario_count > MAX_ALLOWED_FAILED_SCENARIOS {
                 panic!(
                     "{} failed scenario(s) exceeded allowed tolerance (<= {}). See failure summary above.",
