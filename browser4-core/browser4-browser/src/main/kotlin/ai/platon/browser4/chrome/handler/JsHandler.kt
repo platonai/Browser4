@@ -35,18 +35,21 @@ class JsHandler(
         val isolatedContextId = isolatedWorldManager
             .getContextId(runCatching { bp.mainFrame().id }.getOrNull())
         if (isolatedContextId != null && isolatedContextId > 0) {
-            val isolatedResult = evaluateInContext(confusedExpr, isolatedContextId, returnByValue = false)
-            if (isolatedResult != null) {
-                return isolatedResult
+            try {
+                val isolatedResult = evaluateInContext(confusedExpr, isolatedContextId, returnByValue = false)
+                if (isolatedResult != null) {
+                    return isolatedResult
+                }
+            } catch (e: Exception) {
+                logger.warn(
+                    "Failed to evaluate in isolated world (context: {}), falling back to main world | {}",
+                    isolatedContextId, e.message
+                )
             }
         }
 
-        return try {
-            bp.evaluate(confusedExpr)
-        } catch (e: Exception) {
-            logger.warn("Failed to evaluate $script", e)
-            null
-        }
+        // Propagate CDP communication errors — the RobustRPC layer handles retry
+        return bp.evaluate(confusedExpr)
     }
 
     @Throws(ChromeDriverException::class)
@@ -100,18 +103,21 @@ class JsHandler(
         val isolatedContextId = isolatedWorldManager
             .getContextId(runCatching { bp.mainFrame().id }.getOrNull())
         if (isolatedContextId != null && isolatedContextId > 0) {
-            val isolatedResult = evaluateInContext(confusedExpr, isolatedContextId, returnByValue = true)
-            if (isolatedResult != null) {
-                return isolatedResult
+            try {
+                val isolatedResult = evaluateInContext(confusedExpr, isolatedContextId, returnByValue = true)
+                if (isolatedResult != null) {
+                    return isolatedResult
+                }
+            } catch (e: Exception) {
+                logger.warn(
+                    "Failed to evaluate in isolated world (context: {}), falling back to main world | {}",
+                    isolatedContextId, e.message
+                )
             }
         }
 
-        return try {
-            bp.evaluate(confusedExpr, returnByValue = true)
-        } catch (e: Exception) {
-            logger.warn("Failed to evaluate $script", e)
-            null
-        }
+        // Propagate CDP communication errors — the RobustRPC layer handles retry
+        return bp.evaluate(confusedExpr, returnByValue = true)
     }
 
     /**
@@ -128,7 +134,9 @@ class JsHandler(
 
         val exception = evaluate?.exceptionDetails?.exception
         if (exception != null) {
-            logger.warn(exception.description + "\n>>>$script<<<")
+            val message = "${exception.description}\n>>>$script<<<"
+            logger.warn("Failed to evaluate JavaScript. $message")
+            throw ChromeDriverException(message)
         }
 
         return evaluate?.result?.value
@@ -151,7 +159,9 @@ class JsHandler(
 
         val exception = result?.exceptionDetails?.exception
         if (exception != null) {
-            logger.warn(exception.description + "\n>>>$functionDeclaration<<<")
+            val message = "${exception.description}\n>>>$functionDeclaration<<<"
+            logger.warn("Failed to evaluate JavaScript. $message")
+            throw ChromeDriverException(message)
         }
 
         return result?.result?.value
