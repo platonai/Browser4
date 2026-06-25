@@ -17,9 +17,11 @@ English | [简体中文](README.zh.md) | [中国镜像](https://gitee.com/platon
     - [CLI & SKILLS](#cli--skills)
     - [DOM Snapshot](#dom-snapshot)
     - [Agent and Swarm CLI](#agent-and-swarm-cli)
+    - [CLI Timeout Configuration](#cli-timeout-configuration)
   - [🚀 Build from Source](#-build-from-source)
   - [🧬 Auto Extraction](#-auto-extraction)
   - [📦 Modules Overview](#-modules-overview)
+  - [🧪 Test Fixture Server (MockSite)](#-test-fixture-server-mocksite)
   - [🤝 Support & Community](#-support--community)
   - [📜 Documentation](#-documentation)
   - [🔧 Proxy Configuration](#-proxy-configuration---unblock-website-access)
@@ -216,7 +218,7 @@ browser4-cli domsnapshot export --file=page-snapshot.html
 browser4-cli domsnapshot summary
 ```
 
-For the full command reference, X-SQL query examples, and error handling, see the [DOM Snapshot reference](cli/skill/references/domsnapshot.md).
+For the full command reference, X-SQL query examples, and error handling, see the [DOM Snapshot reference](skill/references/domsnapshot.md).
 
 ### Agent and Swarm CLI
 
@@ -431,15 +433,18 @@ curl -L -o PulsarRPAPro.jar https://github.com/platonai/PulsarRPAPro/releases/do
 
 ## 📦 Modules Overview
 
-| Module             | Description                                             |
-|--------------------|---------------------------------------------------------|
-| `cli`              | CLI in Rust that supports SKILLS                        |
-| `browser4-core`    | Core engine: sessions, scheduling, DOM, browser control |
-| `browser4-agentic` | Agent implementation, MCP, and skill registration       |
-| `browser4-rest`    | Spring Boot REST layer & command endpoints              |
-| `browser4-standalone`  | Agent & crawler orchestration with product packaging    |
-| `examples`         | Runnable examples and demos                             |
-| `browser4-tests`   | E2E & heavy integration & scenario tests                |
+| Module | Description |
+|--------|-------------|
+| `cli` | CLI in Rust + SKILL assets (`cli/browser4-cli`, `cli/skill`) |
+| `browser4-core` | Core engine: sessions, scheduling, DOM, browser control |
+| `browser4-dependencies` | BOM and dependency version alignment |
+| `browser4-agent-tools` | Advanced agent tools for scraping, crawling, and stateful page interaction |
+| `browser4-agentic` | Agent implementation, MCP, and skill registration |
+| `browser4-boot` | Spring Boot application bootstrap and launcher |
+| `browser4-rest` | Spring Boot REST layer & command endpoints |
+| `browser4-apps` | Product packaging: standalone launcher and runtime bundle (`browser4-apps/browser4-standalone`, `browser4-apps/browser4-bundle`) |
+| `examples` | Runnable examples and demos (`examples/browser4-examples`) |
+| `browser4-tests` | E2E & heavy integration & scenario tests (`browser4-tests/pulsar-e2e-tests`, `browser4-tests/pulsar-it-tests`, `browser4-tests/browser4-rest-tests`) |
 
 ---
 
@@ -499,7 +504,7 @@ Join our community for support, feedback, and collaboration!
 - **Issue Tracker**: Report bugs or request features.
 - **Social Media**: Follow us for updates and news.
 
-We welcome contributions! See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
+We welcome contributions! See the [GitHub Issues](https://github.com/platonai/browser4/issues) and [Pull Requests](https://github.com/platonai/browser4/pulls) pages to get started.
 
 ---
 

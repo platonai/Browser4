@@ -17,9 +17,11 @@
     - [CLI 与技能 (SKILLS)](#cli-与技能-skills)
     - [DOM 快照](#dom-快照)
     - [Agent 和 Swarm CLI](#agent-和-swarm-cli)
+    - [CLI 超时配置](#cli-超时配置)
   - [🚀 从源码构建](#-从源码构建)
   - [🧬 自动提取](#-自动提取)
   - [📦 模块概览](#-模块概览)
+  - [🧪 测试夹具服务器（MockSite）](#-测试夹具服务器mocksite)
   - [🤝 支持与社区](#-支持与社区)
   - [📜 文档](#-文档)
   - [🔧 代理配置](#-代理配置---解锁网站访问)
@@ -171,26 +173,6 @@ Browser4 CLI 专为 AI 智能体通过技能 (SKILLS) + CLI 使用而设计。
 
 [SKILL.md](skill/SKILL.md)
 
-### CLI 超时配置
-
-某些命令可能比默认的 HTTP 超时时间更长，尤其是文本输入（`type`/`fill`）和页面导航（`goto`）。使用以下环境变量按命令类别调整超时时间：
-
-| 变量 | 默认值 | 适用命令 |
-|------|--------|----------|
-| `BROWSER4_CLI_HTTP_TIMEOUT_SECS` | `30` | 大多数命令（`click`、`snapshot`、`screenshot` 等） |
-| `BROWSER4_CLI_INPUT_TIMEOUT_SECS` | `90` | 文本输入命令（`type`、`fill`、`fill-form`） |
-| `BROWSER4_CLI_NAVIGATION_TIMEOUT_SECS` | `120` | 导航命令（`goto`、`reload`、`go-back`、`go-forward`） |
-
-文本输入命令使用较长的默认超时时间，因为在表单字段中输入——尤其是在复杂页面上——可能比简单的交互更慢。如果文本输入命令超时，操作**可能已部分执行**。超时后，请使用 `snapshot` 或 `get-text` 验证字段内容，然后再重试。
-
-```shell
-# 针对重型页面增加输入超时时间
-export BROWSER4_CLI_INPUT_TIMEOUT_SECS=180
-
-# 针对慢速网站增加导航超时时间
-export BROWSER4_CLI_NAVIGATION_TIMEOUT_SECS=300
-```
-
 ### DOM 快照
 
 `domsnapshot` 系列命令提供**静态 DOM 提取** — 将当前页面的原始 HTML 捕获为可查询的文档对象模型。与交互式的 `snapshot` 命令（捕获无障碍树引用用于 `click`/`type`/`fill`）不同，`domsnapshot` 使用 CSS 选择器和 X-SQL 查询提取结构化数据，无需交互式浏览器会话。
@@ -232,7 +214,7 @@ browser4-cli domsnapshot export --file=page-snapshot.html
 browser4-cli domsnapshot summary
 ```
 
-完整命令参考、X-SQL 查询示例和错误处理，请参见 [DOM 快照参考](cli/skill/references/domsnapshot.md)。
+完整命令参考、X-SQL 查询示例和错误处理，请参见 [DOM 快照参考](skill/references/domsnapshot.md)。
 
 ### Agent 和 Swarm CLI
 
@@ -321,6 +303,26 @@ browser4-cli swarm query --sql @query.sql --seed-file=./urls.txt --refresh
 - `swarm submit` 和 `swarm query` 都支持 `--seed-file`、`--deadline`、`--expires`、`--refresh`、`--store-content`。
 - 所有 swarm 命令都会返回任务 ID；使用 `swarm status` / `swarm result` 跟踪进度。
 - 在 X-SQL 模板中使用 `@url` — 它会在服务器端替换为目标 URL。
+
+### CLI 超时配置
+
+某些命令可能比默认的 HTTP 超时时间更长，尤其是文本输入（`type`/`fill`）和页面导航（`goto`）。使用以下环境变量按命令类别调整超时时间：
+
+| 变量 | 默认值 | 适用命令 |
+|------|--------|----------|
+| `BROWSER4_CLI_HTTP_TIMEOUT_SECS` | `30` | 大多数命令（`click`、`snapshot`、`screenshot` 等） |
+| `BROWSER4_CLI_INPUT_TIMEOUT_SECS` | `90` | 文本输入命令（`type`、`fill`、`fill-form`） |
+| `BROWSER4_CLI_NAVIGATION_TIMEOUT_SECS` | `120` | 导航命令（`goto`、`reload`、`go-back`、`go-forward`） |
+
+文本输入命令使用较长的默认超时时间，因为在表单字段中输入——尤其是在复杂页面上——可能比简单的交互更慢。如果文本输入命令超时，操作**可能已部分执行**。超时后，请使用 `snapshot` 或 `get-text` 验证字段内容，然后再重试。
+
+```shell
+# 针对重型页面增加输入超时时间
+export BROWSER4_CLI_INPUT_TIMEOUT_SECS=180
+
+# 针对慢速网站增加导航超时时间
+export BROWSER4_CLI_NAVIGATION_TIMEOUT_SECS=300
+```
 
 ---
 
@@ -427,15 +429,18 @@ curl -L -o PulsarRPAPro.jar https://github.com/platonai/PulsarRPAPro/releases/do
 
 ## 📦 模块概览
 
-| 模块                   | 描述                                         |
-|------------------------|----------------------------------------------|
-| `cli`                  | 基于 Rust 的 CLI，支持技能 (SKILLS)            |
-| `browser4-core`        | 核心引擎：会话、调度、DOM、浏览器控制            |
-| `browser4-agentic`     | 智能体实现、MCP 和技能注册                      |
-| `browser4-rest`        | Spring Boot REST 层和命令端点                  |
-| `browser4-standalone`  | 智能体和爬虫编排，包含产品打包                    |
-| `examples`             | 可运行的示例和演示                              |
-| `browser4-tests`       | 端到端测试、重量级集成测试和场景测试              |
+| 模块 | 描述 |
+|------|------|
+| `cli` | 基于 Rust 的 CLI + 技能资源 (`cli/browser4-cli`, `cli/skill`) |
+| `browser4-core` | 核心引擎：会话、调度、DOM、浏览器控制 |
+| `browser4-dependencies` | BOM 与依赖版本对齐 |
+| `browser4-agent-tools` | 高级智能体工具：抓取、爬取和有状态页面交互 |
+| `browser4-agentic` | 智能体实现、MCP 和技能注册 |
+| `browser4-boot` | Spring Boot 应用启动器和引导 |
+| `browser4-rest` | Spring Boot REST 层和命令端点 |
+| `browser4-apps` | 产品打包：独立启动器和运行时包 (`browser4-apps/browser4-standalone`, `browser4-apps/browser4-bundle`) |
+| `examples` | 可运行的示例和演示 (`examples/browser4-examples`) |
+| `browser4-tests` | 端到端测试、重量级集成测试和场景测试 (`browser4-tests/pulsar-e2e-tests`, `browser4-tests/pulsar-it-tests`, `browser4-tests/browser4-rest-tests`) |
 
 ---
 
@@ -495,7 +500,7 @@ python3 -m http.server 18080
 - **Issue Tracker**：报告 bug 或请求新功能。
 - **社交媒体**：关注我们以获取更新和新闻。
 
-我们欢迎贡献！详情请参见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+我们欢迎贡献！请通过 [GitHub Issues](https://github.com/platonai/browser4/issues) 和 [Pull Requests](https://github.com/platonai/browser4/pulls) 页面参与。
 
 ---
 
