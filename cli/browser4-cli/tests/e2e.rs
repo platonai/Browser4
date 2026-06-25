@@ -3348,6 +3348,8 @@ fn excluded_commands(include_batch_command: bool) -> HashSet<&'static str> {
         "domsnapshot-get",
         "domsnapshot-query",
         "domsnapshot-export",
+        "domsnapshot-summary",
+        "generate-locator",
         // Uninstall requires npm/cargo on $PATH; not exercised in e2e.
         "uninstall",
     ]

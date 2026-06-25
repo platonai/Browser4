@@ -77,8 +77,8 @@ Read https://browser4.ioSKILL.md and install browser4-cli for browser automation
 4. write the result to a markdown file
 "@
 
-copilot -p "$prompt"
-# claude -p "$prompt"
+# copilot -p "$prompt"
+claude --dangerously-skip-permissions -p "$prompt"
 ```
 
 ### CLI & SKILLS

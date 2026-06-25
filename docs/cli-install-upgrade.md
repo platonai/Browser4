@@ -134,9 +134,9 @@ browser4-cli uninstall [--yes|-y]
 
 ### What it does
 
-1. **Removes npm/cargo packages** — If `browser4-cli` was installed globally via
-   npm (`npm uninstall -g browser4-cli`) or Cargo (`cargo uninstall
-   browser4-cli`), the command runs those package-manager uninstalls first.
+1. **Removes npm packages** — If `browser4-cli` was installed globally via
+   npm (`npm uninstall -g browser4-cli`), the command runs that
+   package-manager uninstall first.
 2. **Removes all runtime data** — Deletes the entire runtime data directory
    (`{runtime-data-dir}/`), including all versioned runtime bundles, the
    `current.tag` marker, and the mirror configuration.
@@ -429,5 +429,5 @@ to PowerShell's `Invoke-WebRequest` which uses the WinINET proxy stack.
 ## See also
 
 - [Standalone CLI Installer Scripts](cli-standalone-install.md) — How to
-  bootstrap the `browser4-cli` binary itself (without npm/Cargo/Homebrew).
+  bootstrap the `browser4-cli` binary itself (without npm).
 - [CLI README](../cli/README.md) — Full command reference for the CLI.

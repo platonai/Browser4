@@ -52,7 +52,6 @@ open class LoadOptions(
     var referrer: String? = null,
 ) : PulsarOptions(argv) {
 
-
     /**
      * Represents the type of content being crawled, such as an article, product, or hotel.
      * This is used for classifying and applying specialized processing to different content types.
