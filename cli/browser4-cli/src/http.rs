@@ -8,10 +8,12 @@ use crate::state::resolve_ref;
 const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 30;
 const NAVIGATION_REQUEST_TIMEOUT_SECS: u64 = 120;
 const TEXT_INPUT_REQUEST_TIMEOUT_SECS: u64 = 90;
+const AGENT_REQUEST_TIMEOUT_SECS: u64 = 180;
 const BATCH_REQUEST_TIMEOUT_SECS: u64 = 120;
 const DEFAULT_REQUEST_TIMEOUT_ENV: &str = "BROWSER4_CLI_HTTP_TIMEOUT_SECS";
 const NAVIGATION_REQUEST_TIMEOUT_ENV: &str = "BROWSER4_CLI_NAVIGATION_TIMEOUT_SECS";
 const TEXT_INPUT_REQUEST_TIMEOUT_ENV: &str = "BROWSER4_CLI_INPUT_TIMEOUT_SECS";
+const AGENT_REQUEST_TIMEOUT_ENV: &str = "BROWSER4_CLI_AGENT_TIMEOUT_SECS";
 
 fn timeout_secs_from_env(env_key: &str, default_secs: u64) -> u64 {
     std::env::var(env_key)
@@ -42,6 +44,13 @@ fn text_input_request_timeout() -> std::time::Duration {
     ))
 }
 
+fn agent_request_timeout() -> std::time::Duration {
+    std::time::Duration::from_secs(timeout_secs_from_env(
+        AGENT_REQUEST_TIMEOUT_ENV,
+        AGENT_REQUEST_TIMEOUT_SECS,
+    ))
+}
+
 fn is_navigation_tool(tool: &str) -> bool {
     matches!(
         tool,
@@ -66,11 +75,17 @@ fn is_text_input_tool(tool: &str) -> bool {
     )
 }
 
+fn is_agent_tool(tool: &str) -> bool {
+    matches!(tool, "agent_extract" | "agent_summarize")
+}
+
 fn timeout_for_tool(tool: &str) -> std::time::Duration {
     if is_navigation_tool(tool) || is_navigation_triggering_tool(tool) {
         navigation_request_timeout()
     } else if is_text_input_tool(tool) {
         text_input_request_timeout()
+    } else if is_agent_tool(tool) {
+        agent_request_timeout()
     } else {
         default_request_timeout()
     }
@@ -203,6 +218,13 @@ fn format_mcp_transport_error(
                 "\nNote: Click/press actions may trigger page navigation that succeeds \
                  despite the timeout. Check the current page with `snapshot` to verify \
                  whether the action completed.",
+            );
+        }
+        if is_agent_tool(tool) {
+            msg.push_str(
+                "\nNote: AI-powered agent operations (extract/summarize) may take \
+                 several minutes on large pages. Increase the timeout with the \
+                 BROWSER4_CLI_AGENT_TIMEOUT_SECS environment variable.",
             );
         }
         msg
@@ -703,6 +725,9 @@ mod tests {
         assert_eq!(timeout_for_tool("browser_type").as_secs(), 11);
         assert_eq!(timeout_for_tool("browser_fill_form").as_secs(), 11);
         assert_eq!(timeout_for_tool("page_title").as_secs(), 3);
+        // Agent tools use their own 180s default when the env var is not set
+        assert_eq!(timeout_for_tool("agent_extract").as_secs(), 180);
+        assert_eq!(timeout_for_tool("agent_summarize").as_secs(), 180);
     }
 
     #[test]
@@ -739,6 +764,32 @@ mod tests {
         assert!(!is_navigation_triggering_tool("browser_navigate"));
         assert!(!is_navigation_triggering_tool("browser_type"));
         assert!(!is_navigation_triggering_tool("page_title"));
+    }
+
+    #[test]
+    fn test_is_agent_tool_detection() {
+        assert!(is_agent_tool("agent_extract"));
+        assert!(is_agent_tool("agent_summarize"));
+        assert!(!is_agent_tool("browser_navigate"));
+        assert!(!is_agent_tool("page_title"));
+    }
+
+    #[test]
+    fn test_agent_tool_timeout_uses_custom_env() {
+        let _env_lock = TIMEOUT_ENV_MUTEX
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        std::env::set_var(AGENT_REQUEST_TIMEOUT_ENV, "240");
+        // Also set a low default so we can confirm agent tools don't use it
+        std::env::set_var(DEFAULT_REQUEST_TIMEOUT_ENV, "10");
+
+        assert_eq!(timeout_for_tool("agent_extract").as_secs(), 240);
+        assert_eq!(timeout_for_tool("agent_summarize").as_secs(), 240);
+        // Non-agent tools still use the default
+        assert_eq!(timeout_for_tool("page_title").as_secs(), 10);
+
+        std::env::remove_var(AGENT_REQUEST_TIMEOUT_ENV);
+        std::env::remove_var(DEFAULT_REQUEST_TIMEOUT_ENV);
     }
 
     #[test]
@@ -818,6 +869,30 @@ mod tests {
         assert!(
             !error.contains("Check the current page with `snapshot`"),
             "Should NOT contain snapshot suggestion for page_title, got: {error}"
+        );
+    }
+
+    #[test]
+    fn test_agent_tool_timeout_error_includes_env_var_note() {
+        let server_url = spawn_hanging_server();
+        let error = format_mcp_transport_error(
+            "agent_extract",
+            "http://localhost:8182/mcp/call-tool",
+            &json!({ "instruction": "product name, price" }),
+            Some(std::time::Duration::from_secs(180)),
+            &reqwest::blocking::Client::new()
+                .post(server_url)
+                .timeout(std::time::Duration::from_millis(1))
+                .send()
+                .expect_err("should time out"),
+        );
+        assert!(
+            error.contains("HTTP request timed out"),
+            "Expected timeout prefix, got: {error}"
+        );
+        assert!(
+            error.contains("BROWSER4_CLI_AGENT_TIMEOUT_SECS"),
+            "Expected env var suggestion for agent tool, got: {error}"
         );
     }
 

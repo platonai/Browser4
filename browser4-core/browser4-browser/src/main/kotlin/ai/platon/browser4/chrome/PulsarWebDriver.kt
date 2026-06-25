@@ -342,8 +342,7 @@ open class PulsarWebDriver constructor(
         val callable = functionDeclaration.trim().removeSuffix(";").trim()
         return """
             function() {
-                const __browser4Element = this;
-                return ($callable).call(__browser4Element, __browser4Element);
+                return ($callable).call(this, this);
             }
         """.trimIndent()
     }
@@ -398,9 +397,7 @@ open class PulsarWebDriver constructor(
     }
 
     override suspend fun currentUrl(): String {
-        val mainFrameUrl = evaluate("document.URL", navigateUrl)
-        navigateUrl = mainFrameUrl ?: navigateUrl
-        return navigateUrl ?: userTypedUrl ?: ""
+        return evaluate("document.URL", navigateUrl ?: userTypedUrl ?: "")
     }
 
     @Throws(WebDriverException::class)
@@ -1110,8 +1107,9 @@ function() {
     override suspend fun selectAttributeAll(selector: String, attrName: String, start: Int, limit: Int): List<String> {
         val end = start + limit
         val safeSelector = page.dom.normalizeSelector(selector, true) ?: selector
+        val encodedAttrName = jacksonObjectMapper().writeValueAsString(attrName)
 
-        val expression = "__pulsar_utils__.selectAttributeAll('$safeSelector', '$attrName', $start, $end)"
+        val expression = "__pulsar_utils__.selectAttributeAll('$safeSelector', $encodedAttrName, $start, $end)"
         val json = evaluate(expression)?.toString() ?: return listOf()
         return jacksonObjectMapper().readValue(json)
     }
@@ -1119,20 +1117,25 @@ function() {
     @Throws(WebDriverException::class)
     override suspend fun setAttribute(selector: String, attrName: String, attrValue: String) {
         val safeSelector = page.dom.normalizeSelector(selector, true) ?: selector
-        evaluate("__pulsar_utils__.setAttribute('$safeSelector', '$attrName', '$attrValue')")
+        val encodedName = jacksonObjectMapper().writeValueAsString(attrName)
+        val encodedValue = jacksonObjectMapper().writeValueAsString(attrValue)
+        evaluate("__pulsar_utils__.setAttribute('$safeSelector', $encodedName, $encodedValue)")
     }
 
     @Throws(WebDriverException::class)
     override suspend fun setAttributeAll(selector: String, attrName: String, attrValue: String) {
         val safeSelector = page.dom.normalizeSelector(selector, true) ?: selector
-        evaluate("__pulsar_utils__.setAttributeAll('$safeSelector', '$attrName', '$attrValue')")
+        val encodedName = jacksonObjectMapper().writeValueAsString(attrName)
+        val encodedValue = jacksonObjectMapper().writeValueAsString(attrValue)
+        evaluate("__pulsar_utils__.setAttributeAll('$safeSelector', $encodedName, $encodedValue)")
     }
 
     // --------------------------- Property helpers ---------------------------
     @Throws(WebDriverException::class)
     override suspend fun selectFirstPropertyValueOrNull(selector: String, propName: String): String? {
         val safeSelector = page.dom.normalizeSelector(selector, true) ?: selector
-        return evaluateValue("__pulsar_utils__.selectFirstPropertyValue('$safeSelector', '$propName')")?.toString()
+        val encodedPropName = jacksonObjectMapper().writeValueAsString(propName)
+        return evaluateValue("__pulsar_utils__.selectFirstPropertyValue('$safeSelector', $encodedPropName)")?.toString()
     }
 
     @Throws(WebDriverException::class)
@@ -1141,7 +1144,8 @@ function() {
     ): List<String> {
         val end = start + limit
         val safeSelector = page.dom.normalizeSelector(selector, true) ?: selector
-        val expression = "__pulsar_utils__.selectPropertyValueAll('$safeSelector', '$propName', $start, $end)"
+        val encodedPropName = jacksonObjectMapper().writeValueAsString(propName)
+        val expression = "__pulsar_utils__.selectPropertyValueAll('$safeSelector', $encodedPropName, $start, $end)"
         val json = evaluate(expression)?.toString() ?: return listOf()
         return jacksonObjectMapper().readValue(json)
     }
@@ -1149,25 +1153,32 @@ function() {
     @Throws(WebDriverException::class)
     override suspend fun setProperty(selector: String, propName: String, propValue: String) {
         val safeSelector = page.dom.normalizeSelector(selector, true) ?: selector
-        evaluate("__pulsar_utils__.setProperty('$safeSelector', '$propName', '$propValue')")
+        val encodedName = jacksonObjectMapper().writeValueAsString(propName)
+        val encodedValue = jacksonObjectMapper().writeValueAsString(propValue)
+        evaluate("__pulsar_utils__.setProperty('$safeSelector', $encodedName, $encodedValue)")
     }
 
     @Throws(WebDriverException::class)
     override suspend fun setPropertyAll(selector: String, propName: String, propValue: String) {
         val safeSelector = page.dom.normalizeSelector(selector, true) ?: selector
-        evaluate("__pulsar_utils__.setPropertyAll('$safeSelector', '$propName', '$propValue')")
+        val encodedName = jacksonObjectMapper().writeValueAsString(propName)
+        val encodedValue = jacksonObjectMapper().writeValueAsString(propValue)
+        evaluate("__pulsar_utils__.setPropertyAll('$safeSelector', $encodedName, $encodedValue)")
     }
 
     @Throws(WebDriverException::class)
     override suspend fun clickTextMatches(selector: String, pattern: String, count: Int) {
         val safeSelector = page.dom.normalizeSelector(selector, true) ?: selector
-        evaluate("__pulsar_utils__.clickTextMatches('$safeSelector', '$pattern')")
+        val encodedPattern = jacksonObjectMapper().writeValueAsString(pattern)
+        evaluate("__pulsar_utils__.clickTextMatches('$safeSelector', $encodedPattern)")
     }
 
     @Throws(WebDriverException::class)
     override suspend fun clickMatches(selector: String, attrName: String, pattern: String, count: Int) {
         val safeSelector = page.dom.normalizeSelector(selector, true) ?: selector
-        evaluate("__pulsar_utils__.clickMatches('$safeSelector', '$attrName', '$pattern')")
+        val encodedAttrName = jacksonObjectMapper().writeValueAsString(attrName)
+        val encodedPattern = jacksonObjectMapper().writeValueAsString(pattern)
+        evaluate("__pulsar_utils__.clickMatches('$safeSelector', $encodedAttrName, $encodedPattern)")
     }
 
     @Throws(WebDriverException::class)
