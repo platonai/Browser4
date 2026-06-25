@@ -42,7 +42,13 @@ param(
     [switch] $FailFast,
 
     # List discovered tasks and exit.
-    [switch] $List
+    [switch] $List,
+
+    # Run tasks silently (forwarded to run-task.ps1).
+    [switch] $Silent,
+
+    # Skip the browser4-cli version check (forwarded to run-task.ps1).
+    [switch] $SkipVersionCheck
 )
 
 $ErrorActionPreference = 'Stop'
@@ -59,6 +65,12 @@ if ($FailFast) {
 }
 if ($List) {
     $runTestsParams['List'] = $true
+}
+if ($Silent) {
+    $runTestsParams['Silent'] = $true
+}
+if ($SkipVersionCheck) {
+    $runTestsParams['SkipVersionCheck'] = $true
 }
 
 . "$PSScriptRoot/run-tests.ps1" @runTestsParams

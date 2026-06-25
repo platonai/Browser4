@@ -50,7 +50,13 @@ param(
     [switch] $List,
 
     # Run in production mode (browser4-cli instead of cargo run).
-    [switch] $Production
+    [switch] $Production,
+
+    # Run tasks silently (forwarded to run-task.ps1).
+    [switch] $Silent,
+
+    # Skip the browser4-cli version check (forwarded to run-task.ps1).
+    [switch] $SkipVersionCheck
 )
 
 $ErrorActionPreference = 'Stop'
@@ -204,7 +210,18 @@ foreach ($name in $Selected) {
             if ($Production) {
                 $env:BROWSER4CLI_MODE = 'production'
             }
-            & pwsh -NoProfile -ExecutionPolicy Bypass -File $RunnerPath -TaskFile $taskPath
+            $pwshArgs = @(
+                '-NoProfile', '-ExecutionPolicy', 'Bypass',
+                '-File', $RunnerPath,
+                '-TaskFile', $taskPath
+            )
+            if ($Silent) {
+                $pwshArgs += '-Silent'
+            }
+            if ($SkipVersionCheck) {
+                $pwshArgs += '-SkipVersionCheck'
+            }
+            & pwsh @pwshArgs
             $exitCode = $LASTEXITCODE
         } finally {
             Pop-Location

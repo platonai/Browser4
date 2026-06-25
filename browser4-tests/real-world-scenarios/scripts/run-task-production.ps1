@@ -27,7 +27,10 @@ param(
     [Parameter(Mandatory = $true)]
     [string] $TaskFile,
 
-    [switch] $Silent
+    [switch] $Silent,
+
+    # Skip the browser4-cli version check (forwarded to run-task.ps1).
+    [switch] $SkipVersionCheck
 )
 
 $ErrorActionPreference = 'Stop'
@@ -41,6 +44,9 @@ $runTaskParams = @{
 }
 if ($Silent) {
     $runTaskParams['Silent'] = $true
+}
+if ($SkipVersionCheck) {
+    $runTaskParams['SkipVersionCheck'] = $true
 }
 
 . "$PSScriptRoot/run-task.ps1" @runTaskParams

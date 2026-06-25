@@ -540,6 +540,104 @@ function Start-NativeCommand {
     return $exitCode
 }
 
+# ── CLI version check ────────────────────────────────────────────────────────
+
+function Assert-Browser4CliLatest {
+    <#
+    .SYNOPSIS
+        Checks that the installed browser4-cli is at the expected version.
+    .DESCRIPTION
+        Reads the expected version from cli/VERSION-CLI in the repo root and
+        compares it against the installed binary.
+
+        In production mode, runs `browser4-cli --version` to get the installed
+        version.  If it differs from the expected version, writes a prominent
+        warning with upgrade instructions and returns a non-zero exit code so
+        the caller can abort.
+
+        In dev mode, simply reports the expected version (cargo run always
+        builds from the latest source).
+    .PARAMETER Silent
+        Suppress informational messages.  Warnings are still emitted.
+    .OUTPUTS
+        Integer.  Returns 0 when everything is up to date or the check is
+        not applicable; returns 1 when the installed version is outdated.
+    #>
+    param(
+        [switch] $Silent
+    )
+
+    # Read the expected version from cli/VERSION-CLI (the canonical source).
+    $versionCliPath = Join-Path $script:RepoRoot 'cli\VERSION-CLI'
+    if (-not (Test-Path -LiteralPath $versionCliPath -PathType Leaf)) {
+        if (-not $Silent) {
+            Write-Host "WARNING: VERSION-CLI not found at $versionCliPath -- cannot verify CLI version." -ForegroundColor Yellow
+        }
+        return 0
+    }
+
+    $expectedVersion = (Get-Content -LiteralPath $versionCliPath -TotalCount 1).Trim()
+    if (-not $expectedVersion) {
+        if (-not $Silent) {
+            Write-Host "WARNING: VERSION-CLI is empty -- cannot verify CLI version." -ForegroundColor Yellow
+        }
+        return 0
+    }
+
+    # ── Dev mode: cargo run always builds from the latest source ──────────
+    if ($browser4cliMode -ne 'production') {
+        if (-not $Silent) {
+            Write-Host "Dev mode: cargo run builds browser4-cli from source (expected v$expectedVersion)." -ForegroundColor DarkGray
+        }
+        return 0
+    }
+
+    # ── Production mode: check the installed binary ───────────────────────
+    $installedVersion = ''
+    try {
+        $versionOutput = & browser4-cli --version 2>&1 | Out-String
+        if ($versionOutput -match '(\d+\.\d+\.\d+)') {
+            $installedVersion = $Matches[1].Trim()
+        }
+    } catch {
+        Write-Host "WARNING: Could not run 'browser4-cli --version'." -ForegroundColor Yellow
+        Write-Host "  $_" -ForegroundColor DarkGray
+        Write-Host '  Ensure browser4-cli is installed and on your PATH.' -ForegroundColor DarkGray
+        return 0
+    }
+
+    if (-not $installedVersion) {
+        Write-Host "WARNING: Could not determine installed browser4-cli version from output:" -ForegroundColor Yellow
+        Write-Host "  $versionOutput" -ForegroundColor DarkGray
+        return 0
+    }
+
+    if ($installedVersion -eq $expectedVersion) {
+        if (-not $Silent) {
+            Write-Host "browser4-cli v$installedVersion is up to date." -ForegroundColor Green
+        }
+        return 0
+    }
+
+    # Version mismatch — emit a clear warning with upgrade instructions.
+    Write-Host ''
+    Write-Host ('=' * 72) -ForegroundColor Red
+    Write-Host "  browser4-cli is OUTDATED." -ForegroundColor Red
+    Write-Host "  Installed: v$installedVersion" -ForegroundColor Red
+    Write-Host "  Expected:  v$expectedVersion" -ForegroundColor Red
+    Write-Host ('=' * 72) -ForegroundColor Red
+    Write-Host ''
+    Write-Host '  To upgrade, run one of the following from the repo root:' -ForegroundColor Yellow
+    Write-Host ''
+    Write-Host '    cargo install --path cli\browser4-cli --force' -ForegroundColor White
+    Write-Host '    npm install -g' -ForegroundColor White
+    Write-Host ''
+    Write-Host '  Then verify with: browser4-cli --version' -ForegroundColor Yellow
+    Write-Host ''
+
+    return 1
+}
+
 # ── Agent invocation ────────────────────────────────────────────────────────
 
 function Invoke-Agent {
