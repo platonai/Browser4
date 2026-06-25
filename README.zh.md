@@ -380,6 +380,27 @@ export BROWSER4_CLI_NAVIGATION_TIMEOUT_SECS=300
    ./mvnw -DskipTests
    ```
 
+4. **构建 CLI（可选）**
+
+   如果你需要 `browser4-cli` 命令行工具，从 `cli/` 目录构建：
+
+   **使用 pnpm（推荐用于开发）：**
+   ```shell
+   cd cli/browser4-cli
+   pnpm install
+   pnpm build:native
+   pnpm link --global
+   ```
+
+   **直接使用 Cargo：**
+   ```shell
+   cd cli/browser4-cli
+   cargo build --release
+   cargo install --path .
+   ```
+
+   跨平台发布构建请参见 [`cli/scripts/`](cli/scripts/)。完整的 CLI 参考请见 [`cli/README.md`](cli/README.md)。
+
 ---
 
 🎬 YouTube：

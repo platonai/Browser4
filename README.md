@@ -384,6 +384,27 @@ If Chrome is not found, the CLI attempts automatic installation:
    ./mvnw -DskipTests
    ```
 
+4. **Build the CLI (optional)**
+
+   If you need the `browser4-cli` command-line tool, build it from the `cli/` directory:
+
+   **Using pnpm (recommended for development):**
+   ```shell
+   cd cli/browser4-cli
+   pnpm install
+   pnpm build:native
+   pnpm link --global
+   ```
+
+   **Using Cargo directly:**
+   ```shell
+   cd cli/browser4-cli
+   cargo build --release
+   cargo install --path .
+   ```
+
+   For cross-platform release builds, see [`cli/scripts/`](cli/scripts/). For the complete CLI reference, see [`cli/README.md`](cli/README.md).
+
 ---
 
 🎬 YouTube:
