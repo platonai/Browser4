@@ -37,7 +37,11 @@ param(
     [Parameter(Mandatory = $true)]
     [string] $TaskFile,
 
-    [switch] $Silent
+    [switch] $Silent,
+
+    # Skip the browser4-cli version check (useful when intentionally testing
+    # an older version or when the check cannot resolve the version).
+    [switch] $SkipVersionCheck
 )
 
 $ErrorActionPreference = 'Stop'
@@ -100,6 +104,15 @@ if (-not $Silent) {
 # common.ps1 defines $generalPrompt and Invoke-Agent.
 # $browser4cliMode may already be set by a production wrapper.
 . "$PSScriptRoot/common.ps1"
+
+# ── Verify the CLI is up to date ─────────────────────────────────────────────
+if (-not $SkipVersionCheck) {
+    $versionStatus = Assert-Browser4CliLatest -Silent:$Silent
+    if ($versionStatus -ne 0) {
+        Write-Host 'Run with -SkipVersionCheck to bypass this check.' -ForegroundColor DarkGray
+        exit $versionStatus
+    }
+}
 
 # ── Build the full prompt and invoke ──────────────────────────────────────────
 $prompt = $generalPrompt + $taskBody
