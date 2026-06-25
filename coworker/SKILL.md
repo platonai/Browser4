@@ -14,7 +14,7 @@ This repository contains a **file-queue automation system** called **Coworker**.
 ### 1. Main task execution
 
 - **Primary entrypoint:** `./coworker/scripts/coworker.ps1`
-- It ensures the task directories exist, optionally accepts a task file path, moves that file into `coworker/tasks/main/1ready`, generates a descriptive kebab-case filename, moves it to `2working`, runs Copilot, writes logs, then moves the task to `main/3complete` or `5approved`. (`coworker/scripts/coworker.ps1:22-35`, `coworker/scripts/coworker.ps1:82-95`, `coworker/scripts/coworker.ps1:417-500`, `coworker/scripts/coworker.ps1:551-713`)
+- It ensures the task directories exist, optionally accepts a task file path, moves that file into `coworker/tasks/main/1ready`, generates a descriptive kebab-case filename, moves it to `2working`, runs Copilot, writes logs, then moves the task to `main/3done` or `5approved`. (`coworker/scripts/coworker.ps1:22-35`, `coworker/scripts/coworker.ps1:82-95`, `coworker/scripts/coworker.ps1:417-500`, `coworker/scripts/coworker.ps1:551-713`)
 - The prompt given to Copilot explicitly says: **finish the task described in the file, but do not move that task file yourself**. The script handles routing after execution. (`coworker/scripts/coworker.ps1:531-545`)
 
 ### 2. Queue processor / watchdog
@@ -82,10 +82,10 @@ This repository contains a **file-queue automation system** called **Coworker**.
 3. **Rename + start work**: Coworker generates a descriptive kebab-case name and moves the file to `coworker/tasks/main/2working`. (`coworker/scripts/coworker.ps1:417-500`, `coworker/scripts/workers/rename.ps1:30-60`, `coworker/scripts/workers/rename.ps1:153-178`)
 4. **Execute**: Copilot works against the repo; logs are written under `coworker/tasks/300logs/YYYY/MM/DD`. (`coworker/scripts/coworker.ps1:548-552`, `coworker/scripts/coworker.ps1:575-687`)
 5. **Finish**:
-   - normal tasks -> `coworker/tasks/main/3complete/YYYY/MMDD/...`
+   - normal tasks -> `coworker/tasks/main/3done/YYYY/MMDD/...`
    - tasks containing `#auto-approve` -> `coworker/tasks/main/5approved/YYYY/MMDD/...` (`coworker/scripts/coworker.ps1:696-713`, `coworker/README.md:48-55`)
 6. **Approval / push**:
-   - human review can happen in `main/3complete` and optionally `4review`
+   - human review can happen in `main/3done` and optionally `4review`
    - moving a reviewed task to `5approved` causes the next run to move it into `6git-pushed/YYYY/MMDD/...` and invoke git sync. (`coworker/README.md:7-12`, `coworker/scripts/coworker.ps1:348-399`)
 7. **Failure path**: stuck/aborted tasks can end up in `coworker/tasks/main/3aborted`. (`coworker/scripts/process-coworker-queue.ps1:133-174`)
 
@@ -174,5 +174,5 @@ If you need to use Coworker safely, the normal path is:
 1. draft a Markdown task
 2. queue it in `coworker/tasks/main/1ready`
 3. run `process-coworker-queue.ps1 -Once` or the scheduler
-4. inspect `main/3complete` and `300logs`
+4. inspect `main/3done` and `300logs`
 5. only then move the task to `5approved` if you want automated commit/push

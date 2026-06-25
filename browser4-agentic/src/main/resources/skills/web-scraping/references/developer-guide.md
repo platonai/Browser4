@@ -199,6 +199,5 @@ fun testWithRegistry() = runBlocking {
 
 ## Related Resources
 
-- [Skills Framework Documentation](/docs/skills-framework.md)
 - [CSS Selector Reference](https://developer.mozilla.org/en-US/docs/Web/CSS/CSS_Selectors)
 - [Browser4 Documentation](/README.md)

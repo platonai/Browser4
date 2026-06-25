@@ -386,6 +386,5 @@ SELECT * FROM loadOptions();
 - [X-SQL Complete Function Reference](/docs/x-sql.md)
 - [X-SQL Skill Specification](../SKILL.md)
 - [Query Templates](../assets/query-templates.md)
-- [Skills Framework Documentation](/docs/skills-framework.md)
 - [PulsarSession API](https://github.com/apache/pulsar)
 - [Jsoup CSS Selector Reference](https://jsoup.org/cookbook/extracting-data/selector-syntax)

@@ -592,4 +592,3 @@ Checks that the X-SQL engine is available and the H2 database is initialized.
 - [Web Scraping Skill](../web-scraping/SKILL.md) — Browser-automation based scraping
 - [Form Filling Skill](../form-filling/SKILL.md) — Form automation
 - [Data Validation Skill](../data-validation/SKILL.md) — Data quality checks
-- [Skills Framework Documentation](/docs/skills-framework.md)

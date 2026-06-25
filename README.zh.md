@@ -71,7 +71,7 @@ browser4-cli install
 
 ```shell
 $prompt = @"
-Read https://browser4.ioSKILL.md and install browser4-cli for browser automation to perform the following task:
+Read https://browser4.io/SKILL.md and install browser4-cli for browser automation to perform the following task:
 
 1. go to amazon.com
 2. search for pens to draw on whiteboards

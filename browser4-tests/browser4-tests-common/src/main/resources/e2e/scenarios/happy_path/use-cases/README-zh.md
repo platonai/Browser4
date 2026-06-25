@@ -49,13 +49,10 @@
 
 ## 运行测试
 
-这些用例通常由仓库脚本执行（脚本路径以仓库为准）：
+这些用例由 Browser4 后端的内部 agent 测试基础设施使用。独立的 CLI 测试运行器已规划但尚未实现。
 
-- 运行全部用例：`bin/tests-production/test-cases/run-e2e-agents.sh`
-- 按编号选择用例：`bin/tests-production/test-cases/run-e2e-agents.sh -t "01,02,03"`
-- 输出更详细日志：`bin/tests-production/test-cases/run-e2e-agents.sh --verbose`
-
-> Windows 上如果你在 PowerShell 里运行 `.sh` 脚本，请确保已安装可用的 bash 环境（如 Git Bash/WSL）。
+如需从命令行直接运行 agent 驱动的场景测试，请参见
+[`browser4-tests/real-world-scenarios/`](../../../../../../../../../browser4-tests/real-world-scenarios/README.md)。
 
 ## 新增用例
 
@@ -67,4 +64,4 @@
 
 ## 参考资料
 
-- 本仓库的 agent 用例设计参考：`docs-dev/agentic/use-cases.md`
+- 这些用例源自 Browser4 agent 测试设计文档。

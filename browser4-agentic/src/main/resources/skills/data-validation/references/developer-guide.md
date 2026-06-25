@@ -291,4 +291,3 @@ object TestDataBuilder {
 
 - [Form Filling Skill](../form-filling/SKILL.md)
 - [Web Scraping Skill](../web-scraping/SKILL.md)
-- [Skills Framework Documentation](/docs/skills-framework.md)

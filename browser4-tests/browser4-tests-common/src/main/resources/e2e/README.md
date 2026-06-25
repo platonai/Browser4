@@ -221,7 +221,7 @@ e2e/
 └── metrics/          # Agent KPI（待填充）
 ```
 
-> **当前状态 (2026-06)**：`tasks/` 和 `scenarios/happy_path/use-cases/` 目录已填充了具体的任务定义和可执行用例。其余目录为占位状态（`.gitkeep`），等待后续实现。测试运行脚本为 `bin/tests-production/test-cases/run-e2e-agents.sh`，支持按编号选择用例执行。关于用例格式、运行方式、新增用例的详细说明，请参见 `scenarios/happy_path/use-cases/README.md`。
+> **当前状态 (2026-06)**：`tasks/` 和 `scenarios/happy_path/use-cases/` 目录已填充了具体的任务定义和可执行用例。其余目录为占位状态（`.gitkeep`），等待后续实现。这些用例由 Browser4 后端的内部 agent 测试基础设施使用；独立的 CLI 测试运行器已规划但尚未实现。关于用例格式、新增用例的详细说明，请参见 `scenarios/happy_path/use-cases/README.md`。
 
 ---
 

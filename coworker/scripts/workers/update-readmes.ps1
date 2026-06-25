@@ -91,7 +91,7 @@ $builtinExcludeGlobs = @(
     '**/.git/**'            # git internals
     '**/logs/**'            # log directories
     '**/.claude/**'         # Claude Code harness
-    '**/coworker/tasks/main/3complete/**'
+    '**/coworker/tasks/main/3done/**'
     '**/coworker/tasks/main/5approved/**'
     '**/coworker/tasks/main/6git-pushed/**'
     '**/coworker/tasks/700archive/**'

@@ -9,9 +9,9 @@ AI 协作助手是一个代理（agent），可协助你在指定仓库中完成
 1. 运行 `coworker-scheduler.ps1` 以启动定时自动化
 2. 在 `0draft` 下起草任务（或者任何地方）
 3. 将已完成草稿的任务复制到 `1ready` 目录以执行
-4. 执行后，您可以在 `main/3complete` 中找到结果，在 `coworker/tasks/300logs` 中找到详细日志
+4. 执行后，您可以在 `main/3done` 中找到结果，在 `coworker/tasks/300logs` 中找到详细日志
 5. 如有需要，复核结果
-6. 将任务文件从 `main/3complete` 移动到 `5approved` 以便触发 git 推送
+6. 将任务文件从 `main/3done` 移动到 `main/5approved` 以便触发 git 推送
 
 ## 工作流程
 
@@ -25,7 +25,7 @@ AI 协作助手是一个代理（agent），可协助你在指定仓库中完成
 | 队列   | `1ready`     | 准备执行时移入此文件夹   |
 | 规划   | `200plan`      | 代理规划阶段（自动管理） |
 | 执行   | `2working`     | 代理正在执行任务         |
-| 完成   | `main/3complete`  | 执行结束，可审查更改     |
+| 完成   | `main/3done`      | 执行结束，可审查更改     |
 | 审查   | `4review`      | 可选的人工审查阶段       |
 | 已批准 | `5approved`    | 已批准任务，等待提交推送 |
 | 已推送 | `6git-pushed`  | 已成功提交并推送         |
@@ -59,7 +59,7 @@ AI 协作助手是一个代理（agent），可协助你在指定仓库中完成
    # 或单次执行：
    .\coworker\scripts\coworker.ps1
    ```
-4. **审查** — 任务执行后会进入 `main/3complete`，可审查更改。
+4. **审查** — 任务执行后会进入 `main/3done`，可审查更改。
 5. **批准** — 将任务移至 `5approved`，定时任务会自动提交并推送。
 
 ## 前置条件
@@ -109,7 +109,10 @@ AI 协作助手是一个代理（agent），可协助你在指定仓库中完成
 | `draft-refinement` | `workers/refine-drafts.ps1` | `0draft/refine/1ready` |
 | `commit-github-issues` | `workers/commit-github-issues.ps1` | `200issues/github/commit/ready` |
 | `refine-github-issues` | `workers/refine-github-issues.ps1` | `200issues/draft/refine/0ready` |
-| `process-task-source` | `process-task-source.ps1` | （默认禁用） |
+| `fetch-github-issues` | `workers/fetch-github-issues.ps1` | （始终运行，每 10 分钟） |
+| `triage-github-issues` | `workers/triage-github-issues.ps1` | `0draft/issues/github`（每 30 分钟） |
+| `organize-task-files` | `workers/organize-task-files.ps1` | （始终运行，每 5 分钟） |
+| `update-readmes` | `workers/update-readmes.ps1` | （始终运行，每 1 小时） |
 
 ## 队列处理脚本
 

@@ -6,7 +6,7 @@ Production wrapper for run-task.ps1 — tests globally installed browser4-cli, n
 .DESCRIPTION
 Sets $browser4cliMode = 'production' before invoking run-task.ps1 so that common.ps1
 resolves the CLI as `browser4-cli help` and loads the skill reference from the public
-URL (https://browser4.ioSKILL.md) instead of the local dev paths.
+URL (https://browser4.io/SKILL.md) instead of the local dev paths.
 
 Replaces the per-task wrapper scripts previously in browser4-tests/real-world-scenarios/.
 Task files remain canonical in browser4-tests/real-world-scenarios/tasks/.

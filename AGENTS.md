@@ -88,14 +88,15 @@ mvnw.cmd -q -DskipTests
 |----------------------------------------|-------------|
 | `browser4-core`                        | Core engine: sessions, scheduling, DOM, browser control |
 | `browser4-dependencies`                | BOM and dependency alignment |
-| `browser4-tools`                       | Operational tools and launch helpers |
+| `browser4-agent-tools`                 | Advanced agent tools for scraping, crawling, and stateful page interaction |
 | `browser4-agentic`                     | AI agents implementation, MCP, skills registration |
+| `browser4-boot`                        | Spring Boot application bootstrap and launcher |
 | `browser4-rest`                        | Spring Boot REST layer & command endpoints |
-| `cli/*`                                | Browser4 CLI + skill assets (`cli/browser4-cli`, `skill/`) |
-| `browser4-apps/*`                       | Product packaging and the unified launcher (`browser4-apps/browser4-standalone`, `target/Browser4.jar`) |
-| `browser4-core/browser4-plugins/*`     | Optional plugins: `browser4-captcha` (CAPTCHA solving), activated by classpath presence |
+| `cli/*`                                | CLI in Rust + skill assets (`cli/browser4-cli`, `skill/`) |
+| `browser4-apps/*`                      | Product packaging: standalone launcher and runtime bundle (`browser4-apps/browser4-standalone`, `browser4-apps/browser4-bundle`) |
+| `browser4-core/browser4-plugins/*`     | Optional plugins: `browser4-captcha` (CAPTCHA solving), `browser4-parse` (HTML/DOM parsing), `browser4-protocol` (CDP), activated by classpath presence |
 | `examples/*`                           | Runnable examples (`examples/browser4-examples`) |
-| `browser4-tests`                       | E2E & heavy integration & scenario tests |
+| `browser4-tests`                       | E2E & heavy integration & scenario tests (`browser4-tests/pulsar-e2e-tests`, `browser4-tests/pulsar-it-tests`, `browser4-tests/browser4-rest-tests`) |
 | `browser4-tests/browser4-tests-common` | Shared test base classes and utilities |
 
 ## Optional/Pluggable Modules
@@ -580,4 +581,4 @@ Before submitting changes, verify:
 
 ---
 
-*Last updated: 2026-05-17*
+*Last updated: 2026-06-25*

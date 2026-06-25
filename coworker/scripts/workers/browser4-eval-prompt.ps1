@@ -12,7 +12,7 @@
     The prompt adapts to the environment automatically:
 
       - Dev (default):  `cd cli/browser4-cli && cargo run -- help`  + local `skill/SKILL.md`.
-      - Production:      `browser4-cli help` + `https://browser4.ioSKILL.md`.
+      - Production:      `browser4-cli help` + `https://browser4.io/SKILL.md`.
 
     Set $browser4cliMode = 'production' BEFORE calling New-Browser4EvalPrompt
     to switch to production mode.
@@ -66,7 +66,7 @@ function New-Browser4EvalPrompt {
 
     .PARAMETER Mode
         'dev' (default) uses `cd cli/browser4-cli && cargo run -- help` and local `skill/SKILL.md`.
-        'production' uses `browser4-cli help` and `https://browser4.ioSKILL.md`.
+        'production' uses `browser4-cli help` and `https://browser4.io/SKILL.md`.
 
         When omitted, the caller may also set `$script:browser4cliMode` before
         dot-sourcing this module.
@@ -96,7 +96,7 @@ function New-Browser4EvalPrompt {
 
     if ($effectiveMode -eq 'production') {
         $helpCmd   = '`browser4-cli help`'
-        $skillPath = 'https://browser4.ioSKILL.md'
+        $skillPath = 'https://browser4.io/SKILL.md'
     } else {
         $helpCmd   = '`cd cli/browser4-cli && cargo run -- help`'
         $skillPath = '`skill/SKILL.md`'

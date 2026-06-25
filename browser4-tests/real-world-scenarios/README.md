@@ -84,7 +84,7 @@ This replaces the per-task wrapper scripts previously in
 `browser4-tests/real-world-scenarios/`. The production wrapper sets
 `$browser4cliMode = 'production'` so `common.ps1` resolves the CLI as
 `browser4-cli help` and loads the skill reference from
-`https://browser4.ioSKILL.md`.
+`https://browser4.io/SKILL.md`.
 
 ## Script reference
 

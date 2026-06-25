@@ -154,7 +154,7 @@ Write-Host '━━━ Mode Detection: Production ━━━' -ForegroundColor Yel
 
     Write-TestGroup '$skillPath in production mode'
     Assert-Equal 'is exactly the remote URL' `
-        'https://browser4.ioSKILL.md' $skillPath
+        'https://browser4.io/SKILL.md' $skillPath
     Assert-Contains 'contains https://' $skillPath 'https://'
     Assert-Contains 'contains browser4.io' $skillPath 'browser4.io'
 }
@@ -187,7 +187,7 @@ Write-Host '━━━ Mode Detection: Edge Cases ━━━' -ForegroundColor Yel
     Assert-Equal "'Production' (capital P) matches 'production' (case-insensitive -eq)" `
         '`browser4-cli help`' $helpCmd
     Assert-Equal '$skillPath is production URL' `
-        'https://browser4.ioSKILL.md' $skillPath
+        'https://browser4.io/SKILL.md' $skillPath
 }
 
 & {

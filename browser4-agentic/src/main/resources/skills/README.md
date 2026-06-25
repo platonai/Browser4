@@ -276,6 +276,6 @@ fun testMySkill() = runBlocking {
 
 ## Resources
 
-- [Project Documentation](../../../../../../docs/)
+- [Project Documentation](../../../../../docs/)
 - Skill source implementations in `src/main/kotlin/ai/platon/pulsar/agentic/skills/`
 - Test resources in `browser4-tests/browser4-tests-common/src/main/resources/static/`

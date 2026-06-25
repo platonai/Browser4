@@ -8,7 +8,7 @@ Dot-source this module to reuse the shared usability-evaluation prompt and the
 standard agent invocation.  The prompt adapts to the environment automatically:
 
   - Dev (default):  `cargo run -- help`  + local `skill/SKILL.md`.
-  - Production:      `browser4-cli help` + `https://browser4.ioSKILL.md`.
+  - Production:      `browser4-cli help` + `https://browser4.io/SKILL.md`.
 
 Set `$browser4cliMode = 'production'` BEFORE dot-sourcing this module to switch
 to production mode.
@@ -38,7 +38,7 @@ if (-not $browser4cliMode -and $env:BROWSER4CLI_MODE) {
 # $generalPrompt is defined below.
 if ($browser4cliMode -eq 'production') {
     $helpCmd   = '`browser4-cli help`'
-    $skillPath = 'https://browser4.ioSKILL.md'
+    $skillPath = 'https://browser4.io/SKILL.md'
 } else {
     $helpCmd   = '`cargo run -- help`'
     $skillPath = '`skill/SKILL.md`'
