@@ -177,6 +177,14 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push(
             "  - When --file is used, the expression positional argument is optional.".to_string(),
         );
+        lines.push(
+            "  - Return values are always printed: `null` for JS null/undefined, `\"\"` for empty string,"
+                .to_string(),
+        );
+        lines.push(
+            "    or the value itself otherwise. JS exceptions are surfaced as errors."
+                .to_string(),
+        );
         lines.push(String::new());
         lines.push("Examples:".to_string());
         lines.push("  browser4-cli eval \"document.title\"".to_string());

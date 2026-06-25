@@ -2172,11 +2172,17 @@ async fn handle_tool_command(
     )
     .await?;
 
-    if !result.is_empty() {
-        cli_println!("{}", result);
-    }
-    // Structured JSON fields for eval-like commands.
+    // Null-aware output for eval: always print the result, distinguishing
+    // JS null/undefined (which arrive as the literal string "null") from
+    // genuinely empty strings (which arrive as "").
     if tool_name == "browser_evaluate" {
+        if result == "null" {
+            cli_println!("null");
+        } else if result.is_empty() {
+            cli_println!("\"\"");
+        } else {
+            cli_println!("{}", result);
+        }
         json_field("result", json!(&result));
         if let Some(expression) = tool_params.get("expression").and_then(|v| v.as_str()) {
             json_field("expression", json!(expression));
@@ -2184,6 +2190,8 @@ async fn handle_tool_command(
         if let Some(r) = tool_params.get("ref").and_then(|v| v.as_str()) {
             json_field("ref", json!(r));
         }
+    } else if !result.is_empty() {
+        cli_println!("{}", result);
     }
     persist_active_selector(base_url, session_name, tracked_selector(tool_params))?;
     Ok(())
@@ -4888,13 +4896,17 @@ fn render_batch_result(
 ) -> Result<(), String> {
     match output {
         PlannedBatchOutput::Text => {
-            if let Some(text) = result
-                .text
-                .as_deref()
-                .map(str::trim)
-                .filter(|text| !text.is_empty())
-            {
-                cli_println!("{}", text);
+            // Always print text results — even empty or "null" values carry
+            // meaningful information (e.g. JS eval returning undefined/null).
+            if let Some(text) = result.text.as_deref() {
+                let trimmed = text.trim();
+                if trimmed == "null" {
+                    cli_println!("null");
+                } else if trimmed.is_empty() {
+                    cli_println!("\"\"");
+                } else {
+                    cli_println!("{}", text);
+                }
             }
         }
         PlannedBatchOutput::Snapshot { path } => {
