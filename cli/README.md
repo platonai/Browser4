@@ -143,7 +143,7 @@ The tables below mirror the commands surfaced by the global `browser4-cli help` 
 | `check <ref>` | Check a checkbox or radio button |
 | `uncheck <ref>` | Uncheck a checkbox or radio button |
 | `drag <startRef> <endRef>` | Drag and drop between two elements |
-| `snapshot` | Capture accessibility snapshot. Supports `--filename=<path>` to save to file, `--boxes` for bounding boxes, `-i`/`--interactive` for interactive-only, `-u`/`--urls` for link URLs, `-c`/`--compact` for compact output, `-d`/`--depth <n>` for depth limiting, and `-s`/`--selector <sel>` for CSS scoping. |
+| `snapshot` | Capture accessibility snapshot. Supports `--filename=<path>` to save to file, `--boxes` for bounding boxes, `-i`/`--interactive` for interactive-only, `-u`/`--urls` for link URLs, `-c`/`--compact` for compact output, `-d`/`--depth <n>` for depth limiting, `-s`/`--selector <sel>` for CSS scoping, and `--raw` for raw output without page info. |
 | `eval <expression> [ref]` | Evaluate JavaScript on the page or a target element. Use `--file=<path>` to read the expression from a file. |
 | `get <mode> <selector> [name]` | Extract data from a page element. Modes: `text`, `html`, `box`, `styles`, `property`, `attr`. `name` is required for `property` and `attr`. |
 | `scroll <direction> <pixels>` | Scroll the page. Direction: `up`, `down`, `left`, or `right`. |
@@ -608,6 +608,9 @@ browser4-cli snapshot -i -c -d 5
 
 # Scope snapshot to a specific CSS selector
 browser4-cli snapshot -s "#main-content"
+
+# Raw output — no page info, just the snapshot content (useful for piping)
+browser4-cli snapshot --raw | grep "button"
 
 # Capture a static DOM snapshot and extract data
 browser4-cli domsnapshot

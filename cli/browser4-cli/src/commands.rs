@@ -831,6 +831,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "compact", description: "Remove empty structural elements", is_bool: true, short: Some("c") },
                 OptionDef { name: "depth", description: "Limit tree depth to n levels", is_bool: false, short: Some("d") },
                 OptionDef { name: "selector", description: "Scope snapshot to a CSS selector", is_bool: false, short: Some("s") },
+                OptionDef { name: "raw", description: "Strip page info and return only snapshot content", is_bool: true, short: None },
             ],
             tool_name_fn: |_| "browser_snapshot".to_string(),
             tool_params_fn: |args| {

@@ -54,7 +54,7 @@ See [`cli/README.md`](../README.md) for the user-facing documentation.
 
 | Command | Description |
 |---|---|
-| `snapshot` | Capture page snapshot to obtain element refs |
+| `snapshot` | Capture page snapshot to obtain element refs. Supports `--boxes`, `-i`/`--interactive`, `-u`/`--urls`, `-c`/`--compact`, `-d`/`--depth <n>`, `-s`/`--selector <sel>`, `--raw` |
 | `get <mode> <selector> [name]` | Extract data from a page element (text, html, box, styles, property, attr) |
 | `eval [expression] [ref]` | Evaluate JavaScript expression on page or element |
 | `wait [target]` | Wait for a condition: element, time, text, URL pattern, page load, or JS expression |

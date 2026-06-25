@@ -2047,15 +2047,26 @@ async fn handle_snapshot(
     let out_path = resolve_output_path(filename.as_deref(), "snapshot", "yml");
     save_snapshot(&out_path, snap).map_err(|e| e.to_string())?;
 
+    let raw = tool_params
+        .get("raw")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
     json_field("page_url", json!(url));
     json_field("page_title", json!(title));
     json_field("snapshot_path", json!(out_path.display().to_string()));
 
-    cli_println!("### Page");
-    cli_println!("- Page URL: {}", url);
-    cli_println!("- Page Title: {}", title);
-    cli_println!("### Snapshot");
-    cli_println!("[Snapshot]({})", out_path.display());
+    if raw {
+        // Print snapshot content directly to stdout for piping.
+        // Safe to use println! directly since --raw explicitly requests raw output.
+        println!("{}", snap);
+    } else {
+        cli_println!("### Page");
+        cli_println!("- Page URL: {}", url);
+        cli_println!("- Page Title: {}", title);
+        cli_println!("### Snapshot");
+        cli_println!("[Snapshot]({})", out_path.display());
+    }
     Ok(())
 }
 
