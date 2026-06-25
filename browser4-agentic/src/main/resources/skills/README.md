@@ -100,7 +100,7 @@ Create `skills/my-skill/SKILL.md` with this template:
 
 - **Skill ID**: `my-skill`
 - **Name**: My Skill Name
-- **Version**: 4.11.x
+- **Version**: 4.12.x
 - **Author**: Your Name
 - **Tags**: `tag1`, `tag2`
 

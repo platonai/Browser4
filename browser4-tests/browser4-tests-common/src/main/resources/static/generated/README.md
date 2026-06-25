@@ -73,4 +73,4 @@ For IntersectionObserver-dependent pages, prefer HTTP serving to avoid browser s
 
 ## Version
 
-Current for Browser4 4.11.x.
+Current for Browser4 4.12.x.

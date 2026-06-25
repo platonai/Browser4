@@ -31,7 +31,3 @@ Use the wrapper scripts at the project root instead of a system-installed Maven:
 - **Unix/macOS:** `./mvnw <goals>`
 
 The wrapper automatically downloads the configured Maven distribution on first use.
-
-## Version
-
-Current for Browser4 4.11.x.

@@ -10,7 +10,7 @@ REST API prompt helpers, and stateful agent/visitor runners.
 ## Module
 
 - **Artifact:** `ai.platon.pulsar:browser4-agent-tools`
-- **Parent:** `ai.platon.pulsar:browser4` (version 4.11.x)
+- **Parent:** `ai.platon.pulsar:browser4` (version 4.12.x)
 - **Language:** Kotlin
 - **Build:** Maven
 
