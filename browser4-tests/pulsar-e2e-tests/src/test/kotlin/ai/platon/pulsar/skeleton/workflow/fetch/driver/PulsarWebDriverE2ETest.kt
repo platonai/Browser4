@@ -303,7 +303,6 @@ open class PulsarWebDriverE2ETest : WebDriverTestBase() {
         printlnPro("Search bar value - driver.evaluateDetail() : <${evaluate?.value}>")
         // assertEquals("Mate60", evaluate?.value)
 
-        // TODO: FIXME: enter seems not working
         driver.press("Enter", selector)
         driver.waitForNavigation()
         assertTrue { driver.currentUrl() != e2eProductUrl }
@@ -358,14 +357,9 @@ open class PulsarWebDriverE2ETest : WebDriverTestBase() {
 
         val lastUrl = driver.currentUrl()
 
-        // TODO: FIXME: enter seems not working
         driver.press("Enter", selector)
         driver.waitForNavigation(oldUrl = lastUrl)
-        // assertTrue { driver.currentUrl() != lastUrl }
-        val currentUrl = driver.currentUrl()
-        Assumptions.assumingThat(currentUrl != lastUrl) {
-            printlnPro("Current url: $currentUrl, last url: $lastUrl")
-        }
+        assertTrue { driver.currentUrl() != lastUrl }
     }
 
     @Test
