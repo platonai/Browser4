@@ -78,7 +78,7 @@ Read https://browser4.io/SKILL.md and install browser4-cli for browser automatio
 "@
 
 # copilot -p "$prompt"
-claude --dangerously-skip-permissions -p "$prompt"
+claude -p "$prompt"
 ```
 
 ### CLI 与技能 (SKILLS)
