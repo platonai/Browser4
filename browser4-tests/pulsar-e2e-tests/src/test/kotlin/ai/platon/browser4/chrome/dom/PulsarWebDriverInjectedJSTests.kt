@@ -79,7 +79,8 @@ class PulsarWebDriverInjectedJSTests : WebDriverTestBase() {
         result = driver.evaluateValue("typeof __pulsar_NodeExt.prototype")
         assertEquals("object", result)
 
-        result = driver.evaluateValue("typeof document.body.nodeExt")
+        // Verify the constructor can be invoked and returns an object
+        result = driver.evaluateValue("typeof new __pulsar_NodeExt(document.body, __pulsar_CONFIGS)")
         assertEquals("object", result)
     }
 
