@@ -391,6 +391,12 @@
                 <artifactId>pulsar-jsoup</artifactId>
                 <version>${pulsar-jsoup.version}</version>
             </dependency>
+            <!-- Source: https://mvnrepository.com/artifact/ai.platon.pulsar/pulsar-boilerpipe -->
+            <dependency>
+                <groupId>ai.platon.pulsar</groupId>
+                <artifactId>pulsar-boilerpipe</artifactId>
+                <version>3.0.17</version>
+            </dependency>
             <dependency>
                 <groupId>ai.platon.cdt</groupId>
                 <artifactId>cdt-kotlin-client</artifactId>

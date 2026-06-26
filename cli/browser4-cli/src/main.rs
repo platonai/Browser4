@@ -211,6 +211,7 @@ fn no_snapshot_commands() -> HashSet<&'static str> {
         "help",
         "eval",
         "generate-locator",
+        "extract",
         "summarize",
         "snapshot",
         "screenshot",
@@ -2192,6 +2193,7 @@ async fn handle_tool_command(
         }
     } else if !result.is_empty() {
         cli_println!("{}", result);
+        json_field("result", json!(&result));
     }
     persist_active_selector(base_url, session_name, tracked_selector(tool_params))?;
     Ok(())
@@ -2244,6 +2246,176 @@ async fn handle_get(
         json_field("name", json!(name));
     }
 
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Agent extract / summarize handlers
+// ---------------------------------------------------------------------------
+
+/// Handle the `extract` command: save AI-extracted content to a file by default,
+/// print to stdout with `--raw`.
+async fn handle_extract(
+    client: &Client,
+    base_url: &str,
+    tool_name: &str,
+    tool_params: &Value,
+    session_name: Option<&str>,
+) -> Result<(), String> {
+    let filename = tool_params
+        .get("filename")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let raw = tool_params
+        .get("raw")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let extract_args = {
+        let mut a = tool_params.clone();
+        if let Value::Object(ref mut m) = a {
+            m.remove("filename");
+            m.remove("raw");
+        }
+        a
+    };
+
+    let combined = with_session(client, base_url, session_name, false, |session_id| {
+        let client = client.clone();
+        let base_url = base_url.to_string();
+        let tool_name = tool_name.to_string();
+        let mut args = extract_args.clone();
+        args["sessionId"] = json!(session_id.clone());
+
+        async move {
+            let (url_res, title_res, extract_res) = tokio::join!(
+                call_tool(
+                    &client,
+                    &base_url,
+                    "page_url",
+                    json!({ "sessionId": session_id })
+                ),
+                call_tool(
+                    &client,
+                    &base_url,
+                    "page_title",
+                    json!({ "sessionId": session_id })
+                ),
+                call_tool(&client, &base_url, &tool_name, args),
+            );
+            let url = url_res?;
+            let title = title_res?;
+            let content = extract_res?;
+            Ok(format!("{}\n{}\n{}", url, title, content))
+        }
+    })
+    .await?;
+
+    let parts: Vec<&str> = combined.splitn(3, '\n').collect();
+    let (url, title, content) = match parts.as_slice() {
+        [u, t, c] => (*u, *t, *c),
+        _ => ("", "", combined.as_str()),
+    };
+
+    let out_path = resolve_output_path(filename.as_deref(), "extract", "txt");
+    save_snapshot(&out_path, content).map_err(|e| e.to_string())?;
+
+    json_field("page_url", json!(url));
+    json_field("page_title", json!(title));
+    json_field("extract_path", json!(out_path.display().to_string()));
+    json_field("extracted_content", json!(content));
+
+    if raw {
+        println!("{}", content);
+    } else {
+        cli_println!("### Page");
+        cli_println!("- Page URL: {}", url);
+        cli_println!("- Page Title: {}", title);
+        cli_println!("### Extracted content");
+        cli_println!("[Extracted content]({})", out_path.display());
+    }
+    Ok(())
+}
+
+/// Handle the `summarize` command: save AI-generated summary to a file by default,
+/// print to stdout with `--raw`.
+async fn handle_summarize(
+    client: &Client,
+    base_url: &str,
+    tool_name: &str,
+    tool_params: &Value,
+    session_name: Option<&str>,
+) -> Result<(), String> {
+    let filename = tool_params
+        .get("filename")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let raw = tool_params
+        .get("raw")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let summarize_args = {
+        let mut a = tool_params.clone();
+        if let Value::Object(ref mut m) = a {
+            m.remove("filename");
+            m.remove("raw");
+        }
+        a
+    };
+
+    let combined = with_session(client, base_url, session_name, false, |session_id| {
+        let client = client.clone();
+        let base_url = base_url.to_string();
+        let tool_name = tool_name.to_string();
+        let mut args = summarize_args.clone();
+        args["sessionId"] = json!(session_id.clone());
+
+        async move {
+            let (url_res, title_res, summary_res) = tokio::join!(
+                call_tool(
+                    &client,
+                    &base_url,
+                    "page_url",
+                    json!({ "sessionId": session_id })
+                ),
+                call_tool(
+                    &client,
+                    &base_url,
+                    "page_title",
+                    json!({ "sessionId": session_id })
+                ),
+                call_tool(&client, &base_url, &tool_name, args),
+            );
+            let url = url_res?;
+            let title = title_res?;
+            let content = summary_res?;
+            Ok(format!("{}\n{}\n{}", url, title, content))
+        }
+    })
+    .await?;
+
+    let parts: Vec<&str> = combined.splitn(3, '\n').collect();
+    let (url, title, content) = match parts.as_slice() {
+        [u, t, c] => (*u, *t, *c),
+        _ => ("", "", combined.as_str()),
+    };
+
+    let out_path = resolve_output_path(filename.as_deref(), "summarize", "txt");
+    save_snapshot(&out_path, content).map_err(|e| e.to_string())?;
+
+    json_field("page_url", json!(url));
+    json_field("page_title", json!(title));
+    json_field("summarize_path", json!(out_path.display().to_string()));
+    json_field("summarized_content", json!(content));
+
+    if raw {
+        println!("{}", content);
+    } else {
+        cli_println!("### Page");
+        cli_println!("- Page URL: {}", url);
+        cli_println!("- Page Title: {}", title);
+        cli_println!("### Summary");
+        cli_println!("[Summary]({})", out_path.display());
+    }
     Ok(())
 }
 
@@ -5536,6 +5708,26 @@ async fn run(
                 &base_url,
                 global.session_name.as_deref(),
                 "sessionStorage",
+            )
+            .await?;
+        }
+        "extract" => {
+            handle_extract(
+                &client,
+                &base_url,
+                &tool_name,
+                &tool_params,
+                global.session_name.as_deref(),
+            )
+            .await?;
+        }
+        "summarize" => {
+            handle_summarize(
+                &client,
+                &base_url,
+                &tool_name,
+                &tool_params,
+                global.session_name.as_deref(),
             )
             .await?;
         }
