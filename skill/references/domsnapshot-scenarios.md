@@ -203,16 +203,16 @@ browser4-cli domsnapshot grep -c '<h1[>\s]'
 browser4-cli domsnapshot grep -c '<img[^>]*alt=""'
 # → 3  (3 images have empty alt — fix them)
 
-# Check for meta description
-browser4-cli domsnapshot grep -q -F '<meta name="description"'
-# exit code 0 = found, 1 = missing
+# Check for meta description (pass/fail for CI)
+browser4-cli domsnapshot grep -l -F '<meta name="description"' | grep -q domsnapshot && echo PASS || echo FAIL
+# exit code 0 = found
 
 # Count total links on the page
 browser4-cli domsnapshot grep -c '<a[>\s]'
 # → 142
 
 # Scope to <head> only — find all meta tags in one shot
-browser4-cli domsnapshot grep --selector head -n '<meta'
+browser4-cli domsnapshot grep --selector head '<meta'
 # → 5:<meta charset="utf-8">
 # → 6:<meta name="viewport" content="width=device-width">
 # → 7:<meta name="description" content="...">
@@ -402,8 +402,8 @@ browser4-cli goto "https://bank.example.com/products/savings"
 browser4-cli domsnapshot
 
 # Verify required legal text exists anywhere on the page
-browser4-cli domsnapshot grep -q -F "FDIC Insured" && echo "PASS" || echo "FAIL"
-browser4-cli domsnapshot grep -q -F "Terms and Conditions" && echo "PASS" || echo "FAIL"
+browser4-cli domsnapshot grep -l -F "FDIC Insured" | grep -q domsnapshot && echo "PASS" || echo "FAIL"
+browser4-cli domsnapshot grep -l -F "Terms and Conditions" | grep -q domsnapshot && echo "PASS" || echo "FAIL"
 
 # Check for forbidden content (tracking scripts, data leaks)
 browser4-cli domsnapshot grep -i 'gtag|fbq|_gaq' && echo "WARNING: trackers found"
@@ -419,7 +419,7 @@ browser4-cli domsnapshot grep -c -F 'cookie-consent'
 # → 1
 ```
 
-**Why `grep` here:** For compliance, you often need to answer "is this text present?" instantly. `grep -q` exits 0/1 for pass/fail — perfect for CI gates and pre-commit hooks. Use `--selector` to scope to specific page regions (footer, nav, main).
+**Why `grep` here:** For compliance, you often need to answer "is this text present?" instantly. The `-l` flag (files-with-matches) prints "domsnapshot" when matches exist — pipe to `grep -q domsnapshot` for a pass/fail exit code. Use `--selector` to scope to specific page regions (footer, nav, main).
 
 ### 6d. Archive for audit trail
 
@@ -598,20 +598,20 @@ browser4-cli goto "https://staging.example.com/checkout"
 browser4-cli domsnapshot
 
 # Verify checkout page has all required sections (exits non-zero if any missing)
-browser4-cli domsnapshot grep -q -F "Cart Total" || exit 1
-browser4-cli domsnapshot grep -q -F "Shipping Address" || exit 1
-browser4-cli domsnapshot grep -q -F "Place Order" || exit 1
+browser4-cli domsnapshot grep -l -F "Cart Total" | grep -q domsnapshot || exit 1
+browser4-cli domsnapshot grep -l -F "Shipping Address" | grep -q domsnapshot || exit 1
+browser4-cli domsnapshot grep -l -F "Place Order" | grep -q domsnapshot || exit 1
 
 # Ensure no error messages leaked to the page
 browser4-cli domsnapshot grep -i 'error|exception|stack trace' && exit 1
 
 # Scope to <main> to check only the content area
-browser4-cli domsnapshot grep --selector main -q -F "Order Summary" || exit 1
+browser4-cli domsnapshot grep --selector main -l -F "Order Summary" | grep -q domsnapshot || exit 1
 
 echo "Smoke test passed"
 ```
 
-**Why `grep` for CI:** `grep -q` returns exit code 0 for match, 1 for no match — perfect for CI shell scripts. It's faster than `query` for presence checks and doesn't require writing SQL. Use `-F` for literal strings (no regex escaping needed) and `--selector` to scope to specific regions.
+**Why `grep` for CI:** The `-l` flag prints "domsnapshot" when matches exist — pipe to `grep -q domsnapshot` for a 0/1 exit code based on match presence. Use `-F` for literal strings (no regex escaping needed) and `--selector` to scope to specific regions.
 
 ---
 
@@ -789,33 +789,33 @@ After a deploy, confirm specific content appeared/disappeared:
 browser4-cli goto "https://staging.example.com"
 browser4-cli domsnapshot
 
-# Confirm the new feature flag is on
-browser4-cli domsnapshot grep -q -F 'feature.new-checkout.enabled' || exit 1
+# Confirm the new feature flag is on (fail if not found)
+browser4-cli domsnapshot grep -l -F 'feature.new-checkout.enabled' | grep -q domsnapshot || exit 1
 
-# Confirm debug info is NOT in the rendered HTML
-browser4-cli domsnapshot grep -q -F 'debugMode' && exit 1
+# Confirm debug info is NOT in the rendered HTML (fail if found)
+browser4-cli domsnapshot grep -l -F 'debugMode' | grep -vq domsnapshot && exit 1
 
-# Show the 5 lines around the version tag to verify deploy
+# Show the 2 lines around the version tag to verify deploy
 browser4-cli domsnapshot grep -C 2 -F 'v2.14.1'
 # → 45:  <meta name="version" content="v2.14.1">
 # → 46:  <meta name="build-time" content="2026-06-27T14:30:00Z">
 ```
 
-### 12d. Inverted search — find what's NOT there
+### 12d. Inverted and targeted search — find what's NOT there
 
 ```bash
 # Show only non-empty lines (strip blank lines for readability)
 browser4-cli domsnapshot grep -v '^\s*$'
 
-# Find all <img> tags WITHOUT alt attributes
-browser4-cli domsnapshot grep -o '<img[^>]*>' | while read tag; do
-  if ! echo "$tag" | grep -q 'alt='; then
-    echo "Missing alt: $tag"
+# Find all <img> tags WITHOUT alt attributes (grep then filter with standard grep)
+browser4-cli domsnapshot grep '<img[^>]*>' | while read line; do
+  if ! echo "$line" | grep -q 'alt='; then
+    echo "Missing alt: $line"
   fi
 done
 
-# Find links missing rel="nofollow"
-browser4-cli domsnapshot grep --selector main -o '<a[^>]*href="http[^"]*"[^>]*>' | grep -v 'rel='
+# Find links missing rel="nofollow" (grep then exclude matches)
+browser4-cli domsnapshot grep --selector main '<a[^>]*href="http[^"]*"[^>]*>' | grep -v 'rel='
 ```
 
 **Why `grep` for incident response:** It's the fastest path from "is X on the page?" to an answer. No SQL, no selectors, no backend load — just regex against the cached snapshot. The grep-style flags (`-A`/`-B`/`-C` for context, `-v` for inverse, `-c` for counting, `-F` for literal strings) match what every developer already knows.
@@ -889,12 +889,12 @@ All scenarios using `get`, `export`, `grep`, and `summary` commands have been te
 |----------|-----------|--------|
 | 1a. Product extraction | books.toscrape.com | ✅ Title, price, availability, image URL |
 | 3. SEO metadata | en.wikipedia.org | ✅ Title, H1, meta description, canonical URL |
-| 3e. Grep-based SEO checks | en.wikipedia.org | ✅ `-c`, `--selector`, `-q` all functional |
+| 3e. Grep-based SEO checks | en.wikipedia.org | ✅ `-c`, `--selector`, `-l` all functional |
 | 5. Listing extraction | books.toscrape.com | ✅ Product title and price (single-element) |
 | 6. Compliance verification | en.wikipedia.org | ✅ Footer link extraction, element presence check |
-| 6c. Grep compliance checks | en.wikipedia.org | ✅ `-q`, `-F`, `--selector footer` functional |
+| 6c. Grep compliance checks | en.wikipedia.org | ✅ `-l`, `-F`, `--selector footer` functional |
 | 9. Export & archival | Multiple sites | ✅ Pretty-formatted HTML with metadata |
-| 9d. Grep smoke tests | Multiple sites | ✅ `-q` pass/fail, `-C` context, `--selector` |
+| 9d. Grep smoke tests | Multiple sites | ✅ `-l` pass/fail, `-C` context, `--selector` |
 | 10. Form discovery | httpbin.org/forms/post | ✅ Full form HTML with all input fields |
 | 11. Summary (WPSI) | en.wikipedia.org | ✅ YAML output with headings, stats, keyContent |
 | 12. Grep incident response | Multiple sites | ✅ `-i`, `-v`, `-C`, `-F`, `--selector` all functional |

@@ -105,16 +105,21 @@ browser4-cli domsnapshot grep [OPTIONS] <pattern>
 | Flag | Description |
 |---|---|
 | `-i` | Case-insensitive matching |
-| `-n` | Show line numbers (default on; use `--no-line-number` to disable) |
 | `-A N` | Show N lines after each match |
 | `-B N` | Show N lines before each match |
 | `-C N` | Show N lines before and after each match |
 | `-v` | Invert match (select non-matching lines) |
 | `-c` | Print only the count of matching lines |
-| `-l` | Print only whether matches exist ("files-with-matches") |
+| `-l` | Print only whether matches exist (grep-style "files-with-matches"; exits 0 if found) |
 | `-F` | Treat pattern as a literal string, not regex |
-| `-w` | Match only whole words (surrounds pattern with `\b`) |
-| `--selector <CSS>` | Scope search to a specific CSS selector (uses `dom_snapshot_scrape` internally) |
+| `-w` | Match only whole words (wraps pattern with `\b` word boundaries) |
+| `--no-line-number` | Suppress line numbers in output (line numbers are shown by default) |
+| `--selector <CSS>` | Scope search to a specific CSS element (fetches inner HTML via `dom_snapshot_scrape`) |
+
+Line numbers are **on by default** (unlike GNU grep where you opt in with `-n`). Use `--no-line-number` to suppress them.
+
+For CI pass/fail checks, use `-l` (prints "domsnapshot" if matches exist) or `-c` (prints match count). Check the CLI exit code (`browser4-cli ... && echo PASS || echo FAIL`) — a non-zero exit means the backend call failed, not that matches were absent. `-l` always exits 0 when the backend call succeeds; the match/no-match result is in the output text.
+
 
 ### Examples
 
@@ -140,16 +145,18 @@ browser4-cli domsnapshot grep -v '^\s*$'
 
 ### Output format
 
-Matches are printed with line numbers and context. Context lines are prefixed with `-`, match lines with the line number and `:`. Non-contiguous context groups are separated by `--`.
+Matches are printed with `N:` (line number + colon) followed by the line content. Context lines use `N:-` (line number, colon, dash) to distinguish them visually from match lines. Non-contiguous context groups are separated by `--`.
 
 ```
 42:    <h1>Welcome to My Page</h1>
-43-    <nav>
+43:-    <nav>
 44:      <a href="/login">Login</a>
-45-    </nav>
+45:-    </nav>
 --
 108:    <footer>Copyright 2026</footer>
 ```
+
+When `--no-line-number` is passed, the line-number prefix is omitted entirely. Match and context lines are then distinguished only by the `-` prefix on context lines.
 
 ## Error Handling
 
@@ -163,3 +170,5 @@ Matches are printed with line numbers and context. Context lines are prefixed wi
 - `domsnapshot get` only accepts CSS selectors. For interactive element interaction, use the standard `snapshot` + ref-based commands.
 - X-SQL queries through `domsnapshot query` follow the same constraints as `swarm query`. See [X-SQL reference](x-sql.md) for full function documentation.
 - The captured snapshot is cached in the backend and invalidated by the next `domsnapshot` capture or a page navigation (`goto`, `reload`, etc.).
+- `domsnapshot grep` performs matching **entirely client-side** in the CLI — the full HTML is fetched from the backend once, then all regex matching happens locally. No backend round-trips for the search itself.
+- For CI pass/fail checks with grep, use `-l` (prints "domsnapshot" if matches found) or `-c` (prints match count). A `browser4-cli` non-zero exit code means the backend call itself failed, not that matches were absent.

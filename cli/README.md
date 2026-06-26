@@ -520,15 +520,18 @@ browser4-cli domsnapshot export --file=page.html
 
 ### `domsnapshot grep` flags
 
+Line numbers are shown by default (unlike GNU grep). Use `--no-line-number` to suppress them.
+
 | Flag | Description |
 |---|---|
 | `-i` | Case-insensitive matching |
 | `-A N`, `-B N`, `-C N` | Context lines after / before / around each match |
 | `-v` | Invert match (select non-matching lines) |
 | `-c` | Print only count of matching lines |
-| `-l` | Print only whether matches exist |
+| `-l` | Print only whether matches exist (prints "domsnapshot" if matches found; use with `\| grep -q domsnapshot` for CI pass/fail) |
 | `-F` | Treat pattern as a literal string |
 | `-w` | Match whole words only |
+| `--no-line-number` | Suppress line numbers in output |
 | `--selector <CSS>` | Scope search to a CSS selector |
 
 ```shell
