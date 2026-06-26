@@ -101,80 +101,15 @@ browser4-cli -s=<name> open|goto <url>          # target a named session
 
 ### Attach — Connect to an Existing Browser
 
-Instead of launching a new browser, `attach` connects to an already-running Chrome or Edge instance via the Chrome DevTools Protocol (CDP).
-
-**Attach by channel name** — the simplest mode. The target browser must have remote debugging enabled (go to `chrome://inspect/#remote-debugging` and check "Allow remote debugging for this browser instance"):
+Connect to an already-running Chrome or Edge instance via CDP instead of launching a new browser. Supports channel names (`chrome`, `msedge`), CDP URLs, bare ports, and remote Browser4 servers.
 
 ```bash
-browser4-cli attach --cdp=chrome
-browser4-cli attach --cdp=chrome-canary
-browser4-cli attach --cdp=msedge
-browser4-cli attach --cdp=msedge-dev
+browser4-cli attach --cdp=<channel|url|port> [--endpoint=<server-url>] [-s=<name>]
 ```
 
-Supported channels: `chrome`, `chrome-beta`, `chrome-dev`, `chrome-canary`, `msedge`, `msedge-beta`, `msedge-dev`, `msedge-canary`.
+Enable remote debugging in the target browser first: go to `chrome://inspect/#remote-debugging` and check "Allow remote debugging for this browser instance".
 
-The CLI scans running processes, probes default debugging ports, and falls back to a port-range scan to find the browser automatically.
-
-**Attach by CDP endpoint URL** — connect to any Chromium-based browser with a known debugging port:
-
-```bash
-# Start Chrome with remote debugging
-google-chrome --remote-debugging-port=9222
-
-# Connect by URL
-browser4-cli attach --cdp=http://localhost:9222
-```
-
-Also accepts WebSocket URLs (`ws://localhost:9222/devtools/...`), bare ports (`--cdp=9222`), and `host:port` (`--cdp=localhost:9222`). Works with Chrome, Edge, Electron apps, and cloud browser services (Browserbase, etc.).
-
-**Attach to a remote Browser4 server** — point the CLI at a remote Browser4 instance:
-
-```bash
-browser4-cli attach --endpoint=http://browser4-server:8182 --cdp=chrome
-```
-
-The `--endpoint` flag overrides the default local server URL. When used alone (without `--cdp`), it switches the CLI to the remote server for subsequent commands.
-
-**Named sessions** — use `-s` to name the attached session:
-
-```bash
-browser4-cli attach --cdp=chrome -s=debug-session
-browser4-cli -s=debug-session snapshot
-browser4-cli -s=debug-session screenshot --filename=state.png
-```
-
-**Workflow: connect to your running Chrome**
-
-```bash
-# 1. In Chrome, go to chrome://inspect/#remote-debugging
-#    and enable "Allow remote debugging for this browser instance"
-
-# 2. Attach by channel name
-browser4-cli attach --cdp=chrome
-
-# 3. Interact with your existing tabs
-browser4-cli snapshot
-browser4-cli screenshot --filename=current-state.png
-
-# 4. Save state for future headless sessions
-browser4-cli state-save auth.json
-```
-
-**Workflow: debugging a remote browser via SSH tunnel**
-
-```bash
-# On the remote machine: start Chrome with debugging
-google-chrome --remote-debugging-port=9222
-
-# On your machine: create an SSH tunnel
-ssh -L 9222:localhost:9222 user@remote-host
-
-# Attach and inspect
-browser4-cli attach --cdp=http://localhost:9222
-browser4-cli snapshot
-browser4-cli screenshot --filename=remote-state.png
-```
+Full reference: **[references/attach.md](references/attach.md)**.
 
 ### Interaction
 
@@ -286,7 +221,7 @@ browser4-cli domsnapshot                                # capture static DOM sna
 browser4-cli domsnapshot get <field> [selector] [name]  # extract text/html/attr via CSS
 browser4-cli domsnapshot query [url] --sql <query>      # X-SQL query against DOM
 browser4-cli domsnapshot summary                        # compressed page summary (WPSI)
-browser4-cli domsnapshot export [--file <path>]         # save snapshot HTML
+browser4-cli domsnapshot export [--file <path>]         # save snapshot HTML (might be huge, don't read it directly)
 ```
 
 Full reference: **[references/domsnapshot.md](references/domsnapshot.md)**.
@@ -382,6 +317,7 @@ Full reference: **[references/swarm.md](references/swarm.md)**.
 
 ## References
 
+- **Attach** — [references/attach.md](references/attach.md)
 - **DOM Snapshot** — [references/domsnapshot.md](references/domsnapshot.md)
 - **CSS Selector Bridge** — [references/css-selector-bridge.md](references/css-selector-bridge.md)
 - **Swarm command** — [references/swarm.md](references/swarm.md)
