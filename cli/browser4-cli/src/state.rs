@@ -185,6 +185,169 @@ pub fn clear_all_state(state_dir: Option<&Path>) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Loop state persistence
+// ---------------------------------------------------------------------------
+
+/// Persistent state for a running or paused `loop` command.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LoopState {
+    /// The task tokens (the command to execute each iteration).
+    #[serde(rename = "taskTokens")]
+    pub task_tokens: Vec<String>,
+    /// Execution mode: "plain", "shell", or "subcommand".
+    pub mode: String,
+    /// Seconds between iterations.
+    #[serde(rename = "intervalSecs")]
+    pub interval_secs: u64,
+    /// Maximum number of iterations (null = infinite).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub count: Option<u64>,
+    /// Maximum total duration in seconds (null = no limit).
+    #[serde(rename = "timeoutSecs", skip_serializing_if = "Option::is_none")]
+    pub timeout_secs: Option<u64>,
+    /// Iterations completed so far.
+    #[serde(rename = "iterationsCompleted")]
+    pub iterations_completed: u64,
+    /// ISO-8601 timestamp when the loop was first started.
+    #[serde(rename = "startedAt")]
+    pub started_at: String,
+    /// ISO-8601 timestamp of the last update.
+    #[serde(rename = "updatedAt")]
+    pub updated_at: String,
+    /// Loop status: "running" or "stopped".
+    pub status: String,
+}
+
+fn loop_state_file(state_dir: &Path, name: Option<&str>) -> PathBuf {
+    match name {
+        Some(n) if !n.is_empty() => state_dir.join("loops").join(format!("{}.json", n)),
+        _ => state_dir.join("loop-state.json"),
+    }
+}
+
+/// Read the persisted loop state, if any.
+pub fn read_loop_state(state_dir: Option<&Path>, name: Option<&str>) -> Option<LoopState> {
+    let dir = state_dir
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(resolve_default_state_dir);
+    let path = loop_state_file(&dir, name);
+    match fs::read_to_string(&path) {
+        Ok(raw) => serde_json::from_str::<LoopState>(&raw).ok(),
+        Err(_) => None,
+    }
+}
+
+/// Write the loop state to disk.
+pub fn write_loop_state(
+    state: &LoopState,
+    state_dir: Option<&Path>,
+    name: Option<&str>,
+) -> std::io::Result<()> {
+    let dir = state_dir
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(resolve_default_state_dir);
+    fs::create_dir_all(&dir)?;
+    let path = loop_state_file(&dir, name);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let json = serde_json::to_string_pretty(state).expect("loop state serialization should not fail");
+    fs::write(path, json)
+}
+
+/// Return the full path to the loop state file (for display).
+pub fn loop_state_path(state_dir: Option<&Path>, name: Option<&str>) -> PathBuf {
+    let dir = state_dir
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(resolve_default_state_dir);
+    loop_state_file(&dir, name)
+}
+
+/// Clear the persisted loop state.
+pub fn clear_loop_state(state_dir: Option<&Path>, name: Option<&str>) {
+    let dir = state_dir
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(resolve_default_state_dir);
+    let _ = fs::remove_file(loop_state_file(&dir, name));
+}
+
+/// Entry in a loop listing.
+#[derive(Debug, Clone, Serialize)]
+pub struct LoopListEntry {
+    pub name: String,
+    pub task: String,
+    pub mode: String,
+    pub status: String,
+    #[serde(rename = "iterationsCompleted")]
+    pub iterations_completed: u64,
+    #[serde(rename = "updatedAt")]
+    pub updated_at: String,
+}
+
+/// List all persisted loops. Returns entries sorted by name (default first).
+pub fn list_loop_states(state_dir: Option<&Path>) -> Vec<LoopListEntry> {
+    let dir = state_dir
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(resolve_default_state_dir);
+    let mut entries: Vec<LoopListEntry> = Vec::new();
+
+    // Default loop
+    let default_path = loop_state_file(&dir, None);
+    if let Ok(raw) = fs::read_to_string(&default_path) {
+        if let Ok(ls) = serde_json::from_str::<LoopState>(&raw) {
+            entries.push(LoopListEntry {
+                name: "default".to_string(),
+                task: ls.task_tokens.join(" "),
+                mode: ls.mode,
+                status: ls.status,
+                iterations_completed: ls.iterations_completed,
+                updated_at: ls.updated_at,
+            });
+        }
+    }
+
+    // Named loops in loops/ subdirectory
+    let loops_dir = dir.join("loops");
+    if let Ok(dir_entries) = fs::read_dir(&loops_dir) {
+        for entry in dir_entries.flatten() {
+            let path = entry.path();
+            if path.extension().map_or(false, |ext| ext == "json") {
+                let name = path
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("")
+                    .to_string();
+                if let Ok(raw) = fs::read_to_string(&path) {
+                    if let Ok(ls) = serde_json::from_str::<LoopState>(&raw) {
+                        entries.push(LoopListEntry {
+                            name,
+                            task: ls.task_tokens.join(" "),
+                            mode: ls.mode,
+                            status: ls.status,
+                            iterations_completed: ls.iterations_completed,
+                            updated_at: ls.updated_at,
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    // Sort: default first, then alphabetical
+    entries.sort_by(|a, b| {
+        if a.name == "default" {
+            std::cmp::Ordering::Less
+        } else if b.name == "default" {
+            std::cmp::Ordering::Greater
+        } else {
+            a.name.cmp(&b.name)
+        }
+    });
+
+    entries
+}
+
 /// Convert a CLI element ref into the selector format expected by Browser4.
 ///
 /// Supported forms:

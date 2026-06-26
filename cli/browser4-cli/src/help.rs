@@ -596,6 +596,72 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("  browser4-cli domsnapshot grep --selector main \"Submit\"".to_string());
     }
 
+    if cmd.name == "loop" {
+        lines.push(String::new());
+        lines.push("Modes:".to_string());
+        lines.push("  - Plain text: the task string is submitted to the Browser4 server as-is.".to_string());
+        lines.push("    X-SQL queries are auto-detected by the server.".to_string());
+        lines.push("  - --shell: the task is executed via the OS shell (cmd /C or sh -c).".to_string());
+        lines.push(
+            "  - -- (double dash): everything after -- is executed as a browser4-cli subcommand."
+                .to_string(),
+        );
+        lines.push(String::new());
+        lines.push("Persistence:".to_string());
+        lines.push(
+            "  - Progress is saved to ~/.browser4/loop-state.json after each iteration."
+                .to_string(),
+        );
+        lines.push(
+            "  - If the process is interrupted (Ctrl+C), the loop can be resumed by running"
+                .to_string(),
+        );
+        lines.push("    the same command again.".to_string());
+        lines.push("  - Use --stop to clear persisted state, --status to inspect it.".to_string());
+        lines.push(String::new());
+        lines.push("Notes:".to_string());
+        lines.push(
+            "  - The interval is measured from the start of each iteration.".to_string(),
+        );
+        lines.push(
+            "  - If an iteration takes longer than the interval, the next starts immediately."
+                .to_string(),
+        );
+        lines.push(
+            "  - Errors during an iteration are logged but the loop continues.".to_string(),
+        );
+        lines.push(
+            "  - The timeout is checked at the start of each iteration; a long-running"
+                .to_string(),
+        );
+        lines.push("    iteration may exceed the timeout.".to_string());
+        lines.push(
+            "  - Defaults: 1 hour interval, 1 week timeout. Use --count, --interval,"
+                .to_string(),
+        );
+        lines.push("    or --timeout to adjust.".to_string());
+        lines.push(String::new());
+        lines.push("Examples:".to_string());
+        lines.push(
+            "  browser4-cli loop \"load https://example.com and extract the page title\""
+                .to_string(),
+        );
+        lines.push(
+            "  browser4-cli loop --shell \"curl -s https://api.example.com/health\" -i 60 -n 10"
+                .to_string(),
+        );
+        lines.push(
+            "  browser4-cli loop -- eval \"document.title\" -i 300"
+                .to_string(),
+        );
+        lines.push(
+            "  browser4-cli loop \"select dom.title from load_and_select('https://example.com')\" --count 5"
+                .to_string(),
+        );
+        lines.push("  browser4-cli loop --status".to_string());
+        lines.push("  browser4-cli loop --stop".to_string());
+    }
+
     lines.join("\n")
 }
 

@@ -380,6 +380,81 @@ pub fn all_commands() -> Vec<CommandDef> {
             tool_params_fn: |_| json!({}),
         },
         CommandDef {
+            name: "loop",
+            description:
+                "Execute a task repeatedly on an interval. Supports plain text commands, \
+                 x-sql queries (auto-detected by the server), browser4-cli subcommands \
+                 (after --), and shell commands (--shell). Progress is persisted to disk \
+                 under a configurable --name and can be resumed after interruption. \
+                 Use --list to see all loops, --status [name] to inspect, --stop [name] to clear.",
+            category: Category::Core,
+            hidden: false,
+            batch_supported: false,
+            args: &[ArgDef {
+                name: "task",
+                description: "The task to execute, use -- for a browser4-cli subcommand, \
+                              --shell for a shell command, or pass plain text/x-sql directly",
+                optional: true,
+            }],
+            options: &[
+                OptionDef {
+                    name: "name",
+                    description: "Loop name for persistence (default: default). \
+                                  Named loops are stored in ~/.browser4/loops/<name>.json",
+                    is_bool: false,
+                    short: None,
+                },
+                OptionDef {
+                    name: "interval",
+                    description: "Seconds between iterations (default: 3600 = 1 hour)",
+                    is_bool: false,
+                    short: Some("i"),
+                },
+                OptionDef {
+                    name: "count",
+                    description: "Number of iterations before stopping (default: infinite)",
+                    is_bool: false,
+                    short: Some("n"),
+                },
+                OptionDef {
+                    name: "timeout",
+                    description: "Maximum total duration in seconds (default: 604800 = 1 week)",
+                    is_bool: false,
+                    short: Some("t"),
+                },
+                OptionDef {
+                    name: "shell",
+                    description: "Execute the task as a shell command (cmd /C or sh -c)",
+                    is_bool: true,
+                    short: None,
+                },
+                OptionDef {
+                    name: "list",
+                    description: "List all persisted loops",
+                    is_bool: true,
+                    short: None,
+                },
+                OptionDef {
+                    name: "stop",
+                    description: "Stop a loop and clear its persisted state. \
+                                  Optionally specify --name to target a named loop",
+                    is_bool: true,
+                    short: None,
+                },
+                OptionDef {
+                    name: "status",
+                    description: "Show loop state and progress. \
+                                  Optionally specify --name to target a named loop",
+                    is_bool: true,
+                    short: None,
+                },
+            ],
+            tool_name_fn: |_| String::new(),
+            tool_params_fn: |args| {
+                json!({ "task": get_str(args, "task").unwrap_or_default() })
+            },
+        },
+        CommandDef {
             name: "goto",
             description: "Navigate to a URL, auto-opening or refreshing the session when needed",
             category: Category::Navigation,
@@ -1962,6 +2037,7 @@ mod tests {
             "install",
             "uninstall",
             "batch",
+            "loop",
             "goto",
             "click",
             "type",

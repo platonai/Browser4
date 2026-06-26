@@ -24,7 +24,7 @@ harness = false
 reqwest = { version = "0.13.2", default-features = false, features = ["blocking", "json", "rustls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tokio = { version = "1.13.1", features = ["macros", "rt", "rt-multi-thread", "time"] }
+tokio = { version = "1.13.1", features = ["macros", "rt", "rt-multi-thread", "signal", "time"] }
 dirs = "6.0.0"
 base64 = "0.22"
 chrono = "0.4"
