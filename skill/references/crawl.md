@@ -1,3 +1,8 @@
+---
+title: "Crawl Command Reference"
+description: "Reference for the crawl command. Recursive website crawling — start from a seed URL and follow links up to a configurable depth."
+---
+
 # Crawl Command Reference
 
 Recursive website crawling — start from a seed URL and follow links up to a configurable depth.

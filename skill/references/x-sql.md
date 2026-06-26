@@ -1,3 +1,8 @@
+---
+title: "X-SQL Reference: DOM & String Functions"
+description: "Master index for the X-SQL function reference. Links to DOM_LOAD_AND_SELECT, DomFunctions, DomSelectFunctions, StringFunctions, and ArrayFunctions documentation."
+---
+
 # X-SQL Reference: DOM & String Functions
 
 This directory contains the X-SQL function reference, split by function group. Use the links below to read only the section you need.

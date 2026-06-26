@@ -1,3 +1,8 @@
+---
+title: "DOM Snapshot — Real-World Scenarios"
+description: "Practical end-to-end recipes using the domsnapshot command family. Covers e-commerce, news, SEO, pricing, job boards, compliance, research, real estate, CI, and agent-assisted workflows."
+---
+
 # DOM Snapshot — Real-World Scenarios
 
 Practical, end-to-end recipes using the `domsnapshot` family of commands. Each scenario is self-contained: you can adapt the CSS selectors and X-SQL queries to your own target pages.

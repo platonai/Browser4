@@ -1,3 +1,8 @@
+---
+title: "CSS Selector Bridge — From Snapshot Refs to DOM Snapshot Queries"
+description: "How to bridge between interactive snapshot refs and DOM snapshot CSS selectors. Three-tier approach for extracting CSS selectors without reading the full DOM."
+---
+
 # CSS Selector Bridge — From Snapshot Refs to DOM Snapshot Queries
 
 `browser4-cli` has two separate element-addressing systems. This document explains how to bridge between them — so you can discover element structure with the compact interactive `snapshot`, then extract structured data with `domsnapshot` — **without ever reading the full DOM snapshot text**.

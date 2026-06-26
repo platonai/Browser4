@@ -1,3 +1,8 @@
+---
+title: "Swarm — Parallel Scraping & Structured Data Extraction"
+description: "Reference for swarm commands (create, submit, query, status, result). Orchestrate parallel scraping and structured data extraction across multiple browser contexts."
+---
+
 # Swarm — Parallel Scraping & Structured Data Extraction
 
 Orchestrate parallel scraping and structured data extraction across multiple browser contexts. All subcommands use spaced form (`swarm <subcommand>`) and are task-ID based — they do not depend on the current CLI browser session slot.
