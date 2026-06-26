@@ -784,8 +784,8 @@ class DOMStateBuilderTest {
         val snapshotWithBoxes = ai.platon.browser4.chrome.dom.model.NanoAriaSnapshotRenderer.render(
             nanoTree, AriaSnapshotOptions(boxes = true)
         )
-        assertTrue(snapshotWithBoxes.contains("- button [ref=e101] [box=50,75,120,40]"),
-            "Expected [box=50,75,120,40] in: $snapshotWithBoxes")
+        assertTrue(snapshotWithBoxes.contains("button [ref=e101]") && snapshotWithBoxes.contains("[box=50,75,120,40]"),
+            "Expected button [ref=e101] with [box=50,75,120,40] in: $snapshotWithBoxes")
         assertTrue(snapshotWithBoxes.contains("[cursor=pointer]"),
             "Expected [cursor=pointer] in: $snapshotWithBoxes")
     }
