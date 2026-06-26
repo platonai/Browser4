@@ -247,21 +247,48 @@ class PulsarSessionManager(
     /**
      * Extracts the port number from a CDP endpoint URL.
      * Handles formats: http://host:port, ws://host:port/path, host:port
+     * IPv6 addresses are supported when bracketed (e.g. [::1]:9222).
      */
     private fun parsePortFromEndpoint(endpoint: String): Int {
+        // Try parsing as-is first, then with an http:// scheme prepended.
         val uri = try {
             URI(endpoint)
         } catch (_: Exception) {
-            // Try adding a default scheme for bare host:port
             URI.create("http://$endpoint")
         }
 
         if (uri.port > 0) return uri.port
 
-        // Fallback: parse host:port format manually
-        val parts = endpoint.split(":")
-        return parts.last().trimEnd('/').toIntOrNull()
-            ?: throw IllegalArgumentException("Could not parse CDP port from endpoint: $endpoint")
+        // Fallback: extract host:port from the authority-like portion.
+        // Strip scheme and path, then parse the remaining host:port.
+        val hostPort = endpoint
+            .substringAfter("://")       // drop scheme (http://, ws://, etc.)
+            .substringBefore('/')        // drop path / query / fragment
+            .substringBefore('?')
+            .substringBefore('#')
+
+        // IPv6: the port follows the closing bracket, e.g. [::1]:9222
+        if (hostPort.contains(']')) {
+            val afterBracket = hostPort.substringAfterLast(']')
+            if (afterBracket.startsWith(':')) {
+                return afterBracket.removePrefix(":").toIntOrNull()
+                    ?: throw IllegalArgumentException(
+                        "Could not parse CDP port from endpoint: $endpoint")
+            }
+            throw IllegalArgumentException(
+                "IPv6 address must be followed by :port in endpoint: $endpoint")
+        }
+
+        // Plain host:port (IPv4 or hostname)
+        val lastColon = hostPort.lastIndexOf(':')
+        if (lastColon >= 0) {
+            return hostPort.substring(lastColon + 1).toIntOrNull()
+                ?: throw IllegalArgumentException(
+                    "Could not parse CDP port from endpoint: $endpoint")
+        }
+
+        throw IllegalArgumentException(
+            "Could not parse CDP port from endpoint: $endpoint")
     }
 
     private fun recreateUnhealthySession(

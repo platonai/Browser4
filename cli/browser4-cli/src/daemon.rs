@@ -15,6 +15,7 @@ use std::io::{Read, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
+use std::sync::atomic::{AtomicU16, Ordering};
 use std::time::{Duration, Instant};
 
 use reqwest::Client;
@@ -3185,11 +3186,23 @@ pub fn resolve_channel_to_endpoint(channel: &str) -> Result<String, String> {
         return Ok(format!("http://localhost:{default_port}"));
     }
 
-    // Tier 3: scan a range of ports
-    for port in 9222..=9333 {
-        if probe_cdp_port(port) {
-            return Ok(format!("http://localhost:{port}"));
+    // Tier 3: scan a range of ports concurrently — probe all ports in the
+    // range at once since localhost connection-refused is near-instant and
+    // sequential scanning would waste time on timeouts for non-CDP open ports.
+    let found = AtomicU16::new(0);
+    let found_ref = &found;
+    std::thread::scope(|s| {
+        for port in 9222..=9333 {
+            s.spawn(move || {
+                if found_ref.load(Ordering::Relaxed) == 0 && probe_cdp_port(port) {
+                    found_ref.store(port, Ordering::Relaxed);
+                }
+            });
         }
+    });
+    let found_port = found.load(Ordering::Relaxed);
+    if found_port != 0 {
+        return Ok(format!("http://localhost:{found_port}"));
     }
 
     Err(format!(
@@ -3206,21 +3219,15 @@ pub fn resolve_channel_to_endpoint(channel: &str) -> Result<String, String> {
 /// its `--remote-debugging-port` value from the command line.
 fn find_debug_port_in_running_processes(executable_name: &str) -> Option<u16> {
     let output = if cfg!(target_os = "windows") {
-        // Use wmic to get command lines of matching processes
-        std::process::Command::new("wmic")
-            .args([
-                "process",
-                "where",
-                &format!("name like '%{executable_name}%'"),
-                "get",
-                "commandline",
-            ])
-            .output()
-            .ok()?
+        // Windows: try PowerShell (Get-CimInstance) first, fall back to
+        // deprecated wmic for older Windows versions.
+        windows_process_list(executable_name)?
     } else {
-        // macOS / Linux: use ps to list all process command lines
+        // macOS / Linux: use ps with `-o args=` for the full command line
+        // (BSD `command=` may truncate long lines; `args=` is the portable
+        // column for the complete argument vector).
         std::process::Command::new("ps")
-            .args(["-e", "-o", "command="])
+            .args(["-e", "-o", "args="])
             .output()
             .ok()?
     };
@@ -3232,7 +3239,7 @@ fn find_debug_port_in_running_processes(executable_name: &str) -> Option<u16> {
         if !lower.contains(executable_name) {
             continue;
         }
-        // Parse --remote-debugging-port=N or --remote-debugging-port N
+        // Parse --remote-debugging-port=N
         for part in line.split_whitespace() {
             if let Some(port_str) = part.strip_prefix("--remote-debugging-port=") {
                 if let Ok(port) = port_str.parse::<u16>() {
@@ -3241,6 +3248,44 @@ fn find_debug_port_in_running_processes(executable_name: &str) -> Option<u16> {
             }
         }
     }
+    None
+}
+
+/// On Windows, enumerate running processes via PowerShell (preferred) or
+/// the deprecated `wmic` as a fallback for older systems.
+#[cfg(target_os = "windows")]
+fn windows_process_list(executable_name: &str) -> Option<std::process::Output> {
+    // PowerShell — Get-CimInstance is the modern replacement for wmic.
+    let ps_cmd = format!(
+        "Get-CimInstance Win32_Process | Where-Object {{ $_.Name -like '*{}*' }} | Select-Object -ExpandProperty CommandLine",
+        executable_name
+    );
+    if let Ok(out) = std::process::Command::new("powershell")
+        .args(["-NoProfile", "-Command", &ps_cmd])
+        .output()
+    {
+        if out.status.success() && !out.stdout.is_empty() {
+            return Some(out);
+        }
+    }
+
+    // Fallback: wmic (deprecated since Windows 10 21H1, but still present
+    // on most systems).
+    std::process::Command::new("wmic")
+        .args([
+            "process",
+            "where",
+            &format!("name like '%{executable_name}%'"),
+            "get",
+            "commandline",
+        ])
+        .output()
+        .ok()
+}
+
+// Stub for non-Windows platforms — never called; satisfies the compiler.
+#[cfg(not(target_os = "windows"))]
+fn windows_process_list(_executable_name: &str) -> Option<std::process::Output> {
     None
 }
 
@@ -6455,5 +6500,102 @@ mod tests {
     fn cdp_probe_unused_port_returns_false() {
         // Port 19999 is very unlikely to have anything listening
         assert!(!probe_cdp_port(19999));
+    }
+
+    // -------------------------------------------------------------------
+    // BrowserChannel::from_str tests
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn channel_from_str_chrome_variants() {
+        assert_eq!(BrowserChannel::from_str("chrome"), Some(BrowserChannel::Chrome));
+        assert_eq!(BrowserChannel::from_str("Chrome"), Some(BrowserChannel::Chrome));
+        assert_eq!(BrowserChannel::from_str("CHROME"), Some(BrowserChannel::Chrome));
+        assert_eq!(BrowserChannel::from_str("google-chrome"), Some(BrowserChannel::Chrome));
+        assert_eq!(BrowserChannel::from_str("google chrome"), Some(BrowserChannel::Chrome));
+    }
+
+    #[test]
+    fn channel_from_str_chrome_beta_variants() {
+        assert_eq!(BrowserChannel::from_str("chrome-beta"), Some(BrowserChannel::ChromeBeta));
+        assert_eq!(BrowserChannel::from_str("google-chrome-beta"), Some(BrowserChannel::ChromeBeta));
+    }
+
+    #[test]
+    fn channel_from_str_chrome_dev_variants() {
+        assert_eq!(BrowserChannel::from_str("chrome-dev"), Some(BrowserChannel::ChromeDev));
+        assert_eq!(BrowserChannel::from_str("google-chrome-dev"), Some(BrowserChannel::ChromeDev));
+    }
+
+    #[test]
+    fn channel_from_str_chrome_canary_variants() {
+        assert_eq!(BrowserChannel::from_str("chrome-canary"), Some(BrowserChannel::ChromeCanary));
+        assert_eq!(BrowserChannel::from_str("google-chrome-canary"), Some(BrowserChannel::ChromeCanary));
+    }
+
+    #[test]
+    fn channel_from_str_edge_variants() {
+        assert_eq!(BrowserChannel::from_str("msedge"), Some(BrowserChannel::MsEdge));
+        assert_eq!(BrowserChannel::from_str("edge"), Some(BrowserChannel::MsEdge));
+        assert_eq!(BrowserChannel::from_str("EDGE"), Some(BrowserChannel::MsEdge));
+        assert_eq!(BrowserChannel::from_str("microsoft-edge"), Some(BrowserChannel::MsEdge));
+        assert_eq!(BrowserChannel::from_str("microsoft edge"), Some(BrowserChannel::MsEdge));
+    }
+
+    #[test]
+    fn channel_from_str_edge_beta_variants() {
+        assert_eq!(BrowserChannel::from_str("msedge-beta"), Some(BrowserChannel::MsEdgeBeta));
+        assert_eq!(BrowserChannel::from_str("edge-beta"), Some(BrowserChannel::MsEdgeBeta));
+        assert_eq!(BrowserChannel::from_str("microsoft-edge-beta"), Some(BrowserChannel::MsEdgeBeta));
+    }
+
+    #[test]
+    fn channel_from_str_edge_dev_variants() {
+        assert_eq!(BrowserChannel::from_str("msedge-dev"), Some(BrowserChannel::MsEdgeDev));
+        assert_eq!(BrowserChannel::from_str("edge-dev"), Some(BrowserChannel::MsEdgeDev));
+        assert_eq!(BrowserChannel::from_str("microsoft-edge-dev"), Some(BrowserChannel::MsEdgeDev));
+    }
+
+    #[test]
+    fn channel_from_str_edge_canary_variants() {
+        assert_eq!(BrowserChannel::from_str("msedge-canary"), Some(BrowserChannel::MsEdgeCanary));
+        assert_eq!(BrowserChannel::from_str("edge-canary"), Some(BrowserChannel::MsEdgeCanary));
+        assert_eq!(BrowserChannel::from_str("microsoft-edge-canary"), Some(BrowserChannel::MsEdgeCanary));
+    }
+
+    #[test]
+    fn channel_from_str_unknown_returns_none() {
+        assert_eq!(BrowserChannel::from_str("firefox"), None);
+        assert_eq!(BrowserChannel::from_str("safari"), None);
+        assert_eq!(BrowserChannel::from_str(""), None);
+        assert_eq!(BrowserChannel::from_str("chromium"), None);
+    }
+
+    #[test]
+    fn channel_default_ports() {
+        assert_eq!(BrowserChannel::Chrome.default_debug_port(), 9222);
+        assert_eq!(BrowserChannel::ChromeBeta.default_debug_port(), 9223);
+        assert_eq!(BrowserChannel::ChromeDev.default_debug_port(), 9224);
+        assert_eq!(BrowserChannel::ChromeCanary.default_debug_port(), 9225);
+        assert_eq!(BrowserChannel::MsEdge.default_debug_port(), 9222);
+        assert_eq!(BrowserChannel::MsEdgeBeta.default_debug_port(), 9223);
+        assert_eq!(BrowserChannel::MsEdgeDev.default_debug_port(), 9224);
+        assert_eq!(BrowserChannel::MsEdgeCanary.default_debug_port(), 9225);
+    }
+
+    #[test]
+    fn channel_executable_names() {
+        assert_eq!(BrowserChannel::Chrome.executable_name(), "chrome");
+        assert_eq!(BrowserChannel::ChromeCanary.executable_name(), "chrome");
+        assert_eq!(BrowserChannel::MsEdge.executable_name(), "msedge");
+        assert_eq!(BrowserChannel::MsEdgeDev.executable_name(), "msedge");
+    }
+
+    #[test]
+    fn channel_display_format() {
+        assert_eq!(BrowserChannel::Chrome.to_string(), "chrome");
+        assert_eq!(BrowserChannel::ChromeBeta.to_string(), "chrome-beta");
+        assert_eq!(BrowserChannel::MsEdge.to_string(), "msedge");
+        assert_eq!(BrowserChannel::MsEdgeCanary.to_string(), "msedge-canary");
     }
 }

@@ -762,12 +762,13 @@ async fn handle_attach(
         .filter(|s| !s.is_empty());
 
     // --endpoint value (overrides base_url for remote Browser4 servers)
-    let effective_base_url = if let Some(endpoint) = parsed_args
+    let endpoint_override = parsed_args
         .get("endpoint")
         .and_then(|v| v.as_str())
         .map(str::trim)
-        .filter(|s| !s.is_empty())
-    {
+        .filter(|s| !s.is_empty());
+
+    let effective_base_url = if let Some(endpoint) = endpoint_override {
         if !endpoint.starts_with("http://") && !endpoint.starts_with("https://") {
             return Err("--endpoint must be an HTTP(S) URL".to_string());
         }
@@ -776,14 +777,37 @@ async fn handle_attach(
         base_url.to_string()
     };
 
+    // If --endpoint is provided without --cdp, just switch the CLI to the
+    // remote server without calling attach_browser.  The remote server
+    // manages its own browser sessions; subsequent commands (open, goto,
+    // list, etc.) will target the remote endpoint.
+    if cdp_raw.is_none() && endpoint_override.is_some() {
+        let mut state = read_state(None, session_name);
+        state.session_name = session_name.map(|s| s.to_string());
+        state.session_id = None;
+        state.base_url = effective_base_url.clone();
+        state.active_selector = None;
+        state.last_mouse_position = None;
+        write_state(&state, None, session_name).map_err(|e| e.to_string())?;
+
+        json_field("endpoint", json!(&effective_base_url));
+
+        cli_println!("Switched to remote Browser4 server: {}", effective_base_url);
+        cli_println!("Use 'browser4-cli list' to see sessions, or 'browser4-cli open' to start one.");
+        return Ok(());
+    }
+
     // Resolve the CDP endpoint
     let cdp_endpoint = if let Some(raw) = cdp_raw {
         resolve_cdp_endpoint(raw)?
     } else {
         return Err(
-            "attach requires --cdp=<url> or --cdp=<channel>.\n\
-             Examples:\n  browser4-cli attach --cdp=chrome\n  \
-             browser4-cli attach --cdp=http://localhost:9222"
+            "attach requires --cdp=<url|channel> or --endpoint=<url>.\n\
+             Examples:\n  \
+             browser4-cli attach --cdp=chrome\n  \
+             browser4-cli attach --cdp=http://localhost:9222\n  \
+             browser4-cli attach --endpoint=http://browser4-server:8182\n  \
+             browser4-cli attach --endpoint=http://remote:8182 --cdp=chrome"
                 .to_string(),
         );
     };
