@@ -1,3 +1,8 @@
+---
+title: "DOM Snapshot — Real-World Scenarios"
+description: "Practical end-to-end recipes using all domsnapshot subcommands: get, query, grep, summary, and export. Covers e-commerce, news, SEO, pricing, job boards, compliance, research, real estate, CI, incident response, and agent-assisted workflows."
+---
+
 # DOM Snapshot — Real-World Scenarios
 
 Practical, end-to-end recipes using the `domsnapshot` family of commands. Each scenario is self-contained: you can adapt the CSS selectors and X-SQL queries to your own target pages.
@@ -8,14 +13,16 @@ Practical, end-to-end recipes using the `domsnapshot` family of commands. Each s
 |---|----------|------------------|--------|
 | 1 | E-Commerce Product Monitoring | `get`, `query` | Retail |
 | 2 | News Headline Aggregator | `domsnapshot`, `get`, `export` | Media |
-| 3 | SEO Health Audit | `query` (X-SQL) | Marketing |
+| 3 | SEO Health Audit | `query` (X-SQL), `grep` | Marketing |
 | 4 | Competitive Price Tracker | `query` (X-SQL + load options) | Business |
-| 5 | Job Board Scraper | `get`, `query` | HR / Recruiting |
-| 6 | Compliance Verification | `get`, `export` | Legal / Governance |
+| 5 | Job Board Scraper | `get`, `query`, `grep` | HR / Recruiting |
+| 6 | Compliance Verification | `get`, `export`, `grep` | Legal / Governance |
 | 7 | Academic Literature Metadata Extraction | `query` (X-SQL) | Research |
 | 8 | Real Estate Listing Monitor | `get`, `query` | Property |
-| 9 | CI/E2E Visual Regression Snapshot | `domsnapshot`, `export` | Engineering |
+| 9 | CI/E2E Visual Regression Snapshot | `domsnapshot`, `export`, `grep` | Engineering |
 | 10 | Agent-Assisted Form Discovery | `get` + Agent CLI | AI / Automation |
+| 11 | Page Structure Analysis | `summary` | Research / Auditing |
+| 12 | Incident Response & Debugging | `grep` | Engineering / SRE |
 
 ---
 
@@ -180,6 +187,39 @@ browser4-cli domsnapshot query --sql "
 "
 ```
 
+### 3e. Quick grep-based checks
+
+When you don't need structured output, `grep` gives instant answers without writing SQL:
+
+```bash
+browser4-cli goto "https://example.com/blog/some-post"
+browser4-cli domsnapshot
+
+# Count how many <h1> tags exist (SEO: should be exactly 1)
+browser4-cli domsnapshot grep -c '<h1[>\s]'
+# → 1
+
+# Find images missing alt text
+browser4-cli domsnapshot grep -c '<img[^>]*alt=""'
+# → 3  (3 images have empty alt — fix them)
+
+# Check for meta description
+browser4-cli domsnapshot grep -q -F '<meta name="description"'
+# exit code 0 = found, 1 = missing
+
+# Count total links on the page
+browser4-cli domsnapshot grep -c '<a[>\s]'
+# → 142
+
+# Scope to <head> only — find all meta tags in one shot
+browser4-cli domsnapshot grep --selector head -n '<meta'
+# → 5:<meta charset="utf-8">
+# → 6:<meta name="viewport" content="width=device-width">
+# → 7:<meta name="description" content="...">
+```
+
+**Why `grep` wins here:** For presence/absence checks and counting, `grep` is faster to write and runs client-side without touching the X-SQL backend. Use `query` when you need structured extraction (field names, tabular output) and `grep` for quick checks, counting, and debugging.
+
 ---
 
 ## 4. Competitive Price Tracker
@@ -264,14 +304,32 @@ browser4-cli domsnapshot query --sql "
 browser4-cli domsnapshot get text ".jobs-search-results__list-item"
 ```
 
-### 5c. Save and process
+### 5c. Quick filtering with grep
+
+Skip the export — search the snapshot directly with `grep` for instant filtering:
+
+```bash
+browser4-cli goto "https://www.linkedin.com/jobs/search?keywords=senior%20frontend"
+browser4-cli domsnapshot
+
+# Find all "Senior" level positions
+browser4-cli domsnapshot grep -i 'senior'
+
+# Count remote vs on-site
+browser4-cli domsnapshot grep -c -i 'remote'
+browser4-cli domsnapshot grep -c -i 'on.site'
+
+# Scope search to job cards only for cleaner results
+browser4-cli domsnapshot grep --selector ".job-card-container" -i 'react'
+```
+
+### 5d. Save and process
 
 ```bash
 browser4-cli goto "https://www.linkedin.com/jobs/search?keywords=senior%20frontend"
 browser4-cli domsnapshot
 browser4-cli domsnapshot export --file=jobs.html
-# Then feed the exported HTML to your preferred parser, or grep for quick checks:
-grep -oP 'Senior.*Engineer' jobs.html | sort | uniq -c
+# For deeper processing, feed the exported HTML to your preferred parser
 ```
 
 ---
@@ -335,7 +393,35 @@ for page in "${PAGES[@]}"; do
 done
 ```
 
-### 6c. Archive for audit trail
+### 6c. Quick compliance check with grep
+
+For fast ad-hoc checks, `grep` answers presence/absence questions without writing scripts:
+
+```bash
+browser4-cli goto "https://bank.example.com/products/savings"
+browser4-cli domsnapshot
+
+# Verify required legal text exists anywhere on the page
+browser4-cli domsnapshot grep -q -F "FDIC Insured" && echo "PASS" || echo "FAIL"
+browser4-cli domsnapshot grep -q -F "Terms and Conditions" && echo "PASS" || echo "FAIL"
+
+# Check for forbidden content (tracking scripts, data leaks)
+browser4-cli domsnapshot grep -i 'gtag|fbq|_gaq' && echo "WARNING: trackers found"
+
+# Scope to footer for legal links
+browser4-cli domsnapshot grep --selector footer -i 'privacy|accessibility|terms'
+# → <a href="/privacy">Privacy Policy</a>
+# → <a href="/accessibility">Accessibility Statement</a>
+# → <a href="/terms">Terms of Service</a>
+
+# Count how many cookie consent elements exist (should be 1)
+browser4-cli domsnapshot grep -c -F 'cookie-consent'
+# → 1
+```
+
+**Why `grep` here:** For compliance, you often need to answer "is this text present?" instantly. `grep -q` exits 0/1 for pass/fail — perfect for CI gates and pre-commit hooks. Use `--selector` to scope to specific page regions (footer, nav, main).
+
+### 6d. Archive for audit trail
 
 ```bash
 browser4-cli goto "https://bank.example.com/products/savings"
@@ -503,6 +589,30 @@ browser4-cli domsnapshot get attr "#checkout-btn" href  # Must be /checkout
 browser4-cli domsnapshot get text ".item-count"         # Must be > 0
 ```
 
+### 9d. Fast smoke test with grep
+
+For a lightweight CI smoke test that just checks critical strings are present:
+
+```bash
+browser4-cli goto "https://staging.example.com/checkout"
+browser4-cli domsnapshot
+
+# Verify checkout page has all required sections (exits non-zero if any missing)
+browser4-cli domsnapshot grep -q -F "Cart Total" || exit 1
+browser4-cli domsnapshot grep -q -F "Shipping Address" || exit 1
+browser4-cli domsnapshot grep -q -F "Place Order" || exit 1
+
+# Ensure no error messages leaked to the page
+browser4-cli domsnapshot grep -i 'error|exception|stack trace' && exit 1
+
+# Scope to <main> to check only the content area
+browser4-cli domsnapshot grep --selector main -q -F "Order Summary" || exit 1
+
+echo "Smoke test passed"
+```
+
+**Why `grep` for CI:** `grep -q` returns exit code 0 for match, 1 for no match — perfect for CI shell scripts. It's faster than `query` for presence checks and doesn't require writing SQL. Use `-F` for literal strings (no regex escaping needed) and `--selector` to scope to specific regions.
+
 ---
 
 ## 10. Agent-Assisted Form Discovery
@@ -557,17 +667,174 @@ browser4-cli select "CA" "#state"
 
 ---
 
+## 11. Page Structure Analysis with Summary (WPSI)
+
+**Problem:** An auditor or researcher needs a quick, AI-readable overview of a page's structure — headings, forms, tables, key content blocks, and statistics — without reading the full HTML or writing selectors.
+
+**Why DOM Snapshot:** `summary` generates a Web Page Summary Index (WPSI) — a deterministic compressed page summary (typically <1% of original HTML) in YAML format. It's designed for LLM consumption and quick human review.
+
+### 11a. Generate a page summary
+
+```bash
+browser4-cli goto "https://en.wikipedia.org/wiki/Web_scraping"
+browser4-cli domsnapshot
+browser4-cli domsnapshot summary
+```
+
+**Output (example — actual output is YAML):**
+```yaml
+url: https://en.wikipedia.org/wiki/Web_scraping
+title: "Web scraping - Wikipedia"
+metaDescription: "Web scraping, web harvesting, or web data extraction is..."
+headings:
+  - level: h1
+    text: "Web scraping"
+  - level: h2
+    text: "History"
+  - level: h2
+    text: "Techniques"
+forms: 0
+tables: 3
+lists: 12
+textStats:
+  totalTextNodes: 847
+  totalTextChars: 52341
+keyContent:
+  - selector: "#mw-content-text > div.mw-parser-output > p:nth-child(5)"
+    textPreview: "Web scraping is the process of automatically..."
+    textLength: 342
+```
+
+### 11b. Compare page structures across a site
+
+Use `summary` to detect structural drift across pages — missing headings, extra forms, changed layouts:
+
+```bash
+#!/bin/bash
+# audit-structure.sh — compare page summaries across a site
+PAGES=("/about" "/products" "/pricing" "/contact")
+
+for path in "${PAGES[@]}"; do
+  browser4-cli goto "https://example.com$path"
+  browser4-cli domsnapshot
+  echo "=== $path ==="
+  browser4-cli domsnapshot summary
+  echo ""
+done
+# Pipe summaries to an LLM: "Compare these page summaries and flag structural inconsistencies"
+```
+
+### 11c. Pre-screen before deep extraction
+
+```bash
+# 1. Get a summary to understand the page structure
+browser4-cli goto "https://example.com/products"
+browser4-cli domsnapshot
+browser4-cli domsnapshot summary
+# → reveals: tables=1, lists=5, headings at h2, no forms
+
+# 2. Now write targeted X-SQL knowing the structure
+browser4-cli domsnapshot query --sql "
+  SELECT dom_first_text(dom, 'h2') AS category, dom_first_text(dom, 'li') AS item
+  FROM load_and_select(@url, 'ul.product-list')
+"
+```
+
+**Why `summary` here:** It answers "what's on this page?" without you writing a single selector. Use it as a discovery step before committing to specific `get` or `query` calls. Especially useful for unfamiliar pages.
+
+---
+
+## 12. Incident Response & Debugging with Grep
+
+**Problem:** During an incident, an SRE or developer needs to quickly search a rendered page for error messages, broken elements, leaked secrets, or unexpected content — fast, without writing SQL or loading tools.
+
+**Why DOM Snapshot:** `grep` searches the full DOM snapshot HTML client-side with familiar grep semantics. No backend round-trip for the search itself. All standard grep flags work: `-i`, `-v`, `-c`, `-A`/`-B`/`-C`, `-F`, `-w`.
+
+### 12a. Find error messages on a broken page
+
+```bash
+browser4-cli goto "https://app.example.com/dashboard"
+browser4-cli domsnapshot
+
+# Search for common error patterns (case-insensitive)
+browser4-cli domsnapshot grep -i 'error|exception|failed|timeout|500|503'
+
+# Show 3 lines of context around each error for debugging
+browser4-cli domsnapshot grep -i -C 3 'error|exception'
+
+# Scope to <main> to ignore nav/footer noise
+browser4-cli domsnapshot grep --selector main -i -C 2 'stack trace'
+```
+
+### 12b. Detect leaked secrets or sensitive data
+
+```bash
+browser4-cli goto "https://app.example.com/settings"
+browser4-cli domsnapshot
+
+# Check for common secret patterns (access keys, tokens, private keys)
+browser4-cli domsnapshot grep -i 'AKIA[0-9A-Z]{16}' && echo "WARNING: AWS key pattern found"
+browser4-cli domsnapshot grep -i 'sk-[a-zA-Z0-9]{32,}' && echo "WARNING: API key pattern found"
+browser4-cli domsnapshot grep -i 'BEGIN.*PRIVATE KEY' && echo "WARNING: Private key in page"
+
+# Look for internal hostnames or IPs leaked to the frontend
+browser4-cli domsnapshot grep -i '\.internal|\.local|10\.\d+\.\d+\.\d+'
+```
+
+### 12c. Verify post-deploy content
+
+After a deploy, confirm specific content appeared/disappeared:
+
+```bash
+browser4-cli goto "https://staging.example.com"
+browser4-cli domsnapshot
+
+# Confirm the new feature flag is on
+browser4-cli domsnapshot grep -q -F 'feature.new-checkout.enabled' || exit 1
+
+# Confirm debug info is NOT in the rendered HTML
+browser4-cli domsnapshot grep -q -F 'debugMode' && exit 1
+
+# Show the 5 lines around the version tag to verify deploy
+browser4-cli domsnapshot grep -C 2 -F 'v2.14.1'
+# → 45:  <meta name="version" content="v2.14.1">
+# → 46:  <meta name="build-time" content="2026-06-27T14:30:00Z">
+```
+
+### 12d. Inverted search — find what's NOT there
+
+```bash
+# Show only non-empty lines (strip blank lines for readability)
+browser4-cli domsnapshot grep -v '^\s*$'
+
+# Find all <img> tags WITHOUT alt attributes
+browser4-cli domsnapshot grep -o '<img[^>]*>' | while read tag; do
+  if ! echo "$tag" | grep -q 'alt='; then
+    echo "Missing alt: $tag"
+  fi
+done
+
+# Find links missing rel="nofollow"
+browser4-cli domsnapshot grep --selector main -o '<a[^>]*href="http[^"]*"[^>]*>' | grep -v 'rel='
+```
+
+**Why `grep` for incident response:** It's the fastest path from "is X on the page?" to an answer. No SQL, no selectors, no backend load — just regex against the cached snapshot. The grep-style flags (`-A`/`-B`/`-C` for context, `-v` for inverse, `-c` for counting, `-F` for literal strings) match what every developer already knows.
+
+---
+
 ## Patterns & Tips
 
 ### Combining commands
 
-Most real workflows chain `goto` → `domsnapshot` → `get`/`query`/`export`. The standalone `domsnapshot` command captures and caches the DOM snapshot; subsequent `get`, `query`, and `export` calls reuse the cached snapshot:
+Most real workflows chain `goto` → `domsnapshot` → `get`/`query`/`export`/`grep`/`summary`. The standalone `domsnapshot` command captures and caches the DOM snapshot; subsequent commands reuse the cached snapshot:
 
 ```bash
 browser4-cli goto "$URL"
-browser4-cli domsnapshot                      # capture + cache
-browser4-cli domsnapshot get text "$SELECTOR"  # reads from cache
-browser4-cli domsnapshot get html "$SELECTOR"  # reads from cache
+browser4-cli domsnapshot                         # capture + cache
+browser4-cli domsnapshot get text "$SELECTOR"    # reads from cache
+browser4-cli domsnapshot get html "$SELECTOR"    # reads from cache
+browser4-cli domsnapshot grep -i "pattern"       # reads from cache (client-side search)
+browser4-cli domsnapshot summary                 # reads from cache (generates WPSI)
 ```
 
 The cache is invalidated by the next `domsnapshot` capture or a page navigation (`goto`, `reload`, etc.).
@@ -593,36 +860,44 @@ Append these to the URL string in `domsnapshot query`:
 | `-njr 3` | No JavaScript rendering, retry up to 3 times |
 | `-njr 0` | Force JS rendering every time |
 
-### Choosing `get` vs `query`
+### Choosing the right command
 
-| Use `get` when… | Use `query` when… |
-|-----------------|-------------------|
-| You need one value from one element | You need multiple fields from repeating elements |
-| The selector is simple and stable | You need filtering (`WHERE`), `expr()`, or aggregation |
-| You're in a shell script doing quick checks | You want structured tabular output |
-| You want raw text/HTML for piping | You're extracting across multiple pages in one command |
+| Command | Best for |
+|---------|----------|
+| `get` | One value from one element; simple scripts; raw text/HTML for piping |
+| `query` | Multiple fields from repeating elements; filtering (`WHERE`/`expr()`); structured tabular output |
+| `export` | Saving full HTML for archival, diffing, external tooling, offline analysis |
+| `grep` | Presence/absence checks; counting; quick searches with context; CI smoke tests; incident response |
+| `summary` | Page discovery before writing selectors; structural audits; LLM-friendly page overviews |
 
 > **Important:** `domsnapshot get` returns **only the first match** (it uses `document.selectFirstOrNull()` internally). For extracting data from multiple elements (e.g., all products on a listing page), use `domsnapshot query` with X-SQL's `load_and_select`.
 
 ### Command form notes
 
 - The CLI uses the **spaced form**: `browser4-cli domsnapshot get text "h1"`, not the hyphenated `domsnapshot-get`.
-- `browser4-cli domsnapshot` (with no subcommand) captures a fresh DOM snapshot and caches it in the backend. Subsequent `get`, `query`, and `export` calls reuse this cached snapshot — they do **not** re-capture the page. The cache is invalidated by the next `domsnapshot` capture or a page navigation.
+- `browser4-cli domsnapshot` (with no subcommand) captures a fresh DOM snapshot and caches it in the backend. Subsequent `get`, `query`, `export`, `grep`, and `summary` calls reuse this cached snapshot — they do **not** re-capture the page. The cache is invalidated by the next `domsnapshot` capture or a page navigation.
+- `grep` performs matching **client-side** by fetching the snapshot HTML then running regex locally — no backend round-trip for the search itself.
+- `summary` generates a WPSI YAML file from the cached snapshot — useful as a discovery step before writing selectors.
 
 ---
 
 ## Tested & Verified
 
-All scenarios using `get` and `export` commands have been tested against live websites:
+All scenarios using `get`, `export`, `grep`, and `summary` commands have been tested against live websites:
 
 | Scenario | Test Site | Result |
 |----------|-----------|--------|
 | 1a. Product extraction | books.toscrape.com | ✅ Title, price, availability, image URL |
 | 3. SEO metadata | en.wikipedia.org | ✅ Title, H1, meta description, canonical URL |
+| 3e. Grep-based SEO checks | en.wikipedia.org | ✅ `-c`, `--selector`, `-q` all functional |
 | 5. Listing extraction | books.toscrape.com | ✅ Product title and price (single-element) |
 | 6. Compliance verification | en.wikipedia.org | ✅ Footer link extraction, element presence check |
+| 6c. Grep compliance checks | en.wikipedia.org | ✅ `-q`, `-F`, `--selector footer` functional |
 | 9. Export & archival | Multiple sites | ✅ Pretty-formatted HTML with metadata |
+| 9d. Grep smoke tests | Multiple sites | ✅ `-q` pass/fail, `-C` context, `--selector` |
 | 10. Form discovery | httpbin.org/forms/post | ✅ Full form HTML with all input fields |
+| 11. Summary (WPSI) | en.wikipedia.org | ✅ YAML output with headings, stats, keyContent |
+| 12. Grep incident response | Multiple sites | ✅ `-i`, `-v`, `-C`, `-F`, `--selector` all functional |
 
 **X-SQL `query` note:** The X-SQL query path (`domsnapshot query`) has a known Jackson serialization issue with `java.time.Instant` fields in `ScrapeResponse`. A fix has been applied in `MCPToolController.kt` (using the Spring-configured `ObjectMapper` with `JavaTimeModule` instead of `jacksonObjectMapper()`). This requires a server rebuild to take effect.
 
@@ -630,6 +905,7 @@ All scenarios using `get` and `export` commands have been tested against live we
 
 ## See Also
 
-- [DOM Snapshot Reference](domsnapshot.md) — full command reference and X-SQL documentation
-- [X-SQL Reference](x-sql.md) — available DOM UDFs and SQL syntax
+- [DOM Snapshot Reference](domsnapshot.md) — full command reference for `get`, `query`, `grep`, `summary`, `export`
+- [CSS Selector Bridge](css-selector-bridge.md) — bridging interactive snapshot refs to DOM snapshot CSS selectors
+- [X-SQL Reference](x-sql.md) — DOM and string function reference for `domsnapshot query`
 - [SKILL.md](../SKILL.md) — Browser4 CLI automation skill overview

@@ -1,3 +1,8 @@
+---
+title: "Attach — Connect to an Existing Browser"
+description: "Reference for the attach command. Connect to an already-running Chrome or Edge instance via CDP instead of launching a new browser."
+---
+
 # Attach — Connect to an Existing Browser
 
 Instead of launching a new browser, `attach` connects to an already-running Chrome or Edge instance via the Chrome DevTools Protocol (CDP).

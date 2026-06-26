@@ -1,3 +1,8 @@
+---
+title: "Agent — Autonomous Browser Task Execution"
+description: "Reference for agent commands (run, status, result), extract, and summarize. Submit natural-language tasks for autonomous browser execution driven by an LLM."
+---
+
 # Agent — Autonomous Browser Task Execution
 
 Submit natural-language tasks and let Browser4's AI agent plan and execute browser actions autonomously. The agent reasons about the page, decides which actions to take, and completes the task asynchronously.

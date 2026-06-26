@@ -1,3 +1,8 @@
+---
+title: "DOM Snapshot — Static DOM Extraction & X-SQL Querying"
+description: "Reference for domsnapshot commands (get, query, summary, export, grep). Extract structured data from the raw HTML DOM via CSS selectors and X-SQL queries."
+---
+
 # DOM Snapshot — Static DOM Extraction & X-SQL Querying
 
 The `domsnapshot` family operates on a **static DOM snapshot** — the raw HTML of the current page parsed into a queryable DOM. Unlike interactive `snapshot` (accessibility-tree refs for `click`/`type`/`fill`), `domsnapshot` extracts structured data via CSS selectors and X-SQL queries.
