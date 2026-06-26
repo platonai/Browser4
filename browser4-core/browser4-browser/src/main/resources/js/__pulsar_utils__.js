@@ -1442,3 +1442,6 @@ __pulsar_utils__.typeInfo = function() {
 // The page's own scripts (Page World) access the window of the Page World and cannot see the global variables of the Isolated World.
 window.__pulsar_utils__ = __pulsar_utils__
 window.__pulsar_CONFIGS = __pulsar_CONFIGS
+window.__pulsar_NodeExt = __pulsar_NodeExt
+window.__pulsar_NodeTraversor = __pulsar_NodeTraversor
+window.__pulsar_NodeFeatureCalculator = __pulsar_NodeFeatureCalculator

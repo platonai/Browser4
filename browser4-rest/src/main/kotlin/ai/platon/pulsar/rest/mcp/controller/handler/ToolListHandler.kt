@@ -40,6 +40,7 @@ class ToolListHandler(
                 // Session management
                 "open_session", "close_session", "list_sessions",
                 "close_all_sessions", "kill_all_sessions", "delete_session_data",
+                "attach_browser",
                 // Command tools (no session required)
                 "command_run", "command_batch", "command_status", "command_result"
             )

@@ -670,6 +670,7 @@ open class PulsarWebDriver constructor(
     override suspend fun hover(selector: String) {
         bringToFront()
         rpc.invokeOnElement(selector, "hover", scrollIntoView = true) { node ->
+            waitForScrollSettled(selector)
             emulator.hover(node, position = "center")
         }
     }

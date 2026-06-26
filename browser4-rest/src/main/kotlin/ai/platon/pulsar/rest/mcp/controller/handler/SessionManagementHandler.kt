@@ -74,6 +74,34 @@ class SessionManagementHandler(
         return ResponseEntity.ok(textResponse("User data deleted for session"))
     }
 
+    fun handleAttachBrowser(request: MCPToolCallRequest): ResponseEntity<MCPToolCallResponse> {
+        val args = request.arguments ?: emptyMap()
+
+        val cdpEndpoint = (args["cdpEndpoint"] as? String)?.takeIf { it.isNotBlank() }
+        val cdpPort = (args["cdpPort"] as? Number)?.toInt()
+
+        require(cdpEndpoint != null || cdpPort != null) {
+            "attach_browser requires either 'cdpEndpoint' (URL) or 'cdpPort' (number)"
+        }
+
+        val session = sessionManager.createAttachedSession(
+            cdpEndpoint = cdpEndpoint,
+            cdpPort = cdpPort,
+            capabilities = args.filterKeys {
+                it != "cdpEndpoint" && it != "cdpPort" && it != "sessionId"
+            }.mapValues { it.value?.toString() }
+        )
+
+        logger.info(
+            "MCP attach_browser: created session {} attached to {}",
+            session.sessionId,
+            cdpEndpoint ?: "port $cdpPort"
+        )
+        return ResponseEntity.ok(
+            textResponse("""{"sessionId":"${session.sessionId}"}""")
+        )
+    }
+
     private fun requireSessionId(request: MCPToolCallRequest): String {
         return request.arguments?.get("sessionId")?.toString()
             ?: throw IllegalArgumentException("Missing required parameter: sessionId")

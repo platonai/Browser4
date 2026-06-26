@@ -812,9 +812,10 @@ async function cmdAuto(args) {
   const lastReleaseTag = getLatestReleaseTag();
   const publishedNpm = getLatestNpmVersion("browser4-cli");
 
-  // Parse last-release versions (strip leading "v" from git tag if present)
+  // Parse last-release versions (strip leading "v" and any prerelease suffix
+  // like "-ci.1" from the git tag, e.g. "v4.11.11-ci.1" → "4.11.11")
   const lastReleaseBackend = lastReleaseTag
-    ? lastReleaseTag.replace(/^v/, "")
+    ? lastReleaseTag.replace(/^v/, "").replace(/-.*$/, "")
     : localBackend;
   const lastReleaseCli = publishedNpm || localCli;
 

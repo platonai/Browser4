@@ -46,7 +46,7 @@ class JsHandler(
                     logger.debug("Failed to evaluate in isolated world: {}", e.message)
                 }
             }.getOrNull()
-            if (isolatedResult != null) {
+            if (isolatedResult != null && isolatedResult.exceptionDetails == null) {
                 return isolatedResult
             }
         }
@@ -116,7 +116,7 @@ class JsHandler(
                     logger.debug("Failed to evaluate in isolated world: {}", e.message)
                 }
             }.getOrNull()
-            if (isolatedResult != null) {
+            if (isolatedResult != null && isolatedResult.exceptionDetails == null) {
                 return isolatedResult
             }
         }

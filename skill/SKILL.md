@@ -90,6 +90,7 @@ Named sessions isolate browser state (cookies, localStorage, tabs). Use `-s=<nam
 
 ```bash
 browser4-cli open [--headed|--headless] [url]  # start session, optionally with url
+browser4-cli attach --cdp=<channel|url>         # connect to an existing browser via CDP
 browser4-cli goto <url>                         # navigate (auto-opens/reconnects session)
 browser4-cli go-back | go-forward | reload
 browser4-cli close                              # close current session
@@ -97,6 +98,83 @@ browser4-cli -s=<name> open|goto <url>          # target a named session
 ```
 
 `goto` auto-reuses the active session; auto-opens a fresh one if stale or missing. Prefer `goto` over manual session management.
+
+### Attach — Connect to an Existing Browser
+
+Instead of launching a new browser, `attach` connects to an already-running Chrome or Edge instance via the Chrome DevTools Protocol (CDP).
+
+**Attach by channel name** — the simplest mode. The target browser must have remote debugging enabled (go to `chrome://inspect/#remote-debugging` and check "Allow remote debugging for this browser instance"):
+
+```bash
+browser4-cli attach --cdp=chrome
+browser4-cli attach --cdp=chrome-canary
+browser4-cli attach --cdp=msedge
+browser4-cli attach --cdp=msedge-dev
+```
+
+Supported channels: `chrome`, `chrome-beta`, `chrome-dev`, `chrome-canary`, `msedge`, `msedge-beta`, `msedge-dev`, `msedge-canary`.
+
+The CLI scans running processes, probes default debugging ports, and falls back to a port-range scan to find the browser automatically.
+
+**Attach by CDP endpoint URL** — connect to any Chromium-based browser with a known debugging port:
+
+```bash
+# Start Chrome with remote debugging
+google-chrome --remote-debugging-port=9222
+
+# Connect by URL
+browser4-cli attach --cdp=http://localhost:9222
+```
+
+Also accepts WebSocket URLs (`ws://localhost:9222/devtools/...`), bare ports (`--cdp=9222`), and `host:port` (`--cdp=localhost:9222`). Works with Chrome, Edge, Electron apps, and cloud browser services (Browserbase, etc.).
+
+**Attach to a remote Browser4 server** — point the CLI at a remote Browser4 instance:
+
+```bash
+browser4-cli attach --endpoint=http://browser4-server:8182 --cdp=chrome
+```
+
+The `--endpoint` flag overrides the default local server URL. When used alone (without `--cdp`), it switches the CLI to the remote server for subsequent commands.
+
+**Named sessions** — use `-s` to name the attached session:
+
+```bash
+browser4-cli attach --cdp=chrome -s=debug-session
+browser4-cli -s=debug-session snapshot
+browser4-cli -s=debug-session screenshot --filename=state.png
+```
+
+**Workflow: connect to your running Chrome**
+
+```bash
+# 1. In Chrome, go to chrome://inspect/#remote-debugging
+#    and enable "Allow remote debugging for this browser instance"
+
+# 2. Attach by channel name
+browser4-cli attach --cdp=chrome
+
+# 3. Interact with your existing tabs
+browser4-cli snapshot
+browser4-cli screenshot --filename=current-state.png
+
+# 4. Save state for future headless sessions
+browser4-cli state-save auth.json
+```
+
+**Workflow: debugging a remote browser via SSH tunnel**
+
+```bash
+# On the remote machine: start Chrome with debugging
+google-chrome --remote-debugging-port=9222
+
+# On your machine: create an SSH tunnel
+ssh -L 9222:localhost:9222 user@remote-host
+
+# Attach and inspect
+browser4-cli attach --cdp=http://localhost:9222
+browser4-cli snapshot
+browser4-cli screenshot --filename=remote-state.png
+```
 
 ### Interaction
 
@@ -274,6 +352,7 @@ Full reference: **[references/agent.md](references/agent.md)**.
 
 ```bash
 browser4-cli list              # show all sessions and their state
+browser4-cli attach --cdp=<channel|url>  # attach to an existing browser instead of launching
 browser4-cli close-all         # close all sessions, keep backend running
 browser4-cli kill-all          # stop backend + kill all browser processes
 ```
@@ -294,7 +373,9 @@ Full reference: **[references/swarm.md](references/swarm.md)**.
 
 ## Error Handling
 
-- Commands requiring the backend (`open`, `goto`, `snapshot`, `click`, etc.) exit non-zero if the backend is unreachable. Check with `browser4-cli list`.
+- Commands requiring the backend (`open`, `attach`, `goto`, `snapshot`, `click`, etc.) exit non-zero if the backend is unreachable. Check with `browser4-cli list`.
+- `attach` exits non-zero when it cannot find the target browser (no matching channel, no CDP endpoint listening on the given port).
+- `attach` exits non-zero when `--cdp` is a channel name and no running browser with remote debugging enabled is found for that channel.
 - `eval` exits non-zero when the JS expression throws.
 - `snapshot` exits non-zero when the page isn't ready or the accessibility tree can't be captured.
 - Stale sessions: prefer `goto` to auto-reopen rather than manually managing session state.

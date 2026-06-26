@@ -43,7 +43,8 @@ use args::{
 use commands::{commands_map, is_bare_css_selector, is_element_reference};
 use daemon::{
     ensure_chrome_available, ensure_server_running, init_root_search_start_dir_from_startup,
-    install_browser4_runtime, read_current_tag, resolve_base_url, InstalledBrowser4Runtime,
+    install_browser4_runtime, read_current_tag, resolve_base_url, resolve_channel_to_endpoint,
+    InstalledBrowser4Runtime,
 };
 use help::{generate_command_help, generate_help, generate_help_entry, public_command_name};
 use http::{
@@ -201,6 +202,7 @@ impl From<&str> for CliError {
 fn no_snapshot_commands() -> HashSet<&'static str> {
     [
         "open",
+        "attach",
         "goto",
         "close",
         "close-all",
@@ -698,6 +700,162 @@ async fn get_or_create_navigation_session(
     };
 
     Ok((state, session_id, reused_existing_session))
+}
+
+// ---------------------------------------------------------------------------
+// Attach command
+// ---------------------------------------------------------------------------
+
+/// Resolve a `--cdp` argument value to a CDP HTTP endpoint URL.
+///
+/// Accepts:
+/// - HTTP/HTTPS URL (passes through unchanged)
+/// - WebSocket URL (`ws://` / `wss://`) — extracts host:port as HTTP
+/// - Bare port number (e.g. `"9222"`) — becomes `http://localhost:9222`
+/// - `host:port` (e.g. `"localhost:9222"`) — becomes `http://host:port`
+/// - Channel name (e.g. `"chrome"`, `"msedge"`) — resolved via process
+///   scanning and port probing
+fn resolve_cdp_endpoint(raw: &str) -> Result<String, String> {
+    // Already an HTTP(S) URL
+    if raw.starts_with("http://") || raw.starts_with("https://") {
+        return Ok(raw.to_string());
+    }
+
+    // WebSocket URL — extract host:port and rewrite as HTTP
+    if raw.starts_with("ws://") || raw.starts_with("wss://") {
+        // Strip the scheme prefix
+        let after_scheme = if raw.starts_with("ws://") {
+            raw.strip_prefix("ws://").unwrap()
+        } else {
+            raw.strip_prefix("wss://").unwrap()
+        };
+        // Strip path (everything after the first '/')
+        let host_port = after_scheme.split('/').next().unwrap_or(after_scheme);
+        if host_port.contains(':') {
+            return Ok(format!("http://{host_port}"));
+        }
+        return Ok(format!("http://{host_port}:9222"));
+    }
+
+    // Bare port number
+    if raw.chars().all(|c| c.is_ascii_digit()) {
+        let port: u16 = raw
+            .parse()
+            .map_err(|_| format!("Invalid port: {raw}"))?;
+        return Ok(format!("http://localhost:{port}"));
+    }
+
+    // host:port (no scheme, no path)
+    if raw.contains(':') && !raw.contains('/') {
+        return Ok(format!("http://{raw}"));
+    }
+
+    // Channel name — delegate to daemon.rs resolution
+    resolve_channel_to_endpoint(raw)
+}
+
+async fn handle_attach(
+    client: &Client,
+    base_url: &str,
+    _tool_params: &Value,
+    session_name: Option<&str>,
+    parsed_args: &HashMap<String, Value>,
+) -> Result<(), String> {
+    // --cdp value
+    let cdp_raw = parsed_args
+        .get("cdp")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+
+    // --endpoint value (overrides base_url for remote Browser4 servers)
+    let endpoint_override = parsed_args
+        .get("endpoint")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+
+    let effective_base_url = if let Some(endpoint) = endpoint_override {
+        if !endpoint.starts_with("http://") && !endpoint.starts_with("https://") {
+            return Err("--endpoint must be an HTTP(S) URL".to_string());
+        }
+        endpoint.to_string()
+    } else {
+        base_url.to_string()
+    };
+
+    // If --endpoint is provided without --cdp, just switch the CLI to the
+    // remote server without calling attach_browser.  The remote server
+    // manages its own browser sessions; subsequent commands (open, goto,
+    // list, etc.) will target the remote endpoint.
+    if cdp_raw.is_none() && endpoint_override.is_some() {
+        let mut state = read_state(None, session_name);
+        state.session_name = session_name.map(|s| s.to_string());
+        state.session_id = None;
+        state.base_url = effective_base_url.clone();
+        state.active_selector = None;
+        state.last_mouse_position = None;
+        write_state(&state, None, session_name).map_err(|e| e.to_string())?;
+
+        json_field("endpoint", json!(&effective_base_url));
+
+        cli_println!("Switched to remote Browser4 server: {}", effective_base_url);
+        cli_println!("Use 'browser4-cli list' to see sessions, or 'browser4-cli open' to start one.");
+        return Ok(());
+    }
+
+    // Resolve the CDP endpoint
+    let cdp_endpoint = if let Some(raw) = cdp_raw {
+        resolve_cdp_endpoint(raw)?
+    } else {
+        return Err(
+            "attach requires --cdp=<url|channel> or --endpoint=<url>.\n\
+             Examples:\n  \
+             browser4-cli attach --cdp=chrome\n  \
+             browser4-cli attach --cdp=http://localhost:9222\n  \
+             browser4-cli attach --endpoint=http://browser4-server:8182\n  \
+             browser4-cli attach --endpoint=http://remote:8182 --cdp=chrome"
+                .to_string(),
+        );
+    };
+
+    // Call the backend attach_browser MCP tool
+    let attach_params = json!({
+        "cdpEndpoint": &cdp_endpoint,
+    });
+
+    let result = call_tool(client, &effective_base_url, "attach_browser", attach_params).await?;
+
+    // Extract session ID from the response
+    let session_id = if let Ok(parsed) = serde_json::from_str::<Value>(&result) {
+        parsed
+            .get("sessionId")
+            .and_then(|v| v.as_str())
+            .unwrap_or(&result)
+            .to_string()
+    } else {
+        result.clone()
+    };
+
+    // Persist session state for subsequent commands
+    let mut state = read_state(None, session_name);
+    state.session_name = session_name.map(|s| s.to_string());
+    state.session_id = Some(session_id.clone());
+    state.base_url = effective_base_url.clone();
+    state.active_selector = None;
+    state.last_mouse_position = None;
+    write_state(&state, None, session_name).map_err(|e| e.to_string())?;
+
+    json_field("session_id", json!(&session_id));
+    json_field("cdp_endpoint", json!(&cdp_endpoint));
+
+    cli_println!("Attached to browser at {}", cdp_endpoint);
+    cli_println!("Session opened: {}", session_id);
+
+    // Take an initial snapshot so the user can see the current state
+    post_command_snapshot(client, &effective_base_url, &session_id).await;
+
+    Ok(())
 }
 
 async fn handle_open(
@@ -5542,6 +5700,16 @@ async fn run(
             )
             .await?;
         }
+        "attach" => {
+            handle_attach(
+                &client,
+                &base_url,
+                &tool_params,
+                global.session_name.as_deref(),
+                &parsed,
+            )
+            .await?;
+        }
         "goto" => {
             handle_goto(
                 &client,
@@ -6180,6 +6348,81 @@ mod tests {
             .prefix("main-")
             .tempdir_in(&root)
             .unwrap()
+    }
+
+    // -----------------------------------------------------------------------
+    // resolve_cdp_endpoint tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn resolve_cdp_endpoint_http_url_passes_through() {
+        assert_eq!(
+            resolve_cdp_endpoint("http://localhost:9222").unwrap(),
+            "http://localhost:9222"
+        );
+        assert_eq!(
+            resolve_cdp_endpoint("https://browser.example.com:9222").unwrap(),
+            "https://browser.example.com:9222"
+        );
+    }
+
+    #[test]
+    fn resolve_cdp_endpoint_ws_url_converts_to_http() {
+        assert_eq!(
+            resolve_cdp_endpoint("ws://localhost:9222/devtools/browser").unwrap(),
+            "http://localhost:9222"
+        );
+        assert_eq!(
+            resolve_cdp_endpoint("ws://127.0.0.1:9223").unwrap(),
+            "http://127.0.0.1:9223"
+        );
+    }
+
+    #[test]
+    fn resolve_cdp_endpoint_wss_url_converts_to_http() {
+        assert_eq!(
+            resolve_cdp_endpoint("wss://localhost:9222").unwrap(),
+            "http://localhost:9222"
+        );
+        // ws without explicit port defaults to 9222
+        assert_eq!(
+            resolve_cdp_endpoint("ws://localhost").unwrap(),
+            "http://localhost:9222"
+        );
+    }
+
+    #[test]
+    fn resolve_cdp_endpoint_bare_port() {
+        assert_eq!(
+            resolve_cdp_endpoint("9222").unwrap(),
+            "http://localhost:9222"
+        );
+        assert_eq!(
+            resolve_cdp_endpoint("9223").unwrap(),
+            "http://localhost:9223"
+        );
+    }
+
+    #[test]
+    fn resolve_cdp_endpoint_host_port() {
+        assert_eq!(
+            resolve_cdp_endpoint("localhost:9222").unwrap(),
+            "http://localhost:9222"
+        );
+        assert_eq!(
+            resolve_cdp_endpoint("192.168.1.5:9222").unwrap(),
+            "http://192.168.1.5:9222"
+        );
+    }
+
+    #[test]
+    fn resolve_cdp_endpoint_invalid_port() {
+        assert!(resolve_cdp_endpoint("99999").is_err());
+    }
+
+    #[test]
+    fn test_no_snapshot_commands_include_attach() {
+        assert!(no_snapshot_commands().contains("attach"));
     }
 
     #[test]

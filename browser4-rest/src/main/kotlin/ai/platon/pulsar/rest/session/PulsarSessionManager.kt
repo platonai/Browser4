@@ -14,7 +14,10 @@ import ai.platon.pulsar.common.config.CapabilityTypes.BROWSER_CONTEXT_MODE
 import ai.platon.pulsar.core.api.PulsarSettings
 import kotlinx.coroutines.runBlocking
 import org.slf4j.LoggerFactory
+import ai.platon.browser4.chrome.PulsarBrowser
+import ai.platon.pulsar.browser.common.BrowserSettings
 import java.io.Closeable
+import java.net.URI
 import java.util.concurrent.ConcurrentHashMap
 
 /**
@@ -190,6 +193,99 @@ class PulsarSessionManager(
         ).also {
             logger.info("Created session {} with capabilities: {}", sessionId, capabilities)
         }
+    }
+
+    /**
+     * Creates a session and attaches it to an already-running browser via CDP.
+     *
+     * Unlike [getOrCreateSession], this does not launch a new browser process.
+     * Instead, it connects to an existing browser at the given CDP endpoint or port
+     * and binds it to the newly created session.
+     *
+     * @param cdpEndpoint A CDP HTTP endpoint URL (e.g. "http://localhost:9222").
+     * @param cdpPort A CDP port number. Used when [cdpEndpoint] is null.
+     * @param capabilities Optional session capabilities.
+     * @return The created managed session with the external browser bound.
+     */
+    fun createAttachedSession(
+        cdpEndpoint: String? = null,
+        cdpPort: Int? = null,
+        capabilities: Map<String, String?>? = null,
+    ): ManagedSession {
+        require(cdpEndpoint != null || cdpPort != null) {
+            "attach_browser requires either 'cdpEndpoint' (URL) or 'cdpPort' (number)"
+        }
+
+        val normalizedCapabilities = normalizeCapabilities(capabilities = capabilities)
+        val sessionId = normalizedCapabilities.getValue(SESSION_ID_CAPABILITY).toString()
+
+        val port = when {
+            cdpPort != null -> cdpPort
+            cdpEndpoint != null -> parsePortFromEndpoint(cdpEndpoint)
+            else -> throw IllegalArgumentException("No CDP endpoint or port provided")
+        }
+
+        val session = sessions.computeIfAbsent(sessionId) {
+            createManagedSession(sessionId, normalizedCapabilities)
+        }
+
+        // Bind the external browser to the session
+        val browser = PulsarBrowser(port = port, settings = BrowserSettings())
+        session.agenticSession.bindBrowser(browser)
+
+        logger.info(
+            "Attached session {} to browser at port {} (endpoint: {})",
+            sessionId, port, cdpEndpoint ?: "N/A"
+        )
+
+        return session
+    }
+
+    /**
+     * Extracts the port number from a CDP endpoint URL.
+     * Handles formats: http://host:port, ws://host:port/path, host:port
+     * IPv6 addresses are supported when bracketed (e.g. [::1]:9222).
+     */
+    private fun parsePortFromEndpoint(endpoint: String): Int {
+        // Try parsing as-is first, then with an http:// scheme prepended.
+        val uri = try {
+            URI(endpoint)
+        } catch (_: Exception) {
+            URI.create("http://$endpoint")
+        }
+
+        if (uri.port > 0) return uri.port
+
+        // Fallback: extract host:port from the authority-like portion.
+        // Strip scheme and path, then parse the remaining host:port.
+        val hostPort = endpoint
+            .substringAfter("://")       // drop scheme (http://, ws://, etc.)
+            .substringBefore('/')        // drop path / query / fragment
+            .substringBefore('?')
+            .substringBefore('#')
+
+        // IPv6: the port follows the closing bracket, e.g. [::1]:9222
+        if (hostPort.contains(']')) {
+            val afterBracket = hostPort.substringAfterLast(']')
+            if (afterBracket.startsWith(':')) {
+                return afterBracket.removePrefix(":").toIntOrNull()
+                    ?: throw IllegalArgumentException(
+                        "Could not parse CDP port from endpoint: $endpoint")
+            }
+            throw IllegalArgumentException(
+                "IPv6 address must be followed by :port in endpoint: $endpoint")
+        }
+
+        // Plain host:port (IPv4 or hostname)
+        val lastColon = hostPort.lastIndexOf(':')
+        if (lastColon >= 0) {
+            return hostPort.substring(lastColon + 1).toIntOrNull()
+                ?: throw IllegalArgumentException(
+                    "Could not parse CDP port from endpoint: $endpoint")
+        }
+
+        throw IllegalArgumentException(
+            "Could not parse CDP port from endpoint: $endpoint")
     }
 
     private fun recreateUnhealthySession(
