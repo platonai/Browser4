@@ -32,6 +32,7 @@ use std::io::{IsTerminal, Read};
 use std::path::PathBuf;
 
 use base64::Engine;
+use chrono::Utc;
 use reqwest::Client;
 use serde::{de::DeserializeOwned, Deserialize};
 use serde_json::{json, Value};
@@ -199,6 +200,31 @@ impl From<&str> for CliError {
     }
 }
 
+/// Parsed arguments for the `loop` command.
+#[derive(Debug, Default)]
+struct LoopArgs {
+    /// The raw tokens forming the task to execute.
+    task_tokens: Vec<String>,
+    /// True when `--shell` was specified.
+    is_shell: bool,
+    /// True when `--` was used to separate loop options from a browser4-cli subcommand.
+    is_subcommand: bool,
+    /// Seconds between iterations (default: 3600 = 1 hour).
+    interval_secs: u64,
+    /// Maximum number of iterations (None = infinite).
+    count: Option<u64>,
+    /// Maximum total duration in seconds (default: 604800 = 1 week).
+    timeout_secs: Option<u64>,
+    /// Loop name for persistence (None = "default").
+    name: Option<String>,
+    /// True when `--stop` was specified — stop a running/persisted loop.
+    stop: bool,
+    /// True when `--status` was specified — show current loop state.
+    status: bool,
+    /// True when `--list` was specified — list all persisted loops.
+    list: bool,
+}
+
 /// Commands that should NOT trigger a post-command snapshot.
 fn no_snapshot_commands() -> HashSet<&'static str> {
     [
@@ -209,6 +235,7 @@ fn no_snapshot_commands() -> HashSet<&'static str> {
         "close-all",
         "kill-all",
         "list",
+        "loop",
         "install",
         "uninstall",
         "help",
@@ -4287,6 +4314,658 @@ async fn handle_crawl(
     }
 }
 
+// ---------------------------------------------------------------------------
+// Loop command — periodic task execution
+// ---------------------------------------------------------------------------
+
+/// Parse arguments for the `loop` command from raw CLI tokens (everything
+/// after the command name).
+///
+/// Recognises `--shell`, `--`, `--interval`/`-i`, `--count`/`-n`,
+/// `--timeout`/`-t`, and collects everything else as the task.
+const DEFAULT_LOOP_INTERVAL_SECS: u64 = 3600; // 1 hour
+const DEFAULT_LOOP_TIMEOUT_SECS: u64 = 604800; // 1 week
+
+fn parse_loop_args(args: &[String]) -> Result<LoopArgs, String> {
+    let mut out = LoopArgs {
+        interval_secs: DEFAULT_LOOP_INTERVAL_SECS,
+        timeout_secs: Some(DEFAULT_LOOP_TIMEOUT_SECS),
+        ..Default::default()
+    };
+    let mut after_dash_dash = false;
+    let mut i = 0;
+
+    while i < args.len() {
+        let arg = &args[i];
+
+        if after_dash_dash {
+            out.task_tokens.push(arg.clone());
+            i += 1;
+            continue;
+        }
+
+        if arg == "--" {
+            after_dash_dash = true;
+            out.is_subcommand = true;
+            i += 1;
+            continue;
+        }
+
+        if arg == "--stop" {
+            out.stop = true;
+            i += 1;
+            continue;
+        }
+
+        if arg == "--status" {
+            out.status = true;
+            i += 1;
+            continue;
+        }
+
+        if arg == "--list" {
+            out.list = true;
+            i += 1;
+            continue;
+        }
+
+        if arg == "--shell" {
+            out.is_shell = true;
+            i += 1;
+            continue;
+        }
+
+        if let Some(val) = arg.strip_prefix("--name=") {
+            out.name = Some(val.to_string());
+        } else if arg == "--name" {
+            out.name = Some(next_arg(&args, &mut i, "name")?.to_string());
+        } else if let Some(val) = arg.strip_prefix("--interval=") {
+            out.interval_secs = parse_u64_required(val, "--interval")?;
+        } else if arg == "--interval" || arg == "-i" {
+            out.interval_secs = parse_u64_required(next_arg(&args, &mut i, "interval")?, "interval")?;
+        } else if let Some(val) = arg.strip_prefix("--count=") {
+            out.count = Some(parse_u64_required(val, "--count")?);
+        } else if arg == "--count" || arg == "-n" {
+            out.count = Some(parse_u64_required(next_arg(&args, &mut i, "count")?, "count")?);
+        } else if let Some(val) = arg.strip_prefix("--timeout=") {
+            out.timeout_secs = Some(parse_u64_required(val, "--timeout")?);
+        } else if arg == "--timeout" || arg == "-t" {
+            out.timeout_secs = Some(parse_u64_required(next_arg(&args, &mut i, "timeout")?, "timeout")?);
+        } else if arg.starts_with('-') {
+            return Err(format!("Unknown option: {}", arg));
+        } else {
+            out.task_tokens.push(arg.clone());
+        }
+        i += 1;
+    }
+
+    // --stop, --status, and --list don't require a task, but reject combining with one
+    if out.stop || out.status || out.list {
+        if !out.task_tokens.is_empty() {
+            let flag = if out.stop { "--stop" } else if out.status { "--status" } else { "--list" };
+            return Err(format!(
+                "The {} flag cannot be combined with a task. Use just `browser4-cli loop {}`.",
+                flag, flag,
+            ));
+        }
+        if out.list && out.name.is_some() {
+            return Err("The --list and --name flags cannot be combined. Use just `browser4-cli loop --list`.".to_string());
+        }
+        return Ok(out);
+    }
+
+    // Validate
+    if out.is_shell && out.is_subcommand {
+        return Err("The --shell flag and -- separator are mutually exclusive. Use --shell for shell commands or -- for browser4-cli subcommands.".to_string());
+    }
+
+    if out.task_tokens.is_empty() {
+        return Err("A task is required. Provide a plain text command, x-sql query, --shell <cmd>, -- <browser4-cli subcommand>, --list, --stop, or --status.".to_string());
+    }
+
+    Ok(out)
+}
+
+/// Helper: get the next argument from the iterator, advancing past it.
+fn next_arg<'a>(args: &'a [String], i: &mut usize, name: &str) -> Result<&'a str, String> {
+    *i += 1;
+    args.get(*i)
+        .map(|s| s.as_str())
+        .ok_or_else(|| format!("Expected a value after --{}", name))
+}
+
+/// Helper: parse a string to u64, emitting a contextual error.
+fn parse_u64_required(s: &str, flag: &str) -> Result<u64, String> {
+    s.parse::<u64>()
+        .map_err(|_| format!("Invalid value for {}: '{}'. Expected a non-negative integer.", flag, s))
+}
+
+/// Format a duration in seconds as a human-readable string.
+///
+/// Examples: `30s`, `5m 30s`, `2h 15m`, `3d 6h`, `1w 2d`.
+fn format_duration(total_secs: u64) -> String {
+    if total_secs == 0 {
+        return "0s".to_string();
+    }
+    let weeks = total_secs / 604800;
+    let days = (total_secs % 604800) / 86400;
+    let hours = (total_secs % 86400) / 3600;
+    let minutes = (total_secs % 3600) / 60;
+    let seconds = total_secs % 60;
+
+    let mut parts: Vec<String> = Vec::new();
+    if weeks > 0 {
+        parts.push(format!("{}w", weeks));
+    }
+    if days > 0 {
+        parts.push(format!("{}d", days));
+    }
+    if hours > 0 {
+        parts.push(format!("{}h", hours));
+    }
+    if minutes > 0 {
+        parts.push(format!("{}m", minutes));
+    }
+    if seconds > 0 || parts.is_empty() {
+        parts.push(format!("{}s", seconds));
+    }
+    parts.join(" ")
+}
+
+/// Execute a shell command via the OS shell.
+///
+/// Uses `cmd /C` on Windows and `sh -c` on Unix.
+fn run_shell_command(task: &str) -> Result<String, String> {
+    #[cfg(windows)]
+    let (shell, flag) = ("cmd", "/C");
+    #[cfg(not(windows))]
+    let (shell, flag) = ("sh", "-c");
+
+    let output = std::process::Command::new(shell)
+        .arg(flag)
+        .arg(task)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .map_err(|e| format!("Failed to execute shell command: {}", e))?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+    if output.status.success() {
+        Ok(stdout.trim().to_string())
+    } else {
+        Err(if stderr.is_empty() {
+            format!("Shell command exited with {}: {}", output.status, stdout.trim())
+        } else {
+            stderr.trim().to_string()
+        })
+    }
+}
+
+/// Execute a `browser4-cli` subcommand by spawning the current binary with
+/// the given tokens.
+async fn run_browser4_cli(tokens: &[String]) -> Result<String, String> {
+    let exe = std::env::current_exe()
+        .map_err(|e| format!("Cannot determine CLI path: {}", e))?;
+
+    let tokens = tokens.to_vec();
+    let output = tokio::task::spawn_blocking(move || {
+        std::process::Command::new(&exe)
+            .args(&tokens)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .output()
+    })
+    .await
+    .map_err(|e| format!("Subprocess spawn failed: {}", e))?
+    .map_err(|e| format!("Failed to execute browser4-cli: {}", e))?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+    if output.status.success() {
+        Ok(stdout.trim().to_string())
+    } else {
+        Err(if stderr.is_empty() {
+            format!(
+                "browser4-cli exited with {}: {}",
+                output.status,
+                stdout.trim()
+            )
+        } else {
+            stderr.trim().to_string()
+        })
+    }
+}
+
+/// Handle the `loop` command — execute a task periodically with persistence,
+/// resume, and stop support.
+async fn handle_loop(
+    client: &Client,
+    base_url: &str,
+    global: &args::GlobalFlags,
+) -> Result<(), String> {
+    let parsed = parse_loop_args(&global.args[1..])?;
+
+    let loop_name: Option<&str> = parsed.name.as_deref();
+
+    // --- --list: list all persisted loops ---
+    if parsed.list {
+        let entries = state::list_loop_states(None);
+        if entries.is_empty() {
+            cli_println!("No persisted loops. Start one with `browser4-cli loop <task>`.");
+        } else {
+            cli_println!("{} persisted loop(s):\n", entries.len());
+            for entry in &entries {
+                let (icon, status_label) = match entry.status.as_str() {
+                    "running" => ("▶", "running"),
+                    "stopped" => ("⏹", "stopped"),
+                    "completed" => ("✓", "completed"),
+                    _ => ("?", &entry.status[..]),
+                };
+                let name_display = if entry.name == "default" {
+                    "(default)".to_string()
+                } else {
+                    entry.name.clone()
+                };
+                cli_println!(
+                    "  {}  {:<20}  {:>3}/{:>3}  {}  {}",
+                    icon,
+                    name_display,
+                    entry.iterations_completed,
+                    if entry.status == "completed" { "" } else { "?" },
+                    status_label,
+                    entry.task,
+                );
+            }
+            cli_println!("\nUse --status [name] for details, --stop [name] to clear.");
+        }
+        json_field("loops", json!(entries));
+        return Ok(());
+    }
+
+    // --- --status: print loop state and exit ---
+    if parsed.status {
+        let state_path = state::loop_state_path(None, loop_name);
+        match state::read_loop_state(None, loop_name) {
+            Some(ls) => {
+                let label = if let Some(ref n) = parsed.name {
+                    format!("Loop \"{}\"", n)
+                } else {
+                    "Loop".to_string()
+                };
+                let (icon, status_label) = match ls.status.as_str() {
+                    "running" => ("▶", "Running"),
+                    "stopped" => ("⏹", "Stopped by user"),
+                    "completed" => ("✓", "Completed"),
+                    _ => ("?", &ls.status[..]),
+                };
+                cli_println!("{}  {} {}", icon, label, status_label);
+                cli_println!("   Task:       {}", ls.task_tokens.join(" "));
+                cli_println!("   Mode:       {}", ls.mode);
+                cli_println!("   Interval:   {}", format_duration(ls.interval_secs));
+                if let Some(n) = ls.count {
+                    let remaining = n.saturating_sub(ls.iterations_completed);
+                    cli_println!(
+                        "   Iterations: {}/{} ({} remaining)",
+                        ls.iterations_completed, n, remaining
+                    );
+                } else {
+                    cli_println!("   Iterations: {} (no limit)", ls.iterations_completed);
+                }
+                if let Some(t) = ls.timeout_secs {
+                    if let Ok(started) = chrono::DateTime::parse_from_rfc3339(&ls.started_at) {
+                        let started_utc = started.with_timezone(&Utc);
+                        let elapsed = Utc::now()
+                            .signed_duration_since(started_utc)
+                            .to_std()
+                            .unwrap_or_default();
+                        let elapsed_secs = elapsed.as_secs();
+                        let remaining_secs = t.saturating_sub(elapsed_secs);
+                        cli_println!(
+                            "   Timeout:    {} total, {} elapsed, {} remaining",
+                            format_duration(t),
+                            format_duration(elapsed_secs),
+                            format_duration(remaining_secs),
+                        );
+                    } else {
+                        cli_println!("   Timeout:    {}", format_duration(t));
+                    }
+                }
+                cli_println!("   Started:    {}", ls.started_at);
+                cli_println!("   Updated:    {}", ls.updated_at);
+                cli_println!("   State file: {}", state_path.display());
+                json_field("loop_state", json!({
+                    "name": loop_name.unwrap_or("default"),
+                    "task_tokens": ls.task_tokens,
+                    "mode": ls.mode,
+                    "interval_secs": ls.interval_secs,
+                    "count": ls.count,
+                    "timeout_secs": ls.timeout_secs,
+                    "iterations_completed": ls.iterations_completed,
+                    "started_at": ls.started_at,
+                    "updated_at": ls.updated_at,
+                    "status": ls.status,
+                    "state_file": state_path.to_string_lossy(),
+                }));
+            }
+            None => {
+                if let Some(n) = loop_name {
+                    cli_println!("No loop named \"{}\".", n);
+                    cli_println!("State file: {}", state_path.display());
+                } else {
+                    cli_println!("No active loop.");
+                    cli_println!("State file: {}", state_path.display());
+                    cli_println!("Start one with `browser4-cli loop <task>`.");
+                }
+            }
+        }
+        return Ok(());
+    }
+
+    // --- --stop: clear persisted loop state and exit ---
+    if parsed.stop {
+        let state_path = state::loop_state_path(None, loop_name);
+        match state::read_loop_state(None, loop_name) {
+            Some(ls) => {
+                let total = ls.iterations_completed;
+                let was_running = ls.status == "running";
+                state::clear_loop_state(None, loop_name);
+                let label = loop_name.unwrap_or("default");
+                if was_running {
+                    cli_println!(
+                        "⏹  Loop \"{}\" stopped. {} iteration(s) completed. State cleared.",
+                        label, total
+                    );
+                } else {
+                    cli_println!(
+                        "✓  Loop \"{}\" state cleared (was {} with {} iteration(s)).",
+                        label, ls.status, total
+                    );
+                }
+                cli_println!("   Removed: {}", state_path.display());
+                json_field("stopped", json!(true));
+                json_field("name", json!(label));
+                json_field("iterations_completed", json!(total));
+                json_field("previous_status", json!(ls.status));
+            }
+            None => {
+                if let Some(n) = loop_name {
+                    cli_println!("No loop named \"{}\" to stop.", n);
+                } else {
+                    cli_println!("No active loop to stop.");
+                }
+                cli_println!("State file: {}", state_path.display());
+            }
+        }
+        return Ok(());
+    }
+
+    // --- build the mode label ---
+    let mode_label = if parsed.is_subcommand {
+        "browser4-cli subcommand"
+    } else if parsed.is_shell {
+        "shell command"
+    } else {
+        "plain-text command"
+    };
+    let mode_key = if parsed.is_subcommand {
+        "subcommand"
+    } else if parsed.is_shell {
+        "shell"
+    } else {
+        "plain"
+    };
+
+    // --- check for existing persisted loop state (resume) ---
+    let mut iteration: u64 = 1;
+    let overall_start: std::time::Instant;
+    let started_at: String;
+
+    if let Some(existing) = state::read_loop_state(None, loop_name) {
+        if existing.status == "stopped" {
+            // Previous loop was explicitly stopped — start fresh
+            state::clear_loop_state(None, loop_name);
+            started_at = Utc::now().to_rfc3339();
+            overall_start = std::time::Instant::now();
+        } else if existing.task_tokens == parsed.task_tokens && existing.mode == mode_key {
+            // Same task, same mode — resume
+            iteration = existing.iterations_completed + 1;
+            cli_println!(
+                "Resuming loop: \"{}\" from iteration {}",
+                parsed.task_tokens.join(" "),
+                iteration
+            );
+            started_at = existing.started_at;
+            // Use the original started_at to calculate the overall elapsed time
+            let started = chrono::DateTime::parse_from_rfc3339(&started_at)
+                .map(|dt| dt.with_timezone(&Utc))
+                .unwrap_or_else(|_| Utc::now());
+            let elapsed = Utc::now()
+                .signed_duration_since(started)
+                .to_std()
+                .unwrap_or_default();
+            overall_start = std::time::Instant::now()
+                .checked_sub(elapsed)
+                .unwrap_or(std::time::Instant::now());
+        } else {
+            // Different task — warn and start fresh
+            cli_println!(
+                "Note: A different loop task was persisted. Starting fresh. \
+                 Use --stop to clear the previous loop first if needed."
+            );
+            state::clear_loop_state(None, loop_name);
+            started_at = Utc::now().to_rfc3339();
+            overall_start = std::time::Instant::now();
+        }
+    } else {
+        started_at = Utc::now().to_rfc3339();
+        overall_start = std::time::Instant::now();
+    }
+
+    cli_println!(
+        "Loop: \"{}\" — every {}s{}",
+        parsed.task_tokens.join(" "),
+        parsed.interval_secs,
+        match (parsed.count, parsed.timeout_secs) {
+            (Some(n), Some(t)) => format!(", up to {} iterations or {}s", n, t),
+            (Some(n), None) => format!(", up to {} iterations", n),
+            (None, Some(t)) => format!(", up to {}s", t),
+            (None, None) => " (Ctrl+C to stop)".to_string(),
+        }
+    );
+    cli_println!("  Mode: {}", mode_label);
+    if iteration > 1 {
+        cli_println!("  Resumed at iteration: {}", iteration);
+    }
+
+    let mut results: Vec<Value> = Vec::new();
+
+    // Persist initial state before the first iteration
+    let persist = |task_tokens: &[String], mode: &str, interval: u64,
+                    count: Option<u64>, timeout: Option<u64>,
+                    completed: u64, started: &str, status: &str| {
+        let state = state::LoopState {
+            task_tokens: task_tokens.to_vec(),
+            mode: mode.to_string(),
+            interval_secs: interval,
+            count,
+            timeout_secs: timeout,
+            iterations_completed: completed,
+            started_at: started.to_string(),
+            updated_at: Utc::now().to_rfc3339(),
+            status: status.to_string(),
+        };
+        let _ = state::write_loop_state(&state, None, loop_name);
+    };
+
+    persist(
+        &parsed.task_tokens, mode_key, parsed.interval_secs,
+        parsed.count, parsed.timeout_secs,
+        iteration.saturating_sub(1), &started_at, "running",
+    );
+
+    loop {
+        // --- check for external stop signal ---
+        if let Some(existing) = state::read_loop_state(None, loop_name) {
+            if existing.status == "stopped" {
+                cli_println!(
+                    "\nStop signal detected. Halting after {} iteration(s).",
+                    iteration.saturating_sub(1)
+                );
+                break;
+            }
+        }
+
+        // --- limit checks (at top so --count=0 returns immediately) ---
+        if let Some(max) = parsed.count {
+            if iteration > max {
+                break;
+            }
+        }
+
+        if let Some(timeout) = parsed.timeout_secs {
+            if overall_start.elapsed().as_secs() >= timeout {
+                cli_println!(
+                    "\nTimeout reached ({}s). Stopping after {} iteration(s).",
+                    timeout,
+                    iteration.saturating_sub(1)
+                );
+                break;
+            }
+        }
+
+        let iter_start = std::time::Instant::now();
+        let timestamp = Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
+
+        cli_println!(
+            "\n--- Iteration {} [{}] ---",
+            iteration,
+            timestamp
+        );
+
+        // --- execute ---
+        let result: Result<String, String> = if parsed.is_subcommand {
+            run_browser4_cli(&parsed.task_tokens).await
+        } else if parsed.is_shell {
+            run_shell_command(&parsed.task_tokens.join(" "))
+        } else {
+            // Plain text command (or x-sql — server auto-detects)
+            submit_plain_command(
+                client,
+                base_url,
+                &parsed.task_tokens.join(" "),
+                false, // sync — the loop itself provides the pacing
+            )
+            .await
+        };
+
+        match &result {
+            Ok(output) => {
+                if output.is_empty() {
+                    cli_println!("(empty)");
+                } else {
+                    cli_println!("{}", output);
+                }
+                results.push(json!({
+                    "iteration": iteration,
+                    "timestamp": timestamp,
+                    "ok": true,
+                    "output": output,
+                }));
+            }
+            Err(err) => {
+                eprintln!("[ERROR] Iteration {}: {}", iteration, err);
+                results.push(json!({
+                    "iteration": iteration,
+                    "timestamp": timestamp,
+                    "ok": false,
+                    "error": err,
+                }));
+            }
+        }
+
+        // --- persist progress after each iteration ---
+        persist(
+            &parsed.task_tokens, mode_key, parsed.interval_secs,
+            parsed.count, parsed.timeout_secs,
+            iteration, &started_at, "running",
+        );
+
+        iteration += 1;
+
+        // --- check count again so we don't print a separator after the last ---
+        if let Some(max) = parsed.count {
+            if iteration > max {
+                break;
+            }
+        }
+
+        // --- sleep (minus elapsed execution time) ---
+        let elapsed = iter_start.elapsed();
+        let interval = std::time::Duration::from_secs(parsed.interval_secs);
+        if elapsed < interval {
+            let mut remaining = interval - elapsed;
+
+            // If a timeout is set, cap the sleep so we wake up in time to
+            // honour the timeout at the top of the next iteration.
+            if let Some(timeout) = parsed.timeout_secs {
+                let budget = std::time::Duration::from_secs(timeout)
+                    .saturating_sub(overall_start.elapsed());
+                if budget < remaining {
+                    remaining = budget;
+                }
+            }
+
+            if remaining > std::time::Duration::ZERO {
+                // Race: sleep vs ctrl+c
+                tokio::select! {
+                    _ = tokio::time::sleep(remaining) => {},
+                    _ = tokio::signal::ctrl_c() => {
+                        // Persist progress on Ctrl+C so it can be resumed
+                        persist(
+                            &parsed.task_tokens, mode_key, parsed.interval_secs,
+                            parsed.count, parsed.timeout_secs,
+                            iteration.saturating_sub(1), &started_at, "running",
+                        );
+                        let state_path = state::loop_state_path(None, loop_name);
+                        cli_println!(
+                            "\n\n⏸  Interrupted — {} of {} iteration(s) completed.",
+                            iteration.saturating_sub(1),
+                            parsed.count.map_or("∞".to_string(), |n| n.to_string()),
+                        );
+                        cli_println!(
+                            "   State saved to {}. Run the same command to resume, \
+                             or `browser4-cli loop --stop` to clear.",
+                            state_path.display(),
+                        );
+                        break;
+                    },
+                }
+            }
+        }
+    }
+
+    // --- summary ---
+    let total = iteration.saturating_sub(1);
+    cli_println!("\n========================================");
+    cli_println!("✓  Loop finished — {} iteration(s) completed.", total);
+
+    // Persist as "completed" so --status shows the last run result.
+    // --stop clears it when the user wants a clean slate.
+    persist(
+        &parsed.task_tokens, mode_key, parsed.interval_secs,
+        parsed.count, parsed.timeout_secs,
+        total, &started_at, "completed",
+    );
+
+    json_field("iterations", json!(results));
+    json_field("total_iterations", json!(total));
+
+    Ok(())
+}
+
 /// Format the output lines for `handle_install`.  Extracted as a pure function
 /// so the branching logic can be unit-tested without network I/O.
 fn format_install_output(runtime: &InstalledBrowser4Runtime) -> Vec<String> {
@@ -6569,6 +7248,9 @@ async fn run(
             )
             .await?;
         }
+        "loop" => {
+            handle_loop(&client, &base_url, global).await?;
+        }
         "domsnapshot" => {
             handle_dom_snapshot_capture(
                 &client,
@@ -7791,5 +8473,314 @@ mod tests {
             "force=true should not print 'already latest': {:?}",
             lines
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // parse_loop_args tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_parse_loop_args_basic_task() {
+        let args: Vec<String> = vec!["loop", "load", "https://example.com"]
+            .into_iter()
+            .map(String::from)
+            .collect();
+        let parsed = parse_loop_args(&args[1..]).unwrap();
+        assert_eq!(parsed.task_tokens, vec!["load", "https://example.com"]);
+        assert!(!parsed.is_shell);
+        assert!(!parsed.is_subcommand);
+        assert_eq!(parsed.interval_secs, 3600); // default 1 hour
+        assert_eq!(parsed.count, None);
+        assert_eq!(parsed.timeout_secs, Some(604800)); // default 1 week
+    }
+
+    #[test]
+    fn test_parse_loop_args_with_interval() {
+        let args: Vec<String> = vec!["loop", "--interval", "5", "task"]
+            .into_iter()
+            .map(String::from)
+            .collect();
+        let parsed = parse_loop_args(&args[1..]).unwrap();
+        assert_eq!(parsed.interval_secs, 5);
+        assert_eq!(parsed.task_tokens, vec!["task"]);
+    }
+
+    #[test]
+    fn test_parse_loop_args_with_count() {
+        let args: Vec<String> = vec!["loop", "--count", "3", "task"]
+            .into_iter()
+            .map(String::from)
+            .collect();
+        let parsed = parse_loop_args(&args[1..]).unwrap();
+        assert_eq!(parsed.count, Some(3));
+    }
+
+    #[test]
+    fn test_parse_loop_args_with_timeout() {
+        let args: Vec<String> = vec!["loop", "--timeout", "60", "task"]
+            .into_iter()
+            .map(String::from)
+            .collect();
+        let parsed = parse_loop_args(&args[1..]).unwrap();
+        assert_eq!(parsed.timeout_secs, Some(60));
+    }
+
+    #[test]
+    fn test_parse_loop_args_shell_mode() {
+        // Quoted shell command arrives as a single token from the shell.
+        let args: Vec<String> = vec!["loop", "--shell", "curl -s https://example.com"]
+            .into_iter()
+            .map(String::from)
+            .collect();
+        let parsed = parse_loop_args(&args[1..]).unwrap();
+        assert!(parsed.is_shell);
+        assert!(!parsed.is_subcommand);
+        assert_eq!(
+            parsed.task_tokens,
+            vec!["curl -s https://example.com"]
+        );
+    }
+
+    #[test]
+    fn test_parse_loop_args_dash_dash_subcommand() {
+        let args: Vec<String> = vec!["loop", "--", "eval", "document.title"]
+            .into_iter()
+            .map(String::from)
+            .collect();
+        let parsed = parse_loop_args(&args[1..]).unwrap();
+        assert!(parsed.is_subcommand);
+        assert!(!parsed.is_shell);
+        assert_eq!(parsed.task_tokens, vec!["eval", "document.title"]);
+    }
+
+    #[test]
+    fn test_parse_loop_args_short_options() {
+        let args: Vec<String> = vec!["loop", "-i", "5", "-n", "3", "-t", "30", "task"]
+            .into_iter()
+            .map(String::from)
+            .collect();
+        let parsed = parse_loop_args(&args[1..]).unwrap();
+        assert_eq!(parsed.interval_secs, 5);
+        assert_eq!(parsed.count, Some(3));
+        assert_eq!(parsed.timeout_secs, Some(30));
+        assert_eq!(parsed.task_tokens, vec!["task"]);
+    }
+
+    #[test]
+    fn test_parse_loop_args_equals_forms() {
+        let args: Vec<String> = vec!["loop", "--interval=15", "--count=7", "--timeout=45", "task"]
+            .into_iter()
+            .map(String::from)
+            .collect();
+        let parsed = parse_loop_args(&args[1..]).unwrap();
+        assert_eq!(parsed.interval_secs, 15);
+        assert_eq!(parsed.count, Some(7));
+        assert_eq!(parsed.timeout_secs, Some(45));
+    }
+
+    #[test]
+    fn test_parse_loop_args_stop_flag() {
+        let args: Vec<String> = vec!["loop", "--stop"]
+            .into_iter()
+            .map(String::from)
+            .collect();
+        let parsed = parse_loop_args(&args[1..]).unwrap();
+        assert!(parsed.stop);
+        assert!(!parsed.status);
+        assert!(parsed.task_tokens.is_empty()); // --stop doesn't require a task
+    }
+
+    #[test]
+    fn test_parse_loop_args_status_flag() {
+        let args: Vec<String> = vec!["loop", "--status"]
+            .into_iter()
+            .map(String::from)
+            .collect();
+        let parsed = parse_loop_args(&args[1..]).unwrap();
+        assert!(parsed.status);
+        assert!(!parsed.stop);
+        assert!(parsed.task_tokens.is_empty()); // --status doesn't require a task
+    }
+
+    #[test]
+    fn test_parse_loop_args_empty_task_error() {
+        let args: Vec<String> = vec!["loop", "--interval", "5"]
+            .into_iter()
+            .map(String::from)
+            .collect();
+        let err = parse_loop_args(&args[1..]).unwrap_err();
+        assert!(err.contains("task is required"));
+    }
+
+    #[test]
+    fn test_parse_loop_args_shell_and_dash_dash_conflict() {
+        let args: Vec<String> = vec!["loop", "--shell", "--", "cmd"]
+            .into_iter()
+            .map(String::from)
+            .collect();
+        let err = parse_loop_args(&args[1..]).unwrap_err();
+        assert!(err.contains("mutually exclusive"));
+    }
+
+    #[test]
+    fn test_parse_loop_args_invalid_interval() {
+        let args: Vec<String> = vec!["loop", "--interval", "abc", "task"]
+            .into_iter()
+            .map(String::from)
+            .collect();
+        let err = parse_loop_args(&args[1..]).unwrap_err();
+        assert!(err.contains("Invalid value"));
+    }
+
+    #[test]
+    fn test_parse_loop_args_invalid_count() {
+        let args: Vec<String> = vec!["loop", "--count", "-1", "task"]
+            .into_iter()
+            .map(String::from)
+            .collect();
+        let err = parse_loop_args(&args[1..]).unwrap_err();
+        assert!(err.contains("Invalid value"));
+    }
+
+    #[test]
+    fn test_parse_loop_args_unknown_option() {
+        let args: Vec<String> = vec!["loop", "--unknown", "task"]
+            .into_iter()
+            .map(String::from)
+            .collect();
+        let err = parse_loop_args(&args[1..]).unwrap_err();
+        assert!(err.contains("Unknown option"));
+    }
+
+    #[test]
+    fn test_parse_loop_args_count_flag_before_dash_dash() {
+        let args: Vec<String> = vec!["loop", "--count", "2", "--", "eval", "x"]
+            .into_iter()
+            .map(String::from)
+            .collect();
+        let parsed = parse_loop_args(&args[1..]).unwrap();
+        assert_eq!(parsed.count, Some(2));
+        assert!(parsed.is_subcommand);
+        assert_eq!(parsed.task_tokens, vec!["eval", "x"]);
+    }
+
+    #[test]
+    fn test_parse_loop_args_count_zero() {
+        let args: Vec<String> = vec!["loop", "--count", "0", "task"]
+            .into_iter()
+            .map(String::from)
+            .collect();
+        let parsed = parse_loop_args(&args[1..]).unwrap();
+        assert_eq!(parsed.count, Some(0));
+    }
+
+    #[test]
+    fn test_parse_loop_args_status_with_task_error() {
+        let args: Vec<String> = vec!["loop", "--status", "some-task"]
+            .into_iter()
+            .map(String::from)
+            .collect();
+        let err = parse_loop_args(&args[1..]).unwrap_err();
+        assert!(err.contains("cannot be combined with a task"));
+    }
+
+    #[test]
+    fn test_parse_loop_args_stop_with_task_error() {
+        let args: Vec<String> = vec!["loop", "--stop", "some-task"]
+            .into_iter()
+            .map(String::from)
+            .collect();
+        let err = parse_loop_args(&args[1..]).unwrap_err();
+        assert!(err.contains("cannot be combined with a task"));
+    }
+
+    #[test]
+    fn test_parse_loop_args_list_flag() {
+        let args: Vec<String> = vec!["loop", "--list"]
+            .into_iter()
+            .map(String::from)
+            .collect();
+        let parsed = parse_loop_args(&args[1..]).unwrap();
+        assert!(parsed.list);
+        assert!(parsed.task_tokens.is_empty());
+    }
+
+    #[test]
+    fn test_parse_loop_args_list_with_task_error() {
+        let args: Vec<String> = vec!["loop", "--list", "task"]
+            .into_iter()
+            .map(String::from)
+            .collect();
+        let err = parse_loop_args(&args[1..]).unwrap_err();
+        assert!(err.contains("cannot be combined with a task"));
+    }
+
+    #[test]
+    fn test_parse_loop_args_name_flag() {
+        let args: Vec<String> = vec!["loop", "--name", "monitor", "--shell", "echo hi"]
+            .into_iter()
+            .map(String::from)
+            .collect();
+        let parsed = parse_loop_args(&args[1..]).unwrap();
+        assert_eq!(parsed.name, Some("monitor".to_string()));
+        assert!(parsed.is_shell);
+        assert_eq!(parsed.task_tokens, vec!["echo hi"]);
+    }
+
+    #[test]
+    fn test_parse_loop_args_name_equals_form() {
+        let args: Vec<String> = vec!["loop", "--name=health-check", "task"]
+            .into_iter()
+            .map(String::from)
+            .collect();
+        let parsed = parse_loop_args(&args[1..]).unwrap();
+        assert_eq!(parsed.name, Some("health-check".to_string()));
+        assert_eq!(parsed.task_tokens, vec!["task"]);
+    }
+
+    // -----------------------------------------------------------------------
+    // format_duration tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_format_duration_zero() {
+        assert_eq!(format_duration(0), "0s");
+    }
+
+    #[test]
+    fn test_format_duration_seconds() {
+        assert_eq!(format_duration(30), "30s");
+    }
+
+    #[test]
+    fn test_format_duration_minutes() {
+        assert_eq!(format_duration(90), "1m 30s");
+    }
+
+    #[test]
+    fn test_format_duration_hours() {
+        assert_eq!(format_duration(3600), "1h");
+        assert_eq!(format_duration(3750), "1h 2m 30s");
+    }
+
+    #[test]
+    fn test_format_duration_days() {
+        assert_eq!(format_duration(90000), "1d 1h");
+    }
+
+    #[test]
+    fn test_format_duration_weeks() {
+        assert_eq!(format_duration(604800), "1w");
+        assert_eq!(format_duration(691200), "1w 1d");
+    }
+
+    #[test]
+    fn test_format_duration_exact_minute() {
+        assert_eq!(format_duration(60), "1m");
+    }
+
+    #[test]
+    fn test_format_duration_exact_hour() {
+        assert_eq!(format_duration(7200), "2h");
     }
 }

@@ -361,6 +361,68 @@ browser4-cli crawl "https://example.com" \
 
 Behind the scenes: depth=1 reuses `PulsarSession.submitForOutPages`; depth>1 uses a BFS continuous crawl with visited-URL dedup and recursive link submission.
 
+## Loop CLI
+
+Execute a task repeatedly on a configurable interval. Progress is persisted to disk and can be resumed after interruption.
+
+```bash
+browser4-cli loop <task> [--interval=3600] [--count=<N>] [--timeout=604800]
+browser4-cli loop --shell <shell-command>
+browser4-cli loop -- <browser4-cli-subcommand...>
+browser4-cli loop --status
+browser4-cli loop --stop
+```
+
+### Modes
+
+| Mode | Syntax | Description |
+|---|---|---|
+| Plain text | `loop <task>` | Task sent to the Browser4 server. X-SQL is auto-detected. |
+| Shell | `loop --shell <cmd>` | Task executed via OS shell (`cmd /C` or `sh -c`). |
+| Subcommand | `loop -- <tokens...>` | Tokens passed to a nested `browser4-cli` process. |
+
+### Key flags
+
+| Flag | Short | Default | Description |
+|---|---|---|---|
+| `--interval` | `-i` | `3600` (1 hour) | Seconds between iterations |
+| `--count` | `-n` | infinite | Maximum number of iterations |
+| `--timeout` | `-t` | `604800` (1 week) | Maximum total duration in seconds |
+| `--shell` | — | — | Execute task as a shell command |
+| `--stop` | — | — | Stop a running loop and clear persisted state |
+| `--status` | — | — | Show current loop state and progress |
+
+### Persistence and resume
+
+- After each iteration, progress is saved to `~/.browser4/loop-state.json`.
+- If the process is interrupted (Ctrl+C, shutdown), running the same command again resumes from the last completed iteration.
+- Use `--stop` to clear the persisted state and start fresh.
+- Use `--status` to inspect the current loop without executing.
+
+### Usage examples
+
+```bash
+# Plain text command every hour (default interval)
+browser4-cli loop "load https://example.com and extract the page title"
+
+# Shell command every 60 seconds, 10 iterations max
+browser4-cli loop --shell "curl -s https://api.example.com/health" -i 60 -n 10
+
+# Run a browser4-cli eval every 5 minutes
+browser4-cli loop -- eval "document.title" -i 300
+
+# X-SQL query, 5 iterations
+browser4-cli loop "select dom.title from load_and_select('https://example.com')" --count 5
+
+# Inspect current loop state
+browser4-cli loop --status
+
+# Stop a running/persisted loop
+browser4-cli loop --stop
+```
+
+Full reference: **[references/loop.md](references/loop.md)**.
+
 ## Error Handling
 
 - Commands requiring the backend (`open`, `attach`, `goto`, `snapshot`, `click`, etc.) exit non-zero if the backend is unreachable. Check with `browser4-cli list`.
@@ -376,6 +438,7 @@ Behind the scenes: depth=1 reuses `PulsarSession.submitForOutPages`; depth>1 use
 - **DOM Snapshot** — [references/domsnapshot.md](references/domsnapshot.md)
 - **CSS Selector Bridge** — [references/css-selector-bridge.md](references/css-selector-bridge.md)
 - **Crawl command** — [references/crawl.md](references/crawl.md)
+- **Loop command** — [references/loop.md](references/loop.md)
 - **Swarm command** — [references/swarm.md](references/swarm.md)
 - **Storage state** — [references/storage-state.md](references/storage-state.md)
 - **X-SQL** — [references/x-sql.md](references/x-sql.md)
