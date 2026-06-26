@@ -781,7 +781,7 @@ class DOMStateBuilderTest {
             "Default nano snapshot should not contain box info: $snapshot")
 
         // Rendering with boxes via the render entry point
-        val snapshotWithBoxes = ai.platon.browser4.chrome.dom.model.NanoAriaSnapshotRenderer.render(
+        val snapshotWithBoxes = NanoAriaSnapshotRenderer.render(
             nanoTree, AriaSnapshotOptions(boxes = true)
         )
         assertTrue(snapshotWithBoxes.contains("- button [ref=e101] [box=50,75,120,40]"),
