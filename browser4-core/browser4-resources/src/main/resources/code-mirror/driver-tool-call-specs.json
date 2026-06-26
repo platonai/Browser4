@@ -933,7 +933,7 @@
   } ],
   "returnType" : "Double",
   "description" : "Scroll to the 2.5th viewport position.",
-  "help" : "Scroll to the 2.5th viewport position.\n\n```kotlin driver.scrollToViewport(0.0) driver.scrollToViewport(0.5) driver.scrollToViewport(1.5) driver.scrollToViewport(2.0) ```\n\n0.00 means at the top of the first screen, 1.50 means halfway through the second screen.",
+  "help" : "Scroll to the 2.5th viewport position.\n\n```kotlin driver.scrollToViewport(1.0) driver.scrollToViewport(1.5) driver.scrollToViewport(2.5) driver.scrollToViewport(3.0) ```\n\n0.00 means at the top of the first screen, 1.50 means halfway through the second screen.",
   "expression" : "tab.scrollToViewport(Arg(name=n, type=Double, defaultValue=), Arg(name=smooth, type=Boolean, defaultValue=true))",
   "cli" : "browser4-cli tab scrollToViewport --n=<Double>, default= --smooth=<Boolean>, default=true"
 }, {
