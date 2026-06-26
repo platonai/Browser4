@@ -54,6 +54,21 @@ without bounds data omit the annotation.
     - /url: /docs/intro
 ```
 
+### Ref lifecycle
+
+The `[ref=eN]` markers are Chrome DevTools Protocol **backend node IDs** — integers Chrome assigns to DOM nodes within the
+current document. They are **not stable across navigations**:
+
+- **`goto` (navigate to a new URL):** A new document is loaded; Chrome assigns entirely new backend node IDs. Old refs are invalid.
+- **`go-back` / `go-forward`:** Even when restoring a previously visited page from the bfcache, Chrome may reassign backend
+  node IDs. Refs that appear to work after `go-back` are a coincidence, not a guarantee.
+- **`reload`:** Chrome may reassign backend node IDs on reload.
+- **Same-page interactions (`click`, `type`, `fill`):** Page-modifying commands regenerate the accessibility tree;
+  always re-snapshot to obtain fresh refs.
+
+**Best practice:** Re-snapshot after any navigation or page-modifying interaction before using refs. Treat refs as
+single-use: capture a snapshot, act on its refs immediately, then re-snapshot for the next interaction.
+
 These values are derived from ARIA attributes or calculated based on HTML semantics. To inspect the accessibility tree
 structure of a page, use the [Chrome DevTools Accessibility Tab](https://developer.chrome.com/docs/devtools/accessibility/reference#tab).
 
