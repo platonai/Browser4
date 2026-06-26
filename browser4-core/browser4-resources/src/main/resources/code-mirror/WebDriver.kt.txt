@@ -1241,13 +1241,13 @@ interface WebDriver : Closeable {
     suspend fun scrollToMiddle(ratio: Double): Double
 
     /**
-     * Scroll to the 2.5th viewport position. @mcp
+     * Scroll to the given 0-based viewport position. @mcp
      *
      * ```kotlin
-     * driver.scrollToViewport(1.0)
+     * driver.scrollToViewport(0.0)
+     * driver.scrollToViewport(0.5)
      * driver.scrollToViewport(1.5)
-     * driver.scrollToViewport(2.5)
-     * driver.scrollToViewport(3.0)
+     * driver.scrollToViewport(2.0)
      * ```
      *
      * @param n The viewport number of the page to scroll to (0-based).
