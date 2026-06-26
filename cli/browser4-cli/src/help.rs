@@ -16,6 +16,7 @@ pub fn public_command_name(name: &str) -> &str {
         "domsnapshot-query" => "domsnapshot query",
         "domsnapshot-export" => "domsnapshot export",
         "domsnapshot-summary" => "domsnapshot summary",
+        "domsnapshot-grep" => "domsnapshot grep",
         _ => name,
     }
 }
