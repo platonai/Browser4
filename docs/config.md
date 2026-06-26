@@ -14,18 +14,49 @@ Browser4 supports multiple configuration sources in order of precedence:
 
 ### 📝 Spring Boot Configuration Files
 
-Browser4 supports Spring Boot-style configuration files.
+Browser4 uses Spring Boot-style `application.properties` files. A sample is located at the project root.
 
-A sample `application.properties` is located at the project root. For privacy, recommend to renaming it to `application-private.properties`.
+**🔐 Best practice:** Create an `application-private.properties` for secrets (API keys, proxy URLs). It's gitignored by default — never commit credentials.
 
-#### For desktop usage:
+#### LLM Provider Configuration
+
+Browser4 supports multiple LLM providers. Set the API key (and optionally model/base-url) for your chosen provider:
 
 ```properties
-# browser.profile.mode=SYSTEM_DEFAULT # Optional: use your system's default browser profile
-openrouter.api.key=
+# OpenRouter (default)
+openrouter.api.key=sk-or-v1-...
+openrouter.model.name=openai/gpt-5.4       # optional
+openrouter.base.url=https://openrouter.ai/api/v1/  # optional
+
+# DeepSeek (official)
+deepseek.api.key=sk-...
+
+# Volcengine / ByteDance
+volcengine.api.key=...
+volcengine.model.name=doubao-seed-2-0-pro-260215
+volcengine.base.url=https://ark.cn-beijing.volces.com/api/v3
+
+# OpenAI-compatible
+openai.api.key=sk-...
+openai.model.name=gpt-4o
+openai.base.url=https://api.openai.com/v1
+
+# Aliyun Qwen (DashScope) — uses OpenAI-compatible keys
+openai.api.key=sk-...
+openai.model.name=qwen-plus
+openai.base.url=https://dashscope.aliyuncs.com/compatible-mode/v1
 ```
 
-#### [**Advanced**] For high-performance, parallel crawling:
+#### Desktop usage
+
+```properties
+# Optional: use your system's default browser profile
+# browser.profile.mode=SYSTEM_DEFAULT
+browser.display.mode=GUI
+```
+
+#### [**Advanced**] High-performance parallel crawling
+
 ```properties
 proxy.rotation.url=https://your-proxy-provider.com/rotation-endpoint
 browser.profile.mode=SEQUENTIAL
@@ -36,39 +67,52 @@ browser.display.mode=HEADLESS
 
 ---
 
-### 🌍 Environment Variables / JVM System Properties
+### 🌍 Environment Variables
 
-You can configure Browser4 using either OS environment variables or JVM system properties.
+All Spring Boot properties can be set as environment variables. Convert dots to underscores and uppercase: `browser.profile.mode` → `BROWSER_PROFILE_MODE`.
 
-#### 💻 Example - OS environment variables
+#### Property → Env Var Quick Reference
 
-For standard desktop usage:
+| Spring Property | Environment Variable | Default |
+|---|---|---|
+| `server.port` | `SERVER_PORT` | `8182` |
+| `openrouter.api.key` | `OPENROUTER_API_KEY` | — |
+| `deepseek.api.key` | `DEEPSEEK_API_KEY` | — |
+| `volcengine.api.key` | `VOLCENGINE_API_KEY` | — |
+| `openai.api.key` | `OPENAI_API_KEY` | — |
+| `browser.profile.mode` | `BROWSER_CONTEXT_MODE` | `DEFAULT` |
+| `browser.display.mode` | `BROWSER_DISPLAY_MODE` | `GUI` |
+| `browser.context.number` | `BROWSER_CONTEXT_NUMBER` | `2` |
+| `browser.max.active.tabs` | `BROWSER_MAX_OPEN_TABS` | `8` |
+| `proxy.rotation.url` | `PROXY_ROTATION_URL` | — |
 
-Linux/MacOS
+#### 💻 Desktop usage
+
+Linux/macOS:
 ```bash
 export OPENROUTER_API_KEY=sk-yourllmproviderapikey
 ```
 
-Windows (PowerShell)
+Windows (PowerShell):
 ```powershell
 $env:OPENROUTER_API_KEY = "sk-yourllmproviderapikey"
 ```
 
-If you want to use your daily used browser profile (remember closed the browser first):
+To use your daily-use browser profile (close the browser first):
 
-Linux/MacOS
+Linux/macOS:
 ```bash
 export BROWSER_CONTEXT_MODE=SYSTEM_DEFAULT
 ```
 
-Windows (PowerShell)
+Windows (PowerShell):
 ```powershell
 $env:BROWSER_CONTEXT_MODE = "SYSTEM_DEFAULT"
 ```
 
-For high-performance parallel crawling:
+#### [**Advanced**] High-performance parallel crawling
 
-Linux/MacOS
+Linux/macOS:
 ```bash
 export PROXY_ROTATION_URL=https://your-proxy-provider.com/rotation-endpoint
 export BROWSER_CONTEXT_MODE=SEQUENTIAL
@@ -77,7 +121,7 @@ export BROWSER_MAX_OPEN_TABS=8
 export BROWSER_DISPLAY_MODE=HEADLESS
 ```
 
-Windows (PowerShell)
+Windows (PowerShell):
 ```powershell
 $env:PROXY_ROTATION_URL = "https://your-proxy-provider.com/rotation-endpoint"
 $env:BROWSER_CONTEXT_MODE = "SEQUENTIAL"
@@ -86,22 +130,44 @@ $env:BROWSER_MAX_OPEN_TABS = 8
 $env:BROWSER_DISPLAY_MODE = "HEADLESS"
 ```
 
-#### ☕ Example – JVM Arguments
+---
 
-Set configuration via command-line JVM args:
+### ☕ JVM System Properties
+
+Set configuration via command-line JVM arguments (dot-separated, same keys as `application.properties`):
 
 ```
 -D"openrouter.api.key=sk-yourllmproviderapikey"
+-D"browser.profile.mode=SEQUENTIAL"
 ```
+
+Use quotes around the key to avoid shell interpretation issues on Windows.
 
 ---
 
 ### 🐳 Docker Configuration
 
-For Docker deployments, use environment variables in the `docker run` command.
+For Docker deployments, pass configuration as environment variables.
 
-**Linux/macOS:**
+**Desktop usage:**
 
+Linux/macOS:
+```bash
+docker run -d -p 8182:8182 \
+  -e OPENROUTER_API_KEY=${OPENROUTER_API_KEY} \
+  galaxyeye88/browser4:latest
+```
+
+Windows (PowerShell):
+```powershell
+docker run -d -p 8182:8182 `
+  -e OPENROUTER_API_KEY=$env:OPENROUTER_API_KEY `
+  galaxyeye88/browser4:latest
+```
+
+**Advanced parallel crawling:**
+
+Linux/macOS:
 ```bash
 docker run -d -p 8182:8182 \
   -e OPENROUTER_API_KEY=${OPENROUTER_API_KEY} \
@@ -113,8 +179,7 @@ docker run -d -p 8182:8182 \
   galaxyeye88/browser4:latest
 ```
 
-**Windows (PowerShell):**
-
+Windows (PowerShell):
 ```powershell
 docker run -d -p 8182:8182 `
   -e OPENROUTER_API_KEY=$env:OPENROUTER_API_KEY `
@@ -126,56 +191,68 @@ docker run -d -p 8182:8182 `
   galaxyeye88/browser4:latest
 ```
 
-> ⚠️ **Note**: Docker users may need to warm up the before crawling to avoid bot detection,
-> for example, visit the home page and open some arbitrary pages.
+> ⚠️ **Note**: When crawling sites with bot detection, warm up the browser first — visit the home page and browse a few pages before submitting scrape jobs.
 
 ---
 
 ## ⚙️ Common Configuration Options
 
-* **`openrouter.api.key`**
-  Your OpenRouter API key. Check [LLM Configuration Guide](../docs/config/llm/llm-config.md) for more LLM providers.
+### LLM API Keys
 
-- **`browser.profile.mode`** (`DEFAULT` | `SYSTEM_DEFAULT` | `PROTOTYPE` | `SEQUENTIAL` | `TEMPORARY`)
+Browser4 supports multiple LLM providers. Configure **one** of:
+
+| Property | Env Var | Description |
+|---|---|---|
+| `openrouter.api.key` | `OPENROUTER_API_KEY` | OpenRouter API key (default provider) |
+| `deepseek.api.key` | `DEEPSEEK_API_KEY` | DeepSeek official API key |
+| `volcengine.api.key` | `VOLCENGINE_API_KEY` | Volcengine / ByteDance API key |
+| `openai.api.key` | `OPENAI_API_KEY` | OpenAI or OpenAI-compatible API key |
+
+Each provider also supports optional `<provider>.model.name` and `<provider>.base.url` properties. See the [LLM Provider Configuration](#llm-provider-configuration) section above for full examples.
+
+### Browser & Server
+
+- **`server.port`** *(default: `8182`)* — Env: `SERVER_PORT`
+
+  HTTP port the Browser4 server listens on.
+
+- **`browser.profile.mode`** (`DEFAULT` | `SYSTEM_DEFAULT` | `PROTOTYPE` | `SEQUENTIAL` | `TEMPORARY`) — Env: `BROWSER_CONTEXT_MODE`
+
   Defines how the user data directory is assigned for each browser instance.
 
   - `DEFAULT`: Uses the default Browser4-managed user data directory.
-  - `SYSTEM_DEFAULT`: Uses the system's default browser profile (e.g., your personal Chrome/Edge profile).
-  - `PROTOTYPE` **[Advanced]**: Uses a predefined prototype user data directory.
-    - All `SEQUENTIAL` and `TEMPORARY` modes inherit from this prototype.
+  - `SYSTEM_DEFAULT`: Uses the system's default browser profile (e.g., your personal Chrome/Edge profile). Close the browser before using this mode.
+  - `PROTOTYPE` **[Advanced]**: Uses a predefined prototype user data directory. All `SEQUENTIAL` and `TEMPORARY` modes inherit from this prototype.
   - `SEQUENTIAL` **[Advanced]**: Selects a user data directory from a managed pool to enable sequential isolation.
   - `TEMPORARY` **[Advanced]**: Generates a new, isolated user data directory for each browser instance.
 
-* **`proxy.rotation.url`**
-  [**Advanced**] Only for `SEQUENTIAL` and `TEMPORARY` modes.
-  Defines the URL provided by your proxy service.
-  Each time the rotation URL is accessed, it should return a response containing one or more fresh proxy IPs.
-  Ask your proxy provider for such a URL.
+- **`browser.display.mode`** (`GUI` | `HEADLESS` | `SUPERVISED`) — Env: `BROWSER_DISPLAY_MODE`
 
-* **`browser.context.number`** *(default: 2)*
-  [**Advanced**] Only for `SEQUENTIAL` and `TEMPORARY` modes.
-  Number of browser contexts (isolated, incognito-like sessions).
-  Each context has its own cookies, local storage, and cache.
-
-  > For `DEFAULT`, `SYSTEM_DEFAULT`, and `PROTOTYPE` browser contexts, this value is **1**.
-
-* **`browser.max.active.tabs`** *(default: 8)*
-  Maximum number of tabs per browser instance.
-
-  > For `DEFAULT`, `SYSTEM_DEFAULT`, and `PROTOTYPE` browser contexts, there is **no limit**.
-
-* **`browser.display.mode`** (`GUI` | `HEADLESS` | `SUPERVISED`)
   Controls how the browser is displayed:
 
-    * `GUI`: Launches a visible browser window.
-    * `HEADLESS`: Runs without a graphical window.
-    * `SUPERVISED`: Linux-only; uses Xvfb for headless GUI simulation.
+  - `GUI`: Launches a visible browser window.
+  - `HEADLESS`: Runs without a graphical window.
+  - `SUPERVISED`: Linux-only; uses Xvfb for headless GUI simulation.
+
+### Advanced: Parallel Crawling
+
+- **`proxy.rotation.url`** — Env: `PROXY_ROTATION_URL`
+
+  Only applies to `SEQUENTIAL` and `TEMPORARY` profile modes. The URL provided by your proxy service — each access should return one or more fresh proxy IPs. Ask your proxy provider for such a URL.
+
+- **`browser.context.number`** *(default: `2`)* — Env: `BROWSER_CONTEXT_NUMBER`
+
+  Only applies to `SEQUENTIAL` and `TEMPORARY` modes. Number of browser contexts (isolated, incognito-like sessions). Each context has its own cookies, local storage, and cache. For `DEFAULT`, `SYSTEM_DEFAULT`, and `PROTOTYPE` modes, this value is always **1**.
+
+- **`browser.max.active.tabs`** *(default: `8`)* — Env: `BROWSER_MAX_OPEN_TABS`
+
+  Maximum number of tabs per browser instance. For `DEFAULT`, `SYSTEM_DEFAULT`, and `PROTOTYPE` modes, there is **no limit**.
 
 ### 📦 `browser.profile.mode` Comparison Table
 
 | Mode           | Description                                                                 | User Data Directory Behavior                             | Use Case            |
 |----------------|-----------------------------------------------------------------------------|-----------------------------------------------------------|---------------------|
-| `DEFAULT`      | Uses the Browser4-managed default profile.                                 | Shared across Pulsar sessions (not your system browser).  | General purpose     |
+| `DEFAULT`      | Uses the Browser4-managed default profile.                                 | Shared across sessions (not your system browser).          | General purpose     |
 | `SYSTEM_DEFAULT` | Uses the system browser's default profile.                                | Shares your daily-used browser profile.                   | For quick integration or debugging with real session data |
 | `PROTOTYPE` ⚠️ | **[Advanced]** Uses a predefined prototype profile.                         | Acts as the base for `SEQUENTIAL` and `TEMPORARY`.        | Controlled state inheritance |
 | `SEQUENTIAL` ⚠️ | **[Advanced]** Picks a profile from a pool sequentially.                   | Rotates through a pool of pre-initialized directories.     | Avoid session reuse in batch runs |
