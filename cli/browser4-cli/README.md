@@ -133,6 +133,7 @@ See [`cli/README.md`](../README.md) for the user-facing documentation.
 | `domsnapshot query [url]` | Run X-SQL against the stored DOM snapshot |
 | `domsnapshot export` | Export snapshot HTML to a local file |
 | `domsnapshot summary` | Generate a compressed Web Page Summary Index (WPSI) from the stored DOM snapshot |
+| `domsnapshot grep [OPTIONS] <pattern>` | Search snapshot HTML with regex patterns and grep-style output |
 | `generate-locator <ref>` | Generate a unique CSS selector path for an element |
 
 ### Install / Admin

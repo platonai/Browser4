@@ -191,6 +191,11 @@ browser4-cli domsnapshot query --sql @query.sql
 
 # 导出快照 HTML 到文件
 browser4-cli domsnapshot export --file=page-snapshot.html
+
+# 在快照 HTML 中使用正则表达式搜索（grep 风格）
+browser4-cli domsnapshot grep -i error
+browser4-cli domsnapshot grep -F -C 2 "404 Not Found"
+browser4-cli domsnapshot grep --selector main "Submit"
 ```
 
 完整命令参考、X-SQL 查询示例和错误处理，请参见 [DOM 快照参考](cli/skill/references/domsnapshot.md)。

@@ -514,6 +514,11 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
             "Generate a compressed Web Page Summary Index (WPSI) from the stored DOM snapshot",
             50,
         ));
+        lines.push(format_with_gap(
+            "  domsnapshot grep [OPTIONS] <pattern>",
+            "Search snapshot HTML with regex patterns and grep-style output",
+            50,
+        ));
         lines.push(String::new());
         lines.push("Notes:".to_string());
         lines.push(
@@ -548,6 +553,10 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
             "  - Generate a compressed page summary (WPSI) from the stored DOM snapshot with `domsnapshot summary`. The summary identifies page type, structure, key content nodes, repeated lists, tables, and stats — typically <1% of the original HTML size."
                 .to_string(),
         );
+        lines.push(
+            "  - Search the DOM snapshot HTML with regex patterns using `domsnapshot grep <pattern>`. Supports standard grep flags: -i, -n, -A, -B, -C, -v, -c, -l, -F, -w, and --selector for CSS-scoped searches."
+                .to_string(),
+        );
         lines.push(String::new());
         lines.push("Examples:".to_string());
         lines.push("  # Capture a DOM snapshot and display metadata".to_string());
@@ -576,6 +585,15 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push(String::new());
         lines.push("  # Generate a compressed page summary from the stored DOM snapshot".to_string());
         lines.push("  browser4-cli domsnapshot summary".to_string());
+        lines.push(String::new());
+        lines.push("  # Search for 'error' case-insensitively".to_string());
+        lines.push("  browser4-cli domsnapshot grep -i error".to_string());
+        lines.push(String::new());
+        lines.push("  # Literal string match with 2 lines of context".to_string());
+        lines.push("  browser4-cli domsnapshot grep -F -C 2 \"404 Not Found\"".to_string());
+        lines.push(String::new());
+        lines.push("  # Search only within <main> element".to_string());
+        lines.push("  browser4-cli domsnapshot grep --selector main \"Submit\"".to_string());
     }
 
     lines.join("\n")

@@ -222,6 +222,7 @@ browser4-cli domsnapshot get <field> [selector] [name]  # extract text/html/attr
 browser4-cli domsnapshot query [url] --sql <query>      # X-SQL query against DOM
 browser4-cli domsnapshot summary                        # compressed page summary (WPSI)
 browser4-cli domsnapshot export [--file <path>]         # save snapshot HTML (might be huge, don't read it directly)
+browser4-cli domsnapshot grep [OPTIONS] <pattern>       # search snapshot HTML with regex (grep-style output)
 ```
 
 Full reference: **[references/domsnapshot.md](references/domsnapshot.md)**.
