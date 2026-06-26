@@ -1,4 +1,4 @@
-package ai.platon.pulsar.examples
+package ai.platon.pulsar.human
 
 import ai.platon.pulsar.common.LinkExtractors
 import ai.platon.pulsar.common.Priority13
@@ -7,14 +7,14 @@ import ai.platon.pulsar.dom.FeaturedDocument
 import ai.platon.pulsar.persist.WebPage
 import ai.platon.pulsar.skeleton.PulsarSettings
 import ai.platon.pulsar.skeleton.context.PulsarContexts
-import ai.platon.pulsar.skeleton.crawl.common.url.ParsableHyperlink
+import ai.platon.pulsar.skeleton.workflow.common.url.ParsableHyperlink
 import java.time.Duration
 
 /**
  * Demonstrates how to crawl a massive collection of urls with various requirements.
  * */
 fun main() {
-    PulsarSettings().withSequentialBrowsers().maxBrowserContexts(4).maxOpenTabs(8).headless()
+    PulsarSettings.withSequentialBrowsers().maxBrowserContexts(4).maxOpenTabs(8).headless()
 
     val session = PulsarContexts.createSession()
     val urlPool = session.context.globalCache.urlPool
