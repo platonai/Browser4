@@ -46,6 +46,93 @@ $mvnwScript = if ($IsWindows) {
     Join-Path $repoRoot 'mvnw'
 }
 
+# ═══════════════════════════════════════════════════════════════════
+# Internal helper functions
+# ═══════════════════════════════════════════════════════════════════
+
+function Write-Rule {
+    <#
+    .SYNOPSIS
+        Print a horizontal rule of '=' characters.
+    #>
+    param([int]$Width = 46)
+    Write-Host ('=' * $Width)
+}
+
+function Write-CommandBanner {
+    <#
+    .SYNOPSIS
+        Print a standardized banner block for test command status.
+    .PARAMETER Label
+        Primary message line.
+    .PARAMETER Subtitle
+        Optional detail line (e.g. the full command being run).
+    .PARAMETER Icon
+        Optional status icon (e.g. '✅', '❌', '[SHOW]').
+    #>
+    param(
+        [string]$Label,
+        [string]$Subtitle = '',
+        [string]$Icon = ''
+    )
+    Write-Host ''
+    Write-Rule
+    if ($Icon) { Write-Host "$Icon $Label" } else { Write-Host $Label }
+    if ($Subtitle) { Write-Host $Subtitle }
+    Write-Rule
+}
+
+function Invoke-CommandAndReport {
+    <#
+    .SYNOPSIS
+        Execute a command (as a scriptblock), push/pop a working
+        directory if needed, and print success/failure banners.
+
+    .PARAMETER ScriptBlock
+        The command to execute.
+    .PARAMETER Label
+        Human-readable label for banner messages.
+    .PARAMETER PreExecPath
+        Optional directory to Push-Location into before execution.
+        Pop-Location is guaranteed via finally.
+    .PARAMETER NoExit
+        If set, return the exit code instead of exiting on failure.
+    #>
+    param(
+        [Parameter(Mandatory)]
+        [scriptblock]$ScriptBlock,
+        [Parameter(Mandatory)]
+        [string]$Label,
+        [string]$PreExecPath = '',
+        [switch]$NoExit
+    )
+    try {
+        if ($PreExecPath) { Push-Location $PreExecPath }
+        & $ScriptBlock
+        $exitCode = $LASTEXITCODE
+    }
+    catch {
+        Write-Error "Failed to execute $Label`: $_"
+        exit 1
+    }
+    finally {
+        if ($PreExecPath) { Pop-Location }
+    }
+
+    if ($exitCode -ne 0) {
+        Write-CommandBanner -Label "$Label failed with exit code $exitCode" -Icon '❌'
+        if (-not $NoExit) { exit $exitCode }
+        return $exitCode
+    }
+
+    Write-CommandBanner -Label "$Label completed successfully" -Icon '✅'
+    return $exitCode
+}
+
+# ═══════════════════════════════════════════════════════════════════
+# Usage
+# ═══════════════════════════════════════════════════════════════════
+
 function Print-Usage {
     param([int]$ExitCode = 1)
     Write-Host "Usage: test.ps1 [-DryRun] [-Show] [test-types...] [additional-args...]"
@@ -106,20 +193,9 @@ function Exit-UnknownTestType([string]$testType) {
     exit 1
 }
 
-function Normalize-ArgumentTokens([string[]]$tokens) {
-    $normalized = @()
-    for ($i = 0; $i -lt $tokens.Count; $i++) {
-        $token = $tokens[$i]
-        while ($token.StartsWith('-D') -and ($i + 1) -lt $tokens.Count -and $tokens[$i + 1].StartsWith('.')) {
-            $i++
-            $token += $tokens[$i]
-        }
-
-        $normalized += $token
-    }
-
-    return $normalized
-}
+# ═══════════════════════════════════════════════════════════════════
+# Execution functions
+# ═══════════════════════════════════════════════════════════════════
 
 function Invoke-MavenTests([string[]]$testTypes, [string[]]$additionalMvnArgs) {
     if (-not (Test-Path $mvnwScript)) {
@@ -127,9 +203,7 @@ function Invoke-MavenTests([string[]]$testTypes, [string[]]$additionalMvnArgs) {
         exit 1
     }
 
-    Write-Host "=========================================="
-    Write-Host "Running Maven tests: $($testTypes -join ', ')"
-    Write-Host "=========================================="
+    Write-CommandBanner -Label "Running Maven tests: $($testTypes -join ', ')"
 
     $goal = if ($script:DryRun -and -not $script:Show) { 'test-compile' } else { 'test' }
     $mvnTestArgs = @($goal)
@@ -161,10 +235,6 @@ function Invoke-MavenTests([string[]]$testTypes, [string[]]$additionalMvnArgs) {
         }
     }
 
-    if ($hasFast -or $hasRest) {
-        $modules = @()
-    }
-
     if ($modules.Count -gt 0) {
         $mvnTestArgs += '-pl'
         $mvnTestArgs += ($modules -join ',')
@@ -174,50 +244,21 @@ function Invoke-MavenTests([string[]]$testTypes, [string[]]$additionalMvnArgs) {
     $mvnTestArgs += $additionalMvnArgs
 
     if ($script:Show) {
-        Write-Host ""
-        Write-Host "=========================================="
-        Write-Host "[SHOW] Would execute:"
-        Write-Host "  $mvnwScript $($mvnTestArgs -join ' ')"
-        Write-Host "=========================================="
+        Write-CommandBanner -Label '[SHOW] Would execute:' -Subtitle "  $mvnwScript $($mvnTestArgs -join ' ')"
         return
     }
 
     if ($script:DryRun) {
-        Write-Host ""
-        Write-Host "=========================================="
-        Write-Host "[DRY RUN] Executing:"
-        Write-Host "  $mvnwScript $($mvnTestArgs -join ' ')"
-        Write-Host "=========================================="
+        Write-CommandBanner -Label '[DRY RUN] Executing:' -Subtitle "  $mvnwScript $($mvnTestArgs -join ' ')"
     }
 
-    try {
-        & $mvnwScript @mvnTestArgs
-        $exitCode = $LASTEXITCODE
-        if ($exitCode -ne 0) {
-            Write-Host ""
-            Write-Host "=========================================="
-            Write-Host "❌ Maven tests failed with exit code $exitCode"
-            Write-Host "=========================================="
-            exit $exitCode
-        }
-
-        Write-Host ""
-        Write-Host "=========================================="
-        Write-Host "✅ Maven tests completed successfully"
-        Write-Host "=========================================="
-    }
-    catch {
-        Write-Error "Failed to execute Maven tests: $_"
-        exit 1
-    }
+    Invoke-CommandAndReport -ScriptBlock { & $mvnwScript @mvnTestArgs } -Label "Maven tests: $($testTypes -join ', ')"
 }
 
 function Invoke-Browser4CliTests([string[]]$additionalArgs) {
     $browser4CliDir = Join-Path $repoRoot 'cli\browser4-cli'
 
-    Write-Host "=========================================="
-    Write-Host "Running Browser4 CLI tests..."
-    Write-Host "=========================================="
+    Write-CommandBanner -Label 'Running Browser4 CLI tests...'
 
     if (-not (Test-Path $browser4CliDir)) {
         Write-Error "Browser4 CLI directory not found at $browser4CliDir"
@@ -230,61 +271,28 @@ function Invoke-Browser4CliTests([string[]]$additionalArgs) {
         exit 1
     }
 
-    Push-Location $browser4CliDir
-    try {
-        Write-Host "Working directory: $(Get-Location)"
-
-        if (-not (Test-Path "$browser4CliDir\Cargo.toml")) {
-            Write-Error "Cargo.toml not found in $browser4CliDir"
-            exit 1
-        }
-
-        if ($script:Show) {
-            $cargoArgs = @('test', '--test', 'e2e', '--', '--nocapture') + $additionalArgs
-            Write-Host ""
-            Write-Host "=========================================="
-            Write-Host "[SHOW] Would execute in ${browser4CliDir}:"
-            Write-Host "  cargo $($cargoArgs -join ' ')"
-            Write-Host "=========================================="
-            return
-        }
-
-        if ($script:DryRun) {
-            $cargoArgs = @('test', '--test', 'e2e', '--no-run') + $additionalArgs
-        } else {
-            $cargoArgs = @('test', '--test', 'e2e', '--', '--nocapture') + $additionalArgs
-        }
-
-        if ($script:DryRun) {
-            Write-Host ""
-            Write-Host "=========================================="
-            Write-Host "[DRY RUN] Executing in ${browser4CliDir}:"
-            Write-Host "  cargo $($cargoArgs -join ' ')"
-            Write-Host "=========================================="
-        }
-
-        & cargo @cargoArgs
-        $exitCode = $LASTEXITCODE
-        if ($exitCode -ne 0) {
-            Write-Host ""
-            Write-Host "=========================================="
-            Write-Host "❌ Browser4 CLI tests failed with exit code $exitCode"
-            Write-Host "=========================================="
-            exit $exitCode
-        }
-
-        Write-Host ""
-        Write-Host "=========================================="
-        Write-Host "✅ Browser4 CLI tests completed successfully"
-        Write-Host "=========================================="
-    }
-    catch {
-        Write-Error "Failed to execute Browser4 CLI tests: $_"
+    if (-not (Test-Path "$browser4CliDir\Cargo.toml")) {
+        Write-Error "Cargo.toml not found in $browser4CliDir"
         exit 1
     }
-    finally {
-        Pop-Location
+
+    if ($script:Show) {
+        $cargoArgs = @('test', '--test', 'e2e', '--', '--nocapture') + $additionalArgs
+        Write-CommandBanner -Label '[SHOW] Would execute in browser4-cli:' -Subtitle "  cargo $($cargoArgs -join ' ')"
+        return
     }
+
+    if ($script:DryRun) {
+        $cargoArgs = @('test', '--test', 'e2e', '--no-run') + $additionalArgs
+    } else {
+        $cargoArgs = @('test', '--test', 'e2e', '--', '--nocapture') + $additionalArgs
+    }
+
+    if ($script:DryRun) {
+        Write-CommandBanner -Label '[DRY RUN] Executing in browser4-cli:' -Subtitle "  cargo $($cargoArgs -join ' ')"
+    }
+
+    Invoke-CommandAndReport -ScriptBlock { & cargo @cargoArgs } -Label 'Browser4 CLI tests' -PreExecPath $browser4CliDir
 }
 
 function Invoke-MockSiteBoot([string[]]$additionalArgs) {
@@ -300,9 +308,7 @@ function Invoke-MockSiteBoot([string[]]$additionalArgs) {
         exit 1
     }
 
-    Write-Host "=========================================="
-    Write-Host "Launching MockSiteBoot..."
-    Write-Host "=========================================="
+    Write-CommandBanner -Label 'Launching MockSiteBoot...'
 
     foreach ($arg in $additionalArgs) {
         if ($arg -like '-Dmock.site.*') {
@@ -323,53 +329,24 @@ function Invoke-MockSiteBoot([string[]]$additionalArgs) {
 
     if ($script:Show) {
         $mvnArgs += @('package', 'spring-boot:run')
-    } elseif ($script:DryRun) {
+        Write-CommandBanner -Label '[SHOW] Would execute in rest-tests:' -Subtitle "  $mvnwScript $($mvnArgs -join ' ')"
+        return
+    }
+    elseif ($script:DryRun) {
         $mvnArgs += @('compile')
-    } else {
+    }
+    else {
         $mvnArgs += @(
             'package',
             'spring-boot:run'
         )
     }
 
-    try {
-        Push-Location $mockSiteModuleDir
-
-        if ($script:Show) {
-            Write-Host ""
-            Write-Host "=========================================="
-            Write-Host "[SHOW] Would execute in ${mockSiteModuleDir}:"
-            Write-Host "  $mvnwScript $($mvnArgs -join ' ')"
-            Write-Host "=========================================="
-            Pop-Location
-            return
-        }
-
-        if ($script:DryRun) {
-            Write-Host ""
-            Write-Host "=========================================="
-            Write-Host "[DRY RUN] Executing in ${mockSiteModuleDir}:"
-            Write-Host "  $mvnwScript $($mvnArgs -join ' ')"
-            Write-Host "=========================================="
-        }
-
-        & $mvnwScript @mvnArgs
-        $exitCode = $LASTEXITCODE
-        if ($exitCode -ne 0) {
-            Write-Host ""
-            Write-Host "=========================================="
-            Write-Host "❌ MockSiteBoot failed with exit code $exitCode"
-            Write-Host "=========================================="
-            exit $exitCode
-        }
+    if ($script:DryRun) {
+        Write-CommandBanner -Label '[DRY RUN] Executing in rest-tests:' -Subtitle "  $mvnwScript $($mvnArgs -join ' ')"
     }
-    catch {
-        Write-Error "Failed to launch MockSiteBoot: $_"
-        exit 1
-    }
-    finally {
-        Pop-Location
-    }
+
+    Invoke-CommandAndReport -ScriptBlock { & $mvnwScript @mvnArgs } -Label 'MockSiteBoot' -PreExecPath $mockSiteModuleDir
 }
 
 function Invoke-RealWorldScenarioTests([string[]]$additionalArgs) {
@@ -425,9 +402,7 @@ function Invoke-RealWorldScenarioTests([string[]]$additionalArgs) {
         }
     }
 
-    Write-Host "=========================================="
-    Write-Host "Running $modeLabel..."
-    Write-Host "=========================================="
+    Write-CommandBanner -Label "Running $modeLabel..."
 
     # ── Resolve the script path for the chosen mode ──────────────────────────
     if ($mode -eq 'unit') {
@@ -460,52 +435,21 @@ function Invoke-RealWorldScenarioTests([string[]]$additionalArgs) {
     # ── Show / DryRun ────────────────────────────────────────────────────────
     if ($script:Show) {
         $envHint = if ($setProduction) { '$env:BROWSER4CLI_MODE=production ' } else { '' }
-        Write-Host ""
-        Write-Host "=========================================="
-        Write-Host "[SHOW] Would execute:"
-        Write-Host "  ${envHint}pwsh $($pwshArgs -join ' ')"
-        Write-Host "=========================================="
+        Write-CommandBanner -Label '[SHOW] Would execute:' -Subtitle "  ${envHint}pwsh $($pwshArgs -join ' ')"
         return
     }
 
     if ($script:DryRun) {
         $envHint = if ($setProduction) { '$env:BROWSER4CLI_MODE=production ' } else { '' }
-        Write-Host ""
-        Write-Host "=========================================="
-        Write-Host "[DRY RUN] Would execute:"
-        Write-Host "  ${envHint}pwsh $($pwshArgs -join ' ')"
-        Write-Host "=========================================="
+        Write-CommandBanner -Label '[DRY RUN] Would execute:' -Subtitle "  ${envHint}pwsh $($pwshArgs -join ' ')"
         return
     }
 
     # ── Execute ──────────────────────────────────────────────────────────────
-    try {
-        Push-Location $repoRoot
-        if ($setProduction) {
-            $env:BROWSER4CLI_MODE = 'production'
-        }
+    Invoke-CommandAndReport -ScriptBlock {
+        if ($setProduction) { $env:BROWSER4CLI_MODE = 'production' }
         & pwsh @pwshArgs
-        $exitCode = $LASTEXITCODE
-        if ($exitCode -ne 0) {
-            Write-Host ""
-            Write-Host "=========================================="
-            Write-Host "❌ $modeLabel failed with exit code $exitCode"
-            Write-Host "=========================================="
-            exit $exitCode
-        }
-
-        Write-Host ""
-        Write-Host "=========================================="
-        Write-Host "✅ $modeLabel completed successfully"
-        Write-Host "=========================================="
-    }
-    catch {
-        Write-Error "Failed to execute $modeLabel`: $_"
-        exit 1
-    }
-    finally {
-        Pop-Location
-    }
+    } -Label $modeLabel -PreExecPath $repoRoot
 }
 
 # Read the parent POM's <modules> section to get the reactor build order.
@@ -552,9 +496,7 @@ function Get-ArtifactIdForDir([string]$moduleDir) {
 }
 
 function Invoke-ResumeTests([string[]]$additionalArgs) {
-    Write-Host "=========================================="
-    Write-Host "Searching for failed modules to resume from..."
-    Write-Host "=========================================="
+    Write-CommandBanner -Label 'Searching for failed modules to resume from...'
 
     # Collect all module directories that have failing test reports.
     $failedModuleDirs = @()
@@ -614,60 +556,64 @@ function Invoke-ResumeTests([string[]]$additionalArgs) {
     $mvnTestArgs = @($goal, '-rf', ":$resumeFrom") + $additionalArgs
 
     if ($script:Show) {
-        Write-Host ""
-        Write-Host "=========================================="
-        Write-Host "[SHOW] Would execute:"
-        Write-Host "  $mvnwScript $($mvnTestArgs -join ' ')"
-        Write-Host "=========================================="
+        Write-CommandBanner -Label '[SHOW] Would execute:' -Subtitle "  $mvnwScript $($mvnTestArgs -join ' ')"
         return
     }
 
     if ($script:DryRun) {
-        Write-Host ""
-        Write-Host "=========================================="
-        Write-Host "[DRY RUN] Executing:"
-        Write-Host "  $mvnwScript $($mvnTestArgs -join ' ')"
-        Write-Host "=========================================="
+        Write-CommandBanner -Label '[DRY RUN] Executing:' -Subtitle "  $mvnwScript $($mvnTestArgs -join ' ')"
     }
 
-    try {
-        & $mvnwScript @mvnTestArgs
-        $exitCode = $LASTEXITCODE
-        if ($exitCode -ne 0) {
-            Write-Host ""
-            Write-Host "=========================================="
-            Write-Host "❌ Tests failed with exit code $exitCode"
-            Write-Host "=========================================="
-            exit $exitCode
-        }
-
-        Write-Host ""
-        Write-Host "=========================================="
-        Write-Host "✅ Resume tests completed successfully"
-        Write-Host "=========================================="
-    }
-    catch {
-        Write-Error "Failed to execute resume tests: $_"
-        exit 1
-    }
+    Invoke-CommandAndReport -ScriptBlock { & $mvnwScript @mvnTestArgs } -Label 'Resume tests'
 }
 
-$knownTestTypes = @('fast', 'it', 'e2e', 'cli', 'main', 'browser4-cli', 'server', 'rest', 'skills', 'mcp', 'rws', 'resume')
+# ═══════════════════════════════════════════════════════════════════
+# Argument parsing
+# ═══════════════════════════════════════════════════════════════════
+
+# Dispatch-category lookup table.  Maps every known test-type name
+# (and its aliases) to a category used later in the dispatch block.
+$testTypeMap = @{
+    'fast'          = 'maven'
+    'it'            = 'maven'
+    'e2e'           = 'maven'
+    'rest'          = 'maven'
+    'skills'        = 'maven'
+    'mcp'           = 'maven'
+    'main'          = 'maven-expand'
+    'cli'           = 'cli'
+    'browser4-cli'  = 'cli'
+    'server'        = 'server'
+    'mock-site'     = 'server'
+    'mocksite'      = 'server'
+    'mocksiteboot'  = 'server'
+    'rws'           = 'rws'
+    'resume'        = 'resume'
+}
+
 $testTypes = @()
 $additionalArgs = @()
-$parsingTestTypes = $true
 
-$normalizedScriptArgs = Normalize-ArgumentTokens $ScriptArgs
-
-if ($normalizedScriptArgs.Count -eq 0) {
+if ($ScriptArgs.Count -eq 0) {
     Print-Usage
 }
 
-foreach ($arg in $normalizedScriptArgs) {
+# Parsing runs in two phases: test-type mode and pass-through mode.
+# The first non-test-type flag (e.g. -pl, -Dfoo=bar) switches from test-type
+# to pass-through mode.  After the switch, ALL tokens (including bare words
+# like 'browser4-core') are forwarded as additional args.
+$parsingTestTypes = $true
+foreach ($arg in $ScriptArgs) {
+    # Handle --help / -h / -help (only before any test type has been collected,
+    # matching the original behaviour where -h given as the first argument
+    # shows usage instead of being treated as a test type).
     if ($arg -in '-h', '-help', '--help' -and $testTypes.Count -eq 0) {
         Print-Usage -ExitCode 0
     }
 
+    # Explicit DryRun / Show flags passed as remaining args
+    # (PowerShell binds -DryRun/-Show to the switch params automatically,
+    # but --dry-run / --show land in $ScriptArgs and need manual handling.)
     if ($arg -eq '--dry-run') {
         $script:DryRun = $true
         continue
@@ -678,22 +624,32 @@ foreach ($arg in $normalizedScriptArgs) {
         continue
     }
 
-    if ($parsingTestTypes -and ($arg -in $knownTestTypes)) {
+    # Known test type (only in test-type mode)
+    if ($parsingTestTypes -and $testTypeMap.ContainsKey($arg)) {
         $testTypes += $arg
+        continue
     }
-    else {
-        if ($parsingTestTypes -and -not ($arg.StartsWith('-'))) {
-            Exit-UnknownTestType $arg
-        }
 
-        $parsingTestTypes = $false
-        $additionalArgs += $arg
+    # Not a known test type.  If we're still in test-type mode and this
+    # isn't a flag, it's an error (e.g. a typo like 'fasst').
+    if ($parsingTestTypes -and -not $arg.StartsWith('-')) {
+        Exit-UnknownTestType $arg
     }
+
+    # First non-test-type arg switches us to pass-through mode.
+    # After this point, all tokens — flags and bare words — are forwarded.
+    $parsingTestTypes = $false
+    $additionalArgs += $arg
 }
 
+# Default to 'fast' when no test type was given and no flags consumed everything
 if ($testTypes.Count -eq 0) {
     $testTypes += 'fast'
 }
+
+# ═══════════════════════════════════════════════════════════════════
+# Dispatch
+# ═══════════════════════════════════════════════════════════════════
 
 # Handle 'resume' test type: find last failed module and resume with -rf
 if ($testTypes -contains 'resume') {
@@ -705,50 +661,40 @@ if ($testTypes -contains 'resume') {
     exit 0
 }
 
-$mavenTests = @()
-$cliTests = @()
-$rwsTests = @()
-$launchTargets = @()
+# Bucket test types by dispatch category
+$mavenTests  = @($testTypes | Where-Object { $testTypeMap[$_] -in 'maven', 'maven-expand' })
+$cliTests    = @($testTypes | Where-Object { $testTypeMap[$_] -eq 'cli' })
+$rwsTests    = @($testTypes | Where-Object { $testTypeMap[$_] -eq 'rws' })
+$launchTargets = @($testTypes | Where-Object { $testTypeMap[$_] -eq 'server' })
 
-foreach ($type in $testTypes) {
+# Expand 'main' into its constituent test types (only for maven bucket)
+$expandedMaven = @()
+foreach ($type in $mavenTests) {
     if ($type -eq 'main') {
-        $mavenTests += 'fast', 'it', 'e2e', 'rest'
-        continue
+        $expandedMaven += 'fast', 'it', 'e2e', 'rest'
+    } else {
+        $expandedMaven += $type
     }
-
-    if ($type -in @('cli', 'browser4-cli')) {
-        $cliTests += $type
-        continue
-    }
-
-    if ($type -eq 'rws') {
-        $rwsTests += $type
-        continue
-    }
-
-    if ($type -in @('server', 'mock-site', 'mocksite', 'mocksiteboot')) {
-        $launchTargets += 'server'
-        continue
-    }
-
-    $mavenTests += $type
 }
+$mavenTests = $expandedMaven | Select-Object -Unique
 
-$mavenTests = $mavenTests | Select-Object -Unique
 $cliTests = $cliTests | Select-Object -Unique
 $rwsTests = $rwsTests | Select-Object -Unique
 $launchTargets = $launchTargets | Select-Object -Unique
 
+# Validate: server must be run by itself
 if ($launchTargets.Count -gt 0 -and (($mavenTests.Count -gt 0) -or ($cliTests.Count -gt 0) -or ($rwsTests.Count -gt 0) -or ($launchTargets.Count -gt 1))) {
     Write-Error "server must be run by itself. Pass any Maven properties after it, for example: test.ps1 server -Dmock.site.port=18080"
     exit 1
 }
 
+# ── Execute ──────────────────────────────────────────────────────────
+
 if ($mavenTests.Count -gt 0) {
     Invoke-MavenTests -testTypes $mavenTests -additionalMvnArgs $additionalArgs
 }
 
-if (($cliTests | Where-Object { $_ -in @('cli', 'browser4-cli') }).Count -gt 0) {
+if ($cliTests.Count -gt 0) {
     Invoke-Browser4CliTests -additionalArgs $additionalArgs
 }
 
@@ -756,7 +702,7 @@ if ($rwsTests.Count -gt 0) {
     Invoke-RealWorldScenarioTests -additionalArgs $additionalArgs
 }
 
-if ($launchTargets -contains 'server') {
+if ($launchTargets.Count -gt 0) {
     Invoke-MockSiteBoot -additionalArgs $additionalArgs
 }
 
