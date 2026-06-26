@@ -225,6 +225,51 @@ Full reference: **[references/domsnapshot.md](references/domsnapshot.md)**.
 
 Full reference: **[references/css-selector-bridge.md](references/css-selector-bridge.md)**.
 
+## AI-Powered Extraction & Summarization
+
+Natural-language commands for extracting structured data or summarizing page content. These are synchronous (they block until complete) and require an LLM API key configured.
+
+**Prerequisites:** Set an LLM API key — see [Agent reference](references/agent.md) for provider configuration (DeepSeek, OpenRouter, Volcengine, OpenAI-compatible, Aliyun Qwen).
+
+### extract
+
+Extract structured data from the current page. Uses an AI agent that reads the page content and returns the requested data.
+
+```bash
+# Simple extraction
+browser4-cli extract "get all product titles on the page"
+
+# Structured extraction with field descriptions
+browser4-cli extract "get the first 5 search results with title, price, rating, and link as JSON"
+
+# With an explicit JSON schema
+browser4-cli extract "list all article headlines and authors" --schema='{"fields":[{"name":"title","type":"string"},{"name":"author","type":"string"}]}'
+```
+
+Options:
+
+| Option | Effect |
+|---|---|
+| `--schema=<json>` | JSON schema to constrain the extracted data structure |
+
+### summarize
+
+Summarize page content using an AI agent.
+
+```bash
+browser4-cli summarize "summarize the main article"
+browser4-cli summarize "summarize the product reviews"
+browser4-cli summarize --selector="#content"
+```
+
+Options:
+
+| Option | Effect |
+|---|---|
+| `--selector=<sel>` | CSS selector to limit summarization to a specific element |
+
+Full reference: **[references/agent.md](references/agent.md)**.
+
 ## Browser Sessions
 
 ```bash
