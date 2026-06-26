@@ -990,6 +990,153 @@ class DOMStateBuilderTest {
         assertEquals("/submit", formAttrs.get("action").asText())
     }
 
+    @Test
+    @DisplayName("nano renderer filters out script, style, and comment nodes")
+    fun nanoRendererFiltersOutScriptStyleAndCommentNodes() {
+        val root = NanoDOMTreeNode(
+            nodeName = "BODY",
+            locator = "0,1",
+            children = listOf(
+                NanoDOMTreeNode(
+                    nodeName = "SCRIPT",
+                    nodeValue = "console.log('should be ignored')"
+                ),
+                NanoDOMTreeNode(
+                    nodeName = "STYLE",
+                    nodeValue = ".hidden { display: none; }"
+                ),
+                NanoDOMTreeNode(
+                    nodeName = "#comment",
+                    nodeValue = "should also be ignored"
+                ),
+                NanoDOMTreeNode(
+                    nodeName = "BUTTON",
+                    locator = "0,2",
+                    attributes = mapOf("ax_name" to "Click Me")
+                )
+            )
+        )
+
+        val snapshot = NanoAriaSnapshotRenderer.render(root)
+
+        assertTrue(snapshot.contains("button \"Click Me\" [ref=e2]"),
+            "Button should be present in: $snapshot")
+        assertFalse(snapshot.contains("console.log"),
+            "Script content should be filtered out: $snapshot")
+        assertFalse(snapshot.contains("hidden"),
+            "Style content should be filtered out: $snapshot")
+        assertFalse(snapshot.contains("should also be ignored"),
+            "Comment content should be filtered out: $snapshot")
+    }
+
+    @Test
+    @DisplayName("nano renderer collapses single-child generic wrappers without refs")
+    fun nanoRendererCollapsesSingleChildGenericWrappersWithoutRefs() {
+        val root = NanoDOMTreeNode(
+            nodeName = "DIV",
+            // No locator → ref = 0 → eligible for collapse
+            children = listOf(
+                NanoDOMTreeNode(
+                    nodeName = "BUTTON",
+                    locator = "0,1",
+                    attributes = mapOf("ax_name" to "Submit")
+                )
+            )
+        )
+
+        val snapshot = NanoAriaSnapshotRenderer.render(root)
+
+        // The DIV wrapper should be collapsed, promoting the button directly
+        assertFalse(snapshot.contains("generic"),
+            "Generic wrapper should be collapsed: $snapshot")
+        assertTrue(snapshot.contains("button \"Submit\" [ref=e1]"),
+            "Button should be present after collapse: $snapshot")
+    }
+
+    @Test
+    @DisplayName("nano renderer preserves generic wrappers that have refs")
+    fun nanoRendererPreservesGenericWrappersWithRefs() {
+        val root = NanoDOMTreeNode(
+            nodeName = "DIV",
+            locator = "0,2",  // ref = 2 → should NOT collapse
+            children = listOf(
+                NanoDOMTreeNode(
+                    nodeName = "BUTTON",
+                    locator = "0,3",
+                    attributes = mapOf("ax_name" to "Open")
+                )
+            )
+        )
+
+        val snapshot = NanoAriaSnapshotRenderer.render(root)
+
+        assertTrue(snapshot.contains("generic [ref=e2]"),
+            "Generic wrapper with ref should be preserved: $snapshot")
+        assertTrue(snapshot.contains("button \"Open\" [ref=e3]"),
+            "Button child should be present: $snapshot")
+    }
+
+    @Test
+    @DisplayName("nano renderer includes link url from href attribute when role is link")
+    fun nanoRendererIncludesLinkUrlFromHrefAttribute() {
+        val root = NanoDOMTreeNode(
+            nodeName = "BODY",
+            locator = "0,1",
+            children = listOf(
+                NanoDOMTreeNode(
+                    nodeName = "A",
+                    locator = "0,2",
+                    attributes = mapOf(
+                        "href" to "https://example.com",
+                        "ax_name" to "Example Link"
+                    )
+                )
+            )
+        )
+
+        val snapshot = NanoAriaSnapshotRenderer.render(root)
+
+        assertTrue(snapshot.contains("link \"Example Link\" [ref=e2]"),
+            "Link should be present: $snapshot")
+        assertTrue(snapshot.contains("/url: https://example.com"),
+            "URL prop should be present: $snapshot")
+    }
+
+    @Test
+    @DisplayName("nano renderer preserves nested generic wrappers that all have refs")
+    fun nanoRendererPreservesNestedGenericWrappersWithRefs() {
+        // Replicates the Playwright cursor pointer suppression pattern:
+        // body > div[cursor=pointer] > button
+        val root = NanoDOMTreeNode(
+            nodeName = "BODY",
+            locator = "0,1",
+            children = listOf(
+                NanoDOMTreeNode(
+                    nodeName = "DIV",
+                    locator = "0,2",
+                    interactive = true,  // cursor=pointer
+                    children = listOf(
+                        NanoDOMTreeNode(
+                            nodeName = "BUTTON",
+                            locator = "0,3",
+                            attributes = mapOf("ax_name" to "Open")
+                        )
+                    )
+                )
+            )
+        )
+
+        val snapshot = NanoAriaSnapshotRenderer.render(root)
+
+        // Both generic wrappers have refs → should NOT be collapsed
+        assertTrue(snapshot.contains("generic [ref=e1]"),
+            "Root generic with ref should be preserved: $snapshot")
+        assertTrue(snapshot.contains("generic [ref=e2] [cursor=pointer]"),
+            "Interactive generic wrapper with ref should be preserved: $snapshot")
+        assertTrue(snapshot.contains("button \"Open\" [ref=e3]"),
+            "Button child should be present: $snapshot")
+    }
+
     private fun cleanedNode(
         locator: String,
         backendNodeId: Int,

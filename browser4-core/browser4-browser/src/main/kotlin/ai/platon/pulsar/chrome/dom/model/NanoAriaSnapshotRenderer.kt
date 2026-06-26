@@ -20,22 +20,23 @@ object NanoAriaSnapshotRenderer {
             return emptyList()
         }
 
-        if (node.invisible == true) {
+        if (node.invisible == true || shouldIgnoreNode(node)) {
             return emptyList()
         }
         if (isTextNode(node)) {
             return AriaSnapshotFormatting.normalizeText(node.nodeValue)
-                ?.takeIf { it.isNotEmpty() }
                 ?.let { listOf(AriaSnapshotFormatting.RenderChild.Text(it)) }
                 ?: emptyList()
         }
 
+        val attrs = stringAttributes(node)
+        val accessibleName = accessibleName(node, attrs)
         val children = node.children.orEmpty()
             .flatMap { child -> toRenderChildren(child, options, depth + 1) }
-            .let { AriaSnapshotFormatting.normalizeChildren(it, accessibleName(node)) }
+            .let { AriaSnapshotFormatting.normalizeChildren(it, accessibleName) }
 
-        val role = role(node) ?: return children
-        val props = renderProps(node, role, options)
+        val role = role(node, attrs) ?: return children
+        val props = renderProps(attrs, role, accessibleName, options)
 
         // --interactive: skip non-interactive nodes, promote their children
         if (options.interactive && !isInteractiveNode(node, role, props)) {
@@ -43,12 +44,17 @@ object NanoAriaSnapshotRenderer {
         }
 
         // --compact: skip generic/group/paragraph nodes that carry no semantic info
-        if (options.compact && shouldCompact(node, role, props, children)) {
+        if (options.compact && shouldCompact(node, role, accessibleName, props, children)) {
             return children
         }
 
-        if (children.isEmpty() && props.isEmpty() && node.ref <= 0 && accessibleName(node).isNullOrEmpty()) {
+        if (children.isEmpty() && props.isEmpty() && node.ref <= 0 && accessibleName.isNullOrEmpty()) {
             return emptyList()
+        }
+
+        // Collapse single-child generic wrappers that carry no identifying information
+        if (shouldCollapseGenericNode(role, accessibleName, props, children, node.ref)) {
+            return children
         }
 
         val box = if (options.boxes) {
@@ -61,22 +67,22 @@ object NanoAriaSnapshotRenderer {
             AriaSnapshotFormatting.RenderChild.Node(
                 AriaSnapshotFormatting.RenderNode(
                     role = role,
-                    name = accessibleName(node),
+                    name = accessibleName,
                     checked = AriaSnapshotFormatting.triState(
-                        stringAttributes(node)["checked"] ?: stringAttributes(node)["aria-checked"]
+                        attrs["checked"] ?: attrs["aria-checked"]
                     ),
                     disabled = AriaSnapshotFormatting.booleanAttribute(
-                        stringAttributes(node)["disabled"] ?: stringAttributes(node)["aria-disabled"]
+                        attrs["disabled"] ?: attrs["aria-disabled"]
                     ),
                     expanded = AriaSnapshotFormatting.booleanAttribute(
-                        stringAttributes(node)["expanded"] ?: stringAttributes(node)["aria-expanded"]
+                        attrs["expanded"] ?: attrs["aria-expanded"]
                     ),
-                    level = level(stringAttributes(node)),
+                    level = level(attrs),
                     pressed = AriaSnapshotFormatting.triState(
-                        stringAttributes(node)["pressed"] ?: stringAttributes(node)["aria-pressed"]
+                        attrs["pressed"] ?: attrs["aria-pressed"]
                     ),
                     selected = AriaSnapshotFormatting.booleanAttribute(
-                        stringAttributes(node)["selected"] ?: stringAttributes(node)["aria-selected"]
+                        attrs["selected"] ?: attrs["aria-selected"]
                     ),
                     ref = node.ref.takeIf { it > 0 }?.let { "e$it" },
                     cursorPointer = node.interactive == true,
@@ -89,22 +95,18 @@ object NanoAriaSnapshotRenderer {
     }
 
     private fun renderProps(
-        node: NanoDOMTreeNode,
+        attrs: Map<String, String>,
         role: String,
+        accessibleName: String?,
         options: AriaSnapshotOptions
     ): LinkedHashMap<String, String> {
-        val attributes = stringAttributes(node)
         val props = linkedMapOf<String, String>()
         if (role == "link") {
-            attributes["href"]?.takeIf { it.isNotBlank() }?.let { props["url"] = it }
-        }
-        // --urls: always include url for links even when the element would otherwise be collapsed
-        if (options.urls && role == "link" && !props.containsKey("url")) {
-            attributes["href"]?.takeIf { it.isNotBlank() }?.let { props["url"] = it }
+            attrs["href"]?.takeIf { it.isNotBlank() }?.let { props["url"] = it }
         }
         if (role == "textbox") {
-            val placeholder = attributes["placeholder"] ?: attributes["aria-placeholder"]
-            if (!placeholder.isNullOrBlank() && placeholder != accessibleName(node)) {
+            val placeholder = attrs["placeholder"] ?: attrs["aria-placeholder"]
+            if (!placeholder.isNullOrBlank() && placeholder != accessibleName) {
                 props["placeholder"] = placeholder
             }
         }
@@ -124,28 +126,48 @@ object NanoAriaSnapshotRenderer {
     private fun shouldCompact(
         node: NanoDOMTreeNode,
         role: String,
+        accessibleName: String?,
         props: LinkedHashMap<String, String>,
         children: List<AriaSnapshotFormatting.RenderChild>
     ): Boolean {
         if (role != "generic" && role != "group" && role != "paragraph" && role != "section") {
             return false
         }
-        val name = accessibleName(node)
-        if (!name.isNullOrEmpty()) return false
+        if (!accessibleName.isNullOrEmpty()) return false
         if (node.ref > 0) return false
         if (props.isNotEmpty()) return false
         // Node carries no identifying information — collapse it
         return true
     }
 
-    private fun accessibleName(node: NanoDOMTreeNode): String? {
-        val attributes = stringAttributes(node)
-        val role = role(node)
+    private fun shouldCollapseGenericNode(
+        role: String,
+        accessibleName: String?,
+        props: Map<String, String>,
+        children: List<AriaSnapshotFormatting.RenderChild>,
+        ref: Int
+    ): Boolean {
+        return role == "generic" &&
+                accessibleName.isNullOrEmpty() &&
+                props.isEmpty() &&
+                ref <= 0 &&
+                children.size == 1 &&
+                children.first() is AriaSnapshotFormatting.RenderChild.Node
+    }
+
+    private fun shouldIgnoreNode(node: NanoDOMTreeNode): Boolean {
+        val nodeName = node.nodeName?.trim()?.lowercase(Locale.ROOT) ?: return false
+        return nodeName == "script" || nodeName == "style"
+                || nodeName == "#comment" || nodeName == "comment"
+    }
+
+    private fun accessibleName(node: NanoDOMTreeNode, attrs: Map<String, String>): String? {
+        val role = role(node, attrs)
         return AriaSnapshotFormatting.normalizeText(
-            attributes["ax_name"]
-                ?: attributes["aria-label"]
-                ?: attributes["title"]
-                ?: if (role == "img") attributes["alt"] else null
+            attrs["ax_name"]
+                ?: attrs["aria-label"]
+                ?: attrs["title"]
+                ?: if (role == "img") attrs["alt"] else null
         )
     }
 
@@ -154,9 +176,8 @@ object NanoAriaSnapshotRenderer {
         return raw?.trim()?.takeIf { it.isNotEmpty() }
     }
 
-    private fun role(node: NanoDOMTreeNode): String? {
-        val attributes = stringAttributes(node)
-        val explicitRole = attributes["role"]?.trim()
+    private fun role(node: NanoDOMTreeNode, attrs: Map<String, String>): String? {
+        val explicitRole = attrs["role"]?.trim()
         if (!explicitRole.isNullOrEmpty()) {
             return when {
                 explicitRole.equals("none", ignoreCase = true) ||
@@ -165,7 +186,7 @@ object NanoAriaSnapshotRenderer {
             }
         }
 
-        val role = implicitRole(node, attributes)
+        val role = implicitRole(node, attrs)
         return when {
             role.isNullOrEmpty() -> if (isTextNode(node)) null else "generic"
             else -> role
