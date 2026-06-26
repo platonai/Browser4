@@ -832,6 +832,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "depth", description: "Limit tree depth to n levels", is_bool: false, short: Some("d") },
                 OptionDef { name: "selector", description: "Scope snapshot to a CSS selector", is_bool: false, short: Some("s") },
                 OptionDef { name: "raw", description: "Strip page info and return only snapshot content", is_bool: true, short: None },
+                OptionDef { name: "viewport", description: "Capture only specified viewports: <index>,<limit> (0-based index, limit count)", is_bool: false, short: Some("vp") },
             ],
             tool_name_fn: |_| "browser_snapshot".to_string(),
             tool_params_fn: |args| {
@@ -845,6 +846,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                     if let Ok(n) = d.parse::<i32>() { p["depth"] = json!(n); }
                 }
                 if let Some(s) = get_opt_str(args, "selector") { p["selector"] = json!(s); }
+                if let Some(v) = get_opt_str(args, "viewport") { p["viewport"] = json!(v); }
                 p
             },
         },

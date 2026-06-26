@@ -1,23 +1,23 @@
 package ai.platon.browser4.chrome.dom.model
 
 /**
- * Parses a viewport specification string into a list of 1-based viewport indices.
+ * Parses a viewport specification string into a list of 0-based viewport indices.
  *
  * Supported formats:
  * - `"all"` or `""` or `null` — returns `null` to indicate "no filtering" (full page).
  * - `"3"` — single viewport.
- * - `"1,3,5"` — comma-separated list.
- * - `"2-4"` — inclusive range (expands to 2, 3, 4).
- * - `"1,3-5,8"` — mix of individual indices and ranges.
+ * - `"0,2,4"` — comma-separated list.
+ * - `"1-3"` — inclusive range (expands to 1, 2, 3).
+ * - `"0,2-4,7"` — mix of individual indices and ranges.
  *
- * Invalid tokens are silently ignored. Indices less than 1 are clamped to 1.
+ * Invalid tokens are silently ignored. Indices less than 0 are clamped to 0.
  */
 object ViewportSpec {
     /**
      * Parses a viewport specification string.
      *
-     * @param spec The viewport specification string (e.g., `"3"`, `"1,3,5"`, `"2-4"`, `"all"`).
-     * @return A sorted, deduplicated list of 1-based viewport indices, or `null` if the spec means "all viewports".
+     * @param spec The viewport specification string (e.g., `"3"`, `"0,2,4"`, `"1-3"`, `"all"`).
+     * @return A sorted, deduplicated list of 0-based viewport indices, or `null` if the spec means "all viewports".
      */
     fun parse(spec: String?): List<Int>? {
         if (spec.isNullOrBlank() || spec.trim().equals("all", ignoreCase = true)) {
@@ -33,14 +33,14 @@ object ViewportSpec {
                 val parts = trimmed.split("-", limit = 2)
                 val start = parts[0].trim().toIntOrNull() ?: continue
                 val end = parts[1].trim().toIntOrNull() ?: continue
-                val lo = start.coerceAtLeast(1)
-                val hi = end.coerceAtLeast(1)
+                val lo = start.coerceAtLeast(0)
+                val hi = end.coerceAtLeast(0)
                 if (lo <= hi) {
                     for (i in lo..hi) indices.add(i)
                 }
             } else {
                 val idx = trimmed.toIntOrNull() ?: continue
-                indices.add(idx.coerceAtLeast(1))
+                indices.add(idx.coerceAtLeast(0))
             }
         }
 

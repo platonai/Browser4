@@ -161,7 +161,7 @@ class NanoDOMTreeBuilderTest {
             scrollRects = null,
             bounds = bounds,
             absoluteBounds = bounds,
-            viewportIndex = 1,
+            viewportIndex = 0,
             paintOrder = null,
             stackingContexts = null,
             contentDocument = null

@@ -383,12 +383,12 @@ __pulsar_utils__.scrollToScreen = function(screenNumber = 1.0) {
 }
 
 /**
- * Scroll the page to the start of the n-th viewport (1-based index).
- * n = 1  → scroll to top (0)
- * n = 2  → scroll to one viewport height
- * @param {number} n The viewport index to scroll to (1-based)
+ * Scroll the page to the start of the n-th viewport (0-based index).
+ * n = 0  → scroll to top (0)
+ * n = 1  → scroll to one viewport height
+ * @param {number} n The viewport index to scroll to (0-based)
  */
-__pulsar_utils__.scrollToViewport = function (n = 1) {
+__pulsar_utils__.scrollToViewport = function (n = 0) {
     if (!document?.documentElement || !document?.body) return;
 
     const config = this.getConfig?.() || {};
@@ -402,8 +402,8 @@ __pulsar_utils__.scrollToViewport = function (n = 1) {
         15000
     );
 
-    // 1-based: first viewport = 0px
-    const y = Math.min(totalHeight, (n - 1) * viewportHeight);
+    // 0-based: first viewport = 0px
+    const y = Math.min(totalHeight, n * viewportHeight);
     window.scrollTo(0, y);
 };
 

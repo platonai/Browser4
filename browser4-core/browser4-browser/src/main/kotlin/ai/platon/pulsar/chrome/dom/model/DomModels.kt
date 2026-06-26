@@ -380,7 +380,7 @@ data class CleanedDOMTreeNode constructor(
     /** The absolute position bounding box. */
     val bounds: CompactRect?,
     val absoluteBounds: CompactRect? = null,
-    /** A 1-based viewport index */
+    /** A 0-based viewport index */
     val viewportIndex: Int? = null,
 
     val paintOrder: Int? = null,
@@ -449,7 +449,7 @@ data class InteractiveDOMTreeNode(
             append(backendNodeId)
             append("]")
             append("{")
-            append(viewportIndex ?: 1)
+            append(viewportIndex ?: 0)
             append("}")
             append("(")
             append(bs)
@@ -532,7 +532,7 @@ data class NanoDOMTreeNode(
     val children: List<NanoDOMTreeNode>? = null,
 
     @JsonIgnore
-    val viewportIndex: Int? = null,    // The position of this DOM node falls within the nth viewport, 1-based
+    val viewportIndex: Int? = null,    // The position of this DOM node falls within the nth viewport, 0-based
     @JsonIgnore
     val interactiveIndex: Int? = null,
     @JsonIgnore
@@ -654,7 +654,7 @@ data class ScrollState constructor(
             .roundToInt().coerceAtLeast(0)
     val viewportHeight get() = viewport.height
 
-    val processingViewport get() = (hiddenTopHeight / viewportHeight) + 1
+    val processingViewport get() = (hiddenTopHeight / viewportHeight)
 }
 
 /**

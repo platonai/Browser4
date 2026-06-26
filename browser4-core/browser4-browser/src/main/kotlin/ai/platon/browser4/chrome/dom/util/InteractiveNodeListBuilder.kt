@@ -7,7 +7,7 @@ import org.apache.commons.lang3.StringUtils
 class InteractiveNodeListBuilder(
     private val root: SerializableDOMTreeNode,
     private val includeAllViewports: Boolean = false,
-    private val currentViewportIndex: Int = 1,
+    private val currentViewportIndex: Int = 0,
     private val lastViewportIndex: Int = 10000,
     private val maxNonInteractiveTextLength: Int = 100,
 ) {
@@ -150,7 +150,7 @@ class InteractiveNodeListBuilder(
         }
 
         var shorterNodeList = if (!includeAllViewports) {
-            val desiredViewports = mutableSetOf(1, 2, currentViewportIndex, lastViewportIndex)
+            val desiredViewports = mutableSetOf(0, 1, currentViewportIndex, lastViewportIndex)
             nodes.filter { (it.viewportIndex ?: -1) in desiredViewports }
         } else nodes
 
@@ -163,7 +163,7 @@ class InteractiveNodeListBuilder(
         }
         if (goodSize()) return InteractiveDOMTreeNodeList(shorterNodeList)
 
-        val discardViewportIndexes = listOf(2, lastViewportIndex, 1)
+        val discardViewportIndexes = listOf(1, lastViewportIndex, 0)
         discardViewportIndexes.forEach { discardViewportIndex ->
             shorterNodeList = shorterNodeList.filterNot { it.viewportIndex == discardViewportIndex }
             if (goodSize()) return InteractiveDOMTreeNodeList(shorterNodeList)

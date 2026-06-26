@@ -1999,10 +1999,36 @@ async fn handle_snapshot(
         .get("filename")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
+    // Parse --viewport <index>,<limit> (0-based) and convert to server's
+    // viewports format (0-based range, e.g., "0-4" for index=0, limit=5).
+    let viewport_spec: Option<String> = tool_params
+        .get("viewport")
+        .and_then(|v| v.as_str())
+        .and_then(|s| {
+            let parts: Vec<&str> = s.split(',').collect();
+            if parts.len() == 2 {
+                let index: usize = parts[0].trim().parse().ok()?;
+                let limit: usize = parts[1].trim().parse().ok()?;
+                if limit > 0 {
+                    let start = index;
+                    let end = index + limit - 1;
+                    Some(format!("{}-{}", start, end))
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        });
+
     let snapshot_args = {
         let mut a = tool_params.clone();
         if let Value::Object(ref mut m) = a {
             m.remove("filename");
+            m.remove("viewport");
+            if let Some(ref spec) = viewport_spec {
+                m.insert("viewports".to_string(), json!(spec));
+            }
         }
         a
     };

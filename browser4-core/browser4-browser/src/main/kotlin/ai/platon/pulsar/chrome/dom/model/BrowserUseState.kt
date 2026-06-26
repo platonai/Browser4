@@ -9,10 +9,10 @@ data class BrowserUseState(
     }
 
     fun getInteractiveElements(): InteractiveDOMTreeNodeList {
-        // The 1-based viewport to see.
+        // The 0-based viewport to see.
         val scrollState = browserState.scrollState
 
-        // The 1-based viewport to see.
+        // The 0-based viewport to see.
         val processingViewport = scrollState.processingViewport
         val viewportsTotal = scrollState.viewportsTotal
 
