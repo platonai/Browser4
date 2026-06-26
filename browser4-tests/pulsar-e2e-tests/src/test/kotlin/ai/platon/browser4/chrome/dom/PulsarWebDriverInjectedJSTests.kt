@@ -68,19 +68,19 @@ class PulsarWebDriverInjectedJSTests : WebDriverTestBase() {
     }
 
     @Test
-    @DisplayName("test __pulsar_NodeExt can not be seen")
+    @DisplayName("test __pulsar_NodeExt is accessible via CDP in isolated world")
     fun testPulsarNodeExtCanNotBeSeen() = runEnhancedWebDriverTest(testURL, browser) { driver ->
-        var result = driver.evaluateValue("__pulsar_NodeExt")
-        // printlnPro(result)
-        assertNull(result)
+        // With the dual-world architecture (Browser4-4.11+), the Browser4 runtime lives in an
+        // isolated world. Page JavaScript cannot see these symbols, but CDP evaluation
+        // (via evaluateValue) accesses the isolated world where they ARE defined.
+        var result = driver.evaluateValue("typeof __pulsar_NodeExt")
+        assertEquals("function", result)
 
-        result = driver.evaluateValue("__pulsar_NodeExt.prototype")
-        // printlnPro(result)
-        assertNull(result)
+        result = driver.evaluateValue("typeof __pulsar_NodeExt.prototype")
+        assertEquals("object", result)
 
-        result = driver.evaluateValue("document.body.nodeExt")
-        // printlnPro(result)
-        assertNull(result)
+        result = driver.evaluateValue("typeof document.body.nodeExt")
+        assertEquals("object", result)
     }
 
     @Test
@@ -193,12 +193,14 @@ class PulsarWebDriverInjectedJSTests : WebDriverTestBase() {
             // Let's also test the raw JavaScript to see if the function works
             val rawTest = driver.evaluateValue(
                 """
-                const btn = document.querySelector('button');
-                if (btn) {
-                    const attrs = Array.from(btn.attributes).flatMap(a => [a.name, a.value]);
-                    return attrs;
-                }
-                return null;
+                (() => {
+                    const btn = document.querySelector('button');
+                    if (btn) {
+                        const attrs = Array.from(btn.attributes).flatMap(a => [a.name, a.value]);
+                        return attrs;
+                    }
+                    return null;
+                })()
             """
             )
             printlnPro("DEBUG: raw JavaScript test = $rawTest")
@@ -269,11 +271,14 @@ class PulsarWebDriverInjectedJSTests : WebDriverTestBase() {
     @Test
     @DisplayName("test JS compute")
     fun testJsCompute() = runEnhancedWebDriverTest(testURL, browser) { driver ->
+        // With the dual-world architecture (Browser4-4.11+), the Browser4 runtime is injected
+        // into the isolated world where CDP evaluation can access it. __pulsar_NodeTraversor
+        // and __pulsar_NodeFeatureCalculator are available in the isolated world.
         val expression = """new __pulsar_NodeTraversor(new __pulsar_NodeFeatureCalculator()).traverse(document.body);"""
 
         val result = driver.evaluateValue(expression)
-        // printlnPro(result)
-        assertNull(result) { "__pulsar_NodeTraversor should not be seen since Browser4-4.5+" }
+        // The traverse method returns void (undefined), so result should be null
+        assertNull(result)
     }
 }
 

@@ -37,7 +37,7 @@ class JsHandler(
         if (isolatedContextId != null && isolatedContextId > 0) {
             try {
                 val isolatedResult = evaluateInContext(confusedExpr, isolatedContextId, returnByValue = false)
-                if (isolatedResult != null) {
+                if (isolatedResult != null && isolatedResult.exceptionDetails == null) {
                     return isolatedResult
                 }
             } catch (e: Exception) {
@@ -105,7 +105,7 @@ class JsHandler(
         if (isolatedContextId != null && isolatedContextId > 0) {
             try {
                 val isolatedResult = evaluateInContext(confusedExpr, isolatedContextId, returnByValue = true)
-                if (isolatedResult != null) {
+                if (isolatedResult != null && isolatedResult.exceptionDetails == null) {
                     return isolatedResult
                 }
             } catch (e: Exception) {
