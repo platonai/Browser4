@@ -2184,6 +2184,7 @@ async fn handle_snapshot(
         if let Value::Object(ref mut m) = a {
             m.remove("filename");
             m.remove("viewport");
+            m.remove("raw"); // CLI-side flag, not a server parameter
             if let Some(ref spec) = viewport_spec {
                 m.insert("viewports".to_string(), json!(spec));
             }

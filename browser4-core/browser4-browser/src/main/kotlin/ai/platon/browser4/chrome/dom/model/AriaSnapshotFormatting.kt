@@ -129,6 +129,9 @@ internal object AriaSnapshotFormatting {
                 key += " [cursor=pointer]"
             }
         }
+        node.box?.let { box ->
+            key += " [box=$box]"
+        }
         return key
     }
 
@@ -203,7 +206,9 @@ internal object AriaSnapshotFormatting {
         val ref: String?,
         val cursorPointer: Boolean,
         val props: LinkedHashMap<String, String>,
-        val children: List<RenderChild>
+        val children: List<RenderChild>,
+        /** Bounding box string "x,y,width,height" rendered as [box=...] when non-null. */
+        val box: String? = null
     )
 
     private fun RenderNode.singleInlinedTextChild(): String? {

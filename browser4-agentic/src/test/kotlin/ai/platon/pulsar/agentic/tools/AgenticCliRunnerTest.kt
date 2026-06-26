@@ -699,6 +699,20 @@ class AgenticCliRunnerTest {
         }
 
         @Test
+        @DisplayName("executes a snapshot command with --boxes flag")
+        fun executesSnapshotWithBoxes() = runBlocking {
+            coEvery { toolManager.execute(any()) } returns toolCallResult("<aria-snapshot>...</aria-snapshot>")
+
+            val result = runner.execute("snapshot --boxes")
+
+            assertTrue(result.success)
+            assertNotNull(result.toolCall)
+            assertEquals("tab", result.toolCall!!.domain)
+            assertEquals("ariaSnapshot", result.toolCall!!.method)
+            assertEquals(true, result.toolCall!!.arguments["boxes"])
+        }
+
+        @Test
         @DisplayName("executes a tab-list command")
         fun executesTabList() = runBlocking {
             coEvery { toolManager.execute(any()) } returns toolCallResult("[tab1, tab2]")
