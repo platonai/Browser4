@@ -43,7 +43,7 @@ After commands that modify browser state (`open`, `click`, `type`, etc.), browse
 - Page URL: https://example.com/
 - Page Title: Example Domain
 ### Snapshot
-[Snapshot](.browser4-cli/snapshot/page-2026-02-14T19-22-42-679Z.yml)
+[Snapshot](.browser4-cli/snapshot/snapshot-2026-02-14T19-22-42-679Z.yml)
 ```
 
 The YAML file itself contains the tree. Each interactive element has a **ref** (`e5`, `e12`) used to target it in subsequent commands. Roles include `button`, `link`, `textbox`, `generic`, `list`, `listitem`, `image`, `paragraph`, etc.:
@@ -64,6 +64,21 @@ The YAML file itself contains the tree. Each interactive element has a **ref** (
 Element roles and accessible names come first, then `[ref=eN]` at the end of the line. Properties (`/url`, `/multiline`) and child elements are nested with indentation. Extra attributes like `[level=1]` may appear alongside the ref.
 
 Take snapshots on demand with `browser4-cli snapshot` (see below).
+
+### Ref Lifecycle
+
+Element refs (`e5`, `e12`) are Chrome DevTools Protocol **backend node IDs** — integers Chrome assigns to DOM nodes in the current document. They are **ephemeral** and have a limited lifetime:
+
+| Operation | Refs still valid? | Notes |
+|---|---|---|
+| Same-page interaction (`click`, `type`, `fill`) | **No** — re-snapshot after | Every command that modifies page state regenerates the accessibility tree; old refs may point to stale or removed nodes |
+| `goto` (navigate to new URL) | **No** | New document → new backend node IDs |
+| `go-back` / `go-forward` | **No** | Restoring a cached page may coincidentally reuse IDs, but this is **not guaranteed** by Chrome |
+| `reload` | **No** | Chrome may reassign backend node IDs on reload |
+| Tab switch (`tab-select`) | **No** — re-snapshot | Different tab → different document |
+| `snapshot` (re-capture) | **No** (old refs); **Yes** (new refs) | A new snapshot produces fresh refs; discard previous ones |
+
+**Best practice:** Re-snapshot after **any** navigation or page-modifying interaction before using refs. Treat refs as single-use: capture a snapshot, act on its refs immediately, then re-snapshot for the next interaction.
 
 ### Sessions
 
