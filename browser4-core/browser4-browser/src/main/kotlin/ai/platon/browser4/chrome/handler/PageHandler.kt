@@ -3,7 +3,6 @@ package ai.platon.browser4.chrome.handler
 import ai.platon.browser4.chrome.IsolatedWorldManager
 import ai.platon.browser4.chrome.dom.CDPSnapshotService
 import ai.platon.browser4.chrome.dom.model.AriaSnapshotOptions
-import ai.platon.browser4.chrome.dom.model.NanoAriaSnapshotRenderer
 import ai.platon.browser4.chrome.dom.model.ViewportSpec
 import ai.platon.browser4.chrome.handler.util.CheckableElementJs
 import ai.platon.browser4.chrome.handler.util.withNodeObjectId
@@ -18,6 +17,7 @@ import ai.platon.pulsar.browser.protocol.BrowserProtocol
 import ai.platon.pulsar.browser.protocol.NodeRef
 import ai.platon.pulsar.chrome.dom.SnapshotService
 import ai.platon.pulsar.chrome.dom.model.BrowserUseState
+import ai.platon.pulsar.chrome.dom.model.NanoAriaSnapshotRenderer
 import ai.platon.pulsar.chrome.dom.model.PageTarget
 import ai.platon.pulsar.chrome.dom.model.SnapshotOptions
 import ai.platon.pulsar.common.AppContext
@@ -87,7 +87,7 @@ class PageHandler constructor(
      * @param boxes When true, includes each element's bounding box as [box=x,y,width,height].
      * @return The ARIA snapshot YAML covering only the requested viewports.
      */
-    suspend fun ariaSnapshot(viewportIndices: List<Int>, boxes: Boolean = false): String {
+    suspend fun ariaSnapshot(viewportIndices: List<Int>): String {
         val buState = snapshot.getBrowserUseState(PageTarget(), SnapshotOptions())
         lastBrowserUseState = buState
 
@@ -104,7 +104,7 @@ class PageHandler constructor(
         }
 
         // Join snapshots from disjoint viewport ranges using YAML document separator
-        return nanoTrees.joinToString("\n---\n") { it.ariaSnapshot(boxes) }
+        return nanoTrees.joinToString("\n---\n") { it.ariaSnapshot }
     }
 
     /**

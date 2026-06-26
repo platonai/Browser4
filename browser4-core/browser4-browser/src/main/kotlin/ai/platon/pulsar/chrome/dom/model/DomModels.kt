@@ -1,17 +1,15 @@
 package ai.platon.pulsar.chrome.dom.model
 
-import ai.platon.browser4.chrome.dom.DOMSerializer
 import ai.platon.browser4.chrome.dom.model.AriaSnapshotOptions
-import ai.platon.browser4.chrome.dom.model.AriaSnapshotRenderer
-import ai.platon.browser4.chrome.dom.model.NanoAriaSnapshotRenderer
-import ai.platon.browser4.chrome.dom.util.CSSSelectorUtils
-import ai.platon.browser4.chrome.dom.util.DOMUtils
-import ai.platon.browser4.chrome.dom.util.InteractiveNodeListBuilder
-import ai.platon.browser4.chrome.dom.util.InteractiveNodeListBuilder.Companion.estimatedSize
-import ai.platon.browser4.chrome.dom.util.NanoDOMTreeBuilder
 import ai.platon.pulsar.browser.common.BrowserSettings.Companion.VIEWPORT
 import ai.platon.pulsar.browser.common.FBNLocator
 import ai.platon.pulsar.browser.common.LocatorMap
+import ai.platon.pulsar.chrome.dom.DOMSerializer
+import ai.platon.pulsar.chrome.dom.util.CSSSelectorUtils
+import ai.platon.pulsar.chrome.dom.util.DOMUtils
+import ai.platon.pulsar.chrome.dom.util.InteractiveNodeListBuilder
+import ai.platon.pulsar.chrome.dom.util.InteractiveNodeListBuilder.Companion.estimatedSize
+import ai.platon.pulsar.chrome.dom.util.NanoDOMTreeBuilder
 import ai.platon.pulsar.common.math.geometric.DimI
 import ai.platon.pulsar.common.math.roundTo
 import ai.platon.pulsar.common.serialize.json.Pson
@@ -544,8 +542,8 @@ data class NanoDOMTreeNode(
     @JsonIgnore
     val serializableTreeNode: SerializableDOMTree? = null,
 ) {
-    @JsonIgnore
-    fun ariaSnapshot(boxes: Boolean = false): String = NanoAriaSnapshotRenderer.render(this, boxes)
+    @get:JsonIgnore
+    val ariaSnapshot: String by lazy { NanoAriaSnapshotRenderer.render(this) }
 
     @get:JsonIgnore
     val ref: Int get() = FBNLocator.parseRelaxed(locator)?.backendNodeId ?: 0

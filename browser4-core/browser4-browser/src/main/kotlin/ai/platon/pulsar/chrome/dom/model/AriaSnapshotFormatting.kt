@@ -129,7 +129,6 @@ internal object AriaSnapshotFormatting {
                 key += " [cursor=pointer]"
             }
         }
-        node.box?.let { key += " [box=$it]" }
         return key
     }
 
@@ -203,7 +202,6 @@ internal object AriaSnapshotFormatting {
         val selected: Boolean,
         val ref: String?,
         val cursorPointer: Boolean,
-        val box: String? = null,
         val props: LinkedHashMap<String, String>,
         val children: List<RenderChild>
     )

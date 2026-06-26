@@ -1,5 +1,6 @@
 package ai.platon.pulsar.chrome.dom.model
 
+import ai.platon.browser4.chrome.dom.model.AriaSnapshotOptions
 import ai.platon.pulsar.chrome.dom.model.CompactRect
 import ai.platon.pulsar.chrome.dom.model.NanoDOMTreeNode
 import java.util.*
@@ -73,7 +74,6 @@ object NanoAriaSnapshotRenderer {
                     ),
                     ref = node.ref.takeIf { it > 0 }?.let { "e$it" },
                     cursorPointer = node.interactive == true,
-                    box = box,
                     props = props,
                     children = children
                 )
