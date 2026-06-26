@@ -307,6 +307,60 @@ browser4-cli swarm result <id>
 
 Full reference: **[references/swarm.md](references/swarm.md)**.
 
+## Crawl CLI
+
+Recursive website crawling — start from a seed URL and follow links up to a configurable depth.
+
+```bash
+browser4-cli crawl <url> [--depth=1] [--out-link-selector=<CSS>] [--out-link-pattern=<regex>] [--top-links=20]
+```
+
+### Command overview
+
+| Command | Description |
+|---|---|
+| `crawl <url>` | Crawl a website starting from a URL, following links up to a configurable depth |
+
+### Key flags
+
+| Flag | Default | Description |
+|---|---|---|
+| `-d`, `--depth` | `1` | Maximum crawl depth |
+| `-ol`, `--out-link-selector` | — | CSS selector to extract links from each page |
+| `-olp`, `--out-link-pattern` | `.+` | Regex pattern to filter extracted links |
+| `-tl`, `--top-links` | `20` | Maximum links to extract per page |
+| `-a`, `--args` | — | Additional LoadOptions passthrough (e.g. `-a "-refresh -nMaxRetry 5"`) |
+| `--refresh` | — | Force a fresh fetch, ignoring cache |
+| `--parse` | — | Parse each page immediately after fetching |
+| `--expires` | — | Cache expiration duration (e.g. `1d`, `1h`, `30m`) |
+| `--store-content` | — | Persist page content to storage |
+| `-p`, `--priority` | — | Queue priority (lower = higher priority) |
+| `--page-load-timeout` | — | Maximum time to wait for page load |
+| `--ignore-url-query` | — | Remove query parameters from URLs during normalization |
+| `--no-norm` | — | Disable URL normalization |
+| `--readonly` | — | Non-destructive mode (no page modifications) |
+
+### Usage examples
+
+```bash
+# Depth=1: extract all links from the homepage and load each linked page
+browser4-cli crawl "https://platon.ai" --out-link-selector "a[href]"
+
+# Depth=2: follow links two levels deep, only matching product pages
+browser4-cli crawl "https://shop.example.com" \
+  --depth 2 \
+  --out-link-selector "a.product-link" \
+  --out-link-pattern "/product/" \
+  --top-links 10
+
+# With LoadOptions passthrough for advanced control
+browser4-cli crawl "https://example.com" \
+  -ol "a[href]" \
+  -a "-refresh -nMaxRetry 5 -interactLevel FAST"
+```
+
+Behind the scenes: depth=1 reuses `PulsarSession.submitForOutPages`; depth>1 uses a BFS continuous crawl with visited-URL dedup and recursive link submission.
+
 ## Error Handling
 
 - Commands requiring the backend (`open`, `attach`, `goto`, `snapshot`, `click`, etc.) exit non-zero if the backend is unreachable. Check with `browser4-cli list`.
@@ -321,6 +375,7 @@ Full reference: **[references/swarm.md](references/swarm.md)**.
 - **Attach** — [references/attach.md](references/attach.md)
 - **DOM Snapshot** — [references/domsnapshot.md](references/domsnapshot.md)
 - **CSS Selector Bridge** — [references/css-selector-bridge.md](references/css-selector-bridge.md)
+- **Crawl command** — [references/crawl.md](references/crawl.md)
 - **Swarm command** — [references/swarm.md](references/swarm.md)
 - **Storage state** — [references/storage-state.md](references/storage-state.md)
 - **X-SQL** — [references/x-sql.md](references/x-sql.md)

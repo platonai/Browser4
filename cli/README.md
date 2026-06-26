@@ -280,6 +280,7 @@ Query `browser4-cli help <command>` for the exact syntax when you need them.
 | `swarm query <url>` | Run an X-SQL query against a loaded webpage |
 | `swarm status <id>` | Check the status of a scrape or query job |
 | `swarm result <id>` | Get the result of a completed job |
+| `crawl <url>` | Crawl a website from a seed URL, following links up to a configurable depth |
 
 ## Agent task workflow (`agent <subcommand>`)
 
@@ -381,6 +382,8 @@ coordinates multiple browser contexts in the Browser4 backend.
 | `swarm query <url>` | Run X-SQL queries against loaded pages | `POST /api/swarm/query` |
 | `swarm status <id>` | Poll job status | `GET /api/swarm/{id}/status` |
 | `swarm result <id>` | Fetch completed job result | `GET /api/swarm/{id}/result` |
+| `crawl <url>` | Start a website crawl | `POST /api/crawl` |
+| (poll) | Track crawl progress | `GET /api/crawl/{id}/result` |
 
 ### URL scraping with `swarm submit`
 
@@ -437,6 +440,57 @@ browser4-cli swarm query --sql @query.sql --seed-file=./urls.txt --refresh
   Use `@url` in the X-SQL template; it is replaced with the target URL server-side.
 - Prefix the `--sql` value with `@` to read from a file (e.g. `--sql @query.sql`).
 - All commands return a task ID; use `swarm status` / `swarm result` to track progress.
+
+## Crawl (`crawl`)
+
+Recursive website crawling from a seed URL.
+
+### Command overview
+
+| Command | Purpose | Backend endpoint |
+|---|---|---|
+| `crawl <url>` | Crawl a website from a seed URL | `POST /api/crawl` |
+| (poll) | Track crawl progress | `GET /api/crawl/{id}/result` |
+
+### Basic crawling
+
+```shell
+# depth=1: extract all links from homepage, load each linked page
+browser4-cli crawl "https://example.com" --out-link-selector "a[href]"
+
+# depth=2: follow links two levels deep, filter by pattern
+browser4-cli crawl "https://shop.example.com" \
+  --depth 2 \
+  --out-link-selector "a.product-link" \
+  --out-link-pattern "/product/" \
+  --top-links 10
+
+# with LoadOptions passthrough
+browser4-cli crawl "https://example.com" -ol "a[href]" -a "-refresh -nMaxRetry 5"
+```
+
+### Key flags
+
+| Flag | Default | Description |
+|---|---|---|
+| `-d`, `--depth` | `1` | Maximum crawl depth |
+| `-ol`, `--out-link-selector` | — | CSS selector to extract links from each page |
+| `-olp`, `--out-link-pattern` | `.+` | Regex pattern to filter extracted links |
+| `-tl`, `--top-links` | `20` | Maximum links to extract per page |
+| `-a`, `--args` | — | Additional LoadOptions passthrough |
+| `--refresh` | — | Force a fresh fetch, ignoring cache |
+| `--parse` | — | Parse each page immediately after fetching |
+| `--expires` | — | Cache expiration duration |
+| `--store-content` | — | Persist page content to storage |
+| `--page-load-timeout` | — | Maximum time to wait for page load |
+| `--readonly` | — | Non-destructive mode |
+
+### Notes
+
+- All LoadOptions flags available via `--args` passthrough (e.g. `-a "-nMaxRetry 5 -lazyFlush"`).
+- Depth=1 reuses `PulsarSession.submitForOutPages`; depth>1 uses BFS continuous crawl with visited-URL dedup.
+- CLI timeout: 600s default, configurable via `BROWSER4_CLI_CRAWL_TIMEOUT_SECS`.
+- Duplicate URLs are skipped (normalized: lowercase, no trailing slash, no query string).
 
 ## DOM Snapshot commands (`domsnapshot <subcommand>`)
 

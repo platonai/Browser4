@@ -10,6 +10,8 @@ const NAVIGATION_REQUEST_TIMEOUT_SECS: u64 = 120;
 const TEXT_INPUT_REQUEST_TIMEOUT_SECS: u64 = 90;
 const AGENT_REQUEST_TIMEOUT_SECS: u64 = 180;
 const BATCH_REQUEST_TIMEOUT_SECS: u64 = 120;
+const CRAWL_REQUEST_TIMEOUT_SECS: u64 = 600;
+const CRAWL_REQUEST_TIMEOUT_ENV: &str = "BROWSER4_CLI_CRAWL_TIMEOUT_SECS";
 const DEFAULT_REQUEST_TIMEOUT_ENV: &str = "BROWSER4_CLI_HTTP_TIMEOUT_SECS";
 const NAVIGATION_REQUEST_TIMEOUT_ENV: &str = "BROWSER4_CLI_NAVIGATION_TIMEOUT_SECS";
 const TEXT_INPUT_REQUEST_TIMEOUT_ENV: &str = "BROWSER4_CLI_INPUT_TIMEOUT_SECS";
@@ -413,6 +415,50 @@ pub async fn get_swarm_result(
     task_id: &str,
 ) -> Result<String, String> {
     let url = build_endpoint_url(base_url, &format!("/api/swarm/{task_id}/result"));
+    send_rest_request(client.get(url)).await
+}
+
+pub fn crawl_request_timeout() -> std::time::Duration {
+    std::time::Duration::from_secs(timeout_secs_from_env(
+        CRAWL_REQUEST_TIMEOUT_ENV,
+        CRAWL_REQUEST_TIMEOUT_SECS,
+    ))
+}
+
+/// Submit a crawl task through `CrawlController.startCrawl(request)`.
+pub async fn submit_crawl(
+    client: &Client,
+    base_url: &str,
+    params: &Value,
+) -> Result<String, String> {
+    let url = build_endpoint_url(base_url, "/api/crawl");
+    send_rest_request(
+        client
+            .post(url)
+            .header("Content-Type", "application/json; charset=utf-8")
+            .json(params),
+    )
+    .await
+}
+
+/// Read crawl task status through `CrawlController.getStatus(id)`.
+#[allow(dead_code)]
+pub async fn get_crawl_status(
+    client: &Client,
+    base_url: &str,
+    task_id: &str,
+) -> Result<String, String> {
+    let url = build_endpoint_url(base_url, &format!("/api/crawl/{task_id}/status"));
+    send_rest_request(client.get(url)).await
+}
+
+/// Read crawl task result through `CrawlController.getResult(id)`.
+pub async fn get_crawl_result(
+    client: &Client,
+    base_url: &str,
+    task_id: &str,
+) -> Result<String, String> {
+    let url = build_endpoint_url(base_url, &format!("/api/crawl/{task_id}/result"));
     send_rest_request(client.get(url)).await
 }
 

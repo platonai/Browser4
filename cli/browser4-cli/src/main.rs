@@ -48,9 +48,10 @@ use daemon::{
 };
 use help::{generate_command_help, generate_help, generate_help_entry, public_command_name};
 use http::{
-    call_tool, get_command_result, get_command_status, get_swarm_result, get_swarm_status,
-    is_stale_session_error, make_client, submit_batch_commands, submit_plain_command,
-    submit_swarm_payload, submit_swarm_query,
+    call_tool, crawl_request_timeout, get_command_result, get_command_status, get_crawl_result,
+    get_swarm_result, get_swarm_status, is_stale_session_error, make_client,
+    submit_batch_commands, submit_crawl, submit_plain_command, submit_swarm_payload,
+    submit_swarm_query,
 };
 use managed_processes::{
     read_managed_server_processes, stop_browser4_server_forcibly, ManagedServerProcess,
@@ -246,6 +247,7 @@ fn no_snapshot_commands() -> HashSet<&'static str> {
         "swarm-query",
         "swarm-status",
         "swarm-result",
+        "crawl",
         "domsnapshot",
         "domsnapshot-get",
         "domsnapshot-query",
@@ -4204,6 +4206,87 @@ async fn handle_swarm_result(
     Ok(())
 }
 
+async fn handle_crawl(
+    client: &Client,
+    base_url: &str,
+    tool_params: &Value,
+    _session_name: Option<&str>,
+) -> Result<(), String> {
+    let url = tool_params
+        .get("url")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+
+    if url.is_empty() {
+        return Err("A URL is required for crawl.".to_string());
+    }
+
+    let task_id = submit_crawl(client, base_url, tool_params).await?;
+    let task_id = task_id.trim().trim_matches('"').to_string();
+    cli_println!("Crawl task submitted: {}", task_id);
+    json_field("task_id", json!(task_id));
+
+    let _depth = tool_params
+        .get("depth")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(1);
+    let poll_interval = std::time::Duration::from_secs(2);
+    let timeout = crawl_request_timeout();
+    let start = std::time::Instant::now();
+
+    loop {
+        if start.elapsed() > timeout {
+            return Err(format!(
+                "Crawl timed out after {} seconds. Task ID: {}. \
+                 Increase the timeout with the BROWSER4_CLI_CRAWL_TIMEOUT_SECS environment variable.",
+                timeout.as_secs(),
+                task_id
+            ));
+        }
+
+        tokio::time::sleep(poll_interval).await;
+
+        let response_text = get_crawl_result(client, base_url, &task_id).await?;
+        let parsed: Value = serde_json::from_str(&response_text)
+            .map_err(|e| format!("Failed to parse crawl response: {}", e))?;
+
+        let status = parsed["status"].as_str().unwrap_or("");
+        let pages_found = parsed["pagesFound"].as_i64().unwrap_or(0);
+        let error = parsed["error"].as_str();
+
+        match status {
+            "OK" | "SC_OK" => {
+                let pages = parsed["pages"].as_array();
+                let page_count = pages.map(|p| p.len()).unwrap_or(0);
+                cli_println!("\nCrawl completed. {} pages found.", page_count);
+
+                if let Some(pages) = pages {
+                    for page in pages {
+                        let page_url = page["url"].as_str().unwrap_or("");
+                        let page_title = page["title"].as_str().unwrap_or("");
+                        let page_depth = page["depth"].as_i64().unwrap_or(0);
+                        cli_println!("  depth={} | {} | {}", page_depth, page_url, page_title);
+                    }
+                }
+
+                json_field("pages", json!(pages));
+                json_field("pages_found", json!(page_count));
+                return Ok(());
+            }
+            "SC_REQUEST_TIMEOUT" | "SC_INTERNAL_SERVER_ERROR" => {
+                let err_msg = error.unwrap_or("Unknown crawl error");
+                return Err(format!("Crawl failed: {}", err_msg));
+            }
+            _ => {
+                // Still running — report progress
+                if pages_found > 0 {
+                    cli_println!("Crawling... {} pages found so far", pages_found);
+                }
+            }
+        }
+    }
+}
+
 /// Format the output lines for `handle_install`.  Extracted as a pure function
 /// so the branching logic can be unit-tested without network I/O.
 fn format_install_output(runtime: &InstalledBrowser4Runtime) -> Vec<String> {
@@ -6476,6 +6559,15 @@ async fn run(
         }
         "swarm-result" => {
             handle_swarm_result(&client, &base_url, &tool_params).await?;
+        }
+        "crawl" => {
+            handle_crawl(
+                &client,
+                &base_url,
+                &tool_params,
+                global.session_name.as_deref(),
+            )
+            .await?;
         }
         "domsnapshot" => {
             handle_dom_snapshot_capture(
