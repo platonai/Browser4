@@ -555,7 +555,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(
-            "  - Search the DOM snapshot HTML with regex patterns using `domsnapshot grep <pattern>`. Supports standard grep flags: -i, -n, -A, -B, -C, -v, -c, -l, -F, -w, and --selector for CSS-scoped searches."
+            "  - Search the DOM snapshot HTML with regex patterns using `domsnapshot grep <pattern>`. Supports standard grep flags: -i, -A, -B, -C, -v, -c, -l, -F, -w, --no-line-number, and --selector for CSS-scoped searches. Line numbers are shown by default (unlike GNU grep's -n opt-in)."
                 .to_string(),
         );
         lines.push(String::new());

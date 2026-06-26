@@ -8783,4 +8783,184 @@ mod tests {
     fn test_format_duration_exact_hour() {
         assert_eq!(format_duration(7200), "2h");
     }
+
+    // -----------------------------------------------------------------------
+    // parse_grep_options tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_parse_grep_options_basic_pattern() {
+        let opts = parse_grep_options(&json!({"pattern": "error"})).unwrap();
+        assert_eq!(opts.pattern, "error");
+        assert!(!opts.ignore_case);
+        assert!(!opts.no_line_number);
+        assert!(!opts.invert_match);
+        assert!(!opts.count);
+        assert!(!opts.files_with_matches);
+        assert!(!opts.fixed_strings);
+        assert!(!opts.word_regexp);
+        assert_eq!(opts.after_context, None);
+        assert_eq!(opts.before_context, None);
+        assert_eq!(opts.context, None);
+        assert_eq!(opts.selector, None);
+    }
+
+    #[test]
+    fn test_parse_grep_options_missing_pattern() {
+        let err = parse_grep_options(&json!({})).unwrap_err();
+        assert!(err.contains("Pattern is required"));
+    }
+
+    #[test]
+    fn test_parse_grep_options_empty_pattern() {
+        let err = parse_grep_options(&json!({"pattern": ""})).unwrap_err();
+        assert!(err.contains("Pattern is required"));
+    }
+
+    #[test]
+    fn test_parse_grep_options_ignore_case() {
+        let opts = parse_grep_options(&json!({"pattern": "err", "ignore-case": true})).unwrap();
+        assert!(opts.ignore_case);
+    }
+
+    #[test]
+    fn test_parse_grep_options_ignore_case_short_form() {
+        // The short form -i gets resolved to ignore-case by build_command_args,
+        // so parse_grep_options only sees the long form.
+        let opts = parse_grep_options(&json!({"pattern": "err", "ignore-case": true})).unwrap();
+        assert!(opts.ignore_case);
+    }
+
+    #[test]
+    fn test_parse_grep_options_no_line_number() {
+        let opts =
+            parse_grep_options(&json!({"pattern": "err", "no-line-number": true})).unwrap();
+        assert!(opts.no_line_number);
+    }
+
+    #[test]
+    fn test_parse_grep_options_after_context() {
+        let opts =
+            parse_grep_options(&json!({"pattern": "err", "after-context": 3})).unwrap();
+        assert_eq!(opts.after_context, Some(3));
+    }
+
+    #[test]
+    fn test_parse_grep_options_before_context() {
+        let opts =
+            parse_grep_options(&json!({"pattern": "err", "before-context": 2})).unwrap();
+        assert_eq!(opts.before_context, Some(2));
+    }
+
+    #[test]
+    fn test_parse_grep_options_context() {
+        let opts = parse_grep_options(&json!({"pattern": "err", "context": 5})).unwrap();
+        assert_eq!(opts.context, Some(5));
+    }
+
+    #[test]
+    fn test_parse_grep_options_context_string_value() {
+        // Context options may arrive as strings from CLI parsing
+        let opts = parse_grep_options(&json!({"pattern": "err", "context": "5"})).unwrap();
+        assert_eq!(opts.context, Some(5));
+    }
+
+    #[test]
+    fn test_parse_grep_options_invert_match() {
+        let opts =
+            parse_grep_options(&json!({"pattern": "err", "invert-match": true})).unwrap();
+        assert!(opts.invert_match);
+    }
+
+    #[test]
+    fn test_parse_grep_options_count() {
+        let opts = parse_grep_options(&json!({"pattern": "err", "count": true})).unwrap();
+        assert!(opts.count);
+    }
+
+    #[test]
+    fn test_parse_grep_options_files_with_matches() {
+        let opts =
+            parse_grep_options(&json!({"pattern": "err", "files-with-matches": true})).unwrap();
+        assert!(opts.files_with_matches);
+    }
+
+    #[test]
+    fn test_parse_grep_options_fixed_strings() {
+        let opts =
+            parse_grep_options(&json!({"pattern": "err", "fixed-strings": true})).unwrap();
+        assert!(opts.fixed_strings);
+    }
+
+    #[test]
+    fn test_parse_grep_options_word_regexp() {
+        let opts =
+            parse_grep_options(&json!({"pattern": "err", "word-regexp": true})).unwrap();
+        assert!(opts.word_regexp);
+    }
+
+    #[test]
+    fn test_parse_grep_options_selector() {
+        let opts =
+            parse_grep_options(&json!({"pattern": "err", "selector": "main"})).unwrap();
+        assert_eq!(opts.selector, Some("main".to_string()));
+    }
+
+    #[test]
+    fn test_parse_grep_options_all_options_combined() {
+        let opts = parse_grep_options(&json!({
+            "pattern": "error",
+            "ignore-case": true,
+            "no-line-number": true,
+            "after-context": 2,
+            "before-context": 1,
+            "context": 3,
+            "invert-match": true,
+            "count": false,
+            "files-with-matches": false,
+            "fixed-strings": true,
+            "word-regexp": true,
+            "selector": "body"
+        }))
+        .unwrap();
+        assert_eq!(opts.pattern, "error");
+        assert!(opts.ignore_case);
+        assert!(opts.no_line_number);
+        assert_eq!(opts.after_context, Some(2));
+        assert_eq!(opts.before_context, Some(1));
+        assert_eq!(opts.context, Some(3));
+        assert!(opts.invert_match);
+        assert!(!opts.count);
+        assert!(!opts.files_with_matches);
+        assert!(opts.fixed_strings);
+        assert!(opts.word_regexp);
+        assert_eq!(opts.selector, Some("body".to_string()));
+    }
+
+    #[test]
+    fn test_parse_grep_options_defaults_all_false() {
+        let opts = parse_grep_options(&json!({"pattern": "test"})).unwrap();
+        // All boolean flags default to false
+        assert!(!opts.ignore_case);
+        assert!(!opts.no_line_number);
+        assert!(!opts.invert_match);
+        assert!(!opts.count);
+        assert!(!opts.files_with_matches);
+        assert!(!opts.fixed_strings);
+        assert!(!opts.word_regexp);
+        // All optional values default to None
+        assert_eq!(opts.after_context, None);
+        assert_eq!(opts.before_context, None);
+        assert_eq!(opts.context, None);
+        assert_eq!(opts.selector, None);
+    }
+
+    #[test]
+    fn test_parse_grep_options_regex_special_chars() {
+        let opts =
+            parse_grep_options(&json!({"pattern": r"error|warning|panic", "ignore-case": true}))
+                .unwrap();
+        assert_eq!(opts.pattern, "error|warning|panic");
+        assert!(opts.ignore_case);
+    }
 }

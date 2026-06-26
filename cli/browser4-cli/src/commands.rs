@@ -1997,7 +1997,15 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "selector", short: None, is_bool: false, description: "CSS selector to scope the search to" },
             ],
             tool_name_fn: |_| "dom_snapshot_export".to_string(),
-            tool_params_fn: |_| json!({}),
+            tool_params_fn: |args| {
+                let mut p = json!({});
+                for (k, v) in args {
+                    if k != "_" {
+                        p[k] = v.clone();
+                    }
+                }
+                p
+            },
         },
         CommandDef {
             name: "generate-locator",
