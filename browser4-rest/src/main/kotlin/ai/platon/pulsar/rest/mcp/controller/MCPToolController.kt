@@ -1,13 +1,17 @@
 package ai.platon.pulsar.rest.mcp.controller
 
 import ai.platon.pulsar.agent.tool.UserCommandExecutor
-import ai.platon.pulsar.rest.session.PulsarSessionManager
 import ai.platon.pulsar.common.brief
 import ai.platon.pulsar.rest.api.service.ScrapeService
+import ai.platon.pulsar.rest.mcp.controller.dto.MCPContent
 import ai.platon.pulsar.rest.mcp.controller.dto.MCPToolCallRequest
 import ai.platon.pulsar.rest.mcp.controller.dto.MCPToolCallResponse
-import ai.platon.pulsar.rest.mcp.controller.dto.MCPContent
-import ai.platon.pulsar.rest.mcp.controller.handler.*
+import ai.platon.pulsar.rest.mcp.controller.handler.CommandHandler
+import ai.platon.pulsar.rest.mcp.controller.handler.DomSnapshotHandler
+import ai.platon.pulsar.rest.mcp.controller.handler.SessionManagementHandler
+import ai.platon.pulsar.rest.mcp.controller.handler.ToolListHandler
+import ai.platon.pulsar.rest.session.PulsarSessionManager
+import ai.platon.pulsar.skeleton.workflow.parse.html.PageSummaryIndexService
 import com.fasterxml.jackson.databind.ObjectMapper
 import jakarta.servlet.http.HttpServletResponse
 import org.slf4j.LoggerFactory
@@ -100,30 +104,6 @@ class MCPToolController(
         return ResponseEntity.ok(mapOf("tools" to tools))
     }
 
-    private suspend fun handleDomSnapshotSummary(
-        request: MCPToolCallRequest
-    ): ResponseEntity<MCPToolCallResponse> {
-        val sessionId = requireSessionId(request)
-        val managed = sessionManager.getSession(sessionId)
-            ?: return ResponseEntity.ok(errorResponse("${MCPConstants.ERROR_SESSION_NOT_FOUND}$sessionId"))
-
-        return try {
-            val summary = managed.withLock {
-                val pulsarSession = managed.agenticSession
-                val url = pulsarSession.normalize(managed.driver.userTypedUrl())
-                val document = pulsarSession.loadDocument(url.urlString)
-                val title = document.title
-                val pageUrl = url.urlString
-
-                PageSummaryIndexService.generate(document, pageUrl, title)
-            }
-            ResponseEntity.ok(textResponse(summary))
-        } catch (e: Exception) {
-            logger.error("dom_snapshot_summary failed | {}", e.message, e)
-            ResponseEntity.ok(errorResponse("dom_snapshot_summary failed: ${e.message}"))
-        }
-    }
-
     // =========================================================================
     // Dispatch to per-session AgentToolManager
     // =========================================================================
@@ -201,6 +181,11 @@ class MCPToolController(
         val tool: String,
         val arguments: Map<String, Any?>
     )
+
+    private fun requireSessionId(request: MCPToolCallRequest): String {
+        return request.arguments?.get("sessionId")?.toString()
+            ?: throw IllegalArgumentException("Missing required parameter: sessionId")
+    }
 
     private fun requireSessionId(arguments: Map<String, Any?>): String {
         return arguments[MCPConstants.KEY_SESSION_ID]?.toString()
