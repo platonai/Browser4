@@ -29,7 +29,11 @@ object ViewportSpec {
             val trimmed = token.trim()
             if (trimmed.isEmpty()) continue
 
-            if (trimmed.contains("-")) {
+            // Try as a single integer first (handles negative numbers like "-1")
+            val singleIdx = trimmed.toIntOrNull()
+            if (singleIdx != null) {
+                indices.add(singleIdx.coerceAtLeast(0))
+            } else if (trimmed.contains("-")) {
                 val parts = trimmed.split("-", limit = 2)
                 val start = parts[0].trim().toIntOrNull() ?: continue
                 val end = parts[1].trim().toIntOrNull() ?: continue
@@ -38,9 +42,6 @@ object ViewportSpec {
                 if (lo <= hi) {
                     for (i in lo..hi) indices.add(i)
                 }
-            } else {
-                val idx = trimmed.toIntOrNull() ?: continue
-                indices.add(idx.coerceAtLeast(0))
             }
         }
 
