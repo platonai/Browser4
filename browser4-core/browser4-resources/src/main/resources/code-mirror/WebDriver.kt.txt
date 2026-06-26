@@ -1250,8 +1250,8 @@ interface WebDriver : Closeable {
      * driver.scrollToViewport(3.0)
      * ```
      *
-     * @param n The viewport number of the page to scroll to (1-based).
-     * 1.00 means at the top of the first screen, 2.50 means halfway through the second screen.
+     * @param n The viewport number of the page to scroll to (0-based).
+     * 0.00 means at the top of the first screen, 1.50 means halfway through the second screen.
      */
     @Throws(WebDriverException::class)
     @MCP
@@ -1978,14 +1978,14 @@ interface WebDriver : Closeable {
      *
      * The [viewports] parameter controls which viewport(s) to include:
      * - `"all"` — return the full-page snapshot (default).
-     * - `"3"` — return only viewport 3.
-     * - `"1,3,5"` — return viewports 1, 3 and 5.
-     * - `"2-4"` — return viewports 2, 3 and 4.
+     * - `"2"` — return only viewport 2.
+     * - `"0,2,4"` — return viewports 0, 2 and 4.
+     * - `"1-3"` — return viewports 1, 2 and 3.
      *
-     * Viewport indices are 1-based. The viewport height is determined by the browser's
+     * Viewport indices are 0-based. The viewport height is determined by the browser's
      * current viewport DimIs.
      *
-     * @param viewports A viewport specification string (e.g., `"3"`, `"1,3,5"`, `"2-4"`, `"all"`).
+     * @param viewports A viewport specification string (e.g., `"2"`, `"0,2,4"`, `"1-3"`, `"all"`).
      * @return The ARIA snapshot YAML covering only the requested viewports.
      */
     @Throws(WebDriverException::class)

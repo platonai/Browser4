@@ -1,64 +1,74 @@
-# 🛠️ Browser4 Configuration Guide
+# LLM Configuration
 
-## 📋 Configuration Sources
+Browser4 supports multiple LLM providers. Configure **one** provider with its API key, and optionally the model name and base URL.
 
-Browser4 supports multiple configuration sources in order of precedence:
+## Configuration methods
 
-1. 🔧 **Environment Variables**
-2. ⚙️ **JVM System Properties**
-3. 📝 **Spring Boot `application.properties`**
+Properties can be set in two ways (in order of precedence):
 
----
+1. **Environment variables** — recommended for secrets (API keys)
+2. **`application.properties`** — the project's Spring Boot config file
 
-## 🔧 Configuration Methods
+Property names use dots (e.g. `openrouter.api.key`). For environment variables, uppercase and replace dots with underscores: `OPENROUTER_API_KEY`.
 
-### 📝 Spring Boot Configuration Files
+## Providers
 
-Browser4 supports Spring Boot-style configuration files.
-
-A sample `application.properties` is located at the project root. For privacy, recommend to renaming it to `application-private.properties`.
-
-#### For desktop usage:
+### OpenRouter (default)
 
 ```properties
-# browser.profile.mode=SYSTEM_DEFAULT # Optional: use your system's default browser profile
-openrouter.api.key=
+openrouter.api.key=sk-or-v1-...
+openrouter.model.name=openai/gpt-5.4
+openrouter.base.url=https://openrouter.ai/api/v1/  # optional
 ```
 
-#### [**Advanced**] For high-performance, parallel crawling:
+| Env var                 | Property                | Default |
+|-------------------------|-------------------------|---|
+| `OPENROUTER_API_KEY`    | `openrouter.api.key`    | — |
+| `OPENROUTER_MODEL_NAME` | `openrouter.model.name` | — |
+
+OpenRouter gives access to many models through one API. `model.name` defaults to a reasonable choice; override it to use any model available on OpenRouter (e.g. `bytedance-seed/seed-2.0-lite`).
+
+### DeepSeek
+
 ```properties
-proxy.rotation.url=https://your-proxy-provider.com/rotation-endpoint
-browser.profile.mode=SEQUENTIAL
-browser.context.number=2
-browser.max.active.tabs=8
-browser.display.mode=HEADLESS
+deepseek.api.key=sk-...
+deepseek.model.name=deepseek-v4-pro[1m]
 ```
 
----
+| Env var               | Property              | Default |
+|-----------------------|-----------------------|---|
+| `DEEPSEEK_API_KEY`    | `deepseek.api.key`    | — |
+| `DEEPSEEK_MODEL_NAME` | `deepseek.model.name` | — |
 
-### 🌍 Environment Variables / JVM System Properties
 
-You can configure Browser4 using either OS environment variables or JVM system properties.
+Uses DeepSeek's official API. Model defaults to DeepSeek's latest.
 
-#### 💻 Example - OS environment variables
+### OpenAI / OpenAI-compatible
 
-For standard desktop usage:
-
-Linux/MacOS
-```bash
-export OPENROUTER_API_KEY=sk-yourllmproviderapikey
+```properties
+openai.api.key=sk-...
+openai.model.name=gpt-5.4
+openai.base.url=https://api.openai.com/v1       # optional
 ```
 
-Windows (PowerShell)
-```powershell
-$env:OPENROUTER_API_KEY = "sk-yourllmproviderapikey"
+| Env var | Property | Default |
+|---|---|---|
+| `OPENAI_API_KEY` | `openai.api.key` | — |
+
+Works with any OpenAI-compatible API by changing `base.url`. For example, Aliyun Qwen (DashScope):
+
+```properties
+openai.api.key=sk-...
+openai.model.name=qwen-plus
+openai.base.url=https://dashscope.aliyuncs.com/compatible-mode/v1
 ```
 
-If you want to use your daily used browser profile (remember closed the browser first):
+### Volcengine (ByteDance)
 
-Linux/MacOS
-```bash
-export BROWSER_CONTEXT_MODE=SYSTEM_DEFAULT
+```properties
+volcengine.api.key=...
+volcengine.model.name=doubao-seed-2-0-pro-260215
+volcengine.base.url=https://ark.cn-beijing.volces.com/api/v3  # optional
 ```
 
 Windows (PowerShell)

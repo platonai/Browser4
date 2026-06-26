@@ -308,7 +308,7 @@ object DOMStateBuilder {
             clientRects = null,
             scrollRects = null,
             absoluteBounds = null,
-            /** A 1-based viewport index */
+            /** A 0-based viewport index */
             viewportIndex = viewportIndex,
             paintOrder = null,
             stackingContexts = null,
@@ -331,7 +331,7 @@ object DOMStateBuilder {
         )
     }
 
-    // Compute viewport index (1-based) using absolute Y and top-level viewport height
+    // Compute viewport index (0-based) using absolute Y and top-level viewport height
     fun computeViewportIndex(node: MergedDOMTreeNode, topViewportHeight: Double?): Int? {
         val vh = topViewportHeight ?: return null
         if (!vh.isFinite() || vh <= 0.0) return null
@@ -342,8 +342,8 @@ object DOMStateBuilder {
             ?: return null
         if (!y.isFinite()) return null
         val base = if (y < 0) 0.0 else y
-        val idx = kotlin.math.floor(base / vh).toInt() + 1
-        return if (idx < 1) 1 else idx
+        val idx = kotlin.math.floor(base / vh).toInt()
+        return if (idx < 0) 0 else idx
     }
 
     /**
@@ -455,7 +455,7 @@ object DOMStateBuilder {
             scrollRects = scrollRects?.compact(),
             bounds = bounds?.compact(),
             absoluteBounds = absoluteBounds?.compact(),
-            /** A 1-based viewport index */
+            /** A 0-based viewport index */
             viewportIndex = viewportIndex,
             paintOrder = paintOrder,
             stackingContexts = stackingContexts,

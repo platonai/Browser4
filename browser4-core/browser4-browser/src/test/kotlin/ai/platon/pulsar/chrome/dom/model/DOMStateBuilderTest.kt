@@ -899,7 +899,7 @@ class DOMStateBuilderTest {
             scrollRects = null,
             bounds = null,
             absoluteBounds = null,
-            viewportIndex = 1,
+            viewportIndex = 0,
             paintOrder = null,
             stackingContexts = null,
             contentDocument = null

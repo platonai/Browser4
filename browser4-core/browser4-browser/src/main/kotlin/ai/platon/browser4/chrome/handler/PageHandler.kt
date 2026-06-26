@@ -83,7 +83,7 @@ class PageHandler constructor(
     /**
      * Fetches the ARIA snapshot for the specified viewports only.
      *
-     * @param viewportIndices The 1-based viewport indices to include.
+     * @param viewportIndices The 0-based viewport indices to include.
      * @param boxes When true, includes each element's bounding box as [box=x,y,width,height].
      * @return The ARIA snapshot YAML covering only the requested viewports.
      */
@@ -98,8 +98,8 @@ class PageHandler constructor(
         val sortedIndices = viewportIndices.distinct().sorted()
         // Merge contiguous viewport ranges into Y-axis ranges and build a combined NanoTree
         val nanoTrees = mergeViewportRanges(sortedIndices).map { (startIdx, endIdx) ->
-            val startY = ((startIdx - 1) * viewportHeight).coerceAtLeast(0.0)
-            val endY = endIdx * viewportHeight
+            val startY = (startIdx * viewportHeight).coerceAtLeast(0.0)
+            val endY = (endIdx + 1) * viewportHeight
             serializableTree.toNanoTreeInRange(startY, endY)
         }
 
@@ -138,8 +138,8 @@ class PageHandler constructor(
 
             val sortedIndices = viewportIndices.distinct().sorted()
             val nanoTrees = mergeViewportRanges(sortedIndices).map { (startIdx, endIdx) ->
-                val startY = ((startIdx - 1) * viewportHeight).coerceAtLeast(0.0)
-                val endY = endIdx * viewportHeight
+                val startY = (startIdx * viewportHeight).coerceAtLeast(0.0)
+                val endY = (endIdx + 1) * viewportHeight
                 serializableTree.toNanoTreeInRange(startY, endY)
             }
             return nanoTrees.joinToString("\n---\n") { NanoAriaSnapshotRenderer.render(it, resolvedOptions) }
@@ -149,8 +149,8 @@ class PageHandler constructor(
     }
 
     /**
-     * Merge contiguous 1-based viewport indices into (start, end) pairs for efficient range queries.
-     * E.g., [1, 2, 3, 5, 7, 8] → [(1, 3), (5, 5), (7, 8)]
+     * Merge contiguous 0-based viewport indices into (start, end) pairs for efficient range queries.
+     * E.g., [0, 1, 2, 4, 6, 7] → [(0, 2), (4, 4), (6, 7)]
      */
     private fun mergeViewportRanges(sortedIndices: List<Int>): List<Pair<Int, Int>> {
         if (sortedIndices.isEmpty()) return emptyList()

@@ -220,7 +220,7 @@ class PulsarWebDriverTests : WebDriverTestBase() {
     @Test
     @DisplayName("test scrollToViewport")
     fun testScrolltoviewport() = runEnhancedWebDriverTest(multiScreensInteractiveUrl, browser) { driver ->
-        val n = 2.0 // second viewport
+        val n = 1.0 // second viewport (0-based)
         val y = driver.scrollToViewport(n, smooth = false)
         val viewportHeight = (driver.evaluate("window.innerHeight", 0.0) as? Number)?.toDouble() ?: 0.0
         val totalHeight = (driver.evaluate(
@@ -228,7 +228,7 @@ class PulsarWebDriverTests : WebDriverTestBase() {
             0.0
         ) as? Number)?.toDouble() ?: 0.0
         val maxScrollY = (totalHeight - viewportHeight).coerceAtLeast(0.0)
-        val expectedY = ((n - 1.0) * viewportHeight).coerceIn(0.0, maxScrollY)
+        val expectedY = (n * viewportHeight).coerceIn(0.0, maxScrollY)
         val actualY = (driver.evaluate("window.scrollY", 0.0) as? Number)?.toDouble() ?: 0.0
         assertEquals(expectedY, y, 5.0)
         assertEquals(expectedY, actualY, 5.0)

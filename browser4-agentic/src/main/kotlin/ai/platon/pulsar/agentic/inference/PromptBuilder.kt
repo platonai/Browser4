@@ -506,7 +506,7 @@ ${params.instruction}
         val viewportHeight = scrollState.viewportHeight
         val domState = params.agentState.browserUseState.domState
 
-        // The 1-based viewport to see.
+        // The 0-based viewport to see.
         val processingViewport = scrollState.processingViewport
         val viewportsTotal = scrollState.viewportsTotal
         val viewPortJson = Pson.toJson(
@@ -563,7 +563,7 @@ Follow these rules exactly:
 1. If the current extraction response already satisfies the instruction, set completion to `true` and stop, even if more viewports remain.
 2. Set completion to `false` only when both conditions are true:
    - the instruction is not yet satisfied
-   - unprocessed viewport data still remains (`viewportsTotal > processingViewport`)
+   - unprocessed viewport data still remains (`viewportsTotal > processingViewport + 1`)
 
 """.trimIndent()
 
@@ -579,7 +579,7 @@ Follow these rules exactly:
         agentState: AgentState,
     ): SimpleMessage {
         /**
-         * The 1-based next chunk to see, each chunk is a viewport height.
+         * The 0-based next chunk to see, each chunk is a viewport height.
          * */
         val browserUseState = agentState.browserUseState
         val scrollState = browserUseState.browserState.scrollState
@@ -588,7 +588,7 @@ Follow these rules exactly:
         val hiddenBottomHeight = scrollState.hiddenBottomHeight
         val viewportHeight = scrollState.viewportHeight
 
-        // The 1-based viewport to see.
+        // The 0-based viewport to see.
         val processingViewport = scrollState.processingViewport
         val viewportsTotal = scrollState.viewportsTotal
 
@@ -691,7 +691,7 @@ $newTabsJson
         val viewportHeight = scrollState.viewportHeight
         val domState = context.agentState.browserUseState.domState
 
-        // The 1-based viewport to see.
+        // The 0-based viewport to see.
         val processingViewport = scrollState.processingViewport
         val viewportsTotal = scrollState.viewportsTotal
 

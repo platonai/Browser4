@@ -465,7 +465,7 @@ abstract class AbstractWebDriver(
     /**
      * Scrolls to the position of the n-th viewport.
      *
-     * @param n Viewport index (1 represents the first screen)
+     * @param n Viewport index (0 represents the first screen)
      * @param smooth Whether to use smooth scrolling
      * @return Actual scrollY pixel value after scrolling
      */
@@ -477,7 +477,7 @@ abstract class AbstractWebDriver(
                 ?: 0.0
         val currentY = (evaluate("window.scrollY") as? Number)?.toDouble() ?: 0.0
         val maxScrollY = (totalHeight - viewportHeight).coerceAtLeast(0.0)
-        val targetY = ((n - 1.0) * viewportHeight).coerceIn(0.0, maxScrollY)
+        val targetY = (n * viewportHeight).coerceIn(0.0, maxScrollY)
         val delta = targetY - currentY
         return scrollBy(delta, smooth)
     }

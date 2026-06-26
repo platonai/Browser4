@@ -68,9 +68,9 @@ class ViewportSpecTest {
     }
 
     @Test
-    @DisplayName("indices less than 1 are clamped to 1")
-    fun testClampedToOne() {
-        assertEquals(listOf(1), ViewportSpec.parse("0"))
+    @DisplayName("indices less than 0 are clamped to 0")
+    fun testClampedToZero() {
+        assertEquals(listOf(0), ViewportSpec.parse("-1"))
     }
 
     @Test

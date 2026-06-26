@@ -129,7 +129,7 @@ NodeOps.isNumberLike = function(node) {
 };
 
 /**
- * 1-based screen number in the viewport
+ * 0-based screen number in the viewport
  * @param node {Node}
  * @return {Number}
  */
@@ -139,7 +139,7 @@ NodeOps.nScreen = function(node) {
     const config = __pulsar_utils__.getConfig();
     const viewPortHeight = config.viewPortHeight;
     let ns = rect.y / viewPortHeight;
-    return Math.ceil(ns);
+    return Math.floor(ns);
 };
 
 /**
