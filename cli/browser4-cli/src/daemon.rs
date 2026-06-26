@@ -6815,6 +6815,7 @@ mod tests {
             playwright_found, Some(playwright_exe),
             "Playwright binary should be independently discoverable"
         );
+    }
     // -----------------------------------------------------------------------
     // BrowserChannel tests
     // -----------------------------------------------------------------------
