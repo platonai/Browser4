@@ -5614,7 +5614,10 @@ mod tests {
             "error sending request for url (http://localhost:8182/actuator/health)".to_string(),
         ));
 
-        assert_eq!(progress, "not reachable yet");
+        assert_eq!(
+            progress,
+            "TCP port not open yet, JVM may still be loading..."
+        );
     }
 
     #[test]
@@ -5622,7 +5625,10 @@ mod tests {
         let progress =
             format_server_wait_progress(&ServerState::Starting("{\"status\":\"STARTING\"}".into()));
 
-        assert_eq!(progress, "still starting ({\"status\":\"STARTING\"})");
+        assert_eq!(
+            progress,
+            "Spring Boot is UP, waiting for MCP tools ({\"status\":\"STARTING\"})"
+        );
     }
 
     #[test]
@@ -6088,12 +6094,12 @@ mod tests {
         // No tag yet → None (and no legacy install to migrate).
         assert!(read_current_tag().is_none());
 
-        // Write a tag → should read back.
-        write_current_tag("v4.11.0").unwrap();
+        // Write a tag with a valid versioned install → should read back.
+        setup_valid_versioned_runtime(&tmp.path().join("runtime-data"), "v4.11.0");
         assert_eq!(read_current_tag().as_deref(), Some("v4.11.0"));
 
         // Overwrite with a different tag.
-        write_current_tag("v4.12.0").unwrap();
+        setup_valid_versioned_runtime(&tmp.path().join("runtime-data"), "v4.12.0");
         assert_eq!(read_current_tag().as_deref(), Some("v4.12.0"));
     }
 
