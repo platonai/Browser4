@@ -25,4 +25,6 @@ data class AriaSnapshotOptions(
     val rootBackendNodeId: Int? = null,
     /** Viewport specification string (e.g., "3", "1,3,5", "2-4", "all"). */
     val viewports: String? = null,
+    /** Include each element's bounding box as [box=x,y,width,height] in the output. */
+    val boxes: Boolean = false,
 )

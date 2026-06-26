@@ -649,7 +649,7 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
             "ariaSnapshot" -> {
                 validateArgs(
                     args,
-                    allowed("viewports", "interactive", "urls", "compact", "depth", "selector"),
+                    allowed("viewports", "interactive", "urls", "compact", "depth", "selector", "boxes"),
                     emptySet(),
                     functionName
                 )
@@ -659,6 +659,7 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
                 val compact = paramBool(args, "compact", functionName, required = false) ?: false
                 val maxDepth = paramInt(args, "depth", functionName, required = false) ?: -1
                 val selector = paramString(args, "selector", functionName, required = false)
+                val boxes = paramBool(args, "boxes", functionName, required = false) ?: false
 
                 val options = AriaSnapshotOptions(
                     interactive = interactive,
@@ -666,7 +667,8 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
                     compact = compact,
                     maxDepth = maxDepth,
                     selector = selector,
-                    viewports = viewports
+                    viewports = viewports,
+                    boxes = boxes
                 )
                 driver.ariaSnapshot(options)
             }

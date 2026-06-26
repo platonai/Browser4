@@ -56,6 +56,12 @@ object AriaSnapshotRenderer {
             return children
         }
 
+        val box = if (options.boxes) {
+            node.originalNode.snapshotNode?.bounds?.let { b ->
+                "${b.x.toInt()},${b.y.toInt()},${b.width.toInt()},${b.height.toInt()}"
+            }
+        } else null
+
         return listOf(
             AriaSnapshotFormatting.RenderChild.Node(
                 AriaSnapshotFormatting.RenderNode(
@@ -70,7 +76,8 @@ object AriaSnapshotRenderer {
                     ref = ref,
                     cursorPointer = hasCursorPointer(node),
                     props = props,
-                    children = children
+                    children = children,
+                    box = box
                 )
             )
         )

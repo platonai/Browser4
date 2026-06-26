@@ -51,6 +51,12 @@ object NanoAriaSnapshotRenderer {
             return emptyList()
         }
 
+        val box = if (options.boxes) {
+            node.bounds?.let { b ->
+                "${b.x?.toInt() ?: 0},${b.y?.toInt() ?: 0},${b.width?.toInt() ?: 0},${b.height?.toInt() ?: 0}"
+            }
+        } else null
+
         return listOf(
             AriaSnapshotFormatting.RenderChild.Node(
                 AriaSnapshotFormatting.RenderNode(
@@ -75,7 +81,8 @@ object NanoAriaSnapshotRenderer {
                     ref = node.ref.takeIf { it > 0 }?.let { "e$it" },
                     cursorPointer = node.interactive == true,
                     props = props,
-                    children = children
+                    children = children,
+                    box = box
                 )
             )
         )

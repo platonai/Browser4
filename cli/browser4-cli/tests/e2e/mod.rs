@@ -3319,6 +3319,7 @@ fn excluded_commands(include_batch_command: bool) -> HashSet<&'static str> {
         // Not yet exercised by e2e scenarios; mock handler exists.
         "swarm-query",
         // New commands pending e2e test scenarios.
+        "attach",
         "scroll",
         "wait",
         "get",

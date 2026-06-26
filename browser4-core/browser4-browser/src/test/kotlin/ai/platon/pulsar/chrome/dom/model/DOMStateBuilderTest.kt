@@ -2,6 +2,7 @@ package ai.platon.pulsar.chrome.dom.model
 
 import ai.platon.pulsar.chrome.dom.DOMSerializer
 import ai.platon.browser4.chrome.dom.DOMStateBuilder
+import ai.platon.browser4.chrome.dom.model.AriaSnapshotOptions
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.DisplayName
@@ -669,6 +670,124 @@ class DOMStateBuilderTest {
 
         assertFalse(legacySnapshot.contains("/description"), legacySnapshot)
         assertFalse(legacySnapshot.contains("/autocomplete"), legacySnapshot)
+    }
+
+    @Test
+    @DisplayName("render includes bounding box when boxes option is true")
+    fun renderIncludesBoundingBoxWhenBoxesOptionIsTrue() {
+        val buttonNode = MergedDOMTreeNode(
+            nodeId = 1,
+            backendNodeId = 101,
+            nodeName = "BUTTON",
+            snapshotNode = SnapshotNodeEx(
+                bounds = DOMRect(100.0, 200.0, 80.0, 32.0)
+            ),
+            isInteractable = true
+        )
+        val rootOriginal = MergedDOMTreeNode(
+            nodeId = 0,
+            backendNodeId = 100,
+            nodeName = "DIV",
+            children = listOf(buttonNode),
+            isVisible = true,
+            snapshotNode = SnapshotNodeEx(
+                bounds = DOMRect(0.0, 0.0, 800.0, 600.0)
+            )
+        )
+        val root = OptimizedDOMTreeNode(
+            originalNode = rootOriginal,
+            children = listOf(OptimizedDOMTreeNode(originalNode = buttonNode, interactiveIndex = 1))
+        )
+
+        val domState = DOMStateBuilder.build(root)
+        val snapshotWithBoxes = domState.renderedAriaSnapshot(AriaSnapshotOptions(boxes = true))
+        val snapshotWithoutBoxes = domState.renderedAriaSnapshot(AriaSnapshotOptions(boxes = false))
+
+        assertTrue(snapshotWithBoxes.contains("- button [ref=e101] [cursor=pointer] [box=100,200,80,32]"),
+            "Expected [box=100,200,80,32] in: $snapshotWithBoxes")
+        assertFalse(snapshotWithoutBoxes.contains("[box="),
+            "Should not contain box info when boxes=false: $snapshotWithoutBoxes")
+    }
+
+    @Test
+    @DisplayName("render omits box for nodes without bounds even when boxes option is true")
+    fun renderOmitsBoxForNodesWithoutBoundsWhenBoxesOptionIsTrue() {
+        val textNode = MergedDOMTreeNode(
+            nodeId = 2,
+            backendNodeId = 102,
+            nodeName = "#text",
+            nodeType = NodeType.TEXT_NODE,
+            nodeValue = "Click me"
+        )
+        val buttonNode = MergedDOMTreeNode(
+            nodeId = 1,
+            backendNodeId = 101,
+            nodeName = "BUTTON",
+            children = listOf(textNode),
+            isInteractable = true,
+            // No snapshotNode, so no bounds available
+            snapshotNode = null
+        )
+        val rootOriginal = MergedDOMTreeNode(
+            nodeId = 0,
+            backendNodeId = 100,
+            nodeName = "DIV",
+            children = listOf(buttonNode),
+            isVisible = true
+        )
+        val root = OptimizedDOMTreeNode(
+            originalNode = rootOriginal,
+            children = listOf(OptimizedDOMTreeNode(originalNode = buttonNode, interactiveIndex = 1))
+        )
+
+        val domState = DOMStateBuilder.build(root)
+        val snapshot = domState.renderedAriaSnapshot(AriaSnapshotOptions(boxes = true))
+
+        assertFalse(snapshot.contains("[box="),
+            "Should not contain box info when bounds are null: $snapshot")
+        assertTrue(snapshot.contains("- button \"Click me\" [ref=e101] [cursor=pointer]"),
+            "Expected button ref in: $snapshot")
+    }
+
+    @Test
+    @DisplayName("render includes bounding box in nano aria snapshot when boxes option is true")
+    fun renderIncludesBoundingBoxInNanoAriaSnapshotWhenBoxesOptionIsTrue() {
+        val buttonNode = MergedDOMTreeNode(
+            nodeId = 1,
+            backendNodeId = 101,
+            nodeName = "BUTTON",
+            snapshotNode = SnapshotNodeEx(
+                bounds = DOMRect(50.0, 75.0, 120.0, 40.0)
+            ),
+            isInteractable = true
+        )
+        val rootOriginal = MergedDOMTreeNode(
+            nodeId = 0,
+            backendNodeId = 100,
+            nodeName = "DIV",
+            children = listOf(buttonNode),
+            isVisible = true
+        )
+        val root = OptimizedDOMTreeNode(
+            originalNode = rootOriginal,
+            children = listOf(OptimizedDOMTreeNode(originalNode = buttonNode, interactiveIndex = 1))
+        )
+
+        val domState = DOMStateBuilder.build(root)
+        val nanoTree = domState.serializableTree.toNanoTreeUnfiltered()
+        val snapshot = nanoTree.ariaSnapshot
+        // Default rendering without boxes
+        assertFalse(snapshot.contains("[box="),
+            "Default nano snapshot should not contain box info: $snapshot")
+
+        // Rendering with boxes via the render entry point
+        val snapshotWithBoxes = ai.platon.browser4.chrome.dom.model.NanoAriaSnapshotRenderer.render(
+            nanoTree, AriaSnapshotOptions(boxes = true)
+        )
+        assertTrue(snapshotWithBoxes.contains("- button [ref=e101] [box=50,75,120,40]"),
+            "Expected [box=50,75,120,40] in: $snapshotWithBoxes")
+        assertTrue(snapshotWithBoxes.contains("[cursor=pointer]"),
+            "Expected [cursor=pointer] in: $snapshotWithBoxes")
     }
 
     @Test
