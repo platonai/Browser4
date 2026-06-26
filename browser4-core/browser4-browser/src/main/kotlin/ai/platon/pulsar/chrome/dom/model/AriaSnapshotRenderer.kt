@@ -171,7 +171,8 @@ object AriaSnapshotRenderer {
             original.attributes["aria-label"],
             original.attributes["title"],
             if (role.equals("generic", ignoreCase = true)) original.axNode?.description else null,
-            if (role == "img") original.attributes["alt"] else null
+            if (role == "img") original.attributes["alt"] else null,
+            original.textContent()
         )
         return candidates.firstNotNullOfOrNull(AriaSnapshotFormatting::normalizeText)
     }
@@ -184,9 +185,41 @@ object AriaSnapshotRenderer {
         val role = node.originalNode.axNode?.role?.trim()
             ?: node.originalNode.attributes["role"]?.trim()
         return when {
-            role.isNullOrEmpty() -> if (isTextNode(node.originalNode)) null else "generic"
             role.equals("none", ignoreCase = true) || role.equals("presentation", ignoreCase = true) -> null
-            else -> role
+            !role.isNullOrEmpty() -> role
+            else -> implicitRole(node) ?: if (isTextNode(node.originalNode)) null else "generic"
+        }
+    }
+
+    private fun implicitRole(node: OptimizedDOMTreeNode): String? {
+        val nodeName = node.originalNode.nodeName.trim().lowercase(Locale.ROOT)
+        val attributes = node.originalNode.attributes
+        return when (nodeName) {
+            "a" -> attributes["href"]?.takeIf { it.isNotBlank() }?.let { "link" }
+            "button" -> "button"
+            "img" -> "img"
+            "option" -> "option"
+            "select" -> if (
+                attributes["multiple"]?.equals("true", ignoreCase = true) == true ||
+                attributes["size"]?.toIntOrNull()?.let { it > 1 } == true
+            ) {
+                "listbox"
+            } else {
+                "combobox"
+            }
+            "summary" -> "button"
+            "textarea" -> "textbox"
+            "input" -> when (attributes["type"]?.trim()?.lowercase(Locale.ROOT)) {
+                null, "", "email", "password", "tel", "text", "url" -> "textbox"
+                "button", "image", "reset", "submit" -> "button"
+                "checkbox" -> "checkbox"
+                "number" -> "spinbutton"
+                "radio" -> "radio"
+                "range" -> "slider"
+                "search" -> "searchbox"
+                else -> null
+            }
+            else -> null
         }
     }
 
@@ -221,7 +254,9 @@ object AriaSnapshotRenderer {
         return if (snapshotNode != null) {
             snapshotNode.cursorStyle?.equals("pointer", ignoreCase = true) == true ||
                     snapshotNode.isClickable == true ||
-                    styleCursorPointer
+                    styleCursorPointer ||
+                    node.originalNode.isInteractable == true ||
+                    node.interactiveIndex != null
         } else {
             styleCursorPointer || node.originalNode.isInteractable == true || node.interactiveIndex != null
         }

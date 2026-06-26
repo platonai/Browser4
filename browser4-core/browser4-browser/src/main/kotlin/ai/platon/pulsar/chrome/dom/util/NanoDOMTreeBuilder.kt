@@ -97,8 +97,8 @@ class NanoDOMTreeBuilder constructor(
             o.attributes,
             scrollable = o.isScrollable,
             interactive = o.isInteractable,
-            // All nodes are visible unless `invisible` == true explicitly.
-            invisible = if (o.isVisible == true) null else true,
+            // All nodes are visible unless `isVisible` == false explicitly.
+            invisible = if (o.isVisible == false) true else null,
             clientRects = o.clientRects?.round(),
             scrollRects = o.scrollRects?.round(),
             bounds = o.bounds?.round(),

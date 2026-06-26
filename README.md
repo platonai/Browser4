@@ -216,6 +216,11 @@ browser4-cli domsnapshot export --file=page-snapshot.html
 
 # Generate a Web Page Summary Index (WPSI) — compressed page structure as YAML
 browser4-cli domsnapshot summary
+
+# Search snapshot HTML with regex (grep-style)
+browser4-cli domsnapshot grep -i error
+browser4-cli domsnapshot grep -F -C 2 "404 Not Found"
+browser4-cli domsnapshot grep --selector main "Submit"
 ```
 
 For the full command reference, X-SQL query examples, and error handling, see the [DOM Snapshot reference](skill/references/domsnapshot.md).

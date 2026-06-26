@@ -19,6 +19,7 @@ browser4-cli domsnapshot get <field> [selector] [name]  # extract text/html/attr
 browser4-cli domsnapshot query [url] --sql <query>      # X-SQL query against DOM (url defaults to current page)
 browser4-cli domsnapshot summary                        # compressed page summary (WPSI)
 browser4-cli domsnapshot export [--file <path>]         # save snapshot HTML to file
+browser4-cli domsnapshot grep [OPTIONS] <pattern>       # search snapshot HTML with regex (grep-style)
 ```
 
 `domsnapshot` (capture) always fetches a fresh snapshot and caches it. Subsequent `get`/`query`/`export` reuse the cache until the next capture or page navigation.
@@ -84,6 +85,65 @@ Save full snapshot HTML to a local file. The exported HTML is pretty-formatted f
 
 ```bash
 browser4-cli domsnapshot export [--file=page-snapshot.html]
+```
+
+## Grep — Search snapshot HTML
+
+Search the DOM snapshot HTML with regex patterns and grep-style output. Performs matching client-side (no backend changes) by fetching the HTML via `dom_snapshot_export` then matching locally.
+
+```bash
+browser4-cli domsnapshot grep [OPTIONS] <pattern>
+```
+
+### Flags
+
+| Flag | Description |
+|---|---|
+| `-i` | Case-insensitive matching |
+| `-n` | Show line numbers (default on; use `--no-line-number` to disable) |
+| `-A N` | Show N lines after each match |
+| `-B N` | Show N lines before each match |
+| `-C N` | Show N lines before and after each match |
+| `-v` | Invert match (select non-matching lines) |
+| `-c` | Print only the count of matching lines |
+| `-l` | Print only whether matches exist ("files-with-matches") |
+| `-F` | Treat pattern as a literal string, not regex |
+| `-w` | Match only whole words (surrounds pattern with `\b`) |
+| `--selector <CSS>` | Scope search to a specific CSS selector (uses `dom_snapshot_scrape` internally) |
+
+### Examples
+
+```bash
+# Find all lines containing "error" (case-insensitive)
+browser4-cli domsnapshot grep -i error
+
+# Literal string match with 2 lines of context
+browser4-cli domsnapshot grep -F -C 2 "404 Not Found"
+
+# Count how many lines contain TODO, FIXME, or HACK
+browser4-cli domsnapshot grep -c 'TODO|FIXME|HACK'
+
+# Search only within <main> element
+browser4-cli domsnapshot grep --selector main "Submit"
+
+# Whole-word search for "password"
+browser4-cli domsnapshot grep -w password
+
+# Show non-empty lines (invert match on empty/whitespace-only)
+browser4-cli domsnapshot grep -v '^\s*$'
+```
+
+### Output format
+
+Matches are printed with line numbers and context. Context lines are prefixed with `-`, match lines with the line number and `:`. Non-contiguous context groups are separated by `--`.
+
+```
+42:    <h1>Welcome to My Page</h1>
+43-    <nav>
+44:      <a href="/login">Login</a>
+45-    </nav>
+--
+108:    <footer>Copyright 2026</footer>
 ```
 
 ## Error Handling

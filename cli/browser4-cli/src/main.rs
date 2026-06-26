@@ -251,6 +251,7 @@ fn no_snapshot_commands() -> HashSet<&'static str> {
         "domsnapshot-query",
         "domsnapshot-export",
         "domsnapshot-summary",
+        "domsnapshot-grep",
     ]
     .into()
 }
@@ -2879,6 +2880,281 @@ async fn handle_dom_snapshot_summary(
 }
 
 // ---------------------------------------------------------------------------
+// domsnapshot-grep handler
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Default)]
+struct GrepOptions {
+    pattern: String,
+    ignore_case: bool,
+    no_line_number: bool,
+    after_context: Option<usize>,
+    before_context: Option<usize>,
+    context: Option<usize>,
+    invert_match: bool,
+    count: bool,
+    files_with_matches: bool,
+    fixed_strings: bool,
+    word_regexp: bool,
+    selector: Option<String>,
+}
+
+fn parse_grep_options(tool_params: &Value) -> Result<GrepOptions, String> {
+    let pattern = tool_params
+        .get("pattern")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "Pattern is required".to_string())?
+        .to_string();
+
+    let parse_usize = |key: &str| -> Option<usize> {
+        tool_params
+            .get(key)
+            .and_then(|v| {
+                v.as_u64()
+                    .map(|n| n as usize)
+                    .or_else(|| v.as_str().and_then(|s| s.parse::<usize>().ok()))
+            })
+    };
+
+    Ok(GrepOptions {
+        pattern,
+        ignore_case: tool_params
+            .get("ignore-case")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+        no_line_number: tool_params
+            .get("no-line-number")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+        after_context: parse_usize("after-context"),
+        before_context: parse_usize("before-context"),
+        context: parse_usize("context"),
+        invert_match: tool_params
+            .get("invert-match")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+        count: tool_params
+            .get("count")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+        files_with_matches: tool_params
+            .get("files-with-matches")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+        fixed_strings: tool_params
+            .get("fixed-strings")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+        word_regexp: tool_params
+            .get("word-regexp")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+        selector: tool_params
+            .get("selector")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+    })
+}
+
+async fn handle_dom_snapshot_grep(
+    client: &Client,
+    base_url: &str,
+    tool_name: &str,
+    _tool_params: &Value,
+    session_name: Option<&str>,
+    grep_options: &GrepOptions,
+) -> Result<(), String> {
+    let source = if let Some(selector) = &grep_options.selector {
+        // Scoped search: use dom_snapshot_scrape to get inner HTML of the selector
+        with_session(client, base_url, session_name, false, |session_id| {
+            let client = client.clone();
+            let base_url = base_url.to_string();
+            let sel = selector.clone();
+            async move {
+                call_tool(
+                    &client,
+                    &base_url,
+                    "dom_snapshot_scrape",
+                    json!({
+                        "sessionId": session_id,
+                        "field": "html",
+                        "selector": sel,
+                    }),
+                )
+                .await
+            }
+        })
+        .await?
+    } else {
+        // Full page: use dom_snapshot_export
+        with_session(client, base_url, session_name, false, |session_id| {
+            let client = client.clone();
+            let base_url = base_url.to_string();
+            let tool_name = tool_name.to_string();
+            async move {
+                call_tool(
+                    &client,
+                    &base_url,
+                    &tool_name,
+                    json!({ "sessionId": session_id }),
+                )
+                .await
+            }
+        })
+        .await?
+    };
+
+    // If the source is "null", no element matched the selector
+    if source == "null" || source.is_empty() {
+        if grep_options.count {
+            cli_println!("0");
+            json_field("count", json!(0));
+        }
+        json_field("matches", json!(0));
+        json_field("total_lines", json!(0));
+        return Ok(());
+    }
+
+    // Build the regex pattern
+    let pattern_str = &grep_options.pattern;
+    let regex_str = if grep_options.fixed_strings {
+        regex::escape(pattern_str)
+    } else {
+        pattern_str.clone()
+    };
+
+    let final_pattern = if grep_options.word_regexp {
+        format!(r"\b{}\b", regex_str)
+    } else {
+        regex_str
+    };
+
+    let re = regex::RegexBuilder::new(&final_pattern)
+        .case_insensitive(grep_options.ignore_case)
+        .build()
+        .map_err(|e| format!("Invalid regex pattern: {e}"))?;
+
+    // Split into lines and find matches
+    let lines: Vec<&str> = source.lines().collect();
+    let total_lines = lines.len();
+
+    let context_before = grep_options
+        .before_context
+        .unwrap_or(0)
+        .max(grep_options.context.unwrap_or(0));
+    let context_after = grep_options
+        .after_context
+        .unwrap_or(0)
+        .max(grep_options.context.unwrap_or(0));
+
+    // Find matching line indices
+    let matched_indices: Vec<usize> = lines
+        .iter()
+        .enumerate()
+        .filter_map(|(i, line)| {
+            let is_match = re.is_match(line);
+            let selected = if grep_options.invert_match {
+                !is_match
+            } else {
+                is_match
+            };
+            if selected {
+                Some(i)
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    // --count: print only the count
+    if grep_options.count {
+        cli_println!("{}", matched_indices.len());
+        json_field("count", json!(matched_indices.len()));
+        json_field("matches", json!(matched_indices.len()));
+        json_field("total_lines", json!(total_lines));
+        return Ok(());
+    }
+
+    // --files-with-matches: print a placeholder "filename" only if there are matches
+    if grep_options.files_with_matches {
+        if !matched_indices.is_empty() {
+            cli_println!("domsnapshot");
+        }
+        json_field("matched", json!(!matched_indices.is_empty()));
+        json_field("matches", json!(matched_indices.len()));
+        json_field("total_lines", json!(total_lines));
+        return Ok(());
+    }
+
+    // Defer context when -v is set (standard grep ignores context with -v)
+    let effective_before = if grep_options.invert_match {
+        0
+    } else {
+        context_before
+    };
+    let effective_after = if grep_options.invert_match {
+        0
+    } else {
+        context_after
+    };
+
+    // Build the set of lines to display (matches + context)
+    let mut display_set: std::collections::BTreeSet<usize> =
+        std::collections::BTreeSet::new();
+    for &idx in &matched_indices {
+        let start = if idx >= effective_before {
+            idx - effective_before
+        } else {
+            0
+        };
+        let end = std::cmp::min(idx + effective_after + 1, total_lines);
+        for i in start..end {
+            display_set.insert(i);
+        }
+    }
+
+    let show_line_numbers = !grep_options.no_line_number;
+
+    // Print with context separators
+    let mut output_parts: Vec<String> = Vec::new();
+    let mut last_printed: Option<usize> = None;
+    for &line_idx in &display_set {
+        if let Some(last) = last_printed {
+            if line_idx > last + 1 {
+                output_parts.push("--".to_string());
+            }
+        }
+
+        let prefix = if show_line_numbers {
+            format!("{}:", line_idx + 1)
+        } else {
+            String::new()
+        };
+
+        if matched_indices.contains(&line_idx) {
+            output_parts.push(format!("{}{}", prefix, lines[line_idx]));
+        } else {
+            output_parts.push(format!("{}-{}", prefix, lines[line_idx]));
+        }
+        last_printed = Some(line_idx);
+    }
+
+    if !output_parts.is_empty() {
+        cli_println!("{}", output_parts.join("\n"));
+    }
+
+    json_field("matches", json!(matched_indices.len()));
+    json_field("lines_printed", json!(display_set.len()));
+    json_field("total_lines", json!(total_lines));
+    if let Some(sel) = &grep_options.selector {
+        json_field("selector", json!(sel));
+    }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // generate-locator handler
 // ---------------------------------------------------------------------------
 
@@ -4702,6 +4978,7 @@ fn preferred_spaced_command_form(command: &str) -> Option<&'static str> {
         "domsnapshot-query" => Some("domsnapshot query"),
         "domsnapshot-export" => Some("domsnapshot export"),
         "domsnapshot-summary" => Some("domsnapshot summary"),
+        "domsnapshot-grep" => Some("domsnapshot grep"),
         _ => None,
     }
 }
@@ -6250,6 +6527,18 @@ async fn run(
             )
             .await?;
         }
+        "domsnapshot-grep" => {
+            let grep_options = parse_grep_options(&tool_params)?;
+            handle_dom_snapshot_grep(
+                &client,
+                &base_url,
+                &tool_name,
+                &tool_params,
+                global.session_name.as_deref(),
+                &grep_options,
+            )
+            .await?;
+        }
         "generate-locator" => {
             handle_generate_locator(
                 &client,
@@ -6488,6 +6777,7 @@ mod tests {
         assert!(no_snapshot_commands().contains("domsnapshot-query"));
         assert!(no_snapshot_commands().contains("domsnapshot-export"));
         assert!(no_snapshot_commands().contains("domsnapshot-summary"));
+        assert!(no_snapshot_commands().contains("domsnapshot-grep"));
     }
 
     #[test]

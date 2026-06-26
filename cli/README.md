@@ -462,6 +462,34 @@ browser4-cli domsnapshot export --file=page.html
 | `domsnapshot get <field> [selector] [name]` | Extract elements from the static DOM snapshot |
 | `domsnapshot query [url] --sql=<query>` | Run X-SQL against the DOM snapshot via the scrape API |
 | `domsnapshot export [--file=<path>]` | Save full snapshot HTML content to a local file |
+| `domsnapshot grep [OPTIONS] <pattern>` | Search snapshot HTML with regex and grep-style output |
+
+### `domsnapshot grep` flags
+
+| Flag | Description |
+|---|---|
+| `-i` | Case-insensitive matching |
+| `-A N`, `-B N`, `-C N` | Context lines after / before / around each match |
+| `-v` | Invert match (select non-matching lines) |
+| `-c` | Print only count of matching lines |
+| `-l` | Print only whether matches exist |
+| `-F` | Treat pattern as a literal string |
+| `-w` | Match whole words only |
+| `--selector <CSS>` | Scope search to a CSS selector |
+
+```shell
+# Basic search
+browser4-cli domsnapshot grep -i error
+
+# With context and literal match
+browser4-cli domsnapshot grep -F -C 2 "404 Not Found"
+
+# Count matches
+browser4-cli domsnapshot grep -c "div"
+
+# Search within a specific element
+browser4-cli domsnapshot grep --selector main "Submit"
+```
 
 ### `domsnapshot get` fields
 

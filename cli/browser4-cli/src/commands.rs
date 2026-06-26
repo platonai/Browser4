@@ -1812,6 +1812,31 @@ pub fn all_commands() -> Vec<CommandDef> {
             tool_params_fn: |_| json!({}),
         },
         CommandDef {
+            name: "domsnapshot-grep",
+            description: "Search the DOM snapshot HTML using regex patterns with grep-style output",
+            category: Category::Snapshot,
+            hidden: false,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "pattern", description: "Regex or literal pattern to search for", optional: false },
+            ],
+            options: &[
+                OptionDef { name: "ignore-case", short: Some("i"), is_bool: true, description: "Case-insensitive matching" },
+                OptionDef { name: "no-line-number", short: None, is_bool: true, description: "Suppress line numbers in output" },
+                OptionDef { name: "after-context", short: Some("A"), is_bool: false, description: "Show N lines after each match" },
+                OptionDef { name: "before-context", short: Some("B"), is_bool: false, description: "Show N lines before each match" },
+                OptionDef { name: "context", short: Some("C"), is_bool: false, description: "Show N lines before and after each match" },
+                OptionDef { name: "invert-match", short: Some("v"), is_bool: true, description: "Select non-matching lines" },
+                OptionDef { name: "count", short: Some("c"), is_bool: true, description: "Print only the count of matching lines" },
+                OptionDef { name: "files-with-matches", short: Some("l"), is_bool: true, description: "Print only whether matches exist" },
+                OptionDef { name: "fixed-strings", short: Some("F"), is_bool: true, description: "Treat pattern as a literal string, not regex" },
+                OptionDef { name: "word-regexp", short: Some("w"), is_bool: true, description: "Match only whole words" },
+                OptionDef { name: "selector", short: None, is_bool: false, description: "CSS selector to scope the search to" },
+            ],
+            tool_name_fn: |_| "dom_snapshot_export".to_string(),
+            tool_params_fn: |_| json!({}),
+        },
+        CommandDef {
             name: "generate-locator",
             description: "Generate a unique CSS selector path for an element identified by a snapshot ref (e5) or CSS selector",
             category: Category::Snapshot,
@@ -3045,6 +3070,8 @@ mod tests {
             "domsnapshot-get",
             "domsnapshot-query",
             "domsnapshot-export",
+            "domsnapshot-summary",
+            "domsnapshot-grep",
         ] {
             assert!(map.contains_key(*expected), "Missing command: {}", expected);
         }
@@ -3156,6 +3183,8 @@ mod tests {
             "domsnapshot-get",
             "domsnapshot-query",
             "domsnapshot-export",
+            "domsnapshot-summary",
+            "domsnapshot-grep",
         ] {
             let cmd = map.get(*name).unwrap();
             assert_eq!(cmd.category, Category::Snapshot);

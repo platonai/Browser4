@@ -125,9 +125,8 @@ jobs:
           echo "Running browser4-cli E2E tests..."
           echo "Working directory: $(pwd)"
           cd cli/browser4-cli
-          # TODO(#TODO): e2e tests are disabled temporarily due to instability in CI. Re-enable once we have more stability in the tests and CI environment.
-          # cargo test --test e2e -- --nocapture
-          cargo test
+          cargo test --test e2e -- --nocapture
+          # cargo test
           cd "$(git rev-parse --show-toplevel)"
 
           echo "::endgroup::"
