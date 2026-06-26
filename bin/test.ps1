@@ -63,6 +63,18 @@ function Print-Usage {
     Write-Host "  rest        Run REST module tests"
     Write-Host "  skills      Run skills-focused agentic tests"
     Write-Host "  mcp         Run MCP-focused agentic tests"
+    Write-Host "  rws         Run real-world-scenario unit tests (common.tests.ps1)"
+    Write-Host "              With --scenarios: run all scenario tasks via run-tests.ps1"
+    Write-Host "              With --task <file>: run a single task via run-task.ps1"
+    Write-Host ""
+    Write-Host "  RWS flags (accepted after 'rws'):"
+    Write-Host "    --scenarios [names...]  Run agent-scenario tasks (requires claude)"
+    Write-Host "    --task <file>           Run a single task file directly"
+    Write-Host "    --production            Use installed browser4-cli instead of cargo run"
+    Write-Host "    --fail-fast             Stop after the first failing scenario"
+    Write-Host "    --list                  List discovered scenarios, don't run"
+    Write-Host "    --silent                Suppress agent output"
+    Write-Host "    --skip-version-check    Skip browser4-cli version check"
     Write-Host "  resume      Resume from the last failed module (-rf)"
     Write-Host "  main    Run all Browser4 main tests (fast, rest, it, e2e)"
     Write-Host ""
@@ -78,13 +90,19 @@ function Print-Usage {
     Write-Host "  test.ps1 skills                     # Run skills-focused agentic tests"
     Write-Host "  test.ps1 mcp                        # Run MCP-focused agentic tests"
     Write-Host "  test.ps1 resume                     # Resume from the last failed module"
+    Write-Host "  test.ps1 rws                        # Run real-world-scenario unit tests"
+    Write-Host "  test.ps1 rws --scenarios            # Run all agent-scenario tasks"
+    Write-Host "  test.ps1 rws --scenarios amazon     # Run a specific scenario task"
+    Write-Host "  test.ps1 rws --scenarios --list     # List discovered scenario tasks"
+    Write-Host "  test.ps1 rws --scenarios --production  # Run scenarios against installed CLI"
+    Write-Host "  test.ps1 rws --task tasks/amazon.md   # Run a single task file directly"
     Write-Host "  test.ps1 main                       # Run all Browser4 main tests"
     Write-Host '  test.ps1 it -pl browser4-core       # Pass additional Maven args through'
     exit $ExitCode
 }
 
 function Exit-UnknownTestType([string]$testType) {
-    Write-Error "Unknown test type '$testType'. Valid test types: fast, it, e2e, cli, browser4-cli, main, server, rest, skills, mcp, resume."
+    Write-Error "Unknown test type '$testType'. Valid test types: fast, it, e2e, cli, browser4-cli, main, server, rest, skills, mcp, rws, resume."
     exit 1
 }
 
@@ -354,6 +372,142 @@ function Invoke-MockSiteBoot([string[]]$additionalArgs) {
     }
 }
 
+function Invoke-RealWorldScenarioTests([string[]]$additionalArgs) {
+    $rwsScriptsDir = Join-Path $repoRoot 'browser4-tests\real-world-scenarios\scripts'
+    $commonTestsScript = Join-Path $rwsScriptsDir 'common.tests.ps1'
+    $scenarioRunner = Join-Path $rwsScriptsDir 'run-tests.ps1'
+    $taskRunner = Join-Path $rwsScriptsDir 'run-task.ps1'
+
+    # ── Determine mode from additional args ──────────────────────────────────
+    $mode = 'unit'
+    $modeLabel = 'real-world-scenario unit tests'
+    $taskFile = $null
+    $setProduction = $false
+    $passThroughArgs = @()
+
+    $i = 0
+    while ($i -lt $additionalArgs.Count) {
+        $arg = $additionalArgs[$i]
+        if ($arg -eq '--scenarios') {
+            $mode = 'scenarios'
+            $modeLabel = 'real-world scenarios'
+            $i++
+        }
+        elseif ($arg -eq '--task' -and ($i + 1) -lt $additionalArgs.Count) {
+            $mode = 'task'
+            $taskFile = $additionalArgs[$i + 1]
+            $modeLabel = "real-world scenario: $taskFile"
+            $i += 2
+        }
+        elseif ($arg -in '--production', '-Production') {
+            $setProduction = $true
+            $i++
+        }
+        elseif ($arg -in '--fail-fast', '-FailFast') {
+            $passThroughArgs += '-FailFast'
+            $i++
+        }
+        elseif ($arg -in '--list', '-List') {
+            $passThroughArgs += '-List'
+            $i++
+        }
+        elseif ($arg -in '--silent', '-Silent') {
+            $passThroughArgs += '-Silent'
+            $i++
+        }
+        elseif ($arg -in '--skip-version-check', '-SkipVersionCheck') {
+            $passThroughArgs += '-SkipVersionCheck'
+            $i++
+        }
+        else {
+            $passThroughArgs += $arg
+            $i++
+        }
+    }
+
+    Write-Host "=========================================="
+    Write-Host "Running $modeLabel..."
+    Write-Host "=========================================="
+
+    # ── Resolve the script path for the chosen mode ──────────────────────────
+    if ($mode -eq 'unit') {
+        $runner = $commonTestsScript
+        $runnerKind = 'Unit test script'
+    }
+    elseif ($mode -eq 'scenarios') {
+        $runner = $scenarioRunner
+        $runnerKind = 'Scenario runner'
+    }
+    else {
+        $runner = $taskRunner
+        $runnerKind = 'Task runner'
+    }
+
+    if (-not (Test-Path $runner)) {
+        Write-Error "$runnerKind not found at $runner"
+        exit 1
+    }
+
+    # ── Build pwsh invocation ────────────────────────────────────────────────
+    $pwshArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $runner)
+
+    if ($mode -eq 'task') {
+        $pwshArgs += '-TaskFile', $taskFile
+    }
+
+    $pwshArgs += $passThroughArgs
+
+    # ── Show / DryRun ────────────────────────────────────────────────────────
+    if ($script:Show) {
+        $envHint = if ($setProduction) { '$env:BROWSER4CLI_MODE=production ' } else { '' }
+        Write-Host ""
+        Write-Host "=========================================="
+        Write-Host "[SHOW] Would execute:"
+        Write-Host "  ${envHint}pwsh $($pwshArgs -join ' ')"
+        Write-Host "=========================================="
+        return
+    }
+
+    if ($script:DryRun) {
+        $envHint = if ($setProduction) { '$env:BROWSER4CLI_MODE=production ' } else { '' }
+        Write-Host ""
+        Write-Host "=========================================="
+        Write-Host "[DRY RUN] Would execute:"
+        Write-Host "  ${envHint}pwsh $($pwshArgs -join ' ')"
+        Write-Host "=========================================="
+        return
+    }
+
+    # ── Execute ──────────────────────────────────────────────────────────────
+    try {
+        Push-Location $repoRoot
+        if ($setProduction) {
+            $env:BROWSER4CLI_MODE = 'production'
+        }
+        & pwsh @pwshArgs
+        $exitCode = $LASTEXITCODE
+        if ($exitCode -ne 0) {
+            Write-Host ""
+            Write-Host "=========================================="
+            Write-Host "❌ $modeLabel failed with exit code $exitCode"
+            Write-Host "=========================================="
+            exit $exitCode
+        }
+
+        Write-Host ""
+        Write-Host "=========================================="
+        Write-Host "✅ $modeLabel completed successfully"
+        Write-Host "=========================================="
+    }
+    catch {
+        Write-Error "Failed to execute $modeLabel`: $_"
+        exit 1
+    }
+    finally {
+        Pop-Location
+    }
+}
+
 # Read the parent POM's <modules> section to get the reactor build order.
 function Get-ReactorModuleOrder {
     $parentPom = Join-Path $repoRoot 'pom.xml'
@@ -498,7 +652,7 @@ function Invoke-ResumeTests([string[]]$additionalArgs) {
     }
 }
 
-$knownTestTypes = @('fast', 'it', 'e2e', 'cli', 'main', 'browser4-cli', 'server', 'rest', 'skills', 'mcp', 'resume')
+$knownTestTypes = @('fast', 'it', 'e2e', 'cli', 'main', 'browser4-cli', 'server', 'rest', 'skills', 'mcp', 'rws', 'resume')
 $testTypes = @()
 $additionalArgs = @()
 $parsingTestTypes = $true
@@ -553,6 +707,7 @@ if ($testTypes -contains 'resume') {
 
 $mavenTests = @()
 $cliTests = @()
+$rwsTests = @()
 $launchTargets = @()
 
 foreach ($type in $testTypes) {
@@ -566,6 +721,11 @@ foreach ($type in $testTypes) {
         continue
     }
 
+    if ($type -eq 'rws') {
+        $rwsTests += $type
+        continue
+    }
+
     if ($type -in @('server', 'mock-site', 'mocksite', 'mocksiteboot')) {
         $launchTargets += 'server'
         continue
@@ -576,9 +736,10 @@ foreach ($type in $testTypes) {
 
 $mavenTests = $mavenTests | Select-Object -Unique
 $cliTests = $cliTests | Select-Object -Unique
+$rwsTests = $rwsTests | Select-Object -Unique
 $launchTargets = $launchTargets | Select-Object -Unique
 
-if ($launchTargets.Count -gt 0 -and (($mavenTests.Count -gt 0) -or ($cliTests.Count -gt 0) -or ($launchTargets.Count -gt 1))) {
+if ($launchTargets.Count -gt 0 -and (($mavenTests.Count -gt 0) -or ($cliTests.Count -gt 0) -or ($rwsTests.Count -gt 0) -or ($launchTargets.Count -gt 1))) {
     Write-Error "server must be run by itself. Pass any Maven properties after it, for example: test.ps1 server -Dmock.site.port=18080"
     exit 1
 }
@@ -589,6 +750,10 @@ if ($mavenTests.Count -gt 0) {
 
 if (($cliTests | Where-Object { $_ -in @('cli', 'browser4-cli') }).Count -gt 0) {
     Invoke-Browser4CliTests -additionalArgs $additionalArgs
+}
+
+if ($rwsTests.Count -gt 0) {
+    Invoke-RealWorldScenarioTests -additionalArgs $additionalArgs
 }
 
 if ($launchTargets -contains 'server') {
