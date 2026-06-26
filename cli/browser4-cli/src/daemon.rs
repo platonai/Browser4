@@ -3074,6 +3074,192 @@ pub fn find_browser_executable() -> Option<PathBuf> {
     find_edge_executable()
 }
 
+// ---------------------------------------------------------------------------
+// Browser channel resolution for `attach --cdp=<channel>`
+// ---------------------------------------------------------------------------
+
+/// Known browser channels for the `attach --cdp=<channel>` command.
+#[derive(Debug, Clone, PartialEq)]
+pub enum BrowserChannel {
+    Chrome,
+    ChromeBeta,
+    ChromeDev,
+    ChromeCanary,
+    MsEdge,
+    MsEdgeBeta,
+    MsEdgeDev,
+    MsEdgeCanary,
+}
+
+impl BrowserChannel {
+    /// Parse a channel name string (case-insensitive).
+    pub fn from_str(s: &str) -> Option<BrowserChannel> {
+        match s.to_ascii_lowercase().as_str() {
+            "chrome" | "google-chrome" | "google chrome" => Some(BrowserChannel::Chrome),
+            "chrome-beta" | "google-chrome-beta" => Some(BrowserChannel::ChromeBeta),
+            "chrome-dev" | "google-chrome-dev" => Some(BrowserChannel::ChromeDev),
+            "chrome-canary" | "google-chrome-canary" => Some(BrowserChannel::ChromeCanary),
+            "msedge" | "edge" | "microsoft-edge" | "microsoft edge" => Some(BrowserChannel::MsEdge),
+            "msedge-beta" | "edge-beta" | "microsoft-edge-beta" => Some(BrowserChannel::MsEdgeBeta),
+            "msedge-dev" | "edge-dev" | "microsoft-edge-dev" => Some(BrowserChannel::MsEdgeDev),
+            "msedge-canary" | "edge-canary" | "microsoft-edge-canary" => {
+                Some(BrowserChannel::MsEdgeCanary)
+            }
+            _ => None,
+        }
+    }
+
+    /// Default remote debugging port for this channel.
+    pub fn default_debug_port(&self) -> u16 {
+        match self {
+            BrowserChannel::Chrome => 9222,
+            BrowserChannel::ChromeBeta => 9223,
+            BrowserChannel::ChromeDev => 9224,
+            BrowserChannel::ChromeCanary => 9225,
+            BrowserChannel::MsEdge => 9222,
+            BrowserChannel::MsEdgeBeta => 9223,
+            BrowserChannel::MsEdgeDev => 9224,
+            BrowserChannel::MsEdgeCanary => 9225,
+        }
+    }
+
+    /// Executable name used to filter running processes (without extension).
+    pub fn executable_name(&self) -> &'static str {
+        match self {
+            BrowserChannel::Chrome
+            | BrowserChannel::ChromeBeta
+            | BrowserChannel::ChromeDev
+            | BrowserChannel::ChromeCanary => "chrome",
+            BrowserChannel::MsEdge
+            | BrowserChannel::MsEdgeBeta
+            | BrowserChannel::MsEdgeDev
+            | BrowserChannel::MsEdgeCanary => "msedge",
+        }
+    }
+}
+
+impl std::fmt::Display for BrowserChannel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            BrowserChannel::Chrome => "chrome",
+            BrowserChannel::ChromeBeta => "chrome-beta",
+            BrowserChannel::ChromeDev => "chrome-dev",
+            BrowserChannel::ChromeCanary => "chrome-canary",
+            BrowserChannel::MsEdge => "msedge",
+            BrowserChannel::MsEdgeBeta => "msedge-beta",
+            BrowserChannel::MsEdgeDev => "msedge-dev",
+            BrowserChannel::MsEdgeCanary => "msedge-canary",
+        };
+        write!(f, "{}", s)
+    }
+}
+
+/// Resolve a channel name to a CDP HTTP endpoint URL.
+///
+/// Uses a three-tier strategy:
+/// 1. Scan running processes for `--remote-debugging-port=N`
+/// 2. Probe the channel's default port
+/// 3. Scan ports 9222–9333 for a responding CDP endpoint
+pub fn resolve_channel_to_endpoint(channel: &str) -> Result<String, String> {
+    let ch = BrowserChannel::from_str(channel).ok_or_else(|| {
+        format!(
+            "Unknown browser channel: {channel}. \
+             Supported channels: chrome, chrome-beta, chrome-dev, chrome-canary, \
+             msedge, msedge-beta, msedge-dev, msedge-canary"
+        )
+    })?;
+
+    let executable_name = ch.executable_name();
+
+    // Tier 1: find --remote-debugging-port in running process command lines
+    if let Some(port) = find_debug_port_in_running_processes(executable_name) {
+        let endpoint = format!("http://localhost:{port}");
+        if probe_cdp_port(port) {
+            return Ok(endpoint);
+        }
+    }
+
+    // Tier 2: try the channel's default port
+    let default_port = ch.default_debug_port();
+    if probe_cdp_port(default_port) {
+        return Ok(format!("http://localhost:{default_port}"));
+    }
+
+    // Tier 3: scan a range of ports
+    for port in 9222..=9333 {
+        if probe_cdp_port(port) {
+            return Ok(format!("http://localhost:{port}"));
+        }
+    }
+
+    Err(format!(
+        "Could not find a running {executable_name} browser with remote debugging enabled.\n\
+         To attach to a {channel} browser:\n\
+         1. Open {executable_name} and go to chrome://inspect/#remote-debugging\n\
+         2. Check 'Allow remote debugging for this browser instance'\n\
+         3. Or start it with: {executable_name} --remote-debugging-port={default_port}\n\
+         Then run: browser4-cli attach --cdp=http://localhost:{default_port}"
+    ))
+}
+
+/// Search for a running process matching `executable_name` and extract
+/// its `--remote-debugging-port` value from the command line.
+fn find_debug_port_in_running_processes(executable_name: &str) -> Option<u16> {
+    let output = if cfg!(target_os = "windows") {
+        // Use wmic to get command lines of matching processes
+        std::process::Command::new("wmic")
+            .args([
+                "process",
+                "where",
+                &format!("name like '%{executable_name}%'"),
+                "get",
+                "commandline",
+            ])
+            .output()
+            .ok()?
+    } else {
+        // macOS / Linux: use ps to list all process command lines
+        std::process::Command::new("ps")
+            .args(["-e", "-o", "command="])
+            .output()
+            .ok()?
+    };
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for line in stdout.lines() {
+        let lower = line.to_ascii_lowercase();
+        // Only consider lines that actually reference the executable
+        if !lower.contains(executable_name) {
+            continue;
+        }
+        // Parse --remote-debugging-port=N or --remote-debugging-port N
+        for part in line.split_whitespace() {
+            if let Some(port_str) = part.strip_prefix("--remote-debugging-port=") {
+                if let Ok(port) = port_str.parse::<u16>() {
+                    return Some(port);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Probe whether a CDP endpoint is listening on `localhost:<port>`.
+///
+/// Sends a quick GET to `/json/version` — the standard Chrome DevTools
+/// Protocol health-check endpoint.
+fn probe_cdp_port(port: u16) -> bool {
+    let url = format!("http://localhost:{port}/json/version");
+    match reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(2))
+        .build()
+        .and_then(|client| client.get(&url).send())
+    {
+        Ok(resp) => resp.status().is_success(),
+        Err(_) => false,
+    }
+}
+
 /// Search for an executable in the system PATH.
 fn find_in_path(name: &str) -> Option<std::path::PathBuf> {
     let path_var = env::var_os("PATH")?;
@@ -6182,5 +6368,92 @@ mod tests {
 
         delete_mirror_preference_cache();
         assert!(!path.exists(), "cache file should be deleted");
+    }
+
+    // -----------------------------------------------------------------------
+    // BrowserChannel tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn browser_channel_from_str_all_variants() {
+        // Chrome variants
+        assert_eq!(BrowserChannel::from_str("chrome"), Some(BrowserChannel::Chrome));
+        assert_eq!(BrowserChannel::from_str("Chrome"), Some(BrowserChannel::Chrome));
+        assert_eq!(BrowserChannel::from_str("CHROME"), Some(BrowserChannel::Chrome));
+        assert_eq!(BrowserChannel::from_str("google-chrome"), Some(BrowserChannel::Chrome));
+        assert_eq!(BrowserChannel::from_str("google chrome"), Some(BrowserChannel::Chrome));
+
+        assert_eq!(BrowserChannel::from_str("chrome-beta"), Some(BrowserChannel::ChromeBeta));
+        assert_eq!(BrowserChannel::from_str("chrome-dev"), Some(BrowserChannel::ChromeDev));
+        assert_eq!(BrowserChannel::from_str("chrome-canary"), Some(BrowserChannel::ChromeCanary));
+
+        // Edge variants
+        assert_eq!(BrowserChannel::from_str("msedge"), Some(BrowserChannel::MsEdge));
+        assert_eq!(BrowserChannel::from_str("edge"), Some(BrowserChannel::MsEdge));
+        assert_eq!(BrowserChannel::from_str("microsoft-edge"), Some(BrowserChannel::MsEdge));
+        assert_eq!(BrowserChannel::from_str("MsEdge"), Some(BrowserChannel::MsEdge));
+
+        assert_eq!(BrowserChannel::from_str("msedge-beta"), Some(BrowserChannel::MsEdgeBeta));
+        assert_eq!(BrowserChannel::from_str("msedge-dev"), Some(BrowserChannel::MsEdgeDev));
+        assert_eq!(BrowserChannel::from_str("msedge-canary"), Some(BrowserChannel::MsEdgeCanary));
+    }
+
+    #[test]
+    fn browser_channel_from_str_unknown() {
+        assert_eq!(BrowserChannel::from_str("firefox"), None);
+        assert_eq!(BrowserChannel::from_str("safari"), None);
+        assert_eq!(BrowserChannel::from_str(""), None);
+    }
+
+    #[test]
+    fn browser_channel_default_debug_port() {
+        assert_eq!(BrowserChannel::Chrome.default_debug_port(), 9222);
+        assert_eq!(BrowserChannel::ChromeBeta.default_debug_port(), 9223);
+        assert_eq!(BrowserChannel::ChromeDev.default_debug_port(), 9224);
+        assert_eq!(BrowserChannel::ChromeCanary.default_debug_port(), 9225);
+        assert_eq!(BrowserChannel::MsEdge.default_debug_port(), 9222);
+        assert_eq!(BrowserChannel::MsEdgeBeta.default_debug_port(), 9223);
+        assert_eq!(BrowserChannel::MsEdgeDev.default_debug_port(), 9224);
+        assert_eq!(BrowserChannel::MsEdgeCanary.default_debug_port(), 9225);
+    }
+
+    #[test]
+    fn browser_channel_executable_name() {
+        assert_eq!(BrowserChannel::Chrome.executable_name(), "chrome");
+        assert_eq!(BrowserChannel::ChromeBeta.executable_name(), "chrome");
+        assert_eq!(BrowserChannel::ChromeDev.executable_name(), "chrome");
+        assert_eq!(BrowserChannel::ChromeCanary.executable_name(), "chrome");
+        assert_eq!(BrowserChannel::MsEdge.executable_name(), "msedge");
+        assert_eq!(BrowserChannel::MsEdgeBeta.executable_name(), "msedge");
+        assert_eq!(BrowserChannel::MsEdgeDev.executable_name(), "msedge");
+        assert_eq!(BrowserChannel::MsEdgeCanary.executable_name(), "msedge");
+    }
+
+    #[test]
+    fn browser_channel_display() {
+        assert_eq!(format!("{}", BrowserChannel::Chrome), "chrome");
+        assert_eq!(format!("{}", BrowserChannel::ChromeCanary), "chrome-canary");
+        assert_eq!(format!("{}", BrowserChannel::MsEdge), "msedge");
+        assert_eq!(format!("{}", BrowserChannel::MsEdgeDev), "msedge-dev");
+    }
+
+    /// Integration test: probes the actual Chrome instance on port 9222.
+    /// Requires Chrome running with --remote-debugging-port=9222.
+    /// Skipped by default; run with `cargo test -- --ignored`.
+    #[test]
+    #[ignore = "requires Chrome with --remote-debugging-port=9222"]
+    fn cdp_probe_live_chrome_port_9222() {
+        assert!(
+            probe_cdp_port(9222),
+            "Chrome CDP endpoint not responding on port 9222. \
+             Start Chrome with: chrome --remote-debugging-port=9222"
+        );
+    }
+
+    /// Integration test: verifies that a port where nothing listens returns false.
+    #[test]
+    fn cdp_probe_unused_port_returns_false() {
+        // Port 19999 is very unlikely to have anything listening
+        assert!(!probe_cdp_port(19999));
     }
 }

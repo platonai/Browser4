@@ -242,6 +242,39 @@ pub fn all_commands() -> Vec<CommandDef> {
             },
         },
         CommandDef {
+            name: "attach",
+            description: "Attach to an existing browser via CDP endpoint or channel name",
+            category: Category::Browsers,
+            hidden: false,
+            batch_supported: false,
+            args: &[],
+            options: &[
+                OptionDef {
+                    name: "cdp",
+                    description: "CDP endpoint URL (e.g. http://localhost:9222) or channel name (chrome, msedge, chrome-canary, ...)",
+                    is_bool: false,
+                    short: None,
+                },
+                OptionDef {
+                    name: "endpoint",
+                    description: "Remote Browser4 server endpoint URL (e.g. http://browser4-server:8182)",
+                    is_bool: false,
+                    short: None,
+                },
+            ],
+            tool_name_fn: |_| "attach_browser".to_string(),
+            tool_params_fn: |args| {
+                let mut params = json!({});
+                if let Some(cdp) = get_opt_str(args, "cdp") {
+                    params["cdp"] = json!(cdp);
+                }
+                if let Some(ep) = get_opt_str(args, "endpoint") {
+                    params["endpoint"] = json!(ep);
+                }
+                params
+            },
+        },
+        CommandDef {
             name: "close",
             description: "Close the browser",
             category: Category::Browsers,

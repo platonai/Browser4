@@ -233,6 +233,7 @@ class MCPToolController(
                 "close_all_sessions" -> handleCloseAllSessions()
                 "kill_all_sessions" -> handleKillAllSessions()
                 "delete_session_data" -> handleDeleteSessionData(request)
+                "attach_browser" -> handleAttachBrowser(request)
                 // Command tools — delegate to CommandRunner (no session required)
                 "command_run" -> handleCommandRun(request)
                 "command_batch" -> handleCommandBatch(request)
@@ -283,6 +284,7 @@ class MCPToolController(
                 // Session management
                 "open_session", "close_session", "list_sessions",
                 "close_all_sessions", "kill_all_sessions", "delete_session_data",
+                "attach_browser",
                 // Command tools (no session required)
                 "command_run", "command_batch", "command_status", "command_result"
             )
@@ -389,6 +391,34 @@ class MCPToolController(
         }
 
         return ResponseEntity.ok(textResponse("User data deleted for session"))
+    }
+
+    private fun handleAttachBrowser(request: MCPToolCallRequest): ResponseEntity<MCPToolCallResponse> {
+        val args = request.arguments ?: emptyMap()
+
+        val cdpEndpoint = (args["cdpEndpoint"] as? String)?.takeIf { it.isNotBlank() }
+        val cdpPort = (args["cdpPort"] as? Number)?.toInt()
+
+        require(cdpEndpoint != null || cdpPort != null) {
+            "attach_browser requires either 'cdpEndpoint' (URL) or 'cdpPort' (number)"
+        }
+
+        val session = sessionManager.createAttachedSession(
+            cdpEndpoint = cdpEndpoint,
+            cdpPort = cdpPort,
+            capabilities = args.filterKeys {
+                it != "cdpEndpoint" && it != "cdpPort" && it != "sessionId"
+            }.mapValues { it.value?.toString() }
+        )
+
+        logger.info(
+            "MCP attach_browser: created session {} attached to {}",
+            session.sessionId,
+            cdpEndpoint ?: "port $cdpPort"
+        )
+        return ResponseEntity.ok(
+            textResponse("""{"sessionId":"${session.sessionId}"}""")
+        )
     }
 
     // =========================================================================
