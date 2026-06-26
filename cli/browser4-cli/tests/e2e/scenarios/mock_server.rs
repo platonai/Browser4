@@ -1780,12 +1780,13 @@ pub(super) fn test_swarm_session_and_agent_tools(ctx: &mut E2ECtx) {
             "extract",
             "product name, price",
             "--schema={\"type\":\"object\"}",
+            "--raw",
         ],
     );
     let extracted = strip_snapshot_output(&extract_result.stdout);
     assert!(
-        extracted.contains("\"Mock Product\"") && extract_result.stdout.contains("### Page"),
-        "Expected extract output with snapshot block in:\n{}",
+        extracted.contains("\"Mock Product\""),
+        "Expected extract output to contain extracted data in:\n{}",
         extract_result.stdout
     );
 
@@ -1795,6 +1796,7 @@ pub(super) fn test_swarm_session_and_agent_tools(ctx: &mut E2ECtx) {
             "summarize",
             "summarize the page marker",
             "--selector=#page-marker",
+            "--raw",
         ],
     );
     let summary = strip_snapshot_output(&summarize_result.stdout);

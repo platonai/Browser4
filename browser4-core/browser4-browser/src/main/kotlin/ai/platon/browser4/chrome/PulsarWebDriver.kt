@@ -915,6 +915,11 @@ open class PulsarWebDriver constructor(
         if (selector.isNullOrBlank()) {
             rpc.invokeOnPage("press") {
                 keyboard?.press(key, randomDelayMillis("press"))
+                // CDP-dispatched Enter may not trigger implicit form submission (HTML spec §4.10.2.2).
+                // Explicitly submit the nearest form as a safety net. See trySubmitFormOnEnter().
+                if (key == "Enter") {
+                    trySubmitFormOnEnter()
+                }
                 gap("press")
             }
             return
@@ -923,7 +928,65 @@ open class PulsarWebDriver constructor(
         rpc.invokeOnElement(selector, "press", scrollIntoView = true) { node ->
             emulator.click(node, 1, position = "right")
             keyboard?.press(key, randomDelayMillis("press"))
+            // CDP-dispatched Enter may not trigger implicit form submission (HTML spec §4.10.2.2).
+            // Explicitly submit the nearest form as a safety net. See trySubmitFormOnEnter().
+            if (key == "Enter") {
+                trySubmitFormOnEnter()
+            }
             gap("press")
+        }
+    }
+
+    /**
+     * Triggers form submission when the active element is a form-control inside a `<form>`.
+     *
+     * **Why this exists:**
+     *
+     * CDP `Input.dispatchKeyEvent` (used by `keyboard?.press("Enter")`) sends trusted
+     * `keydown` / `keypress` DOM events, but Chromium does not reliably fire the browser's
+     * *implicit form submission* default action (HTML spec §4.10.2.2) for synthesized
+     * input — even when the events are marked trusted. The result is that pressing Enter
+     * on a search box inside a `<form>` dispatches the correct DOM events, yet the form
+     * never submits and the page never navigates.
+     *
+     * This method is a safety net: after the CDP key events land, it checks whether the
+     * active element is a form-control eligible for implicit submission, and if so
+     * explicitly calls `form.requestSubmit()` (with fallback to `form.submit()`).
+     *
+     * **Elements excluded (Enter does *not* implicitly submit for these):**
+     * - `<textarea>` — Enter inserts a newline
+     * - `<input type="radio|checkbox|file|button|reset|submit|image|hidden">`
+     * - Any element not inside a `<form>`
+     */
+    private suspend fun trySubmitFormOnEnter() {
+        runCatching {
+            browserProtocol.evaluate(
+                expression = """
+                    (() => {
+                        const el = document.activeElement;
+                        if (!el) return false;
+                        const tag = el.tagName;
+                        if (tag === 'TEXTAREA') return false;
+                        if (tag !== 'INPUT' && tag !== 'SELECT') return false;
+                        if (tag === 'INPUT') {
+                            const t = (el.type || 'text').toLowerCase();
+                            if (t === 'radio' || t === 'checkbox' || t === 'file' ||
+                                t === 'button' || t === 'reset' || t === 'submit' ||
+                                t === 'image' || t === 'hidden') {
+                                return false;
+                            }
+                        }
+                        const form = el.closest('form');
+                        if (!form) return false;
+                        if (typeof form.requestSubmit === 'function') {
+                            try { form.requestSubmit(); return true; } catch (e) {}
+                        }
+                        form.submit();
+                        return true;
+                    })()
+                """.trimIndent(),
+                returnByValue = true,
+            )
         }
     }
 

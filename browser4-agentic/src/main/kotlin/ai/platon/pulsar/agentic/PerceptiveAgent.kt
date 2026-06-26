@@ -94,6 +94,7 @@ data class ActResult constructor(
 data class ExtractOptions(
     val instruction: String,
     val schema: ExtractionSchema,
+    val removeBoilerpipe: Boolean = true,
     // reserved
     val modelName: String? = null,
     // reserved
@@ -113,7 +114,7 @@ data class ExtractResult(
     val data: JsonNode
 ) {
     override fun toString(): String {
-        return "success: $success message: $message data: " + Strings.compactInline(data.toString(), 50)
+        return "success: $success message: $message data: ${data}"
     }
 }
 

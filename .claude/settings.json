@@ -11,6 +11,7 @@
       "Bash(rustc *)",
       "Bash(cargo *)",
       "Bash(java *)",
+      "Bash(javap *)",
       "Bash(jar *)",
       "Bash(bash *)",
       "Bash(cargo test *)",
