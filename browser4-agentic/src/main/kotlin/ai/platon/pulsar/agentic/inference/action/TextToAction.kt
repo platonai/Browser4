@@ -68,7 +68,7 @@ open class TextToAction(
             mapOf(
                 "ACTION_DESCRIPTIONS" to action,
                 "TOOL_CALL_SPECIFICATION" to toolCallExpressions,
-                "ARIA_ACCESSIBILITY_TREE" to domState.ariaSnapshot(),
+                "ARIA_ACCESSIBILITY_TREE" to domState.ariaSnapshot,
                 "OUTPUT_SCHEMA_ACT" to buildObserveResultSchema(true),
             )
         )

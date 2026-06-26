@@ -85,14 +85,14 @@ class SnapshotServiceE2ETest : WebDriverTestBase() {
         assertTrue { enhancedRoot.children.isNotEmpty() }
         kotlin.test.assertTrue { simplified.children.isNotEmpty() }
 
-        assertTrue(domState.ariaSnapshot().isNotBlank(), "Serialized Aria Snapshot should not be blank")
+        assertTrue(domState.ariaSnapshot.isNotBlank(), "Serialized Aria Snapshot should not be blank")
         assertTrue(
-            domState.ariaSnapshot().contains("RootWebArea") &&
-                    domState.ariaSnapshot().contains("Dynamic Content Test") &&
-                    domState.ariaSnapshot().contains("heading \"Dynamic Content Test Page\"") &&
-                    domState.ariaSnapshot().contains("heading \"Asynchronous Content Loading\"") &&
-                    domState.ariaSnapshot().contains("Enter new item..."),
-            "Serialized Aria Snapshot should preserve accessible descendants, actual:\n${domState.ariaSnapshot()}"
+            domState.ariaSnapshot.contains("RootWebArea") &&
+                    domState.ariaSnapshot.contains("Dynamic Content Test") &&
+                    domState.ariaSnapshot.contains("heading \"Dynamic Content Test Page\"") &&
+                    domState.ariaSnapshot.contains("heading \"Asynchronous Content Loading\"") &&
+                    domState.ariaSnapshot.contains("Enter new item..."),
+            "Serialized Aria Snapshot should preserve accessible descendants, actual:\n${domState.ariaSnapshot}"
         )
         assertTrue(domState.selectorMap.isNotEmpty(), "Selector map should contain entries")
 
@@ -112,7 +112,7 @@ class SnapshotServiceE2ETest : WebDriverTestBase() {
             domNodeCount = domCount,
             axNodeCount = trees.axTree.size,
             snapshotEntryCount = trees.snapshotByBackendId.size,
-            renderedAriaSnapshotSize = domState.ariaSnapshot().length,
+            renderedAriaSnapshotSize = domState.ariaSnapshot.length,
             notes = "End-to-end validation with LLM serialization"
         )
 
@@ -144,11 +144,11 @@ class SnapshotServiceE2ETest : WebDriverTestBase() {
         logger.info("Serializable tree written | {}", path.toUri())
 
         path = reportDir.resolve("aria-snapshot-$ident.yml")
-        Files.writeString(path, domState.ariaSnapshot())
+        Files.writeString(path, domState.ariaSnapshot)
         logger.info("Aria snapshot written (unfiltered) | {}", path.toUri())
 
         path = reportDir.resolve("aria-snapshot-nano-$ident.yml")
-        Files.writeString(path, domState.serializableTree.toNanoTree().ariaSnapshot())
+        Files.writeString(path, domState.serializableTree.toNanoTree().ariaSnapshot)
         logger.info("Aria snapshot written (nano) | {}", path.toUri())
     }
 

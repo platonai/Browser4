@@ -81,8 +81,8 @@ class AriaSnapshotRendererE2ETest : WebDriverTestBase() {
         val optimizedTree = service.buildOptimizedDOMTreeNode(enhancedRoot)
         val domState = service.buildDOMState(optimizedTree)
 
-        assertTrue(domState.ariaSnapshot().isNotBlank(), "Aria snapshot should not be blank")
-        return domState.ariaSnapshot()
+        assertTrue(domState.ariaSnapshot.isNotBlank(), "Aria snapshot should not be blank")
+        return domState.ariaSnapshot
     }
 
     private fun normalizeRefs(snapshot: String): String {

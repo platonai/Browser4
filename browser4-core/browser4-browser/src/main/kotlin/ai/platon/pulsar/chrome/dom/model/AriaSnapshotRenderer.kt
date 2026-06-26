@@ -1,9 +1,6 @@
 package ai.platon.pulsar.chrome.dom.model
 
-import ai.platon.pulsar.chrome.dom.model.DOMRect
-import ai.platon.pulsar.chrome.dom.model.MergedDOMTreeNode
-import ai.platon.pulsar.chrome.dom.model.NodeType
-import ai.platon.pulsar.chrome.dom.model.OptimizedDOMTreeNode
+import ai.platon.browser4.chrome.dom.model.AriaSnapshotOptions
 import java.util.*
 
 object AriaSnapshotRenderer {
@@ -40,7 +37,6 @@ object AriaSnapshotRenderer {
         val role = role(node) ?: return children
         val props = renderProps(node, role, accessibleName, options)
         val ref = original.backendNodeId.takeIf { it != null && it > 0 }?.let { "e$it" }
-        val box = if (boxes) formatBox(original.snapshotNode?.bounds) else null
 
         // --interactive: skip non-interactive nodes, promote their children
         if (options.interactive && !isInteractiveNode(node, role, props, ref)) {
@@ -73,7 +69,6 @@ object AriaSnapshotRenderer {
                     selected = AriaSnapshotFormatting.booleanAttribute(rawState(node, "selected", "aria-selected")),
                     ref = ref,
                     cursorPointer = hasCursorPointer(node),
-                    box = box,
                     props = props,
                     children = children
                 )

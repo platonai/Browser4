@@ -56,14 +56,14 @@ class SnapshotServiceFullCoverageTest : WebDriverTestBase() {
         assertTrue(tinyTree.children.isNotEmpty())
 
         val domState = service.buildDOMState(tinyTree)
-        assertTrue(domState.ariaSnapshot().isNotBlank(), "Serialized aria snapshot should not be blank")
+        assertTrue(domState.ariaSnapshot.isNotBlank(), "Serialized aria snapshot should not be blank")
         assertTrue(
-            domState.ariaSnapshot().contains("RootWebArea") &&
-                    domState.ariaSnapshot().contains("Dynamic Content Test") &&
-                    domState.ariaSnapshot().contains("heading \"Dynamic Content Test Page\"") &&
-                    domState.ariaSnapshot().contains("heading \"Asynchronous Content Loading\"") &&
-                    domState.ariaSnapshot().contains("Enter new item..."),
-            "Serialized aria snapshot should preserve accessible descendants, actual:\n${domState.ariaSnapshot()}"
+            domState.ariaSnapshot.contains("RootWebArea") &&
+                    domState.ariaSnapshot.contains("Dynamic Content Test") &&
+                    domState.ariaSnapshot.contains("heading \"Dynamic Content Test Page\"") &&
+                    domState.ariaSnapshot.contains("heading \"Asynchronous Content Loading\"") &&
+                    domState.ariaSnapshot.contains("Enter new item..."),
+            "Serialized aria snapshot should preserve accessible descendants, actual:\n${domState.ariaSnapshot}"
         )
         assertTrue(domState.selectorMap.isNotEmpty())
 
@@ -73,7 +73,7 @@ class SnapshotServiceFullCoverageTest : WebDriverTestBase() {
 
         val path = Paths.get("logs").resolve("tests").resolve("nano.tree.yaml")
         path.parent.createDirectories()
-        Files.writeString(path, domState.serializableTree.toNanoTreeInRange().ariaSnapshot())
+        Files.writeString(path, domState.serializableTree.toNanoTreeInRange().ariaSnapshot)
 
         // Selector map should include at least node: and possibly xpath: keys for some nodes
         val anySelectorKey = domState.selectorMap.keys.any { it.startsWith("node:") || it.startsWith("xpath:") }
