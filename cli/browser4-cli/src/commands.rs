@@ -1708,6 +1708,94 @@ pub fn all_commands() -> Vec<CommandDef> {
                 json!({ "id": get_str(args, "id").unwrap_or_default() })
             },
         },
+        CommandDef {
+            name: "crawl",
+            description: "Crawl a website starting from a URL, following links up to a configurable depth",
+            category: Category::Swarm,
+            hidden: false,
+            batch_supported: false,
+            args: &[ArgDef {
+                name: "url",
+                description: "The starting URL for the crawl",
+                optional: false,
+            }],
+            options: &[
+                OptionDef { name: "depth", description: "Maximum crawl depth (default: 1)", is_bool: false, short: Some("d") },
+                OptionDef { name: "out-link-selector", description: "CSS selector to extract links from each page", is_bool: false, short: Some("ol") },
+                OptionDef { name: "out-link-pattern", description: "Regex pattern to filter extracted links (default: .+)", is_bool: false, short: Some("olp") },
+                OptionDef { name: "top-links", description: "Maximum links to extract per page (default: 20)", is_bool: false, short: Some("tl") },
+                OptionDef { name: "args", description: "Additional LoadOptions passthrough (e.g. -a \"-refresh -nMaxRetry 5\")", is_bool: false, short: Some("a") },
+                OptionDef { name: "refresh", description: "Force a fresh fetch, ignoring cache", is_bool: true, short: None },
+                OptionDef { name: "parse", description: "Parse each page immediately after fetching", is_bool: true, short: None },
+                OptionDef { name: "expires", description: "Cache expiration duration (e.g. 1d, 1h, 30m)", is_bool: false, short: None },
+                OptionDef { name: "store-content", description: "Persist page content to storage", is_bool: true, short: None },
+                OptionDef { name: "priority", description: "Queue priority (lower = higher priority)", is_bool: false, short: Some("p") },
+                OptionDef { name: "page-load-timeout", description: "Maximum time to wait for page load", is_bool: false, short: None },
+                OptionDef { name: "ignore-url-query", description: "Remove query parameters from URLs during normalization", is_bool: true, short: None },
+                OptionDef { name: "no-norm", description: "Disable URL normalization", is_bool: true, short: None },
+                OptionDef { name: "readonly", description: "Non-destructive mode (no page modifications)", is_bool: true, short: None },
+            ],
+            tool_name_fn: |_| String::new(),
+            tool_params_fn: |args| {
+                let mut p = json!({});
+                if let Some(v) = get_opt_str(args, "url") { p["url"] = json!(v); }
+
+                // Build the LoadOptions args string from individual flags
+                let mut load_opts = Vec::new();
+                if let Some(v) = get_opt_str(args, "out-link-selector") {
+                    load_opts.push(format!("-outLink \"{}\"", v));
+                }
+                if let Some(v) = get_opt_str(args, "out-link-pattern") {
+                    load_opts.push(format!("-outLinkPattern \"{}\"", v));
+                }
+                if let Some(v) = get_opt_str(args, "top-links") {
+                    load_opts.push(format!("-topLinks {}", v));
+                }
+                if let Some(v) = get_opt_str(args, "expires") {
+                    load_opts.push(format!("-expires {}", v));
+                }
+                if let Some(v) = get_opt_str(args, "page-load-timeout") {
+                    load_opts.push(format!("-pageLoadTimeout {}", v));
+                }
+                if let Some(v) = get_opt_str(args, "priority") {
+                    load_opts.push(format!("-priority {}", v));
+                }
+                if let Some(true) = get_bool(args, "refresh") {
+                    load_opts.push("-refresh".to_string());
+                }
+                if let Some(true) = get_bool(args, "parse") {
+                    load_opts.push("-parse".to_string());
+                }
+                if let Some(true) = get_bool(args, "store-content") {
+                    load_opts.push("-storeContent".to_string());
+                }
+                if let Some(true) = get_bool(args, "ignore-url-query") {
+                    load_opts.push("-ignoreUrlQuery".to_string());
+                }
+                if let Some(true) = get_bool(args, "no-norm") {
+                    load_opts.push("-noNorm".to_string());
+                }
+                if let Some(true) = get_bool(args, "readonly") {
+                    load_opts.push("-readonly".to_string());
+                }
+                // Append raw args passthrough (allows any LoadOptions field)
+                if let Some(v) = get_opt_str(args, "args") {
+                    load_opts.push(v.to_string());
+                }
+                if !load_opts.is_empty() {
+                    p["args"] = json!(load_opts.join(" "));
+                }
+
+                // Depth
+                if let Some(v) = get_opt_str(args, "depth") {
+                    p["depth"] = json!(v.parse::<i32>().unwrap_or(1));
+                } else {
+                    p["depth"] = json!(1);
+                }
+
+                p
+            },
+        },
         // ---- Snapshot ----
         CommandDef {
             name: "domsnapshot",
@@ -1907,6 +1995,7 @@ mod tests {
             "swarm-query",
             "swarm-status",
             "swarm-result",
+            "crawl",
         ] {
             assert!(map.contains_key(*expected), "Missing command: {}", expected);
         }
@@ -3339,5 +3428,115 @@ mod tests {
         assert!(params.get("compact").is_none());
         assert!(params.get("depth").is_none());
         assert!(params.get("selector").is_none());
+    }
+
+    // ---- crawl command tests ----
+
+    #[test]
+    fn test_crawl_command_exists() {
+        let map = commands_map();
+        let cmd = map.get("crawl").expect("crawl command should exist");
+        assert!(!cmd.hidden);
+        assert_eq!(cmd.args.len(), 1);
+        assert_eq!(cmd.args[0].name, "url");
+        assert!(!cmd.args[0].optional);
+        assert_eq!(cmd.category, Category::Swarm);
+    }
+
+    #[test]
+    fn test_crawl_params_basic() {
+        let map = commands_map();
+        let cmd = map.get("crawl").unwrap();
+        let mut args = HashMap::new();
+        args.insert("url".to_string(), json!("https://example.com"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["url"], "https://example.com");
+        assert_eq!(params["depth"], 1);
+    }
+
+    #[test]
+    fn test_crawl_params_with_depth_and_selector() {
+        let map = commands_map();
+        let cmd = map.get("crawl").unwrap();
+        let mut args = HashMap::new();
+        args.insert("url".to_string(), json!("https://example.com"));
+        args.insert("depth".to_string(), json!("3"));
+        args.insert("out-link-selector".to_string(), json!("a.product"));
+        args.insert("out-link-pattern".to_string(), json!("/product/"));
+        args.insert("top-links".to_string(), json!("10"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["url"], "https://example.com");
+        assert_eq!(params["depth"], 3);
+        let args_str = params["args"].as_str().unwrap_or("");
+        assert!(args_str.contains("-outLink \"a.product\""));
+        assert!(args_str.contains("-outLinkPattern \"/product/\""));
+        assert!(args_str.contains("-topLinks 10"));
+    }
+
+    #[test]
+    fn test_crawl_params_boolean_flags() {
+        let map = commands_map();
+        let cmd = map.get("crawl").unwrap();
+        let mut args = HashMap::new();
+        args.insert("url".to_string(), json!("https://example.com"));
+        args.insert("refresh".to_string(), json!(true));
+        args.insert("parse".to_string(), json!(true));
+        args.insert("store-content".to_string(), json!(true));
+        args.insert("ignore-url-query".to_string(), json!(true));
+        args.insert("readonly".to_string(), json!(true));
+        let params = (cmd.tool_params_fn)(&args);
+        let args_str = params["args"].as_str().unwrap_or("");
+        assert!(args_str.contains("-refresh"));
+        assert!(args_str.contains("-parse"));
+        assert!(args_str.contains("-storeContent"));
+        assert!(args_str.contains("-ignoreUrlQuery"));
+        assert!(args_str.contains("-readonly"));
+    }
+
+    #[test]
+    fn test_crawl_params_args_passthrough() {
+        let map = commands_map();
+        let cmd = map.get("crawl").unwrap();
+        let mut args = HashMap::new();
+        args.insert("url".to_string(), json!("https://example.com"));
+        args.insert("args".to_string(), json!("-nMaxRetry 5 -lazyFlush -interactLevel FAST"));
+        let params = (cmd.tool_params_fn)(&args);
+        let args_str = params["args"].as_str().unwrap_or("");
+        assert!(args_str.contains("-nMaxRetry 5 -lazyFlush -interactLevel FAST"));
+    }
+
+    #[test]
+    fn test_crawl_params_no_args_when_no_options() {
+        let map = commands_map();
+        let cmd = map.get("crawl").unwrap();
+        let mut args = HashMap::new();
+        args.insert("url".to_string(), json!("https://example.com"));
+        let params = (cmd.tool_params_fn)(&args);
+        // No args string should be present since no options were set
+        assert!(params.get("args").is_none());
+    }
+
+    #[test]
+    fn test_crawl_tool_name_empty() {
+        let map = commands_map();
+        let cmd = map.get("crawl").unwrap();
+        let args = HashMap::new();
+        assert_eq!((cmd.tool_name_fn)(&args), "");
+    }
+
+    #[test]
+    fn test_crawl_params_expires_and_priority() {
+        let map = commands_map();
+        let cmd = map.get("crawl").unwrap();
+        let mut args = HashMap::new();
+        args.insert("url".to_string(), json!("https://example.com"));
+        args.insert("expires".to_string(), json!("1h"));
+        args.insert("priority".to_string(), json!("5"));
+        args.insert("page-load-timeout".to_string(), json!("30s"));
+        let params = (cmd.tool_params_fn)(&args);
+        let args_str = params["args"].as_str().unwrap_or("");
+        assert!(args_str.contains("-expires 1h"));
+        assert!(args_str.contains("-priority 5"));
+        assert!(args_str.contains("-pageLoadTimeout 30s"));
     }
 }

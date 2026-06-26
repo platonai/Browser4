@@ -353,6 +353,13 @@ All `.ps1` and `.sh` scripts under `bin/tests-production/` and `bin/test-product
 6. Cover the change with the smallest relevant tests: `cli/browser4-cli/src/commands.rs` unit tests, `browser4-rest` controller mapping tests, `cli/browser4-cli/tests/e2e.rs`, and `browser4-tests/browser4-rest-tests/.../MCPToolControllerE2ETest.kt` when the command changes the end-to-end flow
 7. Watch the common failure points: missing backend alias, omitted `sessionId` in custom handlers, forgetting `no_snapshot_commands()` for read-only commands, forgetting `batch_supported`/`compile_batch_request()` for batch-safe DOM commands, mismatched element-ref parameter names, broken `activeSelector` / `lastMousePosition` persistence in `cli/browser4-cli/src/state.rs`, and snake_case/camelCase argument normalization
 
+**REST-based commands** (like `swarm-submit`, `crawl`) follow a different pattern from MCP tools:
+- Set `tool_name_fn` to return `""` and handle dispatch entirely in `main.rs` via a custom `handle_*` function.
+- Add HTTP functions in `http.rs` following the `submit_*/get_*_result` pattern (e.g. `submit_crawl` → `POST /api/crawl`, `get_crawl_result` → `GET /api/crawl/{id}/result`).
+- Create a backend `@RestController` + `@Service` pair (e.g. `CrawlController.kt` + `CrawlService.kt`) with an async task store (`ConcurrentHashMap`) and a `CoroutineScope` for background execution.
+- Return a task UUID from the POST endpoint; the CLI polls for completion.
+- No MCP alias needed — these commands bypass `MCPToolController` entirely.
+
 #### Modifying Install / Uninstall / Upgrade Rust Code
 
 **Rule:** Whenever you change Rust code related to `install`, `uninstall`, or `upgrade` (primarily in `cli/browser4-cli/src/daemon.rs`), you **must** run the install-scenario e2e tests before considering the change complete:
