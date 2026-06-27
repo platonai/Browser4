@@ -1,6 +1,7 @@
 package ai.platon.pulsar.agentic.tools.builtin
 
 import ai.platon.pulsar.agentic.model.ToolCall
+import ai.platon.pulsar.browser.common.JsEvaluation
 import ai.platon.pulsar.core.api.WebDriver
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -84,7 +85,8 @@ class BrowserTabToolExecutorTest {
 	fun `evaluateValue accepts page expression`() {
 		runBlocking {
 			val driver = Mockito.mock(WebDriver::class.java)
-			`when`(driver.evaluateValue("document.title")).thenReturn("Browser4 CLI Other Fixture")
+			`when`(driver.evaluateValueDetail("document.title"))
+				.thenReturn(JsEvaluation(value = "Browser4 CLI Other Fixture"))
 
 			val result = executor.callFunctionOn(
 				ToolCall("tab", "evaluateValue", mutableMapOf<String, Any?>("expression" to "document.title")),
@@ -92,7 +94,7 @@ class BrowserTabToolExecutorTest {
 			)
 
 			assertEquals("Browser4 CLI Other Fixture", result.value)
-			verify(driver).evaluateValue("document.title")
+			verify(driver).evaluateValueDetail("document.title")
 		}
 	}
 
@@ -100,8 +102,8 @@ class BrowserTabToolExecutorTest {
 	fun `evaluateValue accepts element selector and function declaration`() {
 		runBlocking {
 			val driver = Mockito.mock(WebDriver::class.java)
-			`when`(driver.evaluateValue("#page-marker", "(element) => element.textContent"))
-				.thenReturn("other page")
+			`when`(driver.evaluateValueDetail("#page-marker", "(element) => element.textContent"))
+				.thenReturn(JsEvaluation(value = "other page"))
 
 			val result = executor.callFunctionOn(
 				ToolCall(
@@ -116,7 +118,7 @@ class BrowserTabToolExecutorTest {
 			)
 
 			assertEquals("other page", result.value)
-			verify(driver).evaluateValue("#page-marker", "(element) => element.textContent")
+			verify(driver).evaluateValueDetail("#page-marker", "(element) => element.textContent")
 		}
 	}
 
@@ -124,8 +126,8 @@ class BrowserTabToolExecutorTest {
 	fun `evaluateValue accepts element selector and expression`() {
 		runBlocking {
 			val driver = Mockito.mock(WebDriver::class.java)
-			`when`(driver.evaluateValue("#page-marker", "(element) => element.textContent"))
-				.thenReturn("other page")
+			`when`(driver.evaluateValueDetail("#page-marker", "(element) => element.textContent"))
+				.thenReturn(JsEvaluation(value = "other page"))
 
 			val result = executor.callFunctionOn(
 				ToolCall(
@@ -140,7 +142,7 @@ class BrowserTabToolExecutorTest {
 			)
 
 			assertEquals("other page", result.value)
-			verify(driver).evaluateValue("#page-marker", "(element) => element.textContent")
+			verify(driver).evaluateValueDetail("#page-marker", "(element) => element.textContent")
 		}
 	}
 
@@ -148,7 +150,8 @@ class BrowserTabToolExecutorTest {
 	fun `eval accepts page expression`() {
 		runBlocking {
 			val driver = Mockito.mock(WebDriver::class.java)
-			`when`(driver.evaluateValue("document.title")).thenReturn("Browser4 CLI Other Fixture")
+			`when`(driver.evaluateValueDetail("document.title"))
+				.thenReturn(JsEvaluation(value = "Browser4 CLI Other Fixture"))
 
 			val result = executor.callFunctionOn(
 				ToolCall("tab", "eval", mutableMapOf<String, Any?>("expression" to "document.title")),
@@ -156,7 +159,7 @@ class BrowserTabToolExecutorTest {
 			)
 
 			assertEquals("Browser4 CLI Other Fixture", result.value)
-			verify(driver).evaluateValue("document.title")
+			verify(driver).evaluateValueDetail("document.title")
 		}
 	}
 
@@ -164,8 +167,8 @@ class BrowserTabToolExecutorTest {
 	fun `eval accepts element selector and expression`() {
 		runBlocking {
 			val driver = Mockito.mock(WebDriver::class.java)
-			`when`(driver.evaluateValue("#page-marker", "(element) => element.textContent"))
-				.thenReturn("other page")
+			`when`(driver.evaluateValueDetail("#page-marker", "(element) => element.textContent"))
+				.thenReturn(JsEvaluation(value = "other page"))
 
 			val result = executor.callFunctionOn(
 				ToolCall(
@@ -180,7 +183,7 @@ class BrowserTabToolExecutorTest {
 			)
 
 			assertEquals("other page", result.value)
-			verify(driver).evaluateValue("#page-marker", "(element) => element.textContent")
+			verify(driver).evaluateValueDetail("#page-marker", "(element) => element.textContent")
 		}
 	}
 }
