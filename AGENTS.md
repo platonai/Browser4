@@ -88,70 +88,14 @@ mvnw.cmd -q -DskipTests
 |----------------------------------------|-------------|
 | `browser4-core`                        | Core engine: sessions, scheduling, DOM, browser control |
 | `browser4-dependencies`                | BOM and dependency alignment |
-| `browser4-agent-tools`                 | Advanced agent tools for scraping, crawling, and stateful page interaction |
+| `browser4-tools`                       | Operational tools and launch helpers |
 | `browser4-agentic`                     | AI agents implementation, MCP, skills registration |
-| `browser4-boot`                        | Spring Boot application bootstrap and launcher |
 | `browser4-rest`                        | Spring Boot REST layer & command endpoints |
-| `cli/*`                                | CLI in Rust + skill assets (`cli/browser4-cli`, `skill/`) |
-| `browser4-apps/*`                      | Product packaging: standalone launcher and runtime bundle (`browser4-apps/browser4-standalone`, `browser4-apps/browser4-bundle`) |
-| `browser4-core/browser4-plugins/*`     | Optional plugins: `browser4-captcha` (CAPTCHA solving), `browser4-parse` (HTML/DOM parsing), `browser4-protocol` (CDP), activated by classpath presence |
+| `cli/*`                                | Browser4 CLI + skill assets (`cli/browser4-cli`, `cli/skill`) |
+| `browser4-apps/*`                       | Product packaging and the unified launcher (`browser4-apps/browser4-standalone`, `target/Browser4.jar`) |
 | `examples/*`                           | Runnable examples (`examples/browser4-examples`) |
-| `browser4-tests`                       | E2E & heavy integration & scenario tests (`browser4-tests/pulsar-e2e-tests`, `browser4-tests/pulsar-it-tests`, `browser4-tests/browser4-rest-tests`) |
+| `browser4-tests`                       | E2E & heavy integration & scenario tests |
 | `browser4-tests/browser4-tests-common` | Shared test base classes and utilities |
-
-## Optional/Pluggable Modules
-
-Browser4 supports optional modules that activate **by classpath presence** — drop the JAR on
-the classpath and the feature lights up; remove it and the app starts normally without it.
-
-### Architecture
-
-Each optional module follows the same Spring Boot pattern:
-
-1. **Maven**: declared as `<optional>true</optional>` in `browser4-boot/pom.xml` —
-   available for compilation, but NOT pulled transitively by downstream modules.
-2. **Auto-configuration**: a Spring `@AutoConfiguration` class guarded by
-   `@ConditionalOnClass(name = ["com.example.SentinelClass"])` — the string form is
-   read from bytecode metadata via ASM *before* class loading, so Spring skips the
-   entire configuration class (and all its imports) when the sentinel class is absent.
-3. **Discovery**: registered in
-   `browser4-boot/src/main/resources/META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports` —
-   Spring Boot's `AutoConfigurationImportSelector` evaluates the `@ConditionalOnClass`
-   guard and only loads the class when the condition passes.
-4. **Runtime**: the bundle launch scripts (`start.sh` / `start.bat`) include both
-   `lib/*` and `plugins/*` on the classpath — drop optional JARs into `plugins/`
-   with no rebuild.
-
-### Current Optional Modules
-
-| Module | Sentinel class | Property kill-switch |
-|---|---|---|
-| `browser4-captcha` | `ai.platon.pulsar.captcha.CaptchaConfig` | `captcha.auto.solve.enabled=false` |
-
-### Adding Captcha to the Runtime Bundle
-
-```bash
-# Copy the captcha JAR into the plugins directory
-cp browser4-captcha-4.12.0.jar bundle/plugins/
-
-# Or place it alongside core JARs (both directories are on the classpath)
-cp browser4-captcha-4.12.0.jar bundle/lib/
-
-# Restart — no rebuild needed
-bundle/bin/start.sh
-```
-
-### Adding a New Optional Module
-
-1. Create the module under `browser4-core/browser4-plugins/` and add it to the parent POM.
-2. Add the dependency as `<optional>true</optional>` in `browser4-boot/pom.xml`.
-3. Create a Spring `@AutoConfiguration` class annotated with
-   `@ConditionalOnClass(name = ["com.example.SentinelClass"])` and
-   `@ConditionalOnProperty` for a runtime kill-switch.
-4. Register the auto-configuration class in
-   `browser4-boot/src/main/resources/META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports`.
-5. For the runtime bundle, the `plugins/` directory is already on the classpath —
-   no script changes needed. Users drop the JAR into `plugins/` at runtime.
 
 ## Key APIs and Concepts
 
@@ -230,7 +174,17 @@ See [TESTING.md](docs/TESTING.md) for details and trade-offs.
 - Use `bin/test.ps1` on Windows for scoped runs: `fast`, `it`, `e2e`, `rest`, `skills`, `mcp`, `cli`, `browser4`, `mock-site` (`mocksite` and `mocksiteboot` remain accepted aliases)
 - Maven profile switches in root `pom.xml` are property-driven: `-DrunITs=true`, `-DrunE2ETests=true`, `-DrunCoreTests=true`, `-DrunRestTests=true`
 - Use `bin/test.ps1 mock-site -Dmock.site.port=18080` to launch `MockSiteBoot` from `browser4-tests/browser4-rest-tests`; use `MockSiteLauncher` from `browser4-tests/browser4-tests-common` for in-process startup
-- `cli/browser4-cli/tests/e2e/mod.rs`: all e2e scenarios must start and depend on Browser4.jar; this includes single-scenario runs via `--scenario`.
+- `cli/browser4-cli/tests/e2e.rs`: all e2e scenarios must start and depend on Browser4.jar; this includes single-scenario runs via `--scenario`.
+- **E2E Test Efficiency:** Run `cargo test --test e2e -- --help` to see all filtering options for running e2e tests efficiently. Key flags:
+    - `--scenario=<pattern>` — run only matching scenarios (supports `*` and `?` globs)
+    - `--group=<name>` — run scenarios in a specific group (repeatable)
+    - `--level=BASIC` — default; use `EXTENDED` or `all` for longer edge-case tests
+    - `--fail-fast` — stop after the first failure
+    - `--failed` — rerun only scenarios that failed in the previous run
+    - `--list` / `--list-groups` — discover available scenarios and groups without running anything
+    - `--enable-install-scenario` / `--enable-batch-scenario` — opt into heavier install/batch tests
+    - `--force-rebuild-bundle` — force local Maven + runtime bundle rebuild (skip cached artifacts)
+    - `--force-remote-bundle` — download a pre-built bundle from remote releases instead of building locally
 - `.github/workflows/ci.yml` builds with `all-main-modules`, starts the Dockerized app on port `8182`, runs `cargo test` in `cli/browser4-cli`, and keeps the main Maven test pass limited to fast/unit-style tags by excluding `Slow`, `Heavy`, `Integration`, `E2E`, `SDK`, `Requires*`, and `ManualOnly`.
 
 ### Test Location
@@ -269,18 +223,6 @@ Default: 8182
 - `application-*.properties` — Profile-specific overrides
 - `application-private.properties` — Private overrides (ignored by Git), secrets should be set here or via environment variables
 
-**Runtime Bundle (fat JAR alternative):**
-```
-bundle/
-  bin/start.sh        # -cp "lib/*:plugins/*"
-  bin/start.bat       # -cp "lib/*;plugins/*"
-  lib/                # core + Maven dependency JARs
-  plugins/            # drop-in directory for optional plugin JARs
-  runtime/            # bundled JRE (jlink)
-```
-To add optional plugins (e.g. CAPTCHA), drop their JARs into `plugins/` —
-no rebuild required. See [Optional/Pluggable Modules](#optionalpluggable-modules).
-
 ### Key Configuration Properties
 ```properties
 # LLM API Key
@@ -291,19 +233,6 @@ browser.profile.mode=DEFAULT  # DEFAULT | SYSTEM_DEFAULT | SEQUENTIAL | TEMPORAR
 
 # Display mode
 browser.display.mode=GUI  # GUI | HEADLESS | SUPERVISED
-
-# ---- CAPTCHA (optional, requires browser4-captcha.jar on classpath) ----
-captcha.auto.solve.enabled=true
-captcha.service.provider=CAPSOLVER  # CAPSOLVER | TWO_CAPTCHA | ANTI_CAPTCHA
-# captcha.capsolver.api.key=${CAPSOLVER_KEY}
-# captcha.twocaptcha.api.key=${TWOCAPTCHA_KEY}
-# captcha.anticaptcha.api.key=${ANTICAPTCHA_KEY}
-captcha.solve.timeout.seconds=120
-captcha.poll.interval.ms=1000
-captcha.detection.enabled=true
-captcha.auto.solve.types=RECAPTCHA_V2,HCAPTCHA,TURNSTILE
-captcha.report.failed.enabled=true
-captcha.solve.max.retries=3
 ```
 
 ## Development Principles
@@ -339,6 +268,7 @@ captcha.solve.max.retries=3
 
 - [Configuration Guide](docs/config.md)
 - [Testing Taxonomy](docs/TESTING.md)
+- [Test Strategy](docs/test-strategy.md)
 - [Browser4 CLI Skill Guide](skill/SKILL.md)
 - [ARIA Snapshots](docs/aria-snapshots.md)
 
@@ -430,7 +360,7 @@ All `.ps1` and `.sh` scripts under `bin/tests-production/` and `bin/test-product
 3. Reuse existing backend tools when possible; if a new browser capability is required, add an `@MCP` method in `WebDriver.kt`, implement it in the concrete driver, and only add an explicit `BrowserTabToolExecutor` case when parameter mapping is non-trivial
 4. Update `cli/browser4-cli/src/main.rs` only when the command needs custom dispatch, dynamic tool-name selection, stale-session recovery, inclusion in `no_snapshot_commands()` for read-only behavior, or custom batch handling in `compile_batch_request()`
 5. Update `skill/SKILL.md` for user-facing command documentation; CLI help is generated from `CommandDef`, so avoid hand-editing help infrastructure
-6. Cover the change with the smallest relevant tests: `cli/browser4-cli/src/commands.rs` unit tests, `browser4-rest` controller mapping tests, `cli/browser4-cli/tests/e2e/mod.rs`, and `browser4-tests/browser4-rest-tests/.../MCPToolControllerE2ETest.kt` when the command changes the end-to-end flow
+6. Cover the change with the smallest relevant tests: `cli/browser4-cli/src/commands.rs` unit tests, `browser4-rest` controller mapping tests, `cli/browser4-cli/tests/e2e.rs`, and `browser4-tests/browser4-rest-tests/.../MCPToolControllerE2ETest.kt` when the command changes the end-to-end flow
 7. Watch the common failure points: missing backend alias, omitted `sessionId` in custom handlers, forgetting `no_snapshot_commands()` for read-only commands, forgetting `batch_supported`/`compile_batch_request()` for batch-safe DOM commands, mismatched element-ref parameter names, broken `activeSelector` / `lastMousePosition` persistence in `cli/browser4-cli/src/state.rs`, and snake_case/camelCase argument normalization
 
 **REST-based commands** (like `swarm-submit`, `crawl`) follow a different pattern from MCP tools:
@@ -588,4 +518,4 @@ Before submitting changes, verify:
 
 ---
 
-*Last updated: 2026-06-25*
+*Last updated: 2026-05-17*

@@ -1180,7 +1180,7 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
                             setOf("selector", "functionDeclaration"),
                             functionName
                         )
-                        driver.evaluateValue(
+                        driver.evaluateValueDetail(
                             paramString(normalizedArgs, "selector", functionName)!!,
                             paramString(normalizedArgs, "functionDeclaration", functionName)!!
                         )
@@ -1188,7 +1188,7 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
 
                     normalizedArgs.containsKey("expression") -> {
                         validateArgs(normalizedArgs, allowed("expression"), setOf("expression"), functionName)
-                        driver.evaluateValue(paramString(normalizedArgs, "expression", functionName)!!)
+                        driver.evaluateValueDetail(paramString(normalizedArgs, "expression", functionName)!!)
                     }
 
                     else -> throw IllegalArgumentException(evaluationValueUsage(functionName))

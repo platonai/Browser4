@@ -1537,7 +1537,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         // ---- Server Admin ----
         CommandDef {
             name: "upgrade",
-            description: "Upgrade Browser4 to the latest version (or a specified release tag)",
+            description: "Upgrade browser4-cli and the Browser4 runtime to the latest version (or a specified release tag). Uses npm when available, otherwise the platform install script",
             category: Category::Install,
             hidden: false,
             batch_supported: false,

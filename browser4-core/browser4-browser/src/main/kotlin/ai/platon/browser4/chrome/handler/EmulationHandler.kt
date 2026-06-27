@@ -386,7 +386,7 @@ class Mouse(private val bp: BrowserProtocol) {
             currentY = vp.clientHeight / 2.0
             cdpMoveTo(currentX, currentY)
         }
-        bp.dispatchMouseWheel(x, y, deltaX, deltaY)
+        bp.dispatchMouseWheel(currentX, currentY, deltaX, deltaY)
     }
 
     /**

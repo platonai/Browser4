@@ -16,7 +16,12 @@ data class JsEvaluation(
     var unserializableValue: String? = null,
     var className: String? = null,
     var description: String? = null,
-    var exception: JsException? = null
+    var exception: JsException? = null,
+    /** CDP RemoteObject.type — distinguishes JS null (type="object", subtype="null") from
+     * JS undefined (type="undefined").  See https://chromedevtools.github.io/devtools-protocol/tot/Runtime/#type-RemoteObject */
+    var cdpType: String? = null,
+    /** CDP RemoteObject.subtype — "null", "array", "node", etc. */
+    var cdpSubtype: String? = null
 )
 
 /**

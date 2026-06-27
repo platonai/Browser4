@@ -119,7 +119,9 @@ internal class WebDriverHelper(
                 value = result.value,
                 unserializableValue = result.unserializableValue,
                 className = result.className,
-                description = result.description
+                description = result.description,
+                cdpType = result.type?.name?.lowercase(),
+                cdpSubtype = result.subtype?.name?.lowercase()
             )
         }
     }
@@ -143,7 +145,9 @@ internal class WebDriverHelper(
                 value = result.value,
                 unserializableValue = result.unserializableValue,
                 className = result.className,
-                description = result.description
+                description = result.description,
+                cdpType = result.type?.name?.lowercase(),
+                cdpSubtype = result.subtype?.name?.lowercase()
             )
         }
     }

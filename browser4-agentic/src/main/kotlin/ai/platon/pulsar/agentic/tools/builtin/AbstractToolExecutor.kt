@@ -3,6 +3,7 @@ package ai.platon.pulsar.agentic.tools.builtin
 import ai.platon.pulsar.agentic.model.TcEvaluate
 import ai.platon.pulsar.agentic.model.ToolCall
 import ai.platon.pulsar.agentic.model.ToolSpec
+import ai.platon.pulsar.browser.common.JsEvaluation
 import ai.platon.pulsar.common.brief
 import ai.platon.pulsar.common.getLogger
 import kotlin.reflect.KClass
@@ -52,8 +53,21 @@ abstract class AbstractToolExecutor : ToolExecutor {
         return try {
             val r = callFunctionOn(domain, functionName, args, receiver)
 
-            val className = if (r == null) "null" else r::class.qualifiedName
-            val value = if (r == Unit) null else r
+            val (value, className) = when {
+                r is JsEvaluation -> {
+                    val c = when {
+                        r.cdpType == "undefined" -> "undefined"
+                        r.cdpType == "object" && r.cdpSubtype == "null" -> "null"
+                        !r.className.isNullOrBlank() -> r.className
+                        r.value != null -> r.value!!::class.qualifiedName
+                        else -> "null"
+                    }
+                    r.value to c
+                }
+                r == null -> null to "null"
+                r == Unit -> null to null
+                else -> r to r::class.qualifiedName
+            }
             TcEvaluate(value = value, className = className, expression = pseudoExpression)
         } catch (e: Exception) {
             logger.warn("Error executing expression: {} - {}", pseudoExpression, e.brief())

@@ -5542,12 +5542,186 @@ fn format_upgrade_output(runtime: &InstalledBrowser4Runtime, force: bool) -> Vec
     ]
 }
 
+/// Check whether `npm` is available on PATH.
+fn is_npm_available() -> bool {
+    std::process::Command::new("npm")
+        .arg("--version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+/// Upgrade the `browser4-cli` binary itself.
+///
+/// Strategy:
+/// 1. If `npm` is on PATH, use `npm install -g browser4-cli` (fast, atomic, handles running binary).
+/// 2. Otherwise, use the platform-specific install script from the README.
+///    - Windows: PowerShell with `irm … | iex`
+///    - Linux / macOS: `curl … | bash`
+///
+/// On Unix the running binary can be safely replaced in-place (the old inode
+/// stays alive until this process exits).  On Windows the install script may
+/// fail with a "file locked" error when the binary is running; the error is
+/// surfaced and the runtime upgrade proceeds regardless.
+///
+/// All failures are non-fatal — a warning is printed and the runtime upgrade continues.
+async fn upgrade_cli_binary(tag: Option<&str>) {
+    // ── 1. npm (preferred) ──
+    if is_npm_available() {
+        eprintln!("Upgrading browser4-cli binary via npm...");
+
+        let package_spec = match tag {
+            Some(t) => {
+                // Strip a leading 'v' so that `--tag v4.11.0` maps to `browser4-cli@4.11.0`.
+                let version = t.strip_prefix('v').unwrap_or(t);
+                format!("browser4-cli@{}", version)
+            }
+            None => "browser4-cli".to_string(),
+        };
+
+        let result = tokio::task::spawn_blocking(move || {
+            std::process::Command::new("npm")
+                .args(["install", "-g", &package_spec])
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .output()
+        })
+        .await;
+
+        match result {
+            Ok(Ok(output)) if output.status.success() => {
+                cli_println!("✅ browser4-cli upgraded via npm.");
+                return;
+            }
+            Ok(Ok(output)) => {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                eprintln!("⚠  npm upgrade failed: {}", stderr.trim());
+                eprintln!("   Falling back to install script...");
+            }
+            Ok(Err(e)) => {
+                eprintln!("⚠  npm command failed: {e}");
+                eprintln!("   Falling back to install script...");
+            }
+            Err(e) => {
+                eprintln!("⚠  npm spawn failed: {e}");
+                eprintln!("   Falling back to install script...");
+            }
+        }
+    }
+
+    // ── 2. Platform-specific install script (fallback) ──
+    eprintln!("Upgrading browser4-cli via install script...");
+
+    #[cfg(windows)]
+    {
+        let result = tokio::task::spawn_blocking(|| {
+            std::process::Command::new("powershell.exe")
+                .args([
+                    "-NoProfile",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-Command",
+                    "irm https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.ps1 | iex",
+                ])
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .output()
+        })
+        .await;
+
+        match result {
+            Ok(Ok(output)) if output.status.success() => {
+                cli_println!("✅ browser4-cli upgraded via install script.");
+            }
+            Ok(Ok(output)) => {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                let combined = if stderr.is_empty() {
+                    String::from_utf8_lossy(&output.stdout).trim().to_string()
+                } else {
+                    stderr.trim().to_string()
+                };
+                eprintln!("⚠  Install script failed: {combined}");
+                if combined.to_lowercase().contains("access")
+                    || combined.to_lowercase().contains("denied")
+                    || combined.to_lowercase().contains("locked")
+                {
+                    eprintln!("   The binary may be locked because browser4-cli is running.");
+                    eprintln!("   Close all browser4-cli processes and run 'browser4-cli upgrade' again,");
+                    eprintln!("   or install the latest version manually from https://browser4.io.");
+                }
+                eprintln!("   The runtime upgrade will still proceed.");
+            }
+            Ok(Err(e)) => {
+                eprintln!("⚠  Failed to run install script: {e}");
+                eprintln!("   The runtime upgrade will still proceed.");
+            }
+            Err(e) => {
+                eprintln!("⚠  Failed to spawn PowerShell: {e}");
+                eprintln!("   The runtime upgrade will still proceed.");
+            }
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let result = tokio::task::spawn_blocking(|| {
+            std::process::Command::new("sh")
+                .args([
+                    "-c",
+                    "curl -fsSL https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.sh | bash",
+                ])
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .output()
+        })
+        .await;
+
+        match result {
+            Ok(Ok(output)) if output.status.success() => {
+                cli_println!("✅ browser4-cli upgraded via install script.");
+            }
+            Ok(Ok(output)) => {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                let combined = if stderr.is_empty() {
+                    String::from_utf8_lossy(&output.stdout).trim().to_string()
+                } else {
+                    stderr.trim().to_string()
+                };
+                eprintln!("⚠  Install script failed: {combined}");
+                eprintln!("   The runtime upgrade will still proceed.");
+            }
+            Ok(Err(e)) => {
+                // Missing curl / bash / sh on a minimal system
+                let msg = format!("{e}");
+                if msg.to_lowercase().contains("not found") {
+                    eprintln!("⚠  Cannot run install script: curl and bash are required.");
+                    eprintln!("   Install npm first, or run the install script manually.");
+                } else {
+                    eprintln!("⚠  Failed to run install script: {e}");
+                }
+                eprintln!("   The runtime upgrade will still proceed.");
+            }
+            Err(e) => {
+                eprintln!("⚠  Failed to spawn shell: {e}");
+                eprintln!("   The runtime upgrade will still proceed.");
+            }
+        }
+    }
+}
+
 async fn handle_upgrade(tool_params: &Value) -> Result<(), String> {
     let tag = tool_params.get("tag").and_then(|value| value.as_str());
     let force = tool_params
         .get("force")
         .and_then(|value| value.as_bool())
         .unwrap_or(false);
+
+    // ── 1. Upgrade the CLI binary itself ──
+    // This is non-fatal: if it fails we still attempt the runtime upgrade.
+    upgrade_cli_binary(tag).await;
+
+    // ── 2. Upgrade the runtime ──
 
     // Snapshot the currently-installed tag *before* the upgrade so we can
     // detect the "same version re-downloaded via latest" case.
