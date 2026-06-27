@@ -137,7 +137,6 @@ open class PulsarWebDriver constructor(
     @Volatile
     var lastError: ChromeDriverException? = null
 
-    var userTypedUrl: String? = null
     var navigateUrl: String? = chromeTab.url
     private var credentials: Credentials? = null
 
@@ -191,7 +190,7 @@ open class PulsarWebDriver constructor(
 
     @Throws(WebDriverException::class)
     override suspend fun navigate(entry: NavigateEntry) {
-        userTypedUrl = entry.url
+        navigateUrl = entry.userTypedUrl
 
         navigateHistory.add(entry)
         this.navigateEntry = entry
@@ -387,7 +386,7 @@ open class PulsarWebDriver constructor(
     }
 
     override suspend fun currentUrl(): String {
-        return evaluate("document.URL", navigateUrl ?: userTypedUrl ?: "")
+        return evaluate("document.URL", navigateUrl ?: "")
     }
 
     @Throws(WebDriverException::class)
@@ -1640,7 +1639,7 @@ open class PulsarWebDriver constructor(
                 logger.debug(
                     "Injected Browser4 runtime into Isolated World (context: {}) | {}",
                     contextId,
-                    StringUtils.abbreviateMiddle(userTypedUrl, "...", 200)
+                    StringUtils.abbreviateMiddle(navigateUrl, "...", 200)
                 )
                 val evaluate = browserProtocol.evaluate("typeof(__pulsar_utils__)", contextId = contextId)
                 if (evaluate.result.value != "function") {
