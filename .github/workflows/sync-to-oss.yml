@@ -155,7 +155,8 @@ jobs:
               -e "$OSS_ENDPOINT" \
               --region "$OSS_REGION" \
               --acl public-read \
-              --retry-times 3; then
+              --retry-times 3 \
+              --force; then
               echo "  https://${OSS_BUCKET}.${OSS_ENDPOINT}/scripts/${script}"
             else
               echo "::error::Failed to upload ${script} to scripts/"
@@ -289,7 +290,8 @@ jobs:
             -e "$OSS_ENDPOINT" \
             --region "$OSS_REGION" \
             --acl public-read \
-            --retry-times 3
+            --retry-times 3 \
+            --force
 
           echo "📋 Release metadata published to OSS"
 
