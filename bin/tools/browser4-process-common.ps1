@@ -55,8 +55,15 @@ function Get-Browser4ChromeProcesses {
 }
 
 function Get-PulsarChromeProcesses {
-    Get-CimInstance Win32_Process -Filter "Name = 'chrome.exe' -or Name = 'chromium.exe' -or Name = 'msedge.exe'" -ErrorAction SilentlyContinue | Where-Object {
-        -not [string]::IsNullOrWhiteSpace($_.CommandLine) -and $_.CommandLine -match 'PULSAR_CHROME'
+    # IMPORTANT: Get-CimInstance -Filter uses WQL syntax — operators are
+    # OR / AND / NOT (no dashes).  PowerShell-style -or / -and / -not are
+    # silently accepted but ALWAYS return zero results.
+    Get-CimInstance Win32_Process -Filter "Name = 'chrome.exe' OR Name = 'chromium.exe' OR Name = 'msedge.exe'" -ErrorAction SilentlyContinue | Where-Object {
+        -not [string]::IsNullOrWhiteSpace($_.CommandLine) -and (
+            $_.CommandLine -match 'PULSAR_CHROME' -or
+            $_.CommandLine -match 'browser4[\\/]browser[\\/]chrome' -or
+            $_.CommandLine -match 'browser4-apps'
+        )
     }
 }
 

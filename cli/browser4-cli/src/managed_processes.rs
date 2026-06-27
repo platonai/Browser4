@@ -214,12 +214,33 @@ pub fn stop_browser4_server_gracefully() -> ShutdownResult {
 pub fn stop_browser4_server_forcibly() -> ForceStopBrowser4ServerResult {
     let registry_path = managed_server_registry_path(None);
     let state_dir = resolve_default_state_dir();
-    let result = stop_browser4_server_forcibly_with_steps(
+    let mut result = stop_browser4_server_forcibly_with_steps(
         || notify_close_all_sessions_before_force_stop(Some(&registry_path), Some(&state_dir)),
         kill_all_browsers,
         || stop_browser4_server_with_fallback_force_kill(),
         || sleep(std::time::Duration::from_secs(5)),
     );
+
+    // Final verification: catch processes that respawned or were slow to
+    // materialise during the grace period.  Any stragglers are killed and
+    // folded into the result.
+    let mut final_extra = find_unique_pulsar_browser_processes();
+    #[cfg(windows)]
+    {
+        // On Windows also run the exhaustive per-PID sweep to catch
+        // processes the primary CIM filter skipped.
+        final_extra.extend(find_browser4_chrome_processes_exhaustive());
+        final_extra.sort_unstable();
+        final_extra.dedup();
+    }
+    if !final_extra.is_empty() {
+        bulk_force_stop_browser_processes(&final_extra);
+        std::thread::sleep(std::time::Duration::from_millis(2000));
+        result.browser_kill.killed_pids.extend(final_extra.iter().copied());
+        result.browser_kill.killed_pids.sort_unstable();
+        result.browser_kill.killed_pids.dedup();
+    }
+    result.browser_kill.remaining_pids = find_unique_pulsar_browser_processes();
 
     result
 }
@@ -303,7 +324,7 @@ where
 
     // Post-sweep catches browsers that spawn late during shutdown.
     eprintln!("  [4/5] Scanning for remaining browser processes (post-sweep) ...");
-    let post_browser_kill = std::panic::catch_unwind(std::panic::AssertUnwindSafe(kill_browsers))
+    let post_browser_kill = std::panic::catch_unwind(std::panic::AssertUnwindSafe(&kill_browsers))
         .unwrap_or_else(|_| BrowserKillResult::default());
     eprintln!(
         "        Found {} browser process(es), killed {}",
@@ -438,14 +459,16 @@ pub fn kill_all_browsers() -> BrowserKillResult {
     loop {
         let pids = find_unique_pulsar_browser_processes();
         if pids.is_empty() {
-            // println!("No more Browser4 Chrome processes found.");
             break;
         }
 
         result.killed_pids.extend(pids.iter().copied());
-        for pid in &pids {
-            force_stop_browser_process(*pid);
-        }
+
+        // Bulk-kill: on Windows, pass all PIDs to taskkill in a single
+        // invocation so process-tree teardown is atomic (avoids orphans
+        // that a staggered per-PID approach can leave behind).
+        bulk_force_stop_browser_processes(&pids);
+
         for pid in &pids {
             let _ = wait_for_exit(*pid, WAIT_AFTER_KILL_MS, 100);
         }
@@ -459,14 +482,86 @@ pub fn kill_all_browsers() -> BrowserKillResult {
 
     result.killed_pids.sort_unstable();
     result.killed_pids.dedup();
+
+    // Final exhaustive sweep to catch any stragglers.
     result.remaining_pids = find_unique_pulsar_browser_processes();
 
+    // If anything is left, try one more aggressive sweep + kill cycle.
+    if !result.remaining_pids.is_empty() {
+        #[cfg(windows)]
+        {
+            // Exhaustive per-PID WMI query — catches processes the primary
+            // CIM filter skipped due to null CommandLine.
+            let stragglers = find_browser4_chrome_processes_exhaustive();
+            if !stragglers.is_empty() {
+                bulk_force_stop_browser_processes(&stragglers);
+                for pid in &stragglers {
+                    let _ = wait_for_exit(*pid, 2_000, 100);
+                }
+                result.killed_pids.extend(stragglers);
+                result.killed_pids.sort_unstable();
+                result.killed_pids.dedup();
+                result.remaining_pids = find_unique_pulsar_browser_processes();
+            }
+        }
+    }
+
     result
+}
+
+/// Kill multiple browser processes in a single bulk operation.
+/// On Windows, uses `taskkill /F /PID ...` with all PIDs so the
+/// process trees are torn down together, reducing orphan risk.
+fn bulk_force_stop_browser_processes(pids: &[u32]) {
+    if pids.is_empty() {
+        return;
+    }
+
+    #[cfg(unix)]
+    {
+        for pid in pids {
+            force_stop(*pid);
+        }
+    }
+
+    #[cfg(windows)]
+    {
+        let mut args: Vec<String> = vec!["/F".to_string()];
+        for pid in pids {
+            args.push("/PID".to_string());
+            args.push(pid.to_string());
+        }
+        args.push("/T".to_string());
+
+        let bulk_succeeded = std::process::Command::new("taskkill")
+            .args(&args)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+
+        if !bulk_succeeded {
+            // Fall back to individual kills for any that the bulk call missed.
+            for pid in pids {
+                force_stop_browser_process(*pid);
+            }
+        }
+    }
 }
 
 fn find_unique_pulsar_browser_processes() -> Vec<u32> {
     let mut pids = find_pulsar_browser_processes();
     pids.extend(find_browser_processes_from_markers());
+
+    #[cfg(windows)]
+    {
+        // Exhaustive fallback: Get-Process + per-PID WMI queries.  Catches
+        // renderer / GPU / utility children that the primary CIM filter
+        // bypassed because CommandLine was null there but available here.
+        pids.extend(find_browser4_chrome_processes_exhaustive());
+    }
+
     pids.sort_unstable();
     pids.dedup();
     pids
@@ -708,11 +803,24 @@ fn find_pulsar_browser_processes() -> Vec<u32> {
     #[cfg(windows)]
     {
         use std::process::Command;
+        // IMPORTANT: Get-CimInstance -Filter uses WQL syntax — operators are
+        // OR / AND / NOT (no dashes).  PowerShell-style -or / -and / -not
+        // are silently accepted but ALWAYS return zero results.
+        //
+        // Match Browser4-managed Chrome/Chromium/Edge processes by:
+        //   - PULSAR_CHROME environment marker (set by the Browser4 launcher)
+        //   - Command-line paths containing "browser4" (catches renderer, GPU,
+        //     and utility subprocesses that inherit the user-data-dir but not
+        //     the PULSAR_CHROME variable).
         let ps_command = r#"
-            Get-CimInstance Win32_Process -Filter "Name = 'chrome.exe' -or Name = 'chromium.exe' -or Name = 'msedge.exe'" -ErrorAction SilentlyContinue |
+            Get-CimInstance Win32_Process -Filter "Name = 'chrome.exe' OR Name = 'chromium.exe' OR Name = 'msedge.exe'" -ErrorAction SilentlyContinue |
                 Where-Object {
                     -not [string]::IsNullOrWhiteSpace($_.CommandLine) -and
-                    $_.CommandLine -match 'PULSAR_CHROME'
+                    (
+                        $_.CommandLine -match 'PULSAR_CHROME' -or
+                        $_.CommandLine -match 'browser4[\\/]browser[\\/]chrome' -or
+                        $_.CommandLine -match 'browser4-apps'
+                    )
                 } |
                 Select-Object -ExpandProperty ProcessId
         "#;
@@ -724,6 +832,45 @@ fn find_pulsar_browser_processes() -> Vec<u32> {
         }
     }
 
+    pids
+}
+
+/// Exhaustive fallback sweep: use `Get-Process` to enumerate every
+/// chrome/chromium/msedge process, then query each PID individually for its
+/// command line.  This avoids the `Get-CimInstance -Filter` path where
+/// `CommandLine` can be null for some processes on Windows.
+///
+/// Combined with the broader path matching (browser4 in user-data-dir), this
+/// catches renderer / GPU / utility children that the primary sweep missed.
+#[cfg(windows)]
+fn find_browser4_chrome_processes_exhaustive() -> Vec<u32> {
+    use std::process::Command;
+
+    let ps_command = r#"
+        $pids = Get-Process -Name chrome, chromium, msedge -ErrorAction SilentlyContinue |
+                Select-Object -ExpandProperty Id
+        foreach ($pid in $pids) {
+            $cmd = (Get-CimInstance Win32_Process -Filter "ProcessId = $pid" -ErrorAction SilentlyContinue).CommandLine
+            if ($cmd -and (
+                $cmd -match 'PULSAR_CHROME' -or
+                $cmd -match 'browser4[\\/]browser[\\/]chrome' -or
+                $cmd -match 'browser4-apps'
+            )) {
+                $pid
+            }
+        }
+    "#;
+
+    let mut pids: Vec<u32> = match Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", ps_command])
+        .output()
+    {
+        Ok(out) => parse_pid_list(&out.stdout),
+        Err(_) => Vec::new(),
+    };
+
+    pids.sort_unstable();
+    pids.dedup();
     pids
 }
 
@@ -1275,5 +1422,124 @@ mod tests {
         merge_shutdown_with_fallback_server_kill(&mut shutdown, &fallback);
 
         assert_eq!(shutdown.remaining_pids, vec![5001, 5003]);
+    }
+
+    // -----------------------------------------------------------------------
+    // Tests for bulk_force_stop_browser_processes
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_bulk_force_stop_empty_vec_is_noop() {
+        // Must not panic and must not spawn any subprocess that errors.
+        bulk_force_stop_browser_processes(&[]);
+    }
+
+    #[test]
+    fn test_bulk_force_stop_with_pids_does_not_panic() {
+        // Use a PID that almost certainly doesn't exist so taskkill fails
+        // gracefully (the function swallows both success and failure).
+        let pids = vec![9999999];
+        bulk_force_stop_browser_processes(&pids);
+    }
+
+    // -----------------------------------------------------------------------
+    // Tests for browser-process detection
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_find_unique_returns_vec_not_panics() {
+        // Smoke test: must return a Vec<u32> without panicking, even when
+        // Browser4 Chrome processes happen to be running on the machine.
+        let pids = find_unique_pulsar_browser_processes();
+        // Just verify the type — we can't assert emptiness because real
+        // PULSAR_CHROME processes may be present.
+        let _: Vec<u32> = pids;
+    }
+
+    #[test]
+    fn test_find_pulsar_browser_processes_returns_vec_not_panics() {
+        let pids = find_pulsar_browser_processes();
+        // Verifies it runs without error.  May return PIDs when real
+        // Browser4 Chrome processes are present — that's expected.
+        let _: Vec<u32> = pids;
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn test_find_browser4_chrome_exhaustive_returns_vec_not_panics() {
+        // Smoke test: must return a Vec<u32> without panicking.
+        let pids = find_browser4_chrome_processes_exhaustive();
+        let _: Vec<u32> = pids; // real PULSAR_CHROME processes may be present
+    }
+
+    /// Helper: verify a PowerShell command string is syntactically valid by
+    /// asking PowerShell to parse it into a script block.
+    ///
+    /// NOTE: this only checks PowerShell syntax, not WQL correctness.
+    /// `Get-CimInstance -Filter` uses WQL operators (OR / AND / NOT, no
+    /// dashes); PowerShell-style -or / -and / -not silently return 0 rows.
+    #[cfg(windows)]
+    fn assert_powershell_syntax_valid(label: &str, command: &str) {
+        use std::process::Command;
+        // Escape single quotes in the command so we can wrap it in ''
+        let escaped = command.replace('\'', "''");
+        // [ScriptBlock]::Create('...') throws a parse error for invalid syntax.
+        let wrapper = format!(
+            "$null = [ScriptBlock]::Create('{escaped}')",
+        );
+        let output = Command::new("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-Command", &wrapper])
+            .output()
+            .expect("Failed to spawn PowerShell for syntax check");
+        assert!(
+            output.status.success(),
+            "PowerShell {label} command has syntax errors:\n{stderr}",
+            stderr = String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn test_powershell_pulsar_detection_command_is_syntactically_valid() {
+        let ps_command = r#"
+            Get-CimInstance Win32_Process -Filter "Name = 'chrome.exe' OR Name = 'chromium.exe' OR Name = 'msedge.exe'" -ErrorAction SilentlyContinue |
+                Where-Object {
+                    -not [string]::IsNullOrWhiteSpace($_.CommandLine) -and
+                    (
+                        $_.CommandLine -match 'PULSAR_CHROME' -or
+                        $_.CommandLine -match 'browser4[\\/]browser[\\/]chrome' -or
+                        $_.CommandLine -match 'browser4-apps'
+                    )
+                } |
+                Select-Object -ExpandProperty ProcessId
+        "#;
+        assert_powershell_syntax_valid("pulsar-detection", ps_command);
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn test_powershell_exhaustive_detection_command_is_syntactically_valid() {
+        let ps_command = r#"
+            $pids = Get-Process -Name chrome, chromium, msedge -ErrorAction SilentlyContinue |
+                    Select-Object -ExpandProperty Id
+            foreach ($pid in $pids) {
+                $cmd = (Get-CimInstance Win32_Process -Filter "ProcessId = $pid" -ErrorAction SilentlyContinue).CommandLine
+                if ($cmd -and (
+                    $cmd -match 'PULSAR_CHROME' -or
+                    $cmd -match 'browser4[\\/]browser[\\/]chrome' -or
+                    $cmd -match 'browser4-apps'
+                )) {
+                    $pid
+                }
+            }
+        "#;
+        assert_powershell_syntax_valid("exhaustive-detection", ps_command);
+    }
+
+    #[test]
+    fn test_browser_kill_result_default_is_empty() {
+        let result = BrowserKillResult::default();
+        assert!(result.killed_pids.is_empty());
+        assert!(result.remaining_pids.is_empty());
     }
 }
