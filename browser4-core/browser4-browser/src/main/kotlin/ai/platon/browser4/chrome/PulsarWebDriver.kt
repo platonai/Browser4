@@ -392,9 +392,6 @@ open class PulsarWebDriver constructor(
 
     @Throws(WebDriverException::class)
     override suspend fun exists(selector: String): Boolean {
-//        return rpc.predicateOnPage("exists") {
-//            page.exists(selector)
-//        }
         return page.exists(selector)
     }
 

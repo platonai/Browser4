@@ -110,16 +110,16 @@ class PageHandler constructor(
     /**
      * Fetches the ARIA snapshot with filtering [options] applied.
      *
-     * Supports viewport filtering, CSS selector scoping ([AriaSnapshotOptions.selector]),
+     * Supports viewport filtering, CSS locator scoping ([AriaSnapshotOptions.selector]),
      * interactive-only mode, URL inclusion, compact mode, and depth limiting.
      *
      * @param options The filtering and rendering options.
      * @return The ARIA snapshot YAML with options applied.
      */
     suspend fun ariaSnapshot(options: AriaSnapshotOptions): String {
-        // Resolve --selector to a backendNodeId if provided
-        val rootBackendNodeId = options.selector?.let { selector ->
-            dom.queryLocator(selector)?.let { node ->
+        // Resolve --locator to a backendNodeId if provided
+        val rootBackendNodeId = options.selector?.let { locator ->
+            dom.queryLocator(locator)?.let { node ->
                 node.backendNodeId.takeIf { it > 0 }
             }
         }
@@ -171,15 +171,15 @@ class PageHandler constructor(
     }
 
     /**
-     * Gets a specific attribute value for the element matching the selector.
+     * Gets a specific attribute value for the element matching the locator.
      *
      * @param locator The element locator, multiple formats are supported.
      * @param attrName Attribute name to retrieve
      * @return Attribute value or null if not found
      */
     @Throws(ChromeDriverException::class)
-    suspend fun getAttribute(selector: String, attrName: String) =
-        invokeOnElement(selector) { getAttribute(it, attrName) }
+    suspend fun getAttribute(locator: String, attrName: String) =
+        invokeOnElement(locator) { getAttribute(it, attrName) }
 
     @Throws(ChromeDriverException::class)
     suspend fun getAttribute(node: NodeRef, attrName: String): String? {
@@ -199,7 +199,7 @@ class PageHandler constructor(
     }
 
     /**
-     * Checks if the element matching the selector is visible.
+     * Checks if the element matching the locator is visible.
      *
      * @param locator The element locator, multiple formats are supported.
      * @return true if visible, false otherwise
@@ -236,8 +236,8 @@ class PageHandler constructor(
     }
 
     @Throws(ChromeDriverException::class)
-    suspend fun isChecked(selector: String): Boolean {
-        return predicateOnElement(selector) { isChecked(it) }
+    suspend fun isChecked(locator: String): Boolean {
+        return predicateOnElement(locator) { isChecked(it) }
     }
 
     @Throws(ChromeDriverException::class)
@@ -259,17 +259,17 @@ class PageHandler constructor(
     }
 
     /**
-     * This method fetches an element with `selector` and focuses it. If there's no
-     * element matching `selector`, the method returns 0.
+     * This method fetches an element with `locator` and focuses it. If there's no
+     * element matching `locator`, the method returns 0.
      *
-     * Supports two selector formats:
-     * 1. CSS selector: "input#username"
+     * Supports two locator formats:
+     * 1. CSS locator: "input#username"
      * 2. Backend node ID: "backend:123"
      *
-     * @param locator - A CSS selector or "backend:nodeId" format of an element to focus.
-     * If there are multiple elements satisfying the selector, the first will be focused.
-     * @returns NodeId which resolves when the element matching selector is
-     * successfully focused. Returns 0 if there is no element matching selector.
+     * @param locator - A CSS locator or "backend:nodeId" format of an element to focus.
+     * If there are multiple elements satisfying the locator, the first will be focused.
+     * @returns NodeId which resolves when the element matching locator is
+     * successfully focused. Returns 0 if there is no element matching locator.
      */
     @Throws(ChromeDriverException::class)
     suspend fun focusOnSelector(locator: String): NodeRef? {
@@ -284,7 +284,7 @@ class PageHandler constructor(
     /**
      * Scrolls the element into view if needed.
      *
-     * @param locator CSS selector or "backend:nodeId" format
+     * @param locator CSS locator or "backend:nodeId" format
      * @param rect Optional rectangle to scroll into view
      * @return nodeId of the element, or null if not found
      */
@@ -327,7 +327,7 @@ class PageHandler constructor(
      * When omitted, center of the node will be used, similar to Element.scrollIntoView.
      */
     @Throws(ChromeDriverException::class)
-    suspend fun scrollIntoViewIfNeeded(nodeRef: NodeRef, selector: String? = null, rect: Rect? = null): NodeRef? {
+    suspend fun scrollIntoViewIfNeeded(nodeRef: NodeRef, locator: String? = null, rect: Rect? = null): NodeRef? {
         val node = if (isActive) browserProtocol.describeNode(
             nodeRef.nodeId,
             nodeRef.backendNodeId,
@@ -336,7 +336,7 @@ class PageHandler constructor(
             false
         ) else null
         if (node?.nodeType != ELEMENT_NODE) {
-            logger.info("Node is not of type HTMLElement | {}", selector ?: node)
+            logger.info("Node is not of type HTMLElement | {}", locator ?: node)
             return null
         }
 
@@ -352,10 +352,10 @@ class PageHandler constructor(
                 }
             }
         } catch (_: ChromeRPCException) {
-            // As a last resort, attempt legacy JS utility when a CSS selector is available
+            // As a last resort, attempt legacy JS utility when a CSS locator is available
             // TODO: check if it is necessary to fallback to use JavaScript to scrollIntoView
-            if (!selector.isNullOrBlank()) {
-                val safeSelector = dom.normalizeSelector(selector, true) ?: selector
+            if (!locator.isNullOrBlank()) {
+                val safeSelector = dom.normalizeSelector(locator, true) ?: locator
                 js.evaluate("__pulsar_utils__.scrollIntoView($safeSelector)")
             }
             nodeRef
@@ -371,7 +371,7 @@ class PageHandler constructor(
     private suspend fun trySmoothScroll(nodeRef: NodeRef): Boolean {
         return try {
             withNodeObjectId(browserProtocol, nodeRef) { objectId ->
-                // Execute on the element itself to avoid selector issues; center for stability
+                // Execute on the element itself to avoid locator issues; center for stability
                 val functionDeclaration = """
                     function() {
                         try {
