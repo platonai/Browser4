@@ -1,11 +1,10 @@
 package ai.platon.pulsar.rest.api.service
 
 import ai.platon.pulsar.agentic.context.AgenticContexts
-import ai.platon.pulsar.common.PulsarSessionManager
 import ai.platon.pulsar.common.ResourceStatus
 import ai.platon.pulsar.dom.FeaturedDocument
 import ai.platon.pulsar.persist.WebPage
-import ai.platon.pulsar.persist.metadata.ProtocolStatusCodes
+import ai.platon.pulsar.rest.session.PulsarSessionManager
 import ai.platon.pulsar.skeleton.PulsarSettings
 import ai.platon.pulsar.skeleton.common.options.LoadOptions
 import ai.platon.pulsar.skeleton.session.PulsarSession
@@ -14,10 +13,8 @@ import jakarta.annotation.PreDestroy
 import kotlinx.coroutines.*
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Service
-import java.time.Instant
 import java.util.*
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.TimeUnit
 
 data class CrawlRequest(
     val url: String = "",
@@ -147,12 +144,14 @@ class CrawlService(
             // Submit each out-link as a ParsableHyperlink so we can collect results
             outLinks.forEach { linkUrl ->
                 val hyperlink = ParsableHyperlink("$linkUrl -parse") { _page: WebPage, _document: FeaturedDocument ->
-                    results.add(CrawlPageResult(
-                        url = linkUrl,
-                        title = _document.title,
-                        contentLength = _page.contentLength,
-                        depth = 1
-                    ))
+                    results.add(
+                        CrawlPageResult(
+                            url = linkUrl,
+                            title = _document.title,
+                            contentLength = _page.contentLength,
+                            depth = 1
+                        )
+                    )
                 }
                 session.submit(hyperlink)
             }
@@ -195,12 +194,14 @@ class CrawlService(
                 val currentDepth = extractDepth(page) ?: 1
 
                 // Record this page
-                results.add(CrawlPageResult(
-                    url = pageUrl,
-                    title = document.title,
-                    contentLength = page.contentLength,
-                    depth = currentDepth
-                ))
+                results.add(
+                    CrawlPageResult(
+                        url = pageUrl,
+                        title = document.title,
+                        contentLength = page.contentLength,
+                        depth = currentDepth
+                    )
+                )
                 visited.add(normalizeForVisit(pageUrl))
 
                 logger.debug("Crawl {}: depth={} page={}", taskId, currentDepth, pageUrl)
@@ -225,7 +226,12 @@ class CrawlService(
                                 val hyperlink = ParsableHyperlink("$link $args", parseHandler)
                                 session.submit(hyperlink)
                             }
-                            logger.debug("Crawl {}: submitted {} links at depth {}", taskId, newLinks.size, currentDepth + 1)
+                            logger.debug(
+                                "Crawl {}: submitted {} links at depth {}",
+                                taskId,
+                                newLinks.size,
+                                currentDepth + 1
+                            )
                         }
                     }
                 }

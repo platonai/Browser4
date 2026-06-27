@@ -1,9 +1,9 @@
 package ai.platon.pulsar.rest.api.controller
 
-import ai.platon.pulsar.common.PulsarSessionManager
 import ai.platon.pulsar.rest.api.service.CrawlRequest
 import ai.platon.pulsar.rest.api.service.CrawlResponse
 import ai.platon.pulsar.rest.api.service.CrawlService
+import ai.platon.pulsar.rest.session.PulsarSessionManager
 import org.slf4j.LoggerFactory
 import org.springframework.http.HttpStatus
 import org.springframework.http.MediaType
