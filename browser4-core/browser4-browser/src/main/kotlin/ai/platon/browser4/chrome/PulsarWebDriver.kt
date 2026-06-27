@@ -51,7 +51,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.withContext
 import org.apache.commons.lang3.StringUtils
-import org.apache.commons.lang3.SystemUtils
 import java.nio.file.Files
 import java.time.Duration
 import java.time.Instant
@@ -64,6 +63,29 @@ open class PulsarWebDriver constructor(
     val browserProtocol: BrowserProtocol,
     override val browser: PulsarBrowser
 ) : AbstractWebDriver(uniqueID, browser) {
+    companion object {
+        private val jsonMapper: ObjectMapper = jacksonObjectMapper()
+        private val nonNullJsonMapper: ObjectMapper = jacksonObjectMapper()
+            .setDefaultPropertyInclusion(JsonInclude.Include.NON_NULL)
+
+        // -----------------------------------------------------------------------
+        // Injected JavaScript — extracted from inline string literals for
+        // testability, syntax highlighting, and to eliminate Kotlin ${'$'} escaping.
+        // -----------------------------------------------------------------------
+
+        /** Used by [selectOption] to manipulate <select> elements via CDP callFunctionOn. */
+        val SELECT_OPTION_JS = """function(jsonValues){const values=JSON.parse(jsonValues);const element=this;if(!element||element.tagName!=='SELECT'){throw new Error('Element is not a <select> element');}const optionsToSelect=new Set(values);const selectedValues=[];let hasChanged=false;if(!element.multiple){for(let i=0;i<element.options.length;i++){const option=element.options[i];if(optionsToSelect.has(option.value)||optionsToSelect.has(option.label)||optionsToSelect.has(option.text)){if(!option.selected){option.selected=true;hasChanged=true;}selectedValues.push(option.value);break;}}}else{for(let i=0;i<element.options.length;i++){const option=element.options[i];const shouldSelect=optionsToSelect.has(option.value)||optionsToSelect.has(option.label)||optionsToSelect.has(option.text);if(shouldSelect!=option.selected){option.selected=shouldSelect;hasChanged=true;}if(shouldSelect){selectedValues.push(option.value);}}}if(hasChanged){element.dispatchEvent(new Event('input',{bubbles:true}));element.dispatchEvent(new Event('change',{bubbles:true}));}return selectedValues;}"""
+
+        /** Used by [generateLocator] to build a unique CSS selector for an element. */
+        val GENERATE_LOCATOR_JS = """element=>{if(!element||element.nodeType!==1)return null;function cssEscape(v){if(typeof CSS!=='undefined'&&CSS.escape)return CSS.escape(v);return v.replace(/[!"#$%&'()*+,./:;<=>?@[\]^`{|}~]/g,'\\$&');}function segmentFor(el){var tag=el.tagName.toLowerCase();if(el.id)return '#'+cssEscape(el.id);if(el.classList&&el.classList.length>0){var classes=Array.from(el.classList).filter(function(c){return!/[A-Z]/.test(c)&&!/^[a-z]+-[a-z0-9]{6,}$/.test(c)&&c.indexOf('_')===-1&&c.length>1;});if(classes.length>0)return tag+'.'+classes.map(cssEscape).join('.');}if(el.parentNode){var siblings=Array.from(el.parentNode.children);var sameTag=siblings.filter(function(s){return s.tagName===el.tagName;});if(sameTag.length>1){return tag+':nth-of-type('+(sameTag.indexOf(el)+1)+')';}}return tag;}var parts=[];var cur=element;while(cur&&cur.nodeType===1){parts.unshift(segmentFor(cur));if(cur.id)break;if(cur.tagName.toLowerCase()==='body')break;cur=cur.parentNode;}return parts.join(' > ');}"""
+
+        /** Used by [selectFirstTextOrNull] to walk a DOM subtree collecting text. */
+        val SELECT_FIRST_TEXT_JS = """function(){try{const el=this;const excluded=new Set(['SCRIPT','STYLE','NOSCRIPT','TEMPLATE']);let text='';const walker=document.createTreeWalker(el,NodeFilter.SHOW_TEXT,{acceptNode(node){const p=node.parentNode;return p&&!excluded.has(p.nodeName)?NodeFilter.FILTER_ACCEPT:NodeFilter.FILTER_REJECT;}});let n;while((n=walker.nextNode())){text+=n.nodeValue;}return text;}catch(e){return null;}}"""
+
+        /** Used by [trySubmitFormOnEnter] as a safety net for CDP-dispatched Enter key. */
+        val TRY_SUBMIT_FORM_ON_ENTER_JS = """(()=>{const el=document.activeElement;if(!el)return false;const tag=el.tagName;if(tag==='TEXTAREA')return false;if(tag!=='INPUT'&&tag!=='SELECT')return false;if(tag==='INPUT'){const t=(el.type||'text').toLowerCase();if(t==='radio'||t==='checkbox'||t==='file'||t==='button'||t==='reset'||t==='submit'||t==='image'||t==='hidden'){return false;}}const form=el.closest('form');if(!form)return false;if(typeof form.requestSubmit==='function'){try{form.requestSubmit();return true;}catch(e){}}form.submit();return true;})()"""
+    }
+
     private data class StorageStatePayload(
         val cookies: List<Map<String, Any?>> = emptyList(),
         val origins: List<StorageStateOriginPayload> = emptyList(),
@@ -119,9 +141,21 @@ open class PulsarWebDriver constructor(
     var navigateUrl: String? = chromeTab.url
     private var credentials: Credentials? = null
 
+    /** Cached pre-compiled regex patterns for [probabilisticBlockedURLs] to avoid recompilation on every network request. */
+    @Volatile
+    private var cachedProbabilisticBlockedRegexes: List<Regex>? = null
+
     val isNetworkIdle get() = networkManager.isIdle
 
     var fingerprintApplier: ((WebDriver) -> Unit)? = null
+
+    /**
+     * Shared helper: suppress ChromeIOException when the tab is already closed (normal operational state).
+     * Re-throws if the tab is still open — the exception then indicates a real problem.
+     */
+    private fun propagateIfOpen(e: ChromeIOException) {
+        if (e.isOpen && browserProtocol.isOpen) throw e
+    }
 
     /**
      * Expose the underlying implementation, used for diagnosis purpose
@@ -239,7 +273,7 @@ open class PulsarWebDriver constructor(
     }
 
     override suspend fun saveStorageState(): String {
-        val mapper = jacksonObjectMapper().setDefaultPropertyInclusion(JsonInclude.Include.NON_NULL)
+        val mapper = nonNullJsonMapper
         val cookies = getCookies().map { toStorageStateCookie(it) }
         val origins = listOfNotNull(captureCurrentOriginLocalStorage())
         return mapper.writerWithDefaultPrettyPrinter().writeValueAsString(
@@ -251,7 +285,7 @@ open class PulsarWebDriver constructor(
     }
 
     override suspend fun loadStorageState(state: String): String {
-        val mapper = jacksonObjectMapper().setDefaultPropertyInclusion(JsonInclude.Include.NON_NULL)
+        val mapper = nonNullJsonMapper
         val payload = mapper.readValue<StorageStatePayload>(state)
         val cookies = payload.cookies.map(::normalizeCookieForSet)
         if (cookies.isNotEmpty()) {
@@ -348,50 +382,7 @@ open class PulsarWebDriver constructor(
 
     @Throws(WebDriverException::class)
     override suspend fun generateLocator(selector: String): String? {
-        val jsFunction = """
-            element => {
-                if (!element || element.nodeType !== 1) return null;
-
-                function cssEscape(v) {
-                    if (typeof CSS !== 'undefined' && CSS.escape) return CSS.escape(v);
-                    return v.replace(/[!"#${'$'}%&'()*+,./:;<=>?@[\]^`{|}~]/g, '\\${'$'}&');
-                }
-
-                function segmentFor(el) {
-                    var tag = el.tagName.toLowerCase();
-                    if (el.id) return '#' + cssEscape(el.id);
-                    if (el.classList && el.classList.length > 0) {
-                        var classes = Array.from(el.classList).filter(function(c) {
-                            return !/[A-Z]/.test(c) &&
-                                   !/^[a-z]+-[a-z0-9]{6,}${'$'}/.test(c) &&
-                                   c.indexOf('_') === -1 &&
-                                   c.length > 1;
-                        });
-                        if (classes.length > 0) return tag + '.' + classes.map(cssEscape).join('.');
-                    }
-                    if (el.parentNode) {
-                        var siblings = Array.from(el.parentNode.children);
-                        var sameTag = siblings.filter(function(s) { return s.tagName === el.tagName; });
-                        if (sameTag.length > 1) {
-                            return tag + ':nth-of-type(' + (sameTag.indexOf(el) + 1) + ')';
-                        }
-                    }
-                    return tag;
-                }
-
-                var parts = [];
-                var cur = element;
-                while (cur && cur.nodeType === 1) {
-                    parts.unshift(segmentFor(cur));
-                    if (cur.id) break;
-                    if (cur.tagName.toLowerCase() === 'body') break;
-                    cur = cur.parentNode;
-                }
-                return parts.join(' > ');
-            }
-        """.trimIndent()
-
-        val result = evaluateValue(selector, jsFunction)
+        val result = evaluateValue(selector, GENERATE_LOCATOR_JS)
         return result?.toString()?.takeIf { it.isNotEmpty() && it != "null" }
     }
 
@@ -421,6 +412,7 @@ open class PulsarWebDriver constructor(
         }
     }
 
+    @Suppress("unused") // Retained as an experimental alternative to AbstractWebDriver.waitForNavigation
     @Throws(WebDriverException::class)
     private suspend fun waitForNavigationExperimental(oldUrl: String, timeout: Duration): Duration {
         val startTime = Instant.now()
@@ -523,11 +515,7 @@ open class PulsarWebDriver constructor(
         } catch (e: ChromeDriverException) {
             rpc.interceptChromeException(e, "mouseWheelDown")
         } catch (e: ChromeIOException) {
-            if (!e.isOpen || !browserProtocol.isOpen) {
-                // Tab closed — normal operational state, no need to propagate
-            } else {
-                throw e
-            }
+            propagateIfOpen(e)
         }
     }
 
@@ -553,11 +541,7 @@ open class PulsarWebDriver constructor(
         } catch (e: ChromeDriverException) {
             rpc.interceptChromeException(e, "mouseWheelUp")
         } catch (e: ChromeIOException) {
-            if (!e.isOpen || !browserProtocol.isOpen) {
-                // Tab closed — normal operational state, no need to propagate
-            } else {
-                throw e
-            }
+            propagateIfOpen(e)
         }
     }
 
@@ -581,11 +565,7 @@ open class PulsarWebDriver constructor(
         } catch (e: ChromeDriverException) {
             rpc.interceptChromeException(e, "mouseWheel")
         } catch (e: ChromeIOException) {
-            if (!e.isOpen || !browserProtocol.isOpen) {
-                // Tab closed — normal operational state
-            } else {
-                throw e
-            }
+            propagateIfOpen(e)
         }
     }
 
@@ -695,65 +675,12 @@ open class PulsarWebDriver constructor(
 
     @Throws(WebDriverException::class)
     override suspend fun selectOption(selector: String, values: List<String>): List<String> {
-        val mapper = jacksonObjectMapper()
-        val jsonValues = mapper.writeValueAsString(values)
-
-        val functionDeclaration = """
-            function(jsonValues) {
-                const values = JSON.parse(jsonValues);
-                const element = this;
-                if (!element || element.tagName !== 'SELECT') {
-                    throw new Error('Element is not a <select> element');
-                }
-
-                const optionsToSelect = new Set(values);
-                const selectedValues = [];
-                let hasChanged = false;
-
-                // Handle single select: only select the first match
-                if (!element.multiple) {
-                    for (let i = 0; i < element.options.length; i++) {
-                        const option = element.options[i];
-                        if (optionsToSelect.has(option.value) || optionsToSelect.has(option.label) || optionsToSelect.has(option.text)) {
-                            if (!option.selected) {
-                                option.selected = true;
-                                hasChanged = true;
-                            }
-                            selectedValues.push(option.value);
-                            break;
-                        }
-                    }
-                } else {
-                    // Handle multiple select
-                    // Deselect all, then select specified ones.
-                    for (let i = 0; i < element.options.length; i++) {
-                        const option = element.options[i];
-                        const shouldSelect = optionsToSelect.has(option.value) || optionsToSelect.has(option.label) || optionsToSelect.has(option.text);
-
-                        if (shouldSelect != option.selected) {
-                            option.selected = shouldSelect;
-                            hasChanged = true;
-                        }
-
-                        if (shouldSelect) {
-                            selectedValues.push(option.value);
-                        }
-                    }
-                }
-
-                if (hasChanged) {
-                    element.dispatchEvent(new Event('input', { bubbles: true }));
-                    element.dispatchEvent(new Event('change', { bubbles: true }));
-                }
-
-                return selectedValues;
-            }
-        """.trimIndent()
+        val jsonValues = jsonMapper.writeValueAsString(values)
 
         val result = rpc.invokeOnElement(selector, "selectOption") { node ->
             withNodeObjectId(browserProtocol, node) { objectId ->
                 val res = browserProtocol.callFunctionOn(
-                    functionDeclaration,
+                    SELECT_OPTION_JS,
                     objectId = objectId,
                     arguments = listOf(CallArgument(value = jsonValues)),
                     returnByValue = true
@@ -961,56 +888,38 @@ open class PulsarWebDriver constructor(
     private suspend fun trySubmitFormOnEnter() {
         runCatching {
             browserProtocol.evaluate(
-                expression = """
-                    (() => {
-                        const el = document.activeElement;
-                        if (!el) return false;
-                        const tag = el.tagName;
-                        if (tag === 'TEXTAREA') return false;
-                        if (tag !== 'INPUT' && tag !== 'SELECT') return false;
-                        if (tag === 'INPUT') {
-                            const t = (el.type || 'text').toLowerCase();
-                            if (t === 'radio' || t === 'checkbox' || t === 'file' ||
-                                t === 'button' || t === 'reset' || t === 'submit' ||
-                                t === 'image' || t === 'hidden') {
-                                return false;
-                            }
-                        }
-                        const form = el.closest('form');
-                        if (!form) return false;
-                        if (typeof form.requestSubmit === 'function') {
-                            try { form.requestSubmit(); return true; } catch (e) {}
-                        }
-                        form.submit();
-                        return true;
-                    })()
-                """.trimIndent(),
+                expression = TRY_SUBMIT_FORM_ON_ENTER_JS,
                 returnByValue = true,
             )
+        }.onFailure {
+            logger.debug("Safety-net form submission after Enter key failed: {}", it.brief())
         }
     }
 
+    /**
+     * Dispatches a `keydown` event via DOM API (JavaScript dispatchEvent).
+     *
+     * NOTE: CDP `Input.dispatchKeyEvent` (used by [keyboard?.down]) is unreliable for
+     * keydown/keyup on some platforms — the events may not reach page listeners.
+     * We use DOM event dispatch instead, which produces `isTrusted: false` events but
+     * reliably triggers page-side handlers. Tracked as TODO: revisit once CDP key event
+     * reliability is addressed upstream.
+     */
     @Throws(WebDriverException::class)
     override suspend fun keyDown(key: String) {
         rpc.invokeOnPage("keyDown") {
-            if (alwaysTrue() || SystemUtils.IS_OS_WINDOWS) {
-                // TODO: keydown 事件不太可靠，先用 DOM 事件模拟，后续优化
-                dispatchDomKeyboardEvent("keydown", key)
-            } else {
-                keyboard?.down(key)
-            }
+            dispatchDomKeyboardEvent("keydown", key)
         }
     }
 
+    /**
+     * Dispatches a `keyup` event via DOM API (JavaScript dispatchEvent).
+     * See [keyDown] for rationale on using DOM events instead of CDP.
+     */
     @Throws(WebDriverException::class)
     override suspend fun keyUp(key: String) {
         rpc.invokeOnPage("keyUp") {
-            if (alwaysTrue() || SystemUtils.IS_OS_WINDOWS) {
-                // TODO: keyup 事件不太可靠，先用 DOM 事件模拟，后续优化
-                dispatchDomKeyboardEvent("keyup", key)
-            } else {
-                keyboard?.up(key)
-            }
+            dispatchDomKeyboardEvent("keyup", key)
         }
     }
 
@@ -1112,37 +1021,9 @@ open class PulsarWebDriver constructor(
             when {
                 node.isNull() -> null
                 else -> {
-                    val functionDeclaration = """
-function() {
-  try {
-    const el = this;
-    const excluded = new Set(['SCRIPT','STYLE','NOSCRIPT','TEMPLATE']);
-    let text = '';
-    const walker = document.createTreeWalker(
-      el,
-      NodeFilter.SHOW_TEXT,
-      {
-        acceptNode(node) {
-          const p = node.parentNode;
-          return p && !excluded.has(p.nodeName)
-            ? NodeFilter.FILTER_ACCEPT
-            : NodeFilter.FILTER_REJECT;
-        }
-      }
-    );
-    let n;
-    while ((n = walker.nextNode())) {
-      text += n.nodeValue;
-    }
-    return text;
-  } catch (e) {
-    return null;
-  }
-}
-                    """.trimIndent()
                     withNodeObjectId(browserProtocol, node) { objectId ->
                         val remoteObject = browserProtocol.callFunctionOn(
-                            functionDeclaration, objectId = objectId, returnByValue = true
+                            SELECT_FIRST_TEXT_JS, objectId = objectId, returnByValue = true
                         )
                         // TODO: performance issue for large text (memory copy)
                         remoteObject.result.value?.toString()
@@ -1156,13 +1037,13 @@ function() {
     override suspend fun selectTextAll(selector: String): List<String> {
         val safeSelector = page.dom.normalizeSelector(selector, true) ?: selector
         val json = evaluate("__pulsar_utils__.selectTextAll('$safeSelector')")?.toString() ?: "[]"
-        return jacksonObjectMapper().readValue(json)
+        return jsonMapper.readValue(json)
     }
 
     override suspend fun selectAttributes(selector: String): Map<String, String> {
         val safeSelector = page.dom.normalizeSelector(selector, true) ?: selector
         val json = evaluate("__pulsar_utils__.selectAttributes('$safeSelector')")?.toString() ?: return mapOf()
-        val attributes: List<String> = jacksonObjectMapper().readValue(json)
+        val attributes: List<String> = jsonMapper.readValue(json)
         return attributes.zipWithNext().associate { it }
     }
 
@@ -1170,26 +1051,26 @@ function() {
     override suspend fun selectAttributeAll(selector: String, attrName: String, start: Int, limit: Int): List<String> {
         val end = start + limit
         val safeSelector = page.dom.normalizeSelector(selector, true) ?: selector
-        val encodedAttrName = jacksonObjectMapper().writeValueAsString(attrName)
+        val encodedAttrName = jsonMapper.writeValueAsString(attrName)
 
         val expression = "__pulsar_utils__.selectAttributeAll('$safeSelector', $encodedAttrName, $start, $end)"
         val json = evaluate(expression)?.toString() ?: return listOf()
-        return jacksonObjectMapper().readValue(json)
+        return jsonMapper.readValue(json)
     }
 
     @Throws(WebDriverException::class)
     override suspend fun setAttribute(selector: String, attrName: String, attrValue: String) {
         val safeSelector = page.dom.normalizeSelector(selector, true) ?: selector
-        val encodedName = jacksonObjectMapper().writeValueAsString(attrName)
-        val encodedValue = jacksonObjectMapper().writeValueAsString(attrValue)
+        val encodedName = jsonMapper.writeValueAsString(attrName)
+        val encodedValue = jsonMapper.writeValueAsString(attrValue)
         evaluate("__pulsar_utils__.setAttribute('$safeSelector', $encodedName, $encodedValue)")
     }
 
     @Throws(WebDriverException::class)
     override suspend fun setAttributeAll(selector: String, attrName: String, attrValue: String) {
         val safeSelector = page.dom.normalizeSelector(selector, true) ?: selector
-        val encodedName = jacksonObjectMapper().writeValueAsString(attrName)
-        val encodedValue = jacksonObjectMapper().writeValueAsString(attrValue)
+        val encodedName = jsonMapper.writeValueAsString(attrName)
+        val encodedValue = jsonMapper.writeValueAsString(attrValue)
         evaluate("__pulsar_utils__.setAttributeAll('$safeSelector', $encodedName, $encodedValue)")
     }
 
@@ -1197,7 +1078,7 @@ function() {
     @Throws(WebDriverException::class)
     override suspend fun selectFirstPropertyValueOrNull(selector: String, propName: String): String? {
         val safeSelector = page.dom.normalizeSelector(selector, true) ?: selector
-        val encodedPropName = jacksonObjectMapper().writeValueAsString(propName)
+        val encodedPropName = jsonMapper.writeValueAsString(propName)
         return evaluateValue("__pulsar_utils__.selectFirstPropertyValue('$safeSelector', $encodedPropName)")?.toString()
     }
 
@@ -1207,40 +1088,40 @@ function() {
     ): List<String> {
         val end = start + limit
         val safeSelector = page.dom.normalizeSelector(selector, true) ?: selector
-        val encodedPropName = jacksonObjectMapper().writeValueAsString(propName)
+        val encodedPropName = jsonMapper.writeValueAsString(propName)
         val expression = "__pulsar_utils__.selectPropertyValueAll('$safeSelector', $encodedPropName, $start, $end)"
         val json = evaluate(expression)?.toString() ?: return listOf()
-        return jacksonObjectMapper().readValue(json)
+        return jsonMapper.readValue(json)
     }
 
     @Throws(WebDriverException::class)
     override suspend fun setProperty(selector: String, propName: String, propValue: String) {
         val safeSelector = page.dom.normalizeSelector(selector, true) ?: selector
-        val encodedName = jacksonObjectMapper().writeValueAsString(propName)
-        val encodedValue = jacksonObjectMapper().writeValueAsString(propValue)
+        val encodedName = jsonMapper.writeValueAsString(propName)
+        val encodedValue = jsonMapper.writeValueAsString(propValue)
         evaluate("__pulsar_utils__.setProperty('$safeSelector', $encodedName, $encodedValue)")
     }
 
     @Throws(WebDriverException::class)
     override suspend fun setPropertyAll(selector: String, propName: String, propValue: String) {
         val safeSelector = page.dom.normalizeSelector(selector, true) ?: selector
-        val encodedName = jacksonObjectMapper().writeValueAsString(propName)
-        val encodedValue = jacksonObjectMapper().writeValueAsString(propValue)
+        val encodedName = jsonMapper.writeValueAsString(propName)
+        val encodedValue = jsonMapper.writeValueAsString(propValue)
         evaluate("__pulsar_utils__.setPropertyAll('$safeSelector', $encodedName, $encodedValue)")
     }
 
     @Throws(WebDriverException::class)
     override suspend fun clickTextMatches(selector: String, pattern: String, count: Int) {
         val safeSelector = page.dom.normalizeSelector(selector, true) ?: selector
-        val encodedPattern = jacksonObjectMapper().writeValueAsString(pattern)
+        val encodedPattern = jsonMapper.writeValueAsString(pattern)
         evaluate("__pulsar_utils__.clickTextMatches('$safeSelector', $encodedPattern)")
     }
 
     @Throws(WebDriverException::class)
     override suspend fun clickMatches(selector: String, attrName: String, pattern: String, count: Int) {
         val safeSelector = page.dom.normalizeSelector(selector, true) ?: selector
-        val encodedAttrName = jacksonObjectMapper().writeValueAsString(attrName)
-        val encodedPattern = jacksonObjectMapper().writeValueAsString(pattern)
+        val encodedAttrName = jsonMapper.writeValueAsString(attrName)
+        val encodedPattern = jsonMapper.writeValueAsString(pattern)
         evaluate("__pulsar_utils__.clickMatches('$safeSelector', $encodedAttrName, $encodedPattern)")
     }
 
@@ -1582,7 +1463,16 @@ function() {
         }
 
         if (resourceBlockProbability > 1e-6) {
-            if (probabilisticBlockedURLs.any { url.matches(it.toRegex()) }) {
+            // Pre-compile regex patterns once per call; the underlying list rarely changes.
+            val regexes = cachedProbabilisticBlockedRegexes
+            val patterns = if (regexes != null && regexes.size == probabilisticBlockedURLs.size) {
+                regexes
+            } else {
+                probabilisticBlockedURLs.map { it.toRegex() }.also {
+                    cachedProbabilisticBlockedRegexes = it
+                }
+            }
+            if (patterns.any { url.matches(it) }) {
                 return Random.nextInt(100) / 100.0f < resourceBlockProbability
             }
         }
@@ -1868,7 +1758,7 @@ function() {
     }
 
     private fun serialize(cookie: Cookie): Map<String, String> {
-        val mapper = jacksonObjectMapper().setDefaultPropertyInclusion(JsonInclude.Include.NON_NULL)
+        val mapper = nonNullJsonMapper
         return mapper.readValue(mapper.writeValueAsString(cookie))
     }
 
@@ -1969,7 +1859,7 @@ function() {
     }
 
     private suspend fun dispatchDomKeyboardEvent(type: String, key: String) {
-        val safeKey = jacksonObjectMapper().writeValueAsString(key)
+        val safeKey = jsonMapper.writeValueAsString(key)
         evaluate(
             """
                 (() => {
