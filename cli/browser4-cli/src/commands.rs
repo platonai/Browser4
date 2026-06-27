@@ -1799,7 +1799,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "parse", description: "Parse page immediately after fetching", is_bool: true, short: None },
                 OptionDef { name: "store-content", description: "Persist page content to storage", is_bool: true, short: None },
             ],
-            tool_name_fn: |_| "command_run".to_string(),
+            tool_name_fn: |_| "swarm_submit".to_string(),
             tool_params_fn: |args| {
                 let mut p = json!({});
                 if let Some(v) = get_opt_str(args, "url") { p["url"] = json!(v); }
@@ -1847,7 +1847,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: false,
             args: &[ArgDef { name: "id", description: "Task ID returned by swarm submit", optional: false }],
             options: &[],
-            tool_name_fn: |_| "command_status".to_string(),
+            tool_name_fn: |_| "swarm_status".to_string(),
             tool_params_fn: |args| {
                 json!({ "id": get_str(args, "id").unwrap_or_default() })
             },
@@ -1860,7 +1860,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: false,
             args: &[ArgDef { name: "id", description: "Task ID returned by swarm submit", optional: false }],
             options: &[],
-            tool_name_fn: |_| "command_result".to_string(),
+            tool_name_fn: |_| "swarm_result".to_string(),
             tool_params_fn: |args| {
                 json!({ "id": get_str(args, "id").unwrap_or_default() })
             },
@@ -1892,7 +1892,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "no-norm", description: "Disable URL normalization", is_bool: true, short: None },
                 OptionDef { name: "readonly", description: "Non-destructive mode (no page modifications)", is_bool: true, short: None },
             ],
-            tool_name_fn: |_| String::new(),
+            tool_name_fn: |_| "crawl_submit".to_string(),
             tool_params_fn: |args| {
                 let mut p = json!({});
                 if let Some(v) = get_opt_str(args, "url") { p["url"] = json!(v); }
@@ -2572,7 +2572,7 @@ mod tests {
             json!("https://www.amazon.com/dp/B08PP5MSVB"),
         );
         args.insert("deadline".to_string(), json!("2026-02-24T23:59:59Z"));
-        assert_eq!((cmd.tool_name_fn)(&args), "command_run");
+        assert_eq!((cmd.tool_name_fn)(&args), "swarm_submit");
         let params = (cmd.tool_params_fn)(&args);
         assert_eq!(params["url"], "https://www.amazon.com/dp/B08PP5MSVB");
         assert_eq!(params["deadline"], "2026-02-24T23:59:59Z");
@@ -2611,7 +2611,7 @@ mod tests {
         let cmd = map.get("swarm-status").unwrap();
         let mut args = HashMap::new();
         args.insert("id".to_string(), json!("abc-123"));
-        assert_eq!((cmd.tool_name_fn)(&args), "command_status");
+        assert_eq!((cmd.tool_name_fn)(&args), "swarm_status");
         let params = (cmd.tool_params_fn)(&args);
         assert_eq!(params["id"], "abc-123");
     }
@@ -2622,7 +2622,7 @@ mod tests {
         let cmd = map.get("swarm-result").unwrap();
         let mut args = HashMap::new();
         args.insert("id".to_string(), json!("abc-123"));
-        assert_eq!((cmd.tool_name_fn)(&args), "command_result");
+        assert_eq!((cmd.tool_name_fn)(&args), "swarm_result");
     }
 
     #[test]
@@ -3688,11 +3688,11 @@ mod tests {
     }
 
     #[test]
-    fn test_crawl_tool_name_empty() {
+    fn test_crawl_tool_name() {
         let map = commands_map();
         let cmd = map.get("crawl").unwrap();
         let args = HashMap::new();
-        assert_eq!((cmd.tool_name_fn)(&args), "");
+        assert_eq!((cmd.tool_name_fn)(&args), "crawl_submit");
     }
 
     #[test]

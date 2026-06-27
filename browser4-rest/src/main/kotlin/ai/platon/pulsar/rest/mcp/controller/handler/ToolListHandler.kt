@@ -59,6 +59,15 @@ class ToolListHandler(
                     "dom_snapshot_query",
                     "dom_snapshot_export",
                     "dom_snapshot_summary",
+                    // Swarm tools
+                    "swarm_submit",
+                    "swarm_query",
+                    "swarm_status",
+                    "swarm_result",
+                    // Crawl tools
+                    "crawl_submit",
+                    "crawl_status",
+                    "crawl_result",
                 )
             )
 

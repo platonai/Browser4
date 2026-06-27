@@ -2,13 +2,17 @@ package ai.platon.pulsar.rest.mcp.controller
 
 import ai.platon.pulsar.agent.tool.UserCommandExecutor
 import ai.platon.pulsar.common.brief
+import ai.platon.pulsar.rest.api.service.CrawlService
 import ai.platon.pulsar.rest.api.service.ScrapeService
+import ai.platon.pulsar.rest.api.service.SwarmService
 import ai.platon.pulsar.rest.mcp.controller.dto.MCPContent
 import ai.platon.pulsar.rest.mcp.controller.dto.MCPToolCallRequest
 import ai.platon.pulsar.rest.mcp.controller.dto.MCPToolCallResponse
 import ai.platon.pulsar.rest.mcp.controller.handler.CommandHandler
+import ai.platon.pulsar.rest.mcp.controller.handler.CrawlMcpHandler
 import ai.platon.pulsar.rest.mcp.controller.handler.DomSnapshotHandler
 import ai.platon.pulsar.rest.mcp.controller.handler.SessionManagementHandler
+import ai.platon.pulsar.rest.mcp.controller.handler.SwarmMcpHandler
 import ai.platon.pulsar.rest.mcp.controller.handler.ToolListHandler
 import ai.platon.pulsar.rest.session.PulsarSessionManager
 import ai.platon.pulsar.skeleton.workflow.parse.html.PageSummaryIndexService
@@ -39,6 +43,8 @@ class MCPToolController(
     private val commandExecutor: UserCommandExecutor,
     private val scrapeService: ScrapeService? = null,
     private val objectMapper: ObjectMapper,
+    private val swarmService: SwarmService? = null,
+    private val crawlService: CrawlService? = null,
 ) {
     private val logger = LoggerFactory.getLogger(MCPToolController::class.java)
 
@@ -46,6 +52,8 @@ class MCPToolController(
     private val sessionHandler = SessionManagementHandler(sessionManager)
     private val commandHandler = CommandHandler(sessionManager, commandExecutor, objectMapper)
     private val domSnapshotHandler = DomSnapshotHandler(sessionManager, scrapeService, objectMapper)
+    private val swarmMcpHandler = swarmService?.let { SwarmMcpHandler(it, objectMapper) }
+    private val crawlMcpHandler = crawlService?.let { CrawlMcpHandler(it, objectMapper) }
     private val toolListHandler = ToolListHandler(sessionManager)
 
     // =========================================================================
@@ -82,6 +90,15 @@ class MCPToolController(
                 "dom_snapshot_query" -> domSnapshotHandler.handleDomSnapshotQuery(request)
                 "dom_snapshot_export" -> domSnapshotHandler.handleDomSnapshotExport(request)
                 "dom_snapshot_summary" -> domSnapshotHandler.handleDomSnapshotSummary(request)
+                // Swarm tools
+                "swarm_submit" -> requireHandler(swarmMcpHandler).handleSwarmSubmit(request)
+                "swarm_query" -> requireHandler(swarmMcpHandler).handleSwarmQuery(request)
+                "swarm_status" -> requireHandler(swarmMcpHandler).handleSwarmStatus(request)
+                "swarm_result" -> requireHandler(swarmMcpHandler).handleSwarmResult(request)
+                // Crawl tools
+                "crawl_submit" -> requireHandler(crawlMcpHandler).handleCrawlSubmit(request)
+                "crawl_status" -> requireHandler(crawlMcpHandler).handleCrawlStatus(request)
+                "crawl_result" -> requireHandler(crawlMcpHandler).handleCrawlResult(request)
                 // All other tools are dispatched to the session's agent
                 else -> dispatchToAgentToolExecutor(request)
             }
@@ -190,6 +207,10 @@ class MCPToolController(
     private fun requireSessionId(arguments: Map<String, Any?>): String {
         return arguments[MCPConstants.KEY_SESSION_ID]?.toString()
             ?: throw IllegalArgumentException("Missing required parameter: ${MCPConstants.KEY_SESSION_ID}")
+    }
+
+    private fun <T> requireHandler(handler: T?): T {
+        return handler ?: throw IllegalStateException("Handler is not available. Check service dependencies.")
     }
 
     private fun textResponse(text: String): MCPToolCallResponse =

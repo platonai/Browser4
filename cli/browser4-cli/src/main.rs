@@ -49,10 +49,9 @@ use daemon::{
 };
 use help::{generate_command_help, generate_help, generate_help_entry, public_command_name};
 use http::{
-    call_tool, crawl_request_timeout, get_command_result, get_command_status, get_crawl_result,
-    get_swarm_result, get_swarm_status, is_stale_session_error, make_client,
-    submit_batch_commands, submit_crawl, submit_plain_command, submit_swarm_payload,
-    submit_swarm_query,
+    call_tool, crawl_request_timeout, get_command_result, get_command_status,
+    is_stale_session_error, make_client,
+    submit_batch_commands, submit_plain_command,
 };
 use managed_processes::{
     read_managed_server_processes, stop_browser4_server_forcibly, ManagedServerProcess,
@@ -4044,29 +4043,29 @@ async fn handle_swarm_submit(
     }
     let opts_str = load_opts.join(" ");
 
-    // Submit each URL through the appropriate REST API.
+    // Submit each URL through the MCP interface.
     let mut json_submissions: Vec<serde_json::Value> = Vec::new();
     for u in &urls {
         let (result, method) = if let Some(ref q) = query {
-            // X-SQL query mode: send structured JSON to /api/swarm/query
+            // X-SQL query mode: send via MCP swarm_query
             let payload = json!({
                 "url": u,
                 "args": opts_str,
                 "query": q,
             });
             (
-                submit_swarm_query(client, base_url, payload).await?,
+                call_tool(client, base_url, "swarm_query", payload).await?,
                 "query",
             )
         } else {
-            // Plain scrape mode: send URL with options to /api/swarm/submit
+            // Plain scrape mode: send URL with options via MCP swarm_submit
             let command = if opts_str.is_empty() {
                 u.clone()
             } else {
                 format!("{} {}", u, opts_str)
             };
             (
-                submit_swarm_payload(client, base_url, &command).await?,
+                call_tool(client, base_url, "swarm_submit", json!({ "payload": command })).await?,
                 "submit",
             )
         };
@@ -4160,7 +4159,7 @@ async fn handle_swarm_query(
     }
     let opts_str = load_opts.join(" ");
 
-    // Submit each URL via /api/swarm/query
+    // Submit each URL via MCP swarm_query
     let mut json_submissions: Vec<serde_json::Value> = Vec::new();
     let q = query.expect("query was validated above");
     for u in &urls {
@@ -4169,7 +4168,7 @@ async fn handle_swarm_query(
             "args": opts_str,
             "query": q,
         });
-        let result = submit_swarm_query(client, base_url, payload).await?;
+        let result = call_tool(client, base_url, "swarm_query", payload).await?;
         let task_id = result.trim().trim_matches('"').to_string();
         cli_println!("Query Submitted: {} -> Task ID: {}", u, task_id);
         json_submissions.push(json!({
@@ -4199,7 +4198,7 @@ async fn handle_swarm_status(
         return Err("Task ID is required.".to_string());
     }
 
-    let result = get_swarm_status(client, base_url, id).await?;
+    let result = call_tool(client, base_url, "swarm_status", json!({ "id": id })).await?;
     cli_println!("{}", result);
     json_field("task_id", json!(id));
     json_field(
@@ -4223,7 +4222,7 @@ async fn handle_swarm_result(
         return Err("Task ID is required.".to_string());
     }
 
-    let result = get_swarm_result(client, base_url, id).await?;
+    let result = call_tool(client, base_url, "swarm_result", json!({ "id": id })).await?;
     cli_println!("{}", result);
     json_field("task_id", json!(id));
     json_field(
@@ -4248,7 +4247,7 @@ async fn handle_crawl(
         return Err("A URL is required for crawl.".to_string());
     }
 
-    let task_id = submit_crawl(client, base_url, tool_params).await?;
+    let task_id = call_tool(client, base_url, "crawl_submit", tool_params.clone()).await?;
     let task_id = task_id.trim().trim_matches('"').to_string();
     cli_println!("Crawl task submitted: {}", task_id);
     json_field("task_id", json!(task_id));
@@ -4273,7 +4272,7 @@ async fn handle_crawl(
 
         tokio::time::sleep(poll_interval).await;
 
-        let response_text = get_crawl_result(client, base_url, &task_id).await?;
+        let response_text = call_tool(client, base_url, "crawl_result", json!({ "id": &task_id })).await?;
         let parsed: Value = serde_json::from_str(&response_text)
             .map_err(|e| format!("Failed to parse crawl response: {}", e))?;
 

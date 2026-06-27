@@ -143,39 +143,6 @@ fn extract_mcp_text_payload(data: &Value) -> Option<String> {
     None
 }
 
-fn extract_http_text_payload(response_text: &str) -> String {
-    let trimmed = response_text.trim();
-    if trimmed.is_empty() {
-        return String::new();
-    }
-
-    match serde_json::from_str::<Value>(trimmed) {
-        Ok(Value::String(text)) => text,
-        Ok(value) => value.to_string(),
-        Err(_) => trimmed.to_string(),
-    }
-}
-
-fn build_endpoint_url(base_url: &str, path: &str) -> String {
-    format!(
-        "{}/{}",
-        base_url.trim_end_matches('/'),
-        path.trim_start_matches('/')
-    )
-}
-
-fn format_http_error(status: reqwest::StatusCode, response_text: &str) -> String {
-    let message = response_text.trim();
-    if message.is_empty() {
-        format!(
-            "HTTP request failed with status {} and an empty response body.",
-            status
-        )
-    } else {
-        format!("HTTP request failed with status {}: {}", status, message)
-    }
-}
-
 fn summarize_mcp_request(
     tool: &str,
     endpoint: &str,
@@ -233,25 +200,6 @@ fn format_mcp_transport_error(
     } else {
         format!("HTTP request failed {context}: {error}")
     }
-}
-
-async fn send_rest_request(request: reqwest::RequestBuilder) -> Result<String, String> {
-    let response = request
-        .send()
-        .await
-        .map_err(|e| format!("HTTP request failed: {e}"))?;
-
-    let status = response.status();
-    let response_text = response
-        .text()
-        .await
-        .map_err(|e| format!("Failed to read response body: {e}"))?;
-
-    if !status.is_success() {
-        return Err(format_http_error(status, &response_text));
-    }
-
-    Ok(extract_http_text_payload(&response_text))
 }
 
 /// Call an MCP tool on the Browser4 server.
@@ -366,100 +314,11 @@ pub async fn submit_plain_command(
     .await
 }
 
-/// Submit a swarm payload through `SwarmController.submit(payload)`.
-pub async fn submit_swarm_payload(
-    client: &Client,
-    base_url: &str,
-    payload: &str,
-) -> Result<String, String> {
-    let url = build_endpoint_url(base_url, "/api/swarm/submit");
-    send_rest_request(
-        client
-            .post(url)
-            .header("Content-Type", "text/plain; charset=utf-8")
-            .body(payload.to_string()),
-    )
-    .await
-}
-
-/// Submit a swarm X-SQL query through `SwarmController.query(query)`.
-pub async fn submit_swarm_query(
-    client: &Client,
-    base_url: &str,
-    query: serde_json::Value,
-) -> Result<String, String> {
-    let url = build_endpoint_url(base_url, "/api/swarm/query");
-    send_rest_request(
-        client
-            .post(url)
-            .header("Content-Type", "application/json; charset=utf-8")
-            .body(query.to_string()),
-    )
-    .await
-}
-
-/// Read swarm task status through `SwarmController.getStatus(id)`.
-pub async fn get_swarm_status(
-    client: &Client,
-    base_url: &str,
-    task_id: &str,
-) -> Result<String, String> {
-    let url = build_endpoint_url(base_url, &format!("/api/swarm/{task_id}/status"));
-    send_rest_request(client.get(url)).await
-}
-
-/// Read swarm task result through `SwarmController.getResult(id)`.
-pub async fn get_swarm_result(
-    client: &Client,
-    base_url: &str,
-    task_id: &str,
-) -> Result<String, String> {
-    let url = build_endpoint_url(base_url, &format!("/api/swarm/{task_id}/result"));
-    send_rest_request(client.get(url)).await
-}
-
 pub fn crawl_request_timeout() -> std::time::Duration {
     std::time::Duration::from_secs(timeout_secs_from_env(
         CRAWL_REQUEST_TIMEOUT_ENV,
         CRAWL_REQUEST_TIMEOUT_SECS,
     ))
-}
-
-/// Submit a crawl task through `CrawlController.startCrawl(request)`.
-pub async fn submit_crawl(
-    client: &Client,
-    base_url: &str,
-    params: &Value,
-) -> Result<String, String> {
-    let url = build_endpoint_url(base_url, "/api/crawl");
-    send_rest_request(
-        client
-            .post(url)
-            .header("Content-Type", "application/json; charset=utf-8")
-            .json(params),
-    )
-    .await
-}
-
-/// Read crawl task status through `CrawlController.getStatus(id)`.
-#[allow(dead_code)]
-pub async fn get_crawl_status(
-    client: &Client,
-    base_url: &str,
-    task_id: &str,
-) -> Result<String, String> {
-    let url = build_endpoint_url(base_url, &format!("/api/crawl/{task_id}/status"));
-    send_rest_request(client.get(url)).await
-}
-
-/// Read crawl task result through `CrawlController.getResult(id)`.
-pub async fn get_crawl_result(
-    client: &Client,
-    base_url: &str,
-    task_id: &str,
-) -> Result<String, String> {
-    let url = build_endpoint_url(base_url, &format!("/api/crawl/{task_id}/result"));
-    send_rest_request(client.get(url)).await
 }
 
 /// Get the status of a command by its task ID via the MCP endpoint.
@@ -695,43 +554,6 @@ mod tests {
         assert_eq!(
             extract_mcp_text_payload(&payload).as_deref(),
             Some("{\"results\":[],\"sessionId\":\"s-1\"}")
-        );
-    }
-
-    #[test]
-    fn test_extract_http_text_payload_unquotes_json_string() {
-        assert_eq!(
-            extract_http_text_payload("\"swarm-task-1\""),
-            "swarm-task-1"
-        );
-    }
-
-    #[test]
-    fn test_extract_http_text_payload_preserves_plain_text() {
-        assert_eq!(extract_http_text_payload("swarm-task-1\n"), "swarm-task-1");
-    }
-
-    #[test]
-    fn test_extract_http_text_payload_minifies_json_object() {
-        let payload = r#"{
-            "id": "swarm-task-1",
-            "isDone": false
-        }"#;
-        assert_eq!(
-            extract_http_text_payload(payload),
-            "{\"id\":\"swarm-task-1\",\"isDone\":false}"
-        );
-    }
-
-    #[test]
-    fn test_format_http_error_handles_empty_and_non_empty_bodies() {
-        assert_eq!(
-            format_http_error(reqwest::StatusCode::NOT_FOUND, ""),
-            "HTTP request failed with status 404 Not Found and an empty response body."
-        );
-        assert_eq!(
-            format_http_error(reqwest::StatusCode::BAD_REQUEST, "bad request"),
-            "HTTP request failed with status 400 Bad Request: bad request"
         );
     }
 
