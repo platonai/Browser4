@@ -859,13 +859,16 @@ pub(super) fn test_eval_return_types(ctx: &mut E2ECtx) {
 
     // --- undefined ---
     // `void 0` evaluates to undefined in JS. Some servers serialize
-    // undefined as the empty string, others as "undefined".
+    // undefined as the empty string, others as "undefined".  The CLI
+    // wraps genuinely empty eval results in quotes to make them visible
+    // on stdout, so accept "undefined", the quoted empty string ("\"\""),
+    // or a genuinely empty trimmed result.
     let undef_val = eval_text(ctx, "void 0");
-    // Accept either "undefined" or "" as valid serializations.
+    // Accept either "undefined" or "" (or quoted-empty) as valid serializations.
     let trimmed = undef_val.trim();
     assert!(
-        trimmed == "undefined" || trimmed.is_empty(),
-        "Expected undefined or empty string for `void 0`, got: {undef_val}"
+        trimmed == "undefined" || trimmed.is_empty() || trimmed == "\"\"",
+        "Expected undefined, empty string, or quoted-empty for `void 0`, got: {undef_val}"
     );
 
     run_command(ctx, &["close"]);

@@ -108,7 +108,6 @@ open class PulsarWebDriver constructor(
 
     private val closed = AtomicBoolean()
 
-    var userTypedUrl: String? = null
     var navigateUrl: String? = chromeTab.url
     private var credentials: Credentials? = null
 
@@ -150,8 +149,6 @@ open class PulsarWebDriver constructor(
 
     @Throws(WebDriverException::class)
     override suspend fun navigate(entry: NavigateEntry) {
-        userTypedUrl = entry.url
-
         navigateHistory.add(entry)
         this.navigateEntry = entry
 
@@ -389,7 +386,14 @@ open class PulsarWebDriver constructor(
     }
 
     override suspend fun currentUrl(): String {
-        return evaluate("document.URL", navigateUrl ?: userTypedUrl ?: "")
+        val docUrl = evaluate("document.URL", "")
+        // When a tab has just been created, document.URL may still be "about:blank"
+        // even though navigation to the target URL has been initiated.  Fall back
+        // to the navigateUrl / userTypedUrl tracked at tab creation time.
+        if (docUrl.isNullOrBlank() || docUrl == "about:blank") {
+            return navigateUrl ?: userTypedUrl().takeIf { it.isNotEmpty() } ?: docUrl.orEmpty()
+        }
+        return docUrl
     }
 
     @Throws(WebDriverException::class)
@@ -919,6 +923,7 @@ open class PulsarWebDriver constructor(
         }
 
         rpc.invokeOnElement(selector, "press", scrollIntoView = true) { node ->
+            page.focusOnSelector(selector)
             emulator.click(node, 1, position = "right")
             keyboard?.press(key, randomDelayMillis("press"))
             // CDP-dispatched Enter may not trigger implicit form submission (HTML spec §4.10.2.2).
@@ -1736,7 +1741,7 @@ function() {
                 logger.debug(
                     "Injected Browser4 runtime into Isolated World (context: {}) | {}",
                     contextId,
-                    StringUtils.abbreviateMiddle(userTypedUrl, "...", 200)
+                    StringUtils.abbreviateMiddle(userTypedUrl(), "...", 200)
                 )
                 val evaluate = browserProtocol.evaluate("typeof(__pulsar_utils__)", contextId = contextId)
                 if (evaluate.result.value != "function") {
