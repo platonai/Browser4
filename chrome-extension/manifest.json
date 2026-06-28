@@ -1,0 +1,35 @@
+{
+  "manifest_version": 3,
+  "name": "Browser4 Extension",
+  "version": "0.2.1",
+  "description": "Connect your browser to AI agents through Browser4 MCP server and CLI. Enables AI-driven web testing, debugging, and automation.",
+  "permissions": [
+    "debugger",
+    "activeTab",
+    "tabs",
+    "tabGroups"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "lib/background.mjs",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "Browser4 Extension",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png",
+      "48": "icons/icon-48.png",
+      "128": "icons/icon-128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAsyUdaH5yziKD+7CfBOYtPhmobNahXQNTonkpBc3ZkQfq0wff/6ZTm08NOej1V/5uKlhYz2a0G/iXrTVQ8lnfOJcHDC9/U01JWGg7xrIJ79+i9ODF2p7Y0G3Hgwl88to9HoBbM5ASo5fKybVOIdrX/odw+NtrKbcPb1ALo57zFNqLqOor3qJDS9fzwXGRnbhyqjhkdbXj0iVCFw74PLMUHqb9Gfk/x1eqVNUKCsyj7gJC173Qoe7NE/Y17z51RTDBW/teX9EqWAZqpe5MOst+ghTiFJNH9gbPvrS+kPUASRli1YdWYtMc6ihYTX2ZxYP9uNUZLYcRmJMYDPkm8HQfXQIDAQAB"
+}

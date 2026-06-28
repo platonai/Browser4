@@ -805,6 +805,13 @@ async fn handle_attach(
         .map(str::trim)
         .filter(|s| !s.is_empty());
 
+    // --extension value (optional channel override, e.g. "chrome-canary", "msedge")
+    let extension_raw = parsed_args
+        .get("extension")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+
     let effective_base_url = if let Some(endpoint) = endpoint_override {
         if !endpoint.starts_with("http://") && !endpoint.starts_with("https://") {
             return Err("--endpoint must be an HTTP(S) URL".to_string());
@@ -818,7 +825,7 @@ async fn handle_attach(
     // remote server without calling attach_browser.  The remote server
     // manages its own browser sessions; subsequent commands (open, goto,
     // list, etc.) will target the remote endpoint.
-    if cdp_raw.is_none() && endpoint_override.is_some() {
+    if cdp_raw.is_none() && endpoint_override.is_some() && extension_raw.is_none() {
         let mut state = read_state(None, session_name);
         state.session_name = session_name.map(|s| s.to_string());
         state.session_id = None;
@@ -834,14 +841,25 @@ async fn handle_attach(
         return Ok(());
     }
 
+    // Extension-based attach
+    if let Some(ext_val) = extension_raw {
+        let channel = if ext_val == "true" { "chrome" } else { ext_val };
+        return handle_attach_extension(
+            client, &effective_base_url, session_name, channel, parsed_args,
+        )
+        .await;
+    }
+
     // Resolve the CDP endpoint
     let cdp_endpoint = if let Some(raw) = cdp_raw {
         resolve_cdp_endpoint(raw)?
     } else {
         return Err(
-            "attach requires --cdp=<url|channel> or --endpoint=<url>.\n\
+            "attach requires --cdp=<url|channel>, --extension[=channel], or --endpoint=<url>.\n\
              Examples:\n  \
              browser4-cli attach --cdp=chrome\n  \
+             browser4-cli attach --extension\n  \
+             browser4-cli attach --extension=msedge\n  \
              browser4-cli attach --cdp=http://localhost:9222\n  \
              browser4-cli attach --endpoint=http://browser4-server:8182\n  \
              browser4-cli attach --endpoint=http://remote:8182 --cdp=chrome"
@@ -886,6 +904,189 @@ async fn handle_attach(
     post_command_snapshot(client, &effective_base_url, &session_id).await;
 
     Ok(())
+}
+
+/// Attach via the Browser4 Chrome Extension.
+///
+/// This flow:
+/// 1. Calls `attach_browser` with `{extension: true, channel: ...}` on the backend.
+/// 2. Launches the browser to the extension's connect page with the WebSocket relay URL.
+/// 3. Polls `check_session_ready` until the extension connects.
+/// 4. Persists session state and takes an initial snapshot.
+async fn handle_attach_extension(
+    client: &Client,
+    base_url: &str,
+    session_name: Option<&str>,
+    channel: &str,
+    _parsed_args: &HashMap<String, Value>,
+) -> Result<(), String> {
+    // Step 1: Call the backend to create a pending extension session.
+    let attach_params = json!({
+        "extension": true,
+        "channel": channel,
+    });
+
+    let result = call_tool(client, base_url, "attach_browser", attach_params).await?;
+    let parsed: Value =
+        serde_json::from_str(&result).map_err(|e| format!("Failed to parse attach response: {e}"))?;
+
+    let session_id = parsed
+        .get("sessionId")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing sessionId in attach response")?;
+    let ws_endpoint = parsed
+        .get("wsEndpoint")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing wsEndpoint in attach response")?;
+
+    // Step 2: Build the extension connect URL.
+    let ext_id = resolve_extension_id();
+    let client_info = urlencoding(&json!({"name":"browser4-cli"}).to_string());
+    let connect_url = format!(
+        "chrome-extension://{}/connect.html?mcpRelayUrl={}&client={}",
+        ext_id,
+        urlencoding(ws_endpoint),
+        client_info,
+    );
+
+    // Step 3: Launch the browser.
+    let exec_name = resolve_browser_executable(channel)?;
+    cli_println!(
+        "Launching {} with Browser4 Extension connect page...",
+        exec_name
+    );
+
+    #[cfg(windows)]
+    {
+        // On Windows, use `cmd /c start` to open the URL in the existing
+        // browser instance (if running) rather than launching a new process.
+        // The URL is double-quoted to prevent cmd.exe from interpreting `&`
+        // characters in query parameters as command separators.
+        let status = std::process::Command::new("cmd")
+            .args(["/c", "start", "", &exec_name, &format!("\"{}\"", connect_url)])
+            .spawn()
+            .map_err(|e| format!("Failed to launch browser: {e}"))?;
+        // Detach — we don't wait for the browser process.
+        drop(status);
+    }
+    #[cfg(not(windows))]
+    {
+        let status = std::process::Command::new(&exec_name)
+            .arg(&connect_url)
+            .spawn()
+            .map_err(|e| format!("Failed to launch {}: {}", exec_name, e))?;
+        drop(status);
+    }
+
+    // Step 4: Wait for the extension to connect (poll backend).
+    cli_println!(
+        "Waiting for Browser4 Extension to connect... (opens http://127.0.0.1:{})",
+        ws_endpoint
+            .strip_prefix("ws://127.0.0.1:")
+            .and_then(|rest| rest.split('/').next())
+            .unwrap_or("8182"),
+    );
+    cli_println!("Approve the connection in your browser when prompted.");
+
+    let timeout = std::time::Duration::from_secs(60);
+    let poll_interval = std::time::Duration::from_millis(1000);
+    let start = std::time::Instant::now();
+
+    loop {
+        if start.elapsed() > timeout {
+            return Err(
+                "Timed out waiting for Browser4 Extension to connect.\n\
+                 \n  Make sure:\n  \
+                 - The Browser4 Extension is installed in your browser\n  \
+                 - You clicked \"Allow\" on the extension connect page\n  \
+                 - No firewall is blocking loopback WebSocket connections\n\
+                 \n  Install the extension:\n  \
+                 1. cd chrome-extension && npm install && npm run build\n  \
+                 2. Open chrome://extensions, enable Developer mode\n  \
+                 3. Click \"Load unpacked\" and select the dist/ folder"
+                    .to_string(),
+            );
+        }
+
+        let status = call_tool(
+            client,
+            base_url,
+            "check_session_ready",
+            json!({"sessionId": session_id}),
+        )
+        .await?;
+
+        if let Ok(status_parsed) = serde_json::from_str::<Value>(&status) {
+            if status_parsed
+                .get("ready")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+            {
+                break;
+            }
+        }
+
+        tokio::time::sleep(poll_interval).await;
+    }
+
+    // Step 5: Persist session state.
+    let mut state = read_state(None, session_name);
+    state.session_name = session_name.map(|s| s.to_string());
+    state.session_id = Some(session_id.to_string());
+    state.base_url = base_url.to_string();
+    state.active_selector = None;
+    state.last_mouse_position = None;
+    write_state(&state, None, session_name).map_err(|e| e.to_string())?;
+
+    json_field("session_id", json!(session_id));
+    json_field("ws_endpoint", json!(ws_endpoint));
+
+    cli_println!("Attached to browser via Browser4 Extension");
+    cli_println!("Session opened: {}", session_id);
+
+    // Take an initial snapshot.
+    post_command_snapshot(client, base_url, session_id).await;
+
+    Ok(())
+}
+
+/// Resolve the Browser4 Extension ID.
+///
+/// The production ID is deterministic and derived from the extension's
+/// `manifest.json` `key` field (SHA-256 of DER-encoded public key, first 128
+/// bits as hex mapped to a-p).  Set `BROWSER4_EXTENSION_ID` to override.
+///
+/// TODO: compute the actual ID from the key in manifest.json once the
+/// extension is published.  The deterministic `key` in manifest.json ensures
+/// a stable ID across installs.
+fn resolve_extension_id() -> String {
+    std::env::var("BROWSER4_EXTENSION_ID").unwrap_or_else(|_| {
+        // Placeholder — replace with the actual computed ID from the key.
+        // This value must match the extension loaded in the user's browser.
+        "fcagfeimnhdkkkkipkjjolahpakoddeb".to_string()
+    })
+}
+
+/// Resolve the browser executable path for a given channel name.
+/// Falls back to the channel name itself as a raw executable name.
+fn resolve_browser_executable(channel: &str) -> Result<String, String> {
+    // Try resolving via BrowserChannel enum (reuses daemon.rs logic).
+    // If that fails, treat the value as a raw executable name.
+    let exec = daemon::resolve_channel_executable_name(channel);
+    Ok(exec)
+}
+
+/// Simple URL encoding for query parameter values.
+fn urlencoding(s: &str) -> String {
+    s.replace('%', "%25")
+        .replace(' ', "%20")
+        .replace('"', "%22")
+        .replace('#', "%23")
+        .replace('&', "%26")
+        .replace('=', "%3D")
+        .replace(':', "%3A")
+        .replace('/', "%2F")
+        .replace('?', "%3F")
 }
 
 async fn handle_open(
@@ -9270,5 +9471,82 @@ mod tests {
                 .unwrap();
         assert_eq!(opts.pattern, "error|warning|panic");
         assert!(opts.ignore_case);
+    }
+
+    // =========================================================================
+    // Extension feature helpers
+    // =========================================================================
+
+    #[test]
+    fn test_urlencoding_special_chars() {
+        assert_eq!(urlencoding("hello"), "hello");
+        assert_eq!(
+            urlencoding("ws://127.0.0.1:8182/ws/extension/session"),
+            "ws%3A%2F%2F127.0.0.1%3A8182%2Fws%2Fextension%2Fsession"
+        );
+        assert_eq!(urlencoding("\"quoted\""), "%22quoted%22");
+        assert_eq!(urlencoding("a&b=c"), "a%26b%3Dc");
+        assert_eq!(urlencoding("100%"), "100%25");
+        assert_eq!(urlencoding("a b"), "a%20b");
+        assert_eq!(urlencoding("q?a#f"), "q%3Fa%23f");
+    }
+
+    #[test]
+    fn test_urlencoding_no_special_chars_does_nothing() {
+        assert_eq!(urlencoding("hello-world-123"), "hello-world-123");
+        assert_eq!(urlencoding("test_case.abc"), "test_case.abc");
+    }
+
+    #[test]
+    fn test_urlencoding_encodes_websocket_url() {
+        let ws_url = "ws://127.0.0.1:8182/ws/extension/session?id=123&token=abc";
+        let encoded = urlencoding(ws_url);
+        // Must not contain raw special chars that would break a URL query param
+        assert!(!encoded.contains("://"));
+        assert!(!encoded.contains('&'));
+        assert!(!encoded.contains('='));
+        assert!(!encoded.contains('?'));
+        assert!(!encoded.contains('#'));
+    }
+
+    #[test]
+    fn test_resolve_extension_id_returns_valid_length() {
+        let id = resolve_extension_id();
+        assert!(!id.is_empty());
+        // Chrome extension IDs are 32 lowercase a-p characters
+        assert_eq!(id.len(), 32);
+        assert!(id.chars().all(|c| c.is_ascii_lowercase()));
+    }
+
+    #[test]
+    fn test_resolve_extension_id_env_override() {
+        // Set env var before resolving
+        std::env::set_var("BROWSER4_EXTENSION_ID", "testoverrideabcdefghijklmnopqrstuv");
+        let id = resolve_extension_id();
+        assert_eq!(id, "testoverrideabcdefghijklmnopqrstuv");
+        // Clean up to avoid poisoning other tests
+        std::env::remove_var("BROWSER4_EXTENSION_ID");
+    }
+
+    #[test]
+    fn test_resolve_browser_executable_known_channels() {
+        assert_eq!(resolve_browser_executable("chrome").unwrap(), "chrome");
+        assert_eq!(resolve_browser_executable("msedge").unwrap(), "msedge");
+        assert_eq!(resolve_browser_executable("Chrome").unwrap(), "chrome");
+        assert_eq!(resolve_browser_executable("MsEdge").unwrap(), "msedge");
+    }
+
+    #[test]
+    fn test_resolve_browser_executable_unknown_passthrough() {
+        let result = resolve_browser_executable("my-custom-browser");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "my-custom-browser");
+    }
+
+    #[test]
+    fn test_resolve_browser_executable_empty_not_valid() {
+        let result = resolve_browser_executable("");
+        // Empty string passes through (daemon resolves it as unknown)
+        assert_eq!(result.unwrap(), "");
     }
 }

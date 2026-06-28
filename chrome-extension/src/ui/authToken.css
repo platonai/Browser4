@@ -1,0 +1,153 @@
+/*
+  Copyright (c) Platon AI.
+
+  Licensed under the Apache License, Version 2.0 (the "License");
+  you may not use this file except in compliance with the License.
+  You may obtain a copy of the License at
+
+      http://www.apache.org/licenses/LICENSE-2.0
+
+  Unless required by applicable law or agreed to in writing, software
+  distributed under the License is distributed on an "AS IS" BASIS,
+  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+  See the License for the specific language governing permissions and
+  limitations under the License.
+*/
+
+@import './colors.css';
+
+.auth-token-section {
+  margin: 16px 0 0 0;
+  padding: 16px;
+  background-color: var(--color-canvas-subtle);
+  border-radius: 6px;
+}
+
+.auth-token-description {
+  font-size: 12px;
+  color: var(--color-fg-muted);
+  margin-bottom: 12px;
+}
+
+.auth-token-container {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background-color: var(--color-canvas-default);
+  padding: 8px;
+  border-radius: 4px;
+}
+
+.auth-token-code {
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  font-size: 12px;
+  color: var(--color-fg-default);
+  border: none;
+  flex: 1;
+  padding: 0;
+  word-break: break-all;
+}
+
+.auth-token-refresh {
+  flex: none;
+  height: 24px;
+  width: 24px;
+  border: none;
+  outline: none;
+  color: var(--color-fg-muted);
+  background: transparent;
+  padding: 4px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+}
+
+.auth-token-refresh svg {
+  margin: 0;
+}
+
+.auth-token-refresh:not(:disabled):hover {
+  background-color: var(--color-btn-selected-bg);
+}
+
+/* ── Collapsible Usage Example ────────────────────────────────────────────── */
+
+.auth-token-example-section {
+  margin-top: 16px;
+}
+
+.auth-token-example-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: none;
+  border: none;
+  padding: 8px 0;
+  font-size: 12px;
+  color: var(--color-fg-muted);
+  cursor: pointer;
+  outline: none;
+  text-align: left;
+  width: 100%;
+}
+
+.auth-token-example-toggle:hover {
+  color: var(--color-fg-default);
+}
+
+.auth-token-example-toggle:focus-visible {
+  border-radius: 4px;
+  box-shadow: var(--color-btn-focus-shadow);
+}
+
+.auth-token-chevron {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transform: rotate(-90deg);
+  flex-shrink: 0;
+}
+
+.auth-token-chevron.expanded {
+  transform: rotate(0deg);
+}
+
+.auth-token-chevron svg {
+  width: 12px;
+  height: 12px;
+}
+
+.auth-token-chevron .octicon {
+  margin: 0;
+}
+
+.auth-token-example-content {
+  margin-top: 12px;
+  padding: 12px 0 0 0;
+}
+
+.auth-token-example-description {
+  font-size: 12px;
+  color: var(--color-fg-muted);
+  margin-bottom: 12px;
+}
+
+.auth-token-example-config {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  background-color: var(--color-canvas-default);
+  padding: 12px;
+  border-radius: 4px;
+}
+
+.auth-token-example-code {
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  font-size: 11px;
+  color: var(--color-fg-default);
+  white-space: pre;
+  flex: 1;
+  line-height: 1.4;
+}
