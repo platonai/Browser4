@@ -284,6 +284,74 @@ $sb = [ScriptBlock]::Create($scriptContent)
     Test "Test-LocalBinary returns false for null" {
         if (Test-LocalBinary -Path $null) { throw "Should be false" }
     }
+
+    # ── Set-BinaryFile (locked-binary-safe replacement) ──
+    Test "Set-BinaryFile creates new file (Copy)" {
+        $tmpDir = Join-Path $env:TEMP "b4-test-$(New-Guid)"
+        New-Item -ItemType Directory $tmpDir -Force | Out-Null
+        try {
+            $src = Join-Path $tmpDir "source.exe"
+            $dst = Join-Path $tmpDir "target.exe"
+            "new-content" | Out-File $src -Encoding ASCII
+            Set-BinaryFile -TargetPath $dst -SourcePath $src
+            if (-not (Test-Path $dst)) { throw "Target was not created" }
+            $actual = (Get-Content $dst -Raw).Trim()
+            if ($actual -ne "new-content") { throw "Wrong content: '$actual'" }
+            # Source still exists (Copy mode)
+            if (-not (Test-Path $src)) { throw "Source should still exist after copy" }
+        } finally {
+            Remove-Item $tmpDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    Test "Set-BinaryFile creates new file (Move)" {
+        $tmpDir = Join-Path $env:TEMP "b4-test-$(New-Guid)"
+        New-Item -ItemType Directory $tmpDir -Force | Out-Null
+        try {
+            $src = Join-Path $tmpDir "source.exe"
+            $dst = Join-Path $tmpDir "target.exe"
+            "moved-content" | Out-File $src -Encoding ASCII
+            Set-BinaryFile -TargetPath $dst -SourcePath $src -Move
+            if (-not (Test-Path $dst)) { throw "Target was not created" }
+            $actual = (Get-Content $dst -Raw).Trim()
+            if ($actual -ne "moved-content") { throw "Wrong content: '$actual'" }
+            # Source should be gone (Move mode)
+            if (Test-Path $src) { throw "Source should not exist after move" }
+        } finally {
+            Remove-Item $tmpDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    Test "Set-BinaryFile replaces existing file (Copy)" {
+        $tmpDir = Join-Path $env:TEMP "b4-test-$(New-Guid)"
+        New-Item -ItemType Directory $tmpDir -Force | Out-Null
+        try {
+            $src = Join-Path $tmpDir "source.exe"
+            $dst = Join-Path $tmpDir "target.exe"
+            "old" | Out-File $dst -Encoding ASCII
+            "new" | Out-File $src -Encoding ASCII
+            Set-BinaryFile -TargetPath $dst -SourcePath $src
+            if ((Get-Content $dst -Raw).Trim() -ne "new") { throw "Content not replaced" }
+        } finally {
+            Remove-Item $tmpDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    Test "Set-BinaryFile replaces existing file (Move)" {
+        $tmpDir = Join-Path $env:TEMP "b4-test-$(New-Guid)"
+        New-Item -ItemType Directory $tmpDir -Force | Out-Null
+        try {
+            $src = Join-Path $tmpDir "source.exe"
+            $dst = Join-Path $tmpDir "target.exe"
+            "old" | Out-File $dst -Encoding ASCII
+            "moved" | Out-File $src -Encoding ASCII
+            Set-BinaryFile -TargetPath $dst -SourcePath $src -Move
+            if ((Get-Content $dst -Raw).Trim() -ne "moved") { throw "Content not replaced" }
+            if (Test-Path $src) { throw "Source should not exist after move" }
+        } finally {
+            Remove-Item $tmpDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
 }
 
 Write-Host ""
