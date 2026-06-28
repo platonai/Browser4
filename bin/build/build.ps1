@@ -369,15 +369,15 @@ while ($i -lt $args.Count) {
 
 # --- Help / no-args → print info + help ---
 if ($ShowHelp) {
-  Write-SystemInfo
-  Write-RustInfo
+  [void](Write-SystemInfo)
+  [void](Write-RustInfo)
   Write-Help
   exit 0
 }
 
 if ($args.Count -eq 0) {
-  Write-SystemInfo
-  Write-RustInfo
+  [void](Write-SystemInfo)
+  [void](Write-RustInfo)
   Write-Help
   exit 0
 }
