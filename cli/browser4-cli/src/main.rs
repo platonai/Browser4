@@ -277,6 +277,7 @@ fn no_snapshot_commands() -> HashSet<&'static str> {
         "crawl",
         "domsnapshot",
         "domsnapshot-get",
+        "domsnapshot-get-all",
         "domsnapshot-query",
         "domsnapshot-export",
         "domsnapshot-summary",
@@ -5999,6 +6000,17 @@ fn rewrite_prefixed_command(args: &[String]) -> Option<Vec<String>> {
     if sub.starts_with('-') {
         return None;
     }
+    // `domsnapshot get all` is a two-level subcommand — rewrite to the flat
+    // `domsnapshot-get-all` form so the dispatch matches it correctly.
+    if prefix == "domsnapshot" && sub == "get" {
+        if let Some(inner) = args.get(2) {
+            if inner == "all" {
+                let mut rewritten = vec!["domsnapshot-get-all".to_string()];
+                rewritten.extend(args[3..].iter().cloned());
+                return Some(rewritten);
+            }
+        }
+    }
     let rewritten_command = match prefix {
         "swarm" => format!("swarm-{}", sub),
         "agent" => format!("agent-{}", sub),
@@ -6026,6 +6038,7 @@ fn preferred_spaced_command_form(command: &str) -> Option<&'static str> {
         "co-status" => Some("swarm status"),
         "co-result" => Some("swarm result"),
         "domsnapshot-get" => Some("domsnapshot get"),
+        "domsnapshot-get-all" => Some("domsnapshot get all"),
         "domsnapshot-query" => Some("domsnapshot query"),
         "domsnapshot-export" => Some("domsnapshot export"),
         "domsnapshot-summary" => Some("domsnapshot summary"),
@@ -7546,6 +7559,16 @@ async fn run(
             )
             .await?;
         }
+        "domsnapshot-get-all" => {
+            handle_dom_snapshot_get(
+                &client,
+                &base_url,
+                &tool_name,
+                &tool_params,
+                global.session_name.as_deref(),
+            )
+            .await?;
+        }
         "domsnapshot-query" => {
             handle_dom_snapshot_query(
                 &client,
@@ -7823,6 +7846,7 @@ mod tests {
     fn no_snapshot_commands_include_dom_snapshot_variants() {
         assert!(no_snapshot_commands().contains("domsnapshot"));
         assert!(no_snapshot_commands().contains("domsnapshot-get"));
+        assert!(no_snapshot_commands().contains("domsnapshot-get-all"));
         assert!(no_snapshot_commands().contains("domsnapshot-query"));
         assert!(no_snapshot_commands().contains("domsnapshot-export"));
         assert!(no_snapshot_commands().contains("domsnapshot-summary"));
@@ -8350,6 +8374,59 @@ mod tests {
     }
 
     #[test]
+    fn rewrite_prefixed_command_handles_domsnapshot_get_all() {
+        let rewritten = rewrite_prefixed_command(&[
+            "domsnapshot".to_string(),
+            "get".to_string(),
+            "all".to_string(),
+            "text".to_string(),
+            ".product-title".to_string(),
+        ])
+        .unwrap();
+        assert_eq!(rewritten[0], "domsnapshot-get-all");
+        assert_eq!(rewritten[1], "text");
+        assert_eq!(rewritten[2], ".product-title");
+    }
+
+    #[test]
+    fn rewrite_prefixed_command_handles_domsnapshot_get_all_with_options() {
+        let rewritten = rewrite_prefixed_command(&[
+            "domsnapshot".to_string(),
+            "get".to_string(),
+            "all".to_string(),
+            "text".to_string(),
+            "a".to_string(),
+            "--limit".to_string(),
+            "5".to_string(),
+            "--offset".to_string(),
+            "10".to_string(),
+        ])
+        .unwrap();
+        assert_eq!(rewritten[0], "domsnapshot-get-all");
+        assert_eq!(rewritten[1], "text");
+        assert_eq!(rewritten[2], "a");
+        assert_eq!(rewritten[3], "--limit");
+        assert_eq!(rewritten[4], "5");
+        assert_eq!(rewritten[5], "--offset");
+        assert_eq!(rewritten[6], "10");
+    }
+
+    #[test]
+    fn rewrite_prefixed_command_does_not_rewrite_domsnapshot_get_when_not_all() {
+        // `domsnapshot get text` should still rewrite to `domsnapshot-get text`
+        let rewritten = rewrite_prefixed_command(&[
+            "domsnapshot".to_string(),
+            "get".to_string(),
+            "text".to_string(),
+            ".product-title".to_string(),
+        ])
+        .unwrap();
+        assert_eq!(rewritten[0], "domsnapshot-get");
+        assert_eq!(rewritten[1], "text");
+        assert_eq!(rewritten[2], ".product-title");
+    }
+
+    #[test]
     fn preferred_spaced_command_form_maps_flat_aliases() {
         assert_eq!(
             preferred_spaced_command_form("agent-run"),
@@ -8364,6 +8441,10 @@ mod tests {
             Some("swarm status")
         );
         assert_eq!(preferred_spaced_command_form("goto"), None);
+        assert_eq!(
+            preferred_spaced_command_form("domsnapshot-get-all"),
+            Some("domsnapshot get all")
+        );
     }
 
     #[test]

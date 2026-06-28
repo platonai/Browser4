@@ -13,6 +13,7 @@ pub fn public_command_name(name: &str) -> &str {
         "swarm-status" => "swarm status",
         "swarm-result" => "swarm result",
         "domsnapshot-get" => "domsnapshot get",
+        "domsnapshot-get-all" => "domsnapshot get all",
         "domsnapshot-query" => "domsnapshot query",
         "domsnapshot-export" => "domsnapshot export",
         "domsnapshot-summary" => "domsnapshot summary",
@@ -500,6 +501,11 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
             50,
         ));
         lines.push(format_with_gap(
+            "  domsnapshot get all <field> [selector] [name] [--offset] [--limit]",
+            "Extract ALL matching elements from the DOM snapshot (querySelectorAll semantics)",
+            50,
+        ));
+        lines.push(format_with_gap(
             "  domsnapshot query [url]",
             "Run X-SQL against the DOM snapshot stored in Browser4's page storage via the scrape API",
             50,
@@ -570,6 +576,12 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push(String::new());
         lines.push("  # Get an attribute value (requires attribute name)".to_string());
         lines.push("  browser4-cli domsnapshot get attr \"a.product-link\" href".to_string());
+        lines.push(String::new());
+        lines.push("  # Get all matching elements by CSS selector (returns a JSON array)".to_string());
+        lines.push("  browser4-cli domsnapshot get all text \"h2 a\"".to_string());
+        lines.push(String::new());
+        lines.push("  # Get all matching elements with pagination".to_string());
+        lines.push("  browser4-cli domsnapshot get all text \".result\" --limit 5 --offset 10".to_string());
         lines.push(String::new());
         lines.push("  # Run an X-SQL query against the current page URL".to_string());
         lines.push(
@@ -949,6 +961,8 @@ mod tests {
         assert!(help.contains("Subcommands:"));
         assert!(help.contains("domsnapshot get <field> [selector] [name]"));
         assert!(help.contains("Extract elements from the DOM snapshot stored in Browser4's page storage (text, html, attr)"));
+        assert!(help.contains("domsnapshot get all <field> [selector] [name] [--offset] [--limit]"));
+        assert!(help.contains("Extract ALL matching elements from the DOM snapshot (querySelectorAll semantics)"));
         assert!(help.contains("domsnapshot query [url]"));
         assert!(help.contains("Run X-SQL against the DOM snapshot stored in Browser4's page storage via the scrape API"));
         assert!(help.contains("domsnapshot export"));
@@ -966,6 +980,8 @@ mod tests {
         assert!(help.contains("browser4-cli domsnapshot get text"));
         assert!(help.contains("browser4-cli domsnapshot get html \"#main-content\""));
         assert!(help.contains("browser4-cli domsnapshot get attr \"a.product-link\" href"));
+        assert!(help.contains("browser4-cli domsnapshot get all text \"h2 a\""));
+        assert!(help.contains("browser4-cli domsnapshot get all text \".result\" --limit 5 --offset 10"));
         assert!(help.contains("browser4-cli domsnapshot query --sql"));
         assert!(help.contains("browser4-cli domsnapshot query --sql @query.sql"));
         assert!(help.contains("browser4-cli domsnapshot export --file snapshot.html"));
@@ -1014,6 +1030,20 @@ mod tests {
         assert!(help.contains("browser4-cli domsnapshot summary"));
         assert!(help.contains("Generate a compressed Web Page Summary Index (WPSI) from the stored DOM snapshot"));
         assert!(!help.contains("browser4-cli domsnapshot-summary"));
+    }
+
+    #[test]
+    fn test_generate_command_help_domsnapshot_get_all() {
+        let cmds = all_commands();
+        let cmd = cmds.iter().find(|c| c.name == "domsnapshot-get-all").unwrap();
+        let help = generate_command_help(cmd);
+        assert!(help.contains("browser4-cli domsnapshot get all <field> [selector] [name]"));
+        assert!(help.contains("Extract ALL matching elements from the DOM snapshot (querySelectorAll semantics)"));
+        assert!(help.contains("What to extract: text, html, or attr"));
+        assert!(help.contains("Attribute name (required for attr field)"));
+        assert!(help.contains("--offset"));
+        assert!(help.contains("--limit"));
+        assert!(!help.contains("browser4-cli domsnapshot-get-all"));
     }
 
     #[test]
