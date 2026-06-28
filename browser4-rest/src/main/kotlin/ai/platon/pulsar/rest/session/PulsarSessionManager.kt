@@ -1,5 +1,8 @@
 package ai.platon.pulsar.rest.session
 
+import ai.platon.browser4.chrome.PulsarBrowser
+import ai.platon.browser4.chrome.handler.transport.ExtensionChromeService
+import ai.platon.browser4.chrome.handler.transport.ExtensionMessageSender
 import ai.platon.browser4.common.B4Constants.BROWSER_PROFILE_MODE
 import ai.platon.browser4.common.B4Constants.DEFAULT_SESSION_ID
 import ai.platon.browser4.common.B4Constants.PROFILE_MODE_CAPABILITY
@@ -8,14 +11,13 @@ import ai.platon.browser4.common.B4Constants.SWARM_SESSION_ID
 import ai.platon.pulsar.agentic.context.AbstractAgenticContext
 import ai.platon.pulsar.agentic.context.AgenticContext
 import ai.platon.pulsar.agentic.context.AgenticContexts
+import ai.platon.pulsar.browser.common.BrowserSettings
 import ai.platon.pulsar.common.CheckState
 import ai.platon.pulsar.common.browser.BrowserProfileMode
 import ai.platon.pulsar.common.config.CapabilityTypes.BROWSER_CONTEXT_MODE
 import ai.platon.pulsar.core.api.PulsarSettings
 import kotlinx.coroutines.runBlocking
 import org.slf4j.LoggerFactory
-import ai.platon.browser4.chrome.PulsarBrowser
-import ai.platon.pulsar.browser.common.BrowserSettings
 import java.io.Closeable
 import java.net.URI
 import java.util.concurrent.ConcurrentHashMap
@@ -240,6 +242,139 @@ class PulsarSessionManager(
 
         return session
     }
+
+    // ------------------------------------------------------------------
+    // Extension-attached sessions (Browser4 Chrome Extension relay)
+    // ------------------------------------------------------------------
+
+    /** Sessions waiting for the extension to connect via WebSocket. */
+    private val pendingExtensionConnections = ConcurrentHashMap<String, PendingExtensionConnection>()
+
+    /** Active extension browser instances keyed by sessionId. */
+    private val extensionBrowsers = ConcurrentHashMap<String, ExtensionChromeService>()
+
+    /** Injected by [ai.platon.pulsar.rest.config.ExtensionWebSocketConfig]. */
+    @Volatile
+    var serverPort: Int = 8182
+
+    /**
+     * Creates a pending session that will be bound to the Browser4 Chrome
+     * Extension once it connects via WebSocket.
+     *
+     * @param channel Optional browser channel hint (chrome, msedge, etc.) — informational only.
+     * @param capabilities Optional session capabilities.
+     * @return Info containing the sessionId and the ws:// endpoint URL the extension should connect to.
+     */
+    fun createExtensionAttachedSession(
+        channel: String? = null,
+        capabilities: Map<String, String?>? = null,
+    ): ExtensionSessionInfo {
+        val normalizedCapabilities = normalizeCapabilities(capabilities = capabilities)
+        val sessionId = normalizedCapabilities.getValue(SESSION_ID_CAPABILITY).toString()
+
+        // Create the managed session (without a bound browser yet).
+        val session = sessions.computeIfAbsent(sessionId) {
+            createManagedSession(sessionId, normalizedCapabilities)
+        }
+
+        val wsEndpoint = "ws://127.0.0.1:$serverPort/ws/extension/$sessionId"
+        pendingExtensionConnections[sessionId] = PendingExtensionConnection(
+            sessionId = sessionId,
+            wsEndpoint = wsEndpoint,
+            createdAt = System.currentTimeMillis()
+        )
+
+        logger.info(
+            "Created pending extension session {} at {} (channel={})",
+            sessionId, wsEndpoint, channel ?: "default"
+        )
+
+        return ExtensionSessionInfo(sessionId, wsEndpoint)
+    }
+
+    /**
+     * Called by [ExtensionWebSocketHandler] when an extension WebSocket
+     * connection is established.  Creates an [ExtensionChromeService] wrapping
+     * the connection and binds it as the browser for the pending session.
+     */
+    fun onExtensionConnected(sessionId: String, sender: ExtensionMessageSender) {
+        val pending = pendingExtensionConnections.remove(sessionId)
+            ?: throw IllegalStateException("No pending extension connection for session $sessionId")
+
+        val managedSession = sessions[sessionId]
+            ?: throw IllegalStateException("Session $sessionId not found")
+
+        // Create the ExtensionChromeService that bridges the WebSocket
+        // relay protocol to the internal ChromeService abstraction.
+        val extChrome = ExtensionChromeService(sender, sessionId)
+
+        // Wrap it as a PulsarBrowser so the session can use it.
+        val browser = PulsarBrowser(
+            id = ai.platon.pulsar.browser.BrowserId.RANDOM_TEMP,
+            chrome = extChrome,
+            settings = BrowserSettings(),
+            launcher = null
+        )
+
+        // Bind the browser to the agentic session.
+        managedSession.agenticSession.bindBrowser(browser)
+        extensionBrowsers[sessionId] = extChrome
+
+        logger.info(
+            "Extension connected and bound to session {} | elapsed={}ms",
+            sessionId, System.currentTimeMillis() - pending.createdAt
+        )
+    }
+
+    /**
+     * Routes an incoming text message from the extension WebSocket to the
+     * appropriate [ExtensionChromeService].
+     */
+    fun routeExtensionMessage(sessionId: String, message: String) {
+        extensionBrowsers[sessionId]?.handleIncomingMessage(message)
+    }
+
+    /**
+     * Called when the extension WebSocket disconnects.  Closes the
+     * [ExtensionChromeService] and marks the session stopped.
+     */
+    fun onExtensionDisconnected(sessionId: String) {
+        val browser = extensionBrowsers.remove(sessionId)
+        browser?.close()
+        pendingExtensionConnections.remove(sessionId)
+
+        logger.info("Extension disconnected from session {}", sessionId)
+
+        // Mark the session as stopped so health checks reflect the state.
+        sessions[sessionId]?.let { session ->
+            if (session.status != "stopped") {
+                session.status = "stopped"
+            }
+        }
+    }
+
+    /**
+     * Returns true if the extension has connected and the session has a bound
+     * extension browser.
+     */
+    fun isExtensionSessionReady(sessionId: String): Boolean {
+        return extensionBrowsers.containsKey(sessionId)
+    }
+
+    // ------------------------------------------------------------------
+    // Internal data classes
+    // ------------------------------------------------------------------
+
+    data class ExtensionSessionInfo(
+        val sessionId: String,
+        val wsEndpoint: String
+    )
+
+    private data class PendingExtensionConnection(
+        val sessionId: String,
+        val wsEndpoint: String,
+        val createdAt: Long
+    )
 
     /**
      * Extracts the port number from a CDP endpoint URL.

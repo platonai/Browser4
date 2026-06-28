@@ -1,0 +1,37 @@
+{
+  "name": "@browser4/extension",
+  "version": "0.0.1",
+  "description": "Browser4 Browser Extension",
+  "private": true,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/platonai/Browser4.git"
+  },
+  "homepage": "https://browser4.io",
+  "engines": {
+    "node": ">=18"
+  },
+  "author": "platon.ai",
+  "license": "Apache-2.0",
+  "main": "index.js",
+  "scripts": {
+    "dev": "vite --config vite.config.mts",
+    "build": "vite build --config vite.config.mts && vite build --config vite.config.sw.mts",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.7.0",
+    "jsdom": "^25.0.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "vite": "^5.4.21",
+    "vite-plugin-static-copy": "^1.0.6",
+    "vitest": "^2.1.0"
+  },
+  "keywords": [],
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/platonai/Browser4/issues"
+  }
+}

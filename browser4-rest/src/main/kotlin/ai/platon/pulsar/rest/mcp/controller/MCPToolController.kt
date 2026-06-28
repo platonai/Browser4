@@ -79,6 +79,7 @@ class MCPToolController(
                 "kill_all_sessions" -> sessionHandler.handleKillAllSessions()
                 "delete_session_data" -> sessionHandler.handleDeleteSessionData(request)
                 "attach_browser" -> sessionHandler.handleAttachBrowser(request)
+                "check_session_ready" -> sessionHandler.handleCheckSessionReadiness(request)
                 // Command tools
                 "command_run" -> commandHandler.handleCommandRun(request)
                 "command_batch" -> commandHandler.handleCommandBatch(request)

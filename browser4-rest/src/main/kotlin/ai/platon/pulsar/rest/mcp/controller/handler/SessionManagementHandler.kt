@@ -77,11 +77,36 @@ class SessionManagementHandler(
     fun handleAttachBrowser(request: MCPToolCallRequest): ResponseEntity<MCPToolCallResponse> {
         val args = request.arguments ?: emptyMap()
 
+        // Extension-based attach (Browser4 Chrome Extension)
+        val extensionMode = (args["extension"] as? Boolean) == true
+            || (args["extension"] as? String)?.toBoolean() == true
+
+        if (extensionMode) {
+            val channel = (args["channel"] as? String)?.takeIf { it.isNotBlank() }
+                ?: (args["extension"] as? String)?.takeIf { it.isNotBlank() && it != "true" }
+
+            val session = sessionManager.createExtensionAttachedSession(
+                channel = channel,
+                capabilities = args.filterKeys {
+                    it != "extension" && it != "channel" && it != "sessionId" && it != "cdp" && it != "endpoint"
+                }.mapValues { it.value?.toString() }
+            )
+
+            logger.info(
+                "MCP attach_browser (extension): created session {} at {} (channel={})",
+                session.sessionId, session.wsEndpoint, channel ?: "default"
+            )
+            return ResponseEntity.ok(
+                textResponse("""{"sessionId":"${session.sessionId}","wsEndpoint":"${session.wsEndpoint}"}""")
+            )
+        }
+
+        // Existing CDP-based attach
         val cdpEndpoint = (args["cdpEndpoint"] as? String)?.takeIf { it.isNotBlank() }
         val cdpPort = (args["cdpPort"] as? Number)?.toInt()
 
         require(cdpEndpoint != null || cdpPort != null) {
-            "attach_browser requires either 'cdpEndpoint' (URL) or 'cdpPort' (number)"
+            "attach_browser requires either 'cdpEndpoint' (URL), 'cdpPort' (number), or 'extension' (boolean)"
         }
 
         val session = sessionManager.createAttachedSession(
@@ -99,6 +124,29 @@ class SessionManagementHandler(
         )
         return ResponseEntity.ok(
             textResponse("""{"sessionId":"${session.sessionId}"}""")
+        )
+    }
+
+    /**
+     * Checks whether an extension-attached session is ready (the extension has
+     * connected via WebSocket).  Used by the CLI to poll after launching the
+     * browser.
+     */
+    fun handleCheckSessionReadiness(request: MCPToolCallRequest): ResponseEntity<MCPToolCallResponse> {
+        val sessionId = requireSessionId(request)
+        val ready = sessionManager.isExtensionSessionReady(sessionId)
+        val session = sessionManager.getSession(sessionId)
+        val healthy = if (session != null) {
+            try {
+                sessionManager.checkHealthyBlocking(session).isOK
+            } catch (_: Exception) {
+                false
+            }
+        } else {
+            false
+        }
+        return ResponseEntity.ok(
+            textResponse("""{"ready":$ready,"healthy":$healthy}""")
         )
     }
 

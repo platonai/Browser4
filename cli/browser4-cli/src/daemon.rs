@@ -3390,6 +3390,17 @@ impl BrowserChannel {
     }
 }
 
+/// Resolve a channel name to its browser executable name.
+///
+/// For known channels, returns the executable name (e.g. "chrome", "msedge").
+/// Unknown channels are returned as-is, allowing users to specify raw executable
+/// names.
+pub fn resolve_channel_executable_name(channel: &str) -> String {
+    BrowserChannel::from_str(channel)
+        .map(|ch| ch.executable_name().to_string())
+        .unwrap_or_else(|| channel.to_string())
+}
+
 impl std::fmt::Display for BrowserChannel {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let s = match self {
