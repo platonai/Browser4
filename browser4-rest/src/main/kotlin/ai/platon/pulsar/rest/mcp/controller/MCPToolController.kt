@@ -87,6 +87,7 @@ class MCPToolController(
                 // DOM snapshot tools
                 "dom_snapshot_capture" -> domSnapshotHandler.handleDomSnapshotCapture(request)
                 "dom_snapshot_scrape" -> domSnapshotHandler.handleDomSnapshotScrape(request)
+                "dom_snapshot_scrape_all" -> domSnapshotHandler.handleDomSnapshotScrapeAll(request)
                 "dom_snapshot_query" -> domSnapshotHandler.handleDomSnapshotQuery(request)
                 "dom_snapshot_export" -> domSnapshotHandler.handleDomSnapshotExport(request)
                 "dom_snapshot_summary" -> domSnapshotHandler.handleDomSnapshotSummary(request)

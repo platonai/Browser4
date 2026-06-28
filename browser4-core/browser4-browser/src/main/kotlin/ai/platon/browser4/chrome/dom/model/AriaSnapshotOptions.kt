@@ -11,8 +11,8 @@ data class AriaSnapshotOptions(
     val interactive: Boolean = false,
     /** Always include href URLs for link elements (prevent URL-collapse). */
     val urls: Boolean = false,
-    /** Aggressively remove empty/structural generic nodes. */
-    val compact: Boolean = false,
+    /** Aggressively remove empty/structural generic nodes. Enabled by default to keep snapshots lean. */
+    val compact: Boolean = true,
     /** Maximum tree depth to render. -1 means no limit. */
     val maxDepth: Int = -1,
     /** CSS selector string to scope the snapshot to a specific subtree. */
@@ -27,4 +27,6 @@ data class AriaSnapshotOptions(
     val viewports: String? = null,
     /** Include each element's bounding box as [box=x,y,width,height] in the output. */
     val boxes: Boolean = false,
+    /** Maximum number of nodes to render. -1 means no limit. Useful for large pages (e.g. search results). */
+    val maxNodes: Int = -1,
 )

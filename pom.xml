@@ -593,6 +593,8 @@
 
         <spring-boot.version>4.0.6</spring-boot.version>
         <browser4-base.version>4.9.2</browser4-base.version>
+
+        <git-commit-id-maven-plugin.version>9.0.1</git-commit-id-maven-plugin.version>
     </properties>
 
 </project>

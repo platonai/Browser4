@@ -237,6 +237,7 @@ fn no_snapshot_commands() -> HashSet<&'static str> {
         "loop",
         "install",
         "uninstall",
+        "doctor",
         "help",
         "eval",
         "generate-locator",
@@ -5857,6 +5858,126 @@ async fn handle_status(client: &Client, base_url: &str) -> Result<(), String> {
     Ok(())
 }
 
+async fn handle_doctor(client: &Client, base_url: &str, args: &HashMap<String, Value>) -> Result<(), String> {
+    cli_println!("Browser4 Doctor");
+    cli_println!("================");
+    cli_println!("");
+
+    // ---- CLI Build Info (always available) ----
+    cli_println!("-- CLI Build Info --");
+    cli_println!("  CLI version: {}", VERSION);
+    json_field("cli_version", json!(VERSION));
+
+    if let Some(metadata) = daemon::read_installed_browser4_runtime_metadata() {
+        cli_println!("  Installed runtime: {}", metadata.tag);
+        cli_println!("  Installed at: {}", metadata.installed_at);
+        json_field("installed_runtime", json!({
+            "tag": &metadata.tag,
+            "asset_name": &metadata.asset_name,
+            "download_url": &metadata.download_url,
+            "installed_at": &metadata.installed_at,
+        }));
+    } else {
+        cli_println!("  Installed runtime: not installed (run 'browser4-cli install')");
+        json_field("installed_runtime", json!(null));
+    }
+
+    // ---- Backend Build Info (conditional) ----
+    cli_println!("");
+    cli_println!("-- Backend Build Info --");
+    let build_url = format!("{base_url}/api/system/build");
+    match get_json(client, &build_url).await {
+        Ok(build_info) => {
+            if let Some(obj) = build_info.as_object() {
+                for (key, value) in obj {
+                    cli_println!("  {}: {}", key, value);
+                }
+            }
+            json_field("backend_build", build_info);
+        }
+        Err(e) => {
+            cli_println!("  (server not running or unreachable: {})", e);
+            json_field("backend_build", json!(null));
+        }
+    }
+
+    // ---- Backend Logs (conditional) ----
+    let log_file = args.get("file").and_then(|v| v.as_str()).unwrap_or("pulsar");
+    let log_lines: u32 = args.get("lines")
+        .and_then(|v| v.as_str())
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(50)
+        .min(500);
+
+    cli_println!("");
+    cli_println!("-- Backend Logs: {}.log (last {} lines) --", log_file, log_lines);
+    let log_url = format!("{base_url}/api/doctor/logs?file={}&lines={}", log_file, log_lines);
+    match get_json(client, &log_url).await {
+        Ok(log_data) => {
+            if let Some(entries) = log_data.get("lines").and_then(|v| v.as_array()) {
+                for line in entries {
+                    if let Some(text) = line.as_str() {
+                        cli_println!("  {}", text);
+                    }
+                }
+                if entries.is_empty() {
+                    cli_println!("  (log file empty or not found)");
+                }
+            }
+            json_field("backend_logs", log_data);
+        }
+        Err(e) => {
+            cli_println!("  (server not running or log unavailable: {})", e);
+            json_field("backend_logs", json!(null));
+        }
+    }
+
+    // ---- Backend Metrics (conditional) ----
+    cli_println!("");
+    cli_println!("-- Backend Metrics --");
+    let metrics_url = format!("{base_url}/api/doctor/metrics");
+    match get_json(client, &metrics_url).await {
+        Ok(metrics) => {
+            if let Some(gauges) = metrics.get("gauges").and_then(|v| v.as_object()) {
+                for (key, value) in gauges {
+                    cli_println!("  {}: {}", key, value);
+                }
+            }
+            // Print meter summary counts
+            if let Some(meters) = metrics.get("meters").and_then(|v| v.as_object()) {
+                if !meters.is_empty() {
+                    cli_println!("  -- Meters --");
+                    for (key, val) in meters {
+                        if let Some(obj) = val.as_object() {
+                            let count = obj.get("count").and_then(|v| v.as_u64()).unwrap_or(0);
+                            let rate = obj.get("meanRate").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                            cli_println!("  {}: {} count, {:.2}/s avg", key, count, rate);
+                        }
+                    }
+                }
+            }
+            json_field("backend_metrics", metrics);
+        }
+        Err(e) => {
+            cli_println!("  (server not running or metrics unavailable: {})", e);
+            json_field("backend_metrics", json!(null));
+        }
+    }
+
+    Ok(())
+}
+
+/// GET a JSON endpoint and return the parsed Value.
+async fn get_json(client: &Client, url: &str) -> Result<Value, String> {
+    let response = client.get(url).send().await
+        .map_err(|e| format!("HTTP request failed: {e}"))?;
+    if !response.status().is_success() {
+        return Err(format!("HTTP {}", response.status()));
+    }
+    response.json::<Value>().await
+        .map_err(|e| format!("JSON parse failed: {e}"))
+}
+
 fn should_ensure_server_running(command: &str) -> bool {
     command != "close"
         && command != "close-all"
@@ -5867,6 +5988,7 @@ fn should_ensure_server_running(command: &str) -> bool {
         && command != "upgrade"
         && command != "stop"
         && command != "status"
+        && command != "doctor"
 }
 
 // ---------------------------------------------------------------------------
@@ -6960,6 +7082,9 @@ async fn run(
         "status" => {
             handle_status(&client, &base_url).await?;
         }
+        "doctor" => {
+            handle_doctor(&client, &base_url, &parsed).await?;
+        }
         "delete-data" => {
             handle_delete_data(&client, &base_url, global.session_name.as_deref()).await?;
         }
@@ -7678,6 +7803,11 @@ mod tests {
     }
 
     #[test]
+    fn no_snapshot_commands_include_doctor() {
+        assert!(no_snapshot_commands().contains("doctor"));
+    }
+
+    #[test]
     fn no_snapshot_commands_include_state_save() {
         assert!(no_snapshot_commands().contains("state-save"));
     }
@@ -8145,6 +8275,11 @@ mod tests {
     #[test]
     fn should_not_ensure_server_for_install() {
         assert!(!should_ensure_server_running("install"));
+    }
+
+    #[test]
+    fn should_not_ensure_server_for_doctor() {
+        assert!(!should_ensure_server_running("doctor"));
     }
 
     #[test]

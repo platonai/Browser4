@@ -88,7 +88,10 @@ class DomSnapshotHandler(
         return try {
             val result = managed.withLock {
                 val pulsarSession = managed.agenticSession
-                val url = pulsarSession.normalize(driver.userTypedUrl())
+                // Use current URL to match the key used when pages are stored via domsnapshot capture.
+                // driver.currentUrl() reflects the actual page after navigations/redirects, whereas
+                // driver.userTypedUrl() stays at the originally-typed URL and misses search-results pages.
+                val url = pulsarSession.normalize(driver.currentUrl())
                 val page = pulsarSession.getOrNull(url.urlString) ?: pulsarSession.capture(managed.driver)
                 val document = pulsarSession.parse(page)
 
@@ -104,6 +107,71 @@ class DomSnapshotHandler(
         } catch (e: Exception) {
             logger.error("dom_snapshot_scrape failed | {}", e.message, e)
             ResponseEntity.ok(errorResponse("dom_snapshot_scrape failed: ${e.message}"))
+        }
+    }
+
+    /**
+     * Like [handleDomSnapshotScrape] but returns ALL matching elements (querySelectorAll
+     * semantics) instead of only the first.  Supports [offset] and [limit] for pagination.
+     */
+    suspend fun handleDomSnapshotScrapeAll(
+        request: MCPToolCallRequest
+    ): ResponseEntity<MCPToolCallResponse> {
+        val sessionId = requireSessionId(request)
+        val args = request.arguments ?: emptyMap()
+        val field = args["field"]?.toString() ?: ""
+        val selector = args["selector"]?.toString()?.ifEmpty { ":root" } ?: ":root"
+        val attrName = args["attrName"]?.toString()
+        val offset = (args["offset"] as? Number)?.toInt() ?: 0
+        val limit = (args["limit"] as? Number)?.toInt() ?: -1
+
+        // Validate field
+        if (field !in setOf("text", "html", "attr")) {
+            return ResponseEntity.ok(errorResponse("Unknown field '$field'. Use text, html, or attr."))
+        }
+
+        // Validate attr field requires an attribute name
+        if (field == "attr" && attrName.isNullOrBlank()) {
+            return ResponseEntity.ok(errorResponse("The 'attr' field requires an attribute name."))
+        }
+
+        // Reject element references
+        if (isElementReference(selector)) {
+            return ResponseEntity.ok(
+                errorResponse(
+                    "Element references ('$selector') are not supported in domsnapshot get. Use a CSS selector instead."
+                )
+            )
+        }
+
+        val managed = sessionManager.getSession(sessionId)
+            ?: return ResponseEntity.ok(errorResponse("${MCPConstants.ERROR_SESSION_NOT_FOUND}$sessionId"))
+
+        return try {
+            val results = managed.withLock {
+                val pulsarSession = managed.agenticSession
+                val url = pulsarSession.normalize(driver.currentUrl())
+                val page = pulsarSession.getOrNull(url.urlString) ?: pulsarSession.capture(managed.driver)
+                val document = pulsarSession.parse(page)
+
+                val elements = document.select(selector)
+                val paginated = if (offset > 0) elements.drop(offset) else elements
+                val limited = if (limit > 0) paginated.take(limit) else paginated
+
+                limited.map { element ->
+                    when (field) {
+                        "text" -> element.text()
+                        "html" -> element.html()
+                        "attr" -> element.attr(attrName!!) ?: ""
+                        else -> ""
+                    }
+                }
+            }
+
+            ResponseEntity.ok(textResponse(jacksonObjectMapper().writeValueAsString(results)))
+        } catch (e: Exception) {
+            logger.error("dom_snapshot_scrape_all failed | {}", e.message, e)
+            ResponseEntity.ok(errorResponse("dom_snapshot_scrape_all failed: ${e.message}"))
         }
     }
 
@@ -123,7 +191,7 @@ class DomSnapshotHandler(
                 val managed = sessionManager.getSession(sessionId)
                     ?: return ResponseEntity.ok(errorResponse("${MCPConstants.ERROR_SESSION_NOT_FOUND}$sessionId"))
                 val pulsarSession = managed.agenticSession
-                pulsarSession.normalize(managed.driver.userTypedUrl()).urlString
+                pulsarSession.normalize(managed.driver.currentUrl()).urlString
             }
 
         val processedSql = SQLTemplate(sql).createSQL(url)
@@ -148,7 +216,7 @@ class DomSnapshotHandler(
         return try {
             val html = managed.withLock {
                 val pulsarSession = managed.agenticSession
-                val url = pulsarSession.normalize(managed.driver.userTypedUrl())
+                val url = pulsarSession.normalize(managed.driver.currentUrl())
                 val document = pulsarSession.loadDocument(url.urlString)
                 document.outerHtml
             }
@@ -169,7 +237,7 @@ class DomSnapshotHandler(
         return try {
             val summary = managed.withLock {
                 val pulsarSession = managed.agenticSession
-                val url = pulsarSession.normalize(managed.driver.userTypedUrl())
+                val url = pulsarSession.normalize(managed.driver.currentUrl())
                 val document = pulsarSession.loadDocument(url.urlString)
                 val title = document.title
                 val pageUrl = url.urlString

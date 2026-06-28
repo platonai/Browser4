@@ -98,7 +98,7 @@ function New-Browser4EvalPrompt {
         $helpCmd   = '`browser4-cli help`'
         $skillPath = 'https://browser4.io/SKILL.md'
     } else {
-        $helpCmd   = '`cd cli/browser4-cli && cargo run -- help`'
+        $helpCmd   = '`browser4-cli help` (if not installed: `npm install -g browser4-cli`; if developing from source: `cd cli/browser4-cli && cargo run -- help`)'
         $skillPath = '`skill/SKILL.md`'
     }
 

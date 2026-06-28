@@ -1018,8 +1018,10 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "boxes", description: "Include each element's bounding box as [box=x,y,width,height]", is_bool: true, short: None },
                 OptionDef { name: "interactive", description: "Only show interactive elements (buttons, links, inputs)", is_bool: true, short: Some("i") },
                 OptionDef { name: "urls", description: "Include href URLs for link elements", is_bool: true, short: Some("u") },
-                OptionDef { name: "compact", description: "Remove empty structural elements", is_bool: true, short: Some("c") },
+                OptionDef { name: "compact", description: "Remove empty structural elements (enabled by default)", is_bool: true, short: Some("c") },
+                OptionDef { name: "no-compact", description: "Disable compact mode; include all structural nodes", is_bool: true, short: None },
                 OptionDef { name: "depth", description: "Limit tree depth to n levels", is_bool: false, short: Some("d") },
+                OptionDef { name: "limit", description: "Cap total rendered nodes at n (truncates with notice)", is_bool: false, short: Some("l") },
                 OptionDef { name: "selector", description: "Scope snapshot to a CSS selector", is_bool: false, short: Some("s") },
                 OptionDef { name: "raw", description: "Strip page info and return only snapshot content", is_bool: true, short: None },
                 OptionDef { name: "viewport", description: "Capture only specified viewports: <index>,<limit> (0-based index, limit count)", is_bool: false, short: Some("vp") },
@@ -1031,9 +1033,13 @@ pub fn all_commands() -> Vec<CommandDef> {
                 if let Some(true) = get_bool(args, "boxes") { p["boxes"] = json!(true); }
                 if let Some(true) = get_bool(args, "interactive") { p["interactive"] = json!(true); }
                 if let Some(true) = get_bool(args, "urls") { p["urls"] = json!(true); }
-                if let Some(true) = get_bool(args, "compact") { p["compact"] = json!(true); }
+                if let Some(true) = get_bool(args, "no-compact") { p["compact"] = json!(false); }
+                else if let Some(true) = get_bool(args, "compact") { p["compact"] = json!(true); }
                 if let Some(d) = get_opt_str(args, "depth") {
                     if let Ok(n) = d.parse::<i32>() { p["depth"] = json!(n); }
+                }
+                if let Some(l) = get_opt_str(args, "limit") {
+                    if let Ok(n) = l.parse::<i32>() { p["limit"] = json!(n); }
                 }
                 if let Some(s) = get_opt_str(args, "selector") { p["selector"] = json!(s); }
                 if let Some(v) = get_opt_str(args, "viewport") { p["viewport"] = json!(v); }
@@ -1672,6 +1678,48 @@ pub fn all_commands() -> Vec<CommandDef> {
                 params
             },
         },
+        CommandDef {
+            name: "doctor",
+            description: "Run system diagnostics: build info, logs, and metrics",
+            category: Category::Browsers,
+            hidden: false,
+            batch_supported: false,
+            args: &[],
+            options: &[
+                OptionDef {
+                    name: "server",
+                    description: "Server URL to check (defaults to saved or http://127.0.0.1:8182)",
+                    is_bool: false,
+                    short: None,
+                },
+                OptionDef {
+                    name: "file",
+                    description: "Backend log file to tail (default: pulsar). Available logs: pulsar, pulsar.api, pulsar.s, pulsar.hv, pulsar.bs, pulsar.pg, pulsar.m, pulsar.c, pulsar.sql, pulsar.dc",
+                    is_bool: false,
+                    short: None,
+                },
+                OptionDef {
+                    name: "lines",
+                    description: "Number of recent log lines to show (default: 50, max: 500)",
+                    is_bool: false,
+                    short: None,
+                },
+            ],
+            tool_name_fn: |_| String::new(),
+            tool_params_fn: |args| {
+                let mut params = json!({});
+                if let Some(server) = get_opt_str(args, "server") {
+                    params["server"] = json!(server);
+                }
+                if let Some(file) = get_opt_str(args, "file") {
+                    params["file"] = json!(file);
+                }
+                if let Some(lines) = get_opt_str(args, "lines") {
+                    params["lines"] = json!(lines);
+                }
+                params
+            },
+        },
         // ---- Agent ----
         CommandDef {
             name: "extract",
@@ -1987,6 +2035,36 @@ pub fn all_commands() -> Vec<CommandDef> {
             },
         },
         CommandDef {
+            name: "domsnapshot-get-all",
+            description: "Extract ALL matching elements from the DOM snapshot (querySelectorAll semantics); supports --offset and --limit for pagination",
+            category: Category::Snapshot,
+            hidden: false,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "field", description: "What to extract: text, html, or attr", optional: false },
+                ArgDef { name: "selector", description: "CSS selector (defaults to :root; required for attr)", optional: true },
+                ArgDef { name: "name", description: "Attribute name (required for attr field)", optional: true },
+            ],
+            options: &[
+                OptionDef { name: "offset", description: "Skip the first n results (0-based)", is_bool: false, short: None },
+                OptionDef { name: "limit", description: "Return at most n results", is_bool: false, short: None },
+            ],
+            tool_name_fn: |_| "dom_snapshot_scrape_all".to_string(),
+            tool_params_fn: |args| {
+                let field = get_str(args, "field").unwrap_or_default();
+                let selector = get_opt_str(args, "selector").unwrap_or(":root");
+                let mut p = json!({ "field": field, "selector": selector });
+                if let Some(name) = get_opt_str(args, "name") { p["attrName"] = json!(name); }
+                if let Some(off) = get_opt_str(args, "offset") {
+                    if let Ok(n) = off.parse::<i32>() { p["offset"] = json!(n); }
+                }
+                if let Some(lim) = get_opt_str(args, "limit") {
+                    if let Ok(n) = lim.parse::<i32>() { p["limit"] = json!(n); }
+                }
+                p
+            },
+        },
+        CommandDef {
             name: "domsnapshot-query",
             description: "Run X-SQL against the DOM snapshot stored in Browser4's page storage via the scrape API",
             category: Category::Snapshot,
@@ -2126,6 +2204,7 @@ mod tests {
             "close",
             "install",
             "uninstall",
+            "doctor",
             "batch",
             "loop",
             "goto",
@@ -2879,6 +2958,23 @@ mod tests {
     }
 
     #[test]
+    fn test_doctor_command_defined() {
+        let map = commands_map();
+        let cmd = map.get("doctor").expect("doctor command must exist");
+        assert!(!cmd.hidden);
+        assert_eq!(cmd.category, Category::Browsers);
+        assert!(!cmd.batch_supported);
+        assert_eq!(cmd.args.len(), 0);
+        assert_eq!(cmd.options.len(), 3);
+        let option_names: Vec<&str> = cmd.options.iter().map(|o| o.name).collect();
+        assert!(option_names.contains(&"server"));
+        assert!(option_names.contains(&"file"));
+        assert!(option_names.contains(&"lines"));
+        let args: HashMap<String, Value> = HashMap::new();
+        assert!((cmd.tool_name_fn)(&args).is_empty());
+    }
+
+    #[test]
     fn test_close_all_no_args() {
         let map = commands_map();
         let cmd = map.get("close-all").expect("close-all command must exist");
@@ -3312,6 +3408,7 @@ mod tests {
         for expected in &[
             "domsnapshot",
             "domsnapshot-get",
+            "domsnapshot-get-all",
             "domsnapshot-query",
             "domsnapshot-export",
             "domsnapshot-summary",
@@ -3425,6 +3522,7 @@ mod tests {
         for name in &[
             "domsnapshot",
             "domsnapshot-get",
+            "domsnapshot-get-all",
             "domsnapshot-query",
             "domsnapshot-export",
             "domsnapshot-summary",
@@ -3433,6 +3531,131 @@ mod tests {
             let cmd = map.get(*name).unwrap();
             assert_eq!(cmd.category, Category::Snapshot);
         }
+    }
+
+    // -------------------------------------------------------------------
+    // domsnapshot-get-all tests
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn test_dom_snapshot_get_all_text_params() {
+        let map = commands_map();
+        let cmd = map.get("domsnapshot-get-all").unwrap();
+        let mut args = HashMap::new();
+        args.insert("field".to_string(), json!("text"));
+        args.insert("selector".to_string(), json!(".product"));
+        assert_eq!((cmd.tool_name_fn)(&args), "dom_snapshot_scrape_all");
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["field"], "text");
+        assert_eq!(params["selector"], ".product");
+    }
+
+    #[test]
+    fn test_dom_snapshot_get_all_html_defaults_selector_to_root() {
+        let map = commands_map();
+        let cmd = map.get("domsnapshot-get-all").unwrap();
+        let mut args = HashMap::new();
+        args.insert("field".to_string(), json!("html"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["field"], "html");
+        assert_eq!(params["selector"], ":root");
+    }
+
+    #[test]
+    fn test_dom_snapshot_get_all_attr_params() {
+        let map = commands_map();
+        let cmd = map.get("domsnapshot-get-all").unwrap();
+        let mut args = HashMap::new();
+        args.insert("field".to_string(), json!("attr"));
+        args.insert("selector".to_string(), json!(".product"));
+        args.insert("name".to_string(), json!("data-id"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["field"], "attr");
+        assert_eq!(params["selector"], ".product");
+        assert_eq!(params["attrName"], "data-id");
+    }
+
+    #[test]
+    fn test_dom_snapshot_get_all_with_offset_and_limit() {
+        let map = commands_map();
+        let cmd = map.get("domsnapshot-get-all").unwrap();
+        let mut args = HashMap::new();
+        args.insert("field".to_string(), json!("text"));
+        args.insert("selector".to_string(), json!("h2 a"));
+        args.insert("offset".to_string(), json!("10"));
+        args.insert("limit".to_string(), json!("5"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["field"], "text");
+        assert_eq!(params["offset"], 10);
+        assert_eq!(params["limit"], 5);
+    }
+
+    #[test]
+    fn test_dom_snapshot_get_all_rejects_invalid_offset() {
+        let map = commands_map();
+        let cmd = map.get("domsnapshot-get-all").unwrap();
+        let mut args = HashMap::new();
+        args.insert("field".to_string(), json!("text"));
+        args.insert("offset".to_string(), json!("abc"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert!(params.get("offset").is_none(), "non-numeric offset should be ignored");
+    }
+
+    #[test]
+    fn test_dom_snapshot_get_all_rejects_invalid_limit() {
+        let map = commands_map();
+        let cmd = map.get("domsnapshot-get-all").unwrap();
+        let mut args = HashMap::new();
+        args.insert("field".to_string(), json!("text"));
+        args.insert("limit".to_string(), json!("xyz"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert!(params.get("limit").is_none(), "non-numeric limit should be ignored");
+    }
+
+    // -------------------------------------------------------------------
+    // snapshot --limit and --no-compact tests
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn test_snapshot_limit_param() {
+        let map = commands_map();
+        let cmd = map.get("snapshot").unwrap();
+        let mut args = HashMap::new();
+        args.insert("limit".to_string(), json!("200"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["limit"], 200);
+    }
+
+    #[test]
+    fn test_snapshot_limit_rejects_invalid() {
+        let map = commands_map();
+        let cmd = map.get("snapshot").unwrap();
+        let mut args = HashMap::new();
+        args.insert("limit".to_string(), json!("abc"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert!(params.get("limit").is_none(), "non-numeric limit should be ignored");
+    }
+
+    #[test]
+    fn test_snapshot_no_compact_sends_false() {
+        let map = commands_map();
+        let cmd = map.get("snapshot").unwrap();
+        let mut args = HashMap::new();
+        args.insert("no-compact".to_string(), json!(true));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["compact"], false, "--no-compact should send compact=false");
+    }
+
+    #[test]
+    fn test_snapshot_no_compact_overrides_compact_flag() {
+        let map = commands_map();
+        let cmd = map.get("snapshot").unwrap();
+        let mut args = HashMap::new();
+        args.insert("no-compact".to_string(), json!(true));
+        args.insert("compact".to_string(), json!(true));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["compact"], false,
+            "--no-compact should take precedence over --compact");
     }
 
     // -------------------------------------------------------------------

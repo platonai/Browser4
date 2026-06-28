@@ -56,6 +56,7 @@ class ToolListHandler(
                     "browser_tabs",
                     "dom_snapshot_capture",
                     "dom_snapshot_scrape",
+                    "dom_snapshot_scrape_all",
                     "dom_snapshot_query",
                     "dom_snapshot_export",
                     "dom_snapshot_summary",

@@ -4,6 +4,7 @@ import ai.platon.pulsar.agentic.PerceptiveAgent
 import ai.platon.pulsar.agentic.model.ExtractionSchema
 import ai.platon.pulsar.agentic.tools.specs.ToolSpecGenerator
 import ai.platon.pulsar.common.getLogger
+import ai.platon.pulsar.external.ChatModelFactory
 import kotlin.reflect.KClass
 
 class AgentToolExecutor : AbstractToolExecutor() {
@@ -22,6 +23,53 @@ class AgentToolExecutor : AbstractToolExecutor() {
             "extract" -> extractHelp()
             else -> toolSpec[method]?.description ?: ""
         }
+    }
+
+    /**
+     * Verify that an LLM provider is configured before attempting AI-powered operations.
+     *
+     * Uses [ChatModelFactory.isModelConfigured] as the primary check because it
+     * understands all provider-specific configuration keys and validation rules.
+     * Falls back to a manual env-var / system-property scan in case the factory
+     * method has a bug (e.g. false negative after a config reload).
+     */
+    private fun requireLLMConfigured(agent: PerceptiveAgent) {
+        val config = agent.session.configuration
+
+        // Primary: delegate to the factory's own validation
+        val factorySaysConfigured = try {
+            ChatModelFactory.isModelConfigured(config)
+        } catch (e: Exception) {
+            logger.warn("ChatModelFactory.isModelConfigured threw; falling back to manual check: {}", e.message)
+            false
+        }
+
+        if (factorySaysConfigured) return  // fast path — factory confirms LLM is ready
+
+        // Fallback: manual check in case the factory has a bug
+        val apiKey = System.getProperty("llm.api.key")
+            ?: System.getProperty("LLM_API_KEY")
+            ?: System.getenv("LLM_API_KEY")
+            ?: System.getenv("DEEPSEEK_API_KEY")
+            ?: System.getenv("OPENROUTER_API_KEY")
+            ?: System.getenv("VOLCENGINE_API_KEY")
+            ?: System.getenv("OPENAI_API_KEY")
+
+        if (!apiKey.isNullOrBlank()) {
+            logger.warn("ChatModelFactory.isModelConfigured returned false but an API key was found " +
+                "in environment/properties — possible factory bug; proceeding anyway")
+            return
+        }
+
+        throw UnsupportedOperationException(
+            "LLM API key is not configured. To use extract/summarize/agent commands, set one of:\n" +
+            "  - Environment variable: DEEPSEEK_API_KEY=sk-...\n" +
+            "  - Environment variable: OPENROUTER_API_KEY=...\n" +
+            "  - Environment variable: VOLCENGINE_API_KEY=...\n" +
+            "  - Environment variable: OPENAI_API_KEY=sk-...\n" +
+            "  - Or set LLM_PROVIDER, LLM_NAME, LLM_API_KEY system properties\n" +
+            "See skill/references/agent.md for full configuration details."
+        )
     }
 
     /**
@@ -50,6 +98,7 @@ class AgentToolExecutor : AbstractToolExecutor() {
             }
             // agent.extract(instruction: String) OR agent.extract(instruction: String, schema: Map<String,String>)
             "extract" -> {
+                requireLLMConfigured(agent)
                 return if ("schema" in args) {
                     validateArgs(
                         args,
@@ -66,10 +115,12 @@ class AgentToolExecutor : AbstractToolExecutor() {
                 }
             }
             "run" -> {
+                requireLLMConfigured(agent)
                 validateArgs(args, allowed = setOf("task"), required = setOf("task"), functionName)
                 agent.run(paramString(args, "task", functionName)!!)
             }
             "summarize" -> {
+                requireLLMConfigured(agent)
                 validateArgs(args, allowed = setOf("instruction", "selector"), required = setOf(), functionName)
                 val instruction = paramString(args, "instruction", functionName, required = false)
                 val selector = paramString(args, "selector", functionName, required = false)
