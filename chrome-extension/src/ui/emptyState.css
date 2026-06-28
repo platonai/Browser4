@@ -1,0 +1,65 @@
+/*
+  Copyright (c) Platon AI.
+
+  Licensed under the Apache License, Version 2.0 (the "License");
+  you may not use this file except in compliance with the License.
+  You may obtain a copy of the License at
+
+      http://www.apache.org/licenses/LICENSE-2.0
+
+  Unless required by applicable law or agreed to in writing, software
+  distributed under the License is distributed on an "AS IS" BASIS,
+  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+  See the License for the specific language governing permissions and
+  limitations under the License.
+*/
+
+@import './colors.css';
+
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 32px 16px;
+}
+
+.empty-state-icon {
+  color: var(--color-fg-muted);
+  margin-bottom: 16px;
+}
+
+.empty-state-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--color-fg-default);
+  margin: 0 0 8px 0;
+}
+
+.empty-state-description {
+  font-size: 13px;
+  color: var(--color-fg-muted);
+  margin: 0 0 16px 0;
+  line-height: 1.5;
+  max-width: 360px;
+}
+
+.empty-state-description code {
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  font-size: 12px;
+  background-color: var(--color-canvas-subtle);
+  padding: 2px 6px;
+  border-radius: 3px;
+  border: 1px solid var(--color-border-muted);
+}
+
+.empty-state-link {
+  font-size: 13px;
+  color: var(--color-accent-fg);
+  text-decoration: none;
+  font-weight: 500;
+}
+
+.empty-state-link:hover {
+  text-decoration: underline;
+}

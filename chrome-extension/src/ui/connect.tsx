@@ -16,8 +16,11 @@
 
 import React, { useCallback, useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
+import { Header } from './header';
+import { Footer } from './footer';
 import { Button, TabItem } from './tabItem';
 import { AuthTokenSection, getOrCreateAuthToken } from './authToken';
+import * as icons from './icons';
 
 type Status =
   | { type: 'connecting'; message: string }
@@ -29,9 +32,11 @@ const ConnectApp: React.FC = () => {
   const [status, setStatus] = useState<Status | null>(null);
   const [showTabList, setShowTabList] = useState(true);
   const [clientInfo, setClientInfo] = useState('unknown');
+  const [tabsLoading, setTabsLoading] = useState(false);
 
   const setError = useCallback((message: string) => {
     setShowTabList(false);
+    setTabsLoading(false);
     setStatus({ type: 'error', message });
   }, []);
 
@@ -102,11 +107,14 @@ const ConnectApp: React.FC = () => {
   }, []);
 
   const loadTabs = useCallback(async () => {
+    setTabsLoading(true);
     const response = await chrome.runtime.sendMessage({ type: 'getTabs' });
-    if (response.success)
+    if (response.success) {
       setTabs(response.tabs);
-    else
+    } else {
       setStatus({ type: 'error', message: 'Failed to load tabs: ' + response.error });
+    }
+    setTabsLoading(false);
   }, []);
 
   const handleConnectToTab = useCallback(async (tab?: chrome.tabs.Tab) => {
@@ -151,44 +159,116 @@ const ConnectApp: React.FC = () => {
   return (
     <div className='app-container'>
       <div className='content-wrapper'>
+        <Header />
+
         {status && (
-          <div className='status-container'>
-            <StatusBanner status={status} />
+          <div className='card'>
+            <StatusBanner
+              status={status}
+              onRetry={
+                status.type === 'error' && status.message.includes('tabs')
+                  ? loadTabs
+                  : undefined
+              }
+              retryLabel='Reload tabs'
+            />
           </div>
         )}
 
         {status?.type === 'connecting' && (
-          <div className='warning-banner'>
-            <strong>⚠️ Warning:</strong> Allowing this connection exposes the entire browser to the client,
-            including any signed-in sessions, cookies, and content in other tabs and windows.
-            Once approved, the client may also be able to reconnect later without showing this dialog again,
-            unless you regenerate the token below and then restart the browser.
+          <div className='card'>
+            <div className='warning-banner'>
+              <strong>⚠️ Warning:</strong> Allowing this connection exposes the entire browser to the client,
+              including any signed-in sessions, cookies, and content in other tabs and windows.
+              Once approved, the client may also be able to reconnect later without showing this dialog again,
+              unless you regenerate the token below and then restart the browser.
+            </div>
           </div>
         )}
 
         {status?.type === 'connecting' && (
-          <AuthTokenSection />
+          <div className='card'>
+            <h3 className='card-title'>Authentication Token</h3>
+            <AuthTokenSection />
+          </div>
         )}
 
         {showTabList && (
-          <div>
-            <div className='tab-section-title'>
-              You can drag tabs into the Browser4 group later to make them accessible to the client.
-              Optionally, select a tab to allow and immediately switch to it:
-            </div>
-            <div>
-              {tabs.map(tab => (
-                <TabItem
-                  key={tab.id}
-                  tab={tab}
-                  button={
-                    <Button variant='primary' onClick={() => handleConnectToTab(tab)}>
-                      Allow &amp; select
-                    </Button>
-                  }
-                />
-              ))}
-            </div>
+          <div className='card'>
+            {tabsLoading ? (
+              <div aria-busy='true' aria-label='Loading tabs'>
+                {[1, 2, 3].map(i => (
+                  <div className='skeleton-row' key={i}>
+                    <div className='skeleton skeleton-favicon' />
+                    <div className='skeleton-text'>
+                      <div className='skeleton skeleton-title' />
+                      <div className='skeleton skeleton-url' />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <>
+                <div className='tab-section-title'>
+                  You can drag tabs into the Browser4 group later to make them accessible to the client.
+                  Optionally, select a tab to allow and immediately switch to it:
+                </div>
+                <div>
+                  {tabs.map(tab => (
+                    <TabItem
+                      key={tab.id}
+                      tab={tab}
+                      button={
+                        <Button variant='primary' onClick={() => handleConnectToTab(tab)}>
+                          Allow &amp; select
+                        </Button>
+                      }
+                    />
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+        )}
+
+        <Footer />
+      </div>
+    </div>
+  );
+};
+
+interface StatusBannerProps {
+  status: Status;
+  onRetry?: () => void;
+  retryLabel?: string;
+}
+
+const StatusBanner: React.FC<StatusBannerProps> = ({ status, onRetry, retryLabel }) => {
+  const iconMap: Record<string, React.ReactNode> = {
+    connected: <span className='status-banner-icon' aria-hidden='true'>{icons.check()}</span>,
+    connecting: <Spinner />,
+    error: <span className='status-banner-icon' aria-hidden='true'>{icons.cross()}</span>,
+  };
+
+  return (
+    <div
+      className={`status-banner ${status.type}`}
+      role='status'
+      aria-live='polite'
+    >
+      {iconMap[status.type] || icons.check()}
+      <div className='status-banner-body'>
+        <div>{status.message}</div>
+        {status.type === 'error' && onRetry && (
+          <div className='status-banner-action'>
+            <button
+              className='status-banner-retry-btn'
+              onClick={onRetry}
+              type='button'
+            >
+              {icons.refresh()}
+              {retryLabel || 'Retry'}
+            </button>
           </div>
         )}
       </div>
@@ -196,13 +276,25 @@ const ConnectApp: React.FC = () => {
   );
 };
 
-const StatusBanner: React.FC<{ status: Status }> = ({ status }) => {
-  return (
-    <div className={`status-banner ${status.type}`}>
-      {status.message}
-    </div>
-  );
-};
+/** Simple inline spinner for the connecting state. */
+const Spinner: React.FC = () => (
+  <span className='status-banner-icon' aria-hidden='true'>
+    <svg className='octicon' viewBox='0 0 16 16' width='16' height='16'>
+      <style>{`@keyframes b4-spin{to{transform:rotate(360deg)}}`}</style>
+      <g style={{ transformOrigin: '8px 8px', animation: 'b4-spin 1s linear infinite' }}>
+        <path
+          d='M8 2a6 6 0 100 12A6 6 0 008 2zM1.5 8a6.5 6.5 0 1113 0 6.5 6.5 0 01-13 0z'
+          fill='currentColor'
+          opacity='0.2'
+        />
+        <path
+          d='M8 1.5a.75.75 0 010 1.5A5 5 0 103 8a.75.75 0 01-1.5 0A6.5 6.5 0 118 1.5z'
+          fill='currentColor'
+        />
+      </g>
+    </svg>
+  </span>
+);
 
 // Initialize the React app
 const container = document.getElementById('root');

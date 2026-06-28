@@ -15,19 +15,25 @@
  */
 
 import React from 'react';
+import { chevronDown } from './icons';
 
-export const Button: React.FC<{ variant: 'primary' | 'default' | 'reject'; onClick: () => void; children: React.ReactNode }> = ({
-  variant,
-  onClick,
-  children
-}) => {
+const FALLBACK_FAVICON =
+  'data:image/svg+xml,' +
+  '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">' +
+  '<rect width="16" height="16" fill="%23eaeef2" rx="2"/>' +
+  '</svg>';
+
+export const Button: React.FC<{
+  variant: 'primary' | 'default' | 'reject';
+  onClick: () => void;
+  children: React.ReactNode;
+}> = ({ variant, onClick, children }) => {
   return (
-    <button className={`button ${variant}`} onClick={onClick}>
+    <button className={`button ${variant}`} onClick={onClick} type="button">
       {children}
     </button>
   );
 };
-
 
 export interface TabItemProps {
   tab: chrome.tabs.Tab;
@@ -35,25 +41,48 @@ export interface TabItemProps {
   button?: React.ReactNode;
 }
 
-export const TabItem: React.FC<TabItemProps> = ({
-  tab,
-  onClick,
-  button
-}) => {
+export const TabItem: React.FC<TabItemProps> = ({ tab, onClick, button }) => {
+  const isClickable = !!onClick;
+  const faviconUrl = tab.favIconUrl || FALLBACK_FAVICON;
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if ((e.key === 'Enter' || e.key === ' ') && isClickable) {
+      e.preventDefault();
+      onClick?.();
+    }
+  };
+
   return (
-    <div className='tab-item' onClick={onClick} style={onClick ? { cursor: 'pointer' } : undefined}>
+    <div
+      className={`tab-item${isClickable ? ' clickable' : ''}`}
+      onClick={onClick}
+      role={isClickable ? 'button' : undefined}
+      tabIndex={isClickable ? 0 : undefined}
+      onKeyDown={isClickable ? handleKeyDown : undefined}
+      aria-label={
+        isClickable
+          ? `Switch to tab: ${tab.title || 'Untitled'}`
+          : undefined
+      }
+    >
       <img
-        src={tab.favIconUrl || 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16"><rect width="16" height="16" fill="%23f6f8fa"/></svg>'}
-        alt=''
-        className='tab-favicon'
+        src={faviconUrl}
+        alt=""
+        className="tab-favicon"
+        onError={(e) => {
+          (e.target as HTMLImageElement).src = FALLBACK_FAVICON;
+        }}
       />
-      <div className='tab-content'>
-        <div className='tab-title'>
-          {tab.title || 'Untitled'}
-        </div>
-        <div className='tab-url'>{tab.url}</div>
+      <div className="tab-content">
+        <div className="tab-title">{tab.title || 'Untitled'}</div>
+        <div className="tab-url">{tab.url}</div>
       </div>
       {button}
+      {isClickable && !button && (
+        <span className="tab-item-chevron" aria-hidden="true">
+          {chevronDown()}
+        </span>
+      )}
     </div>
   );
 };

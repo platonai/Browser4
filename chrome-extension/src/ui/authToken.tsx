@@ -21,6 +21,7 @@ import './authToken.css';
 
 export const AuthTokenSection: React.FC<{}> = ({}) => {
   const [authToken, setAuthToken] = useState<string>(getOrCreateAuthToken);
+  const [showExample, setShowExample] = useState(false);
 
   const onRegenerateToken = useCallback(() => {
     const newToken = generateAuthToken();
@@ -29,14 +30,52 @@ export const AuthTokenSection: React.FC<{}> = ({}) => {
   }, []);
 
   return (
-    <div className='auth-token-section'>
-      <div className='auth-token-description'>
+    <div className="auth-token-section">
+      <div className="auth-token-description">
         Set this environment variable to bypass the connection dialog:
       </div>
-      <div className='auth-token-container'>
-        <code className='auth-token-code'>{authTokenCode(authToken)}</code>
-        <button className='auth-token-refresh' title='Generate new token' aria-label='Generate new token'onClick={onRegenerateToken}>{icons.refresh()}</button>
+      <div className="auth-token-container">
+        <code className="auth-token-code">{authTokenCode(authToken)}</code>
+        <button
+          className="auth-token-refresh"
+          title="Generate new token"
+          aria-label="Generate new token"
+          onClick={onRegenerateToken}
+          type="button"
+        >
+          {icons.refresh()}
+        </button>
         <CopyToClipboard value={authTokenCode(authToken)} />
+      </div>
+
+      {/* Collapsible usage example */}
+      <div className="auth-token-example-section">
+        <button
+          className="auth-token-example-toggle"
+          onClick={() => setShowExample(v => !v)}
+          aria-expanded={showExample}
+          aria-controls="auth-token-example-content"
+          type="button"
+        >
+          <span
+            className={`auth-token-chevron ${showExample ? 'expanded' : ''}`}
+            aria-hidden="true"
+          >
+            {icons.chevronDown()}
+          </span>
+          Usage example
+        </button>
+        {showExample && (
+          <div id="auth-token-example-content" className="auth-token-example-content">
+            <div className="auth-token-example-description">
+              Pass this token to the Browser4 CLI to skip the connection dialog:
+            </div>
+            <div className="auth-token-example-config">
+              <code className="auth-token-example-code">{authTokenCode(authToken)}</code>
+              <CopyToClipboard value={authTokenCode(authToken)} />
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -52,14 +91,14 @@ function generateAuthToken(): string {
   crypto.getRandomValues(array);
   // Convert to base64 and make it URL-safe
   return btoa(String.fromCharCode.apply(null, Array.from(array)))
-      .replace(/[+/=]/g, match => {
-        switch (match) {
-          case '+': return '-';
-          case '/': return '_';
-          case '=': return '';
-          default: return match;
-        }
-      });
+    .replace(/[+/=]/g, match => {
+      switch (match) {
+        case '+': return '-';
+        case '/': return '_';
+        case '=': return '';
+        default: return match;
+      }
+    });
 }
 
 export const getOrCreateAuthToken = (): string => {

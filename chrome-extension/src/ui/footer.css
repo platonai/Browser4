@@ -1,4 +1,4 @@
-<!--
+/*
   Copyright (c) Platon AI.
 
   Licensed under the Apache License, Version 2.0 (the "License");
@@ -12,20 +12,36 @@
   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
   See the License for the specific language governing permissions and
   limitations under the License.
--->
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Browser4 UI Demo</title>
-  <link rel="icon" type="image/png" sizes="32x32" href="../../icons/icon-32.png">
-  <link rel="icon" type="image/png" sizes="16x16" href="../../icons/icon-16.png">
-  <link rel="stylesheet" href="demo.css">
-</head>
-<body>
-  <div id="root"></div>
-  <script type="module" src="dev-mock-chrome.ts"></script>
-  <script type="module" src="demo.tsx"></script>
-</body>
-</html>
+*/
+
+@import './colors.css';
+
+.app-footer {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 16px 0 0 0;
+  margin-top: 24px;
+  border-top: 1px solid var(--color-border-muted);
+  font-size: 12px;
+  color: var(--color-fg-muted);
+}
+
+.app-footer-version {
+  color: var(--color-fg-subtle);
+}
+
+.app-footer-separator {
+  color: var(--color-border-muted);
+  user-select: none;
+}
+
+.app-footer-link {
+  color: var(--color-accent-fg);
+  text-decoration: none;
+}
+
+.app-footer-link:hover {
+  text-decoration: underline;
+}

@@ -16,8 +16,12 @@
 
 import React from 'react';
 import { createRoot } from 'react-dom/client';
+import { Header } from './header';
+import { Footer } from './footer';
+import { EmptyState } from './emptyState';
 import { Button, TabItem } from './tabItem';
 import { AuthTokenSection } from './authToken';
+import './demo.css';
 
 // ── Mock data ───────────────────────────────────────────────────────────────
 
@@ -74,9 +78,6 @@ const DemoSection: React.FC<{
   </section>
 );
 
-// Replicas of the status banner / warning banner markup from the real pages,
-// so every visual state can be previewed without a live connection.
-
 const StatusBanner: React.FC<{
   type: 'connecting' | 'connected' | 'error';
   message: string;
@@ -101,6 +102,12 @@ const DemoApp: React.FC = () => {
             Browser4 server required.
           </p>
         </header>
+
+        {/* ── Branding ─────────────────────────────────────────── */}
+        <DemoSection title='Header & Footer' description='Branding components shown on both extension pages.'>
+          <Header />
+          <Footer />
+        </DemoSection>
 
         {/* ── Status banners ─────────────────────────────────── */}
         <DemoSection
@@ -164,32 +171,33 @@ const DemoApp: React.FC = () => {
           title='Connected Tabs'
           description='The Status page when one or more tabs are connected.'
         >
-          <div className='connection-header'>
-            <div className='client-info'>
-              Connected to <strong>"browser4-cli"</strong>
+          <div className='card'>
+            <div className='card-header'>
+              <span className='card-title'>
+                Connected to <strong>"browser4-cli"</strong>
+              </span>
+              <Button variant='primary' onClick={handleNoop}>
+                Disconnect
+              </Button>
             </div>
-            <Button variant='primary' onClick={handleNoop}>
-              Disconnect
-            </Button>
+            <div className='tab-section-title'>
+              {MOCK_CONNECTED_TABS.length === 1
+                ? 'Accessible page:'
+                : 'Accessible pages:'}
+            </div>
+            {MOCK_CONNECTED_TABS.map((tab) => (
+              <TabItem key={tab.id} tab={tab} onClick={handleNoop} />
+            ))}
           </div>
-          <div className='tab-section-title'>
-            {MOCK_CONNECTED_TABS.length === 1
-              ? 'Accessible page:'
-              : 'Accessible pages:'}
-          </div>
-          {MOCK_CONNECTED_TABS.map((tab) => (
-            <TabItem key={tab.id} tab={tab} onClick={handleNoop} />
-          ))}
         </DemoSection>
 
-        {/* ── No clients ─────────────────────────────────────── */}
+        {/* ── Empty state ────────────────────────────────────── */}
         <DemoSection
-          title='No Clients Connected'
-          description='The Status page when nothing is connected.'
+          title='Empty State'
+          description='The Status page when no clients are connected.'
         >
-          <div className='status-banner'>
-            No clients are currently connected. You can connect from the
-            Browser4 CLI or MCP server by passing the --extension flag.
+          <div className='card'>
+            <EmptyState />
           </div>
         </DemoSection>
 
@@ -222,85 +230,13 @@ const DemoApp: React.FC = () => {
         <footer className='demo-footer'>
           <p>
             This is a standalone demo page. In production, these components are
-            rendered inside the Browser4 Chrome Extension popup windows.
+            rendered inside the Browser4 Chrome Extension.
           </p>
         </footer>
       </div>
     </div>
   );
 };
-
-// ── CSS (demo-only styles) ──────────────────────────────────────────────────
-
-const DEMO_CSS = `
-.demo-header {
-  margin-bottom: 32px;
-  padding-bottom: 16px;
-  border-bottom: 1px solid #d0d7de;
-}
-
-.demo-title {
-  margin: 0 0 4px 0;
-  font-size: 22px;
-  font-weight: 600;
-  color: #1f2328;
-}
-
-.demo-subtitle {
-  margin: 0;
-  font-size: 13px;
-  color: #656d76;
-}
-
-.demo-section {
-  margin-bottom: 32px;
-}
-
-.demo-section-title {
-  margin: 0 0 4px 0;
-  font-size: 15px;
-  font-weight: 600;
-  color: #1f2328;
-}
-
-.demo-section-desc {
-  margin: 0 0 12px 0;
-  font-size: 12px;
-  color: #656d76;
-}
-
-.demo-section-body {
-  /* components render their own spacing */
-}
-
-.demo-section-body .status-banner {
-  margin-bottom: 8px;
-}
-
-.demo-button-row {
-  display: flex;
-  gap: 12px;
-  align-items: center;
-  flex-wrap: wrap;
-}
-
-.demo-footer {
-  margin-top: 32px;
-  padding-top: 16px;
-  border-top: 1px solid #d0d7de;
-  font-size: 12px;
-  color: #8c959f;
-}
-
-.demo-footer p {
-  margin: 0;
-}
-`;
-
-// Inject demo-only styles
-const styleEl = document.createElement('style');
-styleEl.textContent = DEMO_CSS;
-document.head.appendChild(styleEl);
 
 // Initialize the React app
 const container = document.getElementById('root');
