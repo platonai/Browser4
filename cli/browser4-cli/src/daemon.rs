@@ -2577,6 +2577,44 @@ struct RuntimeInstallLock {
     acquired: bool,
 }
 
+/// Check whether a process with the given PID is still running.
+fn is_pid_alive(pid: u32) -> bool {
+    #[cfg(unix)]
+    {
+        // Signal 0 performs error checking but sends no signal.
+        // Returns 0 if the process exists, -1 with ESRCH if it doesn't.
+        extern "C" {
+            fn kill(pid: i32, sig: i32) -> i32;
+        }
+        unsafe { kill(pid as i32, 0) == 0 }
+    }
+    #[cfg(windows)]
+    {
+        const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
+        extern "system" {
+            fn OpenProcess(dwDesiredAccess: u32, bInheritHandle: i32, dwProcessId: u32) -> isize;
+            fn CloseHandle(hObject: isize) -> i32;
+        }
+        unsafe {
+            let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+            if handle == 0 {
+                return false;
+            }
+            CloseHandle(handle);
+            true
+        }
+    }
+}
+
+/// Read the PID recorded in the lock directory, if any.
+fn read_lock_pid(lock_dir: &Path) -> Option<u32> {
+    let pid_file = lock_dir.join("pid");
+    match fs::read_to_string(&pid_file) {
+        Ok(contents) => contents.trim().parse::<u32>().ok(),
+        Err(_) => None,
+    }
+}
+
 impl RuntimeInstallLock {
     /// Attempt to acquire the install lock, blocking up to `timeout` seconds.
     fn acquire(timeout: Duration) -> Result<Self, String> {
@@ -2601,9 +2639,19 @@ impl RuntimeInstallLock {
                     });
                 }
                 Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
+                    // Check whether the lock holder is still alive.
+                    let lock_stale = read_lock_pid(&lock_dir)
+                        .map(|pid| !is_pid_alive(pid))
+                        .unwrap_or(false);
+                    if lock_stale {
+                        // The process that created this lock is gone — clean it up.
+                        let _ = fs::remove_dir_all(&lock_dir);
+                        // Retry the acquisition immediately (the next loop iteration
+                        // will attempt create_dir again).
+                        continue;
+                    }
                     if Instant::now() >= deadline {
-                        // Remove a stale lock that's older than our timeout —
-                        // the previous process may have crashed.
+                        // The lock holder is still alive after our full timeout.
                         let _ = fs::remove_dir_all(&lock_dir);
                         return Err(format!(
                             "Another browser4-cli install or upgrade is already in progress \
