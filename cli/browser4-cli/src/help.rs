@@ -13,10 +13,12 @@ pub fn public_command_name(name: &str) -> &str {
         "swarm-status" => "swarm status",
         "swarm-result" => "swarm result",
         "domsnapshot-get" => "domsnapshot get",
+        "domsnapshot-get-all" => "domsnapshot get all",
         "domsnapshot-query" => "domsnapshot query",
         "domsnapshot-export" => "domsnapshot export",
         "domsnapshot-summary" => "domsnapshot summary",
         "domsnapshot-grep" => "domsnapshot grep",
+        "snapshot-grep" => "snapshot grep",
         _ => name,
     }
 }
@@ -501,6 +503,11 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
             50,
         ));
         lines.push(format_with_gap(
+            "  domsnapshot get all <field> [selector] [name] [--offset] [--limit]",
+            "Extract ALL matching elements from the DOM snapshot (querySelectorAll semantics)",
+            50,
+        ));
+        lines.push(format_with_gap(
             "  domsnapshot query [url]",
             "Run X-SQL against the DOM snapshot stored in Browser4's page storage via the scrape API",
             50,
@@ -572,6 +579,12 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("  # Get an attribute value (requires attribute name)".to_string());
         lines.push("  browser4-cli domsnapshot get attr \"a.product-link\" href".to_string());
         lines.push(String::new());
+        lines.push("  # Get all matching elements by CSS selector (returns a JSON array)".to_string());
+        lines.push("  browser4-cli domsnapshot get all text \"h2 a\"".to_string());
+        lines.push(String::new());
+        lines.push("  # Get all matching elements with pagination".to_string());
+        lines.push("  browser4-cli domsnapshot get all text \".result\" --limit 5 --offset 10".to_string());
+        lines.push(String::new());
         lines.push("  # Run an X-SQL query against the current page URL".to_string());
         lines.push(
             "  browser4-cli domsnapshot query --sql \"SELECT dom_first_text(dom, 'h1') AS title FROM load_and_select(@url, ':root')\""
@@ -595,6 +608,53 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push(String::new());
         lines.push("  # Search only within <main> element".to_string());
         lines.push("  browser4-cli domsnapshot grep --selector main \"Submit\"".to_string());
+    }
+
+    if cmd.name == "snapshot" {
+        lines.push("Subcommands:".to_string());
+        lines.push(format_with_gap(
+            "  snapshot grep [OPTIONS] <pattern>",
+            "Search snapshot YAML content with regex patterns and grep-style output",
+            50,
+        ));
+        lines.push(String::new());
+        lines.push("Notes:".to_string());
+        lines.push(
+            "  - Use --stdout (or --raw) to print snapshot content directly to stdout for piping."
+                .to_string(),
+        );
+        lines.push(
+            "  - --viewport accepts single indices (3), comma-separated lists (0,2,4), ranges (1-3),"
+                .to_string(),
+        );
+        lines.push(
+            "    or mixed (0,2-4,7).  Passed directly to the server's ViewportSpec parser."
+                .to_string(),
+        );
+        lines.push(
+            "  - snapshot grep searches the accessibility-tree YAML, not the DOM HTML."
+                .to_string(),
+        );
+        lines.push(
+            "  - snapshot grep supports the same grep options as domsnapshot grep: -i, -A, -B, -C, -v, -c, -l, -F, -w, --no-line-number, and --selector."
+                .to_string(),
+        );
+        lines.push(String::new());
+        lines.push("Examples:".to_string());
+        lines.push("  # Capture snapshot and print to stdout for piping".to_string());
+        lines.push("  browser4-cli snapshot --stdout | head -20".to_string());
+        lines.push(String::new());
+        lines.push("  # Search for 'error' in snapshot YAML".to_string());
+        lines.push("  browser4-cli snapshot grep -i error".to_string());
+        lines.push(String::new());
+        lines.push("  # Search with context lines".to_string());
+        lines.push("  browser4-cli snapshot grep -C 2 \"timeout\"".to_string());
+        lines.push(String::new());
+        lines.push("  # Capture specific viewports using ViewportSpec format".to_string());
+        lines.push("  browser4-cli snapshot --viewport=0,2,4".to_string());
+        lines.push(String::new());
+        lines.push("  # Capture a range of viewports".to_string());
+        lines.push("  browser4-cli snapshot --viewport=1-3".to_string());
     }
 
     if cmd.name == "loop" {
@@ -954,6 +1014,8 @@ mod tests {
         assert!(help.contains("Subcommands:"));
         assert!(help.contains("domsnapshot get <field> [selector] [name]"));
         assert!(help.contains("Extract elements from the DOM snapshot stored in Browser4's page storage (text, html, attr)"));
+        assert!(help.contains("domsnapshot get all <field> [selector] [name] [--offset] [--limit]"));
+        assert!(help.contains("Extract ALL matching elements from the DOM snapshot (querySelectorAll semantics)"));
         assert!(help.contains("domsnapshot query [url]"));
         assert!(help.contains("Run X-SQL against the DOM snapshot stored in Browser4's page storage via the scrape API"));
         assert!(help.contains("domsnapshot export"));
@@ -971,6 +1033,8 @@ mod tests {
         assert!(help.contains("browser4-cli domsnapshot get text"));
         assert!(help.contains("browser4-cli domsnapshot get html \"#main-content\""));
         assert!(help.contains("browser4-cli domsnapshot get attr \"a.product-link\" href"));
+        assert!(help.contains("browser4-cli domsnapshot get all text \"h2 a\""));
+        assert!(help.contains("browser4-cli domsnapshot get all text \".result\" --limit 5 --offset 10"));
         assert!(help.contains("browser4-cli domsnapshot query --sql"));
         assert!(help.contains("browser4-cli domsnapshot query --sql @query.sql"));
         assert!(help.contains("browser4-cli domsnapshot export --file snapshot.html"));
@@ -1019,6 +1083,20 @@ mod tests {
         assert!(help.contains("browser4-cli domsnapshot summary"));
         assert!(help.contains("Generate a compressed Web Page Summary Index (WPSI) from the stored DOM snapshot"));
         assert!(!help.contains("browser4-cli domsnapshot-summary"));
+    }
+
+    #[test]
+    fn test_generate_command_help_domsnapshot_get_all() {
+        let cmds = all_commands();
+        let cmd = cmds.iter().find(|c| c.name == "domsnapshot-get-all").unwrap();
+        let help = generate_command_help(cmd);
+        assert!(help.contains("browser4-cli domsnapshot get all <field> [selector] [name]"));
+        assert!(help.contains("Extract ALL matching elements from the DOM snapshot (querySelectorAll semantics)"));
+        assert!(help.contains("What to extract: text, html, or attr"));
+        assert!(help.contains("Attribute name (required for attr field)"));
+        assert!(help.contains("--offset"));
+        assert!(help.contains("--limit"));
+        assert!(!help.contains("browser4-cli domsnapshot-get-all"));
     }
 
     #[test]

@@ -2753,3 +2753,243 @@ pub(super) fn test_install_speed_test_disabled_env_var(ctx: &mut E2ECtx) {
         result.stderr
     );
 }
+
+// ---------------------------------------------------------------------------
+// snapshot --stdout
+// ---------------------------------------------------------------------------
+
+pub(super) fn test_snapshot_stdout(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let mock_server = MockBrowser4Server::start();
+    ctx.browser4_base_url = mock_server.base_url();
+
+    run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG, "https://example.com"]);
+
+    let result = run_command(ctx, &["snapshot", "--stdout"]);
+    assert_eq!(
+        result.exit_code, 0,
+        "expected snapshot --stdout to succeed:\n{}",
+        result.stderr
+    );
+
+    // --stdout prints raw snapshot content, not formatted output
+    assert!(
+        result.stdout.contains("mock snapshot"),
+        "Expected snapshot content in stdout:\n{}",
+        result.stdout
+    );
+    assert!(
+        !result.stdout.contains("### Page"),
+        "--stdout should not print formatted headers, got:\n{}",
+        result.stdout
+    );
+    assert!(
+        !result.stdout.contains("### Snapshot"),
+        "--stdout should not print formatted headers, got:\n{}",
+        result.stdout
+    );
+
+    // Verify browser_snapshot was called (use last to skip handle_open's auto-snapshot)
+    let tool_calls = mock_server.snapshot().tool_calls;
+    let snap_call = tool_calls
+        .iter()
+        .filter(|call| call.tool == "browser_snapshot")
+        .last()
+        .expect("expected browser_snapshot tool call");
+    assert!(snap_call.arguments.get("sessionId").is_some());
+}
+
+// ---------------------------------------------------------------------------
+// snapshot --raw (backward compat alias for --stdout)
+// ---------------------------------------------------------------------------
+
+pub(super) fn test_snapshot_raw(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let mock_server = MockBrowser4Server::start();
+    ctx.browser4_base_url = mock_server.base_url();
+
+    run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG, "https://example.com"]);
+
+    let result = run_command(ctx, &["snapshot", "--raw"]);
+    assert_eq!(
+        result.exit_code, 0,
+        "expected snapshot --raw to succeed:\n{}",
+        result.stderr
+    );
+
+    // --raw prints raw snapshot content, not formatted output
+    assert!(
+        result.stdout.contains("mock snapshot"),
+        "Expected snapshot content in stdout:\n{}",
+        result.stdout
+    );
+    assert!(
+        !result.stdout.contains("### Page"),
+        "--raw should not print formatted headers, got:\n{}",
+        result.stdout
+    );
+
+    // Verify browser_snapshot was called (use last to skip handle_open's auto-snapshot)
+    let tool_calls = mock_server.snapshot().tool_calls;
+    let snap_call = tool_calls
+        .iter()
+        .filter(|call| call.tool == "browser_snapshot")
+        .last()
+        .expect("expected browser_snapshot tool call");
+    assert!(snap_call.arguments.get("sessionId").is_some());
+}
+
+// ---------------------------------------------------------------------------
+// snapshot grep
+// ---------------------------------------------------------------------------
+
+pub(super) fn test_snapshot_grep(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let mock_server = MockBrowser4Server::start();
+    ctx.browser4_base_url = mock_server.base_url();
+
+    run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG, "https://example.com"]);
+
+    // The mock server returns "mock snapshot" for browser_snapshot.
+    // Grep for "mock" should find a match.
+    let result = run_command(ctx, &["snapshot-grep", "mock"]);
+    assert_eq!(
+        result.exit_code, 0,
+        "expected snapshot-grep to succeed:\n{}",
+        result.stderr
+    );
+    assert!(
+        result.stdout.contains("mock snapshot"),
+        "Expected grep output to contain matching line:\n{}",
+        result.stdout
+    );
+
+    // Grep for non-existent pattern should produce no output but succeed
+    let no_match_result = run_command(ctx, &["snapshot-grep", "nonexistent-pattern-xyz"]);
+    assert_eq!(
+        no_match_result.exit_code, 0,
+        "expected snapshot grep (no match) to succeed:\n{}",
+        no_match_result.stderr
+    );
+
+    // Verify browser_snapshot was called (twice, once for each grep)
+    let tool_calls = mock_server.snapshot().tool_calls;
+    let snap_calls: Vec<_> = tool_calls
+        .iter()
+        .filter(|call| call.tool == "browser_snapshot")
+        .collect();
+    assert!(
+        snap_calls.len() >= 2,
+        "expected at least 2 browser_snapshot calls, got {}",
+        snap_calls.len()
+    );
+}
+
+// ---------------------------------------------------------------------------
+// snapshot --count (grep short-circuit mode)
+// ---------------------------------------------------------------------------
+
+pub(super) fn test_snapshot_grep_count(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let mock_server = MockBrowser4Server::start();
+    ctx.browser4_base_url = mock_server.base_url();
+
+    run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG, "https://example.com"]);
+
+    // Put pattern before flags so --count isn't treated as consuming the pattern
+    let result = run_command(ctx, &["snapshot-grep", "mock", "--count"]);
+    assert_eq!(
+        result.exit_code, 0,
+        "expected snapshot grep -c to succeed:\n{}",
+        result.stderr
+    );
+    // --count should print just the number
+    let stripped = result.stdout.trim();
+    assert!(
+        stripped.parse::<usize>().is_ok(),
+        "Expected count output to be a number, got:\n{}",
+        result.stdout
+    );
+}
+
+// ---------------------------------------------------------------------------
+// snapshot --viewport (ViewportSpec format)
+// ---------------------------------------------------------------------------
+
+pub(super) fn test_snapshot_viewport(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let mock_server = MockBrowser4Server::start();
+    ctx.browser4_base_url = mock_server.base_url();
+
+    run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG, "https://example.com"]);
+
+    // Test comma-separated list format
+    let result = run_command(ctx, &["snapshot", "--viewport=0,2,4"]);
+    assert_eq!(
+        result.exit_code, 0,
+        "expected snapshot --viewport=0,2,4 to succeed:\n{}",
+        result.stderr
+    );
+    assert!(
+        result.stdout.contains("[Snapshot]("),
+        "Expected formatted snapshot output:\n{}",
+        result.stdout
+    );
+
+    // Verify viewports was passed through to the server.
+    // Use the LAST browser_snapshot call, as handle_open also calls
+    // post_command_snapshot internally.
+    let tool_calls = mock_server.snapshot().tool_calls;
+    let snap_call = tool_calls
+        .iter()
+        .filter(|call| call.tool == "browser_snapshot")
+        .last()
+        .expect("expected browser_snapshot tool call");
+    assert_eq!(
+        snap_call.arguments.get("viewports").and_then(|v| v.as_str()),
+        Some("0,2,4"),
+        "Expected viewports to be passed through, got: {:?}",
+        snap_call.arguments
+    );
+}
+
+// ---------------------------------------------------------------------------
+// snapshot --viewport with range format
+// ---------------------------------------------------------------------------
+
+pub(super) fn test_snapshot_viewport_range(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let mock_server = MockBrowser4Server::start();
+    ctx.browser4_base_url = mock_server.base_url();
+
+    run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG, "https://example.com"]);
+
+    // Test range format 1-3
+    let result = run_command(ctx, &["snapshot", "--viewport=1-3"]);
+    assert_eq!(
+        result.exit_code, 0,
+        "expected snapshot --viewport=1-3 to succeed:\n{}",
+        result.stderr
+    );
+
+    // Verify viewports range was passed through (use last call to skip
+    // the post_command_snapshot call from handle_open).
+    let tool_calls = mock_server.snapshot().tool_calls;
+    let snap_call = tool_calls
+        .iter()
+        .filter(|call| call.tool == "browser_snapshot")
+        .last()
+        .expect("expected browser_snapshot tool call");
+    assert_eq!(
+        snap_call.arguments.get("viewports").and_then(|v| v.as_str()),
+        Some("1-3"),
+        "Expected viewports=1-3, got: {:?}",
+        snap_call.arguments
+    );
+}

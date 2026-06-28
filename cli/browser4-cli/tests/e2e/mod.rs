@@ -3333,6 +3333,7 @@ fn excluded_commands(include_batch_command: bool) -> HashSet<&'static str> {
         "domsnapshot-grep",
         "generate-locator",
         "loop",
+        "doctor",
         // Uninstall requires npm/cargo on $PATH; not exercised in e2e.
         "uninstall",
     ]
@@ -3408,6 +3409,7 @@ fn tested_commands(include_batch_command: bool) -> HashSet<&'static str> {
         "upload",
         "console",
         "snapshot",
+        "snapshot-grep",
         "screenshot",
         "pdf",
         // test_swarm_session_and_agent_tools
