@@ -39,9 +39,9 @@
 .PARAMETER DryRun
   Print what would be done without actually doing it.
 
-.PARAMETER Force
-  Force reinstallation — always download from the remote source even if the binary
-  already exists at the install path. Useful for upgrading to the latest release.
+.PARAMETER SkipIfInstalled
+  Skip download if the binary already exists at the install path.
+  By default the script always downloads the latest version.
 
 .PARAMETER SkipLocal
   Skip checking for a locally-bundled binary alongside the script.
@@ -78,8 +78,8 @@
   powershell -ExecutionPolicy Bypass -File install-browser4-cli.ps1 -SkipLocal
 
 .EXAMPLE
-  # Force reinstall even if already installed (upgrade to latest)
-  powershell -ExecutionPolicy Bypass -File install-browser4-cli.ps1 -Force
+  # Skip download if already installed (opt out of default reinstall)
+  powershell -ExecutionPolicy Bypass -File install-browser4-cli.ps1 -SkipIfInstalled
 
 .EXAMPLE
   # For China mainland: OSS is auto-preferred via locale detection,
@@ -96,7 +96,7 @@ param(
   [bool]$AddToPath = $true,
   [switch]$Silent,
   [switch]$DryRun,
-  [switch]$Force,
+  [switch]$SkipIfInstalled,
   [switch]$SkipLocal,
   [switch]$Locate
 )
@@ -592,8 +592,8 @@ function Main {
     Write-Step "Skipping local binary check (-SkipLocal)"
   }
 
-  # If binary already exists and no version/force override, skip download
-  if ((Test-Path $binaryPath) -and (-not $Version) -and (-not $Force) -and (-not $useLocalBinary)) {
+  # Skip download only when --skip-if-installed is set and binary already exists
+  if ((Test-Path $binaryPath) -and (-not $Version) -and $SkipIfInstalled -and (-not $useLocalBinary)) {
     Write-Check "Binary already installed: $binaryPath"
   } elseif ($useLocalBinary) {
     # Copy local binary to install dir
