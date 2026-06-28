@@ -1,1 +1,1 @@
-ai.platon.browser4.boot.autoconfigure.CaptchaAutoConfiguration
+ai.platon.browser4.boot.plugin.PluginAutoConfiguration

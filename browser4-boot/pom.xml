@@ -90,11 +90,5 @@
             <artifactId>spring-boot-test</artifactId>
             <scope>test</scope>
         </dependency>
-        <dependency>
-            <groupId>ai.platon.pulsar</groupId>
-            <artifactId>browser4-captcha</artifactId>
-            <version>4.12.0-rc.1</version>
-            <optional>true</optional>
-        </dependency>
     </dependencies>
 </project>

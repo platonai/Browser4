@@ -1,5 +1,6 @@
 package ai.platon.pulsar.apps
 
+import ai.platon.browser4.boot.plugin.PluginClasspathEnhancer
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.external.ChatModelFactory
 import ai.platon.pulsar.rest.ApiApplication
@@ -11,6 +12,7 @@ import org.springframework.boot.context.event.ApplicationReadyEvent
 import org.springframework.boot.runApplication
 import org.springframework.context.annotation.Import
 import org.springframework.context.event.EventListener
+import java.nio.file.Path
 
 @SpringBootApplication
 @Import(ApiApplication::class)
@@ -76,6 +78,7 @@ class Browser4StandaloneApplication(
 }
 
 fun runBrowser4StandaloneApplication(args: Array<String>) {
+    PluginClasspathEnhancer.enhance(Path.of("plugins"))
     runApplication<Browser4StandaloneApplication>(*args) {
         setAdditionalProfiles("standalone", "private", "advanced")
         setLogStartupInfo(true)

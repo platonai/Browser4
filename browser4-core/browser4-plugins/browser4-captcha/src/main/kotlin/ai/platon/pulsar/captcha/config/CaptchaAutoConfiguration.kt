@@ -1,21 +1,7 @@
-/**
- * Copyright (c) Vincent Zhang, ivincent.zhang@gmail.com, Platon.AI.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- * http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-package ai.platon.browser4.boot.autoconfigure
+package ai.platon.pulsar.captcha.config
 
-import ai.platon.pulsar.agentic.tools.CustomToolRegistry
+import ai.platon.pulsar.agentic.tools.ToolMount
+import ai.platon.pulsar.agentic.tools.builtin.ToolExecutor
 import ai.platon.pulsar.captcha.CaptchaConfig
 import ai.platon.pulsar.captcha.CaptchaServiceProvider
 import ai.platon.pulsar.captcha.CaptchaType
@@ -37,11 +23,14 @@ import ai.platon.pulsar.captcha.provider.TwoCaptchaProvider
 import ai.platon.pulsar.captcha.tools.CaptchaToolExecutor
 import ai.platon.pulsar.common.config.MutableConfig
 import ai.platon.pulsar.common.getLogger
-import ai.platon.pulsar.skeleton.event.PulsarEventBus
+import ai.platon.pulsar.protocol.browser.emulator.util.PageSnifferMount
+import ai.platon.pulsar.skeleton.event.BrowseEventHandlers
+import ai.platon.pulsar.skeleton.plugin.BrowseEventMount
 import org.springframework.boot.autoconfigure.AutoConfiguration
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty
+import org.springframework.context.ApplicationContext
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Lazy
 
@@ -53,16 +42,55 @@ import org.springframework.context.annotation.Lazy
  * - Detection chain (reCAPTCHA, hCaptcha, Turnstile, image)
  * - Solver chain (CapSolver, 2Captcha, Anti-Captcha)
  * - Token injectors
- * - Browse event handler for auto-solve (registered on PulsarEventBus)
+ * - Browse event handler for auto-solve
  * - LLM agent tool executor (captcha domain)
  * - Page category sniffer
+ *
+ * Implements [BrowseEventMount], [ToolMount], and [PageSnifferMount] so that
+ * [ai.platon.browser4.boot.plugin.PluginManager] can automatically wire the
+ * handlers and tools into the appropriate integration points.
  */
 @AutoConfiguration
 @ConditionalOnClass(name = ["ai.platon.pulsar.captcha.CaptchaConfig"])
 @ConditionalOnProperty(name = ["captcha.auto.solve.enabled"], havingValue = "true", matchIfMissing = true)
 @Lazy
-open class CaptchaAutoConfiguration {
+open class CaptchaAutoConfiguration(
+    private val applicationContext: ApplicationContext
+) : BrowseEventMount, ToolMount, PageSnifferMount {
+
     private val logger = getLogger(CaptchaAutoConfiguration::class)
+
+    // ---- Mount Points ----
+
+    override fun configureBrowseHandlers(handlers: BrowseEventHandlers) {
+        try {
+            val handler = applicationContext.getBean("captchaBrowseEventHandler") as CaptchaBrowseEventHandler
+            handlers.onDocumentSteady.addLast(handler)
+            logger.info("CAPTCHA browse event handler registered on onDocumentSteady via BrowseEventMount")
+        } catch (e: Exception) {
+            logger.warn("Failed to register captcha browse event handler: {}", e.message)
+        }
+    }
+
+    override fun getToolExecutors(): List<ToolExecutor> {
+        return try {
+            listOf(applicationContext.getBean("captchaToolExecutor") as ToolExecutor)
+        } catch (e: Exception) {
+            logger.warn("Failed to get captchaToolExecutor for mount: {}", e.message)
+            emptyList()
+        }
+    }
+
+    override fun getPageSniffers(): List<ai.platon.pulsar.protocol.browser.emulator.util.PageCategorySniffer> {
+        return try {
+            listOf(applicationContext.getBean("captchaPageCategorySniffer") as CaptchaPageCategorySniffer)
+        } catch (e: Exception) {
+            logger.warn("Failed to get captchaPageCategorySniffer for mount: {}", e.message)
+            emptyList()
+        }
+    }
+
+    // ---- Beans ----
 
     @Bean(name = ["captchaConfig"])
     @ConditionalOnMissingBean(name = ["captchaConfig"])
@@ -165,22 +193,12 @@ open class CaptchaAutoConfiguration {
         captchaTokenInjectors: Map<CaptchaType, CaptchaTokenInjector>,
         captchaConfig: CaptchaConfig
     ): CaptchaBrowseEventHandler {
-        val handler = CaptchaBrowseEventHandler(
+        return CaptchaBrowseEventHandler(
             captchaDetector = captchaDetector,
             captchaSolver = captchaSolver,
             tokenInjectors = captchaTokenInjectors,
             config = captchaConfig
         )
-
-        // Register on the global event bus so it fires during every browse session
-        try {
-            PulsarEventBus.pageEventHandlers?.browseEventHandlers?.onDocumentSteady?.addLast(handler)
-            logger.info("CAPTCHA browse event handler registered on onDocumentSteady")
-        } catch (e: Exception) {
-            logger.warn("Failed to register CAPTCHA browse event handler: {}", e.message)
-        }
-
-        return handler
     }
 
     // ---- LLM Agent Tool Executor ----
@@ -193,24 +211,12 @@ open class CaptchaAutoConfiguration {
         captchaTokenInjectors: Map<CaptchaType, CaptchaTokenInjector>,
         captchaConfig: CaptchaConfig
     ): CaptchaToolExecutor {
-        val executor = CaptchaToolExecutor(
+        return CaptchaToolExecutor(
             captchaSolver = captchaSolver,
             captchaDetector = captchaDetector,
             tokenInjectors = captchaTokenInjectors,
             config = captchaConfig
         )
-
-        // Register in CustomToolRegistry so AgentToolManager can dispatch captcha.* tool calls
-        try {
-            if (!CustomToolRegistry.instance.contains(executor.domain)) {
-                CustomToolRegistry.instance.register(executor)
-                logger.info("CAPTCHA tool executor registered in CustomToolRegistry for domain '{}'", executor.domain)
-            }
-        } catch (e: Exception) {
-            logger.warn("Failed to register CAPTCHA tool executor in CustomToolRegistry: {}", e.message)
-        }
-
-        return executor
     }
 
     // ---- Page Category Sniffer ----
