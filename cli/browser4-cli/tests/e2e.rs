@@ -3379,6 +3379,7 @@ fn excluded_commands(include_batch_command: bool) -> HashSet<&'static str> {
         "get",
         "domsnapshot",
         "domsnapshot-get",
+        "domsnapshot-get-all",
         "domsnapshot-query",
         "domsnapshot-export",
         "domsnapshot-summary",

@@ -34,14 +34,19 @@ $ErrorActionPreference = "Stop"
 if (-not $browser4cliMode -and $env:BROWSER4CLI_MODE) {
     $browser4cliMode = $env:BROWSER4CLI_MODE
 }
-# PowerShell here-strings expand variables, so $helpCmd is resolved when
-# $generalPrompt is defined below.
+# PowerShell here-strings expand variables, so $helpCmd / $cliInvocation are
+# resolved when $generalPrompt is defined below.
 if ($browser4cliMode -eq 'production') {
-    $helpCmd   = '`browser4-cli help`'
-    $skillPath = 'https://browser4.io/SKILL.md'
+    $helpCmd        = '`browser4-cli help`'
+    $skillPath      = 'https://browser4.io/SKILL.md'
+    $cliInvocation  = '`browser4-cli`'
 } else {
-    $helpCmd   = '`cargo run -- help`'
-    $skillPath = '`skill/SKILL.md`'
+    # Dev mode: use cargo run so the agent tests the locally-built CLI and
+    # the daemon auto-starts the locally-built backend JAR.  The repo root
+    # is the CWD when the agent runs, so the relative "cd" resolves correctly.
+    $helpCmd        = '`cd cli/browser4-cli && cargo run -- help`'
+    $skillPath      = '`skill/SKILL.md`'
+    $cliInvocation  = '`cd cli/browser4-cli && cargo run --`'
 }
 
 # ── Path resolution ──────────────────────────────────────────────────────────
@@ -66,9 +71,22 @@ Before performing any browser interaction:
 3. Learn the available commands, workflows, and conventions directly from the documentation.
 4. Do not assume any prior knowledge of browser4-cli.
 
+## Command Invocation
+
+Every browser4-cli command in this session MUST be invoked as:
+
+$cliInvocation <command>
+
+For example:
+  $cliInvocation goto "https://example.com"
+  $cliInvocation snapshot -i
+  $cliInvocation click e5
+
+Do NOT use a plain `browser4-cli` command unless the invocation above fails after a genuine attempt.  Using the wrong invocation will test a stale installed binary instead of the local source code, invalidating the evaluation.
+
 ## Tool Usage Rules
 
-* Use browser4-cli for ALL browser interactions.
+* Use the invocation method above for ALL browser interactions.
 * Do NOT use Playwright, Puppeteer, Selenium, CDP libraries, external browser APIs, or any other browser automation tool.
 * If a browser action is required, first identify the documented browser4-cli command that should perform it.
 * Prefer documented workflows over assumptions.

@@ -29,26 +29,54 @@ browser4-cli domsnapshot grep [OPTIONS] <pattern>       # search snapshot HTML w
 
 `domsnapshot` (capture) always fetches a fresh snapshot and caches it. Subsequent `get`/`query`/`export` reuse the cache until the next capture or page navigation.
 
+> **Note:** `domsnapshot get` looks up the page using the browser's current URL (after any redirects/navigations), so it works correctly on search-results pages and post-form-submission pages.
+
 ## Get — Extract data via CSS selectors
 
 Only CSS selectors are accepted — element refs (`e5`) are rejected.
 
 ```bash
+# First match only (querySelector semantics)
 browser4-cli domsnapshot get <text|html|attr> <selector> [name]
+
+# All matches (querySelectorAll semantics)
+browser4-cli domsnapshot get all <text|html|attr> <selector> [name] [--offset N] [--limit N]
 ```
 
 | Field | Description | Requires `name`? |
 |---|---|---|
-| `text` | Visible text of matched element | No |
-| `html` | Inner HTML of matched element | No |
+| `text` | Visible text of matched element(s) | No |
+| `html` | Inner HTML of matched element(s) | No |
 | `attr` | Value of a named attribute | **Yes** (3rd argument) |
 
-Examples:
+**`get` returns only the first match.** For multiple results, use `domsnapshot get all` (returns a JSON array) or `domsnapshot query`.
+
+### `get` (single)
 
 ```bash
 browser4-cli domsnapshot get text ".product-title"
 browser4-cli domsnapshot get attr ".product-image" data-src
 ```
+
+### `get all` (multiple)
+
+Returns a JSON array of strings.  Supports `--offset` (skip first N) and `--limit` (max results).
+
+```bash
+browser4-cli domsnapshot get all text "h2 a"                  # all product titles
+browser4-cli domsnapshot get all attr ".product-image" src    # all image URLs
+browser4-cli domsnapshot get all text ".result" --limit 5     # first 5 results
+browser4-cli domsnapshot get all text ".result" --offset 10   # skip first 10
+```
+
+### Troubleshooting empty results
+
+If `domsnapshot get` returns an empty string when the page clearly has matching elements:
+
+1. **Run `domsnapshot` first to capture a fresh snapshot:** `browser4-cli domsnapshot` then retry `get`
+2. **Verify the CSS selector** with `domsnapshot grep <pattern>` to search the raw HTML
+3. **Use `domsnapshot query` or `domsnapshot get all`** for multiple results or complex queries
+4. **Check page load:** ensure the page finished loading (AJAX content may take time)
 
 ## Query — X-SQL against DOM snapshot
 

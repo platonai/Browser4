@@ -5,14 +5,39 @@ import java.util.*
 
 object NanoAriaSnapshotRenderer {
     fun render(root: NanoDOMTreeNode, options: AriaSnapshotOptions = AriaSnapshotOptions()): String {
-        return AriaSnapshotFormatting.render(toRenderChildren(root, options))
+        val counter = if (options.maxNodes > 0) NodeCounter(options.maxNodes) else null
+        val children = toRenderChildren(root, options, counter = counter)
+        val truncated = counter?.truncated == true
+        val rendered = AriaSnapshotFormatting.render(children)
+        return if (truncated) {
+            "$rendered\n# Snapshot truncated at ${options.maxNodes} nodes. Use --selector, --interactive, or --compact to reduce output."
+        } else rendered
+    }
+
+    private class NodeCounter(val max: Int) {
+        var count = 0
+        var truncated = false
+        fun increment(): Boolean {
+            if (count >= max) {
+                truncated = true
+                return false
+            }
+            count++
+            return true
+        }
     }
 
     private fun toRenderChildren(
         node: NanoDOMTreeNode,
         options: AriaSnapshotOptions,
-        depth: Int = 0
+        depth: Int = 0,
+        counter: NodeCounter? = null
     ): List<AriaSnapshotFormatting.RenderChild> {
+        // --max-nodes: stop when limit reached
+        if (counter?.truncated == true) {
+            return emptyList()
+        }
+
         // --depth: stop recursing at max depth
         if (options.maxDepth >= 0 && depth > options.maxDepth) {
             return emptyList()
@@ -29,7 +54,7 @@ object NanoAriaSnapshotRenderer {
         }
 
         val children = node.children.orEmpty()
-            .flatMap { child -> toRenderChildren(child, options, depth + 1) }
+            .flatMap { child -> toRenderChildren(child, options, depth + 1, counter) }
             .let { AriaSnapshotFormatting.normalizeChildren(it, accessibleName(node)) }
 
         val role = role(node) ?: return children
@@ -46,6 +71,11 @@ object NanoAriaSnapshotRenderer {
         }
 
         if (children.isEmpty() && props.isEmpty() && node.ref <= 0 && accessibleName(node).isNullOrEmpty()) {
+            return emptyList()
+        }
+
+        // --max-nodes: count this node before rendering
+        if (counter != null && !counter.increment()) {
             return emptyList()
         }
 

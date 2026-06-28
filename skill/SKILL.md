@@ -138,20 +138,26 @@ browser4-cli mousewheel <dx> <dy>
 ### Snapshots
 
 ```bash
-browser4-cli snapshot                              # capture accessibility tree
+browser4-cli snapshot                              # capture accessibility tree (compact by default)
 browser4-cli snapshot --filename=result.yaml       # named output (for workflow artifacts)
 browser4-cli snapshot --boxes                      # include bounding boxes
-browser4-cli snapshot -i -c -d 5                   # interactive only, compact, depth 5
+browser4-cli snapshot -i -d 5                      # interactive only, depth 5
 browser4-cli snapshot -s "#content"                # scoped to CSS selector
+browser4-cli snapshot -l 200                       # cap output at 200 nodes (content-heavy pages)
+browser4-cli snapshot --no-compact                 # include all structural nodes (disable compact)
 ```
 
 | Flag | Effect |
 |---|---|
 | `-i, --interactive` | Only interactive elements (buttons, links, inputs) |
-| `-c, --compact` | Remove empty structural elements |
+| `-c, --compact` | Remove empty structural elements (**enabled by default**) |
+| `--no-compact` | Disable compact mode; include all structural nodes |
 | `-d, --depth <n>` | Limit tree depth |
+| `-l, --limit <n>` | Cap total rendered nodes (truncates with notice) |
 | `-s, --selector <sel>` | Scope to CSS selector subtree |
 | `-u, --urls` | Include href URLs for links |
+
+> **Tip:** On content-heavy pages (e-commerce, search results), snapshots can exceed 256KB. Use `-i`, `-l 200`, or `-s "<selector>"` to keep output manageable. Compact mode (on by default) already strips empty structural wrappers. Never cat full snapshot files — use `domsnapshot get` for structured extraction.
 
 ### Element Data Extraction (get)
 
@@ -218,7 +224,8 @@ Static DOM queries (CSS selectors) for structured data extraction — unlike int
 
 ```bash
 browser4-cli domsnapshot                                # capture static DOM snapshot
-browser4-cli domsnapshot get <field> [selector] [name]  # extract text/html/attr via CSS
+browser4-cli domsnapshot get <field> [selector] [name]  # extract first match (text/html/attr via CSS)
+browser4-cli domsnapshot get all <field> [selector] [name] [--offset] [--limit]  # extract ALL matches (querySelectorAll)
 browser4-cli domsnapshot query [url] --sql <query>      # X-SQL query against DOM
 browser4-cli domsnapshot summary                        # compressed page summary (WPSI)
 browser4-cli domsnapshot export [--file <path>]         # save snapshot HTML (might be huge, don't read it directly)

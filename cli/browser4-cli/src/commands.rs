@@ -1005,8 +1005,10 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "boxes", description: "Include each element's bounding box as [box=x,y,width,height]", is_bool: true, short: None },
                 OptionDef { name: "interactive", description: "Only show interactive elements (buttons, links, inputs)", is_bool: true, short: Some("i") },
                 OptionDef { name: "urls", description: "Include href URLs for link elements", is_bool: true, short: Some("u") },
-                OptionDef { name: "compact", description: "Remove empty structural elements", is_bool: true, short: Some("c") },
+                OptionDef { name: "compact", description: "Remove empty structural elements (enabled by default)", is_bool: true, short: Some("c") },
+                OptionDef { name: "no-compact", description: "Disable compact mode; include all structural nodes", is_bool: true, short: None },
                 OptionDef { name: "depth", description: "Limit tree depth to n levels", is_bool: false, short: Some("d") },
+                OptionDef { name: "limit", description: "Cap total rendered nodes at n (truncates with notice)", is_bool: false, short: Some("l") },
                 OptionDef { name: "selector", description: "Scope snapshot to a CSS selector", is_bool: false, short: Some("s") },
                 OptionDef { name: "raw", description: "Strip page info and return only snapshot content", is_bool: true, short: None },
                 OptionDef { name: "viewport", description: "Capture only specified viewports: <index>,<limit> (0-based index, limit count)", is_bool: false, short: Some("vp") },
@@ -1018,9 +1020,13 @@ pub fn all_commands() -> Vec<CommandDef> {
                 if let Some(true) = get_bool(args, "boxes") { p["boxes"] = json!(true); }
                 if let Some(true) = get_bool(args, "interactive") { p["interactive"] = json!(true); }
                 if let Some(true) = get_bool(args, "urls") { p["urls"] = json!(true); }
-                if let Some(true) = get_bool(args, "compact") { p["compact"] = json!(true); }
+                if let Some(true) = get_bool(args, "no-compact") { p["compact"] = json!(false); }
+                else if let Some(true) = get_bool(args, "compact") { p["compact"] = json!(true); }
                 if let Some(d) = get_opt_str(args, "depth") {
                     if let Ok(n) = d.parse::<i32>() { p["depth"] = json!(n); }
+                }
+                if let Some(l) = get_opt_str(args, "limit") {
+                    if let Ok(n) = l.parse::<i32>() { p["limit"] = json!(n); }
                 }
                 if let Some(s) = get_opt_str(args, "selector") { p["selector"] = json!(s); }
                 if let Some(v) = get_opt_str(args, "viewport") { p["viewport"] = json!(v); }
@@ -1970,6 +1976,36 @@ pub fn all_commands() -> Vec<CommandDef> {
                 let selector = get_opt_str(args, "selector").unwrap_or(":root");
                 let mut p = json!({ "field": field, "selector": selector });
                 if let Some(name) = get_opt_str(args, "name") { p["attrName"] = json!(name); }
+                p
+            },
+        },
+        CommandDef {
+            name: "domsnapshot-get-all",
+            description: "Extract ALL matching elements from the DOM snapshot (querySelectorAll semantics); supports --offset and --limit for pagination",
+            category: Category::Snapshot,
+            hidden: false,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "field", description: "What to extract: text, html, or attr", optional: false },
+                ArgDef { name: "selector", description: "CSS selector (defaults to :root; required for attr)", optional: true },
+                ArgDef { name: "name", description: "Attribute name (required for attr field)", optional: true },
+            ],
+            options: &[
+                OptionDef { name: "offset", description: "Skip the first n results (0-based)", is_bool: false, short: None },
+                OptionDef { name: "limit", description: "Return at most n results", is_bool: false, short: None },
+            ],
+            tool_name_fn: |_| "dom_snapshot_scrape_all".to_string(),
+            tool_params_fn: |args| {
+                let field = get_str(args, "field").unwrap_or_default();
+                let selector = get_opt_str(args, "selector").unwrap_or(":root");
+                let mut p = json!({ "field": field, "selector": selector });
+                if let Some(name) = get_opt_str(args, "name") { p["attrName"] = json!(name); }
+                if let Some(off) = get_opt_str(args, "offset") {
+                    if let Ok(n) = off.parse::<i32>() { p["offset"] = json!(n); }
+                }
+                if let Some(lim) = get_opt_str(args, "limit") {
+                    if let Ok(n) = lim.parse::<i32>() { p["limit"] = json!(n); }
+                }
                 p
             },
         },
@@ -3296,6 +3332,7 @@ mod tests {
         for expected in &[
             "domsnapshot",
             "domsnapshot-get",
+            "domsnapshot-get-all",
             "domsnapshot-query",
             "domsnapshot-export",
             "domsnapshot-summary",
@@ -3409,6 +3446,7 @@ mod tests {
         for name in &[
             "domsnapshot",
             "domsnapshot-get",
+            "domsnapshot-get-all",
             "domsnapshot-query",
             "domsnapshot-export",
             "domsnapshot-summary",
