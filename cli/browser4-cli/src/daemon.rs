@@ -204,21 +204,28 @@ struct ReleaseAssetInfo {
 
 /// A single download mirror entry.
 ///
-/// Each mirror provides a `base_url` that hosts release assets in the same
-/// layout as GitHub Releases: `<base_url>/download/<tag>/<asset>` (or
-/// `/latest/download/<asset>` for the latest release).
+/// Each mirror provides a `base_url` that hosts release assets.  Tagged
+/// downloads always use `<base_url>/download/<tag>/<asset>`.  For the
+/// latest release the URL is `<base_url>/<latest_path>/<asset>`, where
+/// `latest_path` defaults to `latest/download` (GitHub Releases layout).
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 struct DownloadMirror {
     /// Human-readable name shown in log messages (e.g. "github", "aliyun-oss").
     name: String,
     /// Base URL for release downloads (e.g. `https://github.com/platonai/Browser4/releases`).
     base_url: String,
-    /// Whether this mirror supports GitHub-style `/latest/download/` redirects.
-    /// When `false`, "latest" downloads must resolve the tag before constructing
-    /// the download URL (e.g. via a release-metadata endpoint or user-supplied
-    /// `--tag`).
+    /// Whether this mirror supports resolving the latest release without an
+    /// explicit tag.  When `false`, "latest" downloads must resolve the tag
+    /// before constructing the download URL (e.g. via a release-metadata
+    /// endpoint or user-supplied `--tag`).
     #[serde(default)]
     supports_latest_resolution: bool,
+    /// Path segment inserted between `base_url` and `asset_name` for latest
+    /// downloads.  Defaults to `latest/download` (GitHub Releases layout).
+    /// Mirrors that use a different layout (e.g. Aliyun OSS uses
+    /// `download/latest`) can override this.
+    #[serde(default)]
+    latest_path: Option<String>,
 }
 
 /// Top-level structure of the mirrors.json config file.
@@ -264,11 +271,13 @@ fn builtin_mirrors_for_locale(china_locale: bool) -> Vec<DownloadMirror> {
             name: "github".to_string(),
             base_url: "https://github.com/platonai/Browser4/releases".to_string(),
             supports_latest_resolution: true,
+            latest_path: None,
         },
         DownloadMirror {
             name: "aliyun-oss".to_string(),
             base_url: "https://browser4.oss-cn-beijing.aliyuncs.com/releases".to_string(),
             supports_latest_resolution: true,
+            latest_path: Some("download/latest".to_string()),
         },
     ];
     if china_locale {
@@ -357,6 +366,7 @@ fn load_mirrors() -> Vec<DownloadMirror> {
                 name: "custom".to_string(),
                 base_url: trimmed,
                 supports_latest_resolution: true,
+                latest_path: None,
             }];
         }
     }
@@ -420,7 +430,13 @@ fn mirror_download_url(mirror: &DownloadMirror, tag: Option<&str>, asset_name: &
     let base = mirror.base_url.trim_end_matches('/');
     match normalize_release_tag(tag) {
         Some(tag) => format!("{base}/download/{tag}/{asset_name}"),
-        None => format!("{base}/latest/download/{asset_name}"),
+        None => {
+            let latest = mirror
+                .latest_path
+                .as_deref()
+                .unwrap_or("latest/download");
+            format!("{base}/{latest}/{asset_name}")
+        }
     }
 }
 
@@ -5061,6 +5077,28 @@ mod tests {
     }
 
     #[test]
+    fn test_mirror_download_url_oss_latest_path() {
+        let mirror = DownloadMirror {
+            name: "aliyun-oss".to_string(),
+            base_url: "https://browser4.oss-cn-beijing.aliyuncs.com/releases".to_string(),
+            supports_latest_resolution: true,
+            latest_path: Some("download/latest".to_string()),
+        };
+        // Without tag → uses mirror's latest_path
+        let url = mirror_download_url(&mirror, None, "browser4-cli-win32-x64.exe");
+        assert_eq!(
+            url,
+            "https://browser4.oss-cn-beijing.aliyuncs.com/releases/download/latest/browser4-cli-win32-x64.exe"
+        );
+        // With tag → still uses standard /download/<tag>/ pattern
+        let url = mirror_download_url(&mirror, Some("v4.11.13"), "browser4-cli-win32-x64.exe");
+        assert_eq!(
+            url,
+            "https://browser4.oss-cn-beijing.aliyuncs.com/releases/download/v4.11.13/browser4-cli-win32-x64.exe"
+        );
+    }
+
+    #[test]
     fn test_builtin_mirrors_has_github_first() {
         let mirrors = builtin_mirrors_for_locale(false);
         assert_eq!(mirrors[0].name, "github");
@@ -5967,6 +6005,7 @@ mod tests {
             name: "github".to_string(),
             base_url: "https://github.com/platonai/Browser4/releases".to_string(),
             supports_latest_resolution: true,
+            latest_path: None,
         };
         let (owner, repo) = parse_github_owner_repo(&mirror).unwrap();
         assert_eq!(owner, "platonai");
@@ -5979,6 +6018,7 @@ mod tests {
             name: "aliyun-oss".to_string(),
             base_url: "https://browser4.oss-cn-beijing.aliyuncs.com/releases".to_string(),
             supports_latest_resolution: true,
+            latest_path: None,
         };
         assert!(parse_github_owner_repo(&mirror).is_none());
     }
@@ -5989,6 +6029,7 @@ mod tests {
             name: "custom".to_string(),
             base_url: "https://gitlab.example.com/owner/repo/releases".to_string(),
             supports_latest_resolution: true,
+            latest_path: None,
         };
         assert!(parse_github_owner_repo(&mirror).is_none());
     }
