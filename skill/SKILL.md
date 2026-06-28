@@ -50,14 +50,14 @@ The YAML file itself contains the tree. Each interactive element has a **ref** (
 
 ```yaml
 - generic [ref=e7]:
-  - link "新闻" [ref=e191]:
-    - /url: http://news.baidu.com
-  - textbox "端午佳节" [ref=e35]:
+  - link "News" [ref=e191]:
+    - /url: https://example.com/news
+  - textbox "Search query" [ref=e35]:
     - /multiline: "true"
-  - button "百度一下" [ref=e25]
+  - button "Search" [ref=e25]
   - list [ref=e374]:
     - listitem [level=1] [ref=e375]:
-      - link "热搜标题" [ref=e376]:
+      - link "Headline Title" [ref=e376]:
         - /url: https://...
 ```
 
