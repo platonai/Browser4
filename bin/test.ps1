@@ -155,7 +155,7 @@ function Print-Usage {
     Write-Host "  rest        Run REST module tests"
     Write-Host "  skills      Run skills-focused agentic tests"
     Write-Host "  mcp         Run MCP-focused agentic tests"
-    Write-Host "  rws         Run real-world-scenario unit tests (common.tests.ps1)"
+    Write-Host "  rws         Show this help (requires --scenarios or --task)"
     Write-Host "              With --scenarios: run all scenario tasks via run-tests.ps1"
     Write-Host "              With --task <file>: run a single task via run-task.ps1"
     Write-Host ""
@@ -182,7 +182,7 @@ function Print-Usage {
     Write-Host "  test.ps1 skills                     # Run skills-focused agentic tests"
     Write-Host "  test.ps1 mcp                        # Run MCP-focused agentic tests"
     Write-Host "  test.ps1 resume                     # Resume from the last failed module"
-    Write-Host "  test.ps1 rws                        # Run real-world-scenario unit tests"
+    Write-Host "  test.ps1 rws                        # Show RWS help (requires --scenarios or --task)"
     Write-Host "  test.ps1 rws --scenarios            # Run all agent-scenario tasks"
     Write-Host "  test.ps1 rws --scenarios amazon     # Run a specific scenario task"
     Write-Host "  test.ps1 rws --scenarios --list     # List discovered scenario tasks"
@@ -356,13 +356,12 @@ function Invoke-MockSiteBoot([string[]]$additionalArgs) {
 
 function Invoke-RealWorldScenarioTests([string[]]$additionalArgs) {
     $rwsScriptsDir = Join-Path $repoRoot 'browser4-tests\real-world-scenarios\scripts'
-    $commonTestsScript = Join-Path $rwsScriptsDir 'common.tests.ps1'
     $scenarioRunner = Join-Path $rwsScriptsDir 'run-tests.ps1'
     $taskRunner = Join-Path $rwsScriptsDir 'run-task.ps1'
 
     # ── Determine mode from additional args ──────────────────────────────────
-    $mode = 'unit'
-    $modeLabel = 'real-world-scenario unit tests'
+    $mode = ''
+    $modeLabel = ''
     $taskFile = $null
     $setProduction = $false
     $passThroughArgs = @()
@@ -407,18 +406,41 @@ function Invoke-RealWorldScenarioTests([string[]]$additionalArgs) {
         }
     }
 
+    # ── No mode flag provided: show RWS help ──────────────────────────────────
+    if ($mode -eq '') {
+        Write-Host ''
+        Write-Host 'Usage: test.ps1 rws <mode> [options]'
+        Write-Host ''
+        Write-Host 'Modes (required, pick one):'
+        Write-Host '  --scenarios [names...]  Run agent-scenario tasks via run-tests.ps1'
+        Write-Host '  --task <file>           Run a single task file via run-task.ps1'
+        Write-Host ''
+        Write-Host 'Options:'
+        Write-Host '  --production            Use installed browser4-cli instead of cargo run'
+        Write-Host '  --fail-fast             Stop after the first failing scenario'
+        Write-Host '  --list                  List discovered scenarios, don''t run'
+        Write-Host '  --silent                Suppress agent output'
+        Write-Host '  --skip-version-check    Skip browser4-cli version check'
+        Write-Host ''
+        Write-Host 'Examples:'
+        Write-Host '  test.ps1 rws --scenarios                   # Run all agent-scenario tasks'
+        Write-Host '  test.ps1 rws --scenarios amazon            # Run a specific scenario task'
+        Write-Host '  test.ps1 rws --scenarios --list            # List discovered scenario tasks'
+        Write-Host '  test.ps1 rws --scenarios --production     # Run against installed CLI'
+        Write-Host '  test.ps1 rws --task tasks/amazon.md        # Run a single task file directly'
+        Write-Host '  test.ps1 rws --task tasks/amazon.md --production'
+        exit 0
+    }
+
     Write-CommandBanner -Label "Running $modeLabel..."
 
     # ── Resolve the script path for the chosen mode ──────────────────────────
-    if ($mode -eq 'unit') {
-        $runner = $commonTestsScript
-        $runnerKind = 'Unit test script'
-    }
-    elseif ($mode -eq 'scenarios') {
+    if ($mode -eq 'scenarios') {
         $runner = $scenarioRunner
         $runnerKind = 'Scenario runner'
     }
     else {
+        # mode must be 'task' — validated above
         $runner = $taskRunner
         $runnerKind = 'Task runner'
     }

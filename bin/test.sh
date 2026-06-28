@@ -17,5 +17,7 @@ if ! command -v pwsh &> /dev/null; then
     fi
 fi
 
+echo "It is strongly recommended to launch `pwsh` and run the .ps1commands directly within the `pwsh` terminal."
+
 # Forward all arguments to the PowerShell test script
 exec pwsh "${SCRIPT_DIR}/test.ps1" "$@"
