@@ -713,6 +713,95 @@ Write-Host '━━━ Invoke-Agent Backward Compatibility ━━━' -Foreground
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# Test group 15: Read-TaskFile
+# ═══════════════════════════════════════════════════════════════════════════════
+
+Write-Host ''
+Write-Host '━━━ Read-TaskFile ━━━' -ForegroundColor Yellow
+
+& {
+    Remove-Variable -Name 'browser4cliMode' -Scope Local -ErrorAction SilentlyContinue
+    . "$PSScriptRoot/common.ps1"
+
+    # Use a temp directory to avoid polluting the real tasks/ directory
+    $tempDir = Join-Path ([System.IO.Path]::GetTempPath()) "b4cli-readtask-$(Get-Random)"
+    New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
+
+    try {
+        # Helper: write a .md file with the given content and return its path.
+        function New-TaskFile([string]$Name, [string]$Content, [string]$Encoding = 'UTF8') {
+            $path = Join-Path $tempDir "$Name.md"
+            if ($Encoding -eq 'ASCII') {
+                # Write with explicit LF line endings for controlled tests
+                [System.IO.File]::WriteAllText($path, $Content, [System.Text.Encoding]::ASCII)
+            } else {
+                [System.IO.File]::WriteAllText($path, $Content)
+            }
+            return $path
+        }
+
+        Write-TestGroup 'Valid file: heading + body (blank line between)'
+        $path = New-TaskFile 'valid' "# my-scenario`n`nStep 1. Do this.`nStep 2. Do that.`n"
+        $task = Read-TaskFile -Path $path
+        Assert-Equal 'Name' 'my-scenario' $task.Name
+        Assert-True 'Body non-empty' (-not [string]::IsNullOrWhiteSpace($task.Body))
+        Assert-Contains 'Body starts with Step 1' $task.Body 'Step 1. Do this.'
+
+        Write-TestGroup 'No blank line after heading'
+        $path = New-TaskFile 'no-blank' "# scenario-name`nBody text here.`n"
+        $task = Read-TaskFile -Path $path
+        Assert-Equal 'Name' 'scenario-name' $task.Name
+        Assert-Equal 'Body (trimmed)' 'Body text here.' $task.Body.Trim()
+
+        Write-TestGroup 'Multiple blank lines after heading'
+        $path = New-TaskFile 'multi-blank' "# multi`n`n`n`nFirst line of body.`n"
+        $task = Read-TaskFile -Path $path
+        Assert-Equal 'Name' 'multi' $task.Name
+        Assert-True 'Body starts with First line' $task.Body.TrimStart().StartsWith('First line')
+
+        Write-TestGroup 'No heading (body-only file)'
+        $path = New-TaskFile 'no-heading' "Just some task body text.`nNo heading here.`n"
+        $task = Read-TaskFile -Path $path
+        Assert-Equal 'Name is empty' '' $task.Name
+        Assert-Contains 'Body preserved' $task.Body 'Just some task body text.'
+
+        Write-TestGroup 'Empty file should throw'
+        $path = New-TaskFile 'empty' ''
+        $threw = $false
+        try { Read-TaskFile -Path $path } catch { $threw = $true }
+        Assert-True 'Throws on empty file' $threw
+
+        Write-TestGroup 'Only heading, no body should throw'
+        $path = New-TaskFile 'heading-only' "# just-heading`n"
+        $threw = $false
+        try { Read-TaskFile -Path $path } catch { $threw = $true }
+        Assert-True 'Throws on heading-only file' $threw
+
+        Write-TestGroup 'CRLF line endings'
+        $path = New-TaskFile 'crlf' "# crlf-scenario`r`n`r`nBody with CRLF.`r`n"
+        $task = Read-TaskFile -Path $path
+        Assert-Equal 'Name' 'crlf-scenario' $task.Name
+        Assert-True 'Body non-empty' (-not [string]::IsNullOrWhiteSpace($task.Body))
+
+        Write-TestGroup 'Missing file should throw'
+        $path = Join-Path $tempDir 'does-not-exist.md'
+        $threw = $false
+        try { Read-TaskFile -Path $path } catch { $threw = $true }
+        Assert-True 'Throws on missing file' $threw
+
+        Write-TestGroup 'Returns PSCustomObject'
+        $path = New-TaskFile 'psobject-check' "# test`n`nBody.`n"
+        $task = Read-TaskFile -Path $path
+        Assert-True 'Is PSCustomObject' ($task -is [PSCustomObject])
+        Assert-True 'Has Name property' ($null -ne $task.Name)
+        Assert-True 'Has Body property' ($null -ne $task.Body)
+    }
+    finally {
+        Remove-Item -Path $tempDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # Summary
 # ═══════════════════════════════════════════════════════════════════════════════
 

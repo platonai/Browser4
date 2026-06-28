@@ -62,6 +62,10 @@ param(
 $ErrorActionPreference = 'Stop'
 $script:StartTime = Get-Date
 
+# Dot-source shared helpers for Read-TaskFile (used in -List mode).
+# Safe: this script already sets ErrorActionPreference=Stop; default dev mode is harmless.
+. "$PSScriptRoot/common.ps1"
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # Discovery — every .md in tasks/
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -117,18 +121,14 @@ if ($List) {
 
         # Extract the heading and first content line as a quick description.
         $desc = ''
-        $content = Get-Content $taskPath -Raw -ErrorAction SilentlyContinue
-        if ($content -match '(?m)^\s*#\s+(.+?)\s*$') {
-            $heading = $Matches[1].Trim()
-            # Get the first non-blank, non-heading line after the heading
-            $afterHeading = $content -replace '^\s*#\s+.+?\s*\r?\n', ''
-            if ($afterHeading -match '(?m)^\s*\r?\n?\s*(.+?)\s*$' -or
-                $afterHeading -match '(?m)^(.+?)\s*$') {
-                $firstLine = $Matches[1].Trim()
-                if ($firstLine -and -not $firstLine.StartsWith('#')) {
-                    $desc = " -- $firstLine"
-                }
+        try {
+            $task = Read-TaskFile -Path $taskPath
+            $firstLine = ($task.Body -split "`n" | Where-Object { $_ -match '\S' } | Select-Object -First 1)
+            if ($firstLine) {
+                $desc = " -- $($firstLine.Trim())"
             }
+        } catch {
+            # Silently skip unparseable files in list mode
         }
 
         Write-Host "  $name$marker$desc"

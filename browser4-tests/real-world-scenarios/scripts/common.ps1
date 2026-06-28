@@ -418,6 +418,64 @@ $($issue.Suggestion)
     }
 }
 
+# ── Task file parsing ───────────────────────────────────────────────────────────
+
+function Read-TaskFile {
+    <#
+    .SYNOPSIS
+        Parse a task markdown file, returning the scenario name and body.
+    .DESCRIPTION
+        Reads a .md task file, extracts the first "# Heading" as the scenario
+        name, and returns the remaining content (heading stripped, leading
+        blank lines trimmed) as the body.
+
+        Returns a PSCustomObject with Name and Body properties.
+        Throws a terminating error if the file is missing, empty, or
+        contains no body content after the heading.
+    .PARAMETER Path
+        Absolute or relative path to the .md task file.
+    .OUTPUTS
+        PSCustomObject with Name (string) and Body (string).
+    .EXAMPLE
+        $task = Read-TaskFile -Path 'tasks/search-summary.md'
+        $task.Name  # "search-summary"
+        $task.Body  # "1. Go to ..."
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path
+    )
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        throw "Task file not found: $Path"
+    }
+
+    $rawContent = Get-Content -Path $Path -Raw -Encoding UTF8
+    if ([string]::IsNullOrWhiteSpace($rawContent)) {
+        throw "Task file is empty: $Path"
+    }
+
+    $name = ''
+    $body = $rawContent
+
+    # Match the first "# Heading" (optionally preceded by whitespace).
+    if ($rawContent -match '(?m)^\s*#\s+(.+?)\s*$') {
+        $name = $Matches[1].Trim()
+        # Remove the heading line and any following blank lines.
+        $body = $rawContent -replace '(?m)^\s*#\s+.+?\s*\r?\n[\s\r\n]*', ''
+    }
+
+    $body = $body.TrimStart()
+    if ([string]::IsNullOrWhiteSpace($body)) {
+        throw "No task body found after heading in: $Path"
+    }
+
+    return [PSCustomObject]@{
+        Name = $name
+        Body = $body
+    }
+}
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # Safe native-command invocation
 # ═══════════════════════════════════════════════════════════════════════════════
