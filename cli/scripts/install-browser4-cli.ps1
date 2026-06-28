@@ -304,7 +304,7 @@ function Get-DownloadUrls {
   } else {
     # Use 'latest' redirect for GitHub, 'latest' symlink for OSS
     $ghUrl = "https://github.com/$GITHUB_REPO/releases/latest/download/$BinaryName"
-    $ossUrl = "$OSS_BASE/releases/latest/download/$BinaryName"
+    $ossUrl = "$OSS_BASE/releases/download/latest/$BinaryName"
   }
 
   if ($Source -eq "github") {

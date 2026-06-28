@@ -358,7 +358,7 @@ fi
 # ── Step 7: Create symlinks ───────────────────────────────────────────
 banner "Step 7/7: Creating Latest Symlinks"
 
-OSS_SYMLINK_PREFIX="${OSS_BASE}/releases/latest/download"
+OSS_SYMLINK_PREFIX="${OSS_BASE}/releases/download/latest"
 
 echo "Symlink prefix: ${OSS_SYMLINK_PREFIX}"
 
