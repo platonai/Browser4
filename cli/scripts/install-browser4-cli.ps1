@@ -83,7 +83,7 @@
 param(
   [string]$Version = "",
   [string]$InstallDir = "",
-  [ValidateSet("github", "oss")]
+  [ValidateSet("", "github", "oss")]
   [string]$Source = "",
   [bool]$AddToPath = $true,
   [switch]$Silent,
