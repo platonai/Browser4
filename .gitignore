@@ -137,5 +137,8 @@ browser4-cli-win32-x64.exe
 /cli/cli/.intentionally-empty-file.o
 */**/.locks
 
+# Build state tracking (used by bin/build/build.ps1 --resume)
+/.build-state/
+
 # Maintenance state lock files (state JSON is tracked for team sharing)
 bin/maintenance/state/*.lock
