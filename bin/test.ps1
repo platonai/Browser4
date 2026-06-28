@@ -40,7 +40,7 @@ if (-not (Test-Path (Join-Path $repoRoot 'VERSION'))) {
 
 Set-Location $repoRoot
 
-$mvnwScript = if ($IsWindows) {
+$mvnwScript = if ($IsWindows -or $env:OS -eq 'Windows_NT') {
     Join-Path $repoRoot 'mvnw.cmd'
 } else {
     Join-Path $repoRoot 'mvnw'
@@ -261,7 +261,7 @@ function Invoke-MavenTests([string[]]$testTypes, [string[]]$additionalMvnArgs) {
 }
 
 function Invoke-Browser4CliTests([string[]]$additionalArgs) {
-    $browser4CliDir = Join-Path $repoRoot 'cli\browser4-cli'
+    $browser4CliDir = Join-Path $repoRoot 'cli' 'browser4-cli'
 
     Write-CommandBanner -Label 'Running Browser4 CLI tests...'
 
@@ -276,8 +276,9 @@ function Invoke-Browser4CliTests([string[]]$additionalArgs) {
         exit 1
     }
 
-    if (-not (Test-Path "$browser4CliDir\Cargo.toml")) {
-        Write-Error "Cargo.toml not found in $browser4CliDir"
+    $cargoTomlPath = Join-Path $browser4CliDir 'Cargo.toml'
+    if (-not (Test-Path $cargoTomlPath)) {
+        Write-Error "Cargo.toml not found at $cargoTomlPath"
         exit 1
     }
 
@@ -301,7 +302,7 @@ function Invoke-Browser4CliTests([string[]]$additionalArgs) {
 }
 
 function Invoke-MockSiteBoot([string[]]$additionalArgs) {
-    $mockSiteModuleDir = Join-Path $repoRoot 'browser4-tests\browser4-rest-tests'
+    $mockSiteModuleDir = Join-Path $repoRoot 'browser4-tests' 'browser4-rest-tests'
     $passThroughArgs = @()
     $mockSiteJvmArgs = @()
     if (-not (Test-Path $mvnwScript)) {
@@ -355,7 +356,7 @@ function Invoke-MockSiteBoot([string[]]$additionalArgs) {
 }
 
 function Invoke-RealWorldScenarioTests([string[]]$additionalArgs) {
-    $rwsScriptsDir = Join-Path $repoRoot 'browser4-tests\real-world-scenarios\scripts'
+    $rwsScriptsDir = Join-Path $repoRoot 'browser4-tests' 'real-world-scenarios' 'scripts'
     $scenarioRunner = Join-Path $rwsScriptsDir 'run-tests.ps1'
     $taskRunner = Join-Path $rwsScriptsDir 'run-task.ps1'
 
@@ -439,10 +440,13 @@ function Invoke-RealWorldScenarioTests([string[]]$additionalArgs) {
         $runner = $scenarioRunner
         $runnerKind = 'Scenario runner'
     }
-    else {
-        # mode must be 'task' — validated above
+    elseif ($mode -eq 'task') {
         $runner = $taskRunner
         $runnerKind = 'Task runner'
+    }
+    else {
+        Write-Error "Unknown RWS mode '$mode'. Valid modes: --scenarios, --task <file>"
+        exit 1
     }
 
     if (-not (Test-Path $runner)) {
@@ -528,7 +532,7 @@ function Invoke-ResumeTests([string[]]$additionalArgs) {
     # Collect all module directories that have failing test reports.
     $failedModuleDirs = @()
     $reportsDirs = Get-ChildItem -Path $repoRoot -Recurse -Directory -Filter 'surefire-reports' -ErrorAction SilentlyContinue |
-        Where-Object { $_.FullName -match '\\target\\surefire-reports$' }
+        Where-Object { $_.FullName -match '[\\/]target[\\/]surefire-reports$' }
 
     foreach ($dir in $reportsDirs) {
         $hasFailure = Get-ChildItem -Path $dir.FullName -Filter '*.xml' -ErrorAction SilentlyContinue |
