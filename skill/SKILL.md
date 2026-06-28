@@ -251,6 +251,7 @@ browser4-cli domsnapshot query [url] --sql <query>      # X-SQL query against DO
 browser4-cli domsnapshot summary                        # compressed page summary (WPSI)
 browser4-cli domsnapshot export [--file <path>]         # save snapshot HTML (might be huge, don't read it directly)
 browser4-cli domsnapshot grep [OPTIONS] <pattern>       # search snapshot HTML with regex (grep-style output)
+browser4-cli domsnapshot inspect [selector] [--max N]   # analyze DOM structure, suggest CSS selectors
 ```
 
 Full reference: **[references/domsnapshot.md](references/domsnapshot.md)**.

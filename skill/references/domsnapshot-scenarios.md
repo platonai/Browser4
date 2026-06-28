@@ -1,6 +1,6 @@
 ---
 title: "DOM Snapshot — Real-World Scenarios"
-description: "Practical end-to-end recipes using all domsnapshot subcommands: get, query, grep, summary, and export. Covers e-commerce, news, SEO, pricing, job boards, compliance, research, real estate, CI, incident response, and agent-assisted workflows."
+description: "Practical end-to-end recipes using all domsnapshot subcommands: get, query, grep, summary, export, and inspect. Covers e-commerce, news, SEO, pricing, job boards, compliance, research, real estate, CI, incident response, and agent-assisted workflows."
 ---
 
 # DOM Snapshot — Real-World Scenarios
@@ -23,6 +23,7 @@ Practical, end-to-end recipes using the `domsnapshot` family of commands. Each s
 | 10 | Agent-Assisted Form Discovery | `get` + Agent CLI | AI / Automation |
 | 11 | Page Structure Analysis | `summary` | Research / Auditing |
 | 12 | Incident Response & Debugging | `grep` | Engineering / SRE |
+| 13 | Selector Discovery for Unknown Pages | `inspect` | Research / Scraping |
 
 ---
 
@@ -822,6 +823,120 @@ browser4-cli domsnapshot grep --selector main '<a[^>]*href="http[^"]*"[^>]*>' | 
 
 ---
 
+## 13. Selector Discovery for Unknown Pages with Inspect
+
+**Problem:** You land on an unfamiliar page (e.g., a competitor's e-commerce search results, a job board, or a news aggregator) and need to extract structured data — but you don't know the CSS selectors for product titles, prices, ratings, or other recurring fields. Guessing selectors or manually reading HTML is slow and error-prone.
+
+**Why DOM Snapshot:** `inspect` analyzes the DOM structure and suggests CSS selectors for recurring patterns across matching elements. It's deterministic, requires no AI, and works on any page where content repeats in a consistent structure.
+
+### 13a. Discover selectors on an e-commerce listing page
+
+```bash
+# Navigate to the page and capture a snapshot
+browser4-cli goto "https://books.toscrape.com"
+browser4-cli domsnapshot
+
+# Inspect the product listing — find the repeating product cards
+browser4-cli domsnapshot inspect ".product_pod"
+```
+
+**Output (example):**
+```
+### Inspect: ".product_pod" (20 matches, 10 analyzed)
+
+  Sample structure (3 of 20):
+  -- Element 1: article.product_pod
+      img.thumbnail
+      h3            ""
+       a            "A Light in the Attic"
+      div.product_price
+       p.price_color  "£51.77"
+      p.instock.availability  "In stock"
+  ...
+
+  Suggested selectors (recurring across matches):
+   10/10 (100%)  h3 a                                         → "A Light in the..."
+   10/10 (100%)  img.thumbnail                                → ""
+   10/10 (100%)  p.price_color                                → "£51.77"
+    8/10 ( 80%)  p.instock.availability                       → "In stock"
+```
+
+### 13b. Use discovered selectors for extraction
+
+Take the selectors from `inspect` and feed them directly into `domsnapshot get all` or `domsnapshot query`:
+
+```bash
+# Extract all product titles using the suggested selector
+browser4-cli domsnapshot get all text ".product_pod h3 a"
+
+# Extract all prices
+browser4-cli domsnapshot get all text ".product_pod p.price_color"
+
+# Or run a structured X-SQL query with the discovered selectors
+browser4-cli domsnapshot query --sql "
+  SELECT
+    dom_first_text(dom, 'h3 a') AS title,
+    dom_first_text(dom, 'p.price_color') AS price,
+    dom_first_text(dom, 'p.instock.availability') AS availability
+  FROM load_and_select(@url, '.product_pod')
+"
+```
+
+### 13c. Narrow scope for complex pages
+
+On larger pages, start broad then narrow down:
+
+```bash
+# Step 1: See what repeating containers exist
+browser4-cli domsnapshot inspect
+
+# Step 2: Inspect just the search results area
+browser4-cli domsnapshot inspect ".s-result-item"
+
+# Step 3: For deeply nested structures, increase depth
+browser4-cli domsnapshot inspect ".job-card" --depth 6 --max 20
+```
+
+### 13d. Workflow: discover → extract → validate
+
+```bash
+#!/bin/bash
+# discover-and-extract.sh — from zero to structured data on an unknown page
+
+URL="$1"
+browser4-cli goto "$URL"
+browser4-cli domsnapshot
+
+# 1. Discover repeating containers
+echo "=== Scanning for repeating containers ==="
+browser4-cli domsnapshot inspect
+
+# 2. Pick the most promising container (e.g., largest match count)
+#    and inspect it in detail
+CONTAINER=".product_pod"  # adjust based on step 1 output
+echo "=== Inspecting $CONTAINER ==="
+browser4-cli domsnapshot inspect "$CONTAINER"
+
+# 3. Validate the suggested selectors by extracting a few values
+echo "=== Validating: title ==="
+browser4-cli domsnapshot get all text "$CONTAINER h3 a" --limit 5
+
+echo "=== Validating: price ==="
+browser4-cli domsnapshot get all text "$CONTAINER p.price_color" --limit 5
+
+# 4. Once validated, run full extraction with domsnapshot query
+browser4-cli domsnapshot query --sql "
+  SELECT
+    dom_first_text(dom, 'h3 a') AS title,
+    dom_first_text(dom, 'p.price_color') AS price
+  FROM load_and_select(@url, '$CONTAINER')
+"
+```
+
+**Why `inspect` here:** It eliminates the guesswork of selector discovery. Instead of reading raw HTML or guessing class names, you get a ranked list of selectors with coverage percentages. The suggested selectors are based on structural recurrence — if a selector appears in 10/10 cards, it's reliable for extraction.
+
+---
+
 ## Patterns & Tips
 
 ### Combining commands
@@ -835,6 +950,7 @@ browser4-cli domsnapshot get text "$SELECTOR"    # reads from cache
 browser4-cli domsnapshot get html "$SELECTOR"    # reads from cache
 browser4-cli domsnapshot grep -i "pattern"       # reads from cache (client-side search)
 browser4-cli domsnapshot summary                 # reads from cache (generates WPSI)
+browser4-cli domsnapshot inspect ".card"         # reads from cache (suggests selectors)
 ```
 
 The cache is invalidated by the next `domsnapshot` capture or a page navigation (`goto`, `reload`, etc.).
@@ -869,15 +985,18 @@ Append these to the URL string in `domsnapshot query`:
 | `export` | Saving full HTML for archival, diffing, external tooling, offline analysis |
 | `grep` | Presence/absence checks; counting; quick searches with context; CI smoke tests; incident response |
 | `summary` | Page discovery before writing selectors; structural audits; LLM-friendly page overviews |
+| `inspect` | Discovering unknown CSS selectors on complex pages; finding recurring patterns; selector validation before extraction |
 
 > **Important:** `domsnapshot get` returns **only the first match** (it uses `document.selectFirstOrNull()` internally). For extracting data from multiple elements (e.g., all products on a listing page), use `domsnapshot query` with X-SQL's `load_and_select`.
 
 ### Command form notes
 
 - The CLI uses the **spaced form**: `browser4-cli domsnapshot get text "h1"`, not the hyphenated `domsnapshot-get`.
-- `browser4-cli domsnapshot` (with no subcommand) captures a fresh DOM snapshot and caches it in the backend. Subsequent `get`, `query`, `export`, `grep`, and `summary` calls reuse this cached snapshot — they do **not** re-capture the page. The cache is invalidated by the next `domsnapshot` capture or a page navigation.
+- `browser4-cli domsnapshot` (with no subcommand) captures a fresh DOM snapshot and caches it in the backend. Subsequent `get`, `query`, `export`, `grep`, `summary`, and `inspect` calls reuse this cached snapshot — they do **not** re-capture the page. The cache is invalidated by the next `domsnapshot` capture or a page navigation.
+- The capture command now returns enriched metadata including `imageCount`, `linkCount`, and `interactiveElements` (tag, class, id, aria attributes, bounding-box).
 - `grep` performs matching **client-side** by fetching the snapshot HTML then running regex locally — no backend round-trip for the search itself.
 - `summary` generates a WPSI YAML file from the cached snapshot — useful as a discovery step before writing selectors.
+- `inspect` analyzes DOM structure and suggests CSS selectors for recurring patterns. It is fully deterministic (no AI) and based on structural recurrence across matching elements.
 
 ---
 
