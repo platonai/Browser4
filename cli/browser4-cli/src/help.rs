@@ -189,6 +189,14 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
             "    or the value itself otherwise. JS exceptions are surfaced as errors."
                 .to_string(),
         );
+        lines.push(
+            "  - Objects and arrays are serialized as valid JSON. Use --json to JSON-wrap"
+                .to_string(),
+        );
+        lines.push(
+            "    scalar results (strings get quoted, numbers/booleans/null pass through)."
+                .to_string(),
+        );
         lines.push(String::new());
         lines.push("Examples:".to_string());
         lines.push("  browser4-cli eval \"document.title\"".to_string());
@@ -198,6 +206,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("  browser4-cli eval \"element => element.textContent\" e5".to_string());
         lines.push("  browser4-cli eval --file script.js".to_string());
         lines.push("  browser4-cli eval --file script.js e5".to_string());
+        lines.push("  browser4-cli eval --json \"document.title\"".to_string());
     }
 
     if cmd.name == "agent-run" {
@@ -527,10 +536,15 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
             "Search snapshot HTML with regex patterns and grep-style output",
             50,
         ));
+        lines.push(format_with_gap(
+            "  domsnapshot inspect [selector] [--max N] [--depth D]",
+            "Analyze DOM structure and suggest CSS selectors for recurring patterns",
+            50,
+        ));
         lines.push(String::new());
         lines.push("Notes:".to_string());
         lines.push(
-            "  - The base `domsnapshot` command captures a static DOM snapshot, saves it in Browser4's page storage, and returns metadata (URL, title, timestamp)."
+            "  - The base `domsnapshot` command captures a static DOM snapshot, saves it in Browser4's page storage, and returns enriched metadata (URL, title, timestamps, image/link counts, interactive elements with tag/class/id/aria/bounding-box)."
                 .to_string(),
         );
         lines.push(
@@ -563,6 +577,10 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         );
         lines.push(
             "  - Search the DOM snapshot HTML with regex patterns using `domsnapshot grep <pattern>`. Supports standard grep flags: -i, -A, -B, -C, -v, -c, -l, -F, -w, --no-line-number, and --selector for CSS-scoped searches. Line numbers are shown by default (unlike GNU grep's -n opt-in)."
+                .to_string(),
+        );
+        lines.push(
+            "  - Analyze DOM structure and discover CSS selectors for recurring patterns with `domsnapshot inspect [selector]`. When the selector matches multiple elements (e.g. `.product-card`), it compares child structures across matches and suggests selectors ranked by recurrence. Use --max to control sample size and --depth to limit descendant traversal."
                 .to_string(),
         );
         lines.push(String::new());
@@ -608,6 +626,12 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push(String::new());
         lines.push("  # Search only within <main> element".to_string());
         lines.push("  browser4-cli domsnapshot grep --selector main \"Submit\"".to_string());
+        lines.push(String::new());
+        lines.push("  # Discover CSS selectors for recurring product cards".to_string());
+        lines.push("  browser4-cli domsnapshot inspect \".product_pod\"".to_string());
+        lines.push(String::new());
+        lines.push("  # Inspect with deeper analysis and larger sample".to_string());
+        lines.push("  browser4-cli domsnapshot inspect \".s-result-item\" --depth 6 --max 20".to_string());
     }
 
     if cmd.name == "snapshot" {
@@ -891,6 +915,9 @@ mod tests {
         assert!(help.contains("--file"));
         assert!(help.contains("Read JavaScript expression from a file"));
         assert!(help.contains("browser4-cli eval --file script.js"));
+        assert!(help.contains("Objects and arrays are serialized as valid JSON"));
+        assert!(help.contains("--json to JSON-wrap"));
+        assert!(help.contains("browser4-cli eval --json \"document.title\""));
     }
 
     #[test]
@@ -1019,7 +1046,7 @@ mod tests {
         assert!(help.contains("domsnapshot summary"));
         assert!(help.contains("Generate a compressed Web Page Summary Index (WPSI) from the stored DOM snapshot"));
         // Notes
-        assert!(help.contains("static DOM snapshot, saves it in Browser4's page storage, and returns metadata"));
+        assert!(help.contains("static DOM snapshot, saves it in Browser4's page storage, and returns enriched metadata"));
         assert!(help.contains("CSS selectors only"));
         assert!(help.contains("@url"));
         assert!(help.contains("SQLTemplate handles escaping"));
@@ -1035,6 +1062,15 @@ mod tests {
         assert!(help.contains("browser4-cli domsnapshot query --sql @query.sql"));
         assert!(help.contains("browser4-cli domsnapshot export --file snapshot.html"));
         assert!(help.contains("browser4-cli domsnapshot summary"));
+        // grep and inspect
+        assert!(help.contains("domsnapshot grep [OPTIONS] <pattern>"));
+        assert!(help.contains("browser4-cli domsnapshot grep --selector main \"Submit\""));
+        assert!(help.contains("domsnapshot inspect [selector] [--max N] [--depth D]"));
+        assert!(help.contains("Analyze DOM structure and suggest CSS selectors for recurring patterns"));
+        assert!(help.contains("browser4-cli domsnapshot inspect \".product_pod\""));
+        // enriched metadata
+        assert!(help.contains("image/link counts"));
+        assert!(help.contains("interactive elements with tag/class/id/aria/bounding-box"));
     }
 
     #[test]
