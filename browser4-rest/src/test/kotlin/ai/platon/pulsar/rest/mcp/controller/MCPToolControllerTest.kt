@@ -1248,6 +1248,119 @@ class MCPToolControllerTest {
         Unit
     }
 
+    // -------------------------------------------------------------------
+    // dom_snapshot_scrape_all tests
+    // -------------------------------------------------------------------
+
+    @Test
+    fun `test dom snapshot scrape all rejects unknown field`() = runBlocking {
+        val request = MCPToolCallRequest(
+            tool = "dom_snapshot_scrape_all",
+            arguments = mapOf(
+                "sessionId" to sessionId,
+                "field" to "unknown",
+                "selector" to "h2 a"
+            )
+        )
+
+        val result = controller.callTool(request, response)
+
+        assertEquals(HttpStatus.OK, result.statusCode)
+        assertTrue(result.body!!.isError)
+        assertTrue(
+            result.body!!.content[0].text.contains("Unknown field"),
+            "Expected 'Unknown field' error, got: ${result.body!!.content[0].text}"
+        )
+        Unit
+    }
+
+    @Test
+    fun `test dom snapshot scrape all rejects attr without name`() = runBlocking {
+        val request = MCPToolCallRequest(
+            tool = "dom_snapshot_scrape_all",
+            arguments = mapOf(
+                "sessionId" to sessionId,
+                "field" to "attr",
+                "selector" to "a"
+            )
+        )
+
+        val result = controller.callTool(request, response)
+
+        assertEquals(HttpStatus.OK, result.statusCode)
+        assertTrue(result.body!!.isError)
+        assertTrue(
+            result.body!!.content[0].text.contains("attribute name"),
+            "Expected 'attribute name' error, got: ${result.body!!.content[0].text}"
+        )
+        Unit
+    }
+
+    @Test
+    fun `test dom snapshot scrape all rejects element reference`() = runBlocking {
+        val request = MCPToolCallRequest(
+            tool = "dom_snapshot_scrape_all",
+            arguments = mapOf(
+                "sessionId" to sessionId,
+                "field" to "text",
+                "selector" to "e5"
+            )
+        )
+
+        val result = controller.callTool(request, response)
+
+        assertEquals(HttpStatus.OK, result.statusCode)
+        assertTrue(result.body!!.isError)
+        assertTrue(
+            result.body!!.content[0].text.contains("Element references"),
+            "Expected 'Element references' error, got: ${result.body!!.content[0].text}"
+        )
+        Unit
+    }
+
+    @Test
+    fun `test dom snapshot scrape all rejects backend ref`() = runBlocking {
+        val request = MCPToolCallRequest(
+            tool = "dom_snapshot_scrape_all",
+            arguments = mapOf(
+                "sessionId" to sessionId,
+                "field" to "html",
+                "selector" to "backend:15"
+            )
+        )
+
+        val result = controller.callTool(request, response)
+
+        assertEquals(HttpStatus.OK, result.statusCode)
+        assertTrue(result.body!!.isError)
+        assertTrue(
+            result.body!!.content[0].text.contains("Element references"),
+            "Expected 'Element references' error, got: ${result.body!!.content[0].text}"
+        )
+        Unit
+    }
+
+    @Test
+    fun `test dom snapshot scrape all rejects missing session id`() = runBlocking {
+        val request = MCPToolCallRequest(
+            tool = "dom_snapshot_scrape_all",
+            arguments = mapOf(
+                "field" to "text",
+                "selector" to "h2 a"
+            )
+        )
+
+        val result = controller.callTool(request, response)
+
+        assertEquals(HttpStatus.OK, result.statusCode)
+        assertTrue(result.body!!.isError)
+        assertTrue(
+            result.body!!.content[0].text.contains("sessionId"),
+            "Expected error mentioning sessionId, got: ${result.body!!.content[0].text}"
+        )
+        Unit
+    }
+
     private fun parseBatchPayload(result: org.springframework.http.ResponseEntity<MCPToolCallResponse>): Map<String, Any?> {
         assertEquals(HttpStatus.OK, result.statusCode)
         @Suppress("UNCHECKED_CAST")

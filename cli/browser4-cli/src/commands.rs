@@ -3458,6 +3458,131 @@ mod tests {
     }
 
     // -------------------------------------------------------------------
+    // domsnapshot-get-all tests
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn test_dom_snapshot_get_all_text_params() {
+        let map = commands_map();
+        let cmd = map.get("domsnapshot-get-all").unwrap();
+        let mut args = HashMap::new();
+        args.insert("field".to_string(), json!("text"));
+        args.insert("selector".to_string(), json!(".product"));
+        assert_eq!((cmd.tool_name_fn)(&args), "dom_snapshot_scrape_all");
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["field"], "text");
+        assert_eq!(params["selector"], ".product");
+    }
+
+    #[test]
+    fn test_dom_snapshot_get_all_html_defaults_selector_to_root() {
+        let map = commands_map();
+        let cmd = map.get("domsnapshot-get-all").unwrap();
+        let mut args = HashMap::new();
+        args.insert("field".to_string(), json!("html"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["field"], "html");
+        assert_eq!(params["selector"], ":root");
+    }
+
+    #[test]
+    fn test_dom_snapshot_get_all_attr_params() {
+        let map = commands_map();
+        let cmd = map.get("domsnapshot-get-all").unwrap();
+        let mut args = HashMap::new();
+        args.insert("field".to_string(), json!("attr"));
+        args.insert("selector".to_string(), json!(".product"));
+        args.insert("name".to_string(), json!("data-id"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["field"], "attr");
+        assert_eq!(params["selector"], ".product");
+        assert_eq!(params["attrName"], "data-id");
+    }
+
+    #[test]
+    fn test_dom_snapshot_get_all_with_offset_and_limit() {
+        let map = commands_map();
+        let cmd = map.get("domsnapshot-get-all").unwrap();
+        let mut args = HashMap::new();
+        args.insert("field".to_string(), json!("text"));
+        args.insert("selector".to_string(), json!("h2 a"));
+        args.insert("offset".to_string(), json!("10"));
+        args.insert("limit".to_string(), json!("5"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["field"], "text");
+        assert_eq!(params["offset"], 10);
+        assert_eq!(params["limit"], 5);
+    }
+
+    #[test]
+    fn test_dom_snapshot_get_all_rejects_invalid_offset() {
+        let map = commands_map();
+        let cmd = map.get("domsnapshot-get-all").unwrap();
+        let mut args = HashMap::new();
+        args.insert("field".to_string(), json!("text"));
+        args.insert("offset".to_string(), json!("abc"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert!(params.get("offset").is_none(), "non-numeric offset should be ignored");
+    }
+
+    #[test]
+    fn test_dom_snapshot_get_all_rejects_invalid_limit() {
+        let map = commands_map();
+        let cmd = map.get("domsnapshot-get-all").unwrap();
+        let mut args = HashMap::new();
+        args.insert("field".to_string(), json!("text"));
+        args.insert("limit".to_string(), json!("xyz"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert!(params.get("limit").is_none(), "non-numeric limit should be ignored");
+    }
+
+    // -------------------------------------------------------------------
+    // snapshot --limit and --no-compact tests
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn test_snapshot_limit_param() {
+        let map = commands_map();
+        let cmd = map.get("snapshot").unwrap();
+        let mut args = HashMap::new();
+        args.insert("limit".to_string(), json!("200"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["limit"], 200);
+    }
+
+    #[test]
+    fn test_snapshot_limit_rejects_invalid() {
+        let map = commands_map();
+        let cmd = map.get("snapshot").unwrap();
+        let mut args = HashMap::new();
+        args.insert("limit".to_string(), json!("abc"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert!(params.get("limit").is_none(), "non-numeric limit should be ignored");
+    }
+
+    #[test]
+    fn test_snapshot_no_compact_sends_false() {
+        let map = commands_map();
+        let cmd = map.get("snapshot").unwrap();
+        let mut args = HashMap::new();
+        args.insert("no-compact".to_string(), json!(true));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["compact"], false, "--no-compact should send compact=false");
+    }
+
+    #[test]
+    fn test_snapshot_no_compact_overrides_compact_flag() {
+        let map = commands_map();
+        let cmd = map.get("snapshot").unwrap();
+        let mut args = HashMap::new();
+        args.insert("no-compact".to_string(), json!(true));
+        args.insert("compact".to_string(), json!(true));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["compact"], false,
+            "--no-compact should take precedence over --compact");
+    }
+
+    // -------------------------------------------------------------------
     // generate-locator tests
     // -------------------------------------------------------------------
 
