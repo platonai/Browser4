@@ -155,7 +155,8 @@ jobs:
               -e "$OSS_ENDPOINT" \
               --region "$OSS_REGION" \
               --acl public-read \
-              --retry-times 3; then
+              --retry-times 3 \
+              --force; then
               echo "  https://${OSS_BUCKET}.${OSS_ENDPOINT}/scripts/${script}"
             else
               echo "::error::Failed to upload ${script} to scripts/"
@@ -214,7 +215,7 @@ jobs:
             asset_name=$(basename "$asset")
 
             # Symlink key and its target object key (relative to bucket root)
-            symlink_key="releases/latest/download/${asset_name}"
+            symlink_key="releases/download/latest/${asset_name}"
             target_key="releases/download/${TAG_NAME}/${asset_name}"
 
             echo "Creating symlink: ${symlink_key} → ${target_key}"
@@ -289,7 +290,8 @@ jobs:
             -e "$OSS_ENDPOINT" \
             --region "$OSS_REGION" \
             --acl public-read \
-            --retry-times 3
+            --retry-times 3 \
+            --force
 
           echo "📋 Release metadata published to OSS"
 
@@ -303,7 +305,7 @@ jobs:
             echo "- **Release URL**: ${{ steps.resolve.outputs.release_url }}"
             echo "- **Assets**: ${{ steps.resolve.outputs.assets_count }}"
             echo "- **OSS Bucket**: \`oss://browser4/releases/download/${{ steps.resolve.outputs.tag_name }}/\`"
-            echo "- **Latest symlink**: \`oss://browser4/releases/latest/download/\`"
+            echo "- **Latest symlink**: \`oss://browser4/releases/download/latest/\`"
             echo "- **Release metadata**: \`https://browser4.oss-cn-beijing.aliyuncs.com/releases/latest-release.json\`"
             echo "- **CLI installer scripts** (convenience — always latest):"
             echo "  - \`https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.ps1\`"
@@ -312,7 +314,7 @@ jobs:
             echo "  - \`https://browser4.oss-cn-beijing.aliyuncs.com/releases/download/${{ steps.resolve.outputs.tag_name }}/install-browser4-cli.ps1\`"
             echo "  - \`https://browser4.oss-cn-beijing.aliyuncs.com/releases/download/${{ steps.resolve.outputs.tag_name }}/install-browser4-cli.sh\`"
             echo "- **CLI installer scripts** (latest alias):"
-            echo "  - \`https://browser4.oss-cn-beijing.aliyuncs.com/releases/latest/download/install-browser4-cli.ps1\`"
-            echo "  - \`https://browser4.oss-cn-beijing.aliyuncs.com/releases/latest/download/install-browser4-cli.sh\`"
+            echo "  - \`https://browser4.oss-cn-beijing.aliyuncs.com/releases/download/latest/install-browser4-cli.ps1\`"
+            echo "  - \`https://browser4.oss-cn-beijing.aliyuncs.com/releases/download/latest/install-browser4-cli.sh\`"
             echo "- **Status**: ${{ job.status }}"
           } >> "$GITHUB_STEP_SUMMARY"
