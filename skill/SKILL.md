@@ -145,7 +145,25 @@ browser4-cli snapshot -i -d 5                      # interactive only, depth 5
 browser4-cli snapshot -s "#content"                # scoped to CSS selector
 browser4-cli snapshot -l 200                       # cap output at 200 nodes (content-heavy pages)
 browser4-cli snapshot --no-compact                 # include all structural nodes (disable compact)
+browser4-cli snapshot --stdout                     # print raw snapshot content to stdout (for piping)
+browser4-cli snapshot --viewport=0,2,4             # capture specific viewports (single, list, range, or mixed)
+browser4-cli snapshot --viewport=1-3               # capture viewports 1 through 3
 ```
+
+### Snapshot Grep
+
+Search snapshot accessibility-tree YAML content with regex patterns and grep-style output:
+
+```bash
+browser4-cli snapshot grep <pattern>               # search snapshot YAML with regex
+browser4-cli snapshot grep -i error                # case-insensitive search
+browser4-cli snapshot grep -C 2 "timeout"          # show 2 lines of context
+browser4-cli snapshot grep -F "literal"            # fixed-string (literal) matching
+browser4-cli snapshot grep -c pattern              # print only match count
+browser4-cli snapshot grep --selector main "text"  # search within a CSS selector's subtree
+```
+
+Supported grep options: `-i` (ignore-case), `-A N` (after-context), `-B N` (before-context), `-C N` (context), `-v` (invert-match), `-c` (count), `-l` (files-with-matches), `-F` (fixed-strings), `-w` (word-regexp), `--no-line-number`, `--selector`.
 
 | Flag | Effect |
 |---|---|
@@ -156,8 +174,11 @@ browser4-cli snapshot --no-compact                 # include all structural node
 | `-l, --limit <n>` | Cap total rendered nodes (truncates with notice) |
 | `-s, --selector <sel>` | Scope to CSS selector subtree |
 | `-u, --urls` | Include href URLs for links |
+| `--stdout` | Print snapshot content to stdout (for piping); alias: `--raw` |
+| `--raw` | Alias for `--stdout` |
+| `--viewport <spec>` | Capture specific viewports: single index (3), comma list (0,2,4), range (1-3), or mixed (0,2-4,7) |
 
-> **Tip:** On content-heavy pages (e-commerce, search results), snapshots can exceed 256KB. Use `-i`, `-l 200`, or `-s "<selector>"` to keep output manageable. Compact mode (on by default) already strips empty structural wrappers. Never cat full snapshot files — use `domsnapshot get` for structured extraction.
+> **Tip:** On content-heavy pages (e-commerce, search results), snapshots can exceed 256KB. Use `-i`, `-l 200`, or `-s "<selector>"` to keep output manageable. Compact mode (on by default) already strips empty structural wrappers. Never cat full snapshot files — use `domsnapshot get` for structured extraction. Use `snapshot grep` to search the YAML accessibility tree directly without loading it into an editor.
 
 ### Element Data Extraction (get)
 

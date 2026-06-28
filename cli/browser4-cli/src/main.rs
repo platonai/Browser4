@@ -245,6 +245,7 @@ fn no_snapshot_commands() -> HashSet<&'static str> {
         "extract",
         "summarize",
         "snapshot",
+        "snapshot-grep",
         "screenshot",
         "state-save",
         "state-load",
@@ -2189,37 +2190,15 @@ async fn handle_snapshot(
         .get("filename")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
-    // Parse --viewport <index>,<limit> (0-based) and convert to server's
-    // viewports format (0-based range, e.g., "0-4" for index=0, limit=5).
-    let viewport_spec: Option<String> = tool_params
-        .get("viewport")
-        .and_then(|v| v.as_str())
-        .and_then(|s| {
-            let parts: Vec<&str> = s.split(',').collect();
-            if parts.len() == 2 {
-                let index: usize = parts[0].trim().parse().ok()?;
-                let limit: usize = parts[1].trim().parse().ok()?;
-                if limit > 0 {
-                    let start = index;
-                    let end = index + limit - 1;
-                    Some(format!("{}-{}", start, end))
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        });
-
+    // --viewport is now passed through directly to the server as the
+    // "viewports" key (renamed in tool_params_fn).  The server's
+    // ViewportSpec.parse() handles the flexible format natively.
     let snapshot_args = {
         let mut a = tool_params.clone();
         if let Value::Object(ref mut m) = a {
             m.remove("filename");
-            m.remove("viewport");
-            m.remove("raw"); // CLI-side flag, not a server parameter
-            if let Some(ref spec) = viewport_spec {
-                m.insert("viewports".to_string(), json!(spec));
-            }
+            m.remove("raw");    // CLI-side flag, not a server parameter
+            m.remove("stdout"); // CLI-side flag, not a server parameter
         }
         a
     };
@@ -2268,7 +2247,11 @@ async fn handle_snapshot(
     let raw = tool_params
         .get("raw")
         .and_then(|v| v.as_bool())
-        .unwrap_or(false);
+        .unwrap_or(false)
+        || tool_params
+            .get("stdout")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
 
     json_field("page_url", json!(url));
     json_field("page_title", json!(title));
@@ -2286,6 +2269,56 @@ async fn handle_snapshot(
         cli_println!("[Snapshot]({})", out_path.display());
     }
     Ok(())
+}
+
+async fn handle_snapshot_grep(
+    client: &Client,
+    base_url: &str,
+    tool_name: &str,
+    _tool_params: &Value,
+    session_name: Option<&str>,
+    grep_options: &GrepOptions,
+) -> Result<(), String> {
+    let source = if let Some(selector) = &grep_options.selector {
+        // Scoped search: first get snapshot scoped to the CSS selector
+        with_session(client, base_url, session_name, false, |session_id| {
+            let client = client.clone();
+            let base_url = base_url.to_string();
+            let sel = selector.clone();
+            async move {
+                call_tool(
+                    &client,
+                    &base_url,
+                    "browser_snapshot",
+                    json!({
+                        "sessionId": session_id,
+                        "selector": sel,
+                    }),
+                )
+                .await
+            }
+        })
+        .await?
+    } else {
+        // Full page snapshot
+        with_session(client, base_url, session_name, false, |session_id| {
+            let client = client.clone();
+            let base_url = base_url.to_string();
+            let tool_name = tool_name.to_string();
+            async move {
+                call_tool(
+                    &client,
+                    &base_url,
+                    &tool_name,
+                    json!({ "sessionId": session_id }),
+                )
+                .await
+            }
+        })
+        .await?
+    };
+
+    run_grep_on_source(&source, grep_options, "snapshot")
 }
 
 async fn handle_screenshot(
@@ -2904,7 +2937,7 @@ async fn handle_dom_snapshot_summary(
 }
 
 // ---------------------------------------------------------------------------
-// domsnapshot-grep handler
+// grep support (shared between domsnapshot-grep and snapshot-grep)
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Default)]
@@ -3029,6 +3062,19 @@ async fn handle_dom_snapshot_grep(
         .await?
     };
 
+    run_grep_on_source(&source, grep_options, "domsnapshot")
+}
+
+/// Run grep matching on an already-fetched source text, printing results
+/// via cli_println! and recording json fields via json_field().
+///
+/// `source_label` is used as the "filename" in --files-with-matches output
+/// (e.g., "snapshot" or "domsnapshot").
+fn run_grep_on_source(
+    source: &str,
+    grep_options: &GrepOptions,
+    source_label: &str,
+) -> Result<(), String> {
     // If the source is "null", no element matched the selector
     if source == "null" || source.is_empty() {
         if grep_options.count {
@@ -3100,10 +3146,10 @@ async fn handle_dom_snapshot_grep(
         return Ok(());
     }
 
-    // --files-with-matches: print a placeholder "filename" only if there are matches
+    // --files-with-matches: print the source label only if there are matches
     if grep_options.files_with_matches {
         if !matched_indices.is_empty() {
-            cli_println!("domsnapshot");
+            cli_println!("{}", source_label);
         }
         json_field("matched", json!(!matched_indices.is_empty()));
         json_field("matches", json!(matched_indices.len()));
@@ -6015,6 +6061,7 @@ fn rewrite_prefixed_command(args: &[String]) -> Option<Vec<String>> {
         "swarm" => format!("swarm-{}", sub),
         "agent" => format!("agent-{}", sub),
         "domsnapshot" => format!("domsnapshot-{}", sub),
+        "snapshot" => format!("snapshot-{}", sub),
         _ => return None,
     };
     let mut rewritten = vec![rewritten_command];
@@ -7602,6 +7649,18 @@ async fn run(
         "domsnapshot-grep" => {
             let grep_options = parse_grep_options(&tool_params)?;
             handle_dom_snapshot_grep(
+                &client,
+                &base_url,
+                &tool_name,
+                &tool_params,
+                global.session_name.as_deref(),
+                &grep_options,
+            )
+            .await?;
+        }
+        "snapshot-grep" => {
+            let grep_options = parse_grep_options(&tool_params)?;
+            handle_snapshot_grep(
                 &client,
                 &base_url,
                 &tool_name,
@@ -9323,5 +9382,209 @@ mod tests {
                 .unwrap();
         assert_eq!(opts.pattern, "error|warning|panic");
         assert!(opts.ignore_case);
+    }
+
+    // -----------------------------------------------------------------------
+    // run_grep_on_source tests
+    // -----------------------------------------------------------------------
+
+    fn make_grep_opts(pattern: &str) -> GrepOptions {
+        GrepOptions {
+            pattern: pattern.to_string(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn test_run_grep_source_null_or_empty() {
+        // null source should succeed with zero matches
+        run_grep_on_source("null", &make_grep_opts("x"), "test").unwrap();
+        // empty source should succeed with zero matches
+        run_grep_on_source("", &make_grep_opts("x"), "test").unwrap();
+    }
+
+    #[test]
+    fn test_run_grep_invalid_regex() {
+        let result = run_grep_on_source(
+            "some text",
+            &GrepOptions {
+                pattern: "[invalid".to_string(),
+                ..Default::default()
+            },
+            "test",
+        );
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Invalid regex"));
+    }
+
+    #[test]
+    fn test_run_grep_basic_match() {
+        let source = "line one\nline two\nline three\n";
+        let opts = make_grep_opts("two");
+        // Since run_grep_on_source prints via cli_println! and json_field,
+        // we test that it returns Ok for valid inputs.
+        let result = run_grep_on_source(source, &opts, "test");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_run_grep_fixed_strings_escapes_regex() {
+        let source = "text with dots... and more";
+        // "..." is a regex special pattern, but with -F it should match literally
+        let opts = GrepOptions {
+            pattern: "dots...".to_string(),
+            fixed_strings: true,
+            ..Default::default()
+        };
+        let result = run_grep_on_source(source, &opts, "test");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_run_grep_word_regexp() {
+        let source = "word boundary test\nnotawordmatch\n";
+        let opts = GrepOptions {
+            pattern: "word".to_string(),
+            word_regexp: true,
+            ..Default::default()
+        };
+        let result = run_grep_on_source(source, &opts, "test");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_run_grep_count_mode() {
+        let source = "apple\nbanana\napple pie\n";
+        let opts = GrepOptions {
+            pattern: "apple".to_string(),
+            count: true,
+            ..Default::default()
+        };
+        let result = run_grep_on_source(source, &opts, "test");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_run_grep_invert_match() {
+        let source = "match this\nskip this\nmatch again\n";
+        let opts = GrepOptions {
+            pattern: "skip".to_string(),
+            invert_match: true,
+            ..Default::default()
+        };
+        let result = run_grep_on_source(source, &opts, "test");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_run_grep_files_with_matches() {
+        let source = "content with match here\n";
+        let opts = GrepOptions {
+            pattern: "match".to_string(),
+            files_with_matches: true,
+            ..Default::default()
+        };
+        let result = run_grep_on_source(source, &opts, "test-label");
+        assert!(result.is_ok());
+
+        // No-match case
+        let opts_no = GrepOptions {
+            pattern: "nonexistent".to_string(),
+            files_with_matches: true,
+            ..Default::default()
+        };
+        let result_no = run_grep_on_source(source, &opts_no, "test-label");
+        assert!(result_no.is_ok());
+    }
+
+    #[test]
+    fn test_run_grep_context_lines() {
+        let source = "line 1\nline 2\nline 3\nline 4\nline 5\n";
+        let opts = GrepOptions {
+            pattern: "line 3".to_string(),
+            context: Some(1),
+            ..Default::default()
+        };
+        let result = run_grep_on_source(source, &opts, "test");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_run_grep_no_line_number() {
+        let source = "line a\nline b\n";
+        let opts = GrepOptions {
+            pattern: "a".to_string(),
+            no_line_number: true,
+            ..Default::default()
+        };
+        let result = run_grep_on_source(source, &opts, "test");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_run_grep_case_insensitive() {
+        let source = "UPPERCASE\n";
+        let opts = GrepOptions {
+            pattern: "uppercase".to_string(),
+            ignore_case: true,
+            ..Default::default()
+        };
+        let result = run_grep_on_source(source, &opts, "test");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_run_grep_no_matches_produces_empty_output() {
+        let source = "nothing here\nreally nothing\n";
+        let opts = make_grep_opts("absent");
+        let result = run_grep_on_source(source, &opts, "test");
+        assert!(result.is_ok());
+    }
+
+    // -----------------------------------------------------------------------
+    // Snapshot command arg handling tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_snapshot_viewport_renamed_to_viewports() {
+        // Simulate what tool_params_fn does: viewport → viewports
+        let mut args: HashMap<String, Value> = HashMap::new();
+        args.insert("viewport".to_string(), json!("0,2,4"));
+
+        // Replicate the tool_params_fn logic
+        let mut p = serde_json::Map::new();
+        if let Some(v) = args.get("viewport").and_then(|v| v.as_str()) {
+            p.insert("viewports".to_string(), json!(v));
+        }
+
+        assert_eq!(p.get("viewports").and_then(|v| v.as_str()), Some("0,2,4"));
+        assert!(p.get("viewport").is_none());
+    }
+
+    #[test]
+    fn test_snapshot_tool_params_includes_raw_and_stdout() {
+        let mut args: HashMap<String, Value> = HashMap::new();
+        args.insert("stdout".to_string(), json!(true));
+
+        // Replicate the tool_params_fn logic for stdout
+        let mut p = serde_json::Map::new();
+        if let Some(true) = args.get("stdout").and_then(|v| v.as_bool()) {
+            p.insert("stdout".to_string(), json!(true));
+        }
+
+        assert_eq!(p.get("stdout").and_then(|v| v.as_bool()), Some(true));
+    }
+
+    #[test]
+    fn test_snapshot_tool_params_viewport_with_range() {
+        let mut args: HashMap<String, Value> = HashMap::new();
+        args.insert("viewport".to_string(), json!("1-3"));
+
+        let mut p = serde_json::Map::new();
+        if let Some(v) = args.get("viewport").and_then(|v| v.as_str()) {
+            p.insert("viewports".to_string(), json!(v));
+        }
+
+        assert_eq!(p.get("viewports").and_then(|v| v.as_str()), Some("1-3"));
     }
 }

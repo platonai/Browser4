@@ -1010,8 +1010,9 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "depth", description: "Limit tree depth to n levels", is_bool: false, short: Some("d") },
                 OptionDef { name: "limit", description: "Cap total rendered nodes at n (truncates with notice)", is_bool: false, short: Some("l") },
                 OptionDef { name: "selector", description: "Scope snapshot to a CSS selector", is_bool: false, short: Some("s") },
-                OptionDef { name: "raw", description: "Strip page info and return only snapshot content", is_bool: true, short: None },
-                OptionDef { name: "viewport", description: "Capture only specified viewports: <index>,<limit> (0-based index, limit count)", is_bool: false, short: Some("vp") },
+                OptionDef { name: "raw", description: "Strip page info and return only snapshot content (alias for --stdout)", is_bool: true, short: None },
+                OptionDef { name: "stdout", description: "Print snapshot content to stdout instead of saving to file", is_bool: true, short: None },
+                OptionDef { name: "viewport", description: "Capture only specified viewports: single index (3), comma list (0,2,4), range (1-3), or mixed (0,2-4,7)", is_bool: false, short: Some("vp") },
             ],
             tool_name_fn: |_| "browser_snapshot".to_string(),
             tool_params_fn: |args| {
@@ -1029,7 +1030,44 @@ pub fn all_commands() -> Vec<CommandDef> {
                     if let Ok(n) = l.parse::<i32>() { p["limit"] = json!(n); }
                 }
                 if let Some(s) = get_opt_str(args, "selector") { p["selector"] = json!(s); }
-                if let Some(v) = get_opt_str(args, "viewport") { p["viewport"] = json!(v); }
+                if let Some(v) = get_opt_str(args, "viewport") { p["viewports"] = json!(v); }
+                // Pass through CLI-side flags so the handler can check them
+                // (they are stripped from server-bound args in handle_snapshot).
+                if let Some(true) = get_bool(args, "raw") { p["raw"] = json!(true); }
+                if let Some(true) = get_bool(args, "stdout") { p["stdout"] = json!(true); }
+                p
+            },
+        },
+        CommandDef {
+            name: "snapshot-grep",
+            description: "Search snapshot YAML content using regex patterns with grep-style output",
+            category: Category::Core,
+            hidden: false,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "pattern", description: "Regex or literal pattern to search for", optional: false },
+            ],
+            options: &[
+                OptionDef { name: "ignore-case", short: Some("i"), is_bool: true, description: "Case-insensitive matching" },
+                OptionDef { name: "no-line-number", short: None, is_bool: true, description: "Suppress line numbers in output" },
+                OptionDef { name: "after-context", short: Some("A"), is_bool: false, description: "Show N lines after each match" },
+                OptionDef { name: "before-context", short: Some("B"), is_bool: false, description: "Show N lines before each match" },
+                OptionDef { name: "context", short: Some("C"), is_bool: false, description: "Show N lines before and after each match" },
+                OptionDef { name: "invert-match", short: Some("v"), is_bool: true, description: "Select non-matching lines" },
+                OptionDef { name: "count", short: Some("c"), is_bool: true, description: "Print only the count of matching lines" },
+                OptionDef { name: "files-with-matches", short: Some("l"), is_bool: true, description: "Print only whether matches exist" },
+                OptionDef { name: "fixed-strings", short: Some("F"), is_bool: true, description: "Treat pattern as a literal string, not regex" },
+                OptionDef { name: "word-regexp", short: Some("w"), is_bool: true, description: "Match only whole words" },
+                OptionDef { name: "selector", short: None, is_bool: false, description: "CSS selector to scope the search to" },
+            ],
+            tool_name_fn: |_| "browser_snapshot".to_string(),
+            tool_params_fn: |args| {
+                let mut p = json!({});
+                for (k, v) in args {
+                    if k != "_" {
+                        p[k] = v.clone();
+                    }
+                }
                 p
             },
         },
@@ -3806,6 +3844,39 @@ mod tests {
         assert!(params.get("compact").is_none());
         assert!(params.get("depth").is_none());
         assert!(params.get("selector").is_none());
+    }
+
+    #[test]
+    fn test_snapshot_viewport_renamed_to_viewports_in_params() {
+        let map = commands_map();
+        let cmd = map.get("snapshot").unwrap();
+        let mut args = HashMap::new();
+        args.insert("viewport".to_string(), json!("0,2,4"));
+        let params = (cmd.tool_params_fn)(&args);
+        // Key should be renamed from "viewport" to "viewports"
+        assert_eq!(
+            params.get("viewports").and_then(|v| v.as_str()),
+            Some("0,2,4"),
+            "viewport key should be renamed to viewports"
+        );
+        assert!(
+            params.get("viewport").is_none(),
+            "viewport key should not be present"
+        );
+    }
+
+    #[test]
+    fn test_snapshot_viewport_range_in_params() {
+        let map = commands_map();
+        let cmd = map.get("snapshot").unwrap();
+        let mut args = HashMap::new();
+        args.insert("viewport".to_string(), json!("1-3"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(
+            params.get("viewports").and_then(|v| v.as_str()),
+            Some("1-3"),
+            "viewport range should be passed through"
+        );
     }
 
     // ---- crawl command tests ----
