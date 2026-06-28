@@ -461,6 +461,49 @@ function New-Symlinks {
 }
 
 # ----------------------------------------------
+# Helper: replace a binary that may be locked (i.e. currently running)
+# ----------------------------------------------
+
+function Set-BinaryFile {
+  param(
+    [Parameter(Mandatory=$true)] [string]$TargetPath,
+    [Parameter(Mandatory=$true)] [string]$SourcePath,
+    [Parameter(Mandatory=$false)] [switch]$Move  # $true = move temp file, $false = copy
+  )
+
+  if (Test-Path $TargetPath) {
+    # Remove any stale .old from a previous upgrade
+    $oldPath = "$TargetPath.old"
+    try {
+      if (Test-Path $oldPath) { Remove-Item $oldPath -Force -ErrorAction Stop }
+    } catch { }
+
+    try {
+      Remove-Item $TargetPath -Force -ErrorAction Stop
+    } catch {
+      # The binary is locked (likely the currently-running process).
+      # On Windows we can rename a running executable -- move the old binary
+      # out of the way, place the new one alongside, and clean up the old one
+      # on the next install/upgrade.
+      try {
+        Move-Item $TargetPath $oldPath -Force -ErrorAction Stop
+        Write-WarnMsg "Existing binary is locked (it may be running)."
+        Write-WarnMsg "The old copy will be cleaned up on the next install or upgrade."
+      } catch {
+        throw "Cannot replace '$TargetPath' -- it is locked and cannot be renamed. Close all browser4-cli processes and try again."
+      }
+    }
+  }
+
+  # Place the new binary at the target path
+  if ($Move) {
+    Move-Item $SourcePath $TargetPath -Force -ErrorAction Stop
+  } else {
+    Copy-Item $SourcePath $TargetPath -Force -ErrorAction Stop
+  }
+}
+
+# ----------------------------------------------
 # PATH management
 # ----------------------------------------------
 
@@ -598,8 +641,7 @@ function Main {
     } elseif ($useLocalBinary) {
         # Copy local binary to install dir
         if (-not $DryRun) {
-            if (Test-Path $binaryPath) { Remove-Item $binaryPath -Force }
-            Copy-Item $localBinaryPath $binaryPath -Force
+            Set-BinaryFile -TargetPath $binaryPath -SourcePath $localBinaryPath
         }
         Write-Check "Installed (local): $binaryPath"
     } else {
@@ -637,8 +679,7 @@ Please check:
 
         # Move from temp to install dir
         if (-not $DryRun) {
-            if (Test-Path $binaryPath) { Remove-Item $binaryPath -Force }
-            Move-Item $tempFile $binaryPath -Force
+            Set-BinaryFile -TargetPath $binaryPath -SourcePath $tempFile -Move
         }
         Write-Check "Installed: $binaryPath"
     }
