@@ -256,6 +256,52 @@ jobs:
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
+  test-install-scripts:
+    name: Test ${{ matrix.name }}
+    needs: prepare
+    if: needs.prepare.outputs.skip_tests != 'true'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: install script (Linux)
+            os: ubuntu-latest
+          - name: install script (Windows)
+            os: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.prepare.outputs.tag }}
+
+      - name: Run install-browser4-cli.tests.sh
+        if: runner.os == 'Linux'
+        shell: bash
+        run: bash cli/scripts/tests/install-browser4-cli.tests.sh
+
+      - name: Run install-browser4-cli.tests.ps1
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          ./cli/scripts/tests/install-browser4-cli.tests.ps1
+
+      - name: Install script test summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## 🧪 Install Script Test - ${{ matrix.name }}"
+            echo ""
+            echo "- **Runner**: ${{ matrix.os }}"
+            echo "- **Status**: ${{ job.status }}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
   build-core-and-docker:
     name: Build core artifacts and Docker image
     needs: prepare
