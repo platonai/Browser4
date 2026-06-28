@@ -312,7 +312,10 @@ Create a JSON file at `{runtime-data-dir}/mirrors.json` (or set
   which source was used.
 - Each `DownloadMirror` entry accepts an optional `supports_latest_resolution`
   field (defaults to `true`). Set to `false` if the mirror does not support
-  GitHub-style `/latest/download/` redirects.
+  latest-release resolution.
+- The optional `latest_path` field (defaults to `latest/download`) controls
+  the URL segment for latest-release downloads. Set to `download/latest` for
+  mirrors that use the OSS-style path layout instead of GitHub Releases.
 
 ### Legacy single-source override
 

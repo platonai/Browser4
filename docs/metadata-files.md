@@ -189,8 +189,9 @@ terminated by `\n`.
 |---|---|---|
 | `mirrors` | array | Ordered list of download mirrors. The CLI tries them in array order and uses the first reachable one. |
 | `mirrors[].name` | string | Human-readable label shown in log messages (e.g. `"github"`, `"corporate-cdn"`). |
-| `mirrors[].base_url` | string | Base URL hosting release assets in GitHub Releases layout (`<base>/download/<tag>/<asset>` or `<base>/latest/download/<asset>`). Trailing slashes are normalised. |
-| `mirrors[].supports_latest_resolution` | boolean | When `true`, the CLI can use `/latest/download/` redirects. When `false`, speed tests are skipped for `latest` requests. Defaults to `false` when omitted. |
+| `mirrors[].base_url` | string | Base URL hosting release assets. Tagged downloads use `<base>/download/<tag>/<asset>`. Latest-download path is controlled by `latest_path`. Trailing slashes are normalised. |
+| `mirrors[].supports_latest_resolution` | boolean | When `true`, the CLI can resolve the latest release without an explicit `--tag`. When `false`, speed tests are skipped for `latest` requests. Defaults to `false` when omitted. |
+| `mirrors[].latest_path` | string | Path segment inserted between `base_url` and `asset_name` for latest downloads. Defaults to `latest/download` (GitHub Releases layout). Override to `download/latest` for mirrors like Aliyun OSS. Optional — omit for the default. |
 
 ### Lifecycle
 

@@ -204,21 +204,28 @@ struct ReleaseAssetInfo {
 
 /// A single download mirror entry.
 ///
-/// Each mirror provides a `base_url` that hosts release assets in the same
-/// layout as GitHub Releases: `<base_url>/download/<tag>/<asset>` (or
-/// `/latest/download/<asset>` for the latest release).
+/// Each mirror provides a `base_url` that hosts release assets.  Tagged
+/// downloads always use `<base_url>/download/<tag>/<asset>`.  For the
+/// latest release the URL is `<base_url>/<latest_path>/<asset>`, where
+/// `latest_path` defaults to `latest/download` (GitHub Releases layout).
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 struct DownloadMirror {
     /// Human-readable name shown in log messages (e.g. "github", "aliyun-oss").
     name: String,
     /// Base URL for release downloads (e.g. `https://github.com/platonai/Browser4/releases`).
     base_url: String,
-    /// Whether this mirror supports GitHub-style `/latest/download/` redirects.
-    /// When `false`, "latest" downloads must resolve the tag before constructing
-    /// the download URL (e.g. via a release-metadata endpoint or user-supplied
-    /// `--tag`).
+    /// Whether this mirror supports resolving the latest release without an
+    /// explicit tag.  When `false`, "latest" downloads must resolve the tag
+    /// before constructing the download URL (e.g. via a release-metadata
+    /// endpoint or user-supplied `--tag`).
     #[serde(default)]
     supports_latest_resolution: bool,
+    /// Path segment inserted between `base_url` and `asset_name` for latest
+    /// downloads.  Defaults to `latest/download` (GitHub Releases layout).
+    /// Mirrors that use a different layout (e.g. Aliyun OSS uses
+    /// `download/latest`) can override this.
+    #[serde(default)]
+    latest_path: Option<String>,
 }
 
 /// Top-level structure of the mirrors.json config file.
@@ -264,11 +271,13 @@ fn builtin_mirrors_for_locale(china_locale: bool) -> Vec<DownloadMirror> {
             name: "github".to_string(),
             base_url: "https://github.com/platonai/Browser4/releases".to_string(),
             supports_latest_resolution: true,
+            latest_path: None,
         },
         DownloadMirror {
             name: "aliyun-oss".to_string(),
             base_url: "https://browser4.oss-cn-beijing.aliyuncs.com/releases".to_string(),
             supports_latest_resolution: true,
+            latest_path: Some("download/latest".to_string()),
         },
     ];
     if china_locale {
@@ -357,6 +366,7 @@ fn load_mirrors() -> Vec<DownloadMirror> {
                 name: "custom".to_string(),
                 base_url: trimmed,
                 supports_latest_resolution: true,
+                latest_path: None,
             }];
         }
     }
@@ -420,7 +430,13 @@ fn mirror_download_url(mirror: &DownloadMirror, tag: Option<&str>, asset_name: &
     let base = mirror.base_url.trim_end_matches('/');
     match normalize_release_tag(tag) {
         Some(tag) => format!("{base}/download/{tag}/{asset_name}"),
-        None => format!("{base}/latest/download/{asset_name}"),
+        None => {
+            let latest = mirror
+                .latest_path
+                .as_deref()
+                .unwrap_or("latest/download");
+            format!("{base}/{latest}/{asset_name}")
+        }
     }
 }
 
@@ -2577,6 +2593,44 @@ struct RuntimeInstallLock {
     acquired: bool,
 }
 
+/// Check whether a process with the given PID is still running.
+fn is_pid_alive(pid: u32) -> bool {
+    #[cfg(unix)]
+    {
+        // Signal 0 performs error checking but sends no signal.
+        // Returns 0 if the process exists, -1 with ESRCH if it doesn't.
+        extern "C" {
+            fn kill(pid: i32, sig: i32) -> i32;
+        }
+        unsafe { kill(pid as i32, 0) == 0 }
+    }
+    #[cfg(windows)]
+    {
+        const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
+        extern "system" {
+            fn OpenProcess(dwDesiredAccess: u32, bInheritHandle: i32, dwProcessId: u32) -> isize;
+            fn CloseHandle(hObject: isize) -> i32;
+        }
+        unsafe {
+            let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+            if handle == 0 {
+                return false;
+            }
+            CloseHandle(handle);
+            true
+        }
+    }
+}
+
+/// Read the PID recorded in the lock directory, if any.
+fn read_lock_pid(lock_dir: &Path) -> Option<u32> {
+    let pid_file = lock_dir.join("pid");
+    match fs::read_to_string(&pid_file) {
+        Ok(contents) => contents.trim().parse::<u32>().ok(),
+        Err(_) => None,
+    }
+}
+
 impl RuntimeInstallLock {
     /// Attempt to acquire the install lock, blocking up to `timeout` seconds.
     fn acquire(timeout: Duration) -> Result<Self, String> {
@@ -2601,9 +2655,19 @@ impl RuntimeInstallLock {
                     });
                 }
                 Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
+                    // Check whether the lock holder is still alive.
+                    let lock_stale = read_lock_pid(&lock_dir)
+                        .map(|pid| !is_pid_alive(pid))
+                        .unwrap_or(false);
+                    if lock_stale {
+                        // The process that created this lock is gone — clean it up.
+                        let _ = fs::remove_dir_all(&lock_dir);
+                        // Retry the acquisition immediately (the next loop iteration
+                        // will attempt create_dir again).
+                        continue;
+                    }
                     if Instant::now() >= deadline {
-                        // Remove a stale lock that's older than our timeout —
-                        // the previous process may have crashed.
+                        // The lock holder is still alive after our full timeout.
                         let _ = fs::remove_dir_all(&lock_dir);
                         return Err(format!(
                             "Another browser4-cli install or upgrade is already in progress \
@@ -5182,6 +5246,28 @@ mod tests {
     }
 
     #[test]
+    fn test_mirror_download_url_oss_latest_path() {
+        let mirror = DownloadMirror {
+            name: "aliyun-oss".to_string(),
+            base_url: "https://browser4.oss-cn-beijing.aliyuncs.com/releases".to_string(),
+            supports_latest_resolution: true,
+            latest_path: Some("download/latest".to_string()),
+        };
+        // Without tag → uses mirror's latest_path
+        let url = mirror_download_url(&mirror, None, "browser4-cli-win32-x64.exe");
+        assert_eq!(
+            url,
+            "https://browser4.oss-cn-beijing.aliyuncs.com/releases/download/latest/browser4-cli-win32-x64.exe"
+        );
+        // With tag → still uses standard /download/<tag>/ pattern
+        let url = mirror_download_url(&mirror, Some("v4.11.13"), "browser4-cli-win32-x64.exe");
+        assert_eq!(
+            url,
+            "https://browser4.oss-cn-beijing.aliyuncs.com/releases/download/v4.11.13/browser4-cli-win32-x64.exe"
+        );
+    }
+
+    #[test]
     fn test_builtin_mirrors_has_github_first() {
         let mirrors = builtin_mirrors_for_locale(false);
         assert_eq!(mirrors[0].name, "github");
@@ -6088,6 +6174,7 @@ mod tests {
             name: "github".to_string(),
             base_url: "https://github.com/platonai/Browser4/releases".to_string(),
             supports_latest_resolution: true,
+            latest_path: None,
         };
         let (owner, repo) = parse_github_owner_repo(&mirror).unwrap();
         assert_eq!(owner, "platonai");
@@ -6100,6 +6187,7 @@ mod tests {
             name: "aliyun-oss".to_string(),
             base_url: "https://browser4.oss-cn-beijing.aliyuncs.com/releases".to_string(),
             supports_latest_resolution: true,
+            latest_path: None,
         };
         assert!(parse_github_owner_repo(&mirror).is_none());
     }
@@ -6110,6 +6198,7 @@ mod tests {
             name: "custom".to_string(),
             base_url: "https://gitlab.example.com/owner/repo/releases".to_string(),
             supports_latest_resolution: true,
+            latest_path: None,
         };
         assert!(parse_github_owner_repo(&mirror).is_none());
     }
