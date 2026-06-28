@@ -22,6 +22,7 @@
 #   --locate             Print detection results and exit (no install).
 #   --silent, -s         Suppress non-error output.
 #   --dry-run            Print what would be done without doing it.
+#   --force, -f          Force reinstallation — always download even if already installed.
 #   --help, -h           Show this message.
 
 set -euo pipefail
@@ -39,6 +40,7 @@ SOURCE=""
 ADD_TO_PATH=true
 SILENT=false
 DRY_RUN=false
+FORCE=false
 SKIP_LOCAL=false
 LOCATE_MODE=false
 CHINA_DETECTED=false
@@ -127,6 +129,7 @@ Options:
   --locate            Print detection results and exit without installing.
   --silent, -s        Suppress non-error output.
   --dry-run           Print what would be done without doing it.
+  --force, -f         Force reinstallation — always download even if already installed.
   --help, -h          Show this message.
 
 Examples:
@@ -137,6 +140,7 @@ Examples:
   $(basename "$0") --locate                 # Run diagnostics (no install)
   $(basename "$0") --skip-local             # Force download, ignore bundled binary
   $(basename "$0") --source oss             # Force Aliyun OSS (China mainland)
+  $(basename "$0") --force                  # Force reinstall to latest version
 EOF
 }
 
@@ -163,6 +167,7 @@ while [[ $# -gt 0 ]]; do
     --locate) LOCATE_MODE=true; shift ;;
     --silent|-s) SILENT=true; shift ;;
     --dry-run) DRY_RUN=true; shift ;;
+    --force|-f) FORCE=true; shift ;;
     --help|-h) usage; exit 0 ;;
     *) die "Unknown argument: $1 (use --help)";;
   esac
@@ -624,7 +629,7 @@ main() {
   fi
 
   # Install binary: local copy > already installed > download
-  if [[ -f "$binary_path" ]] && [[ -z "$VERSION" ]] && [[ "$use_local_binary" != true ]]; then
+  if [[ -f "$binary_path" ]] && [[ -z "$VERSION" ]] && [[ "$FORCE" != true ]] && [[ "$use_local_binary" != true ]]; then
     ok "Binary already installed: $binary_path"
   elif [[ "$use_local_binary" == true ]]; then
     # Copy local binary to install dir
