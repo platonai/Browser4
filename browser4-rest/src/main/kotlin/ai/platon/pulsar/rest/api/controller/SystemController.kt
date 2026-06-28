@@ -3,7 +3,7 @@ package ai.platon.pulsar.rest.api.controller
 import ai.platon.pulsar.browser.privacy.PrivacyManager
 import ai.platon.pulsar.protocol.browser.driver.WebDriverPoolManager
 import ai.platon.pulsar.skeleton.session.PulsarSession
-import org.springframework.boot.actuate.info.GitProperties
+import org.springframework.boot.info.GitProperties
 import org.springframework.web.bind.annotation.CrossOrigin
 import org.springframework.web.bind.annotation.GetMapping
 import org.springframework.web.bind.annotation.RequestMapping
