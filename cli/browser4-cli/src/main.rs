@@ -9337,4 +9337,81 @@ mod tests {
         assert_eq!(opts.pattern, "error|warning|panic");
         assert!(opts.ignore_case);
     }
+
+    // =========================================================================
+    // Extension feature helpers
+    // =========================================================================
+
+    #[test]
+    fn test_urlencoding_special_chars() {
+        assert_eq!(urlencoding("hello"), "hello");
+        assert_eq!(
+            urlencoding("ws://127.0.0.1:8182/ws/extension/session"),
+            "ws%3A%2F%2F127.0.0.1%3A8182%2Fws%2Fextension%2Fsession"
+        );
+        assert_eq!(urlencoding("\"quoted\""), "%22quoted%22");
+        assert_eq!(urlencoding("a&b=c"), "a%26b%3Dc");
+        assert_eq!(urlencoding("100%"), "100%25");
+        assert_eq!(urlencoding("a b"), "a%20b");
+        assert_eq!(urlencoding("q?a#f"), "q%3Fa%23f");
+    }
+
+    #[test]
+    fn test_urlencoding_no_special_chars_does_nothing() {
+        assert_eq!(urlencoding("hello-world-123"), "hello-world-123");
+        assert_eq!(urlencoding("test_case.abc"), "test_case.abc");
+    }
+
+    #[test]
+    fn test_urlencoding_encodes_websocket_url() {
+        let ws_url = "ws://127.0.0.1:8182/ws/extension/session?id=123&token=abc";
+        let encoded = urlencoding(ws_url);
+        // Must not contain raw special chars that would break a URL query param
+        assert!(!encoded.contains("://"));
+        assert!(!encoded.contains('&'));
+        assert!(!encoded.contains('='));
+        assert!(!encoded.contains('?'));
+        assert!(!encoded.contains('#'));
+    }
+
+    #[test]
+    fn test_resolve_extension_id_returns_valid_length() {
+        let id = resolve_extension_id();
+        assert!(!id.is_empty());
+        // Chrome extension IDs are 32 lowercase a-p characters
+        assert_eq!(id.len(), 32);
+        assert!(id.chars().all(|c| c.is_ascii_lowercase()));
+    }
+
+    #[test]
+    fn test_resolve_extension_id_env_override() {
+        // Set env var before resolving
+        std::env::set_var("BROWSER4_EXTENSION_ID", "testoverrideabcdefghijklmnopqrstuv");
+        let id = resolve_extension_id();
+        assert_eq!(id, "testoverrideabcdefghijklmnopqrstuv");
+        // Clean up to avoid poisoning other tests
+        std::env::remove_var("BROWSER4_EXTENSION_ID");
+    }
+
+    #[test]
+    fn test_resolve_browser_executable_known_channels() {
+        assert_eq!(resolve_browser_executable("chrome").unwrap(), "chrome");
+        assert_eq!(resolve_browser_executable("msedge").unwrap(), "msedge");
+        assert_eq!(resolve_browser_executable("Chrome").unwrap(), "chrome");
+        assert_eq!(resolve_browser_executable("MsEdge").unwrap(), "msedge");
+    }
+
+    #[test]
+    fn test_resolve_browser_executable_unknown_passthrough() {
+        let result = resolve_browser_executable("my-custom-browser");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "my-custom-browser");
+    }
+
+    #[test]
+    fn test_resolve_browser_executable_empty_not_valid() {
+        let result = resolve_browser_executable("");
+        // Empty string passes through (daemon resolves it as unknown)
+        assert_eq!(result.unwrap(), "");
+    }
 }

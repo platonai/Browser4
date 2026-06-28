@@ -3884,4 +3884,54 @@ mod tests {
             "document.querySelector('.loaded') !== null"
         );
     }
+
+    // =========================================================================
+    // attach --extension
+    // =========================================================================
+
+    #[test]
+    fn test_attach_extension_default() {
+        let cmds = commands_map();
+        let cmd = cmds.get("attach").unwrap();
+        let mut args = HashMap::new();
+        args.insert("extension".to_string(), json!("true"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["extension"], json!(true));
+        // When "true", no channel key is added
+        assert!(params.get("channel").is_none());
+    }
+
+    #[test]
+    fn test_attach_extension_with_channel() {
+        let cmds = commands_map();
+        let cmd = cmds.get("attach").unwrap();
+        let mut args = HashMap::new();
+        args.insert("extension".to_string(), json!("msedge"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["extension"], json!(true));
+        assert_eq!(params["channel"], json!("msedge"));
+    }
+
+    #[test]
+    fn test_attach_extension_combined_with_cdp() {
+        // --extension and --cdp can be specified together (the tool_params_fn
+        // includes both; handle_attach enforces mutual exclusivity at runtime)
+        let cmds = commands_map();
+        let cmd = cmds.get("attach").unwrap();
+        let mut args = HashMap::new();
+        args.insert("extension".to_string(), json!("chrome-canary"));
+        args.insert("cdp".to_string(), json!("http://localhost:9222"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["extension"], json!(true));
+        assert_eq!(params["channel"], json!("chrome-canary"));
+        assert_eq!(params["cdp"], json!("http://localhost:9222"));
+    }
+
+    #[test]
+    fn test_attach_command_has_extension_option() {
+        let cmds = commands_map();
+        let cmd = cmds.get("attach").unwrap();
+        let has_extension = cmd.options.iter().any(|o| o.name == "extension");
+        assert!(has_extension, "attach command should have --extension option");
+    }
 }

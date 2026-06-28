@@ -232,7 +232,8 @@ class ExtensionChromeService(
                 val tabId = sourceJson.get("tabId")?.toString() ?: return
                 val cdpMethod = params.get(1)?.asText() ?: return
                 val cdpParams = params.get(2)
-                devToolsServices[tabId]?.dispatchEvent(cdpMethod, cdpParams)
+                val cdpParamsJson = if (cdpParams != null) objectMapper.writeValueAsString(cdpParams) else "{}"
+                devToolsServices[tabId]?.deliverCdpEvent(cdpMethod, cdpParamsJson)
             }
 
             "chrome.debugger.onDetach" -> {
