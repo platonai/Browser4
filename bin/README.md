@@ -49,16 +49,18 @@ Comprehensive test runner for the current Maven reactors plus the Browser4 CLI p
 Acceptance test for the latest production release of `browser4-cli`.
 
 Downloads, installs, exercises, uninstalls, and re-installs the global `browser4-cli`
-from the public distribution channel, then runs the multi-scenario stress suite against it.
+from the public distribution channel. Shows help when called with no arguments
+(safe default). The multi-scenario stress suite is opt-in via `-Stress`.
 
-Tests the full lifecycle: install → smoke-test → uninstall → re-install → multi-scenario stress.
+Tests the full lifecycle: install → smoke-test → uninstall → re-install → (with `-Stress`) multi-scenario stress.
 
 | Parameter | Description |
 |---|---|
-| `-SkipMultiScenarios` | Skip the final multi-scenarios.ps1 run |
-| `-MultiScenariosIterations N` | Number of iterations (default: 1) |
-| `-KeepWorkingDir` | Do not delete the working directory on exit |
+| `-Stress` | Enable the multi-scenario stress suite (opt-in) |
+| `-MultiScenariosIterations N` | Number of stress iterations (default: 1) |
+| `-RemoveWorkingDir` | Delete the working directory on exit |
 | `-WorkingDir <path>` | Override the working directory |
+| `-Help` | Show help message |
 
 ### `version.mjs`
 

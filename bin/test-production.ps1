@@ -13,8 +13,9 @@
 
 .DESCRIPTION
     Downloads, installs, exercises, uninstalls, and re-installs the global
-    browser4-cli from the public OSS distribution channel, then runs the
-    multi-scenario stress suite against the global CLI.
+    browser4-cli from the public OSS distribution channel.
+
+    The stress suite (multi-scenarios.ps1) is opt-in via -Stress.
 
     The script is designed to be run in CI or locally before tagging a release.
     It simulates a real end user's journey:
@@ -29,12 +30,14 @@
       8. Clean up server processes (close-all, kill-all), verify server is no longer reachable.
       9. Uninstall and verify runtime data / caches are removed.
      10. Repeat the install cycle to verify idempotency.
-     11. Run multi-scenarios.ps1 against the global CLI with captured output.
+     11. (With -Stress) Run multi-scenarios.ps1 against the global CLI with captured output.
 
     KEY PRINCIPLE: This test acts like a real end user. It does NOT patch the
     install script, create missing symlinks, or manually clean up after uninstall.
     If any of those are needed, the test FAILS — because a real user would hit
     the same broken behavior.
+
+    Running with no arguments shows this help message (safe default).
 
 .PARAMETER WorkingDir
     Working directory for temporary artifacts.
@@ -42,11 +45,13 @@
     (e.g. /tmp/.browser4-acceptance/20260611-143052-a3f2 on Unix,
     %TEMP%\.browser4-acceptance\20260611-143052-a3f2 on Windows).
 
-.PARAMETER SkipMultiScenarios
-    Skip the final multi-scenarios.ps1 run.
+.PARAMETER Stress
+    Enable the multi-scenario stress suite (multi-scenarios.ps1).
+    Stress tests are skipped by default.
 
 .PARAMETER MultiScenariosIterations
     Number of iterations for the multi-scenario suite (default: 1).
+    Only applies when -Stress is set.
 
 .PARAMETER RemoveWorkingDir
     Delete the working directory on exit (default: keep it for review).
@@ -56,24 +61,30 @@
 
 .EXAMPLE
     .\test-production.ps1
+    (shows help — no arguments = safe default)
 
 .EXAMPLE
-    .\test-production.ps1 -SkipMultiScenarios
+    .\test-production.ps1 -Stress
 
 .EXAMPLE
-    .\test-production.ps1 -MultiScenariosIterations 3 -RemoveWorkingDir
+    .\test-production.ps1 -Stress -MultiScenariosIterations 3 -RemoveWorkingDir
 #>
 
 [CmdletBinding()]
 param(
     [string] $WorkingDir = '',
-    [switch] $SkipMultiScenarios,
+    [switch] $Stress,
     [int] $MultiScenariosIterations = 1,
     [switch] $RemoveWorkingDir,
     [switch] $Help
 )
 
-if ($Help) {
+# Show help when called with no arguments (safe default).
+if ($PSBoundParameters.Count -eq 0 -or $Help) {
+    Write-Host ''
+    Write-Host 'Browser4 Production Acceptance Test' -ForegroundColor Cyan
+    Write-Host '────────────────────────────────────' -ForegroundColor Cyan
+    Write-Host ''
     Get-Help -Full $MyInvocation.MyCommand.Path
     exit 0
 }
@@ -1207,13 +1218,13 @@ $cycle1Ok = Invoke-InstallationCycle -CycleNumber 1 -CycleLabel 'FRESH INSTALL (
 $cycle2Ok = Invoke-InstallationCycle -CycleNumber 2 -CycleLabel 'RE-INSTALL (with config + timing)' -CopyConfig -MeasureStartupTime
 
 # ═══════════════════════════════════════════════════════════════
-# FINAL STEP — Multi-scenarios test against global CLI
+# FINAL STEP — Multi-scenarios stress test (opt-in via -Stress)
 # ═══════════════════════════════════════════════════════════════
-Write-StepHeader 'FINAL STEP — Multi-scenarios test against global CLI'
+Write-StepHeader 'FINAL STEP — Multi-scenarios stress test (opt-in via -Stress)'
 
-if ($SkipMultiScenarios) {
-    Write-Info '-SkipMultiScenarios set — skipping multi-scenarios suite'
-    Write-StepResult -Step 'multi-scenarios' -Passed $true -Detail 'skipped by flag'
+if (-not $Stress) {
+    Write-Info '-Stress not set — skipping multi-scenarios suite (opt-in)'
+    Write-StepResult -Step 'multi-scenarios' -Passed $true -Detail 'skipped (use -Stress to enable)'
 } else {
     # Ensure browser4-cli is available (cycle 2 may have uninstalled)
     $cliCheck = Resolve-CliPath
