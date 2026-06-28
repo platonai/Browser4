@@ -114,6 +114,7 @@ CI/CD helper scripts for triggering and managing CI workflows.
 Shared PowerShell utility modules imported by other scripts.
 
 - **`Util.ps1`**: Common utilities including `Fix-Encoding-UTF8` — sets the console code page and output encoding to UTF-8 to prevent mojibake in Windows PowerShell.
+- **`agent-utils.psm1`**: AI agent utilities for resolving and invoking AI assistants (Claude, Copilot, etc.). Provides `Get-AiAnalyzer`, `Test-AiAvailable`, `Invoke-AiAnalysis`, and backward-compatible wrappers.
 
 ### `git/`
 
@@ -124,6 +125,82 @@ Git maintenance and housekeeping scripts.
 - **`delete-copilot-branches.ps1`**: Delete local and remote branches matching the GitHub Copilot naming pattern (`copilot/*`).
 - **`git-config.ps1`**: Quick-set git HTTP/HTTPS proxy configuration.
 - **`remove-tags-before.ps1`**: Remove stable-version git tags older than a specified threshold (default: before `v4.0.0`). Supports remote deletion.
+
+### `maintenance/`
+
+Automated maintenance system that runs health checks on a configurable schedule.
+Modeled after a cron-style scheduler with CI, nightly, and dev execution modes.
+
+**Orchestrator:**
+- **`orchestrator.ps1`**: Master maintenance orchestrator. Loads task definitions from `config.psd1` and runs them on their configured intervals. Supports three modes via `$env:MAINTENANCE_MODE`: `ci` (single pass, strict, exit 1 on failure), `nightly` (single pass, relaxed), and `dev` (continuous loop, warn only). Use `-Once` for a single pass, `-Force` to bypass schedule state.
+
+**Configuration:**
+- **`config.psd1`**: Task definitions and scheduling configuration. Defines all maintenance tasks with their intervals, script paths, arguments, and dependencies. Tasks are organized into CI-level (per-commit, fast) and nightly-level (slower, comprehensive) tiers.
+- **`thresholds/thresholds.psd1`**: Threshold values for checks that compare against numeric limits (e.g., max allowed log size, min coverage percentage).
+
+**CI Entry Points:**
+- **`ci/invoke-ci-checks.ps1`**: CI entry point — runs all level-1 (fast, per-commit) checks in sequence. Designed to be called from CI workflows as a single step. Checks include compilation, fast tests, Rust CLI, doc links, skill frontmatter, version consistency, PS1 syntax, and Dockerfile validation.
+- **`ci/invoke-nightly-checks.ps1`**: Nightly entry point — runs the full check suite including slower checks like integration tests, e2e tests, coverage, dependency audits, dead code detection, and Qodana analysis.
+
+**Check Scripts** (`checks/`):
+
+*Build & Compilation:*
+- **`check-compilation.ps1`**: Verify Maven + Cargo compilation succeeds.
+- **`check-fast-tests.ps1`**: Run fast unit tests and verify they pass.
+- **`check-integration-tests.ps1`**: Run integration tests.
+- **`check-e2e-tests.ps1`**: Run end-to-end tests.
+- **`check-rust-cli.ps1`**: Verify Rust CLI compiles and passes tests.
+- **`check-qodana.ps1`**: Run Qodana static analysis.
+
+*Dependencies & Security:*
+- **`check-dependency-vulns.ps1`**: Check for known vulnerabilities in dependencies.
+- **`check-cargo-audit.ps1`**: Run `cargo audit` for Rust dependency vulnerabilities.
+- **`check-maven-deps.ps1`**: Validate Maven dependency tree.
+- **`check-license-compliance.ps1`**: Check that all dependencies have compliant licenses.
+
+*Code Quality:*
+- **`check-dead-code.ps1`**: Detect potentially dead/unused code.
+- **`check-deprecated-apis.ps1`**: Flag usage of deprecated APIs.
+- **`check-coverage.ps1`**: Verify code coverage meets thresholds.
+- **`check-ps1-syntax.ps1`**: Validate PowerShell script syntax across the repo.
+- **`check-dockerfile.ps1`**: Validate Dockerfile correctness and best practices.
+
+*Documentation & Links:*
+- **`check-doc-links-internal.ps1`**: Check internal documentation links for broken references.
+- **`check-doc-links-external.ps1`**: Check external documentation links for availability.
+- **`check-readme-staleness.ps1`**: Detect if READMEs are stale relative to the files they document.
+- **`check-bilingual-readme.ps1`**: Verify bilingual READMEs are in sync.
+
+*Release & Versioning:*
+- **`check-version-consistency.ps1`**: Verify version numbers are consistent across all files.
+- **`check-release-assets.ps1`**: Validate that release assets are present and valid.
+- **`check-changelog-staleness.ps1`**: Check if the changelog is up to date.
+- **`check-ci-workflows.ps1`**: Validate CI workflow definitions.
+
+*Skills:*
+- **`check-skill-frontmatter.ps1`**: Validate frontmatter in skill definition files.
+- **`check-skill-structure.ps1`**: Validate skill file/directory structure.
+- **`check-skill-ai-quality.ps1`**: Assess AI quality of skill definitions.
+
+*Housekeeping:*
+- **`check-log-sizes.ps1`**: Monitor log file sizes against thresholds.
+- **`check-test-tags.ps1`**: Validate test tag annotations.
+- **`clean-build-artifacts.ps1`**: Clean up stale build artifacts.
+- **`clean-temp-files.ps1`**: Remove orphaned temporary files.
+
+**Common Modules:**
+- **`common/MaintenanceUtil.ps1`**: Shared utilities for all maintenance scripts. Provides `New-MaintenanceResult`, `Add-MaintenanceResult`, `Get-RepositoryRoot`, `Resolve-MaintenancePath`, `Write-MaintenanceLog`, `Invoke-MaintenanceStep`, `Test-Platform`, `Get-MaintenanceThreshold`, and `Test-IsMaintenanceMode`.
+- **`common/MaintenanceState.ps1`**: State management for the scheduler — tracks last-run times, results, and status per task.
+
+**Reporters** (`reporters/`):
+- **`report-console.ps1`**: Colorized, human-readable console output.
+- **`report-github-annotations.ps1`**: GitHub Actions annotation output (errors/warnings surface in PR diffs).
+- **`report-json.ps1`**: Machine-readable JSON output for downstream processing.
+- **`report-summary.ps1`**: Summary-only reporter for CI step summaries.
+
+**Tests:**
+- **`tests/maintenance.tests.ps1`**: Unit tests for the maintenance system itself.
+- **`state/maintenance-state.json`**: Runtime state file tracking execution history.
 
 ### `quality/`
 
@@ -139,32 +216,42 @@ Release management scripts. See also [release/README.md](release/README.md) for 
 - **`trigger-cli-release-action.ps1`**: Trigger the `browser4-cli` release workflow. Supports tag mode (creates `v{version}-cli` tag) and dispatch mode (`gh workflow run`), plus dry-run tagging.
 - **`check-publish-status.ps1`**: Check whether the current project version and CLI version have been fully published to GitHub and npm.
 - **`download-release-assets.ps1`**: Download all assets from a GitHub release (defaults to latest, supports specific tags via `-Tag`).
-- **`version.mjs`**: Unified version maintenance (bump, release, sync, check, show). See above.
 
-### `test/`
+### `tests/`
 
 Test infrastructure and Docker verification scripts.
 
 - **`test-create-runtime-bundle.ps1`**: Build the `browser4-bundle` Maven module with `-Passet-bundle` to create a runtime distribution bundle.
 - **`test-docker-local.ps1`**: Build and smoke-test the Browser4 Docker image locally, mirroring the CI `build-core-and-docker` job. Runs Maven build, Docker build, health check, and JAR inspection.
+- **`test.ps1.tests.ps1`**: Unit tests for helper functions and dispatch logic in `bin/test.ps1`. Extracts pure functions via PowerShell's AST parser and tests them in isolation — no Maven or Cargo execution needed.
 
-### `tests/`
+### `tests-production/`
 
-Integration test suite for `browser4-cli`. All tests use the globally-installed CLI by default (override with `$env:BROWSER4_CLI_BIN`).
+Integration test suite for `browser4-cli` production releases. All tests use the globally-installed CLI by default (override with `$env:BROWSER4_CLI_BIN`).
 
 **Test Runner:**
 - **`run-tests.ps1`**, **`run-tests.sh`**: Discover and run test scripts. Supports categories (`smoke`, `agent`, `swarm`, `stress`, `all`) or individual tests. `run-tests.sh` is a bash wrapper that auto-detects locale and invokes `run-tests.ps1` via `pwsh`. On failure, attempts AI-powered log analysis via `claude` or `copilot` if available.
 
-**Test Scripts:**
+**Acceptance Tests:**
 - **`cli-basics.ps1`**: Smoke test — verifies `--version`, `--help`, and basic session operations (open, list, close).
 - **`agent-run-page-visit.ps1`**: Agent page-visit task lifecycle test.
 - **`agent-run-page-visit-interact.ps1`**: Agent page-visit with interaction task test.
 - **`agent-run-free-command.ps1`**: Agent free-command task lifecycle test (goto → extract).
 - **`swarm-agents.ps1`**, **`swarm-agents.sh`**: Swarm create / submit / status lifecycle test.
+- **`bundle-download-speed.ps1`**: Measure runtime bundle download speed from each available source (GitHub Releases, Alibaba Cloud OSS, proxy on/off). Downloads the first 10 MB via HTTP Range request to keep probes small.
+
+**Stress Tests:**
 - **`multi-scenarios.ps1`**: Multi-scenario stress-test orchestrator. Runs the scenario suite in a loop with isolated sub-processes.
 - **`stress-install.ps1`**: Stress-test the install/uninstall lifecycle.
 - **`stress-session.ps1`**: Stress-test session open/close lifecycle.
 - **`stress-swarm-agents.ps1`**: Stress-test swarm agent operations at scale.
+
+**Test & Fix:**
+- **`test-and-fix.ps1`**: Two-phase workflow: (1) run the full acceptance test suite via `test-production.ps1`, then (2) collect AI analysis files from failing tests and invoke the best available AI CLI to produce a fix plan. Optionally applies fixes automatically. Designed for CI and local "test → fix → retest" loops.
+
+**Unit Tests (for test infrastructure):**
+- **`test-production-helpers.ps1`**: Unit tests for helper functions defined in `test-production.ps1` (assertions, result writing, path resolution). Extracts functions via AST parser and tests in isolation.
+- **`test-utils-helpers.ps1`**: Unit tests for `ConvertTo-WindowsCmdArg` in `test-utils.psm1`. Validates Windows command-line argument escaping against the MSDN CommandLineToArgvW specification.
 
 **Support Files:**
 - **`test-utils.psm1`**: Shared PowerShell module providing CLI invocation tracking, logging, failure reporting, and AI analysis.
