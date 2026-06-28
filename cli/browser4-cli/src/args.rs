@@ -6,7 +6,7 @@
 //! - Named options (`--key=value`, `--flag`)
 
 use serde_json::{json, Value};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Parsed global flags that appear before the command name.
 #[derive(Debug, Default, Clone)]
@@ -100,14 +100,23 @@ pub fn parse_global_flags(argv: &[String]) -> GlobalFlags {
 
 /// Build a mapping from short option names (e.g. `"y"`) to their long
 /// equivalent (e.g. `"yes"`) for a given command's option definitions.
-pub fn build_short_option_map(options: &[crate::commands::OptionDef]) -> HashMap<String, String> {
+///
+/// Returns a tuple of `(short_to_long_map, boolean_option_names)`.
+/// The boolean set is used by `parse_raw_args` to avoid consuming the next
+/// argument as a value for boolean flags (e.g. `-i` should not consume
+/// `"search"` in `snapshot grep -i "search"`).
+pub fn build_short_option_map(options: &[crate::commands::OptionDef]) -> (HashMap<String, String>, HashSet<String>) {
     let mut map = HashMap::new();
+    let mut bool_opts = HashSet::new();
     for opt in options {
+        if opt.is_bool {
+            bool_opts.insert(opt.name.to_string());
+        }
         if let Some(short) = opt.short {
             map.insert(short.to_string(), opt.name.to_string());
         }
     }
-    map
+    (map, bool_opts)
 }
 
 /// Parse raw CLI arguments into a map suitable for command dispatch.
@@ -118,10 +127,14 @@ pub fn build_short_option_map(options: &[crate::commands::OptionDef]) -> HashMap
 /// - `--flag` (followed by another `--` arg or end-of-args) → key: true (boolean)
 /// - Short options (`-x` / `-x=value` / `-x value`) are resolved through
 ///   `short_to_long` when provided.
+/// - `bool_opts` contains the long names of boolean options; when a boolean
+///   option (short or long) is encountered, the next argument is NOT consumed
+///   as its value — it stays positional.
 /// - Values `"true"` / `"false"` are coerced to booleans.
 pub fn parse_raw_args(
     raw_args: &[String],
     short_to_long: Option<&HashMap<String, String>>,
+    bool_opts: Option<&HashSet<String>>,
 ) -> HashMap<String, Value> {
     let mut result: HashMap<String, Value> = HashMap::new();
     let mut positional: Vec<Value> = Vec::new();
@@ -141,9 +154,12 @@ pub fn parse_raw_args(
                 };
                 result.insert(key, value);
             } else {
+                // Check if this is a known boolean option — if so, don't consume
+                // the next argument as a value.
+                let is_bool = bool_opts.map_or(false, |b| b.contains(rest));
                 // Look ahead: if the next argument does NOT start with `--`,
                 // treat it as this option's value rather than a positional.
-                if i + 1 < raw_args.len() && !raw_args[i + 1].starts_with("--") {
+                if !is_bool && i + 1 < raw_args.len() && !raw_args[i + 1].starts_with("--") {
                     let key = rest.to_string();
                     let val = &raw_args[i + 1];
                     let value = match val.as_str() {
@@ -174,9 +190,12 @@ pub fn parse_raw_args(
                         positional.push(json!(arg));
                     }
                 } else if let Some(long) = map.get(rest) {
+                    // Check if this is a boolean option — if so, don't consume
+                    // the next argument as a value.
+                    let is_bool = bool_opts.map_or(false, |b| b.contains(long));
                     // Look ahead: if the next argument does NOT start with `-`,
                     // treat it as this option's value rather than a positional.
-                    if i + 1 < raw_args.len() && !raw_args[i + 1].starts_with('-') {
+                    if !is_bool && i + 1 < raw_args.len() && !raw_args[i + 1].starts_with('-') {
                         let val = &raw_args[i + 1];
                         let value = match val.as_str() {
                             "true" => Value::Bool(true),
@@ -480,7 +499,7 @@ mod tests {
     #[test]
     fn test_parse_raw_args_positional() {
         let raw = vec!["goto".to_string(), "https://example.com".to_string()];
-        let map = parse_raw_args(&raw, None);
+        let map = parse_raw_args(&raw, None, None);
         let pos = map["_"].as_array().unwrap();
         assert_eq!(pos[0].as_str(), Some("goto"));
         assert_eq!(pos[1].as_str(), Some("https://example.com"));
@@ -493,14 +512,14 @@ mod tests {
             "e15".to_string(),
             "--submit=true".to_string(),
         ];
-        let map = parse_raw_args(&raw, None);
+        let map = parse_raw_args(&raw, None, None);
         assert_eq!(map.get("submit"), Some(&json!(true)));
     }
 
     #[test]
     fn test_parse_raw_args_bool_flag() {
         let raw = vec!["snapshot".to_string(), "--headed".to_string()];
-        let map = parse_raw_args(&raw, None);
+        let map = parse_raw_args(&raw, None, None);
         assert_eq!(map.get("headed"), Some(&json!(true)));
     }
 
@@ -511,7 +530,7 @@ mod tests {
             "--tag".to_string(),
             "4.10.0-rc.2".to_string(),
         ];
-        let map = parse_raw_args(&raw, None);
+        let map = parse_raw_args(&raw, None, None);
         // --tag value should be parsed as a key-value pair, not a boolean flag
         // plus a positional argument.
         assert_eq!(map.get("tag"), Some(&json!("4.10.0-rc.2")));
@@ -526,7 +545,7 @@ mod tests {
     fn test_parse_raw_args_key_value_equals() {
         // --key=value should still work alongside --key value.
         let raw = vec!["install".to_string(), "--tag=4.10.0-rc.2".to_string()];
-        let map = parse_raw_args(&raw, None);
+        let map = parse_raw_args(&raw, None, None);
         assert_eq!(map.get("tag"), Some(&json!("4.10.0-rc.2")));
     }
 
@@ -540,9 +559,77 @@ mod tests {
             "--tag".to_string(),
             "4.10.0-rc.2".to_string(),
         ];
-        let map = parse_raw_args(&raw, None);
+        let map = parse_raw_args(&raw, None, None);
         assert_eq!(map.get("force"), Some(&json!(true)));
         assert_eq!(map.get("tag"), Some(&json!("4.10.0-rc.2")));
+    }
+
+    #[test]
+    fn test_parse_raw_args_boolean_short_flag_does_not_consume_next_arg() {
+        // Regression test: `snapshot grep -i "search"` — the -i flag should
+        // be parsed as --ignore-case=true, and "search" should stay as a
+        // positional argument (the pattern), not be consumed as -i's value.
+        let short_to_long: HashMap<String, String> = [
+            ("i".to_string(), "ignore-case".to_string()),
+            ("v".to_string(), "invert-match".to_string()),
+            ("c".to_string(), "count".to_string()),
+            ("F".to_string(), "fixed-strings".to_string()),
+            ("w".to_string(), "word-regexp".to_string()),
+            ("l".to_string(), "files-with-matches".to_string()),
+            ("A".to_string(), "after-context".to_string()),
+            ("B".to_string(), "before-context".to_string()),
+            ("C".to_string(), "context".to_string()),
+        ]
+        .into_iter()
+        .collect();
+        let bool_opts: HashSet<String> = [
+            "ignore-case", "invert-match", "count", "fixed-strings",
+            "word-regexp", "files-with-matches",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect();
+
+        // Scenario: snapshot-grep -i "search"
+        let raw = vec![
+            "snapshot-grep".to_string(),
+            "-i".to_string(),
+            "search".to_string(),
+        ];
+        let map = parse_raw_args(&raw, Some(&short_to_long), Some(&bool_opts));
+        // -i should be parsed as ignore-case=true (boolean flag)
+        assert_eq!(map.get("ignore-case"), Some(&json!(true)));
+        // "search" should be kept as a positional argument
+        let pos = map["_"].as_array().unwrap();
+        assert_eq!(pos.len(), 2, "expected 2 positionals: command + pattern");
+        assert_eq!(pos[0].as_str(), Some("snapshot-grep"));
+        assert_eq!(pos[1].as_str(), Some("search"), "pattern should be 'search', not consumed by -i");
+    }
+
+    #[test]
+    fn test_parse_raw_args_non_boolean_short_flag_still_consumes_value() {
+        // Non-boolean short flags like -A, -B, -C should still consume
+        // their next argument as a value.
+        let short_to_long: HashMap<String, String> = [
+            ("A".to_string(), "after-context".to_string()),
+            ("C".to_string(), "context".to_string()),
+        ]
+        .into_iter()
+        .collect();
+        let bool_opts: HashSet<String> = HashSet::new(); // neither is boolean
+
+        let raw = vec![
+            "snapshot-grep".to_string(),
+            "-A".to_string(),
+            "3".to_string(),
+            "search".to_string(),
+        ];
+        let map = parse_raw_args(&raw, Some(&short_to_long), Some(&bool_opts));
+        assert_eq!(map.get("after-context"), Some(&json!("3")));
+        // "search" should still be positional
+        let pos = map["_"].as_array().unwrap();
+        assert_eq!(pos.len(), 2);
+        assert_eq!(pos[1].as_str(), Some("search"));
     }
 
     #[test]

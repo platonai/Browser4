@@ -1073,7 +1073,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "eval",
-            description: "Evaluate JavaScript expression on page or element",
+            description: "Evaluate JavaScript expression on page or element. Objects and arrays are serialized as JSON; use --json to JSON-wrap scalar results.",
             category: Category::Core,
             hidden: false,
             batch_supported: true,
@@ -1083,6 +1083,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             ],
             options: &[
                 OptionDef { name: "file", description: "Read JavaScript expression from a file instead of the command line", is_bool: false, short: None },
+                OptionDef { name: "json", description: "Serialize the result as JSON (quotes strings, wraps scalars)", is_bool: true, short: None },
             ],
             tool_name_fn: |_| "browser_evaluate".to_string(),
             tool_params_fn: |args| {
@@ -2029,7 +2030,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         // ---- Snapshot ----
         CommandDef {
             name: "domsnapshot",
-            description: "Capture a static DOM snapshot, save it in Browser4's page storage, and return metadata (URL, title, timestamp, content type, size)",
+            description: "Capture a static DOM snapshot, save it in Browser4's page storage, and return metadata (URL, title, timestamps, image/link counts, interactive elements with tag/class/id/aria/bounding-box)",
             category: Category::Snapshot,
             hidden: false,
             batch_supported: false,
@@ -2175,6 +2176,32 @@ pub fn all_commands() -> Vec<CommandDef> {
                     if k != "_" {
                         p[k] = v.clone();
                     }
+                }
+                p
+            },
+        },
+        CommandDef {
+            name: "domsnapshot-inspect",
+            description: "Inspect DOM structure and suggest CSS selectors for recurring patterns (product cards, prices, titles)",
+            category: Category::Snapshot,
+            hidden: false,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "selector", description: "CSS selector to scope inspection (default: :root; use e.g. .product-card for recurring pattern detection)", optional: true },
+            ],
+            options: &[
+                OptionDef { name: "max", description: "Max matching elements to analyze (default: 10)", is_bool: false, short: None },
+                OptionDef { name: "depth", description: "Max descendant depth for selector suggestions (default: 5)", is_bool: false, short: None },
+            ],
+            tool_name_fn: |_| "dom_snapshot_inspect".to_string(),
+            tool_params_fn: |args| {
+                let mut p = json!({});
+                if let Some(s) = get_opt_str(args, "selector") { p["selector"] = json!(s); }
+                if let Some(m) = get_opt_str(args, "max") {
+                    if let Ok(n) = m.parse::<i32>() { p["max"] = json!(n); }
+                }
+                if let Some(d) = get_opt_str(args, "depth") {
+                    if let Ok(n) = d.parse::<i32>() { p["depth"] = json!(n); }
                 }
                 p
             },
@@ -3435,6 +3462,7 @@ mod tests {
             "domsnapshot-export",
             "domsnapshot-summary",
             "domsnapshot-grep",
+            "domsnapshot-inspect",
         ] {
             assert!(map.contains_key(*expected), "Missing command: {}", expected);
         }
@@ -3549,6 +3577,7 @@ mod tests {
             "domsnapshot-export",
             "domsnapshot-summary",
             "domsnapshot-grep",
+            "domsnapshot-inspect",
         ] {
             let cmd = map.get(*name).unwrap();
             assert_eq!(cmd.category, Category::Snapshot);

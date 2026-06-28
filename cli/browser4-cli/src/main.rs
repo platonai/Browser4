@@ -283,6 +283,7 @@ fn no_snapshot_commands() -> HashSet<&'static str> {
         "domsnapshot-export",
         "domsnapshot-summary",
         "domsnapshot-grep",
+        "domsnapshot-inspect",
     ]
     .into()
 }
@@ -2407,6 +2408,21 @@ async fn handle_tool_command(
     recover_stale: bool,
     session_name: Option<&str>,
 ) -> Result<(), String> {
+    handle_tool_command_with_options(client, base_url, tool_name, tool_params, recover_stale, session_name, false).await
+}
+
+/// Like [handle_tool_command] but with an `eval_json` flag that, when true,
+/// ensures the eval result is printed as valid JSON (scalar strings are
+/// quoted, objects/arrays/numbers are printed as-is).
+async fn handle_tool_command_with_options(
+    client: &Client,
+    base_url: &str,
+    tool_name: &str,
+    tool_params: &Value,
+    recover_stale: bool,
+    session_name: Option<&str>,
+    eval_json: bool,
+) -> Result<(), String> {
     let result = with_session(
         client,
         base_url,
@@ -2431,6 +2447,18 @@ async fn handle_tool_command(
             cli_println!("null");
         } else if result.is_empty() {
             cli_println!("\"\"");
+        } else if eval_json {
+            // --json: ensure output is valid JSON. Try to parse the result
+            // as JSON first (objects, arrays, numbers, booleans, null); if
+            // that fails, wrap it as a JSON string.
+            let json_val: serde_json::Value = match serde_json::from_str(&result) {
+                Ok(v) => v,
+                Err(_) => serde_json::Value::String(result.clone()),
+            };
+            cli_println!(
+                "{}",
+                serde_json::to_string(&json_val).unwrap_or_else(|_| result.clone())
+            );
         } else {
             cli_println!("{}", result);
         }
@@ -2695,11 +2723,83 @@ async fn handle_dom_snapshot_capture(
         .map_err(|e| format!("Failed to parse snapshot metadata: {e}"))?;
 
     json_field("snapshot_metadata", json!(&metadata));
-    cli_println!(
-        "{}",
-        serde_json::to_string_pretty(&metadata)
-            .map_err(|e| format!("Failed to format metadata: {e}"))?
-    );
+
+    // Display page info
+    let url = metadata.get("url").and_then(|v| v.as_str()).unwrap_or("");
+    let title = metadata.get("title").and_then(|v| v.as_str()).unwrap_or("");
+    let size = metadata.get("sizeBytes").and_then(|v| v.as_str()).unwrap_or("");
+    let captured = metadata.get("capturedAt").and_then(|v| v.as_str()).unwrap_or("");
+    let content_type = metadata.get("contentType").and_then(|v| v.as_str()).unwrap_or("");
+
+    cli_println!("### Page Info");
+    if !url.is_empty() {
+        cli_println!("- URL: {}", url);
+    }
+    if !title.is_empty() {
+        cli_println!("- Title: {}", title);
+    }
+    if !size.is_empty() {
+        let size_bytes: i64 = size.parse().unwrap_or(0);
+        if size_bytes >= 1024 {
+            cli_println!("- Size: {} ({} KB)", size_bytes, size_bytes / 1024);
+        } else {
+            cli_println!("- Size: {} bytes", size_bytes);
+        }
+    }
+    if !content_type.is_empty() {
+        cli_println!("- Content-Type: {}", content_type);
+    }
+    if !captured.is_empty() {
+        cli_println!("- Captured At: {}", captured);
+    }
+
+    // Display stats
+    let image_count = metadata.get("imageCount").and_then(|v| v.as_i64()).unwrap_or(0);
+    let link_count = metadata.get("linkCount").and_then(|v| v.as_i64()).unwrap_or(0);
+    cli_println!("### Stats");
+    cli_println!("- Images: {}", image_count);
+    cli_println!("- Links: {}", link_count);
+
+    // Display interactive elements
+    if let Some(elements) = metadata.get("interactiveElements").and_then(|v| v.as_array()) {
+        if !elements.is_empty() {
+            cli_println!("### Interactive Elements ({})", elements.len());
+            for (i, el) in elements.iter().enumerate() {
+                let tag = el.get("tag").and_then(|v| v.as_str()).unwrap_or("");
+                let id = el.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                let class = el.get("class").and_then(|v| v.as_str()).unwrap_or("");
+                let box_val = el.get("box").and_then(|v| v.as_str()).unwrap_or("");
+                let aria = el.get("aria");
+
+                let mut desc = tag.to_string();
+                if !id.is_empty() {
+                    desc.push_str(&format!("#{}", id));
+                }
+                if !class.is_empty() {
+                    desc.push_str(&format!(".{}", class));
+                }
+                let mut extras = Vec::new();
+                if !box_val.is_empty() {
+                    extras.push(format!("box={}", box_val));
+                }
+                if let Some(aria_obj) = aria.and_then(|v| v.as_object()) {
+                    let aria_pairs: Vec<String> = aria_obj
+                        .iter()
+                        .map(|(k, v)| format!("{}={}", k, v.as_str().unwrap_or("")))
+                        .collect();
+                    if !aria_pairs.is_empty() {
+                        extras.push(format!("aria: {}", aria_pairs.join(", ")));
+                    }
+                }
+                if extras.is_empty() {
+                    cli_println!("  {:>3}. {}", i + 1, desc);
+                } else {
+                    cli_println!("  {:>3}. {}  [{}]", i + 1, desc, extras.join("; "));
+                }
+            }
+        }
+    }
+
     Ok(())
 }
 
@@ -2933,6 +3033,123 @@ async fn handle_dom_snapshot_summary(
     cli_println!("- Page Title: {}", title);
     cli_println!("### Summary");
     cli_println!("[Summary]({})", out_path.display());
+    Ok(())
+}
+
+async fn handle_dom_snapshot_inspect(
+    client: &Client,
+    base_url: &str,
+    tool_name: &str,
+    tool_params: &Value,
+    session_name: Option<&str>,
+) -> Result<(), String> {
+    let result = with_session(client, base_url, session_name, false, |session_id| {
+        let client = client.clone();
+        let base_url = base_url.to_string();
+        let tool_name = tool_name.to_string();
+        let mut params = tool_params.clone();
+        params["sessionId"] = json!(session_id);
+        async move { call_tool(&client, &base_url, &tool_name, params).await }
+    })
+    .await?;
+
+    let data: Value = serde_json::from_str(&result)
+        .map_err(|e| format!("Failed to parse inspect result: {e}"))?;
+
+    let selector = data.get("selector").and_then(|v| v.as_str()).unwrap_or(":root");
+    let match_count = data.get("matchCount").and_then(|v| v.as_i64()).unwrap_or(0);
+    let analyzed = data.get("analyzed").and_then(|v| v.as_u64()).unwrap_or(0);
+
+    if match_count == 0 {
+        cli_println!("### Inspect: \"{}\" (0 matches)", selector);
+        cli_println!("- No elements matched. Check the CSS selector and ensure a DOM snapshot has been captured (`browser4-cli domsnapshot`).");
+        json_field("matchCount", json!(0));
+        json_field("selector", json!(selector));
+        return Ok(());
+    }
+
+    cli_println!(
+        "### Inspect: \"{}\" ({} matches, {} analyzed)",
+        selector, match_count, analyzed
+    );
+
+    // Sample structures
+    if let Some(samples) = data.get("samples").and_then(|v| v.as_array()) {
+        if !samples.is_empty() {
+            cli_println!("");
+            cli_println!(
+                "  Sample structure ({} of {}):",
+                samples.len(),
+                match_count
+            );
+            for (i, sample) in samples.iter().enumerate() {
+                let tag = sample.get("tag").and_then(|v| v.as_str()).unwrap_or("");
+                let id = sample.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                let class = sample.get("class").and_then(|v| v.as_str()).unwrap_or("");
+                let text = sample.get("text").and_then(|v| v.as_str()).unwrap_or("");
+
+                let mut desc = tag.to_string();
+                if !id.is_empty() {
+                    desc.push_str(&format!("#{}", id));
+                }
+                if !class.is_empty() {
+                    desc.push_str(&format!(".{}", class));
+                }
+                cli_println!("  -- Element {}: {}", i + 1, desc);
+                if !text.is_empty() {
+                    cli_println!("     text: \"{}\"", text);
+                }
+
+                // Children
+                if let Some(children) = sample.get("children").and_then(|v| v.as_array()) {
+                    for child in children {
+                        let ctag = child.get("tag").and_then(|v| v.as_str()).unwrap_or("");
+                        let cid = child.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                        let cclass = child.get("class").and_then(|v| v.as_str()).unwrap_or("");
+                        let ctext = child.get("text").and_then(|v| v.as_str()).unwrap_or("");
+
+                        let mut cdesc = format!("{:>4} ", ctag); // indent
+                        if !cid.is_empty() {
+                            cdesc.push_str(&format!("#{}", cid));
+                        }
+                        if !cclass.is_empty() {
+                            cdesc.push_str(&format!(".{}", cclass));
+                        }
+                        if !ctext.is_empty() {
+                            cdesc.push_str(&format!("  \"{}\"", ctext));
+                        }
+                        cli_println!("   {}", cdesc);
+                    }
+                }
+            }
+        }
+    }
+
+    // Suggestions
+    if let Some(suggestions) = data.get("suggestions").and_then(|v| v.as_array()) {
+        if !suggestions.is_empty() {
+            cli_println!("");
+            cli_println!("  Suggested selectors (recurring across matches):");
+            for sug in suggestions {
+                let sel = sug.get("selector").and_then(|v| v.as_str()).unwrap_or("");
+                let count = sug.get("matchCount").and_then(|v| v.as_i64()).unwrap_or(0);
+                let coverage = sug.get("coverage").and_then(|v| v.as_str()).unwrap_or("");
+                let text = sug.get("textPreview").and_then(|v| v.as_str()).unwrap_or("");
+
+                let text_hint = if text.is_empty() {
+                    String::new()
+                } else {
+                    format!("→ \"{}\"", text)
+                };
+                cli_println!(
+                    "  {:>3}/{} ({})  {:<40} {}",
+                    count, analyzed, coverage, sel, text_hint
+                );
+            }
+        }
+    }
+
+    json_field("inspect", data);
     Ok(())
 }
 
@@ -6090,6 +6307,7 @@ fn preferred_spaced_command_form(command: &str) -> Option<&'static str> {
         "domsnapshot-export" => Some("domsnapshot export"),
         "domsnapshot-summary" => Some("domsnapshot summary"),
         "domsnapshot-grep" => Some("domsnapshot grep"),
+        "domsnapshot-inspect" => Some("domsnapshot inspect"),
         _ => None,
     }
 }
@@ -6334,8 +6552,8 @@ fn compile_batch_request(
             continue;
         }
 
-        let nested_short_to_long = build_short_option_map(cmd_def.options);
-        let raw_parsed = parse_raw_args(&effective_nested_global.args, Some(&nested_short_to_long));
+        let (nested_short_to_long, nested_bool_opts) = build_short_option_map(cmd_def.options);
+        let raw_parsed = parse_raw_args(&effective_nested_global.args, Some(&nested_short_to_long), Some(&nested_bool_opts));
         let arg_names: Vec<&str> = cmd_def.args.iter().map(|arg| arg.name).collect();
         let parsed = match build_command_args(&raw_parsed, &arg_names) {
             Ok(parsed) => parsed,
@@ -7068,8 +7286,8 @@ async fn run(
     };
 
     // Parse positional + named arguments (with short-option resolution)
-    let short_to_long = build_short_option_map(cmd_def.options);
-    let raw_parsed = parse_raw_args(&global.args, Some(&short_to_long));
+    let (short_to_long, bool_opts) = build_short_option_map(cmd_def.options);
+    let raw_parsed = parse_raw_args(&global.args, Some(&short_to_long), Some(&bool_opts));
     let arg_names: Vec<&str> = cmd_def.args.iter().map(|a| a.name).collect();
     let parsed = build_command_args(&raw_parsed, &arg_names).map_err(|e| e.to_string())?;
 
@@ -7393,13 +7611,18 @@ async fn run(
                 ));
             }
 
-            handle_tool_command(
+            let eval_json = parsed
+                .get("json")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            handle_tool_command_with_options(
                 &client,
                 &base_url,
                 &tool_name,
                 &tool_params,
                 false,
                 global.session_name.as_deref(),
+                eval_json,
             )
             .await?;
         }
@@ -7658,6 +7881,16 @@ async fn run(
             )
             .await?;
         }
+        "domsnapshot-inspect" => {
+            handle_dom_snapshot_inspect(
+                &client,
+                &base_url,
+                &tool_name,
+                &tool_params,
+                global.session_name.as_deref(),
+            )
+            .await?;
+        }
         "snapshot-grep" => {
             let grep_options = parse_grep_options(&tool_params)?;
             handle_snapshot_grep(
@@ -7910,6 +8143,7 @@ mod tests {
         assert!(no_snapshot_commands().contains("domsnapshot-export"));
         assert!(no_snapshot_commands().contains("domsnapshot-summary"));
         assert!(no_snapshot_commands().contains("domsnapshot-grep"));
+        assert!(no_snapshot_commands().contains("domsnapshot-inspect"));
     }
 
     #[test]

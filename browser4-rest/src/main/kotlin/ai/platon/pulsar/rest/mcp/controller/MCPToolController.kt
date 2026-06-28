@@ -19,6 +19,8 @@ import com.fasterxml.jackson.annotation.JsonProperty
 import com.fasterxml.jackson.annotation.JsonSetter
 import com.fasterxml.jackson.annotation.Nulls
 import com.fasterxml.jackson.databind.ObjectMapper
+import com.fasterxml.jackson.databind.node.ArrayNode
+import com.fasterxml.jackson.databind.node.ObjectNode
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import jakarta.servlet.http.HttpServletResponse
 import org.slf4j.LoggerFactory
@@ -246,6 +248,7 @@ class MCPToolController(
                 "dom_snapshot_query" -> handleDomSnapshotQuery(request)
                 "dom_snapshot_export" -> handleDomSnapshotExport(request)
                 "dom_snapshot_summary" -> handleDomSnapshotSummary(request)
+                "dom_snapshot_inspect" -> handleDomSnapshotInspect(request)
                 // All other tools are dispatched to the session's agent
                 else -> dispatchToAgentToolExecutor(request)
             }
@@ -308,6 +311,7 @@ class MCPToolController(
                     "dom_snapshot_query",
                     "dom_snapshot_export",
                     "dom_snapshot_summary",
+                    "dom_snapshot_inspect",
                 )
             )
 
@@ -759,6 +763,42 @@ class MCPToolController(
                 val document = pulsarSession.parse(page, noCache = true)
                 val title = document.title
 
+                // Count images and links
+                val imageCount = document.select("img").size
+                val linkCount = document.select("a").size
+
+                // Extract non-trivial interactive elements
+                val interactiveSelector = "a[href], button, input:not([type=hidden]), select, textarea, " +
+                    "details, summary, " +
+                    "[role=button], [role=link], [role=checkbox], [role=radio], " +
+                    "[role=tab], [role=menuitem], [role=switch], [role=combobox], " +
+                    "[role=searchbox], [role=textbox], [role=slider], [role=spinbutton], " +
+                    "[role=option], [role=treeitem], " +
+                    "[tabindex]:not([tabindex=\"-1\"]), [contenteditable=true], " +
+                    "[onclick], [onkeydown], [onsubmit]"
+                val maxInteractive = 100
+                val interactiveElements = document.select(interactiveSelector).take(maxInteractive).map { el ->
+                    val obj = jacksonObjectMapper().createObjectNode()
+                    obj.put("tag", el.tagName().lowercase())
+                    val cls = el.className()
+                    if (cls.isNotBlank()) obj.put("class", cls)
+                    val id = el.id()
+                    if (id.isNotBlank()) obj.put("id", id)
+                    // Collect aria-* attributes
+                    val ariaAttrs = el.attributes().filter { it.key.startsWith("aria-") }
+                    if (ariaAttrs.isNotEmpty()) {
+                        val ariaObj = jacksonObjectMapper().createObjectNode()
+                        for (attr in ariaAttrs) {
+                            ariaObj.put(attr.key, attr.value)
+                        }
+                        obj.set<ObjectNode>("aria", ariaObj)
+                    }
+                    // Bounding box (vi attribute, injected by feature_calculator.js)
+                    val box = el.attr("vi")
+                    if (box.isNotBlank()) obj.put("box", box)
+                    obj
+                }
+
                 val json = jacksonObjectMapper().createObjectNode().apply {
                     put("url", page.url) // normalized url and can be served as the key to retrieve the page from database
                     put("href", page.href) // the href from an anchor, or the user-typed url
@@ -766,6 +806,9 @@ class MCPToolController(
                     put("capturedAt", page.prevFetchTime.toString())
                     put("contentType", page.contentType) // should be html/text
                     put("title", title)
+                    put("imageCount", imageCount)
+                    put("linkCount", linkCount)
+                    putArray("interactiveElements").addAll(interactiveElements)
                 }
                 json.toString()
             }
@@ -984,6 +1027,147 @@ class MCPToolController(
         }
     }
 
+    /**
+     * Inspect the DOM snapshot and suggest CSS selectors for recurring patterns.
+     *
+     * When [selector] matches multiple elements (e.g. `.product-card`), the
+     * command compares descendant structures across matches to identify
+     * recurring child selectors — useful for discovering selectors for titles,
+     * prices, ratings, images, etc.
+     */
+    private suspend fun handleDomSnapshotInspect(
+        request: MCPToolCallRequest
+    ): ResponseEntity<MCPToolCallResponse> {
+        val sessionId = requireSessionId(request)
+        val managed = sessionManager.getSession(sessionId)
+            ?: return ResponseEntity.ok(errorResponse("${MCPConstants.ERROR_SESSION_NOT_FOUND}$sessionId"))
+
+        return try {
+            val result = managed.withLock {
+                val pulsarSession = managed.agenticSession
+                val url = pulsarSession.normalize(managed.driver.currentUrl())
+                val document = pulsarSession.loadDocument(url.urlString)
+
+                val args = request.arguments ?: emptyMap()
+                val selector = args["selector"]?.toString()?.ifEmpty { ":root" } ?: ":root"
+                val maxMatches = (args["max"] as? Number)?.toInt() ?: 10
+                val maxDepth = (args["depth"] as? Number)?.toInt() ?: 5
+
+                val matches = document.select(selector).take(maxMatches)
+                val matchCount = document.select(selector).size
+
+                if (matches.isEmpty()) {
+                    return@withLock jacksonObjectMapper().createObjectNode().apply {
+                        put("matchCount", 0)
+                        put("selector", selector)
+                        putArray("suggestions")
+                    }.toString()
+                }
+
+                // Build sample structures for the first 3 matches
+                val samples = jacksonObjectMapper().createArrayNode()
+                for (m in matches.take(3)) {
+                    val sample = jacksonObjectMapper().createObjectNode()
+                    sample.put("tag", m.tagName().lowercase())
+                    val cls = m.className()
+                    if (cls.isNotBlank()) sample.put("class", cls)
+                    val id = m.id()
+                    if (id.isNotBlank()) sample.put("id", id)
+                    val ownText = m.ownText().trim()
+                    if (ownText.isNotBlank()) sample.put("text", ownText.take(120))
+
+                    // Direct children
+                    val children = jacksonObjectMapper().createArrayNode()
+                    for (child in m.children().take(20)) {
+                        val cObj = jacksonObjectMapper().createObjectNode()
+                        cObj.put("tag", child.tagName().lowercase())
+                        val cCls = child.className()
+                        if (cCls.isNotBlank()) cObj.put("class", cCls)
+                        val cId = child.id()
+                        if (cId.isNotBlank()) cObj.put("id", cId)
+                        val cText = (child as? org.jsoup.nodes.Element)?.ownText()?.trim()
+                        if (!cText.isNullOrBlank()) cObj.put("text", cText.take(80))
+                        children.add(cObj)
+                    }
+                    sample.set<ArrayNode>("children", children)
+                    samples.add(sample)
+                }
+
+                // Find recurring descendant selectors across matches
+                data class SelectorCandidate(
+                    val selector: String,
+                    val tag: String,
+                    val textPreview: String,
+                )
+
+                val candidateCounts = mutableMapOf<SelectorCandidate, Int>()
+
+                for (match in matches) {
+                    val seen = mutableSetOf<SelectorCandidate>()
+                    for (desc in match.select("*")) {
+                        val depth = desc.parents().indexOfFirst { it === match } + 1
+                        if (depth < 0 || depth > maxDepth) continue
+                        if (desc.tagName().lowercase() in setOf("html", "head", "body", "script", "style", "meta", "link", "noscript")) continue
+
+                        val descTag = desc.tagName().lowercase()
+                        val descClass = desc.className()
+                        val descId = desc.id()
+                        val descText = desc.ownText().trim().take(80)
+
+                        // Build a short selector: tag + class(es)
+                        val shortSelector = if (descClass.isNotBlank()) {
+                            val classes = descClass.split("\\s+".toRegex()).take(2).joinToString(".") { it }
+                            if (descId.isNotBlank()) "${descTag}.$classes#${descId}"
+                            else "${descTag}.$classes"
+                        } else if (descId.isNotBlank()) {
+                            "${descTag}#${descId}"
+                        } else {
+                            descTag
+                        }
+
+                        val candidate = SelectorCandidate(shortSelector, descTag, descText)
+                        if (seen.add(candidate)) {
+                            candidateCounts[candidate] = (candidateCounts[candidate] ?: 0) + 1
+                        }
+                    }
+                }
+
+                // Filter to selectors appearing in >= 50% of matches (min 2 matches)
+                val threshold = maxOf(2, (matches.size * 0.5).toInt())
+                val recurring = candidateCounts.entries
+                    .filter { it.value >= threshold }
+                    .sortedByDescending { it.value }
+                    .take(40)
+
+                // Build suggestions array
+                val suggestions = jacksonObjectMapper().createArrayNode()
+                for ((candidate, count) in recurring) {
+                    val sug = jacksonObjectMapper().createObjectNode()
+                    sug.put("selector", candidate.selector)
+                    sug.put("tag", candidate.tag)
+                    if (candidate.textPreview.isNotBlank()) {
+                        sug.put("textPreview", candidate.textPreview)
+                    }
+                    sug.put("matchCount", count)
+                    sug.put("coverage", "%.0f%%".format(count * 100.0 / matches.size))
+                    suggestions.add(sug)
+                }
+
+                jacksonObjectMapper().createObjectNode().apply {
+                    put("matchCount", matchCount)
+                    put("selector", selector)
+                    put("analyzed", matches.size)
+                    set<ArrayNode>("samples", samples)
+                    set<ArrayNode>("suggestions", suggestions)
+                }.toString()
+            }
+            ResponseEntity.ok(textResponse(result))
+        } catch (e: Exception) {
+            logger.error("dom_snapshot_inspect failed | {}", e.message, e)
+            ResponseEntity.ok(errorResponse("dom_snapshot_inspect failed: ${e.message}"))
+        }
+    }
+
     // =========================================================================
     // Dispatch to per-session AgentToolManager
     // =========================================================================
@@ -1020,7 +1204,14 @@ class MCPToolController(
                 // Distinguish JS null (className == "null") from JS undefined (className == "undefined")
                 // and Kotlin Unit (no meaningful return value).
                 // All three arrive as evaluate.value == null, but only JS null should produce visible output.
-                ResponseEntity.ok(textResponse(evaluate.value?.toString() ?: if (evaluate.className == "null") "null" else ""))
+                val text = when (val v = evaluate.value) {
+                    null -> if (evaluate.className == "null") "null" else ""
+                    is String -> v
+                    is Number, is Boolean -> v.toString()
+                    // Maps, Lists, arrays etc. — serialize as valid JSON
+                    else -> jacksonObjectMapper().writeValueAsString(v)
+                }
+                ResponseEntity.ok(textResponse(text))
             }
         } catch (e: Exception) {
             logger.warn(
