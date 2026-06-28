@@ -1665,6 +1665,48 @@ pub fn all_commands() -> Vec<CommandDef> {
                 params
             },
         },
+        CommandDef {
+            name: "doctor",
+            description: "Run system diagnostics: build info, logs, and metrics",
+            category: Category::Browsers,
+            hidden: false,
+            batch_supported: false,
+            args: &[],
+            options: &[
+                OptionDef {
+                    name: "server",
+                    description: "Server URL to check (defaults to saved or http://127.0.0.1:8182)",
+                    is_bool: false,
+                    short: None,
+                },
+                OptionDef {
+                    name: "file",
+                    description: "Backend log file to tail (default: pulsar). Available logs: pulsar, pulsar.api, pulsar.s, pulsar.hv, pulsar.bs, pulsar.pg, pulsar.m, pulsar.c, pulsar.sql, pulsar.dc",
+                    is_bool: false,
+                    short: None,
+                },
+                OptionDef {
+                    name: "lines",
+                    description: "Number of recent log lines to show (default: 50, max: 500)",
+                    is_bool: false,
+                    short: None,
+                },
+            ],
+            tool_name_fn: |_| String::new(),
+            tool_params_fn: |args| {
+                let mut params = json!({});
+                if let Some(server) = get_opt_str(args, "server") {
+                    params["server"] = json!(server);
+                }
+                if let Some(file) = get_opt_str(args, "file") {
+                    params["file"] = json!(file);
+                }
+                if let Some(lines) = get_opt_str(args, "lines") {
+                    params["lines"] = json!(lines);
+                }
+                params
+            },
+        },
         // ---- Agent ----
         CommandDef {
             name: "extract",
@@ -2149,6 +2191,7 @@ mod tests {
             "close",
             "install",
             "uninstall",
+            "doctor",
             "batch",
             "loop",
             "goto",
@@ -2896,6 +2939,23 @@ mod tests {
         assert_eq!(cmd.args.len(), 0);
         assert_eq!(cmd.options.len(), 1);
         assert_eq!(cmd.options[0].name, "server");
+    }
+
+    #[test]
+    fn test_doctor_command_defined() {
+        let map = commands_map();
+        let cmd = map.get("doctor").expect("doctor command must exist");
+        assert!(!cmd.hidden);
+        assert_eq!(cmd.category, Category::Browsers);
+        assert!(!cmd.batch_supported);
+        assert_eq!(cmd.args.len(), 0);
+        assert_eq!(cmd.options.len(), 3);
+        let option_names: Vec<&str> = cmd.options.iter().map(|o| o.name).collect();
+        assert!(option_names.contains(&"server"));
+        assert!(option_names.contains(&"file"));
+        assert!(option_names.contains(&"lines"));
+        let args: HashMap<String, Value> = HashMap::new();
+        assert!((cmd.tool_name_fn)(&args).is_empty());
     }
 
     #[test]
