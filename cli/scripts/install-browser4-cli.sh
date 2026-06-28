@@ -16,7 +16,7 @@
 #   --version, -v TAG   Release tag (e.g. "v4.11.0"). Default: latest.
 #   --install-dir, -d DIR  Install directory (default: ~/.local/bin).
 #   --source SRC        Force download source: "github" or "oss".
-#                       Default (auto): locale-aware — OSS first for China mainland.
+#                       Default (auto): locale-aware -- OSS first for China mainland.
 #   --no-path            Skip adding install dir to PATH.
 #   --skip-local         Skip checking for a locally-bundled binary.
 #   --locate             Print detection results and exit (no install).
@@ -27,9 +27,9 @@
 
 set -euo pipefail
 
-# ──────────────────────────────────────────────
+# ----------------------------------------------
 # Globals
-# ──────────────────────────────────────────────
+# ----------------------------------------------
 
 GITHUB_REPO="platonai/Browser4"
 OSS_BASE="https://browser4.oss-cn-beijing.aliyuncs.com"
@@ -46,14 +46,14 @@ LOCATE_MODE=false
 CHINA_DETECTED=false
 SCRIPT_DIR=""
 
-# ──────────────────────────────────────────────
+# ----------------------------------------------
 # Helpers
-# ──────────────────────────────────────────────
+# ----------------------------------------------
 
 say()    { if [[ "$SILENT" != true ]]; then echo -e "$*"; fi; }
-step()   { say "  → $*"; }
-ok()     { say "    ✓ $*"; }
-warn()   { say "    ⚠ $*" >&2; }
+step()   { say "  -> $*"; }
+ok()     { say "    [v] $*"; }
+warn()   { say "    [!] $*" >&2; }
 die()    { echo "ERROR: $*" >&2; exit 1; }
 
 color_cyan='\033[0;36m'
@@ -63,16 +63,16 @@ color_reset='\033[0m'
 
 header() {
   if [[ "$SILENT" != true ]]; then
-    echo -e "${color_cyan}╔════════════════════════════════════════╗${color_reset}"
-    echo -e "${color_cyan}║   browser4-cli Installer               ║${color_reset}"
-    echo -e "${color_cyan}╚════════════════════════════════════════╝${color_reset}"
+    echo -e "${color_cyan}==========================================${color_reset}"
+    echo -e "${color_cyan}    browser4-cli Installer${color_reset}"
+    echo -e "${color_cyan}==========================================${color_reset}"
     echo ""
   fi
 }
 
-# ──────────────────────────────────────────────
-# Script location — find ourselves on disk
-# ──────────────────────────────────────────────
+# ----------------------------------------------
+# Script location -- find ourselves on disk
+# ----------------------------------------------
 
 detect_script_dir() {
   # BASH_SOURCE works even when sourced; prefer it over $0.
@@ -81,7 +81,7 @@ detect_script_dir() {
   elif [[ -n "${0:-}" ]] && [[ "$0" != "bash" ]] && [[ "$0" != "-bash" ]] && [[ -f "$0" ]]; then
     SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
   fi
-  # If piped via curl | bash, SCRIPT_DIR stays empty — no local binaries available.
+  # If piped via curl | bash, SCRIPT_DIR stays empty -- no local binaries available.
 }
 
 # Search for a pre-downloaded binary near the script (bundled/sideload install).
@@ -144,9 +144,9 @@ Examples:
 EOF
 }
 
-# ──────────────────────────────────────────────
+# ----------------------------------------------
 # Argument parsing
-# ──────────────────────────────────────────────
+# ----------------------------------------------
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -173,24 +173,24 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# ──────────────────────────────────────────────
+# ----------------------------------------------
 # China mainland locale detection (zero-network)
-# ──────────────────────────────────────────────
+# ----------------------------------------------
 
 detect_china_locale() {
-  # 1 — Locale env vars
+  # 1 -- Locale env vars
   local lang
   lang="${LC_ALL:-${LANG:-${LC_CTYPE:-${LC_MESSAGES:-}}}}"
   case "$lang" in
     zh_CN*|zh-CN*|"Chinese (Simplified)_China"*) return 0 ;;
   esac
 
-  # 2 — TZ env var
+  # 2 -- TZ env var
   case "${TZ:-}" in
     Asia/Shanghai|Asia/Chongqing|Asia/Urumqi|Asia/Harbin) return 0 ;;
   esac
 
-  # 3 — /etc/timezone
+  # 3 -- /etc/timezone
   if [[ -f /etc/timezone ]]; then
     local tz
     tz=$(cat /etc/timezone 2>/dev/null || true)
@@ -202,9 +202,9 @@ detect_china_locale() {
   return 1
 }
 
-# ──────────────────────────────────────────────
+# ----------------------------------------------
 # Platform detection
-# ──────────────────────────────────────────────
+# ----------------------------------------------
 
 detect_os() {
   case "$(uname -s)" in
@@ -240,7 +240,7 @@ detect_libc() {
     fi
   fi
 
-  # Check for musl loader — covers common architectures
+  # Check for musl loader -- covers common architectures
   # x86_64, aarch64, armhf (32-bit ARM), i386, riscv64, s390x, ppc64le, mips64
   local musl_loader
   for musl_loader in \
@@ -303,9 +303,9 @@ get_default_install_dir() {
   echo "$dir"
 }
 
-# ──────────────────────────────────────────────
+# ----------------------------------------------
 # Download
-# ──────────────────────────────────────────────
+# ----------------------------------------------
 
 check_commands() {
   local missing=()
@@ -397,7 +397,7 @@ download_file() {
       return 0
     fi
 
-    warn "Downloaded file too small (${size} bytes) — may be an error page"
+    warn "Downloaded file too small (${size} bytes) -- may be an error page"
     rm -f "$dest"
     return 1
   fi
@@ -407,9 +407,9 @@ download_file() {
   return 1
 }
 
-# ──────────────────────────────────────────────
+# ----------------------------------------------
 # PATH management
-# ──────────────────────────────────────────────
+# ----------------------------------------------
 
 add_to_shell_rc() {
   local dir="$1"
@@ -473,9 +473,9 @@ add_to_shell_rc() {
   say "    Reload with: source $rc_file"
 }
 
-# ──────────────────────────────────────────────
+# ----------------------------------------------
 # Symlinks
-# ──────────────────────────────────────────────
+# ----------------------------------------------
 
 create_symlinks() {
   local binary_name="$1"
@@ -519,9 +519,9 @@ create_symlinks() {
   fi
 }
 
-# ──────────────────────────────────────────────
+# ----------------------------------------------
 # Main
-# ──────────────────────────────────────────────
+# ----------------------------------------------
 
 main() {
   check_commands
@@ -543,11 +543,11 @@ main() {
   platform_key=$(get_platform_key)
   binary_name=$(get_binary_name "$platform_key")
 
-  # ── Locate mode: print diagnostics and exit ──
+  # -- Locate mode: print diagnostics and exit --
   if [[ "$LOCATE_MODE" == true ]]; then
-    echo -e "${color_cyan}─── Locate / diagnostics ───${color_reset}"
+    echo -e "${color_cyan}--- Locate / diagnostics ---${color_reset}"
     echo ""
-    step "Script dir:       ${SCRIPT_DIR:-'(not available — piped via curl?)'}"
+    step "Script dir:       ${SCRIPT_DIR:-'(not available -- piped via curl?)'}"
     step "Platform key:     $platform_key"
     step "Binary name:      $binary_name"
     step "Default install:  $(get_default_install_dir)"
@@ -611,7 +611,7 @@ main() {
 
   local binary_path="${INSTALL_DIR}/${binary_name}"
 
-  # ── Local binary discovery (bundled/sideload) ──
+  # -- Local binary discovery (bundled/sideload) --
   local use_local_binary=false
   local local_binary_path=""
   if [[ "$SKIP_LOCAL" != true ]]; then
@@ -621,7 +621,7 @@ main() {
         ok "Local binary verified (--version OK)"
         use_local_binary=true
       else
-        warn "Local binary found but --version check failed — will download instead"
+        warn "Local binary found but --version check failed -- will download instead"
       fi
     fi
   else
@@ -710,10 +710,10 @@ main() {
   say ""
   if [[ "$DRY_RUN" != true ]]; then
     if version_output=$("$binary_path" --version 2>&1); then
-      echo -e "${color_green}✓ browser4-cli installed successfully${color_reset}"
+      echo -e "${color_green}[v] browser4-cli installed successfully${color_reset}"
       say "  Version: $version_output"
     else
-      echo -e "${color_green}✓ Binary installed at: $binary_path${color_reset}"
+      echo -e "${color_green}[v] Binary installed at: $binary_path${color_reset}"
       warn "Could not verify --version (this is normal on first install)"
     fi
   else

@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-  Install browser4-cli — download the native binary and set it up on your PATH.
+  Install browser4-cli -- download the native binary and set it up on your PATH.
 
 .DESCRIPTION
   Detects your OS and CPU architecture, downloads the matching native binary from
@@ -14,8 +14,8 @@
   Download sources (auto-selected by locale; use -Source to override):
     Outside China:  1. GitHub Releases  ->  2. Aliyun OSS
     China mainland: 1. Aliyun OSS        ->  2. GitHub Releases
-    GitHub Releases — https://github.com/platonai/Browser4
-    Aliyun OSS       — https://browser4.oss-cn-beijing.aliyuncs.com
+    GitHub Releases -- https://github.com/platonai/Browser4
+    Aliyun OSS       -- https://browser4.oss-cn-beijing.aliyuncs.com
 
 .PARAMETER Version
   Release version tag to download (e.g. "v4.11.0" or "v0.1.12-cli").
@@ -27,7 +27,7 @@
 
 .PARAMETER Source
   Force a specific download source: "github" or "oss".
-  Default (auto): locale-aware — OSS first in China mainland, GitHub first elsewhere.
+  Default (auto): locale-aware -- OSS first in China mainland, GitHub first elsewhere.
 
 .PARAMETER AddToPath
   Add the install directory to the current user's PATH environment variable.
@@ -46,14 +46,14 @@
 .PARAMETER SkipLocal
   Skip checking for a locally-bundled binary alongside the script.
   By default the script looks for the platform binary in its own directory
-  before downloading — use this to force a fresh download.
+  before downloading -- use this to force a fresh download.
 
 .PARAMETER Locate
   Print detection results (OS, architecture, script location, China locale)
   and exit without installing. Useful for diagnostics.
 
 .EXAMPLE
-  # Quick install — default location, latest version, add to PATH
+  # Quick install -- default location, latest version, add to PATH
   powershell -ExecutionPolicy Bypass -File install-browser4-cli.ps1
 
 .EXAMPLE
@@ -65,7 +65,7 @@
   powershell -ExecutionPolicy Bypass -File install-browser4-cli.ps1 -Source oss -InstallDir "C:\tools\browser4"
 
 .EXAMPLE
-  # Run diagnostics — see what the script detects without installing
+  # Run diagnostics -- see what the script detects without installing
   powershell -ExecutionPolicy Bypass -File install-browser4-cli.ps1 -Locate
 
 .EXAMPLE
@@ -103,9 +103,9 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-# ──────────────────────────────────────────────
-# Script location — find ourselves on disk
-# ──────────────────────────────────────────────
+# ----------------------------------------------
+# Script location -- find ourselves on disk
+# ----------------------------------------------
 
 # $PSScriptRoot is the directory containing this script (PS 3+).
 # Falls back to $MyInvocation for edge cases (dot-sourced, PS 2).
@@ -155,11 +155,11 @@ function Test-LocalBinary {
   }
 }
 
-# ──────────────────────────────────────────────
+# ----------------------------------------------
 # OS detection (compatible with PS 5.1+)
-# ──────────────────────────────────────────────
+# ----------------------------------------------
 
-# Avoid assigning to $IsLinux / $IsWindows / $IsMacOS directly —
+# Avoid assigning to $IsLinux / $IsWindows / $IsMacOS directly --
 # they are read-only automatic variables in PowerShell 7+.
 if ($PSVersionTable.PSVersion.Major -ge 6) {
     $script:OSWin   = $IsWindows
@@ -171,9 +171,9 @@ if ($PSVersionTable.PSVersion.Major -ge 6) {
     $script:OSLinux = $false
 }
 
-# ──────────────────────────────────────────────
+# ----------------------------------------------
 # Helpers
-# ──────────────────────────────────────────────
+# ----------------------------------------------
 
 function Write-Summary {
   param([string]$Message, [string]$Color = "White")
@@ -182,22 +182,22 @@ function Write-Summary {
 
 function Write-Step {
   param([string]$Message)
-  if (-not $Silent) { Write-Host "  » $Message" -ForegroundColor Gray }
+  if (-not $Silent) { Write-Host "  >> $Message" -ForegroundColor Gray }
 }
 
 function Write-Check {
   param([string]$Message)
-  if (-not $Silent) { Write-Host "    ✓ $Message" -ForegroundColor Green }
+  if (-not $Silent) { Write-Host "    [v] $Message" -ForegroundColor Green }
 }
 
 function Write-WarnMsg {
   param([string]$Message)
-  if (-not $Silent) { Write-Host "    ⚠ $Message" -ForegroundColor Yellow }
+  if (-not $Silent) { Write-Host "    [!] $Message" -ForegroundColor Yellow }
 }
 
-# ──────────────────────────────────────────────
+# ----------------------------------------------
 # Detection
-# ──────────────────────────────────────────────
+# ----------------------------------------------
 
 function Get-PlatformKey {
   $arch = if ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture -eq [System.Runtime.InteropServices.Architecture]::Arm64) { "arm64" } else { "x64" }
@@ -246,29 +246,29 @@ function Get-DefaultInstallDir {
   throw "Unsupported OS"
 }
 
-# ──────────────────────────────────────────────
+# ----------------------------------------------
 # China mainland locale detection (zero-network)
-# ──────────────────────────────────────────────
+# ----------------------------------------------
 
 <#
 .SYNOPSIS
   Detect whether the current system is likely in China mainland.
-  Uses only local env vars and .NET APIs — no network calls.
+  Uses only local env vars and .NET APIs -- no network calls.
 #>
 function Test-ChinaLocale {
-  # 1 — Locale env vars
+  # 1 -- Locale env vars
   $lang = $env:LC_ALL, $env:LANG, $env:LC_CTYPE, $env:LC_MESSAGES | Where-Object { $_ } | Select-Object -First 1
   if ($lang -and ($lang -match '^zh_CN' -or $lang -match '^zh-CN' -or $lang -match '^Chinese \(Simplified\)_China')) {
     return $true
   }
 
-  # 2 — TZ env var
+  # 2 -- TZ env var
   $tzEnv = $env:TZ
   if ($tzEnv -and ($tzEnv -match '^Asia/(Shanghai|Chongqing|Urumqi|Harbin)$')) {
     return $true
   }
 
-  # 3 — .NET TimeZoneInfo (works on Windows and Unix PowerShell 7+)
+  # 3 -- .NET TimeZoneInfo (works on Windows and Unix PowerShell 7+)
   try {
     $tzId = [System.TimeZoneInfo]::Local.Id
     if ($tzId -match '^Asia/(Shanghai|Chongqing|Urumqi|Harbin)$') {
@@ -278,7 +278,7 @@ function Test-ChinaLocale {
     # TimeZoneInfo not available (unlikely on PS 5.1+ but guard anyway)
   }
 
-  # 4 — /etc/timezone (PowerShell on Linux/macOS)
+  # 4 -- /etc/timezone (PowerShell on Linux/macOS)
   if (-not $script:OSWin -and (Test-Path '/etc/timezone')) {
     try {
       $tz = Get-Content '/etc/timezone' -Raw -ErrorAction Stop
@@ -286,16 +286,16 @@ function Test-ChinaLocale {
         return $true
       }
     } catch {
-      # Permission or read error — skip
+      # Permission or read error -- skip
     }
   }
 
   return $false
 }
 
-# ──────────────────────────────────────────────
+# ----------------------------------------------
 # Download URLs
-# ──────────────────────────────────────────────
+# ----------------------------------------------
 
 $GITHUB_REPO = "platonai/Browser4"
 $OSS_BASE = "https://browser4.oss-cn-beijing.aliyuncs.com"
@@ -356,7 +356,7 @@ function Invoke-Download {
         Write-Check "Downloaded $( [math]::Round($size / 1MB, 1) ) MB"
         return $true
       } else {
-        Write-WarnMsg "Downloaded file too small ($size bytes) — may be an error page"
+        Write-WarnMsg "Downloaded file too small ($size bytes) -- may be an error page"
         Remove-Item $OutFile -Force -ErrorAction SilentlyContinue
         return $false
       }
@@ -369,9 +369,9 @@ function Invoke-Download {
   }
 }
 
-# ──────────────────────────────────────────────
+# ----------------------------------------------
 # Symlinks
-# ──────────────────────────────────────────────
+# ----------------------------------------------
 
 function New-PlatformLink {
   param([string]$LinkPath, [string]$TargetName, [string]$DisplayName)
@@ -382,7 +382,7 @@ function New-PlatformLink {
     Write-Check "Created symlink: $DisplayName -> $TargetName"
     return $true
   } catch {
-    # Symbolic link failed — try hard link on Windows
+    # Symbolic link failed -- try hard link on Windows
   }
 
   # Try hard link (Windows, same volume)
@@ -393,7 +393,7 @@ function New-PlatformLink {
       Write-Check "Created hard link: $DisplayName -> $TargetName"
       return $true
     } catch {
-      # Hard link also failed — create a .cmd wrapper as last resort
+      # Hard link also failed -- create a .cmd wrapper as last resort
     }
 
     # Last resort: .cmd wrapper that forwards all arguments
@@ -460,9 +460,9 @@ function New-Symlinks {
   }
 }
 
-# ──────────────────────────────────────────────
+# ----------------------------------------------
 # PATH management
-# ──────────────────────────────────────────────
+# ----------------------------------------------
 
 function Add-DirectoryToUserPath {
   param([string]$Dir)
@@ -494,14 +494,14 @@ function Add-DirectoryToUserPath {
   $env:Path = "$env:Path;$Dir"
 }
 
-# ──────────────────────────────────────────────
+# ----------------------------------------------
 # Main
-# ──────────────────────────────────────────────
+# ----------------------------------------------
 
 function Main {
-  Write-Summary "╔════════════════════════════════════════╗" -Color Cyan
-  Write-Summary "║   browser4-cli Installer               ║" -Color Cyan
-  Write-Summary "╚════════════════════════════════════════╝" -Color Cyan
+  Write-Summary "==========================================" -Color Cyan
+  Write-Summary "    browser4-cli Installer" -Color Cyan
+  Write-Summary "==========================================" -Color Cyan
   Write-Summary ""
 
   # Auto-detect China mainland locale when no explicit source is given
@@ -516,9 +516,9 @@ function Main {
   $platformKey = Get-PlatformKey
   $binaryName = Get-BinaryName -PlatformKey $platformKey
 
-  # ── Locate mode: print diagnostics and exit ──
+  # -- Locate mode: print diagnostics and exit --
   if ($Locate) {
-    Write-Summary "─── Locate / diagnostics ───" -Color Cyan
+    Write-Summary "--- Locate / diagnostics ---" -Color Cyan
     Write-Summary ""
     Write-Step "Script dir:       $ScriptDir"
     Write-Step "Platform key:     $platformKey"
@@ -575,7 +575,7 @@ function Main {
 
   $binaryPath = Join-Path $installDir $binaryName
 
-  # ── Local binary discovery (bundled/sideload) ──
+  # -- Local binary discovery (bundled/sideload) --
   $useLocalBinary = $false
   if (-not $SkipLocal) {
     $localBinaryPath = Find-LocalBinary -BinaryName $binaryName
@@ -585,7 +585,7 @@ function Main {
         Write-Check "Local binary verified (--version OK)"
         $useLocalBinary = $true
       } else {
-        Write-WarnMsg "Local binary found but --version check failed — will download instead"
+        Write-WarnMsg "Local binary found but --version check failed -- will download instead"
       }
     }
   } elseif ($SkipLocal) {
@@ -681,10 +681,10 @@ Please check:
   if (-not $DryRun) {
     try {
       $versionOutput = & $binaryPath --version 2>&1
-      Write-Summary "✓ browser4-cli installed successfully" -Color Green
+      Write-Summary "[v] browser4-cli installed successfully" -Color Green
       Write-Summary "  Version: $versionOutput"
     } catch {
-      Write-Summary "✓ Binary installed at: $binaryPath" -Color Green
+      Write-Summary "[v] Binary installed at: $binaryPath" -Color Green
       Write-WarnMsg "Could not verify --version (this is normal on first install)"
     }
   } else {
