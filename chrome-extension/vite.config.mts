@@ -44,7 +44,6 @@ export default defineConfig({
       input: {
         connect: resolve(__dirname, 'src/ui/connect.html'),
         status: resolve(__dirname, 'src/ui/status.html'),
-        demo: resolve(__dirname, 'src/ui/demo.html'),
       },
       output: {
         entryFileNames: 'lib/ui/[name].js',

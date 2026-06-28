@@ -54,23 +54,34 @@ class Browser4Extension {
   // Promise-based message handling is not supported in Chrome: https://issues.chromium.org/issues/40753031
   private _onMessage(message: PageMessage, sender: chrome.runtime.MessageSender, sendResponse: (response: any) => void) {
     switch (message.type) {
-      case 'connectionRequested':
-        this._pendingConnections.create(sender.tab!.id!, message.mcpRelayUrl).then(
+      case 'connectionRequested': {
+        const tabId = sender.tab?.id;
+        if (tabId === undefined) {
+          sendResponse({ success: false, error: 'No tab context for connection request' });
+          return false;
+        }
+        this._pendingConnections.create(tabId, message.mcpRelayUrl).then(
             () => sendResponse({ success: true }),
             (error: any) => sendResponse({ success: false, error: error.message }));
         return true;
+      }
       case 'getTabs':
         this._getTabs().then(
             tabs => sendResponse({ success: true, tabs, currentTabId: sender.tab?.id }),
             (error: any) => sendResponse({ success: false, error: error.message }));
         return true;
       case 'connectToTab': {
+        const senderTabId = sender.tab?.id;
+        if (senderTabId === undefined) {
+          sendResponse({ success: false, error: 'No tab context for connection' });
+          return false;
+        }
         // Token-bypass (no specific pick) falls back to the connect page itself
         // so `ConnectedTabGroup` always has a concrete tab to start from. Both
         // sender.tab and UI-supplied tabs come from chrome.tabs.query / runtime
         // message sender, where `id` is always defined.
-        const selectedTab = (message.tab ?? sender.tab!) as chrome.tabs.Tab & { id: number };
-        this._connectTab(sender.tab!.id!, selectedTab, message.clientName).then(
+        const selectedTab = (message.tab ?? sender.tab) as chrome.tabs.Tab & { id: number };
+        this._connectTab(senderTabId, selectedTab, message.clientName).then(
             () => sendResponse({ success: true }),
             (error: any) => sendResponse({ success: false, error: error.message }));
         return true; // Return true to indicate that the response will be sent asynchronously
@@ -88,7 +99,7 @@ class Browser4Extension {
         } catch (error: any) {
           sendResponse({ success: false, error: error.message });
         }
-        return true;
+        return false; // Response sent synchronously — no need to keep channel open
       case 'keepalive':
         // Connect page pings us every ~20s so receiving this message resets
         // the MV3 service worker idle timer and keeps the relay WebSocket alive.
@@ -99,17 +110,27 @@ class Browser4Extension {
   private async _connectTab(selectorTabId: number, tab: chrome.tabs.Tab & { id: number }, clientName: string | undefined): Promise<void> {
     try {
       await this._cleanupPromise;
-      this._disconnect('Another connection is requested');
 
+      // Take the pending connection BEFORE disconnecting the current group.
+      // This prevents a race where two concurrent _connectTab calls both call
+      // _disconnect (which sees no active group yet), then both proceed to
+      // create their groups — the second one would overwrite _activeGroup and
+      // orphan the first one.  By holding the selectorTabId slot in the
+      // pending map first, only one call succeeds at `take`.
       const connection = await this._pendingConnections.take(selectorTabId);
       if (!connection)
         throw new Error('Pending client connection closed');
 
+      this._disconnect('Another connection is requested');
+
       const group = new ConnectedTabGroup(connection, tab);
       group.onclose = () => {
+        // _disconnect normally clears _activeGroup before calling group.close(),
+        // so this branch only triggers on unexpected closes (e.g. remote end).
         if (this._activeGroup === group) {
           this._activeGroup = undefined;
           this._activeClientName = undefined;
+          debugLog('Active group closed unexpectedly');
         }
       };
       this._activeGroup = group;

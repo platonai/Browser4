@@ -269,6 +269,17 @@ class PulsarSessionManager(
         channel: String? = null,
         capabilities: Map<String, String?>? = null,
     ): ExtensionSessionInfo {
+        // Clean up stale pending connections (older than 2 minutes)
+        val now = System.currentTimeMillis()
+        val staleIterator = pendingExtensionConnections.entries.iterator()
+        while (staleIterator.hasNext()) {
+            val (sid, pending) = staleIterator.next()
+            if (now - pending.createdAt > 120_000) {
+                logger.info("Cleaning up stale pending extension connection | sessionId={}", sid)
+                staleIterator.remove()
+            }
+        }
+
         val normalizedCapabilities = normalizeCapabilities(capabilities = capabilities)
         val sessionId = normalizedCapabilities.getValue(SESSION_ID_CAPABILITY).toString()
 
@@ -567,6 +578,10 @@ class PulsarSessionManager(
         } catch (e: Exception) {
             logger.error("Error closing session {}: {}", sessionId, e.message, e)
         }
+
+        // Clean up extension-related resources for this session
+        extensionBrowsers.remove(sessionId)?.close()
+        pendingExtensionConnections.remove(sessionId)
 
         return true
     }

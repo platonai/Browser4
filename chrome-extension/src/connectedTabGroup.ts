@@ -149,7 +149,8 @@ export class ConnectedTabGroup {
         color ? chrome.action.setBadgeBackgroundColor({ tabId, color }) : Promise.resolve(),
       ]);
     } catch (error: any) {
-      // Ignore errors as the tab may be closed already.
+      // Tab may have been closed already — log and move on.
+      debugLog('Failed to update badge for tab', tabId, ':', error?.message);
     }
   }
 
@@ -179,7 +180,7 @@ export class ConnectedTabGroup {
   // Retry with backoff until it clears (or we give up).
   private async _retryOnDrag(fn: () => Promise<void>): Promise<void> {
     const delays = [0, 100, 200, 400, 800];
-    let lastError: unknown;
+    let lastError: Error | undefined;
     for (const delay of delays) {
       if (delay)
         await new Promise(resolve => setTimeout(resolve, delay));
@@ -189,9 +190,9 @@ export class ConnectedTabGroup {
       } catch (error: any) {
         if (!error?.message?.includes('user may be dragging a tab'))
           throw error;
-        lastError = error;
+        lastError = error instanceof Error ? error : new Error(String(error));
       }
     }
-    throw lastError;
+    throw lastError ?? new Error('Tab drag retry exhausted');
   }
 }

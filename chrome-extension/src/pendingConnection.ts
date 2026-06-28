@@ -62,12 +62,27 @@ export class PendingConnections {
 }
 
 async function openRelayConnection(mcpRelayUrl: string): Promise<RelayConnection> {
+  let socket: WebSocket | undefined;
   try {
-    const socket = new WebSocket(mcpRelayUrl);
+    socket = new WebSocket(mcpRelayUrl);
     await new Promise<void>((resolve, reject) => {
-      socket.onopen = () => resolve();
-      socket.onerror = () => reject(new Error('WebSocket error'));
-      setTimeout(() => reject(new Error('Connection timeout')), 5000);
+      const timer = setTimeout(() => {
+        reject(new Error('Connection timeout'));
+        socket!.close();
+      }, 5000);
+
+      socket.onopen = () => {
+        clearTimeout(timer);
+        socket.onopen = null;
+        socket.onerror = null;
+        resolve();
+      };
+      socket.onerror = (event) => {
+        clearTimeout(timer);
+        socket.onopen = null;
+        socket.onerror = null;
+        reject(new Error('WebSocket error'));
+      };
     });
     return new RelayConnection(socket);
   } catch (error: any) {

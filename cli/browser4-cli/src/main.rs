@@ -1062,7 +1062,7 @@ fn resolve_extension_id() -> String {
     std::env::var("BROWSER4_EXTENSION_ID").unwrap_or_else(|_| {
         // Placeholder — replace with the actual computed ID from the key.
         // This value must match the extension loaded in the user's browser.
-        "ikfibbeflnoaeonekpjdbgnoelffdkop".to_string()
+        "fcagfeimnhdkkkkipkjjolahpakoddeb".to_string()
     })
 }
 

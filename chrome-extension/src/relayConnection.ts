@@ -15,11 +15,9 @@
  */
 
 export function debugLog(...args: unknown[]): void {
-  const enabled = true;
-  if (enabled) {
-    // eslint-disable-next-line no-console
-    console.log('[Extension]', ...args);
-  }
+  if (typeof process !== 'undefined' && process.env?.NODE_ENV === 'production') return;
+  // eslint-disable-next-line no-console
+  console.log('[Extension]', ...args);
 }
 
 import {
@@ -70,9 +68,16 @@ export class RelayConnection {
       notifyTabDetached: tabId => this._notifyTabDetached(tabId),
     };
     this._handler = new ProtocolHandler(context);
-    this._installEventForwarders();
+    // Set onclose BEFORE installing event forwarders so that a socket close
+    // during construction is always handled.
     this._ws.onmessage = this._onMessage.bind(this);
     this._ws.onclose = () => this._onClose();
+    // If the socket is already in a terminal state, clean up immediately.
+    if (this._ws.readyState === WebSocket.CLOSED || this._ws.readyState === WebSocket.CLOSING) {
+      this._onClose();
+      return;
+    }
+    this._installEventForwarders();
   }
 
   // Signals the end of the initial-tab handshake — call after the initial
@@ -83,7 +88,13 @@ export class RelayConnection {
   }
 
   close(message: string): void {
-    this._ws.close(1000, message);
+    // WebSocket.close() throws InvalidStateError if already CLOSING/CLOSED.
+    // Also throws SyntaxError if the reason exceeds 123 UTF-8 bytes.
+    try {
+      this._ws.close(1000, message.slice(0, 123));
+    } catch (_) {
+      // Socket already in terminal state — skip straight to cleanup.
+    }
     // ws.onclose is called asynchronously, so we call it here to avoid forwarding
     // CDP events to the closed connection.
     this._onClose();
@@ -212,6 +223,7 @@ export class RelayConnection {
 
   private _sendError(code: number, message: string): void {
     this._sendMessage({
+      id: null,
       error: {
         code,
         message,
@@ -220,7 +232,11 @@ export class RelayConnection {
   }
 
   private _sendMessage(message: any): void {
-    if (this._ws.readyState === WebSocket.OPEN)
+    if (this._ws.readyState !== WebSocket.OPEN) return;
+    try {
       this._ws.send(JSON.stringify(message));
+    } catch (e) {
+      debugLog('Failed to send WebSocket message:', e);
+    }
   }
 }

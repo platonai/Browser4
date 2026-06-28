@@ -22,18 +22,18 @@ import java.util.concurrent.atomic.AtomicLong
  *
  * The extension accepts commands of the form:
  * ```
- * {"id": 1, "type": "chrome.debugger.attach",    "params": [{"tabId": 5}]}
- * {"id": 2, "type": "chrome.debugger.sendCommand", "params": [{"tabId": 5}, "Page.enable", {}]}
- * {"id": 3, "type": "chrome.tabs.create",         "params": [{"url": "https://..."}]}
- * {"id": 4, "type": "chrome.tabs.remove",         "params": [5]}
+ * {"id": 1, "method": "chrome.debugger.attach",    "params": [{"tabId": 5}]}
+ * {"id": 2, "method": "chrome.debugger.sendCommand", "params": [{"tabId": 5}, "Page.enable", {}]}
+ * {"id": 3, "method": "chrome.tabs.create",         "params": [{"url": "https://..."}]}
+ * {"id": 4, "method": "chrome.tabs.remove",         "params": [5]}
  * ```
  *
  * And emits events of the form:
  * ```
- * {"type": "chrome.tabs.onCreated",  "params": [{...tabInfo...}]}
- * {"type": "chrome.tabs.onRemoved",  "params": [5]}
- * {"type": "chrome.debugger.onEvent","params": [{"tabId": 5}, "Page.loadEventFired", {...}]}
- * {"type": "chrome.debugger.onDetach","params": [{"tabId": 5}]}
+ * {"method": "chrome.tabs.onCreated",  "params": [{...tabInfo...}]}
+ * {"method": "chrome.tabs.onRemoved",  "params": [5]}
+ * {"method": "chrome.debugger.onEvent","params": [{"tabId": 5}, "Page.loadEventFired", {...}]}
+ * {"method": "chrome.debugger.onDetach","params": [{"tabId": 5}]}
  * ```
  *
  * Responses carry the same `id` as the request:
@@ -167,12 +167,12 @@ class ExtensionChromeService(
         }
 
         val id = json.get("id")?.asLong()
-        val type = json.get("type")?.asText()
+        val method = json.get("method")?.asText()
         val params = json.get("params")
 
         when {
-            // Response to a pending request (has id, no type)
-            id != null && type == null -> {
+            // Response to a pending request (has id, no method)
+            id != null && method == null -> {
                 val future = pendingRequests.remove(id)
                 if (future != null) {
                     future.complete(json)
@@ -181,11 +181,11 @@ class ExtensionChromeService(
                 }
             }
 
-            // Event (has type)
-            type != null -> handleEvent(type, params)
+            // Event (has method)
+            method != null -> handleEvent(method, params)
 
             // Unrecognized message
-            else -> logger.debug("Unrecognized extension message (no id or type) | sessionId={} | {}",
+            else -> logger.debug("Unrecognized extension message (no id or method) | sessionId={} | {}",
                 sessionId, text.take(200))
         }
     }
@@ -199,6 +199,7 @@ class ExtensionChromeService(
 
     /** Register a pending future for the given request ID. */
     internal fun registerRequest(id: Long): CompletableFuture<JsonNode> {
+        if (closed.get()) throw ChromeIOException("Extension connection is closed")
         val future = CompletableFuture<JsonNode>()
         pendingRequests[id] = future
         return future
@@ -229,7 +230,7 @@ class ExtensionChromeService(
 
             "chrome.debugger.onEvent" -> {
                 val sourceJson = params?.get(0) ?: return
-                val tabId = sourceJson.get("tabId")?.toString() ?: return
+                val tabId = sourceJson.get("tabId")?.asText() ?: return
                 val cdpMethod = params.get(1)?.asText() ?: return
                 val cdpParams = params.get(2)
                 val cdpParamsJson = if (cdpParams != null) objectMapper.writeValueAsString(cdpParams) else "{}"
@@ -238,7 +239,7 @@ class ExtensionChromeService(
 
             "chrome.debugger.onDetach" -> {
                 val sourceJson = params?.get(0) ?: return
-                val tabId = sourceJson.get("tabId")?.toString() ?: return
+                val tabId = sourceJson.get("tabId")?.asText() ?: return
                 devToolsServices[tabId]?.close()
                 devToolsServices.remove(tabId)
             }
@@ -285,9 +286,13 @@ class ExtensionChromeService(
         }
     }
 
-    private fun buildCommand(id: Long, type: String, params: List<Any?>): String {
-        val paramsJson = objectMapper.writeValueAsString(params)
-        return """{"id":$id,"type":"$type","params":$paramsJson}"""
+    private fun buildCommand(id: Long, method: String, params: List<Any?>): String {
+        val message = mapOf(
+            "id" to id,
+            "method" to method,
+            "params" to params
+        )
+        return objectMapper.writeValueAsString(message)
     }
 
     override fun close() {

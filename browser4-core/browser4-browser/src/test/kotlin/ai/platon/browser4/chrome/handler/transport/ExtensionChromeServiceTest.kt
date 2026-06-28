@@ -90,7 +90,7 @@ class ExtensionChromeServiceTest {
         // Wait for the message to be sent, then inject the response.
         fakeSender.waitForMessage()
         val sent = ObjectMapper().readTree(fakeSender.lastSentMessage)
-        assertEquals("chrome.tabs.create", sent.get("type").asText())
+        assertEquals("chrome.tabs.create", sent.get("method").asText())
         val requestId = sent.get("id").asLong()
 
         service.handleIncomingMessage(
@@ -130,10 +130,10 @@ class ExtensionChromeServiceTest {
     @DisplayName("listTabs returns tabs from event cache")
     fun testListTabs() {
         service.handleIncomingMessage(
-            """{"type":"chrome.tabs.onCreated","params":[{"id":1,"url":"https://a.com","title":"A","type":"page"}]}"""
+            """{"method":"chrome.tabs.onCreated","params":[{"id":1,"url":"https://a.com","title":"A","type":"page"}]}"""
         )
         service.handleIncomingMessage(
-            """{"type":"chrome.tabs.onCreated","params":[{"id":2,"url":"https://b.com","title":"B","type":"page"}]}"""
+            """{"method":"chrome.tabs.onCreated","params":[{"id":2,"url":"https://b.com","title":"B","type":"page"}]}"""
         )
 
         val tabs = service.listTabs()
@@ -150,7 +150,7 @@ class ExtensionChromeServiceTest {
     @DisplayName("closeTab sends chrome.tabs.remove and removes from cache")
     fun testCloseTab() {
         service.handleIncomingMessage(
-            """{"type":"chrome.tabs.onCreated","params":[{"id":55,"url":"https://x.com","type":"page"}]}"""
+            """{"method":"chrome.tabs.onCreated","params":[{"id":55,"url":"https://x.com","type":"page"}]}"""
         )
         assertEquals(1, service.listTabs().size)
 
@@ -161,7 +161,7 @@ class ExtensionChromeServiceTest {
 
         fakeSender.waitForMessage()
         val sent = ObjectMapper().readTree(fakeSender.lastSentMessage)
-        assertEquals("chrome.tabs.remove", sent.get("type").asText())
+        assertEquals("chrome.tabs.remove", sent.get("method").asText())
         val requestId = sent.get("id").asLong()
 
         service.handleIncomingMessage("""{"id":$requestId,"result":{}}""")
@@ -188,7 +188,7 @@ class ExtensionChromeServiceTest {
     @DisplayName("createDevTools sends chrome.debugger.attach")
     fun testCreateDevTools() {
         service.handleIncomingMessage(
-            """{"type":"chrome.tabs.onCreated","params":[{"id":10,"url":"https://dev.com","type":"page"}]}"""
+            """{"method":"chrome.tabs.onCreated","params":[{"id":10,"url":"https://dev.com","type":"page"}]}"""
         )
 
         val future = CompletableFuture.supplyAsync {
@@ -198,7 +198,7 @@ class ExtensionChromeServiceTest {
 
         fakeSender.waitForMessage()
         val sent = ObjectMapper().readTree(fakeSender.lastSentMessage)
-        assertEquals("chrome.debugger.attach", sent.get("type").asText())
+        assertEquals("chrome.debugger.attach", sent.get("method").asText())
         val requestId = sent.get("id").asLong()
 
         service.handleIncomingMessage("""{"id":$requestId,"result":{}}""")
@@ -258,12 +258,12 @@ class ExtensionChromeServiceTest {
     @DisplayName("chrome.tabs.onRemoved removes tab from cache")
     fun testTabRemovedEvent() {
         service.handleIncomingMessage(
-            """{"type":"chrome.tabs.onCreated","params":[{"id":33,"url":"https://gone.com","type":"page"}]}"""
+            """{"method":"chrome.tabs.onCreated","params":[{"id":33,"url":"https://gone.com","type":"page"}]}"""
         )
         assertEquals(1, service.listTabs().size)
 
         service.handleIncomingMessage(
-            """{"type":"chrome.tabs.onRemoved","params":[33]}"""
+            """{"method":"chrome.tabs.onRemoved","params":[33]}"""
         )
         assertEquals(0, service.listTabs().size)
     }
@@ -273,7 +273,7 @@ class ExtensionChromeServiceTest {
     fun testDebuggerEventRouting() {
         // Create a tab
         service.handleIncomingMessage(
-            """{"type":"chrome.tabs.onCreated","params":[{"id":7,"url":"https://debug.com","type":"page"}]}"""
+            """{"method":"chrome.tabs.onCreated","params":[{"id":7,"url":"https://debug.com","type":"page"}]}"""
         )
 
         // Attach debugger
@@ -289,7 +289,7 @@ class ExtensionChromeServiceTest {
 
         // Send a CDP event for this tab
         service.handleIncomingMessage(
-            """{"type":"chrome.debugger.onEvent","params":[{"tabId":7},"Page.loadEventFired",{"timestamp":123}]}"""
+            """{"method":"chrome.debugger.onEvent","params":[{"tabId":7},"Page.loadEventFired",{"timestamp":123}]}"""
         )
         // Event dispatched without error — DevTools still open
         assertTrue(devTools.isOpen)
@@ -299,7 +299,7 @@ class ExtensionChromeServiceTest {
     @DisplayName("chrome.debugger.onDetach closes the tab's DevTools")
     fun testDebuggerDetachEvent() {
         service.handleIncomingMessage(
-            """{"type":"chrome.tabs.onCreated","params":[{"id":8,"url":"https://detach.com","type":"page"}]}"""
+            """{"method":"chrome.tabs.onCreated","params":[{"id":8,"url":"https://detach.com","type":"page"}]}"""
         )
         val attachFuture = CompletableFuture.supplyAsync {
             val tab = BrowserTab().apply { id = "8" }
@@ -312,7 +312,7 @@ class ExtensionChromeServiceTest {
         assertTrue(devTools.isOpen)
 
         service.handleIncomingMessage(
-            """{"type":"chrome.debugger.onDetach","params":[{"tabId":8}]}"""
+            """{"method":"chrome.debugger.onDetach","params":[{"tabId":8}]}"""
         )
         assertFalse(devTools.isOpen)
     }
@@ -321,7 +321,7 @@ class ExtensionChromeServiceTest {
     @DisplayName("extension.initialized populates tab cache from array")
     fun testExtensionInitialized() {
         service.handleIncomingMessage(
-            """{"type":"extension.initialized","params":[
+            """{"method":"extension.initialized","params":[
                 {"id":1,"url":"https://a.com","title":"A"},
                 {"id":2,"url":"https://b.com","title":"B"}
             ]}"""

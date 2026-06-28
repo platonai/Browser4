@@ -12,6 +12,8 @@ import ai.platon.pulsar.browser.protocol.MethodInvocation
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
 import org.slf4j.LoggerFactory
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -68,16 +70,19 @@ internal class ExtensionDevToolsService(
         val id = parent.nextId()
         val future = parent.registerRequest(id)
 
-        // Wrap in extension protocol: {id, type, params: [{tabId}, method, params]}
+        // Wrap in extension protocol: {id, method, params: [{tabId}, method, params]}
         val cdpParams = params ?: emptyMap()
         val extParams = listOf(mapOf("tabId" to tabIdInt), method, cdpParams)
-        val paramsJson = objectMapper.writeValueAsString(extParams)
-        val message = """{"id":$id,"type":"chrome.debugger.sendCommand","params":$paramsJson}"""
+        val message = objectMapper.writeValueAsString(mapOf(
+            "id" to id,
+            "method" to "chrome.debugger.sendCommand",
+            "params" to extParams
+        ))
 
         messageSender.sendMessage(message)
 
         val response: JsonNode = try {
-            future.get(30, TimeUnit.SECONDS)
+            withContext(Dispatchers.IO) { future.get(30, TimeUnit.SECONDS) }
         } catch (e: Exception) {
             parent.cancelRequest(id)
             throw ChromeRPCException("CDP command '$method' timed out for tab ${tab.id}: ${e.message}", e)
@@ -155,7 +160,10 @@ internal class ExtensionDevToolsService(
         if (!isOpen) return
 
         try {
-            val cdpMessage = """{"method":"$cdpMethod","params":$cdpParamsJson}"""
+            val cdpMessage = objectMapper.writeValueAsString(mapOf(
+                "method" to cdpMethod,
+                "params" to objectMapper.readTree(cdpParamsJson)
+            ))
             eventDispatcher.accept(cdpMessage)
         } catch (e: Exception) {
             logger.warn("Failed to deliver CDP event {} for tab {}: {}", cdpMethod, tab.id, e.message)
@@ -179,18 +187,20 @@ internal class ExtensionDevToolsService(
         eventDispatcher.close()
 
         // Best-effort detach via the shared connection
-        try {
-            val detachId = parent.nextId()
-            val detachFuture = parent.registerRequest(detachId)
-            val tabIdInt = tab.id.toIntOrNull()
-            if (tabIdInt != null && messageSender.isOpen) {
-                val paramsJson = objectMapper.writeValueAsString(listOf(mapOf("tabId" to tabIdInt)))
-                messageSender.sendMessage(
-                    """{"id":$detachId,"type":"chrome.debugger.detach","params":$paramsJson}"""
-                )
+        val tabIdInt = tab.id.toIntOrNull()
+        if (tabIdInt != null && messageSender.isOpen) {
+            try {
+                val detachId = parent.nextId()
+                val detachFuture = parent.registerRequest(detachId)
+                val message = objectMapper.writeValueAsString(mapOf(
+                    "id" to detachId,
+                    "method" to "chrome.debugger.detach",
+                    "params" to listOf(mapOf("tabId" to tabIdInt))
+                ))
+                messageSender.sendMessage(message)
                 detachFuture.get(5, TimeUnit.SECONDS)
-            }
-        } catch (_: Exception) { /* best effort */ }
+            } catch (_: Exception) { /* best effort */ }
+        }
 
         closeLatch.countDown()
     }
