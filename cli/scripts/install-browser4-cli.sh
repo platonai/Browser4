@@ -325,7 +325,7 @@ get_download_urls() {
   else
     # Use 'latest' redirect for GitHub, 'latest' symlink for OSS
     local gh_url="https://github.com/${GITHUB_REPO}/releases/latest/download/${binary_name}"
-    local oss_url="${OSS_BASE}/releases/download/latest/${binary_name}"
+    local oss_url="${OSS_BASE}/releases/latest/download/${binary_name}"
   fi
 
   case "$SOURCE" in
