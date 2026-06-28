@@ -2258,6 +2258,17 @@ async fn handle_snapshot(
     json_field("page_title", json!(title));
     json_field("snapshot_path", json!(out_path.display().to_string()));
 
+    // Detect whether filtering flags are already in use
+    let has_filter =
+        tool_params.get("selector").and_then(|v| v.as_str()).map_or(false, |s| !s.is_empty())
+        || tool_params.get("viewports").and_then(|v| v.as_str()).map_or(false, |s| !s.is_empty())
+        || tool_params.get("interactive").and_then(|v| v.as_bool()).unwrap_or(false)
+        || tool_params.get("depth").and_then(|v| v.as_str()).map_or(false, |s| !s.is_empty())
+        || tool_params.get("limit").and_then(|v| v.as_str()).map_or(false, |s| !s.is_empty());
+
+    let snap_len = snap.len();
+    let snap_kb = snap_len / 1024;
+
     if raw {
         // Print snapshot content directly to stdout for piping.
         // Safe to use println! directly since --raw explicitly requests raw output.
@@ -2268,6 +2279,20 @@ async fn handle_snapshot(
         cli_println!("- Page Title: {}", title);
         cli_println!("### Snapshot");
         cli_println!("[Snapshot]({})", out_path.display());
+        cli_println!("- Snapshot size: {} KB ({} nodes/lines)", snap_kb, snap.lines().count());
+    }
+
+    // Print a tip for large snapshots when no filtering flags are in use
+    if snap_len > 10_240 && !has_filter {
+        eprintln!(
+            "💡 Tip: Snapshot is large ({} KB). To focus the output, try:\n\
+               -s, --selector <CSS>     Scope to a CSS selector\n\
+               --viewport, -vp <N>       Capture a specific viewport section\n\
+               -i, --interactive        Only show interactive elements\n\
+               -l, --limit <N>           Cap the number of nodes\n\
+               -d, --depth <N>           Limit tree depth",
+            snap_kb
+        );
     }
     Ok(())
 }
@@ -2503,10 +2528,20 @@ async fn handle_get(
     // The MCP response serialises the tool result to a string.
     // A JSON `null` result arrives as the literal string "null".
     // An empty-string result arrives as "".
-    if result == "null" {
-        cli_println!("null");
-    } else if result.is_empty() {
-        cli_println!("\"\"");
+    // An empty array `[]` means no elements matched (get all variants).
+    let empty_result = result == "null" || result.is_empty() || result.trim() == "[]";
+
+    if empty_result {
+        let selector = tool_params
+            .get("selector")
+            .and_then(|v| v.as_str())
+            .or_else(|| tool_params.get("ref").and_then(|v| v.as_str()))
+            .unwrap_or(":root");
+        cli_println!("{}", result);
+        cli_println!(
+            "No elements matched \"{}\". Try `domsnapshot inspect \"{}\"` to discover valid selectors, or run `domsnapshot` to see the full DOM tree.",
+            selector, selector
+        );
     } else {
         cli_println!("{}", result);
     }
@@ -2860,10 +2895,15 @@ async fn handle_dom_snapshot_get(
     .await?;
 
     // Output the result
-    if result == "null" {
-        cli_println!("null");
-    } else if result.is_empty() {
-        cli_println!("\"\"");
+    let empty_result = result == "null" || result.is_empty() || result.trim() == "[]";
+
+    if empty_result {
+        let display_selector = if selector.is_empty() { ":root" } else { selector };
+        cli_println!("{}", result);
+        cli_println!(
+            "No elements matched \"{}\". Try `domsnapshot inspect \"{}\"` to discover valid selectors, or run `domsnapshot` to see the full DOM tree.",
+            display_selector, display_selector
+        );
     } else {
         cli_println!("{}", result);
     }
