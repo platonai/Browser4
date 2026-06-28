@@ -175,6 +175,16 @@ See [TESTING.md](docs/TESTING.md) for details and trade-offs.
 - Maven profile switches in root `pom.xml` are property-driven: `-DrunITs=true`, `-DrunE2ETests=true`, `-DrunCoreTests=true`, `-DrunRestTests=true`
 - Use `bin/test.ps1 mock-site -Dmock.site.port=18080` to launch `MockSiteBoot` from `browser4-tests/browser4-rest-tests`; use `MockSiteLauncher` from `browser4-tests/browser4-tests-common` for in-process startup
 - `cli/browser4-cli/tests/e2e.rs`: all e2e scenarios must start and depend on Browser4.jar; this includes single-scenario runs via `--scenario`.
+- **E2E Test Efficiency:** Run `cargo test --test e2e -- --help` to see all filtering options for running e2e tests efficiently. Key flags:
+    - `--scenario=<pattern>` — run only matching scenarios (supports `*` and `?` globs)
+    - `--group=<name>` — run scenarios in a specific group (repeatable)
+    - `--level=BASIC` — default; use `EXTENDED` or `all` for longer edge-case tests
+    - `--fail-fast` — stop after the first failure
+    - `--failed` — rerun only scenarios that failed in the previous run
+    - `--list` / `--list-groups` — discover available scenarios and groups without running anything
+    - `--enable-install-scenario` / `--enable-batch-scenario` — opt into heavier install/batch tests
+    - `--force-rebuild-bundle` — force local Maven + runtime bundle rebuild (skip cached artifacts)
+    - `--force-remote-bundle` — download a pre-built bundle from remote releases instead of building locally
 - `.github/workflows/ci.yml` builds with `all-main-modules`, starts the Dockerized app on port `8182`, runs `cargo test` in `cli/browser4-cli`, and keeps the main Maven test pass limited to fast/unit-style tags by excluding `Slow`, `Heavy`, `Integration`, `E2E`, `SDK`, `Requires*`, and `ManualOnly`.
 
 ### Test Location

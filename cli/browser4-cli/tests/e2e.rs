@@ -84,6 +84,8 @@ const ROOT_SEARCH_START_DIR_ENV: &str = "BROWSER4_CLI_INVOKE_DIR";
 const USE_MAVEN_STARTUP_ENV: &str = "BROWSER4_E2E_USE_MAVEN_STARTUP";
 const FORCE_REMOTE_BUNDLE_ENV: &str = "BROWSER4_E2E_FORCE_REMOTE_BUNDLE";
 const FORCE_REMOTE_BUNDLE_CLI_ENV: &str = "BROWSER4_CLI_FORCE_REMOTE_BUNDLE";
+const FORCE_REBUILD_BUNDLE_ENV: &str = "BROWSER4_E2E_FORCE_REBUILD_BUNDLE";
+const FORCE_REBUILD_BUNDLE_CLI_ENV: &str = "BROWSER4_CLI_FORCE_REBUILD_BUNDLE";
 const LAST_FAILED_SCENARIOS_FILE: &str = "last-failed-scenarios.json";
 
 // ---------------------------------------------------------------------------
@@ -141,6 +143,18 @@ fn use_maven_startup_for_local_server() -> bool {
 
 fn force_remote_bundle_for_local_server() -> bool {
     std::env::var(FORCE_REMOTE_BUNDLE_ENV)
+        .ok()
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(false)
+}
+
+fn force_rebuild_bundle_for_local_server() -> bool {
+    std::env::var(FORCE_REBUILD_BUNDLE_ENV)
         .ok()
         .map(|value| {
             matches!(
@@ -2865,16 +2879,23 @@ fn ensure_browser4_runtime_bundle_prebuilt() {
             .map(|m| m.len() > 4_096)
             .unwrap_or(false);
 
-    if jar_valid {
+    if jar_valid && !force_rebuild_bundle_for_local_server() {
         eprintln!(
             "[e2e pre-build] Browser4Bundle.jar found at {}; skipping Maven.",
             jar_path.display()
         );
     } else {
-        eprintln!(
-            "[e2e pre-build] Browser4Bundle.jar not found. Running Maven package \
-             (this may take a while on the first run)..."
-        );
+        if force_rebuild_bundle_for_local_server() {
+            eprintln!(
+                "[e2e pre-build] --force-rebuild-bundle is active; \
+                 forcing Maven rebuild of Browser4Bundle.jar ..."
+            );
+        } else {
+            eprintln!(
+                "[e2e pre-build] Browser4Bundle.jar not found. Running Maven package \
+                 (this may take a while on the first run)..."
+            );
+        }
         let mvn = resolve_maven_program_for_root(&root);
         let started = Instant::now();
         let status = Command::new(&mvn)
@@ -2954,7 +2975,7 @@ fn ensure_browser4_runtime_bundle_prebuilt() {
             .unwrap_or(false)
         && java_path.is_file();
 
-    if has_bundle {
+    if has_bundle && !force_rebuild_bundle_for_local_server() {
         eprintln!(
             "[e2e pre-build] Runtime bundle already assembled at {}.",
             work_dir.display()
@@ -2971,6 +2992,13 @@ fn ensure_browser4_runtime_bundle_prebuilt() {
         return;
     }
 
+    if force_rebuild_bundle_for_local_server() {
+        eprintln!(
+            "[e2e pre-build] --force-rebuild-bundle is active; \
+             forcing runtime bundle assembly at {}.",
+            work_dir.display()
+        );
+    }
     eprintln!(
         "[e2e pre-build] Assembling runtime bundle (jdeps + jlink; \
          may take ~30–60 s)..."
@@ -3090,6 +3118,9 @@ fn create_e2e_test_resources() -> E2ETestResources {
     let mut extra_env = Vec::new();
     if force_remote_bundle_for_local_server() {
         extra_env.push((FORCE_REMOTE_BUNDLE_CLI_ENV.to_string(), "1".to_string()));
+    }
+    if force_rebuild_bundle_for_local_server() {
+        extra_env.push((FORCE_REBUILD_BUNDLE_CLI_ENV.to_string(), "1".to_string()));
     }
     // Tag the backend JVM so process-management tooling can distinguish
     // test-server instances from production ones.
@@ -3794,6 +3825,7 @@ struct RunOptions {
     enable_batch_scenario: bool,
     enable_install_scenario: bool,
     force_remote_bundle: bool,
+    force_rebuild_bundle: bool,
     /// When non-empty, only scenarios matching at least one of these group
     /// names are selected.  An empty Vec means no group filter is applied.
     groups: Vec<String>,
@@ -3825,6 +3857,12 @@ Options:
   --force-remote-bundle        Download the Browser4 runtime bundle from a
                                remote release instead of building locally
                                (sets BROWSER4_CLI_FORCE_REMOTE_BUNDLE=1).
+  --force-rebuild-bundle       Force a local rebuild of the Browser4 runtime
+                               bundle, even if already present (skips the
+                               "already exists" shortcuts for Maven and the
+                               runtime bundle assembly).  Only applies when
+                               running a local build (ignored when
+                               --force-remote-bundle is active).
   --level=<BASIC|EXTENDED|all> Max scenario level to run (default: BASIC).
                                Use EXTENDED or all to include edge-case and
                                longer-running tests.
@@ -3840,6 +3878,11 @@ Environment variables:
                                bundle from GitHub (equiv. --force-remote-bundle)
   BROWSER4_CLI_FORCE_REMOTE_BUNDLE Set to 1/true/yes/on in the CLI process
                                to skip local Maven/jlink build
+  BROWSER4_E2E_FORCE_REBUILD_BUNDLE Set to 1/true/yes/on to force Maven and
+                                   runtime bundle rebuild (equiv.
+                                   --force-rebuild-bundle)
+  BROWSER4_CLI_FORCE_REBUILD_BUNDLE Set to 1/true/yes/on in the CLI process
+                                   to force local bundle rebuild
 "#;
 
 fn parse_scenario_limit(raw: &str) -> usize {
@@ -3895,6 +3938,7 @@ fn parse_run_options() -> RunOptions {
     let mut enable_batch_scenario = false;
     let mut enable_install_scenario = false;
     let mut force_remote_bundle = false;
+    let mut force_rebuild_bundle = false;
     let mut groups: Vec<String> = Vec::new();
     let mut max_level = scenarios::ScenarioLevel::Basic;
 
@@ -3906,6 +3950,11 @@ fn parse_run_options() -> RunOptions {
 
         if arg == "--force-remote-bundle" {
             force_remote_bundle = true;
+            continue;
+        }
+
+        if arg == "--force-rebuild-bundle" {
+            force_rebuild_bundle = true;
             continue;
         }
 
@@ -4036,6 +4085,7 @@ fn parse_run_options() -> RunOptions {
         enable_batch_scenario,
         enable_install_scenario,
         force_remote_bundle,
+        force_rebuild_bundle,
         groups,
         max_level,
     }
@@ -4409,6 +4459,9 @@ fn main() {
     // create_e2e_test_resources() reads it.
     if run_options.force_remote_bundle {
         std::env::set_var(FORCE_REMOTE_BUNDLE_ENV, "1");
+    }
+    if run_options.force_rebuild_bundle {
+        std::env::set_var(FORCE_REBUILD_BUNDLE_ENV, "1");
     }
 
     // Pre-build the Browser4 runtime bundle if it is missing so the first

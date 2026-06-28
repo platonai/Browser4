@@ -86,6 +86,11 @@ const ROOT_SEARCH_START_DIR_ENV: &str = "BROWSER4_CLI_INVOKE_DIR";
 /// a local Browser4 repository checkout.  Useful in environments where
 /// Maven / jlink are unavailable or unreliable (e.g. CI behind a proxy).
 const FORCE_REMOTE_BUNDLE_ENV: &str = "BROWSER4_CLI_FORCE_REMOTE_BUNDLE";
+/// When set to `1`, `true`, `yes`, or `on`, forces the CLI to rebuild the
+/// Browser4 runtime bundle from source even if the build artifacts already
+/// exist.  Useful in development when the source code has changed but cached
+/// artifacts appear up-to-date.
+const FORCE_REBUILD_BUNDLE_ENV: &str = "BROWSER4_CLI_FORCE_REBUILD_BUNDLE";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RuntimeBundleArchiveKind {
@@ -1316,6 +1321,19 @@ fn normalize_release_tag(tag: Option<&str>) -> Option<String> {
 /// where Maven or jlink dependencies are unavailable.
 fn should_force_remote_bundle() -> bool {
     match env::var(FORCE_REMOTE_BUNDLE_ENV).ok().as_deref() {
+        Some("1" | "true" | "TRUE" | "yes" | "YES" | "on" | "ON") => true,
+        _ => false,
+    }
+}
+
+/// Check whether `BROWSER4_CLI_FORCE_REBUILD_BUNDLE` is set.
+///
+/// When this flag is active the CLI forces a local Maven/jlink rebuild of
+/// the Browser4 runtime bundle, even if the build artifacts already exist.
+/// This is useful when the source changed but the timestamps/cache make
+/// the existing artifacts appear up-to-date.
+fn should_force_rebuild_bundle() -> bool {
+    match env::var(FORCE_REBUILD_BUNDLE_ENV).ok().as_deref() {
         Some("1" | "true" | "TRUE" | "yes" | "YES" | "on" | "ON") => true,
         _ => false,
     }
@@ -3847,13 +3865,16 @@ async fn try_build_local_runtime_bundle(
         .join("bin")
         .join(browser4_java_executable_name());
 
-    // Fast path: runtime bundle already assembled — nothing to do.
-    if let Some(runtime) = existing_runtime_bundle(&lib_dir, &java_path, &work_dir) {
-        eprintln!(
-            "Using existing local Browser4 runtime bundle at {}.",
-            work_dir.display()
-        );
-        return Ok(Some(runtime));
+    // Fast path: runtime bundle already assembled — nothing to do
+    // (unless --force-rebuild-bundle is active).
+    if !should_force_rebuild_bundle() {
+        if let Some(runtime) = existing_runtime_bundle(&lib_dir, &java_path, &work_dir) {
+            eprintln!(
+                "Using existing local Browser4 runtime bundle at {}.",
+                work_dir.display()
+            );
+            return Ok(Some(runtime));
+        }
     }
 
     let build_script = bundle_module_dir.join(platform.build_script_name());
@@ -3867,8 +3888,9 @@ async fn try_build_local_runtime_bundle(
 
     // Step 1 – ensure the fat JAR exists.  Skip Maven when the JAR from a
     // previous build is still present; this saves 10–30 s on every invocation
-    // when only the runtime assembly step needs to be re-run.
-    if maven_jar_exists(&bundle_module_dir) {
+    // when only the runtime assembly step needs to be re-run.  When
+    // --force-rebuild-bundle is active, always rebuild regardless.
+    if !should_force_rebuild_bundle() && maven_jar_exists(&bundle_module_dir) {
         eprintln!(
             "Using existing Browser4 bundle JAR at {}; skipping Maven package.",
             bundle_module_dir
@@ -3877,10 +3899,17 @@ async fn try_build_local_runtime_bundle(
                 .display()
         );
     } else {
-        eprintln!(
-            "Building local Browser4 runtime bundle from {} ...",
-            bundle_module_dir.display()
-        );
+        if should_force_rebuild_bundle() {
+            eprintln!(
+                "[daemon] --force-rebuild-bundle is active; \
+                 forcing Maven rebuild of Browser4Bundle.jar ..."
+            );
+        } else {
+            eprintln!(
+                "Building local Browser4 runtime bundle from {} ...",
+                bundle_module_dir.display()
+            );
+        }
         let mvn_program = resolve_maven_program(root);
         let mvn_status = tokio::task::spawn_blocking({
             let mvn_program = mvn_program.clone();

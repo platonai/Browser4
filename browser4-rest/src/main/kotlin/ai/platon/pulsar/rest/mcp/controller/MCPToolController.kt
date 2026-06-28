@@ -715,9 +715,14 @@ class MCPToolController(
         evaluate.exception?.let { exception ->
             throw IllegalArgumentException("$toolName failed: ${exception.message} help: ${exception.help}")
         }
-        // Distinguish JS null (className == "null") from Kotlin Unit (no meaningful return value).
-        // Both arrive as evaluate.value == null, but only JS null should produce visible output.
-        return evaluate.value?.toString() ?: if (evaluate.className == "null") "null" else ""
+        // Distinguish JS null (className == "null") from JS undefined (className == "undefined")
+        // and Kotlin Unit (no meaningful return value).
+        // All three arrive as evaluate.value == null, but only JS null should produce visible output.
+        return evaluate.value?.toString() ?: when (evaluate.className) {
+            "null" -> "null"
+            "undefined" -> "undefined"
+            else -> ""
+        }
     }
 
     private fun Any?.toAnyMap(): Map<String, Any?>? {
@@ -943,8 +948,9 @@ class MCPToolController(
             if (exception != null) {
                 ResponseEntity.ok(errorResponse("${request.tool} failed: ${exception.message} help: ${exception.help}"))
             } else {
-                // Distinguish JS null (className == "null") from Kotlin Unit (no meaningful return value).
-                // Both arrive as evaluate.value == null, but only JS null should produce visible output.
+                // Distinguish JS null (className == "null") from JS undefined (className == "undefined")
+                // and Kotlin Unit (no meaningful return value).
+                // All three arrive as evaluate.value == null, but only JS null should produce visible output.
                 ResponseEntity.ok(textResponse(evaluate.value?.toString() ?: if (evaluate.className == "null") "null" else ""))
             }
         } catch (e: Exception) {

@@ -193,6 +193,71 @@ fn resolve_text_and_ref(map: &HashMap<String, Value>) -> (String, Option<String>
 }
 
 // ---------------------------------------------------------------------------
+// Page-load wait helpers
+// ---------------------------------------------------------------------------
+
+/// Build the JavaScript expression for `wait --load=<strategy>`.
+///
+/// Supported strategies:
+/// - `domcontentloaded` — DOM is parsed, scripts executed
+/// - `load` — all static resources (images, stylesheets, etc.) have loaded
+/// - `networkidle` — static resources loaded AND no XHR/fetch activity for
+///   at least 500 ms
+///
+/// Returns an error for unknown strategy names so the CLI can fail early.
+pub fn load_strategy_js(load: &str) -> Result<String, String> {
+    match load.to_ascii_lowercase().as_str() {
+        "domcontentloaded" => {
+            // readyState transitions: loading → interactive (DOMContentLoaded)
+            // → complete (load).  Waiting for "not loading" covers both
+            // interactive and complete — i.e. DOMContentLoaded has fired.
+            Ok("document.readyState !== 'loading'".to_string())
+        }
+        "load" => {
+            // The load event has fired: all stylesheets, images, fonts, and
+            // other sub-resources have finished downloading.
+            Ok("document.readyState === 'complete'".to_string())
+        }
+        "networkidle" => Ok(NETWORK_IDLE_JS.to_string()),
+        other => Err(format!(
+            "invalid --load value: '{other}'. Expected one of: networkidle, domcontentloaded, load"
+        )),
+    }
+}
+
+/// JavaScript expression that monkey-patches `fetch` and `XMLHttpRequest`
+/// to track in-flight requests, then waits until all of the following are true:
+///
+/// 1. `document.readyState === 'complete'` (static resources loaded)
+/// 2. No pending XHR / fetch requests
+/// 3. At least 500 ms have passed since the last request completed
+///
+/// The tracking is installed once (via the `window.__b4_ni` sentinel) and
+/// reused across polling iterations.
+const NETWORK_IDLE_JS: &str = r#"(function(){
+var s=window.__b4_ni;
+if(!s){
+s=window.__b4_ni={p:0,t:Date.now()};
+var _f=window.fetch;
+window.fetch=function(){
+s.p++;s.t=Date.now();
+return _f.apply(this,arguments).finally(function(){s.p--;s.t=Date.now()})
+};
+var XHR=window.XMLHttpRequest;
+window.XMLHttpRequest=function(){
+var x=new XHR,_s=x.send;
+x.send=function(){
+s.p++;s.t=Date.now();
+x.addEventListener('loadend',function(){s.p--;s.t=Date.now()});
+return _s.apply(this,arguments)
+};
+return x
+}
+}
+return document.readyState==='complete'&&s.p===0&&(Date.now()-s.t)>=500
+})()"#;
+
+// ---------------------------------------------------------------------------
 // Command definitions (static)
 // ---------------------------------------------------------------------------
 
@@ -848,8 +913,9 @@ pub fn all_commands() -> Vec<CommandDef> {
             options: &[
                 OptionDef { name: "text", description: "Wait until this text appears on the page", is_bool: false, short: None },
                 OptionDef { name: "url", description: "Wait until the URL matches this glob pattern", is_bool: false, short: None },
-                OptionDef { name: "load", description: "Wait for page load state: networkidle or domcontentloaded", is_bool: false, short: None },
+                OptionDef { name: "load", description: "Wait for page load state: networkidle, domcontentloaded, or load", is_bool: false, short: None },
                 OptionDef { name: "fn", description: "Wait until this JavaScript expression returns true", is_bool: false, short: None },
+                OptionDef { name: "timeout", description: "Maximum time to wait in milliseconds (default: 30000)", is_bool: false, short: None },
             ],
             tool_name_fn: |args| {
                 if get_opt_str(args, "text").is_some() || get_opt_str(args, "fn").is_some() || get_opt_str(args, "load").is_some() {
@@ -863,21 +929,24 @@ pub fn all_commands() -> Vec<CommandDef> {
                 }
             },
             tool_params_fn: |args| {
+                // Resolve --timeout, defaulting to 30 000 ms
+                let timeout_millis: i64 = get_opt_str(args, "timeout")
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(30000);
+
                 if let Some(text) = get_opt_str(args, "text") {
                     let escaped = serde_json::to_string(text)
                         .unwrap_or_else(|_| format!("{:?}", text));
                     let expr = format!("document.body.innerText.includes({})", escaped);
-                    json!({ "pageFunction": expr, "timeoutMillis": 30000 })
+                    json!({ "pageFunction": expr, "timeoutMillis": timeout_millis })
                 } else if let Some(fn_expr) = get_opt_str(args, "fn") {
-                    json!({ "pageFunction": fn_expr, "timeoutMillis": 30000 })
+                    json!({ "pageFunction": fn_expr, "timeoutMillis": timeout_millis })
                 } else if let Some(load) = get_opt_str(args, "load") {
-                    let expr = match load.to_ascii_lowercase().as_str() {
-                        "domcontentloaded" => "document.readyState !== 'loading'",
-                        _ => "document.readyState === 'complete'",
-                    };
-                    json!({ "pageFunction": expr, "timeoutMillis": 30000 })
+                    let expr = load_strategy_js(load)
+                        .unwrap_or_else(|e| panic!("{e}"));
+                    json!({ "pageFunction": expr, "timeoutMillis": timeout_millis })
                 } else if let Some(url) = get_opt_str(args, "url") {
-                    json!({ "url": url, "timeoutMillis": 30000 })
+                    json!({ "url": url, "timeoutMillis": timeout_millis })
                 } else if let Some(millis) = get_number_value(args, "target") {
                     json!({ "millis": millis })
                 } else {
@@ -1524,7 +1593,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         // ---- Server Admin ----
         CommandDef {
             name: "upgrade",
-            description: "Upgrade Browser4 to the latest version (or a specified release tag)",
+            description: "Upgrade browser4-cli and the Browser4 runtime to the latest version (or a specified release tag). Uses npm when available, otherwise the platform install script",
             category: Category::Install,
             hidden: false,
             batch_supported: false,
@@ -2979,7 +3048,9 @@ mod tests {
         assert_eq!((cmd.tool_name_fn)(&args), "wait_for_function");
         let params = (cmd.tool_params_fn)(&args);
         let func = params["pageFunction"].as_str().unwrap();
-        assert_eq!(func, "document.readyState === 'complete'");
+        // networkidle now uses a tracking expression, not just readyState
+        assert!(func.contains("__b4_ni"));
+        assert!(func.contains("readyState"));
         assert_eq!(params["timeoutMillis"], json!(30000));
     }
 
@@ -3622,5 +3693,166 @@ mod tests {
         assert!(args_str.contains("-expires 1h"));
         assert!(args_str.contains("-priority 5"));
         assert!(args_str.contains("-pageLoadTimeout 30s"));
+    }
+
+    // -------------------------------------------------------------------
+    // load_strategy_js tests
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn test_load_strategy_domcontentloaded() {
+        let expr = load_strategy_js("domcontentloaded").unwrap();
+        assert_eq!(expr, "document.readyState !== 'loading'");
+    }
+
+    #[test]
+    fn test_load_strategy_load() {
+        let expr = load_strategy_js("load").unwrap();
+        assert_eq!(expr, "document.readyState === 'complete'");
+    }
+
+    #[test]
+    fn test_load_strategy_networkidle() {
+        let expr = load_strategy_js("networkidle").unwrap();
+        // Should be a non-empty expression containing the sentinel key
+        assert!(!expr.is_empty());
+        assert!(expr.contains("__b4_ni"));
+        assert!(expr.contains("readyState"));
+    }
+
+    #[test]
+    fn test_load_strategy_case_insensitive() {
+        // All strategies should work regardless of case
+        assert!(load_strategy_js("DOMContentLoaded").is_ok());
+        assert!(load_strategy_js("Load").is_ok());
+        assert!(load_strategy_js("NetworkIdle").is_ok());
+    }
+
+    #[test]
+    fn test_load_strategy_rejects_invalid() {
+        let err = load_strategy_js("unknown").unwrap_err();
+        assert!(err.contains("invalid --load value"));
+        assert!(err.contains("unknown"));
+        assert!(err.contains("networkidle"));
+        assert!(err.contains("domcontentloaded"));
+        assert!(err.contains("load"));
+    }
+
+    #[test]
+    fn test_load_strategy_rejects_typo() {
+        let err = load_strategy_js("networkidleee").unwrap_err();
+        assert!(err.contains("invalid --load value"));
+    }
+
+    #[test]
+    fn test_load_strategy_rejects_empty() {
+        let err = load_strategy_js("").unwrap_err();
+        assert!(err.contains("invalid --load value"));
+    }
+
+    // -------------------------------------------------------------------
+    // wait --load command integration tests
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn test_wait_load_networkidle_params() {
+        let map = commands_map();
+        let cmd = map.get("wait").unwrap();
+        let mut args = HashMap::new();
+        args.insert("load".to_string(), json!("networkidle"));
+
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["timeoutMillis"], 30000);
+        let expr = params["pageFunction"].as_str().unwrap();
+        assert!(expr.contains("__b4_ni"));
+    }
+
+    #[test]
+    fn test_wait_load_domcontentloaded_params() {
+        let map = commands_map();
+        let cmd = map.get("wait").unwrap();
+        let mut args = HashMap::new();
+        args.insert("load".to_string(), json!("domcontentloaded"));
+
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["timeoutMillis"], 30000);
+        assert_eq!(params["pageFunction"], "document.readyState !== 'loading'");
+    }
+
+    #[test]
+    fn test_wait_load_with_custom_timeout() {
+        let map = commands_map();
+        let cmd = map.get("wait").unwrap();
+        let mut args = HashMap::new();
+        args.insert("load".to_string(), json!("load"));
+        args.insert("timeout".to_string(), json!("60000"));
+
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["timeoutMillis"], 60000);
+        assert_eq!(params["pageFunction"], "document.readyState === 'complete'");
+    }
+
+    #[test]
+    fn test_wait_load_timeout_defaults_when_not_provided() {
+        let map = commands_map();
+        let cmd = map.get("wait").unwrap();
+        let mut args = HashMap::new();
+        args.insert("load".to_string(), json!("domcontentloaded"));
+
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["timeoutMillis"], 30000);
+    }
+
+    #[test]
+    fn test_wait_text_respects_timeout() {
+        let map = commands_map();
+        let cmd = map.get("wait").unwrap();
+        let mut args = HashMap::new();
+        args.insert("text".to_string(), json!("Hello"));
+        args.insert("timeout".to_string(), json!("10000"));
+
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["timeoutMillis"], 10000);
+        assert!(params["pageFunction"].as_str().unwrap().contains("Hello"));
+    }
+
+    #[test]
+    fn test_wait_url_respects_timeout() {
+        let map = commands_map();
+        let cmd = map.get("wait").unwrap();
+        let mut args = HashMap::new();
+        args.insert("url".to_string(), json!("https://example.com/*"));
+        args.insert("timeout".to_string(), json!("15000"));
+
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["timeoutMillis"], 15000);
+        assert_eq!(params["url"], "https://example.com/*");
+    }
+
+    #[test]
+    #[should_panic(expected = "invalid --load value")]
+    fn test_wait_load_invalid_value_panics() {
+        let map = commands_map();
+        let cmd = map.get("wait").unwrap();
+        let mut args = HashMap::new();
+        args.insert("load".to_string(), json!("invalid_strategy"));
+
+        (cmd.tool_params_fn)(&args);
+    }
+
+    #[test]
+    fn test_wait_fn_respects_timeout() {
+        let map = commands_map();
+        let cmd = map.get("wait").unwrap();
+        let mut args = HashMap::new();
+        args.insert("fn".to_string(), json!("document.querySelector('.loaded') !== null"));
+        args.insert("timeout".to_string(), json!("20000"));
+
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["timeoutMillis"], 20000);
+        assert_eq!(
+            params["pageFunction"],
+            "document.querySelector('.loaded') !== null"
+        );
     }
 }
