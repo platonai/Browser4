@@ -16,6 +16,10 @@ if (-not $repoRoot) {
 }
 Set-Location $repoRoot
 
+# Resolve the Maven wrapper for this platform
+$MvnwScript = if ($IsWindows) { Join-Path $repoRoot 'mvnw.cmd' }
+              else              { Join-Path $repoRoot 'mvnw'     }
+
 # ═══════════════════════════════════════════════════════
 # Build-state tracking files (used by --resume and AI diagnosis)
 # ═══════════════════════════════════════════════════════
@@ -147,7 +151,7 @@ function Write-SystemInfo {
 
   # --- Maven ---
   try {
-    $mvnVer = & "$repoRoot\mvnw" --version 2>&1 | Select-Object -First 2 | ForEach-Object { $_ }
+    $mvnVer = & $MvnwScript --version 2>&1 | Select-Object -First 2 | ForEach-Object { $_ }
     [void]$lines.Add("[Maven]     $($mvnVer -join '; ')" )
   }
   catch {
@@ -239,7 +243,8 @@ function Invoke-MavenBuild {
 
   Push-Location $Directory
   try {
-    $cmdLine = ".\mvnw $($BuildArgs -join ' ')"
+    $mvnwName = Split-Path $MvnwScript -Leaf
+    $cmdLine = "$mvnwName $($BuildArgs -join ' ')"
     $ts = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
 
     Write-Host ""
@@ -250,7 +255,7 @@ function Invoke-MavenBuild {
 
     # Capture output to detect currently-building module for --resume tracking
     $currentModule = ""
-    $mvnOutput = & .\mvnw @BuildArgs 2>&1
+    $mvnOutput = & $MvnwScript @BuildArgs 2>&1
     $exitCode = $LASTEXITCODE
 
     # Stream output to console, while tracking "Building ..." lines
