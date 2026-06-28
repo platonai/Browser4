@@ -70,9 +70,14 @@ function stripSnapshot(version) {
 }
 
 function parseSemver(version) {
-  const m = version.match(/^(\d+)\.(\d+)\.(\d+)$/);
+  const m = version.match(/^(\d+)\.(\d+)\.(\d+)(?:-(.+))?$/);
   if (!m) return null;
-  return { major: Number(m[1]), minor: Number(m[2]), patch: Number(m[3]) };
+  return {
+    major: Number(m[1]),
+    minor: Number(m[2]),
+    patch: Number(m[3]),
+    prerelease: m[4] || null,
+  };
 }
 
 function readBackendVersion() {
