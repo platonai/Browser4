@@ -33,13 +33,11 @@ const CATEGORIES: &[(&str, &str)] = &[
     ("export", "Save as"),
     ("tabs", "Tabs"),
     ("storage", "Storage"),
-    ("network", "Network"),
     ("devtools", "DevTools"),
     ("snapshot", "Snapshot"),
     ("agent", "Agent"),
     ("swarm", "Swarm"),
     ("install", "Install"),
-    ("config", "Configuration"),
     ("browsers", "Browser sessions"),
 ];
 
@@ -209,6 +207,117 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("  browser4-cli eval --json \"document.title\"".to_string());
     }
 
+    if cmd.name == "wait" {
+        lines.push("Notes:".to_string());
+        lines.push(
+            "  - Five wait modes are supported, selected by which option or positional argument is provided:"
+                .to_string(),
+        );
+        lines.push(
+            "    • selector — wait for an element matching a CSS selector or snapshot ref (e.g. e1) to appear"
+                .to_string(),
+        );
+        lines.push(
+            "    • time — wait a fixed number of milliseconds (numeric target argument)"
+                .to_string(),
+        );
+        lines.push(
+            "    • text — wait until the given text appears anywhere in the page body"
+                .to_string(),
+        );
+        lines.push(
+            "    • url — wait until the page URL matches a glob pattern"
+                .to_string(),
+        );
+        lines.push(
+            "    • load — wait for a page-load state: domcontentloaded, load, or networkidle"
+                .to_string(),
+        );
+        lines.push(
+            "    • fn — wait until a custom JavaScript expression returns true"
+                .to_string(),
+        );
+        lines.push(
+            "  - --timeout sets the maximum wait time in milliseconds (default: 30000)."
+                .to_string(),
+        );
+        lines.push(
+            "  - The target positional argument is interpreted as milliseconds when numeric, otherwise as a CSS selector or element ref."
+                .to_string(),
+        );
+        lines.push(String::new());
+        lines.push("Examples:".to_string());
+        lines.push("  browser4-cli wait e1".to_string());
+        lines.push("  browser4-cli wait 2000".to_string());
+        lines.push("  browser4-cli wait --text \"Success\"".to_string());
+        lines.push("  browser4-cli wait --url \"**/dashboard\"".to_string());
+        lines.push("  browser4-cli wait --load networkidle".to_string());
+        lines.push("  browser4-cli wait --fn \"document.querySelector('.loaded') !== null\"".to_string());
+        lines.push("  browser4-cli wait --text \"Ready\" --timeout 60000".to_string());
+    }
+
+    if cmd.name == "get" {
+        lines.push("Notes:".to_string());
+        lines.push(
+            "  - Extracts data from a page element in one of six modes: text, html, box, styles, property, or attr."
+                .to_string(),
+        );
+        lines.push(
+            "  - text — returns the visible inner text of the first matching element."
+                .to_string(),
+        );
+        lines.push(
+            "  - html — returns the inner HTML of the first matching element."
+                .to_string(),
+        );
+        lines.push(
+            "  - box — returns the bounding box {x, y, width, height} of the first matching element."
+                .to_string(),
+        );
+        lines.push(
+            "  - styles — returns all computed CSS styles as a key-value object."
+                .to_string(),
+        );
+        lines.push(
+            "  - property — returns a DOM property value (requires the name argument)."
+                .to_string(),
+        );
+        lines.push(
+            "  - attr — returns an HTML attribute value (requires the name argument)."
+                .to_string(),
+        );
+        lines.push(String::new());
+        lines.push("Examples:".to_string());
+        lines.push("  browser4-cli get text \".price\"".to_string());
+        lines.push("  browser4-cli get html e3".to_string());
+        lines.push("  browser4-cli get box \"#header\"".to_string());
+        lines.push("  browser4-cli get styles e9".to_string());
+        lines.push("  browser4-cli get property \"input[name=email]\" value".to_string());
+        lines.push("  browser4-cli get attr \"a.link\" href".to_string());
+    }
+
+    if cmd.name == "extract" {
+        lines.push("Notes:".to_string());
+        lines.push(
+            "  - Uses AI to extract structured data from the current page based on a natural-language instruction."
+                .to_string(),
+        );
+        lines.push(
+            "  - --schema accepts a JSON schema to constrain the extracted data structure."
+                .to_string(),
+        );
+        lines.push(
+            "  - Output is saved to a timestamped file by default. Use --raw to print to stdout instead, or --filename to specify a custom path."
+                .to_string(),
+        );
+        lines.push(String::new());
+        lines.push("Examples:".to_string());
+        lines.push("  browser4-cli extract \"product name, price, ratings\"".to_string());
+        lines.push("  browser4-cli extract \"all contact info\" --schema person_schema.json".to_string());
+        lines.push("  browser4-cli extract \"article titles and dates\" --raw".to_string());
+        lines.push("  browser4-cli extract \"page metadata\" --filename meta.json".to_string());
+    }
+
     if cmd.name == "agent-run" {
         lines.push("Notes:".to_string());
         lines.push(
@@ -237,6 +346,31 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push(String::new());
         lines.push("Examples:".to_string());
         lines.push("  browser4-cli agent result agent-task-1".to_string());
+    }
+
+    if cmd.name == "attach" {
+        lines.push("Notes:".to_string());
+        lines.push(
+            "  - Attach to an already-running browser via CDP (Chrome DevTools Protocol) endpoint or channel name."
+                .to_string(),
+        );
+        lines.push(
+            "  - --cdp accepts a CDP endpoint URL (e.g. http://localhost:9222) or a browser channel name (chrome, msedge, chrome-canary, chromium, ...)."
+                .to_string(),
+        );
+        lines.push(
+            "  - --endpoint accepts a remote Browser4 server URL (e.g. http://browser4-server:8182) for distributed setups."
+                .to_string(),
+        );
+        lines.push(
+            "  - When attaching, the current session slot is associated with the external browser."
+                .to_string(),
+        );
+        lines.push(String::new());
+        lines.push("Examples:".to_string());
+        lines.push("  browser4-cli attach --cdp=http://localhost:9222".to_string());
+        lines.push("  browser4-cli attach --cdp=chrome".to_string());
+        lines.push("  browser4-cli attach --cdp=msedge".to_string());
     }
 
     if cmd.name == "open" {
@@ -504,6 +638,48 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("  browser4-cli swarm result scrape-task-4".to_string());
     }
 
+    if cmd.name == "crawl" {
+        lines.push("Notes:".to_string());
+        lines.push(
+            "  - Crawls a website starting from a URL, following links up to a configurable depth."
+                .to_string(),
+        );
+        lines.push(
+            "  - --depth (-d) controls how many levels of links to follow (default: 1)."
+                .to_string(),
+        );
+        lines.push(
+            "  - --out-link-selector (-ol) specifies a CSS selector to extract links from each page."
+                .to_string(),
+        );
+        lines.push(
+            "  - --out-link-pattern (-olp) filters extracted links with a regex (default: .+)."
+                .to_string(),
+        );
+        lines.push(
+            "  - --top-links (-tl) limits the number of links extracted per page (default: 20)."
+                .to_string(),
+        );
+        lines.push(
+            "  - Boolean flags --refresh, --parse, --store-content, --ignore-url-query, --no-norm, --readonly control fetch behavior."
+                .to_string(),
+        );
+        lines.push(
+            "  - --args (-a) passes additional LoadOptions through as a raw string (e.g. -a \"-nMaxRetry 5\")."
+                .to_string(),
+        );
+        lines.push(
+            "  - --expires sets cache expiration (e.g. 1d, 1h, 30m), --priority sets queue priority (lower = higher priority)."
+                .to_string(),
+        );
+        lines.push(String::new());
+        lines.push("Examples:".to_string());
+        lines.push("  browser4-cli crawl https://example.com".to_string());
+        lines.push("  browser4-cli crawl https://example.com -d 2 -ol \"a.product\" -olp \"/product/\"".to_string());
+        lines.push("  browser4-cli crawl https://example.com --depth 3 --refresh --store-content".to_string());
+        lines.push("  browser4-cli crawl https://example.com -tl 10 --expires 1h --priority 5".to_string());
+    }
+
     if cmd.name == "domsnapshot" {
         lines.push("Subcommands:".to_string());
         lines.push(format_with_gap(
@@ -705,6 +881,27 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push(String::new());
         lines.push("  # Capture a range of viewports".to_string());
         lines.push("  browser4-cli snapshot --viewport=1-3".to_string());
+    }
+
+    if cmd.name == "generate-locator" {
+        lines.push("Notes:".to_string());
+        lines.push(
+            "  - Generates a unique CSS selector path for an element identified by a snapshot ref (e5, backend:15) or a CSS selector."
+                .to_string(),
+        );
+        lines.push(
+            "  - Useful for creating stable selectors that survive page reloads and DOM changes."
+                .to_string(),
+        );
+        lines.push(
+            "  - The generated selector path is based on the element's tag, id, classes, and structural position."
+                .to_string(),
+        );
+        lines.push(String::new());
+        lines.push("Examples:".to_string());
+        lines.push("  browser4-cli generate-locator e5".to_string());
+        lines.push("  browser4-cli generate-locator backend:15".to_string());
+        lines.push("  browser4-cli generate-locator \".product-card\"".to_string());
     }
 
     if cmd.name == "loop" {
@@ -917,6 +1114,9 @@ mod tests {
         assert!(help.contains("browser4-cli extract <instruction>"));
         assert!(help.contains("Extract structured data"));
         assert!(help.contains("--schema"));
+        assert!(help.contains("natural-language instruction"));
+        assert!(help.contains("--raw to print to stdout"));
+        assert!(help.contains("browser4-cli extract \"product name, price, ratings\""));
     }
 
     #[test]
@@ -1176,5 +1376,90 @@ mod tests {
         let eval = cmds.iter().find(|c| c.name == "eval").unwrap();
         let eval_help = generate_command_help(eval);
         assert!(eval_help.contains("JavaScript expression or function to evaluate"));
+    }
+
+    #[test]
+    fn test_generate_command_help_attach() {
+        let cmds = all_commands();
+        let cmd = cmds.iter().find(|c| c.name == "attach").unwrap();
+        let help = generate_command_help(cmd);
+        assert!(help.contains("browser4-cli attach"));
+        assert!(help.contains("CDP (Chrome DevTools Protocol)"));
+        assert!(help.contains("--cdp"));
+        assert!(help.contains("--endpoint"));
+        assert!(help.contains("browser4-cli attach --cdp=http://localhost:9222"));
+        assert!(help.contains("browser4-cli attach --cdp=chrome"));
+    }
+
+    #[test]
+    fn test_generate_command_help_crawl() {
+        let cmds = all_commands();
+        let cmd = cmds.iter().find(|c| c.name == "crawl").unwrap();
+        let help = generate_command_help(cmd);
+        assert!(help.contains("browser4-cli crawl <url>"));
+        assert!(help.contains("Crawl a website starting from a URL"));
+        assert!(help.contains("--depth (-d)"));
+        assert!(help.contains("--out-link-selector (-ol)"));
+        assert!(help.contains("--out-link-pattern (-olp)"));
+        assert!(help.contains("--top-links (-tl)"));
+        assert!(help.contains("--expires"));
+        assert!(help.contains("--priority"));
+        assert!(help.contains("browser4-cli crawl https://example.com"));
+        assert!(help.contains("--depth 3 --refresh --store-content"));
+    }
+
+    #[test]
+    fn test_generate_command_help_wait() {
+        let cmds = all_commands();
+        let cmd = cmds.iter().find(|c| c.name == "wait").unwrap();
+        let help = generate_command_help(cmd);
+        assert!(help.contains("browser4-cli wait [target]"));
+        assert!(help.contains("Five wait modes"));
+        assert!(help.contains("selector — wait for an element"));
+        assert!(help.contains("time — wait a fixed number"));
+        assert!(help.contains("text — wait until the given text"));
+        assert!(help.contains("url — wait until the page URL"));
+        assert!(help.contains("load — wait for a page-load state"));
+        assert!(help.contains("fn — wait until a custom JavaScript"));
+        assert!(help.contains("--timeout"));
+        assert!(help.contains("browser4-cli wait --load networkidle"));
+        assert!(help.contains("browser4-cli wait --fn"));
+    }
+
+    #[test]
+    fn test_generate_command_help_get() {
+        let cmds = all_commands();
+        let cmd = cmds.iter().find(|c| c.name == "get").unwrap();
+        let help = generate_command_help(cmd);
+        assert!(help.contains("browser4-cli get <mode> <selector> [name]"));
+        assert!(help.contains("six modes"));
+        assert!(help.contains("text — returns the visible inner text"));
+        assert!(help.contains("html — returns the inner HTML"));
+        assert!(help.contains("box — returns the bounding box"));
+        assert!(help.contains("styles — returns all computed CSS styles"));
+        assert!(help.contains("property — returns a DOM property"));
+        assert!(help.contains("attr — returns an HTML attribute"));
+        assert!(help.contains("browser4-cli get text \".price\""));
+        assert!(help.contains("browser4-cli get property \"input[name=email]\" value"));
+    }
+
+    #[test]
+    fn test_generate_command_help_generate_locator() {
+        let cmds = all_commands();
+        let cmd = cmds.iter().find(|c| c.name == "generate-locator").unwrap();
+        let help = generate_command_help(cmd);
+        assert!(help.contains("browser4-cli generate-locator <ref>"));
+        assert!(help.contains("unique CSS selector path"));
+        assert!(help.contains("survive page reloads"));
+        assert!(help.contains("browser4-cli generate-locator e5"));
+        assert!(help.contains("browser4-cli generate-locator backend:15"));
+    }
+
+    #[test]
+    fn test_generate_help_no_empty_categories() {
+        let help = generate_help();
+        // These categories should NOT appear since no commands use them
+        assert!(!help.contains("\nNetwork:"));
+        assert!(!help.contains("\nConfiguration:"));
     }
 }
