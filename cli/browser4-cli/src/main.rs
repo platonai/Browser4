@@ -49,10 +49,10 @@ use daemon::{
 };
 use help::{generate_command_help, generate_help, generate_help_entry, public_command_name};
 use http::{
-    call_tool, crawl_request_timeout, get_command_result, get_command_status, get_crawl_result,
-    get_swarm_result, get_swarm_status, is_stale_session_error, make_client,
-    submit_batch_commands, submit_crawl, submit_plain_command, submit_swarm_payload,
-    submit_swarm_query,
+    call_tool, call_tool_with_result, crawl_request_timeout, get_command_result,
+    get_command_status, get_crawl_result, get_swarm_result, get_swarm_status,
+    is_stale_session_error, make_client, submit_batch_commands, submit_crawl,
+    submit_plain_command, submit_swarm_payload, submit_swarm_query, CallToolResult,
 };
 use managed_processes::{
     read_managed_server_processes, stop_browser4_server_forcibly, ManagedServerProcess,
@@ -629,8 +629,29 @@ async fn with_session<F, Fut>(
     action: F,
 ) -> Result<String, String>
 where
-    F: Fn(String) -> Fut + Send,
+    F: Fn(String) -> Fut + Send + Sync,
     Fut: std::future::Future<Output = Result<String, String>> + Send,
+{
+    with_session_paginated(client, base_url, session_name, recover_stale, |sid| {
+        let fut = action(sid);
+        async move { fut.await.map(|text| CallToolResult { text, pagination: None }) }
+    })
+    .await
+    .map(|r| r.text)
+}
+
+/// Like [with_session] but returns [CallToolResult] which includes optional
+/// server-side pagination metadata from the `_pagination` response field.
+async fn with_session_paginated<F, Fut>(
+    client: &Client,
+    base_url: &str,
+    session_name: Option<&str>,
+    recover_stale: bool,
+    action: F,
+) -> Result<CallToolResult, String>
+where
+    F: Fn(String) -> Fut + Send,
+    Fut: std::future::Future<Output = Result<CallToolResult, String>> + Send,
 {
     let state = require_session(session_name)?;
     let session_id = get_session_id(&state)?.to_string();
@@ -2204,42 +2225,50 @@ async fn handle_snapshot(
         a
     };
 
-    let combined = with_session(client, base_url, session_name, false, |session_id| {
-        let client = client.clone();
-        let base_url = base_url.to_string();
-        let tool_name = tool_name.to_string();
-        let mut snap_args = snapshot_args.clone();
-        snap_args["sessionId"] = json!(session_id.clone());
+    let combined_result = with_session_paginated(
+        client, base_url, session_name, false,
+        |session_id| {
+            let client = client.clone();
+            let base_url = base_url.to_string();
+            let tool_name = tool_name.to_string();
+            let mut snap_args = snapshot_args.clone();
+            snap_args["sessionId"] = json!(session_id.clone());
 
-        async move {
-            let (url_res, title_res, snap_res) = tokio::join!(
-                call_tool(
-                    &client,
-                    &base_url,
-                    "page_url",
-                    json!({ "sessionId": session_id })
-                ),
-                call_tool(
-                    &client,
-                    &base_url,
-                    "page_title",
-                    json!({ "sessionId": session_id })
-                ),
-                call_tool(&client, &base_url, &tool_name, snap_args),
-            );
-            let url = url_res?;
-            let title = title_res?;
-            let snap = snap_res?;
-            Ok(format!("{}\n{}\n{}", url, title, snap))
-        }
-    })
+            async move {
+                let (url_res, title_res, snap_res) = tokio::join!(
+                    call_tool(
+                        &client,
+                        &base_url,
+                        "page_url",
+                        json!({ "sessionId": session_id })
+                    ),
+                    call_tool(
+                        &client,
+                        &base_url,
+                        "page_title",
+                        json!({ "sessionId": session_id })
+                    ),
+                    call_tool_with_result(&client, &base_url, &tool_name, snap_args),
+                );
+                let url = url_res?;
+                let title = title_res?;
+                let snap_result = snap_res?;
+                Ok(CallToolResult {
+                    text: format!("{}\n{}\n{}", url, title, snap_result.text),
+                    pagination: snap_result.pagination,
+                })
+            }
+        },
+    )
     .await?;
 
+    let server_pagination = combined_result.pagination;
+
     // The combined result has url, title, and snapshot separated by newlines
-    let parts: Vec<&str> = combined.splitn(3, '\n').collect();
+    let parts: Vec<&str> = combined_result.text.splitn(3, '\n').collect();
     let (url, title, snap) = match parts.as_slice() {
         [u, t, s] => (*u, *t, *s),
-        _ => ("", "", combined.as_str()),
+        _ => ("", "", combined_result.text.as_str()),
     };
 
     let out_path = resolve_output_path(filename.as_deref(), "snapshot", "yml");
@@ -2263,36 +2292,58 @@ async fn handle_snapshot(
         tool_params.get("selector").and_then(|v| v.as_str()).map_or(false, |s| !s.is_empty())
         || tool_params.get("viewports").and_then(|v| v.as_str()).map_or(false, |s| !s.is_empty())
         || tool_params.get("interactive").and_then(|v| v.as_bool()).unwrap_or(false)
-        || tool_params.get("depth").and_then(|v| v.as_str()).map_or(false, |s| !s.is_empty())
-        || tool_params.get("limit").and_then(|v| v.as_str()).map_or(false, |s| !s.is_empty());
+        || tool_params.get("depth").and_then(|v| v.as_str()).map_or(false, |s| !s.is_empty());
 
     let snap_len = snap.len();
     let snap_kb = snap_len / 1024;
+    let snap_lines = snap.lines().count();
+
+    // Pagination: prefer server-side metadata when available; fall back to
+    // local pagination otherwise.
+    let (page, page_size, show_all) = parse_page_opts(tool_params);
 
     if raw {
-        // Print snapshot content directly to stdout for piping.
-        // Safe to use println! directly since --raw explicitly requests raw output.
-        println!("{}", snap);
+        if let Some(ref pm) = server_pagination {
+            // Server already paginated — just print the content and footer.
+            println!("{}", snap);
+            if pm.truncated {
+                eprintln!(
+                    "[Page {}/{} · {} lines of {} total · use --page N for next page · --all to show all]",
+                    pm.page,
+                    pm.total_pages,
+                    (pm.page.min(pm.total_pages) * pm.page_size).min(pm.total_lines),
+                    pm.total_lines
+                );
+            }
+        } else if !skip_pagination(show_all) {
+            let (page_text, meta) = paginate_output(snap, page, page_size);
+            println!("{}", page_text);
+            if meta.is_truncated {
+                eprintln!("{}", format_pagination_footer(&meta));
+            }
+        } else {
+            println!("{}", snap);
+        }
     } else {
         cli_println!("### Page");
         cli_println!("- Page URL: {}", url);
         cli_println!("- Page Title: {}", title);
         cli_println!("### Snapshot");
         cli_println!("[Snapshot]({})", out_path.display());
-        cli_println!("- Snapshot size: {} KB ({} nodes/lines)", snap_kb, snap.lines().count());
-    }
-
-    // Print a tip for large snapshots when no filtering flags are in use
-    if snap_len > 10_240 && !has_filter {
-        eprintln!(
-            "💡 Tip: Snapshot is large ({} KB). To focus the output, try:\n\
-               -s, --selector <CSS>     Scope to a CSS selector\n\
-               --viewport, -vp <N>       Capture a specific viewport section\n\
-               -i, --interactive        Only show interactive elements\n\
-               -l, --limit <N>           Cap the number of nodes\n\
-               -d, --depth <N>           Limit tree depth",
-            snap_kb
-        );
+        cli_println!("- Snapshot size: {} KB ({} nodes/lines)", snap_kb, snap_lines);
+        // Show pagination info when the file is large
+        if snap_len > 10_240 && !has_filter {
+            eprintln!(
+                "💡 Tip: Snapshot is large ({} KB, {} lines). To focus the output, try:\n\
+                   --viewport, -vp <N>       Capture a specific viewport section\n\
+                   -s, --selector <CSS>     Scope to a CSS selector\n\
+                   -i, --interactive        Only show interactive elements\n\
+                   -d, --depth <N>           Limit tree depth\n\
+                   --raw --page 1            View first page of snapshot content",
+                snap_kb,
+                snap_lines
+            );
+        }
     }
     Ok(())
 }
@@ -2633,10 +2684,18 @@ async fn handle_extract(
     let out_path = resolve_output_path(filename.as_deref(), "extract", "txt");
     save_snapshot(&out_path, content).map_err(|e| e.to_string())?;
 
+    // Detect silent extraction failures: the server may return a metadata-only
+    // response with "completed": false and zero extracted data.  Warn the user
+    // explicitly instead of silently saving an empty/ metadata-only file.
+    let extraction_empty = detect_empty_extraction(content);
+
     json_field("page_url", json!(url));
     json_field("page_title", json!(title));
     json_field("extract_path", json!(out_path.display().to_string()));
     json_field("extracted_content", json!(content));
+    if extraction_empty {
+        json_field("extraction_empty", json!(true));
+    }
 
     if raw {
         println!("{}", content);
@@ -2644,10 +2703,57 @@ async fn handle_extract(
         cli_println!("### Page");
         cli_println!("- Page URL: {}", url);
         cli_println!("- Page Title: {}", title);
-        cli_println!("### Extracted content");
-        cli_println!("[Extracted content]({})", out_path.display());
+        if extraction_empty {
+            cli_println!("### ⚠️  Extraction produced no data");
+            cli_println!("The extract command completed but returned no structured data. The AI model may not have been able to identify the requested information on this page. Try:");
+            cli_println!("  - Narrowing the scope with a more specific instruction");
+            cli_println!("  - Using `eval` with a JavaScript selector for precise data extraction");
+            cli_println!("  - Using `domsnapshot get` for CSS-based DOM extraction");
+            cli_println!("[Raw response]({})", out_path.display());
+        } else {
+            cli_println!("### Extracted content");
+            cli_println!("[Extracted content]({})", out_path.display());
+        }
     }
     Ok(())
+}
+
+/// Check whether an extract response looks like a silent failure — the server
+/// returned metadata (`"completed": false`) with no actual extracted data.
+fn detect_empty_extraction(content: &str) -> bool {
+    let trimmed = content.trim();
+    if trimmed.is_empty() {
+        return true;
+    }
+    // Try to parse as JSON and look for the "completed": false pattern that
+    // signals the extraction pipeline produced no results.
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(trimmed) {
+        if let Some(completed) = v
+            .pointer("/data/metadata/completed")
+            .and_then(|c| c.as_bool())
+        {
+            if !completed {
+                return true;
+            }
+        }
+        // Also detect the top-level form: {"success":true,"completed":false,…}
+        if let Some(completed) = v
+            .pointer("/completed")
+            .and_then(|c| c.as_bool())
+        {
+            if !completed {
+                return true;
+            }
+        }
+        // If the response is a small metadata-only object (no data array/string),
+        // treat it as empty.
+        if let Some(data) = v.get("data") {
+            if data.is_object() && data.get("metadata").is_some() && data.as_object().map_or(true, |o| o.len() <= 2) {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// Handle the `summarize` command: save AI-generated summary to a file by default,
@@ -2716,10 +2822,15 @@ async fn handle_summarize(
     let out_path = resolve_output_path(filename.as_deref(), "summarize", "txt");
     save_snapshot(&out_path, content).map_err(|e| e.to_string())?;
 
+    let summary_empty = detect_empty_extraction(content);
+
     json_field("page_url", json!(url));
     json_field("page_title", json!(title));
     json_field("summarize_path", json!(out_path.display().to_string()));
     json_field("summarized_content", json!(content));
+    if summary_empty {
+        json_field("summarize_empty", json!(true));
+    }
 
     if raw {
         println!("{}", content);
@@ -2727,8 +2838,14 @@ async fn handle_summarize(
         cli_println!("### Page");
         cli_println!("- Page URL: {}", url);
         cli_println!("- Page Title: {}", title);
-        cli_println!("### Summary");
-        cli_println!("[Summary]({})", out_path.display());
+        if summary_empty {
+            cli_println!("### ⚠️  Summary produced no data");
+            cli_println!("The summarize command completed but returned no content. The AI model may not have been able to process this page.");
+            cli_println!("[Raw response]({})", out_path.display());
+        } else {
+            cli_println!("### Summary");
+            cli_println!("[Summary]({})", out_path.display());
+        }
     }
     Ok(())
 }
@@ -2885,46 +3002,72 @@ async fn handle_dom_snapshot_get(
         }
     }
 
-    let result = with_session(client, base_url, session_name, false, |session_id| {
+    let result = with_session_paginated(client, base_url, session_name, false, |session_id| {
         let client = client.clone();
         let base_url = base_url.to_string();
         let tool_name = tool_name.to_string();
         let mut params = tool_params.clone();
         params["sessionId"] = json!(session_id);
-        async move { call_tool(&client, &base_url, &tool_name, params).await }
+        async move { call_tool_with_result(&client, &base_url, &tool_name, params).await }
     })
     .await?;
 
+    let server_pagination = result.pagination;
+    let text = result.text;
+
     // Output the result
-    let empty_result = result == "null" || result.is_empty() || result.trim() == "[]";
+    let empty_result = text == "null" || text.is_empty() || text.trim() == "[]";
     let paginate = (field == "html" || field == "text") && !empty_result;
 
     if empty_result {
         let display_selector = if selector.is_empty() { ":root" } else { selector };
-        cli_println!("{}", result);
+        cli_println!("{}", text);
         cli_println!(
             "No elements matched \"{}\". Try `domsnapshot inspect \"{}\"` to discover valid selectors, or run `domsnapshot` to see the full DOM tree.",
             display_selector, display_selector
         );
     } else if paginate {
-        let (page, page_size, show_all) = parse_page_opts(tool_params);
-        if skip_pagination(show_all) {
-            cli_println!("{}", result);
+        if let Some(ref pm) = server_pagination {
+            // Server already paginated — display as-is with server footer.
+            cli_println!("{}", text);
+            if pm.truncated {
+                cli_println!(
+                    "[Page {}/{} · {} lines of {} total · use --page N for next page · --all to show all]",
+                    pm.page,
+                    pm.total_pages,
+                    (pm.page.min(pm.total_pages) * pm.page_size).min(pm.total_lines),
+                    pm.total_lines
+                );
+            }
         } else {
-            let (page_content, meta) = paginate_output(&result, page, page_size);
-            cli_println!("{}", page_content);
-            if meta.is_truncated {
-                cli_println!("{}", format_pagination_footer(&meta));
+            let (page, page_size, show_all) = parse_page_opts(tool_params);
+            if skip_pagination(show_all) {
+                cli_println!("{}", text);
+            } else {
+                let (page_content, meta) = paginate_output(&text, page, page_size);
+                cli_println!("{}", page_content);
+                if meta.is_truncated {
+                    cli_println!("{}", format_pagination_footer(&meta));
+                }
             }
         }
-        json_field("total_chars", json!(result.len()));
-        json_field("page_size", json!(page_size));
-        json_field("truncated", json!(!skip_pagination(show_all) && result.len() > page_size));
+        json_field("total_chars", json!(text.len()));
+        json_field("total_lines", json!(text.lines().count()));
+        if let Some(ref pm) = server_pagination {
+            json_field("page_size", json!(pm.page_size));
+            json_field("truncated", json!(pm.truncated));
+            json_field("page", json!(pm.page));
+            json_field("total_pages", json!(pm.total_pages));
+        } else {
+            let (_page, page_size, show_all) = parse_page_opts(tool_params);
+            json_field("page_size", json!(page_size));
+            json_field("truncated", json!(!skip_pagination(show_all) && text.lines().count() > page_size));
+        }
     } else {
-        cli_println!("{}", result);
+        cli_println!("{}", text);
     }
 
-    json_field("result", json!(&result));
+    json_field("result", json!(&text));
     json_field("mode", json!(field));
     if !selector.is_empty() {
         json_field("selector", json!(selector));
@@ -3380,7 +3523,18 @@ fn run_grep_on_source(
     let re = regex::RegexBuilder::new(&final_pattern)
         .case_insensitive(grep_options.ignore_case)
         .build()
-        .map_err(|e| format!("Invalid regex pattern: {e}"))?;
+        .map_err(|e| {
+            let mut msg = format!("Invalid regex pattern: {e}");
+            // Help users who accidentally shell-escape regex metacharacters or use
+            // unsupported syntax — suggest -F (fixed-strings) for literal matching.
+            if final_pattern.contains('\\') {
+                msg.push_str("\n💡 Tip: The pattern contains backslash escapes. If you meant to match literal text, try -F (--fixed-strings) to disable regex matching.");
+            } else if final_pattern.contains('|') {
+                msg.push_str("\n💡 Tip: Alternation (|) is supported. If you meant a literal pipe character, try -F (--fixed-strings).");
+            }
+            msg.push_str("\n   Supported regex syntax: https://docs.rs/regex/latest/regex/#syntax");
+            msg
+        })?;
 
     // Split into lines and find matches
     let lines: Vec<&str> = source.lines().collect();
@@ -3499,8 +3653,9 @@ fn run_grep_on_source(
             }
         }
         json_field("total_chars", json!(full_output.len()));
+        json_field("total_lines", json!(full_output.lines().count()));
         json_field("page_size", json!(page_size));
-        json_field("truncated", json!(!skip_pagination(show_all) && full_output.len() > page_size));
+        json_field("truncated", json!(!skip_pagination(show_all) && full_output.lines().count() > page_size));
     }
 
     json_field("matches", json!(matched_indices.len()));
@@ -3520,7 +3675,9 @@ fn run_grep_on_source(
 /// Metadata about a paginated output.
 #[derive(Debug)]
 struct PaginationMeta {
+    #[allow(dead_code)]
     total_chars: usize,
+    total_lines: usize,
     current_page: usize,
     total_pages: usize,
     page_size: usize,
@@ -3528,22 +3685,22 @@ struct PaginationMeta {
     is_truncated: bool,
 }
 
-/// Paginate `text` into pages of `page_size` characters.
+/// Paginate `text` into pages of `page_size` **lines** (not characters).
 ///
-/// Returns the content for `page` (1-based) and metadata about the pagination.
-/// When `page_size` is 0 or the text fits in one page, returns the full text
-/// with `is_truncated: false`.
-///
-/// The split tries to break on a newline boundary near the page_size mark to
-/// avoid mid-line cuts, but if no newline is found within 25% of the page size
-/// it falls back to the exact byte position.
+/// This is line-oriented because snapshot and DOM snapshot output is structured
+/// with one element/node per line.  Returns the content for `page` (1-based)
+/// and metadata about the pagination.  When `page_size` is 0 or the text fits
+/// in one page, returns the full text with `is_truncated: false`.
 fn paginate_output(text: &str, page: usize, page_size: usize) -> (String, PaginationMeta) {
     let total_chars = text.len();
+    let total_lines = text.lines().count();
     let effective_page = if page == 0 { 1 } else { page };
 
-    if page_size == 0 || total_chars <= page_size {
+    // If page_size is 0 (unlimited) or content fits in one page, return all.
+    if page_size == 0 || total_lines <= page_size {
         let meta = PaginationMeta {
             total_chars,
+            total_lines,
             current_page: 1,
             total_pages: 1,
             page_size,
@@ -3552,28 +3709,24 @@ fn paginate_output(text: &str, page: usize, page_size: usize) -> (String, Pagina
         return (text.to_string(), meta);
     }
 
-    let total_pages = (total_chars + page_size - 1) / page_size;
+    let total_pages = (total_lines + page_size - 1) / page_size;
     let current_page = effective_page.min(total_pages);
-    let start = (current_page - 1) * page_size;
-    let end = (start + page_size).min(total_chars);
 
-    // Try to find a newline boundary within the last 25% of the page,
-    // but only if we're not at the last page.
-    let actual_end = if current_page < total_pages {
-        let window_start = start + page_size * 3 / 4;
-        let window_end = end;
-        if let Some(nl_pos) = text[window_start..window_end].rfind('\n') {
-            window_start + nl_pos + 1 // include the newline in this page
-        } else {
-            end
-        }
-    } else {
-        end
-    };
+    // Build line-based page: take lines from (current_page-1)*page_size to
+    // current_page*page_size (or end).
+    let start_line = (current_page - 1) * page_size;
+    let end_line = (start_line + page_size).min(total_lines);
 
-    let page_content = text[start..actual_end].to_string();
+    let selected: Vec<&str> = text
+        .lines()
+        .skip(start_line)
+        .take(end_line - start_line)
+        .collect();
+    let page_content = selected.join("\n");
+
     let meta = PaginationMeta {
         total_chars,
+        total_lines,
         current_page,
         total_pages,
         page_size,
@@ -3585,27 +3738,20 @@ fn paginate_output(text: &str, page: usize, page_size: usize) -> (String, Pagina
 
 /// Format a human-readable pagination footer line.
 fn format_pagination_footer(meta: &PaginationMeta) -> String {
-    let size_label = |bytes: usize| -> String {
-        if bytes < 1024 {
-            format!("{}B", bytes)
-        } else if bytes < 1024 * 1024 {
-            format!("{:.1}K", bytes as f64 / 1024.0)
-        } else {
-            format!("{:.1}M", bytes as f64 / (1024.0 * 1024.0))
-        }
-    };
-
+    let lines_on_page = (meta.current_page.min(meta.total_pages) * meta.page_size).min(meta.total_lines);
     format!(
-        "[Page {}/{} · {} of {} · use --page N for next page · --all to show all]",
+        "[Page {}/{} · {} lines of {} total · use --page N for next page · --all to show all]",
         meta.current_page,
         meta.total_pages,
-        size_label(meta.current_page.min(meta.total_pages) * meta.page_size.min(meta.total_chars)),
-        size_label(meta.total_chars),
+        lines_on_page,
+        meta.total_lines,
     )
 }
 
 /// Extract pagination options from tool_params.
 /// Returns (page, page_size, show_all).
+///
+/// Default page size is 100 **lines** (was 1024 characters prior to v4.12).
 fn parse_page_opts(tool_params: &serde_json::Value) -> (usize, usize, bool) {
     let show_all = tool_params
         .get("all")
@@ -3627,7 +3773,7 @@ fn parse_page_opts(tool_params: &serde_json::Value) -> (usize, usize, bool) {
         .get("page-size")
         .and_then(|v| v.as_str())
         .and_then(|s| s.parse::<usize>().ok())
-        .unwrap_or(1024);
+        .unwrap_or(100);
 
     (page, page_size, show_all)
 }
@@ -6780,24 +6926,21 @@ fn compile_batch_request(
                 continue;
             }
             "eval" => {
-                // When --file is provided, read the expression from the file.
-                if let Some(file_path) = tool_params
-                    .get("file")
-                    .and_then(|v| v.as_str())
-                    .map(str::trim)
-                    .filter(|v| !v.is_empty())
-                {
-                    match std::fs::read_to_string(file_path) {
-                        Ok(content) => {
-                            let expression = content.trim().to_string();
+                // When --stdin or --file is provided, read the expression.
+                let use_stdin = tool_params
+                    .get("stdin")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                if use_stdin {
+                    let mut expression = String::new();
+                    match std::io::stdin().read_to_string(&mut expression) {
+                        Ok(_) => {
+                            let expression = expression.trim().to_string();
                             if expression.is_empty() {
                                 if push_batch_local_failure(
                                     &mut entries,
                                     spec,
-                                    format!(
-                                        "Eval file '{}' is empty. Provide a non-empty JavaScript expression.",
-                                        file_path
-                                    ),
+                                    "Stdin was empty. Provide a non-empty JavaScript expression via stdin.".to_string(),
                                     bail,
                                 ) {
                                     break;
@@ -6812,12 +6955,56 @@ fn compile_batch_request(
                             if push_batch_local_failure(
                                 &mut entries,
                                 spec,
-                                format!("Failed to read eval file '{}': {}", file_path, e),
+                                format!("Failed to read JavaScript expression from stdin: {e}"),
                                 bail,
                             ) {
                                 break;
                             }
                             continue;
+                        }
+                    }
+                }
+
+                // When --file is provided, read the expression from the file.
+                if !use_stdin {
+                    if let Some(file_path) = tool_params
+                        .get("file")
+                        .and_then(|v| v.as_str())
+                        .map(str::trim)
+                        .filter(|v| !v.is_empty())
+                    {
+                        match std::fs::read_to_string(file_path) {
+                            Ok(content) => {
+                                let expression = content.trim().to_string();
+                                if expression.is_empty() {
+                                    if push_batch_local_failure(
+                                        &mut entries,
+                                        spec,
+                                        format!(
+                                            "Eval file '{}' is empty. Provide a non-empty JavaScript expression.",
+                                            file_path
+                                        ),
+                                        bail,
+                                    ) {
+                                        break;
+                                    }
+                                    continue;
+                                }
+                                if let Value::Object(ref mut m) = tool_params {
+                                    m.insert("expression".to_string(), json!(expression));
+                                }
+                            }
+                            Err(e) => {
+                                if push_batch_local_failure(
+                                    &mut entries,
+                                    spec,
+                                    format!("Failed to read eval file '{}': {}", file_path, e),
+                                    bail,
+                                ) {
+                                    break;
+                                }
+                                continue;
+                            }
                         }
                     }
                 }
@@ -6832,7 +7019,7 @@ fn compile_batch_request(
                     if push_batch_local_failure(
                         &mut entries,
                         spec,
-                        "A JavaScript expression is required. Provide it as a positional argument or via --file.".to_string(),
+                        "A JavaScript expression is required. Provide it as a positional argument, via --stdin, or via --file.".to_string(),
                         bail,
                     ) {
                         break;
@@ -7769,23 +7956,22 @@ async fn run(
             .await?;
         }
         "eval" => {
-            // When --file is provided, read the expression from the file.
-            if let Some(file_path) = tool_params
-                .get("file")
-                .and_then(|v| v.as_str())
-                .map(str::trim)
-                .filter(|v| !v.is_empty())
-            {
-                let expression = std::fs::read_to_string(file_path)
-                    .map_err(|e| format!("Failed to read eval file '{}': {}", file_path, e))?;
+            // When --stdin is provided, read the expression from stdin.
+            // This avoids shell quoting complexity for multi-line JS scripts.
+            let use_stdin = tool_params
+                .get("stdin")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            if use_stdin {
+                let mut expression = String::new();
+                std::io::stdin()
+                    .read_to_string(&mut expression)
+                    .map_err(|e| format!("Failed to read JavaScript expression from stdin: {e}"))?;
                 let expression = expression.trim().to_string();
                 if expression.is_empty() {
                     return Err(CliError(
                         ExitCode::Usage,
-                        format!(
-                            "Eval file '{}' is empty. Provide a non-empty JavaScript expression.",
-                            file_path
-                        ),
+                        "Stdin was empty. Provide a non-empty JavaScript expression via stdin.".to_string(),
                     ));
                 }
                 if let Value::Object(ref mut m) = tool_params {
@@ -7793,7 +7979,34 @@ async fn run(
                 }
             }
 
-            // Validate that an expression is provided (either positional or via --file).
+            // When --file is provided, read the expression from the file.
+            if let Some(file_path) = tool_params
+                .get("file")
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|v| !v.is_empty())
+                {
+                    // --stdin takes precedence; skip --file if stdin was already used.
+                    if !use_stdin {
+                        let expression = std::fs::read_to_string(file_path)
+                            .map_err(|e| format!("Failed to read eval file '{}': {}", file_path, e))?;
+                        let expression = expression.trim().to_string();
+                        if expression.is_empty() {
+                            return Err(CliError(
+                                ExitCode::Usage,
+                                format!(
+                                    "Eval file '{}' is empty. Provide a non-empty JavaScript expression.",
+                                    file_path
+                                ),
+                            ));
+                        }
+                        if let Value::Object(ref mut m) = tool_params {
+                            m.insert("expression".to_string(), json!(expression));
+                        }
+                    }
+                }
+
+            // Validate that an expression is provided (either positional, --stdin, or --file).
             let expression_empty = tool_params
                 .get("expression")
                 .and_then(|v| v.as_str())
@@ -7802,7 +8015,7 @@ async fn run(
             if expression_empty {
                 return Err(CliError(
                     ExitCode::Usage,
-                    "A JavaScript expression is required. Provide it as a positional argument or via --file."
+                    "A JavaScript expression is required. Provide it as a positional argument, via --file, or via --stdin."
                         .to_string(),
                 ));
             }
@@ -9979,78 +10192,66 @@ mod tests {
     #[test]
     fn test_paginate_output_small_text_no_pagination() {
         let text = "short text";
-        let (page, meta) = paginate_output(text, 1, 1024);
+        let (page, meta) = paginate_output(text, 1, 100);
         assert_eq!(page, "short text");
         assert!(!meta.is_truncated);
-        assert_eq!(meta.total_chars, 10);
+        assert_eq!(meta.total_lines, 1);
         assert_eq!(meta.total_pages, 1);
     }
 
     #[test]
-    fn test_paginate_output_large_text_first_page() {
-        let text = "a".repeat(3000);
-        let (page, meta) = paginate_output(&text, 1, 1024);
-        assert_eq!(page.len(), 1024);
+    fn test_paginate_output_multiline_first_page() {
+        let text: String = (0..250).map(|i| format!("line {}\n", i)).collect();
+        // 250 lines, page_size = 100 → 3 pages
+        let (page, meta) = paginate_output(&text, 1, 100);
+        assert_eq!(page.lines().count(), 100);
         assert!(meta.is_truncated);
-        assert_eq!(meta.total_chars, 3000);
+        assert_eq!(meta.total_lines, 250);
         assert_eq!(meta.total_pages, 3);
         assert_eq!(meta.current_page, 1);
     }
 
     #[test]
-    fn test_paginate_output_large_text_second_page() {
-        let text = "a".repeat(3000);
-        let (page, meta) = paginate_output(&text, 2, 1024);
-        assert_eq!(page.len(), 1024);
+    fn test_paginate_output_multiline_second_page() {
+        let text: String = (0..250).map(|i| format!("line {}\n", i)).collect();
+        let (page, meta) = paginate_output(&text, 2, 100);
+        assert_eq!(page.lines().count(), 100);
         assert_eq!(meta.current_page, 2);
     }
 
     #[test]
     fn test_paginate_output_last_page() {
-        let text = "a".repeat(2500);
-        let (page, meta) = paginate_output(&text, 3, 1024);
-        // Last page: 2500 - 2*1024 = 452 chars
-        assert_eq!(page.len(), 452);
+        let text: String = (0..250).map(|i| format!("line {}\n", i)).collect();
+        let (page, meta) = paginate_output(&text, 3, 100);
+        // Last page: 50 lines remaining
+        assert_eq!(page.lines().count(), 50);
         assert_eq!(meta.current_page, 3);
         assert_eq!(meta.total_pages, 3);
     }
 
     #[test]
     fn test_paginate_output_page_zero_defaults_to_one() {
-        let text = "a".repeat(3000);
-        let (_page, meta) = paginate_output(&text, 0, 1024);
+        let text: String = (0..250).map(|i| format!("line {}\n", i)).collect();
+        let (_page, meta) = paginate_output(&text, 0, 100);
         assert_eq!(meta.current_page, 1);
     }
 
     #[test]
     fn test_paginate_output_page_beyond_clamped() {
-        let text = "a".repeat(2000);
-        let (page, meta) = paginate_output(&text, 5, 1024);
-        // Clamped to page 2
+        let text: String = (0..150).map(|i| format!("line {}\n", i)).collect();
+        let (page, meta) = paginate_output(&text, 5, 100);
+        // Clamped to page 2 (150 lines, 100 lines/page)
         assert_eq!(meta.current_page, 2);
-        assert_eq!(page.len(), 976); // 2000 - 1024
+        assert_eq!(page.lines().count(), 50);
     }
 
     #[test]
     fn test_paginate_output_page_size_zero_shows_all() {
-        let text = "a".repeat(5000);
+        let text: String = (0..500).map(|i| format!("line {}\n", i)).collect();
         let (page, meta) = paginate_output(&text, 1, 0);
-        assert_eq!(page.len(), 5000);
+        assert_eq!(page.lines().count(), 500);
         assert!(!meta.is_truncated);
         assert_eq!(meta.total_pages, 1);
-    }
-
-    #[test]
-    fn test_paginate_output_newline_boundary() {
-        // Text with a newline near the 1024 boundary
-        let mut text = String::with_capacity(2000);
-        for i in 0..50 {
-            text.push_str(&format!("Line {} with some content to fill space\n", i));
-        }
-        let (page, _meta) = paginate_output(&text, 1, 1024);
-        // Should break on a newline within last 25% of page
-        assert!(page.ends_with('\n'));
-        assert!(page.len() >= 768); // at least 75% of page_size
     }
 
     #[test]
@@ -10058,16 +10259,16 @@ mod tests {
         let params = json!({});
         let (page, page_size, show_all) = parse_page_opts(&params);
         assert_eq!(page, 1);
-        assert_eq!(page_size, 1024);
+        assert_eq!(page_size, 100);
         assert!(!show_all);
     }
 
     #[test]
     fn test_parse_page_opts_explicit() {
-        let params = json!({"page": "3", "page-size": "500", "all": true});
+        let params = json!({"page": "3", "page-size": "50", "all": true});
         let (page, page_size, show_all) = parse_page_opts(&params);
         assert_eq!(page, 3);
-        assert_eq!(page_size, 500);
+        assert_eq!(page_size, 50);
         assert!(show_all);
     }
 
@@ -10075,14 +10276,15 @@ mod tests {
     fn test_format_pagination_footer() {
         let meta = PaginationMeta {
             total_chars: 5000,
+            total_lines: 500,
             current_page: 1,
             total_pages: 5,
-            page_size: 1024,
+            page_size: 100,
             is_truncated: true,
         };
         let footer = format_pagination_footer(&meta);
         assert!(footer.contains("Page 1/5"));
-        assert!(footer.contains("1.0K of 4.9K"));
+        assert!(footer.contains("100 lines of 500 total"));
         assert!(footer.contains("--page N"));
         assert!(footer.contains("--all"));
     }

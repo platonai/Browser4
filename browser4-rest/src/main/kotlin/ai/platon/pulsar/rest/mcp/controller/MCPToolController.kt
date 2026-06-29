@@ -53,13 +53,30 @@ data class MCPToolCallResponse(
     @get:JsonProperty("isError")
     @param:JsonSetter(nulls = Nulls.SKIP)
     @param:JsonProperty("isError")
-    val isError: Boolean = false
+    val isError: Boolean = false,
+    @get:JsonProperty("_pagination")
+    @param:JsonProperty("_pagination")
+    val pagination: PaginationMeta? = null
 )
 
 @JsonInclude(JsonInclude.Include.NON_NULL)
 data class MCPContent(
     @param:JsonProperty("type") val type: String = "text",
     @param:JsonProperty("text") val text: String
+)
+
+/**
+ * Server-side pagination metadata attached to paginated MCP responses.
+ * The CLI reads this to display a pagination footer without needing to
+ * re-paginate locally.
+ */
+@JsonInclude(JsonInclude.Include.NON_NULL)
+data class PaginationMeta(
+    @param:JsonProperty("page") val page: Int,
+    @param:JsonProperty("totalPages") val totalPages: Int,
+    @param:JsonProperty("totalLines") val totalLines: Int,
+    @param:JsonProperty("pageSize") val pageSize: Int,
+    @param:JsonProperty("truncated") val truncated: Boolean = true
 )
 
 // ---------------------------------------------------------------------------
@@ -935,7 +952,9 @@ class MCPToolController(
                 }
             }
 
-            ResponseEntity.ok(textResponse(jacksonObjectMapper().writeValueAsString(results)))
+            val json = jacksonObjectMapper().writeValueAsString(results)
+            val (paginatedJson, pagination) = paginateIfRequested(json, args)
+            ResponseEntity.ok(textResponse(paginatedJson, pagination))
         } catch (e: Exception) {
             logger.error("dom_snapshot_scrape_all failed | {}", e.message, e)
             ResponseEntity.ok(errorResponse("dom_snapshot_scrape_all failed: ${e.message}"))
@@ -998,7 +1017,9 @@ class MCPToolController(
                 // good, the exported HTML is pretty formatted, so grep works on it
                 document.outerHtml
             }
-            ResponseEntity.ok(textResponse(html))
+            val args = request.arguments ?: emptyMap()
+            val (paginatedHtml, pagination) = paginateIfRequested(html, args)
+            ResponseEntity.ok(textResponse(paginatedHtml, pagination))
         } catch (e: Exception) {
             logger.error("dom_snapshot_export failed | {}", e.message, e)
             ResponseEntity.ok(errorResponse("dom_snapshot_export failed: ${e.message}"))
@@ -1221,7 +1242,12 @@ class MCPToolController(
                     // Maps, Lists, arrays etc. — serialize as valid JSON
                     else -> jacksonObjectMapper().writeValueAsString(v)
                 }
-                ResponseEntity.ok(textResponse(text))
+
+                // Server-side pagination: when page/page-size are present, paginate
+                // the result text to reduce network traffic for large snapshots.
+                val requestArgs = request.arguments ?: emptyMap()
+                val (paginatedText, pagination) = paginateIfRequested(text, requestArgs)
+                ResponseEntity.ok(textResponse(paginatedText, pagination))
             }
         } catch (e: Exception) {
             logger.warn(
@@ -1409,8 +1435,48 @@ class MCPToolController(
             ?: throw IllegalArgumentException("Missing required parameter: ${MCPConstants.KEY_SESSION_ID}")
     }
 
+    /**
+     * Parse pagination options from tool arguments and, when active, paginate
+     * [text] by lines.  Returns a pair of (paginatedContent, paginationMeta).
+     * When pagination is disabled (--all, no --page-size, or text fits), returns
+     * the full text with a null meta.
+     */
+    private fun paginateIfRequested(
+        text: String,
+        args: Map<String, Any?>
+    ): Pair<String, PaginationMeta?> {
+        val showAll = args["all"].toBooleanValue() ?: false
+        val pageSize = (args["page-size"] as? Number)?.toInt() ?: 0
+        if (showAll || pageSize <= 0) return Pair(text, null)
+
+        val page = (args["page"] as? Number)?.toInt() ?: 1
+        val effectivePage = if (page < 1) 1 else page
+
+        val lines = text.lines()
+        val totalLines = lines.size
+        if (totalLines <= pageSize) return Pair(text, null)
+
+        val totalPages = (totalLines + pageSize - 1) / pageSize
+        val currentPage = effectivePage.coerceAtMost(totalPages)
+        val startLine = (currentPage - 1) * pageSize
+        val endLine = (startLine + pageSize).coerceAtMost(totalLines)
+
+        val pageContent = lines.subList(startLine, endLine).joinToString("\n")
+        val meta = PaginationMeta(
+            page = currentPage,
+            totalPages = totalPages,
+            totalLines = totalLines,
+            pageSize = pageSize,
+            truncated = true
+        )
+        return Pair(pageContent, meta)
+    }
+
     private fun textResponse(text: String): MCPToolCallResponse =
         MCPToolCallResponse(content = listOf(MCPContent(text = text)))
+
+    private fun textResponse(text: String, pagination: PaginationMeta?): MCPToolCallResponse =
+        MCPToolCallResponse(content = listOf(MCPContent(text = text)), pagination = pagination)
 
     private fun errorResponse(message: String): MCPToolCallResponse =
         MCPToolCallResponse(content = listOf(MCPContent(text = "ERROR: $message")), isError = true)

@@ -1008,11 +1008,13 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "compact", description: "Remove empty structural elements (enabled by default)", is_bool: true, short: Some("c") },
                 OptionDef { name: "no-compact", description: "Disable compact mode; include all structural nodes", is_bool: true, short: None },
                 OptionDef { name: "depth", description: "Limit tree depth to n levels", is_bool: false, short: Some("d") },
-                OptionDef { name: "limit", description: "Cap total rendered nodes at n (truncates with notice)", is_bool: false, short: Some("l") },
                 OptionDef { name: "selector", description: "Scope snapshot to a CSS selector", is_bool: false, short: Some("s") },
                 OptionDef { name: "raw", description: "Strip page info and return only snapshot content (alias for --stdout)", is_bool: true, short: None },
                 OptionDef { name: "stdout", description: "Print snapshot content to stdout instead of saving to file", is_bool: true, short: None },
                 OptionDef { name: "viewport", description: "Capture only specified viewports: single index (3), comma list (0,2,4), range (1-3), or mixed (0,2-4,7)", is_bool: false, short: Some("vp") },
+                OptionDef { name: "page", short: None, is_bool: false, description: "Page number for paginated snapshot output (1-based, default: 1)" },
+                OptionDef { name: "page-size", short: None, is_bool: false, description: "Lines per page for snapshot output (default: 100)" },
+                OptionDef { name: "all", short: None, is_bool: true, description: "Show all output, disabling pagination" },
             ],
             tool_name_fn: |_| "browser_snapshot".to_string(),
             tool_params_fn: |args| {
@@ -1026,15 +1028,16 @@ pub fn all_commands() -> Vec<CommandDef> {
                 if let Some(d) = get_opt_str(args, "depth") {
                     if let Ok(n) = d.parse::<i32>() { p["depth"] = json!(n); }
                 }
-                if let Some(l) = get_opt_str(args, "limit") {
-                    if let Ok(n) = l.parse::<i32>() { p["limit"] = json!(n); }
-                }
                 if let Some(s) = get_opt_str(args, "selector") { p["selector"] = json!(s); }
                 if let Some(v) = get_opt_str(args, "viewport") { p["viewports"] = json!(v); }
                 // Pass through CLI-side flags so the handler can check them
                 // (they are stripped from server-bound args in handle_snapshot).
                 if let Some(true) = get_bool(args, "raw") { p["raw"] = json!(true); }
                 if let Some(true) = get_bool(args, "stdout") { p["stdout"] = json!(true); }
+                // Pagination flags (CLI-side, not sent to server)
+                if let Some(true) = get_bool(args, "all") { p["all"] = json!(true); }
+                if let Some(pg) = get_opt_str(args, "page") { p["page"] = json!(pg); }
+                if let Some(ps) = get_opt_str(args, "page-size") { p["page-size"] = json!(ps); }
                 p
             },
         },
@@ -1060,7 +1063,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "word-regexp", short: Some("w"), is_bool: true, description: "Match only whole words" },
                 OptionDef { name: "selector", short: None, is_bool: false, description: "CSS selector to scope the search to" },
                 OptionDef { name: "page", short: None, is_bool: false, description: "Page number (1-based, default: 1)" },
-                OptionDef { name: "page-size", short: None, is_bool: false, description: "Characters per page (default: 1024)" },
+                OptionDef { name: "page-size", short: None, is_bool: false, description: "Lines per page (default: 100)" },
                 OptionDef { name: "all", short: None, is_bool: true, description: "Show all output, disabling pagination" },
             ],
             tool_name_fn: |_| "browser_snapshot".to_string(),
@@ -1086,6 +1089,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             ],
             options: &[
                 OptionDef { name: "file", description: "Read JavaScript expression from a file instead of the command line", is_bool: false, short: None },
+                OptionDef { name: "stdin", description: "Read JavaScript expression from stdin (useful for piping multi-line scripts without shell quoting)", is_bool: true, short: None },
                 OptionDef { name: "json", description: "Serialize the result as JSON (quotes strings, wraps scalars)", is_bool: true, short: None },
             ],
             tool_name_fn: |_| "browser_evaluate".to_string(),
@@ -2055,7 +2059,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             ],
             options: &[
                 OptionDef { name: "page", short: None, is_bool: false, description: "Page number (1-based, default: 1)" },
-                OptionDef { name: "page-size", short: None, is_bool: false, description: "Characters per page (default: 1024)" },
+                OptionDef { name: "page-size", short: None, is_bool: false, description: "Lines per page (default: 100)" },
                 OptionDef { name: "all", short: None, is_bool: true, description: "Show all output, disabling pagination" },
             ],
             tool_name_fn: |_| "dom_snapshot_scrape".to_string(),
@@ -2082,7 +2086,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "offset", description: "Skip the first n results (0-based)", is_bool: false, short: None },
                 OptionDef { name: "limit", description: "Return at most n results", is_bool: false, short: None },
                 OptionDef { name: "page", short: None, is_bool: false, description: "Page number for paginated output (default: 1)" },
-                OptionDef { name: "page-size", short: None, is_bool: false, description: "Characters per page (default: 1024)" },
+                OptionDef { name: "page-size", short: None, is_bool: false, description: "Lines per page (default: 100)" },
                 OptionDef { name: "all", short: None, is_bool: true, description: "Show all output, disabling pagination" },
             ],
             tool_name_fn: |_| "dom_snapshot_scrape_all".to_string(),
@@ -2179,7 +2183,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "word-regexp", short: Some("w"), is_bool: true, description: "Match only whole words" },
                 OptionDef { name: "selector", short: None, is_bool: false, description: "CSS selector to scope the search to" },
                 OptionDef { name: "page", short: None, is_bool: false, description: "Page number (1-based, default: 1)" },
-                OptionDef { name: "page-size", short: None, is_bool: false, description: "Characters per page (default: 1024)" },
+                OptionDef { name: "page-size", short: None, is_bool: false, description: "Lines per page (default: 100)" },
                 OptionDef { name: "all", short: None, is_bool: true, description: "Show all output, disabling pagination" },
             ],
             tool_name_fn: |_| "dom_snapshot_export".to_string(),
@@ -3679,26 +3683,6 @@ mod tests {
     // -------------------------------------------------------------------
     // snapshot --limit and --no-compact tests
     // -------------------------------------------------------------------
-
-    #[test]
-    fn test_snapshot_limit_param() {
-        let map = commands_map();
-        let cmd = map.get("snapshot").unwrap();
-        let mut args = HashMap::new();
-        args.insert("limit".to_string(), json!("200"));
-        let params = (cmd.tool_params_fn)(&args);
-        assert_eq!(params["limit"], 200);
-    }
-
-    #[test]
-    fn test_snapshot_limit_rejects_invalid() {
-        let map = commands_map();
-        let cmd = map.get("snapshot").unwrap();
-        let mut args = HashMap::new();
-        args.insert("limit".to_string(), json!("abc"));
-        let params = (cmd.tool_params_fn)(&args);
-        assert!(params.get("limit").is_none(), "non-numeric limit should be ignored");
-    }
 
     #[test]
     fn test_snapshot_no_compact_sends_false() {
