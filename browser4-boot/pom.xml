@@ -39,6 +39,27 @@
             <version>1.0.1-slim</version>
         </dependency>
 
+        <!-- gora-core 1.0.1-slim excludes ALL transitive deps of hadoop-common
+             (wildcard exclusion: <exclusion><artifactId>*</artifactId><groupId>*</groupId></exclusion>).
+             Declare hadoop-common explicitly so its runtime dependencies
+             (woodstox-core, stax2-api, shaded-guava, etc.) are resolved.
+             Exclude reload4j logging — Spring Boot uses Logback. -->
+        <dependency>
+            <groupId>org.apache.hadoop</groupId>
+            <artifactId>hadoop-common</artifactId>
+            <version>3.4.2</version>
+            <exclusions>
+                <exclusion>
+                    <groupId>ch.qos.reload4j</groupId>
+                    <artifactId>reload4j</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>org.slf4j</groupId>
+                    <artifactId>slf4j-reload4j</artifactId>
+                </exclusion>
+            </exclusions>
+        </dependency>
+
         <dependency>
             <groupId>ai.platon.pulsar</groupId>
             <artifactId>browser4-skeleton</artifactId>
