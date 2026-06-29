@@ -684,7 +684,12 @@ open class InteractiveBrowserEmulator(
         try {
             var msg: Any? = null
             while ((msg == null || msg == false) && i++ < maxRound && isActive && !fetchTask.isCanceled) {
-                msg = evaluate(interactTask, expression)
+                msg = try {
+                    evaluate(interactTask, expression)
+                } catch (e: RuntimeException) {
+                    logger.debug("Failed to evaluate '{}' at attempt {}: {}", expression, i, e.message)
+                    null
+                }
 
                 if (msg == null || msg == false) {
                     delay(delayMillis.milliseconds)
