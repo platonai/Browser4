@@ -2375,6 +2375,11 @@ mod tests {
             "swarm-status",
             "swarm-result",
             "crawl",
+            "skill-list",
+            "skill-info",
+            "skill-install",
+            "skill-uninstall",
+            "skill-reload",
         ] {
             assert!(map.contains_key(*expected), "Missing command: {}", expected);
         }
@@ -4308,5 +4313,100 @@ mod tests {
         let cmd = cmds.get("attach").unwrap();
         let has_extension = cmd.options.iter().any(|o| o.name == "extension");
         assert!(has_extension, "attach command should have --extension option");
+    }
+
+    // ---- Skill management command tests ----
+
+    #[test]
+    fn test_skill_list_tool_name_and_params() {
+        let cmds = commands_map();
+        let cmd = cmds.get("skill-list").unwrap();
+        let args = HashMap::new();
+        assert_eq!((cmd.tool_name_fn)(&args), "skill_list");
+        assert_eq!((cmd.tool_params_fn)(&args), json!({}));
+        assert_eq!(cmd.category.as_str(), "skill");
+        assert!(!cmd.hidden);
+        assert!(!cmd.batch_supported);
+    }
+
+    #[test]
+    fn test_skill_info_tool_name_and_params() {
+        let cmds = commands_map();
+        let cmd = cmds.get("skill-info").unwrap();
+        let mut args = HashMap::new();
+        args.insert("id".to_string(), json!("web-scraping"));
+        assert_eq!((cmd.tool_name_fn)(&args), "skill_info");
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["id"], "web-scraping");
+    }
+
+    #[test]
+    fn test_skill_info_requires_id_arg() {
+        let cmds = commands_map();
+        let cmd = cmds.get("skill-info").unwrap();
+        assert_eq!(cmd.args.len(), 1);
+        assert_eq!(cmd.args[0].name, "id");
+        assert!(!cmd.args[0].optional, "id arg should be required");
+    }
+
+    #[test]
+    fn test_skill_install_tool_name_and_params() {
+        let cmds = commands_map();
+        let cmd = cmds.get("skill-install").unwrap();
+        let mut args = HashMap::new();
+        args.insert("path".to_string(), json!("/path/to/skill"));
+        assert_eq!((cmd.tool_name_fn)(&args), "skill_install");
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["path"], "/path/to/skill");
+        assert!(params.get("overwrite").is_none());
+    }
+
+    #[test]
+    fn test_skill_install_with_overwrite_option() {
+        let cmds = commands_map();
+        let cmd = cmds.get("skill-install").unwrap();
+        let mut args = HashMap::new();
+        args.insert("path".to_string(), json!("/path/to/skill"));
+        args.insert("overwrite".to_string(), json!(true));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["path"], "/path/to/skill");
+        assert_eq!(params["overwrite"], "true");
+    }
+
+    #[test]
+    fn test_skill_uninstall_tool_name_and_params() {
+        let cmds = commands_map();
+        let cmd = cmds.get("skill-uninstall").unwrap();
+        let mut args = HashMap::new();
+        args.insert("id".to_string(), json!("web-scraping"));
+        assert_eq!((cmd.tool_name_fn)(&args), "skill_uninstall");
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["id"], "web-scraping");
+    }
+
+    #[test]
+    fn test_skill_reload_tool_name_and_params() {
+        let cmds = commands_map();
+        let cmd = cmds.get("skill-reload").unwrap();
+        let mut args = HashMap::new();
+        args.insert("id".to_string(), json!("web-scraping"));
+        assert_eq!((cmd.tool_name_fn)(&args), "skill_reload");
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["id"], "web-scraping");
+    }
+
+    #[test]
+    fn test_skill_commands_all_have_skill_category() {
+        let cmds = commands_map();
+        for name in &["skill-list", "skill-info", "skill-install", "skill-uninstall", "skill-reload"] {
+            let cmd = cmds.get(*name).unwrap();
+            assert_eq!(
+                cmd.category.as_str(),
+                "skill",
+                "Command '{}' should have skill category, got '{}'",
+                name,
+                cmd.category.as_str()
+            );
+        }
     }
 }

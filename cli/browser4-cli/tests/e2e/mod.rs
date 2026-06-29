@@ -3336,6 +3336,13 @@ fn excluded_commands(include_batch_command: bool) -> HashSet<&'static str> {
         "doctor",
         // Uninstall requires npm/cargo on $PATH; not exercised in e2e.
         "uninstall",
+        // Skill management commands — require skills directory setup on the
+        // server side; not yet exercised in e2e.
+        "skill-list",
+        "skill-info",
+        "skill-install",
+        "skill-uninstall",
+        "skill-reload",
     ]
     .into();
 

@@ -4,6 +4,7 @@ import ai.platon.pulsar.agentic.skills.*
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.BeforeEach
+import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
 import org.mockito.Mockito
 import org.springframework.context.ApplicationContext
@@ -59,7 +60,8 @@ class SkillServiceTest {
     // ---- listSkills() ----
 
     @Test
-    fun `listSkills returns empty list when no skills registered`() {
+    @DisplayName("listSkills returns empty list when no skills registered")
+    fun testListSkillsReturnsEmptyWhenNoneRegistered() {
         val registry = SkillRegistry.instance
         val service = SkillService(
             mockAppContext(),
@@ -72,7 +74,8 @@ class SkillServiceTest {
     }
 
     @Test
-    fun `listSkills returns summaries for registered skills`() = runBlocking {
+    @DisplayName("listSkills returns summaries for registered skills")
+    fun testListSkillsReturnsSummariesForRegisteredSkills() = runBlocking {
         val registry = SkillRegistry.instance
         val context = SkillContext(sessionId = "test")
         val skillDir = createSkillDir(createTempSkillsDir(), "test-skill")
@@ -104,13 +107,15 @@ class SkillServiceTest {
     // ---- getSkill() ----
 
     @Test
-    fun `getSkill returns null when skill not found`() {
+    @DisplayName("getSkill returns null when skill not found")
+    fun testGetSkillReturnsNullWhenNotFound() {
         val service = SkillService(mockAppContext(), createTempSkillsDir())
         assertNull(service.getSkill("nonexistent"))
     }
 
     @Test
-    fun `getSkill returns detail for registered skill`() = runBlocking {
+    @DisplayName("getSkill returns detail for registered skill")
+    fun testGetSkillReturnsDetailForRegisteredSkill() = runBlocking {
         val registry = SkillRegistry.instance
         val context = SkillContext(sessionId = "test")
         val skillDir = createSkillDir(createTempSkillsDir(), "my-skill", description = "Does something useful")
@@ -144,7 +149,8 @@ class SkillServiceTest {
     // ---- installSkill() ----
 
     @Test
-    fun `installSkill throws on non-directory source`() = runBlocking {
+    @DisplayName("installSkill throws IllegalArgumentException on non-directory source")
+    fun testInstallSkillThrowsOnNonDirectorySource() = runBlocking {
         val service = SkillService(mockAppContext(), createTempSkillsDir())
 
         try {
@@ -156,7 +162,8 @@ class SkillServiceTest {
     }
 
     @Test
-    fun `installSkill throws when SKILL_md missing`() = runBlocking {
+    @DisplayName("installSkill throws IllegalArgumentException when SKILL.md missing")
+    fun testInstallSkillThrowsWhenSkillMdMissing() = runBlocking {
         val emptyDir = Files.createTempDirectory("empty-skill-")
         val service = SkillService(mockAppContext(), createTempSkillsDir())
 
@@ -171,7 +178,8 @@ class SkillServiceTest {
     // ---- uninstallSkill() ----
 
     @Test
-    fun `uninstallSkill throws for unregistered skill`() = runBlocking {
+    @DisplayName("uninstallSkill throws IllegalArgumentException for unregistered skill")
+    fun testUninstallSkillThrowsForUnregisteredSkill() = runBlocking {
         val service = SkillService(mockAppContext(), createTempSkillsDir())
 
         try {
@@ -185,7 +193,8 @@ class SkillServiceTest {
     // ---- reloadSkill() ----
 
     @Test
-    fun `reloadSkill throws when skill not found`() = runBlocking {
+    @DisplayName("reloadSkill throws IllegalArgumentException when skill not found")
+    fun testReloadSkillThrowsWhenSkillNotFound() = runBlocking {
         val service = SkillService(mockAppContext(), createTempSkillsDir())
 
         try {

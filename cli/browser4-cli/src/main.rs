@@ -8173,6 +8173,15 @@ mod tests {
     }
 
     #[test]
+    fn no_snapshot_commands_include_skill_commands() {
+        assert!(no_snapshot_commands().contains("skill-list"));
+        assert!(no_snapshot_commands().contains("skill-info"));
+        assert!(no_snapshot_commands().contains("skill-install"));
+        assert!(no_snapshot_commands().contains("skill-uninstall"));
+        assert!(no_snapshot_commands().contains("skill-reload"));
+    }
+
+    #[test]
     fn resolve_storage_state_path_uses_current_directory() {
         // Serialize with other tests that modify the process-wide cwd so
         // they don't race and cause flaky failures.
@@ -8598,6 +8607,16 @@ mod tests {
     }
 
     #[test]
+    fn should_ensure_server_for_skill_commands() {
+        // Skill commands need the server running — they call MCP tools
+        assert!(should_ensure_server_running("skill-list"));
+        assert!(should_ensure_server_running("skill-info"));
+        assert!(should_ensure_server_running("skill-install"));
+        assert!(should_ensure_server_running("skill-uninstall"));
+        assert!(should_ensure_server_running("skill-reload"));
+    }
+
+    #[test]
     fn get_session_id_for_close_returns_none_without_session_id() {
         assert_eq!(get_session_id_for_close(&CliState::default()), None);
     }
@@ -8683,6 +8702,67 @@ mod tests {
     }
 
     #[test]
+    fn normalize_command_invocation_maps_skill_prefix_to_skill_command() {
+        let global = args::GlobalFlags {
+            session_name: None,
+            server_url: None,
+            json: false,
+            quiet: false,
+            proxy_url: None,
+            args: vec!["skill".to_string(), "list".to_string()],
+        };
+
+        let (command, normalized, from_spaced_prefix) = normalize_command_invocation(&global);
+
+        assert_eq!(command, "skill-list");
+        assert_eq!(normalized.args[0], "skill-list");
+        assert!(from_spaced_prefix);
+    }
+
+    #[test]
+    fn normalize_command_invocation_leaves_skill_prefixed_form_unchanged() {
+        let global = args::GlobalFlags {
+            session_name: None,
+            server_url: None,
+            json: false,
+            quiet: false,
+            proxy_url: None,
+            args: vec!["skill-install".to_string(), "/path/to/skill".to_string()],
+        };
+
+        let (command, normalized, from_spaced_prefix) = normalize_command_invocation(&global);
+
+        assert_eq!(command, "skill-install");
+        assert_eq!(normalized.args[0], "skill-install");
+        assert_eq!(normalized.args[1], "/path/to/skill");
+        assert!(!from_spaced_prefix);
+    }
+
+    #[test]
+    fn rewrite_prefixed_command_supports_skill_list() {
+        let rewritten = rewrite_prefixed_command(&[
+            "skill".to_string(),
+            "list".to_string(),
+        ])
+        .unwrap();
+
+        assert_eq!(rewritten[0], "skill-list");
+    }
+
+    #[test]
+    fn rewrite_prefixed_command_supports_skill_install() {
+        let rewritten = rewrite_prefixed_command(&[
+            "skill".to_string(),
+            "install".to_string(),
+            "/path/to/skill".to_string(),
+        ])
+        .unwrap();
+
+        assert_eq!(rewritten[0], "skill-install");
+        assert_eq!(rewritten[1], "/path/to/skill");
+    }
+
+    #[test]
     fn rewrite_prefixed_command_rejects_legacy_co_prefix() {
         assert!(rewrite_prefixed_command(&["co".to_string(), "create".to_string(),]).is_none());
     }
@@ -8759,6 +8839,26 @@ mod tests {
             preferred_spaced_command_form("domsnapshot-get-all"),
             Some("domsnapshot get all")
         );
+        assert_eq!(
+            preferred_spaced_command_form("skill-list"),
+            Some("skill list")
+        );
+        assert_eq!(
+            preferred_spaced_command_form("skill-info"),
+            Some("skill info")
+        );
+        assert_eq!(
+            preferred_spaced_command_form("skill-install"),
+            Some("skill install")
+        );
+        assert_eq!(
+            preferred_spaced_command_form("skill-uninstall"),
+            Some("skill uninstall")
+        );
+        assert_eq!(
+            preferred_spaced_command_form("skill-reload"),
+            Some("skill reload")
+        );
     }
 
     #[test]
@@ -8776,6 +8876,10 @@ mod tests {
             Some("swarm <subcommand>")
         );
         assert_eq!(preferred_prefixed_group_form("open"), None);
+        assert_eq!(
+            preferred_prefixed_group_form("skill"),
+            Some("skill <subcommand>")
+        );
         // `domsnapshot` is a valid standalone command — not just a prefix group.
         assert_eq!(preferred_prefixed_group_form("domsnapshot"), None);
     }

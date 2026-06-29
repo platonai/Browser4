@@ -196,6 +196,11 @@ class SkillController(
                     mapOf("success" to false, "skillId" to result.skillId, "message" to result.message)
                 )
             }
+        } catch (e: IllegalArgumentException) {
+            logger.warn("Skill not found for uninstall: {}", id)
+            ResponseEntity.badRequest().body(
+                mapOf("success" to false, "skillId" to id, "message" to (e.message ?: "Invalid request"))
+            )
         } catch (e: Exception) {
             logger.warn("Failed to uninstall skill '{}': {}", id, e.message)
             ResponseEntity.internalServerError().body(

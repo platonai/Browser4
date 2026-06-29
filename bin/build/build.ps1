@@ -220,9 +220,11 @@ Flags:
   --cli                         Build Rust CLI frontend only (skip Maven)
   -ac, --also-cli               Also build the Rust CLI frontend
                                 (run after Maven, if Maven is not skipped)
+  -clean, --clean               Run `mvn clean` before building
+                                (equivalent to mvn clean install ...)
   -h, --help                    Print this help message
 
-Defaults:  skipTests=true   no profiles   no CLI   no debug
+Defaults:  skipTests=true   no profiles   no CLI   no debug   no clean
 
 Examples:
   .\bin\build\build.ps1
@@ -329,6 +331,7 @@ $ResumeFromFailure = $false
 $DebugMode = $false
 $CliOnly = $false
 $AlsoCli = $false
+$RunClean = $false
 $Projects = $null
 $AdditionalMvnArgs = @()
 
@@ -358,6 +361,8 @@ while ($i -lt $args.Count) {
     '--cli'                 { $CliOnly = $true }
     '-ac'                   { $AlsoCli = $true }
     '--also-cli'            { $AlsoCli = $true }
+    '-clean'                { $RunClean = $true }
+    '--clean'               { $RunClean = $true }
     '-h'                    { $ShowHelp = $true }
     '--help'                { $ShowHelp = $true }
     default {
@@ -467,6 +472,9 @@ if ($ResumeFromFailure) {
 }
 
 # --- Goal ---
+if ($RunClean) {
+  [void]$MvnOptions.Add('clean')
+}
 [void]$MvnOptions.Add('install')
 
 # --- User-passed extra args ---
