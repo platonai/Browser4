@@ -1,5 +1,6 @@
 package ai.platon.pulsar.rest.mcp.controller
 
+import ai.platon.browser4.boot.skill.SkillService
 import ai.platon.pulsar.agent.tool.UserCommandExecutor
 import ai.platon.pulsar.common.brief
 import ai.platon.pulsar.rest.api.service.CrawlService
@@ -12,6 +13,7 @@ import ai.platon.pulsar.rest.mcp.controller.handler.CommandHandler
 import ai.platon.pulsar.rest.mcp.controller.handler.CrawlMcpHandler
 import ai.platon.pulsar.rest.mcp.controller.handler.DomSnapshotHandler
 import ai.platon.pulsar.rest.mcp.controller.handler.SessionManagementHandler
+import ai.platon.pulsar.rest.mcp.controller.handler.SkillMcpHandler
 import ai.platon.pulsar.rest.mcp.controller.handler.SwarmMcpHandler
 import ai.platon.pulsar.rest.mcp.controller.handler.ToolListHandler
 import ai.platon.pulsar.rest.session.PulsarSessionManager
@@ -45,6 +47,7 @@ class MCPToolController(
     private val objectMapper: ObjectMapper,
     private val swarmService: SwarmService? = null,
     private val crawlService: CrawlService? = null,
+    private val skillService: SkillService? = null,
 ) {
     private val logger = LoggerFactory.getLogger(MCPToolController::class.java)
 
@@ -54,6 +57,7 @@ class MCPToolController(
     private val domSnapshotHandler = DomSnapshotHandler(sessionManager, scrapeService, objectMapper)
     private val swarmMcpHandler = swarmService?.let { SwarmMcpHandler(it, objectMapper) }
     private val crawlMcpHandler = crawlService?.let { CrawlMcpHandler(it, objectMapper) }
+    private val skillMcpHandler = skillService?.let { SkillMcpHandler(it, objectMapper) }
     private val toolListHandler = ToolListHandler(sessionManager)
 
     // =========================================================================
@@ -101,6 +105,12 @@ class MCPToolController(
                 "crawl_submit" -> requireHandler(crawlMcpHandler).handleCrawlSubmit(request)
                 "crawl_status" -> requireHandler(crawlMcpHandler).handleCrawlStatus(request)
                 "crawl_result" -> requireHandler(crawlMcpHandler).handleCrawlResult(request)
+                // Skill management tools
+                "skill_list" -> requireHandler(skillMcpHandler).handleSkillList()
+                "skill_info" -> requireHandler(skillMcpHandler).handleSkillInfo(request)
+                "skill_install" -> requireHandler(skillMcpHandler).handleSkillInstall(request)
+                "skill_uninstall" -> requireHandler(skillMcpHandler).handleSkillUninstall(request)
+                "skill_reload" -> requireHandler(skillMcpHandler).handleSkillReload(request)
                 // All other tools are dispatched to the session's agent
                 else -> dispatchToAgentToolExecutor(request)
             }

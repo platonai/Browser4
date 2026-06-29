@@ -283,6 +283,11 @@ fn no_snapshot_commands() -> HashSet<&'static str> {
         "domsnapshot-export",
         "domsnapshot-summary",
         "domsnapshot-grep",
+        "skill-list",
+        "skill-info",
+        "skill-install",
+        "skill-uninstall",
+        "skill-reload",
     ]
     .into()
 }
@@ -1327,6 +1332,17 @@ async fn handle_close_all(client: &Client, base_url: &str) -> Result<(), String>
     json_field("errors", json!(close_summary.errors));
 
     log_close_all_summary(&close_summary, "close-all");
+    Ok(())
+}
+
+async fn handle_skill_command(
+    client: &Client,
+    base_url: &str,
+    tool_name: &str,
+    tool_params: &Value,
+) -> Result<(), String> {
+    let result = call_tool(client, base_url, tool_name, tool_params.clone()).await?;
+    cli_println!("{}", result);
     Ok(())
 }
 
@@ -6267,6 +6283,7 @@ fn rewrite_prefixed_command(args: &[String]) -> Option<Vec<String>> {
     let rewritten_command = match prefix {
         "swarm" => format!("swarm-{}", sub),
         "agent" => format!("agent-{}", sub),
+        "skill" => format!("skill-{}", sub),
         "domsnapshot" => format!("domsnapshot-{}", sub),
         "snapshot" => format!("snapshot-{}", sub),
         _ => return None,
@@ -6297,6 +6314,11 @@ fn preferred_spaced_command_form(command: &str) -> Option<&'static str> {
         "domsnapshot-export" => Some("domsnapshot export"),
         "domsnapshot-summary" => Some("domsnapshot summary"),
         "domsnapshot-grep" => Some("domsnapshot grep"),
+        "skill-list" => Some("skill list"),
+        "skill-info" => Some("skill info"),
+        "skill-install" => Some("skill install"),
+        "skill-uninstall" => Some("skill uninstall"),
+        "skill-reload" => Some("skill reload"),
         _ => None,
     }
 }
@@ -6305,6 +6327,7 @@ fn preferred_prefixed_group_form(command: &str) -> Option<&'static str> {
     match command {
         "agent" => Some("agent <subcommand>"),
         "swarm" => Some("swarm <subcommand>"),
+        "skill" => Some("skill <subcommand>"),
         "co" => Some("swarm <subcommand>"),
         // `domsnapshot` is a valid standalone command (captures a DOM snapshot
         // and returns metadata), not just a prefix group — so it is intentionally
@@ -7903,6 +7926,9 @@ async fn run(
                 global.session_name.as_deref(),
             )
             .await?;
+        }
+        "skill-list" | "skill-info" | "skill-install" | "skill-uninstall" | "skill-reload" => {
+            handle_skill_command(&client, &base_url, &tool_name, &tool_params).await?;
         }
         _ => {
             if tool_name.is_empty() {

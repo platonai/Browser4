@@ -22,6 +22,7 @@ pub enum Category {
     Agent,
     Swarm,
     Snapshot,
+    Skill,
 }
 
 impl Category {
@@ -42,6 +43,7 @@ impl Category {
             Category::Agent => "agent",
             Category::Swarm => "swarm",
             Category::Snapshot => "snapshot",
+            Category::Skill => "skill",
         }
     }
 }
@@ -2203,6 +2205,85 @@ pub fn all_commands() -> Vec<CommandDef> {
                     }
                 }
                 p
+            },
+        },
+        // ---- Skill Management ----
+        CommandDef {
+            name: "skill-list",
+            description: "List all installed skills",
+            category: Category::Skill,
+            hidden: false,
+            batch_supported: false,
+            args: &[],
+            options: &[],
+            tool_name_fn: |_| "skill_list".to_string(),
+            tool_params_fn: |_| json!({}),
+        },
+        CommandDef {
+            name: "skill-info",
+            description: "Show detailed information about a skill",
+            category: Category::Skill,
+            hidden: false,
+            batch_supported: false,
+            args: &[ArgDef { name: "id", description: "Skill identifier", optional: false }],
+            options: &[],
+            tool_name_fn: |_| "skill_info".to_string(),
+            tool_params_fn: |args| {
+                let id = get_str(args, "id").unwrap_or_default();
+                json!({ "id": id })
+            },
+        },
+        CommandDef {
+            name: "skill-install",
+            description: "Install a skill from a directory containing SKILL.md",
+            category: Category::Skill,
+            hidden: false,
+            batch_supported: false,
+            args: &[ArgDef { name: "path", description: "Path to skill directory", optional: false }],
+            options: &[
+                OptionDef {
+                    name: "overwrite",
+                    description: "Overwrite existing skill with the same ID",
+                    is_bool: true,
+                    short: None,
+                },
+            ],
+            tool_name_fn: |_| "skill_install".to_string(),
+            tool_params_fn: |args| {
+                let path = get_str(args, "path").unwrap_or_default();
+                let mut p = json!({ "path": path });
+                if let Some(ow) = get_bool(args, "overwrite") {
+                    p["overwrite"] = json!(ow.to_string());
+                }
+                p
+            },
+        },
+        CommandDef {
+            name: "skill-uninstall",
+            description: "Uninstall a skill by ID",
+            category: Category::Skill,
+            hidden: false,
+            batch_supported: false,
+            args: &[ArgDef { name: "id", description: "Skill identifier", optional: false }],
+            options: &[],
+            tool_name_fn: |_| "skill_uninstall".to_string(),
+            tool_params_fn: |args| {
+                let id = get_str(args, "id").unwrap_or_default();
+                json!({ "id": id })
+            },
+        },
+        CommandDef {
+            name: "skill-reload",
+            description: "Reload a skill from its source directory",
+            category: Category::Skill,
+            hidden: false,
+            batch_supported: false,
+            args: &[ArgDef { name: "id", description: "Skill identifier", optional: false }],
+            options: &[],
+            tool_name_fn: |_| "skill_reload".to_string(),
+            tool_params_fn: |args| {
+                let id = get_str(args, "id").unwrap_or_default();
+                json!({ "id": id })
             },
         },
         CommandDef {

@@ -69,6 +69,12 @@ class ToolListHandler(
                     "crawl_submit",
                     "crawl_status",
                     "crawl_result",
+                    // Skill management tools
+                    "skill_list",
+                    "skill_info",
+                    "skill_install",
+                    "skill_uninstall",
+                    "skill_reload",
                 )
             )
 
