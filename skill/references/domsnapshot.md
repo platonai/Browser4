@@ -22,11 +22,12 @@ The `domsnapshot` family operates on a **static DOM snapshot** — the raw HTML 
 
 ```bash
 browser4-cli domsnapshot                                # capture fresh static DOM snapshot + metadata
-browser4-cli domsnapshot get <field> [selector] [name]  # extract text/html/attr via CSS selectors
+browser4-cli domsnapshot get <field> [selector] [name] [--page N] [--page-size N] [--all]  # extract text/html/attr via CSS; paginated by default (1K chars)
 browser4-cli domsnapshot query [url] --sql <query>      # X-SQL query against DOM (url defaults to current page)
 browser4-cli domsnapshot summary                        # compressed page summary (WPSI)
 browser4-cli domsnapshot export [--file <path>]         # save snapshot HTML to file
-browser4-cli domsnapshot grep [OPTIONS] <pattern>       # search snapshot HTML with regex (grep-style)
+browser4-cli domsnapshot get all <field> [selector] [name] [--offset N] [--limit N] [--page N] [--page-size N] [--all]  # extract ALL matches; element + char pagination
+browser4-cli domsnapshot grep [OPTIONS] <pattern> [--page N] [--page-size N] [--all]  # search snapshot HTML with regex; paginated by default (1K chars)
 browser4-cli domsnapshot inspect [selector] [--max N] [--depth D]  # analyze DOM structure, suggest CSS selectors
 ```
 
@@ -146,6 +147,9 @@ browser4-cli domsnapshot grep [OPTIONS] <pattern>
 | `-w` | Match only whole words (wraps pattern with `\b` word boundaries) |
 | `--no-line-number` | Suppress line numbers in output (line numbers are shown by default) |
 | `--selector <CSS>` | Scope search to a specific CSS element (fetches inner HTML via `dom_snapshot_scrape`) |
+| `--page N` | Show page N of paginated output (default: 1) |
+| `--page-size N` | Characters per page (default: 1024) |
+| `--all` | Show all output, disabling pagination |
 
 Line numbers are **on by default** (unlike GNU grep where you opt in with `-n`). Use `--no-line-number` to suppress them.
 
@@ -172,6 +176,12 @@ browser4-cli domsnapshot grep -w password
 
 # Show non-empty lines (invert match on empty/whitespace-only)
 browser4-cli domsnapshot grep -v '^\s*$'
+
+# Search with pagination (page 2, custom page size)
+browser4-cli domsnapshot grep -i error --page 2 --page-size 500
+
+# Show all matches (disable pagination, useful for piping)
+browser4-cli domsnapshot grep --all "pattern"
 ```
 
 ### Output format
@@ -254,3 +264,4 @@ browser4-cli domsnapshot inspect [selector] [--max N] [--depth D]
 - For CI pass/fail checks with grep, use `-l` (prints "domsnapshot" if matches found) or `-c` (prints match count). A `browser4-cli` non-zero exit code means the backend call itself failed, not that matches were absent.
 - `domsnapshot` capture now returns enriched metadata: `imageCount`, `linkCount`, and `interactiveElements` (tag, class, id, aria attributes, bounding-box). The bounding box is extracted from the `vi` attribute injected by the browser's layout engine.
 - `domsnapshot inspect` computes relative CSS selectors using tag + class + id. It does not use AI — the algorithm is fully deterministic and based on structural recurrence across matching elements.
+- **Output pagination:** `get` (html/text fields), `get all` (html/text fields), and `grep` paginate output by default at 1K (1024) characters per page. Use `--page N` for subsequent pages, `--page-size N` to change the page size, or `--all` to disable pagination entirely. Pagination is automatically skipped in `--json` and `--quiet` modes. Use `--all` when piping output to external tools.

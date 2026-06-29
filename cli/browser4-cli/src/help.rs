@@ -507,12 +507,12 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
     if cmd.name == "domsnapshot" {
         lines.push("Subcommands:".to_string());
         lines.push(format_with_gap(
-            "  domsnapshot get <field> [selector] [name]",
+            "  domsnapshot get <field> [selector] [name] [--page N] [--page-size N] [--all]",
             "Extract elements from the DOM snapshot stored in Browser4's page storage (text, html, attr)",
             50,
         ));
         lines.push(format_with_gap(
-            "  domsnapshot get all <field> [selector] [name] [--offset] [--limit]",
+            "  domsnapshot get all <field> [selector] [name] [--offset N] [--limit N] [--page N] [--page-size N] [--all]",
             "Extract ALL matching elements from the DOM snapshot (querySelectorAll semantics)",
             50,
         ));
@@ -583,6 +583,10 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
             "  - Analyze DOM structure and discover CSS selectors for recurring patterns with `domsnapshot inspect [selector]`. When the selector matches multiple elements (e.g. `.product-card`), it compares child structures across matches and suggests selectors ranked by recurrence. Use --max to control sample size and --depth to limit descendant traversal."
                 .to_string(),
         );
+        lines.push(
+            "  - Output from `get html`, `get text`, `get all html`, `get all text`, and `grep` is paginated by default (1K chars per page). Use --page N for subsequent pages, --page-size N to change the page size, or --all to disable pagination and show all content. Pagination is automatically skipped in --json and --quiet modes."
+                .to_string(),
+        );
         lines.push(String::new());
         lines.push("Examples:".to_string());
         lines.push("  # Capture a DOM snapshot and display metadata".to_string());
@@ -600,8 +604,17 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("  # Get all matching elements by CSS selector (returns a JSON array)".to_string());
         lines.push("  browser4-cli domsnapshot get all text \"h2 a\"".to_string());
         lines.push(String::new());
-        lines.push("  # Get all matching elements with pagination".to_string());
+        lines.push("  # Get all matching elements with element-level pagination".to_string());
         lines.push("  browser4-cli domsnapshot get all text \".result\" --limit 5 --offset 10".to_string());
+        lines.push(String::new());
+        lines.push("  # Get HTML with char-level pagination (default 1K, page 2)".to_string());
+        lines.push("  browser4-cli domsnapshot get html \"body\" --page 2".to_string());
+        lines.push(String::new());
+        lines.push("  # Get all text with custom page size".to_string());
+        lines.push("  browser4-cli domsnapshot get all text \"p\" --page-size 500".to_string());
+        lines.push(String::new());
+        lines.push("  # Get full HTML (disable pagination)".to_string());
+        lines.push("  browser4-cli domsnapshot get html --all".to_string());
         lines.push(String::new());
         lines.push("  # Run an X-SQL query against the current page URL".to_string());
         lines.push(
@@ -627,6 +640,12 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("  # Search only within <main> element".to_string());
         lines.push("  browser4-cli domsnapshot grep --selector main \"Submit\"".to_string());
         lines.push(String::new());
+        lines.push("  # Search with pagination (page 2, custom page size)".to_string());
+        lines.push("  browser4-cli domsnapshot grep -i error --page 2 --page-size 500".to_string());
+        lines.push(String::new());
+        lines.push("  # Search and show all matches (disable pagination)".to_string());
+        lines.push("  browser4-cli domsnapshot grep --all \"TODOs\"".to_string());
+        lines.push(String::new());
         lines.push("  # Discover CSS selectors for recurring product cards".to_string());
         lines.push("  browser4-cli domsnapshot inspect \".product_pod\"".to_string());
         lines.push(String::new());
@@ -638,7 +657,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("Subcommands:".to_string());
         lines.push(format_with_gap(
             "  snapshot grep [OPTIONS] <pattern>",
-            "Search snapshot YAML content with regex patterns and grep-style output",
+            "Search snapshot YAML content with regex patterns and grep-style output. Supports --page N, --page-size N, and --all for output pagination (1K chars per page default).",
             50,
         ));
         lines.push(String::new());
@@ -660,7 +679,11 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(
-            "  - snapshot grep supports the same grep options as domsnapshot grep: -i, -A, -B, -C, -v, -c, -l, -F, -w, --no-line-number, and --selector."
+            "  - snapshot grep supports the same grep options as domsnapshot grep: -i, -A, -B, -C, -v, -c, -l, -F, -w, --no-line-number, --selector, --page N, --page-size N, and --all."
+                .to_string(),
+        );
+        lines.push(
+            "  - Output is paginated by default (1K chars per page). Use --page N for subsequent pages, --page-size N to change the page size, or --all to show all content."
                 .to_string(),
         );
         lines.push(String::new());
@@ -673,6 +696,9 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push(String::new());
         lines.push("  # Search with context lines".to_string());
         lines.push("  browser4-cli snapshot grep -C 2 \"timeout\"".to_string());
+        lines.push(String::new());
+        lines.push("  # Search with pagination (page 2, custom page size)".to_string());
+        lines.push("  browser4-cli snapshot grep error --page 2 --page-size 500".to_string());
         lines.push(String::new());
         lines.push("  # Capture specific viewports using ViewportSpec format".to_string());
         lines.push("  browser4-cli snapshot --viewport=0,2,4".to_string());
@@ -1035,9 +1061,9 @@ mod tests {
         assert!(help.contains("Capture a static DOM snapshot, save it in Browser4's page storage"));
         // Subcommands listing
         assert!(help.contains("Subcommands:"));
-        assert!(help.contains("domsnapshot get <field> [selector] [name]"));
+        assert!(help.contains("domsnapshot get <field> [selector] [name] [--page N] [--page-size N] [--all]"));
         assert!(help.contains("Extract elements from the DOM snapshot stored in Browser4's page storage (text, html, attr)"));
-        assert!(help.contains("domsnapshot get all <field> [selector] [name] [--offset] [--limit]"));
+        assert!(help.contains("domsnapshot get all <field> [selector] [name] [--offset N] [--limit N] [--page N] [--page-size N] [--all]"));
         assert!(help.contains("Extract ALL matching elements from the DOM snapshot (querySelectorAll semantics)"));
         assert!(help.contains("domsnapshot query [url]"));
         assert!(help.contains("Run X-SQL against the DOM snapshot stored in Browser4's page storage via the scrape API"));
@@ -1071,6 +1097,14 @@ mod tests {
         // enriched metadata
         assert!(help.contains("image/link counts"));
         assert!(help.contains("interactive elements with tag/class/id/aria/bounding-box"));
+        // pagination
+        assert!(help.contains("Output from `get html`, `get text`, `get all html`, `get all text`, and `grep` is paginated by default (1K chars per page)"));
+        assert!(help.contains("--page N for subsequent pages, --page-size N to change the page size, or --all to disable pagination"));
+        assert!(help.contains("browser4-cli domsnapshot get html \"body\" --page 2"));
+        assert!(help.contains("browser4-cli domsnapshot get all text \"p\" --page-size 500"));
+        assert!(help.contains("browser4-cli domsnapshot get html --all"));
+        assert!(help.contains("browser4-cli domsnapshot grep -i error --page 2 --page-size 500"));
+        assert!(help.contains("browser4-cli domsnapshot grep --all \"TODOs\""));
     }
 
     #[test]

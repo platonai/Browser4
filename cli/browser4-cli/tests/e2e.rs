@@ -3384,6 +3384,7 @@ fn excluded_commands(include_batch_command: bool) -> HashSet<&'static str> {
         "domsnapshot-export",
         "domsnapshot-summary",
         "domsnapshot-grep",
+        "domsnapshot-inspect",
         "generate-locator",
         "loop",
         "doctor",

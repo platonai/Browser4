@@ -2301,7 +2301,7 @@ async fn handle_snapshot_grep(
     client: &Client,
     base_url: &str,
     tool_name: &str,
-    _tool_params: &Value,
+    tool_params: &Value,
     session_name: Option<&str>,
     grep_options: &GrepOptions,
 ) -> Result<(), String> {
@@ -2344,7 +2344,8 @@ async fn handle_snapshot_grep(
         .await?
     };
 
-    run_grep_on_source(&source, grep_options, "snapshot")
+    let (page, page_size, show_all) = parse_page_opts(tool_params);
+    run_grep_on_source(&source, grep_options, "snapshot", page, page_size, show_all)
 }
 
 async fn handle_screenshot(
@@ -2896,6 +2897,7 @@ async fn handle_dom_snapshot_get(
 
     // Output the result
     let empty_result = result == "null" || result.is_empty() || result.trim() == "[]";
+    let paginate = (field == "html" || field == "text") && !empty_result;
 
     if empty_result {
         let display_selector = if selector.is_empty() { ":root" } else { selector };
@@ -2904,6 +2906,20 @@ async fn handle_dom_snapshot_get(
             "No elements matched \"{}\". Try `domsnapshot inspect \"{}\"` to discover valid selectors, or run `domsnapshot` to see the full DOM tree.",
             display_selector, display_selector
         );
+    } else if paginate {
+        let (page, page_size, show_all) = parse_page_opts(tool_params);
+        if skip_pagination(show_all) {
+            cli_println!("{}", result);
+        } else {
+            let (page_content, meta) = paginate_output(&result, page, page_size);
+            cli_println!("{}", page_content);
+            if meta.is_truncated {
+                cli_println!("{}", format_pagination_footer(&meta));
+            }
+        }
+        json_field("total_chars", json!(result.len()));
+        json_field("page_size", json!(page_size));
+        json_field("truncated", json!(!skip_pagination(show_all) && result.len() > page_size));
     } else {
         cli_println!("{}", result);
     }
@@ -3275,7 +3291,7 @@ async fn handle_dom_snapshot_grep(
     client: &Client,
     base_url: &str,
     tool_name: &str,
-    _tool_params: &Value,
+    tool_params: &Value,
     session_name: Option<&str>,
     grep_options: &GrepOptions,
 ) -> Result<(), String> {
@@ -3319,7 +3335,8 @@ async fn handle_dom_snapshot_grep(
         .await?
     };
 
-    run_grep_on_source(&source, grep_options, "domsnapshot")
+    let (page, page_size, show_all) = parse_page_opts(tool_params);
+    run_grep_on_source(&source, grep_options, "domsnapshot", page, page_size, show_all)
 }
 
 /// Run grep matching on an already-fetched source text, printing results
@@ -3331,6 +3348,9 @@ fn run_grep_on_source(
     source: &str,
     grep_options: &GrepOptions,
     source_label: &str,
+    page: usize,
+    page_size: usize,
+    show_all: bool,
 ) -> Result<(), String> {
     // If the source is "null", no element matched the selector
     if source == "null" || source.is_empty() {
@@ -3468,7 +3488,19 @@ fn run_grep_on_source(
     }
 
     if !output_parts.is_empty() {
-        cli_println!("{}", output_parts.join("\n"));
+        let full_output = output_parts.join("\n");
+        if skip_pagination(show_all) {
+            cli_println!("{}", full_output);
+        } else {
+            let (page_content, meta) = paginate_output(&full_output, page, page_size);
+            cli_println!("{}", page_content);
+            if meta.is_truncated {
+                cli_println!("{}", format_pagination_footer(&meta));
+            }
+        }
+        json_field("total_chars", json!(full_output.len()));
+        json_field("page_size", json!(page_size));
+        json_field("truncated", json!(!skip_pagination(show_all) && full_output.len() > page_size));
     }
 
     json_field("matches", json!(matched_indices.len()));
@@ -3479,6 +3511,130 @@ fn run_grep_on_source(
     }
 
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// pagination support (shared between domsnapshot get/grep and snapshot grep)
+// ---------------------------------------------------------------------------
+
+/// Metadata about a paginated output.
+#[derive(Debug)]
+struct PaginationMeta {
+    total_chars: usize,
+    current_page: usize,
+    total_pages: usize,
+    page_size: usize,
+    /// Whether the output was actually truncated (false when it fits in one page).
+    is_truncated: bool,
+}
+
+/// Paginate `text` into pages of `page_size` characters.
+///
+/// Returns the content for `page` (1-based) and metadata about the pagination.
+/// When `page_size` is 0 or the text fits in one page, returns the full text
+/// with `is_truncated: false`.
+///
+/// The split tries to break on a newline boundary near the page_size mark to
+/// avoid mid-line cuts, but if no newline is found within 25% of the page size
+/// it falls back to the exact byte position.
+fn paginate_output(text: &str, page: usize, page_size: usize) -> (String, PaginationMeta) {
+    let total_chars = text.len();
+    let effective_page = if page == 0 { 1 } else { page };
+
+    if page_size == 0 || total_chars <= page_size {
+        let meta = PaginationMeta {
+            total_chars,
+            current_page: 1,
+            total_pages: 1,
+            page_size,
+            is_truncated: false,
+        };
+        return (text.to_string(), meta);
+    }
+
+    let total_pages = (total_chars + page_size - 1) / page_size;
+    let current_page = effective_page.min(total_pages);
+    let start = (current_page - 1) * page_size;
+    let end = (start + page_size).min(total_chars);
+
+    // Try to find a newline boundary within the last 25% of the page,
+    // but only if we're not at the last page.
+    let actual_end = if current_page < total_pages {
+        let window_start = start + page_size * 3 / 4;
+        let window_end = end;
+        if let Some(nl_pos) = text[window_start..window_end].rfind('\n') {
+            window_start + nl_pos + 1 // include the newline in this page
+        } else {
+            end
+        }
+    } else {
+        end
+    };
+
+    let page_content = text[start..actual_end].to_string();
+    let meta = PaginationMeta {
+        total_chars,
+        current_page,
+        total_pages,
+        page_size,
+        is_truncated: true,
+    };
+
+    (page_content, meta)
+}
+
+/// Format a human-readable pagination footer line.
+fn format_pagination_footer(meta: &PaginationMeta) -> String {
+    let size_label = |bytes: usize| -> String {
+        if bytes < 1024 {
+            format!("{}B", bytes)
+        } else if bytes < 1024 * 1024 {
+            format!("{:.1}K", bytes as f64 / 1024.0)
+        } else {
+            format!("{:.1}M", bytes as f64 / (1024.0 * 1024.0))
+        }
+    };
+
+    format!(
+        "[Page {}/{} · {} of {} · use --page N for next page · --all to show all]",
+        meta.current_page,
+        meta.total_pages,
+        size_label(meta.current_page.min(meta.total_pages) * meta.page_size.min(meta.total_chars)),
+        size_label(meta.total_chars),
+    )
+}
+
+/// Extract pagination options from tool_params.
+/// Returns (page, page_size, show_all).
+fn parse_page_opts(tool_params: &serde_json::Value) -> (usize, usize, bool) {
+    let show_all = tool_params
+        .get("all")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+        || tool_params
+            .get("all")
+            .and_then(|v| v.as_str())
+            .map(|s| s == "true")
+            .unwrap_or(false);
+
+    let page = tool_params
+        .get("page")
+        .and_then(|v| v.as_str())
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(1);
+
+    let page_size = tool_params
+        .get("page-size")
+        .and_then(|v| v.as_str())
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(1024);
+
+    (page, page_size, show_all)
+}
+
+/// Whether pagination should be skipped (JSON output, quiet mode, or explicit --all).
+fn skip_pagination(show_all: bool) -> bool {
+    show_all || json_active() || quiet_active()
 }
 
 // ---------------------------------------------------------------------------
@@ -9672,9 +9828,9 @@ mod tests {
     #[test]
     fn test_run_grep_source_null_or_empty() {
         // null source should succeed with zero matches
-        run_grep_on_source("null", &make_grep_opts("x"), "test").unwrap();
+        run_grep_on_source("null", &make_grep_opts("x"), "test", 1, 0, true).unwrap();
         // empty source should succeed with zero matches
-        run_grep_on_source("", &make_grep_opts("x"), "test").unwrap();
+        run_grep_on_source("", &make_grep_opts("x"), "test", 1, 0, true).unwrap();
     }
 
     #[test]
@@ -9686,6 +9842,7 @@ mod tests {
                 ..Default::default()
             },
             "test",
+            1, 0, true,
         );
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Invalid regex"));
@@ -9697,7 +9854,7 @@ mod tests {
         let opts = make_grep_opts("two");
         // Since run_grep_on_source prints via cli_println! and json_field,
         // we test that it returns Ok for valid inputs.
-        let result = run_grep_on_source(source, &opts, "test");
+        let result = run_grep_on_source(source, &opts, "test", 1, 0, true);
         assert!(result.is_ok());
     }
 
@@ -9710,7 +9867,7 @@ mod tests {
             fixed_strings: true,
             ..Default::default()
         };
-        let result = run_grep_on_source(source, &opts, "test");
+        let result = run_grep_on_source(source, &opts, "test", 1, 0, true);
         assert!(result.is_ok());
     }
 
@@ -9722,7 +9879,7 @@ mod tests {
             word_regexp: true,
             ..Default::default()
         };
-        let result = run_grep_on_source(source, &opts, "test");
+        let result = run_grep_on_source(source, &opts, "test", 1, 0, true);
         assert!(result.is_ok());
     }
 
@@ -9734,7 +9891,7 @@ mod tests {
             count: true,
             ..Default::default()
         };
-        let result = run_grep_on_source(source, &opts, "test");
+        let result = run_grep_on_source(source, &opts, "test", 1, 0, true);
         assert!(result.is_ok());
     }
 
@@ -9746,7 +9903,7 @@ mod tests {
             invert_match: true,
             ..Default::default()
         };
-        let result = run_grep_on_source(source, &opts, "test");
+        let result = run_grep_on_source(source, &opts, "test", 1, 0, true);
         assert!(result.is_ok());
     }
 
@@ -9758,7 +9915,7 @@ mod tests {
             files_with_matches: true,
             ..Default::default()
         };
-        let result = run_grep_on_source(source, &opts, "test-label");
+        let result = run_grep_on_source(source, &opts, "test-label", 1, 0, true);
         assert!(result.is_ok());
 
         // No-match case
@@ -9767,7 +9924,7 @@ mod tests {
             files_with_matches: true,
             ..Default::default()
         };
-        let result_no = run_grep_on_source(source, &opts_no, "test-label");
+        let result_no = run_grep_on_source(source, &opts_no, "test-label", 1, 0, true);
         assert!(result_no.is_ok());
     }
 
@@ -9779,7 +9936,7 @@ mod tests {
             context: Some(1),
             ..Default::default()
         };
-        let result = run_grep_on_source(source, &opts, "test");
+        let result = run_grep_on_source(source, &opts, "test", 1, 0, true);
         assert!(result.is_ok());
     }
 
@@ -9791,7 +9948,7 @@ mod tests {
             no_line_number: true,
             ..Default::default()
         };
-        let result = run_grep_on_source(source, &opts, "test");
+        let result = run_grep_on_source(source, &opts, "test", 1, 0, true);
         assert!(result.is_ok());
     }
 
@@ -9803,7 +9960,7 @@ mod tests {
             ignore_case: true,
             ..Default::default()
         };
-        let result = run_grep_on_source(source, &opts, "test");
+        let result = run_grep_on_source(source, &opts, "test", 1, 0, true);
         assert!(result.is_ok());
     }
 
@@ -9811,8 +9968,132 @@ mod tests {
     fn test_run_grep_no_matches_produces_empty_output() {
         let source = "nothing here\nreally nothing\n";
         let opts = make_grep_opts("absent");
-        let result = run_grep_on_source(source, &opts, "test");
+        let result = run_grep_on_source(source, &opts, "test", 1, 0, true);
         assert!(result.is_ok());
+    }
+
+    // -----------------------------------------------------------------------
+    // paginate_output and parse_page_opts tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_paginate_output_small_text_no_pagination() {
+        let text = "short text";
+        let (page, meta) = paginate_output(text, 1, 1024);
+        assert_eq!(page, "short text");
+        assert!(!meta.is_truncated);
+        assert_eq!(meta.total_chars, 10);
+        assert_eq!(meta.total_pages, 1);
+    }
+
+    #[test]
+    fn test_paginate_output_large_text_first_page() {
+        let text = "a".repeat(3000);
+        let (page, meta) = paginate_output(&text, 1, 1024);
+        assert_eq!(page.len(), 1024);
+        assert!(meta.is_truncated);
+        assert_eq!(meta.total_chars, 3000);
+        assert_eq!(meta.total_pages, 3);
+        assert_eq!(meta.current_page, 1);
+    }
+
+    #[test]
+    fn test_paginate_output_large_text_second_page() {
+        let text = "a".repeat(3000);
+        let (page, meta) = paginate_output(&text, 2, 1024);
+        assert_eq!(page.len(), 1024);
+        assert_eq!(meta.current_page, 2);
+    }
+
+    #[test]
+    fn test_paginate_output_last_page() {
+        let text = "a".repeat(2500);
+        let (page, meta) = paginate_output(&text, 3, 1024);
+        // Last page: 2500 - 2*1024 = 452 chars
+        assert_eq!(page.len(), 452);
+        assert_eq!(meta.current_page, 3);
+        assert_eq!(meta.total_pages, 3);
+    }
+
+    #[test]
+    fn test_paginate_output_page_zero_defaults_to_one() {
+        let text = "a".repeat(3000);
+        let (_page, meta) = paginate_output(&text, 0, 1024);
+        assert_eq!(meta.current_page, 1);
+    }
+
+    #[test]
+    fn test_paginate_output_page_beyond_clamped() {
+        let text = "a".repeat(2000);
+        let (page, meta) = paginate_output(&text, 5, 1024);
+        // Clamped to page 2
+        assert_eq!(meta.current_page, 2);
+        assert_eq!(page.len(), 976); // 2000 - 1024
+    }
+
+    #[test]
+    fn test_paginate_output_page_size_zero_shows_all() {
+        let text = "a".repeat(5000);
+        let (page, meta) = paginate_output(&text, 1, 0);
+        assert_eq!(page.len(), 5000);
+        assert!(!meta.is_truncated);
+        assert_eq!(meta.total_pages, 1);
+    }
+
+    #[test]
+    fn test_paginate_output_newline_boundary() {
+        // Text with a newline near the 1024 boundary
+        let mut text = String::with_capacity(2000);
+        for i in 0..50 {
+            text.push_str(&format!("Line {} with some content to fill space\n", i));
+        }
+        let (page, _meta) = paginate_output(&text, 1, 1024);
+        // Should break on a newline within last 25% of page
+        assert!(page.ends_with('\n'));
+        assert!(page.len() >= 768); // at least 75% of page_size
+    }
+
+    #[test]
+    fn test_parse_page_opts_defaults() {
+        let params = json!({});
+        let (page, page_size, show_all) = parse_page_opts(&params);
+        assert_eq!(page, 1);
+        assert_eq!(page_size, 1024);
+        assert!(!show_all);
+    }
+
+    #[test]
+    fn test_parse_page_opts_explicit() {
+        let params = json!({"page": "3", "page-size": "500", "all": true});
+        let (page, page_size, show_all) = parse_page_opts(&params);
+        assert_eq!(page, 3);
+        assert_eq!(page_size, 500);
+        assert!(show_all);
+    }
+
+    #[test]
+    fn test_format_pagination_footer() {
+        let meta = PaginationMeta {
+            total_chars: 5000,
+            current_page: 1,
+            total_pages: 5,
+            page_size: 1024,
+            is_truncated: true,
+        };
+        let footer = format_pagination_footer(&meta);
+        assert!(footer.contains("Page 1/5"));
+        assert!(footer.contains("1.0K of 4.9K"));
+        assert!(footer.contains("--page N"));
+        assert!(footer.contains("--all"));
+    }
+
+    #[test]
+    fn test_skip_pagination_flags() {
+        // Default: don't skip
+        assert!(!skip_pagination(false));
+        // --all: skip
+        assert!(skip_pagination(true));
+        // --json and --quiet are tested elsewhere (state is thread-local)
     }
 
     // -----------------------------------------------------------------------

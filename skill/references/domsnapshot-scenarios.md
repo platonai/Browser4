@@ -980,10 +980,10 @@ Append these to the URL string in `domsnapshot query`:
 
 | Command | Best for |
 |---------|----------|
-| `get` | One value from one element; simple scripts; raw text/HTML for piping |
+| `get` | One value from one element; simple scripts; raw text/HTML for piping. Output paginated by default (1K chars) — use `--all` to disable. |
 | `query` | Multiple fields from repeating elements; filtering (`WHERE`/`expr()`); structured tabular output |
 | `export` | Saving full HTML for archival, diffing, external tooling, offline analysis |
-| `grep` | Presence/absence checks; counting; quick searches with context; CI smoke tests; incident response |
+| `grep` | Presence/absence checks; counting; quick searches with context; CI smoke tests; incident response. Output paginated by default (1K chars) — use `--all` to disable. |
 | `summary` | Page discovery before writing selectors; structural audits; LLM-friendly page overviews |
 | `inspect` | Discovering unknown CSS selectors on complex pages; finding recurring patterns; selector validation before extraction |
 
@@ -997,6 +997,7 @@ Append these to the URL string in `domsnapshot query`:
 - `grep` performs matching **client-side** by fetching the snapshot HTML then running regex locally — no backend round-trip for the search itself.
 - `summary` generates a WPSI YAML file from the cached snapshot — useful as a discovery step before writing selectors.
 - `inspect` analyzes DOM structure and suggests CSS selectors for recurring patterns. It is fully deterministic (no AI) and based on structural recurrence across matching elements.
+- **Output pagination:** `get` (html/text), `get all` (html/text), and `grep` paginate output by default at 1K characters per page. Use `--page N` for subsequent pages, `--page-size N` to change page size, or `--all` to disable. Pagination is skipped in `--json` and `--quiet` modes.
 
 ---
 

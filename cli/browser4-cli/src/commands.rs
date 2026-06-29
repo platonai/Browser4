@@ -1059,6 +1059,9 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "fixed-strings", short: Some("F"), is_bool: true, description: "Treat pattern as a literal string, not regex" },
                 OptionDef { name: "word-regexp", short: Some("w"), is_bool: true, description: "Match only whole words" },
                 OptionDef { name: "selector", short: None, is_bool: false, description: "CSS selector to scope the search to" },
+                OptionDef { name: "page", short: None, is_bool: false, description: "Page number (1-based, default: 1)" },
+                OptionDef { name: "page-size", short: None, is_bool: false, description: "Characters per page (default: 1024)" },
+                OptionDef { name: "all", short: None, is_bool: true, description: "Show all output, disabling pagination" },
             ],
             tool_name_fn: |_| "browser_snapshot".to_string(),
             tool_params_fn: |args| {
@@ -2050,7 +2053,11 @@ pub fn all_commands() -> Vec<CommandDef> {
                 ArgDef { name: "selector", description: "CSS selector (defaults to :root; required for attr)", optional: true },
                 ArgDef { name: "name", description: "Attribute name (required for attr field)", optional: true },
             ],
-            options: &[],
+            options: &[
+                OptionDef { name: "page", short: None, is_bool: false, description: "Page number (1-based, default: 1)" },
+                OptionDef { name: "page-size", short: None, is_bool: false, description: "Characters per page (default: 1024)" },
+                OptionDef { name: "all", short: None, is_bool: true, description: "Show all output, disabling pagination" },
+            ],
             tool_name_fn: |_| "dom_snapshot_scrape".to_string(),
             tool_params_fn: |args| {
                 let field = get_str(args, "field").unwrap_or_default();
@@ -2074,6 +2081,9 @@ pub fn all_commands() -> Vec<CommandDef> {
             options: &[
                 OptionDef { name: "offset", description: "Skip the first n results (0-based)", is_bool: false, short: None },
                 OptionDef { name: "limit", description: "Return at most n results", is_bool: false, short: None },
+                OptionDef { name: "page", short: None, is_bool: false, description: "Page number for paginated output (default: 1)" },
+                OptionDef { name: "page-size", short: None, is_bool: false, description: "Characters per page (default: 1024)" },
+                OptionDef { name: "all", short: None, is_bool: true, description: "Show all output, disabling pagination" },
             ],
             tool_name_fn: |_| "dom_snapshot_scrape_all".to_string(),
             tool_params_fn: |args| {
@@ -2168,6 +2178,9 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "fixed-strings", short: Some("F"), is_bool: true, description: "Treat pattern as a literal string, not regex" },
                 OptionDef { name: "word-regexp", short: Some("w"), is_bool: true, description: "Match only whole words" },
                 OptionDef { name: "selector", short: None, is_bool: false, description: "CSS selector to scope the search to" },
+                OptionDef { name: "page", short: None, is_bool: false, description: "Page number (1-based, default: 1)" },
+                OptionDef { name: "page-size", short: None, is_bool: false, description: "Characters per page (default: 1024)" },
+                OptionDef { name: "all", short: None, is_bool: true, description: "Show all output, disabling pagination" },
             ],
             tool_name_fn: |_| "dom_snapshot_export".to_string(),
             tool_params_fn: |args| {
