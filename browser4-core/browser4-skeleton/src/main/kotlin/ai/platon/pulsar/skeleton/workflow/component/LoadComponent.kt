@@ -31,6 +31,8 @@ import ai.platon.pulsar.skeleton.workflow.common.url.CompletableHyperlink
 import ai.platon.pulsar.skeleton.workflow.common.url.ListenableUrl
 import ai.platon.pulsar.skeleton.workflow.common.url.toCompletableListenableHyperlink
 import ai.platon.pulsar.skeleton.workflow.parse.ParseResult
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import org.slf4j.LoggerFactory
 import java.net.URL
 import java.time.Duration
@@ -193,7 +195,9 @@ class LoadComponent(
      * */
     @Throws(Exception::class)
     suspend fun loadDeferred(normURL: NormURL): WebPage {
-        return abnormalPage ?: loadWithRetryDeferred(normURL)
+        return abnormalPage ?: withContext(Dispatchers.Default) {
+            loadWithRetryDeferred(normURL)
+        }
     }
 
     @Throws(Exception::class)

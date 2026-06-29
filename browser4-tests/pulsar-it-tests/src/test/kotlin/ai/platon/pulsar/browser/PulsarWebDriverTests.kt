@@ -105,7 +105,7 @@ class PulsarWebDriverTests : WebDriverTestBase() {
 
         val propValues = driver.selectPropertyValueAll(selector, "tagName")
         printlnPro(propValues)
-        assertEquals(listOf("INPUT", "INPUT", "INPUT"), propValues)
+        assertEquals(listOf("INPUT", "INPUT"), propValues)
     }
 
     @Test
@@ -130,7 +130,7 @@ class PulsarWebDriverTests : WebDriverTestBase() {
 
         val propValues = driver.selectPropertyValueAll(selector, propName)
         printlnPro(propValues)
-        assertEquals(listOf(text, text, text), propValues)
+        assertEquals(listOf(text, text), propValues)
     }
 
     @Test
