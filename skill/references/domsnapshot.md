@@ -1,9 +1,9 @@
 ---
-title: "DOM Snapshot — Static DOM Extraction & X-SQL Querying"
-description: "Reference for domsnapshot commands (get, query, summary, export, grep). Extract structured data from the raw HTML DOM via CSS selectors and X-SQL queries."
+title: "DOM Snapshot — Static DOM Extraction, Inspection & X-SQL Querying"
+description: "Reference for domsnapshot commands (capture, get, query, summary, export, grep, inspect). Extract structured data from the raw HTML DOM via CSS selectors and X-SQL queries."
 ---
 
-# DOM Snapshot — Static DOM Extraction & X-SQL Querying
+# DOM Snapshot — Static DOM Extraction, Inspection & X-SQL Querying
 
 The `domsnapshot` family operates on a **static DOM snapshot** — the raw HTML of the current page parsed into a queryable DOM. Unlike interactive `snapshot` (accessibility-tree refs for `click`/`type`/`fill`), `domsnapshot` extracts structured data via CSS selectors and X-SQL queries.
 
@@ -14,20 +14,24 @@ The `domsnapshot` family operates on a **static DOM snapshot** — the raw HTML 
 | Data source | Accessibility tree | Raw HTML DOM |
 | Element addressing | Refs (`e5`) | CSS selectors only |
 | X-SQL support | No | Yes (`query`) |
-| Output | YAML accessibility tree | HTML (`export`), structured data (`get`/`query`) |
+| Interactive element list | No | Yes (`domsnapshot` capture returns interactiveElements) |
+| Selector discovery | No | Yes (`inspect`) |
+| Output | YAML accessibility tree | HTML (`export`), structured data (`get`/`query`/`inspect`) |
 
 ## Commands
 
 ```bash
-browser4-cli domsnapshot                                # capture fresh static DOM snapshot
-browser4-cli domsnapshot get <field> [selector] [name]  # extract text/html/attr via CSS selectors
+browser4-cli domsnapshot                                # capture fresh static DOM snapshot + metadata
+browser4-cli domsnapshot get <field> [selector] [name] [--page N] [--page-size N] [--all]  # extract text/html/attr via CSS; paginated by default (1K chars)
 browser4-cli domsnapshot query [url] --sql <query>      # X-SQL query against DOM (url defaults to current page)
 browser4-cli domsnapshot summary                        # compressed page summary (WPSI)
 browser4-cli domsnapshot export [--file <path>]         # save snapshot HTML to file
-browser4-cli domsnapshot grep [OPTIONS] <pattern>       # search snapshot HTML with regex (grep-style)
+browser4-cli domsnapshot get all <field> [selector] [name] [--offset N] [--limit N] [--page N] [--page-size N] [--all]  # extract ALL matches; element + char pagination
+browser4-cli domsnapshot grep [OPTIONS] <pattern> [--page N] [--page-size N] [--all]  # search snapshot HTML with regex; paginated by default (1K chars)
+browser4-cli domsnapshot inspect [selector] [--max N] [--depth D]  # analyze DOM structure, suggest CSS selectors
 ```
 
-`domsnapshot` (capture) always fetches a fresh snapshot and caches it. Subsequent `get`/`query`/`export` reuse the cache until the next capture or page navigation.
+`domsnapshot` (capture) always fetches a fresh snapshot, caches it, and returns enriched metadata including image/link counts and a list of interactive elements (with tag, class, id, aria attributes, and bounding box). Subsequent `get`/`query`/`export`/`inspect` reuse the cache until the next capture or page navigation.
 
 > **Note:** `domsnapshot get` looks up the page using the browser's current URL (after any redirects/navigations), so it works correctly on search-results pages and post-form-submission pages.
 
@@ -143,6 +147,9 @@ browser4-cli domsnapshot grep [OPTIONS] <pattern>
 | `-w` | Match only whole words (wraps pattern with `\b` word boundaries) |
 | `--no-line-number` | Suppress line numbers in output (line numbers are shown by default) |
 | `--selector <CSS>` | Scope search to a specific CSS element (fetches inner HTML via `dom_snapshot_scrape`) |
+| `--page N` | Show page N of paginated output (default: 1) |
+| `--page-size N` | Characters per page (default: 1024) |
+| `--all` | Show all output, disabling pagination |
 
 Line numbers are **on by default** (unlike GNU grep where you opt in with `-n`). Use `--no-line-number` to suppress them.
 
@@ -169,6 +176,12 @@ browser4-cli domsnapshot grep -w password
 
 # Show non-empty lines (invert match on empty/whitespace-only)
 browser4-cli domsnapshot grep -v '^\s*$'
+
+# Search with pagination (page 2, custom page size)
+browser4-cli domsnapshot grep -i error --page 2 --page-size 500
+
+# Show all matches (disable pagination, useful for piping)
+browser4-cli domsnapshot grep --all "pattern"
 ```
 
 ### Output format
@@ -186,12 +199,61 @@ Matches are printed with `N:` (line number + colon) followed by the line content
 
 When `--no-line-number` is passed, the line-number prefix is omitted entirely. Match and context lines are then distinguished only by the `-` prefix on context lines.
 
+## Inspect — Discover CSS selectors for recurring patterns
+
+Analyzes the DOM snapshot and suggests CSS selectors for recurring content patterns. Essential for complex pages where you don't know the right selectors ahead of time (e.g., e-commerce search results, news listings).
+
+```bash
+browser4-cli domsnapshot inspect [selector] [--max N] [--depth D]
+```
+
+| Parameter | Default | Description |
+|---|---|---|
+| `selector` | `:root` | CSS selector to scope inspection. When it matches multiple elements (e.g. `.product-card`), the command compares child structures across matches to find recurring patterns. |
+| `--max N` | 10 | Max matching elements to analyze. |
+| `--depth D` | 5 | Max descendant depth for selector suggestions. |
+
+### How it works
+
+1. Finds all elements matching `selector`
+2. For each match, walks descendants up to `--depth` and computes relative CSS selectors (tag + class + id)
+3. Counts how many matches each selector appears in
+4. Filters to selectors appearing in **≥50%** of matches (minimum 2)
+5. Returns sample structures and ranked selector suggestions
+
+### Output
+
+```
+### Inspect: ".product_pod" (20 matches, 10 analyzed)
+
+  Sample structure (3 of 20):
+  -- Element 1: article.product_pod
+      img.thumbnail  "A Light in the Attic"
+      h3              ""
+       a              "A Light in the..."
+      div.product_price
+       p.price_color  "£51.77"
+  ...
+
+  Suggested selectors (recurring across matches):
+   10/10 (100%)  h3 a                                         → "A Light in the..."
+   10/10 (100%)  img.thumbnail                                → ""
+   10/10 (100%)  p.price_color                                → "£51.77"
+    8/10 ( 80%)  p.instock.availability                       → "In stock"
+```
+
+### Tips
+
+- **Start broad, then narrow:** First run without a selector to see page landmarks. Then target a repeating container (e.g. `.product_pod`, `.s-result-item`).
+- **Always capture first:** `domsnapshot` must be run before `inspect` (it loads the cached document).
+- **Use with `get`:** Take the suggested selectors and use them with `domsnapshot get all` or `domsnapshot query` for batch extraction.
+
 ## Error Handling
 
 - `domsnapshot` capture fails if backend is unreachable or page cannot be loaded.
 - `domsnapshot get` exits non-zero when the CSS selector matches nothing or an element ref (`e5`) is passed.
 - `domsnapshot query` fails on invalid X-SQL syntax or missing `--sql`.
-- `domsnapshot export` / `summary` fail if no snapshot has been captured yet.
+- `domsnapshot export` / `summary` / `inspect` fail if no snapshot has been captured yet.
 
 ## Notes
 
@@ -200,3 +262,6 @@ When `--no-line-number` is passed, the line-number prefix is omitted entirely. M
 - The captured snapshot is cached in the backend and invalidated by the next `domsnapshot` capture or a page navigation (`goto`, `reload`, etc.).
 - `domsnapshot grep` performs matching **entirely client-side** in the CLI — the full HTML is fetched from the backend once, then all regex matching happens locally. No backend round-trips for the search itself.
 - For CI pass/fail checks with grep, use `-l` (prints "domsnapshot" if matches found) or `-c` (prints match count). A `browser4-cli` non-zero exit code means the backend call itself failed, not that matches were absent.
+- `domsnapshot` capture now returns enriched metadata: `imageCount`, `linkCount`, and `interactiveElements` (tag, class, id, aria attributes, bounding-box). The bounding box is extracted from the `vi` attribute injected by the browser's layout engine.
+- `domsnapshot inspect` computes relative CSS selectors using tag + class + id. It does not use AI — the algorithm is fully deterministic and based on structural recurrence across matching elements.
+- **Output pagination:** `get` (html/text fields), `get all` (html/text fields), and `grep` paginate output by default at 1K (1024) characters per page. Use `--page N` for subsequent pages, `--page-size N` to change the page size, or `--all` to disable pagination entirely. Pagination is automatically skipped in `--json` and `--quiet` modes. Use `--all` when piping output to external tools.

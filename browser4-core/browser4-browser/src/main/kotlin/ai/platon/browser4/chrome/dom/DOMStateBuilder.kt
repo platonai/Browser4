@@ -124,8 +124,14 @@ object DOMStateBuilder {
         val enableAttributeCasingAlignment: Boolean = true,
         val maxPaintOrderThreshold: Int = 1000,
         val compoundComponentMinChildren: Int = 3,
-        val preserveOriginalCasing: Boolean = false
-    )
+        val preserveOriginalCasing: Boolean = false,
+        /** Maximum length of [CleanedDOMTreeNode.nodeValue] before truncation. */
+        val maxNodeValueLength: Int = DEFAULT_MAX_NODE_VALUE_LENGTH
+    ) {
+        companion object {
+            const val DEFAULT_MAX_NODE_VALUE_LENGTH = 500
+        }
+    }
 
     /**
      * Recursively converts one `OptimizedDOMTreeNode` subtree into its `SerializableDOMTreeNode` equivalent.
@@ -441,7 +447,7 @@ object DOMStateBuilder {
             backendNodeId = node.backendNodeId,
             nodeType = node.nodeType.value,
             nodeName = if (options.preserveOriginalCasing) node.nodeName else node.nodeName.lowercase(),
-            nodeValue = node.nodeValue.takeIf { it.isNotEmpty() },
+            nodeValue = truncateNodeValue(node.nodeValue, options.maxNodeValueLength),
             attributes = merged.takeIf { it.isNotEmpty() },
             frameId = node.frameId,
             sessionId = node.sessionId,
@@ -557,7 +563,7 @@ object DOMStateBuilder {
             backendNodeId = node.backendNodeId,
             nodeType = node.nodeType.value,
             nodeName = node.nodeName.lowercase(),
-            nodeValue = node.nodeValue.takeIf { it.isNotEmpty() },
+            nodeValue = truncateNodeValue(node.nodeValue, CompactOptions.DEFAULT_MAX_NODE_VALUE_LENGTH),
             attributes = mergedAttrs.takeIf { it.isNotEmpty() },
             frameId = node.frameId,
             sessionId = node.sessionId,
@@ -620,5 +626,18 @@ object DOMStateBuilder {
         val frameIndex = frameIds.indexOf(node.frameId).takeIf { it > 0 } ?: 0
         val backendNodeId = node.backendNodeId ?: 0
         return FBNLocator(frameIndex, backendNodeId)
+    }
+
+    /**
+     * Truncate [value] if it exceeds [maxLength], appending an ellipsis and
+     * the original length.  Returns null when the input is null or blank.
+     *
+     * Truncated form: `"first N chars... (total: <orig_len> chars)"`
+     */
+    internal fun truncateNodeValue(value: String, maxLength: Int): String? {
+        if (value.isBlank()) return null
+        if (value.length <= maxLength) return value
+        val truncated = value.take(maxLength).trimEnd()
+        return "$truncated... (truncated from ${value.length} chars)"
     }
 }

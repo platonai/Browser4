@@ -155,7 +155,7 @@ browser4-cli snapshot --viewport=1-3               # capture viewports 1 through
 Search snapshot accessibility-tree YAML content with regex patterns and grep-style output:
 
 ```bash
-browser4-cli snapshot grep <pattern>               # search snapshot YAML with regex
+browser4-cli snapshot grep <pattern> [--page N] [--page-size N] [--all]  # search snapshot YAML with regex; paginated by default
 browser4-cli snapshot grep -i error                # case-insensitive search
 browser4-cli snapshot grep -C 2 "timeout"          # show 2 lines of context
 browser4-cli snapshot grep -F "literal"            # fixed-string (literal) matching
@@ -245,12 +245,13 @@ Static DOM queries (CSS selectors) for structured data extraction — unlike int
 
 ```bash
 browser4-cli domsnapshot                                # capture static DOM snapshot
-browser4-cli domsnapshot get <field> [selector] [name]  # extract first match (text/html/attr via CSS)
-browser4-cli domsnapshot get all <field> [selector] [name] [--offset] [--limit]  # extract ALL matches (querySelectorAll)
+browser4-cli domsnapshot get <field> [selector] [name] [--page N] [--page-size N] [--all]  # extract first match (text/html/attr via CSS); paginated by default (1K chars/page)
+browser4-cli domsnapshot get all <field> [selector] [name] [--offset N] [--limit N] [--page N] [--page-size N] [--all]  # extract ALL matches (querySelectorAll); paginated by default
 browser4-cli domsnapshot query [url] --sql <query>      # X-SQL query against DOM
 browser4-cli domsnapshot summary                        # compressed page summary (WPSI)
 browser4-cli domsnapshot export [--file <path>]         # save snapshot HTML (might be huge, don't read it directly)
-browser4-cli domsnapshot grep [OPTIONS] <pattern>       # search snapshot HTML with regex (grep-style output)
+browser4-cli domsnapshot grep [OPTIONS] <pattern> [--page N] [--page-size N] [--all]  # search snapshot HTML with regex; paginated by default (1K chars/page)
+browser4-cli domsnapshot inspect [selector] [--max N]   # analyze DOM structure, suggest CSS selectors
 ```
 
 Full reference: **[references/domsnapshot.md](references/domsnapshot.md)**.

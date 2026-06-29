@@ -60,6 +60,7 @@ class ToolListHandler(
                     "dom_snapshot_query",
                     "dom_snapshot_export",
                     "dom_snapshot_summary",
+                    "dom_snapshot_inspect",
                     // Swarm tools
                     "swarm_submit",
                     "swarm_query",

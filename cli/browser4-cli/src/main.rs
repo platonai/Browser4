@@ -288,6 +288,7 @@ fn no_snapshot_commands() -> HashSet<&'static str> {
         "skill-install",
         "skill-uninstall",
         "skill-reload",
+        "domsnapshot-inspect",
     ]
     .into()
 }
@@ -2480,6 +2481,17 @@ async fn handle_snapshot(
     json_field("page_title", json!(title));
     json_field("snapshot_path", json!(out_path.display().to_string()));
 
+    // Detect whether filtering flags are already in use
+    let has_filter =
+        tool_params.get("selector").and_then(|v| v.as_str()).map_or(false, |s| !s.is_empty())
+        || tool_params.get("viewports").and_then(|v| v.as_str()).map_or(false, |s| !s.is_empty())
+        || tool_params.get("interactive").and_then(|v| v.as_bool()).unwrap_or(false)
+        || tool_params.get("depth").and_then(|v| v.as_str()).map_or(false, |s| !s.is_empty())
+        || tool_params.get("limit").and_then(|v| v.as_str()).map_or(false, |s| !s.is_empty());
+
+    let snap_len = snap.len();
+    let snap_kb = snap_len / 1024;
+
     if raw {
         // Print snapshot content directly to stdout for piping.
         // Safe to use println! directly since --raw explicitly requests raw output.
@@ -2490,6 +2502,20 @@ async fn handle_snapshot(
         cli_println!("- Page Title: {}", title);
         cli_println!("### Snapshot");
         cli_println!("[Snapshot]({})", out_path.display());
+        cli_println!("- Snapshot size: {} KB ({} nodes/lines)", snap_kb, snap.lines().count());
+    }
+
+    // Print a tip for large snapshots when no filtering flags are in use
+    if snap_len > 10_240 && !has_filter {
+        eprintln!(
+            "💡 Tip: Snapshot is large ({} KB). To focus the output, try:\n\
+               -s, --selector <CSS>     Scope to a CSS selector\n\
+               --viewport, -vp <N>       Capture a specific viewport section\n\
+               -i, --interactive        Only show interactive elements\n\
+               -l, --limit <N>           Cap the number of nodes\n\
+               -d, --depth <N>           Limit tree depth",
+            snap_kb
+        );
     }
     Ok(())
 }
@@ -2498,7 +2524,7 @@ async fn handle_snapshot_grep(
     client: &Client,
     base_url: &str,
     tool_name: &str,
-    _tool_params: &Value,
+    tool_params: &Value,
     session_name: Option<&str>,
     grep_options: &GrepOptions,
 ) -> Result<(), String> {
@@ -2541,7 +2567,8 @@ async fn handle_snapshot_grep(
         .await?
     };
 
-    run_grep_on_source(&source, grep_options, "snapshot")
+    let (page, page_size, show_all) = parse_page_opts(tool_params);
+    run_grep_on_source(&source, grep_options, "snapshot", page, page_size, show_all)
 }
 
 async fn handle_screenshot(
@@ -2630,6 +2657,21 @@ async fn handle_tool_command(
     recover_stale: bool,
     session_name: Option<&str>,
 ) -> Result<(), String> {
+    handle_tool_command_with_options(client, base_url, tool_name, tool_params, recover_stale, session_name, false).await
+}
+
+/// Like [handle_tool_command] but with an `eval_json` flag that, when true,
+/// ensures the eval result is printed as valid JSON (scalar strings are
+/// quoted, objects/arrays/numbers are printed as-is).
+async fn handle_tool_command_with_options(
+    client: &Client,
+    base_url: &str,
+    tool_name: &str,
+    tool_params: &Value,
+    recover_stale: bool,
+    session_name: Option<&str>,
+    eval_json: bool,
+) -> Result<(), String> {
     let result = with_session(
         client,
         base_url,
@@ -2654,6 +2696,18 @@ async fn handle_tool_command(
             cli_println!("null");
         } else if result.is_empty() {
             cli_println!("\"\"");
+        } else if eval_json {
+            // --json: ensure output is valid JSON. Try to parse the result
+            // as JSON first (objects, arrays, numbers, booleans, null); if
+            // that fails, wrap it as a JSON string.
+            let json_val: serde_json::Value = match serde_json::from_str(&result) {
+                Ok(v) => v,
+                Err(_) => serde_json::Value::String(result.clone()),
+            };
+            cli_println!(
+                "{}",
+                serde_json::to_string(&json_val).unwrap_or_else(|_| result.clone())
+            );
         } else {
             cli_println!("{}", result);
         }
@@ -2698,10 +2752,20 @@ async fn handle_get(
     // The MCP response serialises the tool result to a string.
     // A JSON `null` result arrives as the literal string "null".
     // An empty-string result arrives as "".
-    if result == "null" {
-        cli_println!("null");
-    } else if result.is_empty() {
-        cli_println!("\"\"");
+    // An empty array `[]` means no elements matched (get all variants).
+    let empty_result = result == "null" || result.is_empty() || result.trim() == "[]";
+
+    if empty_result {
+        let selector = tool_params
+            .get("selector")
+            .and_then(|v| v.as_str())
+            .or_else(|| tool_params.get("ref").and_then(|v| v.as_str()))
+            .unwrap_or(":root");
+        cli_println!("{}", result);
+        cli_println!(
+            "No elements matched \"{}\". Try `domsnapshot inspect \"{}\"` to discover valid selectors, or run `domsnapshot` to see the full DOM tree.",
+            selector, selector
+        );
     } else {
         cli_println!("{}", result);
     }
@@ -2918,11 +2982,83 @@ async fn handle_dom_snapshot_capture(
         .map_err(|e| format!("Failed to parse snapshot metadata: {e}"))?;
 
     json_field("snapshot_metadata", json!(&metadata));
-    cli_println!(
-        "{}",
-        serde_json::to_string_pretty(&metadata)
-            .map_err(|e| format!("Failed to format metadata: {e}"))?
-    );
+
+    // Display page info
+    let url = metadata.get("url").and_then(|v| v.as_str()).unwrap_or("");
+    let title = metadata.get("title").and_then(|v| v.as_str()).unwrap_or("");
+    let size = metadata.get("sizeBytes").and_then(|v| v.as_str()).unwrap_or("");
+    let captured = metadata.get("capturedAt").and_then(|v| v.as_str()).unwrap_or("");
+    let content_type = metadata.get("contentType").and_then(|v| v.as_str()).unwrap_or("");
+
+    cli_println!("### Page Info");
+    if !url.is_empty() {
+        cli_println!("- URL: {}", url);
+    }
+    if !title.is_empty() {
+        cli_println!("- Title: {}", title);
+    }
+    if !size.is_empty() {
+        let size_bytes: i64 = size.parse().unwrap_or(0);
+        if size_bytes >= 1024 {
+            cli_println!("- Size: {} ({} KB)", size_bytes, size_bytes / 1024);
+        } else {
+            cli_println!("- Size: {} bytes", size_bytes);
+        }
+    }
+    if !content_type.is_empty() {
+        cli_println!("- Content-Type: {}", content_type);
+    }
+    if !captured.is_empty() {
+        cli_println!("- Captured At: {}", captured);
+    }
+
+    // Display stats
+    let image_count = metadata.get("imageCount").and_then(|v| v.as_i64()).unwrap_or(0);
+    let link_count = metadata.get("linkCount").and_then(|v| v.as_i64()).unwrap_or(0);
+    cli_println!("### Stats");
+    cli_println!("- Images: {}", image_count);
+    cli_println!("- Links: {}", link_count);
+
+    // Display interactive elements
+    if let Some(elements) = metadata.get("interactiveElements").and_then(|v| v.as_array()) {
+        if !elements.is_empty() {
+            cli_println!("### Interactive Elements ({})", elements.len());
+            for (i, el) in elements.iter().enumerate() {
+                let tag = el.get("tag").and_then(|v| v.as_str()).unwrap_or("");
+                let id = el.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                let class = el.get("class").and_then(|v| v.as_str()).unwrap_or("");
+                let box_val = el.get("box").and_then(|v| v.as_str()).unwrap_or("");
+                let aria = el.get("aria");
+
+                let mut desc = tag.to_string();
+                if !id.is_empty() {
+                    desc.push_str(&format!("#{}", id));
+                }
+                if !class.is_empty() {
+                    desc.push_str(&format!(".{}", class));
+                }
+                let mut extras = Vec::new();
+                if !box_val.is_empty() {
+                    extras.push(format!("box={}", box_val));
+                }
+                if let Some(aria_obj) = aria.and_then(|v| v.as_object()) {
+                    let aria_pairs: Vec<String> = aria_obj
+                        .iter()
+                        .map(|(k, v)| format!("{}={}", k, v.as_str().unwrap_or("")))
+                        .collect();
+                    if !aria_pairs.is_empty() {
+                        extras.push(format!("aria: {}", aria_pairs.join(", ")));
+                    }
+                }
+                if extras.is_empty() {
+                    cli_println!("  {:>3}. {}", i + 1, desc);
+                } else {
+                    cli_println!("  {:>3}. {}  [{}]", i + 1, desc, extras.join("; "));
+                }
+            }
+        }
+    }
+
     Ok(())
 }
 
@@ -2983,10 +3119,30 @@ async fn handle_dom_snapshot_get(
     .await?;
 
     // Output the result
-    if result == "null" {
-        cli_println!("null");
-    } else if result.is_empty() {
-        cli_println!("\"\"");
+    let empty_result = result == "null" || result.is_empty() || result.trim() == "[]";
+    let paginate = (field == "html" || field == "text") && !empty_result;
+
+    if empty_result {
+        let display_selector = if selector.is_empty() { ":root" } else { selector };
+        cli_println!("{}", result);
+        cli_println!(
+            "No elements matched \"{}\". Try `domsnapshot inspect \"{}\"` to discover valid selectors, or run `domsnapshot` to see the full DOM tree.",
+            display_selector, display_selector
+        );
+    } else if paginate {
+        let (page, page_size, show_all) = parse_page_opts(tool_params);
+        if skip_pagination(show_all) {
+            cli_println!("{}", result);
+        } else {
+            let (page_content, meta) = paginate_output(&result, page, page_size);
+            cli_println!("{}", page_content);
+            if meta.is_truncated {
+                cli_println!("{}", format_pagination_footer(&meta));
+            }
+        }
+        json_field("total_chars", json!(result.len()));
+        json_field("page_size", json!(page_size));
+        json_field("truncated", json!(!skip_pagination(show_all) && result.len() > page_size));
     } else {
         cli_println!("{}", result);
     }
@@ -3159,6 +3315,123 @@ async fn handle_dom_snapshot_summary(
     Ok(())
 }
 
+async fn handle_dom_snapshot_inspect(
+    client: &Client,
+    base_url: &str,
+    tool_name: &str,
+    tool_params: &Value,
+    session_name: Option<&str>,
+) -> Result<(), String> {
+    let result = with_session(client, base_url, session_name, false, |session_id| {
+        let client = client.clone();
+        let base_url = base_url.to_string();
+        let tool_name = tool_name.to_string();
+        let mut params = tool_params.clone();
+        params["sessionId"] = json!(session_id);
+        async move { call_tool(&client, &base_url, &tool_name, params).await }
+    })
+    .await?;
+
+    let data: Value = serde_json::from_str(&result)
+        .map_err(|e| format!("Failed to parse inspect result: {e}"))?;
+
+    let selector = data.get("selector").and_then(|v| v.as_str()).unwrap_or(":root");
+    let match_count = data.get("matchCount").and_then(|v| v.as_i64()).unwrap_or(0);
+    let analyzed = data.get("analyzed").and_then(|v| v.as_u64()).unwrap_or(0);
+
+    if match_count == 0 {
+        cli_println!("### Inspect: \"{}\" (0 matches)", selector);
+        cli_println!("- No elements matched. Check the CSS selector and ensure a DOM snapshot has been captured (`browser4-cli domsnapshot`).");
+        json_field("matchCount", json!(0));
+        json_field("selector", json!(selector));
+        return Ok(());
+    }
+
+    cli_println!(
+        "### Inspect: \"{}\" ({} matches, {} analyzed)",
+        selector, match_count, analyzed
+    );
+
+    // Sample structures
+    if let Some(samples) = data.get("samples").and_then(|v| v.as_array()) {
+        if !samples.is_empty() {
+            cli_println!("");
+            cli_println!(
+                "  Sample structure ({} of {}):",
+                samples.len(),
+                match_count
+            );
+            for (i, sample) in samples.iter().enumerate() {
+                let tag = sample.get("tag").and_then(|v| v.as_str()).unwrap_or("");
+                let id = sample.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                let class = sample.get("class").and_then(|v| v.as_str()).unwrap_or("");
+                let text = sample.get("text").and_then(|v| v.as_str()).unwrap_or("");
+
+                let mut desc = tag.to_string();
+                if !id.is_empty() {
+                    desc.push_str(&format!("#{}", id));
+                }
+                if !class.is_empty() {
+                    desc.push_str(&format!(".{}", class));
+                }
+                cli_println!("  -- Element {}: {}", i + 1, desc);
+                if !text.is_empty() {
+                    cli_println!("     text: \"{}\"", text);
+                }
+
+                // Children
+                if let Some(children) = sample.get("children").and_then(|v| v.as_array()) {
+                    for child in children {
+                        let ctag = child.get("tag").and_then(|v| v.as_str()).unwrap_or("");
+                        let cid = child.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                        let cclass = child.get("class").and_then(|v| v.as_str()).unwrap_or("");
+                        let ctext = child.get("text").and_then(|v| v.as_str()).unwrap_or("");
+
+                        let mut cdesc = format!("{:>4} ", ctag); // indent
+                        if !cid.is_empty() {
+                            cdesc.push_str(&format!("#{}", cid));
+                        }
+                        if !cclass.is_empty() {
+                            cdesc.push_str(&format!(".{}", cclass));
+                        }
+                        if !ctext.is_empty() {
+                            cdesc.push_str(&format!("  \"{}\"", ctext));
+                        }
+                        cli_println!("   {}", cdesc);
+                    }
+                }
+            }
+        }
+    }
+
+    // Suggestions
+    if let Some(suggestions) = data.get("suggestions").and_then(|v| v.as_array()) {
+        if !suggestions.is_empty() {
+            cli_println!("");
+            cli_println!("  Suggested selectors (recurring across matches):");
+            for sug in suggestions {
+                let sel = sug.get("selector").and_then(|v| v.as_str()).unwrap_or("");
+                let count = sug.get("matchCount").and_then(|v| v.as_i64()).unwrap_or(0);
+                let coverage = sug.get("coverage").and_then(|v| v.as_str()).unwrap_or("");
+                let text = sug.get("textPreview").and_then(|v| v.as_str()).unwrap_or("");
+
+                let text_hint = if text.is_empty() {
+                    String::new()
+                } else {
+                    format!("→ \"{}\"", text)
+                };
+                cli_println!(
+                    "  {:>3}/{} ({})  {:<40} {}",
+                    count, analyzed, coverage, sel, text_hint
+                );
+            }
+        }
+    }
+
+    json_field("inspect", data);
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // grep support (shared between domsnapshot-grep and snapshot-grep)
 // ---------------------------------------------------------------------------
@@ -3241,7 +3514,7 @@ async fn handle_dom_snapshot_grep(
     client: &Client,
     base_url: &str,
     tool_name: &str,
-    _tool_params: &Value,
+    tool_params: &Value,
     session_name: Option<&str>,
     grep_options: &GrepOptions,
 ) -> Result<(), String> {
@@ -3285,7 +3558,8 @@ async fn handle_dom_snapshot_grep(
         .await?
     };
 
-    run_grep_on_source(&source, grep_options, "domsnapshot")
+    let (page, page_size, show_all) = parse_page_opts(tool_params);
+    run_grep_on_source(&source, grep_options, "domsnapshot", page, page_size, show_all)
 }
 
 /// Run grep matching on an already-fetched source text, printing results
@@ -3297,6 +3571,9 @@ fn run_grep_on_source(
     source: &str,
     grep_options: &GrepOptions,
     source_label: &str,
+    page: usize,
+    page_size: usize,
+    show_all: bool,
 ) -> Result<(), String> {
     // If the source is "null", no element matched the selector
     if source == "null" || source.is_empty() {
@@ -3434,7 +3711,19 @@ fn run_grep_on_source(
     }
 
     if !output_parts.is_empty() {
-        cli_println!("{}", output_parts.join("\n"));
+        let full_output = output_parts.join("\n");
+        if skip_pagination(show_all) {
+            cli_println!("{}", full_output);
+        } else {
+            let (page_content, meta) = paginate_output(&full_output, page, page_size);
+            cli_println!("{}", page_content);
+            if meta.is_truncated {
+                cli_println!("{}", format_pagination_footer(&meta));
+            }
+        }
+        json_field("total_chars", json!(full_output.len()));
+        json_field("page_size", json!(page_size));
+        json_field("truncated", json!(!skip_pagination(show_all) && full_output.len() > page_size));
     }
 
     json_field("matches", json!(matched_indices.len()));
@@ -3445,6 +3734,130 @@ fn run_grep_on_source(
     }
 
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// pagination support (shared between domsnapshot get/grep and snapshot grep)
+// ---------------------------------------------------------------------------
+
+/// Metadata about a paginated output.
+#[derive(Debug)]
+struct PaginationMeta {
+    total_chars: usize,
+    current_page: usize,
+    total_pages: usize,
+    page_size: usize,
+    /// Whether the output was actually truncated (false when it fits in one page).
+    is_truncated: bool,
+}
+
+/// Paginate `text` into pages of `page_size` characters.
+///
+/// Returns the content for `page` (1-based) and metadata about the pagination.
+/// When `page_size` is 0 or the text fits in one page, returns the full text
+/// with `is_truncated: false`.
+///
+/// The split tries to break on a newline boundary near the page_size mark to
+/// avoid mid-line cuts, but if no newline is found within 25% of the page size
+/// it falls back to the exact byte position.
+fn paginate_output(text: &str, page: usize, page_size: usize) -> (String, PaginationMeta) {
+    let total_chars = text.len();
+    let effective_page = if page == 0 { 1 } else { page };
+
+    if page_size == 0 || total_chars <= page_size {
+        let meta = PaginationMeta {
+            total_chars,
+            current_page: 1,
+            total_pages: 1,
+            page_size,
+            is_truncated: false,
+        };
+        return (text.to_string(), meta);
+    }
+
+    let total_pages = (total_chars + page_size - 1) / page_size;
+    let current_page = effective_page.min(total_pages);
+    let start = (current_page - 1) * page_size;
+    let end = (start + page_size).min(total_chars);
+
+    // Try to find a newline boundary within the last 25% of the page,
+    // but only if we're not at the last page.
+    let actual_end = if current_page < total_pages {
+        let window_start = start + page_size * 3 / 4;
+        let window_end = end;
+        if let Some(nl_pos) = text[window_start..window_end].rfind('\n') {
+            window_start + nl_pos + 1 // include the newline in this page
+        } else {
+            end
+        }
+    } else {
+        end
+    };
+
+    let page_content = text[start..actual_end].to_string();
+    let meta = PaginationMeta {
+        total_chars,
+        current_page,
+        total_pages,
+        page_size,
+        is_truncated: true,
+    };
+
+    (page_content, meta)
+}
+
+/// Format a human-readable pagination footer line.
+fn format_pagination_footer(meta: &PaginationMeta) -> String {
+    let size_label = |bytes: usize| -> String {
+        if bytes < 1024 {
+            format!("{}B", bytes)
+        } else if bytes < 1024 * 1024 {
+            format!("{:.1}K", bytes as f64 / 1024.0)
+        } else {
+            format!("{:.1}M", bytes as f64 / (1024.0 * 1024.0))
+        }
+    };
+
+    format!(
+        "[Page {}/{} · {} of {} · use --page N for next page · --all to show all]",
+        meta.current_page,
+        meta.total_pages,
+        size_label(meta.current_page.min(meta.total_pages) * meta.page_size.min(meta.total_chars)),
+        size_label(meta.total_chars),
+    )
+}
+
+/// Extract pagination options from tool_params.
+/// Returns (page, page_size, show_all).
+fn parse_page_opts(tool_params: &serde_json::Value) -> (usize, usize, bool) {
+    let show_all = tool_params
+        .get("all")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+        || tool_params
+            .get("all")
+            .and_then(|v| v.as_str())
+            .map(|s| s == "true")
+            .unwrap_or(false);
+
+    let page = tool_params
+        .get("page")
+        .and_then(|v| v.as_str())
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(1);
+
+    let page_size = tool_params
+        .get("page-size")
+        .and_then(|v| v.as_str())
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(1024);
+
+    (page, page_size, show_all)
+}
+
+/// Whether pagination should be skipped (JSON output, quiet mode, or explicit --all).
+fn skip_pagination(show_all: bool) -> bool {
+    show_all || json_active() || quiet_active()
 }
 
 // ---------------------------------------------------------------------------
@@ -6319,6 +6732,7 @@ fn preferred_spaced_command_form(command: &str) -> Option<&'static str> {
         "skill-install" => Some("skill install"),
         "skill-uninstall" => Some("skill uninstall"),
         "skill-reload" => Some("skill reload"),
+        "domsnapshot-inspect" => Some("domsnapshot inspect"),
         _ => None,
     }
 }
@@ -6564,8 +6978,8 @@ fn compile_batch_request(
             continue;
         }
 
-        let nested_short_to_long = build_short_option_map(cmd_def.options);
-        let raw_parsed = parse_raw_args(&effective_nested_global.args, Some(&nested_short_to_long));
+        let (nested_short_to_long, nested_bool_opts) = build_short_option_map(cmd_def.options);
+        let raw_parsed = parse_raw_args(&effective_nested_global.args, Some(&nested_short_to_long), Some(&nested_bool_opts));
         let arg_names: Vec<&str> = cmd_def.args.iter().map(|arg| arg.name).collect();
         let parsed = match build_command_args(&raw_parsed, &arg_names) {
             Ok(parsed) => parsed,
@@ -7298,8 +7712,8 @@ async fn run(
     };
 
     // Parse positional + named arguments (with short-option resolution)
-    let short_to_long = build_short_option_map(cmd_def.options);
-    let raw_parsed = parse_raw_args(&global.args, Some(&short_to_long));
+    let (short_to_long, bool_opts) = build_short_option_map(cmd_def.options);
+    let raw_parsed = parse_raw_args(&global.args, Some(&short_to_long), Some(&bool_opts));
     let arg_names: Vec<&str> = cmd_def.args.iter().map(|a| a.name).collect();
     let parsed = build_command_args(&raw_parsed, &arg_names).map_err(|e| e.to_string())?;
 
@@ -7623,13 +8037,18 @@ async fn run(
                 ));
             }
 
-            handle_tool_command(
+            let eval_json = parsed
+                .get("json")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            handle_tool_command_with_options(
                 &client,
                 &base_url,
                 &tool_name,
                 &tool_params,
                 false,
                 global.session_name.as_deref(),
+                eval_json,
             )
             .await?;
         }
@@ -7905,6 +8324,16 @@ async fn run(
             )
             .await?;
         }
+        "domsnapshot-inspect" => {
+            handle_dom_snapshot_inspect(
+                &client,
+                &base_url,
+                &tool_name,
+                &tool_params,
+                global.session_name.as_deref(),
+            )
+            .await?;
+        }
         "snapshot-grep" => {
             let grep_options = parse_grep_options(&tool_params)?;
             handle_snapshot_grep(
@@ -8165,6 +8594,7 @@ mod tests {
         assert!(no_snapshot_commands().contains("domsnapshot-export"));
         assert!(no_snapshot_commands().contains("domsnapshot-summary"));
         assert!(no_snapshot_commands().contains("domsnapshot-grep"));
+        assert!(no_snapshot_commands().contains("domsnapshot-inspect"));
     }
 
     #[test]
@@ -9834,9 +10264,9 @@ mod tests {
     #[test]
     fn test_run_grep_source_null_or_empty() {
         // null source should succeed with zero matches
-        run_grep_on_source("null", &make_grep_opts("x"), "test").unwrap();
+        run_grep_on_source("null", &make_grep_opts("x"), "test", 1, 0, true).unwrap();
         // empty source should succeed with zero matches
-        run_grep_on_source("", &make_grep_opts("x"), "test").unwrap();
+        run_grep_on_source("", &make_grep_opts("x"), "test", 1, 0, true).unwrap();
     }
 
     #[test]
@@ -9848,6 +10278,7 @@ mod tests {
                 ..Default::default()
             },
             "test",
+            1, 0, true,
         );
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Invalid regex"));
@@ -9859,7 +10290,7 @@ mod tests {
         let opts = make_grep_opts("two");
         // Since run_grep_on_source prints via cli_println! and json_field,
         // we test that it returns Ok for valid inputs.
-        let result = run_grep_on_source(source, &opts, "test");
+        let result = run_grep_on_source(source, &opts, "test", 1, 0, true);
         assert!(result.is_ok());
     }
 
@@ -9872,7 +10303,7 @@ mod tests {
             fixed_strings: true,
             ..Default::default()
         };
-        let result = run_grep_on_source(source, &opts, "test");
+        let result = run_grep_on_source(source, &opts, "test", 1, 0, true);
         assert!(result.is_ok());
     }
 
@@ -9884,7 +10315,7 @@ mod tests {
             word_regexp: true,
             ..Default::default()
         };
-        let result = run_grep_on_source(source, &opts, "test");
+        let result = run_grep_on_source(source, &opts, "test", 1, 0, true);
         assert!(result.is_ok());
     }
 
@@ -9896,7 +10327,7 @@ mod tests {
             count: true,
             ..Default::default()
         };
-        let result = run_grep_on_source(source, &opts, "test");
+        let result = run_grep_on_source(source, &opts, "test", 1, 0, true);
         assert!(result.is_ok());
     }
 
@@ -9908,7 +10339,7 @@ mod tests {
             invert_match: true,
             ..Default::default()
         };
-        let result = run_grep_on_source(source, &opts, "test");
+        let result = run_grep_on_source(source, &opts, "test", 1, 0, true);
         assert!(result.is_ok());
     }
 
@@ -9920,7 +10351,7 @@ mod tests {
             files_with_matches: true,
             ..Default::default()
         };
-        let result = run_grep_on_source(source, &opts, "test-label");
+        let result = run_grep_on_source(source, &opts, "test-label", 1, 0, true);
         assert!(result.is_ok());
 
         // No-match case
@@ -9929,7 +10360,7 @@ mod tests {
             files_with_matches: true,
             ..Default::default()
         };
-        let result_no = run_grep_on_source(source, &opts_no, "test-label");
+        let result_no = run_grep_on_source(source, &opts_no, "test-label", 1, 0, true);
         assert!(result_no.is_ok());
     }
 
@@ -9941,7 +10372,7 @@ mod tests {
             context: Some(1),
             ..Default::default()
         };
-        let result = run_grep_on_source(source, &opts, "test");
+        let result = run_grep_on_source(source, &opts, "test", 1, 0, true);
         assert!(result.is_ok());
     }
 
@@ -9953,7 +10384,7 @@ mod tests {
             no_line_number: true,
             ..Default::default()
         };
-        let result = run_grep_on_source(source, &opts, "test");
+        let result = run_grep_on_source(source, &opts, "test", 1, 0, true);
         assert!(result.is_ok());
     }
 
@@ -9965,7 +10396,7 @@ mod tests {
             ignore_case: true,
             ..Default::default()
         };
-        let result = run_grep_on_source(source, &opts, "test");
+        let result = run_grep_on_source(source, &opts, "test", 1, 0, true);
         assert!(result.is_ok());
     }
 
@@ -9973,8 +10404,132 @@ mod tests {
     fn test_run_grep_no_matches_produces_empty_output() {
         let source = "nothing here\nreally nothing\n";
         let opts = make_grep_opts("absent");
-        let result = run_grep_on_source(source, &opts, "test");
+        let result = run_grep_on_source(source, &opts, "test", 1, 0, true);
         assert!(result.is_ok());
+    }
+
+    // -----------------------------------------------------------------------
+    // paginate_output and parse_page_opts tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_paginate_output_small_text_no_pagination() {
+        let text = "short text";
+        let (page, meta) = paginate_output(text, 1, 1024);
+        assert_eq!(page, "short text");
+        assert!(!meta.is_truncated);
+        assert_eq!(meta.total_chars, 10);
+        assert_eq!(meta.total_pages, 1);
+    }
+
+    #[test]
+    fn test_paginate_output_large_text_first_page() {
+        let text = "a".repeat(3000);
+        let (page, meta) = paginate_output(&text, 1, 1024);
+        assert_eq!(page.len(), 1024);
+        assert!(meta.is_truncated);
+        assert_eq!(meta.total_chars, 3000);
+        assert_eq!(meta.total_pages, 3);
+        assert_eq!(meta.current_page, 1);
+    }
+
+    #[test]
+    fn test_paginate_output_large_text_second_page() {
+        let text = "a".repeat(3000);
+        let (page, meta) = paginate_output(&text, 2, 1024);
+        assert_eq!(page.len(), 1024);
+        assert_eq!(meta.current_page, 2);
+    }
+
+    #[test]
+    fn test_paginate_output_last_page() {
+        let text = "a".repeat(2500);
+        let (page, meta) = paginate_output(&text, 3, 1024);
+        // Last page: 2500 - 2*1024 = 452 chars
+        assert_eq!(page.len(), 452);
+        assert_eq!(meta.current_page, 3);
+        assert_eq!(meta.total_pages, 3);
+    }
+
+    #[test]
+    fn test_paginate_output_page_zero_defaults_to_one() {
+        let text = "a".repeat(3000);
+        let (_page, meta) = paginate_output(&text, 0, 1024);
+        assert_eq!(meta.current_page, 1);
+    }
+
+    #[test]
+    fn test_paginate_output_page_beyond_clamped() {
+        let text = "a".repeat(2000);
+        let (page, meta) = paginate_output(&text, 5, 1024);
+        // Clamped to page 2
+        assert_eq!(meta.current_page, 2);
+        assert_eq!(page.len(), 976); // 2000 - 1024
+    }
+
+    #[test]
+    fn test_paginate_output_page_size_zero_shows_all() {
+        let text = "a".repeat(5000);
+        let (page, meta) = paginate_output(&text, 1, 0);
+        assert_eq!(page.len(), 5000);
+        assert!(!meta.is_truncated);
+        assert_eq!(meta.total_pages, 1);
+    }
+
+    #[test]
+    fn test_paginate_output_newline_boundary() {
+        // Text with a newline near the 1024 boundary
+        let mut text = String::with_capacity(2000);
+        for i in 0..50 {
+            text.push_str(&format!("Line {} with some content to fill space\n", i));
+        }
+        let (page, _meta) = paginate_output(&text, 1, 1024);
+        // Should break on a newline within last 25% of page
+        assert!(page.ends_with('\n'));
+        assert!(page.len() >= 768); // at least 75% of page_size
+    }
+
+    #[test]
+    fn test_parse_page_opts_defaults() {
+        let params = json!({});
+        let (page, page_size, show_all) = parse_page_opts(&params);
+        assert_eq!(page, 1);
+        assert_eq!(page_size, 1024);
+        assert!(!show_all);
+    }
+
+    #[test]
+    fn test_parse_page_opts_explicit() {
+        let params = json!({"page": "3", "page-size": "500", "all": true});
+        let (page, page_size, show_all) = parse_page_opts(&params);
+        assert_eq!(page, 3);
+        assert_eq!(page_size, 500);
+        assert!(show_all);
+    }
+
+    #[test]
+    fn test_format_pagination_footer() {
+        let meta = PaginationMeta {
+            total_chars: 5000,
+            current_page: 1,
+            total_pages: 5,
+            page_size: 1024,
+            is_truncated: true,
+        };
+        let footer = format_pagination_footer(&meta);
+        assert!(footer.contains("Page 1/5"));
+        assert!(footer.contains("1.0K of 4.9K"));
+        assert!(footer.contains("--page N"));
+        assert!(footer.contains("--all"));
+    }
+
+    #[test]
+    fn test_skip_pagination_flags() {
+        // Default: don't skip
+        assert!(!skip_pagination(false));
+        // --all: skip
+        assert!(skip_pagination(true));
+        // --json and --quiet are tested elsewhere (state is thread-local)
     }
 
     // -----------------------------------------------------------------------

@@ -1087,6 +1087,9 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "fixed-strings", short: Some("F"), is_bool: true, description: "Treat pattern as a literal string, not regex" },
                 OptionDef { name: "word-regexp", short: Some("w"), is_bool: true, description: "Match only whole words" },
                 OptionDef { name: "selector", short: None, is_bool: false, description: "CSS selector to scope the search to" },
+                OptionDef { name: "page", short: None, is_bool: false, description: "Page number (1-based, default: 1)" },
+                OptionDef { name: "page-size", short: None, is_bool: false, description: "Characters per page (default: 1024)" },
+                OptionDef { name: "all", short: None, is_bool: true, description: "Show all output, disabling pagination" },
             ],
             tool_name_fn: |_| "browser_snapshot".to_string(),
             tool_params_fn: |args| {
@@ -1101,7 +1104,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "eval",
-            description: "Evaluate JavaScript expression on page or element",
+            description: "Evaluate JavaScript expression on page or element. Objects and arrays are serialized as JSON; use --json to JSON-wrap scalar results.",
             category: Category::Core,
             hidden: false,
             batch_supported: true,
@@ -1111,6 +1114,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             ],
             options: &[
                 OptionDef { name: "file", description: "Read JavaScript expression from a file instead of the command line", is_bool: false, short: None },
+                OptionDef { name: "json", description: "Serialize the result as JSON (quotes strings, wraps scalars)", is_bool: true, short: None },
             ],
             tool_name_fn: |_| "browser_evaluate".to_string(),
             tool_params_fn: |args| {
@@ -2057,7 +2061,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         // ---- Snapshot ----
         CommandDef {
             name: "domsnapshot",
-            description: "Capture a static DOM snapshot, save it in Browser4's page storage, and return metadata (URL, title, timestamp, content type, size)",
+            description: "Capture a static DOM snapshot, save it in Browser4's page storage, and return metadata (URL, title, timestamps, image/link counts, interactive elements with tag/class/id/aria/bounding-box)",
             category: Category::Snapshot,
             hidden: false,
             batch_supported: false,
@@ -2077,7 +2081,11 @@ pub fn all_commands() -> Vec<CommandDef> {
                 ArgDef { name: "selector", description: "CSS selector (defaults to :root; required for attr)", optional: true },
                 ArgDef { name: "name", description: "Attribute name (required for attr field)", optional: true },
             ],
-            options: &[],
+            options: &[
+                OptionDef { name: "page", short: None, is_bool: false, description: "Page number (1-based, default: 1)" },
+                OptionDef { name: "page-size", short: None, is_bool: false, description: "Characters per page (default: 1024)" },
+                OptionDef { name: "all", short: None, is_bool: true, description: "Show all output, disabling pagination" },
+            ],
             tool_name_fn: |_| "dom_snapshot_scrape".to_string(),
             tool_params_fn: |args| {
                 let field = get_str(args, "field").unwrap_or_default();
@@ -2101,6 +2109,9 @@ pub fn all_commands() -> Vec<CommandDef> {
             options: &[
                 OptionDef { name: "offset", description: "Skip the first n results (0-based)", is_bool: false, short: None },
                 OptionDef { name: "limit", description: "Return at most n results", is_bool: false, short: None },
+                OptionDef { name: "page", short: None, is_bool: false, description: "Page number for paginated output (default: 1)" },
+                OptionDef { name: "page-size", short: None, is_bool: false, description: "Characters per page (default: 1024)" },
+                OptionDef { name: "all", short: None, is_bool: true, description: "Show all output, disabling pagination" },
             ],
             tool_name_fn: |_| "dom_snapshot_scrape_all".to_string(),
             tool_params_fn: |args| {
@@ -2195,6 +2206,9 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "fixed-strings", short: Some("F"), is_bool: true, description: "Treat pattern as a literal string, not regex" },
                 OptionDef { name: "word-regexp", short: Some("w"), is_bool: true, description: "Match only whole words" },
                 OptionDef { name: "selector", short: None, is_bool: false, description: "CSS selector to scope the search to" },
+                OptionDef { name: "page", short: None, is_bool: false, description: "Page number (1-based, default: 1)" },
+                OptionDef { name: "page-size", short: None, is_bool: false, description: "Characters per page (default: 1024)" },
+                OptionDef { name: "all", short: None, is_bool: true, description: "Show all output, disabling pagination" },
             ],
             tool_name_fn: |_| "dom_snapshot_export".to_string(),
             tool_params_fn: |args| {
@@ -2284,6 +2298,32 @@ pub fn all_commands() -> Vec<CommandDef> {
             tool_params_fn: |args| {
                 let id = get_str(args, "id").unwrap_or_default();
                 json!({ "id": id })
+            },
+        },
+        CommandDef {
+            name: "domsnapshot-inspect",
+            description: "Inspect DOM structure and suggest CSS selectors for recurring patterns (product cards, prices, titles)",
+            category: Category::Snapshot,
+            hidden: false,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "selector", description: "CSS selector to scope inspection (default: :root; use e.g. .product-card for recurring pattern detection)", optional: true },
+            ],
+            options: &[
+                OptionDef { name: "max", description: "Max matching elements to analyze (default: 10)", is_bool: false, short: None },
+                OptionDef { name: "depth", description: "Max descendant depth for selector suggestions (default: 5)", is_bool: false, short: None },
+            ],
+            tool_name_fn: |_| "dom_snapshot_inspect".to_string(),
+            tool_params_fn: |args| {
+                let mut p = json!({});
+                if let Some(s) = get_opt_str(args, "selector") { p["selector"] = json!(s); }
+                if let Some(m) = get_opt_str(args, "max") {
+                    if let Ok(n) = m.parse::<i32>() { p["max"] = json!(n); }
+                }
+                if let Some(d) = get_opt_str(args, "depth") {
+                    if let Ok(n) = d.parse::<i32>() { p["depth"] = json!(n); }
+                }
+                p
             },
         },
         CommandDef {
@@ -3550,6 +3590,7 @@ mod tests {
             "domsnapshot-export",
             "domsnapshot-summary",
             "domsnapshot-grep",
+            "domsnapshot-inspect",
         ] {
             assert!(map.contains_key(*expected), "Missing command: {}", expected);
         }
@@ -3664,6 +3705,7 @@ mod tests {
             "domsnapshot-export",
             "domsnapshot-summary",
             "domsnapshot-grep",
+            "domsnapshot-inspect",
         ] {
             let cmd = map.get(*name).unwrap();
             assert_eq!(cmd.category, Category::Snapshot);
