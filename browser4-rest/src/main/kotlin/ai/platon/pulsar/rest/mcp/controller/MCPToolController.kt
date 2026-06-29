@@ -992,7 +992,9 @@ class MCPToolController(
             val html = managed.withLock {
                 val pulsarSession = managed.agenticSession
                 val url = pulsarSession.normalize(managed.driver.currentUrl())
-                val document = pulsarSession.loadDocument(url.urlString)
+                // Use getOrNull + capture fallback to get browser-captured HTML
+                val page = pulsarSession.getOrNull(url.urlString) ?: pulsarSession.capture(managed.driver)
+                val document = pulsarSession.parse(page)
                 // good, the exported HTML is pretty formatted, so grep works on it
                 document.outerHtml
             }
@@ -1014,7 +1016,11 @@ class MCPToolController(
             val summary = managed.withLock {
                 val pulsarSession = managed.agenticSession
                 val url = pulsarSession.normalize(managed.driver.currentUrl())
-                val document = pulsarSession.loadDocument(url.urlString)
+                // Use getOrNull + capture fallback to get browser-captured HTML
+                // (which has vi attributes), rather than load() which may reload
+                // from the web without vi attributes.
+                val page = pulsarSession.getOrNull(url.urlString) ?: pulsarSession.capture(managed.driver)
+                val document = pulsarSession.parse(page)
                 val title = document.title
                 val pageUrl = url.urlString
 
@@ -1046,7 +1052,11 @@ class MCPToolController(
             val result = managed.withLock {
                 val pulsarSession = managed.agenticSession
                 val url = pulsarSession.normalize(managed.driver.currentUrl())
-                val document = pulsarSession.loadDocument(url.urlString)
+                // Use getOrNull + capture fallback to get browser-captured HTML
+                // (which has vi attributes), rather than load() which may reload
+                // from the web without vi attributes.
+                val page = pulsarSession.getOrNull(url.urlString) ?: pulsarSession.capture(managed.driver)
+                val document = pulsarSession.parse(page)
 
                 val args = request.arguments ?: emptyMap()
                 val selector = args["selector"]?.toString()?.ifEmpty { ":root" } ?: ":root"
