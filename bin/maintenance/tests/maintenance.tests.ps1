@@ -147,8 +147,7 @@ function Get-MaintenanceThreshold {
     $tp = Join-Path $PSScriptRoot "..\thresholds\thresholds.psd1"
     if (Test-Path $tp) {
         try {
-            $raw = Get-Content $tp -Raw -Encoding UTF8
-            $th = Invoke-Expression $raw
+            $th = Import-PowerShellDataFile -Path $tp
             if ($th.ContainsKey($Section) -and $th[$Section].ContainsKey($Key)) {
                 return $th[$Section][$Key]
             }
@@ -449,7 +448,7 @@ Assert-Equal "E1 CheckId" $r.CheckId "E1"
 Assert-True "E1 valid status" (("passed","failed","skipped","error") -contains $r.Status)
 
 # SNAPSHOT detection
-Assert-True "SNAPSHOT detected" ("4.12.0-rc.1" -match "-SNAPSHOT$")
+Assert-True "SNAPSHOT detected" ("4.12.0-SNAPSHOT" -match "-SNAPSHOT$")
 Assert-True "RELEASE no SNAPSHOT" (-not ("4.11.7" -match "-SNAPSHOT$"))
 
 # Version comparison
@@ -457,7 +456,7 @@ Assert-True "Version match" ("4.12.0-rc.1" -eq "4.12.0-rc.1")
 Assert-True "Version mismatch" ("4.12.0-rc.1" -ne "4.11.6-SNAPSHOT")
 
 # Stripping SNAPSHOT
-Assert-Equal "Strip SNAPSHOT" ("4.12.0-rc.1" -replace "-SNAPSHOT$", "") "4.11.7"
+Assert-Equal "Strip SNAPSHOT" ("4.11.7-SNAPSHOT" -replace "-SNAPSHOT$", "") "4.11.7"
 
 # pom.xml version extraction
 $pomContent = "<project><version>4.12.0-rc.1</version></project>"

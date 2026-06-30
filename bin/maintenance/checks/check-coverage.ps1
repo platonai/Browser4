@@ -94,7 +94,7 @@ try {
             # Map package to category
             $category = "Global"
             if ($pkgName -match "browser4-core") {
-                # Only report core if it's from the core module
+                $category = "Core"
             }
             if ($pkgName -match "util") {
                 $category = "Utilities"

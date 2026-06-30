@@ -85,7 +85,7 @@ Write-MaintenanceLog -Level "INFO" -Component "Orchestrator" -Message "Loaded $(
 # ── Persistent state ──
 $persistedState = Read-MaintenanceState
 if ($null -eq $persistedState) {
-    Initialize-MaintenanceState | Out-Null
+    Initialize-MaintenanceState -PassThru | Out-Null
     $persistedState = Read-MaintenanceState
 }
 Write-MaintenanceLog -Level "INFO" -Component "Orchestrator" `
@@ -157,33 +157,41 @@ function Invoke-MaintenanceTask {
     if (-not (Test-Path $scriptPath)) {
         Write-MaintenanceLog -Level "ERROR" -Component $Task.Name -Message "Script not found: $scriptPath"
         $State.IsRunning = $false
-        return New-MaintenanceResult -CheckId "??" -Name $Task.Name -Status "error" -Details "Script not found: $scriptPath"
+        return New-MaintenanceResult -CheckId "UNKNOWN" -Name $Task.Name -Status "error" -Details "Script not found: $scriptPath"
     }
 
     $argsList = if ($Task.Arguments) { $Task.Arguments } else { @() }
 
     try {
-        $pwshArgs = @("-NoProfile", "-File", $scriptPath) + $argsList
-        $proc = Start-Process -FilePath "pwsh" `
-            -ArgumentList $pwshArgs `
-            -WorkingDirectory $repoRoot `
-            -NoNewWindow `
-            -PassThru `
-            -Wait
+        $timer = [System.Diagnostics.Stopwatch]::StartNew()
+
+        # Run the check script in-process to capture its full result object
+        $checkResult = & $scriptPath @argsList
+        $timer.Stop()
+
+        # Record actual wall-clock duration
+        if ($checkResult -and ($checkResult.PSObject.Properties.Name -contains 'DurationMs')) {
+            $checkResult.DurationMs = $timer.ElapsedMilliseconds
+        }
 
         $State.RunCount++
-        $State.LastResult = if ($proc.ExitCode -eq 0) { "passed" } else { "failed" }
+        $State.LastResult = if ($checkResult.Status) { $checkResult.Status } else { "passed" }
         $State.IsRunning = $false
 
-        return New-MaintenanceResult `
-            -CheckId ($Task.Name -replace '^check-','') `
-            -Name ($Task.Description ?? $Task.Name) `
-            -Status $(if ($proc.ExitCode -eq 0) { "passed" } else { "failed" }) `
-            -ExitCode $proc.ExitCode
+        if (-not $checkResult) {
+            return New-MaintenanceResult `
+                -CheckId ($Task.Name -replace '^check-','') `
+                -Name ($Task.Description ?? $Task.Name) `
+                -Status "failed" `
+                -Details "Check script returned no result object"
+        }
+        return $checkResult
     }
     catch {
-        Write-MaintenanceLog -Level "ERROR" -Component $Task.Name -Message "Failed to start: $($_.Exception.Message)"
+        $State.RunCount++
         $State.IsRunning = $false
+        $State.LastResult = "error"
+        Write-MaintenanceLog -Level "ERROR" -Component $Task.Name -Message "Failed: $($_.Exception.Message)"
         return New-MaintenanceResult `
             -CheckId ($Task.Name -replace '^check-','') `
             -Name ($Task.Description ?? $Task.Name) `
@@ -207,12 +215,30 @@ function Test-TaskDependenciesSatisfied {
             Write-MaintenanceLog -Level "WARN" -Component $Task.Name -Message "Unknown dependency: $dep"
             continue
         }
+
+        # Check session results first (current orchestrator run)
+        if ($sessionTaskResults.ContainsKey($dep)) {
+            $sessionResult = $sessionTaskResults[$dep]
+            if ($sessionResult.Status -eq "failed" -or $sessionResult.Status -eq "error") {
+                Write-MaintenanceLog -Level "DEBUG" -Component $Task.Name `
+                    -Message "Dependency '$dep' failed in current session, blocking"
+                return $false
+            }
+            # Dependency passed in this session — allow
+            continue
+        }
+
+        # Dependency hasn't run in this session yet.
+        # Check persistent state: if it has never run, block.
         $depState = $taskStates[$dep]
-        if ($depState.LastResult -eq "failed" -or $depState.LastResult -eq "error") {
+        if ($depState.RunCount -eq 0) {
             return $false
         }
-        if ($depState.RunCount -eq 0) {
-            return $false  # Dependency hasn't run yet
+        # If the dependency failed in a previous run, don't block —
+        # the code may have been fixed since then. Warn and allow.
+        if ($depState.LastResult -eq "failed" -or $depState.LastResult -eq "error") {
+            Write-MaintenanceLog -Level "WARN" -Component $Task.Name `
+                -Message "Dependency '$dep' failed in a previous run (not current session), allowing to proceed"
         }
     }
     return $true
@@ -223,6 +249,7 @@ function Test-TaskDependenciesSatisfied {
 # ===================================================================
 
 $allResults = @()
+$sessionTaskResults = @{}  # Tracks results from current orchestrator run for dependency resolution
 $tickSeconds = $Scheduler.TickSeconds
 if (-not $tickSeconds) { $tickSeconds = 10 }
 
@@ -247,6 +274,7 @@ do {
 
         $result = Invoke-MaintenanceTask -Task $task -State $state
         $allResults += $result
+        $sessionTaskResults[$task.Name] = $result  # Track for dependency resolution
 
         # Persist updated state so other team members / processes see this run
         Update-MaintenanceTaskState -TaskName $task.Name -Result $result -State $persistedState
@@ -287,6 +315,12 @@ if ($allResults.Count -gt 0) {
     $jsonReporterPath = Join-Path $ScriptDir "reporters\report-json.ps1"
     if (Test-Path $jsonReporterPath) {
         & $jsonReporterPath -Results $allResults
+    }
+
+    # Summary report
+    $summaryReporterPath = Join-Path $ScriptDir "reporters\report-summary.ps1"
+    if (Test-Path $summaryReporterPath) {
+        & $summaryReporterPath -Results $allResults
     }
 }
 

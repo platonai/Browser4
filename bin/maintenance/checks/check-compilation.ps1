@@ -15,9 +15,6 @@ Verifies the project compiles cleanly before any other checks run.
 .PARAMETER MavenProfiles
 Maven profiles to activate. Default: "all-main-modules"
 
-.PARAMETER CargoBuild
-If set, also runs cargo check. Default: $true
-
 .PARAMETER SkipCargo
 If set, skips the Cargo/Rust check entirely.
 
@@ -27,7 +24,6 @@ Standard maintenance result object.
 
 param(
     [string]$MavenProfiles = "all-main-modules",
-    [switch]$CargoBuild,
     [switch]$SkipCargo
 )
 
