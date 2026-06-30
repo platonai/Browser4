@@ -819,6 +819,17 @@ function Start-NativeCommand {
     try {
         if ($CaptureFile) {
             $writer = [System.IO.StreamWriter]::new($CaptureFile, $false, $utf8NoBom)
+            # Print a startup line so the user knows the process has launched
+            # even if it takes a while to produce its first output line.
+            # Omit the -p <prompt> value — it can be thousands of chars.
+            $displayArgs = @()
+            $skipNext = $false
+            foreach ($a in $ArgumentList) {
+                if ($skipNext) { $skipNext = $false; continue }
+                if ($a -eq '-p') { $skipNext = $true; continue }
+                $displayArgs += $a
+            }
+            [Console]::WriteLine("Running: $FilePath $($displayArgs -join ' ')...")
         }
 
         # Fix 1: decode native-command stdout as UTF-8
@@ -1015,6 +1026,10 @@ function Invoke-Agent {
     if (-not $ScenarioName -and -not $OutputFile) {
         $claudeArgs = @('--dangerously-skip-permissions', '-p', $Prompt)
         if ($Silent) { $claudeArgs += '--silent' }
+
+        if (-not $Silent) {
+            Write-Host "→ Agent started at $(Get-Date -Format 'HH:mm:ss'). Output will appear as the agent works..." -ForegroundColor Yellow
+        }
         claude @claudeArgs
 
         if (-not $Silent) {
@@ -1034,6 +1049,10 @@ function Invoke-Agent {
         New-Item -ItemType Directory -Path $targetDir -Force | Out-Null
     }
     $tempFile = Join-Path $targetDir ([System.IO.Path]::GetRandomFileName())
+
+    if (-not $Silent) {
+        Write-Host "→ Agent started at $(Get-Date -Format 'HH:mm:ss'). Output will appear as the agent works..." -ForegroundColor Yellow
+    }
 
     # Start-NativeCommand applies all three anti-garbling fixes:
     #   [Console]::OutputEncoding = UTF-8
