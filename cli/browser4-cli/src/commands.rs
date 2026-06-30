@@ -2120,12 +2120,28 @@ pub fn all_commands() -> Vec<CommandDef> {
                     is_bool: false,
                     short: None,
                 },
+                OptionDef {
+                    name: "result-only",
+                    description: "Extract and print only the resultSet object from the response JSON, omitting wrapper metadata",
+                    is_bool: true,
+                    short: None,
+                },
+                OptionDef {
+                    name: "output-file",
+                    description: "Write output to a file instead of stdout",
+                    is_bool: false,
+                    short: None,
+                },
             ],
             tool_name_fn: |_| "dom_snapshot_query".to_string(),
             tool_params_fn: |args| {
                 let sql = get_opt_str(args, "sql").unwrap_or_default();
                 let url = get_opt_str(args, "url").unwrap_or("");
-                json!({ "sql": sql, "url": url })
+                let mut p = json!({ "sql": sql, "url": url });
+                // Pass through CLI-side flags
+                if let Some(true) = get_bool(args, "result-only") { p["resultOnly"] = json!(true); }
+                if let Some(f) = get_opt_str(args, "output-file") { p["outputFile"] = json!(f); }
+                p
             },
         },
         CommandDef {

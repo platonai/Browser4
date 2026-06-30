@@ -53,7 +53,7 @@ if ($browser4cliMode -eq 'production') {
 # Repo root is 3 levels up from scripts/ (scripts -> tests -> browser4-cli -> repo root)
 $script:RepoRoot = (Resolve-Path "$PSScriptRoot/../../..").Path
 $script:IssuesReadyDir = [System.IO.Path]::GetFullPath(
-    (Join-Path $script:RepoRoot 'coworker\tasks\200issues\draft\refine\0ready')
+    (Join-Path $script:RepoRoot 'coworker\tasks\200issues\draft')
 )
 
 # ── Shared evaluation prompt ────────────────────────────────────────────────
@@ -66,6 +66,7 @@ You are evaluating the usability, discoverability, and reliability of browser4-c
 
 Before performing any browser interaction:
 
+0. Verify your working directory is the repository root (the directory containing `cli/`, `skill/`, `pom.xml`, etc.). If you are not in the repo root, navigate there first with `cd` using the absolute path to the repository. All `cd cli/browser4-cli` commands assume you start from the repo root.
 1. Run $helpCmd.
 2. Read $skillPath completely.
 3. Learn the available commands, workflows, and conventions directly from the documentation.

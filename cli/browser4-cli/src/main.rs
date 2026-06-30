@@ -2294,6 +2294,11 @@ async fn handle_snapshot(
         || tool_params.get("interactive").and_then(|v| v.as_bool()).unwrap_or(false)
         || tool_params.get("depth").and_then(|v| v.as_str()).map_or(false, |s| !s.is_empty());
 
+    let depth_used = tool_params
+        .get("depth")
+        .and_then(|v| v.as_str())
+        .map_or(false, |s| !s.is_empty());
+
     let snap_len = snap.len();
     let snap_kb = snap_len / 1024;
     let snap_lines = snap.lines().count();
@@ -2324,6 +2329,19 @@ async fn handle_snapshot(
         } else {
             println!("{}", snap);
         }
+        // Depth truncation warning (stderr so stdout stays clean for piping)
+        if depth_used {
+            eprintln!(
+                "⚠️  Depth limited to {}. Elements deeper than this are not shown. \
+                 Increase --depth to see more content.",
+                tool_params.get("depth").and_then(|v| v.as_str()).unwrap_or("?")
+            );
+        }
+        // Ref lifecycle note (stderr so stdout stays clean)
+        eprintln!(
+            "ℹ️  Element refs (e.g. e5, e36) are valid only until the next browser \
+             interaction. Re-run snapshot before reusing refs."
+        );
     } else {
         cli_println!("### Page");
         cli_println!("- Page URL: {}", url);
@@ -2331,6 +2349,19 @@ async fn handle_snapshot(
         cli_println!("### Snapshot");
         cli_println!("[Snapshot]({})", out_path.display());
         cli_println!("- Snapshot size: {} KB ({} nodes/lines)", snap_kb, snap_lines);
+        // Depth truncation warning
+        if depth_used {
+            eprintln!(
+                "⚠️  Depth limited to {}. Elements deeper than this are not shown. \
+                 Increase --depth to see more content.",
+                tool_params.get("depth").and_then(|v| v.as_str()).unwrap_or("?")
+            );
+        }
+        // Ref lifecycle note
+        eprintln!(
+            "ℹ️  Element refs (e.g. e5, e36) are valid only until the next browser \
+             interaction. Re-run snapshot before reusing refs."
+        );
         // Show pagination info when the file is large
         if snap_len > 10_240 && !has_filter {
             eprintln!(
@@ -3128,8 +3159,52 @@ async fn handle_dom_snapshot_query(
     })
     .await?;
 
-    if !result.is_empty() {
-        cli_println!("{}", result);
+    let result_only = tool_params
+        .get("resultOnly")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let output_file = tool_params
+        .get("outputFile")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+
+    // Process output: extract resultSet if --result-only, then write to file or stdout
+    let output = if result_only {
+        // Try to parse the server JSON and extract just the resultSet
+        match serde_json::from_str::<Value>(&result) {
+            Ok(parsed) => {
+                if let Some(result_set) = parsed.get("resultSet") {
+                    serde_json::to_string_pretty(result_set)
+                        .unwrap_or_else(|_| result.clone())
+                } else {
+                    // No resultSet found — return the raw result with a warning
+                    eprintln!(
+                        "⚠️  --result-only set but no 'resultSet' field found in response. \
+                         Showing full result."
+                    );
+                    result.clone()
+                }
+            }
+            Err(_) => {
+                // Not valid JSON — return as-is
+                eprintln!(
+                    "⚠️  --result-only set but response is not valid JSON. \
+                     Showing raw result."
+                );
+                result.clone()
+            }
+        }
+    } else {
+        result.clone()
+    };
+
+    if let Some(out_file) = output_file {
+        std::fs::write(&out_file, &output)
+            .map_err(|e| format!("Failed to write output to '{}': {}", out_file, e))?;
+        cli_println!("Output written to: {}", out_file);
+    } else if !output.is_empty() {
+        cli_println!("{}", output);
     }
     json_field("result", json!(&result));
 
@@ -3347,6 +3422,21 @@ async fn handle_dom_snapshot_inspect(
             }
         }
     }
+
+    // Content-selector discovery tips
+    cli_println!("");
+    cli_println!("  💡 Content selector tips:");
+    cli_println!("     Use semantic tags to target content directly:");
+    cli_println!("       h2              — section titles / product names");
+    cli_println!("       h1, h3, h4      — other heading levels");
+    cli_println!("       a               — links");
+    cli_println!("       img             — images");
+    cli_println!("       span, p, li     — inline text, paragraphs, list items");
+    cli_println!("     Use class selectors for specific content types:");
+    cli_println!("       .a-price         — Amazon price elements (example)");
+    cli_println!("       .a-icon-alt      — Amazon rating text (example)");
+    cli_println!("     Try: domsnapshot get all text \"h2\" --limit 10");
+    cli_println!("     Try: domsnapshot query --sql \"SELECT text-content FROM load_and_select(@url, 'h2')\"");
 
     json_field("inspect", data);
     Ok(())
@@ -7535,6 +7625,44 @@ fn format_cli_error_output(error: &str) -> String {
     }
 }
 
+/// Compute Levenshtein distance between two strings.
+fn levenshtein_distance(a: &str, b: &str) -> usize {
+    let a_chars: Vec<char> = a.chars().collect();
+    let b_chars: Vec<char> = b.chars().collect();
+    let m = a_chars.len();
+    let n = b_chars.len();
+
+    // Use two rows for memory efficiency
+    let mut prev = (0..=n).collect::<Vec<usize>>();
+    let mut curr = vec![0; n + 1];
+
+    for i in 1..=m {
+        curr[0] = i;
+        for j in 1..=n {
+            let cost = if a_chars[i - 1] == b_chars[j - 1] { 0 } else { 1 };
+            curr[j] = (prev[j] + 1).min(curr[j - 1] + 1).min(prev[j - 1] + cost);
+        }
+        std::mem::swap(&mut prev, &mut curr);
+    }
+    prev[n]
+}
+
+/// Find commands similar to the given input, sorted by Levenshtein distance.
+fn suggest_similar_commands(input: &str, max_distance: usize, max_suggestions: usize) -> Vec<String> {
+    let cmd_map = commands_map();
+    let mut candidates: Vec<(usize, String)> = cmd_map
+        .keys()
+        .map(|name| (levenshtein_distance(input, name), name.clone()))
+        .filter(|(dist, _)| *dist <= max_distance)
+        .collect();
+    candidates.sort_by_key(|(dist, _)| *dist);
+    candidates
+        .into_iter()
+        .take(max_suggestions)
+        .map(|(_, name)| name)
+        .collect()
+}
+
 fn json_envelope(
     status: &str,
     command: &str,
@@ -7663,6 +7791,20 @@ async fn run(
     let cmd_def = match cmd_map.get(command) {
         Some(def) => def,
         None => {
+            let suggestions = suggest_similar_commands(command, 3, 5);
+            if suggestions.is_empty() {
+                eprintln!("Unknown command: '{}'", command);
+            } else {
+                eprintln!(
+                    "Unknown command: '{}'. Did you mean: {}?",
+                    command,
+                    suggestions
+                        .iter()
+                        .map(|s| format!("'{}'", s))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
+            }
             print_help(None);
             return Ok(());
         }
