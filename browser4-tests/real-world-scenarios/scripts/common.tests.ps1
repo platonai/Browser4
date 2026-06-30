@@ -406,7 +406,7 @@ Write-Host '━━━ Path Resolution ━━━' -ForegroundColor Yellow
     Assert-True 'IssuesReadyDir is absolute' $isAbs
 
     Write-TestGroup '$script:IssuesReadyDir ends with the expected suffix'
-    $expectedSuffix = '200issues\draft\refine\0ready'
+    $expectedSuffix = '200issues\draft'
     $normalized = ([string]$script:IssuesReadyDir) -replace '[/\\]', '\'
     Assert-True "Ends with $expectedSuffix" $normalized.EndsWith($expectedSuffix)
 
