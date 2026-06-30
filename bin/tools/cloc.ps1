@@ -51,6 +51,15 @@ $ErrorActionPreference = 'Stop'
 # Helpers
 # ═══════════════════════════════════════════════════════════════════════
 
+function Get-RepoRoot {
+    try {
+        $root = git rev-parse --show-toplevel 2>$null
+        if ($root) { return $root.Trim() }
+    } catch { }
+    # Fall back to current directory if not in a git repo.
+    return (Get-Location).Path
+}
+
 function Get-CommitDate {
     try {
         $date = git --no-pager log -1 '--date=format:%Y/%m/%d' '--format=%ad' 2>$null
@@ -60,11 +69,11 @@ function Get-CommitDate {
 }
 
 function Invoke-CLoc {
-    param([string[]] $Languages)
+    param([string[]] $Languages, [string] $Path)
 
     # Prefer JSON output for reliable parsing; fall back to plain text.
     try {
-        $raw = & cloc --json --include-lang=($Languages -join ',') . 2>$null
+        $raw = & cloc --json --include-lang=($Languages -join ',') $Path 2>$null
         if ($LASTEXITCODE -eq 0 -and $raw) {
             # &-capture produces an array of lines; ConvertFrom-Json needs a single string.
             $json = ($raw -join "`n") | ConvertFrom-Json
@@ -82,7 +91,7 @@ function Invoke-CLoc {
     # Fallback: parse plain-text cloc output (e.g. "Kotlin  42 10 5 27").
     $result = @{}
     try {
-        $output = & cloc . 2>$null
+        $output = & cloc $Path 2>$null
     } catch {
         return $result
     }
@@ -156,6 +165,9 @@ function Stop-Spinner {
 # Main
 # ═══════════════════════════════════════════════════════════════════════
 
+# Resolve repo root before any checkout, so we always count the right tree.
+$repoRoot = Get-RepoRoot
+
 # Optionally check out the requested ref.
 if ($Ref) {
     try {
@@ -168,7 +180,7 @@ $date = Get-CommitDate
 # Show spinner while cloc runs.
 $spinner = if (-not $Quiet) { Start-Spinner -Message 'Counting lines of code' }
 try {
-    $counts = Invoke-CLoc -Languages 'Kotlin', 'Java'
+    $counts = Invoke-CLoc -Languages 'Kotlin', 'Java' -Path $repoRoot
 } finally {
     Stop-Spinner -State $spinner
 }
