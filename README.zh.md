@@ -159,14 +159,16 @@ Browser4 CLI 专为 AI 智能体通过技能 (SKILLS) + CLI 使用而设计。
 
 `domsnapshot` 系列命令提供**静态 DOM 提取** — 将当前页面的原始 HTML 捕获为可查询的文档对象模型。与交互式的 `snapshot` 命令（捕获无障碍树引用用于 `click`/`type`/`fill`）不同，`domsnapshot` 使用 CSS 选择器和 X-SQL 查询提取结构化数据，无需交互式浏览器会话。
 
-| 功能 | `snapshot` | `domsnapshot` |
-|---|---|---|
-| 数据来源 | 无障碍树 | 原始 HTML DOM |
-| 元素定位 | 引用 (`e5`, `e15`) | 仅 CSS 选择器 |
-| 交互命令 | `click`, `type`, `fill` | 不支持 |
-| 数据提取 | 通过 `extract` | 通过 `get` 和 `query` |
-| X-SQL 支持 | 否 | 是 (`query`) |
-| 导出格式 | YAML（无障碍树） | HTML (`export`) |
+```
+                  snapshot              domsnapshot
+─────────────────────────────────────────────────────────
+数据来源          无障碍树              原始 HTML DOM
+元素定位          引用 (e5, e15)        仅 CSS 选择器
+交互命令          click, type, fill     不支持
+数据提取          通过 extract          通过 get 和 query
+X-SQL 支持        否                    是 (query)
+导出格式          YAML（无障碍树）       HTML (export)
+```
 
 ```shell
 # 捕获当前页面的静态 DOM 快照
@@ -208,11 +210,13 @@ Browser4 CLI 提供两种高级接口，用于超越标准单步操作的复杂�
 
 **Swarm CLI**（`swarm <subcommand>`）—— 跨多个浏览器上下文编排并行抓取和结构化数据提取。专为高吞吐量任务打造：刷新精选 URL 列表、有监督的扇出式浏览、以及可重复执行的基于选择器的抓取。支持 X-SQL，可对已加载的网页进行结构化查询。
 
-| 接口 | 模式 | 适用场景 |
-|---|---|---|
-| 标准命令 | 每次调用执行单个操作 | 你已知道确切的 ref/选择器，需要精确控制 |
-| Agent CLI | 自然语言任务 → 自主执行 | 有目标但不了解页面结构；多步骤探索 |
-| Swarm CLI | 并行上下文 + X-SQL 查询 | 高吞吐量抓取、跨多个页面进行结构化提取 |
+```
+接口          模式                          适用场景
+───────────────────────────────────────────────────────────────────────
+标准命令      每次调用执行单个操作            已知确切的 ref/选择器，需要精确控制
+Agent CLI     自然语言任务 → 自主执行         有目标但不了解页面结构；多步骤探索
+Swarm CLI     并行上下文 + X-SQL 查询         高吞吐量抓取、跨多个页面进行结构化提取
+```
 
 #### Agent CLI 示例
 
@@ -294,32 +298,38 @@ browser4-cli swarm query --sql @query.sql --seed-file=./urls.txt --refresh
 
 ### 前置条件
 
-| 工具 | 最低版本 | 用途 | 备注 |
-|------|---------|------|------|
-| **Git** | 任意 | 克隆、根目录发现 | |
-| **JDK** | 17+（推荐 21+） | 构建与运行时 | 推荐 Eclipse Temurin。JDK 21+ 可启用最佳 jlink 压缩（zip-9）。 |
-| **Maven** | 3.9+ | Java 构建 | 通过 `mvnw` 包装器内置 — 无需单独安装。 |
-| **PowerShell 7** (`pwsh`) | 7.0+ | 运行时打包（jlink） | **Linux** 和 **macOS** 必需。Windows 内置（`powershell.exe`）。安装：`curl -fsSL https://aka.ms/install-powershell.sh \| bash` |
-| **JDK 工具** (`jdeps`, `jlink`, `jpackage`) | 随 JDK 16+ 附带 | 运行时打包 | 包含在你的 JDK 安装中 — 无需单独安装。 |
-| **Chrome / Chromium** | 最新 | 运行时 | 见下方自动检测路径。Docker 镜像通过 `apk add chromium` 捆绑 Chromium。 |
-| **Rust** | stable（edition 2021） | 仅 CLI 构建 | 仅在从源码构建 `browser4-cli` 时需要（Java 后端不需要）。 |
-| **Node.js + pnpm** | Node 24 / pnpm 10 | CLI 分发 | 仅在打包 CLI 用于 npm 发布时需要。 |
+```
+Git                      任意                      克隆、根目录发现
+JDK                      17+（推荐 21+）            构建与运行时
+                                                  推荐 Eclipse Temurin。JDK 21+ 可启用最佳 jlink 压缩（zip-9）。
+Maven                    3.9+                      Java 构建 — 通过 mvnw 包装器内置，无需单独安装
+PowerShell 7 (pwsh)      7.0+                      运行时打包（jlink）
+                                                  Linux 和 macOS 必需。Windows 内置 (powershell.exe)
+JDK 工具                 随 JDK 16+ 附带            运行时打包 — 包含在 JDK 安装中，无需单独安装
+  (jdeps,jlink,jpackage)
+Chrome / Chromium        最新                      运行时。Docker 镜像通过 apk add chromium 捆绑 Chromium
+Rust                     stable（edition 2021）     仅 CLI 构建 — Java 后端不需要
+Node.js + pnpm           Node 24 / pnpm 10         CLI 分发 — 仅在打包 CLI 用于 npm 发布时需要
+```
 
 #### 运行时打包的平台特定工具
 
-| 平台 | 额外工具 |
-|------|---------|
-| **Linux** | `tar`、`wget` 或 `curl` |
-| **macOS** | `tar` |
-| **Windows** | `powershell.exe`（内置）— Windows PowerShell 5.1+ 即可 |
+```
+Linux      tar、wget 或 curl
+macOS      tar
+Windows    powershell.exe（内置）— Windows PowerShell 5.1+ 即可
+```
 
 #### Chrome 自动检测路径
 
-| 平台 | 搜索路径 |
-|------|---------|
-| **Windows** | `C:\Program Files\Google\Chrome\Application\chrome.exe`、`C:\Program Files (x86)\Google\Chrome\Application\chrome.exe` |
-| **macOS** | `/Applications/Google Chrome.app/Contents/MacOS/Google Chrome`、`/Applications/Chromium.app/Contents/MacOS/Chromium` |
-| **Linux** | `/opt/google/chrome/chrome`、`/usr/bin/google-chrome`、`/usr/bin/chromium-browser`、`PATH: google-chrome`、`chromium-browser`、`chromium` |
+```
+Windows    C:\Program Files\Google\Chrome\Application\chrome.exe
+           C:\Program Files (x86)\Google\Chrome\Application\chrome.exe
+macOS      /Applications/Google Chrome.app/Contents/MacOS/Google Chrome
+           /Applications/Chromium.app/Contents/MacOS/Chromium
+Linux      /opt/google/chrome/chrome, /usr/bin/google-chrome
+           /usr/bin/chromium-browser, PATH: google-chrome, chromium-browser, chromium
+```
 
 如果未找到 Chrome，CLI 会自动尝试安装：
 - **Windows**：通过 `winget` 或 PowerShell 下载独立安装程序
@@ -393,15 +403,15 @@ curl -L -o PulsarRPAPro.jar https://github.com/platonai/PulsarRPAPro/releases/do
 
 ## 📦 模块概览
 
-| 模块                   | 描述                                         |
-|------------------------|----------------------------------------------|
-| `cli`                  | 基于 Rust 的 CLI，支持技能 (SKILLS)            |
-| `browser4-core`        | 核心引擎：会话、调度、DOM、浏览器控制            |
-| `browser4-agentic`     | 智能体实现、MCP 和技能注册                      |
-| `browser4-rest`        | Spring Boot REST 层和命令端点                  |
-| `browser4-standalone`  | 智能体和爬虫编排，包含产品打包                    |
-| `examples`             | 可运行的示例和演示                              |
-| `browser4-tests`       | 端到端测试、重量级集成测试和场景测试              |
+```
+cli                     基于 Rust 的 CLI，支持技能 (SKILLS)
+browser4-core           核心引擎：会话、调度、DOM、浏览器控制
+browser4-agentic        智能体实现、MCP 和技能注册
+browser4-rest           Spring Boot REST 层和命令端点
+browser4-standalone     智能体和爬虫编排，包含产品打包
+examples                可运行的示例和演示
+browser4-tests          端到端测试、重量级集成测试和场景测试
+```
 
 ---
 
