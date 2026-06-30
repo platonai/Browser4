@@ -179,6 +179,50 @@ class PageHandler constructor(
     }
 
     /**
+     * Build a YAML comment header with viewport state metadata.
+     * Helps AI agents understand the current viewport position and page dimensions.
+     */
+    private fun buildViewportHeader(buState: BrowserUseState): String {
+        val s = buState.browserState.scrollState
+        return buildString {
+            appendLine("# Viewport State")
+            appendLine("# - processingViewport: ${s.processingViewport}")
+            appendLine("# - viewportHeight: ${s.viewportHeight}px")
+            appendLine("# - viewportsTotal: ${s.viewportsTotal}")
+            appendLine("# - hiddenTopHeight: ${s.hiddenTopHeight}px")
+            appendLine("# - hiddenBottomHeight: ${s.hiddenBottomHeight}px")
+            appendLine("#")
+        }
+    }
+
+    /**
+     * Build a YAML comment footer with viewport navigation guidance.
+     * When the page spans multiple viewports, suggests reading the page viewport by
+     * viewport — just like a human scrolls through a long page.
+     */
+    private fun buildViewportFooter(buState: BrowserUseState, options: AriaSnapshotOptions): String {
+        val s = buState.browserState.scrollState
+        if (s.viewportsTotal <= 1) return ""
+
+        val currentViewport = s.processingViewport
+        return buildString {
+            appendLine("# ---")
+            appendLine("# This page has ${s.viewportsTotal} viewports. You are currently viewing viewport $currentViewport.")
+            appendLine("# To read the page viewport by viewport (like a human scrolling):")
+            if (currentViewport > 0) {
+                appendLine("#   snapshot --viewport=0          # view the top of the page")
+            }
+            if (currentViewport < s.viewportsTotal - 1) {
+                val next = currentViewport + 1
+                appendLine("#   snapshot --viewport=$next          # scroll down to viewport $next")
+            }
+            appendLine("#   snapshot --viewport=0-${s.viewportsTotal - 1}    # capture all viewports at once")
+            appendLine("#   snapshot --viewport=all       # capture all viewports (same as above)")
+            appendLine("#")
+        }
+    }
+
+    /**
      * Gets a specific attribute value for the element matching the locator.
      *
      * @param locator The element locator, multiple formats are supported.
