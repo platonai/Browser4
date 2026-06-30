@@ -227,7 +227,7 @@ Test infrastructure and Docker verification scripts.
 - **`test-docker-local.ps1`**: Build and smoke-test the Browser4 Docker image locally, mirroring the CI `build-core-and-docker` job. Runs Maven build, Docker build, health check, and JAR inspection.
 - **`test.ps1.tests.ps1`**: Unit tests for helper functions and dispatch logic in `bin/test.ps1`. Extracts pure functions via PowerShell's AST parser and tests them in isolation — no Maven or Cargo execution needed.
 
-### `tests-production/`
+### `browser4-tests/tests-production/`
 
 Integration test suite for `browser4-cli` production releases. All tests use the globally-installed CLI by default (override with `$env:BROWSER4_CLI_BIN`).
 

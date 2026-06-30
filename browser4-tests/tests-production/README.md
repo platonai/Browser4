@@ -16,21 +16,21 @@ individual step failures, and a full summary is printed at the end.
 pwsh bin/test-production.ps1
 
 # Run all test categories
-pwsh bin/tests-production/run-tests.ps1 all
+pwsh browser4-tests/tests-production/run-tests.ps1 all
 
 # Run smoke tests only
-pwsh bin/tests-production/run-tests.ps1 smoke
+pwsh browser4-tests/tests-production/run-tests.ps1 smoke
 
 # Run a single test
-pwsh bin/tests-production/run-tests.ps1 cli-basics
+pwsh browser4-tests/tests-production/run-tests.ps1 cli-basics
 
 # Run multi-scenario stress suite (60 iterations, global CLI)
-pwsh bin/tests-production/multi-scenarios.ps1 -Iterations 10
+pwsh browser4-tests/tests-production/multi-scenarios.ps1 -Iterations 10
 ```
 
 ```bash
 # Linux/macOS: use the bash wrapper
-bin/tests-production/run-tests.sh smoke
+browser4-tests/tests-production/run-tests.sh smoke
 ```
 
 ## Available Tests
@@ -97,7 +97,7 @@ location with only a globally-installed `browser4-cli` on PATH.
 
 ## Logs
 
-Each run creates a timestamped log directory under `bin/tests-production/logs/`.
+Each run creates a timestamped log directory under `browser4-tests/tests-production/logs/`.
 On failure, log paths are printed and AI analysis is invoked automatically
 when `claude` or `copilot` is on PATH (priority: `claude`, then `copilot`).
 

@@ -23,7 +23,7 @@
         pwsh bin/tests/test.ps1.tests.ps1
 
     Run via runner:
-        pwsh bin/tests-production/run-tests.ps1 test.ps1
+        pwsh browser4-tests/tests-production/run-tests.ps1 test.ps1
 #>
 
 [CmdletBinding()]
@@ -35,7 +35,7 @@ $ErrorActionPreference = 'Continue'
 # Resolve paths
 # -------------------------------------------------------------------
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$TestUtilsModule = Join-Path $ScriptDir '..\tests-production\test-utils.psm1'
+$TestUtilsModule = Join-Path $ScriptDir '..\..\browser4-tests\tests-production\test-utils.psm1'
 $TestPs1Path = Join-Path $ScriptDir '..\test.ps1'
 
 # -------------------------------------------------------------------

@@ -24,7 +24,7 @@
       - Snapshot accuracy after each navigation
       - Random interactions (scroll, press, hover, eval) without side-effects
 
-    All CLI invocations are logged to a per-run directory under bin/tests-production/logs/.
+    All CLI invocations are logged to a per-run directory under browser4-tests/tests-production/logs/.
     Failures are reported with log paths.  If `copilot` is on PATH, it is
     invoked automatically to analyse any failures.
 

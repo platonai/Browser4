@@ -1243,10 +1243,10 @@ if (-not $Stress) {
         # Ensure config is available before running multi-scenarios
         Copy-ConfigFromUserHome
 
-        $multiScenariosScript = Join-Path $ScriptDir 'tests-production\multi-scenarios.ps1'
+        $multiScenariosScript = Join-Path $ScriptDir '..\browser4-tests\tests-production\multi-scenarios.ps1'
         if (-not (Test-Path $multiScenariosScript) -and $RepoRoot) {
             # Fall back to repo-relative path for bw-compat
-            $multiScenariosScript = Join-Path $RepoRoot 'bin\tests-production\multi-scenarios.ps1'
+            $multiScenariosScript = Join-Path $RepoRoot 'browser4-tests\tests-production\multi-scenarios.ps1'
         }
         if (-not (Test-Path $multiScenariosScript)) {
             Write-WarningMsg "multi-scenarios.ps1 not found at: $multiScenariosScript"

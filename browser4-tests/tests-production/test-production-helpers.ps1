@@ -20,10 +20,10 @@
             Get-RuntimeBundleDir, Update-SessionPath, Resolve-CliPath.
 
     Run standalone:
-        pwsh bin/tests-production/test-production-helpers.ps1
+        pwsh browser4-tests/tests-production/test-production-helpers.ps1
 
     Run via runner:
-        pwsh bin/tests-production/run-tests.ps1 test-production-helpers
+        pwsh browser4-tests/tests-production/run-tests.ps1 test-production-helpers
 #>
 
 [CmdletBinding()]

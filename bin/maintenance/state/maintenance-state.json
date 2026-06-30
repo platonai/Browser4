@@ -1,7 +1,24 @@
 {
   "version": 1,
   "createdAt": "2026-06-20T00:00:00+08:00",
-  "updatedAt": "2026-06-20T00:00:00+08:00",
   "machine": "init",
-  "Tasks": {}
+  "Tasks": {
+    "check-fast-tests": {
+      "runCount": 1,
+      "lastExitCode": 0,
+      "lastDurationMs": 0,
+      "lastMachine": "ALTAIR",
+      "lastResult": "passed",
+      "lastRun": "2026-06-30T15:39:39+08:00"
+    },
+    "check-compilation": {
+      "runCount": 1,
+      "lastExitCode": 0,
+      "lastDurationMs": 0,
+      "lastMachine": "ALTAIR",
+      "lastResult": "passed",
+      "lastRun": "2026-06-30T15:39:36+08:00"
+    }
+  },
+  "updatedAt": "2026-06-30T15:39:39+08:00"
 }

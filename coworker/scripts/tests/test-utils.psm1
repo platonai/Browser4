@@ -22,7 +22,7 @@
 # lower-level Register-CliResult to log results from custom invocations.
 
 # Import shared AI agent utilities (Get-AiAnalyzer, Invoke-CopilotAnalysis, etc.)
-# The agent-utils module lives in bin/common/ alongside bin/tests-production/.  When the
+# The agent-utils module lives in bin/common/ alongside browser4-tests/tests-production/.  When the
 # bin/ directory structure is preserved, it is imported directly.  When this
 # module is used standalone (e.g. copied out of the repo), inline fallback
 # implementations are provided so the test scripts still work.
@@ -145,7 +145,7 @@ function Start-TestSession {
     )
 
     if (-not $LogBaseDir) {
-        # Default to bin/tests-production/logs/<name>/
+        # Default to browser4-tests/tests-production/logs/<name>/
         $LogBaseDir = Join-Path $PSScriptRoot 'logs'
     }
 

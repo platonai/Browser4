@@ -86,7 +86,7 @@ if ($Help) {
 $ErrorActionPreference = 'Stop'
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 # Resolve repo root only when inside a repository checkout (two levels up from
-# bin/tests-production/).  When this script is run standalone (e.g. downloaded from OSS),
+# browser4-tests/tests-production/).  When this script is run standalone (e.g. downloaded from OSS),
 # repo-dependent features like -BuildCli / -BuildServer are unavailable.
 $RepoRoot = if (Test-Path (Join-Path $ScriptDir '..\..\pom.xml')) {
     Resolve-Path (Join-Path $ScriptDir '..\..')
