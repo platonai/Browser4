@@ -30,15 +30,12 @@ import ai.platon.pulsar.browser.protocol.BrowserProtocol
  * All direct usage of [ai.platon.cdt.kt.protocol.ChromeDevTools] should go through this class to improve
  * maintainability and provide a consistent, centralized interface.
  */
-class RemoteChromeProtocol(
+class RemoteChromeProtocol constructor(
     val devTools: ChromeDevTools
 ) : BrowserProtocol {
     private data class EmptyResult(val ignored: String? = null)
 
-    val remoteDevTools: RemoteDevTools =
-        (devTools as? RemoteDevTools) ?: error("CDP requires RemoteDevTools for this runtime")
-
-    val remoteDevToolsOrNull: RemoteDevTools? get() = devTools as? RemoteDevTools
+    override val remoteDevToolsOrNull: RemoteDevTools? get() = devTools as? RemoteDevTools
     override val isOpen: Boolean get() = remoteDevToolsOrNull?.isOpen ?: false
 
     override suspend fun isBrowserAlive(): Boolean {
