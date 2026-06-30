@@ -61,6 +61,15 @@
             <artifactId>browser4-tests-common</artifactId>
             <scope>test</scope>
         </dependency>
+
+        <!-- Shared test base classes (WebDriverTestBase, MockSiteAccess, etc.) -->
+        <dependency>
+            <groupId>ai.platon.pulsar</groupId>
+            <artifactId>pulsar-it-tests</artifactId>
+            <version>${project.version}</version>
+            <type>test-jar</type>
+            <scope>test</scope>
+        </dependency>
         <!--
         If your build relies on dependency management support from Spring Boot, you should not import
         the junit-bom in your build script since that will result in duplicate

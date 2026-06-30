@@ -17,7 +17,7 @@ import org.springframework.context.annotation.Import
     webEnvironment = SpringBootTest.WebEnvironment.DEFINED_PORT
 )
 @Import(Browser4AutoConfiguration::class)
-class MockSiteAccess {
+open class MockSiteAccess {
 
     @Autowired
     lateinit var conf: ImmutableConfig
@@ -25,7 +25,7 @@ class MockSiteAccess {
     @Autowired
     lateinit var session: AgenticSession
 
-    @Value($$"${server.port}")
+    @Value("\${server.port}")
     var port: Int = 18080
 
     val context get() = session.context
@@ -60,6 +60,11 @@ class MockSiteAccess {
     protected val interactiveUrl2 get() = "$generatedAssetsBaseURL/interactive-2.html"
 
     protected val ttaBaseURL get() = "$generatedAssetsBaseURL/tta"
+
+    protected val ttaUrl1 get() = "$ttaBaseURL/interactive-1.html"
+    protected val ttaUrl2 get() = "$ttaBaseURL/interactive-2.html"
+    protected val ttaUrl3 get() = "$ttaBaseURL/interactive-3.html"
+    protected val ttaUrl4 get() = "$ttaBaseURL/interactive-4.html"
 
     protected val actMockSiteBaseURL get() = "$generatedAssetsBaseURL/tta/act"
     protected val actMockSiteHomeURL get() = "$actMockSiteBaseURL/act-demo.html"

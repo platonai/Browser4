@@ -1,5 +1,6 @@
 package ai.platon.pulsar.browser
 
+import ai.platon.pulsar.FastWebDriverService
 import ai.platon.pulsar.WebDriverTestBase
 import ai.platon.pulsar.common.printlnPro
 import ai.platon.pulsar.common.sleepSeconds

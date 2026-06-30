@@ -1,5 +1,6 @@
 package ai.platon.pulsar.browser
 
+import ai.platon.pulsar.FastWebDriverService
 import ai.platon.pulsar.WebDriverTestBase
 import org.junit.jupiter.api.Disabled
 import org.junit.jupiter.api.DisplayName
