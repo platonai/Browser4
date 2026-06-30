@@ -11,7 +11,7 @@ import ai.platon.pulsar.common.PulsarSessionManager
 import ai.platon.pulsar.core.api.WebDriver
 import ai.platon.pulsar.rest.api.entities.CommandResult
 import ai.platon.pulsar.rest.api.entities.CommandStatus
-import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
+import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import jakarta.servlet.http.HttpServletResponse
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
@@ -28,7 +28,7 @@ import org.springframework.http.HttpStatus
 import java.util.*
 
 class MCPToolControllerTest {
-    private val objectMapper = jacksonObjectMapper()
+    private val objectMapper = pulsarObjectMapper()
 
     @Mock
     private lateinit var sessionManager: PulsarSessionManager
@@ -67,7 +67,7 @@ class MCPToolControllerTest {
     @BeforeEach
     fun setUp() {
         MockitoAnnotations.openMocks(this)
-        controller = MCPToolController(sessionManager, commandExecutor, objectMapper = objectMapper)
+        controller = MCPToolController(sessionManager, commandExecutor)
 
         // Setup session structure
         `when`(sessionManager.getSession(sessionId)).thenReturn(managedSession)

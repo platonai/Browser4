@@ -3822,6 +3822,11 @@ fn run_grep_on_source(
         json_field("total_lines", json!(full_output.lines().count()));
         json_field("page_size", json!(page_size));
         json_field("truncated", json!(!skip_pagination(show_all) && full_output.lines().count() > page_size));
+    } else if !grep_options.files_with_matches && !grep_options.count {
+        // Normal mode with no matches: always print a count so the output
+        // is never silently empty.  Silent empty output is confusing and
+        // often mistaken for a bug rather than "no matches in this viewport".
+        cli_println!("0 matches found");
     }
 
     json_field("matches", json!(matched_indices.len()));
@@ -8911,7 +8916,7 @@ async fn run(
                 cli_println!("Command '{}' is not yet implemented.", command);
                 return Ok(());
             }
-            handle_tool_command(
+            let result = handle_tool_command(
                 &client,
                 &base_url,
                 &tool_name,
@@ -8919,7 +8924,27 @@ async fn run(
                 matches!(command, "goto"),
                 global.session_name.as_deref(),
             )
-            .await?;
+            .await;
+            // When `wait --load=networkidle` (or any wait_for_function tool
+            // call) fails with a Java serialization error, suggest using a
+            // fixed delay as a reliable fallback.
+            if let Err(ref e) = result {
+                if tool_name == "wait_for_function"
+                    && (e.contains("java.time.Instant")
+                        || e.contains("Jackson")
+                        || e.contains("not supported by default"))
+                {
+                    return Err(CliError(
+                        ExitCode::Server,
+                        format!(
+                            "{e}\n💡 Tip: The server failed to serialize the response (Java Jackson \
+                             module issue). As a reliable fallback, use a fixed delay instead: \
+                             `wait 3000` (or adjust the ms value to match your page)."
+                        ),
+                    ));
+                }
+            }
+            result?;
         }
     }
 

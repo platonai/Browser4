@@ -12,6 +12,7 @@ import ai.platon.pulsar.agentic.tools.advanced.crawl.ScrapeRequest
 import ai.platon.pulsar.skeleton.workflow.parse.html.PageSummaryIndexService
 import ai.platon.pulsar.common.PulsarSessionManager
 import ai.platon.pulsar.common.brief
+import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import ai.platon.pulsar.common.sql.SQLTemplate
 import ai.platon.pulsar.rest.api.service.ScrapeService
 import com.fasterxml.jackson.annotation.JsonInclude
@@ -21,7 +22,7 @@ import com.fasterxml.jackson.annotation.Nulls
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.databind.node.ArrayNode
 import com.fasterxml.jackson.databind.node.ObjectNode
-import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
+
 import jakarta.servlet.http.HttpServletResponse
 import org.slf4j.LoggerFactory
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean
@@ -103,7 +104,6 @@ class MCPToolController(
     private val sessionManager: PulsarSessionManager,
     private val commandExecutor: UserCommandExecutor,
     private val scrapeService: ScrapeService? = null,
-    private val objectMapper: ObjectMapper,
 ) {
     companion object {
         private val FRONTEND_TOOL_NAME_ALIASES: Map<String, String> = mapOf(
@@ -492,7 +492,7 @@ class MCPToolController(
             stoppedOnError = stoppedOnError,
             results = results,
         )
-        return ResponseEntity.ok(textResponse(jacksonObjectMapper().writeValueAsString(body)))
+        return ResponseEntity.ok(textResponse(pulsarObjectMapper().writeValueAsString(body)))
     }
 
     /**
@@ -661,7 +661,7 @@ class MCPToolController(
             return
         }
 
-        val selectorLiteral = jacksonObjectMapper().writeValueAsString(selector)
+        val selectorLiteral = pulsarObjectMapper().writeValueAsString(selector)
         val focusExpression = $$"""
             (() => {
                 try {
@@ -795,7 +795,7 @@ class MCPToolController(
                     "[onclick], [onkeydown], [onsubmit]"
                 val maxInteractive = 100
                 val interactiveElements = document.select(interactiveSelector).take(maxInteractive).map { el ->
-                    val obj = jacksonObjectMapper().createObjectNode()
+                    val obj = pulsarObjectMapper().createObjectNode()
                     obj.put("tag", el.tagName().lowercase())
                     val cls = el.className()
                     if (cls.isNotBlank()) obj.put("class", cls)
@@ -804,7 +804,7 @@ class MCPToolController(
                     // Collect aria-* attributes
                     val ariaAttrs = el.attributes().filter { it.key.startsWith("aria-") }
                     if (ariaAttrs.isNotEmpty()) {
-                        val ariaObj = jacksonObjectMapper().createObjectNode()
+                        val ariaObj = pulsarObjectMapper().createObjectNode()
                         for (attr in ariaAttrs) {
                             ariaObj.put(attr.key, attr.value)
                         }
@@ -816,7 +816,7 @@ class MCPToolController(
                     obj
                 }
 
-                val json = jacksonObjectMapper().createObjectNode().apply {
+                val json = pulsarObjectMapper().createObjectNode().apply {
                     put("url", page.url) // normalized url and can be served as the key to retrieve the page from database
                     put("href", page.href) // the href from an anchor, or the user-typed url
                     put("sizeBytes", page.contentLength.toString())
@@ -952,7 +952,7 @@ class MCPToolController(
                 }
             }
 
-            val json = jacksonObjectMapper().writeValueAsString(results)
+            val json = pulsarObjectMapper().writeValueAsString(results)
             val (paginatedJson, pagination) = paginateIfRequested(json, args)
             ResponseEntity.ok(textResponse(paginatedJson, pagination))
         } catch (e: Exception) {
@@ -990,9 +990,7 @@ class MCPToolController(
 
         return try {
             val response = scrapeService.executeQuery(ScrapeRequest(processedSql))
-            val json = jacksonObjectMapper()
-                .registerModule(com.fasterxml.jackson.datatype.jsr310.JavaTimeModule())
-                .writeValueAsString(response)
+            val json = pulsarObjectMapper().writeValueAsString(response)
             ResponseEntity.ok(textResponse(json))
         } catch (e: Exception) {
             logger.error("dom_snapshot_query failed | {}", e.message, e)
@@ -1088,7 +1086,7 @@ class MCPToolController(
                 val matchCount = document.select(selector).size
 
                 if (matches.isEmpty()) {
-                    return@withLock jacksonObjectMapper().createObjectNode().apply {
+                    return@withLock pulsarObjectMapper().createObjectNode().apply {
                         put("matchCount", 0)
                         put("selector", selector)
                         putArray("suggestions")
@@ -1096,9 +1094,9 @@ class MCPToolController(
                 }
 
                 // Build sample structures for the first 3 matches
-                val samples = jacksonObjectMapper().createArrayNode()
+                val samples = pulsarObjectMapper().createArrayNode()
                 for (m in matches.take(3)) {
-                    val sample = jacksonObjectMapper().createObjectNode()
+                    val sample = pulsarObjectMapper().createObjectNode()
                     sample.put("tag", m.tagName().lowercase())
                     val cls = m.className()
                     if (cls.isNotBlank()) sample.put("class", cls)
@@ -1108,9 +1106,9 @@ class MCPToolController(
                     if (ownText.isNotBlank()) sample.put("text", ownText.take(120))
 
                     // Direct children
-                    val children = jacksonObjectMapper().createArrayNode()
+                    val children = pulsarObjectMapper().createArrayNode()
                     for (child in m.children().take(20)) {
-                        val cObj = jacksonObjectMapper().createObjectNode()
+                        val cObj = pulsarObjectMapper().createObjectNode()
                         cObj.put("tag", child.tagName().lowercase())
                         val cCls = child.className()
                         if (cCls.isNotBlank()) cObj.put("class", cCls)
@@ -1171,9 +1169,9 @@ class MCPToolController(
                     .take(40)
 
                 // Build suggestions array
-                val suggestions = jacksonObjectMapper().createArrayNode()
+                val suggestions = pulsarObjectMapper().createArrayNode()
                 for ((candidate, count) in recurring) {
-                    val sug = jacksonObjectMapper().createObjectNode()
+                    val sug = pulsarObjectMapper().createObjectNode()
                     sug.put("selector", candidate.selector)
                     sug.put("tag", candidate.tag)
                     if (candidate.textPreview.isNotBlank()) {
@@ -1184,7 +1182,7 @@ class MCPToolController(
                     suggestions.add(sug)
                 }
 
-                jacksonObjectMapper().createObjectNode().apply {
+                pulsarObjectMapper().createObjectNode().apply {
                     put("matchCount", matchCount)
                     put("selector", selector)
                     put("analyzed", matches.size)
@@ -1240,7 +1238,7 @@ class MCPToolController(
                     is String -> v
                     is Number, is Boolean -> v.toString()
                     // Maps, Lists, arrays etc. — serialize as valid JSON
-                    else -> jacksonObjectMapper().writeValueAsString(v)
+                    else -> pulsarObjectMapper().writeValueAsString(v)
                 }
 
                 // Server-side pagination: when page/page-size are present, paginate
