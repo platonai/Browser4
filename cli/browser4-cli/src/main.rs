@@ -50,10 +50,8 @@ use daemon::{
 use help::{generate_command_help, generate_help, generate_help_entry, public_command_name};
 use http::{
     call_tool, call_tool_with_result, crawl_request_timeout, get_command_result,
-    get_command_status, get_crawl_result, get_swarm_result, get_swarm_status,
-    is_stale_session_error, make_client,
-    submit_batch_commands, submit_crawl, submit_plain_command,
-    submit_swarm_payload, submit_swarm_query, CallToolResult,
+    get_command_status, is_stale_session_error, make_client,
+    submit_batch_commands, submit_plain_command, CallToolResult,
 };
 use managed_processes::{
     read_managed_server_processes, stop_browser4_server_forcibly, ManagedServerProcess,
