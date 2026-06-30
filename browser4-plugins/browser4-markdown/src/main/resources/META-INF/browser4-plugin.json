@@ -1,0 +1,7 @@
+{
+  "name": "browser4-markdown",
+  "version": "4.12.0-rc.1",
+  "description": "Crawl pages in a site and convert them to Markdown files",
+  "dependsOn": ["browser4-protocol", "browser4-agentic"],
+  "autoConfigurationClasses": ["ai.platon.pulsar.markdown.config.MarkdownAutoConfiguration"]
+}
