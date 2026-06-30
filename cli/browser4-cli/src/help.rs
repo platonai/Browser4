@@ -932,20 +932,29 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push(String::new());
         lines.push("Persistence & Control:".to_string());
         lines.push(
-            "  - Progress is saved to ~/.browser4/loop-state.json after each iteration."
+            "  - Progress is saved to ~/.browser4/loop-state.json (default) or"
+                .to_string(),
+        );
+        lines.push(
+            "    ~/.browser4/loops/<name>.json (named loops) after each iteration."
                 .to_string(),
         );
         lines.push(
             "  - If the process is interrupted (Ctrl+C), the loop can be resumed by running"
                 .to_string(),
         );
-        lines.push("    the same command again.".to_string());
+        lines.push("    the same command again. State is auto-cleared on normal completion.".to_string());
         lines.push("  - Use --stop to clear persisted state, --status to inspect it.".to_string());
+        lines.push("  - Use --name <n> to run multiple independent loops (name: only letters,".to_string());
+        lines.push("    digits, dots, hyphens, underscores). Use --list to see all loops.".to_string());
         lines.push(
-            "  - Use --pause to suspend a running loop at the next iteration boundary."
+            "  - Use --pause to suspend a running loop (control op) or combine --pause with"
                 .to_string(),
         );
-        lines.push("    Use --resume to continue a paused loop.".to_string());
+        lines.push(
+            "    a task to start in paused state. Use --resume to continue a paused loop."
+                .to_string(),
+        );
         lines.push(
             "  - Use --pause-all / --resume-all to control all loops at once."
                 .to_string(),
@@ -993,9 +1002,11 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         );
         lines.push("  browser4-cli loop --list".to_string());
         lines.push("  browser4-cli loop --status".to_string());
-        lines.push("  browser4-cli loop --pause".to_string());
-        lines.push("  browser4-cli loop --resume".to_string());
-        lines.push("  browser4-cli loop --stop".to_string());
+        lines.push("  browser4-cli loop --status --name my-loop".to_string());
+        lines.push("  browser4-cli loop --pause --name my-loop".to_string());
+        lines.push("  browser4-cli loop --pause --shell \"echo hi\" -i 60   (start paused)".to_string());
+        lines.push("  browser4-cli loop --resume --name my-loop".to_string());
+        lines.push("  browser4-cli loop --stop --name my-loop".to_string());
     }
 
     lines.join("\n")

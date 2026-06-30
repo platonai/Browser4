@@ -5261,9 +5261,13 @@ fn parse_loop_args(args: &[String]) -> Result<LoopArgs, String> {
         }
 
         if let Some(val) = arg.strip_prefix("--name=") {
-            out.name = Some(val.to_string());
+            let name = val.to_string();
+            validate_loop_name(&name)?;
+            out.name = Some(name);
         } else if arg == "--name" {
-            out.name = Some(next_arg(&args, &mut i, "name")?.to_string());
+            let name = next_arg(&args, &mut i, "name")?.to_string();
+            validate_loop_name(&name)?;
+            out.name = Some(name);
         } else if let Some(val) = arg.strip_prefix("--interval=") {
             out.interval_secs = parse_u64_required(val, "--interval")?;
         } else if arg == "--interval" || arg == "-i" {
@@ -5284,9 +5288,11 @@ fn parse_loop_args(args: &[String]) -> Result<LoopArgs, String> {
         i += 1;
     }
 
-    // Flags that don't require a task, but reject combining with one
+    // Flags that are control-only — they reject combining with a task.
+    // --pause is excluded from this set: combining --pause with a task starts
+    // the loop in paused state (the user can --resume later).
     let no_task_flags = out.stop || out.stop_all || out.status || out.list
-        || out.pause || out.resume || out.pause_all || out.resume_all;
+        || out.resume || out.pause_all || out.resume_all;
 
     if no_task_flags {
         if !out.task_tokens.is_empty() {
@@ -5294,7 +5300,6 @@ fn parse_loop_args(args: &[String]) -> Result<LoopArgs, String> {
                 else if out.stop_all { "--stop-all" }
                 else if out.status { "--status" }
                 else if out.list { "--list" }
-                else if out.pause { "--pause" }
                 else if out.resume { "--resume" }
                 else if out.pause_all { "--pause-all" }
                 else { "--resume-all" };
@@ -5324,6 +5329,18 @@ fn parse_loop_args(args: &[String]) -> Result<LoopArgs, String> {
         return Ok(out);
     }
 
+    // --pause without other control flags: if a task is provided, this is
+    // "start paused"; if not, it's a control op handled above.
+    // --resume with a task is always an error — you resume an existing loop.
+    if out.resume && !out.task_tokens.is_empty() {
+        return Err("The --resume flag cannot be combined with a task. Use just `browser4-cli loop --resume` to resume an existing loop.".to_string());
+    }
+
+    // --pause with a task: start-paused is valid (falls through to normal validation)
+    if out.pause && out.task_tokens.is_empty() {
+        return Ok(out); // control op: pause running loop, no task needed
+    }
+
     // Validate
     if out.is_shell && out.is_subcommand {
         return Err("The --shell flag and -- separator are mutually exclusive. Use --shell for shell commands or -- for browser4-cli subcommands.".to_string());
@@ -5348,6 +5365,31 @@ fn next_arg<'a>(args: &'a [String], i: &mut usize, name: &str) -> Result<&'a str
 fn parse_u64_required(s: &str, flag: &str) -> Result<u64, String> {
     s.parse::<u64>()
         .map_err(|_| format!("Invalid value for {}: '{}'. Expected a non-negative integer.", flag, s))
+}
+
+/// Validate a loop --name value. Only allows alphanumeric, dot, hyphen,
+/// and underscore characters.  Rejects names that contain path separators,
+/// parent-directory sequences, or other characters that could be used for
+/// path traversal.
+fn validate_loop_name(name: &str) -> Result<(), String> {
+    if name.is_empty() {
+        return Err("Loop name must not be empty.".to_string());
+    }
+    if name.contains('/') || name.contains('\\') || name.contains("..") {
+        return Err(format!(
+            "Loop name contains invalid path characters: '{}'. \
+             Use only letters, digits, dots, hyphens, and underscores.",
+            name,
+        ));
+    }
+    if !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_') {
+        return Err(format!(
+            "Invalid loop name: '{}'. \
+             Use only letters, digits, dots, hyphens, and underscores.",
+            name,
+        ));
+    }
+    Ok(())
 }
 
 /// Format a duration in seconds as a human-readable string.
@@ -5639,8 +5681,69 @@ async fn handle_loop(
         return Ok(());
     }
 
-    // --- --pause: set loop status to "paused" ---
+    // --- --pause: control op (pause running loop) or start-paused ---
     if parsed.pause {
+        // If a task is provided, this is "start paused" — persist the
+        // loop in paused state so the user can --resume later.
+        if !parsed.task_tokens.is_empty() {
+            let mode_key = if parsed.is_subcommand {
+                "subcommand"
+            } else if parsed.is_shell {
+                "shell"
+            } else {
+                "plain"
+            };
+            let mode_label = if parsed.is_subcommand {
+                "browser4-cli subcommand"
+            } else if parsed.is_shell {
+                "shell command"
+            } else {
+                "plain-text command"
+            };
+            let started_at = Utc::now().to_rfc3339();
+            let state = state::LoopState {
+                task_tokens: parsed.task_tokens.clone(),
+                mode: mode_key.to_string(),
+                interval_secs: parsed.interval_secs,
+                count: parsed.count,
+                timeout_secs: parsed.timeout_secs,
+                iterations_completed: 0,
+                started_at: started_at.clone(),
+                updated_at: Utc::now().to_rfc3339(),
+                status: "paused".to_string(),
+            };
+            let state_path = state::loop_state_path(None, loop_name);
+            if let Err(e) = state::write_loop_state(&state, None, loop_name) {
+                eprintln!("[WARN] Failed to persist loop state: {}", e);
+            }
+            let label = loop_name.unwrap_or("default");
+            cli_println!(
+                "Loop: \"{}\" — every {}s{}",
+                parsed.task_tokens.join(" "),
+                parsed.interval_secs,
+                match (parsed.count, parsed.timeout_secs) {
+                    (Some(n), Some(t)) => format!(", up to {} iterations or {}s", n, t),
+                    (Some(n), None) => format!(", up to {} iterations", n),
+                    (None, Some(t)) => format!(", up to {}s", t),
+                    (None, None) => String::new(),
+                }
+            );
+            cli_println!("  Mode: {}", mode_label);
+            cli_println!(
+                "⏸  Created as paused. Use `browser4-cli loop --resume{}` to start.",
+                if parsed.name.is_some() {
+                    format!(" --name={}", parsed.name.as_ref().unwrap())
+                } else {
+                    String::new()
+                },
+            );
+            cli_println!("   State file: {}", state_path.display());
+            json_field("started_paused", json!(true));
+            json_field("name", json!(label));
+            return Ok(());
+        }
+
+        // No task — control op: pause an existing running loop.
         let state_path = state::loop_state_path(None, loop_name);
         match state::set_loop_status(None, loop_name, "paused") {
             Some(prev) => {
@@ -5830,7 +5933,9 @@ async fn handle_loop(
 
     let mut results: Vec<Value> = Vec::new();
 
-    // Persist initial state before the first iteration
+    // Persist initial state before the first iteration.
+    // Track first write failure so we warn exactly once.
+    let write_warned = std::cell::Cell::new(false);
     let persist = |task_tokens: &[String], mode: &str, interval: u64,
                     count: Option<u64>, timeout: Option<u64>,
                     completed: u64, started: &str, status: &str| {
@@ -5845,7 +5950,14 @@ async fn handle_loop(
             updated_at: Utc::now().to_rfc3339(),
             status: status.to_string(),
         };
-        let _ = state::write_loop_state(&state, None, loop_name);
+        if let Err(e) = state::write_loop_state(&state, None, loop_name) {
+            if !write_warned.replace(true) {
+                eprintln!(
+                    "[WARN] Failed to persist loop state: {}. Progress will not survive a restart.",
+                    e,
+                );
+            }
+        }
     };
 
     persist(
@@ -5943,19 +6055,55 @@ async fn handle_loop(
         );
 
         // --- execute ---
-        let result: Result<String, String> = if parsed.is_subcommand {
-            run_browser4_cli(&parsed.task_tokens).await
-        } else if parsed.is_shell {
-            run_shell_command(&parsed.task_tokens.join(" "))
-        } else {
-            // Plain text command (or x-sql — server auto-detects)
-            submit_plain_command(
-                client,
-                base_url,
-                &parsed.task_tokens.join(" "),
-                false, // sync — the loop itself provides the pacing
-            )
-            .await
+        // Race the execution against Ctrl+C so the loop can persist progress
+        // and exit cleanly instead of leaving a stale state file.
+        let ctrl_c_fut = tokio::signal::ctrl_c();
+        tokio::pin!(ctrl_c_fut);
+
+        let exec_fut = async {
+            if parsed.is_subcommand {
+                run_browser4_cli(&parsed.task_tokens).await
+            } else if parsed.is_shell {
+                run_shell_command(&parsed.task_tokens.join(" "))
+            } else {
+                // Plain text command (or x-sql — server auto-detects)
+                submit_plain_command(
+                    client,
+                    base_url,
+                    &parsed.task_tokens.join(" "),
+                    false, // sync — the loop itself provides the pacing
+                )
+                .await
+            }
+        };
+        tokio::pin!(exec_fut);
+
+        let result: Result<String, String> = tokio::select! {
+            r = &mut exec_fut => r,
+            _ = &mut ctrl_c_fut => {
+                // Ctrl+C arrived mid-execution.  Persist the progress we have
+                // (the current iteration did not complete) so the loop can be
+                // resumed from the last finished iteration.
+                persist(
+                    &parsed.task_tokens, mode_key, parsed.interval_secs,
+                    parsed.count, parsed.timeout_secs,
+                    iteration.saturating_sub(1), &started_at, "running",
+                );
+                let state_path = state::loop_state_path(None, loop_name);
+                cli_println!(
+                    "\n\n⏸  Interrupted during iteration {} — {} iteration(s) completed.",
+                    iteration,
+                    iteration.saturating_sub(1),
+                );
+                cli_println!(
+                    "   State saved to {}. Run the same command to resume, \
+                     or `browser4-cli loop --stop` to clear.",
+                    state_path.display(),
+                );
+                json_field("iterations", json!(results));
+                json_field("total_iterations", json!(iteration.saturating_sub(1)));
+                return Ok(());
+            },
         };
 
         match &result {
@@ -6073,13 +6221,9 @@ async fn handle_loop(
     cli_println!("\n========================================");
     cli_println!("✓  Loop finished — {} iteration(s) completed.", total);
 
-    // Persist as "completed" so --status shows the last run result.
-    // --stop clears it when the user wants a clean slate.
-    persist(
-        &parsed.task_tokens, mode_key, parsed.interval_secs,
-        parsed.count, parsed.timeout_secs,
-        total, &started_at, "completed",
-    );
+    // Clear persisted state on normal completion — the summary was already
+    // printed and re-running the same command starts a fresh loop anyway.
+    state::clear_loop_state(None, loop_name);
 
     json_field("iterations", json!(results));
     json_field("total_iterations", json!(total));
@@ -10427,6 +10571,82 @@ mod tests {
         let parsed = parse_loop_args(&args[1..]).unwrap();
         assert_eq!(parsed.name, Some("health-check".to_string()));
         assert_eq!(parsed.task_tokens, vec!["task"]);
+    }
+
+    #[test]
+    fn test_parse_loop_args_name_invalid_path_traversal() {
+        let args: Vec<String> = vec!["loop", "--name", "../../etc/passwd", "task"]
+            .into_iter()
+            .map(String::from)
+            .collect();
+        let err = parse_loop_args(&args[1..]).unwrap_err();
+        assert!(err.contains("invalid path characters") || err.contains("Invalid loop name"));
+    }
+
+    #[test]
+    fn test_parse_loop_args_name_invalid_special_chars() {
+        let args: Vec<String> = vec!["loop", "--name", "my loop!", "task"]
+            .into_iter()
+            .map(String::from)
+            .collect();
+        let err = parse_loop_args(&args[1..]).unwrap_err();
+        assert!(err.contains("Invalid loop name"));
+    }
+
+    #[test]
+    fn test_parse_loop_args_name_empty() {
+        let args: Vec<String> = vec!["loop", "--name=", "task"]
+            .into_iter()
+            .map(String::from)
+            .collect();
+        let err = parse_loop_args(&args[1..]).unwrap_err();
+        assert!(err.contains("must not be empty"));
+    }
+
+    #[test]
+    fn test_parse_loop_args_name_valid_chars() {
+        let args: Vec<String> = vec!["loop", "--name", "my-monitor_v2.0", "task"]
+            .into_iter()
+            .map(String::from)
+            .collect();
+        let parsed = parse_loop_args(&args[1..]).unwrap();
+        assert_eq!(parsed.name, Some("my-monitor_v2.0".to_string()));
+    }
+
+    #[test]
+    fn test_parse_loop_args_pause_with_task() {
+        // --pause + task = start paused
+        let args: Vec<String> = vec!["loop", "--pause", "--shell", "echo hi"]
+            .into_iter()
+            .map(String::from)
+            .collect();
+        let parsed = parse_loop_args(&args[1..]).unwrap();
+        assert!(parsed.pause);
+        assert!(parsed.is_shell);
+        assert!(!parsed.task_tokens.is_empty());
+    }
+
+    #[test]
+    fn test_parse_loop_args_resume_with_task_error() {
+        // --resume cannot be combined with a task
+        let args: Vec<String> = vec!["loop", "--resume", "task"]
+            .into_iter()
+            .map(String::from)
+            .collect();
+        let err = parse_loop_args(&args[1..]).unwrap_err();
+        assert!(err.contains("cannot be combined with a task"));
+    }
+
+    #[test]
+    fn test_parse_loop_args_pause_alone_no_existing_loop() {
+        // --pause alone (control op) is valid — handle_loop will report "no active loop"
+        let args: Vec<String> = vec!["loop", "--pause"]
+            .into_iter()
+            .map(String::from)
+            .collect();
+        let parsed = parse_loop_args(&args[1..]).unwrap();
+        assert!(parsed.pause);
+        assert!(parsed.task_tokens.is_empty());
     }
 
     // -----------------------------------------------------------------------

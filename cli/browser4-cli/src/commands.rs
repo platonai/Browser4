@@ -451,23 +451,26 @@ pub fn all_commands() -> Vec<CommandDef> {
                  x-sql queries (auto-detected by the server), browser4-cli subcommands \
                  (after --), and shell commands (--shell). Progress is persisted to disk \
                  under a configurable --name and can be resumed after interruption. \
-                 Use --pause/--resume to control running loops, --pause-all/--resume-all/--stop-all \
-                 for bulk operations, --list to see all loops, --status [name] to inspect, \
-                 --stop [name] to clear.",
+                 Use --pause [--name] to pause a running loop (or combine --pause with a \
+                 task to start in paused state), --resume [--name] to resume, \
+                 --pause-all/--resume-all/--stop-all for bulk operations, --list to see \
+                 all loops, --status [--name] to inspect, --stop [--name] to clear.",
             category: Category::Core,
             hidden: false,
             batch_supported: false,
             args: &[ArgDef {
                 name: "task",
                 description: "The task to execute, use -- for a browser4-cli subcommand, \
-                              --shell for a shell command, or pass plain text/x-sql directly",
+                              --shell for a shell command, or pass plain text/x-sql directly. \
+                              Omit for control operations (--list, --stop, --status, --resume, etc.)",
                 optional: true,
             }],
             options: &[
                 OptionDef {
                     name: "name",
                     description: "Loop name for persistence (default: default). \
-                                  Named loops are stored in ~/.browser4/loops/<name>.json",
+                                  Named loops are stored in ~/.browser4/loops/<name>.json. \
+                                  Only letters, digits, dots, hyphens, and underscores allowed.",
                     is_bool: false,
                     short: None,
                 },
@@ -503,16 +506,17 @@ pub fn all_commands() -> Vec<CommandDef> {
                 },
                 OptionDef {
                     name: "pause",
-                    description: "Pause a running loop. The loop suspends at the next \
-                                  iteration boundary and waits until resumed. \
-                                  Optionally specify --name to target a named loop",
+                    description: "Without a task: pause a running loop at the next iteration \
+                                  boundary. With a task: create the loop in paused state \
+                                  (use --resume then re-run to start execution). \
+                                  Optionally specify --name to target a named loop.",
                     is_bool: true,
                     short: None,
                 },
                 OptionDef {
                     name: "resume",
-                    description: "Resume a paused loop. \
-                                  Optionally specify --name to target a named loop",
+                    description: "Resume a paused loop (control op — cannot be combined \
+                                  with a task). Optionally specify --name to target a named loop.",
                     is_bool: true,
                     short: None,
                 },
@@ -531,7 +535,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef {
                     name: "stop",
                     description: "Stop a loop and clear its persisted state. \
-                                  Optionally specify --name to target a named loop",
+                                  Optionally specify --name to target a named loop.",
                     is_bool: true,
                     short: None,
                 },
@@ -544,7 +548,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef {
                     name: "status",
                     description: "Show loop state and progress. \
-                                  Optionally specify --name to target a named loop",
+                                  Optionally specify --name to target a named loop.",
                     is_bool: true,
                     short: None,
                 },
