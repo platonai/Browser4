@@ -13,8 +13,10 @@ import java.io.RandomAccessFile
 @CrossOrigin
 @RequestMapping("api/doctor")
 class DoctorController(
-    @Value("\${logging.dir:logs}") private val loggingDir: String
 ) {
+    @Value("\${logging.dir:logs}")
+    lateinit var loggingDir: String
+
     @GetMapping("logs")
     fun logs(
         @RequestParam(defaultValue = "pulsar") file: String,
