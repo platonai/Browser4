@@ -143,22 +143,32 @@ browser4-cli snapshot --filename=result.yaml       # named output (for workflow 
 browser4-cli snapshot --boxes                      # include bounding boxes
 browser4-cli snapshot -i -d 5                      # interactive only, depth 5
 browser4-cli snapshot -s "#content"                # scoped to CSS selector
-browser4-cli snapshot -l 200                       # cap output at 200 nodes (content-heavy pages)
 browser4-cli snapshot --no-compact                 # include all structural nodes (disable compact)
 browser4-cli snapshot --stdout                     # print raw snapshot content to stdout (for piping)
+browser4-cli snapshot --stdout --page 1            # view first page of snapshot lines
+browser4-cli snapshot --stdout --page-size 50 --page 2  # view 50 lines from page 2
+browser4-cli snapshot --stdout --all               # disable pagination, show all content
 browser4-cli snapshot --viewport=0,2,4             # capture specific viewports (single, list, range, or mixed)
 browser4-cli snapshot --viewport=1-3               # capture viewports 1 through 3
 ```
+
+Pagination options for `--stdout`/`--raw` output:
+
+| Option | Effect |
+|---|---|
+| `--page=<N>` | Page number (1-based, default: 1) |
+| `--page-size=<N>` | Lines per page (default: 100) |
+| `--all` | Disable pagination; show all content |
 
 ### Snapshot Grep
 
 Search snapshot accessibility-tree YAML content with regex patterns and grep-style output:
 
 ```bash
-browser4-cli snapshot grep <pattern> [--page N] [--page-size N] [--all]  # search snapshot YAML with regex; paginated by default
+browser4-cli snapshot grep <pattern> [--page N] [--page-size N] [--all]  # search snapshot YAML with regex; paginated by default (100 lines/page)
 browser4-cli snapshot grep -i error                # case-insensitive search
 browser4-cli snapshot grep -C 2 "timeout"          # show 2 lines of context
-browser4-cli snapshot grep -F "literal"            # fixed-string (literal) matching
+browser4-cli snapshot grep -F "literal"            # fixed-string (literal) matching — use for patterns with special chars
 browser4-cli snapshot grep -c pattern              # print only match count
 browser4-cli snapshot grep --selector main "text"  # search within a CSS selector's subtree
 ```
@@ -171,14 +181,17 @@ Supported grep options: `-i` (ignore-case), `-A N` (after-context), `-B N` (befo
 | `-c, --compact` | Remove empty structural elements (**enabled by default**) |
 | `--no-compact` | Disable compact mode; include all structural nodes |
 | `-d, --depth <n>` | Limit tree depth |
-| `-l, --limit <n>` | Cap total rendered nodes (truncates with notice) |
 | `-s, --selector <sel>` | Scope to CSS selector subtree |
 | `-u, --urls` | Include href URLs for links |
 | `--stdout` | Print snapshot content to stdout (for piping); alias: `--raw` |
 | `--raw` | Alias for `--stdout` |
 | `--viewport <spec>` | Capture specific viewports: single index (3), comma list (0,2,4), range (1-3), or mixed (0,2-4,7) |
 
-> **Tip:** On content-heavy pages (e-commerce, search results), snapshots can exceed 256KB. Use `-i`, `-l 200`, or `-s "<selector>"` to keep output manageable. Compact mode (on by default) already strips empty structural wrappers. Never cat full snapshot files — use `domsnapshot get` for structured extraction. Use `snapshot grep` to search the YAML accessibility tree directly without loading it into an editor.
+> **Tip:** On content-heavy pages (e-commerce, search results), snapshots can exceed 256KB. Use `-i`, `-d 5`, or `-s "<selector>"`
+> to keep output manageable. Compact mode (on by default) already strips empty structural wrappers.
+> Never cat full snapshot files — use `domsnapshot get` for structured extraction. Use `snapshot grep` to search
+> the YAML accessibility tree directly without loading it into an editor. For large snapshots,
+> use `--stdout --page 1` to view the first page or `--page-size` to control pagination.
 
 ### Element Data Extraction (get)
 
@@ -219,9 +232,42 @@ Run `tab-list` first to discover indices.
 ```bash
 browser4-cli screenshot [ref] [--filename=page.png]
 browser4-cli eval "<js>" [ref]              # evaluate JS, optionally scoped to element
-browser4-cli eval --file=script.js [ref]
+browser4-cli eval --file=script.js [ref]    # read JS expression from file
+browser4-cli eval --stdin [ref]             # read JS expression from stdin (avoids shell quoting)
+browser4-cli eval --json "<js>" [ref]       # output result as valid JSON
 browser4-cli resize <width> <height>
 ```
+
+**Evaluate (`eval`):** Run JavaScript in the browser page.
+
+| Option | Effect |
+|---|---|
+| `<expression>` | JavaScript expression or function to evaluate (positional argument) |
+| `[ref]` | Optional CSS selector or element reference to scope the evaluation (e.g. `e5`) |
+| `--file=<path>` | Read the JavaScript expression from a file instead of the command line |
+| `--stdin` | Read the JavaScript expression from stdin — useful for piping multi-line scripts and avoiding shell quoting complexity |
+| `--json` | Serialize the result as JSON: quotes strings, wraps scalar values. Without `--json`, strings are printed raw (unquoted), which can make empty strings and `null` indistinguishable. Use `--json` when consuming eval output programmatically. |
+
+**Examples:**
+
+```bash
+# Simple evaluation
+browser4-cli eval "document.title"
+
+# With JSON output for programmatic use
+browser4-cli eval --json "document.querySelectorAll('.price')"
+
+# Read script from file (avoids shell escaping)
+browser4-cli eval --file=extract-products.js
+
+# Pipe a script via stdin (no quoting needed)
+echo 'Array.from(document.querySelectorAll(".product")).map(el => el.textContent)' | browser4-cli eval --stdin --json
+
+# Extract product data with JSON output
+browser4-cli eval --json "Array.from(document.querySelectorAll('[data-component-type=\"s-search-result\"]')).map(el => ({title: el.querySelector('h2')?.textContent,price: el.querySelector('.a-price')?.textContent}))"
+```
+
+> **Tip:** On Windows/bash, complex JavaScript expressions with nested quotes require careful escaping (e.g. `'\\''` patterns). Use `--file` or `--stdin` to avoid shell quoting issues entirely.
 
 ### Storage
 
@@ -245,12 +291,12 @@ Static DOM queries (CSS selectors) for structured data extraction — unlike int
 
 ```bash
 browser4-cli domsnapshot                                # capture static DOM snapshot
-browser4-cli domsnapshot get <field> [selector] [name] [--page N] [--page-size N] [--all]  # extract first match (text/html/attr via CSS); paginated by default (1K chars/page)
-browser4-cli domsnapshot get all <field> [selector] [name] [--offset N] [--limit N] [--page N] [--page-size N] [--all]  # extract ALL matches (querySelectorAll); paginated by default
+browser4-cli domsnapshot get <field> [selector] [name] [--page N] [--page-size N] [--all]  # extract first match (text/html/attr via CSS); paginated by default (100 lines/page)
+browser4-cli domsnapshot get all <field> [selector] [name] [--page N] [--page-size N] [--all]  # extract ALL matches (querySelectorAll); paginated by default
 browser4-cli domsnapshot query [url] --sql <query>      # X-SQL query against DOM
 browser4-cli domsnapshot summary                        # compressed page summary (WPSI)
 browser4-cli domsnapshot export [--file <path>]         # save snapshot HTML (might be huge, don't read it directly)
-browser4-cli domsnapshot grep [OPTIONS] <pattern> [--page N] [--page-size N] [--all]  # search snapshot HTML with regex; paginated by default (1K chars/page)
+browser4-cli domsnapshot grep [OPTIONS] <pattern> [--page N] [--page-size N] [--all]  # search snapshot HTML with regex; paginated by default (100 lines/page)
 browser4-cli domsnapshot inspect [selector] [--max N]   # analyze DOM structure, suggest CSS selectors
 ```
 

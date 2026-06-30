@@ -53,7 +53,7 @@ if ($browser4cliMode -eq 'production') {
 # Repo root is 3 levels up from scripts/ (scripts -> tests -> browser4-cli -> repo root)
 $script:RepoRoot = (Resolve-Path "$PSScriptRoot/../../..").Path
 $script:IssuesReadyDir = [System.IO.Path]::GetFullPath(
-    (Join-Path $script:RepoRoot 'coworker\tasks\200issues\draft\refine\0ready')
+    (Join-Path $script:RepoRoot 'coworker\tasks\200issues\draft')
 )
 
 # ── Shared evaluation prompt ────────────────────────────────────────────────
@@ -66,6 +66,7 @@ You are evaluating the usability, discoverability, and reliability of browser4-c
 
 Before performing any browser interaction:
 
+0. Verify your working directory is the repository root (the directory containing `cli/`, `skill/`, `pom.xml`, etc.). If you are not in the repo root, navigate there first with `cd` using the absolute path to the repository. All `cd cli/browser4-cli` commands assume you start from the repo root.
 1. Run $helpCmd.
 2. Read $skillPath completely.
 3. Learn the available commands, workflows, and conventions directly from the documentation.
@@ -187,32 +188,40 @@ Summarize:
 
 ### C. Issues Found
 
-For every issue discovered, provide:
+For every issue discovered, provide a structured entry using the format below.
+Each issue MUST begin with an `### Issue N: <title>` header and use `**Bold Label:**`
+lines for every field.
 
-#### Title
+#### Required format for each issue:
 
-#### Severity
+### Issue N: <brief descriptive title>
 
-* Critical
-* High
-* Medium
-* Low
+**Severity:** Critical | High | Medium | Low
 
-#### Category
+**Category:** Product | Documentation | UX | Reliability | Discoverability
 
-* Product
-* Documentation
-* UX
-* Reliability
-* Discoverability
+**Reproduction:** Exact command(s) or steps to reproduce the issue.
 
-#### Reproduction Steps
+**Expected:** What should have happened.
 
-#### Expected Behavior
+**Actual:** What actually happened.
 
-#### Actual Behavior
+**Root Cause:** Your best analysis of the technical cause. Infer from observed
+behavior when possible; note what investigation is needed when uncertain. This
+is essential for an AI coder to fix the issue later.
 
-#### Suggested Improvement
+**Code Pointer:** File path and function name where a fix should likely be
+applied (e.g. `cli/browser4-cli/src/snapshot.rs:render_snapshot()`). If unknown,
+leave the value empty — a follow-up analysis will fill it in.
+
+**Review:** (leave empty — reserved for human review)
+
+**Suggested Improvement:**
+- First concrete suggestion (use a bullet list — each suggestion on its own line)
+- Second concrete suggestion
+- Additional suggestions as needed
+
+Use `---` (horizontal rule) to separate issues.
 
 ### D. Overall Assessment
 
@@ -247,11 +256,14 @@ function ConvertFrom-IssuesSection {
         of the agent output.
     .DESCRIPTION
         Extracts the text between the "C. Issues Found" and "D. Overall Assessment"
-        headings, then splits on "#### Title" markers to isolate individual issues.
-        Each issue is expected to follow the template from the $generalPrompt.
+        headings and isolates individual issues.
+
+        Supports two formats (newer first, with fallback):
+          1. New:  "### Issue N: <title>" headers with "**Key:** Value" fields
+          2. Old:  "#### Title" headers with "#### Key" / "value" pairs
 
         Returns an array of hashtables with fields: Title, Severity, Category,
-        Reproduction, Expected, Actual, Suggestion.
+        Reproduction, Expected, Actual, RootCause, CodePointer, Review, Suggestion.
         Returns empty array if no issues can be parsed (the full output is always
         preserved by Write-IssuesToReadyQueue).
     #>
@@ -287,14 +299,34 @@ function ConvertFrom-IssuesSection {
     $section = $normalized.Substring($cStart, $dIdx - $cStart).Trim()
     if (-not $section) { return @() }
 
-    # Split into individual issues at "#### Title" markers
-    $blocks = @($section -split '(?=####\s+Title)') |
-        Where-Object { $_ -match '####\s+Title' }
+    # ── Strategy 1 (new format): "### Issue N: <title>" headers ──────────────
+    # Split on "### Issue" followed by optional "#" and a number, then ":"
+    $blocks = @($section -split '(?=###\s+Issue\s+)') |
+        Where-Object { $_ -match '###\s+Issue\s+' }
 
+    # ── Strategy 2 (old format): "#### Title" blocks ──────────────────────────
     if ($blocks.Count -eq 0) {
-        # Try alternative: issues with ### headings
+        $blocks = @($section -split '(?=####\s+Title)') |
+            Where-Object { $_ -match '####\s+Title' }
+    }
+
+    # ── Strategy 3 (generic): any ### heading (excluding C/D section heads) ──
+    if ($blocks.Count -eq 0) {
         $blocks = @($section -split '(?=###\s+)') |
             Where-Object { $_ -match '###\s+' -and $_ -notmatch '^###\s+[CD]\.' }
+    }
+
+    # ── Field-name mapping: bold label → hashtable key ──────────────────────
+    $fieldMap = @{
+        'Severity'              = 'Severity'
+        'Category'              = 'Category'
+        'Reproduction'          = 'Reproduction'
+        'Expected'              = 'Expected'
+        'Actual'                = 'Actual'
+        'Root Cause'            = 'RootCause'
+        'Code Pointer'          = 'CodePointer'
+        'Review'                = 'Review'
+        'Suggested Improvement' = 'Suggestion'
     }
 
     $results = [System.Collections.ArrayList]::new()
@@ -308,25 +340,108 @@ function ConvertFrom-IssuesSection {
             Reproduction = ''
             Expected     = ''
             Actual       = ''
+            RootCause    = ''
+            CodePointer  = ''
+            Review       = ''
             Suggestion   = ''
         }
 
-        # Extract each field using a bounded regex.
-        # Use $null = if (...) {...} so the assignment does not leak to the output stream.
-        $null = if ($_ -match '(?s)####\s*Title\s*\n(.+?)(?=\n####\s|\Z)')                { $issue.Title        = $Matches[1].Trim() }
-        $null = if ($_ -match '(?s)####\s*Severity\s*\n(.+?)(?=\n####\s|\Z)')             { $issue.Severity     = $Matches[1].Trim() }
-        $null = if ($_ -match '(?s)####\s*Category\s*\n(.+?)(?=\n####\s|\Z)')             { $issue.Category     = $Matches[1].Trim() }
-        $null = if ($_ -match '(?s)####\s*Reproduction Steps?\s*\n(.+?)(?=\n####\s|\Z)')  { $issue.Reproduction = $Matches[1].Trim() }
-        $null = if ($_ -match '(?s)####\s*Expected Behavior\s*\n(.+?)(?=\n####\s|\Z)')    { $issue.Expected     = $Matches[1].Trim() }
-        $null = if ($_ -match '(?s)####\s*Actual Behavior\s*\n(.+?)(?=\n####\s|\Z)')      { $issue.Actual       = $Matches[1].Trim() }
-        $null = if ($_ -match '(?s)####\s*Suggested Improvement\s*\n(.+?)(?=\n####\s|\Z)'){ $issue.Suggestion   = $Matches[1].Trim() }
+        # ── Extract title ──────────────────────────────────────────────────
+        # New format: "### Issue N: <title>"
+        $null = if ($_ -match '###\s+Issue\s+#?\d+:\s*(.+?)(?:\n|$)') {
+            $issue.Title = $Matches[1].Trim()
+        }
+        # Old format: "#### Title\n<title text>"
+        if (-not $issue.Title) {
+            $null = if ($_ -match '(?s)####\s*Title\s*\n(.+?)(?=\n####\s|\n###\s|\Z)') {
+                $issue.Title = $Matches[1].Trim()
+            }
+        }
 
-        # Fallback: try bullet-point format for Severity and Category
+        # ── Extract "**Key:** Value" fields (new format) ────────────────────
+        # Position-based parsing: find each **Key:** marker position, then
+        # the value is everything between that marker and the next one.
+        # This is more robust than a single regex with lookahead because it
+        # correctly handles empty fields, multi-line values, and fields in
+        # any order.
+        $keyPositions = [System.Collections.ArrayList]::new()
+        foreach ($key in $fieldMap.Keys) {
+            $escapedKey = [regex]::Escape($key)
+            $markerPattern = "\*\*${escapedKey}:\*\*"
+            $markerMatch = [regex]::Match($_, $markerPattern)
+            if ($markerMatch.Success) {
+                [void]$keyPositions.Add(@{
+                    FieldName = $fieldMap[$key]
+                    Start     = $markerMatch.Index
+                    End       = $markerMatch.Index + $markerMatch.Length
+                })
+            }
+        }
+
+        # Sort by position in the block so we can extract text between markers
+        $sorted = @($keyPositions | Sort-Object Start)
+        for ($i = 0; $i -lt $sorted.Count; $i++) {
+            $kp = $sorted[$i]
+            $valueStart = $kp.End
+            if ($i -lt $sorted.Count - 1) {
+                $valueEnd = $sorted[$i + 1].Start
+            } else {
+                $valueEnd = $_.Length
+            }
+            $rawValue = $_.Substring($valueStart, $valueEnd - $valueStart)
+
+            # Clean up: trim leading/trailing whitespace, strip trailing
+            # "---" separators that belong between issues (not to the value)
+            $cleanValue = $rawValue -replace '(?s)^\s+', '' -replace '(?s)\s+$', ''
+            $cleanValue = $cleanValue -replace '(?s)\n---\s*$', ''
+
+            if ($cleanValue) {
+                $issue[$kp.FieldName] = $cleanValue
+            }
+        }
+
+        # ── Fallback: old-format "#### Key\nvalue" extraction ────────────────
         if (-not $issue.Severity) {
-            $null = if ($_ -match 'Severity[:\s]*\*?\*?(Critical|High|Medium|Low)\*?\*?') { $issue.Severity = $Matches[1].Trim() }
+            $null = if ($_ -match '(?s)####\s*Severity\s*\n(.+?)(?=\n####\s|\Z)') {
+                $issue.Severity = $Matches[1].Trim()
+            }
         }
         if (-not $issue.Category) {
-            $null = if ($_ -match 'Category[:\s]*\*?\*?(Product|Documentation|UX|Reliability|Discoverability)\*?\*?') { $issue.Category = $Matches[1].Trim() }
+            $null = if ($_ -match '(?s)####\s*Category\s*\n(.+?)(?=\n####\s|\Z)') {
+                $issue.Category = $Matches[1].Trim()
+            }
+        }
+        if (-not $issue.Reproduction) {
+            $null = if ($_ -match '(?s)####\s*Reproduction Steps?\s*\n(.+?)(?=\n####\s|\Z)') {
+                $issue.Reproduction = $Matches[1].Trim()
+            }
+        }
+        if (-not $issue.Expected) {
+            $null = if ($_ -match '(?s)####\s*Expected Behavior\s*\n(.+?)(?=\n####\s|\Z)') {
+                $issue.Expected = $Matches[1].Trim()
+            }
+        }
+        if (-not $issue.Actual) {
+            $null = if ($_ -match '(?s)####\s*Actual Behavior\s*\n(.+?)(?=\n####\s|\Z)') {
+                $issue.Actual = $Matches[1].Trim()
+            }
+        }
+        if (-not $issue.Suggestion) {
+            $null = if ($_ -match '(?s)####\s*Suggested Improvement\s*\n(.+?)(?=\n####\s|\Z)') {
+                $issue.Suggestion = $Matches[1].Trim()
+            }
+        }
+
+        # ── Last-resort fallback: bullet-point Severity / Category ──────────
+        if (-not $issue.Severity) {
+            $null = if ($_ -match 'Severity[:\s]*\*?\*?(Critical|High|Medium|Low)\*?\*?') {
+                $issue.Severity = $Matches[1].Trim()
+            }
+        }
+        if (-not $issue.Category) {
+            $null = if ($_ -match 'Category[:\s]*\*?\*?(Product|Documentation|UX|Reliability|Discoverability)\*?\*?') {
+                $issue.Category = $Matches[1].Trim()
+            }
         }
 
         if ($issue.Title) {
@@ -408,7 +523,7 @@ function Write-IssuesToReadyQueue {
 **Severity:** $($issue.Severity)
 **Category:** $($issue.Category)
 
-## Reproduction Steps
+## Reproduction
 
 $($issue.Reproduction)
 
@@ -419,6 +534,18 @@ $($issue.Expected)
 ## Actual Behavior
 
 $($issue.Actual)
+
+## Root Cause
+
+$($issue.RootCause)
+
+## Code Pointer
+
+$($issue.CodePointer)
+
+## Review
+
+$($issue.Review)
 
 ## Suggested Improvement
 

@@ -123,8 +123,8 @@ Write-Host '━━━ Mode Detection: Dev (default) ━━━' -ForegroundColor 
     . "$PSScriptRoot/common.ps1"
 
     Write-TestGroup '$helpCmd in dev mode'
-    Assert-Equal 'is exactly "`cargo run -- help`" (with backticks)' `
-        '`cargo run -- help`' $helpCmd
+    Assert-Equal 'is exactly "`cd cli/browser4-cli && cargo run -- help`"' `
+        '`cd cli/browser4-cli && cargo run -- help`' $helpCmd
     Assert-Contains 'contains cargo run' $helpCmd 'cargo run'
     Assert-Contains 'contains help subcommand' $helpCmd 'help'
 
@@ -173,7 +173,7 @@ Write-Host '━━━ Mode Detection: Edge Cases ━━━' -ForegroundColor Yel
 
     Write-TestGroup 'unrecognized mode falls back to dev'
     Assert-Equal '$helpCmd falls back to dev value' `
-        '`cargo run -- help`' $helpCmd
+        '`cd cli/browser4-cli && cargo run -- help`' $helpCmd
     Assert-Equal '$skillPath falls back to dev value' `
         '`skill/SKILL.md`' $skillPath
 }
@@ -197,7 +197,7 @@ Write-Host '━━━ Mode Detection: Edge Cases ━━━' -ForegroundColor Yel
 
     Write-TestGroup 'null mode falls back to dev'
     Assert-Equal '$helpCmd resolves to dev default' `
-        '`cargo run -- help`' $helpCmd
+        '`cd cli/browser4-cli && cargo run -- help`' $helpCmd
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -406,7 +406,7 @@ Write-Host '━━━ Path Resolution ━━━' -ForegroundColor Yellow
     Assert-True 'IssuesReadyDir is absolute' $isAbs
 
     Write-TestGroup '$script:IssuesReadyDir ends with the expected suffix'
-    $expectedSuffix = '200issues\draft\refine\0ready'
+    $expectedSuffix = '200issues\draft'
     $normalized = ([string]$script:IssuesReadyDir) -replace '[/\\]', '\'
     Assert-True "Ends with $expectedSuffix" $normalized.EndsWith($expectedSuffix)
 
@@ -591,6 +591,89 @@ Make it stable.
     $rawMal = ConvertFrom-IssuesSection -Content $malformed
     $result = @($rawMal | Where-Object { $_ -is [hashtable] })
     Assert-True 'Malformed → empty array' ($result.Count -eq 0)
+
+    Write-TestGroup 'Parses new format: ### Issue N: with **Key:** Value fields'
+    $newFormat = @'
+### C. Issues Found
+
+### Issue 1: Relative path cd fails from repo root
+
+**Severity:** Low
+**Category:** Discoverability / UX
+**Reproduction:** Run `cd cli` from repo root.
+**Expected:** Command executes.
+**Actual:** No such file or directory.
+**Root Cause:** The CLI does not inherit the shell CWD.
+**Code Pointer:** cli/browser4-cli/src/main.rs:resolve_path()
+**Review:**
+**Suggested Improvement:**
+- Update scripts to cd into correct subdirectory first.
+- Add a warning when the working directory is unexpected.
+
+---
+
+### Issue 2: Startup latency is high
+
+**Severity:** Medium
+**Category:** UX
+**Reproduction:** Run any cargo command.
+**Expected:** Fast startup.
+**Actual:** ~6 second delay.
+**Root Cause:** Full rebuild on every invocation.
+**Code Pointer:**
+**Review:**
+**Suggested Improvement:**
+- Cache the compiled bundle.
+- Show a progress spinner.
+- Offer a daemon mode.
+'@
+    $rawNew = ConvertFrom-IssuesSection -Content $newFormat
+    $newResult = @($rawNew | Where-Object { $_ -is [hashtable] })
+    Assert-Equal 'Found 2 issues in new format' 2 $newResult.Count
+
+    $issue1 = $newResult[0]
+    Assert-Equal 'Issue 1 Title' 'Relative path cd fails from repo root' $issue1.Title
+    Assert-Equal 'Issue 1 Severity' 'Low' $issue1.Severity
+    Assert-Equal 'Issue 1 Category' 'Discoverability / UX' $issue1.Category
+    Assert-True 'Issue 1 Reproduction not empty' (-not [string]::IsNullOrWhiteSpace($issue1.Reproduction))
+    Assert-True 'Issue 1 Expected not empty' (-not [string]::IsNullOrWhiteSpace($issue1.Expected))
+    Assert-True 'Issue 1 Actual not empty' (-not [string]::IsNullOrWhiteSpace($issue1.Actual))
+    Assert-True 'Issue 1 RootCause extracted' (-not [string]::IsNullOrWhiteSpace($issue1.RootCause))
+    Assert-True 'Issue 1 CodePointer extracted' (-not [string]::IsNullOrWhiteSpace($issue1.CodePointer))
+    Assert-Equal 'Issue 1 Review is empty' '' $issue1.Review
+    Assert-True 'Issue 1 Suggestion is a list' $issue1.Suggestion.Contains('- Update scripts')
+    Assert-True 'Issue 1 Suggestion has multiple items' $issue1.Suggestion.Contains('- Add a warning')
+
+    $issue2 = $newResult[1]
+    Assert-Equal 'Issue 2 Title' 'Startup latency is high' $issue2.Title
+    Assert-Equal 'Issue 2 Severity' 'Medium' $issue2.Severity
+    Assert-True 'Issue 2 RootCause extracted' (-not [string]::IsNullOrWhiteSpace($issue2.RootCause))
+    Assert-Equal 'Issue 2 CodePointer is empty' '' $issue2.CodePointer
+    Assert-Equal 'Issue 2 Review is empty' '' $issue2.Review
+    Assert-True 'Issue 2 Suggestion has 3 items' (($issue2.Suggestion -split "`n").Count -ge 3)
+
+    Write-TestGroup 'Parses new format: Issue #N (with hash mark)'
+    $hashFormat = @'
+### C. Issues Found
+
+### Issue #1: Hash-style numbering
+
+**Severity:** High
+**Category:** Product
+**Reproduction:** Step.
+**Expected:** Good.
+**Actual:** Bad.
+**Root Cause:** Undetermined.
+**Code Pointer:**
+**Review:**
+**Suggested Improvement:**
+- Fix it.
+'@
+    $rawHash = ConvertFrom-IssuesSection -Content $hashFormat
+    $hashResult = @($rawHash | Where-Object { $_ -is [hashtable] })
+    Assert-Equal 'Found 1 issue with hash-style numbering' 1 $hashResult.Count
+    Assert-Equal 'Hash-style title extracted' 'Hash-style numbering' $hashResult[0].Title
+    Assert-Equal 'Hash-style severity' 'High' $hashResult[0].Severity
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -667,6 +750,12 @@ OK.
         Write-TestGroup 'Issue file contains metadata fields'
         Assert-True 'Contains Severity' $issueContent.Contains('**Severity:** Medium')
         Assert-True 'Contains Category' $issueContent.Contains('**Category:** UX')
+
+        Write-TestGroup 'Issue file contains new sections (Root Cause, Code Pointer, Review)'
+        Assert-True 'Contains Root Cause section' $issueContent.Contains('## Root Cause')
+        Assert-True 'Contains Code Pointer section' $issueContent.Contains('## Code Pointer')
+        Assert-True 'Contains Review section' $issueContent.Contains('## Review')
+        Assert-True 'Contains Reproduction (not Reproduction Steps)' $issueContent.Contains('## Reproduction')
     }
     finally {
         Remove-Item -Path $tempDir -Recurse -Force -ErrorAction SilentlyContinue

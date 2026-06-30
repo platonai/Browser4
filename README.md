@@ -99,172 +99,179 @@ Browser4 CLI is designed for use by AI agents through SKILLS + CLI — see [SKIL
 
 These flags can appear before any command:
 
-| Flag | Description |
-|------|-------------|
-| `-s=<name>`, `--session=<name>` | Named session label |
-| `--server=<url>` | Override Browser4 server URL |
-| `--json` | Emit machine-parseable JSON to stdout |
-| `-q`, `--quiet` | Suppress normal output, show only errors |
-| `--proxy=<url>` | Manual HTTP proxy for downloads |
-| `--help`, `-h` | Print help |
-| `--version`, `-v` | Print version |
+```
+-s=<name>, --session=<name>    Named session label
+--server=<url>                 Override Browser4 server URL
+--json                         Emit machine-parseable JSON to stdout
+-q, --quiet                    Suppress normal output, show only errors
+--proxy=<url>                  Manual HTTP proxy for downloads
+--help, -h                     Print help
+--version, -v                  Print version
+```
 
 #### Session Lifecycle
 
-| Command | Description |
-|---------|-------------|
-| `open [url]` | Open a browser session, optionally navigating to a URL. Supports `--headed`, `--headless`, `--profile=<path>`, `--profile-mode=<mode>` |
-| `attach` | Attach to an existing browser via CDP (`--cdp=<channel\|url\|port>`) |
-| `close` | Close the current browser session |
-| `close-all` | Close all browser sessions without stopping the backend |
-| `kill-all` | Forcefully stop the Browser4 backend and kill all browser processes |
-| `list [--all]` | List browser sessions with status and next-open behavior |
-| `stop` | Gracefully stop the Browser4 server |
-| `status` | Show Browser4 server status (version, port, health) |
-| `delete-data` | Delete session data |
+```
+open [url]        Open a browser session, optionally navigating to a URL
+                  --headed, --headless, --profile=<path>, --profile-mode=<mode>
+attach            Attach to an existing browser via CDP (--cdp=<channel|url|port>)
+close             Close the current browser session
+close-all         Close all browser sessions without stopping the backend
+kill-all          Forcefully stop the Browser4 backend and kill all browser processes
+list [--all]      List browser sessions with status and next-open behavior
+stop              Gracefully stop the Browser4 server
+status            Show Browser4 server status (version, port, health)
+delete-data       Delete session data
+```
 
 #### Navigation
 
-| Command | Description |
-|---------|-------------|
-| `goto <url>` | Navigate to a URL, auto-opening/reconnecting a session if needed |
-| `go-back` | Go back to the previous page |
-| `go-forward` | Go forward to the next page |
-| `reload` | Reload the current page |
+```
+goto <url>        Navigate to a URL, auto-opening/reconnecting a session if needed
+go-back           Go back to the previous page
+go-forward        Go forward to the next page
+reload            Reload the current page
+```
 
 #### Core Interaction
 
-| Command | Description |
-|---------|-------------|
-| `click <ref> [button]` | Click an element. Supports `--modifiers` |
-| `dblclick <ref> [button]` | Double-click an element. Supports `--modifiers` |
-| `hover <ref>` | Hover over an element |
-| `fill <ref> <text>` | Clear and fill text into an editable element. Supports `--submit`, `--verify` |
-| `type <text> [ref]` | Type text into the focused element or a target ref. Supports `--submit`, `--verify`, `--focus` |
-| `press <key> [ref]` | Press a key on the focused element or a target ref. Supports `--verify` |
-| `select <ref> <value>` | Select an option in a dropdown. Supports `--verify` |
-| `check <ref>` | Check a checkbox or radio button |
-| `uncheck <ref>` | Uncheck a checkbox or radio button |
-| `drag <startRef> <endRef>` | Drag and drop between two elements |
-| `upload <ref> <file>` | Upload files to a file input |
-| `wait [target]` | Wait for a condition: element, time (`--text`), URL (`--url`), page load (`--load`), or JS (`--fn`) |
+```
+click <ref> [button]       Click an element. --modifiers
+dblclick <ref> [button]    Double-click an element. --modifiers
+hover <ref>                Hover over an element
+fill <ref> <text>          Clear and fill text into an editable element. --submit, --verify
+type <text> [ref]          Type text into the focused element or a target ref. --submit, --verify, --focus
+press <key> [ref]          Press a key on the focused element or a target ref. --verify
+select <ref> <value>       Select an option in a dropdown. --verify
+check <ref>                Check a checkbox or radio button
+uncheck <ref>              Uncheck a checkbox or radio button
+drag <startRef> <endRef>   Drag and drop between two elements
+upload <ref> <file>        Upload files to a file input
+wait [target]              Wait for a condition: element, time (--text), URL (--url), page load (--load), or JS (--fn)
+```
 
 #### Keyboard & Mouse
 
-| Command | Description |
-|---------|-------------|
-| `keydown <key>` | Press and hold a key |
-| `keyup <key>` | Release a key |
-| `mousemove <x> <y>` | Move the mouse to a position |
-| `mousedown [button]` | Press a mouse button |
-| `mouseup [button]` | Release a mouse button |
-| `mousewheel <dx> <dy>` | Scroll the mouse wheel |
-| `scroll <direction> <pixels>` | Scroll the page (`up`/`down`/`left`/`right`) |
+```
+keydown <key>                 Press and hold a key
+keyup <key>                   Release a key
+mousemove <x> <y>             Move the mouse to a position
+mousedown [button]            Press a mouse button
+mouseup [button]              Release a mouse button
+mousewheel <dx> <dy>          Scroll the mouse wheel
+scroll <direction> <pixels>   Scroll the page (up/down/left/right)
+```
 
 #### Page Inspection
 
-| Command | Description |
-|---------|-------------|
-| `snapshot` | Capture an accessibility-tree snapshot. Supports `--boxes`, `--interactive` (`-i`), `--urls` (`-u`), `--compact` (`-c`), `--depth` (`-d`), `--selector` (`-s`), `--raw`, `--viewport` (`-vp`), `--filename` |
-| `get <mode> <selector> [name]` | Extract data using CSS selectors. Modes: `text`, `html`, `box`, `styles`, `property`, `attr` |
-| `eval [expression] [ref]` | Evaluate JavaScript on the page or an element. Supports `--file=<path>` |
-| `console [min-level]` | List browser console messages. Supports `--clear` |
-| `generate-locator <ref>` | Generate a unique CSS selector from a snapshot ref or existing selector |
+```
+snapshot                          Capture an accessibility-tree snapshot
+                                  --boxes, --interactive (-i), --urls (-u), --compact (-c),
+                                  --depth (-d), --selector (-s), --raw, --viewport (-vp), --filename
+get <mode> <selector> [name]      Extract data using CSS selectors
+                                  Modes: text, html, box, styles, property, attr
+eval [expression] [ref]            Evaluate JavaScript on the page or an element. --file=<path>
+console [min-level]                List browser console messages. --clear
+generate-locator <ref>             Generate a unique CSS selector from a snapshot ref or existing selector
+```
 
 #### DOM Snapshot (static DOM extraction)
 
 The `domsnapshot` family captures raw HTML DOM for querying with CSS selectors and X-SQL — no interactive browser session required.
 
-| Feature | `snapshot` | `domsnapshot` |
-|---|---|---|
-| Data source | Accessibility tree | Raw HTML DOM |
-| Element addressing | Refs (`e5`, `e15`) | CSS selectors only |
-| Interactive commands | `click`, `type`, `fill` | Not supported |
-| X-SQL support | No | Yes (`query`) |
+```
+                  snapshot              domsnapshot
+─────────────────────────────────────────────────────────
+Data source       Accessibility tree    Raw HTML DOM
+Element refs      e5, e15               CSS selectors only
+Interactive       click, type, fill     Not supported
+X-SQL support     No                    Yes (query)
+```
 
-| Command | Description |
-|---------|-------------|
-| `domsnapshot` | Capture a static DOM snapshot and store it in page storage |
-| `domsnapshot get <field> [selector] [name]` | Extract `text`, `html`, or `attr` from the stored DOM snapshot |
-| `domsnapshot query [url]` | Run X-SQL against the stored DOM snapshot (`--sql=<query\|@file>`) |
-| `domsnapshot export` | Export snapshot HTML to a local file (`--file=<path>`) |
-| `domsnapshot summary` | Generate a compressed Web Page Summary Index (WPSI) |
-| `domsnapshot grep <pattern>` | Search snapshot HTML with regex. Supports `-i`, `-v`, `-c`, `-l`, `-F`, `-w`, `-A`, `-B`, `-C`, `--selector` |
+```
+domsnapshot                                Capture a static DOM snapshot and store it in page storage
+domsnapshot get <field> [selector] [name]  Extract text, html, or attr from the stored DOM snapshot
+domsnapshot query [url]                    Run X-SQL against the stored DOM snapshot (--sql=<query|@file>)
+domsnapshot export                         Export snapshot HTML to a local file (--file=<path>)
+domsnapshot summary                        Generate a compressed Web Page Summary Index (WPSI)
+domsnapshot grep <pattern>                 Search snapshot HTML with regex
+                                           -i, -v, -c, -l, -F, -w, -A, -B, -C, --selector
+```
 
 For the full reference (including X-SQL `llm_*` functions that also require an LLM key), see the [DOM Snapshot reference](cli/skill/references/domsnapshot.md).
 
 #### Export
 
-| Command | Description |
-|---------|-------------|
-| `screenshot [ref]` | Screenshot the page or an element. Supports `--filename`, `--full-page` |
-| `pdf` | Save the page as PDF. Supports `--filename` |
+```
+screenshot [ref]    Screenshot the page or an element. --filename, --full-page
+pdf                 Save the page as PDF. --filename
+```
 
 #### Tabs
 
-| Command | Description |
-|---------|-------------|
-| `tab-list` | List all open tabs |
-| `tab-new [url]` | Create a new tab, optionally navigating to a URL |
-| `tab-close [index]` | Close a tab by zero-based index (omit for current tab) |
-| `tab-select <index>` | Select a tab by zero-based index |
+```
+tab-list            List all open tabs
+tab-new [url]       Create a new tab, optionally navigating to a URL
+tab-close [index]   Close a tab by zero-based index (omit for current tab)
+tab-select <index>  Select a tab by zero-based index
+```
 
 #### Dialogs
 
-| Command | Description |
-|---------|-------------|
-| `dialog-accept [prompt]` | Accept a browser dialog, optionally providing prompt text |
-| `dialog-dismiss` | Dismiss a browser dialog |
+```
+dialog-accept [prompt]  Accept a browser dialog, optionally providing prompt text
+dialog-dismiss          Dismiss a browser dialog
+```
 
 #### Window
 
-| Command | Description |
-|---------|-------------|
-| `resize <width> <height>` | Resize the browser window |
+```
+resize <width> <height>   Resize the browser window
+```
 
 #### Storage: Cookies
 
-| Command | Description |
-|---------|-------------|
-| `cookie-list` | List cookies. Supports `--domain`, `--path` |
-| `cookie-get <name>` | Get a cookie by name |
-| `cookie-set <name> <value>` | Set a cookie. Supports `--domain`, `--path`, `--expires`, `--httpOnly`, `--secure`, `--sameSite` |
-| `cookie-delete <name>` | Delete a cookie by name. Supports `--domain`, `--path` |
-| `cookie-clear` | Clear all cookies |
+```
+cookie-list               List cookies. --domain, --path
+cookie-get <name>         Get a cookie by name
+cookie-set <name> <val>   Set a cookie. --domain, --path, --expires, --httpOnly, --secure, --sameSite
+cookie-delete <name>      Delete a cookie by name. --domain, --path
+cookie-clear              Clear all cookies
+```
 
 #### Storage: localStorage & sessionStorage
 
-| Command | Description |
-|---------|-------------|
-| `localstorage-list` | List all localStorage entries |
-| `localstorage-get <key>` | Get a localStorage value by key |
-| `localstorage-set <key> <value>` | Set a localStorage value |
-| `localstorage-delete <key>` | Delete a localStorage entry |
-| `localstorage-clear` | Clear all localStorage |
-| `sessionstorage-list` | List all sessionStorage entries |
-| `sessionstorage-get <key>` | Get a sessionStorage value by key |
-| `sessionstorage-set <key> <value>` | Set a sessionStorage value |
-| `sessionstorage-delete <key>` | Delete a sessionStorage entry |
-| `sessionstorage-clear` | Clear all sessionStorage |
+```
+localstorage-list             List all localStorage entries
+localstorage-get <key>        Get a localStorage value by key
+localstorage-set <key> <val>  Set a localStorage value
+localstorage-delete <key>     Delete a localStorage entry
+localstorage-clear            Clear all localStorage
+sessionstorage-list           List all sessionStorage entries
+sessionstorage-get <key>      Get a sessionStorage value by key
+sessionstorage-set <key> <val>Set a sessionStorage value
+sessionstorage-delete <key>   Delete a sessionStorage entry
+sessionstorage-clear          Clear all sessionStorage
+```
 
 #### Storage: State
 
-| Command | Description |
-|---------|-------------|
-| `state-save [filename]` | Save cookies + localStorage to a JSON file |
-| `state-load <filename>` | Load cookies + localStorage from a JSON file |
+```
+state-save [filename]    Save cookies + localStorage to a JSON file
+state-load <filename>    Load cookies + localStorage from a JSON file
+```
 
 #### LLM Configuration
 
 AI-powered commands (`agent`, `extract`, `summarize`) and X-SQL `llm_*` functions require an LLM API key. Configure one provider via environment variables:
 
-| Provider | Required Variables |
-|---|---|
-| DeepSeek | `DEEPSEEK_API_KEY` |
-| OpenRouter | `OPENROUTER_API_KEY`, `OPENROUTER_MODEL_NAME`, `OPENROUTER_BASE_URL` |
-| Volcengine (ByteDance) | `VOLCENGINE_API_KEY`, `VOLCENGINE_MODEL_NAME`, `VOLCENGINE_BASE_URL` |
-| OpenAI-compatible | `OPENAI_API_KEY`, `OPENAI_MODEL_NAME`, `OPENAI_BASE_URL` |
-| Aliyun Qwen (DashScope) | `OPENAI_API_KEY`, `OPENAI_MODEL_NAME`, `OPENAI_BASE_URL` |
+```
+DeepSeek                   DEEPSEEK_API_KEY
+OpenRouter                 OPENROUTER_API_KEY, OPENROUTER_MODEL_NAME, OPENROUTER_BASE_URL
+Volcengine (ByteDance)     VOLCENGINE_API_KEY, VOLCENGINE_MODEL_NAME, VOLCENGINE_BASE_URL
+OpenAI-compatible           OPENAI_API_KEY, OPENAI_MODEL_NAME, OPENAI_BASE_URL
+Aliyun Qwen (DashScope)    OPENAI_API_KEY, OPENAI_MODEL_NAME, OPENAI_BASE_URL
+```
 
 These environment variables map to the corresponding properties in [application.properties](application.properties). Example:
 
@@ -280,13 +287,13 @@ If no valid LLM key is configured, AI commands fail fast with a clear error at s
 
 Submit natural-language tasks and let Browser4's backend AI agent plan and execute autonomously:
 
-| Command | Description |
-|---------|-------------|
-| `agent run <task>` | Submit an autonomous task (async, returns task ID immediately) |
-| `agent status <id>` | Check the status of a running agent task |
-| `agent result <id>` | Get the final result of a completed agent task |
-| `extract <instruction>` | Extract structured data from the page using AI. Supports `--schema=<json>`, `--filename`, `--raw` |
-| `summarize [instruction]` | Summarize page content using AI. Supports `--selector`, `--filename`, `--raw` |
+```
+agent run <task>          Submit an autonomous task (async, returns task ID immediately)
+agent status <id>         Check the status of a running agent task
+agent result <id>         Get the final result of a completed agent task
+extract <instruction>     Extract structured data from the page using AI. --schema=<json>, --filename, --raw
+summarize [instruction]   Summarize page content using AI. --selector, --filename, --raw
+```
 
 - `agent run` is asynchronous — the backend agent reasons, explores, and executes until the task is complete.
 - Agent commands are task-ID based and do not require an active CLI browser session slot.
@@ -296,52 +303,67 @@ Submit natural-language tasks and let Browser4's backend AI agent plan and execu
 
 Orchestrate parallel scraping across multiple browser contexts. The `co` prefix is accepted as an alias for `swarm`.
 
-| Command | Description |
-|---------|-------------|
-| `swarm create` | Create a swarm scrape session. Supports `--profile-mode`, `--max-open-tabs`, `--max-browser-contexts`, `--display-mode` |
-| `swarm submit [url]` | Submit URLs or X-SQL payloads as scrape jobs. Supports `--seed-file`, `--sql`, `--deadline`, `--expires`, `--refresh`, `--parse`, `--store-content` |
-| `swarm query <url>` | Submit an X-SQL query to extract data from a loaded webpage. Supports `--sql`, `--seed-file`, `--deadline`, `--expires`, `--refresh` |
-| `swarm status <id>` | Check the status of a scrape job |
-| `swarm result <id>` | Get the result of a completed scrape job |
+```
+swarm create          Create a swarm scrape session
+                      --profile-mode, --max-open-tabs, --max-browser-contexts, --display-mode
+swarm submit [url]    Submit URLs or X-SQL payloads as scrape jobs
+                      --seed-file, --sql, --deadline, --expires, --refresh, --parse, --store-content
+swarm query <url>     Submit an X-SQL query to extract data from a loaded webpage
+                      --sql, --seed-file, --deadline, --expires, --refresh
+swarm status <id>     Check the status of a scrape job
+swarm result <id>     Get the result of a completed scrape job
+```
 
 Seed files are plain text, one URL per line; `#` comments and blank lines are ignored. Use `@url` in X-SQL templates — it is replaced with the target URL server-side.
 
 #### Crawl
 
-| Command | Description |
-|---------|-------------|
-| `crawl <url>` | Crawl a website starting from a URL, following links. Supports `--depth` (`-d`), `--out-link-selector` (`-ol`), `--out-link-pattern` (`-olp`), `--top-links` (`-tl`), `--args` (`-a`), `--refresh`, `--parse`, `--expires`, `--store-content`, `--priority` (`-p`), `--page-load-timeout`, `--ignore-url-query`, `--no-norm`, `--readonly` |
+```
+crawl <url>   Crawl a website starting from a URL, following links
+              --depth (-d), --out-link-selector (-ol), --out-link-pattern (-olp), --top-links (-tl),
+              --args (-a), --refresh, --parse, --expires, --store-content, --priority (-p),
+              --page-load-timeout, --ignore-url-query, --no-norm, --readonly
+```
 
 #### Batch & Loop
 
-| Command | Description |
-|---------|-------------|
-| `batch <command...>` | Execute multiple commands in one process. Supports `--bail` (stop on first failure), `--json` (read JSON commands from stdin) |
-| `loop [task]` | Execute a task repeatedly on an interval. Supports `--name`, `--interval` (`-i`), `--count` (`-n`), `--timeout` (`-t`), `--shell`, `--list`, `--stop`, `--status` |
+```
+batch <command...>  Execute multiple commands in one process
+                    --bail (stop on first failure), --json (read JSON commands from stdin)
+loop [task]         Execute a task repeatedly on an interval
+                    --name, --interval (-i), --count (-n), --timeout (-t),
+                    --shell, --list, --stop, --status
+```
 
 #### Install & Upgrade
 
-| Command | Description |
-|---------|-------------|
-| `install` | Install the self-contained Browser4 runtime bundle. Supports `--tag=<version>`, `--force` |
-| `uninstall` | Remove globally installed browser4-cli and runtime data. Supports `--yes` (`-y`), `--dry-run` |
-| `upgrade` | Upgrade to the latest version or a specified release tag. Supports `--tag=<version>`, `--force` |
+```
+install      Install the self-contained Browser4 runtime bundle. --tag=<version>, --force
+uninstall    Remove globally installed browser4-cli and runtime data. --yes (-y), --dry-run
+upgrade      Upgrade to the latest version or a specified release tag. --tag=<version>, --force
+```
 
 #### Batch-Compatible Commands
 
 The following commands can be used inside `batch` and `batch --json`:
 
-`goto`, `go-back`, `go-forward`, `reload`, `press`, `type`, `keydown`, `keyup`, `click`, `dblclick`, `hover`, `fill`, `select`, `check`, `uncheck`, `drag`, `upload`, `mousemove`, `mousedown`, `mouseup`, `mousewheel`, `scroll`, `wait`, `get`, `eval`, `snapshot`, `screenshot`, `pdf`, `dialog-accept`, `dialog-dismiss`, `resize`, `tab-list`, `tab-new`, `tab-close`, `tab-select`
+```
+goto  go-back  go-forward  reload  press  type  keydown  keyup
+click  dblclick  hover  fill  select  check  uncheck  drag  upload
+mousemove  mousedown  mouseup  mousewheel  scroll  wait
+get  eval  snapshot  screenshot  pdf  dialog-accept  dialog-dismiss
+resize  tab-list  tab-new  tab-close  tab-select
+```
 
 #### CLI Timeout Configuration
 
 Some commands may take longer than the default HTTP timeout. Use these environment variables to adjust timeouts:
 
-| Variable | Default | Applies to |
-|----------|---------|------------|
-| `BROWSER4_CLI_HTTP_TIMEOUT_SECS` | `30` | Most commands (`click`, `snapshot`, `screenshot`, etc.) |
-| `BROWSER4_CLI_INPUT_TIMEOUT_SECS` | `90` | Text input commands (`type`, `fill`) |
-| `BROWSER4_CLI_NAVIGATION_TIMEOUT_SECS` | `120` | Navigation commands (`goto`, `reload`, `go-back`, `go-forward`) |
+```
+BROWSER4_CLI_HTTP_TIMEOUT_SECS          30    Most commands (click, snapshot, screenshot, etc.)
+BROWSER4_CLI_INPUT_TIMEOUT_SECS         90    Text input commands (type, fill)
+BROWSER4_CLI_NAVIGATION_TIMEOUT_SECS   120    Navigation commands (goto, reload, go-back, go-forward)
+```
 
 Text input commands use a longer default timeout because typing into form fields — especially on complex pages — can be slower than simple interactions. If a text input command times out, the operation **may have partially executed**. After a timeout, verify the field content with `snapshot` or `get` before retrying.
 
@@ -476,15 +498,15 @@ curl -L -o PulsarRPAPro.jar https://github.com/platonai/PulsarRPAPro/releases/do
 
 ## 📦 Modules Overview
 
-| Module             | Description                                             |
-|--------------------|---------------------------------------------------------|
-| `cli`              | CLI in Rust that supports SKILLS                        |
-| `browser4-core`    | Core engine: sessions, scheduling, DOM, browser control |
-| `browser4-agentic` | Agent implementation, MCP, and skill registration       |
-| `browser4-rest`    | Spring Boot REST layer & command endpoints              |
-| `browser4-standalone`  | Agent & crawler orchestration with product packaging    |
-| `examples`         | Runnable examples and demos                             |
-| `browser4-tests`   | E2E & heavy integration & scenario tests                |
+```
+cli                     CLI in Rust that supports SKILLS
+browser4-core           Core engine: sessions, scheduling, DOM, browser control
+browser4-agentic        Agent implementation, MCP, and skill registration
+browser4-rest           Spring Boot REST layer & command endpoints
+browser4-standalone     Agent & crawler orchestration with product packaging
+examples                Runnable examples and demos
+browser4-tests          E2E & heavy integration & scenario tests
+```
 
 ---
 

@@ -206,12 +206,54 @@ fn format_mcp_transport_error(
 ///
 /// Makes a `POST /mcp/call-tool` request and returns the text of the first
 /// content block, or an error message from the server.
+/// Result of an MCP tool call, including optional server-side pagination metadata.
+pub struct CallToolResult {
+    pub text: String,
+    /// Server-side pagination metadata, if the server paginated the response.
+    pub pagination: Option<ServerPaginationMeta>,
+}
+
+/// Server-provided pagination metadata from the `_pagination` field in MCP responses.
+#[derive(Debug, Clone)]
+pub struct ServerPaginationMeta {
+    pub page: usize,
+    pub total_pages: usize,
+    pub total_lines: usize,
+    pub page_size: usize,
+    pub truncated: bool,
+}
+
+impl ServerPaginationMeta {
+    fn from_json(v: &Value) -> Option<Self> {
+        Some(Self {
+            page: v.get("page")?.as_u64()? as usize,
+            total_pages: v.get("totalPages")?.as_u64()? as usize,
+            total_lines: v.get("totalLines")?.as_u64()? as usize,
+            page_size: v.get("pageSize")?.as_u64()? as usize,
+            truncated: v.get("truncated").and_then(|t| t.as_bool()).unwrap_or(true),
+        })
+    }
+}
+
 pub async fn call_tool(
     client: &Client,
     base_url: &str,
     tool: &str,
     args: Value,
 ) -> Result<String, String> {
+    call_tool_with_result(client, base_url, tool, args)
+        .await
+        .map(|r| r.text)
+}
+
+/// Like [call_tool] but also returns any server-side pagination metadata present
+/// in the response.
+pub async fn call_tool_with_result(
+    client: &Client,
+    base_url: &str,
+    tool: &str,
+    args: Value,
+) -> Result<CallToolResult, String> {
     call_tool_with_timeout(client, base_url, tool, args, Some(timeout_for_tool(tool))).await
 }
 
@@ -221,7 +263,7 @@ async fn call_tool_with_timeout(
     tool: &str,
     mut args: Value,
     timeout: Option<std::time::Duration>,
-) -> Result<String, String> {
+) -> Result<CallToolResult, String> {
     normalize_refs(&mut args);
 
     let url = format!("{}/mcp/call-tool", base_url.trim_end_matches('/'));
@@ -280,8 +322,14 @@ async fn call_tool_with_timeout(
         return Err(msg.to_string());
     }
 
-    extract_mcp_text_payload(&data)
-        .ok_or_else(|| "MCP response did not contain a readable payload.".to_string())
+    let text = extract_mcp_text_payload(&data)
+        .ok_or_else(|| "MCP response did not contain a readable payload.".to_string())?;
+
+    let pagination = data
+        .get("_pagination")
+        .and_then(ServerPaginationMeta::from_json);
+
+    Ok(CallToolResult { text, pagination })
 }
 
 /// Check whether a server error message indicates a stale/expired session.
@@ -365,6 +413,7 @@ pub async fn submit_batch_commands(
         Some(std::time::Duration::from_secs(BATCH_REQUEST_TIMEOUT_SECS)),
     )
     .await
+    .map(|r| r.text)
 }
 
 #[cfg(test)]
