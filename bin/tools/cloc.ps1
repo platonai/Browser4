@@ -49,26 +49,23 @@ function Invoke-CLoc {
     param([string[]] $Languages)
 
     # Prefer JSON output for reliable parsing; fall back to plain text.
-    $json = $null
     try {
         $raw = & cloc --json --include-lang=($Languages -join ',') . 2>$null
-        if ($raw) {
-            $json = $raw | ConvertFrom-Json
+        if ($LASTEXITCODE -eq 0 -and $raw) {
+            # &-capture produces an array of lines; ConvertFrom-Json needs a single string.
+            $json = ($raw -join "`n") | ConvertFrom-Json
+            $result = @{}
+            foreach ($lang in $Languages) {
+                $entry = $json.PSObject.Properties | Where-Object { $_.Name -eq $lang }
+                if ($entry -and $entry.Value.code) {
+                    $result[$lang] = $entry.Value.code
+                }
+            }
+            return $result
         }
     } catch { }
 
-    if ($json) {
-        $result = @{}
-        foreach ($lang in $Languages) {
-            $entry = $json.PSObject.Properties | Where-Object { $_.Name -eq $lang }
-            if ($entry -and $entry.Value.code) {
-                $result[$lang] = $entry.Value.code
-            }
-        }
-        return $result
-    }
-
-    # Fallback: parse plain-text cloc output (e.g. "Kotlin  42 10 5 27")
+    # Fallback: parse plain-text cloc output (e.g. "Kotlin  42 10 5 27").
     $result = @{}
     try {
         $output = & cloc . 2>$null
@@ -78,7 +75,8 @@ function Invoke-CLoc {
 
     foreach ($line in $output) {
         if ($line -notmatch '^\s*(Kotlin|Java)\b') { continue }
-        $parts = -split ($line -replace '\s+', ' ').Trim()
+        $norm  = ($line -replace '\s+', ' ').Trim()
+        $parts = -split $norm
         if ($parts.Count -ge 5) {
             $result[$parts[0]] = [int] $parts[4]
         }
