@@ -7536,6 +7536,14 @@ fn compile_batch_request(
                     }
                 }
 
+                // Strip --file and --stdin keys so they aren't sent to the server
+                // (they're CLI-side only — the content has already been read and
+                // inserted as the "expression" parameter above).
+                if let Value::Object(ref mut m) = tool_params {
+                    m.remove("file");
+                    m.remove("stdin");
+                }
+
                 // Validate that an expression is provided.
                 let expression_empty = tool_params
                     .get("expression")
@@ -8585,6 +8593,14 @@ async fn run(
                         }
                     }
                 }
+
+            // Strip --file and --stdin keys so they aren't sent to the server
+            // (they're CLI-side only — the content has already been read and
+            // inserted as the "expression" parameter above).
+            if let Value::Object(ref mut m) = tool_params {
+                m.remove("file");
+                m.remove("stdin");
+            }
 
             // Validate that an expression is provided (either positional, --stdin, or --file).
             let expression_empty = tool_params

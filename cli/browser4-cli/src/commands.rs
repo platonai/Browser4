@@ -1135,6 +1135,9 @@ pub fn all_commands() -> Vec<CommandDef> {
             tool_params_fn: |args| {
                 let mut p = json!({ "expression": get_str(args, "expression").unwrap_or_default() });
                 if let Some(r) = get_opt_str(args, "ref") { p["ref"] = json!(r); }
+                // --file and --stdin are carried through tool_params so the
+                // dispatch logic in main.rs can detect them and read the
+                // expression content. They are stripped before the server call.
                 if let Some(f) = get_opt_str(args, "file") { p["file"] = json!(f); }
                 if get_bool(args, "stdin").unwrap_or(false) { p["stdin"] = json!(true); }
                 if get_bool(args, "json").unwrap_or(false) { p["json"] = json!(true); }
