@@ -90,12 +90,15 @@ mvnw.cmd -q -DskipTests
 | `browser4-dependencies`                | BOM and dependency alignment |
 | `browser4-tools`                       | Operational tools and launch helpers |
 | `browser4-agentic`                     | AI agents implementation, MCP, skills registration |
+| `browser4-agent-tools`                 | High-level agent tools: scraping, crawling, stateful page interaction |
 | `browser4-rest`                        | Spring Boot REST layer & command endpoints |
 | `cli/*`                                | Browser4 CLI + skill assets (`cli/browser4-cli`, `cli/skill`) |
-| `browser4-apps/*`                       | Product packaging and the unified launcher (`browser4-apps/browser4-standalone`, `target/Browser4.jar`) |
+| `browser4-apps/*`                      | Product packaging and the unified launcher (`browser4-apps/browser4-standalone`, `target/Browser4.jar`) |
 | `examples/*`                           | Runnable examples (`examples/browser4-examples`) |
 | `browser4-tests`                       | E2E & heavy integration & scenario tests |
 | `browser4-tests/browser4-tests-common` | Shared test base classes and utilities |
+| `cdp-protocol`                         | Chrome DevTools Protocol JSON definitions (`browser_protocol.json`, `js_protocol.json`) |
+| `coworker/`                            | File-queue automation system for task-driven AI workflows |
 
 ## Key APIs and Concepts
 
@@ -271,8 +274,30 @@ browser.display.mode=GUI  # GUI | HEADLESS | SUPERVISED
 - [Test Strategy](docs/test-strategy.md)
 - [Browser4 CLI Skill Guide](skill/SKILL.md)
 - [ARIA Snapshots](docs/aria-snapshots.md)
+- [Build from Source](docs/build-from-source.md)
+- [CLI Install & Upgrade](docs/cli-install-upgrade.md)
+- [CLI Standalone Install](docs/cli-standalone-install.md)
+- [DOM Snapshot Inspect & Summary](docs/domsnapshot-inspect-summary.md)
+- [Eval Command Output](docs/eval-command-output.md)
+- [Load Options Guide](docs/load-options-guide.md)
+- [Mock Site](docs/mocksite.md)
+- [Metadata Files](docs/metadata-files.md)
+- [QL Functions Guide](docs/ql-functions-guide.md)
+- [QL H2 UDFs Reference](docs/ql-h2-udfs-reference.md)
+- [Coworker Automation](coworker/SKILL.md)
 
 ## Claude-Specific Guidance
+
+### Harness Configuration
+
+The `.claude/settings.json` file contains pre-approved permissions for common operations:
+- Build commands: `./mvnw`, `cargo`, `npm`, `rust`
+- Shell commands: `pwsh`, `powershell`, `bash`
+- Git operations: `pull`, `push`, `stash`, `checkout`, `restore`, `add`, `commit`
+- Helper tools: `browser4-cli`, `gh`, `java`, `jar`
+- Skills: `code-review`
+
+Add new permissions here when you encounter repeated prompts for the same operation. See [Skill: fewer-permission-prompts] for automated scanning.
 
 ### Understanding Browser4 Architecture
 
@@ -291,6 +316,14 @@ When given a task, Claude should:
 3. **Make Minimal Changes** - Preserve existing style and patterns
 4. **Test Incrementally** - Run targeted tests after each change
 5. **Document Changes** - Update relevant documentation
+
+### Coworker Integration
+
+For task-driven batch work, use the `coworker/` file-queue system instead of inline execution:
+1. Create a task `.md` file under `coworker/tasks/main/0draft/` with a `Title:` and `Prompt:` header
+2. Run `./coworker/scripts/coworker.ps1` or let the scheduler pick it up
+3. Results appear in `coworker/tasks/main/3complete/` or `5approved/`
+4. For recurring work, configure entries in `coworker/scripts/coworker-scheduler.config.psd1`
 
 ### PowerShell (.ps1) Cross-Platform Compatibility
 
@@ -359,7 +392,7 @@ All `.ps1` and `.sh` scripts under `bin/tests-production/` and `bin/test-product
 2. Add the frontend alias in `browser4-rest/.../MCPToolController.kt` so names like `browser_my_tool` resolve to the internal tool name such as `my_tool`
 3. Reuse existing backend tools when possible; if a new browser capability is required, add an `@MCP` method in `WebDriver.kt`, implement it in the concrete driver, and only add an explicit `BrowserTabToolExecutor` case when parameter mapping is non-trivial
 4. Update `cli/browser4-cli/src/main.rs` only when the command needs custom dispatch, dynamic tool-name selection, stale-session recovery, inclusion in `no_snapshot_commands()` for read-only behavior, or custom batch handling in `compile_batch_request()`
-5. Update `skill/SKILL.md` for user-facing command documentation; CLI help is generated from `CommandDef`, so avoid hand-editing help infrastructure
+5. Update `skill/SKILL.md` for user-facing command documentation; CLI help is generated from `CommandDef`, so avoid hand-editing help infrastructure. For commands with extensive documentation, add a dedicated reference file under `skill/references/` (e.g. `crawl.md`, `loop.md`, `domsnapshot.md`)
 6. Cover the change with the smallest relevant tests: `cli/browser4-cli/src/commands.rs` unit tests, `browser4-rest` controller mapping tests, `cli/browser4-cli/tests/e2e.rs`, and `browser4-tests/browser4-rest-tests/.../MCPToolControllerE2ETest.kt` when the command changes the end-to-end flow
 7. Watch the common failure points: missing backend alias, omitted `sessionId` in custom handlers, forgetting `no_snapshot_commands()` for read-only commands, forgetting `batch_supported`/`compile_batch_request()` for batch-safe DOM commands, mismatched element-ref parameter names, broken `activeSelector` / `lastMousePosition` persistence in `cli/browser4-cli/src/state.rs`, and snake_case/camelCase argument normalization
 
@@ -369,6 +402,22 @@ All `.ps1` and `.sh` scripts under `bin/tests-production/` and `bin/test-product
 - Create a backend `@RestController` + `@Service` pair (e.g. `CrawlController.kt` + `CrawlService.kt`) with an async task store (`ConcurrentHashMap`) and a `CoroutineScope` for background execution.
 - Return a task UUID from the POST endpoint; the CLI polls for completion.
 - No MCP alias needed — these commands bypass `MCPToolController` entirely.
+
+**Snapshot-related commands** (`domsnapshot`, `snapshot`) use the `Category::Snapshot` category:
+- `domsnapshot get` / `domsnapshot query` — retrieve DOM snapshots with optional pagination (`-limit`, `-offset`)
+- `domsnapshot grep` — search HTML with regex support (`-i`, `-v`, `-fixed-strings`, `-word-regexp`, `-files-with-matches`, `-count`, `-no-line-number`)
+- `domsnapshot inspect` — inspect a DOM element with enriched metadata
+- `domsnapshot summary` — generate a summary view of the DOM
+- `snapshot` — capture live page snapshot with `--boxes` for element bounding boxes, `--stdout` for direct output, `--limit`/`--no-compact` for size control
+- `snapshot grep` — grep over a live page snapshot
+
+**Scheduled/loop commands:**
+- `loop` — periodically execute a subcommand; configure via `--interval` and `--times`
+- The loop command is excluded from batch mode and e2e test runs
+
+**System commands:**
+- `doctor` — system diagnosis: checks Chrome, Java, network connectivity, and configuration
+- `install` / `uninstall` / `upgrade` — CLI lifecycle management (see [CLI Install & Upgrade](docs/cli-install-upgrade.md))
 
 #### Modifying Install / Uninstall / Upgrade Rust Code
 
@@ -514,8 +563,28 @@ Before submitting changes, verify:
 - Check `docs/` for detailed guides
 - Review `examples/` for usage patterns
 - Look in `browser4-tests/` for test examples
-- See `docs-dev/copilot/` for development notes
+
+### Coworker Automation
+
+The `coworker/` directory contains a file-queue automation system for task-driven AI workflows. Tasks are plain Markdown files routed through a state-machine pipeline.
+
+**Main entrypoints:**
+- `./coworker/scripts/coworker.ps1` — Primary worker: picks up a task file, runs Copilot, logs the run, and routes the result
+- `./coworker/scripts/process-coworker-queue.ps1` — One-shot queue processor
+- `./coworker/scripts/coworker-scheduler.ps1` — Long-running scheduler with periodic checks
+
+**Task lifecycle directories** (under `coworker/tasks/`):
+- `main/0draft/` → `main/1ready/` → `main/2working/` → `main/3complete/` (or `3aborted/`, `4review/`, `5approved/`)
+- `200issues/` — GitHub issues pipeline with draft + commit + post stages
+
+**Key conventions:**
+- Task files use optional `Title:`, `Description:`, `Prompt:` headers; if absent, the full file is the prompt
+- The worker moves the file through state directories — never modify the task file from the AI side
+- Scheduler config lives in `coworker/scripts/coworker-scheduler.config.psd1`
+- Worker helper (Copilot, Claude, etc.) is configured in `coworker/scripts/config.psd1`
+
+See [Coworker SKILL.md](coworker/SKILL.md) for full documentation.
 
 ---
 
-*Last updated: 2026-05-17*
+*Last updated: 2026-06-30*
