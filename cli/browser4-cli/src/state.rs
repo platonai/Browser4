@@ -525,22 +525,6 @@ pub fn track_async_task(
     write_async_tasks(&list, state_dir)
 }
 
-/// Update the last known status of a tracked task.
-pub fn update_async_task_status(
-    task_id: &str,
-    status: &str,
-    state_dir: Option<&std::path::Path>,
-) -> std::io::Result<()> {
-    let mut list = read_async_tasks(state_dir);
-    for entry in &mut list.tasks {
-        if entry.task_id == task_id {
-            entry.last_status = status.to_string();
-            break;
-        }
-    }
-    write_async_tasks(&list, state_dir)
-}
-
 /// Remove completed/failed tasks from the tracked list.
 pub fn prune_async_tasks(
     state_dir: Option<&std::path::Path>,
@@ -558,11 +542,6 @@ pub fn prune_async_tasks(
         write_async_tasks(&list, state_dir)?;
     }
     Ok(removed)
-}
-
-/// Clear all tracked async tasks.
-pub fn clear_async_tasks(state_dir: Option<&std::path::Path>) -> std::io::Result<()> {
-    write_async_tasks(&AsyncTaskList::default(), state_dir)
 }
 
 /// Format a list of tracked async tasks for CLI display.
