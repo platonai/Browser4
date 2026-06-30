@@ -244,7 +244,7 @@ Full reference: **[references/domsnapshot.md](references/domsnapshot.md)**.
 | **`snapshot` + refs** | Interactive workflows (click, fill, navigate) | Static data extraction |
 | **`domsnapshot get`** | Extracting specific fields via CSS selectors | Deeply nested selectors (may return `[]`); fall back to `eval` or X-SQL |
 | **`eval --json`** | Live DOM access, complex JS transformations | Windows/bash quoting (use `--stdin` or `--file`) |
-| **X-SQL** | Structured extraction with filtering/sorting, no quoting pain | Interactive workflows, live page manipulation |
+| **X-SQL** | **Bulk data extraction** — structured extraction with filtering, sorting, pagination. No quoting pain | Interactive workflows, live page manipulation |
 | **`extract` / `summarize`** | Natural language extraction, AI-powered | High-volume extraction (cost/latency); requires LLM API key |
 
 ## X-SQL
@@ -288,7 +288,8 @@ SELECT
     DOM_FIRST_FLOAT(DOM, '.a-price .a-offscreen', 0.0) AS price,
     DOM_FIRST_TEXT(DOM, '.a-icon-alt') AS rating,
     DOM_FIRST_HREF(DOM, 'h2 a') AS url,
-    DOM_ATTR(DOM, 'data-asin') AS asin
+    DOM_ATTR(DOM, 'data-asin') AS asin,
+    DOM_FIRST_ATTR(DOM, 'img:expr(width>200 && height>200)', 'src') AS image
 FROM DOM_LOAD_AND_SELECT('https://www.amazon.com/s?k=...', '[data-component-type=\"s-search-result\"]', 1, 48)
 WHERE DOM_IS_NOT_NIL(DOM)
   AND STR_IS_NOT_BLANK(DOM_FIRST_TEXT(DOM, 'h2'))
@@ -372,7 +373,7 @@ Two complementary strategies:
 
 > **Prefer viewport pagination first.** Important content usually appears at the top; viewport 0 captures the most relevant information without loading new URLs.
 
-For bulk data extraction, use `eval` to collect all visible results first, or use `crawl` with `--depth 1` and `--out-link-selector` for automated multi-page traversal.
+For bulk data extraction, prefer **X-SQL** — it handles pagination, filtering, sorting, and caching in a single query. For interactive multi-page traversal, use `crawl` with `--depth 1` and `--out-link-selector`.
 
 ## Polite Scraping
 
@@ -381,17 +382,6 @@ Add `wait 1000-3000` between rapid navigations to avoid rate limiting and CAPTCH
 ## Error Handling & Recovery
 
 Commands exit non-zero on failure. Common recoveries: re-snapshot for stale refs, `wait --load=networkidle` for un-ready pages, `--stdin`/`--file` for eval quoting errors, and `goto` to auto-restart stale sessions. Full reference: **[references/error-handling.md](references/error-handling.md)**.
-
-## Common Pitfalls
-
-- **Stale refs**: Using a ref from a previous snapshot after any interaction. **Always re-snapshot.**
-- **Not waiting for page load**: Snapshotting before the page renders. Use `wait --load=networkidle` after navigation.
-- **Using `-i` on e-commerce**: Interactive mode strips `<div>`-based product cards. Use `--viewport=0` instead.
-- **Cat'ing snapshot files**: Snapshot files can be huge. Use `snapshot grep`, `--stdout --page`, or `domsnapshot get`.
-- **Inline JS quoting on Windows**: Use `--stdin` or `--file` for `eval` to avoid shell escaping nightmares.
-- **Not scoping to viewport**: Capturing `-v all` when `-v 0` would suffice. Start with viewport 0.
-- **Ignoring polite delays**: Rapid-fire requests trigger CAPTCHAs. Add `wait 1000-3000` between navigations.
-- **Using `domsnapshot get all attr` for nested selectors**: May return `[]` due to DOM serialization. Use `eval` or X-SQL as fallback.
 
 ## Installation
 
