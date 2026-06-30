@@ -117,9 +117,9 @@ Internally each `run()` calls `session.open(url, eventHandlers)` with a local
 #### 1. Build the JAR
 
 ```bash
-cd examples/browser4-examples
-../gradlew jar
-# → build/libs/browser4-examples-<version>.jar
+# From the repo root
+mvn package -pl examples/browser4-examples -am -DskipTests
+# → examples/browser4-examples/target/browser4-examples-4.12.0-rc.1.jar
 ```
 
 The JAR contains:
@@ -133,13 +133,13 @@ The JAR contains:
 # Upload the plugin JAR
 curl -X POST http://localhost:8080/api/plugins/install \
   -H "Content-Type: multipart/form-data" \
-  -F "file=@build/libs/browser4-examples-1.0.0.jar"
+  -F "file=@examples/browser4-examples/target/browser4-examples-4.12.0-rc.1.jar"
 
 # Response (200 OK):
 # {
-#   "fileName": "browser4-examples-1.0.0.jar",
+#   "fileName": "browser4-examples-4.12.0-rc.1.jar",
 #   "fileSize": 42000,
-#   "path": "/abs/path/to/plugins/browser4-examples-1.0.0.jar",
+#   "path": "/abs/path/to/plugins/browser4-examples-4.12.0-rc.1.jar",
 #   "manifest": {
 #     "name": "browser4-event-demos",
 #     "version": "1.0.0",
@@ -178,7 +178,7 @@ fire on every page load.
 ```bash
 # List installed plugins
 curl http://localhost:8080/api/plugins
-# → [{"fileName":"browser4-examples-1.0.0.jar", "loaded":true, ...}]
+# → [{"fileName":"browser4-examples-4.12.0-rc.1.jar", "loaded":true, ...}]
 
 # Inspect one
 curl http://localhost:8080/api/plugins/browser4-event-demos
