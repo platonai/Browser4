@@ -214,12 +214,12 @@ is essential for an AI coder to fix the issue later.
 applied (e.g. `cli/browser4-cli/src/snapshot.rs:render_snapshot()`). If unknown,
 leave the value empty — a follow-up analysis will fill it in.
 
-**Review:** (leave empty — reserved for human review)
-
-**Suggested Improvement:**
+**AI Suggested Improvement:**
 - First concrete suggestion (use a bullet list — each suggestion on its own line)
 - Second concrete suggestion
 - Additional suggestions as needed
+
+**Human Review (TOP PRIORITY):** (leave empty — reserved for human review)
 
 Use `---` (horizontal rule) to separate issues.
 
@@ -318,15 +318,17 @@ function ConvertFrom-IssuesSection {
 
     # ── Field-name mapping: bold label → hashtable key ──────────────────────
     $fieldMap = @{
-        'Severity'              = 'Severity'
-        'Category'              = 'Category'
-        'Reproduction'          = 'Reproduction'
-        'Expected'              = 'Expected'
-        'Actual'                = 'Actual'
-        'Root Cause'            = 'RootCause'
-        'Code Pointer'          = 'CodePointer'
-        'Review'                = 'Review'
-        'Suggested Improvement' = 'Suggestion'
+        'Severity'                     = 'Severity'
+        'Category'                     = 'Category'
+        'Reproduction'                 = 'Reproduction'
+        'Expected'                     = 'Expected'
+        'Actual'                       = 'Actual'
+        'Root Cause'                   = 'RootCause'
+        'Code Pointer'                 = 'CodePointer'
+        'Review'                       = 'Review'
+        'Human Review (TOP PRIORITY)'  = 'Review'
+        'Suggested Improvement'        = 'Suggestion'
+        'AI Suggested Improvement'     = 'Suggestion'
     }
 
     $results = [System.Collections.ArrayList]::new()
@@ -453,6 +455,109 @@ function ConvertFrom-IssuesSection {
     return $results.ToArray()
 }
 
+# ── Background context extraction ──────────────────────────────────────────────
+
+function Extract-BackgroundContext {
+    <#
+    .SYNOPSIS
+        Extracts task background and execution context from agent evaluation output.
+    .DESCRIPTION
+        Parses Sections A (Task Result) and B (Execution Trace) from the full
+        agent output to provide the context an AI needs to understand and reproduce
+        the reported issues.  Handles both ## and ### heading levels, optional
+        emoji/decorations in headings, and varied subsection formats within the
+        execution trace.
+    .OUTPUTS
+        Hashtable with keys: TaskSummary, ExecutionTrace, Commands, Workarounds.
+        Empty strings for sections that cannot be extracted.
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Content
+    )
+
+    $normalized = $Content -replace '\r\n', "`n"
+
+    $result = @{
+        TaskSummary    = ''
+        ExecutionTrace = ''
+        Commands       = ''
+        Workarounds    = ''
+    }
+
+    # ── Extract Section A (Task Result) ──────────────────────────────────────
+    # Handles: "### A. Task Result", "## A. Task Result", "## ✅ Task Result: ..."
+    $aStart = -1
+    $aMarkers = @(
+        '### A. Task Result', '## A. Task Result', '## ✅ Task Result',
+        '### A Task Result', '## A Task Result', '## Task Result'
+    )
+    foreach ($m in $aMarkers) {
+        $aStart = $normalized.IndexOf($m, [StringComparison]::OrdinalIgnoreCase)
+        if ($aStart -ge 0) { break }
+    }
+
+    if ($aStart -ge 0) {
+        $aContentStart = $normalized.IndexOf("`n", $aStart) + 1
+        if ($aContentStart -le 0) { $aContentStart = $aStart }
+
+        $bMarkers = @(
+            '### B. Execution Trace', '## B. Execution Trace',
+            '### B Execution Trace', '## B Execution Trace',
+            '## B. Execution Trace'
+        )
+        $aEnd = $normalized.Length
+        foreach ($m in $bMarkers) {
+            $idx = $normalized.IndexOf($m, $aContentStart, [StringComparison]::OrdinalIgnoreCase)
+            if ($idx -ge 0) { $aEnd = $idx; break }
+        }
+        $len = [Math]::Max(0, $aEnd - $aContentStart)
+        $result.TaskSummary = $normalized.Substring($aContentStart, $len).Trim()
+    }
+
+    # ── Extract Section B (Execution Trace) ──────────────────────────────────
+    $bStart = -1
+    $bMarkers = @(
+        '### B. Execution Trace', '## B. Execution Trace',
+        '### B Execution Trace', '## B Execution Trace',
+        '## B. Execution Trace'
+    )
+    foreach ($m in $bMarkers) {
+        $bStart = $normalized.IndexOf($m, [StringComparison]::OrdinalIgnoreCase)
+        if ($bStart -ge 0) { break }
+    }
+
+    if ($bStart -ge 0) {
+        $bContentStart = $normalized.IndexOf("`n", $bStart) + 1
+        if ($bContentStart -le 0) { $bContentStart = $bStart }
+
+        $cMarkers = @(
+            '### C. Issues Found', '## C. Issues Found',
+            '### C Issues Found', '## C Issues Found',
+            '## C. Issues Found'
+        )
+        $bEnd = $normalized.Length
+        foreach ($m in $cMarkers) {
+            $idx = $normalized.IndexOf($m, $bContentStart, [StringComparison]::OrdinalIgnoreCase)
+            if ($idx -ge 0) { $bEnd = $idx; break }
+        }
+        $len = [Math]::Max(0, $bEnd - $bContentStart)
+        $fullTrace = $normalized.Substring($bContentStart, $len).Trim()
+        $result.ExecutionTrace = $fullTrace
+
+        # Extract "Commands Used" subsection (if present)
+        if ($fullTrace -match '(?s)(?:###\s+)?Commands?\s*Used[:\s]*\n(.+?)(?=\n###\s|\n##\s|\Z)') {
+            $result.Commands = $Matches[1].Trim()
+        }
+        # Extract "Workarounds Required" subsection (if present)
+        if ($fullTrace -match '(?s)(?:###\s+)?Workarounds?\s*Required[:\s]*\n(.+?)(?=\n###\s|\n##\s|\Z)') {
+            $result.Workarounds = $Matches[1].Trim()
+        }
+    }
+
+    return $result
+}
+
 # ── Issue file output ─────────────────────────────────────────────────────────
 
 function Write-IssuesToReadyQueue {
@@ -462,10 +567,13 @@ function Write-IssuesToReadyQueue {
     .DESCRIPTION
         Saves the complete agent output (containing A. Task Result, B. Execution Trace,
         C. Issues Found, D. Overall Assessment) as a markdown file in the
-        200issues/draft/refine/0ready directory for downstream refinement.
+        200issues/draft directory for downstream refinement.
 
-        Also attempts best-effort parsing of individual issues from the C section
-        via ConvertFrom-IssuesSection and writes each as a separate file.
+        Also extracts background context (Sections A + B) and parses individual
+        issues from Section C, then writes a SINGLE consolidated issues file
+        (.issues.md) containing all issues, their reproduction context, and a
+        reproduction guide — because the issues discovered in a single scenario
+        are often interrelated and should be analyzed together.
 
         Always writes the full output regardless of whether individual issues
         can be parsed.
@@ -508,58 +616,126 @@ function Write-IssuesToReadyQueue {
     [System.IO.File]::WriteAllText($absoluteFullPath, $Content, $utf8NoBom)
     Write-Host "  Wrote full output: $absoluteFullPath" -ForegroundColor DarkGray
 
-    # 2) Best-effort: parse individual issues from the "C. Issues Found" section
+    # 2) Extract background context (Sections A + B) for AI reproduction
+    $bg = Extract-BackgroundContext -Content $Content
+
+    # 3) Parse individual issues from Section C
     $issues = ConvertFrom-IssuesSection -Content $Content
-    $issueIndex = 1
-    foreach ($issue in $issues) {
-        $paddedIndex = '{0:d3}' -f $issueIndex
-        $issueFileName = "$timestamp-$safeName.issue-$paddedIndex.md"
-        $issueFilePath = Join-Path $OutputDirectory $issueFileName
-        $absoluteIssuePath = [System.IO.Path]::GetFullPath($issueFilePath)
 
-        $issueBody = @"
-# $($issue.Title)
+    # 4) Write a SINGLE consolidated issues file with background context and
+    #    reproduction guide.  Writing all issues together preserves their
+    #    interrelationships — issues in one scenario often share root causes,
+    #    share reproduction environments, or cascade from each other.
+    $consFileName = "$timestamp-$safeName.issues.md"
+    $consFilePath = Join-Path $OutputDirectory $consFileName
+    $absoluteConsPath = [System.IO.Path]::GetFullPath($consFilePath)
 
-**Severity:** $($issue.Severity)
-**Category:** $($issue.Category)
+    # Build the consolidated file body
+    $consBody = "# Issues: $ScenarioName`n`n"
+    $consBody += "> **Source:** ``$fullFileName`` | **Date:** $timestamp | "
+    $consBody += "**Mode:** $(if ($browser4cliMode -eq 'production') { 'production' } else { 'dev' })`n`n"
 
-## Reproduction
-
-$($issue.Reproduction)
-
-## Expected Behavior
-
-$($issue.Expected)
-
-## Actual Behavior
-
-$($issue.Actual)
-
-## Root Cause
-
-$($issue.RootCause)
-
-## Code Pointer
-
-$($issue.CodePointer)
-
-## Review
-
-$($issue.Review)
-
-## Suggested Improvement
-
-$($issue.Suggestion)
-"@
-        [System.IO.File]::WriteAllText($absoluteIssuePath, $issueBody, $utf8NoBom)
-        Write-Host "  Wrote issue: $absoluteIssuePath" -ForegroundColor DarkGray
-        $issueIndex++
+    # ── Background section ──────────────────────────────────────────────────
+    if ($bg.TaskSummary) {
+        $consBody += "## Scenario Background`n`n"
+        $consBody += "### Task`n`n"
+        $consBody += "$($bg.TaskSummary)`n`n"
     }
 
-    if ($issueIndex -eq 1) {
-        Write-Host "  (No individual issues parsed -- full output saved)" -ForegroundColor DarkGray
+    if ($bg.ExecutionTrace) {
+        $consBody += "### Execution Context`n`n"
+        if ($bg.Commands) {
+            $consBody += "**Key Commands:**`n`n$($bg.Commands)`n`n"
+        }
+        if ($bg.Workarounds) {
+            $consBody += "**Workarounds Applied During Task:**`n`n$($bg.Workarounds)`n`n"
+        }
+        # If we have execution trace but couldn't extract subsections, include
+        # a condensed version (first 800 chars) so the AI has some context.
+        if (-not $bg.Commands -and -not $bg.Workarounds) {
+            $condensed = $bg.ExecutionTrace
+            if ($condensed.Length -gt 800) {
+                $condensed = $condensed.Substring(0, 800) + "...`n`n(truncated — see full.md for complete trace)"
+            }
+            $consBody += "$condensed`n`n"
+        }
+    }
+
+    $consBody += "---`n`n"
+
+    # ── Issues section ──────────────────────────────────────────────────────
+    if ($issues.Count -gt 0) {
+        $consBody += "## Issues Found ($($issues.Count) issue$(if ($issues.Count -ne 1) { 's' }))`n`n"
+        $issueIndex = 0
+        foreach ($issue in $issues) {
+            $issueIndex++
+            $consBody += "### Issue $issueIndex`: $($issue.Title)`n`n"
+            $consBody += "**Severity:** $($issue.Severity)`n"
+            $consBody += "**Category:** $($issue.Category)`n`n"
+
+            if ($issue.Reproduction) {
+                $consBody += "#### Reproduction`n`n$($issue.Reproduction)`n`n"
+            }
+            if ($issue.Expected) {
+                $consBody += "#### Expected Behavior`n`n$($issue.Expected)`n`n"
+            }
+            if ($issue.Actual) {
+                $consBody += "#### Actual Behavior`n`n$($issue.Actual)`n`n"
+            }
+            if ($issue.RootCause) {
+                $consBody += "#### Root Cause Analysis`n`n$($issue.RootCause)`n`n"
+            }
+            if ($issue.CodePointer) {
+                $consBody += "#### Code Pointer`n`n``$($issue.CodePointer)```n`n"
+            }
+            if ($issue.Suggestion) {
+                $consBody += "#### AI Suggested Improvement`n`n$($issue.Suggestion)`n`n"
+            }
+            if ($issue.Review) {
+                $consBody += "#### Human Review`n`n$($issue.Review)`n`n"
+            }
+
+            $consBody += "---`n`n"
+        }
+
+        # ── Reproduction guide ──────────────────────────────────────────────
+        # Synthesize a practical reproduction guide that an AI coder can follow.
+        $consBody += "## How to Reproduce`n`n"
+        $consBody += "### Common Setup`n`n"
+        $consBody += "1. Clone the repository and ``cd`` to the repo root.`n"
+        if ($browser4cliMode -eq 'production') {
+            $consBody += "2. Install browser4-cli: ``cargo install --path cli/browser4-cli```n"
+            $consBody += "3. Ensure the backend server is running.`n"
+            $consBody += "4. All commands: ``browser4-cli <command>```n`n"
+        } else {
+            $consBody += "2. Build the CLI: ``cd cli/browser4-cli && cargo build```n"
+            $consBody += "3. The backend server starts automatically in dev mode.`n"
+            $consBody += "4. All commands from repo root: ``cd cli/browser4-cli && cargo run -- <command>```n`n"
+        }
+
+        $consBody += "### Per-Issue Reproduction Steps`n`n"
+        $issueIndex = 0
+        foreach ($issue in $issues) {
+            $issueIndex++
+            $consBody += "#### Issue $issueIndex`: $($issue.Title)`n`n"
+            if ($issue.Reproduction) {
+                $consBody += "$($issue.Reproduction)`n`n"
+            } else {
+                $consBody += "(No reproduction steps recorded — see full.md for surrounding context)`n`n"
+            }
+        }
     } else {
-        Write-Host "  Parsed $($issueIndex - 1) individual issue(s)" -ForegroundColor DarkGray
+        $consBody += "## Issues Found (0)`n`n"
+        $consBody += "No issues could be parsed from Section C of the agent output.`n`n"
+        $consBody += "See ``$fullFileName`` for the complete evaluation output.`n`n"
+    }
+
+    [System.IO.File]::WriteAllText($absoluteConsPath, $consBody, $utf8NoBom)
+    Write-Host "  Wrote consolidated issues: $absoluteConsPath" -ForegroundColor DarkGray
+    if ($issues.Count -gt 0) {
+        Write-Host "  $($issues.Count) issue(s) in one file (interrelated issues stay together)" -ForegroundColor DarkGray
+    } else {
+        Write-Host "  (No individual issues parsed -- full output + background context saved)" -ForegroundColor DarkGray
     }
 }
 

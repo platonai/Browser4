@@ -739,23 +739,36 @@ OK.
         Write-TestGroup 'Full.md file name contains scenario name'
         Assert-True 'Name contains unit-test' $fullFiles[0].Name.Contains('unit-test')
 
-        Write-TestGroup 'Writes individual issue files'
-        $issueFiles = Get-ChildItem -Path $tempDir -Filter '*.issue-*.md'
-        Assert-Equal 'Exactly 1 issue file' 1 $issueFiles.Count
+        Write-TestGroup 'Writes consolidated .issues.md file (not individual issue files)'
+        $issueFiles = Get-ChildItem -Path $tempDir -Filter '*.issues.md'
+        $individualFiles = Get-ChildItem -Path $tempDir -Filter '*.issue-*.md'
+        Assert-Equal 'Exactly 1 consolidated issues file' 1 $issueFiles.Count
+        Assert-Equal 'No individual .issue-NNN.md files' 0 $individualFiles.Count
 
-        Write-TestGroup 'Issue file contains the issue title'
+        Write-TestGroup 'Consolidated issues file contains background context'
         $issueContent = Get-Content -Path $issueFiles[0].FullName -Raw -Encoding UTF8
-        Assert-True 'Contains issue title' $issueContent.Contains('# Test issue')
+        Assert-True 'Contains Scenario Background heading' $issueContent.Contains('## Scenario Background')
+        Assert-True 'Contains Task subsection' $issueContent.Contains('### Task')
+        Assert-True 'Contains Execution Context' $issueContent.Contains('### Execution Context')
 
-        Write-TestGroup 'Issue file contains metadata fields'
+        Write-TestGroup 'Consolidated issues file contains the parsed issue'
+        Assert-True 'Contains issue title' $issueContent.Contains('Test issue')
         Assert-True 'Contains Severity' $issueContent.Contains('**Severity:** Medium')
         Assert-True 'Contains Category' $issueContent.Contains('**Category:** UX')
 
-        Write-TestGroup 'Issue file contains new sections (Root Cause, Code Pointer, Review)'
-        Assert-True 'Contains Root Cause section' $issueContent.Contains('## Root Cause')
-        Assert-True 'Contains Code Pointer section' $issueContent.Contains('## Code Pointer')
-        Assert-True 'Contains Review section' $issueContent.Contains('## Review')
-        Assert-True 'Contains Reproduction (not Reproduction Steps)' $issueContent.Contains('## Reproduction')
+        Write-TestGroup 'Consolidated issues file contains reproduction guide'
+        Assert-True 'Contains How to Reproduce heading' $issueContent.Contains('## How to Reproduce')
+        Assert-True 'Contains Common Setup' $issueContent.Contains('### Common Setup')
+        Assert-True 'Contains Per-Issue Reproduction Steps' $issueContent.Contains('### Per-Issue Reproduction Steps')
+
+        Write-TestGroup 'Consolidated issues file contains issue detail sections'
+        Assert-True 'Contains Reproduction section' $issueContent.Contains('#### Reproduction')
+        Assert-True 'Contains Expected Behavior section' $issueContent.Contains('#### Expected Behavior')
+        Assert-True 'Contains Actual Behavior section' $issueContent.Contains('#### Actual Behavior')
+
+        Write-TestGroup 'Consolidated issues file contains source reference'
+        Assert-True 'Contains Source link to full.md' $issueContent.Contains('Source:')
+        Assert-True 'Contains Mode' $issueContent.Contains('Mode:')
     }
     finally {
         Remove-Item -Path $tempDir -Recurse -Force -ErrorAction SilentlyContinue
