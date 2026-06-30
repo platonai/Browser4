@@ -137,7 +137,10 @@ class PageHandler constructor(
 
         // If viewports are specified, use existing viewport filtering then render with options
         val snapContent = if (resolvedOptions.viewports != null) {
-            val viewportIndices = ViewportSpec.parse(resolvedOptions.viewports) ?: return buState.domState.renderedAriaSnapshot(resolvedOptions)
+            val viewportIndices =
+                ViewportSpec.parse(resolvedOptions.viewports) ?: return buState.domState.renderedAriaSnapshot(
+                    resolvedOptions
+                )
             val scrollState = buState.browserState.scrollState
             val viewportHeight = scrollState.viewportHeight.toDouble()
             val serializableTree = buState.domState.serializableTree
