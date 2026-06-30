@@ -151,7 +151,8 @@ function Print-Usage {
     Write-Host "  it          Run integration tests"
     Write-Host "  e2e         Run end-to-end tests"
     Write-Host "  cli         Run Rust Browser4 CLI tests from cli\browser4-cli"
-    Write-Host "  server   Launch mock site from browser4-tests\browser4-rest-tests"
+    Write-Host "  mock-site  Launch mock site from browser4-tests\browser4-rest-tests"
+    Write-Host "              (aliases: server, mocksite, mocksiteboot)"
     Write-Host "  rest        Run REST module tests"
     Write-Host "  skills      Run skills-focused agentic tests"
     Write-Host "  mcp         Run MCP-focused agentic tests"
@@ -178,7 +179,7 @@ function Print-Usage {
     Write-Host "  test.ps1 e2e                        # Run end-to-end tests"
     Write-Host "  test.ps1 cli                        # Run CLI tests (cargo test --test e2e -- --nocapture)"
     Write-Host "  test.ps1 cli --help                 # Run CLI tests with extra cargo test args"
-    Write-Host "  test.ps1 server -Dmock.site.port=18080"
+    Write-Host "  test.ps1 mock-site -Dmock.site.port=18080"
     Write-Host "  test.ps1 skills                     # Run skills-focused agentic tests"
     Write-Host "  test.ps1 mcp                        # Run MCP-focused agentic tests"
     Write-Host "  test.ps1 resume                     # Resume from the last failed module"
@@ -194,7 +195,7 @@ function Print-Usage {
 }
 
 function Exit-UnknownTestType([string]$testType) {
-    Write-Error "Unknown test type '$testType'. Valid test types: fast, it, e2e, cli, browser4-cli, main, server, rest, skills, mcp, rws, resume."
+    Write-Error "Unknown test type '$testType'. Valid test types: fast, it, e2e, cli, browser4-cli, main, mock-site, server, rest, skills, mcp, rws, resume."
     exit 1
 }
 
@@ -715,7 +716,7 @@ $launchTargets = $launchTargets | Select-Object -Unique
 
 # Validate: server must be run by itself
 if ($launchTargets.Count -gt 0 -and (($mavenTests.Count -gt 0) -or ($cliTests.Count -gt 0) -or ($rwsTests.Count -gt 0) -or ($launchTargets.Count -gt 1))) {
-    Write-Error "server must be run by itself. Pass any Maven properties after it, for example: test.ps1 server -Dmock.site.port=18080"
+    Write-Error "mock-site (or server) must be run by itself. Pass any Maven properties after it, for example: test.ps1 mock-site -Dmock.site.port=18080"
     exit 1
 }
 
