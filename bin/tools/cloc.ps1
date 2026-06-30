@@ -11,17 +11,27 @@
     The ref and date prefix are omitted when the ref is not provided and the
     commit date cannot be determined.
 
+    Progress (a spinner with elapsed time) is written to stderr so stdout
+    stays machine-readable. Use -Quiet to suppress all progress output.
+
 .PARAMETER Ref
     An optional Git ref (branch, tag, or commit) to check out before counting.
     When provided, it is included in the output prefix.
 
+.PARAMETER Quiet
+    Suppress progress messages. Only the result line is written to stdout.
+
 .EXAMPLE
     ./cloc.ps1
-    # Kotlin=24501,Java=18320
+    # [spinner] Kotlin=24501,Java=18320
 
 .EXAMPLE
     ./cloc.ps1 main
-    # main 2026/06/30 Kotlin=24501,Java=18320
+    # [spinner] main 2026/06/30 Kotlin=24501,Java=18320
+
+.EXAMPLE
+    ./cloc.ps1 -Quiet
+    # Kotlin=24501,Java=18320
 
 .NOTES
     Requires cloc (https://github.com/AlDanial/cloc) and Git to be on PATH.
@@ -30,12 +40,16 @@
 [CmdletBinding()]
 Param(
     [Parameter(Position = 0)]
-    [string] $Ref
+    [string] $Ref,
+
+    [switch] $Quiet
 )
 
 $ErrorActionPreference = 'Stop'
 
-# ── Helpers ──────────────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════
+# Helpers
+# ═══════════════════════════════════════════════════════════════════════
 
 function Get-CommitDate {
     try {
@@ -57,7 +71,7 @@ function Invoke-CLoc {
             $result = @{}
             foreach ($lang in $Languages) {
                 $entry = $json.PSObject.Properties | Where-Object { $_.Name -eq $lang }
-                if ($entry -and $entry.Value.code) {
+                if ($entry -and $null -ne $entry.Value.code) {
                     $result[$lang] = $entry.Value.code
                 }
             }
@@ -84,7 +98,63 @@ function Invoke-CLoc {
     return $result
 }
 
-# ── Main ─────────────────────────────────────────────────────────────
+# ── Spinner (runs in a background runspace so it animates while cloc blocks) ──
+
+function Start-Spinner {
+    param([string] $Message)
+
+    $state = @{
+        Stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+        Chars     = [char[]] @('⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏')
+        Index     = 0
+        Running   = $true
+    }
+
+    $runspace = [RunspaceFactory]::CreateRunspace()
+    $runspace.ApartmentState = 'STA'
+    $runspace.Open()
+    $runspace.SessionStateProxy.SetVariable('state', $state)
+    $runspace.SessionStateProxy.SetVariable('message', $Message)
+
+    $ps = [PowerShell]::Create()
+    $ps.Runspace = $runspace
+    [void] $ps.AddScript({
+        while ($state.Running) {
+            $c  = $state.Chars[$state.Index % $state.Chars.Length]
+            $el = [math]::Floor($state.Stopwatch.Elapsed.TotalSeconds)
+            [Console]::Error.Write("`r  {0} {1} ({2}s)   " -f $c, $message, $el)
+            $state.Index++
+            [Threading.Thread]::Sleep(100)
+        }
+    })
+    $handle = $ps.BeginInvoke()
+
+    return @{
+        Stopwatch = $state.Stopwatch
+        Runspace  = $runspace
+        PS        = $ps
+        Handle    = $handle
+    }
+}
+
+function Stop-Spinner {
+    param($State)
+    if (-not $State) { return }
+    try {
+        $State.Runspace.SessionStateProxy.GetVariable('state').Running = $false
+        [Threading.Thread]::Sleep(150)
+        $State.PS.EndInvoke($State.Handle)
+        $State.PS.Dispose()
+        $State.Runspace.Dispose()
+        $State.Stopwatch.Stop()
+        # Clear the spinner line.
+        [Console]::Error.Write("`r" + ' ' * 60 + "`r")
+    } catch { }
+}
+
+# ═══════════════════════════════════════════════════════════════════════
+# Main
+# ═══════════════════════════════════════════════════════════════════════
 
 # Optionally check out the requested ref.
 if ($Ref) {
@@ -93,8 +163,21 @@ if ($Ref) {
     } catch { }
 }
 
-$date   = Get-CommitDate
-$counts = Invoke-CLoc -Languages 'Kotlin', 'Java'
+$date = Get-CommitDate
+
+# Show spinner while cloc runs.
+$spinner = if (-not $Quiet) { Start-Spinner -Message 'Counting lines of code' }
+try {
+    $counts = Invoke-CLoc -Languages 'Kotlin', 'Java'
+} finally {
+    Stop-Spinner -State $spinner
+}
+
+# Emit elapsed time after spinner is cleared.
+if (-not $Quiet -and $spinner) {
+    $elapsed = [math]::Round($spinner.Stopwatch.Elapsed.TotalSeconds, 1)
+    Write-Host "  Done in ${elapsed}s" -ForegroundColor DarkGray
+}
 
 # Build the prefix: "ref YYYY/MM/DD"
 $prefixParts = @()
@@ -108,7 +191,7 @@ foreach ($lang in @('Kotlin', 'Java')) {
     $countParts += "${lang}=${n}"
 }
 
-# Emit a single output line.
+# Emit a single result line to stdout.
 $line = ''
 if ($prefixParts.Count -gt 0) {
     $line += ($prefixParts -join ' ') + ' '
