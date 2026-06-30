@@ -89,6 +89,7 @@
         <module>browser4-dependencies</module>
         <module>browser4-tests/browser4-tests-common</module>
         <module>browser4-core</module>
+        <module>browser4-plugins</module>
         <module>browser4-agent-tools</module>
         <module>browser4-agentic</module>
         <module>browser4-boot</module>
