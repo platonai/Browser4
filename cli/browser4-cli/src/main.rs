@@ -27,6 +27,7 @@ mod managed_processes;
 mod snapshot;
 mod snapshot_diff;
 mod state;
+mod tips;
 
 use std::collections::{HashMap, HashSet};
 use std::io::{IsTerminal, Read};
@@ -8940,6 +8941,9 @@ async fn run(
             );
         }
     }
+
+    // Show a relevant tip on stderr to help AI agents discover advanced features.
+    tips::show_tip(command);
 
     Ok(())
 }
