@@ -272,6 +272,105 @@ pub fn clear_loop_state(state_dir: Option<&Path>, name: Option<&str>) {
     let _ = fs::remove_file(loop_state_file(&dir, name));
 }
 
+/// Update the status field of a specific loop's persisted state.
+/// Returns the previous status if the loop existed.
+pub fn set_loop_status(
+    state_dir: Option<&Path>,
+    name: Option<&str>,
+    new_status: &str,
+) -> Option<String> {
+    read_loop_state(state_dir, name).map(|mut ls| {
+        let prev = ls.status.clone();
+        ls.status = new_status.to_string();
+        ls.updated_at = chrono::Utc::now().to_rfc3339();
+        let _ = write_loop_state(&ls, state_dir, name);
+        prev
+    })
+}
+
+/// Apply a status to all persisted loops whose current status matches
+/// `from_status_filter`. Returns the count of updated loops.
+pub fn set_all_loop_statuses_filtered(
+    state_dir: Option<&Path>,
+    from_status_filter: Option<&str>,
+    new_status: &str,
+) -> usize {
+    let mut updated = 0usize;
+    let dir = state_dir
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(resolve_default_state_dir);
+
+    // Default loop
+    if let Some(mut ls) = read_loop_state(state_dir, None) {
+        let match_filter = from_status_filter.map_or(true, |f| ls.status == f);
+        if match_filter && ls.status != new_status {
+            ls.status = new_status.to_string();
+            ls.updated_at = chrono::Utc::now().to_rfc3339();
+            let _ = write_loop_state(&ls, state_dir, None);
+            updated += 1;
+        }
+    }
+
+    // Named loops in loops/ subdirectory
+    let loops_dir = dir.join("loops");
+    if let Ok(dir_entries) = fs::read_dir(&loops_dir) {
+        for entry in dir_entries.flatten() {
+            let path = entry.path();
+            if path.extension().map_or(false, |ext| ext == "json") {
+                let name = path
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("")
+                    .to_string();
+                if let Some(mut ls) = read_loop_state(state_dir, Some(&name)) {
+                    let match_filter = from_status_filter.map_or(true, |f| ls.status == f);
+                    if match_filter && ls.status != new_status {
+                        ls.status = new_status.to_string();
+                        ls.updated_at = chrono::Utc::now().to_rfc3339();
+                        let _ = write_loop_state(&ls, state_dir, Some(&name));
+                        updated += 1;
+                    }
+                }
+            }
+        }
+    }
+    updated
+}
+
+/// Set the status of all loops (regardless of current status).
+#[allow(dead_code)]
+pub fn set_all_loop_statuses(state_dir: Option<&Path>, new_status: &str) -> usize {
+    set_all_loop_statuses_filtered(state_dir, None, new_status)
+}
+
+/// Clear all persisted loop states (for stop-all).
+pub fn clear_all_loop_states(state_dir: Option<&Path>) -> usize {
+    let dir = state_dir
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(resolve_default_state_dir);
+    let mut cleared = 0usize;
+
+    // Default loop
+    let default_path = loop_state_file(&dir, None);
+    if default_path.exists() {
+        let _ = fs::remove_file(&default_path);
+        cleared += 1;
+    }
+
+    // Named loops
+    let loops_dir = dir.join("loops");
+    if let Ok(dir_entries) = fs::read_dir(&loops_dir) {
+        for entry in dir_entries.flatten() {
+            let path = entry.path();
+            if path.extension().map_or(false, |ext| ext == "json") {
+                let _ = fs::remove_file(&path);
+                cleared += 1;
+            }
+        }
+    }
+    cleared
+}
+
 /// Entry in a loop listing.
 #[derive(Debug, Clone, Serialize)]
 pub struct LoopListEntry {
@@ -346,6 +445,178 @@ pub fn list_loop_states(state_dir: Option<&Path>) -> Vec<LoopListEntry> {
     });
 
     entries
+}
+
+// ---------------------------------------------------------------------------
+// Async task tracking (crawl, agent, swarm)
+// ---------------------------------------------------------------------------
+
+/// Represents a single async task tracked by the CLI.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AsyncTaskEntry {
+    /// Task ID returned by the server.
+    #[serde(rename = "taskId")]
+    pub task_id: String,
+    /// Command type: "agent", "crawl", or "swarm".
+    #[serde(rename = "command")]
+    pub command: String,
+    /// URL or task description submitted.
+    #[serde(rename = "description")]
+    pub description: String,
+    /// ISO-8601 timestamp when the task was submitted.
+    #[serde(rename = "submittedAt")]
+    pub submitted_at: String,
+    /// Last known status (empty until first poll).
+    #[serde(rename = "lastStatus", skip_serializing_if = "String::is_empty", default)]
+    pub last_status: String,
+}
+
+/// Persisted list of tracked async tasks.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct AsyncTaskList {
+    #[serde(rename = "tasks")]
+    pub tasks: Vec<AsyncTaskEntry>,
+}
+
+/// File name for async task persistence.
+const ASYNC_TASKS_FILE: &str = "async-tasks.json";
+
+fn async_tasks_path(state_dir: Option<&std::path::Path>) -> std::path::PathBuf {
+    let base = state_dir
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(resolve_default_state_dir);
+    base.join(ASYNC_TASKS_FILE)
+}
+
+/// Load the persisted async task list.
+pub fn read_async_tasks(state_dir: Option<&std::path::Path>) -> AsyncTaskList {
+    let path = async_tasks_path(state_dir);
+    match std::fs::read_to_string(&path) {
+        Ok(content) => serde_json::from_str(&content).unwrap_or_default(),
+        Err(_) => AsyncTaskList::default(),
+    }
+}
+
+/// Save an async task list to disk.
+pub fn write_async_tasks(list: &AsyncTaskList, state_dir: Option<&std::path::Path>) -> std::io::Result<()> {
+    let path = async_tasks_path(state_dir);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let content = serde_json::to_string_pretty(list)?;
+    std::fs::write(&path, content)
+}
+
+/// Add a task to the tracked list and persist.
+pub fn track_async_task(
+    task_id: &str,
+    command: &str,
+    description: &str,
+    state_dir: Option<&std::path::Path>,
+) -> std::io::Result<()> {
+    let mut list = read_async_tasks(state_dir);
+    list.tasks.push(AsyncTaskEntry {
+        task_id: task_id.to_string(),
+        command: command.to_string(),
+        description: description.to_string(),
+        submitted_at: chrono::Utc::now().to_rfc3339(),
+        last_status: String::new(),
+    });
+    write_async_tasks(&list, state_dir)
+}
+
+/// Update the last known status of a tracked task.
+pub fn update_async_task_status(
+    task_id: &str,
+    status: &str,
+    state_dir: Option<&std::path::Path>,
+) -> std::io::Result<()> {
+    let mut list = read_async_tasks(state_dir);
+    for entry in &mut list.tasks {
+        if entry.task_id == task_id {
+            entry.last_status = status.to_string();
+            break;
+        }
+    }
+    write_async_tasks(&list, state_dir)
+}
+
+/// Remove completed/failed tasks from the tracked list.
+pub fn prune_async_tasks(
+    state_dir: Option<&std::path::Path>,
+) -> std::io::Result<usize> {
+    let mut list = read_async_tasks(state_dir);
+    let before = list.tasks.len();
+    list.tasks.retain(|entry| {
+        !entry.last_status.contains("done")
+            && !entry.last_status.contains("error")
+            && !entry.last_status.contains("SC_OK")
+            && !entry.last_status.contains("OK")
+    });
+    let removed = before - list.tasks.len();
+    if removed > 0 {
+        write_async_tasks(&list, state_dir)?;
+    }
+    Ok(removed)
+}
+
+/// Clear all tracked async tasks.
+pub fn clear_async_tasks(state_dir: Option<&std::path::Path>) -> std::io::Result<()> {
+    write_async_tasks(&AsyncTaskList::default(), state_dir)
+}
+
+/// Format a list of tracked async tasks for CLI display.
+pub fn format_async_task_list(list: &AsyncTaskList) -> String {
+    if list.tasks.is_empty() {
+        return "No tracked async tasks.".to_string();
+    }
+
+    let mut out = Vec::new();
+    out.push(format!("{} tracked task(s):\n", list.tasks.len()));
+
+    // Column widths
+    let id_w = list.tasks.iter().map(|t| t.task_id.len()).max().unwrap_or(8).max(8);
+    let cmd_w = 8;
+    let desc_w = 40;
+
+    out.push(format!(
+        "  {:<id_w$}  {:<cmd_w$}  {:<desc_w$}  {}",
+        "TASK ID", "COMMAND", "DESCRIPTION", "STATUS",
+        id_w = id_w,
+        cmd_w = cmd_w,
+        desc_w = desc_w,
+    ));
+    out.push(format!(
+        "  {:-<id_w$}  {:-<cmd_w$}  {:-<desc_w$}  {}",
+        "", "", "", "------",
+        id_w = id_w,
+        cmd_w = cmd_w,
+        desc_w = desc_w,
+    ));
+
+    for entry in &list.tasks {
+        let desc = if entry.description.len() > desc_w {
+            format!("{}…", &entry.description[..desc_w - 1])
+        } else {
+            entry.description.clone()
+        };
+        let status = if entry.last_status.is_empty() {
+            "pending".to_string()
+        } else {
+            entry.last_status.clone()
+        };
+        out.push(format!(
+            "  {:<id_w$}  {:<cmd_w$}  {:<desc_w$}  {}",
+            entry.task_id,
+            entry.command,
+            desc,
+            status,
+            id_w = id_w,
+            cmd_w = cmd_w,
+            desc_w = desc_w,
+        ));
+    }
+    out.join("\n")
 }
 
 /// Convert a CLI element ref into the selector format expected by Browser4.

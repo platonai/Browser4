@@ -60,8 +60,9 @@ use managed_processes::{
 };
 use snapshot::{resolve_output_path, save_binary, save_snapshot, timestamped_filename};
 use state::{
-    clear_all_state, clear_state, read_state, resolve_default_state_dir, resolve_ref, write_state,
-    CliState, MousePosition,
+    clear_all_state, clear_state, format_async_task_list, prune_async_tasks,
+    read_async_tasks, read_state, resolve_default_state_dir, resolve_ref, track_async_task,
+    write_state, CliState, MousePosition,
 };
 
 const VERSION: &str = env!("BROWSER4_CLI_VERSION");
@@ -219,10 +220,20 @@ struct LoopArgs {
     name: Option<String>,
     /// True when `--stop` was specified — stop a running/persisted loop.
     stop: bool,
+    /// True when `--stop-all` was specified — stop and clear all loops.
+    stop_all: bool,
     /// True when `--status` was specified — show current loop state.
     status: bool,
     /// True when `--list` was specified — list all persisted loops.
     list: bool,
+    /// True when `--pause` was specified — pause a running loop.
+    pause: bool,
+    /// True when `--resume` was specified — resume a paused loop.
+    resume: bool,
+    /// True when `--pause-all` was specified — pause all running loops.
+    pause_all: bool,
+    /// True when `--resume-all` was specified — resume all paused loops.
+    resume_all: bool,
 }
 
 /// Commands that should NOT trigger a post-command snapshot.
@@ -270,12 +281,15 @@ fn no_snapshot_commands() -> HashSet<&'static str> {
         "agent-run",
         "agent-status",
         "agent-result",
+        "agent-list",
         "swarm-create",
         "swarm-submit",
         "swarm-query",
         "swarm-status",
         "swarm-result",
+        "swarm-list",
         "crawl",
+        "crawl-list",
         "domsnapshot",
         "domsnapshot-get",
         "domsnapshot-get-all",
@@ -2221,6 +2235,9 @@ async fn handle_snapshot(
             m.remove("filename");
             m.remove("raw");    // CLI-side flag, not a server parameter
             m.remove("stdout"); // CLI-side flag, not a server parameter
+            m.remove("page");      // CLI-side pagination, not a server parameter
+            m.remove("page-size"); // CLI-side pagination, not a server parameter
+            m.remove("all");       // CLI-side pagination, not a server parameter
         }
         a
     };
@@ -2365,8 +2382,8 @@ async fn handle_snapshot(
         // Show pagination info when the file is large
         if snap_len > 10_240 && !has_filter {
             eprintln!(
-                "💡 Tip: Snapshot is large ({} KB, {} lines). To focus the output, try:\n\
-                   --viewport, -vp <N>       Capture a specific viewport section\n\
+                "💡 Tip: Snapshot is large ({} KB, {} lines). To focus the output, read the page viewport by viewport — just like a human scrolls. Important content usually comes first:\n\
+                   --viewport, -v <N>       Capture a specific viewport (start with -v 0)\n\
                    -s, --selector <CSS>     Scope to a CSS selector\n\
                    -i, --interactive        Only show interactive elements\n\
                    -d, --depth <N>           Limit tree depth\n\
@@ -2581,6 +2598,42 @@ async fn handle_tool_command_with_options(
         cli_println!("{}", result);
         json_field("result", json!(&result));
     }
+
+    // Success confirmation for interaction commands.
+    let ref_val = tool_params.get("ref").and_then(|v| v.as_str()).unwrap_or("");
+    if !ref_val.is_empty() {
+        match tool_name {
+            "browser_click" => {
+                let is_double = tool_params
+                    .get("doubleClick")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                if is_double {
+                    cli_println!("✓ Double-clicked {}", ref_val);
+                } else {
+                    cli_println!("✓ Clicked {}", ref_val);
+                }
+            }
+            "browser_hover" => {
+                cli_println!("✓ Hovered {}", ref_val);
+            }
+            "browser_drag" => {
+                let end_ref = tool_params
+                    .get("endRef")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("?");
+                cli_println!("✓ Dragged {} → {}", ref_val, end_ref);
+            }
+            "browser_check" => {
+                cli_println!("✓ Checked {}", ref_val);
+            }
+            "browser_uncheck" => {
+                cli_println!("✓ Unchecked {}", ref_val);
+            }
+            _ => {} // No confirmation for other tools
+        }
+    }
+
     persist_active_selector(base_url, session_name, tracked_selector(tool_params))?;
     Ok(())
 }
@@ -3841,7 +3894,7 @@ fn format_pagination_footer(meta: &PaginationMeta) -> String {
 /// Extract pagination options from tool_params.
 /// Returns (page, page_size, show_all).
 ///
-/// Default page size is 100 **lines** (was 1024 characters prior to v4.12).
+/// Default page size is 500 **lines** (was 100 lines prior to v4.12).
 fn parse_page_opts(tool_params: &serde_json::Value) -> (usize, usize, bool) {
     let show_all = tool_params
         .get("all")
@@ -3863,7 +3916,7 @@ fn parse_page_opts(tool_params: &serde_json::Value) -> (usize, usize, bool) {
         .get("page-size")
         .and_then(|v| v.as_str())
         .and_then(|s| s.parse::<usize>().ok())
-        .unwrap_or(100);
+        .unwrap_or(500);
 
     (page, page_size, show_all)
 }
@@ -4135,6 +4188,23 @@ async fn handle_text_input_command(
                 cli_println!("{}", text);
             }
 
+            // Success confirmation: tell the user what was done.
+            let action_label = if tool_name == "browser_press_sequentially" {
+                "Typed"
+            } else {
+                "Filled"
+            };
+            if let Some(ref_sel) = element_ref {
+                cli_println!(
+                    "✓ {} '{}' into {}",
+                    action_label,
+                    expected_text,
+                    ref_sel
+                );
+            } else {
+                cli_println!("✓ {} '{}'", action_label, expected_text);
+            }
+
             // Optional --verify: confirm the text was applied.
             if verify {
                 let state = require_session(session_name)?;
@@ -4225,6 +4295,13 @@ async fn handle_press_command(
         Ok(text) => {
             if !text.is_empty() {
                 cli_println!("{}", text);
+            }
+
+            // Success confirmation.
+            if let Some(ref_sel) = element_ref {
+                cli_println!("✓ Pressed '{}' on {}", key_pressed, ref_sel);
+            } else {
+                cli_println!("✓ Pressed '{}'", key_pressed);
             }
 
             if verify {
@@ -4368,6 +4445,13 @@ async fn handle_select_command(
                 cli_println!("{}", text);
             }
 
+            // Success confirmation.
+            if let Some(ref_sel) = element_ref {
+                cli_println!("✓ Selected '{}' in {}", expected_value, ref_sel);
+            } else {
+                cli_println!("✓ Selected '{}'", expected_value);
+            }
+
             if verify {
                 let state = require_session(session_name)?;
                 let session_id = get_session_id(&state)?.to_string();
@@ -4495,9 +4579,13 @@ async fn handle_agent_run(
     cli_println!("Task submitted: {}", task_id);
     json_field("task_id", json!(&task_id));
     cli_println!(
-        "Use 'browser4-cli agent status {}' to check progress.",
+        "Use 'browser4-cli agent status {}' to check progress, or 'browser4-cli agent list' to view all tracked tasks.",
         task_id
     );
+
+    // Persist the task for cross-session tracking
+    let _ = track_async_task(&task_id, "agent", task, None);
+
     Ok(())
 }
 
@@ -4603,6 +4691,15 @@ async fn handle_agent_result(
     cli_println!("{}", result);
     json_field("task_id", json!(id));
     json_field("raw", json!(&result));
+    Ok(())
+}
+
+async fn handle_agent_list() -> Result<(), String> {
+    let _ = prune_async_tasks(None);
+    let list = read_async_tasks(None);
+    let filtered: Vec<_> = list.tasks.iter().filter(|t| t.command == "agent").cloned().collect();
+    let display = state::AsyncTaskList { tasks: filtered };
+    cli_println!("{}", format_async_task_list(&display));
     Ok(())
 }
 
@@ -4772,11 +4869,14 @@ async fn handle_swarm_submit(
             "url": u,
             "task_id": task_id,
         }));
+
+        // Persist each task for cross-session tracking
+        let _ = track_async_task(&task_id, "swarm", u, None);
     }
     json_field("submissions", json!(json_submissions));
 
     if urls.len() > 1 {
-        cli_println!("{} URL(s) submitted.", urls.len());
+        cli_println!("{} URL(s) submitted. Use 'browser4-cli swarm list' to view all tracked tasks.", urls.len());
     }
     Ok(())
 }
@@ -4923,6 +5023,24 @@ async fn handle_swarm_result(
     Ok(())
 }
 
+async fn handle_swarm_list() -> Result<(), String> {
+    let _ = prune_async_tasks(None);
+    let list = read_async_tasks(None);
+    let filtered: Vec<_> = list.tasks.iter().filter(|t| t.command == "swarm").cloned().collect();
+    let display = state::AsyncTaskList { tasks: filtered };
+    cli_println!("{}", format_async_task_list(&display));
+    Ok(())
+}
+
+async fn handle_crawl_list() -> Result<(), String> {
+    let _ = prune_async_tasks(None);
+    let list = read_async_tasks(None);
+    let filtered: Vec<_> = list.tasks.iter().filter(|t| t.command == "crawl").cloned().collect();
+    let display = state::AsyncTaskList { tasks: filtered };
+    cli_println!("{}", format_async_task_list(&display));
+    Ok(())
+}
+
 async fn handle_crawl(
     client: &Client,
     base_url: &str,
@@ -4942,6 +5060,22 @@ async fn handle_crawl(
     let task_id = task_id.trim().trim_matches('"').to_string();
     cli_println!("Crawl task submitted: {}", task_id);
     json_field("task_id", json!(task_id));
+
+    // Persist the task for cross-session tracking
+    let _ = track_async_task(&task_id, "crawl", url, None);
+
+    let background = tool_params
+        .get("background")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    if background {
+        cli_println!(
+            "Running in background. Use 'browser4-cli crawl result {}' to get results, or 'browser4-cli crawl list' to view all tracked tasks.",
+            task_id
+        );
+        return Ok(());
+    }
 
     let _depth = tool_params
         .get("depth")
@@ -5012,9 +5146,11 @@ async fn handle_crawl(
 /// after the command name).
 ///
 /// Recognises `--shell`, `--`, `--interval`/`-i`, `--count`/`-n`,
-/// `--timeout`/`-t`, and collects everything else as the task.
+/// `--timeout`/`-t`, `--pause`/`--resume`/`--pause-all`/`--resume-all`/`--stop-all`,
+/// and collects everything else as the task.
 const DEFAULT_LOOP_INTERVAL_SECS: u64 = 3600; // 1 hour
 const DEFAULT_LOOP_TIMEOUT_SECS: u64 = 604800; // 1 week
+const PAUSE_POLL_INTERVAL_SECS: u64 = 2; // How often to check for resume while paused
 
 fn parse_loop_args(args: &[String]) -> Result<LoopArgs, String> {
     let mut out = LoopArgs {
@@ -5041,8 +5177,15 @@ fn parse_loop_args(args: &[String]) -> Result<LoopArgs, String> {
             continue;
         }
 
+        // Control flags (no task required)
         if arg == "--stop" {
             out.stop = true;
+            i += 1;
+            continue;
+        }
+
+        if arg == "--stop-all" {
+            out.stop_all = true;
             i += 1;
             continue;
         }
@@ -5055,6 +5198,30 @@ fn parse_loop_args(args: &[String]) -> Result<LoopArgs, String> {
 
         if arg == "--list" {
             out.list = true;
+            i += 1;
+            continue;
+        }
+
+        if arg == "--pause" {
+            out.pause = true;
+            i += 1;
+            continue;
+        }
+
+        if arg == "--resume" {
+            out.resume = true;
+            i += 1;
+            continue;
+        }
+
+        if arg == "--pause-all" {
+            out.pause_all = true;
+            i += 1;
+            continue;
+        }
+
+        if arg == "--resume-all" {
+            out.resume_all = true;
             i += 1;
             continue;
         }
@@ -5089,17 +5256,42 @@ fn parse_loop_args(args: &[String]) -> Result<LoopArgs, String> {
         i += 1;
     }
 
-    // --stop, --status, and --list don't require a task, but reject combining with one
-    if out.stop || out.status || out.list {
+    // Flags that don't require a task, but reject combining with one
+    let no_task_flags = out.stop || out.stop_all || out.status || out.list
+        || out.pause || out.resume || out.pause_all || out.resume_all;
+
+    if no_task_flags {
         if !out.task_tokens.is_empty() {
-            let flag = if out.stop { "--stop" } else if out.status { "--status" } else { "--list" };
+            let flag = if out.stop { "--stop" }
+                else if out.stop_all { "--stop-all" }
+                else if out.status { "--status" }
+                else if out.list { "--list" }
+                else if out.pause { "--pause" }
+                else if out.resume { "--resume" }
+                else if out.pause_all { "--pause-all" }
+                else { "--resume-all" };
             return Err(format!(
                 "The {} flag cannot be combined with a task. Use just `browser4-cli loop {}`.",
                 flag, flag,
             ));
         }
+        // --list doesn't make sense with --name
         if out.list && out.name.is_some() {
             return Err("The --list and --name flags cannot be combined. Use just `browser4-cli loop --list`.".to_string());
+        }
+        // --pause-all, --resume-all, --stop-all don't need --name
+        if (out.pause_all || out.resume_all || out.stop_all) && out.name.is_some() {
+            let flag = if out.pause_all { "--pause-all" }
+                else if out.resume_all { "--resume-all" }
+                else { "--stop-all" };
+            return Err(format!(
+                "The {} flag cannot be combined with --name. It applies to all loops.",
+                flag
+            ));
+        }
+        // --pause and --resume are mutually exclusive
+        if out.pause && out.resume {
+            return Err("The --pause and --resume flags are mutually exclusive.".to_string());
         }
         return Ok(out);
     }
@@ -5110,7 +5302,7 @@ fn parse_loop_args(args: &[String]) -> Result<LoopArgs, String> {
     }
 
     if out.task_tokens.is_empty() {
-        return Err("A task is required. Provide a plain text command, x-sql query, --shell <cmd>, -- <browser4-cli subcommand>, --list, --stop, or --status.".to_string());
+        return Err("A task is required. Provide a plain text command, x-sql query, --shell <cmd>, -- <browser4-cli subcommand>, --list, --stop, --status, --pause, or --resume.".to_string());
     }
 
     Ok(out)
@@ -5230,7 +5422,7 @@ async fn run_browser4_cli(tokens: &[String]) -> Result<String, String> {
 }
 
 /// Handle the `loop` command — execute a task periodically with persistence,
-/// resume, and stop support.
+/// resume, pause, and stop support.
 async fn handle_loop(
     client: &Client,
     base_url: &str,
@@ -5250,6 +5442,7 @@ async fn handle_loop(
             for entry in &entries {
                 let (icon, status_label) = match entry.status.as_str() {
                     "running" => ("▶", "running"),
+                    "paused" => ("⏸", "paused"),
                     "stopped" => ("⏹", "stopped"),
                     "completed" => ("✓", "completed"),
                     _ => ("?", &entry.status[..]),
@@ -5259,17 +5452,20 @@ async fn handle_loop(
                 } else {
                     entry.name.clone()
                 };
+                let count_display = match entry.status.as_str() {
+                    "completed" => entry.iterations_completed.to_string(),
+                    _ => format!("{}", entry.iterations_completed),
+                };
                 cli_println!(
-                    "  {}  {:<20}  {:>3}/{:>3}  {}  {}",
+                    "  {}  {:<20}  {:>3} iters  {:<8}  {}",
                     icon,
                     name_display,
-                    entry.iterations_completed,
-                    if entry.status == "completed" { "" } else { "?" },
+                    count_display,
                     status_label,
                     entry.task,
                 );
             }
-            cli_println!("\nUse --status [name] for details, --stop [name] to clear.");
+            cli_println!("\nUse --status [name] for details, --pause/--resume [name] to control, --stop [name] to clear.");
         }
         json_field("loops", json!(entries));
         return Ok(());
@@ -5287,6 +5483,7 @@ async fn handle_loop(
                 };
                 let (icon, status_label) = match ls.status.as_str() {
                     "running" => ("▶", "Running"),
+                    "paused" => ("⏸", "Paused"),
                     "stopped" => ("⏹", "Stopped by user"),
                     "completed" => ("✓", "Completed"),
                     _ => ("?", &ls.status[..]),
@@ -5360,10 +5557,10 @@ async fn handle_loop(
         match state::read_loop_state(None, loop_name) {
             Some(ls) => {
                 let total = ls.iterations_completed;
-                let was_running = ls.status == "running";
+                let was_active = ls.status == "running" || ls.status == "paused";
                 state::clear_loop_state(None, loop_name);
                 let label = loop_name.unwrap_or("default");
-                if was_running {
+                if was_active {
                     cli_println!(
                         "⏹  Loop \"{}\" stopped. {} iteration(s) completed. State cleared.",
                         label, total
@@ -5389,6 +5586,136 @@ async fn handle_loop(
                 cli_println!("State file: {}", state_path.display());
             }
         }
+        return Ok(());
+    }
+
+    // --- --stop-all: clear all persisted loop states ---
+    if parsed.stop_all {
+        let entries = state::list_loop_states(None);
+        if entries.is_empty() {
+            cli_println!("No persisted loops to stop.");
+            return Ok(());
+        }
+        let count = entries.len();
+        let cleared = state::clear_all_loop_states(None);
+        cli_println!(
+            "⏹  Stopped and cleared {} loop(s) ({} state file(s) removed).",
+            count, cleared
+        );
+        for entry in &entries {
+            cli_println!("   - {} ({} iters, was {})", entry.name, entry.iterations_completed, entry.status);
+        }
+        json_field("stopped_all", json!(true));
+        json_field("cleared_count", json!(cleared));
+        json_field("loops", json!(entries));
+        return Ok(());
+    }
+
+    // --- --pause: set loop status to "paused" ---
+    if parsed.pause {
+        let state_path = state::loop_state_path(None, loop_name);
+        match state::set_loop_status(None, loop_name, "paused") {
+            Some(prev) => {
+                let label = loop_name.unwrap_or("default");
+                if prev == "paused" {
+                    cli_println!("⏸  Loop \"{}\" is already paused.", label);
+                } else {
+                    cli_println!(
+                        "⏸  Loop \"{}\" paused (was {}). Use `browser4-cli loop --resume{}` to continue.",
+                        label,
+                        prev,
+                        if parsed.name.is_some() { format!(" --name={}", parsed.name.as_ref().unwrap()) } else { String::new() },
+                    );
+                }
+                cli_println!("   State file: {}", state_path.display());
+                json_field("paused", json!(true));
+                json_field("name", json!(label));
+                json_field("previous_status", json!(prev));
+            }
+            None => {
+                if let Some(n) = loop_name {
+                    cli_println!("No loop named \"{}\" to pause.", n);
+                    cli_println!("State file: {}", state_path.display());
+                } else {
+                    cli_println!("No active loop to pause.");
+                }
+            }
+        }
+        return Ok(());
+    }
+
+    // --- --resume: set loop status to "running" ---
+    if parsed.resume {
+        let state_path = state::loop_state_path(None, loop_name);
+        match state::set_loop_status(None, loop_name, "running") {
+            Some(prev) => {
+                let label = loop_name.unwrap_or("default");
+                if prev == "running" {
+                    cli_println!("▶  Loop \"{}\" is already running.", label);
+                } else {
+                    cli_println!("▶  Loop \"{}\" resumed (was {}).", label, prev);
+                }
+                cli_println!("   State file: {}", state_path.display());
+                json_field("resumed", json!(true));
+                json_field("name", json!(label));
+                json_field("previous_status", json!(prev));
+            }
+            None => {
+                if let Some(n) = loop_name {
+                    cli_println!("No loop named \"{}\" to resume.", n);
+                    cli_println!("State file: {}", state_path.display());
+                } else {
+                    cli_println!("No active loop to resume.");
+                    cli_println!("State file: {}", state_path.display());
+                    cli_println!("Start one with `browser4-cli loop <task>`.");
+                }
+            }
+        }
+        return Ok(());
+    }
+
+    // --- --pause-all: pause all running loops ---
+    if parsed.pause_all {
+        let entries = state::list_loop_states(None);
+        let running: Vec<_> = entries.iter().filter(|e| e.status == "running").collect();
+        if running.is_empty() {
+            cli_println!("No running loops to pause.");
+            if !entries.is_empty() {
+                cli_println!("Use --list to see all loops.");
+            }
+            return Ok(());
+        }
+        let updated = state::set_all_loop_statuses_filtered(None, Some("running"), "paused");
+        cli_println!("⏸  Paused {} running loop(s):", updated);
+        for entry in &running {
+            cli_println!("   - {}", entry.name);
+        }
+        cli_println!("\nUse `browser4-cli loop --resume-all` to resume all, or --resume --name=<n> for a specific loop.");
+        json_field("paused_all", json!(true));
+        json_field("paused_count", json!(updated));
+        json_field("loops", json!(running));
+        return Ok(());
+    }
+
+    // --- --resume-all: resume all paused loops ---
+    if parsed.resume_all {
+        let entries = state::list_loop_states(None);
+        let paused: Vec<_> = entries.iter().filter(|e| e.status == "paused").collect();
+        if paused.is_empty() {
+            cli_println!("No paused loops to resume.");
+            if !entries.is_empty() {
+                cli_println!("Use --list to see all loops.");
+            }
+            return Ok(());
+        }
+        let updated = state::set_all_loop_statuses_filtered(None, Some("paused"), "running");
+        cli_println!("▶  Resumed {} paused loop(s):", updated);
+        for entry in &paused {
+            cli_println!("   - {}", entry.name);
+        }
+        json_field("resumed_all", json!(true));
+        json_field("resumed_count", json!(updated));
+        json_field("loops", json!(paused));
         return Ok(());
     }
 
@@ -5439,6 +5766,9 @@ async fn handle_loop(
             overall_start = std::time::Instant::now()
                 .checked_sub(elapsed)
                 .unwrap_or(std::time::Instant::now());
+            if existing.status == "paused" {
+                cli_println!("  Loop was paused — resuming now.");
+            }
         } else {
             // Different task — warn and start fresh
             cli_println!(
@@ -5462,7 +5792,7 @@ async fn handle_loop(
             (Some(n), Some(t)) => format!(", up to {} iterations or {}s", n, t),
             (Some(n), None) => format!(", up to {} iterations", n),
             (None, Some(t)) => format!(", up to {}s", t),
-            (None, None) => " (Ctrl+C to stop)".to_string(),
+            (None, None) => " (Ctrl+C to stop, --pause to pause)".to_string(),
         }
     );
     cli_println!("  Mode: {}", mode_label);
@@ -5497,7 +5827,7 @@ async fn handle_loop(
     );
 
     loop {
-        // --- check for external stop signal ---
+        // --- check for external signals (stop / pause) ---
         if let Some(existing) = state::read_loop_state(None, loop_name) {
             if existing.status == "stopped" {
                 cli_println!(
@@ -5505,6 +5835,55 @@ async fn handle_loop(
                     iteration.saturating_sub(1)
                 );
                 break;
+            }
+            if existing.status == "paused" {
+                cli_println!(
+                    "\n⏸  Pause signal detected after {} iteration(s). Waiting for resume...",
+                    iteration.saturating_sub(1)
+                );
+                cli_println!(
+                    "   Use `browser4-cli loop --resume{}` to continue, or --stop to clear.",
+                    if let Some(ref n) = parsed.name {
+                        format!(" --name={}", n)
+                    } else {
+                        String::new()
+                    }
+                );
+
+                // Poll until resumed or stopped
+                loop {
+                    if let Some(current) = state::read_loop_state(None, loop_name) {
+                        if current.status == "stopped" {
+                            cli_println!("Stop signal detected while paused. Halting.");
+                            // Break outer loop by using the stopped check at top
+                            break;
+                        }
+                        if current.status == "running" {
+                            cli_println!("▶  Resumed — continuing loop.\n");
+                            break;
+                        }
+                    }
+                    // Also check for Ctrl+C while paused
+                    tokio::select! {
+                        _ = tokio::time::sleep(std::time::Duration::from_secs(PAUSE_POLL_INTERVAL_SECS)) => {},
+                        _ = tokio::signal::ctrl_c() => {
+                            cli_println!(
+                                "\n\nInterrupted while paused. {} iteration(s) completed.",
+                                iteration.saturating_sub(1)
+                            );
+                            cli_println!(
+                                "State remains paused. Use --resume to continue or --stop to clear."
+                            );
+                            json_field("iterations", json!(results));
+                            json_field("total_iterations", json!(iteration.saturating_sub(1)));
+                            json_field("status", json!("paused"));
+                            return Ok(());
+                        },
+                    }
+                }
+
+                // Re-check status after the inner loop to handle "stopped"
+                continue;
             }
         }
 
@@ -5609,29 +5988,53 @@ async fn handle_loop(
             }
 
             if remaining > std::time::Duration::ZERO {
-                // Race: sleep vs ctrl+c
-                tokio::select! {
-                    _ = tokio::time::sleep(remaining) => {},
-                    _ = tokio::signal::ctrl_c() => {
-                        // Persist progress on Ctrl+C so it can be resumed
-                        persist(
-                            &parsed.task_tokens, mode_key, parsed.interval_secs,
-                            parsed.count, parsed.timeout_secs,
-                            iteration.saturating_sub(1), &started_at, "running",
-                        );
-                        let state_path = state::loop_state_path(None, loop_name);
-                        cli_println!(
-                            "\n\n⏸  Interrupted — {} of {} iteration(s) completed.",
-                            iteration.saturating_sub(1),
-                            parsed.count.map_or("∞".to_string(), |n| n.to_string()),
-                        );
-                        cli_println!(
-                            "   State saved to {}. Run the same command to resume, \
-                             or `browser4-cli loop --stop` to clear.",
-                            state_path.display(),
-                        );
-                        break;
-                    },
+                // Race: sleep vs ctrl+c vs pause signal
+                // Use a polling loop so we can detect external pause/stop signals
+                let poll_interval = std::time::Duration::from_secs(PAUSE_POLL_INTERVAL_SECS);
+                let mut slept = std::time::Duration::ZERO;
+
+                while slept < remaining {
+                    let chunk = std::cmp::min(poll_interval, remaining - slept);
+                    tokio::select! {
+                        _ = tokio::time::sleep(chunk) => {
+                            slept += chunk;
+                        },
+                        _ = tokio::signal::ctrl_c() => {
+                            // Persist progress on Ctrl+C so it can be resumed
+                            persist(
+                                &parsed.task_tokens, mode_key, parsed.interval_secs,
+                                parsed.count, parsed.timeout_secs,
+                                iteration.saturating_sub(1), &started_at, "running",
+                            );
+                            let state_path = state::loop_state_path(None, loop_name);
+                            cli_println!(
+                                "\n\n⏸  Interrupted — {} of {} iteration(s) completed.",
+                                iteration.saturating_sub(1),
+                                parsed.count.map_or("∞".to_string(), |n| n.to_string()),
+                            );
+                            cli_println!(
+                                "   State saved to {}. Run the same command to resume, \
+                                 or `browser4-cli loop --stop` to clear.",
+                                state_path.display(),
+                            );
+                            json_field("iterations", json!(results));
+                            json_field("total_iterations", json!(iteration.saturating_sub(1)));
+                            return Ok(());
+                        },
+                    }
+
+                    // Check for external pause/stop signal during sleep
+                    if let Some(current) = state::read_loop_state(None, loop_name) {
+                        if current.status == "stopped" || current.status == "paused" {
+                            // Persist and let the top-of-loop check handle it
+                            persist(
+                                &parsed.task_tokens, mode_key, parsed.interval_secs,
+                                parsed.count, parsed.timeout_secs,
+                                iteration.saturating_sub(1), &started_at, &current.status,
+                            );
+                            break; // exit the sleep loop, top-of-loop will handle
+                        }
+                    }
                 }
             }
         }
@@ -6679,6 +7082,9 @@ fn should_ensure_server_running(command: &str) -> bool {
         && command != "stop"
         && command != "status"
         && command != "doctor"
+        && command != "agent-list"
+        && command != "crawl-list"
+        && command != "swarm-list"
 }
 
 // ---------------------------------------------------------------------------
@@ -6723,11 +7129,14 @@ fn preferred_spaced_command_form(command: &str) -> Option<&'static str> {
         "agent-run" => Some("agent run"),
         "agent-status" => Some("agent status"),
         "agent-result" => Some("agent result"),
+        "agent-list" => Some("agent list"),
         "swarm-create" => Some("swarm create"),
         "swarm-submit" => Some("swarm submit"),
         "swarm-query" => Some("swarm query"),
         "swarm-status" => Some("swarm status"),
         "swarm-result" => Some("swarm result"),
+        "swarm-list" => Some("swarm list"),
+        "crawl-list" => Some("crawl list"),
         "co-create" => Some("swarm create"),
         "co-submit" => Some("swarm submit"),
         "co-query" => Some("swarm query"),
@@ -7247,7 +7656,8 @@ fn compile_batch_request(
             }
             "list" | "close-all" | "kill-all" | "delete-data" | "install" | "uninstall"
             | "upgrade" | "agent-run" | "agent-status" | "agent-result" | "swarm-create"
-            | "swarm-submit" | "swarm-query" | "swarm-status" | "swarm-result" => {
+            | "swarm-submit" | "swarm-query" | "swarm-status" | "swarm-result"
+            | "agent-list" | "crawl-list" | "swarm-list" => {
                 if push_batch_local_failure(
                     &mut entries,
                     spec,
@@ -8326,6 +8736,9 @@ async fn run(
         "agent-result" => {
             handle_agent_result(&client, &base_url, &tool_params).await?;
         }
+        "agent-list" => {
+            handle_agent_list().await?;
+        }
         // Swarm commands
         "swarm-create" => {
             handle_swarm_create(
@@ -8348,6 +8761,9 @@ async fn run(
         "swarm-result" => {
             handle_swarm_result(&client, &base_url, &tool_params).await?;
         }
+        "swarm-list" => {
+            handle_swarm_list().await?;
+        }
         "crawl" => {
             handle_crawl(
                 &client,
@@ -8356,6 +8772,9 @@ async fn run(
                 global.session_name.as_deref(),
             )
             .await?;
+        }
+        "crawl-list" => {
+            handle_crawl_list().await?;
         }
         "loop" => {
             handle_loop(&client, &base_url, global).await?;
@@ -10401,7 +10820,7 @@ mod tests {
         let params = json!({});
         let (page, page_size, show_all) = parse_page_opts(&params);
         assert_eq!(page, 1);
-        assert_eq!(page_size, 100);
+        assert_eq!(page_size, 500);
         assert!(!show_all);
     }
 
@@ -10417,16 +10836,16 @@ mod tests {
     #[test]
     fn test_format_pagination_footer() {
         let meta = PaginationMeta {
-            total_chars: 5000,
-            total_lines: 500,
+            total_chars: 25000,
+            total_lines: 2500,
             current_page: 1,
             total_pages: 5,
-            page_size: 100,
+            page_size: 500,
             is_truncated: true,
         };
         let footer = format_pagination_footer(&meta);
         assert!(footer.contains("Page 1/5"));
-        assert!(footer.contains("100 lines of 500 total"));
+        assert!(footer.contains("500 lines of 2500 total"));
         assert!(footer.contains("--page N"));
         assert!(footer.contains("--all"));
     }
