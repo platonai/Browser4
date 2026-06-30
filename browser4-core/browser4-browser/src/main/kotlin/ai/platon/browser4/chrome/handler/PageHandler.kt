@@ -75,7 +75,12 @@ class PageHandler constructor(
      * Fetches the current ARIA snapshot of the page, which is a YAML representation of the accessibility tree.
      * */
     suspend fun ariaSnapshot(): String {
-        return ariaSnapshot(AriaSnapshotOptions())
+        val options = AriaSnapshotOptions()
+        val result = ariaSnapshot(options)
+        lastBrowserUseState?.let { state ->
+            return buildViewportHeader(state) + result + buildViewportFooter(state, options)
+        }
+        return result
     }
 
     /**
@@ -101,7 +106,8 @@ class PageHandler constructor(
         }
 
         // Join snapshots from disjoint viewport ranges using YAML document separator
-        return nanoTrees.joinToString("\n---\n") { it.ariaSnapshot }
+        val snapContent = nanoTrees.joinToString("\n---\n") { it.ariaSnapshot }
+        return buildViewportHeader(buState) + snapContent + buildViewportFooter(buState, AriaSnapshotOptions())
     }
 
     /**
@@ -127,7 +133,7 @@ class PageHandler constructor(
         lastBrowserUseState = buState
 
         // If viewports are specified, use existing viewport filtering then render with options
-        if (resolvedOptions.viewports != null) {
+        val snapContent = if (resolvedOptions.viewports != null) {
             val viewportIndices = ViewportSpec.parse(resolvedOptions.viewports) ?: return buState.domState.renderedAriaSnapshot(resolvedOptions)
             val scrollState = buState.browserState.scrollState
             val viewportHeight = scrollState.viewportHeight.toDouble()
@@ -139,10 +145,12 @@ class PageHandler constructor(
                 val endY = (endIdx + 1) * viewportHeight
                 serializableTree.toNanoTreeInRange(startY, endY)
             }
-            return nanoTrees.joinToString("\n---\n") { NanoAriaSnapshotRenderer.render(it, resolvedOptions) }
+            nanoTrees.joinToString("\n---\n") { NanoAriaSnapshotRenderer.render(it, resolvedOptions) }
+        } else {
+            buState.domState.renderedAriaSnapshot(resolvedOptions)
         }
 
-        return buState.domState.renderedAriaSnapshot(resolvedOptions)
+        return buildViewportHeader(buState) + snapContent + buildViewportFooter(buState, resolvedOptions)
     }
 
     /**
@@ -165,6 +173,50 @@ class PageHandler constructor(
         }
         result.add(start to end)
         return result
+    }
+
+    /**
+     * Build a YAML comment header with viewport state metadata.
+     * Helps AI agents understand the current viewport position and page dimensions.
+     */
+    private fun buildViewportHeader(buState: BrowserUseState): String {
+        val s = buState.browserState.scrollState
+        return buildString {
+            appendLine("# Viewport State")
+            appendLine("# - processingViewport: ${s.processingViewport}")
+            appendLine("# - viewportHeight: ${s.viewportHeight}px")
+            appendLine("# - viewportsTotal: ${s.viewportsTotal}")
+            appendLine("# - hiddenTopHeight: ${s.hiddenTopHeight}px")
+            appendLine("# - hiddenBottomHeight: ${s.hiddenBottomHeight}px")
+            appendLine("#")
+        }
+    }
+
+    /**
+     * Build a YAML comment footer with viewport navigation guidance.
+     * When the page spans multiple viewports, suggests reading the page viewport by
+     * viewport — just like a human scrolls through a long page.
+     */
+    private fun buildViewportFooter(buState: BrowserUseState, options: AriaSnapshotOptions): String {
+        val s = buState.browserState.scrollState
+        if (s.viewportsTotal <= 1) return ""
+
+        val currentViewport = s.processingViewport
+        return buildString {
+            appendLine("# ---")
+            appendLine("# This page has ${s.viewportsTotal} viewports. You are currently viewing viewport $currentViewport.")
+            appendLine("# To read the page viewport by viewport (like a human scrolling):")
+            if (currentViewport > 0) {
+                appendLine("#   snapshot --viewport=0          # view the top of the page")
+            }
+            if (currentViewport < s.viewportsTotal - 1) {
+                val next = currentViewport + 1
+                appendLine("#   snapshot --viewport=$next          # scroll down to viewport $next")
+            }
+            appendLine("#   snapshot --viewport=0-${s.viewportsTotal - 1}    # capture all viewports at once")
+            appendLine("#   snapshot --viewport=all       # capture all viewports (same as above)")
+            appendLine("#")
+        }
     }
 
     /**

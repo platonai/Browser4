@@ -47,7 +47,7 @@ SELECT
     DOM_FIRST_IMG(DOM, 'img.thumbnail') AS image,
     STR_DEFAULT_IF_BLANK(DOM_FIRST_TEXT(DOM, '.description'), 'N/A') AS description
 FROM DOM_LOAD_AND_SELECT(
-    'https://example.com/products?-expires=1h',
+    'https://example.com/products -expires 1h',
     '.product-card',
     1, 20
 )

@@ -65,7 +65,7 @@ SELECT DOM_TEXT(DOM_FETCH('https://example.com/live-prices'));
 
 -- Equivalent via DOM_LOAD_AND_SELECT with refresh option
 SELECT DOM_TEXT(DOM)
-FROM DOM_LOAD_AND_SELECT('https://example.com/live-prices?-expires=0', ':root');
+FROM DOM_LOAD_AND_SELECT('https://example.com/live-prices -expires 0', ':root');
 ```
 
 ---

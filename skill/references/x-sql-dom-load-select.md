@@ -24,7 +24,7 @@ Loads a web page and immediately selects elements matching a CSS query. Returns 
 **Parameters:**
 | Param | Type | Default | Description |
 |-------|------|---------|-------------|
-| `url` | `String` | required | The URL to load (can include load options via `-i`/`-expires` query args) |
+| `url` | `String` | required | The URL to load. Append space-separated load options (e.g. `https://example.com -expires 1h`) to control caching, rendering, etc. |
 | `cssQuery` | `String` | required | CSS selector to match elements on the page |
 | `offset` | `Int` | `1` | 1-based offset into the matched element set |
 | `limit` | `Int` | `MAX_VALUE` | Maximum number of elements to return |
@@ -43,7 +43,7 @@ FROM DOM_LOAD_AND_SELECT('https://example.com', 'article h2');
 
 -- Load with expiration control (fetch fresh if older than 1 hour)
 SELECT DOM_FIRST_TEXT(DOM, 'title')
-FROM DOM_LOAD_AND_SELECT('https://example.com?-expires=1h', 'h1');
+FROM DOM_LOAD_AND_SELECT('https://example.com -expires 1h', 'h1');
 
 -- Select only the first 5 product cards
 SELECT DOM_TEXT(DOM) AS product_name
