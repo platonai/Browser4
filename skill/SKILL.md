@@ -8,31 +8,47 @@ allowed-tools: Bash(browser4-cli:*)
 
 Browser automation CLI for AI agents — Chrome/Chromium via CDP with accessibility-tree snapshots.
 
-## Installation
+## Quick Start (Core Interaction Loop)
 
-Requires Node.js.
+Every browser4-cli session follows this pattern. Commit it to memory:
 
-```bash
-npm install -g browser4-cli
-browser4-cli install              # install native binary (recommended)
-browser4-cli install --tag=v4.9.3 # pin a specific version
+```
+1. NAVIGATE    browser4-cli goto <url>              # auto-opens/reconnects session
+2. SNAPSHOT    browser4-cli snapshot -v 0            # capture accessibility tree (viewport 0 = top)
+3. INTERACT    browser4-cli click <ref>              # use refs from the snapshot
+              browser4-cli fill <ref> <value>
+              browser4-cli press Enter
+4. RE-SNAPSHOT browser4-cli snapshot -v 0            # ⚠️ REFS ARE SINGLE-USE — re-snapshot after EVERY interaction
+5. EXTRACT     browser4-cli domsnapshot get ...      # or eval, or X-SQL (see Choosing an Extraction Method)
 ```
 
-Bootstrap scripts (alternative to npm):
+> **🔴 THE GOLDEN RULE: Refs are single-use.** Element refs (`e5`, `e12`) are Chrome DevTools Protocol backend node IDs — ephemeral integers that become invalid after ANY page-modifying command (click, type, fill, goto, reload, tab switch). Always re-snapshot before using refs. Never store refs across interactions.
 
-**Windows (PowerShell):**
-```powershell
-irm https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.ps1 | iex
-browser4-cli install
-```
+### Choosing an Extraction Method
 
-**Linux / macOS (bash):**
+| Method | Best for | Avoid for |
+|--------|----------|-----------|
+| **`snapshot` + refs** | Interactive workflows (click, fill, navigate) | Static data extraction |
+| **`domsnapshot get`** | Extracting specific fields via CSS selectors | Deeply nested selectors (may return `[]`); fall back to `eval` or X-SQL |
+| **`eval --json`** | Live DOM access, complex JS transformations | Windows/bash quoting (use `--stdin` or `--file` to avoid escaping) |
+| **X-SQL** | Structured extraction with filtering/sorting, no quoting pain | Interactive workflows, live page manipulation |
+| **`extract` / `summarize`** | Natural language extraction, AI-powered | High-volume extraction (cost/latency); requires LLM API key |
+
+### Minimal Session (Copy-Paste Template)
+
 ```bash
-curl -fsSL https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.sh | bash
-browser4-cli install
+browser4-cli goto "https://example.com"
+browser4-cli snapshot -v 0          # read the page; note refs for elements you need
+browser4-cli fill <ref> "<value>"   # interact
+browser4-cli press Enter
+browser4-cli wait --load=networkidle
+browser4-cli snapshot -v 0          # re-snapshot after interaction
+browser4-cli domsnapshot get text "<css-selector>"   # extract data
 ```
 
 ## Concepts
+
+> **Installation:** See [Installation](#installation) at the bottom of this file. The tool is assumed already installed.
 
 ### Snapshots & Element References
 
@@ -139,6 +155,7 @@ browser4-cli mousewheel <dx> <dy>
 
 ```bash
 browser4-cli snapshot                              # capture accessibility tree (compact + boxes by default)
+browser4-cli snapshot --auto-diff                  # diff against previous snapshot — show only what changed
 browser4-cli snapshot --filename=result.yaml       # named output (for workflow artifacts)
 browser4-cli snapshot --no-boxes                   # omit bounding boxes to reduce output size
 browser4-cli snapshot -i -d 5                      # interactive only, depth 5
@@ -152,7 +169,10 @@ browser4-cli snapshot --viewport=0,2,4             # capture specific viewports 
 browser4-cli snapshot --viewport=1-3               # capture viewports 1 through 3
 ```
 
-Each snapshot now includes a `# Viewport State` header with metadata and each node shows `[box=x,y,width,height]` by default. The bounding box provides the positional data (`top`, `left`, `width`, `height`) that powers **PowerCSS `:expr()` selectors** — query nodes by visual features (size, position, content density) in X-SQL queries and `domsnapshot get` commands. See [references/power-dom.md](references/power-dom.md).
+Each snapshot now includes a `# Viewport State` header with metadata and each node shows `[box=x,y,width,height]` by default.
+The bounding box provides the positional data (`top`, `left`, `width`, `height`) that powers **PowerCSS `:expr()` selectors**
+— query nodes by visual features (size, position, content density) in X-SQL queries and `domsnapshot get` commands.
+See [references/power-dom.md](references/power-dom.md).
 
 Pagination options for `--stdout`/`--raw` output:
 
@@ -193,26 +213,15 @@ Supported grep options: `-i` (ignore-case), `-A N` (after-context), `-B N` (befo
 | `--stdout` | Print snapshot content to stdout (for piping); alias: `--raw` |
 | `--raw` | Alias for `--stdout` |
 
-> **Tip:** On content-heavy pages (e-commerce, search results), snapshots can exceed 256KB.
-> **Read the page viewport by viewport — just like a human scrolls.** Important content usually
-> appears at the top of the page first; `--viewport=0` captures the most relevant viewport.
-> Use `--viewport=1`, `--viewport=2`, etc. to continue down the page as needed:
-> ```bash
-> browser4-cli snapshot -v 0        # top of page — usually the most important content
-> browser4-cli snapshot -v 1        # next scroll down
-> browser4-cli snapshot -v 0-2      # first three viewports at once
-> ```
-> Other options for keeping output manageable: `-d 5`, `-s "<selector>"`, `-i`.
-> Compact mode (on by default) strips empty structural wrappers.
-> Never cat full snapshot files — use `domsnapshot get` for structured extraction.
-> Use `snapshot grep` to search the YAML accessibility tree directly without loading it into an editor.
-> For `--stdout` output, use `--page 1` for the first page or `--page-size` to control pagination.
->
-> **⚠️ Interactive mode (`-i`) on e-commerce sites:** Many e-commerce product cards use generic `<div>`
-> containers (not semantic `listitem`/`article` roles). Interactive mode strips these, hiding product
-> listings from the snapshot. For shopping/search pages, use `--viewport=0` to read the top results
-> first, or `-d 4` (shallow depth) over `-i`,
-> or use `domsnapshot inspect` + `domsnapshot get` for structured data extraction.
+> **🔴 Don't cat snapshot files.** Snapshots can exceed 256KB. Use these strategies instead:
+> - **Viewport pagination** (first choice): `snapshot -v 0`, `snapshot -v 1`, `snapshot -v 0-2`
+> - **Reduce depth**: `snapshot -d 5`
+> - **Scope to selector**: `snapshot -s "<css-selector>"`
+> - **Interactive only**: `snapshot -i`
+> - **Search don't read**: `snapshot grep <pattern>`
+> - **Stdout with pagination**: `snapshot --stdout --page 1 --page-size 500`
+
+> **⚠️ Interactive mode (`-i`) on e-commerce sites:** Many e-commerce product cards use generic `<div>` containers (not semantic `listitem`/`article` roles). Interactive mode strips these, hiding product listings. For shopping/search pages, prefer `--viewport=0` (read top results first), or `-d 4` (shallow depth), or `domsnapshot inspect` + `domsnapshot get` for structured extraction.
 
 ### Element Data Extraction (get)
 
@@ -858,14 +867,63 @@ done
 - Use `eval` or `domsnapshot get all` to batch-extract data from a single page load when possible, rather than navigating to each detail page individually
 - Prefer `crawl` with conservative `--depth` and `--page-load-timeout` for automated multi-page traversal — it includes built-in rate limiting
 
-## Error Handling
+## Error Handling & Recovery
+
+### Command exit codes
 
 - Commands requiring the backend (`open`, `attach`, `goto`, `snapshot`, `click`, etc.) exit non-zero if the backend is unreachable. Check with `browser4-cli list`.
-- `attach` exits non-zero when it cannot find the target browser (no matching channel, no CDP endpoint listening on the given port).
-- `attach` exits non-zero when `--cdp` is a channel name and no running browser with remote debugging enabled is found for that channel.
+- `attach` exits non-zero when it cannot find the target browser (no matching channel, no CDP endpoint listening).
 - `eval` exits non-zero when the JS expression throws.
 - `snapshot` exits non-zero when the page isn't ready or the accessibility tree can't be captured.
-- Stale sessions: prefer `goto` to auto-reopen rather than manually managing session state.
+
+### Recovery patterns
+
+| Symptom | Likely cause | Recovery |
+|---------|-------------|----------|
+| `snapshot` exits non-zero | Page not loaded / stale session | `browser4-cli wait --load=networkidle` then retry |
+| `click <ref>` fails | Ref is stale (page changed) | Re-snapshot, use new ref |
+| `fill <ref>` does nothing | Element not focused or wrong ref | `click <ref>` first, then `type "<value>"` |
+| `domsnapshot get` returns `[]` | CSS selector mismatch in serialized DOM | Fall back to `eval --json` or X-SQL against live DOM |
+| `eval` quoting errors (Windows) | Shell mangles nested quotes | Use `--stdin` or `--file` instead of inline JS |
+| Backend unreachable | Browser4 server not running | Run `browser4-cli goto <url>` to auto-start |
+| Stale session after long idle | Session timed out | Use `goto` instead of manual session management; `goto` auto-reopens |
+| CAPTCHA / rate-limit page | Too many rapid requests | Add `wait 2000-3000` between navigations; reduce request rate |
+| `snapshot -v 0` shows blank/loading page | Page not finished rendering | `wait --load=networkidle` before snapshot |
+
+## Common Pitfalls
+
+- **Stale refs**: Using a ref from a previous snapshot after any interaction. **Always re-snapshot.**
+- **Not waiting for page load**: Snapshotting before the page renders. Use `wait --load=networkidle` after navigation.
+- **Using `-i` on e-commerce**: Interactive mode strips `<div>`-based product cards. Use `--viewport=0` instead.
+- **Cat'ing snapshot files**: Snapshot files can be huge. Use `snapshot grep`, `--stdout --page`, or `domsnapshot get`.
+- **Inline JS quoting on Windows**: Use `--stdin` or `--file` for `eval` to avoid shell escaping nightmares.
+- **Not scoping to viewport**: Capturing `-v all` when `-v 0` would suffice. Start with viewport 0.
+- **Ignoring polite delays**: Rapid-fire requests trigger CAPTCHAs. Add `wait 1000-3000` between navigations.
+- **Using `domsnapshot get all attr` for nested selectors**: May return `[]` due to DOM serialization. Use `eval` or X-SQL as fallback.
+
+## Installation
+
+Requires Node.js.
+
+```bash
+npm install -g browser4-cli
+browser4-cli install              # install native binary (recommended)
+browser4-cli install --tag=v4.9.3 # pin a specific version
+```
+
+Bootstrap scripts (alternative to npm):
+
+**Windows (PowerShell):**
+```powershell
+irm https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.ps1 | iex
+browser4-cli install
+```
+
+**Linux / macOS (bash):**
+```bash
+curl -fsSL https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.sh | bash
+browser4-cli install
+```
 
 ## References
 

@@ -1048,6 +1048,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "raw", description: "Strip page info and return only snapshot content (alias for --stdout)", is_bool: true, short: None },
                 OptionDef { name: "stdout", description: "Print snapshot content to stdout instead of saving to file", is_bool: true, short: None },
                 OptionDef { name: "viewport", description: "Capture only specified viewports: single index (3), comma list (0,2,4), range (1-3), or mixed (0,2-4,7)", is_bool: false, short: Some("v") },
+                OptionDef { name: "auto-diff", description: "Diff against the previous snapshot — show only what changed since the last capture", is_bool: true, short: None },
                 OptionDef { name: "page", short: None, is_bool: false, description: "Page number for paginated snapshot output (1-based, default: 1)" },
                 OptionDef { name: "page-size", short: None, is_bool: false, description: "Lines per page for snapshot output (default: 500)" },
                 OptionDef { name: "all", short: None, is_bool: true, description: "Show all output, disabling pagination" },
@@ -1071,6 +1072,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 // (they are stripped from server-bound args in handle_snapshot).
                 if let Some(true) = get_bool(args, "raw") { p["raw"] = json!(true); }
                 if let Some(true) = get_bool(args, "stdout") { p["stdout"] = json!(true); }
+                if let Some(true) = get_bool(args, "auto-diff") { p["auto-diff"] = json!(true); }
                 // Pagination flags (CLI-side, not sent to server)
                 if let Some(true) = get_bool(args, "all") { p["all"] = json!(true); }
                 if let Some(pg) = get_opt_str(args, "page") { p["page"] = json!(pg); }

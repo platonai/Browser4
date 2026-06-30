@@ -25,6 +25,7 @@ mod help;
 mod http;
 mod managed_processes;
 mod snapshot;
+mod snapshot_diff;
 mod state;
 
 use std::collections::{HashMap, HashSet};
@@ -2233,8 +2234,9 @@ async fn handle_snapshot(
         let mut a = tool_params.clone();
         if let Value::Object(ref mut m) = a {
             m.remove("filename");
-            m.remove("raw");    // CLI-side flag, not a server parameter
-            m.remove("stdout"); // CLI-side flag, not a server parameter
+            m.remove("raw");      // CLI-side flag, not a server parameter
+            m.remove("stdout");   // CLI-side flag, not a server parameter
+            m.remove("auto-diff");// CLI-side flag, not a server parameter
             m.remove("page");      // CLI-side pagination, not a server parameter
             m.remove("page-size"); // CLI-side pagination, not a server parameter
             m.remove("all");       // CLI-side pagination, not a server parameter
@@ -2379,7 +2381,27 @@ async fn handle_snapshot(
             "ℹ️  Element refs (e.g. e5, e36) are valid only until the next browser \
              interaction. Re-run snapshot before reusing refs."
         );
-        // Show pagination info when the file is large
+    }
+
+    // Auto-diff: compare against the previous snapshot in this directory
+    let auto_diff = tool_params
+        .get("auto-diff")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    if auto_diff {
+        if let Some(prev_path) = snapshot_diff::find_previous_snapshot(&out_path) {
+            cli_println!("### Diff");
+            let diff_output = snapshot_diff::diff_snapshots(&prev_path, &out_path);
+            cli_println!("{}", diff_output);
+            json_field("diff_previous", json!(prev_path.display().to_string()));
+        } else {
+            cli_println!("### Diff");
+            cli_println!("# No previous snapshot found — this is the first capture in this session.");
+        }
+    }
+
+    if !raw {
         if snap_len > 10_240 && !has_filter {
             eprintln!(
                 "💡 Tip: Snapshot is large ({} KB, {} lines). To focus the output, read the page viewport by viewport — just like a human scrolls. Important content usually comes first:\n\
