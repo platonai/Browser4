@@ -77,7 +77,12 @@ class PageHandler constructor(
      * @param boxes When true, includes each element's bounding box as [box=x,y,width,height].
      * */
     suspend fun ariaSnapshot(): String {
-        return ariaSnapshot(AriaSnapshotOptions())
+        val options = AriaSnapshotOptions()
+        val result = ariaSnapshot(options)
+        lastBrowserUseState?.let { state ->
+            return buildViewportHeader(state) + result + buildViewportFooter(state, options)
+        }
+        return result
     }
 
     /**
@@ -104,7 +109,8 @@ class PageHandler constructor(
         }
 
         // Join snapshots from disjoint viewport ranges using YAML document separator
-        return nanoTrees.joinToString("\n---\n") { it.ariaSnapshot }
+        val snapContent = nanoTrees.joinToString("\n---\n") { it.ariaSnapshot }
+        return buildViewportHeader(buState) + snapContent + buildViewportFooter(buState, AriaSnapshotOptions())
     }
 
     /**
@@ -130,7 +136,7 @@ class PageHandler constructor(
         lastBrowserUseState = buState
 
         // If viewports are specified, use existing viewport filtering then render with options
-        if (resolvedOptions.viewports != null) {
+        val snapContent = if (resolvedOptions.viewports != null) {
             val viewportIndices = ViewportSpec.parse(resolvedOptions.viewports) ?: return buState.domState.renderedAriaSnapshot(resolvedOptions)
             val scrollState = buState.browserState.scrollState
             val viewportHeight = scrollState.viewportHeight.toDouble()
@@ -142,10 +148,12 @@ class PageHandler constructor(
                 val endY = (endIdx + 1) * viewportHeight
                 serializableTree.toNanoTreeInRange(startY, endY)
             }
-            return nanoTrees.joinToString("\n---\n") { NanoAriaSnapshotRenderer.render(it, resolvedOptions) }
+            nanoTrees.joinToString("\n---\n") { NanoAriaSnapshotRenderer.render(it, resolvedOptions) }
+        } else {
+            buState.domState.renderedAriaSnapshot(resolvedOptions)
         }
 
-        return buState.domState.renderedAriaSnapshot(resolvedOptions)
+        return buildViewportHeader(buState) + snapContent + buildViewportFooter(buState, resolvedOptions)
     }
 
     /**

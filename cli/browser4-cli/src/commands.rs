@@ -479,7 +479,9 @@ pub fn all_commands() -> Vec<CommandDef> {
                  x-sql queries (auto-detected by the server), browser4-cli subcommands \
                  (after --), and shell commands (--shell). Progress is persisted to disk \
                  under a configurable --name and can be resumed after interruption. \
-                 Use --list to see all loops, --status [name] to inspect, --stop [name] to clear.",
+                 Use --pause/--resume to control running loops, --pause-all/--resume-all/--stop-all \
+                 for bulk operations, --list to see all loops, --status [name] to inspect, \
+                 --stop [name] to clear.",
             category: Category::Core,
             hidden: false,
             batch_supported: false,
@@ -528,9 +530,42 @@ pub fn all_commands() -> Vec<CommandDef> {
                     short: None,
                 },
                 OptionDef {
+                    name: "pause",
+                    description: "Pause a running loop. The loop suspends at the next \
+                                  iteration boundary and waits until resumed. \
+                                  Optionally specify --name to target a named loop",
+                    is_bool: true,
+                    short: None,
+                },
+                OptionDef {
+                    name: "resume",
+                    description: "Resume a paused loop. \
+                                  Optionally specify --name to target a named loop",
+                    is_bool: true,
+                    short: None,
+                },
+                OptionDef {
+                    name: "pause-all",
+                    description: "Pause all running loops at once",
+                    is_bool: true,
+                    short: None,
+                },
+                OptionDef {
+                    name: "resume-all",
+                    description: "Resume all paused loops at once",
+                    is_bool: true,
+                    short: None,
+                },
+                OptionDef {
                     name: "stop",
                     description: "Stop a loop and clear its persisted state. \
                                   Optionally specify --name to target a named loop",
+                    is_bool: true,
+                    short: None,
+                },
+                OptionDef {
+                    name: "stop-all",
+                    description: "Stop and clear all persisted loops at once",
                     is_bool: true,
                     short: None,
                 },
@@ -1030,7 +1065,8 @@ pub fn all_commands() -> Vec<CommandDef> {
             args: &[],
             options: &[
                 OptionDef { name: "filename", description: "Save snapshot to file instead of returning it in the response", is_bool: false, short: None },
-                OptionDef { name: "boxes", description: "Include each element's bounding box as [box=x,y,width,height]", is_bool: true, short: None },
+                OptionDef { name: "boxes", description: "Include each element's bounding box as [box=x,y,width,height] (enabled by default)", is_bool: true, short: None },
+                OptionDef { name: "no-boxes", description: "Disable bounding boxes in snapshot output", is_bool: true, short: None },
                 OptionDef { name: "interactive", description: "Only show interactive elements (buttons, links, inputs)", is_bool: true, short: Some("i") },
                 OptionDef { name: "urls", description: "Include href URLs for link elements", is_bool: true, short: Some("u") },
                 OptionDef { name: "compact", description: "Remove empty structural elements (enabled by default)", is_bool: true, short: Some("c") },
@@ -1039,16 +1075,18 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "selector", description: "Scope snapshot to a CSS selector", is_bool: false, short: Some("s") },
                 OptionDef { name: "raw", description: "Strip page info and return only snapshot content (alias for --stdout)", is_bool: true, short: None },
                 OptionDef { name: "stdout", description: "Print snapshot content to stdout instead of saving to file", is_bool: true, short: None },
-                OptionDef { name: "viewport", description: "Capture only specified viewports: single index (3), comma list (0,2,4), range (1-3), or mixed (0,2-4,7)", is_bool: false, short: Some("vp") },
+                OptionDef { name: "viewport", description: "Capture only specified viewports: single index (3), comma list (0,2,4), range (1-3), or mixed (0,2-4,7)", is_bool: false, short: Some("v") },
+                OptionDef { name: "auto-diff", description: "Diff against the previous snapshot — show only what changed since the last capture", is_bool: true, short: None },
                 OptionDef { name: "page", short: None, is_bool: false, description: "Page number for paginated snapshot output (1-based, default: 1)" },
-                OptionDef { name: "page-size", short: None, is_bool: false, description: "Lines per page for snapshot output (default: 100)" },
+                OptionDef { name: "page-size", short: None, is_bool: false, description: "Lines per page for snapshot output (default: 500)" },
                 OptionDef { name: "all", short: None, is_bool: true, description: "Show all output, disabling pagination" },
             ],
             tool_name_fn: |_| "browser_snapshot".to_string(),
             tool_params_fn: |args| {
                 let mut p = json!({});
                 if let Some(f) = get_opt_str(args, "filename") { p["filename"] = json!(f); }
-                if let Some(true) = get_bool(args, "boxes") { p["boxes"] = json!(true); }
+                if let Some(true) = get_bool(args, "no-boxes") { p["boxes"] = json!(false); }
+                else if let Some(true) = get_bool(args, "boxes") { p["boxes"] = json!(true); }
                 if let Some(true) = get_bool(args, "interactive") { p["interactive"] = json!(true); }
                 if let Some(true) = get_bool(args, "urls") { p["urls"] = json!(true); }
                 if let Some(true) = get_bool(args, "no-compact") { p["compact"] = json!(false); }
@@ -1062,6 +1100,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 // (they are stripped from server-bound args in handle_snapshot).
                 if let Some(true) = get_bool(args, "raw") { p["raw"] = json!(true); }
                 if let Some(true) = get_bool(args, "stdout") { p["stdout"] = json!(true); }
+                if let Some(true) = get_bool(args, "auto-diff") { p["auto-diff"] = json!(true); }
                 // Pagination flags (CLI-side, not sent to server)
                 if let Some(true) = get_bool(args, "all") { p["all"] = json!(true); }
                 if let Some(pg) = get_opt_str(args, "page") { p["page"] = json!(pg); }
@@ -1091,7 +1130,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "word-regexp", short: Some("w"), is_bool: true, description: "Match only whole words" },
                 OptionDef { name: "selector", short: None, is_bool: false, description: "CSS selector to scope the search to" },
                 OptionDef { name: "page", short: None, is_bool: false, description: "Page number (1-based, default: 1)" },
-                OptionDef { name: "page-size", short: None, is_bool: false, description: "Lines per page (default: 100)" },
+                OptionDef { name: "page-size", short: None, is_bool: false, description: "Lines per page (default: 500)" },
                 OptionDef { name: "all", short: None, is_bool: true, description: "Show all output, disabling pagination" },
             ],
             tool_name_fn: |_| "browser_snapshot".to_string(),
@@ -1864,6 +1903,17 @@ pub fn all_commands() -> Vec<CommandDef> {
                 json!({ "id": get_str(args, "id").unwrap_or_default() })
             },
         },
+        CommandDef {
+            name: "agent-list",
+            description: "List all tracked agent tasks and their status",
+            category: Category::Agent,
+            hidden: false,
+            batch_supported: false,
+            args: &[],
+            options: &[],
+            tool_name_fn: |_| String::new(),
+            tool_params_fn: |_| json!({}),
+        },
         // ---- Swarm ----
         CommandDef {
             name: "swarm-create",
@@ -1975,6 +2025,17 @@ pub fn all_commands() -> Vec<CommandDef> {
             },
         },
         CommandDef {
+            name: "swarm-list",
+            description: "List all tracked swarm tasks and their status",
+            category: Category::Swarm,
+            hidden: false,
+            batch_supported: false,
+            args: &[],
+            options: &[],
+            tool_name_fn: |_| String::new(),
+            tool_params_fn: |_| json!({}),
+        },
+        CommandDef {
             name: "crawl",
             description: "Crawl a website starting from a URL, following links up to a configurable depth",
             category: Category::Swarm,
@@ -2000,11 +2061,13 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "ignore-url-query", description: "Remove query parameters from URLs during normalization", is_bool: true, short: None },
                 OptionDef { name: "no-norm", description: "Disable URL normalization", is_bool: true, short: None },
                 OptionDef { name: "readonly", description: "Non-destructive mode (no page modifications)", is_bool: true, short: None },
+                OptionDef { name: "background", description: "Submit crawl and return immediately; use 'crawl list' to track progress", is_bool: true, short: Some("bg") },
             ],
             tool_name_fn: |_| "crawl_submit".to_string(),
             tool_params_fn: |args| {
                 let mut p = json!({});
                 if let Some(v) = get_opt_str(args, "url") { p["url"] = json!(v); }
+                if let Some(true) = get_bool(args, "background") { p["background"] = json!(true); }
 
                 // Build the LoadOptions args string from individual flags
                 let mut load_opts = Vec::new();
@@ -2062,6 +2125,17 @@ pub fn all_commands() -> Vec<CommandDef> {
                 p
             },
         },
+        CommandDef {
+            name: "crawl-list",
+            description: "List all tracked crawl tasks and their status",
+            category: Category::Swarm,
+            hidden: false,
+            batch_supported: false,
+            args: &[],
+            options: &[],
+            tool_name_fn: |_| String::new(),
+            tool_params_fn: |_| json!({}),
+        },
         // ---- Snapshot ----
         CommandDef {
             name: "domsnapshot",
@@ -2087,7 +2161,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             ],
             options: &[
                 OptionDef { name: "page", short: None, is_bool: false, description: "Page number (1-based, default: 1)" },
-                OptionDef { name: "page-size", short: None, is_bool: false, description: "Lines per page (default: 100)" },
+                OptionDef { name: "page-size", short: None, is_bool: false, description: "Lines per page (default: 500)" },
                 OptionDef { name: "all", short: None, is_bool: true, description: "Show all output, disabling pagination" },
             ],
             tool_name_fn: |_| "dom_snapshot_scrape".to_string(),
@@ -2114,7 +2188,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "offset", description: "Skip the first n results (0-based)", is_bool: false, short: None },
                 OptionDef { name: "limit", description: "Return at most n results", is_bool: false, short: None },
                 OptionDef { name: "page", short: None, is_bool: false, description: "Page number for paginated output (default: 1)" },
-                OptionDef { name: "page-size", short: None, is_bool: false, description: "Lines per page (default: 100)" },
+                OptionDef { name: "page-size", short: None, is_bool: false, description: "Lines per page (default: 500)" },
                 OptionDef { name: "all", short: None, is_bool: true, description: "Show all output, disabling pagination" },
             ],
             tool_name_fn: |_| "dom_snapshot_scrape_all".to_string(),
@@ -2227,7 +2301,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "word-regexp", short: Some("w"), is_bool: true, description: "Match only whole words" },
                 OptionDef { name: "selector", short: None, is_bool: false, description: "CSS selector to scope the search to" },
                 OptionDef { name: "page", short: None, is_bool: false, description: "Page number (1-based, default: 1)" },
-                OptionDef { name: "page-size", short: None, is_bool: false, description: "Lines per page (default: 100)" },
+                OptionDef { name: "page-size", short: None, is_bool: false, description: "Lines per page (default: 500)" },
                 OptionDef { name: "all", short: None, is_bool: true, description: "Show all output, disabling pagination" },
             ],
             tool_name_fn: |_| "dom_snapshot_export".to_string(),

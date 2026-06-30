@@ -26,7 +26,7 @@ tab.uncheck(selector: String)
 tab.scrollTo(selector: String)
 tab.scrollToMiddle(ratio: Double = 0.5)          // ratio: The ratio of the page to scroll to, 0.0 means the top, 1.0 means the bottom.
 tab.scrollBy(pixels: Double = 200.0): Double
-tab.ariaSnapshot(viewports: String = "all", boxes: Boolean = false)      // Returns the accessibility tree. viewports: "all", "3", "1,3,5", "2-4". boxes: include bounding boxes as [box=x,y,w,h]
+tab.ariaSnapshot(viewports: String = "all", boxes: Boolean = true)      // Returns the accessibility tree. viewports: "all", "3", "1,3,5", "2-4". boxes: include bounding boxes as [box=x,y,w,h] (on by default)
 tab.textContent(): String?                            // Returns the document's text content.
 tab.selectFirstTextOrNull(selector: String): String?  // Returns the first node's text content (descendants included). Returns null if no node.
 tab.eval(expression: String)

@@ -80,7 +80,7 @@ FROM DOM_LOAD_AND_SELECT('https://example.com', 'article h2');
 
 -- Load with expiration control (fetch fresh if older than 1 hour)
 SELECT DOM_FIRST_TEXT(DOM, 'title')
-FROM DOM_LOAD_AND_SELECT('https://example.com?-expires=1h', 'h1');
+FROM DOM_LOAD_AND_SELECT('https://example.com -expires 1h', 'h1');
 
 -- Select only the first 5 product cards
 SELECT DOM_TEXT(DOM) AS product_name
@@ -1474,7 +1474,7 @@ SELECT
     DOM_FIRST_IMG(DOM, 'img.thumbnail') AS image,
     STR_DEFAULT_IF_BLANK(DOM_FIRST_TEXT(DOM, '.description'), 'N/A') AS description
 FROM DOM_LOAD_AND_SELECT(
-    'https://example.com/products?-expires=1h',
+    'https://example.com/products -expires 1h',
     '.product-card',
     1, 20
 )

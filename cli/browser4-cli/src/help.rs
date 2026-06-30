@@ -761,7 +761,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(
-            "  - Output from `get html`, `get text`, `get all html`, `get all text`, and `grep` is paginated by default (1K chars per page). Use --page N for subsequent pages, --page-size N to change the page size, or --all to disable pagination and show all content. Pagination is automatically skipped in --json and --quiet modes."
+            "  - Output from `get html`, `get text`, `get all html`, `get all text`, and `grep` is paginated by default (500 lines per page). Use --page N for subsequent pages, --page-size N to change the page size, or --all to disable pagination and show all content. Pagination is automatically skipped in --json and --quiet modes."
                 .to_string(),
         );
         lines.push(String::new());
@@ -784,11 +784,11 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("  # Get all matching elements with element-level pagination".to_string());
         lines.push("  browser4-cli domsnapshot get all text \".result\" --limit 5 --offset 10".to_string());
         lines.push(String::new());
-        lines.push("  # Get HTML with char-level pagination (default 1K, page 2)".to_string());
+        lines.push("  # Get HTML with line-level pagination (default 500 lines, page 2)".to_string());
         lines.push("  browser4-cli domsnapshot get html \"body\" --page 2".to_string());
         lines.push(String::new());
         lines.push("  # Get all text with custom page size".to_string());
-        lines.push("  browser4-cli domsnapshot get all text \"p\" --page-size 500".to_string());
+        lines.push("  browser4-cli domsnapshot get all text \"p\" --page-size 200".to_string());
         lines.push(String::new());
         lines.push("  # Get full HTML (disable pagination)".to_string());
         lines.push("  browser4-cli domsnapshot get html --all".to_string());
@@ -818,7 +818,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("  browser4-cli domsnapshot grep --selector main \"Submit\"".to_string());
         lines.push(String::new());
         lines.push("  # Search with pagination (page 2, custom page size)".to_string());
-        lines.push("  browser4-cli domsnapshot grep -i error --page 2 --page-size 500".to_string());
+        lines.push("  browser4-cli domsnapshot grep -i error --page 2 --page-size 200".to_string());
         lines.push(String::new());
         lines.push("  # Search and show all matches (disable pagination)".to_string());
         lines.push("  browser4-cli domsnapshot grep --all \"TODOs\"".to_string());
@@ -834,13 +834,21 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("Subcommands:".to_string());
         lines.push(format_with_gap(
             "  snapshot grep [OPTIONS] <pattern>",
-            "Search snapshot YAML content with regex patterns and grep-style output. Supports --page N, --page-size N, and --all for output pagination (1K chars per page default).",
+            "Search snapshot YAML content with regex patterns and grep-style output. For large pages, capture a specific viewport first with -v <N> before grepping — the most relevant content is usually at the top. Supports --page N, --page-size N, and --all for output pagination (500 lines per page default).",
             50,
         ));
         lines.push(String::new());
         lines.push("Notes:".to_string());
         lines.push(
-            "  - Use --stdout (or --raw) to print snapshot content directly to stdout for piping."
+            "  - For large pages, read the page viewport by viewport — just like a human scrolls. Important"
+                .to_string(),
+        );
+        lines.push(
+            "    content usually appears at the top of the page first. Use --viewport / -v as the first choice"
+                .to_string(),
+        );
+        lines.push(
+            "    to keep output manageable: -v 0 (top), -v 1 (next), -v 0-2 (first three), -v all (entire page)."
                 .to_string(),
         );
         lines.push(
@@ -852,6 +860,10 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(
+            "  - Use --stdout (or --raw) to print snapshot content directly to stdout for piping."
+                .to_string(),
+        );
+        lines.push(
             "  - snapshot grep searches the accessibility-tree YAML, not the DOM HTML."
                 .to_string(),
         );
@@ -860,11 +872,20 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(
-            "  - Output is paginated by default (1K chars per page). Use --page N for subsequent pages, --page-size N to change the page size, or --all to show all content."
+            "  - Output is paginated by default (500 lines per page). Use --page N for subsequent pages, --page-size N to change the page size, or --all to show all content."
                 .to_string(),
         );
         lines.push(String::new());
         lines.push("Examples:".to_string());
+        lines.push("  # Read the page viewport by viewport (start from the top)".to_string());
+        lines.push("  browser4-cli snapshot -v 0".to_string());
+        lines.push(String::new());
+        lines.push("  # Capture a range of viewports".to_string());
+        lines.push("  browser4-cli snapshot --viewport=1-3".to_string());
+        lines.push(String::new());
+        lines.push("  # Capture specific viewports using ViewportSpec format".to_string());
+        lines.push("  browser4-cli snapshot --viewport=0,2,4".to_string());
+        lines.push(String::new());
         lines.push("  # Capture snapshot and print to stdout for piping".to_string());
         lines.push("  browser4-cli snapshot --stdout | head -20".to_string());
         lines.push(String::new());
@@ -875,13 +896,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("  browser4-cli snapshot grep -C 2 \"timeout\"".to_string());
         lines.push(String::new());
         lines.push("  # Search with pagination (page 2, custom page size)".to_string());
-        lines.push("  browser4-cli snapshot grep error --page 2 --page-size 500".to_string());
-        lines.push(String::new());
-        lines.push("  # Capture specific viewports using ViewportSpec format".to_string());
-        lines.push("  browser4-cli snapshot --viewport=0,2,4".to_string());
-        lines.push(String::new());
-        lines.push("  # Capture a range of viewports".to_string());
-        lines.push("  browser4-cli snapshot --viewport=1-3".to_string());
+        lines.push("  browser4-cli snapshot grep error --page 2 --page-size 200".to_string());
     }
 
     if cmd.name == "generate-locator" {
@@ -916,7 +931,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(String::new());
-        lines.push("Persistence:".to_string());
+        lines.push("Persistence & Control:".to_string());
         lines.push(
             "  - Progress is saved to ~/.browser4/loop-state.json after each iteration."
                 .to_string(),
@@ -927,6 +942,16 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         );
         lines.push("    the same command again.".to_string());
         lines.push("  - Use --stop to clear persisted state, --status to inspect it.".to_string());
+        lines.push(
+            "  - Use --pause to suspend a running loop at the next iteration boundary."
+                .to_string(),
+        );
+        lines.push("    Use --resume to continue a paused loop.".to_string());
+        lines.push(
+            "  - Use --pause-all / --resume-all to control all loops at once."
+                .to_string(),
+        );
+        lines.push("  - Use --stop-all to stop and clear all persisted loops.".to_string());
         lines.push(String::new());
         lines.push("Notes:".to_string());
         lines.push(
@@ -967,7 +992,10 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
             "  browser4-cli loop \"select dom.title from load_and_select('https://example.com')\" --count 5"
                 .to_string(),
         );
+        lines.push("  browser4-cli loop --list".to_string());
         lines.push("  browser4-cli loop --status".to_string());
+        lines.push("  browser4-cli loop --pause".to_string());
+        lines.push("  browser4-cli loop --resume".to_string());
         lines.push("  browser4-cli loop --stop".to_string());
     }
 
@@ -1303,12 +1331,12 @@ mod tests {
         assert!(help.contains("image/link counts"));
         assert!(help.contains("interactive elements with tag/class/id/aria/bounding-box"));
         // pagination
-        assert!(help.contains("Output from `get html`, `get text`, `get all html`, `get all text`, and `grep` is paginated by default (1K chars per page)"));
+        assert!(help.contains("Output from `get html`, `get text`, `get all html`, `get all text`, and `grep` is paginated by default (500 lines per page)"));
         assert!(help.contains("--page N for subsequent pages, --page-size N to change the page size, or --all to disable pagination"));
         assert!(help.contains("browser4-cli domsnapshot get html \"body\" --page 2"));
-        assert!(help.contains("browser4-cli domsnapshot get all text \"p\" --page-size 500"));
+        assert!(help.contains("browser4-cli domsnapshot get all text \"p\" --page-size 200"));
         assert!(help.contains("browser4-cli domsnapshot get html --all"));
-        assert!(help.contains("browser4-cli domsnapshot grep -i error --page 2 --page-size 500"));
+        assert!(help.contains("browser4-cli domsnapshot grep -i error --page 2 --page-size 200"));
         assert!(help.contains("browser4-cli domsnapshot grep --all \"TODOs\""));
     }
 

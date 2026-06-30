@@ -659,7 +659,7 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
                 val compact = paramBool(args, "compact", functionName, required = false) ?: true
                 val maxDepth = paramInt(args, "depth", functionName, required = false) ?: -1
                 val selector = paramString(args, "selector", functionName, required = false)
-                val boxes = paramBool(args, "boxes", functionName, required = false) ?: false
+                val boxes = paramBool(args, "boxes", functionName, required = false) ?: true
                 val maxNodes = paramInt(args, "limit", functionName, required = false) ?: -1
 
                 val options = AriaSnapshotOptions(
