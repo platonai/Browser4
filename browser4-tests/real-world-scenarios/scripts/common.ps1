@@ -277,7 +277,7 @@ function ConvertFrom-IssuesSection {
 
     # Find C section start — use simple string search for reliability
     $cIdx = -1
-    $cMarkers = @('### C. Issues Found', '## C. Issues Found', '### C Issues Found')
+    $cMarkers = @('### C. Issues Found', '## C. Issues Found', '# C. Issues Found', '### C Issues Found', '## C Issues Found', '# C Issues Found')
     foreach ($m in $cMarkers) {
         $cIdx = $normalized.IndexOf($m, [StringComparison]::OrdinalIgnoreCase)
         if ($cIdx -ge 0) { break }
@@ -289,7 +289,7 @@ function ConvertFrom-IssuesSection {
 
     # Find D section as the end boundary
     $dIdx = -1
-    $dMarkers = @('### D. Overall Assessment', '## D. Overall Assessment', '### D Overall Assessment')
+    $dMarkers = @('### D. Overall Assessment', '## D. Overall Assessment', '# D. Overall Assessment', '### D Overall Assessment', '## D Overall Assessment', '# D Overall Assessment')
     foreach ($m in $dMarkers) {
         $dIdx = $normalized.IndexOf($m, $cStart, [StringComparison]::OrdinalIgnoreCase)
         if ($dIdx -ge 0) { break }
@@ -489,8 +489,8 @@ function Extract-BackgroundContext {
     # Handles: "### A. Task Result", "## A. Task Result", "## ✅ Task Result: ..."
     $aStart = -1
     $aMarkers = @(
-        '### A. Task Result', '## A. Task Result', '## ✅ Task Result',
-        '### A Task Result', '## A Task Result', '## Task Result'
+        '### A. Task Result', '## A. Task Result', '# A. Task Result', '## ✅ Task Result',
+        '### A Task Result', '## A Task Result', '# A Task Result', '## Task Result', '# Task Result'
     )
     foreach ($m in $aMarkers) {
         $aStart = $normalized.IndexOf($m, [StringComparison]::OrdinalIgnoreCase)
@@ -502,8 +502,8 @@ function Extract-BackgroundContext {
         if ($aContentStart -le 0) { $aContentStart = $aStart }
 
         $bMarkers = @(
-            '### B. Execution Trace', '## B. Execution Trace',
-            '### B Execution Trace', '## B Execution Trace',
+            '### B. Execution Trace', '## B. Execution Trace', '# B. Execution Trace',
+            '### B Execution Trace', '## B Execution Trace', '# B Execution Trace',
             '## B. Execution Trace'
         )
         $aEnd = $normalized.Length
@@ -518,8 +518,8 @@ function Extract-BackgroundContext {
     # ── Extract Section B (Execution Trace) ──────────────────────────────────
     $bStart = -1
     $bMarkers = @(
-        '### B. Execution Trace', '## B. Execution Trace',
-        '### B Execution Trace', '## B Execution Trace',
+        '### B. Execution Trace', '## B. Execution Trace', '# B. Execution Trace',
+        '### B Execution Trace', '## B Execution Trace', '# B Execution Trace',
         '## B. Execution Trace'
     )
     foreach ($m in $bMarkers) {
@@ -532,8 +532,8 @@ function Extract-BackgroundContext {
         if ($bContentStart -le 0) { $bContentStart = $bStart }
 
         $cMarkers = @(
-            '### C. Issues Found', '## C. Issues Found',
-            '### C Issues Found', '## C Issues Found',
+            '### C. Issues Found', '## C. Issues Found', '# C. Issues Found',
+            '### C Issues Found', '## C Issues Found', '# C Issues Found',
             '## C. Issues Found'
         )
         $bEnd = $normalized.Length
@@ -546,7 +546,7 @@ function Extract-BackgroundContext {
         $result.ExecutionTrace = $fullTrace
 
         # Extract "Commands Used" subsection (if present)
-        if ($fullTrace -match '(?s)(?:###\s+)?Commands?\s*Used[:\s]*\n(.+?)(?=\n###\s|\n##\s|\Z)') {
+        if ($fullTrace -match '(?s)(?:###\s+)?Commands?\s*Used[^\n]*\n(.+?)(?=\n###\s|\n##\s|\Z)') {
             $result.Commands = $Matches[1].Trim()
         }
         # Extract "Workarounds Required" subsection (if present)
