@@ -18,7 +18,7 @@ Every browser4-cli session follows this pattern. Commit it to memory:
 3. INTERACT    browser4-cli click <ref>              # use refs from the snapshot
               browser4-cli fill <ref> <value>
               browser4-cli press Enter
-4. RE-SNAPSHOT browser4-cli snapshot -v 0            # ⚠️ REFS ARE SINGLE-USE — re-snapshot after EVERY interaction
+4. RE-SNAPSHOT browser4-cli snapshot -v 0 --auto-diff # ⚠️ REFS ARE SINGLE-USE — diff shows exactly what changed
 5. EXTRACT     browser4-cli domsnapshot get ...      # or eval, or X-SQL (see Choosing an Extraction Method)
 ```
 
@@ -42,7 +42,7 @@ browser4-cli snapshot -v 0          # read the page; note refs for elements you 
 browser4-cli fill <ref> "<value>"   # interact
 browser4-cli press Enter
 browser4-cli wait --load=networkidle
-browser4-cli snapshot -v 0          # re-snapshot after interaction
+browser4-cli snapshot -v 0 --auto-diff  # verify what changed (diff vs previous snapshot)
 browser4-cli domsnapshot get text "<css-selector>"   # extract data
 ```
 
@@ -210,6 +210,7 @@ Supported grep options: `-i` (ignore-case), `-A N` (after-context), `-B N` (befo
 | `-d, --depth <n>` | Limit tree depth |
 | `-s, --selector <sel>` | Scope to CSS selector subtree |
 | `-u, --urls` | Include href URLs for links |
+| `--auto-diff` | Diff against the previous snapshot — show only what changed (added/removed/modified elements). Best for verifying interactions. |
 | `--stdout` | Print snapshot content to stdout (for piping); alias: `--raw` |
 | `--raw` | Alias for `--stdout` |
 
@@ -220,6 +221,16 @@ Supported grep options: `-i` (ignore-case), `-A N` (after-context), `-B N` (befo
 > - **Interactive only**: `snapshot -i`
 > - **Search don't read**: `snapshot grep <pattern>`
 > - **Stdout with pagination**: `snapshot --stdout --page 1 --page-size 500`
+
+> **🔄 Verify interactions with `--auto-diff`:** After clicking, filling, or pressing a key, re-snapshot with `--auto-diff`. Instead of reading the full tree again, you see only what changed — a textbox value updated, a button appeared, a link disappeared. This is the fastest way to confirm an action had the expected effect.
+> ```bash
+> browser4-cli fill e42 "hello"
+> browser4-cli snapshot -v 0 --auto-diff
+> # Output:
+> # ### Diff
+> # ~ textbox e99 "Search"
+> #   /value: "" → "hello"
+> ```
 
 > **⚠️ Interactive mode (`-i`) on e-commerce sites:** Many e-commerce product cards use generic `<div>` containers (not semantic `listitem`/`article` roles). Interactive mode strips these, hiding product listings. For shopping/search pages, prefer `--viewport=0` (read top results first), or `-d 4` (shallow depth), or `domsnapshot inspect` + `domsnapshot get` for structured extraction.
 
