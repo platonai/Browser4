@@ -10578,5 +10578,4 @@ mod tests {
 
         assert_eq!(p.get("viewports").and_then(|v| v.as_str()), Some("1-3"));
     }
-    }
 }
