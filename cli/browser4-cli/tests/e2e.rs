@@ -3371,9 +3371,12 @@ fn excluded_commands(include_batch_command: bool) -> HashSet<&'static str> {
     let mut commands: HashSet<&'static str> = [
         // Not yet exercised by e2e scenarios; mock handler exists.
         "swarm-query",
+        "swarm-list",
         // New commands pending e2e test scenarios.
+        "agent-list",
         "attach",
         "crawl",
+        "crawl-list",
         "scroll",
         "wait",
         "get",
