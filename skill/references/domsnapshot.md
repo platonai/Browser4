@@ -1,6 +1,7 @@
 ---
 title: "DOM Snapshot — Static DOM Extraction, Inspection & X-SQL Querying"
 description: "Reference for domsnapshot commands (capture, get, query, summary, export, grep, inspect). Extract structured data from the raw HTML DOM via CSS selectors and X-SQL queries."
+tier: catalog
 ---
 
 # DOM Snapshot — Static DOM Extraction, Inspection & X-SQL Querying
@@ -55,7 +56,7 @@ browser4-cli domsnapshot get all <text|html|attr> <selector> [name] [--offset N]
 
 **`get` returns only the first match.** For multiple results, use `domsnapshot get all` (returns a JSON array) or `domsnapshot query`.
 
-> **⚠️ Correlating multiple fields:** Each `get all` call scans the whole document independently — running `get all text ".title"` and `get all text ".price"` produces two unaligned arrays (different lengths, different order). To extract correlated fields (title + price + URL per item), use `domsnapshot query` with X-SQL's `DOM_LOAD_AND_SELECT` scoped to a parent container. See the [list-page scraping pattern](x-sql-dom-load-select.md#dom_load_and_select).
+> **Warning:** Correlating multiple fields: Each `get all` call scans the whole document independently — running `get all text ".title"` and `get all text ".price"` produces two unaligned arrays (different lengths, different order). To extract correlated fields (title + price + URL per item), use `domsnapshot query` with X-SQL's `DOM_LOAD_AND_SELECT` scoped to a parent container. See the [list-page scraping pattern](x-sql-dom-load-select.md#dom_load_and_select).
 
 ### `get` (single)
 

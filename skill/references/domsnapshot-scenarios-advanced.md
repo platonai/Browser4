@@ -1,13 +1,14 @@
 ---
 title: "DOM Snapshot Scenarios — Advanced Discovery & Automation"
 description: "Recipes for agent-assisted form discovery, page structure analysis with summary/WPSI, and selector discovery with inspect. Covers discovery-first patterns for unfamiliar pages."
+tier: procedure
 ---
 
 # DOM Snapshot Scenarios — Advanced Discovery & Automation
 
 Practical recipes for discovering page structure, finding CSS selectors on unfamiliar pages, and using DOM snapshots in agent-assisted form-filling workflows.
 
-> **⚠️ CSS selectors are tied to live websites — they WILL break over time.** These examples demonstrate discovery workflows — the selectors shown are outputs of `inspect` and `summary`, not inputs you hard-code.
+> **Note:** CSS selectors are tied to live websites and may break over time. See [SKILL.md §5](../SKILL.md#5-critical-warnings). These examples demonstrate discovery workflows — the selectors shown are outputs of `inspect` and `summary`, not inputs you hard-code.
 
 > **Parent document:** [domsnapshot-scenarios.md](domsnapshot-scenarios.md) — full scenario index, patterns & tips, and command reference.
 

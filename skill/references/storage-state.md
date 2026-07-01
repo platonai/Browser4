@@ -1,6 +1,7 @@
 ---
 title: "Storage Management"
 description: "Reference for cookie, localStorage, sessionStorage, and storage state commands. Save and restore complete browser state including cookies and storage."
+tier: catalog
 ---
 
 # Storage Management

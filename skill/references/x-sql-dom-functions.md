@@ -1,6 +1,7 @@
 ---
 title: "X-SQL: DomFunctions — Core DOM Operations"
 description: "Reference for ~65 DOM functions: page loading, state checks, element properties, URL/location, tree navigation, element identity, link/image props, title, text, HTML serialization, regex, and computed features."
+tier: catalog
 ---
 
 # X-SQL: DomFunctions — Core DOM Operations

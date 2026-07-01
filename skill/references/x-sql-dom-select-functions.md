@@ -1,6 +1,7 @@
 ---
 title: "X-SQL: DomSelectFunctions — CSS Selector-Based Extraction"
 description: "Reference for ~50 DOM select functions following the all*/first*/nth* pattern. Covers text, HTML, number, attribute, image, link, node label, and regex extraction with CSS selectors."
+tier: catalog
 ---
 
 # X-SQL: DomSelectFunctions — CSS Selector-Based Extraction

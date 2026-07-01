@@ -1,6 +1,7 @@
 ---
 title: "CSS Selector Bridge — From Snapshot Refs to DOM Snapshot Queries"
 description: "How to bridge between interactive snapshot refs and DOM snapshot CSS selectors. Three-tier approach for extracting CSS selectors without reading the full DOM."
+tier: procedure
 ---
 
 # CSS Selector Bridge — From Snapshot Refs to DOM Snapshot Queries

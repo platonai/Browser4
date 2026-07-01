@@ -1,6 +1,7 @@
 ---
 title: "X-SQL: StringFunctions — String Manipulation"
 description: "Reference for ~90 STR functions covering case manipulation, empty/blank checks, trimming/stripping, substrings, search/contains, splitting/joining, replace/remove, padding, classification, and number extraction."
+tier: catalog
 ---
 
 # X-SQL: StringFunctions — String Manipulation

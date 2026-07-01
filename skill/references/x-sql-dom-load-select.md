@@ -1,6 +1,7 @@
 ---
 title: "X-SQL: DOM_LOAD_AND_SELECT — Page Loading with CSS Selection"
 description: "Reference for DOM_LOAD_AND_SELECT. The required table-source function for all X-SQL page-data queries — loads a web page and selects elements matching a CSS query."
+tier: catalog
 ---
 
 # X-SQL: DOM_LOAD_AND_SELECT — Page Loading with CSS Selection
