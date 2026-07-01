@@ -122,7 +122,18 @@ browser4-cli domsnapshot query --sql-stdin < query.sql
 browser4-cli domsnapshot query "https://example.com" --sql-stdin < query.sql
 ```
 
-**3. Inline (requires careful shell escaping on Windows):**
+**3. Base64 (transport-safe — no quoting, works across all platforms):**
+
+```bash
+# Encode once, pass anywhere without escaping
+base64 -w0 query.sql > query.b64
+browser4-cli domsnapshot query "https://example.com" --sql @query.b64 --sql-base64
+
+# Or inline the base64 value directly
+browser4-cli domsnapshot query "https://example.com" --sql "$(base64 -w0 query.sql)" --sql-base64
+```
+
+**4. Inline (requires careful shell escaping on Windows):**
 
 ```bash
 # Simple queries without quotes in selectors work inline:
@@ -131,7 +142,7 @@ browser4-cli domsnapshot query --sql "
   FROM load_and_select(@url, 'body');
 "
 
-# Queries with quoted selectors or != require escaping — prefer @file or --sql-stdin
+# Queries with quoted selectors or != require escaping — prefer @file, --sql-stdin, or --sql-base64
 ```
 
 To control caching or rendering, append load options to the URL (e.g. `https://example.com/page -i 1d -njr 3`).
@@ -275,6 +286,9 @@ browser4-cli domsnapshot inspect [selector] [--max N] [--depth D]
 - **Start broad, then narrow:** First run without a selector to see page landmarks. Then target a repeating container (e.g. `.product_pod`, `.s-result-item`).
 - **Always capture first:** `domsnapshot` must be run before `inspect` (it loads the cached document).
 - **Use with `get`:** Take the suggested selectors and use them with `domsnapshot get all` or `domsnapshot query` for batch extraction.
+- **Avoid quoting hell:** Use `--sql @file.sql` (file), `--sql-stdin` (piped), or `--sql-base64` (encoded) instead of inline `--sql "..."` on Windows — quoted CSS selectors and `!=` operators break inline SQL.
+- **Base64 for portability:** `--sql "$(base64 -w0 query.sql)" --sql-base64` passes SQL safely through any shell, CI pipeline, or HTTP transport with zero quoting issues.
+- **`@file` paths resolve relative to CWD first**, then fall back to the Browser4 repo root — so `cargo run` from `cli/browser4-cli` still finds `query.sql` at the workspace root.
 
 ## Error Handling
 

@@ -513,7 +513,7 @@ escaping).
 
 **Recommended:** Write queries to a `.sql` file to avoid shell escaping issues.
 Prefix the `--sql` value with `@` to read from a file. Use `--sql-stdin` for
-piped/scripted workflows.
+piped/scripted workflows, or `--sql-base64` for transport-safe encoded queries.
 
 ```bash
 # From a file (recommended — no shell escaping)
@@ -527,6 +527,9 @@ browser4-cli domsnapshot query --sql @query.sql
 
 # From stdin
 cat query.sql | browser4-cli domsnapshot query --sql-stdin
+
+# From base64 (transport-safe, no quoting issues)
+browser4-cli domsnapshot query --sql "$(base64 -w0 query.sql)" --sql-base64
 
 # Inline (simple queries only — quoted selectors require escaping on Windows)
 browser4-cli domsnapshot query --sql "

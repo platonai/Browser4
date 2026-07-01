@@ -186,7 +186,7 @@ browser4-cli eval --stdin [ref]             # read JS from stdin (avoids shell q
 browser4-cli resize <width> <height>
 ```
 
-> **Windows/bash quoting:** Complex JS expressions with nested quotes require painful escaping. **Always prefer `--file` or `--stdin` on Windows.** For X-SQL, write queries to a `.sql` file and use `--sql @file.sql` (or `--sql-stdin`) — inline `--sql "..."` hits the same quoting issues when the query contains double-quoted CSS selectors or `!=` operators.
+> **Windows/bash quoting:** Complex JS expressions with nested quotes require painful escaping. **Always prefer `--file` or `--stdin` on Windows.** For X-SQL, write queries to a `.sql` file and use `--sql @file.sql`, `--sql-stdin`, or `--sql-base64` — inline `--sql "..."` hits the same quoting issues when the query contains double-quoted CSS selectors or `!=` operators.
 
 ### Storage
 
@@ -251,13 +251,13 @@ Full reference: **[references/domsnapshot.md](references/domsnapshot.md)**.
 
 ## X-SQL
 
-X-SQL is a SQL-based query language for extracting structured data from web pages. Use `--sql @file.sql` or `--sql-stdin` to avoid shell quoting — the inline `--sql "..."` form hits escaping issues on Windows when queries contain double-quoted CSS selectors.
+X-SQL is a SQL-based query language for extracting structured data from web pages. Use `--sql @file.sql`, `--sql-stdin`, or `--sql-base64` to avoid shell quoting — the inline `--sql "..."` form hits escaping issues on Windows when queries contain double-quoted CSS selectors.
 
 **Use X-SQL when:** you need structured data (titles, prices, links, images), want to avoid JavaScript quoting complexity, or need server-side filtering/sorting/transformation.
 
 **Use `eval` when:** you need to interact with the live page (click, scroll, read dynamic state), call JavaScript APIs, or the page requires prior interaction.
 
-> **🔴 Windows/bash quoting:** Even plain SQL hits quoting problems on Windows when the query contains quotes (CSS selectors like `[data-component-type="s-search-result"]` or string literals). **Always write X-SQL queries to a `.sql` file and use `--sql @file.sql`** — this avoids all shell escaping issues. Use `--sql-stdin` for piped/scripted workflows.
+> **🔴 Windows/bash quoting:** Even plain SQL hits quoting problems on Windows when the query contains quotes (CSS selectors like `[data-component-type="s-search-result"]` or string literals). **Always write X-SQL queries to a `.sql` file and use `--sql @file.sql`** — this avoids all shell escaping issues. Use `--sql-stdin` for piped/scripted workflows, or `--sql-base64` for transport-safe encoded queries (no quoting at all).
 
 ### Pattern
 
@@ -294,6 +294,11 @@ browser4-cli domsnapshot query "https://www.amazon.com/s?k=laptop" --sql @query.
 cat query.sql | browser4-cli domsnapshot query --sql-stdin
 # or
 browser4-cli domsnapshot query --sql-stdin < query.sql
+
+# 4. For transport-safe execution (no quoting at all), use --sql-base64
+base64 -w0 query.sql > query.b64
+browser4-cli domsnapshot query "https://www.amazon.com/s?k=laptop" --sql @query.b64 --sql-base64
+# Or inline: --sql "$(base64 -w0 query.sql)" --sql-base64
 ```
 
 ### Key Advantages Over eval

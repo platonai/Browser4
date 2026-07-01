@@ -1965,6 +1965,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             options: &[
                 OptionDef { name: "sql", description: "X-SQL query to execute. Use @url as placeholder for the target URL. Prefix with @ to read from file (e.g. --sql @query.sql)", is_bool: false, short: None },
                 OptionDef { name: "sql-stdin", description: "Read X-SQL query from stdin (avoids shell quoting issues on Windows)", is_bool: true, short: None },
+                OptionDef { name: "sql-base64", description: "Decode the --sql value (or stdin input) as base64 before execution", is_bool: true, short: None },
                 OptionDef { name: "seed-file", description: "File containing URLs to submit, one per line (direct path, no @ prefix)", is_bool: false, short: None },
                 OptionDef { name: "deadline", description: "Deadline for task completion (ISO 8601, e.g. 2026-02-24T23:59:59Z)", is_bool: false, short: None },
                 OptionDef { name: "expires", description: "Cache expiration duration (e.g. 1d, 1h)", is_bool: false, short: None },
@@ -1975,8 +1976,9 @@ pub fn all_commands() -> Vec<CommandDef> {
                 let mut p = json!({});
                 if let Some(v) = get_opt_str(args, "url") { p["url"] = json!(v); }
                 if let Some(v) = get_opt_str(args, "sql") { p["sql"] = json!(v); }
-                // --sql-stdin is handled in main.rs dispatch
+                // --sql-stdin and --sql-base64 are handled in main.rs dispatch
                 if get_bool(args, "sql-stdin").unwrap_or(false) { p["sqlStdin"] = json!(true); }
+                if get_bool(args, "sql-base64").unwrap_or(false) { p["sqlBase64"] = json!(true); }
                 if let Some(v) = get_opt_str(args, "seed-file") { p["seedFile"] = json!(v); }
                 if let Some(v) = get_opt_str(args, "deadline") { p["deadline"] = json!(v); }
                 if let Some(v) = get_opt_str(args, "expires") { p["expires"] = json!(v); }
@@ -2215,6 +2217,12 @@ pub fn all_commands() -> Vec<CommandDef> {
                     short: None,
                 },
                 OptionDef {
+                    name: "sql-base64",
+                    description: "Decode the --sql value (or stdin input) as base64 before execution",
+                    is_bool: true,
+                    short: None,
+                },
+                OptionDef {
                     name: "result-only",
                     description: "Extract and print only the resultSet object from the response JSON, omitting wrapper metadata",
                     is_bool: true,
@@ -2232,8 +2240,9 @@ pub fn all_commands() -> Vec<CommandDef> {
                 let sql = get_opt_str(args, "sql").unwrap_or_default();
                 let url = get_opt_str(args, "url").unwrap_or("");
                 let mut p = json!({ "sql": sql, "url": url });
-                // Pass through CLI-side flags (--sql-stdin is handled in main.rs dispatch)
+                // Pass through CLI-side flags (--sql-stdin and --sql-base64 are handled in main.rs dispatch)
                 if get_bool(args, "sql-stdin").unwrap_or(false) { p["sqlStdin"] = json!(true); }
+                if get_bool(args, "sql-base64").unwrap_or(false) { p["sqlBase64"] = json!(true); }
                 if let Some(true) = get_bool(args, "result-only") { p["resultOnly"] = json!(true); }
                 if let Some(f) = get_opt_str(args, "output-file") { p["outputFile"] = json!(f); }
                 p

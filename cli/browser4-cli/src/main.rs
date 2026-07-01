@@ -3185,6 +3185,72 @@ async fn handle_dom_snapshot_get(
     Ok(())
 }
 
+/// Resolves an `@file` path for --sql. Tries CWD first (standard CLI behavior),
+/// then falls back to the Browser4 repo root so that `cargo run` from
+/// subdirectories like `cli/browser4-cli` still finds files placed at the
+/// workspace root.
+fn resolve_sql_file(file_path: &str) -> Result<String, String> {
+    let path = std::path::Path::new(file_path);
+
+    // Absolute path — just try to read it
+    if path.is_absolute() {
+        return std::fs::read_to_string(path).map_err(|e| {
+            format!("Failed to read SQL file '{}' ({})", file_path, e)
+        });
+    }
+
+    // Try CWD first
+    let cwd = std::env::current_dir()
+        .map_err(|e| format!("Cannot determine current directory: {e}"))?;
+    let cwd_path = cwd.join(file_path);
+
+    if let Ok(content) = std::fs::read_to_string(&cwd_path) {
+        return Ok(content);
+    }
+
+    // Fall back to Browser4 repo root (for cargo run from subdirectories)
+    if let Some(root) = daemon::find_browser4_root() {
+        let root_path = root.join(file_path);
+        if root_path != cwd_path {
+            if let Ok(content) = std::fs::read_to_string(&root_path) {
+                return Ok(content);
+            }
+            return Err(format!(
+                "Failed to read SQL file '{}'\n  Tried: '{}'\n  Tried: '{}'",
+                file_path,
+                cwd_path.display(),
+                root_path.display(),
+            ));
+        }
+    }
+
+    Err(format!(
+        "Failed to read SQL file '{}' (looked in: '{}')",
+        file_path,
+        cwd_path.display(),
+    ))
+}
+
+/// Base64-decode the SQL string if `--sql-base64` was passed.
+/// Applied after `@file` resolution so base64-encoded files are also supported.
+fn maybe_decode_base64_sql(sql: String, tool_params: &Value) -> Result<String, String> {
+    let use_base64 = tool_params
+        .get("sqlBase64")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    if !use_base64 {
+        return Ok(sql);
+    }
+    if sql.trim().is_empty() {
+        return Err("--sql-base64 was set but the SQL value is empty.".to_string());
+    }
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(sql.trim())
+        .map_err(|e| format!("Failed to base64-decode SQL: {e}"))?;
+    String::from_utf8(bytes)
+        .map_err(|e| format!("Base64-decoded SQL is not valid UTF-8: {e}"))
+}
+
 async fn handle_dom_snapshot_query(
     client: &Client,
     base_url: &str,
@@ -3225,7 +3291,7 @@ async fn handle_dom_snapshot_query(
 
     if sql_raw.is_empty() {
         return Err(
-            "--sql is required. Provide an inline X-SQL query, @file.sql, or use --sql-stdin."
+            "--sql is required. Provide an inline X-SQL query, @file.sql, --sql-stdin, or --sql-base64."
                 .to_string(),
         );
     }
@@ -3233,11 +3299,13 @@ async fn handle_dom_snapshot_query(
     // Handle --sql @file.sql pattern
     let sql = if sql_raw.starts_with('@') {
         let file_path = &sql_raw[1..];
-        std::fs::read_to_string(file_path)
-            .map_err(|e| format!("Failed to read SQL file '{}': {}", file_path, e))?
+        resolve_sql_file(file_path)?
     } else {
         sql_raw
     };
+
+    // Handle --sql-base64: decode base64-encoded SQL
+    let sql = maybe_decode_base64_sql(sql, tool_params)?;
 
     // @url replacement is handled server-side by SQLTemplate.createSQL(url),
     // which properly escapes the URL value. Do NOT eagerly replace @url here —
@@ -3504,41 +3572,113 @@ async fn handle_dom_snapshot_inspect(
     // Suggestions
     if let Some(suggestions) = data.get("suggestions").and_then(|v| v.as_array()) {
         if !suggestions.is_empty() {
-            cli_println!("");
-            cli_println!("  Suggested selectors (recurring across matches):");
-            for sug in suggestions {
+            // Split into quality suggestions and bare-tag fallbacks
+            let (quality_sugs, bare_sugs): (Vec<_>, Vec<_>) = suggestions
+                .iter()
+                .partition(|s| {
+                    let tag = s.get("tag").and_then(|v| v.as_str()).unwrap_or("");
+                    let sel = s.get("selector").and_then(|v| v.as_str()).unwrap_or("");
+                    // Bare tag = selector is just the tag name (no class/id/attr brackets)
+                    sel != tag
+                });
+
+            // Helper to render a single suggestion row
+            let render_suggestion = |sug: &Value| {
                 let sel = sug.get("selector").and_then(|v| v.as_str()).unwrap_or("");
                 let count = sug.get("matchCount").and_then(|v| v.as_i64()).unwrap_or(0);
                 let coverage = sug.get("coverage").and_then(|v| v.as_str()).unwrap_or("");
-                let text = sug.get("textPreview").and_then(|v| v.as_str()).unwrap_or("");
+                let quality = sug.get("quality").and_then(|v| v.as_str()).unwrap_or("");
 
-                let text_hint = if text.is_empty() {
-                    String::new()
-                } else {
-                    format!("→ \"{}\"", text)
+                // Quality indicator
+                let star = match quality {
+                    "high" => "★ ",
+                    _ => "  ",
                 };
+
+                // Value samples from textSamples (new) or fall back to textPreview (old)
+                let text_hint = if let Some(samples) = sug.get("textSamples").and_then(|v| v.as_array()) {
+                    let vals: Vec<&str> = samples.iter()
+                        .filter_map(|v| v.as_str())
+                        .filter(|s| !s.is_empty())
+                        .take(3)
+                        .collect();
+                    if vals.is_empty() {
+                        String::new()
+                    } else {
+                        format!("→ \"{}\"", vals.join("\" | \""))
+                    }
+                } else {
+                    let text = sug.get("textPreview").and_then(|v| v.as_str()).unwrap_or("");
+                    if text.is_empty() {
+                        String::new()
+                    } else {
+                        format!("→ \"{}\"", text)
+                    }
+                };
+
                 cli_println!(
-                    "  {:>3}/{} ({})  {:<40} {}",
-                    count, analyzed, coverage, sel, text_hint
+                    "  {}{:>3}/{} ({})  {:<40} {}",
+                    star, count, analyzed, coverage, sel, text_hint
                 );
+            };
+
+            cli_println!("");
+            cli_println!("  Suggested selectors (recurring across matches):");
+
+            // Render quality suggestions first (with class/id/attr specificity)
+            for sug in &quality_sugs {
+                render_suggestion(sug);
+            }
+
+            // Render bare-tag fallbacks grouped at bottom
+            if !bare_sugs.is_empty() {
+                cli_println!("");
+                cli_println!("  Structural (bare tags, low specificity):");
+                for sug in &bare_sugs {
+                    render_suggestion(sug);
+                }
             }
         }
     }
 
-    // Content-selector discovery tips
+    // Dynamic next-step tips based on discovered selectors
     cli_println!("");
-    cli_println!("  💡 Content selector tips:");
-    cli_println!("     Use semantic tags to target content directly:");
-    cli_println!("       h2              — section titles / product names");
-    cli_println!("       h1, h3, h4      — other heading levels");
-    cli_println!("       a               — links");
-    cli_println!("       img             — images");
-    cli_println!("       span, p, li     — inline text, paragraphs, list items");
-    cli_println!("     Use class selectors for specific content types:");
-    cli_println!("       .a-price         — Amazon price elements (example)");
-    cli_println!("       .a-icon-alt      — Amazon rating text (example)");
-    cli_println!("     Try: domsnapshot get all text \"h2\" --limit 10");
-    cli_println!("     Try: domsnapshot query --sql \"SELECT text-content FROM load_and_select(@url, 'h2')\"");
+    if let Some(suggestions) = data.get("suggestions").and_then(|v| v.as_array()) {
+        // Pick up to 3 medium+ quality selectors with class/id specificity
+        let actionable: Vec<&str> = suggestions
+            .iter()
+            .filter_map(|s| {
+                let sel = s.get("selector").and_then(|v| v.as_str()).unwrap_or("");
+                let tag = s.get("tag").and_then(|v| v.as_str()).unwrap_or("");
+                let quality = s.get("quality").and_then(|v| v.as_str()).unwrap_or("");
+                // Only suggest specific selectors (not bare tags) and not low quality
+                if sel != tag && quality != "low" {
+                    Some(sel)
+                } else {
+                    None
+                }
+            })
+            .take(3)
+            .collect();
+
+        if !actionable.is_empty() {
+            cli_println!("  💡 Try these next:");
+            for sel in &actionable {
+                cli_println!("     domsnapshot get all text \"{}\" --limit 20", sel);
+            }
+            if let Some(first) = actionable.first() {
+                cli_println!("     domsnapshot query --sql \"SELECT text-content FROM load_and_select(@url, '{}')\"", first);
+            }
+        } else {
+            // Fallback when no quality selectors found (e.g., all bare tags)
+            cli_println!("  💡 Try narrowing the scope with a more specific CSS selector:");
+            cli_println!("     domsnapshot inspect \".card\" --max 20 --depth 6");
+        }
+    } else {
+        // Fallback when no suggestions at all
+        cli_println!("  💡 Try narrowing the scope with a more specific CSS selector:");
+        cli_println!("     domsnapshot inspect \".card\" --max 20 --depth 6");
+    }
 
     json_field("inspect", data);
     Ok(())
@@ -5059,7 +5199,7 @@ async fn handle_swarm_query(
     }
     if query_raw.as_ref().map_or(true, |q| q.is_empty()) {
         return Err(
-            "--sql is required. Provide an inline X-SQL query, @file.sql, or use --sql-stdin."
+            "--sql is required. Provide an inline X-SQL query, @file.sql, --sql-stdin, or --sql-base64."
                 .to_string(),
         );
     }
@@ -5068,14 +5208,16 @@ async fn handle_swarm_query(
     let query = match &query_raw {
         Some(q) if q.starts_with('@') => {
             let file_path = &q[1..];
-            Some(
-                std::fs::read_to_string(file_path)
-                    .map_err(|e| format!("Failed to read query file '{}': {}", file_path, e))?,
-            )
+            Some(resolve_sql_file(file_path)?)
         }
         Some(q) => Some(q.clone()),
         None => None,
     };
+
+    // Handle --sql-base64: decode base64-encoded SQL
+    let query = query
+        .map(|q| maybe_decode_base64_sql(q, tool_params))
+        .transpose()?;
 
     // Collect URLs to query
     let mut urls: Vec<String> = Vec::new();
