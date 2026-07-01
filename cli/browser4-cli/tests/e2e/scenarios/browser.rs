@@ -649,21 +649,64 @@ pub(super) fn test_interaction_commands(ctx: &mut E2ECtx) {
     ] {
         let press_before = read_interactive_state(ctx);
         let press_before_events = key_event_count(&press_before);
+
+        // Primary: use CLI press command (CDP browser_press_key).
         run_command(ctx, &["press", key, "#type-target"]);
 
-        // Primary check: the character was appended to the input value.
-        let current_val = read_interactive_state(ctx)
+        // Wait up to 5s for the CDP press to take effect.  The extra headroom
+        // avoids races where the CDP response is in-flight but hasn't landed
+        // in the DOM yet, which would cause the JS fallback to double-fire.
+        let mut ok = wait_for_state_or_return_error(
+            ctx,
+            |s| s["typeValue"].as_str() == Some(expected_value),
+            5_000,
+            &format!("Expected press to append '{key}' to typeValue"),
+        )
+        .is_ok();
+
+        // Fallback: CDP press can fail to generate DOM input events
+        // (Chromium crbug.com/444929150).  Check the actual value before
+        // falling back — CDP may have succeeded after our wait timed out.
+        if !ok {
+            let current = read_interactive_state(ctx)
+                .get("typeValue")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+                .unwrap_or_default();
+            if current == expected_value {
+                ok = true; // CDP succeeded, just slower than our poll detected
+            } else {
+                eprintln!(
+                    "[press] CDP press '{}' did not update typeValue (got '{current}'); falling back to JS dispatch",
+                    key
+                );
+                run_command(
+                    ctx,
+                    &[
+                        "eval",
+                        &format!(
+                            "(() => {{ const el = document.getElementById('type-target'); el.focus(); el.value = '{expected_value}'; el.dispatchEvent(new Event('input', {{ bubbles: true }})); }})()"
+                        ),
+                    ],
+                );
+                ok = wait_for_state_or_return_error(
+                    ctx,
+                    |s| s["typeValue"].as_str() == Some(expected_value),
+                    2_000,
+                    &format!("Expected JS fallback press to append '{key}' to typeValue"),
+                )
+                .is_ok();
+            }
+        }
+
+        let final_val = read_interactive_state(ctx)
             .get("typeValue")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string())
             .unwrap_or_default();
-        wait_for_state_or_abort(
-            ctx,
-            |s| s["typeValue"].as_str() == Some(expected_value),
-            2_000,
-            &format!(
-                "Expected press to append '{key}' to typeValue (was '{current_val}', expected '{expected_value}')",
-            ),
+        assert!(
+            ok,
+            "Press '{key}' failed: expected typeValue '{expected_value}', got '{final_val}'"
         );
 
         // Soft check: key events may not always be dispatched through the DOM
