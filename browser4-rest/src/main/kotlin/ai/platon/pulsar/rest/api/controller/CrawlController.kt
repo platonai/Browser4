@@ -30,13 +30,14 @@ class CrawlController(
      */
     @PostMapping
     fun startCrawl(@RequestBody request: CrawlRequest): String {
-        if (request.url.isBlank()) {
-            throw IllegalArgumentException("url must not be blank")
+        if (request.url.isBlank() && request.urls.isNullOrEmpty()) {
+            throw IllegalArgumentException("url or urls must not be blank")
         }
-        if (request.depth < 1) {
-            throw IllegalArgumentException("depth must be >= 1, got ${request.depth}")
+        if (request.depth < 0) {
+            throw IllegalArgumentException("depth must be >= 0, got ${request.depth}")
         }
-        logger.info("Crawl request: url='{}' depth={} args='{}'", request.url, request.depth, request.args)
+        logger.info("Crawl request: url='{}' seeds={} depth={} args='{}' sql={}",
+            request.url, request.urls?.size ?: 0, request.depth, request.args, request.sql != null)
         return crawlService.submit(request)
     }
 

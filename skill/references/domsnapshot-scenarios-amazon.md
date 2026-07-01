@@ -257,6 +257,8 @@ browser4-cli domsnapshot get all attr "img.s-image" src
 
 **Why `get all` here:** Unlike `domsnapshot get` (which returns only the first match), `get all` returns a JSON array of all matching elements. This is ideal for validating that your discovered selectors actually work across the full result set before writing a structured query.
 
+> **⚠️ Why not just use `get all` for everything?** Each `get all` call scans the entire document independently. If you run `get all text "h2 a"` (69 titles) and `get all text ".a-offscreen"` (91 prices), the two arrays have different lengths and can't be aligned — some products lack prices, some prices belong to non-product elements. Step 15d solves this with `DOM_LOAD_AND_SELECT` scoped to `.s-result-item`, so each row's fields stay together.
+
 ### 15d. Structured extraction with X-SQL query
 
 For the most efficient single-command workflow, combine all fields into one X-SQL query:

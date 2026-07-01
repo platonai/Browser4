@@ -1,10 +1,15 @@
 package ai.platon.pulsar.rest.api.service
 
 import ai.platon.pulsar.agentic.context.AgenticContexts
+import ai.platon.pulsar.agentic.context.sql.AbstractBrowser4SQLContext
+import ai.platon.pulsar.common.PulsarSessionManager
 import ai.platon.pulsar.common.ResourceStatus
+import ai.platon.pulsar.common.sql.SQLTemplate
 import ai.platon.pulsar.dom.FeaturedDocument
 import ai.platon.pulsar.persist.WebPage
-import ai.platon.pulsar.rest.session.PulsarSessionManager
+import ai.platon.pulsar.persist.metadata.ProtocolStatusCodes
+import ai.platon.pulsar.ql.common.ResultSets
+import ai.platon.pulsar.ql.h2.utils.ResultSetUtils
 import ai.platon.pulsar.skeleton.PulsarSettings
 import ai.platon.pulsar.skeleton.common.options.LoadOptions
 import ai.platon.pulsar.skeleton.session.PulsarSession
@@ -13,13 +18,17 @@ import jakarta.annotation.PreDestroy
 import kotlinx.coroutines.*
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Service
+import java.sql.ResultSet
+import java.time.Instant
 import java.util.*
 import java.util.concurrent.ConcurrentHashMap
 
 data class CrawlRequest(
     val url: String = "",
     val args: String = "",
-    val depth: Int = 1
+    val depth: Int = 1,
+    val urls: List<String>? = null,
+    val sql: String? = null
 )
 
 data class CrawlResponse(
@@ -34,7 +43,8 @@ data class CrawlPageResult(
     val url: String,
     val title: String? = null,
     val contentLength: Long? = null,
-    val depth: Int = 0
+    val depth: Int = 0,
+    val extracted: List<Map<String, Any?>>? = null
 )
 
 @Service
@@ -70,22 +80,46 @@ class CrawlService(
         )
         taskStore[taskId] = response
 
+        // Compute effective seed URL list
+        val seedUrls = if (!request.urls.isNullOrEmpty()) {
+            request.urls
+        } else if (request.url.isNotBlank()) {
+            listOf(request.url)
+        } else {
+            emptyList()
+        }
+
+        if (seedUrls.isEmpty()) {
+            taskStore[taskId] = CrawlResponse(
+                taskId = taskId,
+                status = ResourceStatus.getStatusText(ResourceStatus.SC_INTERNAL_SERVER_ERROR),
+                error = "No URLs provided"
+            )
+            return taskId
+        }
+
         crawlScope.launch {
             try {
-                val pages = withContext(Dispatchers.IO) {
-                    if (request.depth <= 1) {
-                        crawlDepth1(taskId, request)
-                    } else {
-                        crawlDepthN(taskId, request)
+                val allPages = withContext(Dispatchers.IO) {
+                    val results = mutableListOf<CrawlPageResult>()
+                    for (seedUrl in seedUrls) {
+                        val seedRequest = request.copy(url = seedUrl, urls = null)
+                        val pages = when {
+                            seedRequest.depth == 0 -> crawlDepth0(taskId, seedRequest)
+                            seedRequest.depth <= 1 -> crawlDepth1(taskId, seedRequest)
+                            else -> crawlDepthN(taskId, seedRequest)
+                        }
+                        results.addAll(pages)
                     }
+                    results
                 }
                 taskStore[taskId] = CrawlResponse(
                     taskId = taskId,
                     status = ResourceStatus.getStatusText(ResourceStatus.SC_OK),
-                    pagesFound = pages.size,
-                    pages = pages
+                    pagesFound = allPages.size,
+                    pages = allPages
                 )
-                logger.info("Crawl task {} completed: {} pages", taskId, pages.size)
+                logger.info("Crawl task {} completed: {} pages", taskId, allPages.size)
             } catch (e: CancellationException) {
                 taskStore[taskId] = CrawlResponse(
                     taskId = taskId,
@@ -103,7 +137,7 @@ class CrawlService(
             }
         }
 
-        logger.info("Crawl task submitted: {} url={} depth={}", taskId, request.url, request.depth)
+        logger.info("Crawl task submitted: {} seeds={} depth={}", taskId, seedUrls.size, request.depth)
         return taskId
     }
 
@@ -116,6 +150,42 @@ class CrawlService(
             status = ResourceStatus.getStatusText(ResourceStatus.SC_NOT_FOUND),
             error = "Task not found: $taskId"
         )
+    }
+
+    // ------------------------------------------------------------------
+    // Depth=0: fetch each seed URL directly, no link discovery
+    // ------------------------------------------------------------------
+
+    private suspend fun crawlDepth0(taskId: String, request: CrawlRequest): List<CrawlPageResult> {
+        val session = AgenticContexts.createSession()
+        try {
+            val options = parseOptions(session, request.args)
+            val document = session.loadDocument(request.url, options)
+
+            val extracted = if (request.sql != null) {
+                executeSqlQuery(session, request.url, request.sql)
+            } else null
+
+            val result = CrawlPageResult(
+                url = request.url,
+                title = document.title,
+                contentLength = document.contentLength()?.toLong(),
+                depth = 0,
+                extracted = extracted
+            )
+            logger.info("Crawl {}: fetched seed URL {}", taskId, request.url)
+            return listOf(result)
+        } catch (e: Exception) {
+            logger.error("Crawl {}: failed to fetch seed URL {}", taskId, request.url, e)
+            return listOf(CrawlPageResult(
+                url = request.url,
+                title = null,
+                contentLength = null,
+                depth = 0
+            ))
+        } finally {
+            runCatching { session.close() }
+        }
     }
 
     // ------------------------------------------------------------------
@@ -144,14 +214,16 @@ class CrawlService(
             // Submit each out-link as a ParsableHyperlink so we can collect results
             outLinks.forEach { linkUrl ->
                 val hyperlink = ParsableHyperlink("$linkUrl -parse") { _page: WebPage, _document: FeaturedDocument ->
-                    results.add(
-                        CrawlPageResult(
-                            url = linkUrl,
-                            title = _document.title,
-                            contentLength = _page.contentLength,
-                            depth = 1
-                        )
-                    )
+                    val extracted = if (request.sql != null) {
+                        executeSqlQuery(session, linkUrl, request.sql)
+                    } else null
+                    results.add(CrawlPageResult(
+                        url = linkUrl,
+                        title = _document.title,
+                        contentLength = _page.contentLength,
+                        depth = 1,
+                        extracted = extracted
+                    ))
                 }
                 session.submit(hyperlink)
             }
@@ -194,14 +266,16 @@ class CrawlService(
                 val currentDepth = extractDepth(page) ?: 1
 
                 // Record this page
-                results.add(
-                    CrawlPageResult(
-                        url = pageUrl,
-                        title = document.title,
-                        contentLength = page.contentLength,
-                        depth = currentDepth
-                    )
-                )
+                val extracted = if (request.sql != null) {
+                    executeSqlQuery(session, pageUrl, request.sql)
+                } else null
+                results.add(CrawlPageResult(
+                    url = pageUrl,
+                    title = document.title,
+                    contentLength = page.contentLength,
+                    depth = currentDepth,
+                    extracted = extracted
+                ))
                 visited.add(normalizeForVisit(pageUrl))
 
                 logger.debug("Crawl {}: depth={} page={}", taskId, currentDepth, pageUrl)
@@ -266,6 +340,34 @@ class CrawlService(
             session.options()
         } else {
             session.options(args)
+        }
+    }
+
+    /**
+     * Execute an X-SQL query against the page at [pageUrl].
+     * Uses [SQLTemplate] to substitute @url placeholder, then runs the query
+     * via the session's SQL context.  Returns the result set as a list of row
+     * maps, or null on failure (logged, not propagated — a single extraction
+     * failure does not fail the whole crawl).
+     */
+    private fun executeSqlQuery(
+        session: PulsarSession,
+        pageUrl: String,
+        sql: String
+    ): List<Map<String, Any?>>? {
+        return try {
+            val processedSql = SQLTemplate(sql).createSQL(pageUrl)
+            val sqlContext = session.context as? AbstractBrowser4SQLContext
+                ?: run {
+                    logger.warn("Session context is not an SQL context; cannot execute X-SQL")
+                    return null
+                }
+            val rs: ResultSet = sqlContext.executeQuery(processedSql)
+            val copied = ResultSets.copyResultSet(rs)
+            ResultSetUtils.getTextEntitiesFromResultSet(copied)
+        } catch (e: Exception) {
+            logger.error("Failed to execute X-SQL on '{}': {}", pageUrl, e.message)
+            null
         }
     }
 

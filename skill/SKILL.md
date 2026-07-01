@@ -223,6 +223,8 @@ browser4-cli domsnapshot inspect [selector] [--max N]   # analyze DOM structure,
 
 Full reference: **[references/domsnapshot.md](references/domsnapshot.md)**.
 
+> **`get all` vs `query` for list pages:** Use `domsnapshot get all` to validate a single field across matches. For **correlated multi-field extraction** (title + price + URL per item), use `domsnapshot query` with X-SQL's `DOM_LOAD_AND_SELECT` — each `get all` call scans the document independently, producing arrays that can't be aligned across calls. Pattern: [x-sql-dom-load-select.md](references/x-sql-dom-load-select.md).
+
 > **⚠️ Output pagination (DOM snapshot commands).** `get html`, `get all html`, and `grep` paginate output at 2K lines by default. `get text` and `get all text` are not paginated by default (single-field text extraction rarely exceeds practical limits). Use `--page N` for subsequent pages, `--page-size N` to change page size, or `--all` to disable pagination entirely. Pagination is automatically skipped in `--json` and `--quiet` modes.
 
 > **PowerCSS `:expr()` selectors** query elements by visual features (size, position, content density) — resilient to HTML structure changes:
@@ -351,14 +353,13 @@ FROM DOM_LOAD_AND_SELECT(@url, '[data-component-type=\"s-search-result\"]', 1, 4
 
 ### Function Reference
 
-X-SQL provides ~200 functions across four namespaces:
+X-SQL provides ~228 functions across three main namespaces:
 
 | Namespace | Functions | Purpose |
 |-----------|-----------|---------|
-| `DOM_*` | ~110 | Element properties, text extraction, CSS selection, regex, tree navigation |
-| `DOM_FIRST_*` / `DOM_ALL_*` | ~50 | Batch extraction: `DOM_FIRST_TEXT(DOM, '.price')`, `DOM_ALL_HREFS(DOM, 'a')` |
-| `STR_*` | ~90 | String manipulation: trim, split, regex, case conversion, padding |
-| `ARRAY_*` | 3 | Array operations: join, first-not-blank, first-not-empty |
+| `DOM` | ~135 | Element properties, text extraction, CSS selection, regex, tree navigation, page loading. Includes `DOM_FIRST_*` / `DOM_ALL_*` batch extractors (~50) and `DOM_*` element-level functions (~85). Defined by `@UDFGroup(namespace = "DOM")` |
+| `STR` | ~90 | String manipulation: trim, split, regex, case conversion, padding |
+| `ARRAY` | 3 | Array operations: join, first-not-blank, first-not-empty |
 
 **Full reference:** **[references/x-sql.md](references/x-sql.md)** — master index with all functions, plus leaf files:
 - [DOM_LOAD_AND_SELECT](references/x-sql-dom-load-select.md)
@@ -389,10 +390,19 @@ browser4-cli swarm status|result <id> | swarm list
 
 ## Crawl CLI
 
-Recursive website crawling — start from a seed URL and follow links. Full reference: **[references/crawl.md](references/crawl.md)**.
+Recursive website crawling from a URL or seed file, with optional X-SQL data extraction. Full reference: **[references/crawl.md](references/crawl.md)**.
 
 ```bash
-browser4-cli crawl <url> [--depth=1] [--out-link-selector=<CSS>] [--out-link-pattern=<regex>] [--background]
+# Link discovery (depth >= 1)
+browser4-cli crawl <url> [--depth=N] [--out-link-selector=<CSS>] [--out-link-pattern=<regex>] [--background]
+
+# Bulk fetch from seed file (depth 0 = no link discovery)
+browser4-cli crawl --seed-file urls.txt --depth 0
+
+# Bulk fetch + X-SQL extraction
+browser4-cli crawl --seed-file urls.txt --sql @extract.sql --format csv -o results.csv
+
+# Track tasks
 browser4-cli crawl list
 ```
 

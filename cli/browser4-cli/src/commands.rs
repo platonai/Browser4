@@ -1842,7 +1842,8 @@ pub fn all_commands() -> Vec<CommandDef> {
             options: &[
                 OptionDef { name: "schema", description: "JSON schema to constrain the extracted data structure", is_bool: false, short: None },
                 OptionDef { name: "filename", description: "Save extracted content to a file instead of printing to stdout", is_bool: false, short: None },
-                OptionDef { name: "raw", description: "Print extracted content directly to stdout (by default it is saved to a file)", is_bool: true, short: None },
+                OptionDef { name: "raw", description: "Print extracted content directly to stdout (alias for --stdout)", is_bool: true, short: None },
+                OptionDef { name: "stdout", description: "Print extracted content directly to stdout", is_bool: true, short: None },
             ],
             tool_name_fn: |_| "agent_extract".to_string(),
             tool_params_fn: |args| {
@@ -1850,6 +1851,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 if let Some(s) = get_opt_str(args, "schema") { p["schema"] = json!(s); }
                 if let Some(f) = get_opt_str(args, "filename") { p["filename"] = json!(f); }
                 if let Some(true) = get_bool(args, "raw") { p["raw"] = json!(true); }
+                if let Some(true) = get_bool(args, "stdout") { p["stdout"] = json!(true); }
                 p
             },
         },
@@ -1863,7 +1865,8 @@ pub fn all_commands() -> Vec<CommandDef> {
             options: &[
                 OptionDef { name: "selector", description: "CSS selector to limit the scope of summarization", is_bool: false, short: None },
                 OptionDef { name: "filename", description: "Save summary to a file instead of printing to stdout", is_bool: false, short: None },
-                OptionDef { name: "raw", description: "Print summary directly to stdout (by default it is saved to a file)", is_bool: true, short: None },
+                OptionDef { name: "raw", description: "Print summary directly to stdout (alias for --stdout)", is_bool: true, short: None },
+                OptionDef { name: "stdout", description: "Print summary directly to stdout", is_bool: true, short: None },
             ],
             tool_name_fn: |_| "agent_summarize".to_string(),
             tool_params_fn: |args| {
@@ -1872,6 +1875,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 if let Some(s) = get_opt_str(args, "selector") { p["selector"] = json!(s); }
                 if let Some(f) = get_opt_str(args, "filename") { p["filename"] = json!(f); }
                 if let Some(true) = get_bool(args, "raw") { p["raw"] = json!(true); }
+                if let Some(true) = get_bool(args, "stdout") { p["stdout"] = json!(true); }
                 p
             },
         },
@@ -2053,17 +2057,23 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "crawl",
-            description: "Crawl a website starting from a URL, following links up to a configurable depth",
+            description: "Crawl a website starting from a URL or seed file, following links up to a configurable depth. Use --seed-file for bulk URL lists, --sql for X-SQL data extraction from crawled pages.",
             category: Category::Swarm,
             hidden: false,
             batch_supported: false,
             args: &[ArgDef {
                 name: "url",
-                description: "The starting URL for the crawl",
-                optional: false,
+                description: "The starting URL for the crawl (omit if using --seed-file)",
+                optional: true,
             }],
             options: &[
-                OptionDef { name: "depth", description: "Maximum crawl depth (default: 1)", is_bool: false, short: Some("d") },
+                OptionDef { name: "depth", description: "Maximum crawl depth (default: 1). Use 0 to fetch pages without link discovery.", is_bool: false, short: Some("d") },
+                OptionDef { name: "seed-file", description: "File containing URLs to crawl, one per line (lines starting with # are ignored)", is_bool: false, short: None },
+                OptionDef { name: "sql", description: "X-SQL query to extract structured data from each crawled page. Use @url as the page URL placeholder. Prefix with @ to read from file (e.g. --sql @query.sql)", is_bool: false, short: None },
+                OptionDef { name: "sql-stdin", description: "Read X-SQL query from stdin (avoids shell quoting issues on Windows)", is_bool: true, short: None },
+                OptionDef { name: "sql-base64", description: "Decode the --sql value (or stdin input) as base64 before execution", is_bool: true, short: None },
+                OptionDef { name: "format", description: "Output format for extracted data: json, csv, or table (default: table)", is_bool: false, short: None },
+                OptionDef { name: "output", description: "Write results to a file instead of stdout", is_bool: false, short: Some("o") },
                 OptionDef { name: "out-link-selector", description: "CSS selector to extract links from each page", is_bool: false, short: Some("ol") },
                 OptionDef { name: "out-link-pattern", description: "Regex pattern to filter extracted links (default: .+)", is_bool: false, short: Some("olp") },
                 OptionDef { name: "top-links", description: "Maximum links to extract per page (default: 20)", is_bool: false, short: Some("tl") },
@@ -2084,6 +2094,28 @@ pub fn all_commands() -> Vec<CommandDef> {
                 let mut p = json!({});
                 if let Some(v) = get_opt_str(args, "url") { p["url"] = json!(v); }
                 if let Some(true) = get_bool(args, "background") { p["background"] = json!(true); }
+
+                // Seed file (CLI-side resolution, pass through for server)
+                if let Some(v) = get_opt_str(args, "seed-file") {
+                    p["seedFile"] = json!(v);
+                }
+                // X-SQL extraction (resolved in main.rs dispatch)
+                if let Some(v) = get_opt_str(args, "sql") {
+                    p["sql"] = json!(v);
+                }
+                if get_bool(args, "sql-stdin").unwrap_or(false) {
+                    p["sqlStdin"] = json!(true);
+                }
+                if get_bool(args, "sql-base64").unwrap_or(false) {
+                    p["sqlBase64"] = json!(true);
+                }
+                // Output options (CLI-side, not sent to server)
+                if let Some(v) = get_opt_str(args, "format") {
+                    p["format"] = json!(v);
+                }
+                if let Some(v) = get_opt_str(args, "output") {
+                    p["output"] = json!(v);
+                }
 
                 // Build the LoadOptions args string from individual flags
                 let mut load_opts = Vec::new();
@@ -2764,6 +2796,17 @@ mod tests {
     }
 
     #[test]
+    fn test_extract_with_stdout() {
+        let map = commands_map();
+        let cmd = map.get("extract").unwrap();
+        let mut args = HashMap::new();
+        args.insert("instruction".to_string(), json!("product name, price"));
+        args.insert("stdout".to_string(), json!(true));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["stdout"], true);
+    }
+
+    #[test]
     fn test_summarize_tool_name_and_params() {
         let map = commands_map();
         let cmd = map.get("summarize").unwrap();
@@ -2803,6 +2846,16 @@ mod tests {
         args.insert("raw".to_string(), json!(true));
         let params = (cmd.tool_params_fn)(&args);
         assert_eq!(params["raw"], true);
+    }
+
+    #[test]
+    fn test_summarize_with_stdout() {
+        let map = commands_map();
+        let cmd = map.get("summarize").unwrap();
+        let mut args = HashMap::new();
+        args.insert("stdout".to_string(), json!(true));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["stdout"], true);
     }
 
     #[test]
@@ -4150,7 +4203,7 @@ mod tests {
         assert!(!cmd.hidden);
         assert_eq!(cmd.args.len(), 1);
         assert_eq!(cmd.args[0].name, "url");
-        assert!(!cmd.args[0].optional);
+        assert!(cmd.args[0].optional, "url should be optional when --seed-file is used");
         assert_eq!(cmd.category, Category::Swarm);
     }
 
@@ -4249,6 +4302,86 @@ mod tests {
         assert!(args_str.contains("-expires 1h"));
         assert!(args_str.contains("-priority 5"));
         assert!(args_str.contains("-pageLoadTimeout 30s"));
+    }
+
+    #[test]
+    fn test_crawl_params_with_seed_file() {
+        let map = commands_map();
+        let cmd = map.get("crawl").unwrap();
+        let mut args = HashMap::new();
+        args.insert("seed-file".to_string(), json!("urls.txt"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["seedFile"].as_str().unwrap(), "urls.txt");
+    }
+
+    #[test]
+    fn test_crawl_params_with_sql() {
+        let map = commands_map();
+        let cmd = map.get("crawl").unwrap();
+        let mut args = HashMap::new();
+        args.insert("url".to_string(), json!("https://example.com"));
+        args.insert("sql".to_string(), json!("SELECT dom_first_text(dom, 'h1') FROM load_and_select(@url, ':root')"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(
+            params["sql"].as_str().unwrap(),
+            "SELECT dom_first_text(dom, 'h1') FROM load_and_select(@url, ':root')"
+        );
+    }
+
+    #[test]
+    fn test_crawl_params_with_sql_stdin_and_base64() {
+        let map = commands_map();
+        let cmd = map.get("crawl").unwrap();
+        let mut args = HashMap::new();
+        args.insert("sql-stdin".to_string(), json!(true));
+        args.insert("sql-base64".to_string(), json!(true));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["sqlStdin"].as_bool().unwrap(), true);
+        assert_eq!(params["sqlBase64"].as_bool().unwrap(), true);
+    }
+
+    #[test]
+    fn test_crawl_params_with_format_and_output() {
+        let map = commands_map();
+        let cmd = map.get("crawl").unwrap();
+        let mut args = HashMap::new();
+        args.insert("url".to_string(), json!("https://example.com"));
+        args.insert("format".to_string(), json!("csv"));
+        args.insert("output".to_string(), json!("results.csv"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["format"].as_str().unwrap(), "csv");
+        assert_eq!(params["output"].as_str().unwrap(), "results.csv");
+    }
+
+    #[test]
+    fn test_crawl_params_url_optional_with_seed_file() {
+        let map = commands_map();
+        let cmd = map.get("crawl").unwrap();
+        // No url provided, only seed-file — should still produce valid params
+        let mut args = HashMap::new();
+        args.insert("seed-file".to_string(), json!("urls.txt"));
+        args.insert("depth".to_string(), json!("0"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert!(params.get("url").is_none()); // url not set
+        assert_eq!(params["seedFile"].as_str().unwrap(), "urls.txt");
+        assert_eq!(params["depth"].as_i64().unwrap(), 0);
+    }
+
+    #[test]
+    fn test_crawl_params_seed_file_with_load_options() {
+        let map = commands_map();
+        let cmd = map.get("crawl").unwrap();
+        let mut args = HashMap::new();
+        args.insert("seed-file".to_string(), json!("urls.txt"));
+        args.insert("refresh".to_string(), json!(true));
+        args.insert("parse".to_string(), json!(true));
+        args.insert("expires".to_string(), json!("2h"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["seedFile"].as_str().unwrap(), "urls.txt");
+        let args_str = params["args"].as_str().unwrap_or("");
+        assert!(args_str.contains("-refresh"));
+        assert!(args_str.contains("-parse"));
+        assert!(args_str.contains("-expires 2h"));
     }
 
     // -------------------------------------------------------------------

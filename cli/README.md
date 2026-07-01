@@ -499,6 +499,12 @@ Supports `--offset N` and `--limit N` for element-level pagination, plus
 `--page N`, `--page-size N`, `--all` for output pagination. `get all html` is
 paginated at 2000 lines by default; `get all text` is not paginated by default.
 
+> **Note:** Each `get all` call scans the whole document independently. For
+> **correlated multi-field extraction** (title + price + URL per item), use
+> `domsnapshot query` with X-SQL's `DOM_LOAD_AND_SELECT` — it scopes each row
+> to a parent container so fields stay aligned. See the
+> [list-page scraping pattern](skill/references/x-sql-dom-load-select.md).
+
 ```bash
 browser4-cli domsnapshot get all text "h2 a"
 browser4-cli domsnapshot get all text ".result" --offset 10 --limit 5
@@ -740,6 +746,8 @@ browser4-cli crawl <url> [options]
 | `--ignore-url-query` | — | Strip query params during URL normalization |
 | `--no-norm` | — | Disable URL normalization |
 | `--readonly` | — | Non-destructive mode |
+| `--page-load-timeout` | — | Max wait for each page load |
+| `-bg`, `--background` | — | Submit crawl and return immediately; use `crawl list` to track |
 
 ```bash
 # Depth 1: extract all links from homepage, load each linked page
@@ -754,6 +762,10 @@ browser4-cli crawl "https://shop.example.com" \
 
 # Deep crawl with refresh and content storage
 browser4-cli crawl "https://example.com" --depth 3 --refresh --store-content
+
+# Background crawl — submit and return immediately
+browser4-cli crawl "https://example.com" -ol "a[href]" --background
+browser4-cli crawl list
 ```
 
 ---

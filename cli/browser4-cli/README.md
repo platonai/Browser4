@@ -124,6 +124,13 @@ See [`cli/README.md`](../README.md) for the user-facing documentation.
 | `swarm status <id>` | Check the status of a scrape job |
 | `swarm result <id>` | Get the result of a completed scrape job |
 
+### Crawl
+
+| Command | Description |
+|---|---|
+| `crawl [url]` | Crawl from a URL or seed file, with optional X-SQL extraction |
+| `crawl list` | List all tracked crawl tasks and their status |
+
 ### Snapshot
 
 | Command | Description |

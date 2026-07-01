@@ -308,14 +308,14 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(
-            "  - Output is saved to a timestamped file by default. Use --raw to print to stdout instead, or --filename to specify a custom path."
+            "  - Output is saved to a timestamped file by default. Use --stdout (or --raw) to print to stdout instead, or --filename to specify a custom path."
                 .to_string(),
         );
         lines.push(String::new());
         lines.push("Examples:".to_string());
         lines.push("  browser4-cli extract \"product name, price, ratings\"".to_string());
         lines.push("  browser4-cli extract \"all contact info\" --schema person_schema.json".to_string());
-        lines.push("  browser4-cli extract \"article titles and dates\" --raw".to_string());
+        lines.push("  browser4-cli extract \"article titles and dates\" --stdout".to_string());
         lines.push("  browser4-cli extract \"page metadata\" --filename meta.json".to_string());
     }
 
@@ -640,17 +640,31 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
     }
 
     if cmd.name == "crawl" {
+        lines.push("Modes:".to_string());
+        lines.push(
+            "  Link discovery (depth >= 1): start from a seed URL, follow links up to N levels."
+                .to_string(),
+        );
+        lines.push(
+            "  Bulk fetch (depth 0): load each URL from --seed-file directly, no link discovery."
+                .to_string(),
+        );
+        lines.push(
+            "  X-SQL extraction (--sql): run a query against each crawled page and format results."
+                .to_string(),
+        );
+        lines.push(String::new());
         lines.push("Notes:".to_string());
         lines.push(
-            "  - Crawls a website starting from a URL, following links up to a configurable depth."
+            "  - Provide a positional URL or --seed-file (or both) — at least one is required."
                 .to_string(),
         );
         lines.push(
-            "  - --depth (-d) controls how many levels of links to follow (default: 1)."
+            "  - --depth (-d) controls how many levels of links to follow (default: 1). Use 0 to skip link discovery."
                 .to_string(),
         );
         lines.push(
-            "  - --out-link-selector (-ol) specifies a CSS selector to extract links from each page."
+            "  - --out-link-selector (-ol) specifies a CSS selector to extract links (required for depth >= 1)."
                 .to_string(),
         );
         lines.push(
@@ -659,6 +673,18 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         );
         lines.push(
             "  - --top-links (-tl) limits the number of links extracted per page (default: 20)."
+                .to_string(),
+        );
+        lines.push(
+            "  - --sql accepts inline X-SQL, a file path with @ prefix (e.g. --sql @query.sql), or stdin via --sql-stdin."
+                .to_string(),
+        );
+        lines.push(
+            "  - --format controls output: 'table' (default, aligned columns), 'csv', or 'json'."
+                .to_string(),
+        );
+        lines.push(
+            "  - --output (-o) writes results to a file instead of stdout."
                 .to_string(),
         );
         lines.push(
@@ -678,7 +704,9 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("  browser4-cli crawl https://example.com".to_string());
         lines.push("  browser4-cli crawl https://example.com -d 2 -ol \"a.product\" -olp \"/product/\"".to_string());
         lines.push("  browser4-cli crawl https://example.com --depth 3 --refresh --store-content".to_string());
-        lines.push("  browser4-cli crawl https://example.com -tl 10 --expires 1h --priority 5".to_string());
+        lines.push("  browser4-cli crawl --seed-file urls.txt --depth 0 --refresh".to_string());
+        lines.push("  browser4-cli crawl --seed-file urls.txt --sql @extract.sql --format csv -o results.csv".to_string());
+        lines.push("  browser4-cli crawl --seed-file urls.txt --sql-stdin --format table < query.sql".to_string());
     }
 
     if cmd.name == "domsnapshot" {
@@ -733,6 +761,10 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(
+            "  - Each `get all` call runs independently against the whole document. To extract correlated fields (e.g. title + price + URL per product), use `domsnapshot query` with X-SQL's `DOM_LOAD_AND_SELECT` — it scopes each row to a parent container so fields stay aligned."
+                .to_string(),
+        );
+        lines.push(
             "  - Element references (`e5`, `backend:15`) are NOT supported by `domsnapshot get` — use CSS selectors only."
                 .to_string(),
         );
@@ -780,6 +812,9 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push(String::new());
         lines.push("  # Get all matching elements by CSS selector (returns a JSON array)".to_string());
         lines.push("  browser4-cli domsnapshot get all text \"h2 a\"".to_string());
+        lines.push(String::new());
+        lines.push("  # Correlated multi-field extraction: title, price, and link per product".to_string());
+        lines.push("  browser4-cli domsnapshot query --sql \"SELECT dom_first_text(dom, '.title') AS title, dom_first_text(dom, '.price') AS price, dom_first_href(dom, 'a') AS link FROM load_and_select(@url, '.product')\"".to_string());
         lines.push(String::new());
         lines.push("  # Get all matching elements with element-level pagination".to_string());
         lines.push("  browser4-cli domsnapshot get all text \".result\" --limit 5 --offset 10".to_string());
@@ -1171,7 +1206,7 @@ mod tests {
         assert!(help.contains("Extract structured data"));
         assert!(help.contains("--schema"));
         assert!(help.contains("natural-language instruction"));
-        assert!(help.contains("--raw to print to stdout"));
+        assert!(help.contains("--stdout (or --raw) to print to stdout"));
         assert!(help.contains("browser4-cli extract \"product name, price, ratings\""));
     }
 
@@ -1361,6 +1396,13 @@ mod tests {
         assert!(help.contains("browser4-cli domsnapshot get html --all"));
         assert!(help.contains("browser4-cli domsnapshot grep -i error --page 2 --page-size 200"));
         assert!(help.contains("browser4-cli domsnapshot grep --all \"TODOs\""));
+        // get all independence note — steer users to X-SQL for correlated multi-field extraction
+        assert!(help.contains("Each `get all` call runs independently against the whole document"));
+        assert!(help.contains("use `domsnapshot query` with X-SQL's `DOM_LOAD_AND_SELECT`"));
+        // correlated multi-field example
+        assert!(help.contains("Correlated multi-field extraction: title, price, and link per product"));
+        assert!(help.contains("dom_first_text(dom, '.title') AS title, dom_first_text(dom, '.price') AS price, dom_first_href(dom, 'a') AS link"));
+        assert!(help.contains("FROM load_and_select(@url, '.product')"));
     }
 
     #[test]
@@ -1452,16 +1494,32 @@ mod tests {
         let cmds = all_commands();
         let cmd = cmds.iter().find(|c| c.name == "crawl").unwrap();
         let help = generate_command_help(cmd);
-        assert!(help.contains("browser4-cli crawl <url>"));
-        assert!(help.contains("Crawl a website starting from a URL"));
+        assert!(help.contains("browser4-cli crawl [url]"));
+        assert!(help.contains("Crawl a website starting from a URL or seed file"));
+        // Modes section
+        assert!(help.contains("Link discovery"));
+        assert!(help.contains("Bulk fetch"));
+        assert!(help.contains("X-SQL extraction"));
+        // Core flags
         assert!(help.contains("--depth (-d)"));
         assert!(help.contains("--out-link-selector (-ol)"));
         assert!(help.contains("--out-link-pattern (-olp)"));
         assert!(help.contains("--top-links (-tl)"));
+        // New features
+        assert!(help.contains("--sql"));
+        assert!(help.contains("--sql-stdin"));
+        assert!(help.contains("--format"));
+        assert!(help.contains("--output (-o)"));
+        assert!(help.contains("--seed-file"));
+        // Legacy flags
         assert!(help.contains("--expires"));
         assert!(help.contains("--priority"));
+        // Examples
         assert!(help.contains("browser4-cli crawl https://example.com"));
         assert!(help.contains("--depth 3 --refresh --store-content"));
+        assert!(help.contains("--seed-file urls.txt --depth 0"));
+        assert!(help.contains("--sql @extract.sql --format csv -o results.csv"));
+        assert!(help.contains("--sql-stdin --format table"));
     }
 
     #[test]

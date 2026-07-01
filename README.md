@@ -319,10 +319,14 @@ Seed files are plain text, one URL per line; `#` comments and blank lines are ig
 #### Crawl
 
 ```
-crawl <url>   Crawl a website starting from a URL, following links
-              --depth (-d), --out-link-selector (-ol), --out-link-pattern (-olp), --top-links (-tl),
-              --args (-a), --refresh, --parse, --expires, --store-content, --priority (-p),
-              --page-load-timeout, --ignore-url-query, --no-norm, --readonly
+crawl [url]     Crawl a website from a URL or seed file, with optional X-SQL extraction
+                --seed-file (bulk URL list, one per line, # comments ignored)
+                --sql (X-SQL extraction, inline or @file.sql), --sql-stdin, --sql-base64
+                --format json|csv|table (default: table), --output (-o) file
+                --depth (-d, default 1; 0 = no link discovery), --out-link-selector (-ol),
+                --out-link-pattern (-olp), --top-links (-tl), --args (-a),
+                --refresh, --parse, --expires, --store-content, --priority (-p),
+                --page-load-timeout, --ignore-url-query, --no-norm, --readonly
 ```
 
 #### Batch & Loop
