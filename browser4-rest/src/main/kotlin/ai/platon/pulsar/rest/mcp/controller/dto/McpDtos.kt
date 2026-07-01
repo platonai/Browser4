@@ -5,6 +5,8 @@ import com.fasterxml.jackson.annotation.JsonProperty
 import com.fasterxml.jackson.annotation.JsonSetter
 import com.fasterxml.jackson.annotation.Nulls
 
+import ai.platon.pulsar.rest.mcp.controller.PaginationMeta
+
 /**
  * Request body for calling an MCP tool.
  */
@@ -24,7 +26,11 @@ data class MCPToolCallResponse(
     @get:JsonProperty("isError")
     @param:JsonSetter(nulls = Nulls.SKIP)
     @param:JsonProperty("isError")
-    val isError: Boolean = false
+    val isError: Boolean = false,
+    @get:JsonProperty("pagination")
+    @param:JsonSetter(nulls = Nulls.SKIP)
+    @param:JsonProperty("pagination")
+    val pagination: PaginationMeta? = null
 )
 
 @JsonInclude(JsonInclude.Include.NON_NULL)

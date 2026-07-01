@@ -2,6 +2,7 @@ package ai.platon.pulsar.rest.mcp.controller.handler
 
 import ai.platon.pulsar.rest.session.PulsarSessionManager
 import ai.platon.pulsar.rest.mcp.controller.CLEAR_SESSION_STORAGE_SCRIPT
+import ai.platon.pulsar.rest.mcp.controller.PaginationMeta
 import ai.platon.pulsar.rest.mcp.controller.dto.MCPToolCallRequest
 import ai.platon.pulsar.rest.mcp.controller.dto.MCPToolCallResponse
 import ai.platon.pulsar.rest.mcp.controller.dto.MCPContent
@@ -158,6 +159,9 @@ class SessionManagementHandler(
     companion object {
         internal fun textResponse(text: String): MCPToolCallResponse =
             MCPToolCallResponse(content = listOf(MCPContent(text = text)))
+
+        internal fun textResponse(text: String, pagination: PaginationMeta?): MCPToolCallResponse =
+            MCPToolCallResponse(content = listOf(MCPContent(text = text)), pagination = pagination)
 
         internal fun errorResponse(message: String): MCPToolCallResponse =
             MCPToolCallResponse(content = listOf(MCPContent(text = "ERROR: $message")), isError = true)

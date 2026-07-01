@@ -9,6 +9,7 @@ import ai.platon.pulsar.skeleton.workflow.parse.html.PageSummaryIndexService
 import ai.platon.pulsar.rest.mcp.controller.dto.MCPToolCallRequest
 import ai.platon.pulsar.rest.mcp.controller.dto.MCPToolCallResponse
 import ai.platon.pulsar.rest.mcp.controller.isElementReference
+import ai.platon.pulsar.rest.mcp.controller.paginateIfRequested
 import ai.platon.pulsar.rest.mcp.controller.handler.SessionManagementHandler.Companion.errorResponse
 import ai.platon.pulsar.rest.mcp.controller.handler.SessionManagementHandler.Companion.textResponse
 import com.fasterxml.jackson.databind.ObjectMapper
@@ -168,7 +169,9 @@ class DomSnapshotHandler(
                 }
             }
 
-            ResponseEntity.ok(textResponse(jacksonObjectMapper().writeValueAsString(results)))
+            val json = objectMapper.writeValueAsString(results)
+            val (paginatedJson, pagination) = paginateIfRequested(json, args)
+            ResponseEntity.ok(textResponse(paginatedJson, pagination))
         } catch (e: Exception) {
             logger.error("dom_snapshot_scrape_all failed | {}", e.message, e)
             ResponseEntity.ok(errorResponse("dom_snapshot_scrape_all failed: ${e.message}"))
@@ -183,6 +186,20 @@ class DomSnapshotHandler(
 
         val args = request.arguments ?: emptyMap()
         val sql = args["sql"]?.toString() ?: return ResponseEntity.ok(errorResponse("Missing 'sql'"))
+
+        // Reject queries that use '.' as a literal URL in DOM_LOAD_AND_SELECT / load_and_select.
+        val dotUrlPattern = Regex(
+            """(?:DOM_)?LOAD_AND_SELECT\s*\(\s*['"]\.['"]""",
+            RegexOption.IGNORE_CASE
+        )
+        if (dotUrlPattern.containsMatchIn(sql)) {
+            return ResponseEntity.ok(errorResponse(
+                "Invalid URL '.' in DOM_LOAD_AND_SELECT. " +
+                    "Use the unquoted @url placeholder to reference the current page URL. " +
+                    "Example: FROM load_and_select(@url, ':root') — not FROM load_and_select('.', ':root'). " +
+                    "See: https://docs.browser4.ai/x-sql for details."
+            ))
+        }
 
         // Resolve URL: use explicit URL if provided, otherwise fall back to the current session's page URL
         val url = args["url"]?.toString()?.takeIf { it.isNotBlank() }
@@ -217,10 +234,17 @@ class DomSnapshotHandler(
             val html = managed.withLock {
                 val pulsarSession = managed.agenticSession
                 val url = pulsarSession.normalize(managed.driver.currentUrl())
-                val document = pulsarSession.loadDocument(url.urlString)
+                // Use getOrNull + capture fallback to get browser-captured HTML
+                // (which has vi attributes), rather than load() which may reload
+                // from the web without vi attributes.
+                val page = pulsarSession.getOrNull(url.urlString) ?: pulsarSession.capture(managed.driver)
+                val document = pulsarSession.parse(page)
+                // good, the exported HTML is pretty formatted, so grep works on it
                 document.outerHtml
             }
-            ResponseEntity.ok(textResponse(html))
+            val args = request.arguments ?: emptyMap()
+            val (paginatedHtml, pagination) = paginateIfRequested(html, args)
+            ResponseEntity.ok(textResponse(paginatedHtml, pagination))
         } catch (e: Exception) {
             logger.error("dom_snapshot_export failed | {}", e.message, e)
             ResponseEntity.ok(errorResponse("dom_snapshot_export failed: ${e.message}"))
