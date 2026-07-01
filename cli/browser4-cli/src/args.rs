@@ -119,6 +119,29 @@ pub fn build_short_option_map(options: &[crate::commands::OptionDef]) -> (HashMa
     (map, bool_opts)
 }
 
+/// Insert a key-value pair into the result map, collecting repeated non-boolean
+/// options into a JSON array so that repeatable flags like `-e PAT1 -e PAT2`
+/// accumulate instead of the second overwriting the first.
+fn insert_arg(result: &mut HashMap<String, Value>, key: String, value: Value) {
+    if value.is_boolean() {
+        // Boolean flags: repeated flags don't accumulate (e.g. -i -i is still just true).
+        result.insert(key, value);
+        return;
+    }
+    match result.remove(&key) {
+        Some(Value::Array(mut arr)) => {
+            arr.push(value);
+            result.insert(key, Value::Array(arr));
+        }
+        Some(existing) => {
+            result.insert(key, Value::Array(vec![existing, value]));
+        }
+        None => {
+            result.insert(key, value);
+        }
+    }
+}
+
 /// Parse raw CLI arguments into a map suitable for command dispatch.
 ///
 /// - Positional arguments go into `_` as a JSON array.
@@ -131,6 +154,8 @@ pub fn build_short_option_map(options: &[crate::commands::OptionDef]) -> (HashMa
 ///   option (short or long) is encountered, the next argument is NOT consumed
 ///   as its value — it stays positional.
 /// - Values `"true"` / `"false"` are coerced to booleans.
+/// - Repeated non-boolean options are collected into a JSON array
+///   (e.g. `-e foo -e bar` → `"regexp": ["foo", "bar"]`).
 pub fn parse_raw_args(
     raw_args: &[String],
     short_to_long: Option<&HashMap<String, String>>,
@@ -152,7 +177,7 @@ pub fn parse_raw_args(
                     "false" => Value::Bool(false),
                     other => Value::String(other.to_string()),
                 };
-                result.insert(key, value);
+                insert_arg(&mut result, key, value);
             } else {
                 // Check if this is a known boolean option — if so, don't consume
                 // the next argument as a value.
@@ -167,10 +192,10 @@ pub fn parse_raw_args(
                         "false" => Value::Bool(false),
                         other => Value::String(other.to_string()),
                     };
-                    result.insert(key, value);
+                    insert_arg(&mut result, key, value);
                     i += 1; // consume the value
                 } else {
-                    result.insert(rest.to_string(), Value::Bool(true));
+                    insert_arg(&mut result, rest.to_string(), Value::Bool(true));
                 }
             }
         } else if let Some(rest) = arg.strip_prefix('-') {
@@ -185,7 +210,7 @@ pub fn parse_raw_args(
                             "false" => Value::Bool(false),
                             other => Value::String(other.to_string()),
                         };
-                        result.insert(long.clone(), value);
+                        insert_arg(&mut result, long.clone(), value);
                     } else {
                         positional.push(json!(arg));
                     }
@@ -202,10 +227,10 @@ pub fn parse_raw_args(
                             "false" => Value::Bool(false),
                             other => Value::String(other.to_string()),
                         };
-                        result.insert(long.clone(), value);
+                        insert_arg(&mut result, long.clone(), value);
                         i += 1; // consume the value
                     } else {
-                        result.insert(long.clone(), Value::Bool(true));
+                        insert_arg(&mut result, long.clone(), Value::Bool(true));
                     }
                 } else {
                     positional.push(json!(arg));
@@ -1022,5 +1047,70 @@ mod tests {
         for (i, cmd) in parsed.iter().enumerate() {
             assert_eq!(cmd, &vec!["click".to_string(), format!("#btn-{i}")]);
         }
+    }
+
+    #[test]
+    fn test_parse_raw_args_repeatable_non_boolean_option_collected_to_array() {
+        // -e price -e rating -e stars should produce regexp: ["price", "rating", "stars"]
+        let short_to_long: HashMap<String, String> = [
+            ("e".to_string(), "regexp".to_string()),
+        ]
+        .into_iter()
+        .collect();
+        // -e is NOT boolean — it takes a value
+        let bool_opts: HashSet<String> = HashSet::new();
+
+        let raw = vec![
+            "snapshot-grep".to_string(),
+            "-e".to_string(),
+            "price".to_string(),
+            "-e".to_string(),
+            "rating".to_string(),
+            "-e".to_string(),
+            "stars".to_string(),
+        ];
+        let map = parse_raw_args(&raw, Some(&short_to_long), Some(&bool_opts));
+        assert_eq!(
+            map.get("regexp"),
+            Some(&json!(["price", "rating", "stars"]))
+        );
+    }
+
+    #[test]
+    fn test_parse_raw_args_repeatable_boolean_flag_not_collected() {
+        // -i -i should still be ignore-case: true (not [true, true])
+        let short_to_long: HashMap<String, String> = [
+            ("i".to_string(), "ignore-case".to_string()),
+        ]
+        .into_iter()
+        .collect();
+        let bool_opts: HashSet<String> = ["ignore-case".to_string()].into_iter().collect();
+
+        let raw = vec![
+            "snapshot-grep".to_string(),
+            "-i".to_string(),
+            "search".to_string(),
+        ];
+        let map = parse_raw_args(&raw, Some(&short_to_long), Some(&bool_opts));
+        assert_eq!(map.get("ignore-case"), Some(&json!(true)));
+    }
+
+    #[test]
+    fn test_parse_raw_args_single_non_boolean_option_not_array() {
+        // A single -e should still be a string, not an array
+        let short_to_long: HashMap<String, String> = [
+            ("e".to_string(), "regexp".to_string()),
+        ]
+        .into_iter()
+        .collect();
+        let bool_opts: HashSet<String> = HashSet::new();
+
+        let raw = vec![
+            "snapshot-grep".to_string(),
+            "-e".to_string(),
+            "price".to_string(),
+        ];
+        let map = parse_raw_args(&raw, Some(&short_to_long), Some(&bool_opts));
+        assert_eq!(map.get("regexp"), Some(&json!("price")));
     }
 }

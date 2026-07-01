@@ -1091,10 +1091,11 @@ pub fn all_commands() -> Vec<CommandDef> {
             hidden: false,
             batch_supported: false,
             args: &[
-                ArgDef { name: "pattern", description: "Regex or literal pattern to search for", optional: false },
+                ArgDef { name: "pattern", description: "Regex or literal pattern to search for. Use | for alternation (e.g. 'price|rating|stars'), not \\|", optional: true },
             ],
             options: &[
                 OptionDef { name: "ignore-case", short: Some("i"), is_bool: true, description: "Case-insensitive matching" },
+                OptionDef { name: "regexp", short: Some("e"), is_bool: false, description: "Additional regex pattern (repeatable). Use -e PATTERN for alternation, e.g. -e price -e rating -e stars" },
                 OptionDef { name: "no-line-number", short: None, is_bool: true, description: "Suppress line numbers in output" },
                 OptionDef { name: "after-context", short: Some("A"), is_bool: false, description: "Show N lines after each match" },
                 OptionDef { name: "before-context", short: Some("B"), is_bool: false, description: "Show N lines before each match" },
@@ -2268,10 +2269,11 @@ pub fn all_commands() -> Vec<CommandDef> {
             hidden: false,
             batch_supported: false,
             args: &[
-                ArgDef { name: "pattern", description: "Regex or literal pattern to search for", optional: false },
+                ArgDef { name: "pattern", description: "Regex or literal pattern to search for. Use | for alternation (e.g. 'price|rating|stars'), not \\|", optional: true },
             ],
             options: &[
                 OptionDef { name: "ignore-case", short: Some("i"), is_bool: true, description: "Case-insensitive matching" },
+                OptionDef { name: "regexp", short: Some("e"), is_bool: false, description: "Additional regex pattern (repeatable). Use -e PATTERN for alternation, e.g. -e price -e rating -e stars" },
                 OptionDef { name: "no-line-number", short: None, is_bool: true, description: "Suppress line numbers in output" },
                 OptionDef { name: "after-context", short: Some("A"), is_bool: false, description: "Show N lines after each match" },
                 OptionDef { name: "before-context", short: Some("B"), is_bool: false, description: "Show N lines before each match" },

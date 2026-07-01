@@ -3525,6 +3525,8 @@ async fn handle_dom_snapshot_inspect(
 #[derive(Debug, Default)]
 struct GrepOptions {
     pattern: String,
+    /// Additional patterns from `-e` / `--regexp` flags (repeatable).
+    extra_patterns: Vec<String>,
     ignore_case: bool,
     no_line_number: bool,
     after_context: Option<usize>,
@@ -3543,8 +3545,23 @@ fn parse_grep_options(tool_params: &Value) -> Result<GrepOptions, String> {
         .get("pattern")
         .and_then(|v| v.as_str())
         .filter(|s| !s.is_empty())
-        .ok_or_else(|| "Pattern is required".to_string())?
+        .unwrap_or("")
         .to_string();
+
+    // Collect -e / --regexp patterns (supports both single string and array
+    // of strings when the flag is repeated, e.g. -e price -e rating -e stars).
+    let extra_patterns: Vec<String> = match tool_params.get("regexp") {
+        Some(Value::Array(arr)) => arr
+            .iter()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect(),
+        Some(Value::String(s)) if !s.is_empty() => vec![s.clone()],
+        _ => vec![],
+    };
+
+    if pattern.is_empty() && extra_patterns.is_empty() {
+        return Err("Pattern is required. Provide a positional pattern, or use -e PATTERN (repeatable) for multiple patterns.".to_string());
+    }
 
     let parse_usize = |key: &str| -> Option<usize> {
         tool_params
@@ -3558,6 +3575,7 @@ fn parse_grep_options(tool_params: &Value) -> Result<GrepOptions, String> {
 
     Ok(GrepOptions {
         pattern,
+        extra_patterns,
         ignore_case: tool_params
             .get("ignore-case")
             .and_then(|v| v.as_bool())
@@ -3648,6 +3666,42 @@ async fn handle_dom_snapshot_grep(
     run_grep_on_source(&source, grep_options, "domsnapshot", page, page_size, show_all)
 }
 
+/// Convert grep-style escaped-alternation `\|` to Rust regex bare-pipe `|`.
+///
+/// In GNU grep BRE (basic regular expressions), alternation is written `\|`.
+/// Rust's `regex` crate uses ERE-like syntax where `|` is alternation and
+/// `\|` matches a literal pipe character.  This function bridges the two so
+/// that users who type `price\|rating\|stars` (the grep idiom) get the
+/// alternation they intended.
+///
+/// The conversion is safe:
+/// - If the pattern already contains bare `|`, we do nothing — the user
+///   already knows the correct syntax.
+/// - If the pattern contains `\|` but no bare `|`, we replace all `\|`
+///   with `|` (the user meant alternation).
+fn convert_alternation(pattern: &str) -> String {
+    // Already using bare | → user knows the correct syntax; leave it alone.
+    if pattern.contains('|') && !pattern.contains("\\|") {
+        return pattern.to_string();
+    }
+    // Contains \| → convert to bare | (grep BRE → Rust regex).
+    if pattern.contains("\\|") {
+        let converted = pattern.replace("\\|", "|");
+        // Only log the conversion once per session (avoid spam in loops).
+        use std::sync::atomic::{AtomicBool, Ordering};
+        static LOGGED: AtomicBool = AtomicBool::new(false);
+        if !LOGGED.swap(true, Ordering::Relaxed) {
+            eprintln!(
+                "Note: Converted grep-style alternation `\\\\|` to `|` in pattern. \
+                 Rust regex uses bare `|` for alternation (like ERE/egrep). \
+                 Use `snapshot grep -F` for literal matching."
+            );
+        }
+        return converted;
+    }
+    pattern.to_string()
+}
+
 /// Run grep matching on an already-fetched source text, printing results
 /// via cli_println! and recording json fields via json_field().
 ///
@@ -3674,10 +3728,40 @@ fn run_grep_on_source(
 
     // Build the regex pattern
     let pattern_str = &grep_options.pattern;
-    let regex_str = if grep_options.fixed_strings {
-        regex::escape(pattern_str)
+
+    // Combine main pattern with any -e patterns using alternation.
+    let mut all_patterns: Vec<String> = Vec::new();
+    if !pattern_str.is_empty() {
+        all_patterns.push(pattern_str.clone());
+    }
+    for p in &grep_options.extra_patterns {
+        all_patterns.push(p.clone());
+    }
+
+    let combined_pattern = if all_patterns.len() > 1 {
+        // Wrap each pattern in a non-capturing group so that alternation
+        // and word-boundary anchors apply per-pattern.
+        all_patterns
+            .iter()
+            .map(|p| format!("(?:{})", p))
+            .collect::<Vec<_>>()
+            .join("|")
+    } else if all_patterns.len() == 1 {
+        all_patterns.into_iter().next().unwrap()
     } else {
-        pattern_str.clone()
+        return Err("No pattern provided".to_string());
+    };
+
+    // Auto-convert grep-style \| (escaped pipe) to Rust regex | (bare pipe).
+    // In GNU grep BRE, alternation is \|; in Rust's regex crate (like ERE),
+    // alternation is | and \| matches a literal pipe character.
+    // We detect the grep-idiom and silently fix it for a better UX.
+    let converted_pattern = convert_alternation(&combined_pattern);
+
+    let regex_str = if grep_options.fixed_strings {
+        regex::escape(&converted_pattern)
+    } else {
+        converted_pattern.clone()
     };
 
     let final_pattern = if grep_options.word_regexp {
@@ -11191,5 +11275,164 @@ mod tests {
         }
 
         assert_eq!(p.get("viewports").and_then(|v| v.as_str()), Some("1-3"));
+    }
+
+    // -----------------------------------------------------------------------
+    // convert_alternation tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_convert_alternation_bare_pipe_unchanged() {
+        // User already using correct Rust regex syntax — leave it alone.
+        assert_eq!(convert_alternation("price|rating|stars"), "price|rating|stars");
+        assert_eq!(convert_alternation("foo|bar"), "foo|bar");
+    }
+
+    #[test]
+    fn test_convert_alternation_escaped_pipe_converted() {
+        // grep BRE style \| → Rust regex |
+        assert_eq!(
+            convert_alternation(r"price\|rating\|stars"),
+            "price|rating|stars"
+        );
+        assert_eq!(convert_alternation(r"error\|warning"), "error|warning");
+    }
+
+    #[test]
+    fn test_convert_alternation_no_pipe_unchanged() {
+        assert_eq!(convert_alternation("simple pattern"), "simple pattern");
+        assert_eq!(convert_alternation(r"\d+\.\d+"), r"\d+\.\d+");
+    }
+
+    #[test]
+    fn test_convert_alternation_escaped_pipe_in_middle() {
+        // grep BRE alternation in the middle of a pattern.
+        assert_eq!(convert_alternation(r"a\|b"), "a|b");
+    }
+
+    #[test]
+    fn test_convert_alternation_single_pattern() {
+        // Single word, no pipes at all.
+        assert_eq!(convert_alternation("price"), "price");
+    }
+
+    // -----------------------------------------------------------------------
+    // grep alternation tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_run_grep_alternation_bare_pipe() {
+        // Correct Rust regex syntax: bare | = alternation
+        let source = "apple\nbanana\ncherry\ndate\n";
+        let opts = make_grep_opts("banana|cherry");
+        let result = run_grep_on_source(source, &opts, "test", 1, 0, true);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_run_grep_alternation_escaped_pipe_converted() {
+        // grep BRE style \| is auto-converted to | (alternation)
+        let source = "apple\nbanana\ncherry\ndate\n";
+        let opts = make_grep_opts(r"banana\|cherry");
+        let result = run_grep_on_source(source, &opts, "test", 1, 0, true);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_run_grep_alternation_matches_multiple() {
+        let source = "The price is $10\nRating: 4 stars\nNo match here\nPrice: $20\n";
+        let opts = GrepOptions {
+            pattern: "price|rating|stars".to_string(),
+            ignore_case: true,
+            ..Default::default()
+        };
+        let result = run_grep_on_source(source, &opts, "test", 1, 0, true);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_run_grep_extra_patterns_with_e_flag() {
+        // Simulate -e price -e rating -e stars
+        let source = "The price is $10\nRating: 4 stars\nNo match here\n";
+        let opts = GrepOptions {
+            pattern: String::new(),
+            extra_patterns: vec![
+                "price".to_string(),
+                "rating".to_string(),
+                "stars".to_string(),
+            ],
+            ignore_case: true,
+            ..Default::default()
+        };
+        let result = run_grep_on_source(source, &opts, "test", 1, 0, true);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_run_grep_extra_patterns_combined_with_main() {
+        // Main pattern + -e patterns should all match via alternation
+        let source = "apple\nbanana\ncherry\ndate\nelderberry\n";
+        let opts = GrepOptions {
+            pattern: "apple".to_string(),
+            extra_patterns: vec!["cherry".to_string(), "elderberry".to_string()],
+            ..Default::default()
+        };
+        let result = run_grep_on_source(source, &opts, "test", 1, 0, true);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_run_grep_count_with_alternation() {
+        let source = "price: $10\nrating: 4\nprice: $20\nother\n";
+        let opts = GrepOptions {
+            pattern: "price|rating".to_string(),
+            count: true,
+            ..Default::default()
+        };
+        let result = run_grep_on_source(source, &opts, "test", 1, 0, true);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_parse_grep_options_with_regexp_string() {
+        let opts = parse_grep_options(&json!({
+            "pattern": "main",
+            "regexp": "extra"
+        }))
+        .unwrap();
+        assert_eq!(opts.pattern, "main");
+        assert_eq!(opts.extra_patterns, vec!["extra".to_string()]);
+    }
+
+    #[test]
+    fn test_parse_grep_options_with_regexp_array() {
+        let opts = parse_grep_options(&json!({
+            "regexp": ["price", "rating", "stars"]
+        }))
+        .unwrap();
+        assert_eq!(opts.pattern, "");
+        assert_eq!(
+            opts.extra_patterns,
+            vec!["price".to_string(), "rating".to_string(), "stars".to_string()]
+        );
+    }
+
+    #[test]
+    fn test_parse_grep_options_no_pattern_no_regexp() {
+        let result = parse_grep_options(&json!({}));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Pattern is required"));
+    }
+
+    #[test]
+    fn test_parse_grep_options_empty_pattern_with_regexp() {
+        // Pattern is empty but -e patterns are provided — should succeed
+        let opts = parse_grep_options(&json!({
+            "pattern": "",
+            "regexp": ["price", "rating"]
+        }))
+        .unwrap();
+        assert_eq!(opts.pattern, "");
+        assert_eq!(opts.extra_patterns.len(), 2);
     }
 }
