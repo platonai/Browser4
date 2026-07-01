@@ -32,25 +32,48 @@ The first `# Heading` becomes the scenario name; the body is the task prompt.
 
 ## Running every task at once
 
-`run-tests.ps1` auto-discovers every `.md` in `tasks/` and runs them
+`run-tests.ps1` auto-discovers every `.md` in `tasks/` recursively and runs them
 sequentially:
 
 ```powershell
 # Run everything:
 ./browser4-tests/real-world-scenarios/scripts/run-tests.ps1
 
-# List discovered tasks:
+# List discovered tasks (shows category tags):
 ./browser4-tests/real-world-scenarios/scripts/run-tests.ps1 -List
 
-# Run a subset:
+# Run a subset by name:
 ./browser4-tests/real-world-scenarios/scripts/run-tests.ps1 search-summary amazon
 
 # Stop on first failure:
 ./browser4-tests/real-world-scenarios/scripts/run-tests.ps1 -FailFast
 ```
 
-New task files placed in `tasks/` are picked up automatically — no
-registration step is needed.
+### Running by category
+
+Filter tasks by category with `-Category`:
+
+```powershell
+# Universal browser tasks (any agent — Playwright, Puppeteer, Selenium):
+./browser4-tests/real-world-scenarios/scripts/run-tests.ps1 -Category generic
+
+# Browser4-specific feature tests (X-SQL, crawl, agent, domsnapshot, loop):
+./browser4-tests/real-world-scenarios/scripts/run-tests.ps1 -Category browser4
+
+# All real-world tasks (generic + browser4):
+./browser4-tests/real-world-scenarios/scripts/run-tests.ps1 -Category real-world
+
+# MockSite-dependent tasks only:
+./browser4-tests/real-world-scenarios/scripts/run-tests.ps1 -Category mock-site
+
+# Combine with -List to preview:
+./browser4-tests/real-world-scenarios/scripts/run-tests.ps1 -Category browser4 -List
+
+# Combine with task name filter:
+./browser4-tests/real-world-scenarios/scripts/run-tests.ps1 -Category generic amazon
+```
+
+Valid categories: `generic`, `browser4`, `real-world`, `mock-site`, `all` (default).
 
 ## Adding a new task
 
@@ -118,7 +141,7 @@ domsnapshot, attach, named sessions, auto-diff).
 ## Running in production mode
 
 To test against the globally installed `browser4-cli` (not `cargo run`), use
-`run-task-production.ps1`:
+the production wrappers:
 
 ```powershell
 # Single task in production mode:
@@ -126,6 +149,10 @@ To test against the globally installed `browser4-cli` (not `cargo run`), use
 
 # With silent output:
 ./browser4-tests/real-world-scenarios/scripts/run-task-production.ps1 -TaskFile tasks/real-world/generic/search-summary.md -Silent
+
+# Batch run by category in production mode:
+./browser4-tests/real-world-scenarios/scripts/run-tests-production.ps1 -Category generic
+./browser4-tests/real-world-scenarios/scripts/run-tests-production.ps1 -Category browser4 -List
 ```
 
 This replaces the per-task wrapper scripts previously in
@@ -141,5 +168,6 @@ This replaces the per-task wrapper scripts previously in
 | `common.ps1` | Shared evaluation prompt (`$generalPrompt`) and agent invocation (`Invoke-Agent`) |
 | `run-task.ps1` | Single-task runner — reads a `.md` task file and invokes the agent |
 | `run-task-production.ps1` | Production wrapper — sets `$browser4cliMode = 'production'` and delegates to `run-task.ps1` |
-| `run-tests.ps1` | Batch runner — discovers and runs all tasks in `tasks/` |
+| `run-tests.ps1` | Batch runner — recursive discovery, `-Category` filter, `-List`, task name filter, `-FailFast` |
+| `run-tests-production.ps1` | Production batch runner — delegates to `run-tests.ps1` with `-Production`, supports `-Category` |
 | `common.tests.ps1` | Unit tests for `common.ps1` |
