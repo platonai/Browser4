@@ -479,23 +479,26 @@ pub fn all_commands() -> Vec<CommandDef> {
                  x-sql queries (auto-detected by the server), browser4-cli subcommands \
                  (after --), and shell commands (--shell). Progress is persisted to disk \
                  under a configurable --name and can be resumed after interruption. \
-                 Use --pause/--resume to control running loops, --pause-all/--resume-all/--stop-all \
-                 for bulk operations, --list to see all loops, --status [name] to inspect, \
-                 --stop [name] to clear.",
+                 Use --pause [--name] to pause a running loop (or combine --pause with a \
+                 task to start in paused state), --resume [--name] to resume, \
+                 --pause-all/--resume-all/--stop-all for bulk operations, --list to see \
+                 all loops, --status [--name] to inspect, --stop [--name] to clear.",
             category: Category::Core,
             hidden: false,
             batch_supported: false,
             args: &[ArgDef {
                 name: "task",
                 description: "The task to execute, use -- for a browser4-cli subcommand, \
-                              --shell for a shell command, or pass plain text/x-sql directly",
+                              --shell for a shell command, or pass plain text/x-sql directly. \
+                              Omit for control operations (--list, --stop, --status, --resume, etc.)",
                 optional: true,
             }],
             options: &[
                 OptionDef {
                     name: "name",
                     description: "Loop name for persistence (default: default). \
-                                  Named loops are stored in ~/.browser4/loops/<name>.json",
+                                  Named loops are stored in ~/.browser4/loops/<name>.json. \
+                                  Only letters, digits, dots, hyphens, and underscores allowed.",
                     is_bool: false,
                     short: None,
                 },
@@ -531,16 +534,17 @@ pub fn all_commands() -> Vec<CommandDef> {
                 },
                 OptionDef {
                     name: "pause",
-                    description: "Pause a running loop. The loop suspends at the next \
-                                  iteration boundary and waits until resumed. \
-                                  Optionally specify --name to target a named loop",
+                    description: "Without a task: pause a running loop at the next iteration \
+                                  boundary. With a task: create the loop in paused state \
+                                  (use --resume then re-run to start execution). \
+                                  Optionally specify --name to target a named loop.",
                     is_bool: true,
                     short: None,
                 },
                 OptionDef {
                     name: "resume",
-                    description: "Resume a paused loop. \
-                                  Optionally specify --name to target a named loop",
+                    description: "Resume a paused loop (control op — cannot be combined \
+                                  with a task). Optionally specify --name to target a named loop.",
                     is_bool: true,
                     short: None,
                 },
@@ -559,7 +563,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef {
                     name: "stop",
                     description: "Stop a loop and clear its persisted state. \
-                                  Optionally specify --name to target a named loop",
+                                  Optionally specify --name to target a named loop.",
                     is_bool: true,
                     short: None,
                 },
@@ -572,7 +576,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef {
                     name: "status",
                     description: "Show loop state and progress. \
-                                  Optionally specify --name to target a named loop",
+                                  Optionally specify --name to target a named loop.",
                     is_bool: true,
                     short: None,
                 },
@@ -1078,7 +1082,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "viewport", description: "Capture only specified viewports: single index (3), comma list (0,2,4), range (1-3), or mixed (0,2-4,7)", is_bool: false, short: Some("v") },
                 OptionDef { name: "auto-diff", description: "Diff against the previous snapshot — show only what changed since the last capture", is_bool: true, short: None },
                 OptionDef { name: "page", short: None, is_bool: false, description: "Page number for paginated snapshot output (1-based, default: 1)" },
-                OptionDef { name: "page-size", short: None, is_bool: false, description: "Lines per page for snapshot output (default: 500)" },
+                OptionDef { name: "page-size", short: None, is_bool: false, description: "Lines per page for snapshot output (default: 2000)" },
                 OptionDef { name: "all", short: None, is_bool: true, description: "Show all output, disabling pagination" },
             ],
             tool_name_fn: |_| "browser_snapshot".to_string(),
@@ -1115,10 +1119,11 @@ pub fn all_commands() -> Vec<CommandDef> {
             hidden: false,
             batch_supported: false,
             args: &[
-                ArgDef { name: "pattern", description: "Regex or literal pattern to search for", optional: false },
+                ArgDef { name: "pattern", description: "Regex or literal pattern to search for. Use | for alternation (e.g. 'price|rating|stars'), not \\|", optional: true },
             ],
             options: &[
                 OptionDef { name: "ignore-case", short: Some("i"), is_bool: true, description: "Case-insensitive matching" },
+                OptionDef { name: "regexp", short: Some("e"), is_bool: false, description: "Additional regex pattern (repeatable). Use -e PATTERN for alternation, e.g. -e price -e rating -e stars" },
                 OptionDef { name: "no-line-number", short: None, is_bool: true, description: "Suppress line numbers in output" },
                 OptionDef { name: "after-context", short: Some("A"), is_bool: false, description: "Show N lines after each match" },
                 OptionDef { name: "before-context", short: Some("B"), is_bool: false, description: "Show N lines before each match" },
@@ -1130,7 +1135,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "word-regexp", short: Some("w"), is_bool: true, description: "Match only whole words" },
                 OptionDef { name: "selector", short: None, is_bool: false, description: "CSS selector to scope the search to" },
                 OptionDef { name: "page", short: None, is_bool: false, description: "Page number (1-based, default: 1)" },
-                OptionDef { name: "page-size", short: None, is_bool: false, description: "Lines per page (default: 500)" },
+                OptionDef { name: "page-size", short: None, is_bool: false, description: "Lines per page (default: 2000)" },
                 OptionDef { name: "all", short: None, is_bool: true, description: "Show all output, disabling pagination" },
             ],
             tool_name_fn: |_| "browser_snapshot".to_string(),
@@ -1163,6 +1168,9 @@ pub fn all_commands() -> Vec<CommandDef> {
             tool_params_fn: |args| {
                 let mut p = json!({ "expression": get_str(args, "expression").unwrap_or_default() });
                 if let Some(r) = get_opt_str(args, "ref") { p["ref"] = json!(r); }
+                // --file and --stdin are carried through tool_params so the
+                // dispatch logic in main.rs can detect them and read the
+                // expression content. They are stripped before the server call.
                 if let Some(f) = get_opt_str(args, "file") { p["file"] = json!(f); }
                 if get_bool(args, "stdin").unwrap_or(false) { p["stdin"] = json!(true); }
                 if get_bool(args, "json").unwrap_or(false) { p["json"] = json!(true); }
@@ -1984,6 +1992,8 @@ pub fn all_commands() -> Vec<CommandDef> {
             args: &[ArgDef { name: "url", description: "Target page URL to load and run the query against", optional: false }],
             options: &[
                 OptionDef { name: "sql", description: "X-SQL query to execute. Use @url as placeholder for the target URL. Prefix with @ to read from file (e.g. --sql @query.sql)", is_bool: false, short: None },
+                OptionDef { name: "sql-stdin", description: "Read X-SQL query from stdin (avoids shell quoting issues on Windows)", is_bool: true, short: None },
+                OptionDef { name: "sql-base64", description: "Decode the --sql value (or stdin input) as base64 before execution", is_bool: true, short: None },
                 OptionDef { name: "seed-file", description: "File containing URLs to submit, one per line (direct path, no @ prefix)", is_bool: false, short: None },
                 OptionDef { name: "deadline", description: "Deadline for task completion (ISO 8601, e.g. 2026-02-24T23:59:59Z)", is_bool: false, short: None },
                 OptionDef { name: "expires", description: "Cache expiration duration (e.g. 1d, 1h)", is_bool: false, short: None },
@@ -1994,6 +2004,9 @@ pub fn all_commands() -> Vec<CommandDef> {
                 let mut p = json!({});
                 if let Some(v) = get_opt_str(args, "url") { p["url"] = json!(v); }
                 if let Some(v) = get_opt_str(args, "sql") { p["sql"] = json!(v); }
+                // --sql-stdin and --sql-base64 are handled in main.rs dispatch
+                if get_bool(args, "sql-stdin").unwrap_or(false) { p["sqlStdin"] = json!(true); }
+                if get_bool(args, "sql-base64").unwrap_or(false) { p["sqlBase64"] = json!(true); }
                 if let Some(v) = get_opt_str(args, "seed-file") { p["seedFile"] = json!(v); }
                 if let Some(v) = get_opt_str(args, "deadline") { p["deadline"] = json!(v); }
                 if let Some(v) = get_opt_str(args, "expires") { p["expires"] = json!(v); }
@@ -2164,7 +2177,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             ],
             options: &[
                 OptionDef { name: "page", short: None, is_bool: false, description: "Page number (1-based, default: 1)" },
-                OptionDef { name: "page-size", short: None, is_bool: false, description: "Lines per page (default: 500)" },
+                OptionDef { name: "page-size", short: None, is_bool: false, description: "Lines per page (default: 2000)" },
                 OptionDef { name: "all", short: None, is_bool: true, description: "Show all output, disabling pagination" },
             ],
             tool_name_fn: |_| "dom_snapshot_scrape".to_string(),
@@ -2191,7 +2204,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "offset", description: "Skip the first n results (0-based)", is_bool: false, short: None },
                 OptionDef { name: "limit", description: "Return at most n results", is_bool: false, short: None },
                 OptionDef { name: "page", short: None, is_bool: false, description: "Page number for paginated output (default: 1)" },
-                OptionDef { name: "page-size", short: None, is_bool: false, description: "Lines per page (default: 500)" },
+                OptionDef { name: "page-size", short: None, is_bool: false, description: "Lines per page (default: 2000)" },
                 OptionDef { name: "all", short: None, is_bool: true, description: "Show all output, disabling pagination" },
             ],
             tool_name_fn: |_| "dom_snapshot_scrape_all".to_string(),
@@ -2226,6 +2239,18 @@ pub fn all_commands() -> Vec<CommandDef> {
                     short: None,
                 },
                 OptionDef {
+                    name: "sql-stdin",
+                    description: "Read X-SQL query from stdin (avoids shell quoting issues on Windows)",
+                    is_bool: true,
+                    short: None,
+                },
+                OptionDef {
+                    name: "sql-base64",
+                    description: "Decode the --sql value (or stdin input) as base64 before execution",
+                    is_bool: true,
+                    short: None,
+                },
+                OptionDef {
                     name: "result-only",
                     description: "Extract and print only the resultSet object from the response JSON, omitting wrapper metadata",
                     is_bool: true,
@@ -2243,7 +2268,9 @@ pub fn all_commands() -> Vec<CommandDef> {
                 let sql = get_opt_str(args, "sql").unwrap_or_default();
                 let url = get_opt_str(args, "url").unwrap_or("");
                 let mut p = json!({ "sql": sql, "url": url });
-                // Pass through CLI-side flags
+                // Pass through CLI-side flags (--sql-stdin and --sql-base64 are handled in main.rs dispatch)
+                if get_bool(args, "sql-stdin").unwrap_or(false) { p["sqlStdin"] = json!(true); }
+                if get_bool(args, "sql-base64").unwrap_or(false) { p["sqlBase64"] = json!(true); }
                 if let Some(true) = get_bool(args, "result-only") { p["resultOnly"] = json!(true); }
                 if let Some(f) = get_opt_str(args, "output-file") { p["outputFile"] = json!(f); }
                 p
@@ -2289,10 +2316,11 @@ pub fn all_commands() -> Vec<CommandDef> {
             hidden: false,
             batch_supported: false,
             args: &[
-                ArgDef { name: "pattern", description: "Regex or literal pattern to search for", optional: false },
+                ArgDef { name: "pattern", description: "Regex or literal pattern to search for. Use | for alternation (e.g. 'price|rating|stars'), not \\|", optional: true },
             ],
             options: &[
                 OptionDef { name: "ignore-case", short: Some("i"), is_bool: true, description: "Case-insensitive matching" },
+                OptionDef { name: "regexp", short: Some("e"), is_bool: false, description: "Additional regex pattern (repeatable). Use -e PATTERN for alternation, e.g. -e price -e rating -e stars" },
                 OptionDef { name: "no-line-number", short: None, is_bool: true, description: "Suppress line numbers in output" },
                 OptionDef { name: "after-context", short: Some("A"), is_bool: false, description: "Show N lines after each match" },
                 OptionDef { name: "before-context", short: Some("B"), is_bool: false, description: "Show N lines before each match" },
@@ -2304,7 +2332,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "word-regexp", short: Some("w"), is_bool: true, description: "Match only whole words" },
                 OptionDef { name: "selector", short: None, is_bool: false, description: "CSS selector to scope the search to" },
                 OptionDef { name: "page", short: None, is_bool: false, description: "Page number (1-based, default: 1)" },
-                OptionDef { name: "page-size", short: None, is_bool: false, description: "Lines per page (default: 500)" },
+                OptionDef { name: "page-size", short: None, is_bool: false, description: "Lines per page (default: 2000)" },
                 OptionDef { name: "all", short: None, is_bool: true, description: "Show all output, disabling pagination" },
             ],
             tool_name_fn: |_| "dom_snapshot_export".to_string(),

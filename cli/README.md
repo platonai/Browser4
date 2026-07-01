@@ -435,7 +435,7 @@ Line numbers are shown by default.
 | `-w` | Match whole words only |
 | `--no-line-number` | Suppress line numbers |
 | `--selector <css>` | Scope search to a CSS selector |
-| `--page N`, `--page-size N`, `--all` | Output pagination (1K chars per page default) |
+| `--page N`, `--page-size N`, `--all` | Output pagination (2000 lines per page default) |
 
 ```bash
 browser4-cli snapshot grep -i error
@@ -481,8 +481,8 @@ Extract elements from the stored snapshot by CSS selector.
 | `html` | Inner HTML of the first match | `domsnapshot get html "body"` |
 | `attr` | Attribute value (requires `name`) | `domsnapshot get attr "a" href` |
 
-Selector defaults to `:root`. Output is paginated (1K chars per page). Use
-`--page N`, `--page-size N`, or `--all`.
+Selector defaults to `:root`. `get html` output is paginated (2000 lines per page);
+`get text` is not paginated by default. Use `--page N`, `--page-size N`, or `--all`.
 
 ```bash
 browser4-cli domsnapshot get text "#productTitle"
@@ -496,7 +496,8 @@ browser4-cli domsnapshot get html --all
 
 Like `get`, but extracts ALL matching elements (querySelectorAll semantics).
 Supports `--offset N` and `--limit N` for element-level pagination, plus
-`--page N`, `--page-size N`, `--all` for output pagination.
+`--page N`, `--page-size N`, `--all` for output pagination. `get all html` is
+paginated at 2000 lines by default; `get all text` is not paginated by default.
 
 ```bash
 browser4-cli domsnapshot get all text "h2 a"
@@ -506,21 +507,35 @@ browser4-cli domsnapshot get all text "p" --page-size 500
 
 #### domsnapshot query
 
-Run an X-SQL query against the stored DOM snapshot. `--sql` is required. Prefix
-the SQL value with `@` to read from a file. Use `@url` as a placeholder for the
-target page URL (unquoted — the server handles escaping).
+Run an X-SQL query against the stored DOM snapshot. `--sql` is required. Use
+`@url` as a placeholder for the target page URL (unquoted — the server handles
+escaping).
+
+**Recommended:** Write queries to a `.sql` file to avoid shell escaping issues.
+Prefix the `--sql` value with `@` to read from a file. Use `--sql-stdin` for
+piped/scripted workflows, or `--sql-base64` for transport-safe encoded queries.
 
 ```bash
-# Inline X-SQL
+# From a file (recommended — no shell escaping)
+cat > query.sql << 'SQLEOF'
+SELECT
+  dom_base_uri(dom) AS url,
+  dom_first_text(dom, 'h1') AS title
+FROM load_and_select(@url, ':root')
+SQLEOF
+browser4-cli domsnapshot query --sql @query.sql
+
+# From stdin
+cat query.sql | browser4-cli domsnapshot query --sql-stdin
+
+# From base64 (transport-safe, no quoting issues)
+browser4-cli domsnapshot query --sql "$(base64 -w0 query.sql)" --sql-base64
+
+# Inline (simple queries only — quoted selectors require escaping on Windows)
 browser4-cli domsnapshot query --sql "
-  SELECT
-    dom_base_uri(dom) AS url,
-    dom_first_text(dom, 'h1') AS title
+  SELECT dom_base_uri(dom) AS url, dom_first_text(dom, 'h1') AS title
   FROM load_and_select(@url, ':root')
 "
-
-# From a file
-browser4-cli domsnapshot query --sql @query.sql
 ```
 
 #### domsnapshot export

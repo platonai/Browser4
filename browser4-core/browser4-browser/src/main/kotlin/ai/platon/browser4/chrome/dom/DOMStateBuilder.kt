@@ -377,6 +377,7 @@ object DOMStateBuilder {
         node.axNode?.let { ax ->
             ax.role?.let { axAttrs["role"] = it }
             ax.name?.let { axAttrs["ax_name"] = it }
+            ax.description?.let { axAttrs["ax_description"] = it }
             ax.properties?.forEach { prop ->
                 val key = if (options.enableAttributeCasingAlignment) {
                     alignAttributeName(prop.name, options)
@@ -540,6 +541,7 @@ object DOMStateBuilder {
         node.axNode?.let { ax ->
             ax.role?.let { axAttrs["role"] = it }
             ax.name?.let { axAttrs["ax_name"] = it }
+            ax.description?.let { axAttrs["ax_description"] = it }
             ax.properties?.forEach { prop ->
                 val key = prop.name.lowercase()
                 if (key in includeAttributes) {

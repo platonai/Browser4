@@ -31,6 +31,12 @@ Loads a web page and immediately selects elements matching a CSS query. Returns 
 
 **Returns:** `ResultSet` with DOM column — each row is a `ValueDom` that can be passed to other DOM functions.
 
+> **URL parameter:** When used through `domsnapshot query`, use the **unquoted** `@url` placeholder to reference the target page URL. The `SQLTemplate` engine replaces `@url` with the properly escaped URL before execution.
+> - ✅ `DOM_LOAD_AND_SELECT(@url, 'h1')` — `@url` is replaced with the actual page URL
+> - ❌ `DOM_LOAD_AND_SELECT('.', 'h1')` — the literal `'.'` string is not a valid URL and will cause a 500 error
+>
+> The `@url` placeholder must appear **unquoted**. Do not wrap it in quotes: `'@url'` will be treated as a literal string, not a placeholder.
+
 **Examples:**
 
 ```sql

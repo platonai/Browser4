@@ -482,6 +482,19 @@ if ($AdditionalMvnArgs.Count -gt 0) {
   [void]$MvnOptions.AddRange($AdditionalMvnArgs)
 }
 
+# Always clean browser4-bundle and browser4-standalone target dirs —
+# they aggregate other modules and their output becomes stale on every build.
+$StaleTargets = @(
+  (Join-Path $repoRoot 'browser4-apps\browser4-bundle\target'),
+  (Join-Path $repoRoot 'browser4-apps\browser4-standalone\target')
+)
+foreach ($TargetDir in $StaleTargets) {
+  if (Test-Path $TargetDir) {
+    Write-Host "Cleaning stale target: $TargetDir"
+    Remove-Item -Recurse -Force $TargetDir
+  }
+}
+
 # ═══════════════════════════════════════════════════════
 # Execute build
 # ═══════════════════════════════════════════════════════

@@ -221,7 +221,16 @@ pub struct LoopState {
 
 fn loop_state_file(state_dir: &Path, name: Option<&str>) -> PathBuf {
     match name {
-        Some(n) if !n.is_empty() => state_dir.join("loops").join(format!("{}.json", n)),
+        Some(n) if !n.is_empty() => {
+            // Defense-in-depth: sanitize the name so path traversal via --name
+            // is impossible even if the CLI-layer validation is bypassed.
+            let safe: String = n
+                .chars()
+                .filter(|c| c.is_ascii_alphanumeric() || *c == '.' || *c == '-' || *c == '_')
+                .take(64)
+                .collect();
+            state_dir.join("loops").join(format!("{}.json", safe))
+        }
         _ => state_dir.join("loop-state.json"),
     }
 }

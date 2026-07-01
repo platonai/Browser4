@@ -64,15 +64,82 @@ browser4-cli loop -- screenshot --full-page -i 1800
 | `--interval` | `-i` | u64 | `3600` (1 hour) | Seconds between iterations |
 | `--count` | `-n` | u64 | infinite | Maximum number of iterations |
 | `--timeout` | `-t` | u64 | `604800` (1 week) | Maximum total duration in seconds |
+| `--name` | | string | `"default"` | Loop name for persistence. Named loops are stored in `~/.browser4/loops/<name>.json`. Only letters, digits, dots, hyphens, and underscores are allowed. |
 | `--shell` | | bool | — | Execute task as a shell command |
-| `--stop` | | bool | — | Stop a running loop and clear persisted state |
-| `--status` | | bool | — | Show current loop state and progress |
+| `--pause` | | bool | — | Pause a running loop (control op), or start a new loop in paused state (when combined with a task) |
+| `--resume` | | bool | — | Resume a paused loop (control op, no task allowed) |
+| `--stop` | | bool | — | Stop a running/paused loop and clear persisted state |
+| `--status` | | bool | — | Show loop state and progress |
+| `--list` | | bool | — | List all persisted loops |
+| `--pause-all` | | bool | — | Pause all running loops at once |
+| `--resume-all` | | bool | — | Resume all paused loops at once |
+| `--stop-all` | | bool | — | Stop and clear all persisted loops at once |
+
+### Named loops
+
+Use `--name` to run multiple independent loops concurrently. Each named loop
+has its own state file under `~/.browser4/loops/<name>.json`. The default
+loop (no `--name`) uses `~/.browser4/loop-state.json`.
+
+```bash
+# Start a named health-check loop
+browser4-cli loop --name health --shell "curl -s https://api.example.com/health" -i 300
+
+# Start a second loop independently
+browser4-cli loop --name monitor -- eval "document.title" -i 600
+
+# List all loops
+browser4-cli loop --list
+
+# Pause/resume/stop a specific loop
+browser4-cli loop --pause --name health
+browser4-cli loop --resume --name health
+browser4-cli loop --stop --name health
+```
+
+### Start paused
+
+Combine `--pause` with a task to create a loop that is persisted but does not
+start executing immediately. Use `--resume` (control op) followed by the same
+command to begin execution.
+
+```bash
+# Create a loop in paused state
+browser4-cli loop --pause --shell "echo hi" -i 60 --name demo
+
+# Output:
+# Loop: "echo hi" — every 60s
+#   Mode: shell command
+# ⏸  Created as paused. Use `browser4-cli loop --resume --name=demo` to start.
+
+# Resume the paused loop
+browser4-cli loop --resume --name demo
+
+# Run the same command to actually start executing
+browser4-cli loop --shell "echo hi" -i 60 --name demo
+# Resuming loop: "echo hi" from iteration 1
+#   Loop was paused — resuming now.
+```
+
+### Normal completion
+
+When a loop finishes normally (count reached or timeout expired), the
+persisted state is automatically cleared.  Use `--stop` to clear state
+before normal completion if needed.
+
+```bash
+browser4-cli loop --shell "echo hi" --count 2
+# ... runs 2 iterations ...
+# ✓  Loop finished — 2 iteration(s) completed.
+# (state file is automatically removed)
+```
 
 ## Persistence and resume
 
 ### State file
 
-Loop progress is persisted to `~/.browser4/loop-state.json` after each iteration:
+Loop progress is persisted to `~/.browser4/loop-state.json` (default loop) or
+`~/.browser4/loops/<name>.json` (named loops) after each iteration:
 
 ```json
 {
@@ -211,9 +278,17 @@ between iterations is capped so the loop wakes up in time to honour the timeout.
 
 ### Ctrl+C handling
 
-A `tokio::select!` races the inter-iteration sleep against `ctrl_c`. If Ctrl+C arrives
-mid-execution, the current iteration completes before the loop exits. Progress is saved
-on Ctrl+C so the loop can be resumed.
+Ctrl+C is handled at every phase of the loop:
+
+- **During execution**: A `tokio::select!` races the task against Ctrl+C. If
+  Ctrl+C arrives mid-execution, progress is persisted from the last
+  *completed* iteration so the loop can be resumed.
+- **During sleep**: A polling loop checks for Ctrl+C every 2 seconds. Progress
+  is persisted and the loop exits cleanly.
+- **While paused**: Ctrl+C exits without changing state (the loop remains paused).
+
+In all cases the state file is updated so running the same command again
+resumes from the last completed iteration.
 
 ## Timeout
 

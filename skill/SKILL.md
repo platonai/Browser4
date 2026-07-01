@@ -33,7 +33,7 @@ browser4-cli fill <ref> "<value>"   # interact
 browser4-cli press Enter
 browser4-cli wait --load=networkidle
 browser4-cli snapshot -v 0 --auto-diff  # verify what changed (diff vs previous snapshot)
-browser4-cli domsnapshot get text "<css-selector>"   # extract data
+browser4-cli domsnapshot get text "<css-selector>" --all   # extract complete data (--all disables pagination)
 ```
 
 ## Concepts
@@ -125,7 +125,7 @@ browser4-cli snapshot -v 0                         # capture specific viewport (
 browser4-cli snapshot -v 0-3                       # capture viewports 0 through 3
 browser4-cli snapshot -i -d 5                      # interactive only, depth 5
 browser4-cli snapshot -s "#content"                # scoped to CSS selector
-browser4-cli snapshot --stdout --page 1            # paginated stdout (page-size 500 default)
+browser4-cli snapshot --stdout --page 1            # paginated stdout (page-size 2000 default)
 browser4-cli snapshot --filename=result.yaml       # named output for workflow artifacts
 ```
 
@@ -186,7 +186,7 @@ browser4-cli eval --stdin [ref]             # read JS from stdin (avoids shell q
 browser4-cli resize <width> <height>
 ```
 
-> **Windows/bash quoting:** Complex JS expressions with nested quotes require painful escaping. **Always prefer `--file` or `--stdin` on Windows.** For structured data extraction, X-SQL eliminates quoting problems entirely — queries are plain SQL.
+> **Windows/bash quoting:** Complex JS expressions with nested quotes require painful escaping. **Always prefer `--file` or `--stdin` on Windows.** For X-SQL, write queries to a `.sql` file and use `--sql @file.sql`, `--sql-stdin`, or `--sql-base64` — inline `--sql "..."` hits the same quoting issues when the query contains double-quoted CSS selectors or `!=` operators.
 
 ### Storage
 
@@ -223,6 +223,8 @@ browser4-cli domsnapshot inspect [selector] [--max N]   # analyze DOM structure,
 
 Full reference: **[references/domsnapshot.md](references/domsnapshot.md)**.
 
+> **⚠️ Output pagination (DOM snapshot commands).** `get html`, `get all html`, and `grep` paginate output at 2K lines by default. `get text` and `get all text` are not paginated by default (single-field text extraction rarely exceeds practical limits). Use `--page N` for subsequent pages, `--page-size N` to change page size, or `--all` to disable pagination entirely. Pagination is automatically skipped in `--json` and `--quiet` modes.
+
 > **PowerCSS `:expr()` selectors** query elements by visual features (size, position, content density) — resilient to HTML structure changes:
 > ```bash
 > # Select images larger than 400x400 (skip thumbnails/icons)
@@ -244,16 +246,18 @@ Full reference: **[references/domsnapshot.md](references/domsnapshot.md)**.
 | **`snapshot` + refs** | Interactive workflows (click, fill, navigate) | Static data extraction |
 | **`domsnapshot get`** | Extracting specific fields via CSS selectors | Deeply nested selectors (may return `[]`); fall back to `eval` or X-SQL |
 | **`eval --json`** | Live DOM access, complex JS transformations | Windows/bash quoting (use `--stdin` or `--file`) |
-| **X-SQL** | **Bulk data extraction** — structured extraction with filtering, sorting, pagination. No quoting pain | Interactive workflows, live page manipulation |
+| **X-SQL** | **Bulk data extraction** — structured extraction with filtering, sorting, pagination. Use `--sql @file.sql` to avoid quoting | Interactive workflows, live page manipulation |
 | **`extract` / `summarize`** | Natural language extraction, AI-powered | High-volume extraction (cost/latency); requires LLM API key |
 
 ## X-SQL
 
-X-SQL is a SQL-based query language for extracting structured data from web pages. It eliminates shell quoting pain entirely — queries are plain SQL with no nested JavaScript.
+X-SQL is a SQL-based query language for extracting structured data from web pages. Use `--sql @file.sql`, `--sql-stdin`, or `--sql-base64` to avoid shell quoting — the inline `--sql "..."` form hits escaping issues on Windows when queries contain double-quoted CSS selectors.
 
 **Use X-SQL when:** you need structured data (titles, prices, links, images), want to avoid JavaScript quoting complexity, or need server-side filtering/sorting/transformation.
 
 **Use `eval` when:** you need to interact with the live page (click, scroll, read dynamic state), call JavaScript APIs, or the page requires prior interaction.
+
+> **🔴 Windows/bash quoting:** Even plain SQL hits quoting problems on Windows when the query contains quotes (CSS selectors like `[data-component-type="s-search-result"]` or string literals). **Always write X-SQL queries to a `.sql` file and use `--sql @file.sql`** — this avoids all shell escaping issues. Use `--sql-stdin` for piped/scripted workflows, or `--sql-base64` for transport-safe encoded queries (no quoting at all).
 
 ### Pattern
 
@@ -266,6 +270,36 @@ FROM DOM_LOAD_AND_SELECT(url, cssQuery [, offset, limit])
 ```
 
 `DOM_LOAD_AND_SELECT` loads the page (or fetches from cache), selects elements matching the CSS query, and returns them as a virtual table — one row per matched element. Each row has a `DOM` column passed to DOM functions like `DOM_FIRST_TEXT`, `DOM_FIRST_HREF`, `DOM_ATTR`, etc.
+
+### Recommended Workflow (file-based, no quoting pain)
+
+Write the query to a `.sql` file and reference it with `@`:
+
+```bash
+# 1. Write the query (no escaping needed in a file)
+cat > query.sql << 'SQLEOF'
+SELECT
+    DOM_FIRST_TEXT(DOM, 'h2 a span') AS title,
+    DOM_FIRST_FLOAT(DOM, '.a-price .a-offscreen', 0.0) AS price,
+    DOM_FIRST_HREF(DOM, 'h2 a') AS url
+FROM DOM_LOAD_AND_SELECT(@url, '[data-component-type="s-search-result"]', 1, 48)
+WHERE DOM_IS_NOT_NIL(DOM)
+ORDER BY DOM_FIRST_FLOAT(DOM, '.a-price .a-offscreen', 999999.0) ASC
+SQLEOF
+
+# 2. Run it — no shell escaping needed
+browser4-cli domsnapshot query "https://www.amazon.com/s?k=laptop" --sql @query.sql
+
+# 3. For piped/scripted workflows, use --sql-stdin
+cat query.sql | browser4-cli domsnapshot query --sql-stdin
+# or
+browser4-cli domsnapshot query --sql-stdin < query.sql
+
+# 4. For transport-safe execution (no quoting at all), use --sql-base64
+base64 -w0 query.sql > query.b64
+browser4-cli domsnapshot query "https://www.amazon.com/s?k=laptop" --sql @query.b64 --sql-base64
+# Or inline: --sql "$(base64 -w0 query.sql)" --sql-base64
+```
 
 ### Key Advantages Over eval
 
@@ -281,8 +315,11 @@ FROM DOM_LOAD_AND_SELECT(url, cssQuery [, offset, limit])
 
 ### Example: E-commerce Product Extraction
 
+**Recommended — write query to file (no escaping):**
+
 ```bash
-browser4-cli domsnapshot query . --sql "
+# Write query to file (no shell escaping needed)
+cat > query.sql << 'SQLEOF'
 SELECT
     DOM_FIRST_TEXT(DOM, 'h2 a span') AS title,
     DOM_FIRST_FLOAT(DOM, '.a-price .a-offscreen', 0.0) AS price,
@@ -290,10 +327,25 @@ SELECT
     DOM_FIRST_HREF(DOM, 'h2 a') AS url,
     DOM_ATTR(DOM, 'data-asin') AS asin,
     DOM_FIRST_ATTR(DOM, 'img:expr(width>200 && height>200)', 'src') AS image
-FROM DOM_LOAD_AND_SELECT('https://www.amazon.com/s?k=...', '[data-component-type=\"s-search-result\"]', 1, 48)
+FROM DOM_LOAD_AND_SELECT(@url, '[data-component-type="s-search-result"]', 1, 48)
 WHERE DOM_IS_NOT_NIL(DOM)
   AND STR_IS_NOT_BLANK(DOM_FIRST_TEXT(DOM, 'h2'))
 ORDER BY DOM_FIRST_FLOAT(DOM, '.a-price .a-offscreen', 999999.0) ASC
+SQLEOF
+
+browser4-cli domsnapshot query "https://www.amazon.com/s?k=laptop" --sql @query.sql
+```
+
+**Alternative: inline query (requires shell escaping on Windows):**
+
+```bash
+# On Windows bash, the \" sequences and != often require trial-and-error escaping.
+# Prefer --sql @file.sql or --sql-stdin instead.
+browser4-cli domsnapshot query . --sql "
+SELECT
+    DOM_FIRST_TEXT(DOM, 'h2 a span') AS title,
+    DOM_FIRST_FLOAT(DOM, '.a-price .a-offscreen', 0.0) AS price
+FROM DOM_LOAD_AND_SELECT(@url, '[data-component-type=\"s-search-result\"]', 1, 48)
 "
 ```
 

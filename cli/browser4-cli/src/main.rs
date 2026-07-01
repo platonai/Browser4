@@ -3347,7 +3347,9 @@ async fn handle_dom_snapshot_get(
 
     // Output the result
     let empty_result = text == "null" || text.is_empty() || text.trim() == "[]";
-    let paginate = (field == "html" || field == "text") && !empty_result;
+    // Only HTML output is paginated by default; text extraction rarely exceeds
+    // practical limits for single-field extraction so it defaults to --all.
+    let paginate = (field == "html") && !empty_result;
 
     if empty_result {
         let display_selector = if selector.is_empty() { ":root" } else { selector };
@@ -3406,6 +3408,72 @@ async fn handle_dom_snapshot_get(
     Ok(())
 }
 
+/// Resolves an `@file` path for --sql. Tries CWD first (standard CLI behavior),
+/// then falls back to the Browser4 repo root so that `cargo run` from
+/// subdirectories like `cli/browser4-cli` still finds files placed at the
+/// workspace root.
+fn resolve_sql_file(file_path: &str) -> Result<String, String> {
+    let path = std::path::Path::new(file_path);
+
+    // Absolute path — just try to read it
+    if path.is_absolute() {
+        return std::fs::read_to_string(path).map_err(|e| {
+            format!("Failed to read SQL file '{}' ({})", file_path, e)
+        });
+    }
+
+    // Try CWD first
+    let cwd = std::env::current_dir()
+        .map_err(|e| format!("Cannot determine current directory: {e}"))?;
+    let cwd_path = cwd.join(file_path);
+
+    if let Ok(content) = std::fs::read_to_string(&cwd_path) {
+        return Ok(content);
+    }
+
+    // Fall back to Browser4 repo root (for cargo run from subdirectories)
+    if let Some(root) = daemon::find_browser4_root() {
+        let root_path = root.join(file_path);
+        if root_path != cwd_path {
+            if let Ok(content) = std::fs::read_to_string(&root_path) {
+                return Ok(content);
+            }
+            return Err(format!(
+                "Failed to read SQL file '{}'\n  Tried: '{}'\n  Tried: '{}'",
+                file_path,
+                cwd_path.display(),
+                root_path.display(),
+            ));
+        }
+    }
+
+    Err(format!(
+        "Failed to read SQL file '{}' (looked in: '{}')",
+        file_path,
+        cwd_path.display(),
+    ))
+}
+
+/// Base64-decode the SQL string if `--sql-base64` was passed.
+/// Applied after `@file` resolution so base64-encoded files are also supported.
+fn maybe_decode_base64_sql(sql: String, tool_params: &Value) -> Result<String, String> {
+    let use_base64 = tool_params
+        .get("sqlBase64")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    if !use_base64 {
+        return Ok(sql);
+    }
+    if sql.trim().is_empty() {
+        return Err("--sql-base64 was set but the SQL value is empty.".to_string());
+    }
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(sql.trim())
+        .map_err(|e| format!("Failed to base64-decode SQL: {e}"))?;
+    String::from_utf8(bytes)
+        .map_err(|e| format!("Base64-decoded SQL is not valid UTF-8: {e}"))
+}
+
 async fn handle_dom_snapshot_query(
     client: &Client,
     base_url: &str,
@@ -3419,22 +3487,48 @@ async fn handle_dom_snapshot_query(
         .unwrap_or("")
         .to_string();
 
-    let sql_raw = tool_params
-        .get("sql")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
+    // Handle --sql-stdin: read query from stdin (avoids shell quoting issues on Windows)
+    let use_sql_stdin = tool_params
+        .get("sqlStdin")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    let sql_raw = if use_sql_stdin {
+        let mut input = String::new();
+        std::io::stdin()
+            .read_to_string(&mut input)
+            .map_err(|e| format!("Failed to read X-SQL query from stdin: {e}"))?;
+        if input.trim().is_empty() {
+            return Err(
+                "Stdin was empty. Provide a non-empty X-SQL query via stdin.".to_string(),
+            );
+        }
+        input
+    } else {
+        tool_params
+            .get("sql")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string()
+    };
+
     if sql_raw.is_empty() {
-        return Err("--sql is required. Provide an inline X-SQL query or @file.sql.".to_string());
+        return Err(
+            "--sql is required. Provide an inline X-SQL query, @file.sql, --sql-stdin, or --sql-base64."
+                .to_string(),
+        );
     }
 
     // Handle --sql @file.sql pattern
     let sql = if sql_raw.starts_with('@') {
         let file_path = &sql_raw[1..];
-        std::fs::read_to_string(file_path)
-            .map_err(|e| format!("Failed to read SQL file '{}': {}", file_path, e))?
+        resolve_sql_file(file_path)?
     } else {
-        sql_raw.to_string()
+        sql_raw
     };
+
+    // Handle --sql-base64: decode base64-encoded SQL
+    let sql = maybe_decode_base64_sql(sql, tool_params)?;
 
     // @url replacement is handled server-side by SQLTemplate.createSQL(url),
     // which properly escapes the URL value. Do NOT eagerly replace @url here —
@@ -3701,41 +3795,113 @@ async fn handle_dom_snapshot_inspect(
     // Suggestions
     if let Some(suggestions) = data.get("suggestions").and_then(|v| v.as_array()) {
         if !suggestions.is_empty() {
-            cli_println!("");
-            cli_println!("  Suggested selectors (recurring across matches):");
-            for sug in suggestions {
+            // Split into quality suggestions and bare-tag fallbacks
+            let (quality_sugs, bare_sugs): (Vec<_>, Vec<_>) = suggestions
+                .iter()
+                .partition(|s| {
+                    let tag = s.get("tag").and_then(|v| v.as_str()).unwrap_or("");
+                    let sel = s.get("selector").and_then(|v| v.as_str()).unwrap_or("");
+                    // Bare tag = selector is just the tag name (no class/id/attr brackets)
+                    sel != tag
+                });
+
+            // Helper to render a single suggestion row
+            let render_suggestion = |sug: &Value| {
                 let sel = sug.get("selector").and_then(|v| v.as_str()).unwrap_or("");
                 let count = sug.get("matchCount").and_then(|v| v.as_i64()).unwrap_or(0);
                 let coverage = sug.get("coverage").and_then(|v| v.as_str()).unwrap_or("");
-                let text = sug.get("textPreview").and_then(|v| v.as_str()).unwrap_or("");
+                let quality = sug.get("quality").and_then(|v| v.as_str()).unwrap_or("");
 
-                let text_hint = if text.is_empty() {
-                    String::new()
-                } else {
-                    format!("→ \"{}\"", text)
+                // Quality indicator
+                let star = match quality {
+                    "high" => "★ ",
+                    _ => "  ",
                 };
+
+                // Value samples from textSamples (new) or fall back to textPreview (old)
+                let text_hint = if let Some(samples) = sug.get("textSamples").and_then(|v| v.as_array()) {
+                    let vals: Vec<&str> = samples.iter()
+                        .filter_map(|v| v.as_str())
+                        .filter(|s| !s.is_empty())
+                        .take(3)
+                        .collect();
+                    if vals.is_empty() {
+                        String::new()
+                    } else {
+                        format!("→ \"{}\"", vals.join("\" | \""))
+                    }
+                } else {
+                    let text = sug.get("textPreview").and_then(|v| v.as_str()).unwrap_or("");
+                    if text.is_empty() {
+                        String::new()
+                    } else {
+                        format!("→ \"{}\"", text)
+                    }
+                };
+
                 cli_println!(
-                    "  {:>3}/{} ({})  {:<40} {}",
-                    count, analyzed, coverage, sel, text_hint
+                    "  {}{:>3}/{} ({})  {:<40} {}",
+                    star, count, analyzed, coverage, sel, text_hint
                 );
+            };
+
+            cli_println!("");
+            cli_println!("  Suggested selectors (recurring across matches):");
+
+            // Render quality suggestions first (with class/id/attr specificity)
+            for sug in &quality_sugs {
+                render_suggestion(sug);
+            }
+
+            // Render bare-tag fallbacks grouped at bottom
+            if !bare_sugs.is_empty() {
+                cli_println!("");
+                cli_println!("  Structural (bare tags, low specificity):");
+                for sug in &bare_sugs {
+                    render_suggestion(sug);
+                }
             }
         }
     }
 
-    // Content-selector discovery tips
+    // Dynamic next-step tips based on discovered selectors
     cli_println!("");
-    cli_println!("  💡 Content selector tips:");
-    cli_println!("     Use semantic tags to target content directly:");
-    cli_println!("       h2              — section titles / product names");
-    cli_println!("       h1, h3, h4      — other heading levels");
-    cli_println!("       a               — links");
-    cli_println!("       img             — images");
-    cli_println!("       span, p, li     — inline text, paragraphs, list items");
-    cli_println!("     Use class selectors for specific content types:");
-    cli_println!("       .a-price         — Amazon price elements (example)");
-    cli_println!("       .a-icon-alt      — Amazon rating text (example)");
-    cli_println!("     Try: domsnapshot get all text \"h2\" --limit 10");
-    cli_println!("     Try: domsnapshot query --sql \"SELECT text-content FROM load_and_select(@url, 'h2')\"");
+    if let Some(suggestions) = data.get("suggestions").and_then(|v| v.as_array()) {
+        // Pick up to 3 medium+ quality selectors with class/id specificity
+        let actionable: Vec<&str> = suggestions
+            .iter()
+            .filter_map(|s| {
+                let sel = s.get("selector").and_then(|v| v.as_str()).unwrap_or("");
+                let tag = s.get("tag").and_then(|v| v.as_str()).unwrap_or("");
+                let quality = s.get("quality").and_then(|v| v.as_str()).unwrap_or("");
+                // Only suggest specific selectors (not bare tags) and not low quality
+                if sel != tag && quality != "low" {
+                    Some(sel)
+                } else {
+                    None
+                }
+            })
+            .take(3)
+            .collect();
+
+        if !actionable.is_empty() {
+            cli_println!("  💡 Try these next:");
+            for sel in &actionable {
+                cli_println!("     domsnapshot get all text \"{}\" --limit 20", sel);
+            }
+            if let Some(first) = actionable.first() {
+                cli_println!("     domsnapshot query --sql \"SELECT text-content FROM load_and_select(@url, '{}')\"", first);
+            }
+        } else {
+            // Fallback when no quality selectors found (e.g., all bare tags)
+            cli_println!("  💡 Try narrowing the scope with a more specific CSS selector:");
+            cli_println!("     domsnapshot inspect \".card\" --max 20 --depth 6");
+        }
+    } else {
+        // Fallback when no suggestions at all
+        cli_println!("  💡 Try narrowing the scope with a more specific CSS selector:");
+        cli_println!("     domsnapshot inspect \".card\" --max 20 --depth 6");
+    }
 
     json_field("inspect", data);
     Ok(())
@@ -3748,6 +3914,8 @@ async fn handle_dom_snapshot_inspect(
 #[derive(Debug, Default)]
 struct GrepOptions {
     pattern: String,
+    /// Additional patterns from `-e` / `--regexp` flags (repeatable).
+    extra_patterns: Vec<String>,
     ignore_case: bool,
     no_line_number: bool,
     after_context: Option<usize>,
@@ -3766,8 +3934,23 @@ fn parse_grep_options(tool_params: &Value) -> Result<GrepOptions, String> {
         .get("pattern")
         .and_then(|v| v.as_str())
         .filter(|s| !s.is_empty())
-        .ok_or_else(|| "Pattern is required".to_string())?
+        .unwrap_or("")
         .to_string();
+
+    // Collect -e / --regexp patterns (supports both single string and array
+    // of strings when the flag is repeated, e.g. -e price -e rating -e stars).
+    let extra_patterns: Vec<String> = match tool_params.get("regexp") {
+        Some(Value::Array(arr)) => arr
+            .iter()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect(),
+        Some(Value::String(s)) if !s.is_empty() => vec![s.clone()],
+        _ => vec![],
+    };
+
+    if pattern.is_empty() && extra_patterns.is_empty() {
+        return Err("Pattern is required. Provide a positional pattern, or use -e PATTERN (repeatable) for multiple patterns.".to_string());
+    }
 
     let parse_usize = |key: &str| -> Option<usize> {
         tool_params
@@ -3781,6 +3964,7 @@ fn parse_grep_options(tool_params: &Value) -> Result<GrepOptions, String> {
 
     Ok(GrepOptions {
         pattern,
+        extra_patterns,
         ignore_case: tool_params
             .get("ignore-case")
             .and_then(|v| v.as_bool())
@@ -3871,6 +4055,42 @@ async fn handle_dom_snapshot_grep(
     run_grep_on_source(&source, grep_options, "domsnapshot", page, page_size, show_all)
 }
 
+/// Convert grep-style escaped-alternation `\|` to Rust regex bare-pipe `|`.
+///
+/// In GNU grep BRE (basic regular expressions), alternation is written `\|`.
+/// Rust's `regex` crate uses ERE-like syntax where `|` is alternation and
+/// `\|` matches a literal pipe character.  This function bridges the two so
+/// that users who type `price\|rating\|stars` (the grep idiom) get the
+/// alternation they intended.
+///
+/// The conversion is safe:
+/// - If the pattern already contains bare `|`, we do nothing — the user
+///   already knows the correct syntax.
+/// - If the pattern contains `\|` but no bare `|`, we replace all `\|`
+///   with `|` (the user meant alternation).
+fn convert_alternation(pattern: &str) -> String {
+    // Already using bare | → user knows the correct syntax; leave it alone.
+    if pattern.contains('|') && !pattern.contains("\\|") {
+        return pattern.to_string();
+    }
+    // Contains \| → convert to bare | (grep BRE → Rust regex).
+    if pattern.contains("\\|") {
+        let converted = pattern.replace("\\|", "|");
+        // Only log the conversion once per session (avoid spam in loops).
+        use std::sync::atomic::{AtomicBool, Ordering};
+        static LOGGED: AtomicBool = AtomicBool::new(false);
+        if !LOGGED.swap(true, Ordering::Relaxed) {
+            eprintln!(
+                "Note: Converted grep-style alternation `\\\\|` to `|` in pattern. \
+                 Rust regex uses bare `|` for alternation (like ERE/egrep). \
+                 Use `snapshot grep -F` for literal matching."
+            );
+        }
+        return converted;
+    }
+    pattern.to_string()
+}
+
 /// Run grep matching on an already-fetched source text, printing results
 /// via cli_println! and recording json fields via json_field().
 ///
@@ -3897,10 +4117,40 @@ fn run_grep_on_source(
 
     // Build the regex pattern
     let pattern_str = &grep_options.pattern;
-    let regex_str = if grep_options.fixed_strings {
-        regex::escape(pattern_str)
+
+    // Combine main pattern with any -e patterns using alternation.
+    let mut all_patterns: Vec<String> = Vec::new();
+    if !pattern_str.is_empty() {
+        all_patterns.push(pattern_str.clone());
+    }
+    for p in &grep_options.extra_patterns {
+        all_patterns.push(p.clone());
+    }
+
+    let combined_pattern = if all_patterns.len() > 1 {
+        // Wrap each pattern in a non-capturing group so that alternation
+        // and word-boundary anchors apply per-pattern.
+        all_patterns
+            .iter()
+            .map(|p| format!("(?:{})", p))
+            .collect::<Vec<_>>()
+            .join("|")
+    } else if all_patterns.len() == 1 {
+        all_patterns.into_iter().next().unwrap()
     } else {
-        pattern_str.clone()
+        return Err("No pattern provided".to_string());
+    };
+
+    // Auto-convert grep-style \| (escaped pipe) to Rust regex | (bare pipe).
+    // In GNU grep BRE, alternation is \|; in Rust's regex crate (like ERE),
+    // alternation is | and \| matches a literal pipe character.
+    // We detect the grep-idiom and silently fix it for a better UX.
+    let converted_pattern = convert_alternation(&combined_pattern);
+
+    let regex_str = if grep_options.fixed_strings {
+        regex::escape(&converted_pattern)
+    } else {
+        converted_pattern.clone()
     };
 
     let final_pattern = if grep_options.word_regexp {
@@ -4145,7 +4395,7 @@ fn format_pagination_footer(meta: &PaginationMeta) -> String {
 /// Extract pagination options from tool_params.
 /// Returns (page, page_size, show_all).
 ///
-/// Default page size is 500 **lines** (was 100 lines prior to v4.12).
+/// Default page size is 2000 **lines** (was 500 lines prior to v4.12).
 fn parse_page_opts(tool_params: &serde_json::Value) -> (usize, usize, bool) {
     let show_all = tool_params
         .get("all")
@@ -4167,7 +4417,7 @@ fn parse_page_opts(tool_params: &serde_json::Value) -> (usize, usize, bool) {
         .get("page-size")
         .and_then(|v| v.as_str())
         .and_then(|s| s.parse::<usize>().ok())
-        .unwrap_or(500);
+        .unwrap_or(2000);
 
     (page, page_size, show_all)
 }
@@ -5142,27 +5392,55 @@ async fn handle_swarm_query(
         .and_then(|v| v.as_str())
         .unwrap_or("");
     let seed_file = tool_params.get("seedFile").and_then(|v| v.as_str());
-    let query_raw = tool_params.get("sql").and_then(|v| v.as_str());
+
+    // Handle --sql-stdin: read query from stdin (avoids shell quoting issues on Windows)
+    let use_sql_stdin = tool_params
+        .get("sqlStdin")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    let query_raw: Option<String> = if use_sql_stdin {
+        let mut input = String::new();
+        std::io::stdin()
+            .read_to_string(&mut input)
+            .map_err(|e| format!("Failed to read X-SQL query from stdin: {e}"))?;
+        if input.trim().is_empty() {
+            return Err(
+                "Stdin was empty. Provide a non-empty X-SQL query via stdin.".to_string(),
+            );
+        }
+        Some(input)
+    } else {
+        tool_params
+            .get("sql")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+    };
 
     if url.is_empty() && seed_file.is_none() {
         return Err("A URL or --seed-file is required.".to_string());
     }
-    if query_raw.is_none() || query_raw.unwrap().is_empty() {
-        return Err("--sql is required. Provide an inline X-SQL query or @file.sql.".to_string());
+    if query_raw.as_ref().map_or(true, |q| q.is_empty()) {
+        return Err(
+            "--sql is required. Provide an inline X-SQL query, @file.sql, --sql-stdin, or --sql-base64."
+                .to_string(),
+        );
     }
 
     // Read query from file if prefixed with @
-    let query = match query_raw {
+    let query = match &query_raw {
         Some(q) if q.starts_with('@') => {
             let file_path = &q[1..];
-            Some(
-                std::fs::read_to_string(file_path)
-                    .map_err(|e| format!("Failed to read query file '{}': {}", file_path, e))?,
-            )
+            Some(resolve_sql_file(file_path)?)
         }
-        Some(q) => Some(q.to_string()),
+        Some(q) => Some(q.clone()),
         None => None,
     };
+
+    // Handle --sql-base64: decode base64-encoded SQL
+    let query = query
+        .map(|q| maybe_decode_base64_sql(q, tool_params))
+        .transpose()?;
 
     // Collect URLs to query
     let mut urls: Vec<String> = Vec::new();
@@ -5484,9 +5762,13 @@ fn parse_loop_args(args: &[String]) -> Result<LoopArgs, String> {
         }
 
         if let Some(val) = arg.strip_prefix("--name=") {
-            out.name = Some(val.to_string());
+            let name = val.to_string();
+            validate_loop_name(&name)?;
+            out.name = Some(name);
         } else if arg == "--name" {
-            out.name = Some(next_arg(&args, &mut i, "name")?.to_string());
+            let name = next_arg(&args, &mut i, "name")?.to_string();
+            validate_loop_name(&name)?;
+            out.name = Some(name);
         } else if let Some(val) = arg.strip_prefix("--interval=") {
             out.interval_secs = parse_u64_required(val, "--interval")?;
         } else if arg == "--interval" || arg == "-i" {
@@ -5507,9 +5789,11 @@ fn parse_loop_args(args: &[String]) -> Result<LoopArgs, String> {
         i += 1;
     }
 
-    // Flags that don't require a task, but reject combining with one
+    // Flags that are control-only — they reject combining with a task.
+    // --pause is excluded from this set: combining --pause with a task starts
+    // the loop in paused state (the user can --resume later).
     let no_task_flags = out.stop || out.stop_all || out.status || out.list
-        || out.pause || out.resume || out.pause_all || out.resume_all;
+        || out.resume || out.pause_all || out.resume_all;
 
     if no_task_flags {
         if !out.task_tokens.is_empty() {
@@ -5517,7 +5801,6 @@ fn parse_loop_args(args: &[String]) -> Result<LoopArgs, String> {
                 else if out.stop_all { "--stop-all" }
                 else if out.status { "--status" }
                 else if out.list { "--list" }
-                else if out.pause { "--pause" }
                 else if out.resume { "--resume" }
                 else if out.pause_all { "--pause-all" }
                 else { "--resume-all" };
@@ -5547,6 +5830,18 @@ fn parse_loop_args(args: &[String]) -> Result<LoopArgs, String> {
         return Ok(out);
     }
 
+    // --pause without other control flags: if a task is provided, this is
+    // "start paused"; if not, it's a control op handled above.
+    // --resume with a task is always an error — you resume an existing loop.
+    if out.resume && !out.task_tokens.is_empty() {
+        return Err("The --resume flag cannot be combined with a task. Use just `browser4-cli loop --resume` to resume an existing loop.".to_string());
+    }
+
+    // --pause with a task: start-paused is valid (falls through to normal validation)
+    if out.pause && out.task_tokens.is_empty() {
+        return Ok(out); // control op: pause running loop, no task needed
+    }
+
     // Validate
     if out.is_shell && out.is_subcommand {
         return Err("The --shell flag and -- separator are mutually exclusive. Use --shell for shell commands or -- for browser4-cli subcommands.".to_string());
@@ -5571,6 +5866,31 @@ fn next_arg<'a>(args: &'a [String], i: &mut usize, name: &str) -> Result<&'a str
 fn parse_u64_required(s: &str, flag: &str) -> Result<u64, String> {
     s.parse::<u64>()
         .map_err(|_| format!("Invalid value for {}: '{}'. Expected a non-negative integer.", flag, s))
+}
+
+/// Validate a loop --name value. Only allows alphanumeric, dot, hyphen,
+/// and underscore characters.  Rejects names that contain path separators,
+/// parent-directory sequences, or other characters that could be used for
+/// path traversal.
+fn validate_loop_name(name: &str) -> Result<(), String> {
+    if name.is_empty() {
+        return Err("Loop name must not be empty.".to_string());
+    }
+    if name.contains('/') || name.contains('\\') || name.contains("..") {
+        return Err(format!(
+            "Loop name contains invalid path characters: '{}'. \
+             Use only letters, digits, dots, hyphens, and underscores.",
+            name,
+        ));
+    }
+    if !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_') {
+        return Err(format!(
+            "Invalid loop name: '{}'. \
+             Use only letters, digits, dots, hyphens, and underscores.",
+            name,
+        ));
+    }
+    Ok(())
 }
 
 /// Format a duration in seconds as a human-readable string.
@@ -5862,8 +6182,69 @@ async fn handle_loop(
         return Ok(());
     }
 
-    // --- --pause: set loop status to "paused" ---
+    // --- --pause: control op (pause running loop) or start-paused ---
     if parsed.pause {
+        // If a task is provided, this is "start paused" — persist the
+        // loop in paused state so the user can --resume later.
+        if !parsed.task_tokens.is_empty() {
+            let mode_key = if parsed.is_subcommand {
+                "subcommand"
+            } else if parsed.is_shell {
+                "shell"
+            } else {
+                "plain"
+            };
+            let mode_label = if parsed.is_subcommand {
+                "browser4-cli subcommand"
+            } else if parsed.is_shell {
+                "shell command"
+            } else {
+                "plain-text command"
+            };
+            let started_at = Utc::now().to_rfc3339();
+            let state = state::LoopState {
+                task_tokens: parsed.task_tokens.clone(),
+                mode: mode_key.to_string(),
+                interval_secs: parsed.interval_secs,
+                count: parsed.count,
+                timeout_secs: parsed.timeout_secs,
+                iterations_completed: 0,
+                started_at: started_at.clone(),
+                updated_at: Utc::now().to_rfc3339(),
+                status: "paused".to_string(),
+            };
+            let state_path = state::loop_state_path(None, loop_name);
+            if let Err(e) = state::write_loop_state(&state, None, loop_name) {
+                eprintln!("[WARN] Failed to persist loop state: {}", e);
+            }
+            let label = loop_name.unwrap_or("default");
+            cli_println!(
+                "Loop: \"{}\" — every {}s{}",
+                parsed.task_tokens.join(" "),
+                parsed.interval_secs,
+                match (parsed.count, parsed.timeout_secs) {
+                    (Some(n), Some(t)) => format!(", up to {} iterations or {}s", n, t),
+                    (Some(n), None) => format!(", up to {} iterations", n),
+                    (None, Some(t)) => format!(", up to {}s", t),
+                    (None, None) => String::new(),
+                }
+            );
+            cli_println!("  Mode: {}", mode_label);
+            cli_println!(
+                "⏸  Created as paused. Use `browser4-cli loop --resume{}` to start.",
+                if parsed.name.is_some() {
+                    format!(" --name={}", parsed.name.as_ref().unwrap())
+                } else {
+                    String::new()
+                },
+            );
+            cli_println!("   State file: {}", state_path.display());
+            json_field("started_paused", json!(true));
+            json_field("name", json!(label));
+            return Ok(());
+        }
+
+        // No task — control op: pause an existing running loop.
         let state_path = state::loop_state_path(None, loop_name);
         match state::set_loop_status(None, loop_name, "paused") {
             Some(prev) => {
@@ -6053,7 +6434,9 @@ async fn handle_loop(
 
     let mut results: Vec<Value> = Vec::new();
 
-    // Persist initial state before the first iteration
+    // Persist initial state before the first iteration.
+    // Track first write failure so we warn exactly once.
+    let write_warned = std::cell::Cell::new(false);
     let persist = |task_tokens: &[String], mode: &str, interval: u64,
                     count: Option<u64>, timeout: Option<u64>,
                     completed: u64, started: &str, status: &str| {
@@ -6068,7 +6451,14 @@ async fn handle_loop(
             updated_at: Utc::now().to_rfc3339(),
             status: status.to_string(),
         };
-        let _ = state::write_loop_state(&state, None, loop_name);
+        if let Err(e) = state::write_loop_state(&state, None, loop_name) {
+            if !write_warned.replace(true) {
+                eprintln!(
+                    "[WARN] Failed to persist loop state: {}. Progress will not survive a restart.",
+                    e,
+                );
+            }
+        }
     };
 
     persist(
@@ -6166,19 +6556,55 @@ async fn handle_loop(
         );
 
         // --- execute ---
-        let result: Result<String, String> = if parsed.is_subcommand {
-            run_browser4_cli(&parsed.task_tokens).await
-        } else if parsed.is_shell {
-            run_shell_command(&parsed.task_tokens.join(" "))
-        } else {
-            // Plain text command (or x-sql — server auto-detects)
-            submit_plain_command(
-                client,
-                base_url,
-                &parsed.task_tokens.join(" "),
-                false, // sync — the loop itself provides the pacing
-            )
-            .await
+        // Race the execution against Ctrl+C so the loop can persist progress
+        // and exit cleanly instead of leaving a stale state file.
+        let ctrl_c_fut = tokio::signal::ctrl_c();
+        tokio::pin!(ctrl_c_fut);
+
+        let exec_fut = async {
+            if parsed.is_subcommand {
+                run_browser4_cli(&parsed.task_tokens).await
+            } else if parsed.is_shell {
+                run_shell_command(&parsed.task_tokens.join(" "))
+            } else {
+                // Plain text command (or x-sql — server auto-detects)
+                submit_plain_command(
+                    client,
+                    base_url,
+                    &parsed.task_tokens.join(" "),
+                    false, // sync — the loop itself provides the pacing
+                )
+                .await
+            }
+        };
+        tokio::pin!(exec_fut);
+
+        let result: Result<String, String> = tokio::select! {
+            r = &mut exec_fut => r,
+            _ = &mut ctrl_c_fut => {
+                // Ctrl+C arrived mid-execution.  Persist the progress we have
+                // (the current iteration did not complete) so the loop can be
+                // resumed from the last finished iteration.
+                persist(
+                    &parsed.task_tokens, mode_key, parsed.interval_secs,
+                    parsed.count, parsed.timeout_secs,
+                    iteration.saturating_sub(1), &started_at, "running",
+                );
+                let state_path = state::loop_state_path(None, loop_name);
+                cli_println!(
+                    "\n\n⏸  Interrupted during iteration {} — {} iteration(s) completed.",
+                    iteration,
+                    iteration.saturating_sub(1),
+                );
+                cli_println!(
+                    "   State saved to {}. Run the same command to resume, \
+                     or `browser4-cli loop --stop` to clear.",
+                    state_path.display(),
+                );
+                json_field("iterations", json!(results));
+                json_field("total_iterations", json!(iteration.saturating_sub(1)));
+                return Ok(());
+            },
         };
 
         match &result {
@@ -6296,13 +6722,9 @@ async fn handle_loop(
     cli_println!("\n========================================");
     cli_println!("✓  Loop finished — {} iteration(s) completed.", total);
 
-    // Persist as "completed" so --status shows the last run result.
-    // --stop clears it when the user wants a clean slate.
-    persist(
-        &parsed.task_tokens, mode_key, parsed.interval_secs,
-        parsed.count, parsed.timeout_secs,
-        total, &started_at, "completed",
-    );
+    // Clear persisted state on normal completion — the summary was already
+    // printed and re-running the same command starts a fresh loop anyway.
+    state::clear_loop_state(None, loop_name);
 
     json_field("iterations", json!(results));
     json_field("total_iterations", json!(total));
@@ -7766,6 +8188,14 @@ fn compile_batch_request(
                     }
                 }
 
+                // Strip --file and --stdin keys so they aren't sent to the server
+                // (they're CLI-side only — the content has already been read and
+                // inserted as the "expression" parameter above).
+                if let Value::Object(ref mut m) = tool_params {
+                    m.remove("file");
+                    m.remove("stdin");
+                }
+
                 // Validate that an expression is provided.
                 let expression_empty = tool_params
                     .get("expression")
@@ -8815,6 +9245,14 @@ async fn run(
                         }
                     }
                 }
+
+            // Strip --file and --stdin keys so they aren't sent to the server
+            // (they're CLI-side only — the content has already been read and
+            // inserted as the "expression" parameter above).
+            if let Value::Object(ref mut m) = tool_params {
+                m.remove("file");
+                m.remove("stdin");
+            }
 
             // Validate that an expression is provided (either positional, --stdin, or --file).
             let expression_empty = tool_params
@@ -10772,6 +11210,82 @@ mod tests {
         assert_eq!(parsed.task_tokens, vec!["task"]);
     }
 
+    #[test]
+    fn test_parse_loop_args_name_invalid_path_traversal() {
+        let args: Vec<String> = vec!["loop", "--name", "../../etc/passwd", "task"]
+            .into_iter()
+            .map(String::from)
+            .collect();
+        let err = parse_loop_args(&args[1..]).unwrap_err();
+        assert!(err.contains("invalid path characters") || err.contains("Invalid loop name"));
+    }
+
+    #[test]
+    fn test_parse_loop_args_name_invalid_special_chars() {
+        let args: Vec<String> = vec!["loop", "--name", "my loop!", "task"]
+            .into_iter()
+            .map(String::from)
+            .collect();
+        let err = parse_loop_args(&args[1..]).unwrap_err();
+        assert!(err.contains("Invalid loop name"));
+    }
+
+    #[test]
+    fn test_parse_loop_args_name_empty() {
+        let args: Vec<String> = vec!["loop", "--name=", "task"]
+            .into_iter()
+            .map(String::from)
+            .collect();
+        let err = parse_loop_args(&args[1..]).unwrap_err();
+        assert!(err.contains("must not be empty"));
+    }
+
+    #[test]
+    fn test_parse_loop_args_name_valid_chars() {
+        let args: Vec<String> = vec!["loop", "--name", "my-monitor_v2.0", "task"]
+            .into_iter()
+            .map(String::from)
+            .collect();
+        let parsed = parse_loop_args(&args[1..]).unwrap();
+        assert_eq!(parsed.name, Some("my-monitor_v2.0".to_string()));
+    }
+
+    #[test]
+    fn test_parse_loop_args_pause_with_task() {
+        // --pause + task = start paused
+        let args: Vec<String> = vec!["loop", "--pause", "--shell", "echo hi"]
+            .into_iter()
+            .map(String::from)
+            .collect();
+        let parsed = parse_loop_args(&args[1..]).unwrap();
+        assert!(parsed.pause);
+        assert!(parsed.is_shell);
+        assert!(!parsed.task_tokens.is_empty());
+    }
+
+    #[test]
+    fn test_parse_loop_args_resume_with_task_error() {
+        // --resume cannot be combined with a task
+        let args: Vec<String> = vec!["loop", "--resume", "task"]
+            .into_iter()
+            .map(String::from)
+            .collect();
+        let err = parse_loop_args(&args[1..]).unwrap_err();
+        assert!(err.contains("cannot be combined with a task"));
+    }
+
+    #[test]
+    fn test_parse_loop_args_pause_alone_no_existing_loop() {
+        // --pause alone (control op) is valid — handle_loop will report "no active loop"
+        let args: Vec<String> = vec!["loop", "--pause"]
+            .into_iter()
+            .map(String::from)
+            .collect();
+        let parsed = parse_loop_args(&args[1..]).unwrap();
+        assert!(parsed.pause);
+        assert!(parsed.task_tokens.is_empty());
+    }
+
     // -----------------------------------------------------------------------
     // format_duration tests
     // -----------------------------------------------------------------------
@@ -11307,7 +11821,7 @@ mod tests {
         let params = json!({});
         let (page, page_size, show_all) = parse_page_opts(&params);
         assert_eq!(page, 1);
-        assert_eq!(page_size, 500);
+        assert_eq!(page_size, 2000);
         assert!(!show_all);
     }
 
@@ -11391,5 +11905,362 @@ mod tests {
         }
 
         assert_eq!(p.get("viewports").and_then(|v| v.as_str()), Some("1-3"));
+    }
+
+    // -----------------------------------------------------------------------
+    // convert_alternation tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_convert_alternation_bare_pipe_unchanged() {
+        // User already using correct Rust regex syntax — leave it alone.
+        assert_eq!(convert_alternation("price|rating|stars"), "price|rating|stars");
+        assert_eq!(convert_alternation("foo|bar"), "foo|bar");
+    }
+
+    #[test]
+    fn test_convert_alternation_escaped_pipe_converted() {
+        // grep BRE style \| → Rust regex |
+        assert_eq!(
+            convert_alternation(r"price\|rating\|stars"),
+            "price|rating|stars"
+        );
+        assert_eq!(convert_alternation(r"error\|warning"), "error|warning");
+    }
+
+    #[test]
+    fn test_convert_alternation_no_pipe_unchanged() {
+        assert_eq!(convert_alternation("simple pattern"), "simple pattern");
+        assert_eq!(convert_alternation(r"\d+\.\d+"), r"\d+\.\d+");
+    }
+
+    #[test]
+    fn test_convert_alternation_escaped_pipe_in_middle() {
+        // grep BRE alternation in the middle of a pattern.
+        assert_eq!(convert_alternation(r"a\|b"), "a|b");
+    }
+
+    #[test]
+    fn test_convert_alternation_single_pattern() {
+        // Single word, no pipes at all.
+        assert_eq!(convert_alternation("price"), "price");
+    }
+
+    // -----------------------------------------------------------------------
+    // grep alternation tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_run_grep_alternation_bare_pipe() {
+        // Correct Rust regex syntax: bare | = alternation
+        let source = "apple\nbanana\ncherry\ndate\n";
+        let opts = make_grep_opts("banana|cherry");
+        let result = run_grep_on_source(source, &opts, "test", 1, 0, true);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_run_grep_alternation_escaped_pipe_converted() {
+        // grep BRE style \| is auto-converted to | (alternation)
+        let source = "apple\nbanana\ncherry\ndate\n";
+        let opts = make_grep_opts(r"banana\|cherry");
+        let result = run_grep_on_source(source, &opts, "test", 1, 0, true);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_run_grep_alternation_matches_multiple() {
+        let source = "The price is $10\nRating: 4 stars\nNo match here\nPrice: $20\n";
+        let opts = GrepOptions {
+            pattern: "price|rating|stars".to_string(),
+            ignore_case: true,
+            ..Default::default()
+        };
+        let result = run_grep_on_source(source, &opts, "test", 1, 0, true);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_run_grep_extra_patterns_with_e_flag() {
+        // Simulate -e price -e rating -e stars
+        let source = "The price is $10\nRating: 4 stars\nNo match here\n";
+        let opts = GrepOptions {
+            pattern: String::new(),
+            extra_patterns: vec![
+                "price".to_string(),
+                "rating".to_string(),
+                "stars".to_string(),
+            ],
+            ignore_case: true,
+            ..Default::default()
+        };
+        let result = run_grep_on_source(source, &opts, "test", 1, 0, true);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_run_grep_extra_patterns_combined_with_main() {
+        // Main pattern + -e patterns should all match via alternation
+        let source = "apple\nbanana\ncherry\ndate\nelderberry\n";
+        let opts = GrepOptions {
+            pattern: "apple".to_string(),
+            extra_patterns: vec!["cherry".to_string(), "elderberry".to_string()],
+            ..Default::default()
+        };
+        let result = run_grep_on_source(source, &opts, "test", 1, 0, true);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_run_grep_count_with_alternation() {
+        let source = "price: $10\nrating: 4\nprice: $20\nother\n";
+        let opts = GrepOptions {
+            pattern: "price|rating".to_string(),
+            count: true,
+            ..Default::default()
+        };
+        let result = run_grep_on_source(source, &opts, "test", 1, 0, true);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_parse_grep_options_with_regexp_string() {
+        let opts = parse_grep_options(&json!({
+            "pattern": "main",
+            "regexp": "extra"
+        }))
+        .unwrap();
+        assert_eq!(opts.pattern, "main");
+        assert_eq!(opts.extra_patterns, vec!["extra".to_string()]);
+    }
+
+    #[test]
+    fn test_parse_grep_options_with_regexp_array() {
+        let opts = parse_grep_options(&json!({
+            "regexp": ["price", "rating", "stars"]
+        }))
+        .unwrap();
+        assert_eq!(opts.pattern, "");
+        assert_eq!(
+            opts.extra_patterns,
+            vec!["price".to_string(), "rating".to_string(), "stars".to_string()]
+        );
+    }
+
+    #[test]
+    fn test_parse_grep_options_no_pattern_no_regexp() {
+        let result = parse_grep_options(&json!({}));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Pattern is required"));
+    }
+
+    #[test]
+    fn test_parse_grep_options_empty_pattern_with_regexp() {
+        // Pattern is empty but -e patterns are provided — should succeed
+        let opts = parse_grep_options(&json!({
+            "pattern": "",
+            "regexp": ["price", "rating"]
+        }))
+        .unwrap();
+        assert_eq!(opts.pattern, "");
+        assert_eq!(opts.extra_patterns.len(), 2);
+    }
+
+    // -----------------------------------------------------------------------
+    // resolve_sql_file tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn resolve_sql_file_absolute_path_succeeds() {
+        let tmp = test_temp_dir();
+        let file_path = tmp.path().join("query.sql");
+        std::fs::write(&file_path, "SELECT 1").unwrap();
+
+        let result = resolve_sql_file(&file_path.to_string_lossy());
+        assert_eq!(result.unwrap(), "SELECT 1");
+    }
+
+    #[test]
+    fn resolve_sql_file_absolute_path_not_found_shows_path() {
+        let tmp = test_temp_dir();
+        let file_path = tmp.path().join("nonexistent.sql");
+
+        let result = resolve_sql_file(&file_path.to_string_lossy());
+        let err = result.unwrap_err();
+        let path_str = file_path.to_string_lossy();
+        assert!(
+            err.contains(path_str.as_ref()),
+            "error should contain the resolved path, got: {err}"
+        );
+    }
+
+    #[test]
+    fn resolve_sql_file_cwd_relative_found() {
+        let _cwd_guard = CWD_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = test_temp_dir();
+        let sql_content = "SELECT * FROM test";
+        std::fs::write(tmp.path().join("query.sql"), sql_content).unwrap();
+
+        let previous_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(tmp.path()).unwrap();
+
+        let result = resolve_sql_file("query.sql");
+        std::env::set_current_dir(previous_dir).unwrap();
+
+        assert_eq!(result.unwrap(), sql_content);
+    }
+
+    #[test]
+    fn resolve_sql_file_falls_back_to_repo_root() {
+        let _cwd_guard = CWD_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+
+        // Set up a fake repo root with ROOT.md + pom.xml
+        let repo_root = test_temp_dir();
+        std::fs::write(repo_root.path().join("ROOT.md"), "").unwrap();
+        std::fs::write(repo_root.path().join("pom.xml"), "").unwrap();
+        let sql_content = "SELECT * FROM repo_root";
+        std::fs::write(repo_root.path().join("query.sql"), sql_content).unwrap();
+
+        // Set up a subdirectory (like cli/browser4-cli) as CWD with no query.sql
+        let sub_dir = repo_root.path().join("cli").join("browser4-cli");
+        std::fs::create_dir_all(&sub_dir).unwrap();
+
+        let previous_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&sub_dir).unwrap();
+
+        // resolve_sql_file uses CWD; find_browser4_root walks up to repo_root
+        let result = resolve_sql_file("query.sql");
+        std::env::set_current_dir(previous_dir).unwrap();
+
+        assert_eq!(result.unwrap(), sql_content);
+    }
+
+    #[test]
+    fn resolve_sql_file_not_found_shows_attempted_paths() {
+        let _cwd_guard = CWD_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = test_temp_dir();
+        // No query.sql exists, and tmp is not a browser4 root
+
+        let previous_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(tmp.path()).unwrap();
+
+        let result = resolve_sql_file("ghost.sql");
+        std::env::set_current_dir(previous_dir).unwrap();
+
+        let err = result.unwrap_err();
+        let cwd_path = tmp.path().join("ghost.sql");
+        let cwd_str = cwd_path.to_string_lossy();
+        assert!(
+            err.contains(cwd_str.as_ref()),
+            "error should mention the CWD-resolved path, got: {err}"
+        );
+        assert!(
+            err.contains("ghost.sql"),
+            "error should mention the original filename, got: {err}"
+        );
+    }
+
+    #[test]
+    fn resolve_sql_file_repo_root_fallback_not_confused_by_cwd_file() {
+        // When the file exists in CWD, it should be used — NOT the repo root copy
+        let _cwd_guard = CWD_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+
+        let repo_root = test_temp_dir();
+        std::fs::write(repo_root.path().join("ROOT.md"), "").unwrap();
+        std::fs::write(repo_root.path().join("pom.xml"), "").unwrap();
+        std::fs::write(
+            repo_root.path().join("query.sql"),
+            "REPO ROOT VERSION",
+        )
+        .unwrap();
+
+        let sub_dir = repo_root.path().join("cli").join("browser4-cli");
+        std::fs::create_dir_all(&sub_dir).unwrap();
+        std::fs::write(sub_dir.join("query.sql"), "CWD VERSION").unwrap();
+
+        let previous_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&sub_dir).unwrap();
+
+        let result = resolve_sql_file("query.sql");
+        std::env::set_current_dir(previous_dir).unwrap();
+
+        assert_eq!(result.unwrap(), "CWD VERSION");
+    }
+
+    // -----------------------------------------------------------------------
+    // maybe_decode_base64_sql tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn decode_base64_sql_disabled_passthrough() {
+        let params = json!({}); // no sqlBase64 key
+        let result = maybe_decode_base64_sql("SELECT 1".to_string(), &params);
+        assert_eq!(result.unwrap(), "SELECT 1");
+    }
+
+    #[test]
+    fn decode_base64_sql_explicitly_false() {
+        let params = json!({"sqlBase64": false});
+        let result = maybe_decode_base64_sql("SELECT 1".to_string(), &params);
+        assert_eq!(result.unwrap(), "SELECT 1");
+    }
+
+    #[test]
+    fn decode_base64_sql_valid_decode() {
+        use base64::Engine;
+        let original = "SELECT DOM_FIRST_TEXT(DOM, 'h2') AS title\nFROM DOM_LOAD_AND_SELECT(@url, ':root')";
+        let encoded = base64::engine::general_purpose::STANDARD.encode(original);
+
+        let params = json!({"sqlBase64": true});
+        let result = maybe_decode_base64_sql(encoded, &params);
+        assert_eq!(result.unwrap(), original);
+    }
+
+    #[test]
+    fn decode_base64_sql_valid_with_whitespace() {
+        use base64::Engine;
+        let original = "SELECT 1";
+        let encoded = base64::engine::general_purpose::STANDARD.encode(original);
+        let padded = format!("  {encoded}  \n");
+
+        let params = json!({"sqlBase64": true});
+        let result = maybe_decode_base64_sql(padded, &params);
+        assert_eq!(result.unwrap(), original);
+    }
+
+    #[test]
+    fn decode_base64_sql_empty_input_errors() {
+        let params = json!({"sqlBase64": true});
+        let result = maybe_decode_base64_sql("   ".to_string(), &params);
+        assert!(
+            result.unwrap_err().contains("empty"),
+            "should error on empty/blank input"
+        );
+    }
+
+    #[test]
+    fn decode_base64_sql_invalid_base64_errors() {
+        let params = json!({"sqlBase64": true});
+        let result = maybe_decode_base64_sql("!!!not valid base64!!!".to_string(), &params);
+        let err = result.unwrap_err();
+        assert!(
+            err.contains("base64"),
+            "error should mention base64, got: {err}"
+        );
+    }
+
+    #[test]
+    fn decode_base64_sql_non_utf8_errors() {
+        use base64::Engine;
+        // 0xFE 0xFF = invalid UTF-8 (BOM-like but broken)
+        let bytes = vec![0xFE, 0xFF, 0x00, 0x01];
+        let encoded = base64::engine::general_purpose::STANDARD.encode(&bytes);
+
+        let params = json!({"sqlBase64": true});
+        let result = maybe_decode_base64_sql(encoded, &params);
+        assert!(
+            result.is_err(),
+            "non-UTF-8 bytes should fail, got: {result:?}",
+        );
     }
 }
