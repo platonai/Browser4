@@ -117,8 +117,10 @@ class NanoDOMTreeBuilder constructor(
         if (startY.isNaN() || endY.isNaN() || startY >= endY) return false
 
         val o = no.originalNode ?: return false
-        // Prefer absolute page coordinates first, then bounds, then client rects
-        val r = (o.absoluteBounds ?: o.bounds ?: o.clientRects)?.uncompact() ?: return false
+        // Prefer absolute page coordinates first, then bounds, then client rects.
+        // Nodes without any spatial rect (e.g. text nodes) are included — they
+        // inherit position from their parent, which already passed the range check.
+        val r = (o.absoluteBounds ?: o.bounds ?: o.clientRects)?.uncompact() ?: return true
         val y = r.y
         val h = r.height
 

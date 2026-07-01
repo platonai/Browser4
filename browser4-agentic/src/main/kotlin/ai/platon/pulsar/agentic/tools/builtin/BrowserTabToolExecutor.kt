@@ -20,7 +20,6 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
         private const val READ_ACTIONS_WHITELIST_PROPERTY = "browser4.tab.read.actions.whitelist"
         private const val READ_ACTIONS_WHITELIST_ENV = "BROWSER4_TAB_READ_ACTIONS_WHITELIST"
         private val logger: Logger = Logger.getLogger(BrowserTabToolExecutor::class.java.name)
-
         // Actions that read page state and can become flaky if executed too soon after mutations/navigation.
         private val DEFAULT_READ_PAGE_STATE_ACTIONS = setOf(
             "waitForSelector", "waitForNavigation", "waitForPage",
