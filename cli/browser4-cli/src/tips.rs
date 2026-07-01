@@ -386,6 +386,7 @@ fn is_suppressed_command(command: &str) -> bool {
 /// Suppressed when:
 /// - The command is an infrastructure/meta command
 /// - `--json` output mode is active
+/// - `--raw` / `--stdout` output mode is active
 /// - `--quiet` mode is active
 ///
 /// The function is a no-op in all of those cases.
@@ -395,10 +396,11 @@ pub fn show_tip(command: &str) {
         return;
     }
 
-    // Suppress in JSON mode or quiet mode — these checks must match the
-    // `quiet_active()` / `json_active()` functions in main.rs.  We duplicate
+    // Suppress in machine-readable output modes (--json, --raw, --stdout)
+    // or quiet mode.  These checks must match the `quiet_active()` /
+    // `json_active()` / `raw_active()` functions in main.rs.  We duplicate
     // the check here to keep the tips module self-contained.
-    if crate::quiet_active() || crate::json_active() {
+    if crate::quiet_active() || crate::json_active() || crate::raw_active() {
         return;
     }
 

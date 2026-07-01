@@ -87,8 +87,17 @@ thread_local! {
         RefCell::new(None);
 }
 
+thread_local! {
+    /// When `--json` is active, human-readable output is suppressed and
+    /// a JSON envelope is emitted on exit.  This flag persists for the
+    /// entire command lifetime — unlike `JSON_OUTPUT` which is taken by
+    /// `json_finish()` before the envelope is printed.
+    static JSON_MODE: RefCell<bool> = RefCell::new(false);
+}
+
 /// Initialise the JSON output accumulator for the current command.
 fn json_init() {
+    JSON_MODE.with(|cell| *cell.borrow_mut() = true);
     JSON_OUTPUT.with(|cell| {
         *cell.borrow_mut() = Some(serde_json::Map::new());
     });
@@ -104,9 +113,14 @@ fn json_field(key: &str, value: serde_json::Value) {
 }
 
 /// True when `--json` mode is active.
+///
+/// Uses the persistent `JSON_MODE` flag so the check remains reliable
+/// even after `json_finish()` has taken the accumulator.  This is
+/// important for suppressing tips and human-readable output that are
+/// emitted after the JSON envelope.
 #[allow(dead_code)]
 fn json_active() -> bool {
-    JSON_OUTPUT.with(|cell| cell.borrow().is_some())
+    JSON_MODE.with(|cell| *cell.borrow())
 }
 
 /// Take the accumulated JSON fields and tear down the accumulator.
@@ -130,6 +144,26 @@ fn quiet_init(quiet: bool) {
 
 fn quiet_active() -> bool {
     QUIET.with(|cell| *cell.borrow())
+}
+
+// ---------------------------------------------------------------------------
+// Raw / stdout output support (--raw / --stdout per-command flags)
+// ---------------------------------------------------------------------------
+
+thread_local! {
+    /// When `--raw` or `--stdout` is active, the command emits machine-readable
+    /// content directly to stdout (bypassing `cli_println!`).  Tips and other
+    /// human-oriented stderr chatter should be suppressed so the output is
+    /// clean for piping.
+    static RAW_MODE: RefCell<bool> = RefCell::new(false);
+}
+
+fn raw_init(raw: bool) {
+    RAW_MODE.with(|cell| *cell.borrow_mut() = raw);
+}
+
+fn raw_active() -> bool {
+    RAW_MODE.with(|cell| *cell.borrow())
 }
 
 /// Print to stdout unless `-q` / `--quiet` or `--json` is active.
@@ -2303,6 +2337,10 @@ async fn handle_snapshot(
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
 
+    // Suppress tips when --raw/--stdout is active so stderr doesn't
+    // interleave with machine-readable stdout output.
+    raw_init(raw);
+
     json_field("page_url", json!(url));
     json_field("page_title", json!(title));
     json_field("snapshot_path", json!(out_path.display().to_string()));
@@ -2741,12 +2779,18 @@ async fn handle_extract(
     let raw = tool_params
         .get("raw")
         .and_then(|v| v.as_bool())
-        .unwrap_or(false);
+        .unwrap_or(false)
+        || tool_params
+            .get("stdout")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+    raw_init(raw);
     let extract_args = {
         let mut a = tool_params.clone();
         if let Value::Object(ref mut m) = a {
             m.remove("filename");
-            m.remove("raw");
+            m.remove("raw");      // CLI-side flag, not a server parameter
+            m.remove("stdout");   // CLI-side flag, not a server parameter
         }
         a
     };
@@ -2879,12 +2923,18 @@ async fn handle_summarize(
     let raw = tool_params
         .get("raw")
         .and_then(|v| v.as_bool())
-        .unwrap_or(false);
+        .unwrap_or(false)
+        || tool_params
+            .get("stdout")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+    raw_init(raw);
     let summarize_args = {
         let mut a = tool_params.clone();
         if let Value::Object(ref mut m) = a {
             m.remove("filename");
-            m.remove("raw");
+            m.remove("raw");      // CLI-side flag, not a server parameter
+            m.remove("stdout");   // CLI-side flag, not a server parameter
         }
         a
     };
@@ -9396,9 +9446,12 @@ async fn run(
     }
 
     // Emit JSON envelope when --json is active.
+    // Use println! directly — cli_println! checks json_active() which is
+    // true for the entire command lifetime, and we MUST emit the JSON
+    // envelope regardless.  (Same pattern as the error envelope below.)
     if global.json {
         if let Some(fields) = json_finish() {
-            cli_println!(
+            println!(
                 "{}",
                 json_envelope("ok", command, serde_json::Value::Object(fields), None)
             );

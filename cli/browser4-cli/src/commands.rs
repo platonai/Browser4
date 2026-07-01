@@ -1814,7 +1814,8 @@ pub fn all_commands() -> Vec<CommandDef> {
             options: &[
                 OptionDef { name: "schema", description: "JSON schema to constrain the extracted data structure", is_bool: false, short: None },
                 OptionDef { name: "filename", description: "Save extracted content to a file instead of printing to stdout", is_bool: false, short: None },
-                OptionDef { name: "raw", description: "Print extracted content directly to stdout (by default it is saved to a file)", is_bool: true, short: None },
+                OptionDef { name: "raw", description: "Print extracted content directly to stdout (alias for --stdout)", is_bool: true, short: None },
+                OptionDef { name: "stdout", description: "Print extracted content directly to stdout", is_bool: true, short: None },
             ],
             tool_name_fn: |_| "agent_extract".to_string(),
             tool_params_fn: |args| {
@@ -1822,6 +1823,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 if let Some(s) = get_opt_str(args, "schema") { p["schema"] = json!(s); }
                 if let Some(f) = get_opt_str(args, "filename") { p["filename"] = json!(f); }
                 if let Some(true) = get_bool(args, "raw") { p["raw"] = json!(true); }
+                if let Some(true) = get_bool(args, "stdout") { p["stdout"] = json!(true); }
                 p
             },
         },
@@ -1835,7 +1837,8 @@ pub fn all_commands() -> Vec<CommandDef> {
             options: &[
                 OptionDef { name: "selector", description: "CSS selector to limit the scope of summarization", is_bool: false, short: None },
                 OptionDef { name: "filename", description: "Save summary to a file instead of printing to stdout", is_bool: false, short: None },
-                OptionDef { name: "raw", description: "Print summary directly to stdout (by default it is saved to a file)", is_bool: true, short: None },
+                OptionDef { name: "raw", description: "Print summary directly to stdout (alias for --stdout)", is_bool: true, short: None },
+                OptionDef { name: "stdout", description: "Print summary directly to stdout", is_bool: true, short: None },
             ],
             tool_name_fn: |_| "agent_summarize".to_string(),
             tool_params_fn: |args| {
@@ -1844,6 +1847,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 if let Some(s) = get_opt_str(args, "selector") { p["selector"] = json!(s); }
                 if let Some(f) = get_opt_str(args, "filename") { p["filename"] = json!(f); }
                 if let Some(true) = get_bool(args, "raw") { p["raw"] = json!(true); }
+                if let Some(true) = get_bool(args, "stdout") { p["stdout"] = json!(true); }
                 p
             },
         },
@@ -2650,6 +2654,17 @@ mod tests {
     }
 
     #[test]
+    fn test_extract_with_stdout() {
+        let map = commands_map();
+        let cmd = map.get("extract").unwrap();
+        let mut args = HashMap::new();
+        args.insert("instruction".to_string(), json!("product name, price"));
+        args.insert("stdout".to_string(), json!(true));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["stdout"], true);
+    }
+
+    #[test]
     fn test_summarize_tool_name_and_params() {
         let map = commands_map();
         let cmd = map.get("summarize").unwrap();
@@ -2689,6 +2704,16 @@ mod tests {
         args.insert("raw".to_string(), json!(true));
         let params = (cmd.tool_params_fn)(&args);
         assert_eq!(params["raw"], true);
+    }
+
+    #[test]
+    fn test_summarize_with_stdout() {
+        let map = commands_map();
+        let cmd = map.get("summarize").unwrap();
+        let mut args = HashMap::new();
+        args.insert("stdout".to_string(), json!(true));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["stdout"], true);
     }
 
     #[test]

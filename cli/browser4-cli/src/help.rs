@@ -307,14 +307,14 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(
-            "  - Output is saved to a timestamped file by default. Use --raw to print to stdout instead, or --filename to specify a custom path."
+            "  - Output is saved to a timestamped file by default. Use --stdout (or --raw) to print to stdout instead, or --filename to specify a custom path."
                 .to_string(),
         );
         lines.push(String::new());
         lines.push("Examples:".to_string());
         lines.push("  browser4-cli extract \"product name, price, ratings\"".to_string());
         lines.push("  browser4-cli extract \"all contact info\" --schema person_schema.json".to_string());
-        lines.push("  browser4-cli extract \"article titles and dates\" --raw".to_string());
+        lines.push("  browser4-cli extract \"article titles and dates\" --stdout".to_string());
         lines.push("  browser4-cli extract \"page metadata\" --filename meta.json".to_string());
     }
 
@@ -1166,7 +1166,7 @@ mod tests {
         assert!(help.contains("Extract structured data"));
         assert!(help.contains("--schema"));
         assert!(help.contains("natural-language instruction"));
-        assert!(help.contains("--raw to print to stdout"));
+        assert!(help.contains("--stdout (or --raw) to print to stdout"));
         assert!(help.contains("browser4-cli extract \"product name, price, ratings\""));
     }
 
