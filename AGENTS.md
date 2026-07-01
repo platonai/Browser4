@@ -179,9 +179,9 @@ See [TESTING.md](docs/TESTING.md) for details and trade-offs.
 - Use `bin/test.ps1 mock-site -Dmock.site.port=18080` to launch `MockSiteBoot` from `browser4-tests/browser4-rest-tests`; use `MockSiteLauncher` from `browser4-tests/browser4-tests-common` for in-process startup
 - `cli/browser4-cli/tests/e2e.rs`: all e2e scenarios must start and depend on Browser4.jar; this includes single-scenario runs via `--scenario`.
 - **E2E Test Efficiency:** Run `cargo test --test e2e -- --help` to see all filtering options for running e2e tests efficiently. Key flags:
-    - `--scenario=<pattern>` — run only matching scenarios (supports `*` and `?` globs)
-    - `--group=<name>` — run scenarios in a specific group (repeatable)
-    - `--level=BASIC` — default; use `EXTENDED` or `all` for longer edge-case tests
+    - `--scenario <pattern>` — run only matching scenarios (supports `*` and `?` globs)
+    - `--group <name>` — run scenarios in a specific group (repeatable)
+    - `--level BASIC` — default; use `EXTENDED` or `all` for longer edge-case tests
     - `--fail-fast` — stop after the first failure
     - `--failed` — rerun only scenarios that failed in the previous run
     - `--list` / `--list-groups` — discover available scenarios and groups without running anything
@@ -425,10 +425,10 @@ All `.ps1` and `.sh` scripts under `bin/tests-production/` and `bin/test-product
 
 ```bash
 # Run all install-related scenarios:
-cargo test --test e2e -- --nocapture --level=ALL --enable-install-scenario --scenario='*install*'
+cargo test --test e2e -- --nocapture --level ALL --enable-install-scenario --scenario '*install*'
 
 # Or run the full install-enabled suite (broader, catches regressions in other scenarios):
-cargo test --test e2e -- --nocapture --level=ALL --enable-install-scenario
+cargo test --test e2e -- --nocapture --level ALL --enable-install-scenario
 ```
 
 These tests exercise the full download / extract / install / uninstall / upgrade lifecycle against a local mock release server and catch regressions that unit tests miss (lock acquisition failures, path handling, disk-space checks, mirror selection, download-cache behavior, and current-tag management).

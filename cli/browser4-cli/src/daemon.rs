@@ -1517,7 +1517,7 @@ fn proxy_from_url(raw: &str) -> Option<reqwest::Proxy> {
 /// Resolve a download proxy for the reqwest HTTP client.
 ///
 /// # Search order (first match wins)
-/// 1. `BROWSER4_CLI_PROXY` env var — set by `--proxy=<url>` on the CLI,
+/// 1. `BROWSER4_CLI_PROXY` env var — set by `--proxy <url>` on the CLI,
 ///    giving the user explicit control over the download proxy.
 /// 2. Standard env vars (`https_proxy`, `HTTPS_PROXY`, `http_proxy`, …) —
 ///    the portable path, used on Unix, in CI, and in Docker.
@@ -3158,10 +3158,10 @@ pub fn find_browser_executable() -> Option<PathBuf> {
 }
 
 // ---------------------------------------------------------------------------
-// Browser channel resolution for `attach --cdp=<channel>`
+// Browser channel resolution for `attach --cdp <channel>`
 // ---------------------------------------------------------------------------
 
-/// Known browser channels for the `attach --cdp=<channel>` command.
+/// Known browser channels for the `attach --cdp <channel>` command.
 #[derive(Debug, Clone, PartialEq)]
 pub enum BrowserChannel {
     Chrome,
@@ -3293,7 +3293,7 @@ pub fn resolve_channel_to_endpoint(channel: &str) -> Result<String, String> {
          1. Open {executable_name} and go to chrome://inspect/#remote-debugging\n\
          2. Check 'Allow remote debugging for this browser instance'\n\
          3. Or start it with: {executable_name} --remote-debugging-port={default_port}\n\
-         Then run: browser4-cli attach --cdp=http://localhost:{default_port}"
+         Then run: browser4-cli attach --cdp http://localhost:{default_port}"
     ))
 }
 

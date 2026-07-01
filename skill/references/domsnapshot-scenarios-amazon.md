@@ -282,7 +282,7 @@ browser4-cli domsnapshot query --sql "
 
 ```bash
 # Export the full page HTML for archival or later re-extraction
-browser4-cli domsnapshot export --file="amazon-search-wireless-mouse-$(date +%Y%m%d).html"
+browser4-cli domsnapshot export --file "amazon-search-wireless-mouse-$(date +%Y%m%d).html"
 
 # For scheduled monitoring, combine with load options (see audit scenarios)
 echo "
@@ -485,12 +485,12 @@ browser4-cli domsnapshot grep -i 'coupon|save.*off|extra savings' --selector "#c
 
 ```bash
 # Export the full page for offline reference
-browser4-cli domsnapshot export --file="airpods-pro-2-$(date +%Y%m%d).html"
+browser4-cli domsnapshot export --file "airpods-pro-2-$(date +%Y%m%d).html"
 
 # Revisit the same product a week later
 browser4-cli goto "https://www.amazon.com/dp/B08PP5MSVB"
 browser4-cli domsnapshot
-browser4-cli domsnapshot export --file="airpods-pro-2-$(date +%Y%m%d).html"
+browser4-cli domsnapshot export --file "airpods-pro-2-$(date +%Y%m%d).html"
 
 # Diff the exported files to detect changes
 diff airpods-pro-2-20260622.html airpods-pro-2-20260629.html

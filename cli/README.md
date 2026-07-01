@@ -86,8 +86,8 @@ browser4-cli summarize "key points in 3 bullets"
 browser4-cli agent run "Search amazon for mechanical keyboards, compare the top 3, write a summary"
 
 # Parallel scraping with swarm
-browser4-cli swarm create --max-open-tabs=12 --display-mode=HEADLESS
-browser4-cli swarm submit --seed-file=./urls.txt --refresh --store-content
+browser4-cli swarm create --max-open-tabs 12 --display-mode HEADLESS
+browser4-cli swarm submit --seed-file ./urls.txt --refresh --store-content
 browser4-cli swarm result scrape-task-1
 
 # Batch multiple commands
@@ -110,14 +110,14 @@ browser4-cli close
 |---|---|
 | `-h`, `--help [command]` | Print help (optionally for a command) |
 | `-v`, `--version` | Print version |
-| `-s=<name>` | Named session (isolated state per name) |
-| `--server=<url>` | Override Browser4 server URL |
-| `--proxy=<url>` | HTTP proxy for runtime downloads only |
+| `-s <name>` | Named session (isolated state per name) |
+| `--server <url>` | Override Browser4 server URL |
+| `--proxy <url>` | HTTP proxy for runtime downloads only |
 | `--json` | Emit machine-parseable JSON to stdout |
 | `-q`, `--quiet` | Suppress normal output |
 
 Sessions persist independently per name. Omit `-s` to use the default session
-(`~/.browser4/cli-state.json`). With `-s=<name>`, state is stored under
+(`~/.browser4/cli-state.json`). With `-s <name>`, state is stored under
 `~/.browser4/sessions/<name>.json`.
 
 `--json` wraps every command's stdout in a single-line JSON envelope
@@ -129,20 +129,20 @@ Sessions persist independently per name. Omit `-s` to use the default session
 
 | Command | Description |
 |---|---|
-| `open [url]` | Open or reuse a browser session. `--headed` / `--headless`, `--profile=<path>`, `--profile-mode=<mode>` (temporary / sequential / default), `--interact-level=<level>` (FASTEST / FAST / DEFAULT). |
-| `attach` | Attach to an existing browser via CDP endpoint or channel name. `--cdp=<url\|channel>` (e.g. `http://localhost:9222` or `chrome`), `--endpoint=<url>` for remote Browser4 servers. |
+| `open [url]` | Open or reuse a browser session. `--headed` / `--headless`, `--profile <path>`, `--profile-mode <mode>` (temporary / sequential / default), `--interact-level <level>` (FASTEST / FAST / DEFAULT). |
+| `attach` | Attach to an existing browser via CDP endpoint or channel name. `--cdp <url\|channel>` (e.g. `http://localhost:9222` or `chrome`), `--endpoint <url>` for remote Browser4 servers. |
 | `close` | Close the active session. |
 | `list` | List sessions with status (Active / Stale / Unknown). `--all` to list across workspaces. |
 | `close-all` | Close all sessions, keep the backend running. |
 | `kill-all` | Forcefully stop the backend and all browser processes. |
 | `stop` | Gracefully stop the Browser4 server. |
-| `status` | Check whether the backend is reachable. `--server=<url>` to check a specific server. |
-| `doctor` | Run system diagnostics. `--server=<url>`, `--file=<log-name>`, `--lines=<n>`. |
+| `status` | Check whether the backend is reachable. `--server <url>` to check a specific server. |
+| `doctor` | Run system diagnostics. `--server <url>`, `--file <log-name>`, `--lines <n>`. |
 
 ```bash
 browser4-cli open --headed https://example.com
-browser4-cli open --profile-mode=temporary https://example.com
-browser4-cli attach --cdp=chrome
+browser4-cli open --profile-mode temporary https://example.com
+browser4-cli attach --cdp chrome
 browser4-cli list
 browser4-cli status
 ```
@@ -218,24 +218,24 @@ browser4-cli scroll down 300
 |---|---|---|
 | **selector** | `wait <ref\|selector>` | `browser4-cli wait e1` |
 | **time** | `wait <milliseconds>` | `browser4-cli wait 2000` |
-| **text** | `wait --text=<text>` | `browser4-cli wait --text "Success"` |
-| **url** | `wait --url=<glob>` | `browser4-cli wait --url "**/dashboard"` |
-| **load** | `wait --load=<state>` | `browser4-cli wait --load networkidle` |
-| **fn** | `wait --fn=<JS expr>` | `browser4-cli wait --fn "window.ready === true"` |
+| **text** | `wait --text <text>` | `browser4-cli wait --text "Success"` |
+| **url** | `wait --url <glob>` | `browser4-cli wait --url "**/dashboard"` |
+| **load** | `wait --load <state>` | `browser4-cli wait --load networkidle` |
+| **fn** | `wait --fn <JS expr>` | `browser4-cli wait --fn "window.ready === true"` |
 
-All modes accept `--timeout=<ms>` (default: 30000). Load states: `networkidle`,
+All modes accept `--timeout <ms>` (default: 30000). Load states: `networkidle`,
 `domcontentloaded`, `load`.
 
 ### Screenshots & PDF
 
 | Command | Description |
 |---|---|
-| `screenshot [ref]` | Take a screenshot. `--filename=<path>`, `--full-page`. Optionally of a specific element. |
-| `pdf` | Save page as PDF. `--filename=<path>`. |
+| `screenshot [ref]` | Take a screenshot. `--filename <path>`, `--full-page`. Optionally of a specific element. |
+| `pdf` | Save page as PDF. `--filename <path>`. |
 
 ```bash
-browser4-cli screenshot --full-page --filename=page.png
-browser4-cli pdf --filename=page.pdf
+browser4-cli screenshot --full-page --filename page.png
+browser4-cli pdf --filename page.pdf
 ```
 
 ### Tabs
@@ -260,11 +260,11 @@ browser4-cli tab-close 1
 |---|---|
 | `snapshot` | Capture an accessibility snapshot. See [Snapshot](#snapshot) below. |
 | `get <mode> <selector> [name]` | Extract data from a page element in one of six modes (see below). |
-| `eval <expression> [ref]` | Evaluate JavaScript on the page or a target element. `--file=<path>` to read from file. `--json` to wrap scalar results. |
+| `eval <expression> [ref]` | Evaluate JavaScript on the page or a target element. `--file <path>` to read from file. `--json` to wrap scalar results. |
 | `generate-locator <ref>` | Generate a stable CSS selector path for an element. |
 | `domsnapshot` | Capture a static DOM snapshot. See [DOM Snapshot](#dom-snapshot) below. |
-| `extract <instruction>` | Extract structured data with AI. `--schema=<file>` for typed output. `--filename=<path>`, `--raw`. |
-| `summarize [instruction]` | Summarize page content with AI. `--selector=<css>`, `--filename=<path>`, `--raw`. |
+| `extract <instruction>` | Extract structured data with AI. `--schema <file>` for typed output. `--filename <path>`, `--raw`. |
+| `summarize [instruction]` | Summarize page content with AI. `--selector <css>`, `--filename <path>`, `--raw`. |
 
 `get` modes:
 
@@ -351,13 +351,13 @@ browser4-cli loop --shell "curl -s https://api.example.com/health" -i 60 -n 10
 
 | Command | Description |
 |---|---|
-| `install` | Download the Browser4 runtime bundle. `--tag=<version>`, `--force`. |
-| `upgrade` | Upgrade the runtime. `--tag=<version>`, `--force`. |
+| `install` | Download the Browser4 runtime bundle. `--tag <version>`, `--force`. |
+| `upgrade` | Upgrade the runtime. `--tag <version>`, `--force`. |
 | `uninstall` | Remove browser4-cli and its runtime data. `-y` / `--yes` to skip confirmation, `--dry-run` to preview. |
 
 ```bash
 browser4-cli install
-browser4-cli install --tag=v4.11.0
+browser4-cli install --tag v4.11.0
 browser4-cli upgrade --force
 browser4-cli uninstall --dry-run
 browser4-cli uninstall -y
@@ -393,7 +393,7 @@ Capture the accessibility snapshot.
 
 | Option | Description |
 |---|---|
-| `--filename=<path>` | Save snapshot to file instead of stdout |
+| `--filename <path>` | Save snapshot to file instead of stdout |
 | `--boxes` | Include bounding boxes `[box=x,y,w,h]` per element |
 | `-i`, `--interactive` | Show only interactive elements |
 | `-u`, `--urls` | Include href URLs for link elements |
@@ -416,7 +416,7 @@ browser4-cli snapshot -i -c -d 5
 browser4-cli snapshot -s "#main-content" --raw | grep "button"
 
 # Capture specific viewports
-browser4-cli snapshot --viewport=0,2,4
+browser4-cli snapshot --viewport 0,2,4
 ```
 
 #### snapshot grep
@@ -455,8 +455,8 @@ re-fetching. Unlike the accessibility `snapshot`, this works against the raw DOM
 browser4-cli domsnapshot
 browser4-cli domsnapshot get <field> [selector] [name]
 browser4-cli domsnapshot get all <field> [selector] [name]
-browser4-cli domsnapshot query [url] --sql=<query>
-browser4-cli domsnapshot export [--file=<path>]
+browser4-cli domsnapshot query [url] --sql <query>
+browser4-cli domsnapshot export [--file <path>]
 browser4-cli domsnapshot summary
 browser4-cli domsnapshot grep [OPTIONS] <pattern>
 browser4-cli domsnapshot inspect [selector] [--max N] [--depth D]
@@ -638,7 +638,7 @@ scraping and data extraction.
 ```
 browser4-cli swarm create [options]
 browser4-cli swarm submit [url] [options]
-browser4-cli swarm query <url> --sql=<query>
+browser4-cli swarm query <url> --sql <query>
 browser4-cli swarm status <id>
 browser4-cli swarm result <id>
 ```
@@ -656,10 +656,10 @@ Create a swarm scrape session.
 
 ```bash
 browser4-cli swarm create \
-  --profile-mode=TEMPORARY \
-  --max-open-tabs=12 \
-  --max-browser-contexts=3 \
-  --display-mode=HEADLESS
+  --profile-mode TEMPORARY \
+  --max-open-tabs 12 \
+  --max-browser-contexts 3 \
+  --display-mode HEADLESS
 ```
 
 #### swarm submit
@@ -669,19 +669,19 @@ line; `#` comments and blank lines ignored), or both.
 
 | Option | Description |
 |---|---|
-| `--seed-file=<path>` | File of URLs to submit |
-| `--sql=<query>` | X-SQL query (inline or `@file.sql`). Sends to query API instead of submit. |
-| `--deadline=<ISO 8601>` | Task completion deadline |
-| `--expires=<duration>` | Cache expiration (e.g. `1d`, `1h`) |
+| `--seed-file <path>` | File of URLs to submit |
+| `--sql <query>` | X-SQL query (inline or `@file.sql`). Sends to query API instead of submit. |
+| `--deadline <ISO 8601>` | Task completion deadline |
+| `--expires <duration>` | Cache expiration (e.g. `1d`, `1h`) |
 | `--refresh` | Force fresh fetch, ignore cache |
 | `--parse` | Parse page immediately after fetching |
 | `--store-content` | Persist page content to storage |
 
 ```bash
 # Submit URLs from a file
-browser4-cli swarm submit --seed-file=./urls.txt \
-  --deadline=2026-03-30T00:00:00Z \
-  --expires=1d --refresh --store-content
+browser4-cli swarm submit --seed-file ./urls.txt \
+  --deadline 2026-03-30T00:00:00Z \
+  --expires 1d --refresh --store-content
 
 # Submit with inline X-SQL
 browser4-cli swarm submit "https://www.amazon.com/dp/B08PP5MSVB" --sql "
@@ -709,7 +709,7 @@ browser4-cli swarm query "https://www.amazon.com/dp/B08PP5MSVB" --sql "
 "
 
 # From a file, with seed URLs
-browser4-cli swarm query --sql @query.sql --seed-file=./urls.txt --refresh
+browser4-cli swarm query --sql @query.sql --seed-file ./urls.txt --refresh
 ```
 
 #### swarm status / swarm result
@@ -790,7 +790,7 @@ You can also use CSS selectors (e.g. `#search`, `.btn-primary`,
 CLI state is stored under `~/.browser4` (override with `BROWSER4_CLI_STATE_DIR`):
 
 - Default session: `~/.browser4/cli-state.json`
-- Named sessions (`-s=<name>`): `~/.browser4/sessions/<name>.json`
+- Named sessions (`-s <name>`): `~/.browser4/sessions/<name>.json`
 
 Each state file stores the session ID, server URL, and cursor position — so your
 next `open` or `goto` picks up right where you left off.

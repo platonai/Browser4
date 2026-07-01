@@ -31,7 +31,7 @@ browser4-cli goto "https://example.com"
 browser4-cli snapshot -v 0          # read the page; note refs
 browser4-cli fill <ref> "<value>"   # interact
 browser4-cli press Enter
-browser4-cli wait --load=networkidle
+browser4-cli wait --load networkidle
 browser4-cli snapshot -v 0 --auto-diff  # verify what changed
 browser4-cli domsnapshot get text "<css-selector>" --all
 ```
@@ -58,7 +58,7 @@ Refs are **ephemeral** — they become invalid after ANY page-modifying command 
 
 ### Sessions
 
-Named sessions isolate browser state (cookies, localStorage, tabs). Use `-s=<name>` to target a named session. `goto` auto-opens/reconnects — you rarely need to manage sessions manually.
+Named sessions isolate browser state (cookies, localStorage, tabs). Use `-s <name>` to target a named session. `goto` auto-opens/reconnects — you rarely need to manage sessions manually.
 
 ## 3. Command Map
 
@@ -130,7 +130,7 @@ Need to process multiple pages?
 
 > **Note:** Output pagination defaults — `get html`, `get all html`, and `grep` paginate at 2K lines. `get text` and `get all text` are not paginated by default. Use `--all` to disable pagination, or `--page N` for subsequent pages.
 
-> **Note:** Interactive mode (`snapshot -i`) strips generic `<div>` containers. Many e-commerce product cards use generic divs, not semantic elements. Prefer `--viewport=0` or `domsnapshot` for shopping/search pages.
+> **Note:** Interactive mode (`snapshot -i`) strips generic `<div>` containers. Many e-commerce product cards use generic divs, not semantic elements. Prefer `--viewport 0` or `domsnapshot` for shopping/search pages.
 
 ## 6. Quick Patterns
 
@@ -142,7 +142,7 @@ browser4-cli snapshot -v 0
 browser4-cli fill <email-ref> "user@example.com"
 browser4-cli fill <password-ref> "password"
 browser4-cli click <submit-ref>
-browser4-cli wait --load=networkidle
+browser4-cli wait --load networkidle
 browser4-cli snapshot -v 0 --auto-diff
 ```
 

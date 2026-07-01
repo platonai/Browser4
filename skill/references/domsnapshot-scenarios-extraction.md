@@ -83,7 +83,7 @@ browser4-cli domsnapshot query "https://www.amazon.com/s?k=mechanical+keyboard -
 ```bash
 browser4-cli goto "https://www.amazon.com/dp/B08PP5MSVB"
 browser4-cli domsnapshot
-browser4-cli domsnapshot export --file=product-page-$(date +%Y%m%d).html
+browser4-cli domsnapshot export --file product-page-$(date +%Y%m%d).html
 # Later: grep, parse, or diff against yesterday's export
 diff product-page-20260621.html product-page-20260622.html
 ```
@@ -127,7 +127,7 @@ browser4-cli domsnapshot get text ".gs-c-promo-heading__title"
 ```bash
 browser4-cli goto "https://news.ycombinator.com"
 browser4-cli domsnapshot
-browser4-cli domsnapshot export --file="headlines-$(date +%Y%m%d-%H%M).html"
+browser4-cli domsnapshot export --file "headlines-$(date +%Y%m%d-%H%M).html"
 # Build a corpus over weeks; run NLP pipelines on the exported HTML
 ```
 
@@ -185,7 +185,7 @@ browser4-cli domsnapshot grep --selector ".job-card-container" -i 'react'
 ```bash
 browser4-cli goto "https://www.linkedin.com/jobs/search?keywords=senior%20frontend"
 browser4-cli domsnapshot
-browser4-cli domsnapshot export --file=jobs.html
+browser4-cli domsnapshot export --file jobs.html
 # For deeper processing, feed the exported HTML to your preferred parser
 ```
 

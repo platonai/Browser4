@@ -98,11 +98,11 @@ Browser4 CLI 专为 AI 智能体通过 SKILLS + CLI 使用而设计 — 详见 [
 以下标志可以出现在任何命令之前：
 
 ```
--s=<name>, --session=<name>    命名会话标签
---server=<url>                 覆盖 Browser4 服务器 URL
+-s <name>, --session <name>    命名会话标签
+--server <url>                 覆盖 Browser4 服务器 URL
 --json                         将机器可解析的 JSON 输出到 stdout
 -q, --quiet                    隐藏常规输出，仅显示错误
---proxy=<url>                  手动指定下载用的 HTTP 代理
+--proxy <url>                  手动指定下载用的 HTTP 代理
 --help, -h                     打印帮助信息
 --version, -v                  打印版本号
 ```
@@ -111,8 +111,8 @@ Browser4 CLI 专为 AI 智能体通过 SKILLS + CLI 使用而设计 — 详见 [
 
 ```
 open [url]        打开浏览器会话，可选地导航到某个 URL
-                  --headed, --headless, --profile=<path>, --profile-mode=<mode>
-attach            通过 CDP 附加到现有浏览器 (--cdp=<channel|url|port>)
+                  --headed, --headless, --profile <path>, --profile-mode <mode>
+attach            通过 CDP 附加到现有浏览器 (--cdp <channel|url|port>)
 close             关闭当前浏览器会话
 close-all         关闭所有浏览器会话但不停止后端
 kill-all          强制停止 Browser4 后端并终止所有浏览器进程
@@ -168,7 +168,7 @@ snapshot                          捕获无障碍树快照
                                   --depth (-d), --selector (-s), --raw, --viewport (-vp), --filename
 get <mode> <selector> [name]      使用 CSS 选择器提取数据
                                   模式：text, html, box, styles, property, attr
-eval [expression] [ref]            在页面或元素上执行 JavaScript。--file=<path>
+eval [expression] [ref]            在页面或元素上执行 JavaScript。--file <path>
 console [min-level]                列出浏览器控制台消息。--clear
 generate-locator <ref>             从快照 ref 或现有选择器生成唯一的 CSS 选择器
 ```
@@ -189,8 +189,8 @@ X-SQL 支持        否                    是 (query)
 ```
 domsnapshot                                捕获静态 DOM 快照并将其存储在页面存储中
 domsnapshot get <field> [selector] [name]  从存储的 DOM 快照中提取 text、html 或 attr
-domsnapshot query [url]                    对存储的 DOM 快照运行 X-SQL (--sql=<query|@file>)
-domsnapshot export                         将快照 HTML 导出到本地文件 (--file=<path>)
+domsnapshot query [url]                    对存储的 DOM 快照运行 X-SQL (--sql <query|@file>)
+domsnapshot export                         将快照 HTML 导出到本地文件 (--file <path>)
 domsnapshot summary                        生成压缩的网页摘要索引 (WPSI)
 domsnapshot grep <pattern>                 使用正则表达式搜索快照 HTML
                                            -i, -v, -c, -l, -F, -w, -A, -B, -C, --selector
@@ -289,7 +289,7 @@ export DEEPSEEK_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxx
 agent run <task>          提交自主任务（异步，立即返回任务 ID）
 agent status <id>         查看正在运行的智能体任务的状态
 agent result <id>         获取已完成的智能体任务的最终结果
-extract <instruction>     使用 AI 从页面提取结构化数据。--schema=<json>, --filename, --raw
+extract <instruction>     使用 AI 从页面提取结构化数据。--schema <json>, --filename, --raw
 summarize [instruction]   使用 AI 总结页面内容。--selector, --filename, --raw
 ```
 
@@ -336,9 +336,9 @@ loop [task]         按间隔重复执行任务
 #### 安装与升级
 
 ```
-install      安装自包含的 Browser4 运行时包。--tag=<version>, --force
+install      安装自包含的 Browser4 运行时包。--tag <version>, --force
 uninstall    移除全局安装的 browser4-cli 和运行时数据。--yes (-y), --dry-run
-upgrade      升级到最新版本或指定的发布标签。--tag=<version>, --force
+upgrade      升级到最新版本或指定的发布标签。--tag <version>, --force
 ```
 
 #### 支持批处理的命令
@@ -408,8 +408,8 @@ browser4-cli summarize "key points in 3 bullets"
 browser4-cli agent run "Search amazon for mechanical keyboards, compare the top 3, write a summary"
 
 # 使用 swarm 进行并行抓取
-browser4-cli swarm create --max-open-tabs=12 --display-mode=HEADLESS
-browser4-cli swarm submit --seed-file=./urls.txt --refresh --store-content
+browser4-cli swarm create --max-open-tabs 12 --display-mode HEADLESS
+browser4-cli swarm submit --seed-file ./urls.txt --refresh --store-content
 browser4-cli swarm result scrape-task-1
 
 # 批量执行多个命令

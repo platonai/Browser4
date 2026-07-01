@@ -222,7 +222,7 @@ browser4-cli domsnapshot get text "$SELECTOR"
 
 ```bash
 # ❌ BAD: Exporting full page HTML then reading it
-browser4-cli domsnapshot export --file=page.html
+browser4-cli domsnapshot export --file page.html
 cat page.html  # hundreds of MB!
 
 # ❌ BAD: Getting full page HTML just to find one value

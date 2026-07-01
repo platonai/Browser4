@@ -163,7 +163,7 @@ browser4-cli domsnapshot summary
 Save full snapshot HTML to a local file. The exported HTML is pretty-formatted for direct use with tools like `grep`.
 
 ```bash
-browser4-cli domsnapshot export [--file=page-snapshot.html]
+browser4-cli domsnapshot export [--file page-snapshot.html]
 ```
 
 ## Grep — Search snapshot HTML

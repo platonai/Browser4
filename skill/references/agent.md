@@ -92,14 +92,14 @@ browser4-cli agent run "Navigate to the reports dashboard, extract all monthly m
 
 ```bash
 browser4-cli extract "product name, price, ratings"
-browser4-cli extract "all article headlines and authors" --schema='{"fields":[{"name":"title","type":"string"},{"name":"author","type":"string"}]}'
+browser4-cli extract "all article headlines and authors" --schema '{"fields":[{"name":"title","type":"string"},{"name":"author","type":"string"}]}'
 ```
 
 ### 6. Synchronous Summarization (summarize)
 
 ```bash
 browser4-cli summarize "summarize the product reviews"
-browser4-cli summarize --selector="#content"
+browser4-cli summarize --selector "#content"
 ```
 
 ## Errors & Recovery

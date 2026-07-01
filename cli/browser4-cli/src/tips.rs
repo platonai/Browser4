@@ -36,7 +36,7 @@ const TIPS_SNAPSHOT: &[Tip] = &[
         text: "Use `snapshot --stdout --page 1` to read snapshots directly in stdout without file access",
     },
     Tip {
-        text: "Use `snapshot --filename=result.yaml` for named output — great for workflow artifact tracking",
+        text: "Use `snapshot --filename result.yaml` for named output — great for workflow artifact tracking",
     },
 ];
 
@@ -108,13 +108,13 @@ const TIPS_NAVIGATION: &[Tip] = &[
         text: "Use `--headed` flag to see the browser window — invaluable for debugging automation issues",
     },
     Tip {
-        text: "Use named sessions (`-s=<name>`) with `goto` to maintain separate browser state per task",
+        text: "Use named sessions (`-s <name>`) with `goto` to maintain separate browser state per task",
     },
 ];
 
 const TIPS_EVAL: &[Tip] = &[
     Tip {
-        text: "Use `eval --file=script.js` or `eval --stdin` to avoid shell quoting pain on Windows",
+        text: "Use `eval --file script.js` or `eval --stdin` to avoid shell quoting pain on Windows",
     },
     Tip {
         text: "Use `eval --json` for machine-parseable JSON output — perfect for piping to other tools",
@@ -135,13 +135,13 @@ const TIPS_AI_EXTRACTION: &[Tip] = &[
         text: "For high-volume extraction, X-SQL is faster, cheaper, and more predictable than LLM-based extraction",
     },
     Tip {
-        text: "Use `summarize --selector=<css>` to focus AI summarization on a specific page section",
+        text: "Use `summarize --selector <css>` to focus AI summarization on a specific page section",
     },
 ];
 
 const TIPS_SCROLL: &[Tip] = &[
     Tip {
-        text: "Use `wait --load=networkidle` after scrolling to ensure infinite-scroll content has loaded",
+        text: "Use `wait --load networkidle` after scrolling to ensure infinite-scroll content has loaded",
     },
     Tip {
         text: "Use `scroll down <px>` with incremental values (e.g. 300px) to trigger lazy-loading without overshooting",
@@ -150,16 +150,16 @@ const TIPS_SCROLL: &[Tip] = &[
 
 const TIPS_WAIT: &[Tip] = &[
     Tip {
-        text: "Use `wait --load=networkidle` instead of fixed `wait <ms>` for reliable page readiness",
+        text: "Use `wait --load networkidle` instead of fixed `wait <ms>` for reliable page readiness",
     },
     Tip {
-        text: "Chain wait conditions: `wait <ref> && wait --load=networkidle` for dynamic content that loads after interaction",
+        text: "Chain wait conditions: `wait <ref> && wait --load networkidle` for dynamic content that loads after interaction",
     },
     Tip {
-        text: "Use `wait --fn=\"document.readyState === 'complete'\"` for custom page-ready checks",
+        text: "Use `wait --fn \"document.readyState === 'complete'\"` for custom page-ready checks",
     },
     Tip {
-        text: "Use `wait --url=\"<glob>\"` to wait for SPA route changes after clicking navigation links",
+        text: "Use `wait --url \"<glob>\"` to wait for SPA route changes after clicking navigation links",
     },
 ];
 
@@ -168,7 +168,7 @@ const TIPS_SCREENSHOT: &[Tip] = &[
         text: "Use `screenshot [ref]` to capture a specific element — much smaller than full-page captures",
     },
     Tip {
-        text: "Use `--filename=result.png` for workflow-friendly named output files",
+        text: "Use `--filename result.png` for workflow-friendly named output files",
     },
     Tip {
         text: "Combine with `pdf` command for document-ready page captures",
@@ -177,7 +177,7 @@ const TIPS_SCREENSHOT: &[Tip] = &[
 
 const TIPS_CRAWL: &[Tip] = &[
     Tip {
-        text: "Use `--seed-file=urls.txt --depth 0` for bulk fetching known URLs without link discovery",
+        text: "Use `--seed-file urls.txt --depth 0` for bulk fetching known URLs without link discovery",
     },
     Tip {
         text: "Use `--sql` (or `--sql @query.sql`) with crawl to extract structured data from every crawled page. Use @url as the page URL placeholder",
@@ -186,28 +186,28 @@ const TIPS_CRAWL: &[Tip] = &[
         text: "Use `--format csv -o results.csv` with `--sql` to save extracted crawl data directly to a spreadsheet-ready file",
     },
     Tip {
-        text: "Use `--out-link-pattern=<regex>` to filter which links to follow during crawling",
+        text: "Use `--out-link-pattern <regex>` to filter which links to follow during crawling",
     },
     Tip {
         text: "Combine `crawl` with `swarm`: crawl discovers URLs, swarm scrapes them in parallel",
     },
     Tip {
-        text: "Use `--depth=1` for single-level crawling — discover links from one page only",
+        text: "Use `--depth 1` for single-level crawling — discover links from one page only",
     },
 ];
 
 const TIPS_SWARM: &[Tip] = &[
     Tip {
-        text: "Use `--max-browser-contexts=3` to control parallelism in swarm operations",
+        text: "Use `--max-browser-contexts 3` to control parallelism in swarm operations",
     },
     Tip {
-        text: "Use `--seed-file=urls.txt` with `swarm submit` for bulk URL processing",
+        text: "Use `--seed-file urls.txt` with `swarm submit` for bulk URL processing",
     },
     Tip {
         text: "Use `swarm query` with X-SQL to run the same structured extraction across all swarm results",
     },
     Tip {
-        text: "Use `--display-mode=HEADLESS` for swarm operations to reduce resource usage",
+        text: "Use `--display-mode HEADLESS` for swarm operations to reduce resource usage",
     },
 ];
 
@@ -222,10 +222,10 @@ const TIPS_AGENT: &[Tip] = &[
 
 const TIPS_ATTACH: &[Tip] = &[
     Tip {
-        text: "Use `attach --cdp=chrome` to connect to your regular Chrome with all your logins intact",
+        text: "Use `attach --cdp chrome` to connect to your regular Chrome with all your logins intact",
     },
     Tip {
-        text: "Use `attach --cdp=msedge` to connect to Microsoft Edge via CDP",
+        text: "Use `attach --cdp msedge` to connect to Microsoft Edge via CDP",
     },
 ];
 
@@ -292,7 +292,7 @@ const TIPS_DOMSNAPSHOT_GREP: &[Tip] = &[
 
 const TIPS_GENERAL: &[Tip] = &[
     Tip {
-        text: "Use named sessions (`-s=<name>`) to isolate different tasks with separate browser state",
+        text: "Use named sessions (`-s <name>`) to isolate different tasks with separate browser state",
     },
     Tip {
         text: "Use `batch` for multi-step workflows — executes commands sequentially with state sharing",
@@ -307,7 +307,7 @@ const TIPS_GENERAL: &[Tip] = &[
         text: "Combine `snapshot -v 0`, `domsnapshot get`, and `eval --json` for a complete extraction pipeline",
     },
     Tip {
-        text: "Use `--server=<url>` to target a remote Browser4 server for distributed scraping",
+        text: "Use `--server <url>` to target a remote Browser4 server for distributed scraping",
     },
     Tip {
         text: "Use `list` to see all active sessions and their current page URLs at a glance",

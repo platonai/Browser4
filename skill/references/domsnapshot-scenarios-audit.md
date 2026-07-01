@@ -265,7 +265,7 @@ browser4-cli domsnapshot grep -c -F 'cookie-consent'
 ```bash
 browser4-cli goto "https://bank.example.com/products/savings"
 browser4-cli domsnapshot
-browser4-cli domsnapshot export --file="compliance-$(date +%Y%m%d)-savings.html"
+browser4-cli domsnapshot export --file "compliance-$(date +%Y%m%d)-savings.html"
 # Store in versioned S3 bucket for regulatory audit
 ```
 
@@ -297,7 +297,7 @@ for url in "${PAGES[@]}"; do
   slug=$(echo "$url" | sed 's/[^a-zA-Z0-9]/_/g')
   browser4-cli goto "$url"
   browser4-cli domsnapshot
-  browser4-cli domsnapshot export --file="$CURRENT_DIR/${slug}.html"
+  browser4-cli domsnapshot export --file "$CURRENT_DIR/${slug}.html"
 done
 
 # Diff current against baseline

@@ -46,7 +46,7 @@ pub fn generate_help() -> String {
     let cmds = all_commands();
     let mut lines: Vec<String> = vec![
         "Usage: browser4-cli <command> [args] [options]".to_string(),
-        "Usage: browser4-cli -s=<session> <command> [args] [options]".to_string(),
+        "Usage: browser4-cli -s <session> <command> [args] [options]".to_string(),
     ];
 
     for (cat_name, cat_title) in CATEGORIES {
@@ -76,9 +76,9 @@ pub fn generate_help() -> String {
         "suppress normal output, only show errors",
         30,
     ));
-    lines.push(format_with_gap("  -s=<name>", "named session label", 30));
+    lines.push(format_with_gap("  -s <name>", "named session label", 30));
     lines.push(format_with_gap(
-        "  --server=<url>",
+        "  --server <url>",
         "override Browser4 server URL",
         30,
     ));
@@ -368,9 +368,9 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         );
         lines.push(String::new());
         lines.push("Examples:".to_string());
-        lines.push("  browser4-cli attach --cdp=http://localhost:9222".to_string());
-        lines.push("  browser4-cli attach --cdp=chrome".to_string());
-        lines.push("  browser4-cli attach --cdp=msedge".to_string());
+        lines.push("  browser4-cli attach --cdp http://localhost:9222".to_string());
+        lines.push("  browser4-cli attach --cdp chrome".to_string());
+        lines.push("  browser4-cli attach --cdp msedge".to_string());
     }
 
     if cmd.name == "open" {
@@ -410,8 +410,8 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push(String::new());
         lines.push("Examples:".to_string());
         lines.push("  browser4-cli install".to_string());
-        lines.push("  browser4-cli install --tag=v4.9.3".to_string());
-        lines.push("  browser4-cli install --tag=4.9.3 --force".to_string());
+        lines.push("  browser4-cli install --tag v4.9.3".to_string());
+        lines.push("  browser4-cli install --tag 4.9.3 --force".to_string());
     }
 
     if cmd.name == "upgrade" {
@@ -509,7 +509,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("Examples:".to_string());
         lines.push("  browser4-cli swarm create".to_string());
         lines.push(
-            "  browser4-cli swarm create --profile-mode=TEMPORARY --max-open-tabs=12 --max-browser-contexts=3 --display-mode=HEADLESS"
+            "  browser4-cli swarm create --profile-mode TEMPORARY --max-open-tabs 12 --max-browser-contexts 3 --display-mode HEADLESS"
                 .to_string(),
         );
     }
@@ -543,7 +543,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push(String::new());
         lines.push("Examples:".to_string());
         lines.push(
-            "  browser4-cli swarm submit https://example.com/direct --seed-file=./swarm-seeds.txt --deadline=2026-03-30T00:00:00Z --expires=1d --refresh --store-content"
+            "  browser4-cli swarm submit https://example.com/direct --seed-file ./swarm-seeds.txt --deadline 2026-03-30T00:00:00Z --expires 1d --refresh --store-content"
                 .to_string(),
         );
         lines.push(String::new());
@@ -611,7 +611,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push(String::new());
         lines.push("  # With seed file:".to_string());
         lines.push(
-            "  browser4-cli swarm query --sql @query.sql --seed-file=./swarm-seeds.txt --refresh"
+            "  browser4-cli swarm query --sql @query.sql --seed-file ./swarm-seeds.txt --refresh"
                 .to_string(),
         );
     }
@@ -921,10 +921,10 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("  browser4-cli snapshot -v 0".to_string());
         lines.push(String::new());
         lines.push("  # Capture a range of viewports".to_string());
-        lines.push("  browser4-cli snapshot --viewport=1-3".to_string());
+        lines.push("  browser4-cli snapshot --viewport 1-3".to_string());
         lines.push(String::new());
         lines.push("  # Capture specific viewports using ViewportSpec format".to_string());
-        lines.push("  browser4-cli snapshot --viewport=0,2,4".to_string());
+        lines.push("  browser4-cli snapshot --viewport 0,2,4".to_string());
         lines.push(String::new());
         lines.push("  # Capture snapshot and print to stdout for piping".to_string());
         lines.push("  browser4-cli snapshot --stdout | head -20".to_string());
@@ -1147,7 +1147,7 @@ mod tests {
         assert!(help.contains("browser4-cli install"));
         assert!(help.contains("self-contained Browser4 runtime bundle"));
         assert!(help.contains("dependency jars, a minimal `jlink`-built JRE"));
-        assert!(help.contains("browser4-cli install --tag=v4.9.3"));
+        assert!(help.contains("browser4-cli install --tag v4.9.3"));
         assert!(help.contains("--force"));
         assert!(help.contains("configured download mirrors"));
     }
@@ -1480,8 +1480,8 @@ mod tests {
         assert!(help.contains("CDP (Chrome DevTools Protocol)"));
         assert!(help.contains("--cdp"));
         assert!(help.contains("--endpoint"));
-        assert!(help.contains("browser4-cli attach --cdp=http://localhost:9222"));
-        assert!(help.contains("browser4-cli attach --cdp=chrome"));
+        assert!(help.contains("browser4-cli attach --cdp http://localhost:9222"));
+        assert!(help.contains("browser4-cli attach --cdp chrome"));
     }
 
     #[test]

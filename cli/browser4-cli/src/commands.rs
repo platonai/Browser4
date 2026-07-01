@@ -54,7 +54,7 @@ pub struct ArgDef {
     pub optional: bool,
 }
 
-/// Describes a named option (`--key=value`) for a command.
+/// Describes a named option (`--key value`) for a command.
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub struct OptionDef {
@@ -196,7 +196,7 @@ fn resolve_text_and_ref(map: &HashMap<String, Value>) -> (String, Option<String>
 // Page-load wait helpers
 // ---------------------------------------------------------------------------
 
-/// Build the JavaScript expression for `wait --load=<strategy>`.
+/// Build the JavaScript expression for `wait --load <strategy>`.
 ///
 /// Supported strategies:
 /// - `domcontentloaded` — DOM is parsed, scripts executed

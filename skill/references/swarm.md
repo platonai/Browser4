@@ -11,8 +11,8 @@ Orchestrate parallel scraping and structured data extraction across multiple bro
 ## Quick Start
 
 ```bash
-browser4-cli swarm create --display-mode=HEADLESS
-browser4-cli swarm query --sql @query.sql --seed-file=./urls.txt --refresh
+browser4-cli swarm create --display-mode HEADLESS
+browser4-cli swarm query --sql @query.sql --seed-file ./urls.txt --refresh
 browser4-cli swarm status scrape-task-4     # poll until isDone: true
 browser4-cli swarm result scrape-task-4
 browser4-cli close                          # free resources
@@ -39,7 +39,7 @@ swarm result <id>   →  fetches the completed job payload
 ### 1. Create a Swarm Session
 
 ```bash
-browser4-cli swarm create [--profile-mode=SEQUENTIAL|TEMPORARY] [--max-open-tabs=8] [--max-browser-contexts=2] [--display-mode=GUI|HEADLESS|SUPERVISED]
+browser4-cli swarm create [--profile-mode SEQUENTIAL|TEMPORARY] [--max-open-tabs 8] [--max-browser-contexts 2] [--display-mode GUI|HEADLESS|SUPERVISED]
 ```
 
 | Option | Default | Description |
@@ -54,7 +54,7 @@ The session persists until `browser4-cli close` or `close-all`.
 ### 2. Submit Scrape Jobs
 
 ```bash
-browser4-cli swarm submit <url> [--seed-file=./urls.txt] [--deadline=ISO] [--expires=1d] [--refresh] [--parse] [--store-content]
+browser4-cli swarm submit <url> [--seed-file ./urls.txt] [--deadline ISO] [--expires 1d] [--refresh] [--parse] [--store-content]
 ```
 
 | Argument/Option | Description |
@@ -72,7 +72,7 @@ browser4-cli swarm submit <url> [--seed-file=./urls.txt] [--deadline=ISO] [--exp
 ### 3. Submit X-SQL Extraction Jobs (Preferred)
 
 ```bash
-browser4-cli swarm query [url] --sql "<query>" [--seed-file=./urls.txt] [--refresh]
+browser4-cli swarm query [url] --sql "<query>" [--seed-file ./urls.txt] [--refresh]
 ```
 
 | Argument/Option | Required | Description |
@@ -85,7 +85,7 @@ browser4-cli swarm query [url] --sql "<query>" [--seed-file=./urls.txt] [--refre
 
 ```bash
 # Query file against every URL in a seed file
-browser4-cli swarm query --sql @query.sql --seed-file=./urls.txt --refresh
+browser4-cli swarm query --sql @query.sql --seed-file ./urls.txt --refresh
 ```
 
 Core X-SQL pattern: `SELECT <fn>(dom, <selector>) FROM load_and_select(@url, '<scope>');`
@@ -118,6 +118,6 @@ Example result:
 
 ## Notes
 
-- The swarm session uses fixed session ID `SWARM` — it doesn't share state with named (`-s=<name>`) or default sessions.
+- The swarm session uses fixed session ID `SWARM` — it doesn't share state with named (`-s <name>`) or default sessions.
 - Seed files support thousands of URLs; control parallelism with `--max-open-tabs` and `--max-browser-contexts`.
 - Always close the swarm session when done (`browser4-cli close` or `close-all`) to free resources.

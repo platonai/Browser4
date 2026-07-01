@@ -73,13 +73,13 @@ browser4-cli cookie-list
 ### Filter Cookies by Domain
 
 ```bash
-browser4-cli cookie-list --domain=example.com
+browser4-cli cookie-list --domain example.com
 ```
 
 ### Filter Cookies by Path
 
 ```bash
-browser4-cli cookie-list --path=/api
+browser4-cli cookie-list --path /api
 ```
 
 ### Get Specific Cookie
@@ -95,10 +95,10 @@ browser4-cli cookie-get session_id
 browser4-cli cookie-set session abc123
 
 # Cookie with options
-browser4-cli cookie-set session abc123 --domain=example.com --path=/ --httpOnly --secure --sameSite=Lax
+browser4-cli cookie-set session abc123 --domain example.com --path / --httpOnly --secure --sameSite Lax
 
 # Cookie with expiration (Unix timestamp)
-browser4-cli cookie-set remember_me token123 --expires=1735689600
+browser4-cli cookie-set remember_me token123 --expires 1735689600
 ```
 
 ### Delete a Cookie

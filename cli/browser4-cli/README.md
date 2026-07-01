@@ -159,8 +159,8 @@ See [`cli/README.md`](../README.md) for the user-facing documentation.
 | `--version` | Print version |
 | `--json` | Emit machine-parseable JSON to stdout |
 | `-q, --quiet` | Suppress normal output, only show errors |
-| `-s=<name>` | Named session label |
-| `--server=<url>` | Override Browser4 server URL |
+| `-s <name>` | Named session label |
+| `--server <url>` | Override Browser4 server URL |
 
 ## Build
 
@@ -250,7 +250,7 @@ cargo test -- --nocapture
 cargo test -- --show-output
 
 # Limit concurrency
-cargo test -- --test-threads=1
+cargo test -- --test-threads 1
 ```
 
 ### e2e-specific
@@ -263,17 +263,17 @@ e2e uses a custom harness (`harness = false`). Arguments after `--` are forwarde
 cargo test --test e2e -- --nocapture
 
 # Run only "Extended" level scenarios (default is "Basic")
-cargo test --test e2e -- --nocapture --level=EXTENDED
+cargo test --test e2e -- --nocapture --level EXTENDED
 
 # Limit to 1 scenario
-cargo test --test e2e -- --nocapture --scenario-limit=1
+cargo test --test e2e -- --nocapture --scenario-limit 1
 
 # Run a specific scenario (exact match)
-cargo test --test e2e -- --nocapture --scenario=test_e2e_batch_form_submission
+cargo test --test e2e -- --nocapture --scenario test_e2e_batch_form_submission
 
 # Wildcard — match multiple scenarios
-cargo test --test e2e -- --nocapture --scenario=*open*
-cargo test --test e2e -- --nocapture --scenario=test_e2e_swarm_*
+cargo test --test e2e -- --nocapture --scenario *open*
+cargo test --test e2e -- --nocapture --scenario test_e2e_swarm_*
 
 # Re-run scenarios that failed last time
 cargo test --test e2e -- --nocapture --failed
@@ -290,24 +290,24 @@ cargo test --test e2e -- --list
 
 # More examples:
 cargo test --test e2e -- --nocapture
-cargo test --test e2e -- --nocapture --level=Basic
-cargo test --test e2e -- --nocapture --scenario-limit=1
+cargo test --test e2e -- --nocapture --level Basic
+cargo test --test e2e -- --nocapture --scenario-limit 1
 cargo test --test e2e -- --nocapture --enable-batch-scenario
 cargo test --test e2e -- --nocapture --enable-install-scenario
 cargo test --test e2e -- --nocapture --batch-only
-cargo test --test e2e -- --nocapture --scenario=*open*
-cargo test --test e2e -- --nocapture --scenario=test_e2e_batch_*
-cargo test --test e2e -- --nocapture --scenario=test_e2e_swarm_*
-cargo test --test e2e -- --nocapture --scenario=test_e2e_agent_*
-cargo test --test e2e -- --nocapture --scenario=test_e2e_agent_task_commands
-cargo test --test e2e -- --nocapture --scenario-from=test_e2e_mouse_and_dialog
-cargo test --test e2e -- --nocapture --scenario-from=test_e2e_navigation_and_storage --scenario-limit=5
+cargo test --test e2e -- --nocapture --scenario *open*
+cargo test --test e2e -- --nocapture --scenario test_e2e_batch_*
+cargo test --test e2e -- --nocapture --scenario test_e2e_swarm_*
+cargo test --test e2e -- --nocapture --scenario test_e2e_agent_*
+cargo test --test e2e -- --nocapture --scenario test_e2e_agent_task_commands
+cargo test --test e2e -- --nocapture --scenario-from test_e2e_mouse_and_dialog
+cargo test --test e2e -- --nocapture --scenario-from test_e2e_navigation_and_storage --scenario-limit 5
 cargo test --test e2e -- --nocapture --failed
-cargo test --test e2e -- --nocapture --scenario=test_e2e_eval_command --fail-fast
+cargo test --test e2e -- --nocapture --scenario test_e2e_eval_command --fail-fast
 cargo test --test e2e -- --nocapture --force-remote-bundle
 
 # Nightly regression testing (runs all scenarios)
-cargo test --test e2e -- --nocapture --level=All --force-remote-bundle --enable-batch-scenario --enable-install-scenario
+cargo test --test e2e -- --nocapture --level All --force-remote-bundle --enable-batch-scenario --enable-install-scenario
 ```
 
 ## License

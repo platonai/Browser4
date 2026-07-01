@@ -119,7 +119,7 @@ browser4-cli loop --pause --shell "echo hi" -i 60 --name demo
 # Output:
 # Loop: "echo hi" — every 60s
 #   Mode: shell command
-# ⏸  Created as paused. Use `browser4-cli loop --resume --name=demo` to start.
+# ⏸  Created as paused. Use `browser4-cli loop --resume --name demo` to start.
 
 # Resume the paused loop
 browser4-cli loop --resume --name demo
