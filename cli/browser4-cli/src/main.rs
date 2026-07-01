@@ -8008,12 +8008,14 @@ fn compile_batch_request(
                     }
                 }
 
-                // Strip --file and --stdin keys so they aren't sent to the server
+                // Strip --file, --stdin, and --json keys so they aren't sent to the server
                 // (they're CLI-side only — the content has already been read and
-                // inserted as the "expression" parameter above).
+                // inserted as the "expression" parameter above; --json controls
+                // local output formatting, not a server parameter).
                 if let Value::Object(ref mut m) = tool_params {
                     m.remove("file");
                     m.remove("stdin");
+                    m.remove("json");
                 }
 
                 // Validate that an expression is provided.
@@ -9066,12 +9068,14 @@ async fn run(
                     }
                 }
 
-            // Strip --file and --stdin keys so they aren't sent to the server
+            // Strip --file, --stdin, and --json keys so they aren't sent to the server
             // (they're CLI-side only — the content has already been read and
-            // inserted as the "expression" parameter above).
+            // inserted as the "expression" parameter above; --json controls
+            // local output formatting, not a server parameter).
             if let Value::Object(ref mut m) = tool_params {
                 m.remove("file");
                 m.remove("stdin");
+                m.remove("json");
             }
 
             // Validate that an expression is provided (either positional, --stdin, or --file).
