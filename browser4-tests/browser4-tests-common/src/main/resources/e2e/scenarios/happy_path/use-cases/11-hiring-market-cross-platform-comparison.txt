@@ -1,7 +1,7 @@
 # Use Case 11: Hiring Market Cross-Platform Comparison
 # Level: Complex (Cross-site)
 # Type: Cross-site workflows
-# Description: Compare QA automation engineer hiring trends across Indeed and LinkedIn
+# Description: Compare QA automation engineer hiring trends across RemoteOK and Wellfound
 
 1. go to https://remoteok.com/jobs
 2. search for "QA automation engineer"
@@ -10,4 +10,4 @@
 5. search for the same role
 6. compare skill requirements
 7. assess demand differences
-8. summarize findings
+8. summarize findings as `qa-automation-hiring-comparison.md`

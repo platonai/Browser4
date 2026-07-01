@@ -7,4 +7,4 @@
 2. search for "mechanical keyboard"
 3. open the first 3 products
 4. extract price, rating, and review count
-5. write a comparison table to a markdown file
+5. write a comparison table to `keyboard-comparison.md`

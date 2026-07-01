@@ -1,10 +1,12 @@
 # Use Case 5: Cloud Console Alert Check (Single-site)
 # Level: Simple
 # Type: Single-site, deterministic
-# Description: Check cloud provider console for active alerts
-# Note: This use case requires authentication and is typically used in enterprise environments
+# Description: Check AWS Console for active CloudWatch alarms
+# Note: This use case requires an AWS account with IAM credentials. Replace placeholder URLs
+#       and credential instructions with your own setup. The steps assume the AWS Management Console.
 
-1. go to the cloud provider console
-2. log in with credentials
-3. navigate to the alerts page
-4. export active alerts to CSV
+1. go to https://console.aws.amazon.com/
+2. log in with your IAM credentials (email + password, then MFA if enabled)
+3. navigate to CloudWatch > Alarms (search "CloudWatch" in the top bar if needed)
+4. identify alarms in ALARM state
+5. export active alarms to `cloudwatch-alarms.csv`

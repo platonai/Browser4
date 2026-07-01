@@ -67,4 +67,4 @@
 
 ## 参考资料
 
-- 本仓库的 agent 用例设计参考：`docs-dev/agentic/use-cases.md`
+- 本仓库的 agent 用例设计供 Browser4 E2E 测试套件运行器使用

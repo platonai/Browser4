@@ -5,10 +5,10 @@
 
 1. go to https://github.com/search
 2. search for "browser automation"
-3. filter by stars > 1000
+3. filter by stars > 1000 (use the search query: `stars:>1000`)
 4. open the top 3 repositories
 5. navigate to Issues
 6. count open vs closed issues
 7. navigate to Contributors
 8. evaluate activity level
-9. produce a health score
+9. produce a health score report as `oss-health-report.md`

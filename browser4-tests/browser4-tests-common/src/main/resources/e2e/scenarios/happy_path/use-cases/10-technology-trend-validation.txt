@@ -5,10 +5,10 @@
 
 1. search on Google for "headless browser framework"
 2. collect top mentioned projects
-3. go to https://www.github.com/
+3. go to https://github.com/
 4. open each project repository
 5. extract stars and forks
 6. inspect recent commits
 7. assess community activity
 8. identify growth or decline
-9. write a trend analysis summary
+9. write a trend analysis summary as `headless-browser-trends.md`

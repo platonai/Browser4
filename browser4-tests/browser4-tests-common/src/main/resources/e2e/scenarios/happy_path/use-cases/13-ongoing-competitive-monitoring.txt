@@ -1,14 +1,17 @@
 # Use Case 13: Ongoing Competitive Monitoring
 # Level: Enterprise
-# Type: Long-running, scheduled, auditable
-# Description: Continuous competitive monitoring with change detection
+# Type: Multi-site, repeatable, auditable
+# Description: Compare Notion pricing and features against Confluence and Coda
+# Note: This case is designed to be run periodically (e.g., weekly) to detect changes. A scheduler
+#       or CI cron job triggers the run; the agent compares results against the previous snapshot.
 
-1. go to competitor official websites
-2. locate pricing and feature pages
-3. snapshot current state
-4. repeat on a scheduled interval
-5. detect changes and diffs
-6. classify changes (pricing / feature)
-7. store versioned results
-8. trigger alerts
-9. generate a periodic report
+1. go to https://www.notion.so/pricing
+2. snapshot current pricing tiers and feature list
+3. go to https://www.atlassian.com/software/confluence/pricing
+4. snapshot current pricing tiers and feature list
+5. go to https://coda.io/pricing
+6. snapshot current pricing tiers and feature list
+7. compare snapshots against the previous run (stored in `competitive-snapshots/` directory)
+8. classify any detected changes (pricing change / feature added / feature removed / plan restructured)
+9. store new versioned snapshots in `competitive-snapshots/<YYYY-MM-DD>/`
+10. generate a change report as `competitive-monitoring-report.md`

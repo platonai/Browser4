@@ -11,4 +11,4 @@
 6. locate pricing pages
 7. extract pricing and positioning
 8. compare feature focus
-9. generate a comparison matrix
+9. generate a comparison matrix as `ai-agent-comparison.md`

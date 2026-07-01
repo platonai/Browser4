@@ -1,14 +1,14 @@
 # Use Case 12: Company Due Diligence Automation
 # Level: Enterprise
 # Type: Cross-site, long-running, auditable
-# Description: Automated company due diligence report generation
+# Description: Automated company due diligence report generation for Stripe
 
-1. go to the company official website
-2. extract product description and customers
-3. go to https://www.crunchbase.com/
-4. extract funding history and investors
-5. search the company on Google News
+1. go to https://stripe.com/
+2. extract product description and target customers from the homepage and /use-cases
+3. go to https://www.crunchbase.com/organization/stripe
+4. extract funding history and key investors (if Crunchbase blocks unauthenticated access, search "Stripe Crunchbase" on Google instead)
+5. search "Stripe latest news" on Google News
 6. open the latest 5 articles
-7. identify major business events
-8. assess risk and maturity
-9. generate a due diligence report
+7. identify major business events (funding rounds, acquisitions, product launches, regulatory actions)
+8. assess risk and maturity from the collected data
+9. generate a due diligence report as `stripe-due-diligence.md`
