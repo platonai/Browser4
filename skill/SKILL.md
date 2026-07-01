@@ -353,14 +353,13 @@ FROM DOM_LOAD_AND_SELECT(@url, '[data-component-type=\"s-search-result\"]', 1, 4
 
 ### Function Reference
 
-X-SQL provides ~200 functions across four namespaces:
+X-SQL provides ~228 functions across three main namespaces:
 
 | Namespace | Functions | Purpose |
 |-----------|-----------|---------|
-| `DOM_*` | ~110 | Element properties, text extraction, CSS selection, regex, tree navigation |
-| `DOM_FIRST_*` / `DOM_ALL_*` | ~50 | Batch extraction: `DOM_FIRST_TEXT(DOM, '.price')`, `DOM_ALL_HREFS(DOM, 'a')` |
-| `STR_*` | ~90 | String manipulation: trim, split, regex, case conversion, padding |
-| `ARRAY_*` | 3 | Array operations: join, first-not-blank, first-not-empty |
+| `DOM` | ~135 | Element properties, text extraction, CSS selection, regex, tree navigation, page loading. Includes `DOM_FIRST_*` / `DOM_ALL_*` batch extractors (~50) and `DOM_*` element-level functions (~85). Defined by `@UDFGroup(namespace = "DOM")` |
+| `STR` | ~90 | String manipulation: trim, split, regex, case conversion, padding |
+| `ARRAY` | 3 | Array operations: join, first-not-blank, first-not-empty |
 
 **Full reference:** **[references/x-sql.md](references/x-sql.md)** — master index with all functions, plus leaf files:
 - [DOM_LOAD_AND_SELECT](references/x-sql-dom-load-select.md)
