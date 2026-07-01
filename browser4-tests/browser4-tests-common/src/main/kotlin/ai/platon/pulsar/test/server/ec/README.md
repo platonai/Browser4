@@ -10,7 +10,7 @@ All pages (home, category/list, product) must be rendered server-side from a **s
 
 ## High-Level Goals
 - 1 home page listing 20 category links.
-- 20 category (list) pages, each showing 5–12 products (total products ≥ 100).
+- 20 category (list) pages, each showing exactly 5 products (total products = 100).
 - Product detail pages for every listed product.
 - Deterministic, reproducible data generation (seeded) to keep IDs stable across runs.
 - Clean semantic HTML with unique IDs and reusable classes to aid automated testing / scraping.
@@ -52,7 +52,7 @@ Load once at application start; keep immutable in memory.
       "categoryId": "1292115012",
       "price": 199.99,
       "currency": "USD",
-      "image": "/ec/static/img/B08PP5MSVB.jpg",
+      "image": "/ec/static/img/placeholder.png",
       "rating": 4.4,
       "ratingCount": 312,
       "badges": ["Bestseller"],
@@ -71,14 +71,24 @@ Load once at application start; keep immutable in memory.
 ### Data Rules
 - Exactly 20 distinct categories.
 - Each product belongs to exactly one `categoryId` present in categories.
-- ≥ 5 and ≤ 12 products per category (for variety) → easy pagination later.
+- Exactly 5 products per category (100 total).
 - Product IDs unique (Amazon-like IDs ok, e.g. `B0...`).
 - Prices: positive, formatted with 2 decimals when rendered.
 - Deterministic generation: if you implement a generator, seed the RNG (store seed in `meta.seed`).
 
-## Page Templates (Base)
-- Category list: `/browser4-tests-common/src/main/resources/static/generated/mock-amazon/list/index.html`
-- Product page: `/browser4-tests-common/src/main/resources/static/generated/mock-amazon/product/index.html`
+## Page Templates
+
+The primary `EcommerceController` + `HtmlRenderer` uses these templates under
+`/browser4-tests-common/src/main/resources/static/generated/mock-amazon/`:
+- Home: `ec-home.html`
+- Category: `ec-category.html`
+- Product: `ec-product.html`
+
+Placeholders use `{{VARIABLE}}` syntax for scalar values and `<!--BLOCK_NAME-->` HTML comments
+for repeated/multi-line content injection.
+
+An alternative renderer (`ListPageRenderer`) also renders category pages from
+`list/index.html` using direct string replacement on the stock Amazon-mock layout.
 
 > **CRITICAL REQUIREMENT: DO NOT ALTER THE TEMPLATE LAYOUT, EXISTING JAVASCRIPT, OR CSS—ONLY INJECT DYNAMIC PRODUCT DATA INTO PLACEHOLDERS.**
 
@@ -88,14 +98,17 @@ Load once at application start; keep immutable in memory.
 - `<title>` reflects page context: `Category: Electronics` or `Product: Wireless Noise-Cancelling Headphones`.
 - Include canonical-like structure for consistent scraping.
 - Stable, descriptive IDs (unique per page) and reusable classes for selectors.
+- Product images: if the product's `image` field is blank or `placeholder.png`, the renderer falls back to `https://picsum.photos/seed/{hash}/200/140`.
 
 ### Suggested ID / Class Conventions
 - Home: `#category-list`, items: `li.category-item[data-category-id]`, link id: `cat-link-{categoryId}`.
 - Category Page wrapper: `#category-page[data-category-id]`.
-- Product cards: `article.product-card#product-{productId}`.
-- Inside card: `h2.product-title`, price span: `span.product-price[data-product-id]`, rating: `span.product-rating`, badge container: `.product-badges`.
-- Product Detail root: `#product-page[data-product-id]`.
-- Detail fields: `#product-title`, `#product-price`, `#product-rating`, `#product-category-link`, features list `#product-features`, specs table `#product-specs`.
+- Product grid: `#product-list.product-grid`.
+- Product cards: `article.product-card#product-{productId}[data-category-id]`.
+- Inside card: `h2.product-title`, price span: `span.product-price#product-price-{id}[data-product-id]`, rating: `span.product-rating#product-rating-{id}[data-rating]`, badge container: `.product-badges`.
+- Product Detail root: `#product-page[data-product-id][data-category-id]`.
+- Product image: `#product-image.product-image`.
+- Detail fields: `#productTitle` (h1), `#product-price`, `#product-rating`, `#product-rating-count`, `#product-category-link`, features list `#product-features`, specs table `#product-specs`.
 - Use `alt` attributes for images: `alt="{name}"`.
 
 ### Accessibility / Semantics
@@ -124,7 +137,7 @@ Automated or manual tests should assert:
 6. Invalid product (`/ec/dp/DOESNOTEXIST`) returns 404.
 7. All prices show two decimals (regex: `\$\d+\.\d{2}`).
 8. No duplicate IDs in any page (spot check by parsing DOM or regex + set logic).
-9. Total product count ≥ 100; distribution respects 5–12 per category.
+9. Total product count = 100; exactly 5 products per category.
 
 ## Optional Enhancements (Do NOT block MVP)
 - Query pagination: `/ec/b?node=1292115012&page=2` (deterministic sort by product ID).
@@ -144,22 +157,28 @@ Automated or manual tests should assert:
 - Semantic, test-friendly HTML.
 
 ## Quick Implementation Steps
-1. Create JSON data file with categories & products.
-2. Implement data loader + indexes.
-3. Implement route handlers.
-4. Wire template loader & placeholder replacement.
-5. Add error responses.
-6. Verify with test checklist.
+1. Create (or generate) the JSON data file with categories & products.
+2. Implement `CatalogLoader` to parse JSON into `Catalog` data classes and build in-memory indexes (`byId`, `byCategory`).
+3. Implement `CatalogService` wrapper with sorted product queries.
+4. Implement `HtmlRenderer` to load templates and perform placeholder replacement (`{{VAR}}` + `<!--BLOCK-->`).
+5. Implement `EcommerceController` route handlers for `/ec/`, `/ec/b`, `/ec/dp/{id}`, `/ec/static/**`, and fallback 404.
+6. Add error responses with `#error-page` and `error-code-{status}` conventions.
+7. Verify with test checklist.
 
-## Seeds & Determinism (If Generating)
-Pseudo approach:
+## Seeds & Determinism
+
+The data is pre-generated and stored as a static JSON file (`products.json`). The seed
+is stored in `meta.seed` for traceability. Product data is loaded once at startup and
+held immutable — no runtime generation occurs.
+
+If you need to regenerate the dataset, use a deterministic approach:
 ```
 val rng = Random(seed)
 val categoryIds = listOf("1292115012", ... total 20 ...)
-// For each category: (5..12).random(rng) products
-// Product ID: 'B' + (uppercase letters/digits) length 9 deterministic generation
+// For each category: generate products using seeded RNG
+// Product ID: 'B' + category-specific char + 5-digit zero-padded number
 ```
-Keep original seed inside JSON `meta` for traceability.
+Store the new seed inside JSON `meta` for traceability.
 
 ## Maintenance Notes
 - If schema evolves, bump `meta.version` and handle backward compatibility in loader.
