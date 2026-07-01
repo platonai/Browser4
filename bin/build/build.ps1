@@ -320,6 +320,152 @@ function Invoke-CargoBuild {
 }
 
 # ═══════════════════════════════════════════════════════
+# AI bug-report generation (called on build failure)
+# ═══════════════════════════════════════════════════════
+function Invoke-BugReportAgent {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$BuildSystem,
+    [Parameter(Mandatory = $true)]
+    [string]$ErrorMessage
+  )
+
+  Write-Host ""
+  Write-Host "[BUG-REPORT] Generating AI bug report for $BuildSystem failure..." -ForegroundColor Yellow
+
+  $bugReportDir = Join-Path $repoRoot "coworker\tasks\200issues\draft"
+  if (-not (Test-Path $bugReportDir)) {
+    New-Item -ItemType Directory -Path $bugReportDir -Force | Out-Null
+  }
+
+  # ── Gather diagnostic context ──────────────────────────────────────────
+  $buildLogTail = ""
+  if (Test-Path $BuildLogFile) {
+    $buildLogTail = (Get-Content -Path $BuildLogFile -Tail 80 -Encoding UTF8 -ErrorAction SilentlyContinue) -join "`n"
+  }
+
+  $envSnapshot = ""
+  if (Test-Path $BuildEnvFile) {
+    $envSnapshot = Get-Content -Path $BuildEnvFile -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
+  }
+
+  $lastFailedModule = Read-TrackedFile -Path $LastFailedModuleFile
+  $buildStatus = Read-TrackedFile -Path $BuildStatusFile
+
+  # ── AI prompt ──────────────────────────────────────────────────────────
+  $prompt = @"
+You are a senior QA engineer for the Browser4 project — a web agent / browser automation platform built with Kotlin/JVM (Maven) and Rust (Cargo).
+
+A **$BuildSystem build has FAILED** in CI/local. Analyze the failure and write a concise, actionable bug report in markdown.
+
+## Failure Data
+
+**Build System:** $BuildSystem
+**Error Message:** $ErrorMessage
+**Last Module Building:** $lastFailedModule
+**Build Status:** $buildStatus
+
+### Build Log (tail)
+````
+$buildLogTail
+````
+
+### Environment Snapshot
+$envSnapshot
+
+## Instructions
+
+Produce a bug report with these sections (use level-2 ``##`` headings):
+
+1. **Title** — Start with a ``# `` level-1 heading: a short, specific title summarizing the failure.
+2. **Severity** — ``Critical`` | ``High`` | ``Medium`` | ``Low`` — with a one-sentence justification.
+3. **Summary** — 2-4 sentences: what broke, which module, and the impact.
+4. **Error Analysis** — Parse the error message and log. Identify the likely root cause (compilation error, dependency resolution, test failure, OOM, timeout, missing tool, etc.).
+5. **Reproduction** — Steps another developer can follow to reproduce.
+6. **Suggested Fix** — Concrete next step: revert a commit, fix a dependency version, add missing config, run a diagnostic command, etc.
+7. **Environment** — Distill the relevant parts of the environment snapshot (OS, Java version, Cargo version, git branch/commit).
+
+**Output ONLY the markdown bug report — no conversational text, no tool-call logs, no prefixes.**
+"@
+
+  $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
+  $safeName = $BuildSystem.ToLower() -replace '[^a-z0-9]', '-'
+  $outputFile = Join-Path $bugReportDir "${timestamp}-build-failure-${safeName}.md"
+
+  # ── Try AI agent via coworker infrastructure ───────────────────────────
+  $agentUsed = $false
+  try {
+    $agentScript = Join-Path $repoRoot "coworker\scripts\workers\agent.ps1"
+    $configScript = Join-Path $repoRoot "coworker\scripts\config.ps1"
+
+    if ((Test-Path $agentScript) -and (Test-Path $configScript)) {
+      . $configScript
+      . $agentScript
+
+      $result = Invoke-Agent -Prompt $prompt -CaptureOutput -WorkingDirectory $repoRoot -TimeoutSeconds 300
+
+      if ($result) {
+        # Strip tool-call log lines and conversational noise
+        $cleaned = ($result -replace '(?m)^\s*[●│└✗○◉◈▸▪▹]\s*.*$', '') -replace '(?m)^\s*\d+\s*│\s*.*$', ''
+        $cleaned = ($cleaned -split "`n" | Where-Object { $_.Trim() -ne "" }) -join "`n"
+        $cleaned = $cleaned.Trim()
+
+        if ($cleaned) {
+          $cleaned | Out-File -FilePath $outputFile -Encoding UTF8
+          $agentUsed = $true
+          Write-Host "[BUG-REPORT] AI-generated report: $outputFile" -ForegroundColor Green
+        }
+      }
+    }
+  }
+  catch {
+    Write-Host "[BUG-REPORT] AI agent unavailable: $_" -ForegroundColor DarkYellow
+  }
+
+  # ── Fallback: template-based report when AI is not available ───────────
+  if (-not $agentUsed) {
+    $fallback = @"
+# Build Failure: $BuildSystem — $lastFailedModule
+
+**Time:** $(Get-Date -Format "yyyy-MM-dd HH:mm:ss")
+**Severity:** High *(auto-generated — AI analysis unavailable)*
+**Build System:** $BuildSystem
+
+## Summary
+The $BuildSystem build failed on module ``$lastFailedModule``. The error requires manual investigation.
+
+## Error Message
+````
+$ErrorMessage
+````
+
+## Build Log (tail)
+````
+$buildLogTail
+````
+
+## Environment
+$envSnapshot
+
+## Reproduction
+Run ``.\bin\build\build.ps1`` with the same flags that triggered this failure.
+
+## Suggested Fix
+1. Review the error message and build log above.
+2. Compare with the last successful build for differences.
+3. Run the failing module in isolation to narrow the cause.
+
+---
+*(Fallback template — AI agent was not available to analyze the failure.)*
+"@
+    $fallback | Out-File -FilePath $outputFile -Encoding UTF8
+    Write-Host "[BUG-REPORT] Fallback report: $outputFile" -ForegroundColor Yellow
+  }
+
+  return $outputFile
+}
+
+# ═══════════════════════════════════════════════════════
 # Argument parsing
 # ═══════════════════════════════════════════════════════
 $ShowHelp = $false
@@ -500,10 +646,12 @@ foreach ($TargetDir in $StaleTargets) {
 # ═══════════════════════════════════════════════════════
 try {
   if (-not $CliOnly) {
+    $CurrentBuildSystem = "Maven"
     Invoke-MavenBuild -Directory $repoRoot -BuildArgs $MvnOptions.ToArray()
   }
 
   if ($CliOnly -or $AlsoCli) {
+    $CurrentBuildSystem = "Cargo"
     Invoke-CargoBuild -Directory (Join-Path $repoRoot 'cli\browser4-cli') -RunTests (-not $SkipTests)
   }
 
@@ -527,6 +675,13 @@ catch {
   Write-Host "  Logs  : $BuildLogFile" -ForegroundColor DarkGray
   Write-Host "  State : $BuildStateDir\" -ForegroundColor DarkGray
   Write-Host "  Re-run with --resume to continue from the failing module" -ForegroundColor DarkGray
+
+  # ── Trigger AI bug-report generation ───────────────────────────────────
+  $buildSystem = if ($CurrentBuildSystem) { $CurrentBuildSystem } else { "Unknown" }
+  $bugReportPath = Invoke-BugReportAgent -BuildSystem $buildSystem -ErrorMessage $_.Exception.Message
+  if ($bugReportPath) {
+    Write-Host "  Bug Report : $bugReportPath" -ForegroundColor DarkGray
+  }
 
   exit 1
 }
