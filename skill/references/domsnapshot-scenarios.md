@@ -7,6 +7,8 @@ description: "Practical end-to-end recipes using all domsnapshot subcommands: ge
 
 Practical, end-to-end recipes using the `domsnapshot` family of commands. Each scenario is self-contained: you can adapt the CSS selectors and X-SQL queries to your own target pages.
 
+> **⚠️ CSS selectors are tied to live websites — they WILL break over time.** The selectors shown in these examples (e.g. `#productTitle`, `.s-result-item`, `.a-price .a-offscreen`) worked at the time of writing but are not guaranteed to work today. Websites change their HTML structure, class names, and element IDs without notice. **Treat these examples as patterns, not copy-paste recipes.** Before running a scenario, use [`domsnapshot inspect`](#13-selector-discovery-for-unknown-pages) or [`domsnapshot summary`](#14-amazon-home-page-discovery) to discover the current selectors on your target page, then adapt the query structure shown here.
+
 ## Scenario Index
 
 | # | Scenario | Primary Commands | Domain |
@@ -61,20 +63,26 @@ https://m.media-amazon.com/images/I/61SUj2aKoEL._AC_SL1500_.jpg
 ### 1b. Query a search-results page with X-SQL
 
 ```bash
+# Step 1: Navigate and capture the DOM snapshot
 browser4-cli goto "https://www.amazon.com/s?k=mechanical+keyboard"
+browser4-cli domsnapshot
 
-browser4-cli domsnapshot query --sql "
+# Step 2: Query the cached snapshot with X-SQL
+# -i 1h caches the load for 1 hour — critical for avoiding quota exhaustion
+browser4-cli domsnapshot query "https://www.amazon.com/s?k=mechanical+keyboard -i 1h" --sql "
   SELECT
     dom_first_text(dom, 'h2 .a-link-normal') AS title,
     dom_first_text(dom, '.a-price .a-offscreen') AS price,
     dom_first_text(dom, '.a-icon-alt') AS rating,
     dom_first_attr(dom, 'img.s-image', 'src') AS image_url
-  FROM load_and_select(@url, '.s-result-item[data-component-type=\"s-search-result\"]')
+  FROM load_and_select(@url, '.s-result-item[data-component-type=s-search-result]')
   WHERE dom_first_text(dom, 'h2 .a-link-normal') IS NOT NULL
 "
 ```
 
-**Why this works:** `load_and_select` iterates over each search-result card; the `dom_*` UDFs extract fields from each card. The `@url` placeholder is replaced with the current page URL.
+**Why this works:** The explicit `domsnapshot` capture step avoids a redundant page load (without it, `load_and_select` would re-fetch the URL). The `-i 1h` load option caches the server response for 1 hour — essential when iterating on a query or running it repeatedly, as Amazon aggressively rate-limits rapid requests. The `dom_*` UDFs extract fields from each search-result card. When `@url` is used, pass the full URL with load options directly to `domsnapshot query` instead of relying on the current page URL (which lacks caching controls).
+
+> **⚠️ Quota warning:** Amazon and similar sites detect rapid repeated requests and will return CAPTCHAs or 503 errors. Always use `-i 1h` (or longer) when iterating on a query. If you see empty results or bot-detection pages, wait 5–10 minutes before retrying. See [Scenario 15](#15-amazon-search-results-extraction) for a full discovery-to-extraction workflow that minimizes quota burn by validating selectors on the cached snapshot before running X-SQL queries.
 
 ### 1c. Export for offline analysis
 
@@ -171,9 +179,9 @@ browser4-cli domsnapshot query --sql "
 ```bash
 browser4-cli domsnapshot query --sql "
   SELECT
-    dom_first_attr(dom, 'meta[name=\"description\"]', 'content') AS meta_description,
-    dom_first_attr(dom, 'meta[name=\"keywords\"]', 'content') AS meta_keywords,
-    dom_first_attr(dom, 'link[rel=\"canonical\"]', 'href') AS canonical_url,
+    dom_first_attr(dom, 'meta[name=description]', 'content') AS meta_description,
+    dom_first_attr(dom, 'meta[name=keywords]', 'content') AS meta_keywords,
+    dom_first_attr(dom, 'link[rel=canonical]', 'href') AS canonical_url,
     dom_first_text(dom, 'title') AS title_tag
   FROM load_and_select(@url, ':root')
 "
@@ -187,7 +195,7 @@ browser4-cli domsnapshot query --sql "
     dom_first_text(dom, 'a') AS link_text,
     dom_first_attr(dom, 'a', 'href') AS href,
     dom_first_attr(dom, 'a', 'rel') AS rel
-  FROM load_and_select(@url, 'a[href^=\"http\"]')
+  FROM load_and_select(@url, 'a[href^=http]')
 "
 ```
 
@@ -499,12 +507,12 @@ browser4-cli goto "https://www.zillow.com/homes/san-francisco_rb/"
 
 browser4-cli domsnapshot query --sql "
   SELECT
-    dom_first_text(dom, '[data-test=\"property-card-address\"]') AS address,
-    dom_first_text(dom, '[data-test=\"property-card-price\"]') AS price,
+    dom_first_text(dom, '[data-test=property-card-address]') AS address,
+    dom_first_text(dom, '[data-test=property-card-price]') AS price,
     dom_first_text(dom, '.beds-container') AS beds,
     dom_first_text(dom, '.baths-container') AS baths,
     dom_first_text(dom, '.sqft-container') AS sqft
-  FROM load_and_select(@url, '[data-test=\"property-card\"]')
+  FROM load_and_select(@url, '[data-test=property-card]')
 "
 ```
 
@@ -522,10 +530,10 @@ diff yesterdays-listings.txt todays-listings.txt
 ```bash
 browser4-cli domsnapshot query --sql "
   SELECT
-    dom_first_text(dom, '[data-test=\"property-card-address\"]') AS address,
-    dom_first_text(dom, '[data-test=\"property-card-price\"]') AS price
-  FROM load_and_select(@url, 'article:expr(dom_first_text(dom, \".beds\") >= 3)')
-  WHERE dom_first_text(dom, '[data-test=\"property-card-address\"]') IS NOT NULL
+    dom_first_text(dom, '[data-test=property-card-address]') AS address,
+    dom_first_text(dom, '[data-test=property-card-price]') AS price
+  FROM load_and_select(@url, 'article:expr(dom_first_text(dom, .beds) >= 3)')
+  WHERE dom_first_text(dom, '[data-test=property-card-address]') IS NOT NULL
 "
 ```
 
@@ -1187,7 +1195,7 @@ browser4-cli domsnapshot query --sql "
     dom_first_text(dom, 'span.a-offscreen') AS price,
     dom_first_text(dom, 'span.a-icon-alt') AS rating,
     dom_first_attr(dom, 'img.s-image', 'src') AS image_url
-  FROM load_and_select(@url, '.s-result-item[data-component-type=\"s-search-result\"]')
+  FROM load_and_select(@url, '.s-result-item[data-component-type=s-search-result]')
   WHERE dom_first_text(dom, 'h2 a.a-link-normal') IS NOT NULL
 "
 ```
@@ -1468,10 +1476,10 @@ Append these to the URL string in `domsnapshot query`:
 
 | Command | Best for |
 |---------|----------|
-| `get` | One value from one element; simple scripts; raw text/HTML for piping. Output paginated by default (1K chars) — use `--all` to disable. |
+| `get` | One value from one element; simple scripts; raw text/HTML for piping. `get html` paginated at 2K lines by default; `get text` not paginated — use `--all` to disable pagination when needed. |
 | `query` | Multiple fields from repeating elements; filtering (`WHERE`/`expr()`); structured tabular output |
 | `export` | Saving full HTML for archival, diffing, external tooling, offline analysis |
-| `grep` | Presence/absence checks; counting; quick searches with context; CI smoke tests; incident response. Output paginated by default (1K chars) — use `--all` to disable. |
+| `grep` | Presence/absence checks; counting; quick searches with context; CI smoke tests; incident response. Output paginated by default (2K lines) — use `--all` to disable. |
 | `summary` | Page discovery before writing selectors; structural audits; LLM-friendly page overviews |
 | `inspect` | Discovering unknown CSS selectors on complex pages; finding recurring patterns; selector validation before extraction |
 
@@ -1485,7 +1493,7 @@ Append these to the URL string in `domsnapshot query`:
 - `grep` performs matching **client-side** by fetching the snapshot HTML then running regex locally — no backend round-trip for the search itself.
 - `summary` generates a WPSI YAML file from the cached snapshot — useful as a discovery step before writing selectors.
 - `inspect` analyzes DOM structure and suggests CSS selectors for recurring patterns. It is fully deterministic (no AI) and based on structural recurrence across matching elements.
-- **Output pagination:** `get` (html/text), `get all` (html/text), and `grep` paginate output by default at 1K characters per page. Use `--page N` for subsequent pages, `--page-size N` to change page size, or `--all` to disable. Pagination is skipped in `--json` and `--quiet` modes.
+- **Output pagination:** `get html`, `get all html`, and `grep` paginate output by default at 2000 lines per page. `get text` and `get all text` are not paginated by default. Use `--page N` for subsequent pages, `--page-size N` to change page size, or `--all` to disable. Pagination is skipped in `--json` and `--quiet` modes.
 
 ---
 

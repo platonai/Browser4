@@ -3124,7 +3124,9 @@ async fn handle_dom_snapshot_get(
 
     // Output the result
     let empty_result = text == "null" || text.is_empty() || text.trim() == "[]";
-    let paginate = (field == "html" || field == "text") && !empty_result;
+    // Only HTML output is paginated by default; text extraction rarely exceeds
+    // practical limits for single-field extraction so it defaults to --all.
+    let paginate = (field == "html") && !empty_result;
 
     if empty_result {
         let display_selector = if selector.is_empty() { ":root" } else { selector };
@@ -3196,12 +3198,36 @@ async fn handle_dom_snapshot_query(
         .unwrap_or("")
         .to_string();
 
-    let sql_raw = tool_params
-        .get("sql")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
+    // Handle --sql-stdin: read query from stdin (avoids shell quoting issues on Windows)
+    let use_sql_stdin = tool_params
+        .get("sqlStdin")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    let sql_raw = if use_sql_stdin {
+        let mut input = String::new();
+        std::io::stdin()
+            .read_to_string(&mut input)
+            .map_err(|e| format!("Failed to read X-SQL query from stdin: {e}"))?;
+        if input.trim().is_empty() {
+            return Err(
+                "Stdin was empty. Provide a non-empty X-SQL query via stdin.".to_string(),
+            );
+        }
+        input
+    } else {
+        tool_params
+            .get("sql")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string()
+    };
+
     if sql_raw.is_empty() {
-        return Err("--sql is required. Provide an inline X-SQL query or @file.sql.".to_string());
+        return Err(
+            "--sql is required. Provide an inline X-SQL query, @file.sql, or use --sql-stdin."
+                .to_string(),
+        );
     }
 
     // Handle --sql @file.sql pattern
@@ -3210,7 +3236,7 @@ async fn handle_dom_snapshot_query(
         std::fs::read_to_string(file_path)
             .map_err(|e| format!("Failed to read SQL file '{}': {}", file_path, e))?
     } else {
-        sql_raw.to_string()
+        sql_raw
     };
 
     // @url replacement is handled server-side by SQLTemplate.createSQL(url),
@@ -4006,7 +4032,7 @@ fn format_pagination_footer(meta: &PaginationMeta) -> String {
 /// Extract pagination options from tool_params.
 /// Returns (page, page_size, show_all).
 ///
-/// Default page size is 500 **lines** (was 100 lines prior to v4.12).
+/// Default page size is 2000 **lines** (was 500 lines prior to v4.12).
 fn parse_page_opts(tool_params: &serde_json::Value) -> (usize, usize, bool) {
     let show_all = tool_params
         .get("all")
@@ -4028,7 +4054,7 @@ fn parse_page_opts(tool_params: &serde_json::Value) -> (usize, usize, bool) {
         .get("page-size")
         .and_then(|v| v.as_str())
         .and_then(|s| s.parse::<usize>().ok())
-        .unwrap_or(500);
+        .unwrap_or(2000);
 
     (page, page_size, show_all)
 }
@@ -5003,17 +5029,43 @@ async fn handle_swarm_query(
         .and_then(|v| v.as_str())
         .unwrap_or("");
     let seed_file = tool_params.get("seedFile").and_then(|v| v.as_str());
-    let query_raw = tool_params.get("sql").and_then(|v| v.as_str());
+
+    // Handle --sql-stdin: read query from stdin (avoids shell quoting issues on Windows)
+    let use_sql_stdin = tool_params
+        .get("sqlStdin")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    let query_raw: Option<String> = if use_sql_stdin {
+        let mut input = String::new();
+        std::io::stdin()
+            .read_to_string(&mut input)
+            .map_err(|e| format!("Failed to read X-SQL query from stdin: {e}"))?;
+        if input.trim().is_empty() {
+            return Err(
+                "Stdin was empty. Provide a non-empty X-SQL query via stdin.".to_string(),
+            );
+        }
+        Some(input)
+    } else {
+        tool_params
+            .get("sql")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+    };
 
     if url.is_empty() && seed_file.is_none() {
         return Err("A URL or --seed-file is required.".to_string());
     }
-    if query_raw.is_none() || query_raw.unwrap().is_empty() {
-        return Err("--sql is required. Provide an inline X-SQL query or @file.sql.".to_string());
+    if query_raw.as_ref().map_or(true, |q| q.is_empty()) {
+        return Err(
+            "--sql is required. Provide an inline X-SQL query, @file.sql, or use --sql-stdin."
+                .to_string(),
+        );
     }
 
     // Read query from file if prefixed with @
-    let query = match query_raw {
+    let query = match &query_raw {
         Some(q) if q.starts_with('@') => {
             let file_path = &q[1..];
             Some(
@@ -5021,7 +5073,7 @@ async fn handle_swarm_query(
                     .map_err(|e| format!("Failed to read query file '{}': {}", file_path, e))?,
             )
         }
-        Some(q) => Some(q.to_string()),
+        Some(q) => Some(q.clone()),
         None => None,
     };
 
@@ -11191,7 +11243,7 @@ mod tests {
         let params = json!({});
         let (page, page_size, show_all) = parse_page_opts(&params);
         assert_eq!(page, 1);
-        assert_eq!(page_size, 500);
+        assert_eq!(page_size, 2000);
         assert!(!show_all);
     }
 

@@ -22,12 +22,12 @@ The `domsnapshot` family operates on a **static DOM snapshot** — the raw HTML 
 
 ```bash
 browser4-cli domsnapshot                                # capture fresh static DOM snapshot + metadata
-browser4-cli domsnapshot get <field> [selector] [name] [--page N] [--page-size N] [--all]  # extract text/html/attr via CSS; paginated by default (1K chars)
+browser4-cli domsnapshot get <field> [selector] [name] [--page N] [--page-size N] [--all]  # extract text/html/attr via CSS; html paginated at 2K lines, text not paginated
 browser4-cli domsnapshot query [url] --sql <query>      # X-SQL query against DOM (url defaults to current page)
 browser4-cli domsnapshot summary                        # compressed page summary (WPSI)
 browser4-cli domsnapshot export [--file <path>]         # save snapshot HTML to file
-browser4-cli domsnapshot get all <field> [selector] [name] [--offset N] [--limit N] [--page N] [--page-size N] [--all]  # extract ALL matches; element + char pagination
-browser4-cli domsnapshot grep [OPTIONS] <pattern> [--page N] [--page-size N] [--all]  # search snapshot HTML with regex; paginated by default (1K chars)
+browser4-cli domsnapshot get all <field> [selector] [name] [--offset N] [--limit N] [--page N] [--page-size N] [--all]  # extract ALL matches; html paginated at 2K lines, text not paginated
+browser4-cli domsnapshot grep [OPTIONS] <pattern> [--page N] [--page-size N] [--all]  # search snapshot HTML with regex; paginated by default (2K lines)
 browser4-cli domsnapshot inspect [selector] [--max N] [--depth D]  # analyze DOM structure, suggest CSS selectors
 ```
 
@@ -84,7 +84,7 @@ If `domsnapshot get` returns an empty string when the page clearly has matching 
 
 ## Query — X-SQL against DOM snapshot
 
-The `--sql` flag is **required**. Use `@url` as a placeholder for the target URL. Prefix `--sql` value with `@` to read the query from a file.
+The `--sql` flag is **required**. Use `@url` as a placeholder for the target URL.
 
 X-SQL uses the **H2 database** SQL dialect with DOM UDFs. Only simple `SELECT ... FROM load_and_select(url, cssQuery)` queries are supported — no CTEs, subqueries, `EXPLODE`, or joins.
 
@@ -93,18 +93,45 @@ X-SQL uses the **H2 database** SQL dialect with DOM UDFs. Only simple `SELECT ..
 > - ❌ `FROM load_and_select('@url', ':root')`
 > - ❌ `FROM load_and_select('.', ':root')` — the literal `'.'` is not a valid URL. Use the `@url` placeholder to reference the current page.
 
+### Three ways to provide the SQL query
+
+**1. File (recommended — no shell escaping issues):**
+Prefix the `--sql` value with `@` to read from a `.sql` file:
+
 ```bash
-# Inline query against current page:
+# Write query to file (no escaping needed)
+cat > query.sql << 'SQLEOF'
+SELECT
+  dom_base_uri(dom) AS url,
+  dom_first_text(dom, '#productTitle') AS title
+FROM load_and_select(@url, 'body')
+WHERE dom_first_text(dom, '#productTitle') != 'Sponsored'
+SQLEOF
+
+# Run it
+browser4-cli domsnapshot query "https://www.amazon.com/dp/B08PP5MSVB" --sql @query.sql
+```
+
+**2. Stdin (for piped/scripted workflows — also avoids quoting):**
+
+```bash
+cat query.sql | browser4-cli domsnapshot query --sql-stdin
+# or
+browser4-cli domsnapshot query --sql-stdin < query.sql
+# with a URL
+browser4-cli domsnapshot query "https://example.com" --sql-stdin < query.sql
+```
+
+**3. Inline (requires careful shell escaping on Windows):**
+
+```bash
+# Simple queries without quotes in selectors work inline:
 browser4-cli domsnapshot query --sql "
-  SELECT
-    dom_base_uri(dom) AS url,
-    dom_first_text(dom, '#productTitle') AS title,
-    dom_first_slim_html(dom, 'img:expr(width > 400)') AS img
+  SELECT dom_base_uri(dom) AS url, dom_first_text(dom, 'h1') AS title
   FROM load_and_select(@url, 'body');
 "
 
-# Read query from file, target a specific URL:
-browser4-cli domsnapshot query "https://www.amazon.com/dp/B08PP5MSVB" --sql @query.sql
+# Queries with quoted selectors or != require escaping — prefer @file or --sql-stdin
 ```
 
 To control caching or rendering, append load options to the URL (e.g. `https://example.com/page -i 1d -njr 3`).
@@ -265,4 +292,4 @@ browser4-cli domsnapshot inspect [selector] [--max N] [--depth D]
 - For CI pass/fail checks with grep, use `-l` (prints "domsnapshot" if matches found) or `-c` (prints match count). A `browser4-cli` non-zero exit code means the backend call itself failed, not that matches were absent.
 - `domsnapshot` capture now returns enriched metadata: `imageCount`, `linkCount`, and `interactiveElements` (tag, class, id, aria attributes, bounding-box). The bounding box is extracted from the `vi` attribute injected by the browser's layout engine.
 - `domsnapshot inspect` computes relative CSS selectors using tag + class + id. It does not use AI — the algorithm is fully deterministic and based on structural recurrence across matching elements.
-- **Output pagination:** `get` (html/text fields), `get all` (html/text fields), and `grep` paginate output by default at 1K (1024) characters per page. Use `--page N` for subsequent pages, `--page-size N` to change the page size, or `--all` to disable pagination entirely. Pagination is automatically skipped in `--json` and `--quiet` modes. Use `--all` when piping output to external tools.
+- **Output pagination:** `get html`, `get all html`, and `grep` paginate output by default at 2000 lines per page. `get text` and `get all text` are not paginated by default (text extraction rarely exceeds practical limits). Use `--page N` for subsequent pages, `--page-size N` to change the page size, or `--all` to disable pagination entirely. Pagination is automatically skipped in `--json` and `--quiet` modes. Use `--all` when piping output to external tools.

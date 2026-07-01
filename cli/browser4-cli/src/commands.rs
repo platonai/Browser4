@@ -1054,7 +1054,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "viewport", description: "Capture only specified viewports: single index (3), comma list (0,2,4), range (1-3), or mixed (0,2-4,7)", is_bool: false, short: Some("v") },
                 OptionDef { name: "auto-diff", description: "Diff against the previous snapshot — show only what changed since the last capture", is_bool: true, short: None },
                 OptionDef { name: "page", short: None, is_bool: false, description: "Page number for paginated snapshot output (1-based, default: 1)" },
-                OptionDef { name: "page-size", short: None, is_bool: false, description: "Lines per page for snapshot output (default: 500)" },
+                OptionDef { name: "page-size", short: None, is_bool: false, description: "Lines per page for snapshot output (default: 2000)" },
                 OptionDef { name: "all", short: None, is_bool: true, description: "Show all output, disabling pagination" },
             ],
             tool_name_fn: |_| "browser_snapshot".to_string(),
@@ -1107,7 +1107,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "word-regexp", short: Some("w"), is_bool: true, description: "Match only whole words" },
                 OptionDef { name: "selector", short: None, is_bool: false, description: "CSS selector to scope the search to" },
                 OptionDef { name: "page", short: None, is_bool: false, description: "Page number (1-based, default: 1)" },
-                OptionDef { name: "page-size", short: None, is_bool: false, description: "Lines per page (default: 500)" },
+                OptionDef { name: "page-size", short: None, is_bool: false, description: "Lines per page (default: 2000)" },
                 OptionDef { name: "all", short: None, is_bool: true, description: "Show all output, disabling pagination" },
             ],
             tool_name_fn: |_| "browser_snapshot".to_string(),
@@ -1964,6 +1964,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             args: &[ArgDef { name: "url", description: "Target page URL to load and run the query against", optional: false }],
             options: &[
                 OptionDef { name: "sql", description: "X-SQL query to execute. Use @url as placeholder for the target URL. Prefix with @ to read from file (e.g. --sql @query.sql)", is_bool: false, short: None },
+                OptionDef { name: "sql-stdin", description: "Read X-SQL query from stdin (avoids shell quoting issues on Windows)", is_bool: true, short: None },
                 OptionDef { name: "seed-file", description: "File containing URLs to submit, one per line (direct path, no @ prefix)", is_bool: false, short: None },
                 OptionDef { name: "deadline", description: "Deadline for task completion (ISO 8601, e.g. 2026-02-24T23:59:59Z)", is_bool: false, short: None },
                 OptionDef { name: "expires", description: "Cache expiration duration (e.g. 1d, 1h)", is_bool: false, short: None },
@@ -1974,6 +1975,8 @@ pub fn all_commands() -> Vec<CommandDef> {
                 let mut p = json!({});
                 if let Some(v) = get_opt_str(args, "url") { p["url"] = json!(v); }
                 if let Some(v) = get_opt_str(args, "sql") { p["sql"] = json!(v); }
+                // --sql-stdin is handled in main.rs dispatch
+                if get_bool(args, "sql-stdin").unwrap_or(false) { p["sqlStdin"] = json!(true); }
                 if let Some(v) = get_opt_str(args, "seed-file") { p["seedFile"] = json!(v); }
                 if let Some(v) = get_opt_str(args, "deadline") { p["deadline"] = json!(v); }
                 if let Some(v) = get_opt_str(args, "expires") { p["expires"] = json!(v); }
@@ -2144,7 +2147,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             ],
             options: &[
                 OptionDef { name: "page", short: None, is_bool: false, description: "Page number (1-based, default: 1)" },
-                OptionDef { name: "page-size", short: None, is_bool: false, description: "Lines per page (default: 500)" },
+                OptionDef { name: "page-size", short: None, is_bool: false, description: "Lines per page (default: 2000)" },
                 OptionDef { name: "all", short: None, is_bool: true, description: "Show all output, disabling pagination" },
             ],
             tool_name_fn: |_| "dom_snapshot_scrape".to_string(),
@@ -2171,7 +2174,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "offset", description: "Skip the first n results (0-based)", is_bool: false, short: None },
                 OptionDef { name: "limit", description: "Return at most n results", is_bool: false, short: None },
                 OptionDef { name: "page", short: None, is_bool: false, description: "Page number for paginated output (default: 1)" },
-                OptionDef { name: "page-size", short: None, is_bool: false, description: "Lines per page (default: 500)" },
+                OptionDef { name: "page-size", short: None, is_bool: false, description: "Lines per page (default: 2000)" },
                 OptionDef { name: "all", short: None, is_bool: true, description: "Show all output, disabling pagination" },
             ],
             tool_name_fn: |_| "dom_snapshot_scrape_all".to_string(),
@@ -2206,6 +2209,12 @@ pub fn all_commands() -> Vec<CommandDef> {
                     short: None,
                 },
                 OptionDef {
+                    name: "sql-stdin",
+                    description: "Read X-SQL query from stdin (avoids shell quoting issues on Windows)",
+                    is_bool: true,
+                    short: None,
+                },
+                OptionDef {
                     name: "result-only",
                     description: "Extract and print only the resultSet object from the response JSON, omitting wrapper metadata",
                     is_bool: true,
@@ -2223,7 +2232,8 @@ pub fn all_commands() -> Vec<CommandDef> {
                 let sql = get_opt_str(args, "sql").unwrap_or_default();
                 let url = get_opt_str(args, "url").unwrap_or("");
                 let mut p = json!({ "sql": sql, "url": url });
-                // Pass through CLI-side flags
+                // Pass through CLI-side flags (--sql-stdin is handled in main.rs dispatch)
+                if get_bool(args, "sql-stdin").unwrap_or(false) { p["sqlStdin"] = json!(true); }
                 if let Some(true) = get_bool(args, "result-only") { p["resultOnly"] = json!(true); }
                 if let Some(f) = get_opt_str(args, "output-file") { p["outputFile"] = json!(f); }
                 p
@@ -2285,7 +2295,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "word-regexp", short: Some("w"), is_bool: true, description: "Match only whole words" },
                 OptionDef { name: "selector", short: None, is_bool: false, description: "CSS selector to scope the search to" },
                 OptionDef { name: "page", short: None, is_bool: false, description: "Page number (1-based, default: 1)" },
-                OptionDef { name: "page-size", short: None, is_bool: false, description: "Lines per page (default: 500)" },
+                OptionDef { name: "page-size", short: None, is_bool: false, description: "Lines per page (default: 2000)" },
                 OptionDef { name: "all", short: None, is_bool: true, description: "Show all output, disabling pagination" },
             ],
             tool_name_fn: |_| "dom_snapshot_export".to_string(),

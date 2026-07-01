@@ -760,7 +760,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(
-            "  - Output from `get html`, `get text`, `get all html`, `get all text`, and `grep` is paginated by default (500 lines per page). Use --page N for subsequent pages, --page-size N to change the page size, or --all to disable pagination and show all content. Pagination is automatically skipped in --json and --quiet modes."
+            "  - Output from `get html`, `get all html`, and `grep` is paginated by default (2000 lines per page). `get text` and `get all text` are not paginated by default (text extraction rarely exceeds practical limits). Use --page N for subsequent pages, --page-size N to change the page size, or --all to disable pagination and show all content. Pagination is automatically skipped in --json and --quiet modes."
                 .to_string(),
         );
         lines.push(String::new());
@@ -783,7 +783,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("  # Get all matching elements with element-level pagination".to_string());
         lines.push("  browser4-cli domsnapshot get all text \".result\" --limit 5 --offset 10".to_string());
         lines.push(String::new());
-        lines.push("  # Get HTML with line-level pagination (default 500 lines, page 2)".to_string());
+        lines.push("  # Get HTML with line-level pagination (default 2000 lines, page 2)".to_string());
         lines.push("  browser4-cli domsnapshot get html \"body\" --page 2".to_string());
         lines.push(String::new());
         lines.push("  # Get all text with custom page size".to_string());
@@ -839,7 +839,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("Subcommands:".to_string());
         lines.push(format_with_gap(
             "  snapshot grep [OPTIONS] <pattern>",
-            "Search snapshot YAML content with regex patterns and grep-style output. Use | for alternation (e.g. 'price|rating|stars') or -e for multiple patterns. For large pages, capture a specific viewport first with -v <N> before grepping. Supports --page N, --page-size N, and --all for output pagination (500 lines per page default).",
+            "Search snapshot YAML content with regex patterns and grep-style output. Use | for alternation (e.g. 'price|rating|stars') or -e for multiple patterns. For large pages, capture a specific viewport first with -v <N> before grepping. Supports --page N, --page-size N, and --all for output pagination (2000 lines per page default).",
             50,
         ));
         lines.push(String::new());
@@ -877,7 +877,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(
-            "  - Output is paginated by default (500 lines per page). Use --page N for subsequent pages, --page-size N to change the page size, or --all to show all content."
+            "  - Output is paginated by default (2000 lines per page). Use --page N for subsequent pages, --page-size N to change the page size, or --all to show all content."
                 .to_string(),
         );
         lines.push(String::new());
@@ -1349,7 +1349,7 @@ mod tests {
         assert!(help.contains("image/link counts"));
         assert!(help.contains("interactive elements with tag/class/id/aria/bounding-box"));
         // pagination
-        assert!(help.contains("Output from `get html`, `get text`, `get all html`, `get all text`, and `grep` is paginated by default (500 lines per page)"));
+        assert!(help.contains("Output from `get html`, `get all html`, and `grep` is paginated by default (2000 lines per page)"));
         assert!(help.contains("--page N for subsequent pages, --page-size N to change the page size, or --all to disable pagination"));
         assert!(help.contains("browser4-cli domsnapshot get html \"body\" --page 2"));
         assert!(help.contains("browser4-cli domsnapshot get all text \"p\" --page-size 200"));
