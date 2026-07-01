@@ -19,6 +19,8 @@ FROM DOM_LOAD_AND_SELECT(url, cssQuery [, offset, limit])
 
 No other SQL syntax is supported — no CTEs (`WITH`), no subqueries in `FROM`, no `EXPLODE`, no joins. The only valid table source is `DOM_LOAD_AND_SELECT`.
 
+**URL parameter:** When used through `domsnapshot query` or `swarm query`, use the **unquoted** `@url` placeholder to reference the target page URL. Do NOT use `'.'` as a literal URL — it is not valid and will cause a 500 error. The `@url` placeholder is replaced with the actual page URL by `SQLTemplate.createSQL()`.
+
 X-SQL uses the **H2 database** SQL dialect.
 
 ---

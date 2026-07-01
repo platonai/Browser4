@@ -980,6 +980,23 @@ class MCPToolController(
                 pulsarSession.normalize(managed.driver.currentUrl()).urlString
             }
 
+        // Reject queries that use '.' as a literal URL in DOM_LOAD_AND_SELECT / load_and_select.
+        // The '.' is not a valid URL — use the unquoted @url placeholder instead:
+        //   FROM load_and_select(@url, ':root')           ← correct
+        //   FROM load_and_select('.', ':root')            ← incorrect
+        val dotUrlPattern = Regex(
+            """(?:DOM_)?LOAD_AND_SELECT\s*\(\s*['"]\.['"]""",
+            RegexOption.IGNORE_CASE
+        )
+        if (dotUrlPattern.containsMatchIn(sql)) {
+            return ResponseEntity.ok(errorResponse(
+                "Invalid URL '.' in DOM_LOAD_AND_SELECT. " +
+                    "Use the unquoted @url placeholder to reference the current page URL. " +
+                    "Example: FROM load_and_select(@url, ':root') — not FROM load_and_select('.', ':root'). " +
+                    "See: https://docs.browser4.ai/x-sql for details."
+            ))
+        }
+
         // SQLTemplate.createSQL(url) replaces the @url placeholder with a properly
         // escaped URL value. @url must appear UNQUOTED in the SQL — the template
         // engine handles quoting internally. The correct form is:

@@ -91,6 +91,7 @@ X-SQL uses the **H2 database** SQL dialect with DOM UDFs. Only simple `SELECT ..
 > **Important:** `@url` must appear **unquoted** in SQL. `SQLTemplate.createSQL(url)` handles escaping internally.
 > - ✅ `FROM load_and_select(@url, ':root')`
 > - ❌ `FROM load_and_select('@url', ':root')`
+> - ❌ `FROM load_and_select('.', ':root')` — the literal `'.'` is not a valid URL. Use the `@url` placeholder to reference the current page.
 
 ```bash
 # Inline query against current page:
