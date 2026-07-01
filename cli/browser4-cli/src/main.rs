@@ -11629,4 +11629,202 @@ mod tests {
         assert_eq!(opts.pattern, "");
         assert_eq!(opts.extra_patterns.len(), 2);
     }
+
+    // -----------------------------------------------------------------------
+    // resolve_sql_file tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn resolve_sql_file_absolute_path_succeeds() {
+        let tmp = test_temp_dir();
+        let file_path = tmp.path().join("query.sql");
+        std::fs::write(&file_path, "SELECT 1").unwrap();
+
+        let result = resolve_sql_file(&file_path.to_string_lossy());
+        assert_eq!(result.unwrap(), "SELECT 1");
+    }
+
+    #[test]
+    fn resolve_sql_file_absolute_path_not_found_shows_path() {
+        let tmp = test_temp_dir();
+        let file_path = tmp.path().join("nonexistent.sql");
+
+        let result = resolve_sql_file(&file_path.to_string_lossy());
+        let err = result.unwrap_err();
+        let path_str = file_path.to_string_lossy();
+        assert!(
+            err.contains(path_str.as_ref()),
+            "error should contain the resolved path, got: {err}"
+        );
+    }
+
+    #[test]
+    fn resolve_sql_file_cwd_relative_found() {
+        let _cwd_guard = CWD_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = test_temp_dir();
+        let sql_content = "SELECT * FROM test";
+        std::fs::write(tmp.path().join("query.sql"), sql_content).unwrap();
+
+        let previous_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(tmp.path()).unwrap();
+
+        let result = resolve_sql_file("query.sql");
+        std::env::set_current_dir(previous_dir).unwrap();
+
+        assert_eq!(result.unwrap(), sql_content);
+    }
+
+    #[test]
+    fn resolve_sql_file_falls_back_to_repo_root() {
+        let _cwd_guard = CWD_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+
+        // Set up a fake repo root with ROOT.md + pom.xml
+        let repo_root = test_temp_dir();
+        std::fs::write(repo_root.path().join("ROOT.md"), "").unwrap();
+        std::fs::write(repo_root.path().join("pom.xml"), "").unwrap();
+        let sql_content = "SELECT * FROM repo_root";
+        std::fs::write(repo_root.path().join("query.sql"), sql_content).unwrap();
+
+        // Set up a subdirectory (like cli/browser4-cli) as CWD with no query.sql
+        let sub_dir = repo_root.path().join("cli").join("browser4-cli");
+        std::fs::create_dir_all(&sub_dir).unwrap();
+
+        let previous_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&sub_dir).unwrap();
+
+        // resolve_sql_file uses CWD; find_browser4_root walks up to repo_root
+        let result = resolve_sql_file("query.sql");
+        std::env::set_current_dir(previous_dir).unwrap();
+
+        assert_eq!(result.unwrap(), sql_content);
+    }
+
+    #[test]
+    fn resolve_sql_file_not_found_shows_attempted_paths() {
+        let _cwd_guard = CWD_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = test_temp_dir();
+        // No query.sql exists, and tmp is not a browser4 root
+
+        let previous_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(tmp.path()).unwrap();
+
+        let result = resolve_sql_file("ghost.sql");
+        std::env::set_current_dir(previous_dir).unwrap();
+
+        let err = result.unwrap_err();
+        let cwd_path = tmp.path().join("ghost.sql");
+        let cwd_str = cwd_path.to_string_lossy();
+        assert!(
+            err.contains(cwd_str.as_ref()),
+            "error should mention the CWD-resolved path, got: {err}"
+        );
+        assert!(
+            err.contains("ghost.sql"),
+            "error should mention the original filename, got: {err}"
+        );
+    }
+
+    #[test]
+    fn resolve_sql_file_repo_root_fallback_not_confused_by_cwd_file() {
+        // When the file exists in CWD, it should be used — NOT the repo root copy
+        let _cwd_guard = CWD_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+
+        let repo_root = test_temp_dir();
+        std::fs::write(repo_root.path().join("ROOT.md"), "").unwrap();
+        std::fs::write(repo_root.path().join("pom.xml"), "").unwrap();
+        std::fs::write(
+            repo_root.path().join("query.sql"),
+            "REPO ROOT VERSION",
+        )
+        .unwrap();
+
+        let sub_dir = repo_root.path().join("cli").join("browser4-cli");
+        std::fs::create_dir_all(&sub_dir).unwrap();
+        std::fs::write(sub_dir.join("query.sql"), "CWD VERSION").unwrap();
+
+        let previous_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&sub_dir).unwrap();
+
+        let result = resolve_sql_file("query.sql");
+        std::env::set_current_dir(previous_dir).unwrap();
+
+        assert_eq!(result.unwrap(), "CWD VERSION");
+    }
+
+    // -----------------------------------------------------------------------
+    // maybe_decode_base64_sql tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn decode_base64_sql_disabled_passthrough() {
+        let params = json!({}); // no sqlBase64 key
+        let result = maybe_decode_base64_sql("SELECT 1".to_string(), &params);
+        assert_eq!(result.unwrap(), "SELECT 1");
+    }
+
+    #[test]
+    fn decode_base64_sql_explicitly_false() {
+        let params = json!({"sqlBase64": false});
+        let result = maybe_decode_base64_sql("SELECT 1".to_string(), &params);
+        assert_eq!(result.unwrap(), "SELECT 1");
+    }
+
+    #[test]
+    fn decode_base64_sql_valid_decode() {
+        use base64::Engine;
+        let original = "SELECT DOM_FIRST_TEXT(DOM, 'h2') AS title\nFROM DOM_LOAD_AND_SELECT(@url, ':root')";
+        let encoded = base64::engine::general_purpose::STANDARD.encode(original);
+
+        let params = json!({"sqlBase64": true});
+        let result = maybe_decode_base64_sql(encoded, &params);
+        assert_eq!(result.unwrap(), original);
+    }
+
+    #[test]
+    fn decode_base64_sql_valid_with_whitespace() {
+        use base64::Engine;
+        let original = "SELECT 1";
+        let encoded = base64::engine::general_purpose::STANDARD.encode(original);
+        let padded = format!("  {encoded}  \n");
+
+        let params = json!({"sqlBase64": true});
+        let result = maybe_decode_base64_sql(padded, &params);
+        assert_eq!(result.unwrap(), original);
+    }
+
+    #[test]
+    fn decode_base64_sql_empty_input_errors() {
+        let params = json!({"sqlBase64": true});
+        let result = maybe_decode_base64_sql("   ".to_string(), &params);
+        assert!(
+            result.unwrap_err().contains("empty"),
+            "should error on empty/blank input"
+        );
+    }
+
+    #[test]
+    fn decode_base64_sql_invalid_base64_errors() {
+        let params = json!({"sqlBase64": true});
+        let result = maybe_decode_base64_sql("!!!not valid base64!!!".to_string(), &params);
+        let err = result.unwrap_err();
+        assert!(
+            err.contains("base64"),
+            "error should mention base64, got: {err}"
+        );
+    }
+
+    #[test]
+    fn decode_base64_sql_non_utf8_errors() {
+        use base64::Engine;
+        // 0xFE 0xFF = invalid UTF-8 (BOM-like but broken)
+        let bytes = vec![0xFE, 0xFF, 0x00, 0x01];
+        let encoded = base64::engine::general_purpose::STANDARD.encode(&bytes);
+
+        let params = json!({"sqlBase64": true});
+        let result = maybe_decode_base64_sql(encoded, &params);
+        assert!(
+            result.is_err(),
+            "non-UTF-8 bytes should fail, got: {result:?}",
+        );
+    }
 }
