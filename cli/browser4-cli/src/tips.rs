@@ -177,6 +177,15 @@ const TIPS_SCREENSHOT: &[Tip] = &[
 
 const TIPS_CRAWL: &[Tip] = &[
     Tip {
+        text: "Use `--seed-file=urls.txt --depth 0` for bulk fetching known URLs without link discovery",
+    },
+    Tip {
+        text: "Use `--sql` (or `--sql @query.sql`) with crawl to extract structured data from every crawled page. Use @url as the page URL placeholder",
+    },
+    Tip {
+        text: "Use `--format csv -o results.csv` with `--sql` to save extracted crawl data directly to a spreadsheet-ready file",
+    },
+    Tip {
         text: "Use `--out-link-pattern=<regex>` to filter which links to follow during crawling",
     },
     Tip {

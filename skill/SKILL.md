@@ -391,11 +391,20 @@ browser4-cli swarm status|result <id> | swarm list
 
 ## Crawl CLI
 
-Recursive website crawling — start from a seed URL and follow links. Full reference: **[references/crawl.md](references/crawl.md)**.
+Recursive website crawling from a URL or seed file, with optional X-SQL data extraction. Full reference: **[references/crawl.md](references/crawl.md)**.
 
 ```bash
-browser4-cli crawl <url> [--depth=1] [--out-link-selector=<CSS>] [--out-link-pattern=<regex>] [--background]
-browser4-cli crawl-list
+# Link discovery (depth >= 1)
+browser4-cli crawl <url> [--depth=N] [--out-link-selector=<CSS>] [--out-link-pattern=<regex>] [--background]
+
+# Bulk fetch from seed file (depth 0 = no link discovery)
+browser4-cli crawl --seed-file urls.txt --depth 0
+
+# Bulk fetch + X-SQL extraction
+browser4-cli crawl --seed-file urls.txt --sql @extract.sql --format csv -o results.csv
+
+# Track tasks
+browser4-cli crawl list
 ```
 
 ## Loop CLI

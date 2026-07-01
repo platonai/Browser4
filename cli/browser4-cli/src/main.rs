@@ -5403,22 +5403,117 @@ async fn handle_crawl(
     tool_params: &Value,
     _session_name: Option<&str>,
 ) -> Result<(), String> {
+    // ---- Resolve URLs ----
     let url = tool_params
         .get("url")
         .and_then(|v| v.as_str())
         .unwrap_or("");
 
-    if url.is_empty() {
-        return Err("A URL is required for crawl.".to_string());
+    let seed_file = tool_params
+        .get("seedFile")
+        .and_then(|v| v.as_str());
+
+    let mut urls: Vec<String> = Vec::new();
+    if !url.is_empty() {
+        urls.push(url.to_string());
+    }
+    if let Some(file_path) = seed_file {
+        let content = std::fs::read_to_string(file_path)
+            .map_err(|e| format!("Failed to read seed file '{}': {}", file_path, e))?;
+        for line in content.lines() {
+            let line = line.trim();
+            if !line.is_empty() && !line.starts_with('#') {
+                urls.push(line.to_string());
+            }
+        }
+    }
+    if urls.is_empty() {
+        return Err("No URLs provided. Specify a URL argument or --seed-file.".to_string());
     }
 
-    let task_id = submit_crawl(client, base_url, tool_params).await?;
+    // ---- Resolve X-SQL query ----
+    let use_sql_stdin = tool_params
+        .get("sqlStdin")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    let query_raw: Option<String> = if use_sql_stdin {
+        let mut input = String::new();
+        std::io::stdin()
+            .read_to_string(&mut input)
+            .map_err(|e| format!("Failed to read X-SQL query from stdin: {e}"))?;
+        if input.trim().is_empty() {
+            return Err("Stdin was empty but --sql-stdin was specified.".to_string());
+        }
+        Some(input)
+    } else {
+        tool_params
+            .get("sql")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+    };
+
+    let has_sql = query_raw.is_some();
+    let resolved_sql: Option<String> = match query_raw {
+        Some(q) if q.starts_with('@') => {
+            let file_path = &q[1..];
+            Some(resolve_sql_file(file_path)?)
+        }
+        Some(q) => {
+            let decoded = maybe_decode_base64_sql(q, tool_params)?;
+            Some(decoded)
+        }
+        None => None,
+    };
+
+    // ---- Resolve output options ----
+    let format = tool_params
+        .get("format")
+        .and_then(|v| v.as_str())
+        .unwrap_or("table")
+        .to_ascii_lowercase();
+
+    match format.as_str() {
+        "json" | "csv" | "table" => {}
+        _ => return Err(format!("Invalid --format '{}'. Expected: json, csv, or table", format)),
+    }
+
+    let output_file = tool_params
+        .get("output")
+        .and_then(|v| v.as_str());
+
+    // ---- Build server-bound params (strip CLI-only keys) ----
+    let mut server_params = tool_params.clone();
+    if let Value::Object(ref mut m) = server_params {
+        m.remove("seedFile");
+        m.remove("sqlStdin");
+        m.remove("sqlBase64");
+        m.remove("format");
+        m.remove("output");
+        // Insert resolved urls array and resolved sql
+        let url_array: Vec<Value> = urls.iter().map(|u| json!(u)).collect();
+        m.insert("urls".to_string(), json!(url_array));
+        if let Some(ref sql) = resolved_sql {
+            m.insert("sql".to_string(), json!(sql));
+        }
+        // Ensure url is set to the first URL for backward compat
+        if url.is_empty() {
+            m.insert("url".to_string(), json!(urls[0]));
+        }
+    }
+
+    let primary_url = &urls[0];
+    let task_id = submit_crawl(client, base_url, &server_params).await?;
     let task_id = task_id.trim().trim_matches('"').to_string();
     cli_println!("Crawl task submitted: {}", task_id);
+    cli_println!("  URLs: {}", urls.len());
+    if has_sql {
+        cli_println!("  X-SQL extraction: enabled");
+    }
     json_field("task_id", json!(task_id));
 
     // Persist the task for cross-session tracking
-    let _ = track_async_task(&task_id, "crawl", url, None);
+    let _ = track_async_task(&task_id, "crawl", primary_url, None);
 
     let background = tool_params
         .get("background")
@@ -5427,16 +5522,12 @@ async fn handle_crawl(
 
     if background {
         cli_println!(
-            "Running in background. Task ID: {}. Use 'browser4-cli crawl-list' to view all tracked tasks.",
+            "Running in background. Task ID: {}. Use 'browser4-cli crawl list' to view all tracked tasks.",
             task_id
         );
         return Ok(());
     }
 
-    let _depth = tool_params
-        .get("depth")
-        .and_then(|v| v.as_i64())
-        .unwrap_or(1);
     let poll_interval = std::time::Duration::from_secs(2);
     let timeout = crawl_request_timeout();
     let start = std::time::Instant::now();
@@ -5465,14 +5556,52 @@ async fn handle_crawl(
             "OK" | "SC_OK" => {
                 let pages = parsed["pages"].as_array();
                 let page_count = pages.map(|p| p.len()).unwrap_or(0);
-                cli_println!("\nCrawl completed. {} pages found.", page_count);
 
-                if let Some(pages) = pages {
-                    for page in pages {
-                        let page_url = page["url"].as_str().unwrap_or("");
-                        let page_title = page["title"].as_str().unwrap_or("");
-                        let page_depth = page["depth"].as_i64().unwrap_or(0);
-                        cli_println!("  depth={} | {} | {}", page_depth, page_url, page_title);
+                // Collect extracted data from all pages when X-SQL was provided
+                let mut all_extracted: Vec<Value> = Vec::new();
+                if has_sql {
+                    if let Some(pages) = pages {
+                        for page in pages {
+                            if let Some(extracted) = page["extracted"].as_array() {
+                                all_extracted.extend(extracted.iter().cloned());
+                            }
+                        }
+                    }
+                }
+
+                // Format output
+                if has_sql {
+                    cli_println!("");
+                    let output: String = if all_extracted.is_empty() {
+                        "No extracted data.".to_string()
+                    } else {
+                        match format.as_str() {
+                            "json" => serde_json::to_string_pretty(&all_extracted)
+                                .unwrap_or_else(|_| "[]".to_string()),
+                            "csv" => format_csv(&all_extracted),
+                            "table" | _ => format_table(&all_extracted),
+                        }
+                    };
+
+                    if let Some(file_path) = output_file {
+                        std::fs::write(file_path, &output)
+                            .map_err(|e| format!("Failed to write output file '{}': {}", file_path, e))?;
+                        cli_println!("Results written to {}", file_path);
+                    } else {
+                        cli_println!("{}", output);
+                    }
+
+                    json_field("extracted", json!(all_extracted));
+                } else {
+                    cli_println!("\nCrawl completed. {} pages found.", page_count);
+
+                    if let Some(pages) = pages {
+                        for page in pages {
+                            let page_url = page["url"].as_str().unwrap_or("");
+                            let page_title = page["title"].as_str().unwrap_or("");
+                            let page_depth = page["depth"].as_i64().unwrap_or(0);
+                            cli_println!("  depth={} | {} | {}", page_depth, page_url, page_title);
+                        }
                     }
                 }
 
@@ -5492,6 +5621,155 @@ async fn handle_crawl(
             }
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Output formatting helpers for extracted crawl data
+// ---------------------------------------------------------------------------
+
+/// Format a list of extracted data rows as CSV with header row.
+/// Uses manual escaping (no csv crate dependency needed).
+fn format_csv(rows: &[Value]) -> String {
+    if rows.is_empty() {
+        return String::new();
+    }
+
+    // Collect column names in order of first appearance
+    let mut columns: Vec<String> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for row in rows {
+        if let Value::Object(map) = row {
+            for key in map.keys() {
+                if seen.insert(key.clone()) {
+                    columns.push(key.clone());
+                }
+            }
+        }
+    }
+
+    if columns.is_empty() {
+        return String::new();
+    }
+
+    // CSV escape: wrap in double quotes if contains comma, quote, or newline
+    let escape = |s: &str| -> String {
+        if s.contains(',') || s.contains('"') || s.contains('\n') {
+            format!("\"{}\"", s.replace('"', "\"\""))
+        } else {
+            s.to_string()
+        }
+    };
+
+    let mut out = String::new();
+    // Header row
+    out.push_str(
+        &columns
+            .iter()
+            .map(|c| escape(c))
+            .collect::<Vec<_>>()
+            .join(","),
+    );
+    out.push('\n');
+    // Data rows
+    for row in rows {
+        let vals: Vec<String> = columns
+            .iter()
+            .map(|col| {
+                row.get(col)
+                    .map(|v| match v {
+                        Value::String(s) => escape(s),
+                        Value::Null => String::new(),
+                        other => escape(&other.to_string()),
+                    })
+                    .unwrap_or_default()
+            })
+            .collect();
+        out.push_str(&vals.join(","));
+        out.push('\n');
+    }
+    out
+}
+
+/// Format extracted data as a human-readable aligned table.
+fn format_table(rows: &[Value]) -> String {
+    if rows.is_empty() {
+        return "No data.".to_string();
+    }
+
+    // Collect column names in order of first appearance
+    let mut columns: Vec<String> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for row in rows {
+        if let Value::Object(map) = row {
+            for key in map.keys() {
+                if seen.insert(key.clone()) {
+                    columns.push(key.clone());
+                }
+            }
+        }
+    }
+
+    if columns.is_empty() {
+        return "No data.".to_string();
+    }
+
+    // Build string data and compute column widths
+    let mut col_widths: Vec<usize> = columns.iter().map(|c| c.len()).collect();
+    let cell_data: Vec<Vec<String>> = rows
+        .iter()
+        .map(|row| {
+            columns
+                .iter()
+                .enumerate()
+                .map(|(i, col)| {
+                    let val = row
+                        .get(col)
+                        .map(|v| match v {
+                            Value::String(s) => s.clone(),
+                            Value::Null => String::new(),
+                            Value::Bool(b) => b.to_string(),
+                            Value::Number(n) => n.to_string(),
+                            _ => v.to_string(),
+                        })
+                        .unwrap_or_default();
+                    col_widths[i] = col_widths[i].max(val.len());
+                    val
+                })
+                .collect()
+        })
+        .collect();
+
+    let mut out = String::new();
+
+    // Header
+    let header: Vec<String> = columns
+        .iter()
+        .enumerate()
+        .map(|(i, c)| format!("{:width$}", c, width = col_widths[i]))
+        .collect();
+    out.push_str("  ");
+    out.push_str(&header.join(" | "));
+    out.push('\n');
+
+    // Separator
+    let sep: Vec<String> = col_widths.iter().map(|w| "-".repeat(*w)).collect();
+    out.push_str("  ");
+    out.push_str(&sep.join("-+-"));
+    out.push('\n');
+
+    // Data rows
+    for row_cells in &cell_data {
+        let formatted: Vec<String> = row_cells
+            .iter()
+            .enumerate()
+            .map(|(i, val)| format!("{:width$}", val, width = col_widths[i]))
+            .collect();
+        out.push_str("  ");
+        out.push_str(&formatted.join(" | "));
+        out.push('\n');
+    }
+
+    out
 }
 
 // ---------------------------------------------------------------------------
@@ -7612,6 +7890,17 @@ fn rewrite_prefixed_command(args: &[String]) -> Option<Vec<String>> {
             }
         }
     }
+    // "crawl" works standalone (crawl <url>) AND as a prefix (crawl list).
+    // Only rewrite known crawl subcommands so positional URLs pass through.
+    if prefix == "crawl" {
+        let known_subs = ["list"];
+        if known_subs.contains(&sub.as_str()) {
+            let mut rewritten = vec![format!("crawl-{}", sub)];
+            rewritten.extend(args[2..].iter().cloned());
+            return Some(rewritten);
+        }
+        return None;
+    }
     let rewritten_command = match prefix {
         "swarm" => format!("swarm-{}", sub),
         "agent" => format!("agent-{}", sub),
@@ -7657,6 +7946,7 @@ fn preferred_prefixed_group_form(command: &str) -> Option<&'static str> {
     match command {
         "agent" => Some("agent <subcommand>"),
         "swarm" => Some("swarm <subcommand>"),
+        "crawl" => Some("crawl <subcommand>"),
         "co" => Some("swarm <subcommand>"),
         // `domsnapshot` is a valid standalone command (captures a DOM snapshot
         // and returns metadata), not just a prefix group — so it is intentionally
