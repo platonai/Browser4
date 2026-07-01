@@ -187,7 +187,7 @@ function Print-Usage {
     Write-Host "  test.ps1 rws --scenarios amazon     # Run a specific scenario task"
     Write-Host "  test.ps1 rws --scenarios --list     # List discovered scenario tasks"
     Write-Host "  test.ps1 rws --scenarios --production  # Run scenarios against installed CLI"
-    Write-Host "  test.ps1 rws --task tasks/amazon.md   # Run a single task file directly"
+    Write-Host "  test.ps1 rws --task tasks/real-world/amazon.md   # Run a single task file directly"
     Write-Host "  test.ps1 main                       # Run all Browser4 main tests"
     Write-Host '  test.ps1 it -pl browser4-core       # Pass additional Maven args through'
     exit $ExitCode

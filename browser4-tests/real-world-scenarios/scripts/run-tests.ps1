@@ -1,10 +1,13 @@
 #!/usr/bin/env pwsh
 <#
 .SYNOPSIS
-Runs every agent-scenario task defined in tasks/*.md.
+Runs every agent-scenario task defined in tasks/ (recursive into subdirectories).
 
 .DESCRIPTION
-Auto-discovers and executes task markdown files in the tasks/ directory.
+Auto-discovers and executes task markdown files recursively in the tasks/
+directory. Tasks are organized in category subdirectories:
+  - tasks/real-world/ — scenarios targeting live websites
+  - tasks/mock-site/   — scenarios requiring the local MockSite server
 Each task is run via run-task.ps1, which combines the task description with
 the shared usability-evaluation prompt and invokes the Claude Code agent.
 
@@ -63,7 +66,7 @@ $ErrorActionPreference = 'Stop'
 $script:StartTime = Get-Date
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Discovery — every .md in tasks/
+# Discovery — every .md in tasks/ (recursive into subdirectories)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 $script:ScriptsDir = $PSScriptRoot
@@ -72,9 +75,11 @@ $script:RunnerPath = Join-Path $ScriptsDir 'run-task.ps1'
 # Repo root is 3 levels up from scripts/ (scripts -> tests -> browser4-cli -> repo root)
 $script:RepoRoot   = (Resolve-Path "$ScriptsDir/../../..").Path
 
-$script:Discovered = Get-ChildItem -Path $TasksDir -Filter '*.md' `
-    | Sort-Object Name `
-    | ForEach-Object { $_.Name }
+$script:DiscoveredFiles = Get-ChildItem -Path $TasksDir -Filter '*.md' -Recurse `
+    | Sort-Object Name
+$script:Discovered = $DiscoveredFiles | ForEach-Object { $_.Name }
+$script:TaskPathMap = @{}
+$DiscoveredFiles | ForEach-Object { $TaskPathMap[$_.Name] = $_.FullName }
 
 if ($Discovered.Count -eq 0) {
     Write-Host 'No task files found in tasks/.' -ForegroundColor Yellow
@@ -113,7 +118,7 @@ if ($List) {
     Write-Host ''
     foreach ($name in $Discovered) {
         $marker = if ($name -in $Selected) { ' [selected]' } else { '' }
-        $taskPath = Join-Path $TasksDir $name
+        $taskPath = $TaskPathMap[$name]
 
         # Extract the heading and first content line as a quick description.
         $desc = ''
@@ -196,7 +201,7 @@ $Failed  = 0
 Write-Banner "Agent Scenarios ($($Selected.Count) task(s))"
 
 foreach ($name in $Selected) {
-    $taskPath = Join-Path $TasksDir $name
+    $taskPath = $TaskPathMap[$name]
 
     Write-Section $name
     $start = Get-Date

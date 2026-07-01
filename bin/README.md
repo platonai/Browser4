@@ -59,7 +59,7 @@ Comprehensive test runner for the current Maven reactors plus the Browser4 CLI p
 ./bin/test.sh rws --scenarios            # Run all agent-scenario tasks
 ./bin/test.sh rws --scenarios amazon     # Run a specific scenario task
 ./bin/test.sh rws --scenarios --list     # List discovered scenario tasks
-./bin/test.sh rws --task tasks/amazon.md # Run a single task file
+./bin/test.sh rws --task tasks/real-world/amazon.md # Run a single task file
 ./bin/test.sh resume                     # Resume from last failed module
 ```
 

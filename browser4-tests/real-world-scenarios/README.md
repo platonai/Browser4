@@ -9,7 +9,7 @@ documentation, and reliability from a first-time user's perspective.
 
 ```powershell
 # From the repo root:
-./browser4-tests/real-world-scenarios/scripts/run-task.ps1 -TaskFile tasks/search-summary.md
+./browser4-tests/real-world-scenarios/scripts/run-task.ps1 -TaskFile tasks/real-world/search-summary.md
 ```
 
 Each task file describes the scenario in plain markdown. `run-task.ps1` reads the
@@ -54,85 +54,78 @@ registration step is needed.
 
 ## Adding a new task
 
-1. Create a new `.md` file in `tasks/`, e.g. `tasks/my-scenario.md`
+1. Create a new `.md` file in the appropriate category subdirectory:
+   - `tasks/real-world/` — scenarios targeting live websites (Wikipedia, Hacker News, etc.)
+   - `tasks/mock-site/` — scenarios requiring the local MockSite server
 2. Add a `# scenario-name` heading and the task instructions
-3. Save and run — `run-tests.ps1` discovers it automatically
+3. Save and run — `run-tests.ps1` discovers it automatically (recursive)
 
 ## Available tasks
 
 25 task files covering all browser4-cli commands documented in the SKILL reference.
 
-### Navigation & Session
+### Real-World Sites (`tasks/real-world/`)
+
+17 scenarios targeting live, stable websites.
+
+#### Navigation & Session
+
+| Task file | Target | Scenario |
+|-----------|--------|----------|
+| `navigation-basics.md` | Wikipedia | Navigate pages, use history (back/forward), reload, check status |
+| `session-management.md` | Wikipedia, HN | Open named sessions, switch between them, list/close all |
+
+#### Snapshot & DOM Extraction
+
+| Task file | Target | Scenario |
+|-----------|--------|----------|
+| `snapshot-mastery.md` | Wikipedia | Full/interactive/scoped/depth-limited snapshots, auto-diff, grep with all flags |
+| `dom-snapshot-extraction.md` | books.toscrape.com | Capture DOM snapshot, get single/all values, export, summary, grep |
+| `x-sql-query-methods.md` | books.toscrape.com | X-SQL via inline, @file, stdin, and base64; inspect for selector discovery |
+| `domsnapshot-inspect-discovery.md` | books.toscrape.com | DOM inspection and selector discovery workflow |
+
+#### Visual, Tabs, Agent
+
+| Task file | Target | Scenario |
+|-----------|--------|----------|
+| `visual-screenshot-controls.md` | Wikipedia | Resize viewport, scroll, wait, screenshot (full-page), PDF export |
+| `tab-management.md` | Wikipedia, HN | Open, list, switch, and close multiple tabs across different sites |
+| `agent-extraction.md` | Wikipedia | extract with schema, summarize with --selector, agent run/status/result |
+
+#### Crawl, Loop, Attach
+
+| Task file | Target | Scenario |
+|-----------|--------|----------|
+| `crawl-link-discovery.md` | books.toscrape.com | Crawl with link discovery, seed files, format/output options |
+| `loop-monitoring.md` | httpbin.org | Loop in plain-text/shell/subcommand modes, named loops, pause/resume/stop |
+| `attach-remote-debug.md` | Chrome/Edge CDP | Attach to running Chrome/Edge via CDP, capture state |
+
+#### Web Search & Shopping
+
+| Task file | Target | Scenario |
+|-----------|--------|----------|
+| `search-summary.md` | Baidu | Search for 武汉龙虾节, summarize findings |
+| `amazon.md` | Amazon | Search for whiteboard pens, compare top 4 |
+| `hacker-news.md` | Hacker News | Navigate HN, open and summarize top 3 posts |
+| `amazon-calabi-yau.md` | Amazon | Search for Calabi-Yau gift, shortlist 10, pick best |
+| `amazon-laser-engraved-crystal.md` | Amazon | Search for laser-engraved crystal gift, pick best |
+
+### Mock Site (`tasks/mock-site/`)
+
+8 scenarios requiring the local MockSite server (`./bin/test.ps1 mock-site`).
 
 | Task file | Scenario |
 |-----------|----------|
-| `tasks/navigation-basics.md` | Navigate Wikipedia, use history (back/forward), reload, check status |
-| `tasks/session-management.md` | Open named sessions, switch between them, list/close all |
+| `form-filling.md` | Fill HTML form: text fields, dropdowns, checkboxes, radio buttons, submit, verify |
+| `advanced-mouse-interaction.md` | Hover tooltips, drag-and-drop, double-click, generate-locator, browser dialogs |
+| `x-sql-extraction-functions.md` | X-SQL DOM/STR/ARRAY/LLM functions, PowerCSS :expr(), WHERE/ORDER BY/LIMIT |
+| `javascript-evaluation.md` | eval with --json, --file, --stdin, --ref on dynamic page |
+| `crawl-advanced-extraction.md` | Crawl with X-SQL, background mode, caching, priority, timeouts |
+| `swarm-parallel-scraping.md` | Swarm session, parallel X-SQL extraction, headless mode |
+| `storage-state-management.md` | Cookies (set with all flags), localStorage, sessionStorage, state-save/load |
+| `comprehensive-ecommerce-workflow.md` | End-to-end e-commerce research: 18 steps combining 15+ commands |
 
-### Page Interaction
-
-| Task file | Scenario |
-|-----------|----------|
-| `tasks/form-filling.md` | Fill a MockSite HTML form: text fields, dropdowns, checkboxes, submit, verify |
-| `tasks/advanced-mouse-interaction.md` | Hover, drag, double-click, generate-locator, handle dialogs on MockSite |
-
-### Snapshot
-
-| Task file | Scenario |
-|-----------|----------|
-| `tasks/snapshot-mastery.md` | Full/interactive/scoped/depth-limited snapshots, auto-diff, grep with all flags |
-
-### DOM Snapshot & X-SQL
-
-| Task file | Scenario |
-|-----------|----------|
-| `tasks/dom-snapshot-extraction.md` | Capture DOM snapshot, get single/all values, export, summary, grep |
-| `tasks/x-sql-query-methods.md` | X-SQL via inline, @file, stdin, and base64; inspect for selector discovery |
-| `tasks/x-sql-extraction-functions.md` | X-SQL DOM/STR/ARRAY/LLM functions, PowerCSS :expr(), WHERE/ORDER BY/LIMIT |
-| `tasks/domsnapshot-inspect-discovery.md` | DOM inspection and selector discovery workflow |
-
-### JavaScript, Visual, Tabs, Storage
-
-| Task file | Scenario |
-|-----------|----------|
-| `tasks/javascript-evaluation.md` | eval with --json, --file, --stdin, --ref on MockSite |
-| `tasks/visual-screenshot-controls.md` | Resize viewport, scroll, wait, screenshot (full-page), PDF export |
-| `tasks/tab-management.md` | Open, list, switch, and close multiple tabs across different sites |
-| `tasks/storage-state-management.md` | Cookies (set with all flags), localStorage, sessionStorage, state-save/load |
-
-### Agent & Extraction
-
-| Task file | Scenario |
-|-----------|----------|
-| `tasks/agent-extraction.md` | extract with schema, summarize with --selector, agent run/status/result |
-
-### Crawl, Swarm, Loop
-
-| Task file | Scenario |
-|-----------|----------|
-| `tasks/crawl-link-discovery.md` | Crawl with link discovery, seed files, format/output options |
-| `tasks/crawl-advanced-extraction.md` | Crawl with X-SQL, background mode, caching, priority, timeouts |
-| `tasks/swarm-parallel-scraping.md` | Swarm session, parallel X-SQL extraction, headless mode |
-| `tasks/loop-monitoring.md` | Loop in plain-text/shell/subcommand modes, named loops, pause/resume/stop |
-
-### Specialized & Capstone
-
-| Task file | Scenario |
-|-----------|----------|
-| `tasks/attach-remote-debug.md` | Attach to running Chrome/Edge via CDP, capture state |
-| `tasks/comprehensive-ecommerce-workflow.md` | End-to-end e-commerce research: 18 steps combining 15+ commands |
-
-### Web Search & Shopping
-
-| Task file | Scenario |
-|-----------|----------|
-| `tasks/search-summary.md` | Search Baidu for 武汉龙虾节, summarize findings |
-| `tasks/amazon.md` | Search Amazon for whiteboard pens, compare top 4 |
-| `tasks/hacker-news.md` | Navigate HN, open and summarize top 3 posts |
-| `tasks/amazon-calabi-yau.md` | Search Amazon for Calabi-Yau gift, shortlist 10, pick best |
-| `tasks/amazon-laser-engraved-crystal.md` | Search Amazon for laser-engraved crystal gift, pick best |
-
-> **Note:** Tasks marked with a MockSite dependency require the mock server running on `localhost:18080`. Start it with `./bin/test.ps1 mock-site`.
+> **Note:** MockSite tasks require the mock server running on `localhost:18080`. Start it with `./bin/test.ps1 mock-site`.
 
 ## Running in production mode
 
