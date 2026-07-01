@@ -5427,7 +5427,7 @@ async fn handle_crawl(
 
     if background {
         cli_println!(
-            "Running in background. Use 'browser4-cli crawl result {}' to get results, or 'browser4-cli crawl list' to view all tracked tasks.",
+            "Running in background. Task ID: {}. Use 'browser4-cli crawl-list' to view all tracked tasks.",
             task_id
         );
         return Ok(());

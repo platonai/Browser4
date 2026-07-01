@@ -746,6 +746,8 @@ browser4-cli crawl <url> [options]
 | `--ignore-url-query` | — | Strip query params during URL normalization |
 | `--no-norm` | — | Disable URL normalization |
 | `--readonly` | — | Non-destructive mode |
+| `--page-load-timeout` | — | Max wait for each page load |
+| `-bg`, `--background` | — | Submit crawl and return immediately; use `crawl-list` to track |
 
 ```bash
 # Depth 1: extract all links from homepage, load each linked page
@@ -760,6 +762,10 @@ browser4-cli crawl "https://shop.example.com" \
 
 # Deep crawl with refresh and content storage
 browser4-cli crawl "https://example.com" --depth 3 --refresh --store-content
+
+# Background crawl — submit and return immediately
+browser4-cli crawl "https://example.com" -ol "a[href]" --background
+browser4-cli crawl-list
 ```
 
 ---

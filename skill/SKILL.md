@@ -395,7 +395,7 @@ Recursive website crawling — start from a seed URL and follow links. Full refe
 
 ```bash
 browser4-cli crawl <url> [--depth=1] [--out-link-selector=<CSS>] [--out-link-pattern=<regex>] [--background]
-browser4-cli crawl list
+browser4-cli crawl-list
 ```
 
 ## Loop CLI

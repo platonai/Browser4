@@ -13,6 +13,8 @@ Recursive website crawling — start from a seed URL, extract links, load each l
 browser4-cli crawl "https://example.com" --out-link-selector "a[href]"
 ```
 
+> **Note:** `--out-link-selector` is effectively required. Without it, the crawl returns 0 pages — the seed URL is loaded but no out-links are extracted.
+
 ## Behavior
 
 The `crawl` command:
@@ -23,7 +25,7 @@ The `crawl` command:
 4. Deduplicates and limits to `--top-links` links.
 5. Loads each linked page.
 6. If `--depth` > 1, repeats steps 2–5 for each loaded page (skipping already-visited URLs).
-7. Returns results as a JSON array of crawled pages.
+7. Returns results as human-readable text (or JSON with `--json`).
 
 Crawl runs asynchronously — the command submits a task and polls until completion.
 
@@ -45,6 +47,7 @@ Crawl runs asynchronously — the command submits a task and polls until complet
 | `--ignore-url-query` | | bool | — | Strip query params from URLs (treat `?page=1` and `?page=2` as same URL) |
 | `--no-norm` | | bool | — | Disable URL normalization |
 | `--readonly` | | bool | — | Non-destructive mode (no side effects on target pages) |
+| `--background` | `-bg` | bool | — | Submit crawl and return immediately; use `crawl-list` to track |
 
 ## LoadOptions passthrough (`--args` / `-a`)
 
@@ -58,8 +61,10 @@ This appends the raw string to the generated LoadOptions. Use for advanced optio
 
 ## URL deduplication
 
-- Visited URLs are normalized: lowercase, trailing slash removed, query string stripped (unless `--no-norm` is set).
+- Visited URLs are normalized: lowercase, trailing slash removed, query string always stripped for dedup purposes.
 - The same URL is never visited twice within a crawl session, preventing infinite loops.
+- Use `--ignore-url-query` to additionally strip query parameters from extracted link hrefs before resolution.
+- Use `--no-norm` to disable LoadOptions-level normalization (does not affect internal dedup normalization).
 
 ## Timeout
 
@@ -84,7 +89,7 @@ Crawl completed. 5 pages found.
 ```json
 {
   "task_id": "<uuid>",
-  "pages_found": 5,
+  "pagesFound": 5,
   "pages": [
     {"url": "https://...", "title": "Page 1", "contentLength": 12345, "depth": 1},
     {"url": "https://...", "title": "Page 2", "contentLength": 67890, "depth": 1}
