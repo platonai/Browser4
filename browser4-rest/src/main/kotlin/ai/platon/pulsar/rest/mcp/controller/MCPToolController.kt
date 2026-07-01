@@ -1238,7 +1238,16 @@ class MCPToolController(
                     is String -> v
                     is Number, is Boolean -> v.toString()
                     // Maps, Lists, arrays etc. — serialize as valid JSON
-                    else -> pulsarObjectMapper().writeValueAsString(v)
+                    is Map<*, *>, is Collection<*>, is Array<*> -> pulsarObjectMapper().writeValueAsString(v)
+                    // Non-serializable domain objects (WebDriver, Browser, etc.) —
+                    // wrap in a description object so internal object graphs are never
+                    // exposed to the client
+                    else -> pulsarObjectMapper().writeValueAsString(
+                        mapOf(
+                            "type" to (evaluate.className ?: v::class.qualifiedName),
+                            "description" to v.toString()
+                        )
+                    )
                 }
 
                 // Server-side pagination: when page/page-size are present, paginate

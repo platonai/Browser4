@@ -66,7 +66,22 @@ abstract class AbstractToolExecutor : ToolExecutor {
                 }
                 r == null -> null to "null"
                 r == Unit -> null to null
-                else -> r to r::class.qualifiedName
+                else -> {
+                    val qualifiedName = r::class.qualifiedName
+                    if (r is String || r is Number || r is Boolean
+                        || r is Map<*, *> || r is Collection<*> || r is Array<*>
+                    ) {
+                        r to qualifiedName
+                    } else {
+                        // Wrap non-serializable domain objects in a description map
+                        // to prevent Jackson from walking into internal object graphs
+                        // (e.g. PulsarWebDriver → browser → settings → Spring Environment → ...)
+                        mapOf(
+                            "type" to qualifiedName,
+                            "description" to r.toString()
+                        ) to qualifiedName
+                    }
+                }
             }
             TcEvaluate(value = value, className = className, expression = pseudoExpression)
         } catch (e: Exception) {
