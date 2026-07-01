@@ -83,7 +83,7 @@ data class MarkdownConfig(
                 maxDepth = conf.getInt("${PREFIX}crawl.max-depth", 3),
                 maxPages = conf.getInt("${PREFIX}crawl.max-pages", 50),
                 sameDomainOnly = conf.getBoolean("${PREFIX}crawl.same-domain-only", true),
-                samePathPrefix = conf.get("${PREFIX}crawl.same-path-prefix", null),
+                samePathPrefix = conf.get("${PREFIX}crawl.same-path-prefix"),
                 downloadImages = conf.getBoolean("${PREFIX}images.download", false),
                 maxImageDownloadSize = conf.getLong("${PREFIX}images.max-size", 10 * 1024 * 1024L),
                 imageDownloadTimeoutSeconds = conf.getLong("${PREFIX}images.timeout.seconds", 30),
