@@ -33,7 +33,7 @@ browser4-cli fill <ref> "<value>"   # interact
 browser4-cli press Enter
 browser4-cli wait --load=networkidle
 browser4-cli snapshot -v 0 --auto-diff  # verify what changed (diff vs previous snapshot)
-browser4-cli domsnapshot get text "<css-selector>"   # extract data
+browser4-cli domsnapshot get text "<css-selector>" --all   # extract complete data (--all disables pagination)
 ```
 
 ## Concepts
@@ -222,6 +222,8 @@ browser4-cli domsnapshot inspect [selector] [--max N]   # analyze DOM structure,
 ```
 
 Full reference: **[references/domsnapshot.md](references/domsnapshot.md)**.
+
+> **⚠️ Output is paginated at 1K chars by default.** `get text`, `get html`, and `grep` paginate output — if results are truncated, use `--all` to get the complete output. Pagination is automatically skipped in `--json` and `--quiet` modes.
 
 > **PowerCSS `:expr()` selectors** query elements by visual features (size, position, content density) — resilient to HTML structure changes:
 > ```bash
