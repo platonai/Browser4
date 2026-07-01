@@ -5,7 +5,7 @@ description: "Reference for the crawl command. Recursive website crawling — st
 
 # Crawl Command Reference
 
-Recursive website crawling — start from a seed URL and follow links up to a configurable depth.
+Recursive website crawling — start from a seed URL, extract links, load each linked page, and optionally recurse deeper.
 
 ## Quick start
 
@@ -13,77 +13,58 @@ Recursive website crawling — start from a seed URL and follow links up to a co
 browser4-cli crawl "https://example.com" --out-link-selector "a[href]"
 ```
 
-## Overview
+## Behavior
 
-The `crawl` command loads a seed URL, extracts links matching a CSS selector,
-optionally filters them with a regex pattern, loads each linked page, and
-optionally recurses to the configured depth. Results are returned as a JSON
-array of crawled pages.
+The `crawl` command:
 
-**Backend:** `POST /api/crawl` returns a task UUID; poll via `GET /api/crawl/{id}/result`.
+1. Loads the seed URL.
+2. Extracts links matching `--out-link-selector` (a CSS selector).
+3. Optionally filters links by `--out-link-pattern` (regex).
+4. Deduplicates and limits to `--top-links` links.
+5. Loads each linked page.
+6. If `--depth` > 1, repeats steps 2–5 for each loaded page (skipping already-visited URLs).
+7. Returns results as a JSON array of crawled pages.
+
+Crawl runs asynchronously — the command submits a task and polls until completion.
 
 ## Flags
 
 | Flag | Short | Type | Default | Description |
 |---|---|---|---|---|
-| `--depth` | `-d` | int | `1` | Maximum crawl depth |
-| `--out-link-selector` | `-ol` | string | — | CSS selector to extract links |
+| `--depth` | `-d` | int | `1` | Maximum crawl depth (1 = seed + linked pages only) |
+| `--out-link-selector` | `-ol` | string | — | CSS selector to extract links from each page |
 | `--out-link-pattern` | `-olp` | regex | `.+` | Regex to filter extracted links |
-| `--top-links` | `-tl` | int | `20` | Max links per page |
-| `--args` | `-a` | string | — | Raw LoadOptions passthrough |
-| `--refresh` | | bool | — | Force fresh fetch |
+| `--top-links` | `-tl` | int | `20` | Max links extracted per page |
+| `--args` | `-a` | string | — | Raw LoadOptions passthrough (see [LoadOptions Guide](load-options-guide.md)) |
+| `--refresh` | | bool | — | Force fresh fetch (ignore cache) |
 | `--parse` | | bool | — | Parse pages after fetch |
-| `--expires` | | string | — | Cache TTL (`1d`, `1h`, `30m`) |
-| `--store-content` | | bool | — | Persist page content |
-| `--priority` | `-p` | int | — | Queue priority |
-| `--page-load-timeout` | | string | — | Page load timeout |
-| `--ignore-url-query` | | bool | — | Strip URL query params |
+| `--expires` | | string | — | Cache TTL: `1d`, `1h`, `30m`, etc. |
+| `--store-content` | | bool | — | Persist page content to storage |
+| `--priority` | `-p` | int | — | Queue priority (lower = higher priority) |
+| `--page-load-timeout` | | string | — | Max wait for each page load |
+| `--ignore-url-query` | | bool | — | Strip query params from URLs (treat `?page=1` and `?page=2` as same URL) |
 | `--no-norm` | | bool | — | Disable URL normalization |
-| `--readonly` | | bool | — | Non-destructive mode |
-
-## How it works
-
-### Depth = 1 (default)
-
-1. Parse `--args` into `LoadOptions` (JCommander).
-2. Load the portal (seed) page via `PulsarSession.loadDocument`.
-3. Extract links using `outLinkSelector` CSS selector, normalize to absolute
-   URLs, filter by `outLinkPattern`, deduplicate, limit to `topLinks`.
-4. Wrap each out-link in a `ParsableHyperlink` with `-parse` and a result-tracking
-   parse handler.
-5. Submit all to the session's URL pool and await completion.
-6. Collect page titles, URLs, content lengths, and depths.
-
-### Depth > 1
-
-1. Create a session with `PulsarSettings.withSequentialBrowsers()` (same as
-   `_5_ContinuousCrawler.kt`).
-2. Submit the seed URL as a `ParsableHyperlink` with depth=1.
-3. The parse handler:
-   - Records the page result (URL, title, content length, depth).
-   - If `currentDepth < maxDepth`: extracts links matching the selector/pattern,
-     filters out already-visited URLs, wraps new links in `ParsableHyperlink`
-     with `depth = currentDepth + 1`, submits them.
-4. `AgenticContexts.await()` blocks until the URL pool is empty.
-5. Timeout: `min(maxDepth × 5 min, 30 min)`.
+| `--readonly` | | bool | — | Non-destructive mode (no side effects on target pages) |
 
 ## LoadOptions passthrough (`--args` / `-a`)
 
-Any `LoadOptions` field can be passed through `-a`:
+Any [LoadOptions](load-options-guide.md) field can be passed through `-a`:
 
 ```bash
 browser4-cli crawl "https://example.com" -ol "a[href]" -a "-nMaxRetry 5 -lazyFlush -interactLevel FAST"
 ```
 
-This appends the raw string to the generated `LoadOptions` args sent to the backend.
-Use this for advanced options not covered by dedicated flags.
+This appends the raw string to the generated LoadOptions. Use for advanced options not covered by dedicated flags.
 
-## Error handling
+## URL deduplication
 
-- **Missing URL**: exits with "A URL is required for crawl."
-- **Timeout**: exits with a message and the task ID after the timeout (default 600s,
-  configurable via `BROWSER4_CLI_CRAWL_TIMEOUT_SECS`).
-- **Server errors**: reported as "Crawl failed: ..." with the server error message.
+- Visited URLs are normalized: lowercase, trailing slash removed, query string stripped (unless `--no-norm` is set).
+- The same URL is never visited twice within a crawl session, preventing infinite loops.
+
+## Timeout
+
+- CLI-side default: 600s. Override with `BROWSER4_CLI_CRAWL_TIMEOUT_SECS` env var.
+- Backend timeout scales with depth: roughly 5 min per level, capped at 30 min.
 
 ## Output format
 
@@ -106,19 +87,47 @@ Crawl completed. 5 pages found.
   "pages_found": 5,
   "pages": [
     {"url": "https://...", "title": "Page 1", "contentLength": 12345, "depth": 1},
-    ...
+    {"url": "https://...", "title": "Page 2", "contentLength": 67890, "depth": 1}
   ]
 }
 ```
 
-## URL normalization and dedup
+## Common patterns
 
-- Visited URLs are normalized: lowercase, trailing slash removed, query string
-  stripped.
-- The same URL won't be visited twice within a crawl session, preventing cycles.
+### Shallow crawl (depth 1) — list page + detail pages
 
-## Timeout
+```bash
+browser4-cli crawl "https://example.com/products" \
+  --out-link-selector "a.product-link" \
+  --top-links 50 \
+  --parse \
+  --expires 1d
+```
 
-- CLI-side: 600s default, controlled by `BROWSER4_CLI_CRAWL_TIMEOUT_SECS`.
-- Backend depth=1: 5 min.
-- Backend depth>1: `min(depth × 5 min, 30 min)`.
+### Deep crawl (depth > 1) — follow links recursively
+
+```bash
+browser4-cli crawl "https://example.com/docs" \
+  --out-link-selector "a[href]" \
+  --out-link-pattern ".*/docs/.*" \
+  --depth 3 \
+  --top-links 30
+```
+
+### Fresh crawl with quality requirements
+
+```bash
+browser4-cli crawl "https://example.com" \
+  --out-link-selector "a[href]" \
+  --refresh \
+  --args "-requireSize 100000 -scrollCount 5"
+```
+
+## Error handling
+
+| Situation | Behavior |
+|---|---|
+| Missing URL | Exits with "A URL is required for crawl." |
+| Timeout | Exits with message + task ID after timeout expires |
+| Server error | Exits with "Crawl failed: ..." and server error details |
+| No links found | Completes with 0 pages (verify your `--out-link-selector` matches) |
