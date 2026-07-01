@@ -732,6 +732,10 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(
+            "  - Each `get all` call runs independently against the whole document. To extract correlated fields (e.g. title + price + URL per product), use `domsnapshot query` with X-SQL's `DOM_LOAD_AND_SELECT` — it scopes each row to a parent container so fields stay aligned."
+                .to_string(),
+        );
+        lines.push(
             "  - Element references (`e5`, `backend:15`) are NOT supported by `domsnapshot get` — use CSS selectors only."
                 .to_string(),
         );
@@ -779,6 +783,9 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push(String::new());
         lines.push("  # Get all matching elements by CSS selector (returns a JSON array)".to_string());
         lines.push("  browser4-cli domsnapshot get all text \"h2 a\"".to_string());
+        lines.push(String::new());
+        lines.push("  # Correlated multi-field extraction: title, price, and link per product".to_string());
+        lines.push("  browser4-cli domsnapshot query --sql \"SELECT dom_first_text(dom, '.title') AS title, dom_first_text(dom, '.price') AS price, dom_first_href(dom, 'a') AS link FROM load_and_select(@url, '.product')\"".to_string());
         lines.push(String::new());
         lines.push("  # Get all matching elements with element-level pagination".to_string());
         lines.push("  browser4-cli domsnapshot get all text \".result\" --limit 5 --offset 10".to_string());
@@ -1356,6 +1363,13 @@ mod tests {
         assert!(help.contains("browser4-cli domsnapshot get html --all"));
         assert!(help.contains("browser4-cli domsnapshot grep -i error --page 2 --page-size 200"));
         assert!(help.contains("browser4-cli domsnapshot grep --all \"TODOs\""));
+        // get all independence note — steer users to X-SQL for correlated multi-field extraction
+        assert!(help.contains("Each `get all` call runs independently against the whole document"));
+        assert!(help.contains("use `domsnapshot query` with X-SQL's `DOM_LOAD_AND_SELECT`"));
+        // correlated multi-field example
+        assert!(help.contains("Correlated multi-field extraction: title, price, and link per product"));
+        assert!(help.contains("dom_first_text(dom, '.title') AS title, dom_first_text(dom, '.price') AS price, dom_first_href(dom, 'a') AS link"));
+        assert!(help.contains("FROM load_and_select(@url, '.product')"));
     }
 
     #[test]

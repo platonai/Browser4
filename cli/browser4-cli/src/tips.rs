@@ -48,6 +48,9 @@ const TIPS_DOMSNAPSHOT_GET: &[Tip] = &[
         text: "Use `domsnapshot get all` (note the `all` keyword) to extract ALL matching elements, not just the first",
     },
     Tip {
+        text: "To correlate multiple fields (titles + prices + URLs) from a list page, use `domsnapshot query` with X-SQL — `get all` arrays can't be aligned across independent calls. See skill/references/x-sql-dom-load-select.md",
+    },
+    Tip {
         text: "Use `domsnapshot inspect <selector>` to analyze DOM structure and discover CSS selectors before extracting",
     },
     Tip {
@@ -456,6 +459,19 @@ mod tests {
         assert!(!tips_for_command("select").is_empty());
         // General fallback
         assert!(!tips_for_command("some-unknown-command").is_empty());
+    }
+
+    #[test]
+    fn test_tips_domsnapshot_get_includes_xsql_correlation_hint() {
+        let has_xsql_tip = TIPS_DOMSNAPSHOT_GET.iter().any(|t| {
+            t.text.contains("correlate multiple fields")
+                && t.text.contains("domsnapshot query")
+                && t.text.contains("x-sql-dom-load-select.md")
+        });
+        assert!(
+            has_xsql_tip,
+            "TIPS_DOMSNAPSHOT_GET should include a tip steering users to X-SQL for correlated multi-field extraction"
+        );
     }
 
     #[test]

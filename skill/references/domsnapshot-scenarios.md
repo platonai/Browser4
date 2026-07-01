@@ -105,7 +105,7 @@ Append these to the URL string in `domsnapshot query`:
 | Command | Best for |
 |---------|----------|
 | `get` | One value from one element; simple scripts; raw text/HTML for piping. `get html` paginated at 2K lines by default; `get text` defaults to `--all` (no pagination). |
-| `get all` | Multiple values from repeating elements; JSON array output; validating selectors before X-SQL queries |
+| `get all` | Single-field validation from repeating elements; JSON array output; verifying selectors before X-SQL queries. **Not for correlated multi-field extraction** — each call scans independently, producing unaligned arrays. |
 | `query` | Multiple fields from repeating elements; filtering (`WHERE`/`expr()`); structured tabular output |
 | `export` | Saving full HTML for archival, diffing, external tooling, offline analysis |
 | `grep` | Presence/absence checks; counting; quick searches with context; CI smoke tests; incident response. Output paginated by default — use `--all` to disable. |
@@ -113,6 +113,8 @@ Append these to the URL string in `domsnapshot query`:
 | `inspect` | Discovering unknown CSS selectors on complex pages; finding recurring patterns; selector validation before extraction |
 
 > **Important:** `domsnapshot get` returns **only the first match** (querySelector semantics). For extracting data from multiple elements (e.g., all products on a listing page), use `domsnapshot get all` (returns a JSON array) or `domsnapshot query` with X-SQL's `load_and_select`.
+>
+> **When to use `get all` vs `query`:** Use `get all` to validate a single field across all matches (e.g., "do all product titles match this selector?"). But if you need **correlated fields** — title, price, and URL aligned per product — use `domsnapshot query` with `DOM_LOAD_AND_SELECT`. Running multiple `get all` calls produces independent arrays that can't be reliably correlated (different lengths, different element order). See [x-sql-dom-load-select.md](x-sql-dom-load-select.md) for the list-page scraping pattern.
 
 ### Command form notes
 

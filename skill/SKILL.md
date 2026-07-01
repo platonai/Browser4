@@ -223,6 +223,8 @@ browser4-cli domsnapshot inspect [selector] [--max N]   # analyze DOM structure,
 
 Full reference: **[references/domsnapshot.md](references/domsnapshot.md)**.
 
+> **`get all` vs `query` for list pages:** Use `domsnapshot get all` to validate a single field across matches. For **correlated multi-field extraction** (title + price + URL per item), use `domsnapshot query` with X-SQL's `DOM_LOAD_AND_SELECT` — each `get all` call scans the document independently, producing arrays that can't be aligned across calls. Pattern: [x-sql-dom-load-select.md](references/x-sql-dom-load-select.md).
+
 > **⚠️ Output pagination (DOM snapshot commands).** `get html`, `get all html`, and `grep` paginate output at 2K lines by default. `get text` and `get all text` are not paginated by default (single-field text extraction rarely exceeds practical limits). Use `--page N` for subsequent pages, `--page-size N` to change page size, or `--all` to disable pagination entirely. Pagination is automatically skipped in `--json` and `--quiet` modes.
 
 > **PowerCSS `:expr()` selectors** query elements by visual features (size, position, content density) — resilient to HTML structure changes:
