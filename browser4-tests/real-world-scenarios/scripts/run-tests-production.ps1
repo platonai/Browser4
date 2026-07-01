@@ -8,7 +8,8 @@ Sets $browser4cliMode = 'production' before invoking run-tests.ps1 so that commo
 resolves the CLI as `browser4-cli help` and loads the skill reference from the public
 URL (https://browser4.io/SKILL.md) instead of the local dev paths.
 
-Auto-discovers and executes task markdown files in tasks/ sequentially.
+Auto-discovers and executes task markdown files in tasks/ sequentially. Supports
+-List, -Category, task name filters, -FailFast, and -Silent flags.
 
 .EXAMPLE
 ./browser4-tests/real-world-scenarios/scripts/run-tests-production.ps1
@@ -24,6 +25,11 @@ Auto-discovers and executes task markdown files in tasks/ sequentially.
 ./browser4-tests/real-world-scenarios/scripts/run-tests-production.ps1 -List
 
     List discovered tasks without running them.
+
+.EXAMPLE
+./browser4-tests/real-world-scenarios/scripts/run-tests-production.ps1 -Category generic
+
+    Run only generic tasks in production mode.
 
 .EXAMPLE
 ./browser4-tests/real-world-scenarios/scripts/run-tests-production.ps1 -FailFast
@@ -48,7 +54,11 @@ param(
     [switch] $Silent,
 
     # Skip the browser4-cli version check (forwarded to run-task.ps1).
-    [switch] $SkipVersionCheck
+    [switch] $SkipVersionCheck,
+
+    # Filter tasks by category: generic, browser4, real-world, mock-site, or all (default).
+    [ValidateSet('generic', 'browser4', 'real-world', 'mock-site', 'all')]
+    [string] $Category = 'all'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -71,6 +81,9 @@ if ($Silent) {
 }
 if ($SkipVersionCheck) {
     $runTestsParams['SkipVersionCheck'] = $true
+}
+if ($Category -ne 'all') {
+    $runTestsParams['Category'] = $Category
 }
 
 . "$PSScriptRoot/run-tests.ps1" @runTestsParams
