@@ -169,12 +169,34 @@ object NanoAriaSnapshotRenderer {
     private fun accessibleName(node: NanoDOMTreeNode): String? {
         val attributes = stringAttributes(node)
         val role = role(node)
-        return AriaSnapshotFormatting.normalizeText(
-            attributes["ax_name"]
-                ?: attributes["aria-label"]
-                ?: attributes["title"]
-                ?: if (role == "img") attributes["alt"] else null
+        val candidates = listOfNotNull(
+            attributes["ax_name"],
+            attributes["aria-label"],
+            attributes["title"],
+            if (role.equals("generic", ignoreCase = true)) attributes["ax_description"] else null,
+            if (role == "img") attributes["alt"] else null,
+            textContent(node)
         )
+        return candidates.firstNotNullOfOrNull(AriaSnapshotFormatting::normalizeText)
+    }
+
+    /**
+     * Recursively collect text content from child text nodes, analogous to
+     * [ai.platon.browser4.chrome.dom.util.DOMUtils.textContent] used by
+     * [AriaSnapshotRenderer].
+     */
+    private fun textContent(node: NanoDOMTreeNode): String? {
+        val tokens = mutableListOf<String>()
+        collectTextTokens(node, tokens)
+        return tokens.joinToString(" ").takeIf { it.isNotBlank() }?.trim()
+    }
+
+    private fun collectTextTokens(node: NanoDOMTreeNode, tokens: MutableList<String>) {
+        val nodeName = node.nodeName?.lowercase()
+        if (nodeName == "#text" || nodeName == "text") {
+            node.nodeValue?.trim()?.takeIf { it.isNotEmpty() }?.let { tokens.add(it) }
+        }
+        node.children?.forEach { collectTextTokens(it, tokens) }
     }
 
     private fun level(attributes: Map<String, String>): String? {
