@@ -14,6 +14,7 @@ import ai.platon.pulsar.common.PulsarSessionManager
 import ai.platon.pulsar.common.brief
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import ai.platon.pulsar.common.sql.SQLTemplate
+import ai.platon.pulsar.dom.FeaturedDocument
 import ai.platon.pulsar.rest.api.service.ScrapeService
 import com.fasterxml.jackson.annotation.JsonInclude
 import com.fasterxml.jackson.annotation.JsonProperty
@@ -1099,113 +1100,7 @@ class MCPToolController(
                 val maxMatches = (args["max"] as? Number)?.toInt() ?: 10
                 val maxDepth = (args["depth"] as? Number)?.toInt() ?: 5
 
-                val matches = document.select(selector).take(maxMatches)
-                val matchCount = document.select(selector).size
-
-                if (matches.isEmpty()) {
-                    return@withLock pulsarObjectMapper().createObjectNode().apply {
-                        put("matchCount", 0)
-                        put("selector", selector)
-                        putArray("suggestions")
-                    }.toString()
-                }
-
-                // Build sample structures for the first 3 matches
-                val samples = pulsarObjectMapper().createArrayNode()
-                for (m in matches.take(3)) {
-                    val sample = pulsarObjectMapper().createObjectNode()
-                    sample.put("tag", m.tagName().lowercase())
-                    val cls = m.className()
-                    if (cls.isNotBlank()) sample.put("class", cls)
-                    val id = m.id()
-                    if (id.isNotBlank()) sample.put("id", id)
-                    val ownText = m.ownText().trim()
-                    if (ownText.isNotBlank()) sample.put("text", ownText.take(120))
-
-                    // Direct children
-                    val children = pulsarObjectMapper().createArrayNode()
-                    for (child in m.children().take(20)) {
-                        val cObj = pulsarObjectMapper().createObjectNode()
-                        cObj.put("tag", child.tagName().lowercase())
-                        val cCls = child.className()
-                        if (cCls.isNotBlank()) cObj.put("class", cCls)
-                        val cId = child.id()
-                        if (cId.isNotBlank()) cObj.put("id", cId)
-                        val cText = (child as? org.jsoup.nodes.Element)?.ownText()?.trim()
-                        if (!cText.isNullOrBlank()) cObj.put("text", cText.take(80))
-                        children.add(cObj)
-                    }
-                    sample.set<ArrayNode>("children", children)
-                    samples.add(sample)
-                }
-
-                // Find recurring descendant selectors across matches
-                data class SelectorCandidate(
-                    val selector: String,
-                    val tag: String,
-                    val textPreview: String,
-                )
-
-                val candidateCounts = mutableMapOf<SelectorCandidate, Int>()
-
-                for (match in matches) {
-                    val seen = mutableSetOf<SelectorCandidate>()
-                    for (desc in match.select("*")) {
-                        val depth = desc.parents().indexOfFirst { it === match } + 1
-                        if (depth < 0 || depth > maxDepth) continue
-                        if (desc.tagName().lowercase() in setOf("html", "head", "body", "script", "style", "meta", "link", "noscript")) continue
-
-                        val descTag = desc.tagName().lowercase()
-                        val descClass = desc.className()
-                        val descId = desc.id()
-                        val descText = desc.ownText().trim().take(80)
-
-                        // Build a short selector: tag + class(es)
-                        val shortSelector = if (descClass.isNotBlank()) {
-                            val classes = descClass.split("\\s+".toRegex()).take(2).joinToString(".") { it }
-                            if (descId.isNotBlank()) "${descTag}.$classes#${descId}"
-                            else "${descTag}.$classes"
-                        } else if (descId.isNotBlank()) {
-                            "${descTag}#${descId}"
-                        } else {
-                            descTag
-                        }
-
-                        val candidate = SelectorCandidate(shortSelector, descTag, descText)
-                        if (seen.add(candidate)) {
-                            candidateCounts[candidate] = (candidateCounts[candidate] ?: 0) + 1
-                        }
-                    }
-                }
-
-                // Filter to selectors appearing in >= 50% of matches (min 2 matches)
-                val threshold = maxOf(2, (matches.size * 0.5).toInt())
-                val recurring = candidateCounts.entries
-                    .filter { it.value >= threshold }
-                    .sortedByDescending { it.value }
-                    .take(40)
-
-                // Build suggestions array
-                val suggestions = pulsarObjectMapper().createArrayNode()
-                for ((candidate, count) in recurring) {
-                    val sug = pulsarObjectMapper().createObjectNode()
-                    sug.put("selector", candidate.selector)
-                    sug.put("tag", candidate.tag)
-                    if (candidate.textPreview.isNotBlank()) {
-                        sug.put("textPreview", candidate.textPreview)
-                    }
-                    sug.put("matchCount", count)
-                    sug.put("coverage", "%.0f%%".format(count * 100.0 / matches.size))
-                    suggestions.add(sug)
-                }
-
-                pulsarObjectMapper().createObjectNode().apply {
-                    put("matchCount", matchCount)
-                    put("selector", selector)
-                    put("analyzed", matches.size)
-                    set<ArrayNode>("samples", samples)
-                    set<ArrayNode>("suggestions", suggestions)
-                }.toString()
+                inspectDocument(document, selector, maxMatches, maxDepth)
             }
             ResponseEntity.ok(textResponse(result))
         } catch (e: Exception) {
@@ -1508,4 +1403,254 @@ class MCPToolController(
     private fun addRequestId(response: HttpServletResponse) {
         response.addHeader("X-Request-Id", UUID.randomUUID().toString())
     }
+}
+
+// =========================================================================
+// dom_snapshot_inspect — core algorithm (extracted for testability)
+// =========================================================================
+
+/**
+ * Analyse a [document] and produce selector suggestions for recurring patterns.
+ *
+ * Pure function: takes a parsed document + parameters, returns a JSON result
+ * string. Callable from tests without session/browser infrastructure.
+ */
+internal fun inspectDocument(
+    document: FeaturedDocument,
+    selector: String,
+    maxMatches: Int,
+    maxDepth: Int,
+): String {
+    val matches = document.select(selector).take(maxMatches)
+    val matchCount = document.select(selector).size
+
+    if (matches.isEmpty()) {
+        return pulsarObjectMapper().createObjectNode().apply {
+            put("matchCount", 0)
+            put("selector", selector)
+            putArray("suggestions")
+        }.toString()
+    }
+
+    // Build sample structures for the first 3 matches
+    val samples = pulsarObjectMapper().createArrayNode()
+    for (m in matches.take(3)) {
+        val sample = pulsarObjectMapper().createObjectNode()
+        sample.put("tag", m.tagName().lowercase())
+        val cls = m.className()
+        if (cls.isNotBlank()) sample.put("class", cls)
+        val id = m.id()
+        if (id.isNotBlank()) sample.put("id", id)
+        val ownText = m.ownText().trim()
+        if (ownText.isNotBlank()) sample.put("text", ownText.take(120))
+
+        // Direct children
+        val children = pulsarObjectMapper().createArrayNode()
+        for (child in m.children().take(20)) {
+            val cObj = pulsarObjectMapper().createObjectNode()
+            cObj.put("tag", child.tagName().lowercase())
+            val cCls = child.className()
+            if (cCls.isNotBlank()) cObj.put("class", cCls)
+            val cId = child.id()
+            if (cId.isNotBlank()) cObj.put("id", cId)
+            val cText = (child as? org.jsoup.nodes.Element)?.ownText()?.trim()
+            if (!cText.isNullOrBlank()) cObj.put("text", cText.take(80))
+            children.add(cObj)
+        }
+        sample.set<ArrayNode>("children", children)
+        samples.add(sample)
+    }
+
+    // Find recurring descendant selectors across matches
+    data class SelectorCandidate(
+        val selector: String,
+        val tag: String,
+        val selectorType: String, // "id", "class", "attr", "bare", "power"
+    )
+
+    // Track count + per-match text samples for value previews
+    class CandidateStats(
+        var count: Int = 0,
+        val textValues: MutableMap<Int, String> = mutableMapOf(), // matchIndex -> text
+    )
+
+    val candidateStats = mutableMapOf<SelectorCandidate, CandidateStats>()
+
+    // Attribute names worth surfacing as selectors (ordered by priority)
+    val priorityAttrs = listOf("data-testid", "aria-label", "role", "itemprop")
+    val dataAttrPattern = Regex("^data-.+")
+    val structuralTags = setOf("html", "head", "body", "script", "style", "meta", "link", "noscript")
+
+    for ((matchIndex, match) in matches.withIndex()) {
+        val seen = mutableSetOf<SelectorCandidate>()
+        for (desc in match.select("*")) {
+            val depth = desc.parents().indexOfFirst { it === match } + 1
+            if (depth < 0 || depth > maxDepth) continue
+            val descTag = desc.tagName().lowercase()
+            if (descTag in structuralTags) continue
+
+            val descClass = desc.className()
+            val descId = desc.id()
+            val descText = desc.ownText().trim().take(80)
+
+            // Build selector candidates: class/id first, then attribute, then bare tag
+            val candidates = mutableListOf<Pair<String, String>>() // selector to type
+
+            // 1. Class-based selector (primary)
+            if (descClass.isNotBlank()) {
+                val classes = descClass.split("\\s+".toRegex()).take(2).joinToString(".") { it }
+                val sel = if (descId.isNotBlank()) "${descTag}.$classes#${descId}"
+                          else "${descTag}.$classes"
+                candidates.add(sel to "class")
+            } else if (descId.isNotBlank()) {
+                candidates.add("${descTag}#${descId}" to "id")
+            }
+
+            // 2. Bare tag (fallback — lowest priority, always included)
+            candidates.add(descTag to "bare")
+
+            // 3. Attribute-based selectors from priority attrs
+            for (attr in priorityAttrs) {
+                val value = desc.attr(attr).trim()
+                if (value.isNotBlank() && value.length <= 40) {
+                    candidates.add("[$attr=\"$value\"]" to "attr")
+                }
+            }
+            // 3b. Generic data-* attributes (lower priority than named ones)
+            for (attr in desc.attributes()) {
+                val key = attr.key
+                if (key in priorityAttrs) continue // already handled above
+                if (dataAttrPattern.matches(key)) {
+                    val value = attr.value.trim()
+                    if (value.isNotBlank() && value.length <= 40) {
+                        candidates.add("[$key=\"$value\"]" to "attr")
+                    }
+                }
+            }
+
+            // 4. PowerCSS :expr() selectors from visual features (vi attribute)
+            val vi = desc.attr("vi").trim()
+            if (vi.isNotBlank()) {
+                val viParts = vi.split("\\s+".toRegex())
+                if (viParts.size >= 4) {
+                    val viWidth = viParts[2].toDoubleOrNull()?.toInt() ?: 0
+                    val viHeight = viParts[3].toDoubleOrNull()?.toInt() ?: 0
+
+                    // Large elements are likely meaningful content blocks
+                    if (viWidth >= 200) {
+                        val w = (viWidth / 100) * 100 // round down to nearest 100
+                        candidates.add("${descTag}:expr(width>${w})" to "power")
+                        if (viHeight >= 100) {
+                            val h = (viHeight / 100) * 100
+                            candidates.add("${descTag}:expr(width>${w} && height>${h})" to "power")
+                        }
+                    }
+
+                    // Image containers: elements that contain <img> descendants
+                    val imgCount = desc.select("img").size
+                    if (imgCount > 0) {
+                        candidates.add("${descTag}:expr(img>0)" to "power")
+                        if (viWidth >= 200) {
+                            val w = (viWidth / 100) * 100
+                            candidates.add("${descTag}:expr(width>${w} && img>0)" to "power")
+                        }
+                    }
+
+                    // Link containers: elements that contain <a> descendants
+                    val aCount = desc.select("a").size
+                    if (aCount > 0) {
+                        candidates.add("${descTag}:expr(a>0)" to "power")
+                    }
+                }
+            }
+
+            for ((sel, type) in candidates) {
+                val candidate = SelectorCandidate(sel, descTag, type)
+                if (seen.add(candidate)) {
+                    val stats = candidateStats.getOrPut(candidate) { CandidateStats() }
+                    stats.count++
+                    if (descText.isNotBlank()) {
+                        stats.textValues[matchIndex] = descText
+                    }
+                }
+            }
+        }
+    }
+
+    // Filter to selectors appearing in >= 50% of matches (min 2 matches)
+    val threshold = maxOf(2, (matches.size * 0.5).toInt())
+    val filtered = candidateStats.entries.filter { it.value.count >= threshold }
+
+    // ---- Quality scoring ----
+
+    val semanticTags = setOf("h1", "h2", "h3", "h4", "h5", "h6", "a", "img", "button", "input", "select", "textarea", "label")
+
+    fun distinctTextCount(stats: CandidateStats): Int =
+        stats.textValues.values.filter { it.isNotBlank() }.distinct().size
+
+    fun qualityScore(candidate: SelectorCandidate, stats: CandidateStats): Double {
+        val n = stats.count.toDouble()
+        // Specificity: class/id/attr selectors are more useful than bare tags
+        val specificityPerMatch = when (candidate.selectorType) {
+            "id"    -> 0.7
+            "class" -> 0.4
+            "power" -> 0.35  // visual features: almost as stable as classes
+            "attr"  -> 0.2
+            "bare"  -> if (candidate.tag in setOf("div", "span")) -0.3 else -0.1
+            else    -> 0.0
+        }
+        // Distinctiveness: text that varies across matches signals unique data
+        val distinctBoost = if (distinctTextCount(stats) >= 2) 0.3 else 0.0
+        // Semantic tags (headings, links, form controls) carry more meaning
+        val semanticBoost = if (candidate.tag in semanticTags) 0.2 else 0.0
+        return n + (specificityPerMatch * n) + (distinctBoost * n) + (semanticBoost * n)
+    }
+
+    // Sort by quality score descending, take top 40
+    val ranked = filtered
+        .sortedByDescending { (c, s) -> qualityScore(c, s) }
+        .take(40)
+
+    // Percentile-based quality tier (high = top quartile)
+    val scores = ranked.map { (c, s) -> qualityScore(c, s) }
+    val p75 = if (scores.isNotEmpty()) {
+        val idx = (scores.size * 0.25).toInt().coerceIn(0, scores.size - 1)
+        scores.sortedDescending()[idx]
+    } else 0.0
+    fun qualityTier(score: Double): String = when {
+        score >= p75 -> "high"
+        score >= p75 * 0.5 -> "medium"
+        else -> "low"
+    }
+
+    // Build suggestions array
+    val suggestions = pulsarObjectMapper().createArrayNode()
+    for ((candidate, stats) in ranked) {
+        val score = qualityScore(candidate, stats)
+        val sug = pulsarObjectMapper().createObjectNode()
+        sug.put("selector", candidate.selector)
+        sug.put("tag", candidate.tag)
+        // textPreview: first non-blank text (backward compat)
+        val firstText = stats.textValues.values.firstOrNull { it.isNotBlank() }
+        if (firstText != null) sug.put("textPreview", firstText)
+        // textSamples: up to 3 distinct values across matches
+        val distinctTexts = stats.textValues.values.filter { it.isNotBlank() }.distinct().take(3)
+        if (distinctTexts.isNotEmpty()) {
+            val samplesArr = pulsarObjectMapper().createArrayNode()
+            distinctTexts.forEach { samplesArr.add(it) }
+            sug.set<ArrayNode>("textSamples", samplesArr)
+        }
+        sug.put("matchCount", stats.count)
+        sug.put("coverage", "%.0f%%".format(stats.count * 100.0 / matches.size))
+        sug.put("quality", qualityTier(score))
+        suggestions.add(sug)
+    }
+
+    return pulsarObjectMapper().createObjectNode().apply {
+        put("matchCount", matchCount)
+        put("selector", selector)
+        put("analyzed", matches.size)
+        set<ArrayNode>("samples", samples)
+        set<ArrayNode>("suggestions", suggestions)
+    }.toString()
 }
