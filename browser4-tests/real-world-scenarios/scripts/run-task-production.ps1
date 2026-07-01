@@ -12,12 +12,12 @@ Replaces the per-task wrapper scripts previously in browser4-tests/real-world-sc
 Task files remain canonical in browser4-tests/real-world-scenarios/tasks/.
 
 .EXAMPLE
-./browser4-tests/real-world-scenarios/scripts/run-task-production.ps1 -TaskFile tasks/amazon.md
+./browser4-tests/real-world-scenarios/scripts/run-task-production.ps1 -TaskFile tasks/real-world/generic/amazon.md
 
     Run the amazon scenario in production mode.
 
 .EXAMPLE
-./browser4-tests/real-world-scenarios/scripts/run-task-production.ps1 -TaskFile tasks/search-summary.md -Silent
+./browser4-tests/real-world-scenarios/scripts/run-task-production.ps1 -TaskFile tasks/real-world/generic/search-summary.md -Silent
 
     Run the search-summary scenario with silent output.
 #>

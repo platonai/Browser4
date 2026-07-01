@@ -6,8 +6,9 @@ Runs every agent-scenario task defined in tasks/ (recursive into subdirectories)
 .DESCRIPTION
 Auto-discovers and executes task markdown files recursively in the tasks/
 directory. Tasks are organized in category subdirectories:
-  - tasks/real-world/ — scenarios targeting live websites
-  - tasks/mock-site/   — scenarios requiring the local MockSite server
+  - tasks/real-world/generic/  — universal scenarios (any browser agent)
+  - tasks/real-world/browser4/ — scenarios requiring browser4-specific features
+  - tasks/mock-site/           — scenarios requiring the local MockSite server
 Each task is run via run-task.ps1, which combines the task description with
 the shared usability-evaluation prompt and invokes the Claude Code agent.
 
