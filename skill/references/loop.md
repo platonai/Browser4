@@ -1,6 +1,7 @@
 ---
 title: "Loop Command Reference"
 description: "Reference for the loop command. Execute a task repeatedly on a configurable interval with persistence and resume support."
+tier: procedure
 ---
 
 # Loop Command Reference
@@ -21,6 +22,14 @@ browser4-cli loop --shell "curl -s https://api.example.com/health" -i 60 -n 10
 # Run eval every 5 minutes
 browser4-cli loop -- eval "document.title" -i 300
 ```
+
+## When to Use
+
+Use **loop** for repeated task execution at fixed intervals — monitoring, health checks, scheduled data collection. Prefer **crawl** for one-time bulk multi-page extraction. Prefer **swarm** for parallel high-throughput scraping. Use **cron** (system scheduler) for tasks that don't need browser automation.
+
+## How It Works
+
+Loop executes a task on a fixed interval, persists progress to `~/.browser4/loop-state.json` after each iteration, and resumes from the last completed iteration on restart. Interval is measured from start-to-start of iterations. Ctrl+C during execution saves progress before exit.
 
 ## Modes
 
@@ -110,7 +119,7 @@ browser4-cli loop --pause --shell "echo hi" -i 60 --name demo
 # Output:
 # Loop: "echo hi" — every 60s
 #   Mode: shell command
-# ⏸  Created as paused. Use `browser4-cli loop --resume --name=demo` to start.
+# ⏸  Created as paused. Use `browser4-cli loop --resume --name demo` to start.
 
 # Resume the paused loop
 browser4-cli loop --resume --name demo

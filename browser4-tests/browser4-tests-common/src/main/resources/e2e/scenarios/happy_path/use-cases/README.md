@@ -34,8 +34,7 @@ Each use case file contains:
 
 ## Running Tests
 
-These use cases are consumed by the Browser4 backend's internal agent test infrastructure.
-A standalone CLI test runner is planned but not yet implemented.
+Run these use cases via the project's E2E test runner:
 
 For agent-driven scenario tests that can be run directly from the command line, see
 [`browser4-tests/real-world-scenarios/`](../../../../../../../../../browser4-tests/real-world-scenarios/README.md).
@@ -50,4 +49,4 @@ The test runner will automatically discover and execute new use cases.
 
 ## Reference
 
-These use cases are derived from the Browser4 agent testing design documents.
+These use cases are designed to be run by the Browser4 E2E test suite runner.

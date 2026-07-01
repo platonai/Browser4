@@ -1,6 +1,7 @@
 ---
 title: "X-SQL: ArrayFunctions — Array Operations"
 description: "Reference for ARRAY functions (ARRAY_JOIN_TO_STRING, ARRAY_FIRST_NOT_BLANK, ARRAY_FIRST_NOT_EMPTY). Fallback chains and array joining for X-SQL queries."
+tier: catalog
 ---
 
 # X-SQL: ArrayFunctions — Array Operations

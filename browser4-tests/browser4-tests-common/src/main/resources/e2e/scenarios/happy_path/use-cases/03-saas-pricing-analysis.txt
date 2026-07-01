@@ -6,4 +6,4 @@
 1. go to https://www.notion.so/pricing
 2. identify all pricing tiers
 3. extract price and core features
-4. summarize differences in markdown
+4. summarize differences in `notion-pricing-comparison.md`

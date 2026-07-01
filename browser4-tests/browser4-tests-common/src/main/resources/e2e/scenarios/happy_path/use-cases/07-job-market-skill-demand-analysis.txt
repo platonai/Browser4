@@ -11,4 +11,4 @@
 6. extract skill requirements
 7. normalize skill names
 8. calculate frequency
-9. generate a demand summary
+9. generate a demand summary as `skill-demand-analysis.md`

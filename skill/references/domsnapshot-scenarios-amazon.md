@@ -1,13 +1,14 @@
 ---
 title: "DOM Snapshot Scenarios — Amazon Discovery & Extraction"
 description: "End-to-end Amazon workflows: home page discovery with summary + inspect, search results extraction, and product detail page extraction. Covers discovery-first patterns that work across Amazon locales and layout changes."
+tier: procedure
 ---
 
 # DOM Snapshot Scenarios — Amazon Discovery & Extraction
 
 These three scenarios form a complete Amazon extraction workflow: discover the home page structure → extract search results → extract product details. Each scenario is self-contained and emphasizes a **discovery-first** approach — use `summary` and `inspect` to find selectors before committing to extraction queries.
 
-> **⚠️ CSS selectors are tied to live websites — they WILL break over time.** Amazon frequently A/B tests layouts and uses different class names across locales. Always run `summary` + `inspect` first when targeting a new locale or product category.
+> **Note:** CSS selectors are tied to live websites and may break over time. See [SKILL.md §5](../SKILL.md#5-critical-warnings). Always run `summary` + `inspect` first when targeting a new locale or product category.
 
 > **Parent document:** [domsnapshot-scenarios.md](domsnapshot-scenarios.md) — full scenario index, patterns & tips, and command reference.
 
@@ -257,7 +258,7 @@ browser4-cli domsnapshot get all attr "img.s-image" src
 
 **Why `get all` here:** Unlike `domsnapshot get` (which returns only the first match), `get all` returns a JSON array of all matching elements. This is ideal for validating that your discovered selectors actually work across the full result set before writing a structured query.
 
-> **⚠️ Why not just use `get all` for everything?** Each `get all` call scans the entire document independently. If you run `get all text "h2 a"` (69 titles) and `get all text ".a-offscreen"` (91 prices), the two arrays have different lengths and can't be aligned — some products lack prices, some prices belong to non-product elements. Step 15d solves this with `DOM_LOAD_AND_SELECT` scoped to `.s-result-item`, so each row's fields stay together.
+> **Note:** Why not just use `get all` for everything? Each `get all` call scans the entire document independently. If you run `get all text "h2 a"` (69 titles) and `get all text ".a-offscreen"` (91 prices), the two arrays have different lengths and can't be aligned — some products lack prices, some prices belong to non-product elements. Step 15d solves this with `DOM_LOAD_AND_SELECT` scoped to `.s-result-item`, so each row's fields stay together.
 
 ### 15d. Structured extraction with X-SQL query
 
@@ -281,7 +282,7 @@ browser4-cli domsnapshot query --sql "
 
 ```bash
 # Export the full page HTML for archival or later re-extraction
-browser4-cli domsnapshot export --file="amazon-search-wireless-mouse-$(date +%Y%m%d).html"
+browser4-cli domsnapshot export --file "amazon-search-wireless-mouse-$(date +%Y%m%d).html"
 
 # For scheduled monitoring, combine with load options (see audit scenarios)
 echo "
@@ -484,12 +485,12 @@ browser4-cli domsnapshot grep -i 'coupon|save.*off|extra savings' --selector "#c
 
 ```bash
 # Export the full page for offline reference
-browser4-cli domsnapshot export --file="airpods-pro-2-$(date +%Y%m%d).html"
+browser4-cli domsnapshot export --file "airpods-pro-2-$(date +%Y%m%d).html"
 
 # Revisit the same product a week later
 browser4-cli goto "https://www.amazon.com/dp/B08PP5MSVB"
 browser4-cli domsnapshot
-browser4-cli domsnapshot export --file="airpods-pro-2-$(date +%Y%m%d).html"
+browser4-cli domsnapshot export --file "airpods-pro-2-$(date +%Y%m%d).html"
 
 # Diff the exported files to detect changes
 diff airpods-pro-2-20260622.html airpods-pro-2-20260629.html

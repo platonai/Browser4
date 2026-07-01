@@ -1,13 +1,14 @@
 ---
 title: "DOM Snapshot Scenarios — Audit, Compliance & Monitoring"
 description: "Recipes for SEO health audits, competitive price tracking, compliance verification, CI/E2E regression snapshots, and incident response debugging using grep, query, export, and load options."
+tier: procedure
 ---
 
 # DOM Snapshot Scenarios — Audit, Compliance & Monitoring
 
 Practical recipes for auditing web pages, tracking competitive pricing, verifying compliance requirements, running CI regression checks, and debugging incidents — using `domsnapshot grep`, `query`, `export`, and load options.
 
-> **⚠️ CSS selectors are tied to live websites — they WILL break over time.** Treat these examples as patterns, not copy-paste recipes.
+> **Note:** CSS selectors are tied to live websites and may break over time. See [SKILL.md §5](../SKILL.md#5-critical-warnings). Treat these examples as patterns, not copy-paste recipes.
 
 > **Parent document:** [domsnapshot-scenarios.md](domsnapshot-scenarios.md) — full scenario index, patterns & tips, and command reference.
 
@@ -264,7 +265,7 @@ browser4-cli domsnapshot grep -c -F 'cookie-consent'
 ```bash
 browser4-cli goto "https://bank.example.com/products/savings"
 browser4-cli domsnapshot
-browser4-cli domsnapshot export --file="compliance-$(date +%Y%m%d)-savings.html"
+browser4-cli domsnapshot export --file "compliance-$(date +%Y%m%d)-savings.html"
 # Store in versioned S3 bucket for regulatory audit
 ```
 
@@ -296,7 +297,7 @@ for url in "${PAGES[@]}"; do
   slug=$(echo "$url" | sed 's/[^a-zA-Z0-9]/_/g')
   browser4-cli goto "$url"
   browser4-cli domsnapshot
-  browser4-cli domsnapshot export --file="$CURRENT_DIR/${slug}.html"
+  browser4-cli domsnapshot export --file "$CURRENT_DIR/${slug}.html"
 done
 
 # Diff current against baseline

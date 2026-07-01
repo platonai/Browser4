@@ -4717,7 +4717,7 @@ async fn handle_text_input_command(
             "Warning: No element ref specified for 'type' command. \
              Text will be typed into whatever element currently has focus. \
              If nothing is focused, the text will go nowhere. \
-             Use 'type <text> <ref>' or 'type <text> --ref=<css-selector>' for reliable targeting."
+             Use 'type <text> <ref>' or 'type <text> --ref <css-selector>' for reliable targeting."
         );
     }
 
@@ -6561,7 +6561,7 @@ async fn handle_loop(
             cli_println!(
                 "⏸  Created as paused. Use `browser4-cli loop --resume{}` to start.",
                 if parsed.name.is_some() {
-                    format!(" --name={}", parsed.name.as_ref().unwrap())
+                    format!(" --name {}", parsed.name.as_ref().unwrap())
                 } else {
                     String::new()
                 },
@@ -6584,7 +6584,7 @@ async fn handle_loop(
                         "⏸  Loop \"{}\" paused (was {}). Use `browser4-cli loop --resume{}` to continue.",
                         label,
                         prev,
-                        if parsed.name.is_some() { format!(" --name={}", parsed.name.as_ref().unwrap()) } else { String::new() },
+                        if parsed.name.is_some() { format!(" --name {}", parsed.name.as_ref().unwrap()) } else { String::new() },
                     );
                 }
                 cli_println!("   State file: {}", state_path.display());
@@ -6650,7 +6650,7 @@ async fn handle_loop(
         for entry in &running {
             cli_println!("   - {}", entry.name);
         }
-        cli_println!("\nUse `browser4-cli loop --resume-all` to resume all, or --resume --name=<n> for a specific loop.");
+        cli_println!("\nUse `browser4-cli loop --resume-all` to resume all, or --resume --name <n> for a specific loop.");
         json_field("paused_all", json!(true));
         json_field("paused_count", json!(updated));
         json_field("loops", json!(running));
@@ -6813,7 +6813,7 @@ async fn handle_loop(
                 cli_println!(
                     "   Use `browser4-cli loop --resume{}` to continue, or --stop to clear.",
                     if let Some(ref n) = parsed.name {
-                        format!(" --name={}", n)
+                        format!(" --name {}", n)
                     } else {
                         String::new()
                     }
@@ -6856,7 +6856,7 @@ async fn handle_loop(
             }
         }
 
-        // --- limit checks (at top so --count=0 returns immediately) ---
+        // --- limit checks (at top so --count 0 returns immediately) ---
         if let Some(max) = parsed.count {
             if iteration > max {
                 break;
@@ -9655,7 +9655,7 @@ async fn run(
                 if !has_ref {
                     return Err(CliError(
                         ExitCode::Usage,
-                        "--focus requires a target ref. Provide a CSS selector, element reference (e5), or --ref=X.".to_string(),
+                        "--focus requires a target ref. Provide a CSS selector, element reference (e5), or --ref X.".to_string(),
                     ));
                 }
                 let ref_val = tool_params.get("ref").cloned().unwrap();
@@ -9957,7 +9957,7 @@ async fn run(
                 global.session_name.as_deref(),
             )
             .await;
-            // When `wait --load=networkidle` (or any wait_for_function tool
+            // When `wait --load networkidle` (or any wait_for_function tool
             // call) fails with a Java serialization error, suggest using a
             // fixed delay as a reliable fallback.
             if let Err(ref e) = result {

@@ -11,4 +11,4 @@
 6. extract pricing and review summaries
 7. identify common negative keywords
 8. rank products by value
-9. generate a markdown report
+9. generate a markdown report as `headphone-analysis.md`

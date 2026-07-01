@@ -6,4 +6,4 @@
 1. go to https://www.reddit.com/r/programming/
 2. search for "browser automation"
 3. open the top 5 posts
-4. summarize key opinions and sentiment
+4. summarize key opinions and sentiment in `browser-automation-sentiment.md`

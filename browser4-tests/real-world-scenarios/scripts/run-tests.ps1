@@ -1,10 +1,14 @@
 #!/usr/bin/env pwsh
 <#
 .SYNOPSIS
-Runs every agent-scenario task defined in tasks/*.md.
+Runs every agent-scenario task defined in tasks/ (recursive into subdirectories).
 
 .DESCRIPTION
-Auto-discovers and executes task markdown files in the tasks/ directory.
+Auto-discovers and executes task markdown files recursively in the tasks/
+directory. Tasks are organized in category subdirectories:
+  - tasks/real-world/generic/  — universal scenarios (any browser agent)
+  - tasks/real-world/browser4/ — scenarios requiring browser4-specific features
+  - tasks/mock-site/           — scenarios requiring the local MockSite server
 Each task is run via run-task.ps1, which combines the task description with
 the shared usability-evaluation prompt and invokes the Claude Code agent.
 
@@ -27,6 +31,21 @@ what would run, or name one or more tasks to run a subset.
     Run only the two named tasks (with or without .md extension).
 
 .EXAMPLE
+./browser4-tests/real-world-scenarios/scripts/run-tests.ps1 -Category generic
+
+    Run only tasks in tasks/real-world/generic/.
+
+.EXAMPLE
+./browser4-tests/real-world-scenarios/scripts/run-tests.ps1 -Category browser4 -List
+
+    List only browser4-specific tasks.
+
+.EXAMPLE
+./browser4-tests/real-world-scenarios/scripts/run-tests.ps1 -Category mock-site
+
+    Run only tasks requiring MockSite.
+
+.EXAMPLE
 ./browser4-tests/real-world-scenarios/scripts/run-tests.ps1 -FailFast
 
     Stop after the first failing task.
@@ -45,6 +64,10 @@ param(
 
     # Stop after the first failure instead of continuing.
     [switch] $FailFast,
+
+    # Filter tasks by category: generic, browser4, real-world, mock-site, or all (default).
+    [ValidateSet('generic', 'browser4', 'real-world', 'mock-site', 'all')]
+    [string] $Category = 'all',
 
     # List discovered tasks and exit.
     [switch] $List,
@@ -67,7 +90,7 @@ $script:StartTime = Get-Date
 . "$PSScriptRoot/common.ps1"
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Discovery — every .md in tasks/
+# Discovery — every .md in tasks/ (recursive into subdirectories)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 $script:ScriptsDir = $PSScriptRoot
@@ -76,13 +99,35 @@ $script:RunnerPath = Join-Path $ScriptsDir 'run-task.ps1'
 # Repo root is 3 levels up from scripts/ (scripts -> tests -> browser4-cli -> repo root)
 $script:RepoRoot   = (Resolve-Path "$ScriptsDir/../../..").Path
 
-$script:Discovered = Get-ChildItem -Path $TasksDir -Filter '*.md' `
-    | Sort-Object Name `
-    | ForEach-Object { $_.Name }
+$script:DiscoveredFiles = Get-ChildItem -Path $TasksDir -Filter '*.md' -Recurse `
+    | Sort-Object Name
+$script:Discovered = $DiscoveredFiles | ForEach-Object { $_.Name }
+$script:TaskPathMap = @{}
+$DiscoveredFiles | ForEach-Object { $TaskPathMap[$_.Name] = $_.FullName }
 
 if ($Discovered.Count -eq 0) {
     Write-Host 'No task files found in tasks/.' -ForegroundColor Yellow
     exit 0
+}
+
+# ── Category filter ──────────────────────────────────────────────────────────
+if ($Category -ne 'all') {
+    $categoryPathMap = @{
+        'generic'    = '\real-world\generic\'
+        'browser4'   = '\real-world\browser4\'
+        'real-world' = '\real-world\'
+        'mock-site'  = '\mock-site\'
+    }
+    $segment = $categoryPathMap[$Category]
+    $script:DiscoveredFiles = $DiscoveredFiles | Where-Object { $_.FullName.Contains($segment) }
+    $script:Discovered = $DiscoveredFiles | ForEach-Object { $_.Name }
+    $script:TaskPathMap = @{}
+    $DiscoveredFiles | ForEach-Object { $TaskPathMap[$_.Name] = $_.FullName }
+
+    if ($Discovered.Count -eq 0) {
+        Write-Host "No task files found for category '$Category'." -ForegroundColor Yellow
+        exit 0
+    }
 }
 
 # Resolve which tasks to run — accept names with or without .md extension
@@ -114,10 +159,20 @@ if ($Tasks -and $Tasks.Count -gt 0) {
 
 if ($List) {
     Write-Host 'Agent scenario tasks:' -ForegroundColor Cyan
+    if ($Category -ne 'all') {
+        Write-Host "  Category: $Category" -ForegroundColor DarkGray
+    }
     Write-Host ''
     foreach ($name in $Discovered) {
         $marker = if ($name -in $Selected) { ' [selected]' } else { '' }
-        $taskPath = Join-Path $TasksDir $name
+        $taskPath = $TaskPathMap[$name]
+
+        # Determine category from path
+        $cat = ''
+        if ($taskPath -match '\\mock-site\\')        { $cat = 'mock-site' }
+        elseif ($taskPath -match '\\browser4\\')     { $cat = 'browser4' }
+        elseif ($taskPath -match '\\generic\\')      { $cat = 'generic' }
+        $catTag = if ($cat) { "[$cat]" } else { '' }
 
         # Extract the heading and first content line as a quick description.
         $desc = ''
@@ -131,7 +186,7 @@ if ($List) {
             # Silently skip unparseable files in list mode
         }
 
-        Write-Host "  $name$marker$desc"
+        Write-Host "  $catTag $name$marker$desc"
     }
     Write-Host ''
     Write-Host "$($Selected.Count) task(s) selected out of $($Discovered.Count) discovered."
@@ -193,10 +248,12 @@ $Results = [System.Collections.ArrayList]::new()
 $Passed  = 0
 $Failed  = 0
 
-Write-Banner "Agent Scenarios ($($Selected.Count) task(s))"
+$bannerTitle = "Agent Scenarios ($($Selected.Count) task(s))"
+if ($Category -ne 'all') { $bannerTitle += " — $Category" }
+Write-Banner $bannerTitle
 
 foreach ($name in $Selected) {
-    $taskPath = Join-Path $TasksDir $name
+    $taskPath = $TaskPathMap[$name]
 
     Write-Section $name
     $start = Get-Date

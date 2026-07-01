@@ -1,13 +1,14 @@
 ---
 title: "DOM Snapshot Scenarios — Data Extraction"
 description: "End-to-end recipes for extracting structured data from e-commerce, news, job boards, academic literature, and real estate pages using domsnapshot get, query, and export."
+tier: procedure
 ---
 
 # DOM Snapshot Scenarios — Data Extraction
 
 Practical recipes for extracting structured data from listing and detail pages using `domsnapshot get`, `domsnapshot query`, and `domsnapshot export`.
 
-> **⚠️ CSS selectors are tied to live websites — they WILL break over time.** Treat these examples as patterns, not copy-paste recipes. Before running a scenario, use [`domsnapshot inspect`](domsnapshot-scenarios-advanced.md#13-selector-discovery-for-unknown-pages) or [`domsnapshot summary`](domsnapshot-scenarios-advanced.md#11-page-structure-analysis-with-summary-wpsi) to discover the current selectors on your target page.
+> **Note:** CSS selectors are tied to live websites and may break over time. See [SKILL.md §5](../SKILL.md#5-critical-warnings).
 
 > **Parent document:** [domsnapshot-scenarios.md](domsnapshot-scenarios.md) — full scenario index, patterns & tips, and command reference.
 
@@ -75,14 +76,14 @@ browser4-cli domsnapshot query "https://www.amazon.com/s?k=mechanical+keyboard -
 
 **Why this works:** The initial `goto` + `domsnapshot` capture lets you verify the page structure and test selectors before committing to the full X-SQL query — especially important on rate-limited sites where every `load_and_select` call counts against your quota. The `-i 1h` load option caches the server response for 1 hour — essential when iterating on a query or running it repeatedly, as Amazon aggressively rate-limits rapid requests.
 
-> **⚠️ Quota warning:** Amazon and similar sites detect rapid repeated requests and will return CAPTCHAs or 503 errors. Always use `-i 1h` (or longer) when iterating on a query. If you see empty results or bot-detection pages, wait 5–10 minutes before retrying. See the [Amazon Search Results Extraction](domsnapshot-scenarios-amazon.md#15-amazon-search-results-extraction) for a full discovery-to-extraction workflow that minimizes quota burn by validating selectors on the cached snapshot before running X-SQL queries.
+> **Warning:** Quota warning: Amazon and similar sites detect rapid repeated requests and will return CAPTCHAs or 503 errors. Always use `-i 1h` (or longer) when iterating on a query. If you see empty results or bot-detection pages, wait 5–10 minutes before retrying. See the [Amazon Search Results Extraction](domsnapshot-scenarios-amazon.md#15-amazon-search-results-extraction) for a full discovery-to-extraction workflow that minimizes quota burn by validating selectors on the cached snapshot before running X-SQL queries.
 
 ### 1c. Export for offline analysis
 
 ```bash
 browser4-cli goto "https://www.amazon.com/dp/B08PP5MSVB"
 browser4-cli domsnapshot
-browser4-cli domsnapshot export --file=product-page-$(date +%Y%m%d).html
+browser4-cli domsnapshot export --file product-page-$(date +%Y%m%d).html
 # Later: grep, parse, or diff against yesterday's export
 diff product-page-20260621.html product-page-20260622.html
 ```
@@ -126,7 +127,7 @@ browser4-cli domsnapshot get text ".gs-c-promo-heading__title"
 ```bash
 browser4-cli goto "https://news.ycombinator.com"
 browser4-cli domsnapshot
-browser4-cli domsnapshot export --file="headlines-$(date +%Y%m%d-%H%M).html"
+browser4-cli domsnapshot export --file "headlines-$(date +%Y%m%d-%H%M).html"
 # Build a corpus over weeks; run NLP pipelines on the exported HTML
 ```
 
@@ -184,7 +185,7 @@ browser4-cli domsnapshot grep --selector ".job-card-container" -i 'react'
 ```bash
 browser4-cli goto "https://www.linkedin.com/jobs/search?keywords=senior%20frontend"
 browser4-cli domsnapshot
-browser4-cli domsnapshot export --file=jobs.html
+browser4-cli domsnapshot export --file jobs.html
 # For deeper processing, feed the exported HTML to your preferred parser
 ```
 

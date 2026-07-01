@@ -1,6 +1,7 @@
 ---
 title: "Crawl Command Reference"
 description: "Reference for the crawl command. Recursive website crawling from a URL or seed file, with optional X-SQL data extraction and multi-format output."
+tier: procedure
 ---
 
 # Crawl Command Reference
@@ -25,6 +26,14 @@ browser4-cli crawl --seed-file urls.txt --sql @extract.sql --format csv -o resul
 > **Note:** `--out-link-selector` is required for link discovery (depth >= 1).
 > Without it, the crawl returns 0 pages.  For depth 0 (bulk fetch), no selector
 > is needed.
+
+## When to Use
+
+Use **crawl** for sequential multi-page workflows with built-in link discovery, seed-file bulk processing, and X-SQL extraction to structured output (CSV/JSON/table). Prefer **swarm** for parallel high-throughput extraction. Prefer **loop** for repeated monitoring at intervals. Prefer **domsnapshot query** for extracting from a single page.
+
+## How It Works
+
+Crawl loads seed URLs, optionally follows links up to a configurable depth, deduplicates visited pages, and optionally runs an X-SQL query against each page. Results are aggregated and formatted as table, CSV, or JSON. Use `--background` for async execution.
 
 ## Modes
 
@@ -288,6 +297,17 @@ prepended to the seed file list.
 | Invalid --format | Exits with "Invalid --format '...'. Expected: json, csv, or table" |
 | X-SQL failure on one page | Page logged with error; other pages continue normally |
 
+## Rate Limiting & Polite Scraping
+
+Crawl includes built-in rate limiting between page loads. For manual batch operations,
+follow these guidelines:
+
+- Add `wait 1000-3000` (1-3 seconds) between rapid navigations on the same site
+- Amazon and similar sites may show CAPTCHAs under aggressive automated access — longer delays reduce risk
+- Use `eval` or `domsnapshot get all` to batch-extract from a single page load when possible, rather than navigating to each detail page individually
+- Prefer `crawl` with conservative `--depth` and `--page-load-timeout` for automated multi-page traversal
+- For `swarm`, control parallelism with `--max-browser-contexts` and `--max-open-tabs`
+
 ## See also
 
 - [X-SQL: DOM_LOAD_AND_SELECT](x-sql-dom-load-select.md) — the table-source
@@ -297,5 +317,3 @@ prepended to the seed file list.
 - [Multi-product extraction guide](../../docs/multi-product-extraction.md) —
   choosing between crawl, swarm, and other approaches for bulk data extraction
 - [LoadOptions Guide](load-options-guide.md) — full LoadOptions reference
-- [Polite scraping](polite-scraping.md) — rate limiting and bot-detection
-  avoidance

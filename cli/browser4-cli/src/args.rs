@@ -1,9 +1,9 @@
 //! Argument parsing helpers for the Browser4 CLI.
 //!
 //! Parses raw command-line arguments into:
-//! - Global flags (`-s=<session>`, `--session=<session>`, `--server=<url>`)
+//! - Global flags (`-s <session>`, `--session <session>`, `--server <url>`)
 //! - Positional arguments (stored in `_`)
-//! - Named options (`--key=value`, `--flag`)
+//! - Named options (`--key value`, `--flag`)
 
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
@@ -13,13 +13,13 @@ use std::collections::{HashMap, HashSet};
 pub struct GlobalFlags {
     /// `-s` / `--session` requested session identifier
     pub session_name: Option<String>,
-    /// `--server=<url>` or `--server <url>` server override
+    /// `--server <url>` or `--server=<url>` server override
     pub server_url: Option<String>,
     /// `--json` — emit machine-parseable JSON to stdout
     pub json: bool,
     /// `-q` / `--quiet` — suppress normal output, only show errors
     pub quiet: bool,
-    /// `--proxy=<url>` or `--proxy <url>` — manual HTTP proxy for downloads
+    /// `--proxy <url>` or `--proxy=<url>` — manual HTTP proxy for downloads
     pub proxy_url: Option<String>,
     /// Remaining arguments (command + its args/options)
     pub args: Vec<String>,
@@ -35,9 +35,9 @@ pub struct BatchArgs {
 /// Parse global flags that may appear before the command.
 ///
 /// Recognises:
-/// - `-s=<name>`, `-s <name>`, `--session=<name>`, `--session <name>` → session name
-/// - `--server=<url>` or `--server <url>` → server URL override
-/// - `--proxy=<url>` or `--proxy <url>` → manual HTTP proxy override for downloads
+/// - `-s <name>`, `-s=<name>`, `--session <name>`, `--session=<name>` → session name
+/// - `--server <url>` or `--server=<url>` → server URL override
+/// - `--proxy <url>` or `--proxy=<url>` → manual HTTP proxy override for downloads
 /// - `--json` → emit machine-parseable JSON to stdout
 /// - `--version` / `-v` → version flag (returned in `args`)
 /// - Everything else is forwarded unchanged in `args`
@@ -145,7 +145,7 @@ fn insert_arg(result: &mut HashMap<String, Value>, key: String, value: Value) {
 /// Parse raw CLI arguments into a map suitable for command dispatch.
 ///
 /// - Positional arguments go into `_` as a JSON array.
-/// - `--key=value` → key: string value
+/// - `--key value` → key: string value
 /// - `--key value` (next arg does not start with `--`) → key: string value
 /// - `--flag` (followed by another `--` arg or end-of-args) → key: true (boolean)
 /// - Short options (`-x` / `-x=value` / `-x value`) are resolved through
@@ -568,7 +568,7 @@ mod tests {
 
     #[test]
     fn test_parse_raw_args_key_value_equals() {
-        // --key=value should still work alongside --key value.
+        // --key value should still work alongside --key=value.
         let raw = vec!["install".to_string(), "--tag=4.10.0-rc.2".to_string()];
         let map = parse_raw_args(&raw, None, None);
         assert_eq!(map.get("tag"), Some(&json!("4.10.0-rc.2")));

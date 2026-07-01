@@ -303,7 +303,7 @@ pdfimages -all document.pdf images/img
 #### Complex Page Manipulation
 ```bash
 # Split PDF into groups of pages
-qpdf --split-pages=3 input.pdf output_group_%02d.pdf
+qpdf --split-pages 3 input.pdf output_group_%02d.pdf
 
 # Extract specific pages with complex ranges
 qpdf input.pdf --pages input.pdf 1,3-5,8,10-end -- extracted.pdf
@@ -318,7 +318,7 @@ qpdf --empty --pages doc1.pdf 1-3 doc2.pdf 5-7 doc3.pdf 2,4 -- combined.pdf
 qpdf --linearize input.pdf optimized.pdf
 
 # Remove unused objects and compress
-qpdf --optimize-level=all input.pdf compressed.pdf
+qpdf --optimize-level all input.pdf compressed.pdf
 
 # Attempt to repair corrupted PDF structure
 qpdf --check input.pdf
@@ -331,13 +331,13 @@ qpdf --show-all-pages input.pdf > structure.txt
 #### Advanced Encryption
 ```bash
 # Add password protection with specific permissions
-qpdf --encrypt user_pass owner_pass 256 --print=none --modify=none -- input.pdf encrypted.pdf
+qpdf --encrypt user_pass owner_pass 256 --print none --modify none -- input.pdf encrypted.pdf
 
 # Check encryption status
 qpdf --show-encryption encrypted.pdf
 
 # Remove password protection (requires password)
-qpdf --password=secret123 --decrypt encrypted.pdf decrypted.pdf
+qpdf --password secret123 --decrypt encrypted.pdf decrypted.pdf
 ```
 
 ## Advanced Python Techniques

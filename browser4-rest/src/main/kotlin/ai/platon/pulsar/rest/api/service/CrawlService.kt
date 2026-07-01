@@ -160,7 +160,8 @@ class CrawlService(
         val session = AgenticContexts.createSession()
         try {
             val options = parseOptions(session, request.args)
-            val document = session.loadDocument(request.url, options)
+            val page = session.load(request.url, options)
+            val document = session.parse(page)
 
             val extracted = if (request.sql != null) {
                 executeSqlQuery(session, request.url, request.sql)
@@ -169,7 +170,7 @@ class CrawlService(
             val result = CrawlPageResult(
                 url = request.url,
                 title = document.title,
-                contentLength = document.contentLength()?.toLong(),
+                contentLength = page.contentLength,
                 depth = 0,
                 extracted = extracted
             )
@@ -363,7 +364,7 @@ class CrawlService(
                     return null
                 }
             val rs: ResultSet = sqlContext.executeQuery(processedSql)
-            val copied = ResultSets.copyResultSet(rs)
+            val copied = ResultSetUtils.copyResultSet(rs)
             ResultSetUtils.getTextEntitiesFromResultSet(copied)
         } catch (e: Exception) {
             logger.error("Failed to execute X-SQL on '{}': {}", pageUrl, e.message)

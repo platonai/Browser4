@@ -13,12 +13,12 @@ remaining body becomes the task-specific prompt.
 Set $browser4cliMode = 'production' before running to switch to production mode.
 
 .EXAMPLE
-./browser4-tests/real-world-scenarios/scripts/run-task.ps1 -TaskFile tasks/amazon.md
+./browser4-tests/real-world-scenarios/scripts/run-task.ps1 -TaskFile tasks/real-world/generic/amazon.md
 
     Run the amazon scenario in dev mode.
 
 .EXAMPLE
-./browser4-tests/real-world-scenarios/scripts/run-task.ps1 -TaskFile tasks/search-summary.md -Silent
+./browser4-tests/real-world-scenarios/scripts/run-task.ps1 -TaskFile tasks/real-world/generic/search-summary.md -Silent
 
     Run the search-summary scenario with silent output.
 

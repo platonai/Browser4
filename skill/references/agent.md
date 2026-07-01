@@ -1,11 +1,12 @@
 ---
 title: "Agent — Autonomous Browser Task Execution"
 description: "Reference for agent commands (run, status, result), extract, and summarize. Submit natural-language tasks for autonomous browser execution driven by an LLM."
+tier: procedure
 ---
 
 # Agent — Autonomous Browser Task Execution
 
-Submit natural-language tasks and let Browser4's AI agent plan and execute browser actions autonomously. The agent reasons about the page, decides which actions to take, and completes the task asynchronously.
+Submit natural-language tasks and let Browser4's AI agent plan and execute browser actions autonomously. Supports both asynchronous multi-step tasks (`agent run`) and synchronous single-page operations (`extract`, `summarize`).
 
 ## Prerequisites
 
@@ -19,41 +20,47 @@ Agent commands require an LLM API key. Configure one provider via environment va
 | OpenAI-compatible | `OPENAI_API_KEY`, `OPENAI_MODEL_NAME`, `OPENAI_BASE_URL` |
 | Aliyun Qwen (DashScope) | `OPENAI_API_KEY`, `OPENAI_MODEL_NAME`, `OPENAI_BASE_URL` |
 
-Example pattern (adapt to your provider):
-
 ```bash
 export DEEPSEEK_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxx
 ```
 
 If no valid LLM key is configured, `agent run` fails fast with a clear error.
 
-## agent run
-
-Submit a natural-language task for autonomous execution. Returns a task ID immediately — the task runs asynchronously.
+## Quick Start
 
 ```bash
 browser4-cli agent run "Open browser4.io and summarize the hero section"
+browser4-cli agent status agent-task-1    # poll until COMPLETED
+browser4-cli agent result agent-task-1
 ```
 
-**Writing tasks:** Describe **what** you want, not how. The agent discovers elements, waits for pages, and adapts on its own. Good: "Go to amazon.com, search for 'wireless headphones', extract the top 5 product titles and prices." Avoid step-by-step ref-based instructions.
+## When to Use
 
-Output on success:
+Use **agent** for natural-language tasks where you describe what you want without specifying click/fill/snapshot steps. Use **extract**/**summarize** for synchronous single-page LLM-powered extraction. For deterministic extraction with CSS selectors, prefer `domsnapshot get` or `domsnapshot query` (no LLM key needed).
 
+## How It Works
+
+`agent run` submits a natural-language task to the Browser4 backend, which uses an LLM to plan and execute browser actions autonomously. The agent reasons about the page, discovers elements, and adapts — it does not need refs or step-by-step instructions. Tasks run asynchronously; poll with `agent status` and fetch results with `agent result`. `extract` and `summarize` are synchronous variants that operate on the current page.
+
+## Patterns
+
+### 1. Asynchronous Multi-Step Task
+
+```bash
+browser4-cli agent run "Go to amazon.com, search for 'wireless headphones', extract the top 5 product titles and prices"
+browser4-cli agent status agent-task-1    # poll until COMPLETED
+browser4-cli agent result agent-task-1
 ```
-Task submitted: agent-task-1
-Next: browser4-cli agent status agent-task-1
-```
 
-## agent status
+**Writing tasks:** Describe **what** you want, not how. Good: "extract the top 5 product titles and prices." Avoid step-by-step ref-based instructions.
 
-Poll the progress of a running agent task.
+### 2. Poll Status
 
 ```bash
 browser4-cli agent status <task-id>
 ```
 
-Returns the current task status as JSON:
-
+Returns JSON:
 ```json
 {"id":"agent-task-1","status":"RUNNING","statusCode":null,"processState":"processing","message":"Navigating..."}
 ```
@@ -65,35 +72,15 @@ Returns the current task status as JSON:
 | `FAILED` | Task errored — inspect `message` and `statusCode` |
 | `EXPECTATION_FAILED` | Precondition failed (e.g., missing LLM config, status 417) |
 
-Poll until status reaches a terminal state before calling `agent result`.
-
-## agent result
-
-Fetch the completed output of an agent task.
+### 3. Fetch Results
 
 ```bash
 browser4-cli agent result <task-id>
 ```
 
-Output depends on the task — plain text for summarization, structured JSON for extraction:
-
-```json
-{"products":[{"title":"Wireless Headphones Pro","price":"$79.99","rating":"4.5 stars"}]}
-```
-
 Always confirm completion via `agent status` first — incomplete tasks may return empty or partial results.
 
-## Complete Workflow
-
-```bash
-browser4-cli agent run "Open browser4.io and summarize the hero section"
-browser4-cli agent status agent-task-1    # poll until COMPLETED
-browser4-cli agent result agent-task-1
-```
-
-## Combining with Standard Commands
-
-Agent tasks operate independently of standard browser sessions, but you can compose them:
+### 4. Composing with Standard Commands
 
 ```bash
 browser4-cli open https://app.example.com
@@ -101,30 +88,27 @@ browser4-cli state-load auth.json
 browser4-cli agent run "Navigate to the reports dashboard, extract all monthly metrics, and summarize trends"
 ```
 
-## Related Commands (synchronous, current session)
-
-### extract
-
-Extract structured data from the current page. Operates synchronously.
+### 5. Synchronous Extraction (extract)
 
 ```bash
 browser4-cli extract "product name, price, ratings"
-browser4-cli extract "all article headlines and authors" --schema='{"fields":[{"name":"title","type":"string"},{"name":"author","type":"string"}]}'
+browser4-cli extract "all article headlines and authors" --schema '{"fields":[{"name":"title","type":"string"},{"name":"author","type":"string"}]}'
 ```
 
-### summarize
-
-Summarize page content. Operates synchronously.
+### 6. Synchronous Summarization (summarize)
 
 ```bash
 browser4-cli summarize "summarize the product reviews"
-browser4-cli summarize --selector="#content"
+browser4-cli summarize --selector "#content"
 ```
 
-## Error Handling
+## Errors & Recovery
 
-- `agent run` exits non-zero when the backend is unreachable or no LLM key is configured.
-- `agent status` / `agent result` print the backend payload as-is. Inspect `status`, `statusCode`, and `message` fields on failure.
-- Task IDs may not persist across backend restarts. Poll `agent status` to confirm a task is still alive after a restart.
-- `extract` and `summarize` are synchronous and block until complete. Use `agent run` for asynchronous multi-step tasks.
-- Agent subcommands use spaced form (`agent run`, not `agent-run`) and are not supported in `batch` mode.
+| Symptom | Recovery |
+|----------|---------|
+| `agent run` exits non-zero | Check backend is reachable and LLM key is configured |
+| Task stuck in RUNNING | Poll `agent status` — some tasks take minutes |
+| Status/result returns unexpected payload | Inspect `status`, `statusCode`, `message` fields |
+| Task lost after backend restart | Task IDs may not persist; re-submit the task |
+| `extract`/`summarize` blocking too long | Use `agent run` for async execution instead |
+| Agent subcommands in batch mode | Not supported — use standalone commands |

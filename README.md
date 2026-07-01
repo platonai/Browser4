@@ -100,11 +100,11 @@ Browser4 CLI is designed for use by AI agents through SKILLS + CLI — see [SKIL
 These flags can appear before any command:
 
 ```
--s=<name>, --session=<name>    Named session label
---server=<url>                 Override Browser4 server URL
+-s <name>, --session <name>    Named session label
+--server <url>                 Override Browser4 server URL
 --json                         Emit machine-parseable JSON to stdout
 -q, --quiet                    Suppress normal output, show only errors
---proxy=<url>                  Manual HTTP proxy for downloads
+--proxy <url>                  Manual HTTP proxy for downloads
 --help, -h                     Print help
 --version, -v                  Print version
 ```
@@ -113,8 +113,8 @@ These flags can appear before any command:
 
 ```
 open [url]        Open a browser session, optionally navigating to a URL
-                  --headed, --headless, --profile=<path>, --profile-mode=<mode>
-attach            Attach to an existing browser via CDP (--cdp=<channel|url|port>)
+                  --headed, --headless, --profile <path>, --profile-mode <mode>
+attach            Attach to an existing browser via CDP (--cdp <channel|url|port>)
 close             Close the current browser session
 close-all         Close all browser sessions without stopping the backend
 kill-all          Forcefully stop the Browser4 backend and kill all browser processes
@@ -170,7 +170,7 @@ snapshot                          Capture an accessibility-tree snapshot
                                   --depth (-d), --selector (-s), --raw, --viewport (-vp), --filename
 get <mode> <selector> [name]      Extract data using CSS selectors
                                   Modes: text, html, box, styles, property, attr
-eval [expression] [ref]            Evaluate JavaScript on the page or an element. --file=<path>
+eval [expression] [ref]            Evaluate JavaScript on the page or an element. --file <path>
 console [min-level]                List browser console messages. --clear
 generate-locator <ref>             Generate a unique CSS selector from a snapshot ref or existing selector
 ```
@@ -191,8 +191,8 @@ X-SQL support     No                    Yes (query)
 ```
 domsnapshot                                Capture a static DOM snapshot and store it in page storage
 domsnapshot get <field> [selector] [name]  Extract text, html, or attr from the stored DOM snapshot
-domsnapshot query [url]                    Run X-SQL against the stored DOM snapshot (--sql=<query|@file>)
-domsnapshot export                         Export snapshot HTML to a local file (--file=<path>)
+domsnapshot query [url]                    Run X-SQL against the stored DOM snapshot (--sql <query|@file>)
+domsnapshot export                         Export snapshot HTML to a local file (--file <path>)
 domsnapshot summary                        Generate a compressed Web Page Summary Index (WPSI)
 domsnapshot grep <pattern>                 Search snapshot HTML with regex
                                            -i, -v, -c, -l, -F, -w, -A, -B, -C, --selector
@@ -291,7 +291,7 @@ Submit natural-language tasks and let Browser4's backend AI agent plan and execu
 agent run <task>          Submit an autonomous task (async, returns task ID immediately)
 agent status <id>         Check the status of a running agent task
 agent result <id>         Get the final result of a completed agent task
-extract <instruction>     Extract structured data from the page using AI. --schema=<json>, --filename, --raw
+extract <instruction>     Extract structured data from the page using AI. --schema <json>, --filename, --raw
 summarize [instruction]   Summarize page content using AI. --selector, --filename, --raw
 ```
 
@@ -342,9 +342,9 @@ loop [task]         Execute a task repeatedly on an interval
 #### Install & Upgrade
 
 ```
-install      Install the self-contained Browser4 runtime bundle. --tag=<version>, --force
+install      Install the self-contained Browser4 runtime bundle. --tag <version>, --force
 uninstall    Remove globally installed browser4-cli and runtime data. --yes (-y), --dry-run
-upgrade      Upgrade to the latest version or a specified release tag. --tag=<version>, --force
+upgrade      Upgrade to the latest version or a specified release tag. --tag <version>, --force
 ```
 
 #### Batch-Compatible Commands
@@ -414,8 +414,8 @@ browser4-cli summarize "key points in 3 bullets"
 browser4-cli agent run "Search amazon for mechanical keyboards, compare the top 3, write a summary"
 
 # Parallel scraping with swarm
-browser4-cli swarm create --max-open-tabs=12 --display-mode=HEADLESS
-browser4-cli swarm submit --seed-file=./urls.txt --refresh --store-content
+browser4-cli swarm create --max-open-tabs 12 --display-mode HEADLESS
+browser4-cli swarm submit --seed-file ./urls.txt --refresh --store-content
 browser4-cli swarm result scrape-task-1
 
 # Batch multiple commands

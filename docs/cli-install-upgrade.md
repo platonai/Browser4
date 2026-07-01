@@ -14,7 +14,7 @@ it explicitly.
 ## `install` — Install the runtime bundle
 
 ```bash
-browser4-cli install [--tag=<version>] [--force]
+browser4-cli install [--tag <version>] [--force]
 ```
 
 ### What it does
@@ -32,7 +32,7 @@ browser4-cli install [--tag=<version>] [--force]
 
 | Option | Description |
 |---|---|
-| `--tag=<version>` | Install a specific release version (e.g. `--tag=v4.11.0` or `--tag=4.11.0`). The `v` prefix is optional and normalised automatically. Defaults to the **latest** release. |
+| `--tag <version>` | Install a specific release version (e.g. `--tag v4.11.0` or `--tag 4.11.0`). The `v` prefix is optional and normalised automatically. Defaults to the **latest** release. |
 | `--force` | Re-download and re-install even if the requested version is already present in the local cache. Without `--force`, an already-installed version is reused. |
 
 ### Examples
@@ -42,10 +42,10 @@ browser4-cli install [--tag=<version>] [--force]
 browser4-cli install
 
 # Install a specific version
-browser4-cli install --tag=v4.11.0
+browser4-cli install --tag v4.11.0
 
 # Re-install a specific version (force re-download)
-browser4-cli install --tag=4.11.0 --force
+browser4-cli install --tag 4.11.0 --force
 ```
 
 ### Output
@@ -392,7 +392,7 @@ install Java 17+ and use the standalone `Browser4.jar` release asset instead.
 
 The CLI automatically detects HTTP/HTTPS proxies from (in order):
 
-1. `BROWSER4_CLI_PROXY` — explicit CLI override (set by `--proxy=<url>`)
+1. `BROWSER4_CLI_PROXY` — explicit CLI override (set by `--proxy <url>`)
 2. `https_proxy` / `HTTPS_PROXY` / `http_proxy` / `HTTP_PROXY` / `all_proxy` / `ALL_PROXY`
 3. Windows system proxy (WinHTTP / Internet Options)
 

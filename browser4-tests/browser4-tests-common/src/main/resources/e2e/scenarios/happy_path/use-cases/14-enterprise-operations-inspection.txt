@@ -2,14 +2,16 @@
 # Level: Enterprise
 # Type: Internal systems, SSO authentication, observability
 # Description: Enterprise operations dashboard inspection and monitoring
-# Note: This use case requires enterprise SSO authentication
+# Note: This use case is a TEMPLATE. Replace "internal admin or ops dashboard" and SSO details
+#       with your organization's actual URLs, IdP, and credentials. Test only in non-production
+#       environments first.
 
-1. go to internal admin or ops dashboard
-2. authenticate with enterprise SSO
-3. navigate across multiple subsystems
-4. collect system status and metrics
-5. identify anomalies
-6. retry failed checks
-7. log all actions
-8. export audit records
-9. notify stakeholders
+1. go to the internal admin or ops dashboard (replace with your actual URL, e.g. https://admin.example.com)
+2. authenticate with enterprise SSO (replace with your IdP flow: Okta / Azure AD / etc.)
+3. navigate across subsystems: check API gateway, database health, and job queue status pages
+4. collect system status and key metrics (CPU, memory, error rate, queue depth)
+5. compare metrics against baseline thresholds and flag anomalies
+6. retry any failed health checks once
+7. log all actions with timestamps to `ops-inspection-log.md`
+8. export audit records as `ops-audit-<YYYY-MM-DD>.csv`
+9. summarize findings and anomalies as `ops-inspection-report.md`

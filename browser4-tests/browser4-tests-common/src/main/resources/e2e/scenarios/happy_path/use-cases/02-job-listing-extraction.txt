@@ -1,10 +1,10 @@
 # Use Case 2: Job Listing Extraction (Single-site)
 # Level: Simple
 # Type: Single-site, deterministic
-# Description: Extract job listings from LinkedIn for Kotlin backend engineer positions
+# Description: Extract job listings from Wellfound for Kotlin backend engineer positions
 
 1. go to https://wellfound.com/jobs
 2. search for "Kotlin backend engineer"
 3. open the first 5 job postings
 4. extract company, location, and skills
-5. export the result as JSON
+5. export the result as `kotlin-backend-jobs.json`

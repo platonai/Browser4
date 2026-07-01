@@ -402,7 +402,7 @@ install/upgrade operations.
 | `sessionId` | string\|null | Active session ID returned by the Browser4 server on `open`. |
 | `baseUrl` | string | Base URL of the Browser4 REST server. Default: `"http://localhost:8182"`. |
 | `activeSelector` | string\|null | Reserved selector slot for future CLI workflows. |
-| `sessionName` | string\|null | Named session label from the `-s=<name>` flag. |
+| `sessionName` | string\|null | Named session label from the `-s <name>` flag. |
 | `lastMousePosition` | object\|null | Last known pointer coordinates, used to restore state across invocations. |
 
 These files are not directly managed by `install`/`upgrade`/`uninstall`, but

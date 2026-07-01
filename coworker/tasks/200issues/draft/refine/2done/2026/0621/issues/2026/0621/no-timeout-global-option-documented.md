@@ -19,7 +19,7 @@ No timeout configuration option is found in help output, SKILL.md, or error mess
 
 ## Suggested resolution
 
-- Add a global `--timeout=<ms>` option that applies to all commands.
+- Add a global `--timeout <ms>` option that applies to all commands.
 - Document the `--timeout` option in the help output and SKILL.md.
 - Consider supporting a `BROWSER4_TIMEOUT` environment variable as an alternative configuration mechanism.
 - Set a more generous default timeout (at least 60-120 seconds) for commands known to require longer execution (e.g., `extract`).

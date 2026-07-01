@@ -110,10 +110,10 @@ cli/ (Rust)  ──MCP/HTTP──▶  browser4-rest (server)  ──▶  browser
 | `uncheck <ref>` | JS `evaluate()` to set `element.checked = false` | |
 | `wait <ms>` | Coroutine `delay(ms)` | |
 | `wait <ref>` | Poll `DOMHandler.queryLocator()` until non-null | |
-| `wait --text="..."` | Poll `BrowserProtocol.evaluate("document.body.innerText.includes(...)")` | |
-| `wait --url="<glob>"` | Poll `BrowserProtocol.evaluate("window.location.href")` + glob match | |
-| `wait --load=<strategy>` | Poll JS `document.readyState` / network-idle expression | |
-| `wait --fn="<js>"` | Poll `BrowserProtocol.evaluate(js)` until truthy | |
+| `wait --text "..."` | Poll `BrowserProtocol.evaluate("document.body.innerText.includes(...)")` | |
+| `wait --url "<glob>"` | Poll `BrowserProtocol.evaluate("window.location.href")` + glob match | |
+| `wait --load <strategy>` | Poll JS `document.readyState` / network-idle expression | |
+| `wait --fn "<js>"` | Poll `BrowserProtocol.evaluate(js)` until truthy | |
 | `dialog-accept [prompt]` | `BrowserProtocol.handleJavaScriptDialog(accept=true, promptText)` | |
 | `dialog-dismiss` | `BrowserProtocol.handleJavaScriptDialog(accept=false)` | |
 | `resize <w> <h>` | `BrowserProtocol.setDeviceMetricsOverride()` | |
@@ -153,7 +153,7 @@ cli/ (Rust)  ──MCP/HTTP──▶  browser4-rest (server)  ──▶  browser
 |---|---|---|
 | `eval "<js>" [ref]` | `BrowserProtocol.evaluate(expression)` or `callFunctionOn()` with element | |
 | `eval --json "<js>"` | Same + JSON-serialize the result | |
-| `eval --file=script.js` | Read file contents → `evaluate()` | File I/O, not CDP |
+| `eval --file script.js` | Read file contents → `evaluate()` | File I/O, not CDP |
 
 ### Screenshots & Export
 
@@ -228,7 +228,7 @@ cli/ (Rust)  ──MCP/HTTP──▶  browser4-rest (server)  ──▶  browser
 | CLI Command | Missing Capability |
 |---|---|
 | `close` | Session lifecycle managed by server; browser4-browser just closes CDP |
-| `attach --cdp=<...>` | Server-mediated CDP endpoint discovery + routing to existing Chrome |
+| `attach --cdp <...>` | Server-mediated CDP endpoint discovery + routing to existing Chrome |
 | `list` | Multi-session state tracking across workspaces |
 | `close-all` | Graceful shutdown of all sessions while keeping server alive |
 | `kill-all` | Force-kill all browser processes + stop backend |

@@ -1,6 +1,7 @@
 ---
 title: "PowerCSS — Visual Feature Selectors with :expr()"
 description: "Reference for PowerCSS :expr() pseudo-selector. Query DOM elements by their computed visual features — size, position, and content density — in CSS selectors and X-SQL queries."
+tier: catalog
 ---
 
 # PowerCSS — Visual Feature Selectors with `:expr()`

@@ -79,7 +79,7 @@ When the skill offers multiple ways to accomplish similar tasks, the file must g
 ```markdown
 | Symptom | Likely cause | Recovery |
 |---------|-------------|----------|
-| `snapshot` exits non-zero | Page not loaded | `wait --load=networkidle` then retry |
+| `snapshot` exits non-zero | Page not loaded | `wait --load networkidle` then retry |
 | `domsnapshot get` returns `[]` | DOM serialization mismatch | Fall back to `eval` or X-SQL |
 ```
 

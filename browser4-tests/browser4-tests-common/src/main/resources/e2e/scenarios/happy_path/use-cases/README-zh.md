@@ -64,4 +64,4 @@
 
 ## 参考资料
 
-- 这些用例源自 Browser4 agent 测试设计文档。
+- 本仓库的 agent 用例设计供 Browser4 E2E 测试套件运行器使用

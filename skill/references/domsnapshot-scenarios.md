@@ -1,13 +1,14 @@
 ---
 title: "DOM Snapshot — Real-World Scenarios"
 description: "Index of practical end-to-end recipes for domsnapshot: extraction, Amazon workflows, audit & compliance, and advanced discovery. Includes patterns & tips, command selection guide, and tested/verified results."
+tier: decision
 ---
 
 # DOM Snapshot — Real-World Scenarios
 
 Practical, end-to-end recipes using the `domsnapshot` family of commands. Each scenario is self-contained: you can adapt the CSS selectors and X-SQL queries to your own target pages.
 
-> **⚠️ CSS selectors are tied to live websites — they WILL break over time.** The selectors shown in these examples (e.g. `#productTitle`, `.s-result-item`, `.a-price .a-offscreen`) worked at the time of writing but are not guaranteed to work today. Websites change their HTML structure, class names, and element IDs without notice. **Treat these examples as patterns, not copy-paste recipes.** Before running a scenario, use [`domsnapshot inspect`](domsnapshot-scenarios-advanced.md#13-selector-discovery-for-unknown-pages) or [`domsnapshot summary`](domsnapshot-scenarios-advanced.md#11-page-structure-analysis-with-summary-wpsi) to discover the current selectors on your target page.
+> **Note:** CSS selectors are tied to live websites and may break over time. See [SKILL.md §5](../SKILL.md#5-critical-warnings). Always discover current selectors with `domsnapshot inspect` or `domsnapshot summary` before extraction.
 
 ## Scenario Index
 
@@ -61,74 +62,6 @@ Scenarios for discovering page structure, finding selectors on unknown pages, an
 
 ---
 
-## Patterns & Tips
-
-### Combining commands
-
-Most real workflows chain `goto` → `domsnapshot` → `get`/`query`/`export`/`grep`/`summary`. The standalone `domsnapshot` command captures and caches the DOM snapshot; subsequent commands reuse the cached snapshot:
-
-```bash
-browser4-cli goto "$URL"
-browser4-cli domsnapshot                         # capture + cache
-browser4-cli domsnapshot get text "$SELECTOR"    # reads from cache
-browser4-cli domsnapshot get html "$SELECTOR"    # reads from cache
-browser4-cli domsnapshot grep -i "pattern"       # reads from cache (client-side search)
-browser4-cli domsnapshot summary                 # reads from cache (generates WPSI)
-browser4-cli domsnapshot inspect ".card"         # reads from cache (suggests selectors)
-```
-
-The cache is invalidated by the next `domsnapshot` capture or a page navigation (`goto`, `reload`, etc.).
-
-### Error handling
-
-```bash
-# In scripts: check exit codes
-if ! browser4-cli domsnapshot get text ".critical-element" > /dev/null 2>&1; then
-  echo "ERROR: .critical-element not found on $URL"
-  exit 1
-fi
-```
-
-### Load options reference
-
-Append these to the URL string in `domsnapshot query`:
-
-| Option | Meaning |
-|--------|---------|
-| `-i 1h` | Cache page for 1 hour |
-| `-i 1d` | Cache page for 1 day |
-| `-njr 3` | No JavaScript rendering, retry up to 3 times |
-| `-njr 0` | Force JS rendering every time |
-
-### Choosing the right command
-
-| Command | Best for |
-|---------|----------|
-| `get` | One value from one element; simple scripts; raw text/HTML for piping. `get html` paginated at 2K lines by default; `get text` defaults to `--all` (no pagination). |
-| `get all` | Single-field validation from repeating elements; JSON array output; verifying selectors before X-SQL queries. **Not for correlated multi-field extraction** — each call scans independently, producing unaligned arrays. |
-| `query` | Multiple fields from repeating elements; filtering (`WHERE`/`expr()`); structured tabular output |
-| `export` | Saving full HTML for archival, diffing, external tooling, offline analysis |
-| `grep` | Presence/absence checks; counting; quick searches with context; CI smoke tests; incident response. Output paginated by default — use `--all` to disable. |
-| `summary` | Page discovery before writing selectors; structural audits; LLM-friendly page overviews |
-| `inspect` | Discovering unknown CSS selectors on complex pages; finding recurring patterns; selector validation before extraction |
-
-> **Important:** `domsnapshot get` returns **only the first match** (querySelector semantics). For extracting data from multiple elements (e.g., all products on a listing page), use `domsnapshot get all` (returns a JSON array) or `domsnapshot query` with X-SQL's `load_and_select`.
->
-> **When to use `get all` vs `query`:** Use `get all` to validate a single field across all matches (e.g., "do all product titles match this selector?"). But if you need **correlated fields** — title, price, and URL aligned per product — use `domsnapshot query` with `DOM_LOAD_AND_SELECT`. Running multiple `get all` calls produces independent arrays that can't be reliably correlated (different lengths, different element order). See [x-sql-dom-load-select.md](x-sql-dom-load-select.md) for the list-page scraping pattern.
-
-### Command form notes
-
-- The CLI uses the **spaced form**: `browser4-cli domsnapshot get text "h1"`, not the hyphenated `domsnapshot-get`.
-- `browser4-cli domsnapshot` (with no subcommand) captures a fresh DOM snapshot and caches it in the backend. Subsequent `get`, `query`, `export`, `grep`, `summary`, and `inspect` calls reuse this cached snapshot — they do **not** re-capture the page. The cache is invalidated by the next `domsnapshot` capture or a page navigation.
-- The capture command returns enriched metadata including `imageCount`, `linkCount`, and `interactiveElements` (tag, class, id, aria attributes, bounding-box).
-- `grep` performs matching **client-side** by fetching the snapshot HTML then running regex locally — no backend round-trip for the search itself.
-- `summary` generates a WPSI YAML file from the cached snapshot — useful as a discovery step before writing selectors.
-- `inspect` analyzes DOM structure and suggests CSS selectors for recurring patterns. It is fully deterministic (no AI) and based on structural recurrence across matching elements.
-- **Output pagination:** `get html`, `get all html`, and `grep` paginate output by default at 2000 lines per page. `get text` and `get all text` default to `--all` (no pagination). Use `--page N` for subsequent pages, `--page-size N` to change page size, or `--all` to disable pagination entirely. Pagination is automatically skipped in `--json` and `--quiet` modes.
-- **X-SQL `load_and_select`** makes its own HTTP request when called via `domsnapshot query` with a URL argument. The initial `goto` + `domsnapshot` capture step is for validating the page and testing selectors with `get`/`inspect` before running the X-SQL query — it does not eliminate the server-side load inside `load_and_select(@url, ...)`.
-
----
-
 ## Tested & Verified
 
 All scenarios using `get`, `export`, `grep`, and `summary` commands have been tested against live websites:
@@ -157,6 +90,4 @@ All scenarios using `get`, `export`, `grep`, and `summary` commands have been te
 - [CSS Selector Bridge](css-selector-bridge.md) — bridging interactive snapshot refs to DOM snapshot CSS selectors
 - [X-SQL Reference](x-sql.md) — DOM and string function reference for `domsnapshot query`
 - [PowerCSS :expr()](power-dom.md) — visual feature selectors for resilient element targeting
-- [Polite Scraping](polite-scraping.md) — rate limiting and CAPTCHA avoidance
-- [Error Handling](error-handling.md) — common failure modes and recovery patterns
 - [SKILL.md](../SKILL.md) — Browser4 CLI automation skill overview

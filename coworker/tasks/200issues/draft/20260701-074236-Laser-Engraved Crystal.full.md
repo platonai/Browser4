@@ -54,8 +54,8 @@
 6. `cargo run -- domsnapshot get all text ".a-price .a-offscreen" --all` — extracted 91 prices
 7. `cargo run -- domsnapshot get all text "[aria-label*=\"stars\"]" --all` — extracted 67 ratings
 8. `cargo run -- domsnapshot get all attr ".s-line-clamp-4" href --all` — extracted product URLs
-9. `cargo run -- eval --file=extract_products.js` — extracted structured JSON of 60 products with titles, prices, ratings, URLs, ASINs
-10. `cargo run -- eval --file=extract_detail.js` — extracted structured product details (used for 9 products)
+9. `cargo run -- eval --file extract_products.js` — extracted structured JSON of 60 products with titles, prices, ratings, URLs, ASINs
+10. `cargo run -- eval --file extract_detail.js` — extracted structured product details (used for 9 products)
 11. `cargo run -- domsnapshot get text "#productTitle"` — extracted individual product field
 12. `cargo run -- goto "https://www.amazon.com/dp/<ASIN>"` — navigated to each product (10 times)
 
@@ -274,7 +274,7 @@ cargo run -- domsnapshot get text "#productTitle" --json
 
 **Reproduction:**
 ```
-cargo run -- eval --json --file=extract_products.js
+cargo run -- eval --json --file extract_products.js
 ```
 
 **Expected:** JavaScript evaluated against the page, result serialized as JSON.
