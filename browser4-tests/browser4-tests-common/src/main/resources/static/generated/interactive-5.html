@@ -1,0 +1,499 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+    <title>Advanced Interaction Playground</title>
+    <style>
+        :root {
+            --bg: #f4f6f9;
+            --text: #333;
+            --card: white;
+            --header: linear-gradient(to right, #667eea, #764ba2);
+            --shadow: rgba(0, 0, 0, 0.05);
+            --tooltip-bg: #333;
+            --tooltip-text: #fff;
+        }
+
+        body {
+            font-family: 'Segoe UI', sans-serif;
+            margin: 0;
+            padding: 0;
+            background: var(--bg);
+            color: var(--text);
+        }
+
+        header {
+            background: var(--header);
+            color: white;
+            padding: 2rem;
+            text-align: center;
+        }
+
+        section {
+            padding: 2rem;
+            margin: 1rem auto;
+            max-width: 800px;
+            background: var(--card);
+            border-radius: 10px;
+            box-shadow: 0 4px 12px var(--shadow);
+        }
+
+        h2 { margin-top: 0; }
+
+        input, select, textarea {
+            padding: 0.5rem;
+            margin: 0.5rem 0;
+            width: 100%;
+            border: 1px solid #ccc;
+            border-radius: 6px;
+            transition: box-shadow 0.3s, border 0.3s;
+        }
+
+        input:focus, select:focus, textarea:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 8px rgba(102,126,234,0.2);
+        }
+
+        button {
+            padding: 0.6rem 1.2rem;
+            background-color: #667eea;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: transform 0.2s ease, background 0.2s;
+            margin: 0.3rem;
+        }
+
+        button:hover { background-color: #5a6fd6; transform: translateY(-1px); }
+        button:active { transform: scale(0.95); }
+
+        label { display: block; margin-top: 0.8rem; font-weight: 600; }
+
+        /* ── Hover Tooltips ────────────────────────────────────────── */
+        .tooltip-container {
+            position: relative;
+            display: inline-block;
+            cursor: help;
+            border-bottom: 1px dotted #667eea;
+            color: #667eea;
+            padding: 0.2rem 0;
+        }
+
+        .tooltip-container .tooltip-text {
+            visibility: hidden;
+            opacity: 0;
+            width: 200px;
+            background-color: var(--tooltip-bg);
+            color: var(--tooltip-text);
+            text-align: center;
+            border-radius: 6px;
+            padding: 0.5rem;
+            position: absolute;
+            z-index: 100;
+            bottom: 125%;
+            left: 50%;
+            transform: translateX(-50%);
+            transition: opacity 0.3s;
+            font-size: 0.85rem;
+            font-weight: normal;
+        }
+
+        .tooltip-container .tooltip-text::after {
+            content: "";
+            position: absolute;
+            top: 100%;
+            left: 50%;
+            margin-left: -5px;
+            border-width: 5px;
+            border-style: solid;
+            border-color: var(--tooltip-bg) transparent transparent transparent;
+        }
+
+        .tooltip-container:hover .tooltip-text {
+            visibility: visible;
+            opacity: 1;
+        }
+
+        /* ── Hover Card ────────────────────────────────────────────── */
+        .hover-card {
+            background: #f0f0f0;
+            border: 2px solid #ddd;
+            border-radius: 10px;
+            padding: 1.5rem;
+            margin: 1rem 0;
+            transition: transform 0.3s ease, box-shadow 0.3s ease, border-color 0.3s;
+            cursor: pointer;
+        }
+
+        .hover-card:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 8px 24px rgba(102,126,234,0.25);
+            border-color: #667eea;
+        }
+
+        .hover-card .card-detail {
+            max-height: 0;
+            overflow: hidden;
+            transition: max-height 0.4s ease;
+        }
+
+        .hover-card:hover .card-detail {
+            max-height: 100px;
+        }
+
+        /* ── Draggable List ────────────────────────────────────────── */
+        .draggable-list {
+            list-style: none;
+            padding: 0;
+        }
+
+        .draggable-list li {
+            background: #e8ecf1;
+            padding: 12px 16px;
+            margin: 8px 0;
+            border-radius: 8px;
+            cursor: grab;
+            user-select: none;
+            transition: background 0.2s, box-shadow 0.2s;
+            border: 1px solid transparent;
+        }
+
+        .draggable-list li:hover {
+            background: #dce1e8;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+        }
+
+        .draggable-list li:active {
+            cursor: grabbing;
+        }
+
+        .draggable-list li.dragging {
+            opacity: 0.4;
+            border: 1px dashed #667eea;
+        }
+
+        .draggable-list li.drag-over {
+            border: 2px dashed #667eea;
+            background: #eef0ff;
+        }
+
+        /* ── Double-click Target ───────────────────────────────────── */
+        .dblclick-zone {
+            background: #fff3cd;
+            border: 2px dashed #ffc107;
+            border-radius: 10px;
+            padding: 2rem;
+            text-align: center;
+            cursor: pointer;
+            transition: background 0.3s;
+            user-select: none;
+        }
+
+        .dblclick-zone.activated {
+            background: #d4edda;
+            border-color: #28a745;
+        }
+
+        .click-counter {
+            font-size: 0.85rem;
+            color: #666;
+            margin-top: 0.5rem;
+        }
+
+        /* ── Dialog Buttons ────────────────────────────────────────── */
+        .dialog-buttons {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+        }
+
+        .dialog-result {
+            margin-top: 1rem;
+            padding: 0.8rem;
+            background: #f8f9fa;
+            border-radius: 6px;
+            font-family: monospace;
+            font-size: 0.9rem;
+            min-height: 1.5rem;
+        }
+
+        /* ── Interaction Log ───────────────────────────────────────── */
+        .interaction-log {
+            background: #1e1e1e;
+            color: #0f0;
+            padding: 1rem;
+            border-radius: 6px;
+            font-family: 'Courier New', monospace;
+            font-size: 0.8rem;
+            max-height: 200px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+        }
+
+        footer {
+            text-align: center;
+            padding: 1rem;
+            font-size: 0.9rem;
+            color: #999;
+        }
+    </style>
+</head>
+<body>
+
+<header id="pageHeader" data-testid="pageHeader" data-role="header" data-component="site-header">
+    <h1>🧪 Advanced Interaction Playground</h1>
+    <p>Hover, drag, double-click, and dialog testing ground</p>
+</header>
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<!-- Section 1: Hover Tooltips & Cards -->
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<section id="hoverSection" data-testid="hoverSection" class="section-hover" data-role="section" data-component="hover-section">
+    <h2>💡 Hover Interactions</h2>
+
+    <p>Hover over the underlined terms below to see tooltips:</p>
+    <p>
+        <span class="tooltip-container" data-testid="tooltipA11y" data-role="tooltip" data-component="accessible-tooltip">
+            Accessibility Tree
+            <span class="tooltip-text">A hierarchical representation of the page that assistive technologies use to navigate content.</span>
+        </span>
+        &mdash; used by screen readers to understand page structure.
+    </p>
+    <p>
+        <span class="tooltip-container" data-testid="tooltipSnapshot" data-role="tooltip" data-component="snapshot-tooltip">
+            DOM Snapshot
+            <span class="tooltip-text">A static capture of the full Document Object Model at a point in time, useful for offline extraction and analysis.</span>
+        </span>
+        &mdash; captured for structured data extraction.
+    </p>
+
+    <div class="hover-card" id="productCard" data-testid="productCard" data-role="card" data-component="hover-detail-card">
+        <strong>📦 Wireless Headphones</strong> — $79.99
+        <div class="card-detail">
+            <p>Features: Noise cancelling, 30h battery, Bluetooth 5.3. Free shipping on orders over $50.</p>
+        </div>
+    </div>
+
+    <div class="hover-card" id="serviceCard" data-testid="serviceCard" data-role="card" data-component="hover-detail-card">
+        <strong>🔧 Premium Support Plan</strong> — $9.99/month
+        <div class="card-detail">
+            <p>24/7 phone support, extended warranty, accidental damage coverage. Cancel anytime.</p>
+        </div>
+    </div>
+</section>
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<!-- Section 2: Drag & Drop -->
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<section id="dragSection" data-testid="dragSection" class="section-drag" data-role="section" data-component="drag-section">
+    <h2>📋 Drag &amp; Drop Reordering</h2>
+    <p>Drag items to reorder the priority list:</p>
+    <ul class="draggable-list" id="priorityList" data-testid="priorityList" data-role="list" data-component="sortable-list" aria-label="Sortable priority list">
+        <li draggable="true" class="draggable-item" id="priorityHigh"   data-testid="priorityHigh"   data-role="listitem" data-component="drag-item" data-priority="1" data-label="high">🔴 High Priority — Fix login bug</li>
+        <li draggable="true" class="draggable-item" id="priorityMedium" data-testid="priorityMedium" data-role="listitem" data-component="drag-item" data-priority="2" data-label="medium">🟡 Medium Priority — Update docs</li>
+        <li draggable="true" class="draggable-item" id="priorityLow"    data-testid="priorityLow"    data-role="listitem" data-component="drag-item" data-priority="3" data-label="low">🟢 Low Priority — Refactor tests</li>
+        <li draggable="true" class="draggable-item" id="priorityBacklog" data-testid="priorityBacklog" data-role="listitem" data-component="drag-item" data-priority="4" data-label="backlog">⚪ Backlog — Investigate perf</li>
+    </ul>
+</section>
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<!-- Section 3: Double-Click Actions -->
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<section id="dblclickSection" data-testid="dblclickSection" class="section-dblclick" data-role="section" data-component="dblclick-section">
+    <h2>🖱️ Double-Click Actions</h2>
+
+    <div class="dblclick-zone" id="dblclickZone" data-testid="dblclickZone" data-role="zone" data-component="dblclick-target" data-action="double-click" title="Double-click me to activate">
+        <strong>Double-click this area</strong>
+        <div class="click-counter">Single clicks: <span id="singleClickCount">0</span> | Double clicks: <span id="dblClickCount">0</span></div>
+    </div>
+    <p style="margin-top:0.5rem; font-size:0.9rem; color:#666;" id="dblclickStatus">Status: idle</p>
+
+    <div class="dblclick-zone" id="dblclickResetZone" data-testid="dblclickResetZone" data-role="zone" data-component="dblclick-target" data-action="double-click-reset" title="Double-click to reset counters" style="margin-top:1rem;">
+        <strong>Double-click here to reset all counters</strong>
+    </div>
+</section>
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<!-- Section 4: Browser Dialogs -->
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<section id="dialogSection" data-testid="dialogSection" class="section-dialog" data-role="section" data-component="dialog-section">
+    <h2>💬 Browser Dialogs</h2>
+    <p>Click the buttons below to trigger native browser dialogs:</p>
+
+    <div class="dialog-buttons">
+        <button id="alertBtn" data-testid="alertBtn" data-role="button" data-component="dialog-trigger" data-action="show-alert" onclick="triggerAlert()">
+            🔔 Show Alert
+        </button>
+        <button id="confirmBtn" data-testid="confirmBtn" data-role="button" data-component="dialog-trigger" data-action="show-confirm" onclick="triggerConfirm()">
+            ❓ Show Confirm
+        </button>
+        <button id="promptBtn" data-testid="promptBtn" data-role="button" data-component="dialog-trigger" data-action="show-prompt" onclick="triggerPrompt()">
+            ✏️ Show Prompt
+        </button>
+        <button id="clearDialogLog" data-testid="clearDialogLog" data-role="button" data-component="clear-log" data-action="clear-log" onclick="clearDialogLog()">
+            🗑️ Clear Log
+        </button>
+    </div>
+
+    <div class="dialog-result" id="dialogResult" data-testid="dialogResult" data-role="output" data-component="dialog-output">
+        Dialog results will appear here...
+    </div>
+</section>
+
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<!-- Section 5: Interaction Log -->
+<!-- ═══════════════════════════════════════════════════════════════════ -->
+<section id="logSection" data-testid="logSection" class="section-log" data-role="section" data-component="log-section">
+    <h2>📜 Interaction Log</h2>
+    <div class="interaction-log" id="interactionLog" data-testid="interactionLog" data-role="output" data-component="event-log">
+[system] Page loaded. Ready for interaction testing.
+</div>
+</section>
+
+<footer id="pageFooter" data-testid="pageFooter" data-role="footer" data-component="site-footer">
+    © 2025 Advanced Interaction Playground — MockSite Test Fixture
+</footer>
+
+<script>
+    const log = document.getElementById('interactionLog');
+
+    function logEvent(msg) {
+        const time = new Date().toLocaleTimeString();
+        log.textContent += `[${time}] ${msg}\n`;
+        log.scrollTop = log.scrollHeight;
+    }
+
+    // ── Drag & Drop ─────────────────────────────────────────────────
+    const list = document.getElementById('priorityList');
+    let draggingEl = null;
+
+    list.addEventListener('dragstart', (e) => {
+        draggingEl = e.target;
+        if (!draggingEl.classList.contains('draggable-item')) return;
+        draggingEl.classList.add('dragging');
+        logEvent('DRAG START: ' + draggingEl.textContent.trim());
+    });
+
+    list.addEventListener('dragend', (e) => {
+        if (!draggingEl) return;
+        draggingEl.classList.remove('dragging');
+        logEvent('DRAG END: ' + draggingEl.textContent.trim() + ' → new position');
+        draggingEl = null;
+        // Remove all drag-over highlights
+        list.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'));
+    });
+
+    list.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        if (!draggingEl) return;
+        const afterEl = getDragAfterElement(list, e.clientY);
+        // Highlight the drop target
+        list.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'));
+        if (afterEl) {
+            afterEl.classList.add('drag-over');
+        }
+        if (afterEl == null) {
+            list.appendChild(draggingEl);
+        } else {
+            list.insertBefore(draggingEl, afterEl);
+        }
+    });
+
+    list.addEventListener('drop', (e) => {
+        e.preventDefault();
+        list.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'));
+    });
+
+    function getDragAfterElement(container, y) {
+        const draggableElements = [...container.querySelectorAll('.draggable-item:not(.dragging)')];
+        return draggableElements.reduce((closest, child) => {
+            const box = child.getBoundingClientRect();
+            const offset = y - box.top - box.height / 2;
+            if (offset < 0 && offset > closest.offset) {
+                return { offset, element: child };
+            }
+            return closest;
+        }, { offset: Number.NEGATIVE_INFINITY }).element;
+    }
+
+    // ── Double-Click ────────────────────────────────────────────────
+    let singleClicks = 0;
+    let dblClicks = 0;
+
+    document.getElementById('dblclickZone').addEventListener('click', () => {
+        singleClicks++;
+        document.getElementById('singleClickCount').textContent = singleClicks;
+    });
+
+    document.getElementById('dblclickZone').addEventListener('dblclick', (e) => {
+        e.preventDefault();
+        dblClicks++;
+        document.getElementById('dblClickCount').textContent = dblClicks;
+        const zone = document.getElementById('dblclickZone');
+        zone.classList.add('activated');
+        document.getElementById('dblclickStatus').textContent = 'Status: ACTIVATED ✅';
+        document.getElementById('dblclickStatus').style.color = '#28a745';
+        logEvent('DBLCLICK: Zone activated (' + dblClicks + ' total double-clicks)');
+    });
+
+    document.getElementById('dblclickResetZone').addEventListener('dblclick', (e) => {
+        e.preventDefault();
+        singleClicks = 0;
+        dblClicks = 0;
+        document.getElementById('singleClickCount').textContent = '0';
+        document.getElementById('dblClickCount').textContent = '0';
+        document.getElementById('dblclickZone').classList.remove('activated');
+        document.getElementById('dblclickStatus').textContent = 'Status: idle';
+        document.getElementById('dblclickStatus').style.color = '#666';
+        logEvent('DBLCLICK: Counters reset');
+    });
+
+    // ── Browser Dialogs ─────────────────────────────────────────────
+    function triggerAlert() {
+        logEvent('DIALOG: Showing alert()');
+        alert('This is a test alert from MockSite!');
+        document.getElementById('dialogResult').textContent = '[alert] User dismissed the alert dialog.';
+        document.getElementById('dialogResult').style.background = '#d4edda';
+        logEvent('DIALOG: Alert dismissed');
+    }
+
+    function triggerConfirm() {
+        logEvent('DIALOG: Showing confirm()');
+        const result = confirm('Do you accept the terms of this test scenario?');
+        const msg = result ? 'User clicked OK / accepted.' : 'User clicked Cancel / declined.';
+        document.getElementById('dialogResult').textContent = '[confirm] ' + msg;
+        document.getElementById('dialogResult').style.background = result ? '#d4edda' : '#f8d7da';
+        logEvent('DIALOG: Confirm result = ' + result);
+    }
+
+    function triggerPrompt() {
+        logEvent('DIALOG: Showing prompt()');
+        const result = prompt('Enter a name for this test session:', 'test-session-001');
+        const msg = result != null ? 'User entered: "' + result + '"' : 'User cancelled the prompt.';
+        document.getElementById('dialogResult').textContent = '[prompt] ' + msg;
+        document.getElementById('dialogResult').style.background = result != null ? '#d4edda' : '#f8d7da';
+        logEvent('DIALOG: Prompt result = ' + (result != null ? '"' + result + '"' : 'null (cancelled)'));
+    }
+
+    function clearDialogLog() {
+        document.getElementById('dialogResult').textContent = 'Dialog results cleared.';
+        document.getElementById('dialogResult').style.background = '#f8f9fa';
+        logEvent('DIALOG: Log cleared');
+    }
+
+    // ── Hover Card click logging ────────────────────────────────────
+    document.querySelectorAll('.hover-card').forEach(card => {
+        card.addEventListener('click', (e) => {
+            const title = card.querySelector('strong').textContent;
+            logEvent('CLICK: ' + title);
+        });
+    });
+
+    // ── Initialize ──────────────────────────────────────────────────
+    logEvent('All sections initialized.');
+</script>
+</body>
+</html>
