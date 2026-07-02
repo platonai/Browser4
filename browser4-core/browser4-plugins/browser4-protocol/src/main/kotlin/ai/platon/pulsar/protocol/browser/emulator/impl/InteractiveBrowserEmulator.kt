@@ -325,11 +325,6 @@ open class InteractiveBrowserEmulator(
         } catch (e: InterruptedException) {
             Thread.currentThread().interrupt()
             response = ForwardingResponse.crawlRetry(task.page, e)
-        } catch (e: Exception) {
-            // handleException(e, task, driver)
-            // Let the higher level to handle it
-            throw e
-        } finally {
         }
 
         return FetchResult(task, response ?: ForwardingResponse(exception, task.page), exception)
@@ -349,7 +344,6 @@ open class InteractiveBrowserEmulator(
         val resourceLoader = page.conf["resource.loader", "jsoup"]
         val response = when (resourceLoader) {
             "web.driver" -> driver.loadResource(navigateTask.url)
-            "jsoup" -> NetworkResourceHelper.fromJsoup(driver.loadJsoupResource(navigateTask.url))
             else -> NetworkResourceHelper.fromJsoup(driver.loadJsoupResource(navigateTask.url))
         }
 
@@ -535,11 +529,16 @@ open class InteractiveBrowserEmulator(
         // TODO: driver.pageSource() might be huge so there might be a performance issue
         task.originalContentLength = driver.pageSource()?.length ?: 0
 
-        // js might not injected
-//        if (result.state.isContinue) {
-//            emit1(EmulateEvents.willComputeFeature, page, driver)
-//            emit1(EmulateEvents.featureComputed, page, driver)
-//        }
+        // Compute document features so that vi (visual-information) attributes are
+        // injected into the DOM.  These attributes contain bounding-box data
+        // ("x y w h") and are required by downstream consumers such as
+        // dom_snapshot_capture (computeInteractiveWeights) and dom_snapshot_inspect
+        // (PowerCSS :expr() selectors).
+        if (result.state.isContinue) {
+            val interactTask = InteractTask(task, settings, driver)
+            runCatching { computeDocumentFeatures(interactTask, result) }
+                .onFailure { logger.warn("Failed to compute document features during capture: {}", it.message) }
+        }
 
         return result
     }
@@ -633,11 +632,11 @@ open class InteractiveBrowserEmulator(
         val page = interactTask.page
         val driver = interactTask.driver
 
-        var n = 10
+        var n = MAX_JAVASCRIPT_INJECTION_RETRIES
         while (n-- > 0 && !isScriptInjected(driver)) {
-            delay(1000.milliseconds)
+            delay(JAVASCRIPT_INJECTION_POLL_MS.milliseconds)
             checkState(driver)
-            if (n < 5) {
+            if (n < MAX_JAVASCRIPT_INJECTION_RETRIES / 2) {
                 // TODO: Health checks should reside in the driver layer and be managed through a unified strategy
                 driver.healthy()
             }
@@ -655,7 +654,7 @@ open class InteractiveBrowserEmulator(
      * */
     protected suspend fun isScriptInjected(driver: WebDriver): Boolean {
         // Ensure __pulsar_utils__ is defined. For some type of pages, the script can not be injected.
-        val utils = driver.evaluate("typeof(__pulsar_utils__)")
+        val utils = driver.evaluate("typeof($PULSAR_UTILS_FUNCTION)")
         return utils == "function"
     }
 
@@ -672,13 +671,13 @@ open class InteractiveBrowserEmulator(
         val fetchTask = interactTask.navigateTask.fetchTask
         val scrollCount = interactTask.interactSettings.autoScrollCount
 
-        val initialScroll = if (scrollCount > 0) 5 else 0
-        val delayMillis = 500L * 2
-//        val maxRound = scriptTimeout.toMillis() / delayMillis
-        val maxRound = 60
+        val initialScroll = if (scrollCount > 0) INITIAL_SCROLL_WHEN_SCROLL_ENABLED else 0
+        val delayMillis = DOCUMENT_SETTLE_POLL_MS
+        val maxRound = (scriptTimeout.toMillis() / delayMillis)
+            .toInt().coerceAtMost(MAX_DOCUMENT_SETTLE_ROUNDS)
 
         // TODO: wait for expected data, ni, na, nn, nst, etc; required element
-        val expression = String.format("__pulsar_utils__.waitForReady(%d)", initialScroll)
+        val expression = String.format("$PULSAR_UTILS_FUNCTION.waitForReady(%d)", initialScroll)
         var i = 0
         var message: Any? = null
         try {
@@ -725,14 +724,20 @@ open class InteractiveBrowserEmulator(
         val driver = interactTask.driver
         require(driver is PulsarWebDriver)
 
-        val pollMillis = 200L
-        val maxRound = 60_000 / pollMillis
+        val pollMillis = NETWORK_IDLE_POLL_MS
+        val maxRound = NETWORK_IDLE_TOTAL_MS / pollMillis
         var i = 0
-        while (i++ < maxRound) {
+        while (i++ < maxRound && isActive && !interactTask.navigateTask.fetchTask.isCanceled) {
             if (driver.isNetworkIdle) {
                 break
             }
             delay(pollMillis.milliseconds)
+        }
+
+        if (!isActive || interactTask.navigateTask.fetchTask.isCanceled) {
+            result.protocolStatus = ProtocolStatus.retry(RetryScope.PRIVACY, "Task canceled during network idle wait")
+            result.state = FlowState.BREAK
+            return
         }
 
         result.protocolStatus = ProtocolStatus.STATUS_SUCCESS
@@ -753,8 +758,9 @@ open class InteractiveBrowserEmulator(
             }
             val scrollInterval = interactSettings.scrollInterval.toMillis()
             // evaluate(interactTask, positions, scrollInterval, bringToFront = bringToFront)
-            positions.forEach {
-                driver.scrollToMiddle(it)
+            for (position in positions) {
+                checkState(interactTask.navigateTask.fetchTask, driver)
+                driver.scrollToMiddle(position)
                 delay(scrollInterval.milliseconds)
             }
         }
@@ -783,7 +789,7 @@ open class InteractiveBrowserEmulator(
     protected open suspend fun waitForElementUntilNonBlank(
         interactTask: InteractTask, requiredElements: List<String>,
     ) {
-        if (requiredElements.isNotEmpty()) {
+        if (requiredElements.isEmpty()) {
             return
         }
 
@@ -801,7 +807,7 @@ open class InteractiveBrowserEmulator(
     }
 
     protected open suspend fun computeDocumentFeatures(interactTask: InteractTask, result: InteractResult) {
-        val expression = "__pulsar_utils__.compute()"
+        val expression = "$PULSAR_UTILS_FUNCTION.compute()"
         val message = evaluate(interactTask, expression)
 
         if (message is String) {
@@ -811,5 +817,16 @@ open class InteractiveBrowserEmulator(
                 taskLogger.debug("{}. {} | {}", page.id, result.activeDOMMessage?.trace, interactTask.url)
             }
         }
+    }
+
+    companion object {
+        private const val MAX_JAVASCRIPT_INJECTION_RETRIES = 10
+        private const val JAVASCRIPT_INJECTION_POLL_MS = 1000L
+        private const val MAX_DOCUMENT_SETTLE_ROUNDS = 60
+        private const val DOCUMENT_SETTLE_POLL_MS = 1000L
+        private const val NETWORK_IDLE_POLL_MS = 200L
+        private const val NETWORK_IDLE_TOTAL_MS = 60_000L
+        private const val PULSAR_UTILS_FUNCTION = "__pulsar_utils__"
+        private const val INITIAL_SCROLL_WHEN_SCROLL_ENABLED = 5
     }
 }
