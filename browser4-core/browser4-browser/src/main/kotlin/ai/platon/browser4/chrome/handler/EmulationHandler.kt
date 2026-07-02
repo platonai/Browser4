@@ -241,11 +241,11 @@ class Mouse(private val bp: BrowserProtocol) {
         }
     }
 
-    suspend fun moveTo(point: PointD, steps: Int = 5, delayMillis: Long = 50) {
-        moveTo(point.x, point.y, steps, delayMillis)
+    suspend fun moveTo(point: PointD, steps: Int = 5, delayMillis: Long = 50, modifiers: Int? = null) {
+        moveTo(point.x, point.y, steps, delayMillis, modifiers)
     }
 
-    suspend fun moveTo(x: Double, y: Double, steps: Int = 1, delayMillis: Long = 50) {
+    suspend fun moveTo(x: Double, y: Double, steps: Int = 1, delayMillis: Long = 50, modifiers: Int? = null) {
         val fromX = currentX
         val fromY = currentY
 
@@ -260,7 +260,7 @@ class Mouse(private val bp: BrowserProtocol) {
             val x1 = fromX + (currentX - fromX) * t
             val y1 = fromY + (currentY - fromY) * t
 
-            cdpMoveTo(x1, y1)
+            cdpMoveTo(x1, y1, modifiers)
 
             if (delayMillis > 0) {
                 delay(delayMillis.milliseconds)
@@ -270,8 +270,8 @@ class Mouse(private val bp: BrowserProtocol) {
         }
     }
 
-    private suspend fun cdpMoveTo(x: Double, y: Double) {
-        bp.dispatchMouseMoved(x, y, buttonsState)
+    private suspend fun cdpMoveTo(x: Double, y: Double, modifiers: Int? = null) {
+        bp.dispatchMouseMoved(x, y, buttonsState, modifiers)
     }
 
     /**
@@ -297,6 +297,9 @@ class Mouse(private val bp: BrowserProtocol) {
      * * (default: 0).
      */
     suspend fun down(x: Double, y: Double, clickCount: Int = 1, modifiers: Int? = null) {
+        currentX = x
+        currentY = y
+
         // Update buttons bitfield to include left button (1)
         buttonsState = buttonsState or 1
         bp.dispatchMousePressed(x, y, clickCount, modifiers, buttonsState)
@@ -311,6 +314,9 @@ class Mouse(private val bp: BrowserProtocol) {
     }
 
     suspend fun up(x: Double, y: Double, clickCount: Int = 1, modifiers: Int? = null) {
+        currentX = x
+        currentY = y
+
         // Update buttons bitfield to reflect release of left button
         buttonsState = buttonsState and 1.inv()
         bp.dispatchMouseReleased(x, y, clickCount, modifiers, buttonsState)
@@ -332,8 +338,8 @@ class Mouse(private val bp: BrowserProtocol) {
      * mouse.wheel({ deltaY: -100 })
      * ```
      */
-    suspend fun wheel(deltaX: Double = 10.0, deltaY: Double = 10.0) {
-        wheel(currentX, currentY, deltaX, deltaY)
+    suspend fun wheel(deltaX: Double = 10.0, deltaY: Double = 10.0, modifiers: Int? = null) {
+        wheel(currentX, currentY, deltaX, deltaY, modifiers)
     }
 
     /**
@@ -352,8 +358,8 @@ class Mouse(private val bp: BrowserProtocol) {
      * mouse.wheel({ deltaY: -100 })
      * ```
      */
-    suspend fun wheel(point: PointD, deltaX: Double = 0.0, deltaY: Double = 10.0) {
-        wheel(point.x, point.y, deltaX, deltaY)
+    suspend fun wheel(point: PointD, deltaX: Double = 0.0, deltaY: Double = 10.0, modifiers: Int? = null) {
+        wheel(point.x, point.y, deltaX, deltaY, modifiers)
     }
 
     /**
@@ -375,18 +381,19 @@ class Mouse(private val bp: BrowserProtocol) {
      * @param x X coordinate
      * @param y Y coordinate
      */
-    suspend fun wheel(x: Double, y: Double, deltaX: Double, deltaY: Double) {
-        // If the mouse has never been explicitly positioned (still at origin),
-        // move it to the viewport center so the wheel event is dispatched to a
-        // reasonable target element rather than (0,0) where it may be misrouted.
-        if (currentX == 0.0 && currentY == 0.0) {
+    suspend fun wheel(x: Double, y: Double, deltaX: Double, deltaY: Double, modifiers: Int? = null) {
+        // If the mouse has never been explicitly positioned AND no explicit
+        // coordinates were given (both still at origin), move the mouse to the
+        // viewport center so the wheel event is dispatched to a reasonable
+        // target element rather than (0,0) where it may be misrouted.
+        if (currentX == 0.0 && currentY == 0.0 && x == 0.0 && y == 0.0) {
             val metrics = bp.getLayoutMetrics()
             val vp = metrics.cssLayoutViewport
             currentX = vp.clientWidth / 2.0
             currentY = vp.clientHeight / 2.0
             cdpMoveTo(currentX, currentY)
         }
-        bp.dispatchMouseWheel(currentX, currentY, deltaX, deltaY)
+        bp.dispatchMouseWheel(x, y, deltaX, deltaY, modifiers)
     }
 
     /**
@@ -868,16 +875,18 @@ class EmulationHandler(
     }
 
     private suspend fun clickWithModifiers(point: PointD, modifier: String, count: Int, delayMillis: Long = 100) {
-        var cdpModifiers = 0
-        val kb = keyboard
         // Normalize modifier for the current OS (Ctrl->Meta on macOS)
         val mappedModifierName = mapModifierForOS(modifier)
         val normModifier = KeyboardModifier.valueOfOrNull(mappedModifierName)
-        if (normModifier != null && kb != null) {
-            val virtualKey = kb.createVirtualKeyForSingleKeyString(normModifier)
-            if (virtualKey.isModifier) {
-                // Use CDP-compliant modifier bitmask for mouse events
-                cdpModifiers = modifierMaskForKeyString(normModifier.name)
+        if (normModifier != null) {
+            val kb = keyboard
+            val virtualKey = kb?.createVirtualKeyForSingleKeyString(normModifier)
+            if (virtualKey?.isModifier == true) {
+                // Use CDP-compliant modifier bitmask for mouse events.
+                // The bitmask alone is sufficient — Chromium synthesizes the
+                // modifier key state from it, so we don't need to separately
+                // press the modifier key via Keyboard.
+                val cdpModifiers = modifierMaskForKeyString(normModifier.name)
                 if (!modifier.equals(mappedModifierName, true)) {
                     logger.info(
                         "OS mapped modifier {} -> {} (macOS={})",
@@ -886,20 +895,16 @@ class EmulationHandler(
                         SystemUtils.IS_OS_MAC
                     )
                 }
-                logger.info("Clicking with virtual key: {}, modifiers: {}", virtualKey, cdpModifiers)
-            }
-            // Press and guarantee release via try/finally
-            try {
-                kb.down(virtualKey)
+                logger.info("Clicking with modifier mask: {}", cdpModifiers)
                 mouse?.click(point.x, point.y, count, modifiers = cdpModifiers, delayMillis = delayMillis)
-            } finally {
-                runCatching { kb.up(virtualKey) }
             }
         }
     }
 
     private fun modifierMaskForKeyString(key: String): Int {
-        return when (key.trim().lowercase()) {
+        // Apply OS mapping so the mask is correct regardless of caller context
+        val mapped = mapModifierForOS(key)
+        return when (mapped.trim().lowercase()) {
             "alt" -> 1
             "control", "ctrl" -> 2
             "meta", "command", "cmd", "win", "super" -> 4
@@ -988,13 +993,28 @@ class EmulationHandler(
             return MouseModifierState()
         }
 
-        return when (mapModifierForOS(modifier).trim().lowercase()) {
-            "alt" -> MouseModifierState(altKey = true)
-            "control", "ctrl" -> MouseModifierState(ctrlKey = true)
-            "meta", "command", "cmd", "win", "super" -> MouseModifierState(metaKey = true)
-            "shift" -> MouseModifierState(shiftKey = true)
-            else -> MouseModifierState()
+        // Support combo modifiers like "Ctrl+Shift" by splitting on '+'
+        val parts = modifier.split("+").map { it.trim() }.filter { it.isNotEmpty() }
+        if (parts.isEmpty()) {
+            return MouseModifierState()
         }
+
+        var altKey = false
+        var ctrlKey = false
+        var metaKey = false
+        var shiftKey = false
+
+        for (part in parts) {
+            when (mapModifierForOS(part).lowercase()) {
+                "alt" -> altKey = true
+                "control", "ctrl" -> ctrlKey = true
+                "meta", "command", "cmd", "win", "super" -> metaKey = true
+                "shift" -> shiftKey = true
+                // Unknown keys are silently ignored; the caller may warn
+            }
+        }
+
+        return MouseModifierState(altKey, ctrlKey, metaKey, shiftKey)
     }
 
     private data class MouseModifierState(

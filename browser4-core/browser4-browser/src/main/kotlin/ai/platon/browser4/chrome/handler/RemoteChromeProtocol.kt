@@ -295,12 +295,12 @@ class RemoteChromeProtocol(
 
     override fun onDragIntercepted(handler: (DragIntercepted) -> Unit) = input.onDragIntercepted(handler)
 
-    override suspend fun dispatchMouseMoved(x: Double, y: Double, buttons: Int?) {
+    override suspend fun dispatchMouseMoved(x: Double, y: Double, buttons: Int?, modifiers: Int?) {
         input.dispatchMouseEvent(
             type = DispatchMouseEventType.MOUSE_MOVED,
             x = x,
             y = y,
-            modifiers = null,
+            modifiers = modifiers,
             timestamp = null,
             button = null,
             buttons = buttons,
@@ -349,12 +349,12 @@ class RemoteChromeProtocol(
         )
     }
 
-    override suspend fun dispatchMouseWheel(x: Double, y: Double, deltaX: Double, deltaY: Double) {
+    override suspend fun dispatchMouseWheel(x: Double, y: Double, deltaX: Double, deltaY: Double, modifiers: Int?) {
         input.dispatchMouseEvent(
             type = DispatchMouseEventType.MOUSE_WHEEL,
             x = x,
             y = y,
-            modifiers = null,
+            modifiers = modifiers,
             timestamp = null,
             button = null,
             buttons = null,
