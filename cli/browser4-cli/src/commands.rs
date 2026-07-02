@@ -360,7 +360,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             options: &[
                 OptionDef {
                     name: "tag",
-                    description: "Release tag to install, for example v4.9.3 or 4.9.3 (defaults to latest release)",
+                    description: "Release tag to install, e.g. v4.9.3 (defaults to latest release)",
                     is_bool: false,
                     short: None,
                 },

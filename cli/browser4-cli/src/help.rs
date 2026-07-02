@@ -407,6 +407,14 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push(
             "  - When no --tag is given the latest release is resolved automatically.".to_string(),
         );
+        lines.push(
+            "  - When the requested version is already installed, the download is skipped."
+                .to_string(),
+        );
+        lines.push(
+            "  - Use --force to re-download even when the requested version is already installed."
+                .to_string(),
+        );
         lines.push(String::new());
         lines.push("Examples:".to_string());
         lines.push("  browser4-cli install".to_string());
@@ -417,7 +425,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
     if cmd.name == "upgrade" {
         lines.push("Notes:".to_string());
         lines.push(
-            "  - Convenience wrapper around `install` that upgrades the runtime to a newer version."
+            "  - Like `install`, but also upgrades the browser4-cli binary itself, and skips the download when the requested version is already installed."
                 .to_string(),
         );
         lines.push(
@@ -435,7 +443,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push(String::new());
         lines.push("Examples:".to_string());
         lines.push("  browser4-cli upgrade".to_string());
-        lines.push("  browser4-cli upgrade v4.11.0".to_string());
+        lines.push("  browser4-cli upgrade --tag v4.11.0".to_string());
         lines.push("  browser4-cli upgrade --force".to_string());
     }
 
@@ -1150,6 +1158,8 @@ mod tests {
         assert!(help.contains("browser4-cli install --tag v4.9.3"));
         assert!(help.contains("--force"));
         assert!(help.contains("configured download mirrors"));
+        assert!(help.contains("download is skipped"));
+        assert!(help.contains("re-download even when"));
     }
 
     #[test]
@@ -1158,8 +1168,9 @@ mod tests {
         let upgrade = cmds.iter().find(|c| c.name == "upgrade").unwrap();
         let help = generate_command_help(upgrade);
         assert!(help.contains("browser4-cli upgrade"));
-        assert!(help.contains("Convenience wrapper around `install`"));
+        assert!(help.contains("also upgrades the browser4-cli binary itself"));
         assert!(help.contains("restart the server"));
+        assert!(help.contains("--tag"));
         assert!(help.contains("--force"));
         assert!(help.contains("mirror selection"));
     }
