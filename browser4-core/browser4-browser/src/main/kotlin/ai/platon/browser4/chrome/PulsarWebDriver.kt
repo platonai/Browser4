@@ -50,11 +50,7 @@ import com.google.common.annotations.Beta
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeout
 import org.apache.commons.lang3.StringUtils
-import kotlin.math.abs
-import kotlin.math.max
-import kotlin.math.roundToLong
 import org.apache.commons.lang3.SystemUtils
 import java.nio.file.Files
 import java.time.Duration
@@ -562,32 +558,11 @@ open class PulsarWebDriver constructor(
         }
     }
 
-    /**
-     * Compute a timeout for mouse-wheel operations proportional to the scroll
-     * distance.  The base 5 s covers the CDP round-trip; each additional
-     * 1 000 px of combined delta adds 1 s, capped at 30 s.
-     */
-    private fun wheelTimeout(deltaX: Double, deltaY: Double): Long {
-        val distance = max(abs(deltaX), abs(deltaY))
-        val extra = (distance / 1000.0).roundToLong() * 1000L
-        return maxOf(5_000L, minOf(30_000L, 5_000L + extra))
-    }
-
     @Throws(WebDriverException::class)
     override suspend fun mouseWheel(deltaX: Double, deltaY: Double) {
         val m = mouse ?: throw IllegalWebDriverStateException("Mouse not available", driver = this)
         rpc.invokeOnPage("mouseWheel") {
-            // Primary: JS window.scrollBy() — reliable, bypasses the CDP
-            // Input.dispatchMouseEvent wheel race condition (crbug.com/444929150).
-            try {
-                js.evaluate("window.scrollBy($deltaX, $deltaY)")
-            } catch (_: Exception) {
-                // Fallback: CDP mouse wheel with a distance-proportional timeout
-                // so large scrolls don't trigger false-positive timeouts.
-                withTimeout(wheelTimeout(deltaX, deltaY)) {
-                    m.wheel(deltaX, deltaY)
-                }
-            }
+            m.wheel(deltaX, deltaY)
         }
     }
 
@@ -598,17 +573,9 @@ open class PulsarWebDriver constructor(
                 gap("mouseWheel")
                 val point = emulator.getInteractPoint(node, "center", useRandomOffset = true)
                     ?: return@invokeOnElement
-                // Primary: JS scroll — reliable, bypasses CDP wheel race (crbug.com/444929150).
-                // Fallback: CDP with distance-proportional timeout for fixed containers.
-                try {
-                    js.evaluate("document.querySelector('${selector.replace("'", "\\'")}').scrollBy($deltaX, $deltaY)")
-                } catch (_: Exception) {
-                    val m = mouse ?: return@invokeOnElement
-                    withTimeout(wheelTimeout(deltaX, deltaY)) {
-                        m.moveTo(point, steps = 1)
-                        m.wheel(deltaX, deltaY)
-                    }
-                }
+                val m = mouse ?: return@invokeOnElement
+                m.moveTo(point, steps = 1)
+                m.wheel(deltaX, deltaY)
             }
         } catch (e: ChromeDriverException) {
             rpc.interceptChromeException(e, "mouseWheel")
