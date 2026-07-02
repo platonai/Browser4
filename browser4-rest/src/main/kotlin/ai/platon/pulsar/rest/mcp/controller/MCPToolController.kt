@@ -9,21 +9,19 @@ import ai.platon.pulsar.agentic.model.ToolCall
 import ai.platon.pulsar.agentic.model.ToolSpec
 import ai.platon.pulsar.agentic.tools.AgentToolManager
 import ai.platon.pulsar.agentic.tools.advanced.crawl.ScrapeRequest
-import ai.platon.pulsar.skeleton.workflow.parse.html.PageSummaryIndexService
 import ai.platon.pulsar.common.PulsarSessionManager
 import ai.platon.pulsar.common.brief
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import ai.platon.pulsar.common.sql.SQLTemplate
 import ai.platon.pulsar.dom.FeaturedDocument
 import ai.platon.pulsar.rest.api.service.ScrapeService
+import ai.platon.pulsar.skeleton.workflow.parse.html.PageSummaryIndexService
 import com.fasterxml.jackson.annotation.JsonInclude
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.fasterxml.jackson.annotation.JsonSetter
 import com.fasterxml.jackson.annotation.Nulls
-import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.databind.node.ArrayNode
 import com.fasterxml.jackson.databind.node.ObjectNode
-
 import jakarta.servlet.http.HttpServletResponse
 import org.slf4j.LoggerFactory
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean
@@ -787,15 +785,16 @@ class MCPToolController(
 
                 // Extract non-trivial interactive elements and assign importance weights
                 val interactiveSelector = "a[href], button, input:not([type=hidden]), select, textarea, " +
-                    "details, summary, " +
-                    "[role=button], [role=link], [role=checkbox], [role=radio], " +
-                    "[role=tab], [role=menuitem], [role=switch], [role=combobox], " +
-                    "[role=searchbox], [role=textbox], [role=slider], [role=spinbutton], " +
-                    "[role=option], [role=treeitem], " +
-                    "[tabindex]:not([tabindex=\"-1\"]), [contenteditable=true], " +
-                    "[onclick], [onkeydown], [onsubmit]"
+                        "details, summary, " +
+                        "[role=button], [role=link], [role=checkbox], [role=radio], " +
+                        "[role=tab], [role=menuitem], [role=switch], [role=combobox], " +
+                        "[role=searchbox], [role=textbox], [role=slider], [role=spinbutton], " +
+                        "[role=option], [role=treeitem], " +
+                        "[tabindex]:not([tabindex=\"-1\"]), [contenteditable=true], " +
+                        "[onclick], [onkeydown], [onsubmit]"
                 val maxInteractive = 100
-                val allInteractive = document.select(interactiveSelector).take(maxInteractive * 2) // over-fetch to allow exclusions
+                val allInteractive =
+                    document.select(interactiveSelector).take(maxInteractive * 2) // over-fetch to allow exclusions
                 val weighted = computeInteractiveWeights(allInteractive).take(maxInteractive)
                 val interactiveElements = weighted.map { (el, weight, tier) ->
                     val obj = pulsarObjectMapper().createObjectNode()
@@ -826,7 +825,10 @@ class MCPToolController(
                 }
 
                 val json = pulsarObjectMapper().createObjectNode().apply {
-                    put("url", page.url) // normalized url and can be served as the key to retrieve the page from database
+                    put(
+                        "url",
+                        page.url
+                    ) // normalized url and can be served as the key to retrieve the page from database
                     put("href", page.href) // the href from an anchor, or the user-typed url
                     put("sizeBytes", page.contentLength.toString())
                     put("capturedAt", page.prevFetchTime.toString())
@@ -998,12 +1000,14 @@ class MCPToolController(
             RegexOption.IGNORE_CASE
         )
         if (dotUrlPattern.containsMatchIn(sql)) {
-            return ResponseEntity.ok(errorResponse(
-                "Invalid URL '.' in DOM_LOAD_AND_SELECT. " +
-                    "Use the unquoted @url placeholder to reference the current page URL. " +
-                    "Example: FROM load_and_select(@url, ':root') — not FROM load_and_select('.', ':root'). " +
-                    "See: https://docs.browser4.ai/x-sql for details."
-            ))
+            return ResponseEntity.ok(
+                errorResponse(
+                    "Invalid URL '.' in DOM_LOAD_AND_SELECT. " +
+                            "Use the unquoted @url placeholder to reference the current page URL. " +
+                            "Example: FROM load_and_select(@url, ':root') — not FROM load_and_select('.', ':root'). " +
+                            "See: https://docs.browser4.ai/x-sql for details."
+                )
+            )
         }
 
         // SQLTemplate.createSQL(url) replaces the @url placeholder with a properly
@@ -1435,13 +1439,13 @@ internal fun inspectDocument(
     // Pre-compute element weights for all interactive elements in the document.
     // Used to boost selector candidates that target high-importance elements.
     val interactiveSelector = "a[href], button, input:not([type=hidden]), select, textarea, " +
-        "details, summary, " +
-        "[role=button], [role=link], [role=checkbox], [role=radio], " +
-        "[role=tab], [role=menuitem], [role=switch], [role=combobox], " +
-        "[role=searchbox], [role=textbox], [role=slider], [role=spinbutton], " +
-        "[role=option], [role=treeitem], " +
-        "[tabindex]:not([tabindex=\"-1\"]), [contenteditable=true], " +
-        "[onclick], [onkeydown], [onsubmit]"
+            "details, summary, " +
+            "[role=button], [role=link], [role=checkbox], [role=radio], " +
+            "[role=tab], [role=menuitem], [role=switch], [role=combobox], " +
+            "[role=searchbox], [role=textbox], [role=slider], [role=spinbutton], " +
+            "[role=option], [role=treeitem], " +
+            "[tabindex]:not([tabindex=\"-1\"]), [contenteditable=true], " +
+            "[onclick], [onkeydown], [onsubmit]"
     val elementWeightMap: Map<org.jsoup.nodes.Element, Int> = try {
         val allInteractive = document.select(interactiveSelector)
         computeInteractiveWeights(allInteractive).associate { (el, weight, _) -> el to weight }
@@ -1526,7 +1530,7 @@ internal fun inspectDocument(
             if (descClass.isNotBlank()) {
                 val classes = descClass.split("\\s+".toRegex()).take(2).joinToString(".") { it }
                 val sel = if (descId.isNotBlank()) "${descTag}.$classes#${descId}"
-                          else "${descTag}.$classes"
+                else "${descTag}.$classes"
                 candidates.add(sel to "class")
             } else if (descId.isNotBlank()) {
                 candidates.add("${descTag}#${descId}" to "id")
@@ -1614,7 +1618,8 @@ internal fun inspectDocument(
 
     // ---- Quality scoring ----
 
-    val semanticTags = setOf("h1", "h2", "h3", "h4", "h5", "h6", "a", "img", "button", "input", "select", "textarea", "label")
+    val semanticTags =
+        setOf("h1", "h2", "h3", "h4", "h5", "h6", "a", "img", "button", "input", "select", "textarea", "label")
 
     fun distinctTextCount(stats: CandidateStats): Int =
         stats.textValues.values.filter { it.isNotBlank() }.distinct().size
@@ -1623,12 +1628,12 @@ internal fun inspectDocument(
         val n = stats.count.toDouble()
         // Specificity: class/id/attr selectors are more useful than bare tags
         val specificityPerMatch = when (candidate.selectorType) {
-            "id"    -> 0.7
+            "id" -> 0.7
             "class" -> 0.4
             "power" -> 0.35  // visual features: almost as stable as classes
-            "attr"  -> 0.2
-            "bare"  -> if (candidate.tag in setOf("div", "span")) -0.3 else -0.1
-            else    -> 0.0
+            "attr" -> 0.2
+            "bare" -> if (candidate.tag in setOf("div", "span")) -0.3 else -0.1
+            else -> 0.0
         }
         // Distinctiveness: text that varies across matches signals unique data
         val distinctBoost = if (distinctTextCount(stats) >= 2) 0.3 else 0.0
@@ -1653,6 +1658,7 @@ internal fun inspectDocument(
         val idx = (scores.size * 0.25).toInt().coerceIn(0, scores.size - 1)
         scores.sortedDescending()[idx]
     } else 0.0
+
     fun qualityTier(score: Double): String = when {
         score >= p75 -> "high"
         score >= p75 * 0.5 -> "medium"
@@ -1691,162 +1697,161 @@ internal fun inspectDocument(
     }.toString()
 }
 
-    // =========================================================================
-    // Interactive Element Weighting
-    // =========================================================================
+// =========================================================================
+// Interactive Element Weighting
+// =========================================================================
 
-    /**
-     * Computes importance weights for interactive elements using a two-tier system.
-     *
-     * Tier 1 — Primary interactive controls (buttons, inputs, form controls, interactive ARIA roles).
-     * Weight = 1_000_000 + area, ensuring they always rank above links.
-     *
-     * Tier 2 — Links (anchor elements with href). Links are grouped by x-coordinate (tolerance ε=10px),
-     * then by area (20% relative tolerance). Each group's score = sum of member areas.
-     * Links inherit their group's score as weight.
-     *
-     * Excluded: hidden (_h attr), aria-hidden, disabled, type=hidden, zero-area, pointer-events:none.
-     *
-     * @param elements Jsoup Elements to weight
-     * @return sorted list of (element, weight, tier) ordered by weight descending
-     */
-    internal fun computeInteractiveWeights(
-        elements: List<org.jsoup.nodes.Element>
-    ): List<Triple<org.jsoup.nodes.Element, Int, String>> {
-        if (elements.isEmpty()) return emptyList()
+/**
+ * Computes importance weights for interactive elements using a two-tier system.
+ *
+ * Tier 1 — Primary interactive controls (buttons, inputs, form controls, interactive ARIA roles).
+ * Weight = 1_000_000 + area, ensuring they always rank above links.
+ *
+ * Tier 2 — Links (anchor elements with href). Links are grouped by x-coordinate (tolerance ε=10px),
+ * then by area (20% relative tolerance). Each group's score = sum of member areas.
+ * Links inherit their group's score as weight.
+ *
+ * Excluded: hidden (_h attr), aria-hidden, disabled, type=hidden, zero-area, pointer-events:none.
+ *
+ * @param elements Jsoup Elements to weight
+ * @return sorted list of (element, weight, tier) ordered by weight descending
+ */
+internal fun computeInteractiveWeights(
+    elements: List<org.jsoup.nodes.Element>
+): List<Triple<org.jsoup.nodes.Element, Int, String>> {
+    if (elements.isEmpty()) return emptyList()
 
-        data class BoxInfo(
-            val el: org.jsoup.nodes.Element,
-            val x: Double, val y: Double, val w: Double, val h: Double,
-            val area: Double, val tag: String, val role: String?
-        )
+    data class BoxInfo(
+        val el: org.jsoup.nodes.Element,
+        val x: Double, val y: Double, val w: Double, val h: Double,
+        val area: Double, val tag: String, val role: String?
+    )
 
-        val infos = mutableListOf<BoxInfo>()
+    val infos = mutableListOf<BoxInfo>()
 
-        for (el in elements) {
-            // ---- exclusion ----
-            if (el.attr("_h") == "1") continue
-            if (el.attr("aria-hidden") == "true") continue
-            if (el.hasAttr("disabled") || el.attr("aria-disabled") == "true") continue
-            if (el.attr("type").lowercase() == "hidden") continue
+    for (el in elements) {
+        // ---- exclusion ----
+        if (el.attr("_h") == "1") continue
+        if (el.attr("aria-hidden") == "true") continue
+        if (el.hasAttr("disabled") || el.attr("aria-disabled") == "true") continue
+        if (el.attr("type").lowercase() == "hidden") continue
 
-            val style = el.attr("style")
-            if ("pointer-events: none" in style.replace(" ", "") ||
-                "pointer-events:none" in style.replace(" ", "")
-            ) continue
+        val style = el.attr("style")
+        if ("pointer-events: none" in style.replace(" ", "") ||
+            "pointer-events:none" in style.replace(" ", "")
+        ) continue
 
-            // ---- parse vi rect ----
-            val vi = el.attr("vi")
-            if (vi.isBlank()) continue
-            val parts = vi.split("\\s+".toRegex())
-            if (parts.size < 4) continue
-            val x = parts[0].toDoubleOrNull() ?: continue
-            val y = parts[1].toDoubleOrNull() ?: continue
-            val w = parts[2].toDoubleOrNull() ?: continue
-            val h = parts[3].toDoubleOrNull() ?: continue
-            if (w <= 0 || h <= 0) continue
+        // ---- parse vi rect ----
+        val vi = el.attr("vi")
+        if (vi.isBlank()) continue
+        val parts = vi.split("\\s+".toRegex())
+        if (parts.size < 4) continue
+        val x = parts[0].toDoubleOrNull() ?: continue
+        val y = parts[1].toDoubleOrNull() ?: continue
+        val w = parts[2].toDoubleOrNull() ?: continue
+        val h = parts[3].toDoubleOrNull() ?: continue
+        if (w <= 0 || h <= 0) continue
 
-            val area = w * h
-            val tag = el.tagName().lowercase()
-            val role = el.attr("role").takeIf { it.isNotBlank() }?.lowercase()
+        val area = w * h
+        val tag = el.tagName().lowercase()
+        val role = el.attr("role").takeIf { it.isNotBlank() }?.lowercase()
 
-            infos.add(BoxInfo(el, x, y, w, h, area, tag, role))
+        infos.add(BoxInfo(el, x, y, w, h, area, tag, role))
+    }
+
+    // ---- classify ----
+    val tier1Tags = setOf("button", "input", "select", "textarea", "details", "summary")
+    val tier1Roles = setOf(
+        "button", "checkbox", "radio", "switch", "tab", "menuitem",
+        "combobox", "searchbox", "textbox", "slider", "spinbutton", "option", "treeitem",
+        "link", "menuitemcheckbox", "menuitemradio"
+    )
+
+    val tier1 = mutableListOf<Pair<BoxInfo, Int>>() // (info, weight)
+    val links = mutableListOf<BoxInfo>()
+
+    for (info in infos) {
+        val isTier1 = info.tag in tier1Tags ||
+                info.role in tier1Roles ||
+                info.el.hasAttr("contenteditable") ||
+                info.el.attr("contenteditable") == "true" ||
+                info.el.hasAttr("onclick") ||
+                info.el.hasAttr("onkeydown") ||
+                info.el.hasAttr("onsubmit") ||
+                (info.el.hasAttr("tabindex") && info.el.attr("tabindex") != "-1")
+
+        if (isTier1) {
+            tier1.add(info to (1_000_000 + info.area.toInt()))
+        } else if (info.tag == "a" && info.el.hasAttr("href")) {
+            links.add(info)
         }
+    }
 
-        // ---- classify ----
-        val tier1Tags = setOf("button", "input", "select", "textarea", "details", "summary")
-        val tier1Roles = setOf(
-            "button", "checkbox", "radio", "switch", "tab", "menuitem",
-            "combobox", "searchbox", "textbox", "slider", "spinbutton", "option", "treeitem",
-            "link", "menuitemcheckbox", "menuitemradio"
-        )
+    // ---- Tier 2: link grouping ----
+    val epsilon = 10.0        // x-coordinate tolerance (px)
+    val areaTolerance = 0.2   // 20% relative area tolerance
 
-        val tier1 = mutableListOf<Pair<BoxInfo, Int>>() // (info, weight)
-        val links = mutableListOf<BoxInfo>()
-
-        for (info in infos) {
-            val isTier1 = info.tag in tier1Tags ||
-                    info.role in tier1Roles ||
-                    info.el.hasAttr("contenteditable") ||
-                    info.el.attr("contenteditable") == "true" ||
-                    info.el.hasAttr("onclick") ||
-                    info.el.hasAttr("onkeydown") ||
-                    info.el.hasAttr("onsubmit") ||
-                    (info.el.hasAttr("tabindex") && info.el.attr("tabindex") != "-1")
-
-            if (isTier1) {
-                tier1.add(info to (1_000_000 + info.area.toInt()))
-            } else if (info.tag == "a" && info.el.hasAttr("href")) {
-                links.add(info)
+    // Group by x-coordinate
+    val xGroups = mutableListOf<MutableList<BoxInfo>>()
+    for (link in links) {
+        var found = false
+        for (group in xGroups) {
+            if (Math.abs(link.x - group.first().x) <= epsilon) {
+                group.add(link)
+                found = true
+                break
             }
         }
+        if (!found) {
+            xGroups.add(mutableListOf(link))
+        }
+    }
 
-        // ---- Tier 2: link grouping ----
-        val epsilon = 10.0        // x-coordinate tolerance (px)
-        val areaTolerance = 0.2   // 20% relative area tolerance
+    // Within each x-group, further group by area similarity
+    val linkWeights = mutableMapOf<org.jsoup.nodes.Element, Int>()
+    for (xGroup in xGroups) {
+        xGroup.sortBy { it.area }
 
-        // Group by x-coordinate
-        val xGroups = mutableListOf<MutableList<BoxInfo>>()
-        for (link in links) {
+        val areaGroups = mutableListOf<MutableList<BoxInfo>>()
+        for (link in xGroup) {
             var found = false
-            for (group in xGroups) {
-                if (Math.abs(link.x - group.first().x) <= epsilon) {
+            for (group in areaGroups) {
+                val refArea = group.first().area
+                if (refArea > 0 && Math.abs(link.area - refArea) / refArea <= areaTolerance) {
                     group.add(link)
                     found = true
                     break
                 }
             }
             if (!found) {
-                xGroups.add(mutableListOf(link))
+                areaGroups.add(mutableListOf(link))
             }
         }
 
-        // Within each x-group, further group by area similarity
-        val linkWeights = mutableMapOf<org.jsoup.nodes.Element, Int>()
-        for (xGroup in xGroups) {
-            xGroup.sortBy { it.area }
-
-            val areaGroups = mutableListOf<MutableList<BoxInfo>>()
-            for (link in xGroup) {
-                var found = false
-                for (group in areaGroups) {
-                    val refArea = group.first().area
-                    if (refArea > 0 && Math.abs(link.area - refArea) / refArea <= areaTolerance) {
-                        group.add(link)
-                        found = true
-                        break
-                    }
-                }
-                if (!found) {
-                    areaGroups.add(mutableListOf(link))
-                }
-            }
-
-            // Score each area-group and assign to all members
-            for (areaGroup in areaGroups) {
-                val score = areaGroup.sumOf { it.area }.toInt()
-                for (link in areaGroup) {
-                    linkWeights[link.el] = score
-                }
+        // Score each area-group and assign to all members
+        for (areaGroup in areaGroups) {
+            val score = areaGroup.sumOf { it.area }.toInt()
+            for (link in areaGroup) {
+                linkWeights[link.el] = score
             }
         }
-
-        // ---- build sorted result ----
-        val result = mutableListOf<Triple<org.jsoup.nodes.Element, Int, String>>()
-
-        // Tier 1: sort by weight descending
-        tier1.sortedByDescending { it.second }.forEach { (info, weight) ->
-            result.add(Triple(info.el, weight, "primary"))
-        }
-
-        // Tier 2: sort by weight descending (links in high-scoring groups first)
-        links
-            .filter { it.el in linkWeights }
-            .sortedByDescending { linkWeights[it.el]!! }
-            .forEach { link ->
-                result.add(Triple(link.el, linkWeights[link.el]!!, "link"))
-            }
-
-        return result
     }
+
+    // ---- build sorted result ----
+    val result = mutableListOf<Triple<org.jsoup.nodes.Element, Int, String>>()
+
+    // Tier 1: sort by weight descending
+    tier1.sortedByDescending { it.second }.forEach { (info, weight) ->
+        result.add(Triple(info.el, weight, "primary"))
+    }
+
+    // Tier 2: sort by weight descending (links in high-scoring groups first)
+    links
+        .filter { it.el in linkWeights }
+        .sortedByDescending { linkWeights[it.el]!! }
+        .forEach { link ->
+            result.add(Triple(link.el, linkWeights[link.el]!!, "link"))
+        }
+
+    return result
 }
