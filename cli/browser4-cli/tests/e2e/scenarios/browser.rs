@@ -649,73 +649,16 @@ pub(super) fn test_interaction_commands(ctx: &mut E2ECtx) {
     ] {
         let press_before = read_interactive_state(ctx);
         let press_before_events = key_event_count(&press_before);
-
-        // Primary: use CLI press command (CDP browser_press_key).
         run_command(ctx, &["press", key, "#type-target"]);
 
-        // Wait up to 5s for the CDP press to take effect.  The extra headroom
-        // avoids races where the CDP response is in-flight but hasn't landed
-        // in the DOM yet, which would cause the JS fallback to double-fire.
-        let mut ok = wait_for_state_or_return_error(
-            ctx,
-            |s| s["typeValue"].as_str() == Some(expected_value),
-            5_000,
-            &format!("Expected press to append '{key}' to typeValue"),
-        )
-        .is_ok();
-
-        // Fallback: CDP press can fail to generate DOM input events
-        // (Chromium crbug.com/444929150).  Check the actual value before
-        // falling back — CDP may have succeeded after our wait timed out.
-        if !ok {
-            let current = read_interactive_state(ctx)
-                .get("typeValue")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string())
-                .unwrap_or_default();
-            if current == expected_value {
-                ok = true; // CDP succeeded, just slower than our poll detected
-            } else {
-                eprintln!(
-                    "[press] CDP press '{}' did not update typeValue (got '{current}'); falling back to JS dispatch",
-                    key
-                );
-                run_command(
-                    ctx,
-                    &[
-                        "eval",
-                        &format!(
-                            "(() => {{ const el = document.getElementById('type-target'); el.focus(); el.value = '{expected_value}'; el.dispatchEvent(new Event('input', {{ bubbles: true }})); }})()"
-                        ),
-                    ],
-                );
-                ok = wait_for_state_or_return_error(
-                    ctx,
-                    |s| s["typeValue"].as_str() == Some(expected_value),
-                    2_000,
-                    &format!("Expected JS fallback press to append '{key}' to typeValue"),
-                )
-                .is_ok();
-            }
-        }
-
-        let final_val = read_interactive_state(ctx)
-            .get("typeValue")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string())
-            .unwrap_or_default();
-        assert!(
-            ok,
-            "Press '{key}' failed: expected typeValue '{expected_value}', got '{final_val}'"
-        );
-
-        // Soft check: key events may not always be dispatched through the DOM
-        // event system (e.g. when the CDP keyboard implementation uses
-        // Input.insertText).  Log a warning but don't fail the test.
-        let _ = wait_for_state_or_return_error(
+        // The server-side PulsarWebDriver.press() now uses the same
+        // focusOnSelector + click + keyboard.press pattern as type(),
+        // which reliably produces DOM input events.
+        wait_for_state_or_abort(
             ctx,
             |s| {
-                key_event_count(s) >= press_before_events + 2
+                s["typeValue"].as_str() == Some(expected_value)
+                    && key_event_count(s) >= press_before_events + 2
                     && s["keyEvents"]
                         .as_array()
                         .map(|events| {
@@ -729,9 +672,9 @@ pub(super) fn test_interaction_commands(ctx: &mut E2ECtx) {
                         })
                         .unwrap_or(false)
             },
-            1_000,
+            5_000,
             &format!(
-                "Soft check: expected press to emit down/up key events for '{key}'"
+                "Expected press to append '{key}' to typeValue and emit down/up key events for '{key}'"
             ),
         );
     }
@@ -1197,63 +1140,16 @@ pub(super) fn test_mousewheel(ctx: &mut E2ECtx) {
     run_command(ctx, &["mousemove", "240", "160"]);
 
     // ── Vertical scroll (deltaY=160) ────────────────────────────────────
-    // Primary: dispatch a custom WheelEvent via JS — deterministic and
-    // immune to the Chromium CDP mouseWheel race condition (crbug.com/444929150).
-    // The wheel listener in the fixture uses { passive: false } (Chromium's
-    // own workaround) so the event is delivered synchronously.
-    run_command(
-        ctx,
-        &[
-            "eval",
-            "document.getElementById('mouse-area').dispatchEvent(new WheelEvent('wheel', { deltaX: 0, deltaY: 160 }))",
-        ],
-    );
-    wait_for_state_or_abort(
+    // The server-side PulsarWebDriver.mouseWheel() uses JS window.scrollBy()
+    // as primary (reliable, bypasses CDP crbug.com/444929150), falling back
+    // to CDP Input.dispatchMouseEvent only if JS fails.
+    run_command(ctx, &["mousewheel", "0", "160"]);
+    let wheel_state = wait_for_state_or_abort(
         ctx,
         |s| s["lastWheel"][0].as_i64() == Some(0) && s["lastWheel"][1].as_i64() == Some(160),
         5_000,
-        "Expected JS wheel event to update lastWheel to [0, 160]",
+        "Expected mousewheel to update lastWheel to [0, 160]",
     );
-
-    // Fallback: CDP mouseWheel — may hang due to Chromium CDP bug; retry
-    // with a 5-second timeout.
-    let current = read_interactive_state(ctx);
-    if !(current["lastWheel"][0].as_i64() == Some(0)
-        && current["lastWheel"][1].as_i64() == Some(160))
-    {
-        eprintln!(
-            "[mousewheel] JS WheelEvent did not set expected deltas (got {:?}); falling back to CDP mousewheel",
-            current.get("lastWheel")
-        );
-        let mut ok = false;
-        for attempt in 0..3 {
-            if attempt > 0 {
-                thread::sleep(Duration::from_secs(2));
-            }
-            let result = run_command_allowing_failure(ctx, &["mousewheel", "0", "160"]);
-            if result.exit_code == 0 {
-                ok = true;
-                break;
-            }
-            eprintln!(
-                "[mousewheel] CDP fallback attempt {}/3 failed (exit={}): {}",
-                attempt + 1,
-                result.exit_code,
-                result.stderr.trim()
-            );
-        }
-        if !ok {
-            run_command(ctx, &["mousewheel", "0", "160"]);
-        }
-        wait_for_state_or_abort(
-            ctx,
-            |s| s["lastWheel"][0].as_i64() == Some(0) && s["lastWheel"][1].as_i64() == Some(160),
-            5_000,
-            "Expected CDP mousewheel fallback to update lastWheel to [0, 160]",
-        );
-    }
-
-    let wheel_state = read_interactive_state(ctx);
     assert!(
         wheel_state["lastWheel"][0].as_i64() == Some(0)
             && wheel_state["lastWheel"][1].as_i64() == Some(160),
@@ -1261,37 +1157,14 @@ pub(super) fn test_mousewheel(ctx: &mut E2ECtx) {
     );
 
     // ── Horizontal scroll (deltaX=160) ──────────────────────────────────
-    // Same primary + fallback pattern.
-    run_command(
-        ctx,
-        &[
-            "eval",
-            "document.getElementById('mouse-area').dispatchEvent(new WheelEvent('wheel', { deltaX: 160, deltaY: 0 }))",
-        ],
-    );
+    // May be unreliable on some platforms; warn on timeout but don't fail.
+    run_command(ctx, &["mousewheel", "160", "0"]);
     assume_wait_for_state(
         ctx,
         |s| s["lastWheel"][0].as_i64() == Some(160) && s["lastWheel"][1].as_i64() == Some(0),
         10_000,
-        "Expected JS wheel event to update lastWheel to [160, 0]",
+        "Expected mousewheel to update lastWheel to [160, 0]",
     );
-
-    // Fallback for horizontal scroll
-    let current = read_interactive_state(ctx);
-    if !(current["lastWheel"][0].as_i64() == Some(160)
-        && current["lastWheel"][1].as_i64() == Some(0))
-    {
-        eprintln!(
-            "[mousewheel] JS WheelEvent for horizontal scroll did not set expected deltas; falling back to CDP"
-        );
-        run_command(ctx, &["mousewheel", "160", "0"]);
-        assume_wait_for_state(
-            ctx,
-            |s| s["lastWheel"][0].as_i64() == Some(160) && s["lastWheel"][1].as_i64() == Some(0),
-            10_000,
-            "Expected CDP mousewheel to update lastWheel to [160, 0]",
-        );
-    }
 
     run_command(ctx, &["close"]);
 }
