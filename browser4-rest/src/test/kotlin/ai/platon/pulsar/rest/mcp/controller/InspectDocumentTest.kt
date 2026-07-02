@@ -602,12 +602,78 @@ class InspectDocumentTest {
         }
 
         @Test
-        @DisplayName(":root selector works on full document")
-        fun rootSelector() {
+        @DisplayName(":root selector auto-discovers repeating pattern")
+        fun rootSelectorAutoDiscovers() {
             val result = inspect(productCardsHtml)
+            // Auto-discovery should kick in and find .product-card
+            assertTrue(result["autoDiscovered"].asBoolean(),
+                "Should auto-discover when :root matches only 1 element")
+            assertEquals(":root", result["originalSelector"].asText())
+            assertEquals(".product-card", result["selector"].asText())
+            assertEquals(3, result["matchCount"].asInt())
+            assertTrue(result["suggestions"].size() > 0,
+                "Should have suggestions from auto-discovered repeating pattern")
+        }
+
+        @Test
+        @DisplayName("auto-discovery returns null on pages with no repeating content")
+        fun autoDiscoveryNoRepeatingContent() {
+            val html = """
+                <html><body>
+                <h1>Single Article</h1>
+                <p>This page has no repeating content patterns.</p>
+                </body></html>
+            """.trimIndent()
+            val result = inspect(html)
+            // No auto-discovery fields (nothing found), selector stays as :root
+            assertFalse(result.has("autoDiscovered"),
+                "Should not set autoDiscovered when no pattern found")
             assertEquals(":root", result["selector"].asText())
-            // :root matches exactly 1 element (the html element)
             assertEquals(1, result["matchCount"].asInt())
+            assertEquals(0, result["suggestions"].size(),
+                "No suggestions when no repeating content exists")
+        }
+
+        @Test
+        @DisplayName("auto-discovery prefers class-based groups over bare tags")
+        fun autoDiscoveryPrefersClassBased() {
+            val html = """
+                <html><body>
+                <nav>
+                  <a href="/1">Link 1</a>
+                  <a href="/2">Link 2</a>
+                  <a href="/3">Link 3</a>
+                </nav>
+                <main>
+                  <div class="product">
+                    <h2>Widget A</h2>
+                    <span class="price">$10</span>
+                    <p>Description A</p>
+                  </div>
+                  <div class="product">
+                    <h2>Widget B</h2>
+                    <span class="price">$20</span>
+                    <p>Description B</p>
+                  </div>
+                </main>
+                </body></html>
+            """.trimIndent()
+            val result = inspect(html)
+            assertTrue(result["autoDiscovered"].asBoolean())
+            // Should prefer .product (class-based, richer structure) over a (bare tag)
+            assertEquals(".product", result["selector"].asText(),
+                "Should prefer class-based .product over bare <a> tags")
+        }
+
+        @Test
+        @DisplayName("explicit multi-match selector bypasses auto-discovery")
+        fun explicitMultiMatchBypassesAutoDiscovery() {
+            // When user provides a selector that matches ≥2 elements, no auto-discovery
+            val result = inspect(productCardsHtml, ".product-card")
+            assertFalse(result.has("autoDiscovered"),
+                "Should not auto-discover when explicit selector matches ≥2 elements")
+            assertEquals(".product-card", result["selector"].asText())
+            assertEquals(3, result["matchCount"].asInt())
         }
     }
 }

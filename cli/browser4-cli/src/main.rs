@@ -3704,9 +3704,16 @@ async fn handle_dom_snapshot_inspect(
     let selector = data.get("selector").and_then(|v| v.as_str()).unwrap_or(":root");
     let match_count = data.get("matchCount").and_then(|v| v.as_i64()).unwrap_or(0);
     let analyzed = data.get("analyzed").and_then(|v| v.as_u64()).unwrap_or(0);
+    let auto_discovered = data.get("autoDiscovered").and_then(|v| v.as_bool()).unwrap_or(false);
+    let original_selector = data.get("originalSelector").and_then(|v| v.as_str());
 
     if match_count == 0 {
         cli_println!("### Inspect: \"{}\" (0 matches)", selector);
+        if auto_discovered {
+            if let Some(orig) = original_selector {
+                cli_println!("  Auto-discovered selector \"{}\" from \"{}\" also had no matches.", selector, orig);
+            }
+        }
         cli_println!("- No elements matched. Check the CSS selector and ensure a DOM snapshot has been captured (`browser4-cli domsnapshot`).");
         json_field("matchCount", json!(0));
         json_field("selector", json!(selector));
@@ -3717,6 +3724,11 @@ async fn handle_dom_snapshot_inspect(
         "### Inspect: \"{}\" ({} matches, {} analyzed)",
         selector, match_count, analyzed
     );
+    if auto_discovered {
+        if let Some(orig) = original_selector {
+            cli_println!("  🔍 Auto-discovered repeating pattern from \"{}\"", orig);
+        }
+    }
 
     // Sample structures
     if let Some(samples) = data.get("samples").and_then(|v| v.as_array()) {

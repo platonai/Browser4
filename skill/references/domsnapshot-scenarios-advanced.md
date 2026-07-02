@@ -166,16 +166,43 @@ browser4-cli domsnapshot query --sql "
 
 **Problem:** You land on an unfamiliar page (e.g., a competitor's e-commerce search results, a job board, or a news aggregator) and need to extract structured data — but you don't know the CSS selectors for product titles, prices, ratings, or other recurring fields. Guessing selectors or manually reading HTML is slow and error-prone.
 
-**Why DOM Snapshot:** `inspect` analyzes the DOM structure and suggests CSS selectors for recurring patterns across matching elements. It's deterministic, requires no AI, and works on any page where content repeats in a consistent structure.
+**Why DOM Snapshot:** `inspect` analyzes the DOM structure and suggests CSS selectors for recurring patterns across matching elements. Run without arguments to trigger **auto-discovery** — it finds the page's most prominent repeating content pattern automatically. It's deterministic, requires no AI, and works on any page where content repeats in a consistent structure.
 
-### 13a. Discover selectors on an e-commerce listing page
+### 13a. Auto-discover selectors on an unfamiliar page
 
 ```bash
 # Navigate to the page and capture a snapshot
 browser4-cli goto "https://books.toscrape.com"
 browser4-cli domsnapshot
 
-# Inspect the product listing — find the repeating product cards
+# Run inspect without arguments — auto-discovery finds .product_pod automatically
+browser4-cli domsnapshot inspect
+```
+
+**Output (example):**
+```
+### Inspect: ".product_pod" (20 matches, 10 analyzed)
+  🔍 Auto-discovered repeating pattern from ":root"
+
+  Sample structure (3 of 20):
+  -- Element 1: article.product_pod
+      img.thumbnail
+      h3            ""
+       a            "A Light in the Attic"
+      div.product_price
+       p.price_color  "£51.77"
+      p.instock.availability  "In stock"
+  ...
+
+  Suggested selectors (recurring across matches):
+   10/10 (100%)  h3 a                                         → "A Light in the..."
+   10/10 (100%)  img.thumbnail                                → ""
+   10/10 (100%)  p.price_color                                → "£51.77"
+    8/10 ( 80%)  p.instock.availability                       → "In stock"
+```
+
+You can also provide an explicit container selector if you already know it:
+```bash
 browser4-cli domsnapshot inspect ".product_pod"
 ```
 
@@ -226,10 +253,10 @@ browser4-cli domsnapshot query --sql "
 On larger pages, start broad then narrow down:
 
 ```bash
-# Step 1: See what repeating containers exist
+# Step 1: Auto-discover the main repeating containers
 browser4-cli domsnapshot inspect
 
-# Step 2: Inspect just the search results area
+# Step 2: Drill into a specific container for finer-grained selectors
 browser4-cli domsnapshot inspect ".s-result-item"
 
 # Step 3: For deeply nested structures, increase depth
@@ -246,7 +273,7 @@ URL="$1"
 browser4-cli goto "$URL"
 browser4-cli domsnapshot
 
-# 1. Discover repeating containers
+# 1. Auto-discover repeating containers
 echo "=== Scanning for repeating containers ==="
 browser4-cli domsnapshot inspect
 

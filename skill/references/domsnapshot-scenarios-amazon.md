@@ -78,7 +78,7 @@ keyContent:
 ### 14b. Discover structural patterns with inspect
 
 ```bash
-# Inspect the :root to find top-level repeating patterns
+# Auto-discover the page's most prominent repeating patterns
 browser4-cli domsnapshot inspect
 
 # Then narrow down to discover navigation structure
@@ -184,7 +184,7 @@ The summary confirms: this is a search-results page (h1 "Results"), there are 48
 ### 15b. Discover selectors with inspect
 
 ```bash
-# Start broad — scan for repeating containers
+# Auto-discover repeating containers (finds .s-result-item automatically)
 browser4-cli domsnapshot inspect
 
 # Narrow to the search result cards using the Amazon-specific data attribute

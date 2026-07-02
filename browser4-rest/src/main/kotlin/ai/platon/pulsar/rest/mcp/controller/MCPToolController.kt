@@ -1422,6 +1422,76 @@ class MCPToolController(
 // =========================================================================
 
 /**
+ * Auto-discovers the best CSS selector for repeating content patterns on a page.
+ *
+ * Used as a fallback when the user-specified selector (e.g. default `:root`)
+ * matches ≤1 element — making cross-match comparison impossible.
+ *
+ * Algorithm: walks the DOM, groups each parent's direct children by CSS
+ * signature (tag + up to 2 classes), scores each group by size × specificity ×
+ * content-variance × structural-richness, and returns the highest-scoring
+ * group's selector.
+ *
+ * @return a CSS selector string (e.g. ".product-card", "li"), or null if no
+ *   suitable repeating pattern found (single article pages, etc.)
+ */
+internal fun autoDiscoverRepeatingSelector(document: FeaturedDocument): String? {
+    val structuralTags = setOf("html", "head", "body", "script", "style", "meta", "link", "noscript")
+    val structuralBare = setOf("div", "span")
+
+    var bestSelector: String? = null
+    var bestScore = 0.0
+
+    for (parent in document.select("*")) {
+        val parentTag = parent.tagName().lowercase()
+        if (parentTag in structuralTags && parentTag != "body") continue
+
+        val children = parent.children()
+        if (children.size < 2) continue
+
+        // Group direct children by CSS signature: "tag.class1.class2" or bare "tag"
+        val groups = mutableMapOf<String, MutableList<org.jsoup.nodes.Element>>()
+        for (child in children) {
+            val tag = child.tagName().lowercase()
+            if (tag in structuralTags) continue
+            val cls = child.className().trim()
+            val sig = if (cls.isNotBlank()) {
+                val classes = cls.split("\\s+".toRegex()).take(2).joinToString(".") { it }
+                "$tag.$classes"
+            } else {
+                tag
+            }
+            groups.getOrPut(sig) { mutableListOf() }.add(child)
+        }
+
+        for ((sig, members) in groups) {
+            if (members.size < 2) continue
+
+            val hasClasses = sig.contains(".")
+            // Use text() (all descendant text) rather than ownText() so compound
+            // elements like product cards show content variance across matches.
+            val distinctText = members.map { it.text().trim() }.filter { it.isNotBlank() }.distinct().size
+            val avgDesc = members.map { it.select("*").size.toDouble() }.average()
+            val isStructuralDiv = !hasClasses && sig in structuralBare
+
+            var score = members.size.toDouble()
+            if (hasClasses) score *= 1.5
+            if (distinctText >= 2) score *= 1.3
+            if (avgDesc >= 3) score *= 1.2
+            if (isStructuralDiv) score *= 0.5
+
+            if (score > bestScore) {
+                bestScore = score
+                // Build usable CSS selector: use class if present, otherwise bare tag
+                bestSelector = if (hasClasses) ".${sig.substringAfter(".")}" else sig
+            }
+        }
+    }
+
+    return bestSelector
+}
+
+/**
  * Analyse a [document] and produce selector suggestions for recurring patterns.
  *
  * Pure function: takes a parsed document + parameters, returns a JSON result
@@ -1433,8 +1503,22 @@ internal fun inspectDocument(
     maxMatches: Int,
     maxDepth: Int,
 ): String {
-    val matches = document.select(selector).take(maxMatches)
-    val matchCount = document.select(selector).size
+    // Auto-discovery: when the selector matches exactly 1 element (e.g. default
+    // :root), find the best repeating content pattern on the page and use it
+    // instead. Does NOT activate for 0 matches — the user's selector is wrong.
+    var effectiveSelector = selector
+    var autoDiscovered = false
+    val initialMatchCount = document.select(selector).size
+    if (initialMatchCount == 1) {
+        val discovered = autoDiscoverRepeatingSelector(document)
+        if (discovered != null) {
+            effectiveSelector = discovered
+            autoDiscovered = true
+        }
+    }
+
+    val matches = document.select(effectiveSelector).take(maxMatches)
+    val matchCount = document.select(effectiveSelector).size
 
     // Pre-compute element weights for all interactive elements in the document.
     // Used to boost selector candidates that target high-importance elements.
@@ -1456,7 +1540,11 @@ internal fun inspectDocument(
     if (matches.isEmpty()) {
         return pulsarObjectMapper().createObjectNode().apply {
             put("matchCount", 0)
-            put("selector", selector)
+            put("selector", effectiveSelector)
+            if (autoDiscovered) {
+                put("autoDiscovered", true)
+                put("originalSelector", selector)
+            }
             putArray("suggestions")
         }.toString()
     }
@@ -1690,8 +1778,12 @@ internal fun inspectDocument(
 
     return pulsarObjectMapper().createObjectNode().apply {
         put("matchCount", matchCount)
-        put("selector", selector)
+        put("selector", effectiveSelector)
         put("analyzed", matches.size)
+        if (autoDiscovered) {
+            put("autoDiscovered", true)
+            put("originalSelector", selector)
+        }
         set<ArrayNode>("samples", samples)
         set<ArrayNode>("suggestions", suggestions)
     }.toString()
