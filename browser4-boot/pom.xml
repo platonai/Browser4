@@ -35,8 +35,8 @@
         </dependency>
         <dependency>
             <groupId>ai.platon.gora</groupId>
-            <artifactId>gora-core</artifactId>
-            <version>1.0.1-slim</version>
+            <artifactId>gora-core-shaded</artifactId>
+            <version>1.0.5-slim</version>
         </dependency>
 
         <!-- gora-core 1.0.1-slim excludes ALL transitive deps of hadoop-common
