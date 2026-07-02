@@ -1,5 +1,6 @@
 package ai.platon.pulsar.agentic.skills
 
+import ai.platon.pulsar.agentic.model.DirectValue
 import ai.platon.pulsar.agentic.model.ToolSpec
 import kotlin.reflect.KClass
 
@@ -97,7 +98,7 @@ data class SkillResult(
     val data: Any? = null,
     val message: String? = null,
     val metadata: Map<String, Any> = emptyMap()
-) {
+) : DirectValue {
     companion object {
         fun success(data: Any? = null, message: String? = null): SkillResult {
             return SkillResult(success = true, data = data, message = message)
