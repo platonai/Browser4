@@ -3420,6 +3420,8 @@ fn excluded_commands(include_batch_command: bool) -> HashSet<&'static str> {
         "generate-locator",
         "loop",
         "doctor",
+        // Act translates natural language to commands; requires an MCP/LLM backend.
+        "act",
         // Uninstall requires npm/cargo on $PATH; not exercised in e2e.
         "uninstall",
     ]
