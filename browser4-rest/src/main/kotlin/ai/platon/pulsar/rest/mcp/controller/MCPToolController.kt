@@ -814,6 +814,9 @@ class MCPToolController(
                     // Bounding box (vi attribute, injected by feature_calculator.js)
                     val box = el.attr("vi")
                     if (box.isNotBlank()) obj.put("box", box)
+                    // Own text (direct text content, not including descendants)
+                    val ownText = el.ownText().trim().take(80)
+                    if (ownText.isNotBlank()) obj.put("text", ownText)
                     obj
                 }
 
