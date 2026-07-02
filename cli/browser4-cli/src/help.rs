@@ -37,6 +37,7 @@ const CATEGORIES: &[(&str, &str)] = &[
     ("agent", "Agent"),
     ("snapshot", "Snapshot"),
     ("agent", "Agent"),
+    ("act", "Act"),
     ("swarm", "Swarm"),
     ("install", "Install"),
     ("browsers", "Browser sessions"),
@@ -349,6 +350,32 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("  browser4-cli agent result agent-task-1".to_string());
     }
 
+    if cmd.name == "act" {
+        lines.push("Notes:".to_string());
+        lines.push(
+            "  - Accepts natural language descriptions of browser actions."
+                .to_string(),
+        );
+        lines.push(
+            "  - The description is automatically translated to a browser4-cli command using AI."
+                .to_string(),
+        );
+        lines.push(
+            "  - Executes the command immediately against your current browser session."
+                .to_string(),
+        );
+        lines.push(
+            "  - Requires an LLM provider to be configured on the Browser4 server."
+                .to_string(),
+        );
+        lines.push(String::new());
+        lines.push("Examples:".to_string());
+        lines.push("  browser4-cli act \"scroll by 200px\"".to_string());
+        lines.push("  browser4-cli act \"go to https://example.com\"".to_string());
+        lines.push("  browser4-cli act \"click the search button and type hello\"".to_string());
+        lines.push("  browser4-cli act \"take a screenshot and save it as my-screen.png\"".to_string());
+    }
+
     if cmd.name == "attach" {
         lines.push("Notes:".to_string());
         lines.push(
@@ -408,6 +435,14 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push(
             "  - When no --tag is given the latest release is resolved automatically.".to_string(),
         );
+        lines.push(
+            "  - When the requested version is already installed, the download is skipped."
+                .to_string(),
+        );
+        lines.push(
+            "  - Use --force to re-download even when the requested version is already installed."
+                .to_string(),
+        );
         lines.push(String::new());
         lines.push("Examples:".to_string());
         lines.push("  browser4-cli install".to_string());
@@ -418,7 +453,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
     if cmd.name == "upgrade" {
         lines.push("Notes:".to_string());
         lines.push(
-            "  - Convenience wrapper around `install` that upgrades the runtime to a newer version."
+            "  - Like `install`, but also upgrades the browser4-cli binary itself, and skips the download when the requested version is already installed."
                 .to_string(),
         );
         lines.push(
@@ -436,7 +471,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push(String::new());
         lines.push("Examples:".to_string());
         lines.push("  browser4-cli upgrade".to_string());
-        lines.push("  browser4-cli upgrade v4.11.0".to_string());
+        lines.push("  browser4-cli upgrade --tag v4.11.0".to_string());
         lines.push("  browser4-cli upgrade --force".to_string());
     }
 
@@ -1112,6 +1147,7 @@ mod tests {
         assert!(help.contains("agent status"));
         assert!(help.contains("agent result"));
         assert!(help.contains("pdf"));
+        assert!(help.contains("act"));
         assert!(help.contains("swarm create"));
         assert!(help.contains("--json"));
         assert!(help.contains("machine-parseable JSON"));
@@ -1155,6 +1191,8 @@ mod tests {
         assert!(help.contains("browser4-cli install --tag v4.9.3"));
         assert!(help.contains("--force"));
         assert!(help.contains("configured download mirrors"));
+        assert!(help.contains("download is skipped"));
+        assert!(help.contains("re-download even when"));
     }
 
     #[test]
@@ -1163,8 +1201,9 @@ mod tests {
         let upgrade = cmds.iter().find(|c| c.name == "upgrade").unwrap();
         let help = generate_command_help(upgrade);
         assert!(help.contains("browser4-cli upgrade"));
-        assert!(help.contains("Convenience wrapper around `install`"));
+        assert!(help.contains("also upgrades the browser4-cli binary itself"));
         assert!(help.contains("restart the server"));
+        assert!(help.contains("--tag"));
         assert!(help.contains("--force"));
         assert!(help.contains("mirror selection"));
     }
@@ -1263,6 +1302,18 @@ mod tests {
         assert!(result_help.contains("browser4-cli agent result <id>"));
         assert!(result_help.contains("browser4-cli agent result agent-task-1"));
         assert!(!result_help.contains("browser4-cli agent-result"));
+    }
+
+    #[test]
+    fn test_generate_command_help_act() {
+        let cmds = all_commands();
+        let cmd = cmds.iter().find(|c| c.name == "act").unwrap();
+        let help = generate_command_help(cmd);
+        assert!(help.contains("browser4-cli act <description>"));
+        assert!(help.contains("natural language descriptions"));
+        assert!(help.contains("browser4-cli act \"scroll by 200px\""));
+        assert!(help.contains("browser4-cli act \"go to https://example.com\""));
+        assert!(help.contains("LLM provider"));
     }
 
     #[test]

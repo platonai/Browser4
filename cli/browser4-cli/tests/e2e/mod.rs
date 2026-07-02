@@ -2314,6 +2314,7 @@ fn is_transient_retryable_failure(result: &CliRunResult) -> bool {
 
     let combined = format!("{}\n{}", result.stdout, result.stderr).to_lowercase();
     combined.contains("http request failed: error sending request for url")
+        || combined.contains("http request timed out")
         || combined.contains("connection refused")
         || combined.contains("tcp connect error")
         || combined.contains("failed to launch browser")
@@ -2356,7 +2357,35 @@ fn extract_submitted_task_id(output: &str) -> String {
 }
 
 /// Extract the zero-based tab index for the given URL from `tab-list` output.
+///
+/// The output is a JSON array of `{index, guid, title, url}` objects.  We
+/// parse it as JSON first so we are robust against formatting variations
+/// (pretty-print, line-wrapping, etc.).  If that fails we fall back to the
+/// legacy regex-based extraction for backward compatibility.
 fn extract_tab_index(output: &str, url: &str) -> usize {
+    // Primary path: parse as JSON array of {index, url} objects.
+    if let Ok(tabs) = serde_json::from_str::<Vec<serde_json::Value>>(output) {
+        for tab in &tabs {
+            if let Some(tab_url) = tab.get("url").and_then(|v| v.as_str()) {
+                if tab_url == url {
+                    if let Some(idx) = tab
+                        .get("index")
+                        .and_then(|v| v.as_str())
+                        .and_then(|s| s.parse::<usize>().ok())
+                    {
+                        return idx;
+                    }
+                    panic!(
+                        "Found URL '{}' in tab-list but index field is missing or not parseable:\n{}",
+                        url, output
+                    );
+                }
+            }
+        }
+        panic!("Could not find tab index for '{}' in:\n{}", url, output);
+    }
+
+    // Fallback: legacy regex extraction for non-JSON or unusual formats.
     static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
     let re = RE.get_or_init(|| {
         regex::Regex::new(r#"url\s*[:=]\s*"?([^",}\s]+)"?"#).expect("tab url regex compile")
@@ -3338,6 +3367,8 @@ fn excluded_commands(include_batch_command: bool) -> HashSet<&'static str> {
         "generate-locator",
         "loop",
         "doctor",
+        // Act translates natural language to commands; requires an MCP/LLM backend.
+        "act",
         // Uninstall requires npm/cargo on $PATH; not exercised in e2e.
         "uninstall",
         // Skill management commands — require skills directory setup on the

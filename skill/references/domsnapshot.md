@@ -257,11 +257,18 @@ browser4-cli domsnapshot inspect [selector] [--max N] [--depth D]
 
 ### How it works
 
+When `selector` matches **multiple elements** (e.g. `.product-card`):
 1. Finds all elements matching `selector`
 2. For each match, walks descendants up to `--depth` and computes relative CSS selectors (tag + class + id)
 3. Counts how many matches each selector appears in
 4. Filters to selectors appearing in **≥50%** of matches (minimum 2)
 5. Returns sample structures and ranked selector suggestions
+
+When `selector` matches only **1 element** (e.g. default `:root`, or `body`), **auto-discovery** activates:
+1. Walks the DOM to find groups of sibling elements sharing the same CSS signature
+2. Scores each group by size × specificity × content-variance × structural-richness
+3. Picks the best repeating pattern (e.g. `.product-card`) and re-runs the pipeline against it
+4. Adds `autoDiscovered: true` and `originalSelector` to the response
 
 ### Output
 
@@ -286,6 +293,7 @@ browser4-cli domsnapshot inspect [selector] [--max N] [--depth D]
 
 ### Tips
 
+- **Start without arguments:** `domsnapshot inspect` (no selector) triggers auto-discovery and finds the page's most prominent repeating content pattern. This is the quickest way to discover selectors on an unfamiliar page.
 - **Start broad, then narrow:** First run without a selector to see page landmarks. Then target a repeating container (e.g. `.product_pod`, `.s-result-item`).
 - **Always capture first:** `domsnapshot` must be run before `inspect` (it loads the cached document).
 - **Use with `get`:** Take the suggested selectors and use them with `domsnapshot get all` or `domsnapshot query` for batch extraction.
@@ -308,5 +316,5 @@ browser4-cli domsnapshot inspect [selector] [--max N] [--depth D]
 - `domsnapshot grep` performs matching **entirely client-side** in the CLI — the full HTML is fetched from the backend once, then all regex matching happens locally. No backend round-trips for the search itself.
 - For CI pass/fail checks with grep, use `-l` (prints "domsnapshot" if matches found) or `-c` (prints match count). A `browser4-cli` non-zero exit code means the backend call itself failed, not that matches were absent.
 - `domsnapshot` capture now returns enriched metadata: `imageCount`, `linkCount`, and `interactiveElements` (tag, class, id, aria attributes, bounding-box). The bounding box is extracted from the `vi` attribute injected by the browser's layout engine.
-- `domsnapshot inspect` computes relative CSS selectors using tag + class + id. It does not use AI — the algorithm is fully deterministic and based on structural recurrence across matching elements.
+- `domsnapshot inspect` computes relative CSS selectors using tag + class + id. It does not use AI — the algorithm is fully deterministic and based on structural recurrence across matching elements. When run without a selector (or any single-match selector like `:root`), **auto-discovery** finds the page's most prominent repeating content pattern automatically — no prior knowledge of the page's markup is needed.
 - **Output pagination:** `get html`, `get all html`, and `grep` paginate output by default at 2000 lines per page. `get text` and `get all text` are not paginated by default (text extraction rarely exceeds practical limits). Use `--page N` for subsequent pages, `--page-size N` to change the page size, or `--all` to disable pagination entirely. Pagination is automatically skipped in `--json` and `--quiet` modes. Use `--all` when piping output to external tools.

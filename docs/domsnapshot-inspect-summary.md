@@ -6,11 +6,21 @@
 
 **How it works (fully deterministic, no AI):**
 
-1. Finds all elements matching your `selector` (defaults to `:root`)
+When you provide a CSS `selector` that matches multiple elements (e.g. `.product-card`):
+1. Finds all elements matching your `selector`
 2. For each match, walks descendants up to `--depth` and computes relative CSS selectors (`tag.class#id`)
 3. Counts how many matches each selector appears in
 4. Filters to selectors appearing in **≥50%** of matches (minimum 2)
 5. Returns sample structures + ranked selector suggestions with coverage percentages
+
+When you run without a selector (default `:root`), or with any selector that matches only 1 element, **auto-discovery** kicks in:
+1. Walks the DOM to find groups of sibling elements with the same CSS signature
+2. Scores each group by size, specificity (class-based > bare tags), content variance, and structural richness
+3. Picks the best repeating pattern and uses it as the effective selector
+4. Runs the normal cross-match comparison pipeline against the discovered pattern
+5. The response includes `autoDiscovered: true` and `originalSelector` so you know discovery was used
+
+This means `domsnapshot inspect` with no arguments now produces useful suggestions out of the box — no need to already know a container selector.
 
 **Usage:**
 
@@ -116,7 +126,7 @@ keyContent:
 |------|---------|----------------|
 | 1 | `domsnapshot` | Capture the page DOM |
 | 2 | `domsnapshot summary` | What's on the page (headings, tables, forms, key content) |
-| 3 | `domsnapshot inspect` | Which CSS selectors reliably target repeating content |
+| 3 | `domsnapshot inspect` | Auto-discover repeating content patterns and their reliable CSS selectors |
 | 4 | `domsnapshot get all` / `query` | Extract the actual data |
 
 Both commands are purely deterministic — no AI involved — and operate against the cached DOM snapshot.

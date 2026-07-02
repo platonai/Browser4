@@ -578,11 +578,13 @@ browser4-cli domsnapshot grep --all "TODOs"
 #### domsnapshot inspect
 
 Analyze DOM structure and discover CSS selectors for recurring patterns (product
-cards, prices, titles). When the selector matches multiple similar elements, it
-compares their child structures and ranks selectors by recurrence.
+cards, prices, titles). Run without arguments to auto-discover the page's most
+prominent repeating content. When the selector matches multiple similar elements,
+it compares their child structures and ranks selectors by recurrence.
 
 ```bash
-browser4-cli domsnapshot inspect ".product_pod"
+browser4-cli domsnapshot inspect                        # auto-discover repeating patterns
+browser4-cli domsnapshot inspect ".product_pod"         # inspect a specific container
 browser4-cli domsnapshot inspect ".s-result-item" --depth 6 --max 20
 ```
 

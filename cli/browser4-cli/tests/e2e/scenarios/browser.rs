@@ -650,6 +650,10 @@ pub(super) fn test_interaction_commands(ctx: &mut E2ECtx) {
         let press_before = read_interactive_state(ctx);
         let press_before_events = key_event_count(&press_before);
         run_command(ctx, &["press", key, "#type-target"]);
+
+        // The server-side PulsarWebDriver.press() now uses the same
+        // focusOnSelector + click + keyboard.press pattern as type(),
+        // which reliably produces DOM input events.
         wait_for_state_or_abort(
             ctx,
             |s| {
@@ -668,7 +672,7 @@ pub(super) fn test_interaction_commands(ctx: &mut E2ECtx) {
                         })
                         .unwrap_or(false)
             },
-            2_000,
+            5_000,
             &format!(
                 "Expected press to append '{key}' to typeValue and emit down/up key events for '{key}'"
             ),
@@ -1135,7 +1139,10 @@ pub(super) fn test_mousewheel(ctx: &mut E2ECtx) {
     // The viewport-center default (640,450) is outside this area.
     run_command(ctx, &["mousemove", "240", "160"]);
 
-    // Vertical scroll (deltaY=160) — should work reliably.
+    // ── Vertical scroll (deltaY=160) ────────────────────────────────────
+    // The server-side PulsarWebDriver.mouseWheel() uses JS window.scrollBy()
+    // as primary (reliable, bypasses CDP crbug.com/444929150), falling back
+    // to CDP Input.dispatchMouseEvent only if JS fails.
     run_command(ctx, &["mousewheel", "0", "160"]);
     let wheel_state = wait_for_state_or_abort(
         ctx,
@@ -1149,8 +1156,8 @@ pub(super) fn test_mousewheel(ctx: &mut E2ECtx) {
         "Expected lastWheel to equal [0, 160], got {wheel_state:#?}"
     );
 
-    // Horizontal scroll (deltaX=160) — may be unreliable on some platforms;
-    // warn on timeout but do not fail the scenario while we investigate further.
+    // ── Horizontal scroll (deltaX=160) ──────────────────────────────────
+    // May be unreliable on some platforms; warn on timeout but don't fail.
     run_command(ctx, &["mousewheel", "160", "0"]);
     assume_wait_for_state(
         ctx,

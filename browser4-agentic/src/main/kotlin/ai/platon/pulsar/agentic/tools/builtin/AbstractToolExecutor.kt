@@ -1,5 +1,6 @@
 package ai.platon.pulsar.agentic.tools.builtin
 
+import ai.platon.pulsar.agentic.model.DirectValue
 import ai.platon.pulsar.agentic.model.TcEvaluate
 import ai.platon.pulsar.agentic.model.ToolCall
 import ai.platon.pulsar.agentic.model.ToolSpec
@@ -70,6 +71,7 @@ abstract class AbstractToolExecutor : ToolExecutor {
                     val qualifiedName = r::class.qualifiedName
                     if (r is String || r is Number || r is Boolean
                         || r is Map<*, *> || r is Collection<*> || r is Array<*>
+                        || r is DirectValue
                     ) {
                         r to qualifiedName
                     } else {

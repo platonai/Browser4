@@ -544,7 +544,9 @@ open class PulsarWebDriver constructor(
     @Throws(WebDriverException::class)
     override suspend fun mouseWheel(deltaX: Double, deltaY: Double) {
         val m = mouse ?: throw IllegalWebDriverStateException("Mouse not available", driver = this)
-        rpc.invokeOnPage("mouseWheel") { m.wheel(deltaX, deltaY) }
+        rpc.invokeOnPage("mouseWheel") {
+            m.wheel(deltaX, deltaY)
+        }
     }
 
     @Throws(WebDriverException::class)

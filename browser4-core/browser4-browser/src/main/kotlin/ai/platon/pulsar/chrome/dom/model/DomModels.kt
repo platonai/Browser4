@@ -543,7 +543,7 @@ data class NanoDOMTreeNode(
     val serializableTreeNode: SerializableDOMTree? = null,
 ) {
     @get:JsonIgnore
-    val ariaSnapshot: String by lazy { NanoAriaSnapshotRenderer.render(this) }
+    val ariaSnapshot: String by lazy { NanoAriaSnapshotRenderer.render(this, AriaSnapshotOptions(boxes = false)) }
 
     @get:JsonIgnore
     val ref: Int get() = FBNLocator.parseRelaxed(locator)?.backendNodeId ?: 0

@@ -1229,7 +1229,33 @@ class MCPToolControllerE2ETest : RestAPITestBase() {
         throw AssertionError("Timed out waiting for command $taskId to finish. Last status: $lastStatus")
     }
 
+    /**
+     * Extract the tab GUID for the given URL from `browser_tabs list` output.
+     *
+     * The output is a JSON array of `{index, guid, title, url}` objects.  We
+     * parse it as JSON first so we are robust against formatting variations
+     * (pretty-print, line-wrapping, etc.).  If that fails we fall back to the
+     * legacy regex-based extraction for backward compatibility.
+     */
     private fun extractTabGuid(output: String, url: String): String {
+        // Primary path: parse as JSON array of {index, guid, url} objects.
+        try {
+            val root = objectMapper.readTree(output)
+            if (root is ArrayNode) {
+                for (node in root) {
+                    if (node is ObjectNode && node.has("url") && node.get("url").asText() == url) {
+                        if (node.has("guid")) {
+                            return node.get("guid").asText()
+                        }
+                        error("Found URL '$url' in tab-list but guid field is missing:\n$output")
+                    }
+                }
+            }
+        } catch (_: Exception) {
+            // Fall through to legacy regex extraction
+        }
+
+        // Fallback: legacy regex extraction for non-JSON formats.
         val regex = Regex("""guid[:=]"?([^",}\s]+)"?""")
         val guids = regex.findAll(output)
             .map { it.groupValues[1] to it.range.first }

@@ -3264,73 +3264,224 @@ async fn handle_dom_snapshot_capture(
     let captured = metadata.get("capturedAt").and_then(|v| v.as_str()).unwrap_or("");
     let content_type = metadata.get("contentType").and_then(|v| v.as_str()).unwrap_or("");
 
-    cli_println!("### Page Info");
-    if !url.is_empty() {
-        cli_println!("- URL: {}", url);
-    }
-    if !title.is_empty() {
-        cli_println!("- Title: {}", title);
-    }
-    if !size.is_empty() {
-        let size_bytes: i64 = size.parse().unwrap_or(0);
-        if size_bytes >= 1024 {
-            cli_println!("- Size: {} ({} KB)", size_bytes, size_bytes / 1024);
-        } else {
-            cli_println!("- Size: {} bytes", size_bytes);
-        }
-    }
-    if !content_type.is_empty() {
-        cli_println!("- Content-Type: {}", content_type);
-    }
-    if !captured.is_empty() {
-        cli_println!("- Captured At: {}", captured);
-    }
-
-    // Display stats
     let image_count = metadata.get("imageCount").and_then(|v| v.as_i64()).unwrap_or(0);
     let link_count = metadata.get("linkCount").and_then(|v| v.as_i64()).unwrap_or(0);
-    cli_println!("### Stats");
-    cli_println!("- Images: {}", image_count);
-    cli_println!("- Links: {}", link_count);
+    let elements = metadata.get("interactiveElements").and_then(|v| v.as_array());
+    let interactive_count = elements.map_or(0, |e| e.len());
 
-    // Display interactive elements
-    if let Some(elements) = metadata.get("interactiveElements").and_then(|v| v.as_array()) {
+    // Compact header: one-line title, one-line metadata
+    if !title.is_empty() {
+        cli_println!("Snapshot: \"{}\"", title);
+    } else if !url.is_empty() {
+        cli_println!("Snapshot: {}", url);
+    } else {
+        cli_println!("Snapshot captured");
+    }
+
+    // Line 2: URL + size + content-type + timestamp
+    {
+        let mut parts: Vec<String> = Vec::new();
+        if !url.is_empty() {
+            parts.push(url.to_string());
+        }
+        let size_bytes: i64 = size.parse().unwrap_or(0);
+        if size_bytes >= 1024 {
+            parts.push(format!("{} KB", size_bytes / 1024));
+        } else if size_bytes > 0 {
+            parts.push(format!("{} bytes", size_bytes));
+        }
+        if !content_type.is_empty() {
+            parts.push(content_type.to_string());
+        }
+        if !captured.is_empty() {
+            parts.push(format!("captured {}", captured));
+        }
+        if !parts.is_empty() {
+            cli_println!("{}", parts.join(" · "));
+        }
+    }
+
+    // Line 3: stats summary
+    {
+        let mut stats: Vec<String> = Vec::new();
+        if image_count > 0 {
+            stats.push(format!("{} images", image_count));
+        }
+        if link_count > 0 {
+            stats.push(format!("{} links", link_count));
+        }
+        if interactive_count > 0 {
+            stats.push(format!("{} interactive elements", interactive_count));
+        }
+        if !stats.is_empty() {
+            cli_println!("{}", stats.join(" · "));
+        }
+    }
+
+    // Display interactive elements grouped by type
+    if let Some(elements) = elements {
         if !elements.is_empty() {
-            cli_println!("### Interactive Elements ({})", elements.len());
-            for (i, el) in elements.iter().enumerate() {
+            cli_println!("");
+            cli_println!("### Interactive Elements");
+
+            // Group by category
+            let mut links: Vec<&Value> = Vec::new();
+            let mut buttons: Vec<&Value> = Vec::new();
+            let mut inputs: Vec<&Value> = Vec::new();
+            let mut other: Vec<&Value> = Vec::new();
+
+            for el in elements.iter() {
                 let tag = el.get("tag").and_then(|v| v.as_str()).unwrap_or("");
-                let id = el.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                match tag {
+                    "a" => links.push(el),
+                    "button" => buttons.push(el),
+                    "input" | "textarea" | "select" => {
+                        // Distinguish button-type inputs from text-type inputs
+                        let cls = el.get("class").and_then(|v| v.as_str()).unwrap_or("");
+                        let id_str = el.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                        if cls.contains("btn") || id_str.contains("btn") || id_str.contains("submit") {
+                            buttons.push(el);
+                        } else {
+                            inputs.push(el);
+                        }
+                    },
+                    _ => {
+                        // Check for button-like roles/attributes
+                        let aria = el.get("aria");
+                        let has_button_role = aria
+                            .and_then(|a| a.get("role"))
+                            .and_then(|v| v.as_str())
+                            .map_or(false, |r| r == "button");
+                        if has_button_role {
+                            buttons.push(el);
+                        } else {
+                            other.push(el);
+                        }
+                    },
+                }
+            }
+
+            let mut global_index: usize = 0;
+            let desc_width: usize = 30;
+            let text_width: usize = 48;
+
+            // Helper to format a single element line
+            let format_element = |i: usize, el: &Value| -> String {
+                let tag = el.get("tag").and_then(|v| v.as_str()).unwrap_or("");
+                let id_str = el.get("id").and_then(|v| v.as_str()).unwrap_or("");
                 let class = el.get("class").and_then(|v| v.as_str()).unwrap_or("");
                 let box_val = el.get("box").and_then(|v| v.as_str()).unwrap_or("");
+                let text_val = el.get("text").and_then(|v| v.as_str()).unwrap_or("");
                 let aria = el.get("aria");
 
+                // Build element description (CSS-selector-like)
                 let mut desc = tag.to_string();
-                if !id.is_empty() {
-                    desc.push_str(&format!("#{}", id));
+                if !id_str.is_empty() {
+                    desc.push_str(&format!("#{}", id_str));
                 }
                 if !class.is_empty() {
                     desc.push_str(&format!(".{}", class));
                 }
-                let mut extras = Vec::new();
+
+                // Truncate text
+                let display_text = if text_val.is_empty() {
+                    String::new()
+                } else {
+                    let trimmed: String = text_val
+                        .chars()
+                        .take(text_width)
+                        .collect();
+                    if trimmed.len() < text_val.chars().count() {
+                        format!("\"{}\u{2026}\"", trimmed) // … (ellipsis)
+                    } else {
+                        format!("\"{}\"", trimmed)
+                    }
+                };
+
+                // Build extras
+                let mut extras: Vec<String> = Vec::new();
                 if !box_val.is_empty() {
                     extras.push(format!("box={}", box_val));
                 }
                 if let Some(aria_obj) = aria.and_then(|v| v.as_object()) {
+                    // For inputs, extract placeholder first
+                    if (tag == "input" || tag == "textarea") && !text_val.is_empty() {
+                        let placeholder = aria_obj.get("placeholder")
+                            .or_else(|| aria_obj.get("aria-placeholder"))
+                            .and_then(|v| v.as_str());
+                        if let Some(ph) = placeholder {
+                            if !ph.is_empty() {
+                                extras.push(format!("ph=\"{}\"", ph));
+                            }
+                        }
+                    }
+                    // Remaining aria attrs (excluding placeholder since we handled it)
                     let aria_pairs: Vec<String> = aria_obj
                         .iter()
+                        .filter(|(k, _)| {
+                            if tag == "input" || tag == "textarea" {
+                                *k != "placeholder" && *k != "aria-placeholder"
+                            } else {
+                                true
+                            }
+                        })
                         .map(|(k, v)| format!("{}={}", k, v.as_str().unwrap_or("")))
                         .collect();
                     if !aria_pairs.is_empty() {
                         extras.push(format!("aria: {}", aria_pairs.join(", ")));
                     }
                 }
-                if extras.is_empty() {
-                    cli_println!("  {:>3}. {}", i + 1, desc);
+
+                let mut line = format!("  {:>3}. ", i + 1);
+                // Pad description to desc_width
+                let desc_padded = if desc.len() < desc_width {
+                    format!("{:<width$}", desc, width = desc_width)
                 } else {
-                    cli_println!("  {:>3}. {}  [{}]", i + 1, desc, extras.join("; "));
+                    desc.to_string()
+                };
+                line.push_str(&desc_padded);
+
+                if !display_text.is_empty() {
+                    line.push_str(&format!(" {}  ", display_text));
+                } else {
+                    line.push_str("  ");
                 }
-            }
+
+                if !extras.is_empty() {
+                    line.push_str(&format!("[{}]", extras.join("; ")));
+                }
+
+                line
+            };
+
+            // Helper to print a group
+            let mut print_group = |label: &str, group: &Vec<&Value>| {
+                if !group.is_empty() {
+                    cli_println!("  {} ({}):", label, group.len());
+                    for el in group {
+                        global_index += 1;
+                        cli_println!("{}", format_element(global_index, el));
+                    }
+                    cli_println!("");
+                }
+            };
+
+            print_group("Links", &links);
+            print_group("Buttons", &buttons);
+            print_group("Inputs", &inputs);
+            print_group("Other", &other);
         }
+    }
+
+    // Next-step hints
+    cli_println!("💡 Next:");
+    if !title.is_empty() {
+        cli_println!("   domsnapshot get text \"h1\"              — page heading");
+    }
+    cli_println!("   domsnapshot get all text \"a\" --limit 20 — link texts");
+    cli_println!("   domsnapshot inspect                      — discover recurring patterns");
+    if !url.is_empty() {
+        cli_println!("   domsnapshot query --sql \"SELECT text-content FROM load_and_select(@url, 'h1')\"");
     }
 
     Ok(())
@@ -3776,9 +3927,16 @@ async fn handle_dom_snapshot_inspect(
     let selector = data.get("selector").and_then(|v| v.as_str()).unwrap_or(":root");
     let match_count = data.get("matchCount").and_then(|v| v.as_i64()).unwrap_or(0);
     let analyzed = data.get("analyzed").and_then(|v| v.as_u64()).unwrap_or(0);
+    let auto_discovered = data.get("autoDiscovered").and_then(|v| v.as_bool()).unwrap_or(false);
+    let original_selector = data.get("originalSelector").and_then(|v| v.as_str());
 
     if match_count == 0 {
         cli_println!("### Inspect: \"{}\" (0 matches)", selector);
+        if auto_discovered {
+            if let Some(orig) = original_selector {
+                cli_println!("  Auto-discovered selector \"{}\" from \"{}\" also had no matches.", selector, orig);
+            }
+        }
         cli_println!("- No elements matched. Check the CSS selector and ensure a DOM snapshot has been captured (`browser4-cli domsnapshot`).");
         json_field("matchCount", json!(0));
         json_field("selector", json!(selector));
@@ -3789,6 +3947,11 @@ async fn handle_dom_snapshot_inspect(
         "### Inspect: \"{}\" ({} matches, {} analyzed)",
         selector, match_count, analyzed
     );
+    if auto_discovered {
+        if let Some(orig) = original_selector {
+            cli_println!("  🔍 Auto-discovered repeating pattern from \"{}\"", orig);
+        }
+    }
 
     // Sample structures
     if let Some(samples) = data.get("samples").and_then(|v| v.as_array()) {
@@ -5136,6 +5299,22 @@ async fn handle_agent_run(
 
     // Persist the task for cross-session tracking
     let _ = track_async_task(&task_id, "agent", task, None);
+
+    Ok(())
+}
+
+async fn handle_act(
+    client: &Client,
+    base_url: &str,
+    description: &str,
+) -> Result<(), String> {
+    let result = http::execute_act_command(client, base_url, description).await?;
+
+    if result.is_empty() {
+        cli_println!("Action completed (no output).");
+    } else {
+        cli_println!("{}", result);
+    }
 
     Ok(())
 }
@@ -9249,6 +9428,25 @@ async fn run(
             return Ok(());
         }
     };
+
+    // `act` is handled early — its description is variadic (multi-word),
+    // so we join all remaining positionals before the standard arg parser
+    // would reject them as "too many positional arguments".
+    if command == "act" {
+        let description = global.args.iter().skip(1)
+            .skip_while(|s| *s == "--")
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(" ");
+        if description.is_empty() {
+            return Err(CliError(
+                ExitCode::Usage,
+                "A description is required. Usage: browser4-cli act \"<natural language description>\"".to_string()
+            ));
+        }
+        handle_act(&client, &base_url, &description).await?;
+        return Ok(());
+    }
 
     // Parse positional + named arguments (with short-option resolution)
     let (short_to_long, bool_opts) = build_short_option_map(cmd_def.options);

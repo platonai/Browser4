@@ -408,7 +408,7 @@ class DOMStateBuilderTest {
                   - /url: "#__docusaurus_skipToContent_fallback"
               - button "Node.js" [ref=e5] [cursor=pointer]
               - heading "Playwright enables reliable end-to-end testing for modern web apps." [level=1] [ref=e6]
-              - generic [ref=e10]: Playwright
+              - generic "Playwright" [ref=e10]
             """.trimIndent(),
             ariaSnapshot
         )

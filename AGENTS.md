@@ -406,7 +406,7 @@ All `.ps1` and `.sh` scripts under `browser4-tests/tests-production/` and `bin/t
 **Snapshot-related commands** (`domsnapshot`, `snapshot`) use the `Category::Snapshot` category:
 - `domsnapshot get` / `domsnapshot query` — retrieve DOM snapshots with optional pagination (`-limit`, `-offset`)
 - `domsnapshot grep` — search HTML with regex support (`-i`, `-v`, `-fixed-strings`, `-word-regexp`, `-files-with-matches`, `-count`, `-no-line-number`)
-- `domsnapshot inspect` — inspect a DOM element with enriched metadata
+- `domsnapshot inspect` — discover CSS selectors for recurring patterns; run without args for auto-discovery
 - `domsnapshot summary` — generate a summary view of the DOM
 - `snapshot` — capture live page snapshot with `--boxes` for element bounding boxes, `--stdout` for direct output, `--limit`/`--no-compact` for size control
 - `snapshot grep` — grep over a live page snapshot

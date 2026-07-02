@@ -16,6 +16,8 @@ const DEFAULT_REQUEST_TIMEOUT_ENV: &str = "BROWSER4_CLI_HTTP_TIMEOUT_SECS";
 const NAVIGATION_REQUEST_TIMEOUT_ENV: &str = "BROWSER4_CLI_NAVIGATION_TIMEOUT_SECS";
 const TEXT_INPUT_REQUEST_TIMEOUT_ENV: &str = "BROWSER4_CLI_INPUT_TIMEOUT_SECS";
 const AGENT_REQUEST_TIMEOUT_ENV: &str = "BROWSER4_CLI_AGENT_TIMEOUT_SECS";
+const ACT_REQUEST_TIMEOUT_SECS: u64 = 60;
+const ACT_REQUEST_TIMEOUT_ENV: &str = "BROWSER4_CLI_ACT_TIMEOUT_SECS";
 
 fn timeout_secs_from_env(env_key: &str, default_secs: u64) -> u64 {
     std::env::var(env_key)
@@ -361,6 +363,126 @@ pub async fn submit_plain_command(
     )
     .await
 }
+
+/// Submit a natural language description to the server, which translates it
+/// to a CLI command via LLM and executes it synchronously.
+/// Returns the command output on success.
+pub async fn execute_act_command(
+    client: &Client,
+    base_url: &str,
+    description: &str,
+) -> Result<String, String> {
+    let url = build_endpoint_url(base_url, "/api/act");
+    let timeout = std::time::Duration::from_secs(timeout_secs_from_env(
+        ACT_REQUEST_TIMEOUT_ENV,
+        ACT_REQUEST_TIMEOUT_SECS,
+    ));
+    let response = client
+        .post(&url)
+        .header("Content-Type", "application/json")
+        .json(&json!({ "description": description }))
+        .timeout(timeout)
+        .send()
+        .await
+        .map_err(|e| {
+            if e.is_timeout() {
+                format!(
+                    "Act request timed out after {}s. Increase with {} env var.",
+                    timeout.as_secs(),
+                    ACT_REQUEST_TIMEOUT_ENV
+                )
+            } else {
+                format!("Failed to call act endpoint: {e}")
+            }
+        })?;
+
+    let status = response.status();
+    let response_text = response
+        .text()
+        .await
+        .map_err(|e| format!("Failed to read act response body: {e}"))?;
+
+    if !status.is_success() {
+        return Err(format_http_error(status, &response_text));
+    }
+
+    // Parse the JSON response: { "success": true, "output": "..." }
+    // or { "success": false, "error": "..." }
+    let parsed: Value = serde_json::from_str(&response_text)
+        .map_err(|e| format!("Failed to parse act response: {e}"))?;
+
+    let success = parsed
+        .get("success")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    if success {
+        Ok(parsed
+            .get("output")
+            .and_then(|v| v.as_str())
+            .map(String::from)
+            .unwrap_or_default())
+    } else {
+        let error_msg = parsed
+            .get("error")
+            .and_then(|v| v.as_str())
+            .unwrap_or("Unknown error");
+        Err(error_msg.to_string())
+    }
+}
+
+/// Submit a swarm payload through `SwarmController.submit(payload)`.
+pub async fn submit_swarm_payload(
+    client: &Client,
+    base_url: &str,
+    payload: &str,
+) -> Result<String, String> {
+    let url = build_endpoint_url(base_url, "/api/swarm/submit");
+    send_rest_request(
+        client
+            .post(url)
+            .header("Content-Type", "text/plain; charset=utf-8")
+            .body(payload.to_string()),
+    )
+    .await
+}
+
+/// Submit a swarm X-SQL query through `SwarmController.query(query)`.
+pub async fn submit_swarm_query(
+    client: &Client,
+    base_url: &str,
+    query: serde_json::Value,
+) -> Result<String, String> {
+    let url = build_endpoint_url(base_url, "/api/swarm/query");
+    send_rest_request(
+        client
+            .post(url)
+            .header("Content-Type", "application/json; charset=utf-8")
+            .body(query.to_string()),
+    )
+    .await
+}
+
+/// Read swarm task status through `SwarmController.getStatus(id)`.
+pub async fn get_swarm_status(
+    client: &Client,
+    base_url: &str,
+    task_id: &str,
+) -> Result<String, String> {
+    let url = build_endpoint_url(base_url, &format!("/api/swarm/{task_id}/status"));
+    send_rest_request(client.get(url)).await
+}
+
+/// Read swarm task result through `SwarmController.getResult(id)`.
+pub async fn get_swarm_result(
+    client: &Client,
+    base_url: &str,
+    task_id: &str,
+) -> Result<String, String> {
+    let url = build_endpoint_url(base_url, &format!("/api/swarm/{task_id}/result"));
+    send_rest_request(client.get(url)).await
+}
+
 
 pub fn crawl_request_timeout() -> std::time::Duration {
     std::time::Duration::from_secs(timeout_secs_from_env(

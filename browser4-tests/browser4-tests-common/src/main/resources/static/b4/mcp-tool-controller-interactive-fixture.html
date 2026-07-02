@@ -164,10 +164,15 @@
       window.__browser4State.mouseUpCount += 1;
       syncState();
     });
+    // Chromium CDP bug workaround (crbug.com/444929150): Input.dispatchMouseEvent
+    // for wheel events uses a non-blocking synthetic event that may fire after
+    // the CDP promise resolves — or never fire at all in headless/Docker.
+    // Registering as { passive: false } forces synchronous delivery and prevents
+    // the race condition that causes CDP mouseWheel commands to hang/timeout.
     mouseArea.addEventListener('wheel', (event) => {
       window.__browser4State.lastWheel = [Math.round(event.deltaX), Math.round(event.deltaY)];
       syncState();
-    });
+    }, { passive: false });
 
     syncState();
   </script>

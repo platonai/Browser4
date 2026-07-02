@@ -109,8 +109,9 @@ class PageHandler constructor(
         }
 
         // Join snapshots from disjoint viewport ranges using YAML document separator
-        val snapContent = nanoTrees.joinToString("\n---\n") { it.ariaSnapshot }
-        return buildViewportHeader(buState) + snapContent + buildViewportFooter(buState, AriaSnapshotOptions())
+        val defaultOptions = AriaSnapshotOptions()
+        val snapContent = nanoTrees.joinToString("\n---\n") { NanoAriaSnapshotRenderer.render(it, defaultOptions) }
+        return buildViewportHeader(buState) + snapContent + buildViewportFooter(buState, defaultOptions)
     }
 
     /**
