@@ -36,6 +36,7 @@ const CATEGORIES: &[(&str, &str)] = &[
     ("devtools", "DevTools"),
     ("snapshot", "Snapshot"),
     ("agent", "Agent"),
+    ("act", "Act"),
     ("swarm", "Swarm"),
     ("install", "Install"),
     ("browsers", "Browser sessions"),
@@ -346,6 +347,32 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push(String::new());
         lines.push("Examples:".to_string());
         lines.push("  browser4-cli agent result agent-task-1".to_string());
+    }
+
+    if cmd.name == "act" {
+        lines.push("Notes:".to_string());
+        lines.push(
+            "  - Accepts natural language descriptions of browser actions."
+                .to_string(),
+        );
+        lines.push(
+            "  - The description is automatically translated to a browser4-cli command using AI."
+                .to_string(),
+        );
+        lines.push(
+            "  - Executes the command immediately against your current browser session."
+                .to_string(),
+        );
+        lines.push(
+            "  - Requires an LLM provider to be configured on the Browser4 server."
+                .to_string(),
+        );
+        lines.push(String::new());
+        lines.push("Examples:".to_string());
+        lines.push("  browser4-cli act \"scroll by 200px\"".to_string());
+        lines.push("  browser4-cli act \"go to https://example.com\"".to_string());
+        lines.push("  browser4-cli act \"click the search button and type hello\"".to_string());
+        lines.push("  browser4-cli act \"take a screenshot and save it as my-screen.png\"".to_string());
     }
 
     if cmd.name == "attach" {
@@ -1115,6 +1142,7 @@ mod tests {
         assert!(!help.contains("  console "));
         assert!(help.contains("extract"));
         assert!(!help.contains("agent run"));
+        assert!(help.contains("act"));
         assert!(help.contains("swarm create"));
         assert!(help.contains("--json"));
         assert!(help.contains("machine-parseable JSON"));
@@ -1269,6 +1297,18 @@ mod tests {
         assert!(result_help.contains("browser4-cli agent result <id>"));
         assert!(result_help.contains("browser4-cli agent result agent-task-1"));
         assert!(!result_help.contains("browser4-cli agent-result"));
+    }
+
+    #[test]
+    fn test_generate_command_help_act() {
+        let cmds = all_commands();
+        let cmd = cmds.iter().find(|c| c.name == "act").unwrap();
+        let help = generate_command_help(cmd);
+        assert!(help.contains("browser4-cli act <description>"));
+        assert!(help.contains("natural language descriptions"));
+        assert!(help.contains("browser4-cli act \"scroll by 200px\""));
+        assert!(help.contains("browser4-cli act \"go to https://example.com\""));
+        assert!(help.contains("LLM provider"));
     }
 
     #[test]

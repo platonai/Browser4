@@ -4917,6 +4917,22 @@ async fn handle_agent_run(
     Ok(())
 }
 
+async fn handle_act(
+    client: &Client,
+    base_url: &str,
+    description: &str,
+) -> Result<(), String> {
+    let result = http::execute_act_command(client, base_url, description).await?;
+
+    if result.is_empty() {
+        cli_println!("Action completed (no output).");
+    } else {
+        cli_println!("{}", result);
+    }
+
+    Ok(())
+}
+
 async fn detect_missing_llm_error_for_submitted_agent_task(
     client: &Client,
     base_url: &str,
@@ -9019,6 +9035,25 @@ async fn run(
             return Ok(());
         }
     };
+
+    // `act` is handled early — its description is variadic (multi-word),
+    // so we join all remaining positionals before the standard arg parser
+    // would reject them as "too many positional arguments".
+    if command == "act" {
+        let description = global.args.iter().skip(1)
+            .skip_while(|s| *s == "--")
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(" ");
+        if description.is_empty() {
+            return Err(CliError(
+                ExitCode::Usage,
+                "A description is required. Usage: browser4-cli act \"<natural language description>\"".to_string()
+            ));
+        }
+        handle_act(&client, &base_url, &description).await?;
+        return Ok(());
+    }
 
     // Parse positional + named arguments (with short-option resolution)
     let (short_to_long, bool_opts) = build_short_option_map(cmd_def.options);

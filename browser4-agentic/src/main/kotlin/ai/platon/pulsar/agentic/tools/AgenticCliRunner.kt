@@ -847,6 +847,19 @@ class AgenticCliRunner(
             "tab-close" to CommandDef(listOf("index")),
             "tab-select" to CommandDef(listOf("index")),
         )
+
+        /**
+         * Returns the set of all CLI command names that can be executed.
+         * Used by the `act` command to build a prompt reference for the LLM.
+         */
+        fun getAvailableCommands(): Set<String> = COMMAND_RESOLVERS.keys
+
+        /**
+         * Returns the positional argument names for a given CLI command,
+         * or an empty list if the command is unknown.
+         */
+        fun getCommandArgs(name: String): List<String> =
+            COMMAND_DEFS[name]?.positionalArgs ?: emptyList()
     }
 
     // =========================================================================
