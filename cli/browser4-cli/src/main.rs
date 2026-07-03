@@ -2448,7 +2448,7 @@ async fn handle_snapshot(
     if !raw && !json_active() {
         if snap_len > 10_240 && !has_filter {
             eprintln!(
-                "💡 Tip: Snapshot is large ({} KB, {} lines). To focus the output, read the page viewport by viewport — just like a human scrolls. Important content usually comes first:\n\
+                "\n💡 Tip: Snapshot is large ({} KB, {} lines). To focus the output, read the page viewport by viewport — just like a human scrolls. Important content usually comes first:\n\
                    --viewport, -v <N>       Capture a specific viewport (start with -v 0)\n\
                    -s, --selector <CSS>     Scope to a CSS selector\n\
                    -i, --interactive        Only show interactive elements\n\
@@ -3636,9 +3636,19 @@ async fn handle_html_snapshot_summary(
     client: &Client,
     base_url: &str,
     tool_name: &str,
-    _tool_params: &Value,
+    tool_params: &Value,
     session_name: Option<&str>,
 ) -> Result<(), String> {
+    let raw = tool_params
+        .get("raw")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+        || tool_params
+            .get("stdout")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+    raw_init(raw);
+
     let combined = with_session(client, base_url, session_name, false, |session_id| {
         let client = client.clone();
         let base_url = base_url.to_string();
@@ -3682,11 +3692,15 @@ async fn handle_html_snapshot_summary(
     json_field("page_title", json!(title));
     json_field("summary_path", json!(out_path.display().to_string()));
 
-    cli_println!("### Page");
-    cli_println!("- Page URL: {}", url);
-    cli_println!("- Page Title: {}", title);
-    cli_println!("### Summary");
-    cli_println!("[Summary]({})", out_path.display());
+    if raw {
+        println!("{}", summary);
+    } else {
+        cli_println!("### Page");
+        cli_println!("- Page URL: {}", url);
+        cli_println!("- Page Title: {}", title);
+        cli_println!("### Summary");
+        cli_println!("[Summary]({})", out_path.display());
+    }
     Ok(())
 }
 
