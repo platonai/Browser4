@@ -11,16 +11,16 @@ local server that translates CLI commands into browser actions.
 **What you can do with it:**
 
 - Automate form filling, logins, and multistep web workflows
-- Capture accessibility snapshots (ARIA tree) for interaction and DOM snapshots (HTML) for data analysis
+- Capture accessibility snapshots (ARIA tree) for interaction and HTML snapshots (HTML) for data analysis
 - Extract structured data with AI, CSS selectors or X-SQL queries
 - Swarm mode: Scrape at scale with parallel browser contexts
 - Crawl websites recursively, following links to a configurable depth
 - Run autonomous AI agent tasks from natural-language instructions
-- Save screenshots, PDFs, and full DOM snapshots
+- Save screenshots, PDFs, and full HTML snapshots
 
 **What makes it different:**
 
-- **DOM snapshots** - static HTML analysis without losing information
+- **HTML snapshots** - static HTML analysis without losing information
 - **X-SQL** — a SQL-like query language for extracting structured data from
   web pages in a single expression
 - **Session persistence** — browser sessions survive across CLI invocations;
@@ -72,7 +72,7 @@ browser4-cli press e15 Enter
 browser4-cli get text ".product-title"
 browser4-cli get attr ".product-image" data-src
 
-# DOM snapshot with X-SQL
+# HTML snapshot with X-SQL
 browser4-cli htmlsnapshot
 browser4-cli htmlsnapshot get text "#main-content"
 browser4-cli htmlsnapshot query --sql @query.sql
@@ -265,7 +265,7 @@ browser4-cli tab-close 1
 | `get <mode> <selector> [name]` | Extract data from a page element in one of six modes (see below). |
 | `eval <expression> [ref]` | Evaluate JavaScript on the page or a target element. `--file <path>` to read from file. `--json` to wrap scalar results. |
 | `generate-locator <ref>` | Generate a stable CSS selector path for an element. |
-| `htmlsnapshot` | Capture a static DOM snapshot. See [DOM Snapshot](#dom-snapshot) below. |
+| `htmlsnapshot` | Capture a static HTML snapshot. See [HTML Snapshot](#dom-snapshot) below. |
 | `extract <instruction>` | Extract structured data with AI. `--schema <file>` for typed output. `--filename <path>`, `--raw`. |
 | `summarize [instruction]` | Summarize page content with AI. `--selector <css>`, `--filename <path>`, `--raw`. |
 
@@ -448,9 +448,9 @@ browser4-cli snapshot grep -F -w "Error" --selector main
 
 ---
 
-### DOM Snapshot
+### HTML Snapshot
 
-`htmlsnapshot` captures a **static DOM snapshot** of the current page — a full
+`htmlsnapshot` captures a **static HTML snapshot** of the current page — a full
 HTML capture stored in the backend that can be queried repeatedly without
 re-fetching. Unlike the accessibility `snapshot`, this works against the raw DOM.
 
@@ -516,7 +516,7 @@ browser4-cli htmlsnapshot get all text "p" --page-size 500
 
 #### htmlsnapshot query
 
-Run an X-SQL query against the stored DOM snapshot. `--sql` is required. Use
+Run an X-SQL query against the stored HTML snapshot. `--sql` is required. Use
 `@url` as a placeholder for the target page URL (unquoted — the server handles
 escaping).
 
@@ -567,7 +567,7 @@ browser4-cli htmlsnapshot summary
 
 #### htmlsnapshot grep
 
-Search the DOM snapshot HTML with regex patterns. Same grep flags as
+Search the HTML snapshot HTML with regex patterns. Same grep flags as
 `snapshot grep`: `-i`, `-A N`, `-B N`, `-C N`, `-v`, `-c`, `-l`, `-F`, `-w`,
 `--no-line-number`, `--selector <css>`, `--page N`, `--page-size N`, `--all`.
 

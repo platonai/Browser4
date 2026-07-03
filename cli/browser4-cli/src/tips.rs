@@ -428,7 +428,7 @@ pub fn show_tip(command: &str) {
         val % tips.len()
     });
 
-    eprintln!("💡 Tip: {}", tips[index].text);
+    eprintln!("\n💡 Tip: {}", tips[index].text);
 }
 
 #[cfg(test)]

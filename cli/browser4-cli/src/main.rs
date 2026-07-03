@@ -2671,7 +2671,7 @@ async fn handle_snapshot(
     if !raw && !json_active() {
         if snap_len > 10_240 && !has_filter {
             eprintln!(
-                "💡 Tip: Snapshot is large ({} KB, {} lines). To focus the output, read the page viewport by viewport — just like a human scrolls. Important content usually comes first:\n\
+                "\n💡 Tip: Snapshot is large ({} KB, {} lines). To focus the output, read the page viewport by viewport — just like a human scrolls. Important content usually comes first:\n\
                    --viewport, -v <N>       Capture a specific viewport (start with -v 0)\n\
                    -s, --selector <CSS>     Scope to a CSS selector\n\
                    -i, --interactive        Only show interactive elements\n\
@@ -3855,13 +3855,241 @@ async fn handle_html_snapshot_export(
     Ok(())
 }
 
+/// Parse the WPSI YAML summary and produce a compact outline for stdout display.
+/// The full summary is always saved to file; this extracts the key structure.
+fn format_summary_outline(yaml: &str) -> String {
+    let mut outline = String::new();
+
+    // Track which top-level section we're in and accumulate items.
+    enum Section { None, Page, Structure, Content, Lists, Tables, Stats }
+    let mut section = Section::None;
+    let mut page_type = "";
+    let mut structure_count = 0;
+    let mut structure_items: Vec<String> = Vec::new();
+    let mut content_count = 0;
+    let mut content_items: Vec<(String, String, String)> = Vec::new(); // (type, score, text)
+    let mut list_count = 0;
+    let mut list_items: Vec<String> = Vec::new();
+    let mut table_count = 0;
+    let mut table_items: Vec<String> = Vec::new();
+    let mut stats_lines: Vec<String> = Vec::new();
+
+    // Track current content item being built across multiple lines
+    let mut cur_content_type = String::new();
+    let mut cur_content_score = String::new();
+    let mut cur_content_text = String::new();
+
+    for line in yaml.lines() {
+        // Detect top-level section keys
+        if line == "page:" {
+            section = Section::Page;
+            continue;
+        } else if line == "structure:" {
+            section = Section::Structure;
+            continue;
+        } else if line == "content:" {
+            section = Section::Content;
+            continue;
+        } else if line == "lists:" {
+            section = Section::Lists;
+            continue;
+        } else if line == "tables:" {
+            section = Section::Tables;
+            continue;
+        } else if line == "stats:" {
+            section = Section::Stats;
+            continue;
+        }
+
+        // Skip empty lines and YAML document markers
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed == "---" {
+            continue;
+        }
+
+        match section {
+            Section::Page => {
+                if let Some(val) = trim_prefix(trimmed, "type:") {
+                    page_type = val.trim_matches('"');
+                }
+            }
+            Section::Structure => {
+                // Lines starting with "  - box:" start a new structure item
+                if trimmed.starts_with("- box:") {
+                    structure_count += 1;
+                } else if let Some(tag) = trim_prefix(trimmed, "tag:") {
+                    structure_items.push(format!("  {}", tag.trim()));
+                } else if let Some(sel) = trim_prefix(trimmed, "selector:") {
+                    if let Some(last) = structure_items.last_mut() {
+                        *last = format!("{}  {}", last, sel.trim().trim_matches('"'));
+                    }
+                }
+            }
+            Section::Content => {
+                if trimmed.starts_with("- box:") {
+                    // Flush previous content item
+                    if !cur_content_type.is_empty() {
+                        content_items.push((
+                            std::mem::take(&mut cur_content_type),
+                            std::mem::take(&mut cur_content_score),
+                            std::mem::take(&mut cur_content_text),
+                        ));
+                    }
+                    content_count += 1;
+                    cur_content_type.clear();
+                    cur_content_score.clear();
+                    cur_content_text.clear();
+                } else if let Some(t) = trim_prefix(trimmed, "type:") {
+                    cur_content_type = t.trim().to_string();
+                } else if let Some(s) = trim_prefix(trimmed, "score:") {
+                    cur_content_score = s.trim().to_string();
+                } else if let Some(txt) = trim_prefix(trimmed, "text:") {
+                    cur_content_text = txt.trim().trim_matches('"').to_string();
+                }
+            }
+            Section::Lists => {
+                if trimmed.starts_with("- parentTag:") {
+                    list_count += 1;
+                } else if let Some(parent) = trim_prefix(trimmed, "parentTag:") {
+                    // Will be followed by itemTag and count
+                    list_items.push(format!("  {}", parent.trim()));
+                } else if let Some(item) = trim_prefix(trimmed, "itemTag:") {
+                    if let Some(last) = list_items.last_mut() {
+                        *last = format!("{} > {}", last, item.trim());
+                    }
+                } else if let Some(count) = trim_prefix(trimmed, "count:") {
+                    if let Some(last) = list_items.last_mut() {
+                        *last = format!("{} ({} items)", last, count.trim());
+                    }
+                }
+            }
+            Section::Tables => {
+                if trimmed.starts_with("- box:") {
+                    table_count += 1;
+                } else if let Some(rows) = trim_prefix(trimmed, "rows:") {
+                    table_items.push(format!("  {} rows", rows.trim()));
+                } else if let Some(cols) = trim_prefix(trimmed, "cols:") {
+                    if let Some(last) = table_items.last_mut() {
+                        *last = format!("{} × {} cols", last, cols.trim());
+                    }
+                } else if let Some(_h) = trim_prefix(trimmed, "headers:") {
+                    // Headers follow on indented lines
+                } else if trimmed.starts_with("- ") && trimmed.len() > 2 {
+                    // Header value like "  - Name"
+                    let hdr = trimmed[2..].trim().trim_matches('"');
+                    if let Some(last) = table_items.last_mut() {
+                        if !last.contains('[') {
+                            *last = format!("{} [{}", last, hdr);
+                        } else {
+                            *last = format!("{}, {}", last, hdr);
+                        }
+                    }
+                }
+            }
+            Section::Stats => {
+                if trimmed.contains(':') && !trimmed.starts_with('-') {
+                    stats_lines.push(trimmed.to_string());
+                }
+            }
+            Section::None => {}
+        }
+    }
+
+    // Flush final content item
+    if !cur_content_type.is_empty() {
+        content_items.push((cur_content_type, cur_content_score, cur_content_text));
+    }
+    // Close any open table bracket
+    for item in &mut table_items {
+        if item.contains('[') && !item.contains(']') {
+            item.push(']');
+        }
+    }
+
+    // ---- Build output ----
+    // Page section
+    outline.push_str("### Page\n");
+    outline.push_str(&format!("- Type: {}\n", if page_type.is_empty() { "—" } else { page_type }));
+
+    // Structure section
+    if structure_count > 0 {
+        outline.push_str(&format!("\n### Structure ({} {})\n", structure_count,
+            if structure_count == 1 { "landmark" } else { "landmarks" }));
+        for item in &structure_items {
+            outline.push_str(&format!("{}\n", item));
+        }
+    }
+
+    // Content section — show top 20 scored items
+    if !content_items.is_empty() {
+        let shown = content_items.len().min(20);
+        outline.push_str(&format!("\n### Content ({} of {} nodes)\n", shown, content_count));
+        for (i, (typ, score, text)) in content_items.iter().take(20).enumerate() {
+            let display_text = if text.len() > 60 {
+                format!("{}…", &text[..60])
+            } else {
+                text.clone()
+            };
+            if display_text.is_empty() {
+                outline.push_str(&format!("  {:>2}. {:<10} score:{}\n", i + 1, typ, score));
+            } else {
+                outline.push_str(&format!("  {:>2}. {:<10} score:{:<4} \"{}\"\n", i + 1, typ, score, display_text));
+            }
+        }
+    }
+
+    // Lists section
+    if list_count > 0 {
+        outline.push_str(&format!("\n### Lists ({} detected)\n", list_count));
+        for item in &list_items.iter().take(10).collect::<Vec<_>>() {
+            outline.push_str(&format!("{}\n", item));
+        }
+        if list_items.len() > 10 {
+            outline.push_str(&format!("  ... and {} more\n", list_items.len() - 10));
+        }
+    }
+
+    // Tables section
+    if table_count > 0 {
+        outline.push_str(&format!("\n### Tables ({} detected)\n", table_count));
+        for item in &table_items.iter().take(10).collect::<Vec<_>>() {
+            outline.push_str(&format!("{}\n", item));
+        }
+    }
+
+    // Stats section
+    if !stats_lines.is_empty() {
+        outline.push_str("\n### Stats\n");
+        // Format as compact single line
+        let compact: Vec<String> = stats_lines.iter().map(|s| s.trim().to_string()).collect();
+        outline.push_str(&format!("  {}\n", compact.join("  ")));
+    }
+
+    outline
+}
+
+/// Trim a prefix from a string, returning the remainder trimmed.
+fn trim_prefix<'a>(s: &'a str, prefix: &str) -> Option<&'a str> {
+    s.strip_prefix(prefix).map(|r| r.trim())
+}
+
 async fn handle_html_snapshot_summary(
     client: &Client,
     base_url: &str,
     tool_name: &str,
-    _tool_params: &Value,
+    tool_params: &Value,
     session_name: Option<&str>,
 ) -> Result<(), String> {
+    let raw = tool_params
+        .get("raw")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+        || tool_params
+            .get("stdout")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+    raw_init(raw);
+
     let combined = with_session(client, base_url, session_name, false, |session_id| {
         let client = client.clone();
         let base_url = base_url.to_string();
@@ -3905,11 +4133,17 @@ async fn handle_html_snapshot_summary(
     json_field("page_title", json!(title));
     json_field("summary_path", json!(out_path.display().to_string()));
 
-    cli_println!("### Page");
-    cli_println!("- Page URL: {}", url);
-    cli_println!("- Page Title: {}", title);
-    cli_println!("### Summary");
-    cli_println!("[Summary]({})", out_path.display());
+    if raw {
+        println!("{}", summary);
+    } else {
+        let outline = format_summary_outline(summary);
+        cli_println!("### Page");
+        cli_println!("- Page URL: {}", url);
+        cli_println!("- Page Title: {}", title);
+        cli_println!("{}", outline);
+        cli_println!("");
+        cli_println!("💾 Full summary saved to {}", out_path.display());
+    }
     Ok(())
 }
 
@@ -3946,7 +4180,7 @@ async fn handle_html_snapshot_inspect(
                 cli_println!("  Auto-discovered selector \"{}\" from \"{}\" also had no matches.", selector, orig);
             }
         }
-        cli_println!("- No elements matched. Check the CSS selector and ensure a DOM snapshot has been captured (`browser4-cli htmlsnapshot`).");
+        cli_println!("- No elements matched. Check the CSS selector and ensure a HTML snapshot has been captured (`browser4-cli htmlsnapshot`).");
         json_field("matchCount", json!(0));
         json_field("selector", json!(selector));
         return Ok(());
@@ -4553,7 +4787,7 @@ struct PaginationMeta {
 
 /// Paginate `text` into pages of `page_size` **lines** (not characters).
 ///
-/// This is line-oriented because snapshot and DOM snapshot output is structured
+/// This is line-oriented because snapshot and HTML snapshot output is structured
 /// with one element/node per line.  Returns the content for `page` (1-based)
 /// and metadata about the pagination.  When `page_size` is 0 or the text fits
 /// in one page, returns the full text with `is_truncated: false`.
@@ -8366,7 +8600,7 @@ fn preferred_prefixed_group_form(command: &str) -> Option<&'static str> {
         "skill" => Some("skill <subcommand>"),
         "crawl" => Some("crawl <subcommand>"),
         "co" => Some("swarm <subcommand>"),
-        // `htmlsnapshot` is a valid standalone command (captures a DOM snapshot
+        // `htmlsnapshot` is a valid standalone command (captures a HTML snapshot
         // and returns metadata), not just a prefix group — so it is intentionally
         // absent here.  Use `browser4-cli htmlsnapshot --help` to see subcommands.
         _ => None,

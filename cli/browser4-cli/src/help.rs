@@ -748,17 +748,17 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("Subcommands:".to_string());
         lines.push(format_with_gap(
             "  htmlsnapshot get <field> [selector] [name] [--page N] [--page-size N] [--all]",
-            "Extract elements from the DOM snapshot stored in Browser4's page storage (text, html, attr)",
+            "Extract elements from the HTML snapshot stored in Browser4's page storage (text, html, attr)",
             50,
         ));
         lines.push(format_with_gap(
             "  htmlsnapshot get all <field> [selector] [name] [--offset N] [--limit N] [--page N] [--page-size N] [--all]",
-            "Extract ALL matching elements from the DOM snapshot (querySelectorAll semantics)",
+            "Extract ALL matching elements from the HTML snapshot (querySelectorAll semantics)",
             50,
         ));
         lines.push(format_with_gap(
             "  htmlsnapshot query [url]",
-            "Run X-SQL against the DOM snapshot stored in Browser4's page storage via the scrape API",
+            "Run X-SQL against the HTML snapshot stored in Browser4's page storage via the scrape API",
             50,
         ));
         lines.push(format_with_gap(
@@ -768,7 +768,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         ));
         lines.push(format_with_gap(
             "  htmlsnapshot summary",
-            "Generate a compressed Web Page Summary Index (WPSI) from the stored DOM snapshot",
+            "Summarize: read the stored HTML snapshot and produce a compressed Web Page Summary Index (WPSI)",
             50,
         ));
         lines.push(format_with_gap(
@@ -784,7 +784,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push(String::new());
         lines.push("Notes:".to_string());
         lines.push(
-            "  - The base `htmlsnapshot` command captures a static DOM snapshot, saves it in Browser4's page storage, and returns enriched metadata (URL, title, timestamps, image/link counts, interactive elements with tag/class/id/aria/bounding-box)."
+            "  - The base `htmlsnapshot` command captures a static HTML snapshot, stores it in Browser4's page storage, and returns enriched metadata (URL, title, timestamps, image/link counts, interactive elements with tag/class/id/aria/bounding-box)."
                 .to_string(),
         );
         lines.push(
@@ -816,11 +816,11 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(
-            "  - Generate a compressed page summary (WPSI) from the stored DOM snapshot with `htmlsnapshot summary`. The summary identifies page type, structure, key content nodes, repeated lists, tables, and stats — typically <1% of the original HTML size."
+            "  - Generate a compressed page summary (WPSI) from the stored HTML snapshot with `htmlsnapshot summary`. The summary identifies page type, structure, key content nodes, repeated lists, tables, and stats — typically <1% of the original HTML size."
                 .to_string(),
         );
         lines.push(
-            "  - Search the DOM snapshot HTML with regex patterns using `htmlsnapshot grep <pattern>`. Supports standard grep flags: -e (repeatable), -i, -A, -B, -C, -v, -c, -l, -F, -w, --no-line-number, and --selector for CSS-scoped searches. Uses Rust regex syntax where | is alternation (not \\|). Line numbers are shown by default (unlike GNU grep's -n opt-in)."
+            "  - Search the HTML snapshot HTML with regex patterns using `htmlsnapshot grep <pattern>`. Supports standard grep flags: -e (repeatable), -i, -A, -B, -C, -v, -c, -l, -F, -w, --no-line-number, and --selector for CSS-scoped searches. Uses Rust regex syntax where | is alternation (not \\|). Line numbers are shown by default (unlike GNU grep's -n opt-in)."
                 .to_string(),
         );
         lines.push(
@@ -833,7 +833,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         );
         lines.push(String::new());
         lines.push("Examples:".to_string());
-        lines.push("  # Capture a DOM snapshot and display metadata".to_string());
+        lines.push("  # Capture a HTML snapshot and display metadata".to_string());
         lines.push("  browser4-cli htmlsnapshot".to_string());
         lines.push(String::new());
         lines.push("  # Get the text content of the whole page (:root)".to_string());
@@ -875,7 +875,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("  # Export the full snapshot HTML to a file".to_string());
         lines.push("  browser4-cli htmlsnapshot export --file snapshot.html".to_string());
         lines.push(String::new());
-        lines.push("  # Generate a compressed page summary from the stored DOM snapshot".to_string());
+        lines.push("  # Generate a compressed page summary from the stored HTML snapshot".to_string());
         lines.push("  browser4-cli htmlsnapshot summary".to_string());
         lines.push(String::new());
         lines.push("  # Search for 'error' case-insensitively".to_string());
@@ -1400,21 +1400,21 @@ mod tests {
         let help = generate_command_help(cmd);
         // Header
         assert!(help.contains("browser4-cli htmlsnapshot"));
-        assert!(help.contains("Capture a static DOM snapshot, save it in Browser4's page storage"));
+        assert!(help.contains("Capture: take a static HTML snapshot of the current page and store it"));
         // Subcommands listing
         assert!(help.contains("Subcommands:"));
         assert!(help.contains("htmlsnapshot get <field> [selector] [name] [--page N] [--page-size N] [--all]"));
-        assert!(help.contains("Extract elements from the DOM snapshot stored in Browser4's page storage (text, html, attr)"));
+        assert!(help.contains("Extract elements from the HTML snapshot stored in Browser4's page storage (text, html, attr)"));
         assert!(help.contains("htmlsnapshot get all <field> [selector] [name] [--offset N] [--limit N] [--page N] [--page-size N] [--all]"));
-        assert!(help.contains("Extract ALL matching elements from the DOM snapshot (querySelectorAll semantics)"));
+        assert!(help.contains("Extract ALL matching elements from the HTML snapshot (querySelectorAll semantics)"));
         assert!(help.contains("htmlsnapshot query [url]"));
-        assert!(help.contains("Run X-SQL against the DOM snapshot stored in Browser4's page storage via the scrape API"));
+        assert!(help.contains("Run X-SQL against the HTML snapshot stored in Browser4's page storage via the scrape API"));
         assert!(help.contains("htmlsnapshot export"));
         assert!(help.contains("Export snapshot HTML from Browser4's page storage to a local file"));
         assert!(help.contains("htmlsnapshot summary"));
-        assert!(help.contains("Generate a compressed Web Page Summary Index (WPSI) from the stored DOM snapshot"));
+        assert!(help.contains("Summarize: read the stored HTML snapshot and produce a compressed Web Page Summary Index (WPSI)"));
         // Notes
-        assert!(help.contains("static DOM snapshot, saves it in Browser4's page storage, and returns enriched metadata"));
+        assert!(help.contains("static HTML snapshot, stores it in Browser4's page storage, and returns enriched metadata"));
         assert!(help.contains("CSS selectors only"));
         assert!(help.contains("@url"));
         assert!(help.contains("SQLTemplate handles escaping"));
@@ -1462,7 +1462,7 @@ mod tests {
         let cmd = cmds.iter().find(|c| c.name == "htmlsnapshot-get").unwrap();
         let help = generate_command_help(cmd);
         assert!(help.contains("browser4-cli htmlsnapshot get <field> [selector] [name]"));
-        assert!(help.contains("Extract elements from the DOM snapshot stored in Browser4's page storage (text, html, attr)"));
+        assert!(help.contains("Extract elements from the HTML snapshot stored in Browser4's page storage (text, html, attr)"));
         assert!(help.contains("What to extract: text, html, or attr"));
         assert!(help.contains("Attribute name (required for attr field)"));
         assert!(!help.contains("browser4-cli htmlsnapshot-get"));
@@ -1474,7 +1474,7 @@ mod tests {
         let cmd = cmds.iter().find(|c| c.name == "htmlsnapshot-query").unwrap();
         let help = generate_command_help(cmd);
         assert!(help.contains("browser4-cli htmlsnapshot query [url]"));
-        assert!(help.contains("Run X-SQL against the DOM snapshot stored in Browser4's page storage via the scrape API"));
+        assert!(help.contains("Run X-SQL against the HTML snapshot stored in Browser4's page storage via the scrape API"));
         assert!(help.contains("--sql"));
         assert!(!help.contains("browser4-cli htmlsnapshot-query"));
     }
@@ -1496,7 +1496,7 @@ mod tests {
         let cmd = cmds.iter().find(|c| c.name == "htmlsnapshot-summary").unwrap();
         let help = generate_command_help(cmd);
         assert!(help.contains("browser4-cli htmlsnapshot summary"));
-        assert!(help.contains("Generate a compressed Web Page Summary Index (WPSI) from the stored DOM snapshot"));
+        assert!(help.contains("Summarize: read the stored HTML snapshot and produce a compressed Web Page Summary Index (WPSI)"));
         assert!(!help.contains("browser4-cli htmlsnapshot-summary"));
     }
 
@@ -1506,7 +1506,7 @@ mod tests {
         let cmd = cmds.iter().find(|c| c.name == "htmlsnapshot-get-all").unwrap();
         let help = generate_command_help(cmd);
         assert!(help.contains("browser4-cli htmlsnapshot get all <field> [selector] [name]"));
-        assert!(help.contains("Extract ALL matching elements from the DOM snapshot (querySelectorAll semantics)"));
+        assert!(help.contains("Extract ALL matching elements from the HTML snapshot (querySelectorAll semantics)"));
         assert!(help.contains("What to extract: text, html, or attr"));
         assert!(help.contains("Attribute name (required for attr field)"));
         assert!(help.contains("--offset"));
