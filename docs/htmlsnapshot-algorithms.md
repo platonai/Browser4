@@ -467,7 +467,7 @@ Running `capture` → `summary` → `inspect` in sequence would previously parse
 ┌──────────────────────────────────────────────────────────────┐
 │                     INSPECT Algorithm                         │
 ├──────────────────────────────────────────────────────────────┤
-│  INPUT: sessionId, selector=":root", max=10, depth=5         │
+│  INPUT: sessionId, selector=":root", max=20, depth=5         │
 │                                                              │
 │  SERVER SIDE:                                                │
 │                                                              │

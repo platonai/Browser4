@@ -84,7 +84,7 @@ object PageSummaryIndexService {
         val stats = computeStats(indexedNodes)
 
         // Build YAML
-        val pageType = inferPageType(indexedNodes)
+        val pageType = inferPageType(indexedNodes, pageUrl)
         return buildYamlSummary(
             pageUrl = pageUrl,
             title = title,
@@ -412,8 +412,8 @@ object PageSummaryIndexService {
     // Page type inference
     // =========================================================================
 
-    /** Heuristic page-type detection from DOM text and tags. */
-    private fun inferPageType(nodes: List<SummaryIndexedNode>): String {
+    /** Heuristic page-type detection from DOM text, tags, and URL. */
+    private fun inferPageType(nodes: List<SummaryIndexedNode>, pageUrl: String): String {
         val text = nodes.joinToString(" ") { it.text }.lowercase()
         val tags = nodes.map { it.tag }.toSet()
 
@@ -431,13 +431,37 @@ object PageSummaryIndexService {
         val hasForm = tags.contains("form") && (text.contains("submit") || text.contains("提交"))
         val hasVideo = tags.contains("video") || text.contains("video") || text.contains("视频")
 
+        // URL-based signals
+        val urlLower = pageUrl.lowercase()
+        val urlPath = try {
+            java.net.URI(pageUrl).path.lowercase()
+        } catch (_: Exception) {
+            pageUrl.substringAfter("//").substringAfter("/").lowercase()
+        }
+
+        val isHomepage = urlPath.isBlank() || urlPath == "/" || urlPath == "/index.html" || urlPath == "/index.htm"
+        val isProductDetailUrl = Regex("""/(dp|product|ip|item|gp/product)/""").containsMatchIn(urlPath)
+        val isSearchUrl = urlPath.contains("search") ||
+                Regex("""[?&](s|q|k|query|search|keyword)=""").containsMatchIn(urlLower)
+
         return when {
-            hasAddToCart || (hasPrice && hasProduct) -> "Product Detail"
+            // Strong content signals take priority over URL hints
+            hasAddToCart -> "Product Detail"
             hasSearch && hasPrice -> "Search Results"
+            hasArticle -> "Article / Content"
             hasLogin && !hasArticle -> "Login / Auth"
             hasForm && !hasArticle -> "Form Page"
             hasVideo -> "Media Page"
-            hasArticle -> "Article / Content"
+
+            // URL-backed signals (refine or override content-ambiguous cases)
+            isProductDetailUrl && hasPrice -> "Product Detail"
+            isSearchUrl -> "Search Results"
+
+            // Homepage detection (only when no strong content signal above)
+            isHomepage && hasPrice -> "Product Listing"
+            isHomepage -> "Homepage"
+
+            // Remaining content heuristics
             text.contains("blog") || text.contains("博客") -> "Blog"
             text.contains("forum") || text.contains("论坛") -> "Forum"
             text.contains("documentation") || text.contains("文档") -> "Documentation"

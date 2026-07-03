@@ -2381,7 +2381,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 ArgDef { name: "selector", description: "CSS selector to scope inspection (default: :root; use e.g. .product-card for recurring pattern detection)", optional: true },
             ],
             options: &[
-                OptionDef { name: "max", description: "Max matching elements to analyze (default: 10)", is_bool: false, short: None },
+                OptionDef { name: "max", description: "Max matching elements to analyze (default: 20)", is_bool: false, short: None },
                 OptionDef { name: "depth", description: "Max descendant depth for selector suggestions (default: 5)", is_bool: false, short: None },
             ],
             tool_name_fn: |_| "html_snapshot_inspect".to_string(),
@@ -2416,7 +2416,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             name: "act",
             description: "Execute a natural language browser action. Translates plain text to a browser4-cli command and runs it immediately.",
             category: Category::Act,
-            hidden: false,
+            hidden: true,
             batch_supported: false,
             args: &[ArgDef {
                 name: "description",
@@ -2821,7 +2821,7 @@ mod tests {
         let cmd = map.get("act").unwrap();
         assert_eq!(cmd.name, "act");
         assert_eq!(cmd.category, Category::Act);
-        assert!(!cmd.hidden);
+        assert!(cmd.hidden);
 
         let mut args = HashMap::new();
         args.insert("description".to_string(), json!("scroll by 200px"));

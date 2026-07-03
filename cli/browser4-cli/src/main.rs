@@ -3639,7 +3639,7 @@ fn format_summary_outline(yaml: &str) -> String {
     let mut outline = String::new();
 
     // Track which top-level section we're in and accumulate items.
-    enum Section { None, Page, Structure, Content, Lists, Tables, Stats }
+    enum Section { None, Page, Structure, Content, Lists, LinkGroups, Tables, Stats }
     let mut section = Section::None;
     let mut page_type = "";
     let mut structure_count = 0;
@@ -3648,6 +3648,8 @@ fn format_summary_outline(yaml: &str) -> String {
     let mut content_items: Vec<(String, String, String)> = Vec::new(); // (type, score, text)
     let mut list_count = 0;
     let mut list_items: Vec<String> = Vec::new();
+    let mut linkgroup_count = 0;
+    let mut linkgroup_items: Vec<String> = Vec::new();
     let mut table_count = 0;
     let mut table_items: Vec<String> = Vec::new();
     let mut stats_lines: Vec<String> = Vec::new();
@@ -3670,6 +3672,9 @@ fn format_summary_outline(yaml: &str) -> String {
             continue;
         } else if line == "lists:" {
             section = Section::Lists;
+            continue;
+        } else if line == "linkGroups:" {
+            section = Section::LinkGroups;
             continue;
         } else if line == "tables:" {
             section = Section::Tables;
@@ -3704,7 +3709,8 @@ fn format_summary_outline(yaml: &str) -> String {
                 }
             }
             Section::Content => {
-                if trimmed.starts_with("- box:") {
+                // YAML content entries start with "  - ref:", not "- box:"
+                if trimmed.starts_with("- ref:") {
                     // Flush previous content item
                     if !cur_content_type.is_empty() {
                         content_items.push((
@@ -3726,10 +3732,9 @@ fn format_summary_outline(yaml: &str) -> String {
                 }
             }
             Section::Lists => {
-                if trimmed.starts_with("- parentTag:") {
+                // Each list entry starts with "  - parentTag: label"
+                if let Some(parent) = trim_prefix(trimmed, "- parentTag:") {
                     list_count += 1;
-                } else if let Some(parent) = trim_prefix(trimmed, "parentTag:") {
-                    // Will be followed by itemTag and count
                     list_items.push(format!("  {}", parent.trim()));
                 } else if let Some(item) = trim_prefix(trimmed, "itemTag:") {
                     if let Some(last) = list_items.last_mut() {
@@ -3738,6 +3743,52 @@ fn format_summary_outline(yaml: &str) -> String {
                 } else if let Some(count) = trim_prefix(trimmed, "count:") {
                     if let Some(last) = list_items.last_mut() {
                         *last = format!("{} ({} items)", last, count.trim());
+                    }
+                }
+            }
+            Section::LinkGroups => {
+                // Each link group entry starts with "  - container: label"
+                if let Some(container) = trim_prefix(trimmed, "- container:") {
+                    linkgroup_count += 1;
+                    linkgroup_items.push(format!("  {}", container.trim().trim_matches('"')));
+                } else if let Some(item) = trim_prefix(trimmed, "itemTag:") {
+                    if let Some(last) = linkgroup_items.last_mut() {
+                        *last = format!("{} > {}", last, item.trim());
+                    }
+                } else if let Some(count) = trim_prefix(trimmed, "count:") {
+                    if let Some(last) = linkgroup_items.last_mut() {
+                        *last = format!("{}  {} items", last, count.trim());
+                    }
+                } else if let Some(cols) = trim_prefix(trimmed, "columnCount:") {
+                    if let Some(last) = linkgroup_items.last_mut() {
+                        let label = if cols.trim() == "1" { "list" } else { &format!("grid({} cols)", cols.trim()) };
+                        *last = format!("{}  {}", last, label);
+                    }
+                } else if let Some(w) = trim_prefix(trimmed, "avgCardWidth:") {
+                    if let Some(last) = linkgroup_items.last_mut() {
+                        let w = w.trim().trim_end_matches('0').trim_end_matches('.');
+                        *last = format!("{}  avg:{}×", last, w);
+                    }
+                } else if let Some(h) = trim_prefix(trimmed, "avgCardHeight:") {
+                    if let Some(last) = linkgroup_items.last_mut() {
+                        let h = h.trim().trim_end_matches('0').trim_end_matches('.');
+                        *last = format!("{}{}", last, h);
+                    }
+                } else if let Some(links) = trim_prefix(trimmed, "allHaveLinks:") {
+                    if links.trim() == "true" {
+                        if let Some(last) = linkgroup_items.last_mut() {
+                            *last = format!("{}  +links", last);
+                        }
+                    }
+                } else if let Some(imgs) = trim_prefix(trimmed, "anyHaveImages:") {
+                    if imgs.trim() == "true" {
+                        if let Some(last) = linkgroup_items.last_mut() {
+                            *last = format!("{}  +imgs", last);
+                        }
+                    }
+                } else if let Some(score) = trim_prefix(trimmed, "score:") {
+                    if let Some(last) = linkgroup_items.last_mut() {
+                        *last = format!("{}  score:{}", last, score.trim());
                     }
                 }
             }
@@ -3789,6 +3840,17 @@ fn format_summary_outline(yaml: &str) -> String {
     outline.push_str("### Page\n");
     outline.push_str(&format!("- Type: {}\n", if page_type.is_empty() { "—" } else { page_type }));
 
+    // Link Groups section (highest priority — product/comment/article lists contain the most important data)
+    if linkgroup_count > 0 {
+        outline.push_str(&format!("\n### Link Groups ({} detected)\n", linkgroup_count));
+        for item in &linkgroup_items.iter().take(10).collect::<Vec<_>>() {
+            outline.push_str(&format!("{}\n", item));
+        }
+        if linkgroup_items.len() > 10 {
+            outline.push_str(&format!("  ... and {} more\n", linkgroup_items.len() - 10));
+        }
+    }
+
     // Structure section
     if structure_count > 0 {
         outline.push_str(&format!("\n### Structure ({} {})\n", structure_count,
@@ -3814,6 +3876,8 @@ fn format_summary_outline(yaml: &str) -> String {
                 outline.push_str(&format!("  {:>2}. {:<10} score:{:<4} \"{}\"\n", i + 1, typ, score, display_text));
             }
         }
+        // Score legend: explain what the numbers mean
+        outline.push_str("  ── Score scale: h1=100 h2=50 h3=30 table=60 btn/input=50 form=40 img=20(alt)/5 a=15 p~len/4 +id(10) +cls(5)\n");
     }
 
     // Lists section
@@ -3984,19 +4048,26 @@ async fn handle_html_snapshot_inspect(
                 match_count
             );
             for (i, sample) in samples.iter().enumerate() {
-                let tag = sample.get("tag").and_then(|v| v.as_str()).unwrap_or("");
-                let id = sample.get("id").and_then(|v| v.as_str()).unwrap_or("");
-                let class = sample.get("class").and_then(|v| v.as_str()).unwrap_or("");
+                // Section 8 format: use "ref" (e.g. "li.feed-carousel-card") instead of
+                // separate tag/id/class fields. Fall back to legacy fields for compatibility.
+                let elem_ref = sample.get("ref").and_then(|v| v.as_str()).unwrap_or("");
                 let text = sample.get("text").and_then(|v| v.as_str()).unwrap_or("");
+                let box_val = sample.get("box").and_then(|v| v.as_str()).unwrap_or("");
 
-                let mut desc = tag.to_string();
-                if !id.is_empty() {
-                    desc.push_str(&format!("#{}", id));
-                }
-                if !class.is_empty() {
-                    desc.push_str(&format!(".{}", class));
+                let mut desc = elem_ref.to_string();
+                if desc.is_empty() {
+                    // Legacy fallback: reconstruct from tag/id/class
+                    let tag = sample.get("tag").and_then(|v| v.as_str()).unwrap_or("");
+                    let id = sample.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                    let class = sample.get("class").and_then(|v| v.as_str()).unwrap_or("");
+                    desc = tag.to_string();
+                    if !id.is_empty() { desc.push_str(&format!("#{}", id)); }
+                    if !class.is_empty() { desc.push_str(&format!(".{}", class)); }
                 }
                 cli_println!("  -- Element {}: {}", i + 1, desc);
+                if !box_val.is_empty() {
+                    cli_println!("     box: {}", box_val);
+                }
                 if !text.is_empty() {
                     cli_println!("     text: \"{}\"", text);
                 }
@@ -4004,17 +4075,24 @@ async fn handle_html_snapshot_inspect(
                 // Children
                 if let Some(children) = sample.get("children").and_then(|v| v.as_array()) {
                     for child in children {
-                        let ctag = child.get("tag").and_then(|v| v.as_str()).unwrap_or("");
-                        let cid = child.get("id").and_then(|v| v.as_str()).unwrap_or("");
-                        let cclass = child.get("class").and_then(|v| v.as_str()).unwrap_or("");
+                        let cref = child.get("ref").and_then(|v| v.as_str()).unwrap_or("");
                         let ctext = child.get("text").and_then(|v| v.as_str()).unwrap_or("");
+                        let cbox = child.get("box").and_then(|v| v.as_str()).unwrap_or("");
 
-                        let mut cdesc = format!("{:>4} ", ctag); // indent
-                        if !cid.is_empty() {
-                            cdesc.push_str(&format!("#{}", cid));
-                        }
-                        if !cclass.is_empty() {
-                            cdesc.push_str(&format!(".{}", cclass));
+                        let mut cdesc = if cref.is_empty() {
+                            // Legacy fallback
+                            let ctag = child.get("tag").and_then(|v| v.as_str()).unwrap_or("");
+                            let cid = child.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                            let cclass = child.get("class").and_then(|v| v.as_str()).unwrap_or("");
+                            let mut d = format!("{:>4} ", ctag);
+                            if !cid.is_empty() { d.push_str(&format!("#{}", cid)); }
+                            if !cclass.is_empty() { d.push_str(&format!(".{}", cclass)); }
+                            d
+                        } else {
+                            format!("{:>4} {}", "", cref)
+                        };
+                        if !cbox.is_empty() {
+                            cdesc.push_str(&format!("  [{}]", cbox));
                         }
                         if !ctext.is_empty() {
                             cdesc.push_str(&format!("  \"{}\"", ctext));

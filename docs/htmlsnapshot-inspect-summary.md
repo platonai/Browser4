@@ -58,7 +58,7 @@ browser4-cli htmlsnapshot inspect ".product_pod"
 | Parameter | Default | Purpose |
 |-----------|---------|---------|
 | `selector` | `:root` | CSS selector to scope inspection; when it matches multiple elements, it compares child structures across matches |
-| `--max N` | 10 | Max matching elements to analyze |
+| `--max N` | 20 | Max matching elements to analyze |
 | `--depth D` | 5 | Max descendant depth for selector suggestions |
 
 **Workflow:** `inspect` → `get all` / `query` — take the suggested selectors and use them for batch extraction:

@@ -1106,7 +1106,7 @@ class MCPToolController(
 
                 val args = request.arguments ?: emptyMap()
                 val selector = args["selector"]?.toString()?.ifEmpty { ":root" } ?: ":root"
-                val maxMatches = (args["max"] as? Number)?.toInt() ?: 10
+                val maxMatches = (args["max"] as? Number)?.toInt() ?: 20
                 val maxDepth = (args["depth"] as? Number)?.toInt() ?: 5
 
                 inspectDocument(document, selector, maxMatches, maxDepth)
