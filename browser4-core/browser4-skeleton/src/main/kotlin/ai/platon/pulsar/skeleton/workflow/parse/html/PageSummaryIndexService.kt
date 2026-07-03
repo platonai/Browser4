@@ -351,6 +351,63 @@ object PageSummaryIndexService {
         return ""
     }
 
+    /**
+     * Build the compact element reference format defined in Section 8:
+     * `#closestId tag#id.class1.class2`
+     */
+    private fun buildElementRef(node: SummaryIndexedNode): String {
+        val closestId = findClosestId(node.element)
+        val idPart = if (closestId.isNotEmpty()) "#$closestId " else ""
+        val ownId = node.id.takeIf { it.isNotBlank() }?.let { "#$it" } ?: ""
+        val classPart = formatClassList(node.className)
+        return "$idPart${node.tag}$ownId$classPart"
+    }
+
+    /** Find the id of the nearest ancestor element (up to [maxLevels] levels up). */
+    private fun findClosestId(el: org.jsoup.nodes.Element, maxLevels: Int = 6): String {
+        var current: org.jsoup.nodes.Element? = el.parent()
+        var level = 0
+        while (current != null && level < maxLevels) {
+            val id = current.id()
+            if (id.isNotBlank()) return id
+            current = current.parent()
+            level++
+        }
+        return ""
+    }
+
+    /** Format up to 2 CSS classes as `.class1.class2`, or empty string if none. */
+    private fun formatClassList(className: String): String {
+        if (className.isBlank()) return ""
+        val classes = className.split("\\s+".toRegex()).take(2)
+        return classes.joinToString("") { ".$it" }
+    }
+
+    /**
+     * Truncate text to ≤5 words (Latin) or ≤5 characters (CJK).
+     */
+    private fun truncateSummaryText(text: String, maxWords: Int = 5): String {
+        val trimmed = text.trim()
+        if (trimmed.isEmpty()) return ""
+        if (trimmed.any { isCJK(it) }) return trimmed.take(maxWords)
+        val words = trimmed.split("\\s+".toRegex())
+        return words.take(maxWords).joinToString(" ")
+    }
+
+    /** Check if a character is in a CJK Unicode range. */
+    private fun isCJK(c: Char): Boolean {
+        val cp = c.code
+        return cp in 0x4E00..0x9FFF   // CJK Unified Ideographs
+            || cp in 0x3400..0x4DBF   // CJK Unified Ideographs Extension A
+            || cp in 0xF900..0xFAFF   // CJK Compatibility Ideographs
+            || cp in 0x3040..0x309F   // Hiragana
+            || cp in 0x30A0..0x30FF   // Katakana
+            || cp in 0xAC00..0xD7AF   // Hangul Syllables
+            || cp in 0x2E80..0x2EFF   // CJK Radicals Supplement
+            || cp in 0x3000..0x303F   // CJK Symbols and Punctuation
+            || cp in 0xFF00..0xFFEF   // Halfwidth and Fullwidth Forms
+    }
+
     // =========================================================================
     // Page type inference
     // =========================================================================
@@ -1143,9 +1200,11 @@ object PageSummaryIndexService {
         if (keyNodes.isNotEmpty()) {
             appendLine("content:")
             for (sn in keyNodes) {
+                val ref = buildElementRef(sn.indexed)
                 val selector = buildSelectorHint(sn.indexed.className, sn.indexed.id)
-                val text = sn.indexed.text.take(80)
-                appendLine("  - box: ${sn.indexed.box}")
+                val text = truncateSummaryText(sn.indexed.element.text().trim())
+                appendLine("  - ref: ${ref.toYamlValue()}")
+                appendLine("    box: ${sn.indexed.box}")
                 appendLine("    type: ${sn.typeLabel}")
                 appendLine("    score: ${sn.score}")
                 if (text.isNotEmpty()) appendLine("    text: ${text.toYamlValue()}")

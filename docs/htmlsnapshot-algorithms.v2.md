@@ -1,6 +1,6 @@
 # Link Group Detection Algorithm
 
-**Status**: Draft proposal for `htmlsnapshot summary` Phase 6b
+**Status**: Implemented — applied to all three `htmlsnapshot` commands (`capture`, `summary`, `inspect`)
 
 ---
 
@@ -589,12 +589,12 @@ If no link groups are found, the `linkGroups:` section is omitted (same conventi
 
 ## Integration
 
-### Call site in `PageSummaryIndexService.generate()`
+### Call sites
 
 ```
-Phase 6:  val lists = detectLists(indexedNodes)       ← existing
-Phase 6b: val linkGroups = detectLinkGroups(cleaned)  ← NEW
-Phase 7:  val tables = summarizeTables(indexedNodes)   ← existing
+capture:  handleHtmlSnapshotCapture()  → detectLinkGroups(cleaned)  → included as JSON linkGroups
+summary:  PageSummaryIndexService.generate() → Phase 6b → detectLinkGroups(cleaned)  → included as YAML linkGroups
+inspect:  inspectDocument()            → detectLinkGroups(document) → included as JSON linkGroups
 ```
 
 ### Method signature

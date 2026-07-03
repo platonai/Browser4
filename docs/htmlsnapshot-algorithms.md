@@ -148,7 +148,14 @@ Running `capture` → `summary` → `inspect` in sequence would previously parse
 │     Elements with no semantic ancestor go into "Page" group. │
 │     Output is partitioned by group for readability.          │
 │                                                              │
-│  8. SERIALIZE interactive elements                           │
+│  8. DETECT link groups (visual geometry algorithm)           │
+│     Run PageSummaryIndexService.detectLinkGroups() on the     │
+│     captured document. Groups visually similar card elements  │
+│     (product grids, article lists, etc.) by bounding-box      │
+│     geometry and includes them as linkGroups in the output.   │
+│     See docs/htmlsnapshot-algorithms.v2.md for full details.  │
+│                                                              │
+│  9. SERIALIZE interactive elements                           │
 │     For each element, output a compact representation:       │
 │                                                              │
 │     ┌─ Element reference format:                              │
@@ -162,23 +169,25 @@ Running `capture` → `summary` → `inspect` in sequence would previously parse
 │     │                                                        │
 │     ├─ Bounding box: "x,y,w,h" from vi attr                  │
 │     │                                                        │
-│     ├─ Text: ownText, truncated to ≤5 words for space-       │
-│     │  separated languages or ≤5 characters for languages    │
-│     │  that require segmentation (CJK). Full text stored     │
-│     │  server-side for `htmlsnapshot get`.                   │
+│     ├─ Text: full descendant text (`text()`), truncated to   │
+│     │  ≤5 words for Latin or ≤5 characters for CJK.          │
+│     │  Using `text()` rather than `ownText()` because many    │
+│     │  interactive elements wrap text in child nodes —        │
+│     │  e.g. `<a href="..."><em>$</em><span>140</span></a>`.  │
+│     │  Full text stored server-side for `htmlsnapshot get`.   │
 │     │                                                        │
 │     └─ Also include: weight, tier, semanticGroup             │
 │                                                              │
 │                                                              │
-│  9. DELTA DETECTION (if prior snapshot exists for this URL)  │
+│  10. DELTA DETECTION (if prior snapshot exists for this URL)  │
 │     Compute structural diff: elements added, removed, or     │
 │     whose text changed. Store delta alongside full snapshot.  │
 │     Enables `htmlsnapshot diff` for "what changed?" queries. │
 │                                                              │
-│  10. RETURN JSON to CLI                                      │
+│  11. RETURN JSON to CLI                                      │
 │      { url, href, sizeBytes, capturedAt, contentType,        │
 │        title, imageCount, linkCount, interactiveElements,    │
-│        semanticGroups, deltaSummary? }                       │
+│        linkGroups?, deltaSummary? }                          │
 │                                                              │
 │  CLI: FORMAT and PRINT                                       │
 │     Line 1: Snapshot: "<title>" or <url>                     │
@@ -209,6 +218,7 @@ Running `capture` → `summary` → `inspect` in sequence would previously parse
 - **Context-aware weighting**: link-heavy pages compress the Tier 1/2 gap so navigation content isn't buried
 - **Resolution-independent link grouping**: ε based on viewport percentage, not absolute px
 - **Semantic grouping**: elements organized by nearest semantic ancestor for readability
+- **Visual link group detection**: runs the same geometry-first algorithm as summary, detecting product grids, article lists, and other repeating card patterns — included as `linkGroups` in the output
 - **Delta detection**: diff stored when re-capturing the same URL, enabling change queries
 - **Next-step hints**: shows relevant follow-up commands
 
@@ -440,6 +450,7 @@ Running `capture` → `summary` → `inspect` in sequence would previously parse
 - **Text excerpts**: top paragraphs give a "what this page says" signal
 - **Multi-locale page type inference**: structural heuristics (language-independent) weighted 2× over keyword matching in 12+ languages
 - **Fully deterministic**: zero randomness, no AI model
+- **Full text extraction**: uses `text()` (all descendant text) rather than `ownText()` for display values, because many elements wrap their visible text in child nodes — scoring and inference still use `ownText()` for correct structural weighting
 - **Size compression**: typically 0.1%–1% of original HTML
 
 ---
@@ -521,7 +532,8 @@ Running `capture` → `summary` → `inspect` in sequence would previously parse
 │                                                              │
 │  6. BUILD sample structures (first 3 matches)                │
 │     For each match: "#closestId tag#id.class" reference,     │
-│     bounding box, text (≤5 words / 5 CJK chars),             │
+│     bounding box, full descendant text truncated to          │
+│     ≤5 words / 5 CJK chars (using `text()`, not `ownText()`), │
 │     + direct children in same compact format                  │
 │                                                              │
 │  7. PRE-COMPUTE element weights                              │
@@ -665,6 +677,7 @@ Running `capture` → `summary` → `inspect` in sequence would previously parse
 - **PowerCSS selectors**: `:expr(width>N)`, `:expr(width>N && height>N)`, `:expr(img>0)`, `:expr(width>N && img>0)`, `:expr(a>0)`, `:expr(char>N)`, `:expr(left>N)` — all using valid PowerCSS features (`width`, `height`, `img`, `a`, `char`, `left`)
 - **Dedup of equivalent selectors**: subset/superset relationships detected; most specific kept, broader flagged as alternative
 - **Reliability warnings**: per-selector structural-variance flagging when content shape differs across matches
+- **Visual link group detection**: runs the same geometry-first algorithm as summary, detecting product grids, article lists, etc. — included as `linkGroups` in the JSON output
 - **Sample-size caveat**: explicit note when `max` < `matchCount`, with hint to increase limit
 - **Absolute quality floor**: prevents misleading tier labels from purely-relative percentile thresholds
 - **Early pruning**: bare tags appearing in <50% of matches skip expensive class/id/attr/power generation
@@ -691,6 +704,7 @@ Running `capture` → `summary` → `inspect` in sequence would previously parse
 | **Text excerpts** | ❌ | ✅ (top 3 paragraphs) | ❌ |
 | **Content-to-chrome ratio** | ❌ | ✅ | ❌ |
 | **List/table detection** | ❌ | ✅ (tag-name + structural similarity) | ❌ |
+| **Link group detection** | ✅ (visual geometry, same algorithm as summary) | ✅ (visual geometry algorithm) | ✅ (visual geometry, same algorithm as summary) |
 | **Selector generation** | ❌ | Hint only (#id or .class) | ✅ (class, id, attr, child, sibling, PowerCSS) |
 | **Selector dedup** | ❌ | ❌ | ✅ (subset/superset detection) |
 | **Reliability warnings** | ❌ | ❌ | ✅ (structural variance per selector) |
