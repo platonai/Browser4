@@ -15,6 +15,7 @@
  */
 package ai.platon.pulsar.media.service
 
+import ai.platon.pulsar.agentic.model.DirectValue
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.media.config.MediaConfig
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
@@ -61,7 +62,7 @@ open class FFmpegProcessManager(
         val bitrate: Long? = null,
         /** List of all streams in the file */
         val streams: List<StreamInfo> = emptyList(),
-    )
+    ) : DirectValue
 
     /**
      * Information about a single media stream.
@@ -91,7 +92,7 @@ open class FFmpegProcessManager(
         val durationMs: Long,
         /** Whether the process timed out */
         val timedOut: Boolean = false,
-    ) {
+    ) : DirectValue {
         val success: Boolean get() = exitCode == 0 && !timedOut
     }
 

@@ -15,6 +15,7 @@
  */
 package ai.platon.pulsar.media.service
 
+import ai.platon.pulsar.agentic.model.DirectValue
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.media.config.MediaConfig
 import kotlinx.coroutines.Dispatchers
@@ -66,7 +67,7 @@ open class MediaDownloader(
         val success: Boolean,
         /** Error message if the download failed */
         val error: String? = null,
-    )
+    ) : DirectValue
 
     /**
      * Download a media file directly via OkHttp.
