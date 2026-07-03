@@ -29,9 +29,9 @@ Every document is classified into one of three tiers, signaled by `tier:` in its
 
 | Tier | Purpose | Target Length | Example |
 |------|---------|---------------|---------|
-| **decision** | Comparison tables, decision trees, trade-off analysis. Answers "which approach should I use?" | 100-300 lines | SKILL.md, domsnapshot-scenarios.md |
+| **decision** | Comparison tables, decision trees, trade-off analysis. Answers "which approach should I use?" | 100-300 lines | SKILL.md, htmlsnapshot-scenarios.md |
 | **procedure** | End-to-end workflows. Answers "I want to do X, show me the steps." | 100-500 lines | Scenario files, attach.md, crawl.md, loop.md, swarm.md, agent.md |
-| **catalog** | Exhaustive reference listings. Answers "what are all the options for Y?" Only consulted on demand. | Any length | x-sql-*.md, load-options-guide.md, domsnapshot.md, power-dom.md |
+| **catalog** | Exhaustive reference listings. Answers "what are all the options for Y?" Only consulted on demand. | Any length | x-sql-*.md, load-options-guide.md, htmlsnapshot.md, power-dom.md |
 
 **Critical rule:** A decision document never contains a complete flag listing. A procedure document never contains an exhaustive function catalog. A catalog never contains a decision tree.
 

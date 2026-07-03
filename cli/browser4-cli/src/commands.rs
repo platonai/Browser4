@@ -2186,20 +2186,20 @@ pub fn all_commands() -> Vec<CommandDef> {
             tool_name_fn: |_| String::new(),
             tool_params_fn: |_| json!({}),
         },
-        // ---- Snapshot ----
+        // ---- HtmlSnapshot ----
         CommandDef {
-            name: "domsnapshot",
+            name: "htmlsnapshot",
             description: "Capture a static DOM snapshot, save it in Browser4's page storage, and return metadata (URL, title, timestamps, image/link counts, interactive elements with tag/class/id/aria/bounding-box)",
             category: Category::Snapshot,
             hidden: false,
             batch_supported: false,
             args: &[],
             options: &[],
-            tool_name_fn: |_| "dom_snapshot_capture".to_string(),
+            tool_name_fn: |_| "html_snapshot_capture".to_string(),
             tool_params_fn: |_| json!({}),
         },
         CommandDef {
-            name: "domsnapshot-get",
+            name: "htmlsnapshot-get",
             description: "Extract elements from the DOM snapshot stored in Browser4's page storage (text, html, attr)",
             category: Category::Snapshot,
             hidden: false,
@@ -2214,7 +2214,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "page-size", short: None, is_bool: false, description: "Lines per page (default: 2000)" },
                 OptionDef { name: "all", short: None, is_bool: true, description: "Show all output, disabling pagination" },
             ],
-            tool_name_fn: |_| "dom_snapshot_scrape".to_string(),
+            tool_name_fn: |_| "html_snapshot_scrape".to_string(),
             tool_params_fn: |args| {
                 let field = get_str(args, "field").unwrap_or_default();
                 let selector = get_opt_str(args, "selector").unwrap_or(":root");
@@ -2224,7 +2224,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             },
         },
         CommandDef {
-            name: "domsnapshot-get-all",
+            name: "htmlsnapshot-get-all",
             description: "Extract ALL matching elements from the DOM snapshot (querySelectorAll semantics); supports --offset and --limit for pagination",
             category: Category::Snapshot,
             hidden: false,
@@ -2241,7 +2241,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "page-size", short: None, is_bool: false, description: "Lines per page (default: 2000)" },
                 OptionDef { name: "all", short: None, is_bool: true, description: "Show all output, disabling pagination" },
             ],
-            tool_name_fn: |_| "dom_snapshot_scrape_all".to_string(),
+            tool_name_fn: |_| "html_snapshot_scrape_all".to_string(),
             tool_params_fn: |args| {
                 let field = get_str(args, "field").unwrap_or_default();
                 let selector = get_opt_str(args, "selector").unwrap_or(":root");
@@ -2257,7 +2257,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             },
         },
         CommandDef {
-            name: "domsnapshot-query",
+            name: "htmlsnapshot-query",
             description: "Run X-SQL against the DOM snapshot stored in Browser4's page storage via the scrape API",
             category: Category::Snapshot,
             hidden: false,
@@ -2297,7 +2297,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                     short: None,
                 },
             ],
-            tool_name_fn: |_| "dom_snapshot_query".to_string(),
+            tool_name_fn: |_| "html_snapshot_query".to_string(),
             tool_params_fn: |args| {
                 let sql = get_opt_str(args, "sql").unwrap_or_default();
                 let url = get_opt_str(args, "url").unwrap_or("");
@@ -2311,7 +2311,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             },
         },
         CommandDef {
-            name: "domsnapshot-export",
+            name: "htmlsnapshot-export",
             description: "Export snapshot HTML from Browser4's page storage to a local file",
             category: Category::Snapshot,
             hidden: false,
@@ -2325,7 +2325,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                     short: None,
                 },
             ],
-            tool_name_fn: |_| "dom_snapshot_export".to_string(),
+            tool_name_fn: |_| "html_snapshot_export".to_string(),
             tool_params_fn: |args| {
                 let mut p = json!({});
                 if let Some(f) = get_opt_str(args, "file") { p["file"] = json!(f); }
@@ -2333,18 +2333,18 @@ pub fn all_commands() -> Vec<CommandDef> {
             },
         },
         CommandDef {
-            name: "domsnapshot-summary",
+            name: "htmlsnapshot-summary",
             description: "Generate a compressed Web Page Summary Index (WPSI) from the stored DOM snapshot — preserves page structure, key nodes, and stats in <1% of original HTML size",
             category: Category::Snapshot,
             hidden: false,
             batch_supported: false,
             args: &[],
             options: &[],
-            tool_name_fn: |_| "dom_snapshot_summary".to_string(),
+            tool_name_fn: |_| "html_snapshot_summary".to_string(),
             tool_params_fn: |_| json!({}),
         },
         CommandDef {
-            name: "domsnapshot-grep",
+            name: "htmlsnapshot-grep",
             description: "Search the DOM snapshot HTML using regex patterns with grep-style output",
             category: Category::Snapshot,
             hidden: false,
@@ -2369,7 +2369,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "page-size", short: None, is_bool: false, description: "Lines per page (default: 2000)" },
                 OptionDef { name: "all", short: None, is_bool: true, description: "Show all output, disabling pagination" },
             ],
-            tool_name_fn: |_| "dom_snapshot_export".to_string(),
+            tool_name_fn: |_| "html_snapshot_export".to_string(),
             tool_params_fn: |args| {
                 let mut p = json!({});
                 for (k, v) in args {
@@ -2460,7 +2460,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             },
         },
         CommandDef {
-            name: "domsnapshot-inspect",
+            name: "htmlsnapshot-inspect",
             description: "Inspect DOM structure and suggest CSS selectors for recurring patterns (product cards, prices, titles)",
             category: Category::Snapshot,
             hidden: false,
@@ -2472,7 +2472,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "max", description: "Max matching elements to analyze (default: 10)", is_bool: false, short: None },
                 OptionDef { name: "depth", description: "Max descendant depth for selector suggestions (default: 5)", is_bool: false, short: None },
             ],
-            tool_name_fn: |_| "dom_snapshot_inspect".to_string(),
+            tool_name_fn: |_| "html_snapshot_inspect".to_string(),
             tool_params_fn: |args| {
                 let mut p = json!({});
                 if let Some(s) = get_opt_str(args, "selector") { p["selector"] = json!(s); }
@@ -3792,31 +3792,31 @@ mod tests {
         assert_eq!(cmd.category, Category::Mouse);
     }
 
-    // ---- domsnapshot tests ----
+    // ---- htmlsnapshot tests ----
 
     #[test]
-    fn test_commands_map_contains_dom_snapshot_variants() {
+    fn test_commands_map_contains_html_snapshot_variants() {
         let map = commands_map();
         for expected in &[
-            "domsnapshot",
-            "domsnapshot-get",
-            "domsnapshot-get-all",
-            "domsnapshot-query",
-            "domsnapshot-export",
-            "domsnapshot-summary",
-            "domsnapshot-grep",
-            "domsnapshot-inspect",
+            "htmlsnapshot",
+            "htmlsnapshot-get",
+            "htmlsnapshot-get-all",
+            "htmlsnapshot-query",
+            "htmlsnapshot-export",
+            "htmlsnapshot-summary",
+            "htmlsnapshot-grep",
+            "htmlsnapshot-inspect",
         ] {
             assert!(map.contains_key(*expected), "Missing command: {}", expected);
         }
     }
 
     #[test]
-    fn test_dom_snapshot_capture_params() {
+    fn test_html_snapshot_capture_params() {
         let map = commands_map();
-        let cmd = map.get("domsnapshot").unwrap();
+        let cmd = map.get("htmlsnapshot").unwrap();
         let args = HashMap::new();
-        assert_eq!((cmd.tool_name_fn)(&args), "dom_snapshot_capture");
+        assert_eq!((cmd.tool_name_fn)(&args), "html_snapshot_capture");
         let params = (cmd.tool_params_fn)(&args);
         assert!(
             params.as_object().unwrap().is_empty(),
@@ -3825,30 +3825,30 @@ mod tests {
     }
 
     #[test]
-    fn test_dom_snapshot_capture_empty_params() {
+    fn test_html_snapshot_capture_empty_params() {
         let map = commands_map();
-        let cmd = map.get("domsnapshot").unwrap();
+        let cmd = map.get("htmlsnapshot").unwrap();
         let args = HashMap::new();
-        assert_eq!((cmd.tool_name_fn)(&args), "dom_snapshot_capture");
+        assert_eq!((cmd.tool_name_fn)(&args), "html_snapshot_capture");
     }
 
     #[test]
-    fn test_dom_snapshot_get_text_params() {
+    fn test_html_snapshot_get_text_params() {
         let map = commands_map();
-        let cmd = map.get("domsnapshot-get").unwrap();
+        let cmd = map.get("htmlsnapshot-get").unwrap();
         let mut args = HashMap::new();
         args.insert("field".to_string(), json!("text"));
         args.insert("selector".to_string(), json!(".product"));
-        assert_eq!((cmd.tool_name_fn)(&args), "dom_snapshot_scrape");
+        assert_eq!((cmd.tool_name_fn)(&args), "html_snapshot_scrape");
         let params = (cmd.tool_params_fn)(&args);
         assert_eq!(params["field"], "text");
         assert_eq!(params["selector"], ".product");
     }
 
     #[test]
-    fn test_dom_snapshot_get_html_defaults_selector_to_root() {
+    fn test_html_snapshot_get_html_defaults_selector_to_root() {
         let map = commands_map();
-        let cmd = map.get("domsnapshot-get").unwrap();
+        let cmd = map.get("htmlsnapshot-get").unwrap();
         let mut args = HashMap::new();
         args.insert("field".to_string(), json!("html"));
         let params = (cmd.tool_params_fn)(&args);
@@ -3857,9 +3857,9 @@ mod tests {
     }
 
     #[test]
-    fn test_dom_snapshot_get_attr_params() {
+    fn test_html_snapshot_get_attr_params() {
         let map = commands_map();
-        let cmd = map.get("domsnapshot-get").unwrap();
+        let cmd = map.get("htmlsnapshot-get").unwrap();
         let mut args = HashMap::new();
         args.insert("field".to_string(), json!("attr"));
         args.insert("selector".to_string(), json!(".product"));
@@ -3871,25 +3871,25 @@ mod tests {
     }
 
     #[test]
-    fn test_dom_snapshot_query_params() {
+    fn test_html_snapshot_query_params() {
         let map = commands_map();
-        let cmd = map.get("domsnapshot-query").unwrap();
+        let cmd = map.get("htmlsnapshot-query").unwrap();
         let mut args = HashMap::new();
         args.insert("url".to_string(), json!("https://example.com"));
         args.insert(
             "sql".to_string(),
             json!("SELECT dom_base_uri(dom) AS url FROM load_and_select('@url', ':root')"),
         );
-        assert_eq!((cmd.tool_name_fn)(&args), "dom_snapshot_query");
+        assert_eq!((cmd.tool_name_fn)(&args), "html_snapshot_query");
         let params = (cmd.tool_params_fn)(&args);
         assert_eq!(params["url"], "https://example.com");
         assert!(params["sql"].as_str().unwrap().contains("@url"));
     }
 
     #[test]
-    fn test_dom_snapshot_export_params() {
+    fn test_html_snapshot_export_params() {
         let map = commands_map();
-        let cmd = map.get("domsnapshot-export").unwrap();
+        let cmd = map.get("htmlsnapshot-export").unwrap();
         let mut args = HashMap::new();
         args.insert("file".to_string(), json!("snapshot.html"));
         let params = (cmd.tool_params_fn)(&args);
@@ -3910,17 +3910,17 @@ mod tests {
     }
 
     #[test]
-    fn test_dom_snapshot_commands_are_snapshot_category() {
+    fn test_html_snapshot_commands_are_snapshot_category() {
         let map = commands_map();
         for name in &[
-            "domsnapshot",
-            "domsnapshot-get",
-            "domsnapshot-get-all",
-            "domsnapshot-query",
-            "domsnapshot-export",
-            "domsnapshot-summary",
-            "domsnapshot-grep",
-            "domsnapshot-inspect",
+            "htmlsnapshot",
+            "htmlsnapshot-get",
+            "htmlsnapshot-get-all",
+            "htmlsnapshot-query",
+            "htmlsnapshot-export",
+            "htmlsnapshot-summary",
+            "htmlsnapshot-grep",
+            "htmlsnapshot-inspect",
         ] {
             let cmd = map.get(*name).unwrap();
             assert_eq!(cmd.category, Category::Snapshot);
@@ -3928,26 +3928,26 @@ mod tests {
     }
 
     // -------------------------------------------------------------------
-    // domsnapshot-get-all tests
+    // htmlsnapshot-get-all tests
     // -------------------------------------------------------------------
 
     #[test]
-    fn test_dom_snapshot_get_all_text_params() {
+    fn test_html_snapshot_get_all_text_params() {
         let map = commands_map();
-        let cmd = map.get("domsnapshot-get-all").unwrap();
+        let cmd = map.get("htmlsnapshot-get-all").unwrap();
         let mut args = HashMap::new();
         args.insert("field".to_string(), json!("text"));
         args.insert("selector".to_string(), json!(".product"));
-        assert_eq!((cmd.tool_name_fn)(&args), "dom_snapshot_scrape_all");
+        assert_eq!((cmd.tool_name_fn)(&args), "html_snapshot_scrape_all");
         let params = (cmd.tool_params_fn)(&args);
         assert_eq!(params["field"], "text");
         assert_eq!(params["selector"], ".product");
     }
 
     #[test]
-    fn test_dom_snapshot_get_all_html_defaults_selector_to_root() {
+    fn test_html_snapshot_get_all_html_defaults_selector_to_root() {
         let map = commands_map();
-        let cmd = map.get("domsnapshot-get-all").unwrap();
+        let cmd = map.get("htmlsnapshot-get-all").unwrap();
         let mut args = HashMap::new();
         args.insert("field".to_string(), json!("html"));
         let params = (cmd.tool_params_fn)(&args);
@@ -3956,9 +3956,9 @@ mod tests {
     }
 
     #[test]
-    fn test_dom_snapshot_get_all_attr_params() {
+    fn test_html_snapshot_get_all_attr_params() {
         let map = commands_map();
-        let cmd = map.get("domsnapshot-get-all").unwrap();
+        let cmd = map.get("htmlsnapshot-get-all").unwrap();
         let mut args = HashMap::new();
         args.insert("field".to_string(), json!("attr"));
         args.insert("selector".to_string(), json!(".product"));
@@ -3970,9 +3970,9 @@ mod tests {
     }
 
     #[test]
-    fn test_dom_snapshot_get_all_with_offset_and_limit() {
+    fn test_html_snapshot_get_all_with_offset_and_limit() {
         let map = commands_map();
-        let cmd = map.get("domsnapshot-get-all").unwrap();
+        let cmd = map.get("htmlsnapshot-get-all").unwrap();
         let mut args = HashMap::new();
         args.insert("field".to_string(), json!("text"));
         args.insert("selector".to_string(), json!("h2 a"));
@@ -3985,9 +3985,9 @@ mod tests {
     }
 
     #[test]
-    fn test_dom_snapshot_get_all_rejects_invalid_offset() {
+    fn test_html_snapshot_get_all_rejects_invalid_offset() {
         let map = commands_map();
-        let cmd = map.get("domsnapshot-get-all").unwrap();
+        let cmd = map.get("htmlsnapshot-get-all").unwrap();
         let mut args = HashMap::new();
         args.insert("field".to_string(), json!("text"));
         args.insert("offset".to_string(), json!("abc"));
@@ -3996,9 +3996,9 @@ mod tests {
     }
 
     #[test]
-    fn test_dom_snapshot_get_all_rejects_invalid_limit() {
+    fn test_html_snapshot_get_all_rejects_invalid_limit() {
         let map = commands_map();
-        let cmd = map.get("domsnapshot-get-all").unwrap();
+        let cmd = map.get("htmlsnapshot-get-all").unwrap();
         let mut args = HashMap::new();
         args.insert("field".to_string(), json!("text"));
         args.insert("limit".to_string(), json!("xyz"));

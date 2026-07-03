@@ -231,7 +231,7 @@ interface BrowserProtocol {
         autoRepeat: Boolean? = null,
     ): Unit
 
-    suspend fun domSnapshotCaptureSnapshot(
+    suspend fun htmlSnapshotCaptureSnapshot(
         computedStyles: List<String>,
         includePaintOrder: Boolean? = null,
         includeDOMRects: Boolean? = null,

@@ -175,10 +175,10 @@ generate-locator <ref>             从快照 ref 或现有选择器生成唯一�
 
 #### DOM 快照（静态 DOM 提取）
 
-`domsnapshot` 系列命令捕获原始 HTML DOM，可使用 CSS 选择器和 X-SQL 进行查询 — 无需交互式浏览器会话。
+`htmlsnapshot` 系列命令捕获原始 HTML DOM，可使用 CSS 选择器和 X-SQL 进行查询 — 无需交互式浏览器会话。
 
 ```
-                  snapshot              domsnapshot
+                  snapshot              htmlsnapshot
 ─────────────────────────────────────────────────────────
 数据来源          无障碍树              原始 HTML DOM
 元素引用          e5, e15               仅 CSS 选择器
@@ -187,16 +187,16 @@ X-SQL 支持        否                    是 (query)
 ```
 
 ```
-domsnapshot                                捕获静态 DOM 快照并将其存储在页面存储中
-domsnapshot get <field> [selector] [name]  从存储的 DOM 快照中提取 text、html 或 attr
-domsnapshot query [url]                    对存储的 DOM 快照运行 X-SQL (--sql <query|@file>)
-domsnapshot export                         将快照 HTML 导出到本地文件 (--file <path>)
-domsnapshot summary                        生成压缩的网页摘要索引 (WPSI)
-domsnapshot grep <pattern>                 使用正则表达式搜索快照 HTML
+htmlsnapshot                                捕获静态 DOM 快照并将其存储在页面存储中
+htmlsnapshot get <field> [selector] [name]  从存储的 DOM 快照中提取 text、html 或 attr
+htmlsnapshot query [url]                    对存储的 DOM 快照运行 X-SQL (--sql <query|@file>)
+htmlsnapshot export                         将快照 HTML 导出到本地文件 (--file <path>)
+htmlsnapshot summary                        生成压缩的网页摘要索引 (WPSI)
+htmlsnapshot grep <pattern>                 使用正则表达式搜索快照 HTML
                                            -i, -v, -c, -l, -F, -w, -A, -B, -C, --selector
 ```
 
-完整参考（包括同样需要 LLM 密钥的 X-SQL `llm_*` 函数），请参见 [DOM 快照参考](cli/skill/references/domsnapshot.md)。
+完整参考（包括同样需要 LLM 密钥的 X-SQL `llm_*` 函数），请参见 [DOM 快照参考](cli/skill/references/htmlsnapshot.md)。
 
 #### 导出
 
@@ -398,11 +398,11 @@ browser4-cli press e15 Enter
 browser4-cli get text ".product-title"
 browser4-cli get attr ".product-image" data-src
 
-# DOM 快照与 X-SQL
-browser4-cli domsnapshot
-browser4-cli domsnapshot get text "#main-content"
-browser4-cli domsnapshot query --sql @query.sql
-browser4-cli domsnapshot grep -i "error"
+# 使用 X-SQL 进行 DOM 快照
+browser4-cli htmlsnapshot
+browser4-cli htmlsnapshot get text "#main-content"
+browser4-cli htmlsnapshot query --sql @query.sql
+browser4-cli htmlsnapshot grep -i "error"
 
 # AI 驱动的提取与总结（需要 LLM 密钥 — 参见上方的 LLM 配置）
 browser4-cli extract "product name, price, and rating as JSON"

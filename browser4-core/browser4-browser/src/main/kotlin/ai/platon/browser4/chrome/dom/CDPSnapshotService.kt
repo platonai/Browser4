@@ -2,7 +2,7 @@ package ai.platon.browser4.chrome.dom
 
 import ai.platon.browser4.chrome.dom.impl.AccessibilityHandler
 import ai.platon.browser4.chrome.dom.impl.AccessibilityHandler.AccessibilityTreeResult
-import ai.platon.browser4.chrome.dom.impl.DomSnapshotHandler
+import ai.platon.browser4.chrome.dom.impl.HtmlSnapshotHandler
 import ai.platon.browser4.chrome.dom.impl.DomTreeHandler
 import ai.platon.browser4.chrome.dom.impl.OptimizedDOMTreeBuilder
 import ai.platon.browser4.chrome.dom.util.DomDebug
@@ -111,7 +111,7 @@ class CDPSnapshotService(
 
     private val accessibility = AccessibilityHandler(bp)
     private val domTree = DomTreeHandler(bp)
-    private val snapshot = DomSnapshotHandler(bp)
+    private val snapshot = HtmlSnapshotHandler(bp)
     private val highlightManager = HighlightManager(bp)
     private val clickableDetector = ClickableElementDetector()
 

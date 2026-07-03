@@ -9,7 +9,7 @@ import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
 import kotlin.test.*
 
-@DisplayName("domsnapshot inspect — inspectDocument() unit tests")
+@DisplayName("htmlsnapshot inspect — inspectDocument() unit tests")
 class InspectDocumentTest {
 
     private val mapper = pulsarObjectMapper()

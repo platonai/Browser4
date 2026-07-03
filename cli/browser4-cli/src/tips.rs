@@ -40,18 +40,18 @@ const TIPS_SNAPSHOT: &[Tip] = &[
     },
 ];
 
-const TIPS_DOMSNAPSHOT_GET: &[Tip] = &[
+const TIPS_HTMLSNAPSHOT_GET: &[Tip] = &[
     Tip {
-        text: "Use PowerCSS `:expr()` selectors: `domsnapshot get all attr \"img:expr(width>400)\" src` to get large images only",
+        text: "Use PowerCSS `:expr()` selectors: `htmlsnapshot get all attr \"img:expr(width>400)\" src` to get large images only",
     },
     Tip {
-        text: "Use `domsnapshot get all` (note the `all` keyword) to extract ALL matching elements, not just the first",
+        text: "Use `htmlsnapshot get all` (note the `all` keyword) to extract ALL matching elements, not just the first",
     },
     Tip {
-        text: "To correlate multiple fields (titles + prices + URLs) from a list page, use `domsnapshot query` with X-SQL — `get all` arrays can't be aligned across independent calls. See skill/references/x-sql-dom-load-select.md",
+        text: "To correlate multiple fields (titles + prices + URLs) from a list page, use `htmlsnapshot query` with X-SQL — `get all` arrays can't be aligned across independent calls. See skill/references/x-sql-dom-load-select.md",
     },
     Tip {
-        text: "Use `domsnapshot inspect <selector>` to analyze DOM structure and discover CSS selectors before extracting",
+        text: "Use `htmlsnapshot inspect <selector>` to analyze DOM structure and discover CSS selectors before extracting",
     },
     Tip {
         text: "Use `get attr <ref> id` or `get attr <ref> class` to bridge a snapshot ref to a CSS selector",
@@ -61,7 +61,7 @@ const TIPS_DOMSNAPSHOT_GET: &[Tip] = &[
     },
 ];
 
-const TIPS_DOMSNAPSHOT_QUERY: &[Tip] = &[
+const TIPS_HTMLSNAPSHOT_QUERY: &[Tip] = &[
     Tip {
         text: "X-SQL has ~200 functions across DOM_*, STR_*, and ARRAY_* namespaces — see skill/references/x-sql.md",
     },
@@ -120,7 +120,7 @@ const TIPS_EVAL: &[Tip] = &[
         text: "Use `eval --json` for machine-parseable JSON output — perfect for piping to other tools",
     },
     Tip {
-        text: "For structured data extraction without quoting pain, consider X-SQL: `domsnapshot query --sql \"...\"`",
+        text: "For structured data extraction without quoting pain, consider X-SQL: `htmlsnapshot query --sql \"...\"`",
     },
     Tip {
         text: "Use `eval` with a `[ref]` argument to scope JS execution to a specific element: `eval \"this.textContent\" e5`",
@@ -249,10 +249,10 @@ const TIPS_SELECT: &[Tip] = &[
 
 const TIPS_INSPECT: &[Tip] = &[
     Tip {
-        text: "Use `domsnapshot inspect [selector] --max 20` to analyze DOM patterns across multiple elements",
+        text: "Use `htmlsnapshot inspect [selector] --max 20` to analyze DOM patterns across multiple elements",
     },
     Tip {
-        text: "Use `domsnapshot inspect` without arguments to get a structural overview of the entire page",
+        text: "Use `htmlsnapshot inspect` without arguments to get a structural overview of the entire page",
     },
 ];
 
@@ -274,15 +274,15 @@ const TIPS_STORAGE: &[Tip] = &[
     },
 ];
 
-const TIPS_DOMSNAPSHOT_GREP: &[Tip] = &[
+const TIPS_HTMLSNAPSHOT_GREP: &[Tip] = &[
     Tip {
-        text: "Use `domsnapshot grep -i <pattern>` for case-insensitive search across the DOM HTML",
+        text: "Use `htmlsnapshot grep -i <pattern>` for case-insensitive search across the DOM HTML",
     },
     Tip {
-        text: "Use `domsnapshot grep -C 3 <pattern>` for context lines around matches",
+        text: "Use `htmlsnapshot grep -C 3 <pattern>` for context lines around matches",
     },
     Tip {
-        text: "Use `domsnapshot grep --selector main <pattern>` to search only within a CSS selector subtree",
+        text: "Use `htmlsnapshot grep --selector main <pattern>` to search only within a CSS selector subtree",
     },
 ];
 
@@ -301,10 +301,10 @@ const TIPS_GENERAL: &[Tip] = &[
         text: "Use `loop --times 10 --interval 5s <command>` for repeated task execution with pacing",
     },
     Tip {
-        text: "Use `domsnapshot query --sql` (X-SQL) for structured data extraction — no JavaScript quoting pain",
+        text: "Use `htmlsnapshot query --sql` (X-SQL) for structured data extraction — no JavaScript quoting pain",
     },
     Tip {
-        text: "Combine `snapshot -v 0`, `domsnapshot get`, and `eval --json` for a complete extraction pipeline",
+        text: "Combine `snapshot -v 0`, `htmlsnapshot get`, and `eval --json` for a complete extraction pipeline",
     },
     Tip {
         text: "Use `--server <url>` to target a remote Browser4 server for distributed scraping",
@@ -332,12 +332,12 @@ thread_local! {
 fn tips_for_command(command: &str) -> &'static [Tip] {
     match command {
         "snapshot" | "snapshot-grep" => TIPS_SNAPSHOT,
-        "domsnapshot" => TIPS_DOMSNAPSHOT_GET,
-        "domsnapshot-get" => TIPS_DOMSNAPSHOT_GET,
-        "domsnapshot-query" => TIPS_DOMSNAPSHOT_QUERY,
-        "domsnapshot-grep" => TIPS_DOMSNAPSHOT_GREP,
-        "domsnapshot-inspect" => TIPS_INSPECT,
-        "domsnapshot-summary" => TIPS_INSPECT,
+        "htmlsnapshot" => TIPS_HTMLSNAPSHOT_GET,
+        "htmlsnapshot-get" => TIPS_HTMLSNAPSHOT_GET,
+        "htmlsnapshot-query" => TIPS_HTMLSNAPSHOT_QUERY,
+        "htmlsnapshot-grep" => TIPS_HTMLSNAPSHOT_GREP,
+        "htmlsnapshot-inspect" => TIPS_INSPECT,
+        "htmlsnapshot-summary" => TIPS_INSPECT,
         "click" | "dblclick" | "hover" | "fill" | "type" | "press" | "check" | "uncheck"
         | "drag" | "keydown" | "keyup" => TIPS_INTERACTION,
         "goto" | "open" | "go-back" | "go-forward" | "reload" => TIPS_NAVIGATION,
@@ -361,7 +361,7 @@ fn tips_for_command(command: &str) -> &'static [Tip] {
         | "sessionstorage-set" | "sessionstorage-delete" | "sessionstorage-clear" => TIPS_STORAGE,
         "state-save" | "state-load" => TIPS_STORAGE,
         "mousemove" | "mousedown" | "mouseup" | "mousewheel" => TIPS_INTERACTION,
-        "get" => TIPS_DOMSNAPSHOT_GET,
+        "get" => TIPS_HTMLSNAPSHOT_GET,
         "generate-locator" => TIPS_INTERACTION,
         _ => TIPS_GENERAL,
     }
@@ -447,11 +447,11 @@ mod tests {
         assert!(!tips_for_command("fill").is_empty());
         assert!(!tips_for_command("type").is_empty());
         assert!(!tips_for_command("press").is_empty());
-        // domsnapshot variants
-        assert!(!tips_for_command("domsnapshot-get").is_empty());
-        assert!(!tips_for_command("domsnapshot-query").is_empty());
-        assert!(!tips_for_command("domsnapshot-grep").is_empty());
-        assert!(!tips_for_command("domsnapshot-inspect").is_empty());
+        // htmlsnapshot variants
+        assert!(!tips_for_command("htmlsnapshot-get").is_empty());
+        assert!(!tips_for_command("htmlsnapshot-query").is_empty());
+        assert!(!tips_for_command("htmlsnapshot-grep").is_empty());
+        assert!(!tips_for_command("htmlsnapshot-inspect").is_empty());
         // Eval
         assert!(!tips_for_command("eval").is_empty());
         // AI
@@ -471,15 +471,15 @@ mod tests {
     }
 
     #[test]
-    fn test_tips_domsnapshot_get_includes_xsql_correlation_hint() {
-        let has_xsql_tip = TIPS_DOMSNAPSHOT_GET.iter().any(|t| {
+    fn test_tips_htmlsnapshot_get_includes_xsql_correlation_hint() {
+        let has_xsql_tip = TIPS_HTMLSNAPSHOT_GET.iter().any(|t| {
             t.text.contains("correlate multiple fields")
-                && t.text.contains("domsnapshot query")
+                && t.text.contains("htmlsnapshot query")
                 && t.text.contains("x-sql-dom-load-select.md")
         });
         assert!(
             has_xsql_tip,
-            "TIPS_DOMSNAPSHOT_GET should include a tip steering users to X-SQL for correlated multi-field extraction"
+            "TIPS_HTMLSNAPSHOT_GET should include a tip steering users to X-SQL for correlated multi-field extraction"
         );
     }
 
@@ -508,7 +508,7 @@ mod tests {
         assert!(!is_suppressed_command("click"));
         assert!(!is_suppressed_command("snapshot"));
         assert!(!is_suppressed_command("eval"));
-        assert!(!is_suppressed_command("domsnapshot"));
+        assert!(!is_suppressed_command("htmlsnapshot"));
         assert!(!is_suppressed_command("screenshot"));
     }
 }

@@ -6,20 +6,20 @@ import org.springframework.web.bind.annotation.RestController
 
 /**
  * Serves mock HTML pages tailored to each scenario in
- * skill/references/domsnapshot-scenarios.md.
+ * skill/references/htmlsnapshot-scenarios.md.
  *
- * All endpoints live under /domsnapshot-test/ and produce text/html.
+ * All endpoints live under /htmlsnapshot-test/ and produce text/html.
  * Each page contains 5–8 repeating elements so X-SQL `load_and_select`
  * queries return meaningful multi-row results.
  */
 @RestController
-class DomSnapshotMockController {
+class HtmlSnapshotMockController {
 
     // =========================================================================
     // Scenario 2 — News Headline Aggregator
     // =========================================================================
 
-    @GetMapping("/domsnapshot-test/news", produces = [MediaType.TEXT_HTML_VALUE])
+    @GetMapping("/htmlsnapshot-test/news", produces = [MediaType.TEXT_HTML_VALUE])
     fun newsPage(): String = """<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -158,7 +158,7 @@ class DomSnapshotMockController {
     // Scenario 3 — SEO Health Audit
     // =========================================================================
 
-    @GetMapping("/domsnapshot-test/seo", produces = [MediaType.TEXT_HTML_VALUE])
+    @GetMapping("/htmlsnapshot-test/seo", produces = [MediaType.TEXT_HTML_VALUE])
     fun seoPage(): String = """<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -233,7 +233,7 @@ class DomSnapshotMockController {
     // Scenario 5 — Job Board Scraper
     // =========================================================================
 
-    @GetMapping("/domsnapshot-test/jobs", produces = [MediaType.TEXT_HTML_VALUE])
+    @GetMapping("/htmlsnapshot-test/jobs", produces = [MediaType.TEXT_HTML_VALUE])
     fun jobsPage(): String = """<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -299,7 +299,7 @@ class DomSnapshotMockController {
     // Scenario 6 — Compliance Verification
     // =========================================================================
 
-    @GetMapping("/domsnapshot-test/compliance", produces = [MediaType.TEXT_HTML_VALUE])
+    @GetMapping("/htmlsnapshot-test/compliance", produces = [MediaType.TEXT_HTML_VALUE])
     fun compliancePage(): String = """<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -380,7 +380,7 @@ class DomSnapshotMockController {
     // Scenario 7 — Academic Literature Metadata Extraction
     // =========================================================================
 
-    @GetMapping("/domsnapshot-test/research", produces = [MediaType.TEXT_HTML_VALUE])
+    @GetMapping("/htmlsnapshot-test/research", produces = [MediaType.TEXT_HTML_VALUE])
     fun researchPage(): String = """<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -457,7 +457,7 @@ class DomSnapshotMockController {
     // Scenario 8 — Real Estate Listing Monitor
     // =========================================================================
 
-    @GetMapping("/domsnapshot-test/real-estate", produces = [MediaType.TEXT_HTML_VALUE])
+    @GetMapping("/htmlsnapshot-test/real-estate", produces = [MediaType.TEXT_HTML_VALUE])
     fun realEstatePage(): String = """<!DOCTYPE html>
 <html lang="en">
 <head>

@@ -73,6 +73,74 @@ class MCPToolController(
     private val crawlService: CrawlService? = null,
     private val skillService: SkillService? = null,
 ) {
+    companion object {
+        private val FRONTEND_TOOL_NAME_ALIASES: Map<String, String> = mapOf(
+            "browser_navigate" to "navigate",
+            "browser_snapshot" to "aria_snapshot",
+            "browser_navigate_back" to "go_back",
+            "browser_navigate_forward" to "go_forward",
+            "browser_reload" to "reload",
+            "browser_press_key" to "press",
+            "browser_press_sequentially" to "type",
+            "browser_keydown" to "keydown",
+            "browser_keyup" to "keyup",
+            "browser_mouse_move_xy" to "mousemove",
+            "browser_mouse_down" to "mousedown",
+            "browser_mouse_up" to "mouseup",
+            "browser_mouse_wheel" to "mousewheel",
+            "browser_drag" to "drag",
+            "browser_type" to "fill",
+            "browser_hover" to "hover",
+            "browser_select_option" to "select_option",
+            "browser_file_upload" to "upload",
+            "browser_check" to "check",
+            "browser_uncheck" to "uncheck",
+            "browser_evaluate" to "evaluate_value",
+            "browser_generate_locator" to "generate_locator",
+            "browser_resize" to "resize",
+            "browser_take_screenshot" to "screenshot",
+            "browser_pdf_save" to "pdf",
+            "browser_save_storage_state" to "save_storage_state",
+            "browser_load_storage_state" to "load_storage_state",
+        )
+
+        private const val CLEAR_SESSION_STORAGE_SCRIPT = """
+            (() => {
+                const result = {
+                    localStorageCleared: false,
+                    sessionStorageCleared: false,
+                    errors: []
+                };
+                try {
+                    window.localStorage.clear();
+                    result.localStorageCleared = true;
+                } catch (error) {
+                    result.errors.push("localStorage: " + error);
+                }
+                try {
+                    window.sessionStorage.clear();
+                    result.sessionStorageCleared = true;
+                } catch (error) {
+                    result.errors.push("sessionStorage: " + error);
+                }
+                return JSON.stringify(result);
+            })()
+        """
+
+        /**
+         * Returns true if the given value is an element reference pattern
+         * (e.g. "e5", "backend:15") that should be rejected for static
+         * HTML snapshot queries.
+         */
+        private fun isElementReference(value: String): Boolean {
+            val trimmed = value.trim()
+            return (trimmed.startsWith('e') && trimmed.length > 1
+                    && trimmed.substring(1).all { it.isDigit() })
+                    || trimmed.startsWith("backend:")
+        }
+    }
+
+
     private val logger = LoggerFactory.getLogger(MCPToolController::class.java)
 
     // Handler delegates
@@ -100,27 +168,27 @@ class MCPToolController(
         return try {
             when (request.tool) {
                 // Session management tools
-                "open_session" -> sessionHandler.handleOpenSession(request)
-                "close_session" -> sessionHandler.handleCloseSession(request)
-                "list_sessions" -> sessionHandler.handleListSessions()
-                "close_all_sessions" -> sessionHandler.handleCloseAllSessions()
-                "kill_all_sessions" -> sessionHandler.handleKillAllSessions()
-                "delete_session_data" -> sessionHandler.handleDeleteSessionData(request)
-                "attach_browser" -> sessionHandler.handleAttachBrowser(request)
+                "open_session" -> handleOpenSession(request)
+                "close_session" -> handleCloseSession(request)
+                "list_sessions" -> handleListSessions()
+                "close_all_sessions" -> handleCloseAllSessions()
+                "kill_all_sessions" -> handleKillAllSessions()
+                "delete_session_data" -> handleDeleteSessionData(request)
+                "attach_browser" -> handleAttachBrowser(request)
                 "check_session_ready" -> sessionHandler.handleCheckSessionReadiness(request)
-                // Command tools
-                "command_run" -> commandHandler.handleCommandRun(request)
-                "command_batch" -> commandHandler.handleCommandBatch(request)
-                "command_status" -> commandHandler.handleCommandStatus(request)
-                "command_result" -> commandHandler.handleCommandResult(request)
-                // DOM snapshot tools
-                "dom_snapshot_capture" -> domSnapshotHandler.handleDomSnapshotCapture(request)
-                "dom_snapshot_scrape" -> domSnapshotHandler.handleDomSnapshotScrape(request)
-                "dom_snapshot_scrape_all" -> domSnapshotHandler.handleDomSnapshotScrapeAll(request)
-                "dom_snapshot_query" -> domSnapshotHandler.handleDomSnapshotQuery(request)
-                "dom_snapshot_export" -> domSnapshotHandler.handleDomSnapshotExport(request)
-                "dom_snapshot_summary" -> domSnapshotHandler.handleDomSnapshotSummary(request)
-                "dom_snapshot_inspect" -> handleDomSnapshotInspect(request)
+                // Command tools — delegate to CommandRunner (no session required)
+                "command_run" -> handleCommandRun(request)
+                "command_batch" -> handleCommandBatch(request)
+                "command_status" -> handleCommandStatus(request)
+                "command_result" -> handleCommandResult(request)
+                // HTML snapshot tools
+                "html_snapshot_capture" -> handleHtmlSnapshotCapture(request)
+                "html_snapshot_scrape" -> handleHtmlSnapshotScrape(request)
+                "html_snapshot_scrape_all" -> handleHtmlSnapshotScrapeAll(request)
+                "html_snapshot_query" -> handleHtmlSnapshotQuery(request)
+                "html_snapshot_export" -> handleHtmlSnapshotExport(request)
+                "html_snapshot_summary" -> handleHtmlSnapshotSummary(request)
+                "html_snapshot_inspect" -> handleHtmlSnapshotInspect(request)
                 // Swarm tools
                 "swarm_submit" -> requireHandler(swarmMcpHandler).handleSwarmSubmit(request)
                 "swarm_query" -> requireHandler(swarmMcpHandler).handleSwarmQuery(request)
@@ -154,15 +222,490 @@ class MCPToolController(
         response: HttpServletResponse
     ): ResponseEntity<Any> {
         addRequestId(response)
-        val tools = toolListHandler.listToolNames()
-        return ResponseEntity.ok(mapOf("tools" to tools))
+        // Fast path: return cached tool names if already computed
+        cachedToolNames?.let {
+            return ResponseEntity.ok(mapOf("tools" to it))
+        }
+
+        // Slow path: compute tool names under a lock so only one request
+        // initialises the cache.
+        synchronized(this) {
+            cachedToolNames?.let {
+                return ResponseEntity.ok(mapOf("tools" to it))
+            }
+
+            val tools = linkedSetOf(
+                // Session management
+                "open_session", "close_session", "list_sessions",
+                "close_all_sessions", "kill_all_sessions", "delete_session_data",
+                "attach_browser", "check_session_ready",
+                // Command tools (no session required)
+                "command_run", "command_batch", "command_status", "command_result"
+            )
+
+            // Include every frontend tool alias so the CLI readiness probe
+            // (which checks for "open_session" + "browser_navigate") passes
+            // without creating a throwaway session that would launch Chrome.
+            tools.addAll(FRONTEND_TOOL_NAME_ALIASES.keys)
+
+            // Composite / convenience tools that map to underlying domain tools.
+            // These should always be advertised, even when no session is active.
+            tools.addAll(
+                listOf(
+                    "browser_click",
+                    "browser_handle_dialog",
+                    "browser_tabs",
+                    "html_snapshot_capture",
+                    "html_snapshot_scrape",
+                    "html_snapshot_scrape_all",
+                    "html_snapshot_query",
+                    "html_snapshot_export",
+                    "html_snapshot_summary",
+                    "html_snapshot_inspect",
+                    // Swarm tools
+                    "swarm_submit", "swarm_query", "swarm_status", "swarm_result",
+                    // Crawl tools
+                    "crawl_submit", "crawl_status", "crawl_result",
+                    // Skill management tools
+                    "skill_list", "skill_info", "skill_install", "skill_uninstall", "skill_reload",
+                )
+            )
+
+            val activeSession = sessionManager.getAllSessions().firstOrNull()
+            if (activeSession != null) {
+                // A real session already exists — enrich with per-agent tools.
+                try {
+                    val agent = activeSession.agenticSession.companionAgent as? BasicBrowserAgent
+                    if (agent != null) {
+                        tools.addAll(collectAdvertisedToolNames(agent.agentToolManager.getAllToolSpecs()))
+                    }
+                } catch (_: Exception) {
+                    // Session may be mid-initialisation; the static set is sufficient.
+                }
+            }
+
+            val result = tools.toList()
+            cachedToolNames = result
+            return ResponseEntity.ok(mapOf("tools" to result))
+        }
     }
 
     // =========================================================================
-    // DOM snapshot handlers
+    // Session management handlers
     // =========================================================================
 
-    private suspend fun handleDomSnapshotCapture(
+    private fun handleOpenSession(request: MCPToolCallRequest): ResponseEntity<MCPToolCallResponse> {
+        val capabilities = request.arguments?.get("capabilities") as? Map<String, String?>
+        val session = sessionManager.getOrCreateSession(capabilities)
+
+        // Navigate to initial URL if provided
+        val url = request.arguments?.get("url")?.toString()
+        // Navigate operation is handled in the client side
+
+        logger.info("MCP open_session: created session {}", session.sessionId)
+        return ResponseEntity.ok(
+            textResponse("""{"sessionId":"${session.sessionId}"}""")
+        )
+    }
+
+    private fun handleCloseSession(request: MCPToolCallRequest): ResponseEntity<MCPToolCallResponse> {
+        val sessionId = requireSessionId(request)
+        val deleted = sessionManager.deleteSession(sessionId)
+        return if (deleted) {
+            ResponseEntity.ok(textResponse("Session closed"))
+        } else {
+            ResponseEntity.ok(errorResponse("Session not found: $sessionId"))
+        }
+    }
+
+    private fun handleListSessions(): ResponseEntity<MCPToolCallResponse> {
+        val sessions = sessionManager.getAllSessions().map { s ->
+            """{"sessionId":"${s.sessionId}","url":"${s.url ?: ""}","status":"${s.status}"}"""
+        }
+        return ResponseEntity.ok(textResponse("[${sessions.joinToString(",")}]"))
+    }
+
+    private fun handleCloseAllSessions(): ResponseEntity<MCPToolCallResponse> {
+        val count = sessionManager.deleteAllSessions()
+        return ResponseEntity.ok(textResponse("Closed $count session(s)"))
+    }
+
+    private fun handleKillAllSessions(): ResponseEntity<MCPToolCallResponse> {
+        val count = sessionManager.deleteAllSessions()
+        return ResponseEntity.ok(textResponse("Killed $count session(s)"))
+    }
+
+    private suspend fun handleDeleteSessionData(request: MCPToolCallRequest): ResponseEntity<MCPToolCallResponse> {
+        val sessionId = requireSessionId(request)
+        val managed = sessionManager.getSession(sessionId)
+            ?: return ResponseEntity.ok(errorResponse("Session not found: $sessionId"))
+
+        managed.withLock {
+            driver.clearBrowserCookies()
+            val storageResult = driver.evaluate(CLEAR_SESSION_STORAGE_SCRIPT)?.toString().orEmpty()
+            if (storageResult.isNotBlank() && !storageResult.contains("\"errors\":[]")) {
+                logger.warn(
+                    "delete_session_data completed with partial storage cleanup | sessionId={} | result={}",
+                    sessionId,
+                    storageResult
+                )
+            }
+        }
+
+        return ResponseEntity.ok(textResponse("User data deleted for session"))
+    }
+
+    private fun handleAttachBrowser(request: MCPToolCallRequest): ResponseEntity<MCPToolCallResponse> {
+        val args = request.arguments ?: emptyMap()
+
+        val cdpEndpoint = (args["cdpEndpoint"] as? String)?.takeIf { it.isNotBlank() }
+        val cdpPort = (args["cdpPort"] as? Number)?.toInt()
+
+        require(cdpEndpoint != null || cdpPort != null) {
+            "attach_browser requires either 'cdpEndpoint' (URL) or 'cdpPort' (number)"
+        }
+
+        val session = sessionManager.createAttachedSession(
+            cdpEndpoint = cdpEndpoint,
+            cdpPort = cdpPort,
+            capabilities = args.filterKeys {
+                it != "cdpEndpoint" && it != "cdpPort" && it != "sessionId"
+            }.mapValues { it.value?.toString() }
+        )
+
+        logger.info(
+            "MCP attach_browser: created session {} attached to {}",
+            session.sessionId,
+            cdpEndpoint ?: "port $cdpPort"
+        )
+        return ResponseEntity.ok(
+            textResponse("""{"sessionId":"${session.sessionId}"}""")
+        )
+    }
+
+    // =========================================================================
+    // Command tool handlers
+    // =========================================================================
+
+    /**
+     * Execute a plain command via the unified [AgentToolManager] path.
+     *
+     * When `async=true` (default), returns the task ID string immediately.
+     * When `async=false`, blocks until execution completes and returns the [CommandStatus] as JSON.
+     */
+    private suspend fun handleCommandRun(request: MCPToolCallRequest): ResponseEntity<MCPToolCallResponse> =
+        dispatchToCommandToolExecutor("command_run", "run", request.arguments ?: emptyMap())
+
+    private suspend fun handleCommandBatch(request: MCPToolCallRequest): ResponseEntity<MCPToolCallResponse> {
+        val args = request.arguments ?: emptyMap()
+        val stepMaps = (args["steps"] as? List<*>)?.mapIndexed { index, step ->
+            val stepMap = step.toAnyMap()
+                ?: throw IllegalArgumentException("Batch step at index $index must be an object.")
+            index to stepMap
+        } ?: throw IllegalArgumentException("command_batch requires a 'steps' array.")
+
+        val bail = args["bail"].toBooleanValue() ?: false
+        val currentSessionId = args["sessionId"]?.toString()?.takeIf { it.isNotBlank() }
+        val results = mutableListOf<BatchExecutionResult>()
+        var stoppedOnError = false
+
+        for ((index, step) in stepMaps) {
+            val startedAt = System.nanoTime()
+            val result = try {
+                executeBatchStep(index, step, currentSessionId)
+            } catch (e: Exception) {
+                BatchExecutionResult(index = index, ok = false, error = e.message ?: "Unknown batch execution error")
+            }
+            val durationMillis = (System.nanoTime() - startedAt) / 1_000_000
+
+            results += result.copy(durationMillis = durationMillis)
+            if (!result.ok && bail) {
+                stoppedOnError = true
+                break
+            }
+        }
+
+        val body = BatchExecutionResponse(
+            sessionId = currentSessionId,
+            failureCount = results.count { !it.ok },
+            stoppedOnError = stoppedOnError,
+            results = results,
+        )
+        return ResponseEntity.ok(textResponse(pulsarObjectMapper().writeValueAsString(body)))
+    }
+
+    /**
+     * Get the status of a command task by its ID.
+     */
+    private suspend fun handleCommandStatus(request: MCPToolCallRequest): ResponseEntity<MCPToolCallResponse> =
+        dispatchToCommandToolExecutor("command_status", "status", request.arguments ?: emptyMap())
+
+    /**
+     * Get the result of a completed command task by its ID.
+     */
+    private suspend fun handleCommandResult(request: MCPToolCallRequest): ResponseEntity<MCPToolCallResponse> =
+        dispatchToCommandToolExecutor("command_result", "result", request.arguments ?: emptyMap())
+
+    /**
+     * Common dispatcher for command tool calls — invokes the command agent's
+     * [AgentToolManager] and maps the result to an [MCPToolCallResponse].
+     *
+     * @param toolDisplayName Human-readable tool name for error messages.
+     * @param method The command domain method to invoke (`run`, `status`, or `result`).
+     * @param args The raw request arguments.
+     */
+    private suspend fun dispatchToCommandToolExecutor(
+        toolDisplayName: String,
+        method: String,
+        args: Map<String, Any?>,
+    ): ResponseEntity<MCPToolCallResponse> {
+        val sessionId: String = args[B4Constants.SESSION_ID_CAPABILITY]?.toString() ?: DEFAULT_SESSION_ID
+
+        return try {
+            val toolExecutor = getCommandAgentToolManager(sessionId)
+            val evaluate = toolExecutor.execute(ToolCall("command", method, args.toMutableMap())).evaluate
+            if (evaluate.exception != null) {
+                ResponseEntity.ok(errorResponse("$toolDisplayName failed: ${evaluate.exception!!.message}"))
+            } else {
+                ResponseEntity.ok(textResponse(evaluate.value?.toString() ?: ""))
+            }
+        } catch (e: Exception) {
+            logger.error("{} failed | {}", toolDisplayName, e.message, e)
+            ResponseEntity.ok(errorResponse("$toolDisplayName failed: ${e.message}"))
+        }
+    }
+
+    private fun getCommandAgentToolManager(sessionId: String): AgentToolManager {
+        val agentRunner = commandExecutor.ensureAgentRunner(sessionId)
+        val commandAgent = agentRunner.session.companionAgent as? BasicBrowserAgent
+            ?: throw IllegalStateException("CommandRunner session agent does not support tools")
+
+        val agentToolManager = commandAgent.agentToolManager
+
+        val domain = "command"
+        if (!agentToolManager.hasToolExecutor(domain)) {
+            agentToolManager.registerCustomToolExecutor(commandToolExecutor)
+            agentToolManager.registerCustomTarget(domain, commandExecutor)
+        }
+        return agentToolManager
+    }
+
+    private suspend fun executeBatchStep(
+        index: Int,
+        step: Map<String, Any?>,
+        currentSessionId: String?,
+    ): BatchExecutionResult {
+        val op = step[MCPConstants.KEY_OP]?.toString()
+            ?: throw IllegalArgumentException(MCPConstants.ERROR_MISSING_OP)
+
+        // Validate that only DOM operations are allowed in batch
+        when (op) {
+            MCPConstants.OP_OPEN, MCPConstants.OP_CLOSE -> {
+                throw IllegalArgumentException(String.format(MCPConstants.ERROR_BATCH_NON_DOM_OP, op))
+            }
+        }
+
+        return when (op) {
+            MCPConstants.OP_TOOL -> handleBatchTool(index, step, currentSessionId)
+            MCPConstants.OP_SNAPSHOT -> handleBatchSnapshot(index, step, currentSessionId)
+            MCPConstants.OP_SCREENSHOT -> handleBatchScreenshot(index, step, currentSessionId)
+            MCPConstants.OP_PDF -> handleBatchPdf(index, step, currentSessionId)
+            else -> throw IllegalArgumentException("${MCPConstants.ERROR_UNSUPPORTED_OP}$op")
+        }
+    }
+
+    private suspend fun handleBatchTool(
+        index: Int,
+        step: Map<String, Any?>,
+        currentSessionId: String?
+    ): BatchExecutionResult {
+        val sessionId = requireSessionId(currentSessionId)
+
+        step[MCPConstants.KEY_PRE_FOCUS_SELECTOR]?.toString()?.takeIf { it.isNotBlank() }?.let {
+            restoreBatchFocus(sessionId, it)
+        }
+        step[MCPConstants.KEY_PRE_MOUSE_POSITION].toBatchMousePosition()?.let {
+            restoreBatchMousePosition(sessionId, it)
+        }
+
+        val tool = step[MCPConstants.KEY_TOOL]?.toString()
+            ?: throw IllegalArgumentException(MCPConstants.ERROR_MISSING_TOOL)
+        val arguments =
+            step[MCPConstants.KEY_ARGUMENTS].toAnyMap().orEmpty() + (MCPConstants.KEY_SESSION_ID to sessionId)
+
+        logger.info("Calling batch tool step: $index " + tool + " " + arguments.entries.joinToString(" ") { "--" + it.key + "=" + it.value })
+
+        val text = executeAgentToolText(tool, arguments)
+
+        return BatchExecutionResult(index = index, ok = true, text = text.ifBlank { null })
+    }
+
+    private suspend fun handleBatchSnapshot(
+        index: Int,
+        step: Map<String, Any?>,
+        currentSessionId: String?
+    ): BatchExecutionResult {
+        val sessionId = requireSessionId(currentSessionId)
+        val tool = step[MCPConstants.KEY_TOOL]?.toString()
+            ?: throw IllegalArgumentException(MCPConstants.ERROR_MISSING_TOOL)
+        val arguments =
+            step[MCPConstants.KEY_ARGUMENTS].toAnyMap().orEmpty() + (MCPConstants.KEY_SESSION_ID to sessionId)
+
+        val pageUrl = executeAgentToolText(MCPConstants.TOOL_PAGE_URL, mapOf(MCPConstants.KEY_SESSION_ID to sessionId))
+        val pageTitle =
+            executeAgentToolText(MCPConstants.TOOL_PAGE_TITLE, mapOf(MCPConstants.KEY_SESSION_ID to sessionId))
+        val snapshot = executeAgentToolText(tool, arguments)
+
+        return BatchExecutionResult(
+            index = index,
+            ok = true,
+            pageUrl = pageUrl,
+            pageTitle = pageTitle,
+            snapshot = snapshot,
+        )
+    }
+
+    private suspend fun handleBatchScreenshot(
+        index: Int,
+        step: Map<String, Any?>,
+        currentSessionId: String?
+    ): BatchExecutionResult {
+        val sessionId = requireSessionId(currentSessionId)
+        val tool = step[MCPConstants.KEY_TOOL]?.toString()
+            ?: throw IllegalArgumentException(MCPConstants.ERROR_MISSING_TOOL)
+        val arguments =
+            step[MCPConstants.KEY_ARGUMENTS].toAnyMap().orEmpty() + (MCPConstants.KEY_SESSION_ID to sessionId)
+        val screenshot = executeAgentToolText(tool, arguments)
+
+        return BatchExecutionResult(index = index, ok = true, screenshot = screenshot)
+    }
+
+    private suspend fun handleBatchPdf(
+        index: Int,
+        step: Map<String, Any?>,
+        currentSessionId: String?
+    ): BatchExecutionResult {
+        val sessionId = requireSessionId(currentSessionId)
+        val tool = step[MCPConstants.KEY_TOOL]?.toString()
+            ?: throw IllegalArgumentException(MCPConstants.ERROR_MISSING_TOOL)
+        val arguments =
+            step[MCPConstants.KEY_ARGUMENTS].toAnyMap().orEmpty() + (MCPConstants.KEY_SESSION_ID to sessionId)
+        val pdf = executeAgentToolText(tool, arguments)
+
+        return BatchExecutionResult(index = index, ok = true, pdf = pdf)
+    }
+
+    private suspend fun restoreBatchFocus(sessionId: String, selector: String) {
+        if (selector.startsWith("backend:")) {
+            return
+        }
+
+        val selectorLiteral = pulsarObjectMapper().writeValueAsString(selector)
+        val focusExpression = $$"""
+            (() => {
+                try {
+                    const el = document.querySelector($$selectorLiteral);
+                    if (!el) return 'missing';
+                    if (typeof el.focus === 'function') {
+                        el.focus();
+                    }
+                    return document.activeElement === el ? 'focused' : 'unfocused';
+                } catch (error) {
+                    return `invalid:${error}`;
+                }
+            })()
+        """.trimIndent()
+
+        when (val result = executeAgentToolText(
+            MCPConstants.TOOL_BROWSER_EVALUATE,
+            mapOf(MCPConstants.KEY_SESSION_ID to sessionId, "expression" to focusExpression),
+        ).trim()) {
+            "focused" -> return
+            "missing" -> throw IllegalArgumentException(
+                "Saved active selector '$selector' no longer exists on the page."
+            )
+
+            "unfocused" -> throw IllegalArgumentException(
+                "Failed to focus saved active selector '$selector' before keyboard command."
+            )
+
+            else -> {
+                if (result.startsWith("invalid:")) {
+                    throw IllegalArgumentException(
+                        "Saved active selector '$selector' is not a valid query selector: $result"
+                    )
+                }
+                throw IllegalArgumentException(
+                    "Unexpected focus result for saved active selector '$selector': $result"
+                )
+            }
+        }
+    }
+
+    private suspend fun restoreBatchMousePosition(sessionId: String, position: BatchMousePosition) {
+        executeAgentToolText(
+            "browser_mouse_move_xy",
+            mapOf(MCPConstants.KEY_SESSION_ID to sessionId, "x" to position.x, "y" to position.y),
+        )
+    }
+
+    private suspend fun executeAgentToolText(toolName: String, args: Map<String, Any?>): String {
+        val sessionId = requireSessionId(args)
+        val managed = sessionManager.getSession(sessionId)
+            ?: throw IllegalArgumentException("${MCPConstants.ERROR_SESSION_NOT_FOUND}$sessionId")
+
+        val agent = managed.agenticSession.companionAgent as? BasicBrowserAgent
+            ?: throw IllegalStateException("Session agent does not support tools")
+
+        return executeAgentToolText(agent, toolName, args)
+    }
+
+    private suspend fun executeAgentToolText(
+        agent: BasicBrowserAgent,
+        toolName: String,
+        args: Map<String, Any?>,
+    ): String {
+        val normalizedRequest = normalizeFrontendToolCall(toolName, args)
+        val normalizedTool = normalizedRequest.tool
+        val normalizedArgs = normalizeToolArguments(normalizedTool, normalizedRequest.arguments)
+        val toolCall = resolveMcpToolCall(normalizedTool, normalizedArgs, agent)
+            ?: throw IllegalArgumentException("Unknown tool: $toolName")
+
+        val result = agent.agentToolManager.execute(toolCall)
+
+        val evaluate = result.evaluate
+        evaluate.exception?.let { exception ->
+            throw IllegalArgumentException("$toolName failed: ${exception.message} help: ${exception.help}")
+        }
+        // Distinguish JS null (className == "null") from JS undefined (className == "undefined")
+        // and Kotlin Unit (no meaningful return value).
+        // All three arrive as evaluate.value == null, but only JS null should produce visible output.
+        return evaluate.value?.toString() ?: when (evaluate.className) {
+            "null" -> "null"
+            "undefined" -> "undefined"
+            else -> ""
+        }
+    }
+
+    private fun Any?.toAnyMap(): Map<String, Any?>? {
+        if (this !is Map<*, *>) {
+            return null
+        }
+        return this.entries.associate { (key, value) -> key.toString() to value }
+    }
+
+    private fun Any?.toBatchMousePosition(): BatchMousePosition? {
+        val map = this.toAnyMap() ?: return null
+        val x = (map["x"] as? Number)?.toDouble() ?: return null
+        val y = (map["y"] as? Number)?.toDouble() ?: return null
+        return BatchMousePosition(x, y)
+    }
+
+    // =========================================================================
+    // HTML snapshot handlers
+    // =========================================================================
+
+    private suspend fun handleHtmlSnapshotCapture(
         request: MCPToolCallRequest
     ): ResponseEntity<MCPToolCallResponse> {
         val sessionId = requireSessionId(request)
@@ -239,12 +782,12 @@ class MCPToolController(
             }
             ResponseEntity.ok(textResponse(metadata))
         } catch (e: Exception) {
-            logger.error("dom_snapshot_capture failed | {}", e.message, e)
-            ResponseEntity.ok(errorResponse("dom_snapshot_capture failed: ${e.message}"))
+            logger.error("html_snapshot_capture failed | {}", e.message, e)
+            ResponseEntity.ok(errorResponse("html_snapshot_capture failed: ${e.message}"))
         }
     }
 
-    private suspend fun handleDomSnapshotScrape(
+    private suspend fun handleHtmlSnapshotScrape(
         request: MCPToolCallRequest
     ): ResponseEntity<MCPToolCallResponse> {
         val sessionId = requireSessionId(request)
@@ -267,7 +810,7 @@ class MCPToolController(
         if (isElementReference(selector)) {
             return ResponseEntity.ok(
                 errorResponse(
-                    "Element references ('$selector') are not supported in domsnapshot get. Use a CSS selector instead."
+                    "Element references ('$selector') are not supported in htmlsnapshot get. Use a CSS selector instead."
                 )
             )
         }
@@ -278,11 +821,11 @@ class MCPToolController(
         return try {
             val result = managed.withLock {
                 val pulsarSession = managed.agenticSession
-                // Use current URL to match the key used when pages are stored via domsnapshot capture.
+                // Use current URL to match the key used when pages are stored via htmlsnapshot capture.
                 // driver.currentUrl() reflects the actual page after navigations/redirects, whereas
                 // driver.userTypedUrl() stays at the originally-typed URL and misses search-results pages.
                 val url = pulsarSession.normalize(driver.currentUrl())
-                // Retrieve from database if exists, otherwise, capture a new dom snapshot
+                // Retrieve from database if exists, otherwise, capture a new html snapshot
                 val page = pulsarSession.getOrNull(url.urlString) ?: pulsarSession.capture(managed.driver)
                 // Parse the HTML to a DOM, the document can be cached
                 val document = pulsarSession.parse(page)
@@ -297,16 +840,16 @@ class MCPToolController(
 
             ResponseEntity.ok(textResponse(result))
         } catch (e: Exception) {
-            logger.error("dom_snapshot_scrape failed | {}", e.message, e)
-            ResponseEntity.ok(errorResponse("dom_snapshot_scrape failed: ${e.message}"))
+            logger.error("html_snapshot_scrape failed | {}", e.message, e)
+            ResponseEntity.ok(errorResponse("html_snapshot_scrape failed: ${e.message}"))
         }
     }
 
     /**
-     * Like [handleDomSnapshotScrape] but returns ALL matching elements (querySelectorAll
+     * Like [handleHtmlSnapshotScrape] but returns ALL matching elements (querySelectorAll
      * semantics) instead of only the first.  Supports [offset] and [limit] for pagination.
      */
-    private suspend fun handleDomSnapshotScrapeAll(
+    private suspend fun handleHtmlSnapshotScrapeAll(
         request: MCPToolCallRequest
     ): ResponseEntity<MCPToolCallResponse> {
         val sessionId = requireSessionId(request)
@@ -331,7 +874,7 @@ class MCPToolController(
         if (isElementReference(selector)) {
             return ResponseEntity.ok(
                 errorResponse(
-                    "Element references ('$selector') are not supported in domsnapshot get. Use a CSS selector instead."
+                    "Element references ('$selector') are not supported in htmlsnapshot get. Use a CSS selector instead."
                 )
             )
         }
@@ -364,12 +907,12 @@ class MCPToolController(
             val (paginatedJson, pagination) = paginateIfRequested(json, args)
             ResponseEntity.ok(textResponse(paginatedJson, pagination))
         } catch (e: Exception) {
-            logger.error("dom_snapshot_scrape_all failed | {}", e.message, e)
-            ResponseEntity.ok(errorResponse("dom_snapshot_scrape_all failed: ${e.message}"))
+            logger.error("html_snapshot_scrape_all failed | {}", e.message, e)
+            ResponseEntity.ok(errorResponse("html_snapshot_scrape_all failed: ${e.message}"))
         }
     }
 
-    private suspend fun handleDomSnapshotQuery(
+    private suspend fun handleHtmlSnapshotQuery(
         request: MCPToolCallRequest
     ): ResponseEntity<MCPToolCallResponse> {
         val scrapeService = this.scrapeService
@@ -420,12 +963,12 @@ class MCPToolController(
             val json = pulsarObjectMapper().writeValueAsString(response)
             ResponseEntity.ok(textResponse(json))
         } catch (e: Exception) {
-            logger.error("dom_snapshot_query failed | {}", e.message, e)
-            ResponseEntity.ok(errorResponse("dom_snapshot_query failed: ${e.message}"))
+            logger.error("html_snapshot_query failed | {}", e.message, e)
+            ResponseEntity.ok(errorResponse("html_snapshot_query failed: ${e.message}"))
         }
     }
 
-    private suspend fun handleDomSnapshotExport(
+    private suspend fun handleHtmlSnapshotExport(
         request: MCPToolCallRequest
     ): ResponseEntity<MCPToolCallResponse> {
         val sessionId = requireSessionId(request)
@@ -446,12 +989,12 @@ class MCPToolController(
             val (paginatedHtml, pagination) = paginateIfRequested(html, args)
             ResponseEntity.ok(textResponse(paginatedHtml, pagination))
         } catch (e: Exception) {
-            logger.error("dom_snapshot_export failed | {}", e.message, e)
-            ResponseEntity.ok(errorResponse("dom_snapshot_export failed: ${e.message}"))
+            logger.error("html_snapshot_export failed | {}", e.message, e)
+            ResponseEntity.ok(errorResponse("html_snapshot_export failed: ${e.message}"))
         }
     }
 
-    private suspend fun handleDomSnapshotSummary(
+    private suspend fun handleHtmlSnapshotSummary(
         request: MCPToolCallRequest
     ): ResponseEntity<MCPToolCallResponse> {
         val sessionId = requireSessionId(request)
@@ -474,20 +1017,20 @@ class MCPToolController(
             }
             ResponseEntity.ok(textResponse(summary))
         } catch (e: Exception) {
-            logger.error("dom_snapshot_summary failed | {}", e.message, e)
-            ResponseEntity.ok(errorResponse("dom_snapshot_summary failed: ${e.message}"))
+            logger.error("html_snapshot_summary failed | {}", e.message, e)
+            ResponseEntity.ok(errorResponse("html_snapshot_summary failed: ${e.message}"))
         }
     }
 
     /**
-     * Inspect the DOM snapshot and suggest CSS selectors for recurring patterns.
+     * Inspect the HTML snapshot and suggest CSS selectors for recurring patterns.
      *
      * When [selector] matches multiple elements (e.g. `.product-card`), the
      * command compares descendant structures across matches to identify
      * recurring child selectors — useful for discovering selectors for titles,
      * prices, ratings, images, etc.
      */
-    private suspend fun handleDomSnapshotInspect(
+    private suspend fun handleHtmlSnapshotInspect(
         request: MCPToolCallRequest
     ): ResponseEntity<MCPToolCallResponse> {
         val sessionId = requireSessionId(request)
@@ -513,8 +1056,8 @@ class MCPToolController(
             }
             ResponseEntity.ok(textResponse(result))
         } catch (e: Exception) {
-            logger.error("dom_snapshot_inspect failed | {}", e.message, e)
-            ResponseEntity.ok(errorResponse("dom_snapshot_inspect failed: ${e.message}"))
+            logger.error("html_snapshot_inspect failed | {}", e.message, e)
+            ResponseEntity.ok(errorResponse("html_snapshot_inspect failed: ${e.message}"))
         }
     }
 
@@ -678,7 +1221,7 @@ internal fun paginateIfRequested(
 }
 
 // =========================================================================
-// dom_snapshot_inspect — core algorithm (extracted for testability)
+// html_snapshot_inspect — core algorithm (extracted for testability)
 // =========================================================================
 
 /**

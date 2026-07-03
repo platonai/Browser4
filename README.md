@@ -175,12 +175,12 @@ console [min-level]                List browser console messages. --clear
 generate-locator <ref>             Generate a unique CSS selector from a snapshot ref or existing selector
 ```
 
-#### DOM Snapshot (static DOM extraction)
+#### HTML Snapshot (static DOM extraction)
 
-The `domsnapshot` family captures raw HTML DOM for querying with CSS selectors and X-SQL — no interactive browser session required.
+The `htmlsnapshot` family captures raw HTML DOM for querying with CSS selectors and X-SQL — no interactive browser session required.
 
 ```
-                  snapshot              domsnapshot
+                  snapshot              htmlsnapshot
 ─────────────────────────────────────────────────────────
 Data source       Accessibility tree    Raw HTML DOM
 Element refs      e5, e15               CSS selectors only
@@ -189,16 +189,16 @@ X-SQL support     No                    Yes (query)
 ```
 
 ```
-domsnapshot                                Capture a static DOM snapshot and store it in page storage
-domsnapshot get <field> [selector] [name]  Extract text, html, or attr from the stored DOM snapshot
-domsnapshot query [url]                    Run X-SQL against the stored DOM snapshot (--sql <query|@file>)
-domsnapshot export                         Export snapshot HTML to a local file (--file <path>)
-domsnapshot summary                        Generate a compressed Web Page Summary Index (WPSI)
-domsnapshot grep <pattern>                 Search snapshot HTML with regex
+htmlsnapshot                                Capture a static HTML snapshot and store it in page storage
+htmlsnapshot get <field> [selector] [name]  Extract text, html, or attr from the stored HTML snapshot
+htmlsnapshot query [url]                    Run X-SQL against the stored HTML snapshot (--sql <query|@file>)
+htmlsnapshot export                         Export snapshot HTML to a local file (--file <path>)
+htmlsnapshot summary                        Generate a compressed Web Page Summary Index (WPSI)
+htmlsnapshot grep <pattern>                 Search snapshot HTML with regex
                                            -i, -v, -c, -l, -F, -w, -A, -B, -C, --selector
 ```
 
-For the full reference (including X-SQL `llm_*` functions that also require an LLM key), see the [DOM Snapshot reference](cli/skill/references/domsnapshot.md).
+For the full reference (including X-SQL `llm_*` functions that also require an LLM key), see the [HTML Snapshot reference](cli/skill/references/htmlsnapshot.md).
 
 #### Export
 
@@ -400,11 +400,11 @@ browser4-cli press e15 Enter
 browser4-cli get text ".product-title"
 browser4-cli get attr ".product-image" data-src
 
-# DOM snapshot with X-SQL
-browser4-cli domsnapshot
-browser4-cli domsnapshot get text "#main-content"
-browser4-cli domsnapshot query --sql @query.sql
-browser4-cli domsnapshot grep -i "error"
+# HTML snapshot with X-SQL
+browser4-cli htmlsnapshot
+browser4-cli htmlsnapshot get text "#main-content"
+browser4-cli htmlsnapshot query --sql @query.sql
+browser4-cli htmlsnapshot grep -i "error"
 
 # AI-powered extraction and summarization (requires LLM key — see LLM Configuration above)
 browser4-cli extract "product name, price, and rating as JSON"

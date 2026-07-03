@@ -73,10 +73,10 @@ browser4-cli get text ".product-title"
 browser4-cli get attr ".product-image" data-src
 
 # DOM snapshot with X-SQL
-browser4-cli domsnapshot
-browser4-cli domsnapshot get text "#main-content"
-browser4-cli domsnapshot query --sql @query.sql
-browser4-cli domsnapshot grep -i "error"
+browser4-cli htmlsnapshot
+browser4-cli htmlsnapshot get text "#main-content"
+browser4-cli htmlsnapshot query --sql @query.sql
+browser4-cli htmlsnapshot grep -i "error"
 
 # AI-powered extraction and summarization (requires LLM key — see LLM Configuration above)
 browser4-cli extract "product name, price, and rating as JSON"
@@ -120,8 +120,11 @@ Sessions persist independently per name. Omit `-s` to use the default session
 (`~/.browser4/cli-state.json`). With `-s <name>`, state is stored under
 `~/.browser4/sessions/<name>.json`.
 
-`--json` wraps every command's stdout in a single-line JSON envelope
-(`{"status":"ok","command":"<name>","output":{...}}`).
+`--json` makes the CLI emit only the JSON envelope on stdout — all human-readable
+text, tips, hints, and side information are suppressed (equivalent to `--quiet`
+but with structured output). Every successful command writes a single-line JSON
+envelope: `{"status":"ok","command":"<name>","output":{...}}`. Errors also
+produce a JSON envelope with `"status":"error"` and an `"error"` object.
 
 ## Command reference
 
@@ -262,7 +265,7 @@ browser4-cli tab-close 1
 | `get <mode> <selector> [name]` | Extract data from a page element in one of six modes (see below). |
 | `eval <expression> [ref]` | Evaluate JavaScript on the page or a target element. `--file <path>` to read from file. `--json` to wrap scalar results. |
 | `generate-locator <ref>` | Generate a stable CSS selector path for an element. |
-| `domsnapshot` | Capture a static DOM snapshot. See [DOM Snapshot](#dom-snapshot) below. |
+| `htmlsnapshot` | Capture a static DOM snapshot. See [DOM Snapshot](#dom-snapshot) below. |
 | `extract <instruction>` | Extract structured data with AI. `--schema <file>` for typed output. `--filename <path>`, `--raw`. |
 | `summarize [instruction]` | Summarize page content with AI. `--selector <css>`, `--filename <path>`, `--raw`. |
 
@@ -447,52 +450,52 @@ browser4-cli snapshot grep -F -w "Error" --selector main
 
 ### DOM Snapshot
 
-`domsnapshot` captures a **static DOM snapshot** of the current page — a full
+`htmlsnapshot` captures a **static DOM snapshot** of the current page — a full
 HTML capture stored in the backend that can be queried repeatedly without
 re-fetching. Unlike the accessibility `snapshot`, this works against the raw DOM.
 
 ```
-browser4-cli domsnapshot
-browser4-cli domsnapshot get <field> [selector] [name]
-browser4-cli domsnapshot get all <field> [selector] [name]
-browser4-cli domsnapshot query [url] --sql <query>
-browser4-cli domsnapshot export [--file <path>]
-browser4-cli domsnapshot summary
-browser4-cli domsnapshot grep [OPTIONS] <pattern>
-browser4-cli domsnapshot inspect [selector] [--max N] [--depth D]
+browser4-cli htmlsnapshot
+browser4-cli htmlsnapshot get <field> [selector] [name]
+browser4-cli htmlsnapshot get all <field> [selector] [name]
+browser4-cli htmlsnapshot query [url] --sql <query>
+browser4-cli htmlsnapshot export [--file <path>]
+browser4-cli htmlsnapshot summary
+browser4-cli htmlsnapshot grep [OPTIONS] <pattern>
+browser4-cli htmlsnapshot inspect [selector] [--max N] [--depth D]
 ```
 
-#### domsnapshot
+#### htmlsnapshot
 
 Capture the DOM and display metadata (URL, title, timestamps, image/link counts,
 interactive elements with tag, class, id, aria, and bounding boxes).
 
 ```bash
-browser4-cli domsnapshot
+browser4-cli htmlsnapshot
 ```
 
-#### domsnapshot get
+#### htmlsnapshot get
 
 Extract elements from the stored snapshot by CSS selector.
 
 | Field | Returns | Example |
 |---|---|---|
-| `text` | Inner text of the first match | `domsnapshot get text "#title"` |
-| `html` | Inner HTML of the first match | `domsnapshot get html "body"` |
-| `attr` | Attribute value (requires `name`) | `domsnapshot get attr "a" href` |
+| `text` | Inner text of the first match | `htmlsnapshot get text "#title"` |
+| `html` | Inner HTML of the first match | `htmlsnapshot get html "body"` |
+| `attr` | Attribute value (requires `name`) | `htmlsnapshot get attr "a" href` |
 
 Selector defaults to `:root`. `get html` output is paginated (2000 lines per page);
 `get text` is not paginated by default. Use `--page N`, `--page-size N`, or `--all`.
 
 ```bash
-browser4-cli domsnapshot get text "#productTitle"
-browser4-cli domsnapshot get html "#main-content"
-browser4-cli domsnapshot get attr "a.product-link" href
-browser4-cli domsnapshot get html "body" --page 2
-browser4-cli domsnapshot get html --all
+browser4-cli htmlsnapshot get text "#productTitle"
+browser4-cli htmlsnapshot get html "#main-content"
+browser4-cli htmlsnapshot get attr "a.product-link" href
+browser4-cli htmlsnapshot get html "body" --page 2
+browser4-cli htmlsnapshot get html --all
 ```
 
-#### domsnapshot get all
+#### htmlsnapshot get all
 
 Like `get`, but extracts ALL matching elements (querySelectorAll semantics).
 Supports `--offset N` and `--limit N` for element-level pagination, plus
@@ -501,17 +504,17 @@ paginated at 2000 lines by default; `get all text` is not paginated by default.
 
 > **Note:** Each `get all` call scans the whole document independently. For
 > **correlated multi-field extraction** (title + price + URL per item), use
-> `domsnapshot query` with X-SQL's `DOM_LOAD_AND_SELECT` — it scopes each row
+> `htmlsnapshot query` with X-SQL's `DOM_LOAD_AND_SELECT` — it scopes each row
 > to a parent container so fields stay aligned. See the
 > [list-page scraping pattern](skill/references/x-sql-dom-load-select.md).
 
 ```bash
-browser4-cli domsnapshot get all text "h2 a"
-browser4-cli domsnapshot get all text ".result" --offset 10 --limit 5
-browser4-cli domsnapshot get all text "p" --page-size 500
+browser4-cli htmlsnapshot get all text "h2 a"
+browser4-cli htmlsnapshot get all text ".result" --offset 10 --limit 5
+browser4-cli htmlsnapshot get all text "p" --page-size 500
 ```
 
-#### domsnapshot query
+#### htmlsnapshot query
 
 Run an X-SQL query against the stored DOM snapshot. `--sql` is required. Use
 `@url` as a placeholder for the target page URL (unquoted — the server handles
@@ -529,53 +532,53 @@ SELECT
   dom_first_text(dom, 'h1') AS title
 FROM load_and_select(@url, ':root')
 SQLEOF
-browser4-cli domsnapshot query --sql @query.sql
+browser4-cli htmlsnapshot query --sql @query.sql
 
 # From stdin
-cat query.sql | browser4-cli domsnapshot query --sql-stdin
+cat query.sql | browser4-cli htmlsnapshot query --sql-stdin
 
 # From base64 (transport-safe, no quoting issues)
-browser4-cli domsnapshot query --sql "$(base64 -w0 query.sql)" --sql-base64
+browser4-cli htmlsnapshot query --sql "$(base64 -w0 query.sql)" --sql-base64
 
 # Inline (simple queries only — quoted selectors require escaping on Windows)
-browser4-cli domsnapshot query --sql "
+browser4-cli htmlsnapshot query --sql "
   SELECT dom_base_uri(dom) AS url, dom_first_text(dom, 'h1') AS title
   FROM load_and_select(@url, ':root')
 "
 ```
 
-#### domsnapshot export
+#### htmlsnapshot export
 
 Save the full snapshot HTML to a local file.
 
 ```bash
-browser4-cli domsnapshot export --file snapshot.html
+browser4-cli htmlsnapshot export --file snapshot.html
 ```
 
-#### domsnapshot summary
+#### htmlsnapshot summary
 
 Generate a compressed Web Page Summary Index (WPSI) — page type, structure, key
 content nodes, repeated lists, tables, and stats — typically <1% of the original
 HTML size.
 
 ```bash
-browser4-cli domsnapshot summary
+browser4-cli htmlsnapshot summary
 ```
 
-#### domsnapshot grep
+#### htmlsnapshot grep
 
 Search the DOM snapshot HTML with regex patterns. Same grep flags as
 `snapshot grep`: `-i`, `-A N`, `-B N`, `-C N`, `-v`, `-c`, `-l`, `-F`, `-w`,
 `--no-line-number`, `--selector <css>`, `--page N`, `--page-size N`, `--all`.
 
 ```bash
-browser4-cli domsnapshot grep -i error
-browser4-cli domsnapshot grep -F -C 2 "404 Not Found"
-browser4-cli domsnapshot grep --selector main "Submit"
-browser4-cli domsnapshot grep --all "TODOs"
+browser4-cli htmlsnapshot grep -i error
+browser4-cli htmlsnapshot grep -F -C 2 "404 Not Found"
+browser4-cli htmlsnapshot grep --selector main "Submit"
+browser4-cli htmlsnapshot grep --all "TODOs"
 ```
 
-#### domsnapshot inspect
+#### htmlsnapshot inspect
 
 Analyze DOM structure and discover CSS selectors for recurring patterns (product
 cards, prices, titles). Run without arguments to auto-discover the page's most
@@ -583,9 +586,9 @@ prominent repeating content. When the selector matches multiple similar elements
 it compares their child structures and ranks selectors by recurrence.
 
 ```bash
-browser4-cli domsnapshot inspect                        # auto-discover repeating patterns
-browser4-cli domsnapshot inspect ".product_pod"         # inspect a specific container
-browser4-cli domsnapshot inspect ".s-result-item" --depth 6 --max 20
+browser4-cli htmlsnapshot inspect                        # auto-discover repeating patterns
+browser4-cli htmlsnapshot inspect ".product_pod"         # inspect a specific container
+browser4-cli htmlsnapshot inspect ".s-result-item" --depth 6 --max 20
 ```
 
 ---

@@ -1252,13 +1252,13 @@ class MCPToolControllerTest {
     }
 
     // -------------------------------------------------------------------
-    // dom_snapshot_scrape_all tests
+    // html_snapshot_scrape_all tests
     // -------------------------------------------------------------------
 
     @Test
-    fun `test dom snapshot scrape all rejects unknown field`() = runBlocking {
+    fun `test html snapshot scrape all rejects unknown field`() = runBlocking {
         val request = MCPToolCallRequest(
-            tool = "dom_snapshot_scrape_all",
+            tool = "html_snapshot_scrape_all",
             arguments = mapOf(
                 "sessionId" to sessionId,
                 "field" to "unknown",
@@ -1278,9 +1278,9 @@ class MCPToolControllerTest {
     }
 
     @Test
-    fun `test dom snapshot scrape all rejects attr without name`() = runBlocking {
+    fun `test html snapshot scrape all rejects attr without name`() = runBlocking {
         val request = MCPToolCallRequest(
-            tool = "dom_snapshot_scrape_all",
+            tool = "html_snapshot_scrape_all",
             arguments = mapOf(
                 "sessionId" to sessionId,
                 "field" to "attr",
@@ -1300,9 +1300,9 @@ class MCPToolControllerTest {
     }
 
     @Test
-    fun `test dom snapshot scrape all rejects element reference`() = runBlocking {
+    fun `test html snapshot scrape all rejects element reference`() = runBlocking {
         val request = MCPToolCallRequest(
-            tool = "dom_snapshot_scrape_all",
+            tool = "html_snapshot_scrape_all",
             arguments = mapOf(
                 "sessionId" to sessionId,
                 "field" to "text",
@@ -1322,9 +1322,9 @@ class MCPToolControllerTest {
     }
 
     @Test
-    fun `test dom snapshot scrape all rejects backend ref`() = runBlocking {
+    fun `test html snapshot scrape all rejects backend ref`() = runBlocking {
         val request = MCPToolCallRequest(
-            tool = "dom_snapshot_scrape_all",
+            tool = "html_snapshot_scrape_all",
             arguments = mapOf(
                 "sessionId" to sessionId,
                 "field" to "html",
@@ -1344,9 +1344,9 @@ class MCPToolControllerTest {
     }
 
     @Test
-    fun `test dom snapshot scrape all rejects missing session id`() = runBlocking {
+    fun `test html snapshot scrape all rejects missing session id`() = runBlocking {
         val request = MCPToolCallRequest(
-            tool = "dom_snapshot_scrape_all",
+            tool = "html_snapshot_scrape_all",
             arguments = mapOf(
                 "field" to "text",
                 "selector" to "h2 a"

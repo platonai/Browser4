@@ -80,7 +80,7 @@ When the skill offers multiple ways to accomplish similar tasks, the file must g
 | Symptom | Likely cause | Recovery |
 |---------|-------------|----------|
 | `snapshot` exits non-zero | Page not loaded | `wait --load networkidle` then retry |
-| `domsnapshot get` returns `[]` | DOM serialization mismatch | Fall back to `eval` or X-SQL |
+| `htmlsnapshot get` returns `[]` | DOM serialization mismatch | Fall back to `eval` or X-SQL |
 ```
 
 ### 6. Example Quality (P1 — agent copies broken examples)
@@ -163,7 +163,7 @@ Pick 3 representative tasks and simulate how an agent would read the file:
 2. **Complex task**: e.g., "extract product data from search results with filtering"
    - Does the agent find the decision guidance and choose the right tool?
    
-3. **Failure task**: e.g., "domsnapshot get returns empty, what now?"
+3. **Failure task**: e.g., "htmlsnapshot get returns empty, what now?"
    - Does the agent find the recovery table and apply the fallback?
 
 ## Severity Levels
@@ -203,7 +203,7 @@ Frontmatter
 Quick Start (core loop, golden rule, extraction methods, template)
 Concepts (snapshots, ref lifecycle, sessions)
 Commands (navigation, interaction, snapshots, grep, get, eval, storage)
-DOM Snapshot
+HTML Snapshot
 X-SQL
 AI-Powered Extraction
 Browser Sessions

@@ -1,14 +1,14 @@
 ---
-title: "DOM Snapshot — Real-World Scenarios"
-description: "Index of practical end-to-end recipes for domsnapshot: extraction, Amazon workflows, audit & compliance, and advanced discovery. Includes patterns & tips, command selection guide, and tested/verified results."
+title: "HTML Snapshot — Real-World Scenarios"
+description: "Index of practical end-to-end recipes for htmlsnapshot: extraction, Amazon workflows, audit & compliance, and advanced discovery. Includes patterns & tips, command selection guide, and tested/verified results."
 tier: decision
 ---
 
-# DOM Snapshot — Real-World Scenarios
+# HTML Snapshot — Real-World Scenarios
 
-Practical, end-to-end recipes using the `domsnapshot` family of commands. Each scenario is self-contained: you can adapt the CSS selectors and X-SQL queries to your own target pages.
+Practical, end-to-end recipes using the `htmlsnapshot` family of commands. Each scenario is self-contained: you can adapt the CSS selectors and X-SQL queries to your own target pages.
 
-> **Note:** CSS selectors are tied to live websites and may break over time. See [SKILL.md §5](../SKILL.md#5-critical-warnings). Always discover current selectors with `domsnapshot inspect` or `domsnapshot summary` before extraction.
+> **Note:** CSS selectors are tied to live websites and may break over time. See [SKILL.md §5](../SKILL.md#5-critical-warnings). Always discover current selectors with `htmlsnapshot inspect` or `htmlsnapshot summary` before extraction.
 
 ## Scenario Index
 
@@ -18,12 +18,12 @@ Scenarios for extracting structured data from listing and detail pages using `ge
 | # | Scenario | Primary Commands | Domain |
 |---|----------|------------------|--------|
 | 1 | E-Commerce Product Monitoring | `get`, `query` | Retail |
-| 2 | News Headline Aggregator | `domsnapshot`, `get`, `export` | Media |
+| 2 | News Headline Aggregator | `htmlsnapshot`, `get`, `export` | Media |
 | 5 | Job Board Scraper | `get`, `query`, `grep` | HR / Recruiting |
 | 7 | Academic Literature Metadata Extraction | `query` (X-SQL) | Research |
 | 8 | Real Estate Listing Monitor | `get`, `query` | Property |
 
-📄 **[View extraction scenarios →](domsnapshot-scenarios-extraction.md)**
+📄 **[View extraction scenarios →](htmlsnapshot-scenarios-extraction.md)**
 
 ### Amazon Discovery & Extraction
 Complete Amazon workflows emphasizing discovery-first patterns: use `summary` and `inspect` to find selectors before committing to extraction queries.
@@ -34,7 +34,7 @@ Complete Amazon workflows emphasizing discovery-first patterns: use `summary` an
 | 15 | Amazon Search Results Extraction | `summary`, `inspect`, `get all`, `query` | Discovery → validate → extract |
 | 16 | Amazon Product Detail Extraction | `summary`, `inspect`, `get`, `grep`, `export` | Full product page data collection |
 
-📄 **[View Amazon scenarios →](domsnapshot-scenarios-amazon.md)**
+📄 **[View Amazon scenarios →](htmlsnapshot-scenarios-amazon.md)**
 
 ### Audit, Compliance & Monitoring
 Scenarios for auditing pages, tracking pricing changes, verifying compliance, and debugging incidents — grep-heavy workflows with CI integration.
@@ -44,13 +44,13 @@ Scenarios for auditing pages, tracking pricing changes, verifying compliance, an
 | 3 | SEO Health Audit | `query` (X-SQL), `grep` | Marketing |
 | 4 | Competitive Price Tracker | `query` (X-SQL + load options) | Business |
 | 6 | Compliance Verification | `get`, `export`, `grep` | Legal / Governance |
-| 9 | CI/E2E Visual Regression Snapshot | `domsnapshot`, `export`, `grep` | Engineering |
+| 9 | CI/E2E Visual Regression Snapshot | `htmlsnapshot`, `export`, `grep` | Engineering |
 | 12 | Incident Response & Debugging | `grep` | Engineering / SRE |
 
-📄 **[View audit scenarios →](domsnapshot-scenarios-audit.md)**
+📄 **[View audit scenarios →](htmlsnapshot-scenarios-audit.md)**
 
 ### Advanced Discovery & Automation
-Scenarios for discovering page structure, finding selectors on unknown pages, and integrating DOM snapshots with agent workflows.
+Scenarios for discovering page structure, finding selectors on unknown pages, and integrating HTML snapshots with agent workflows.
 
 | # | Scenario | Primary Commands | Domain |
 |---|----------|------------------|--------|
@@ -58,7 +58,7 @@ Scenarios for discovering page structure, finding selectors on unknown pages, an
 | 11 | Page Structure Analysis | `summary` | Research / Auditing |
 | 13 | Selector Discovery for Unknown Pages | `inspect` | Research / Scraping |
 
-📄 **[View advanced scenarios →](domsnapshot-scenarios-advanced.md)**
+📄 **[View advanced scenarios →](htmlsnapshot-scenarios-advanced.md)**
 
 ---
 
@@ -80,14 +80,14 @@ All scenarios using `get`, `export`, `grep`, and `summary` commands have been te
 | 11. Summary (WPSI) | en.wikipedia.org | ✅ YAML output with headings, stats, keyContent |
 | 12. Grep incident response | Multiple sites | ✅ `-i`, `-v`, `-C`, `-F`, `--selector` all functional |
 
-**X-SQL `query` note:** The X-SQL query path (`domsnapshot query`) has a known Jackson serialization issue with `java.time.Instant` fields in `ScrapeResponse`. A fix has been applied in `MCPToolController.kt` (using the Spring-configured `ObjectMapper` with `JavaTimeModule` instead of `jacksonObjectMapper()`). This requires a server rebuild to take effect.
+**X-SQL `query` note:** The X-SQL query path (`htmlsnapshot query`) has a known Jackson serialization issue with `java.time.Instant` fields in `ScrapeResponse`. A fix has been applied in `MCPToolController.kt` (using the Spring-configured `ObjectMapper` with `JavaTimeModule` instead of `jacksonObjectMapper()`). This requires a server rebuild to take effect.
 
 ---
 
 ## See Also
 
-- [DOM Snapshot Reference](domsnapshot.md) — full command reference for `get`, `query`, `grep`, `summary`, `export`, `inspect`
-- [CSS Selector Bridge](css-selector-bridge.md) — bridging interactive snapshot refs to DOM snapshot CSS selectors
-- [X-SQL Reference](x-sql.md) — DOM and string function reference for `domsnapshot query`
+- [HTML Snapshot Reference](htmlsnapshot.md) — full command reference for `get`, `query`, `grep`, `summary`, `export`, `inspect`
+- [CSS Selector Bridge](css-selector-bridge.md) — bridging interactive snapshot refs to HTML snapshot CSS selectors
+- [X-SQL Reference](x-sql.md) — DOM and string function reference for `htmlsnapshot query`
 - [PowerCSS :expr()](power-dom.md) — visual feature selectors for resilient element targeting
 - [SKILL.md](../SKILL.md) — Browser4 CLI automation skill overview

@@ -36,7 +36,7 @@ browser4-cli agent result agent-task-1
 
 ## When to Use
 
-Use **agent** for natural-language tasks where you describe what you want without specifying click/fill/snapshot steps. Use **extract**/**summarize** for synchronous single-page LLM-powered extraction. For deterministic extraction with CSS selectors, prefer `domsnapshot get` or `domsnapshot query` (no LLM key needed).
+Use **agent** for natural-language tasks where you describe what you want without specifying click/fill/snapshot steps. Use **extract**/**summarize** for synchronous single-page LLM-powered extraction. For deterministic extraction with CSS selectors, prefer `htmlsnapshot get` or `htmlsnapshot query` (no LLM key needed).
 
 ## How It Works
 

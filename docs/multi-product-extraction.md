@@ -74,22 +74,22 @@ extraction.
 
 ---
 
-## Solution 2: batch with goto + domsnapshot get
+## Solution 2: batch with goto + htmlsnapshot get
 
 The simplest automation — just sequence the same commands you'd type manually.
 
 ```bash
 browser4-cli batch --bail \
   "goto 'https://www.amazon.com/dp/B0C17W3Q9B'" \
-  "domsnapshot" \
-  "domsnapshot get text '#productTitle'" \
-  "domsnapshot get text '.a-price .a-offscreen'" \
-  "domsnapshot get text '#feature-bullets'" \
+  "htmlsnapshot" \
+  "htmlsnapshot get text '#productTitle'" \
+  "htmlsnapshot get text '.a-price .a-offscreen'" \
+  "htmlsnapshot get text '#feature-bullets'" \
   "goto 'https://www.amazon.com/dp/B0CXYZ1234'" \
-  "domsnapshot" \
-  "domsnapshot get text '#productTitle'" \
-  "domsnapshot get text '.a-price .a-offscreen'" \
-  "domsnapshot get text '#feature-bullets'" \
+  "htmlsnapshot" \
+  "htmlsnapshot get text '#productTitle'" \
+  "htmlsnapshot get text '.a-price .a-offscreen'" \
+  "htmlsnapshot get text '#feature-bullets'" \
   ...
 ```
 
@@ -175,11 +175,11 @@ recommended for Amazon — CORS and bot detection make this unreliable.
 
 ## Solution 5: X-SQL UNION across URLs
 
-A single `domsnapshot query` that UNIONs results from multiple
+A single `htmlsnapshot query` that UNIONs results from multiple
 `DOM_LOAD_AND_SELECT` calls.
 
 ```bash
-browser4-cli domsnapshot query --sql "
+browser4-cli htmlsnapshot query --sql "
   SELECT dom_base_uri(dom) AS url,
          dom_first_text(dom, '#productTitle') AS title,
          dom_first_text(dom, '.a-price .a-offscreen') AS price,
@@ -201,7 +201,7 @@ browser4-cli domsnapshot query --sql "
 | Single command, structured table output | Verbose SQL for 10+ URLs |
 | `-expires 1h` caches individual fetches | Serial execution (one page at a time) |
 | No swarm setup needed | Query string becomes unwieldy |
-| Works with any `domsnapshot`-capable page | All URLs must be known at write time |
+| Works with any `htmlsnapshot`-capable page | All URLs must be known at write time |
 
 **Best for:** 3–8 URLs, simple fields, when you want a single-command answer
 without swarm overhead.
@@ -259,10 +259,10 @@ EOF
 # Process one URL per iteration
 browser4-cli loop --name crystal-extract --interval 10s --count 10 -- \
   "goto \"\$(sed -n '\${B4_ITERATION}p' urls.txt)\"" \
-  "domsnapshot" \
-  "domsnapshot get text '#productTitle'" \
-  "domsnapshot get text '.a-price .a-offscreen'" \
-  "domsnapshot get text '#feature-bullets'"
+  "htmlsnapshot" \
+  "htmlsnapshot get text '#productTitle'" \
+  "htmlsnapshot get text '.a-price .a-offscreen'" \
+  "htmlsnapshot get text '#feature-bullets'"
 ```
 
 | Pros | Cons |
@@ -285,8 +285,8 @@ them to swarm for parallel detail extraction.
 ```bash
 # Phase 1 — extract product URLs from search results (eval, X-SQL, or get)
 browser4-cli goto "https://www.amazon.com/s?k=Laser-Engraved+Crystal"
-browser4-cli domsnapshot
-browser4-cli domsnapshot query --sql "
+browser4-cli htmlsnapshot
+browser4-cli htmlsnapshot query --sql "
   SELECT dom_first_href(dom, 'a.a-link-normal[href*=\"/dp/\"]') AS url,
          dom_first_text(dom, 'h2') AS title,
          dom_first_text(dom, '.a-price .a-offscreen') AS price
@@ -347,7 +347,7 @@ come from a search/listing page and the real data is on detail pages.
   table-source function for loading pages in X-SQL queries
 - [Swarm reference](skill/references/swarm.md) — parallel scraping and X-SQL
   extraction across multiple browser contexts
-- [DOM Snapshot extraction scenarios](skill/references/domsnapshot-scenarios-extraction.md) —
+- [HTML Snapshot extraction scenarios](skill/references/htmlsnapshot-scenarios-extraction.md) —
   end-to-end e-commerce extraction recipes
 - [X-SQL reference](skill/references/x-sql.md) — ~200 functions across DOM_*,
   STR_*, and ARRAY_* namespaces
