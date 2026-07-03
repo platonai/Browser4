@@ -20,6 +20,27 @@ vi="{x},{y},{w},{h}[,_h=1]"
 
 Additional flags may be appended for other element states. Downstream algorithms use this attribute for: visibility filtering, visual-prominence scoring, positional grouping, and PowerCSS `:expr()` selector generation.
 
+### PulsarMetaInformation
+
+During capture, a hidden `<input>` element is injected into the page carrying page-level metadata including the viewport dimensions used as the coordinate system for all `vi` bounding boxes:
+
+```html
+<input type="hidden" id="PulsarMetaInformation"
+       domain="www.amazon.com"
+       view-port="1920x1080"
+       date-time="2026/7/3 01:56:24"
+       timestamp="1783014984670">
+```
+
+| Attribute | Meaning |
+|---|---|
+| `domain` | The page's domain |
+| `view-port` | Viewport dimensions as `WxH` in CSS pixels — the coordinate space for all `vi` boxes |
+| `date-time` | Capture timestamp (local time) |
+| `timestamp` | Capture timestamp (Unix epoch ms) |
+
+Downstream algorithms read `view-port` to interpret bounding-box coordinates correctly (e.g., a card at `x=800` in a 1920px viewport is centered; the same coordinate in a 375px viewport is off-screen).
+
 ---
 
 ## Error Modes
@@ -42,7 +63,9 @@ Running `capture` → `summary` → `inspect` in sequence would previously parse
 
 ---
 
-## 1. `htmlsnapshot` — Capture
+## 1. `htmlsnapshot capture`
+
+> **Alias**: `htmlsnapshot` (without the subcommand) is the short form of `htmlsnapshot capture`. Both invoke the same capture logic.
 
 **Purpose**: Take a static HTML snapshot of the current page and store it in Browser4's page storage for later querying.
 
@@ -126,10 +149,26 @@ Running `capture` → `summary` → `inspect` in sequence would previously parse
 │     Output is partitioned by group for readability.          │
 │                                                              │
 │  8. SERIALIZE interactive elements                           │
-│     For each element: tag, class, id, aria-* attrs,          │
-│     bounding-box (vi attr), ownText (≤80 chars for display;  │
-│     full text stored server-side for `htmlsnapshot get`),    │
-│     weight, tier, semanticGroup                              │
+│     For each element, output a compact representation:       │
+│                                                              │
+│     ┌─ Element reference format:                              │
+│     │  "#closestId tag#id.class1.class2"                      │
+│     │                                                        │
+│     │  · #closestId: id of the nearest ancestor that has     │
+│     │    an id attribute (empty if none within 6 levels)     │
+│     │  · tag: the element's own tag name                     │
+│     │  · #id: the element's own id (omitted if none)         │
+│     │  · .class1.class2: up to 2 classes (omitted if none)   │
+│     │                                                        │
+│     ├─ Bounding box: "x,y,w,h" from vi attr                  │
+│     │                                                        │
+│     ├─ Text: ownText, truncated to ≤5 words for space-       │
+│     │  separated languages or ≤5 characters for languages    │
+│     │  that require segmentation (CJK). Full text stored     │
+│     │  server-side for `htmlsnapshot get`.                   │
+│     │                                                        │
+│     └─ Also include: weight, tier, semanticGroup             │
+│                                                              │
 │                                                              │
 │  9. DELTA DETECTION (if prior snapshot exists for this URL)  │
 │     Compute structural diff: elements added, removed, or     │
@@ -147,8 +186,15 @@ Running `capture` → `summary` → `inspect` in sequence would previously parse
 │     Line 3: N images · N links · N interactive elements      │
 │     Then: interactive elements grouped by semantic context    │
 │           (Nav / Main Form / Header / Footer / Page)          │
-│           with numbered entries within each group             │
-│     Then: Next-step hints (htmlsnapshot get/inspect/query)   │
+│           each element on its own line:                       │
+│             1. #closestId tag#id.class  x,y,w,h  "text..."   │
+│     Then: Next-step hints (htmlsnapshot summary/inspect)     │
+│                                                              │
+│     Example elements:                                        │
+│       #main a#buy-btn.primary.lg  100,200,120,40  "Buy Now"  │
+│       #search-results div.product-card  200,300,220,380      │
+│       #nav li.nav-item  0,100,180,32  "Home"                 │
+│                                                              │
 │                                                              │
 │  OUTPUT: JSON metadata + interactive elements → stdout       │
 │          Stored HTML snapshot → page storage (server-side)   │
@@ -345,11 +391,13 @@ Running `capture` → `summary` → `inspect` in sequence would previously parse
 │     │                                                        │
 │     └── PHASE 13: Build YAML ────────────────────────────    │
 │        Structured output with sections:                      │
-│        page: {title, url, type, contentTypeRatio}            │
-│        structure: [landmarks with box, tag, selector]        │
+│        page: {title, url, type, viewport, contentTypeRatio}  │
+│        structure: [landmarks with ref, box, tag, selector]   │
 │        outline: [heading hierarchy tree]                     │
-│        content: [key nodes with box, type, score, text,      │
-│                  selector]                                   │
+│        content: [key nodes with ref, box, type, score,       │
+│                  text, selector]                              │
+│          where ref = "#closestId tag#id.class1.class2"       │
+│          and text ≤ 5 words / 5 CJK chars                    │
 │        excerpt: [top 1-3 text paragraphs]                    │
 │        lists: [repeated patterns with samples]               │
 │        tables: [table dimensions with headers]               │
@@ -370,7 +418,10 @@ Running `capture` → `summary` → `inspect` in sequence would previously parse
 │     - Page Title: <title>                                    │
 │     - Page Type: <type> (content-to-chrome: <ratio>)         │
 │     ### Summary                                              │
-│     <YAML content>                                           │
+│     <YAML content with element refs in compact form>         │
+│     #### Content                                             │
+│       1. #main a#buy-btn.primary.lg  100,200,120,40  "Buy"   │
+│       2. #search div.product-card  200,300,220,380  "Sony"   │
 │     💾 Saved to <path>                                       │
 │                                                              │
 │  OUTPUT: YAML summary → stdout + saved to file               │
@@ -469,8 +520,9 @@ Running `capture` → `summary` → `inspect` in sequence would previously parse
 │        coverage."                                            │
 │                                                              │
 │  6. BUILD sample structures (first 3 matches)                │
-│     For each match: tag, class, id, ownText                  │
-│                     + direct children (tag, class, id, text)  │
+│     For each match: "#closestId tag#id.class" reference,     │
+│     bounding box, text (≤5 words / 5 CJK chars),             │
+│     + direct children in same compact format                  │
 │                                                              │
 │  7. PRE-COMPUTE element weights                              │
 │     computeInteractiveWeights() across all interactive        │
@@ -585,7 +637,11 @@ Running `capture` → `summary` → `inspect` in sequence would previously parse
 │      Sample-size note (if max < matchCount)                  │
 │      Speculative suggestion (if auto-discovered better)      │
 │      Auto-discovery notice (if applicable)                   │
-│      Sample structures (3 samples with children)             │
+│      Sample structures (3 samples in compact form):          │
+│        1. #search div.product-card  200,300,220,380  "Sony"  │
+│           ├─ #card img.thumb  10,10,200,200  ""              │
+│           ├─ #card a.title  10,220,200,20  "Sony WH..."      │
+│           └─ #card span.price  10,340,80,20  "$349"          │
 │      Selector suggestions grouped by specificity:            │
 │        Class/ID selectors (high specificity)                 │
 │        Child/Sibling combinators (> .card > .title)          │
@@ -617,7 +673,7 @@ Running `capture` → `summary` → `inspect` in sequence would previously parse
 
 ## Side-by-Side Comparison
 
-| Dimension | `htmlsnapshot` (Capture) | `htmlsnapshot summary` | `htmlsnapshot inspect` |
+| Dimension | `htmlsnapshot capture` | `htmlsnapshot summary` | `htmlsnapshot inspect` |
 |---|---|---|---|
 | **Action** | Write: capture fresh DOM | Read: analyze stored DOM | Read: analyze stored DOM |
 | **Mutates storage** | ✅ Stores new snapshot (+ delta) | ❌ Read-only (re-captures if stale) | ❌ Read-only (re-captures if stale) |
@@ -638,6 +694,7 @@ Running `capture` → `summary` → `inspect` in sequence would previously parse
 | **Selector generation** | ❌ | Hint only (#id or .class) | ✅ (class, id, attr, child, sibling, PowerCSS) |
 | **Selector dedup** | ❌ | ❌ | ✅ (subset/superset detection) |
 | **Reliability warnings** | ❌ | ❌ | ✅ (structural variance per selector) |
+| **Element format** | `#closestId tag#id.class` + box + ≤5-word text | Same compact format in YAML `ref` field | Same compact format in sample trees |
 | **Bounding boxes** | Extracted from `vi` attr | Used for visibility, position, area scoring | Used for PowerCSS :expr() generation |
 | **Semantic grouping** | ✅ (by nearest semantic ancestor) | ✅ (landmarks) | ❌ |
 | **Delta/diff support** | ✅ (delta stored on re-capture) | ❌ | ❌ |
@@ -655,7 +712,8 @@ Running `capture` → `summary` → `inspect` in sequence would previously parse
                         │ DOM HTML
                         ▼
 ┌──────────────────────────────────────────────────┐
-│              htmlsnapshot (capture)               │
+│            htmlsnapshot capture                   │
+│            (alias: htmlsnapshot)                  │
 │                                                  │
 │  driver.currentUrl() → capture() → parse()       │
 │  ┌─────────────────────────────────────────┐     │
