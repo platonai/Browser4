@@ -56,6 +56,12 @@ Each interactive element has a **ref** (`e5`, `e12`) — these are Chrome DevToo
 
 Refs are **ephemeral** — they become invalid after ANY page-modifying command (click, type, fill, goto, reload, tab switch). **Re-snapshot before every interaction.** Never store refs across commands.
 
+### Output Modes
+
+- **Default** — human-readable output on stdout with tips on stderr.
+- **`--json`** — single-line JSON envelope on stdout only. All tips, hints, warnings, and human-readable text are suppressed (clean machine output).
+- **`--quiet` / `-q`** — suppress all normal output; only errors appear on stderr.
+
 ### Sessions
 
 Named sessions isolate browser state (cookies, localStorage, tabs). Use `-s <name>` to target a named session. `goto` auto-opens/reconnects — you rarely need to manage sessions manually.

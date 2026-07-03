@@ -69,7 +69,7 @@ pub fn generate_help() -> String {
     lines.push(format_with_gap("  --version", "print version", 30));
     lines.push(format_with_gap(
         "  --json",
-        "emit machine-parseable JSON to stdout",
+        "emit JSON to stdout only (suppresses tips, hints, and human-readable text)",
         30,
     ));
     lines.push(format_with_gap(
@@ -1145,7 +1145,7 @@ mod tests {
         assert!(help.contains("act"));
         assert!(help.contains("swarm create"));
         assert!(help.contains("--json"));
-        assert!(help.contains("machine-parseable JSON"));
+        assert!(help.contains("suppresses tips, hints, and human-readable text"));
         assert!(help.contains("-q, --quiet"));
         assert!(help.contains("suppress normal output"));
     }

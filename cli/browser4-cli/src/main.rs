@@ -2369,7 +2369,7 @@ async fn handle_snapshot(
         if let Some(ref pm) = server_pagination {
             // Server already paginated — just print the content and footer.
             println!("{}", snap);
-            if pm.truncated {
+            if pm.truncated && !json_active() {
                 eprintln!(
                     "[Page {}/{} · {} lines of {} total · use --page N for next page · --all to show all]",
                     pm.page,
@@ -2381,25 +2381,28 @@ async fn handle_snapshot(
         } else if !skip_pagination(show_all) {
             let (page_text, meta) = paginate_output(snap, page, page_size);
             println!("{}", page_text);
-            if meta.is_truncated {
+            if meta.is_truncated && !json_active() {
                 eprintln!("{}", format_pagination_footer(&meta));
             }
         } else {
             println!("{}", snap);
         }
-        // Depth truncation warning (stderr so stdout stays clean for piping)
-        if depth_used {
+        // Depth truncation warning (stderr so stdout stays clean for piping;
+        // suppress in --json mode since JSON output is consumed by machines, not pipes)
+        if depth_used && !json_active() {
             eprintln!(
                 "⚠️  Depth limited to {}. Elements deeper than this are not shown. \
                  Increase --depth to see more content.",
                 tool_params.get("depth").and_then(|v| v.as_str()).unwrap_or("?")
             );
         }
-        // Ref lifecycle note (stderr so stdout stays clean)
-        eprintln!(
-            "ℹ️  Element refs (e.g. e5, e36) are valid only until the next browser \
-             interaction. Re-run snapshot before reusing refs."
-        );
+        // Ref lifecycle note (suppress in --json mode)
+        if !json_active() {
+            eprintln!(
+                "ℹ️  Element refs (e.g. e5, e36) are valid only until the next browser \
+                 interaction. Re-run snapshot before reusing refs."
+            );
+        }
     } else {
         cli_println!("### Page");
         cli_println!("- Page URL: {}", url);
@@ -2407,19 +2410,21 @@ async fn handle_snapshot(
         cli_println!("### Snapshot");
         cli_println!("[Snapshot]({})", out_path.display());
         cli_println!("- Snapshot size: {} KB ({} nodes/lines)", snap_kb, snap_lines);
-        // Depth truncation warning
-        if depth_used {
+        // Depth truncation warning (suppress in --json mode)
+        if depth_used && !json_active() {
             eprintln!(
                 "⚠️  Depth limited to {}. Elements deeper than this are not shown. \
                  Increase --depth to see more content.",
                 tool_params.get("depth").and_then(|v| v.as_str()).unwrap_or("?")
             );
         }
-        // Ref lifecycle note
-        eprintln!(
-            "ℹ️  Element refs (e.g. e5, e36) are valid only until the next browser \
-             interaction. Re-run snapshot before reusing refs."
-        );
+        // Ref lifecycle note (suppress in --json mode)
+        if !json_active() {
+            eprintln!(
+                "ℹ️  Element refs (e.g. e5, e36) are valid only until the next browser \
+                 interaction. Re-run snapshot before reusing refs."
+            );
+        }
     }
 
     // Auto-diff: compare against the previous snapshot in this directory
@@ -2440,7 +2445,7 @@ async fn handle_snapshot(
         }
     }
 
-    if !raw {
+    if !raw && !json_active() {
         if snap_len > 10_240 && !has_filter {
             eprintln!(
                 "💡 Tip: Snapshot is large ({} KB, {} lines). To focus the output, read the page viewport by viewport — just like a human scrolls. Important content usually comes first:\n\
@@ -3550,19 +3555,23 @@ async fn handle_dom_snapshot_query(
                         .unwrap_or_else(|_| result.clone())
                 } else {
                     // No resultSet found — return the raw result with a warning
-                    eprintln!(
-                        "⚠️  --result-only set but no 'resultSet' field found in response. \
-                         Showing full result."
-                    );
+                    if !json_active() {
+                        eprintln!(
+                            "⚠️  --result-only set but no 'resultSet' field found in response. \
+                             Showing full result."
+                        );
+                    }
                     result.clone()
                 }
             }
             Err(_) => {
                 // Not valid JSON — return as-is
-                eprintln!(
-                    "⚠️  --result-only set but response is not valid JSON. \
-                     Showing raw result."
-                );
+                if !json_active() {
+                    eprintln!(
+                        "⚠️  --result-only set but response is not valid JSON. \
+                         Showing raw result."
+                    );
+                }
                 result.clone()
             }
         }
@@ -4069,7 +4078,7 @@ fn convert_alternation(pattern: &str) -> String {
         // Only log the conversion once per session (avoid spam in loops).
         use std::sync::atomic::{AtomicBool, Ordering};
         static LOGGED: AtomicBool = AtomicBool::new(false);
-        if !LOGGED.swap(true, Ordering::Relaxed) {
+        if !LOGGED.swap(true, Ordering::Relaxed) && !json_active() {
             eprintln!(
                 "Note: Converted grep-style alternation `\\\\|` to `|` in pattern. \
                  Rust regex uses bare `|` for alternation (like ERE/egrep). \

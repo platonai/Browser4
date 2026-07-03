@@ -120,8 +120,11 @@ Sessions persist independently per name. Omit `-s` to use the default session
 (`~/.browser4/cli-state.json`). With `-s <name>`, state is stored under
 `~/.browser4/sessions/<name>.json`.
 
-`--json` wraps every command's stdout in a single-line JSON envelope
-(`{"status":"ok","command":"<name>","output":{...}}`).
+`--json` makes the CLI emit only the JSON envelope on stdout — all human-readable
+text, tips, hints, and side information are suppressed (equivalent to `--quiet`
+but with structured output). Every successful command writes a single-line JSON
+envelope: `{"status":"ok","command":"<name>","output":{...}}`. Errors also
+produce a JSON envelope with `"status":"error"` and an `"error"` object.
 
 ## Command reference
 
