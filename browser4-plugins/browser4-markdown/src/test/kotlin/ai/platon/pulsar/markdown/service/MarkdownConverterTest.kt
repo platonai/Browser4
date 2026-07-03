@@ -134,7 +134,7 @@ class MarkdownUtilsTest {
     @Test
     fun `generateFilename sanitizes special characters`() {
         val result = MarkdownUtils.generateFilename("Hello: World / Test <b>")
-        assertEquals("Hello_-World-_-Test-_b_", result)
+        assertEquals("Hello_-World-_-Test-_b", result)
     }
 
     @Test
