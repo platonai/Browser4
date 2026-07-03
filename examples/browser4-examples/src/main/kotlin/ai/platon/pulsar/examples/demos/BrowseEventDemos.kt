@@ -242,5 +242,3 @@ class BrowseEventDemos : BrowseEventMount {
         suspend fun main(vararg args: String) = BrowseEventDemos().run()
     }
 }
-
-suspend fun main() = BrowseEventDemos.run()

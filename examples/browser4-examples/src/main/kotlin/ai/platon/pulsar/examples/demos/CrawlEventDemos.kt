@@ -62,15 +62,11 @@ class CrawlEventDemos : CrawlEventMount {
         handlers.onWillLoad.addLast { url: UrlAware ->
             logger.info("[Crawl.onWillLoad] About to load: ${url.url}")
 
-            // Example: skip URLs containing "skip-this"
+            // Example: inspect URL before loading
             if (url.url.contains("skip-this")) {
-                logger.info("[Crawl.onWillLoad] Skipping: ${url.url}")
-                null
-            } else {
-                // Example: attach custom metadata
-                url.remark = "processed-by-crawl-demo"
-                url
+                logger.info("[Crawl.onWillLoad] Detected skip-this URL: ${url.url}")
             }
+            url
         }
 
         handlers.onLoaded.addLast { url, page ->
@@ -129,5 +125,3 @@ class CrawlEventDemos : CrawlEventMount {
         suspend fun main(vararg args: String) = CrawlEventDemos().run()
     }
 }
-
-suspend fun main() = CrawlEventDemos.run()

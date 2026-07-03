@@ -152,5 +152,3 @@ class LoadEventDemos : LoadEventMount {
         suspend fun main(vararg args: String) = LoadEventDemos().run()
     }
 }
-
-suspend fun main() = LoadEventDemos.run()
