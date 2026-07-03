@@ -135,12 +135,12 @@ See [`cli/README.md`](../README.md) for the user-facing documentation.
 
 | Command | Description |
 |---|---|
-| `domsnapshot` | Capture a static DOM snapshot and return metadata |
-| `domsnapshot get <field> [selector] [name]` | Extract elements from the stored DOM snapshot (text, html, attr) |
-| `domsnapshot query [url]` | Run X-SQL against the stored DOM snapshot |
-| `domsnapshot export` | Export snapshot HTML to a local file |
-| `domsnapshot summary` | Generate a compressed Web Page Summary Index (WPSI) from the stored DOM snapshot |
-| `domsnapshot grep [OPTIONS] <pattern>` | Search snapshot HTML with regex patterns and grep-style output |
+| `htmlsnapshot` | Capture a static DOM snapshot and return metadata |
+| `htmlsnapshot get <field> [selector] [name]` | Extract elements from the stored DOM snapshot (text, html, attr) |
+| `htmlsnapshot query [url]` | Run X-SQL against the stored DOM snapshot |
+| `htmlsnapshot export` | Export snapshot HTML to a local file |
+| `htmlsnapshot summary` | Generate a compressed Web Page Summary Index (WPSI) from the stored DOM snapshot |
+| `htmlsnapshot grep [OPTIONS] <pattern>` | Search snapshot HTML with regex patterns and grep-style output |
 | `generate-locator <ref>` | Generate a unique CSS selector path for an element |
 
 ### Install / Admin

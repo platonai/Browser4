@@ -21,7 +21,7 @@ Every browser4-cli session follows this pattern:
               browser4-cli fill <ref> <value>
               browser4-cli press Enter
 4. RE-SNAPSHOT browser4-cli snapshot -v 0 --auto-diff # verify what changed (diff vs previous)
-5. EXTRACT     browser4-cli domsnapshot get ...      # or eval, or X-SQL (see §4)
+5. EXTRACT     browser4-cli htmlsnapshot get ...      # or eval, or X-SQL (see §4)
 ```
 
 ### Copy-Paste Template
@@ -33,7 +33,7 @@ browser4-cli fill <ref> "<value>"   # interact
 browser4-cli press Enter
 browser4-cli wait --load networkidle
 browser4-cli snapshot -v 0 --auto-diff  # verify what changed
-browser4-cli domsnapshot get text "<css-selector>" --all
+browser4-cli htmlsnapshot get text "<css-selector>" --all
 ```
 
 ## 2. Key Concepts
@@ -71,10 +71,10 @@ Named sessions isolate browser state (cookies, localStorage, tabs). Use `-s <nam
 | Command family | Purpose | When to use | Full reference |
 |---------------|---------|-------------|----------------|
 | `goto`, `open`, `close`, `reload` | Navigation & session management | Every session starts here | — |
-| `snapshot` | Capture accessibility tree with refs | Before/after interactions | [domsnapshot.md](references/domsnapshot.md) |
+| `snapshot` | Capture accessibility tree with refs | Before/after interactions | [htmlsnapshot.md](references/htmlsnapshot.md) |
 | `click`, `fill`, `type`, `press`, `select`, `check`, `drag` | Page interaction | Form filling, button clicks, navigation | — |
-| `domsnapshot get`, `get all` | Extract text/html/attr via CSS selectors | Single-field data extraction | [domsnapshot.md](references/domsnapshot.md) |
-| `domsnapshot query` | X-SQL queries for structured extraction | Multi-field, filtered, sorted data | [x-sql.md](references/x-sql.md) |
+| `htmlsnapshot get`, `get all` | Extract text/html/attr via CSS selectors | Single-field data extraction | [htmlsnapshot.md](references/htmlsnapshot.md) |
+| `htmlsnapshot query` | X-SQL queries for structured extraction | Multi-field, filtered, sorted data | [x-sql.md](references/x-sql.md) |
 | `eval` | Execute JavaScript in the page | Live DOM access, complex transforms | — |
 | `extract`, `summarize`, `agent run` | AI-powered extraction | Natural language extraction (needs LLM key) | [agent.md](references/agent.md) |
 | `crawl` | Recursive crawling + bulk extraction | Multi-page traversal, seed-file processing | [crawl.md](references/crawl.md) |
@@ -91,10 +91,10 @@ Named sessions isolate browser state (cookies, localStorage, tabs). Use `-s <nam
 ```
 Need to extract data from a page?
 ├─ Need to interact first (click, fill, scroll)? → snapshot + refs, then extract
-├─ Static page, one field? → domsnapshot get text "<selector>"
-├─ Static page, one field, ALL matches? → domsnapshot get all text "<selector>"
+├─ Static page, one field? → htmlsnapshot get text "<selector>"
+├─ Static page, one field, ALL matches? → htmlsnapshot get all text "<selector>"
 ├─ Static page, multiple correlated fields (title+price+url per item)?
-│  → domsnapshot query with X-SQL DOM_LOAD_AND_SELECT
+│  → htmlsnapshot query with X-SQL DOM_LOAD_AND_SELECT
 ├─ Dynamic/complex JS logic needed? → eval --json (use --stdin or --file on Windows)
 ├─ Natural language ("find the product price")? → extract (needs LLM key)
 └─ High volume, many pages? → crawl or swarm with --sql
@@ -105,7 +105,7 @@ Need to extract data from a page?
 ```
 Need to process multiple pages?
 ├─ Single list page (products on one search results page)?
-│  → domsnapshot query with DOM_LOAD_AND_SELECT
+│  → htmlsnapshot query with DOM_LOAD_AND_SELECT
 ├─ Multiple known URLs (list in a file)? → crawl --seed-file urls.txt --depth 0 --sql @query.sql
 ├─ Crawl from a start URL (follow links)? → crawl <url> --out-link-selector "..." --depth N
 ├─ Need parallel execution (high throughput)? → swarm create → swarm query --seed-file ...
@@ -118,9 +118,9 @@ Need to process multiple pages?
 
 | Command | Returns | Best for |
 |---------|---------|----------|
-| `domsnapshot get text ".price"` | First match only (string) | Single value, quick check |
-| `domsnapshot get all text ".price"` | All matches (JSON array) | Validate a selector returns expected count |
-| `domsnapshot query --sql "SELECT ..."` | Correlated multi-field rows | Title + price + URL per product card |
+| `htmlsnapshot get text ".price"` | First match only (string) | Single value, quick check |
+| `htmlsnapshot get all text ".price"` | All matches (JSON array) | Validate a selector returns expected count |
+| `htmlsnapshot query --sql "SELECT ..."` | Correlated multi-field rows | Title + price + URL per product card |
 
 **Warning:** Multiple `get all` calls produce unaligned arrays (different lengths, different order). For correlated fields, use `query` with `DOM_LOAD_AND_SELECT` scoped to a parent container.
 
@@ -128,7 +128,7 @@ Need to process multiple pages?
 
 > **Warning:** Refs are single-use. Re-snapshot after every page-modifying command (click, type, fill, goto, reload, tab switch). Never store refs across interactions.
 
-> **Warning:** CSS selectors are tied to live websites — they break when sites change their HTML. Always discover selectors with `domsnapshot inspect` or `domsnapshot summary` before extraction. Treat scenario examples as patterns, not copy-paste recipes.
+> **Warning:** CSS selectors are tied to live websites — they break when sites change their HTML. Always discover selectors with `htmlsnapshot inspect` or `htmlsnapshot summary` before extraction. Treat scenario examples as patterns, not copy-paste recipes.
 
 > **Warning:** Shell quoting on Windows — complex JS/SQL with nested quotes causes escaping issues. Prefer `--sql @file.sql` (read from file), `--sql-stdin` (piped), `--sql-base64` (encoded), or `eval --file`/`eval --stdin` (JS from file). Never inline `--sql "..."` with double-quoted CSS selectors on Windows.
 
@@ -136,7 +136,7 @@ Need to process multiple pages?
 
 > **Note:** Output pagination defaults — `get html`, `get all html`, and `grep` paginate at 2K lines. `get text` and `get all text` are not paginated by default. Use `--all` to disable pagination, or `--page N` for subsequent pages.
 
-> **Note:** Interactive mode (`snapshot -i`) strips generic `<div>` containers. Many e-commerce product cards use generic divs, not semantic elements. Prefer `--viewport 0` or `domsnapshot` for shopping/search pages.
+> **Note:** Interactive mode (`snapshot -i`) strips generic `<div>` containers. Many e-commerce product cards use generic divs, not semantic elements. Prefer `--viewport 0` or `htmlsnapshot` for shopping/search pages.
 
 ## 6. Quick Patterns
 
@@ -156,9 +156,9 @@ browser4-cli snapshot -v 0 --auto-diff
 
 ```bash
 browser4-cli goto "https://example.com/product/42"
-browser4-cli domsnapshot                           # capture static DOM snapshot
-browser4-cli domsnapshot get text ".product-title"
-browser4-cli domsnapshot get attr ".product-image" src
+browser4-cli htmlsnapshot                           # capture static HTML snapshot
+browser4-cli htmlsnapshot get text ".product-title"
+browser4-cli htmlsnapshot get attr ".product-image" src
 ```
 
 ### Bulk Extraction (X-SQL — Correlated Fields)
@@ -175,7 +175,7 @@ WHERE DOM_IS_NOT_NIL(DOM)
 ORDER BY DOM_FIRST_FLOAT(DOM, '.price', 999999.0) ASC
 SQLEOF
 
-browser4-cli domsnapshot query "https://example.com/products" --sql @query.sql
+browser4-cli htmlsnapshot query "https://example.com/products" --sql @query.sql
 ```
 
 ## 7. Reference Map
@@ -183,9 +183,9 @@ browser4-cli domsnapshot query "https://example.com/products" --sql @query.sql
 Organized by task — follow the link that matches what you're trying to do:
 
 **Extract data from pages:**
-[domsnapshot.md](references/domsnapshot.md) — `get`, `get all`, `query`, `grep`, `summary`, `inspect`, `export`
+[htmlsnapshot.md](references/htmlsnapshot.md) — `get`, `get all`, `query`, `grep`, `summary`, `inspect`, `export`
 [x-sql.md](references/x-sql.md) — X-SQL function reference (DOM, STR, ARRAY namespaces)
-[domsnapshot-scenarios.md](references/domsnapshot-scenarios.md) — 16 end-to-end recipes (e-commerce, Amazon, SEO, CI, jobs, real estate)
+[htmlsnapshot-scenarios.md](references/htmlsnapshot-scenarios.md) — 16 end-to-end recipes (e-commerce, Amazon, SEO, CI, jobs, real estate)
 
 **Run at scale (multiple pages/URLs):**
 [crawl.md](references/crawl.md) — recursive crawling, seed-file bulk fetch, X-SQL extraction

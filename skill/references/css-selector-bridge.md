@@ -1,33 +1,33 @@
 ---
-title: "CSS Selector Bridge — From Snapshot Refs to DOM Snapshot Queries"
-description: "How to bridge between interactive snapshot refs and DOM snapshot CSS selectors. Three-tier approach for extracting CSS selectors without reading the full DOM."
+title: "CSS Selector Bridge — From Snapshot Refs to HTML Snapshot Queries"
+description: "How to bridge between interactive snapshot refs and HTML snapshot CSS selectors. Three-tier approach for extracting CSS selectors without reading the full DOM."
 tier: procedure
 ---
 
-# CSS Selector Bridge — From Snapshot Refs to DOM Snapshot Queries
+# CSS Selector Bridge — From Snapshot Refs to HTML Snapshot Queries
 
-`browser4-cli` has two separate element-addressing systems. This document explains how to bridge between them — so you can discover element structure with the compact interactive `snapshot`, then extract structured data with `domsnapshot` — **without ever reading the full DOM snapshot text**.
+`browser4-cli` has two separate element-addressing systems. This document explains how to bridge between them — so you can discover element structure with the compact interactive `snapshot`, then extract structured data with `htmlsnapshot` — **without ever reading the full HTML snapshot text**.
 
 ## The Two Systems
 
 | System | Command | Addressing | Purpose |
 |--------|---------|------------|---------|
 | Interactive snapshot | `browser4-cli snapshot` | `@e5`, `@e15` refs | `click`, `type`, `fill` |
-| Static DOM snapshot | `browser4-cli domsnapshot get` | CSS selectors only | Data extraction (`text`, `html`, `attr`) |
+| Static HTML snapshot | `browser4-cli htmlsnapshot get` | CSS selectors only | Data extraction (`text`, `html`, `attr`) |
 
-**The gap:** `domsnapshot get` rejects element refs (`e5`, `backend:15`). It only accepts CSS selectors. But the interactive snapshot output is compact (~200-400 tokens) while the full DOM snapshot can be hundreds of megabytes. You need a way to get CSS selectors without reading the full snapshot.
+**The gap:** `htmlsnapshot get` rejects element refs (`e5`, `backend:15`). It only accepts CSS selectors. But the interactive snapshot output is compact (~200-400 tokens) while the full HTML snapshot can be hundreds of megabytes. You need a way to get CSS selectors without reading the full snapshot.
 
 ## Core Principle
 
-> **Never read the full DOM snapshot text directly.** Always use targeted extraction commands.
+> **Never read the full HTML snapshot text directly.** Always use targeted extraction commands.
 
 | ❌ NEVER | ✅ INSTEAD |
 |----------|------------|
-| `browser4-cli domsnapshot get html ":root"` (entire page HTML) | `browser4-cli domsnapshot get text "selector"` (single element) |
-| `cat domsnapshot-export.html` | `browser4-cli domsnapshot get text "selector"` |
-| `grep` through an exported snapshot file | `browser4-cli domsnapshot query --sql "..."` |
-| `browser4-cli domsnapshot export` then `cat` | `browser4-cli domsnapshot get html "form"` (scoped to one element) |
-| Dump entire page HTML into agent context | Use `domsnapshot get text` to pull only the fields you need |
+| `browser4-cli htmlsnapshot get html ":root"` (entire page HTML) | `browser4-cli htmlsnapshot get text "selector"` (single element) |
+| `cat htmlsnapshot-export.html` | `browser4-cli htmlsnapshot get text "selector"` |
+| `grep` through an exported snapshot file | `browser4-cli htmlsnapshot query --sql "..."` |
+| `browser4-cli htmlsnapshot export` then `cat` | `browser4-cli htmlsnapshot get html "form"` (scoped to one element) |
+| Dump entire page HTML into agent context | Use `htmlsnapshot get text` to pull only the fields you need |
 
 ## Three-Tier Approach
 
@@ -59,17 +59,17 @@ The interactive `snapshot` output shows each element's tag, key attributes, and 
 | `[div class="price"] "$19.99"` | `.price` |
 | `[h1] "Welcome"` | `h1` (check if unique on page) |
 
-**Then use it with `domsnapshot get`:**
+**Then use it with `htmlsnapshot get`:**
 
 ```bash
 # Extract the current price from a product page
 browser4-cli goto "https://shop.example.com/product/42"
 browser4-cli snapshot                   # see @e20 [div class="price"] "$19.99"
-browser4-cli domsnapshot get text ".price"
+browser4-cli htmlsnapshot get text ".price"
 # → "$19.99"
 
 # Verify a form field exists and get its current value
-browser4-cli domsnapshot get attr "[name=\"email\"]" value
+browser4-cli htmlsnapshot get attr "[name=\"email\"]" value
 # → "user@example.com"
 ```
 
@@ -94,11 +94,11 @@ ELEM_NAME=$(browser4-cli get attr e5 name)
 ELEM_DATA_ID=$(browser4-cli get attr e5 data-testid)
 
 # Now construct a precise selector
-browser4-cli domsnapshot get text "#${ELEM_ID}"
+browser4-cli htmlsnapshot get text "#${ELEM_ID}"
 # or
-browser4-cli domsnapshot get text ".${ELEM_CLASS}"
+browser4-cli htmlsnapshot get text ".${ELEM_CLASS}"
 # or for React/Vue testing attributes
-browser4-cli domsnapshot get text "[data-testid=\"${ELEM_DATA_ID}\"]"
+browser4-cli htmlsnapshot get text "[data-testid=\"${ELEM_DATA_ID}\"]"
 ```
 
 **Complete example — extract product details:**
@@ -115,9 +115,9 @@ browser4-cli snapshot
 PRICE_CLASS=$(browser4-cli get attr e15 class)    # → "product-price"
 TITLE_CLASS=$(browser4-cli get attr e16 class)    # → "product-title"
 
-# 3. Use those selectors with domsnapshot for structured extraction
-PRICE=$(browser4-cli domsnapshot get text ".${PRICE_CLASS}")
-TITLE=$(browser4-cli domsnapshot get text ".${TITLE_CLASS}")
+# 3. Use those selectors with htmlsnapshot for structured extraction
+PRICE=$(browser4-cli htmlsnapshot get text ".${PRICE_CLASS}")
+TITLE=$(browser4-cli htmlsnapshot get text ".${TITLE_CLASS}")
 
 echo "$TITLE costs $PRICE"
 # → "Widget Pro costs $29.99"
@@ -143,9 +143,9 @@ SELECTOR=$(browser4-cli generate-locator e5)
 # SELECTOR is now something like:
 # "#main-content > div.product-card:nth-child(3) > div.price-container > span.price"
 
-# Use it with domsnapshot
-browser4-cli domsnapshot get text "$SELECTOR"
-browser4-cli domsnapshot get html "$SELECTOR"
+# Use it with htmlsnapshot
+browser4-cli htmlsnapshot get text "$SELECTOR"
+browser4-cli htmlsnapshot get html "$SELECTOR"
 ```
 
 **How it works:**
@@ -169,7 +169,7 @@ browser4-cli generate-locator ".price"
 
 ## End-to-End Workflow
 
-Here is the complete pattern: snapshot to discover → bridge to selector → extract with domsnapshot:
+Here is the complete pattern: snapshot to discover → bridge to selector → extract with htmlsnapshot:
 
 ```bash
 # 1. Navigate and get a compact snapshot (NO full DOM read)
@@ -187,13 +187,13 @@ browser4-cli snapshot
 #     @e18 [a href="/p/456"] "Details"
 
 # 2. Option A (Tier 1): Use visible class names directly
-browser4-cli domsnapshot get text ".price"
+browser4-cli htmlsnapshot get text ".price"
 # → "$1,299"  (first match only — see note below)
 
 # 2. Option B (Tier 2): Extract class from a specific ref for precision
 CARD_CLASS=$(browser4-cli get attr e11 class)
 # To get ALL prices, use X-SQL (since get returns only the first match):
-browser4-cli domsnapshot query --sql "
+browser4-cli htmlsnapshot query --sql "
   SELECT dom_first_text(dom, '.price') AS price,
          dom_first_text(dom, 'h2') AS title
   FROM load_and_select(@url, '.${CARD_CLASS}')
@@ -203,39 +203,39 @@ browser4-cli domsnapshot query --sql "
 
 # 3. Option C (Tier 3): Get a guaranteed-unique selector for a specific element
 SELECTOR=$(browser4-cli generate-locator e13)
-browser4-cli domsnapshot get text "$SELECTOR"
+browser4-cli htmlsnapshot get text "$SELECTOR"
 # → "$1,299"
 ```
 
 ## Choosing get vs query
 
-| Use `domsnapshot get` when… | Use `domsnapshot query` when… |
+| Use `htmlsnapshot get` when… | Use `htmlsnapshot query` when… |
 |-----------------------------|-------------------------------|
 | You need one value from one element | You need multiple fields from repeating elements |
 | The selector is simple and stable | You need filtering (`WHERE`), `expr()`, or aggregation |
 | You're in a shell script doing quick checks | You want structured tabular output |
 | You want raw text/HTML for piping | You want all matches, not just the first |
 
-> **Important:** `domsnapshot get` returns **only the first match**. For extracting data from multiple elements (e.g., all prices on a listing page), use `domsnapshot query` with X-SQL's `load_and_select`.
+> **Important:** `htmlsnapshot get` returns **only the first match**. For extracting data from multiple elements (e.g., all prices on a listing page), use `htmlsnapshot query` with X-SQL's `load_and_select`.
 
 ## Anti-Patterns to Avoid
 
 ```bash
 # ❌ BAD: Exporting full page HTML then reading it
-browser4-cli domsnapshot export --file page.html
+browser4-cli htmlsnapshot export --file page.html
 cat page.html  # hundreds of MB!
 
 # ❌ BAD: Getting full page HTML just to find one value
-browser4-cli domsnapshot get html ":root"  # entire page innerHTML
+browser4-cli htmlsnapshot get html ":root"  # entire page innerHTML
 
 # ✅ GOOD: Get only what you need
-browser4-cli domsnapshot get text ".price"
+browser4-cli htmlsnapshot get text ".price"
 
 # ✅ GOOD: Scoped HTML for a specific region
-browser4-cli domsnapshot get html "form#checkout"
+browser4-cli htmlsnapshot get html "form#checkout"
 
 # ✅ GOOD: Structured extraction with X-SQL
-browser4-cli domsnapshot query --sql "
+browser4-cli htmlsnapshot query --sql "
   SELECT dom_first_text(dom, '.price') AS price
   FROM load_and_select(@url, '.product-card')
 "
@@ -243,8 +243,8 @@ browser4-cli domsnapshot query --sql "
 
 ## Related References
 
-- [DOM Snapshot Reference](domsnapshot.md) — full command reference for `domsnapshot get`, `query`, `export`
-- [X-SQL Reference](x-sql.md) — DOM and string function reference for `domsnapshot query`
+- [HTML Snapshot Reference](htmlsnapshot.md) — full command reference for `htmlsnapshot get`, `query`, `export`
+- [X-SQL Reference](x-sql.md) — DOM and string function reference for `htmlsnapshot query`
 - [X-SQL DOM Select Functions](x-sql-dom-select-functions.md) — CSS selector-based extraction functions
-- [DOM Snapshot Scenarios](domsnapshot-scenarios.md) — real-world recipes
+- [HTML Snapshot Scenarios](htmlsnapshot-scenarios.md) — real-world recipes
 - [SKILL.md](../SKILL.md) — Browser4 CLI automation skill overview

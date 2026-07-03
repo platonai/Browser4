@@ -8,7 +8,7 @@
     generates detailed help for each, and organizes the output into:
       - A top-level help overview
       - One file per command (with numbered prefixes for ordering)
-      - Prefix group overviews (swarm, agent, domsnapshot, crawl, snapshot)
+      - Prefix group overviews (swarm, agent, htmlsnapshot, crawl, snapshot)
       - An INDEX.md for easy navigation
 
     Output is saved to: <repo-root>/cli/help-output/
@@ -181,11 +181,11 @@ $Commands = @(
     # agent-list is a standalone command, not hidden
     @{ Name = "agent-list";     HelpArgs = @("--help", "agent-list") },
 
-    # -- Snapshot subcommands (spaced-form: domsnapshot *, snapshot grep) --
+    # -- Snapshot subcommands (spaced-form: htmlsnapshot *, snapshot grep) --
     @{ Name = "snapshot-grep";  HelpArgs = @("--help", "snapshot-grep") },
 
     # -- DOM Snapshot (base command + spaced subcommands) --
-    @{ Name = "domsnapshot";    HelpArgs = @("--help", "domsnapshot") },
+    @{ Name = "htmlsnapshot";    HelpArgs = @("--help", "htmlsnapshot") },
 
     # -- Crawl --
     @{ Name = "crawl";          HelpArgs = @("--help", "crawl") },
@@ -214,13 +214,13 @@ $SpacedCommands = @(
     @{ Name = "swarm-list";     HelpArgs = @("swarm", "list", "--help") },
 
     # DOM Snapshot subcommands
-    @{ Name = "domsnapshot-get";       HelpArgs = @("domsnapshot", "get", "--help") },
-    @{ Name = "domsnapshot-get-all";   HelpArgs = @("domsnapshot", "get", "all", "--help") },
-    @{ Name = "domsnapshot-query";     HelpArgs = @("domsnapshot", "query", "--help") },
-    @{ Name = "domsnapshot-export";    HelpArgs = @("domsnapshot", "export", "--help") },
-    @{ Name = "domsnapshot-summary";   HelpArgs = @("domsnapshot", "summary", "--help") },
-    @{ Name = "domsnapshot-grep";      HelpArgs = @("domsnapshot", "grep", "--help") },
-    @{ Name = "domsnapshot-inspect";   HelpArgs = @("domsnapshot", "inspect", "--help") },
+    @{ Name = "htmlsnapshot-get";       HelpArgs = @("htmlsnapshot", "get", "--help") },
+    @{ Name = "htmlsnapshot-get-all";   HelpArgs = @("htmlsnapshot", "get", "all", "--help") },
+    @{ Name = "htmlsnapshot-query";     HelpArgs = @("htmlsnapshot", "query", "--help") },
+    @{ Name = "htmlsnapshot-export";    HelpArgs = @("htmlsnapshot", "export", "--help") },
+    @{ Name = "htmlsnapshot-summary";   HelpArgs = @("htmlsnapshot", "summary", "--help") },
+    @{ Name = "htmlsnapshot-grep";      HelpArgs = @("htmlsnapshot", "grep", "--help") },
+    @{ Name = "htmlsnapshot-inspect";   HelpArgs = @("htmlsnapshot", "inspect", "--help") },
 
     # Crawl subcommand
     @{ Name = "crawl-list";     HelpArgs = @("crawl", "list", "--help") }
@@ -238,7 +238,7 @@ $HiddenCommands = @(
 $PrefixGroups = @(
     @{ Name = "swarm";       HelpArgs = @("--help", "swarm") },
     @{ Name = "agent";        HelpArgs = @("--help", "agent") },
-    @{ Name = "domsnapshot";  HelpArgs = @("--help", "domsnapshot") },
+    @{ Name = "htmlsnapshot";  HelpArgs = @("--help", "htmlsnapshot") },
     @{ Name = "crawl";        HelpArgs = @("--help", "crawl") },
     @{ Name = "snapshot";     HelpArgs = @("--help", "snapshot") }
 )

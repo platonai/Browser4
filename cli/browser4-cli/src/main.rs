@@ -326,14 +326,14 @@ fn no_snapshot_commands() -> HashSet<&'static str> {
         "swarm-list",
         "crawl",
         "crawl-list",
-        "domsnapshot",
-        "domsnapshot-get",
-        "domsnapshot-get-all",
-        "domsnapshot-query",
-        "domsnapshot-export",
-        "domsnapshot-summary",
-        "domsnapshot-grep",
-        "domsnapshot-inspect",
+        "htmlsnapshot",
+        "htmlsnapshot-get",
+        "htmlsnapshot-get-all",
+        "htmlsnapshot-query",
+        "htmlsnapshot-export",
+        "htmlsnapshot-summary",
+        "htmlsnapshot-grep",
+        "htmlsnapshot-inspect",
     ]
     .into()
 }
@@ -2741,7 +2741,7 @@ async fn handle_get(
             .unwrap_or(":root");
         cli_println!("{}", result);
         cli_println!(
-            "No elements matched \"{}\". Try `domsnapshot inspect \"{}\"` to discover valid selectors, or run `domsnapshot` to see the full DOM tree.",
+            "No elements matched \"{}\". Try `htmlsnapshot inspect \"{}\"` to discover valid selectors, or run `htmlsnapshot` to see the full DOM tree.",
             selector, selector
         );
     } else {
@@ -2864,7 +2864,7 @@ async fn handle_extract(
             cli_println!("The extract command completed but returned no structured data. The AI model may not have been able to identify the requested information on this page. Try:");
             cli_println!("  - Narrowing the scope with a more specific instruction");
             cli_println!("  - Using `eval` with a JavaScript selector for precise data extraction");
-            cli_println!("  - Using `domsnapshot get` for CSS-based DOM extraction");
+            cli_println!("  - Using `htmlsnapshot get` for CSS-based DOM extraction");
             cli_println!("[Raw response]({})", out_path.display());
         } else {
             cli_println!("### Extracted content");
@@ -3013,10 +3013,10 @@ async fn handle_summarize(
 }
 
 // ---------------------------------------------------------------------------
-// domsnapshot handlers
+// htmlsnapshot handlers
 // ---------------------------------------------------------------------------
 
-async fn handle_dom_snapshot_capture(
+async fn handle_html_snapshot_capture(
     client: &Client,
     base_url: &str,
     tool_name: &str,
@@ -3258,18 +3258,18 @@ async fn handle_dom_snapshot_capture(
     // Next-step hints
     cli_println!("💡 Next:");
     if !title.is_empty() {
-        cli_println!("   domsnapshot get text \"h1\"              — page heading");
+        cli_println!("   htmlsnapshot get text \"h1\"              — page heading");
     }
-    cli_println!("   domsnapshot get all text \"a\" --limit 20 — link texts");
-    cli_println!("   domsnapshot inspect                      — discover recurring patterns");
+    cli_println!("   htmlsnapshot get all text \"a\" --limit 20 — link texts");
+    cli_println!("   htmlsnapshot inspect                      — discover recurring patterns");
     if !url.is_empty() {
-        cli_println!("   domsnapshot query --sql \"SELECT text-content FROM load_and_select(@url, 'h1')\"");
+        cli_println!("   htmlsnapshot query --sql \"SELECT text-content FROM load_and_select(@url, 'h1')\"");
     }
 
     Ok(())
 }
 
-async fn handle_dom_snapshot_get(
+async fn handle_html_snapshot_get(
     client: &Client,
     base_url: &str,
     tool_name: &str,
@@ -3298,7 +3298,7 @@ async fn handle_dom_snapshot_get(
         .unwrap_or("");
     if is_element_reference(selector) {
         return Err(format!(
-            "Element references ('{selector}') are not supported in domsnapshot get. Use a CSS selector instead."
+            "Element references ('{selector}') are not supported in htmlsnapshot get. Use a CSS selector instead."
         ));
     }
 
@@ -3338,7 +3338,7 @@ async fn handle_dom_snapshot_get(
         let display_selector = if selector.is_empty() { ":root" } else { selector };
         cli_println!("{}", text);
         cli_println!(
-            "No elements matched \"{}\". Try `domsnapshot inspect \"{}\"` to discover valid selectors, or run `domsnapshot` to see the full DOM tree.",
+            "No elements matched \"{}\". Try `htmlsnapshot inspect \"{}\"` to discover valid selectors, or run `htmlsnapshot` to see the full DOM tree.",
             display_selector, display_selector
         );
     } else if paginate {
@@ -3457,7 +3457,7 @@ fn maybe_decode_base64_sql(sql: String, tool_params: &Value) -> Result<String, S
         .map_err(|e| format!("Base64-decoded SQL is not valid UTF-8: {e}"))
 }
 
-async fn handle_dom_snapshot_query(
+async fn handle_html_snapshot_query(
     client: &Client,
     base_url: &str,
     tool_name: &str,
@@ -3591,7 +3591,7 @@ async fn handle_dom_snapshot_query(
     Ok(())
 }
 
-async fn handle_dom_snapshot_export(
+async fn handle_html_snapshot_export(
     client: &Client,
     base_url: &str,
     tool_name: &str,
@@ -3605,7 +3605,7 @@ async fn handle_dom_snapshot_export(
         .filter(|v| !v.is_empty())
         .map(PathBuf::from)
         .unwrap_or_else(|| {
-            let name = snapshot::timestamped_filename("domsnapshot", "html");
+            let name = snapshot::timestamped_filename("htmlsnapshot", "html");
             snapshot::snapshot_dir().join(name)
         });
 
@@ -3632,7 +3632,7 @@ async fn handle_dom_snapshot_export(
     Ok(())
 }
 
-async fn handle_dom_snapshot_summary(
+async fn handle_html_snapshot_summary(
     client: &Client,
     base_url: &str,
     tool_name: &str,
@@ -3675,7 +3675,7 @@ async fn handle_dom_snapshot_summary(
         _ => ("", "", combined.as_str()),
     };
 
-    let out_path = resolve_output_path(None, "domsnapshot-summary", "yml");
+    let out_path = resolve_output_path(None, "htmlsnapshot-summary", "yml");
     save_snapshot(&out_path, summary).map_err(|e| e.to_string())?;
 
     json_field("page_url", json!(url));
@@ -3690,7 +3690,7 @@ async fn handle_dom_snapshot_summary(
     Ok(())
 }
 
-async fn handle_dom_snapshot_inspect(
+async fn handle_html_snapshot_inspect(
     client: &Client,
     base_url: &str,
     tool_name: &str,
@@ -3723,7 +3723,7 @@ async fn handle_dom_snapshot_inspect(
                 cli_println!("  Auto-discovered selector \"{}\" from \"{}\" also had no matches.", selector, orig);
             }
         }
-        cli_println!("- No elements matched. Check the CSS selector and ensure a DOM snapshot has been captured (`browser4-cli domsnapshot`).");
+        cli_println!("- No elements matched. Check the CSS selector and ensure a DOM snapshot has been captured (`browser4-cli htmlsnapshot`).");
         json_field("matchCount", json!(0));
         json_field("selector", json!(selector));
         return Ok(());
@@ -3886,20 +3886,20 @@ async fn handle_dom_snapshot_inspect(
         if !actionable.is_empty() {
             cli_println!("  💡 Try these next:");
             for sel in &actionable {
-                cli_println!("     domsnapshot get all text \"{}\" --limit 20", sel);
+                cli_println!("     htmlsnapshot get all text \"{}\" --limit 20", sel);
             }
             if let Some(first) = actionable.first() {
-                cli_println!("     domsnapshot query --sql \"SELECT text-content FROM load_and_select(@url, '{}')\"", first);
+                cli_println!("     htmlsnapshot query --sql \"SELECT text-content FROM load_and_select(@url, '{}')\"", first);
             }
         } else {
             // Fallback when no quality selectors found (e.g., all bare tags)
             cli_println!("  💡 Try narrowing the scope with a more specific CSS selector:");
-            cli_println!("     domsnapshot inspect \".card\" --max 20 --depth 6");
+            cli_println!("     htmlsnapshot inspect \".card\" --max 20 --depth 6");
         }
     } else {
         // Fallback when no suggestions at all
         cli_println!("  💡 Try narrowing the scope with a more specific CSS selector:");
-        cli_println!("     domsnapshot inspect \".card\" --max 20 --depth 6");
+        cli_println!("     htmlsnapshot inspect \".card\" --max 20 --depth 6");
     }
 
     json_field("inspect", data);
@@ -3907,7 +3907,7 @@ async fn handle_dom_snapshot_inspect(
 }
 
 // ---------------------------------------------------------------------------
-// grep support (shared between domsnapshot-grep and snapshot-grep)
+// grep support (shared between htmlsnapshot-grep and snapshot-grep)
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Default)]
@@ -4002,7 +4002,7 @@ fn parse_grep_options(tool_params: &Value) -> Result<GrepOptions, String> {
     })
 }
 
-async fn handle_dom_snapshot_grep(
+async fn handle_html_snapshot_grep(
     client: &Client,
     base_url: &str,
     tool_name: &str,
@@ -4011,7 +4011,7 @@ async fn handle_dom_snapshot_grep(
     grep_options: &GrepOptions,
 ) -> Result<(), String> {
     let source = if let Some(selector) = &grep_options.selector {
-        // Scoped search: use dom_snapshot_scrape to get inner HTML of the selector
+        // Scoped search: use html_snapshot_scrape to get inner HTML of the selector
         with_session(client, base_url, session_name, false, |session_id| {
             let client = client.clone();
             let base_url = base_url.to_string();
@@ -4020,7 +4020,7 @@ async fn handle_dom_snapshot_grep(
                 call_tool(
                     &client,
                     &base_url,
-                    "dom_snapshot_scrape",
+                    "html_snapshot_scrape",
                     json!({
                         "sessionId": session_id,
                         "field": "html",
@@ -4032,7 +4032,7 @@ async fn handle_dom_snapshot_grep(
         })
         .await?
     } else {
-        // Full page: use dom_snapshot_export
+        // Full page: use html_snapshot_export
         with_session(client, base_url, session_name, false, |session_id| {
             let client = client.clone();
             let base_url = base_url.to_string();
@@ -4051,7 +4051,7 @@ async fn handle_dom_snapshot_grep(
     };
 
     let (page, page_size, show_all) = parse_page_opts(tool_params);
-    run_grep_on_source(&source, grep_options, "domsnapshot", page, page_size, show_all)
+    run_grep_on_source(&source, grep_options, "htmlsnapshot", page, page_size, show_all)
 }
 
 /// Convert grep-style escaped-alternation `\|` to Rust regex bare-pipe `|`.
@@ -4094,7 +4094,7 @@ fn convert_alternation(pattern: &str) -> String {
 /// via cli_println! and recording json fields via json_field().
 ///
 /// `source_label` is used as the "filename" in --files-with-matches output
-/// (e.g., "snapshot" or "domsnapshot").
+/// (e.g., "snapshot" or "htmlsnapshot").
 fn run_grep_on_source(
     source: &str,
     grep_options: &GrepOptions,
@@ -4312,7 +4312,7 @@ fn run_grep_on_source(
 }
 
 // ---------------------------------------------------------------------------
-// pagination support (shared between domsnapshot get/grep and snapshot grep)
+// pagination support (shared between htmlsnapshot get/grep and snapshot grep)
 // ---------------------------------------------------------------------------
 
 /// Metadata about a paginated output.
@@ -8067,12 +8067,12 @@ fn rewrite_prefixed_command(args: &[String]) -> Option<Vec<String>> {
     if sub.starts_with('-') {
         return None;
     }
-    // `domsnapshot get all` is a two-level subcommand — rewrite to the flat
-    // `domsnapshot-get-all` form so the dispatch matches it correctly.
-    if prefix == "domsnapshot" && sub == "get" {
+    // `htmlsnapshot get all` is a two-level subcommand — rewrite to the flat
+    // `htmlsnapshot-get-all` form so the dispatch matches it correctly.
+    if prefix == "htmlsnapshot" && sub == "get" {
         if let Some(inner) = args.get(2) {
             if inner == "all" {
-                let mut rewritten = vec!["domsnapshot-get-all".to_string()];
+                let mut rewritten = vec!["htmlsnapshot-get-all".to_string()];
                 rewritten.extend(args[3..].iter().cloned());
                 return Some(rewritten);
             }
@@ -8092,7 +8092,7 @@ fn rewrite_prefixed_command(args: &[String]) -> Option<Vec<String>> {
     let rewritten_command = match prefix {
         "swarm" => format!("swarm-{}", sub),
         "agent" => format!("agent-{}", sub),
-        "domsnapshot" => format!("domsnapshot-{}", sub),
+        "htmlsnapshot" => format!("htmlsnapshot-{}", sub),
         "snapshot" => format!("snapshot-{}", sub),
         _ => return None,
     };
@@ -8119,13 +8119,13 @@ fn preferred_spaced_command_form(command: &str) -> Option<&'static str> {
         "co-query" => Some("swarm query"),
         "co-status" => Some("swarm status"),
         "co-result" => Some("swarm result"),
-        "domsnapshot-get" => Some("domsnapshot get"),
-        "domsnapshot-get-all" => Some("domsnapshot get all"),
-        "domsnapshot-query" => Some("domsnapshot query"),
-        "domsnapshot-export" => Some("domsnapshot export"),
-        "domsnapshot-summary" => Some("domsnapshot summary"),
-        "domsnapshot-grep" => Some("domsnapshot grep"),
-        "domsnapshot-inspect" => Some("domsnapshot inspect"),
+        "htmlsnapshot-get" => Some("htmlsnapshot get"),
+        "htmlsnapshot-get-all" => Some("htmlsnapshot get all"),
+        "htmlsnapshot-query" => Some("htmlsnapshot query"),
+        "htmlsnapshot-export" => Some("htmlsnapshot export"),
+        "htmlsnapshot-summary" => Some("htmlsnapshot summary"),
+        "htmlsnapshot-grep" => Some("htmlsnapshot grep"),
+        "htmlsnapshot-inspect" => Some("htmlsnapshot inspect"),
         _ => None,
     }
 }
@@ -8136,9 +8136,9 @@ fn preferred_prefixed_group_form(command: &str) -> Option<&'static str> {
         "swarm" => Some("swarm <subcommand>"),
         "crawl" => Some("crawl <subcommand>"),
         "co" => Some("swarm <subcommand>"),
-        // `domsnapshot` is a valid standalone command (captures a DOM snapshot
+        // `htmlsnapshot` is a valid standalone command (captures a DOM snapshot
         // and returns metadata), not just a prefix group — so it is intentionally
-        // absent here.  Use `browser4-cli domsnapshot --help` to see subcommands.
+        // absent here.  Use `browser4-cli htmlsnapshot --help` to see subcommands.
         _ => None,
     }
 }
@@ -9124,7 +9124,7 @@ async fn run(
         return handle_batch(global).await;
     }
 
-    // When the user passes --help/-h after a command (e.g. `domsnapshot --help`),
+    // When the user passes --help/-h after a command (e.g. `htmlsnapshot --help`),
     // print the help for that command instead of complaining about the form.
     if global.args.iter().any(|a| a == "--help" || a == "-h") {
         print_help(Some(command));
@@ -9796,8 +9796,8 @@ async fn run(
         "loop" => {
             handle_loop(&client, &base_url, global).await?;
         }
-        "domsnapshot" => {
-            handle_dom_snapshot_capture(
+        "htmlsnapshot" => {
+            handle_html_snapshot_capture(
                 &client,
                 &base_url,
                 &tool_name,
@@ -9806,8 +9806,8 @@ async fn run(
             )
             .await?;
         }
-        "domsnapshot-get" => {
-            handle_dom_snapshot_get(
+        "htmlsnapshot-get" => {
+            handle_html_snapshot_get(
                 &client,
                 &base_url,
                 &tool_name,
@@ -9816,8 +9816,8 @@ async fn run(
             )
             .await?;
         }
-        "domsnapshot-get-all" => {
-            handle_dom_snapshot_get(
+        "htmlsnapshot-get-all" => {
+            handle_html_snapshot_get(
                 &client,
                 &base_url,
                 &tool_name,
@@ -9826,8 +9826,8 @@ async fn run(
             )
             .await?;
         }
-        "domsnapshot-query" => {
-            handle_dom_snapshot_query(
+        "htmlsnapshot-query" => {
+            handle_html_snapshot_query(
                 &client,
                 &base_url,
                 &tool_name,
@@ -9836,8 +9836,8 @@ async fn run(
             )
             .await?;
         }
-        "domsnapshot-export" => {
-            handle_dom_snapshot_export(
+        "htmlsnapshot-export" => {
+            handle_html_snapshot_export(
                 &client,
                 &base_url,
                 &tool_name,
@@ -9846,8 +9846,8 @@ async fn run(
             )
             .await?;
         }
-        "domsnapshot-summary" => {
-            handle_dom_snapshot_summary(
+        "htmlsnapshot-summary" => {
+            handle_html_snapshot_summary(
                 &client,
                 &base_url,
                 &tool_name,
@@ -9856,9 +9856,9 @@ async fn run(
             )
             .await?;
         }
-        "domsnapshot-grep" => {
+        "htmlsnapshot-grep" => {
             let grep_options = parse_grep_options(&tool_params)?;
-            handle_dom_snapshot_grep(
+            handle_html_snapshot_grep(
                 &client,
                 &base_url,
                 &tool_name,
@@ -9868,8 +9868,8 @@ async fn run(
             )
             .await?;
         }
-        "domsnapshot-inspect" => {
-            handle_dom_snapshot_inspect(
+        "htmlsnapshot-inspect" => {
+            handle_html_snapshot_inspect(
                 &client,
                 &base_url,
                 &tool_name,
@@ -10148,15 +10148,15 @@ mod tests {
     }
 
     #[test]
-    fn no_snapshot_commands_include_dom_snapshot_variants() {
-        assert!(no_snapshot_commands().contains("domsnapshot"));
-        assert!(no_snapshot_commands().contains("domsnapshot-get"));
-        assert!(no_snapshot_commands().contains("domsnapshot-get-all"));
-        assert!(no_snapshot_commands().contains("domsnapshot-query"));
-        assert!(no_snapshot_commands().contains("domsnapshot-export"));
-        assert!(no_snapshot_commands().contains("domsnapshot-summary"));
-        assert!(no_snapshot_commands().contains("domsnapshot-grep"));
-        assert!(no_snapshot_commands().contains("domsnapshot-inspect"));
+    fn no_snapshot_commands_include_html_snapshot_variants() {
+        assert!(no_snapshot_commands().contains("htmlsnapshot"));
+        assert!(no_snapshot_commands().contains("htmlsnapshot-get"));
+        assert!(no_snapshot_commands().contains("htmlsnapshot-get-all"));
+        assert!(no_snapshot_commands().contains("htmlsnapshot-query"));
+        assert!(no_snapshot_commands().contains("htmlsnapshot-export"));
+        assert!(no_snapshot_commands().contains("htmlsnapshot-summary"));
+        assert!(no_snapshot_commands().contains("htmlsnapshot-grep"));
+        assert!(no_snapshot_commands().contains("htmlsnapshot-inspect"));
     }
 
     #[test]
@@ -10680,24 +10680,24 @@ mod tests {
     }
 
     #[test]
-    fn rewrite_prefixed_command_handles_domsnapshot_get_all() {
+    fn rewrite_prefixed_command_handles_htmlsnapshot_get_all() {
         let rewritten = rewrite_prefixed_command(&[
-            "domsnapshot".to_string(),
+            "htmlsnapshot".to_string(),
             "get".to_string(),
             "all".to_string(),
             "text".to_string(),
             ".product-title".to_string(),
         ])
         .unwrap();
-        assert_eq!(rewritten[0], "domsnapshot-get-all");
+        assert_eq!(rewritten[0], "htmlsnapshot-get-all");
         assert_eq!(rewritten[1], "text");
         assert_eq!(rewritten[2], ".product-title");
     }
 
     #[test]
-    fn rewrite_prefixed_command_handles_domsnapshot_get_all_with_options() {
+    fn rewrite_prefixed_command_handles_htmlsnapshot_get_all_with_options() {
         let rewritten = rewrite_prefixed_command(&[
-            "domsnapshot".to_string(),
+            "htmlsnapshot".to_string(),
             "get".to_string(),
             "all".to_string(),
             "text".to_string(),
@@ -10708,7 +10708,7 @@ mod tests {
             "10".to_string(),
         ])
         .unwrap();
-        assert_eq!(rewritten[0], "domsnapshot-get-all");
+        assert_eq!(rewritten[0], "htmlsnapshot-get-all");
         assert_eq!(rewritten[1], "text");
         assert_eq!(rewritten[2], "a");
         assert_eq!(rewritten[3], "--limit");
@@ -10718,16 +10718,16 @@ mod tests {
     }
 
     #[test]
-    fn rewrite_prefixed_command_does_not_rewrite_domsnapshot_get_when_not_all() {
-        // `domsnapshot get text` should still rewrite to `domsnapshot-get text`
+    fn rewrite_prefixed_command_does_not_rewrite_htmlsnapshot_get_when_not_all() {
+        // `htmlsnapshot get text` should still rewrite to `htmlsnapshot-get text`
         let rewritten = rewrite_prefixed_command(&[
-            "domsnapshot".to_string(),
+            "htmlsnapshot".to_string(),
             "get".to_string(),
             "text".to_string(),
             ".product-title".to_string(),
         ])
         .unwrap();
-        assert_eq!(rewritten[0], "domsnapshot-get");
+        assert_eq!(rewritten[0], "htmlsnapshot-get");
         assert_eq!(rewritten[1], "text");
         assert_eq!(rewritten[2], ".product-title");
     }
@@ -10748,8 +10748,8 @@ mod tests {
         );
         assert_eq!(preferred_spaced_command_form("goto"), None);
         assert_eq!(
-            preferred_spaced_command_form("domsnapshot-get-all"),
-            Some("domsnapshot get all")
+            preferred_spaced_command_form("htmlsnapshot-get-all"),
+            Some("htmlsnapshot get all")
         );
     }
 
@@ -10768,8 +10768,8 @@ mod tests {
             Some("swarm <subcommand>")
         );
         assert_eq!(preferred_prefixed_group_form("open"), None);
-        // `domsnapshot` is a valid standalone command — not just a prefix group.
-        assert_eq!(preferred_prefixed_group_form("domsnapshot"), None);
+        // `htmlsnapshot` is a valid standalone command — not just a prefix group.
+        assert_eq!(preferred_prefixed_group_form("htmlsnapshot"), None);
     }
 
     #[test]

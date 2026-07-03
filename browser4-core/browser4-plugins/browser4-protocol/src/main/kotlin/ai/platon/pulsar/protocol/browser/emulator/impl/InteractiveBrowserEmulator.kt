@@ -532,7 +532,7 @@ open class InteractiveBrowserEmulator(
         // Compute document features so that vi (visual-information) attributes are
         // injected into the DOM.  These attributes contain bounding-box data
         // ("x y w h") and are required by downstream consumers such as
-        // dom_snapshot_capture (computeInteractiveWeights) and dom_snapshot_inspect
+        // html_snapshot_capture (computeInteractiveWeights) and html_snapshot_inspect
         // (PowerCSS :expr() selectors).
         if (result.state.isContinue) {
             val interactTask = InteractTask(task, settings, driver)

@@ -3,8 +3,8 @@
 Before running this scenario, ensure MockSite is running on localhost:18080 (`./bin/test.ps1 mock-site`).
 
 1. Go to `http://localhost:18080/ec/b?node=1292115012` (the MockSite e-commerce Electronics category with 6 products).
-2. Capture a DOM snapshot of the page.
-3. Use domsnapshot inspect with `--max 3 --depth 3` to discover the CSS selectors for product containers, titles, prices, images, and links.
+2. Capture an HTML snapshot of the page.
+3. Use htmlsnapshot inspect with `--max 3 --depth 3` to discover the CSS selectors for product containers, titles, prices, images, and links.
 4. Write an X-SQL query that extracts multiple fields from each product using DOM functions:
    - `DOM_FIRST_TEXT` for the product title
    - `DOM_FIRST_FLOAT` for the price (parsed as a number)

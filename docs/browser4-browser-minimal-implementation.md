@@ -190,17 +190,17 @@ cli/ (Rust)  ──MCP/HTTP──▶  browser4-rest (server)  ──▶  browser
 | `localstorage-clear` | `BrowserProtocol.evaluate("localStorage.clear()")` | |
 | `sessionstorage-*` | Same pattern with `sessionStorage` | |
 
-### DOM Snapshot (Static)
+### HTML Snapshot (Static)
 
 | CLI Command | browser4-browser API | Notes |
 |---|---|---|
-| `domsnapshot` (capture) | `CDPSnapshotService.getDOMState()` + `DOMSerializer` | |
-| `domsnapshot get <field> [sel]` | `DOMHandler.queryLocator(sel)` → extract field | Text, html, attr via CSS |
-| `domsnapshot get all <field> [sel]` | `DOMHandler.queryLocatorAll(sel)` → extract from each | |
-| `domsnapshot summary` | Summarize `DOMState` — element counts, roles, heading structure | |
-| `domsnapshot export` | `BrowserProtocol.getOuterHTML(documentNodeId)` | |
-| `domsnapshot grep <pattern>` | Regex search over exported HTML | Post-processing |
-| `domsnapshot inspect [sel]` | `CDPSnapshotService` merged tree analysis | Structure introspection |
+| `htmlsnapshot` (capture) | `CDPSnapshotService.getDOMState()` + `DOMSerializer` | |
+| `htmlsnapshot get <field> [sel]` | `DOMHandler.queryLocator(sel)` → extract field | Text, html, attr via CSS |
+| `htmlsnapshot get all <field> [sel]` | `DOMHandler.queryLocatorAll(sel)` → extract from each | |
+| `htmlsnapshot summary` | Summarize `DOMState` — element counts, roles, heading structure | |
+| `htmlsnapshot export` | `BrowserProtocol.getOuterHTML(documentNodeId)` | |
+| `htmlsnapshot grep <pattern>` | Regex search over exported HTML | Post-processing |
+| `htmlsnapshot inspect [sel]` | `CDPSnapshotService` merged tree analysis | Structure introspection |
 
 ### Other
 
@@ -262,7 +262,7 @@ cli/ (Rust)  ──MCP/HTTP──▶  browser4-rest (server)  ──▶  browser
 
 | CLI Command | Missing Capability |
 |---|---|
-| `domsnapshot query --sql <query>` | X-SQL parser + ~200 functions (`DOM_*`, `STR_*`, `ARRAY_*`) |
+| `htmlsnapshot query --sql <query>` | X-SQL parser + ~200 functions (`DOM_*`, `STR_*`, `ARRAY_*`) |
 | `swarm-query --sql <query>` | Same SQL engine, distributed across swarm |
 
 > **Note:** A minimal subset of X-SQL (basic `SELECT DOM_FIRST_TEXT(...) FROM DOM_LOAD_AND_SELECT(...)`)
@@ -285,7 +285,7 @@ cli/ (Rust)  ──MCP/HTTP──▶  browser4-rest (server)  ──▶  browser
 | Screenshots & Export | 3/3 | — |
 | Tabs | 4/4 | — |
 | Storage | 14/14 | — |
-| DOM Snapshot | 7/8 | X-SQL queries |
+| HTML Snapshot | 7/8 | X-SQL queries |
 | Console | 2/2 | — |
 | CLI Toolchain | — | install, uninstall, upgrade, batch, loop (5) |
 | Server/Session | — | close, attach, list, close-all, kill-all, status, doctor (7) |

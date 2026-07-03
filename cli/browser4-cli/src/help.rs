@@ -12,13 +12,13 @@ pub fn public_command_name(name: &str) -> &str {
         "swarm-query" => "swarm query",
         "swarm-status" => "swarm status",
         "swarm-result" => "swarm result",
-        "domsnapshot-get" => "domsnapshot get",
-        "domsnapshot-get-all" => "domsnapshot get all",
-        "domsnapshot-query" => "domsnapshot query",
-        "domsnapshot-export" => "domsnapshot export",
-        "domsnapshot-summary" => "domsnapshot summary",
-        "domsnapshot-grep" => "domsnapshot grep",
-        "domsnapshot-inspect" => "domsnapshot inspect",
+        "htmlsnapshot-get" => "htmlsnapshot get",
+        "htmlsnapshot-get-all" => "htmlsnapshot get all",
+        "htmlsnapshot-query" => "htmlsnapshot query",
+        "htmlsnapshot-export" => "htmlsnapshot export",
+        "htmlsnapshot-summary" => "htmlsnapshot summary",
+        "htmlsnapshot-grep" => "htmlsnapshot grep",
+        "htmlsnapshot-inspect" => "htmlsnapshot inspect",
         "snapshot-grep" => "snapshot grep",
         _ => name,
     }
@@ -743,51 +743,51 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("  browser4-cli crawl --seed-file urls.txt --sql-stdin --format table < query.sql".to_string());
     }
 
-    if cmd.name == "domsnapshot" {
+    if cmd.name == "htmlsnapshot" {
         lines.push("Subcommands:".to_string());
         lines.push(format_with_gap(
-            "  domsnapshot get <field> [selector] [name] [--page N] [--page-size N] [--all]",
+            "  htmlsnapshot get <field> [selector] [name] [--page N] [--page-size N] [--all]",
             "Extract elements from the DOM snapshot stored in Browser4's page storage (text, html, attr)",
             50,
         ));
         lines.push(format_with_gap(
-            "  domsnapshot get all <field> [selector] [name] [--offset N] [--limit N] [--page N] [--page-size N] [--all]",
+            "  htmlsnapshot get all <field> [selector] [name] [--offset N] [--limit N] [--page N] [--page-size N] [--all]",
             "Extract ALL matching elements from the DOM snapshot (querySelectorAll semantics)",
             50,
         ));
         lines.push(format_with_gap(
-            "  domsnapshot query [url]",
+            "  htmlsnapshot query [url]",
             "Run X-SQL against the DOM snapshot stored in Browser4's page storage via the scrape API",
             50,
         ));
         lines.push(format_with_gap(
-            "  domsnapshot export",
+            "  htmlsnapshot export",
             "Export snapshot HTML from Browser4's page storage to a local file",
             50,
         ));
         lines.push(format_with_gap(
-            "  domsnapshot summary",
+            "  htmlsnapshot summary",
             "Generate a compressed Web Page Summary Index (WPSI) from the stored DOM snapshot",
             50,
         ));
         lines.push(format_with_gap(
-            "  domsnapshot grep [OPTIONS] <pattern>",
+            "  htmlsnapshot grep [OPTIONS] <pattern>",
             "Search snapshot HTML with regex patterns and grep-style output. Use | for alternation or -e for multiple patterns.",
             50,
         ));
         lines.push(format_with_gap(
-            "  domsnapshot inspect [selector] [--max N] [--depth D]",
+            "  htmlsnapshot inspect [selector] [--max N] [--depth D]",
             "Analyze DOM structure and suggest CSS selectors for recurring patterns",
             50,
         ));
         lines.push(String::new());
         lines.push("Notes:".to_string());
         lines.push(
-            "  - The base `domsnapshot` command captures a static DOM snapshot, saves it in Browser4's page storage, and returns enriched metadata (URL, title, timestamps, image/link counts, interactive elements with tag/class/id/aria/bounding-box)."
+            "  - The base `htmlsnapshot` command captures a static DOM snapshot, saves it in Browser4's page storage, and returns enriched metadata (URL, title, timestamps, image/link counts, interactive elements with tag/class/id/aria/bounding-box)."
                 .to_string(),
         );
         lines.push(
-            "  - After capturing, extract elements from the stored snapshot by CSS selector with `domsnapshot get <field> [selector]`."
+            "  - After capturing, extract elements from the stored snapshot by CSS selector with `htmlsnapshot get <field> [selector]`."
                 .to_string(),
         );
         lines.push(
@@ -795,35 +795,35 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(
-            "  - Each `get all` call runs independently against the whole document. To extract correlated fields (e.g. title + price + URL per product), use `domsnapshot query` with X-SQL's `DOM_LOAD_AND_SELECT` — it scopes each row to a parent container so fields stay aligned."
+            "  - Each `get all` call runs independently against the whole document. To extract correlated fields (e.g. title + price + URL per product), use `htmlsnapshot query` with X-SQL's `DOM_LOAD_AND_SELECT` — it scopes each row to a parent container so fields stay aligned."
                 .to_string(),
         );
         lines.push(
-            "  - Element references (`e5`, `backend:15`) are NOT supported by `domsnapshot get` — use CSS selectors only."
+            "  - Element references (`e5`, `backend:15`) are NOT supported by `htmlsnapshot get` — use CSS selectors only."
                 .to_string(),
         );
         lines.push(
-            "  - X-SQL queries via `domsnapshot query --sql` use `@url` as a placeholder for the target page URL (unquoted — SQLTemplate handles escaping)."
+            "  - X-SQL queries via `htmlsnapshot query --sql` use `@url` as a placeholder for the target page URL (unquoted — SQLTemplate handles escaping)."
                 .to_string(),
         );
         lines.push(
-            "  - `domsnapshot query --sql` also supports reading from a file with `--sql @file.sql`."
+            "  - `htmlsnapshot query --sql` also supports reading from a file with `--sql @file.sql`."
                 .to_string(),
         );
         lines.push(
-            "  - Export the full HTML snapshot from Browser4's page storage to a local file with `domsnapshot export --file <path>`."
+            "  - Export the full HTML snapshot from Browser4's page storage to a local file with `htmlsnapshot export --file <path>`."
                 .to_string(),
         );
         lines.push(
-            "  - Generate a compressed page summary (WPSI) from the stored DOM snapshot with `domsnapshot summary`. The summary identifies page type, structure, key content nodes, repeated lists, tables, and stats — typically <1% of the original HTML size."
+            "  - Generate a compressed page summary (WPSI) from the stored DOM snapshot with `htmlsnapshot summary`. The summary identifies page type, structure, key content nodes, repeated lists, tables, and stats — typically <1% of the original HTML size."
                 .to_string(),
         );
         lines.push(
-            "  - Search the DOM snapshot HTML with regex patterns using `domsnapshot grep <pattern>`. Supports standard grep flags: -e (repeatable), -i, -A, -B, -C, -v, -c, -l, -F, -w, --no-line-number, and --selector for CSS-scoped searches. Uses Rust regex syntax where | is alternation (not \\|). Line numbers are shown by default (unlike GNU grep's -n opt-in)."
+            "  - Search the DOM snapshot HTML with regex patterns using `htmlsnapshot grep <pattern>`. Supports standard grep flags: -e (repeatable), -i, -A, -B, -C, -v, -c, -l, -F, -w, --no-line-number, and --selector for CSS-scoped searches. Uses Rust regex syntax where | is alternation (not \\|). Line numbers are shown by default (unlike GNU grep's -n opt-in)."
                 .to_string(),
         );
         lines.push(
-            "  - Analyze DOM structure and discover CSS selectors for recurring patterns with `domsnapshot inspect [selector]`. When the selector matches multiple elements (e.g. `.product-card`), it compares child structures across matches and suggests selectors ranked by recurrence. Use --max to control sample size and --depth to limit descendant traversal."
+            "  - Analyze DOM structure and discover CSS selectors for recurring patterns with `htmlsnapshot inspect [selector]`. When the selector matches multiple elements (e.g. `.product-card`), it compares child structures across matches and suggests selectors ranked by recurrence. Use --max to control sample size and --depth to limit descendant traversal."
                 .to_string(),
         );
         lines.push(
@@ -833,76 +833,76 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push(String::new());
         lines.push("Examples:".to_string());
         lines.push("  # Capture a DOM snapshot and display metadata".to_string());
-        lines.push("  browser4-cli domsnapshot".to_string());
+        lines.push("  browser4-cli htmlsnapshot".to_string());
         lines.push(String::new());
         lines.push("  # Get the text content of the whole page (:root)".to_string());
-        lines.push("  browser4-cli domsnapshot get text".to_string());
+        lines.push("  browser4-cli htmlsnapshot get text".to_string());
         lines.push(String::new());
         lines.push("  # Get the HTML of a specific element by CSS selector".to_string());
-        lines.push("  browser4-cli domsnapshot get html \"#main-content\"".to_string());
+        lines.push("  browser4-cli htmlsnapshot get html \"#main-content\"".to_string());
         lines.push(String::new());
         lines.push("  # Get an attribute value (requires attribute name)".to_string());
-        lines.push("  browser4-cli domsnapshot get attr \"a.product-link\" href".to_string());
+        lines.push("  browser4-cli htmlsnapshot get attr \"a.product-link\" href".to_string());
         lines.push(String::new());
         lines.push("  # Get all matching elements by CSS selector (returns a JSON array)".to_string());
-        lines.push("  browser4-cli domsnapshot get all text \"h2 a\"".to_string());
+        lines.push("  browser4-cli htmlsnapshot get all text \"h2 a\"".to_string());
         lines.push(String::new());
         lines.push("  # Correlated multi-field extraction: title, price, and link per product".to_string());
-        lines.push("  browser4-cli domsnapshot query --sql \"SELECT dom_first_text(dom, '.title') AS title, dom_first_text(dom, '.price') AS price, dom_first_href(dom, 'a') AS link FROM load_and_select(@url, '.product')\"".to_string());
+        lines.push("  browser4-cli htmlsnapshot query --sql \"SELECT dom_first_text(dom, '.title') AS title, dom_first_text(dom, '.price') AS price, dom_first_href(dom, 'a') AS link FROM load_and_select(@url, '.product')\"".to_string());
         lines.push(String::new());
         lines.push("  # Get all matching elements with element-level pagination".to_string());
-        lines.push("  browser4-cli domsnapshot get all text \".result\" --limit 5 --offset 10".to_string());
+        lines.push("  browser4-cli htmlsnapshot get all text \".result\" --limit 5 --offset 10".to_string());
         lines.push(String::new());
         lines.push("  # Get HTML with line-level pagination (default 2000 lines, page 2)".to_string());
-        lines.push("  browser4-cli domsnapshot get html \"body\" --page 2".to_string());
+        lines.push("  browser4-cli htmlsnapshot get html \"body\" --page 2".to_string());
         lines.push(String::new());
         lines.push("  # Get all text with custom page size".to_string());
-        lines.push("  browser4-cli domsnapshot get all text \"p\" --page-size 200".to_string());
+        lines.push("  browser4-cli htmlsnapshot get all text \"p\" --page-size 200".to_string());
         lines.push(String::new());
         lines.push("  # Get full HTML (disable pagination)".to_string());
-        lines.push("  browser4-cli domsnapshot get html --all".to_string());
+        lines.push("  browser4-cli htmlsnapshot get html --all".to_string());
         lines.push(String::new());
         lines.push("  # Run an X-SQL query against the current page URL".to_string());
         lines.push(
-            "  browser4-cli domsnapshot query --sql \"SELECT dom_first_text(dom, 'h1') AS title FROM load_and_select(@url, ':root')\""
+            "  browser4-cli htmlsnapshot query --sql \"SELECT dom_first_text(dom, 'h1') AS title FROM load_and_select(@url, ':root')\""
                 .to_string(),
         );
         lines.push(String::new());
         lines.push("  # Run an X-SQL query from a file".to_string());
-        lines.push("  browser4-cli domsnapshot query --sql @query.sql".to_string());
+        lines.push("  browser4-cli htmlsnapshot query --sql @query.sql".to_string());
         lines.push(String::new());
         lines.push("  # Export the full snapshot HTML to a file".to_string());
-        lines.push("  browser4-cli domsnapshot export --file snapshot.html".to_string());
+        lines.push("  browser4-cli htmlsnapshot export --file snapshot.html".to_string());
         lines.push(String::new());
         lines.push("  # Generate a compressed page summary from the stored DOM snapshot".to_string());
-        lines.push("  browser4-cli domsnapshot summary".to_string());
+        lines.push("  browser4-cli htmlsnapshot summary".to_string());
         lines.push(String::new());
         lines.push("  # Search for 'error' case-insensitively".to_string());
-        lines.push("  browser4-cli domsnapshot grep -i error".to_string());
+        lines.push("  browser4-cli htmlsnapshot grep -i error".to_string());
         lines.push(String::new());
         lines.push("  # Match any of multiple words with alternation (| is alternation in Rust regex)".to_string());
-        lines.push("  browser4-cli domsnapshot grep -i \"price|rating|stars\"".to_string());
+        lines.push("  browser4-cli htmlsnapshot grep -i \"price|rating|stars\"".to_string());
         lines.push(String::new());
         lines.push("  # Same search using -e repeatable flags (avoids shell escaping)".to_string());
-        lines.push("  browser4-cli domsnapshot grep -i -e price -e rating -e stars".to_string());
+        lines.push("  browser4-cli htmlsnapshot grep -i -e price -e rating -e stars".to_string());
         lines.push(String::new());
         lines.push("  # Literal string match with 2 lines of context".to_string());
-        lines.push("  browser4-cli domsnapshot grep -F -C 2 \"404 Not Found\"".to_string());
+        lines.push("  browser4-cli htmlsnapshot grep -F -C 2 \"404 Not Found\"".to_string());
         lines.push(String::new());
         lines.push("  # Search only within <main> element".to_string());
-        lines.push("  browser4-cli domsnapshot grep --selector main \"Submit\"".to_string());
+        lines.push("  browser4-cli htmlsnapshot grep --selector main \"Submit\"".to_string());
         lines.push(String::new());
         lines.push("  # Search with pagination (page 2, custom page size)".to_string());
-        lines.push("  browser4-cli domsnapshot grep -i error --page 2 --page-size 200".to_string());
+        lines.push("  browser4-cli htmlsnapshot grep -i error --page 2 --page-size 200".to_string());
         lines.push(String::new());
         lines.push("  # Search and show all matches (disable pagination)".to_string());
-        lines.push("  browser4-cli domsnapshot grep --all \"TODOs\"".to_string());
+        lines.push("  browser4-cli htmlsnapshot grep --all \"TODOs\"".to_string());
         lines.push(String::new());
         lines.push("  # Discover CSS selectors for recurring product cards".to_string());
-        lines.push("  browser4-cli domsnapshot inspect \".product_pod\"".to_string());
+        lines.push("  browser4-cli htmlsnapshot inspect \".product_pod\"".to_string());
         lines.push(String::new());
         lines.push("  # Inspect with deeper analysis and larger sample".to_string());
-        lines.push("  browser4-cli domsnapshot inspect \".s-result-item\" --depth 6 --max 20".to_string());
+        lines.push("  browser4-cli htmlsnapshot inspect \".s-result-item\" --depth 6 --max 20".to_string());
     }
 
     if cmd.name == "snapshot" {
@@ -943,7 +943,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(
-            "  - snapshot grep supports the same grep options as domsnapshot grep: -e (repeatable), -i, -A, -B, -C, -v, -c, -l, -F, -w, --no-line-number, --selector, --page N, --page-size N, and --all."
+            "  - snapshot grep supports the same grep options as htmlsnapshot grep: -e (repeatable), -i, -A, -B, -C, -v, -c, -l, -F, -w, --no-line-number, --selector, --page N, --page-size N, and --all."
                 .to_string(),
         );
         lines.push(
@@ -1389,24 +1389,24 @@ mod tests {
     }
 
     #[test]
-    fn test_generate_command_help_domsnapshot() {
+    fn test_generate_command_help_htmlsnapshot() {
         let cmds = all_commands();
-        let cmd = cmds.iter().find(|c| c.name == "domsnapshot").unwrap();
+        let cmd = cmds.iter().find(|c| c.name == "htmlsnapshot").unwrap();
         let help = generate_command_help(cmd);
         // Header
-        assert!(help.contains("browser4-cli domsnapshot"));
+        assert!(help.contains("browser4-cli htmlsnapshot"));
         assert!(help.contains("Capture a static DOM snapshot, save it in Browser4's page storage"));
         // Subcommands listing
         assert!(help.contains("Subcommands:"));
-        assert!(help.contains("domsnapshot get <field> [selector] [name] [--page N] [--page-size N] [--all]"));
+        assert!(help.contains("htmlsnapshot get <field> [selector] [name] [--page N] [--page-size N] [--all]"));
         assert!(help.contains("Extract elements from the DOM snapshot stored in Browser4's page storage (text, html, attr)"));
-        assert!(help.contains("domsnapshot get all <field> [selector] [name] [--offset N] [--limit N] [--page N] [--page-size N] [--all]"));
+        assert!(help.contains("htmlsnapshot get all <field> [selector] [name] [--offset N] [--limit N] [--page N] [--page-size N] [--all]"));
         assert!(help.contains("Extract ALL matching elements from the DOM snapshot (querySelectorAll semantics)"));
-        assert!(help.contains("domsnapshot query [url]"));
+        assert!(help.contains("htmlsnapshot query [url]"));
         assert!(help.contains("Run X-SQL against the DOM snapshot stored in Browser4's page storage via the scrape API"));
-        assert!(help.contains("domsnapshot export"));
+        assert!(help.contains("htmlsnapshot export"));
         assert!(help.contains("Export snapshot HTML from Browser4's page storage to a local file"));
-        assert!(help.contains("domsnapshot summary"));
+        assert!(help.contains("htmlsnapshot summary"));
         assert!(help.contains("Generate a compressed Web Page Summary Index (WPSI) from the stored DOM snapshot"));
         // Notes
         assert!(help.contains("static DOM snapshot, saves it in Browser4's page storage, and returns enriched metadata"));
@@ -1415,36 +1415,36 @@ mod tests {
         assert!(help.contains("SQLTemplate handles escaping"));
         assert!(help.contains("@file.sql"));
         // Examples
-        assert!(help.contains("browser4-cli domsnapshot"));
-        assert!(help.contains("browser4-cli domsnapshot get text"));
-        assert!(help.contains("browser4-cli domsnapshot get html \"#main-content\""));
-        assert!(help.contains("browser4-cli domsnapshot get attr \"a.product-link\" href"));
-        assert!(help.contains("browser4-cli domsnapshot get all text \"h2 a\""));
-        assert!(help.contains("browser4-cli domsnapshot get all text \".result\" --limit 5 --offset 10"));
-        assert!(help.contains("browser4-cli domsnapshot query --sql"));
-        assert!(help.contains("browser4-cli domsnapshot query --sql @query.sql"));
-        assert!(help.contains("browser4-cli domsnapshot export --file snapshot.html"));
-        assert!(help.contains("browser4-cli domsnapshot summary"));
+        assert!(help.contains("browser4-cli htmlsnapshot"));
+        assert!(help.contains("browser4-cli htmlsnapshot get text"));
+        assert!(help.contains("browser4-cli htmlsnapshot get html \"#main-content\""));
+        assert!(help.contains("browser4-cli htmlsnapshot get attr \"a.product-link\" href"));
+        assert!(help.contains("browser4-cli htmlsnapshot get all text \"h2 a\""));
+        assert!(help.contains("browser4-cli htmlsnapshot get all text \".result\" --limit 5 --offset 10"));
+        assert!(help.contains("browser4-cli htmlsnapshot query --sql"));
+        assert!(help.contains("browser4-cli htmlsnapshot query --sql @query.sql"));
+        assert!(help.contains("browser4-cli htmlsnapshot export --file snapshot.html"));
+        assert!(help.contains("browser4-cli htmlsnapshot summary"));
         // grep and inspect
-        assert!(help.contains("domsnapshot grep [OPTIONS] <pattern>"));
-        assert!(help.contains("browser4-cli domsnapshot grep --selector main \"Submit\""));
-        assert!(help.contains("domsnapshot inspect [selector] [--max N] [--depth D]"));
+        assert!(help.contains("htmlsnapshot grep [OPTIONS] <pattern>"));
+        assert!(help.contains("browser4-cli htmlsnapshot grep --selector main \"Submit\""));
+        assert!(help.contains("htmlsnapshot inspect [selector] [--max N] [--depth D]"));
         assert!(help.contains("Analyze DOM structure and suggest CSS selectors for recurring patterns"));
-        assert!(help.contains("browser4-cli domsnapshot inspect \".product_pod\""));
+        assert!(help.contains("browser4-cli htmlsnapshot inspect \".product_pod\""));
         // enriched metadata
         assert!(help.contains("image/link counts"));
         assert!(help.contains("interactive elements with tag/class/id/aria/bounding-box"));
         // pagination
         assert!(help.contains("Output from `get html`, `get all html`, and `grep` is paginated by default (2000 lines per page)"));
         assert!(help.contains("--page N for subsequent pages, --page-size N to change the page size, or --all to disable pagination"));
-        assert!(help.contains("browser4-cli domsnapshot get html \"body\" --page 2"));
-        assert!(help.contains("browser4-cli domsnapshot get all text \"p\" --page-size 200"));
-        assert!(help.contains("browser4-cli domsnapshot get html --all"));
-        assert!(help.contains("browser4-cli domsnapshot grep -i error --page 2 --page-size 200"));
-        assert!(help.contains("browser4-cli domsnapshot grep --all \"TODOs\""));
+        assert!(help.contains("browser4-cli htmlsnapshot get html \"body\" --page 2"));
+        assert!(help.contains("browser4-cli htmlsnapshot get all text \"p\" --page-size 200"));
+        assert!(help.contains("browser4-cli htmlsnapshot get html --all"));
+        assert!(help.contains("browser4-cli htmlsnapshot grep -i error --page 2 --page-size 200"));
+        assert!(help.contains("browser4-cli htmlsnapshot grep --all \"TODOs\""));
         // get all independence note — steer users to X-SQL for correlated multi-field extraction
         assert!(help.contains("Each `get all` call runs independently against the whole document"));
-        assert!(help.contains("use `domsnapshot query` with X-SQL's `DOM_LOAD_AND_SELECT`"));
+        assert!(help.contains("use `htmlsnapshot query` with X-SQL's `DOM_LOAD_AND_SELECT`"));
         // correlated multi-field example
         assert!(help.contains("Correlated multi-field extraction: title, price, and link per product"));
         assert!(help.contains("dom_first_text(dom, '.title') AS title, dom_first_text(dom, '.price') AS price, dom_first_href(dom, 'a') AS link"));
@@ -1452,61 +1452,61 @@ mod tests {
     }
 
     #[test]
-    fn test_generate_command_help_domsnapshot_get() {
+    fn test_generate_command_help_htmlsnapshot_get() {
         let cmds = all_commands();
-        let cmd = cmds.iter().find(|c| c.name == "domsnapshot-get").unwrap();
+        let cmd = cmds.iter().find(|c| c.name == "htmlsnapshot-get").unwrap();
         let help = generate_command_help(cmd);
-        assert!(help.contains("browser4-cli domsnapshot get <field> [selector] [name]"));
+        assert!(help.contains("browser4-cli htmlsnapshot get <field> [selector] [name]"));
         assert!(help.contains("Extract elements from the DOM snapshot stored in Browser4's page storage (text, html, attr)"));
         assert!(help.contains("What to extract: text, html, or attr"));
         assert!(help.contains("Attribute name (required for attr field)"));
-        assert!(!help.contains("browser4-cli domsnapshot-get"));
+        assert!(!help.contains("browser4-cli htmlsnapshot-get"));
     }
 
     #[test]
-    fn test_generate_command_help_domsnapshot_query() {
+    fn test_generate_command_help_htmlsnapshot_query() {
         let cmds = all_commands();
-        let cmd = cmds.iter().find(|c| c.name == "domsnapshot-query").unwrap();
+        let cmd = cmds.iter().find(|c| c.name == "htmlsnapshot-query").unwrap();
         let help = generate_command_help(cmd);
-        assert!(help.contains("browser4-cli domsnapshot query [url]"));
+        assert!(help.contains("browser4-cli htmlsnapshot query [url]"));
         assert!(help.contains("Run X-SQL against the DOM snapshot stored in Browser4's page storage via the scrape API"));
         assert!(help.contains("--sql"));
-        assert!(!help.contains("browser4-cli domsnapshot-query"));
+        assert!(!help.contains("browser4-cli htmlsnapshot-query"));
     }
 
     #[test]
-    fn test_generate_command_help_domsnapshot_export() {
+    fn test_generate_command_help_htmlsnapshot_export() {
         let cmds = all_commands();
-        let cmd = cmds.iter().find(|c| c.name == "domsnapshot-export").unwrap();
+        let cmd = cmds.iter().find(|c| c.name == "htmlsnapshot-export").unwrap();
         let help = generate_command_help(cmd);
-        assert!(help.contains("browser4-cli domsnapshot export"));
+        assert!(help.contains("browser4-cli htmlsnapshot export"));
         assert!(help.contains("Export snapshot HTML from Browser4's page storage to a local file"));
         assert!(help.contains("--file"));
-        assert!(!help.contains("browser4-cli domsnapshot-export"));
+        assert!(!help.contains("browser4-cli htmlsnapshot-export"));
     }
 
     #[test]
-    fn test_generate_command_help_domsnapshot_summary() {
+    fn test_generate_command_help_htmlsnapshot_summary() {
         let cmds = all_commands();
-        let cmd = cmds.iter().find(|c| c.name == "domsnapshot-summary").unwrap();
+        let cmd = cmds.iter().find(|c| c.name == "htmlsnapshot-summary").unwrap();
         let help = generate_command_help(cmd);
-        assert!(help.contains("browser4-cli domsnapshot summary"));
+        assert!(help.contains("browser4-cli htmlsnapshot summary"));
         assert!(help.contains("Generate a compressed Web Page Summary Index (WPSI) from the stored DOM snapshot"));
-        assert!(!help.contains("browser4-cli domsnapshot-summary"));
+        assert!(!help.contains("browser4-cli htmlsnapshot-summary"));
     }
 
     #[test]
-    fn test_generate_command_help_domsnapshot_get_all() {
+    fn test_generate_command_help_htmlsnapshot_get_all() {
         let cmds = all_commands();
-        let cmd = cmds.iter().find(|c| c.name == "domsnapshot-get-all").unwrap();
+        let cmd = cmds.iter().find(|c| c.name == "htmlsnapshot-get-all").unwrap();
         let help = generate_command_help(cmd);
-        assert!(help.contains("browser4-cli domsnapshot get all <field> [selector] [name]"));
+        assert!(help.contains("browser4-cli htmlsnapshot get all <field> [selector] [name]"));
         assert!(help.contains("Extract ALL matching elements from the DOM snapshot (querySelectorAll semantics)"));
         assert!(help.contains("What to extract: text, html, or attr"));
         assert!(help.contains("Attribute name (required for attr field)"));
         assert!(help.contains("--offset"));
         assert!(help.contains("--limit"));
-        assert!(!help.contains("browser4-cli domsnapshot-get-all"));
+        assert!(!help.contains("browser4-cli htmlsnapshot-get-all"));
     }
 
     #[test]

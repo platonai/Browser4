@@ -15,31 +15,31 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 /**
- * E2E tests for the 10 DOM Snapshot scenarios defined in
- * skill/references/domsnapshot-scenarios.md.
+ * E2E tests for the 10 HTML Snapshot scenarios defined in
+ * skill/references/htmlsnapshot-scenarios.md.
  *
  * Each test navigates to a mock page served by the embedded mock EC server
- * (port 18080 via [MockEcServerConfiguration]) and exercises the dom_snapshot_*
+ * (port 18080 via [MockEcServerConfiguration]) and exercises the html_snapshot_*
  * MCP tools.
  *
- * NOTE: The `dom_snapshot_query` tool uses the scrape service which employs an
+ * NOTE: The `html_snapshot_query` tool uses the scrape service which employs an
  * optimized DOM parser.  Most mock pages yield a sparse DOM (4–40 elements
  * depending on the page).  Query tests therefore use selectors that match
  * within this representation (typically `body`-level queries or the rich
  * product-detail page where 40 elements survive).  Multi-row `load_and_select`
  * on listing pages is not supported under the optimized DOM.
  *
- * `dom_snapshot_scrape` and `dom_snapshot_export` work against the full
+ * `html_snapshot_scrape` and `html_snapshot_export` work against the full
  * browser DOM and are tested extensively across all scenarios.
  */
 @Tag("E2ETest")
-class DomSnapshotScenariosE2ETest : RestAPITestBase() {
+class HtmlSnapshotScenariosE2ETest : RestAPITestBase() {
 
     companion object {
         const val PROFILE_MODE = "SEQUENTIAL"
     }
 
-    private val logger = LoggerFactory.getLogger(DomSnapshotScenariosE2ETest::class.java)
+    private val logger = LoggerFactory.getLogger(HtmlSnapshotScenariosE2ETest::class.java)
     private val objectMapper = ObjectMapper()
         .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false)
         .configure(DeserializationFeature.FAIL_ON_NULL_FOR_PRIMITIVES, false)
@@ -105,7 +105,7 @@ class DomSnapshotScenariosE2ETest : RestAPITestBase() {
 
     private fun openTemporarySession(): String = openSession(
         mapOf(
-            "sessionId" to "domsnapshot-test",
+            "sessionId" to "htmlsnapshot-test",
             "profileMode" to PROFILE_MODE,
             "interactLevel" to "FASTEST"
         )
@@ -135,44 +135,44 @@ class DomSnapshotScenariosE2ETest : RestAPITestBase() {
         return retryId
     }
 
-    /** Force a fresh capture then call dom_snapshot_scrape. */
+    /** Force a fresh capture then call html_snapshot_scrape. */
     private fun scrapeField(
         sessionId: String,
         field: String,
         selector: String,
         attrName: String? = null
     ): String {
-        // Force a fresh DOM snapshot capture — the implicit capture in scrape
+        // Force a fresh HTML snapshot capture — the implicit capture in scrape
         // may return a stale cached page.
-        callTool("dom_snapshot_capture", mapOf("sessionId" to sessionId))
+        callTool("html_snapshot_capture", mapOf("sessionId" to sessionId))
         val args = buildMap<String, Any?> {
             put("sessionId", sessionId)
             put("field", field)
             put("selector", selector)
             if (attrName != null) put("attrName", attrName)
         }
-        val response = callTool("dom_snapshot_scrape", args)
+        val response = callTool("html_snapshot_scrape", args)
         assertNotError(response)
         return textContent(response)
     }
 
-    /** Call dom_snapshot_query and return parsed JSON. */
-    private fun queryDomSnapshot(
+    /** Call html_snapshot_query and return parsed JSON. */
+    private fun queryHtmlSnapshot(
         sessionId: String,
         sql: String
     ): com.fasterxml.jackson.databind.JsonNode {
         val response = callTool(
-            "dom_snapshot_query",
+            "html_snapshot_query",
             mapOf("sessionId" to sessionId, "sql" to sql)
         )
         assertNotError(response)
         return objectMapper.readTree(textContent(response))
     }
 
-    /** Force a fresh capture then export the DOM snapshot. */
-    private fun exportDomSnapshot(sessionId: String): String {
-        callTool("dom_snapshot_capture", mapOf("sessionId" to sessionId))
-        val response = callTool("dom_snapshot_export", mapOf("sessionId" to sessionId))
+    /** Force a fresh capture then export the HTML snapshot. */
+    private fun exportHtmlSnapshot(sessionId: String): String {
+        callTool("html_snapshot_capture", mapOf("sessionId" to sessionId))
+        val response = callTool("html_snapshot_export", mapOf("sessionId" to sessionId))
         assertNotError(response)
         return textContent(response)
     }
@@ -207,7 +207,7 @@ class DomSnapshotScenariosE2ETest : RestAPITestBase() {
     // =========================================================================
 
     @Test
-    @DisplayName("1a — Extract single product details via dom_snapshot_scrape")
+    @DisplayName("1a — Extract single product details via html_snapshot_scrape")
     fun test1a_extractSingleProductDetails() {
         val sessionId = openAndNavigate(TestUrls.MOCK_PRODUCT_DETAIL_URL)
         awaitPageTitle(sessionId, "4K OLED TV")
@@ -239,7 +239,7 @@ class DomSnapshotScenariosE2ETest : RestAPITestBase() {
             FROM load_and_select(@url, 'body')
         """.trimIndent()
 
-        val result = queryDomSnapshot(sessionId, sql)
+        val result = queryHtmlSnapshot(sessionId, sql)
         val resultSet = requireResultSet(result)
         assertTrue(resultSet.size() == 1, "Expected 1 body row, got ${resultSet.size()}")
 
@@ -260,7 +260,7 @@ class DomSnapshotScenariosE2ETest : RestAPITestBase() {
         val sessionId = openAndNavigate(TestUrls.MOCK_PRODUCT_DETAIL_URL)
         awaitPageTitle(sessionId, "4K OLED TV")
 
-        val html = exportDomSnapshot(sessionId)
+        val html = exportHtmlSnapshot(sessionId)
         assertTrue(html.contains("4K OLED TV"), "Exported HTML should contain product title")
         assertTrue(html.contains("product-price"), "Exported HTML should contain price element")
     }
@@ -283,7 +283,7 @@ class DomSnapshotScenariosE2ETest : RestAPITestBase() {
             FROM load_and_select(@url, '*')
         """.trimIndent()
 
-        val result = queryDomSnapshot(sessionId, sql)
+        val result = queryHtmlSnapshot(sessionId, sql)
         val resultSet = requireResultSet(result)
         assertTrue(resultSet.size() >= 1, "Expected at least 1 row from COUNT(*)")
         val count = resultSet[0]["cnt"]?.asText()?.toIntOrNull() ?: 0
@@ -291,7 +291,7 @@ class DomSnapshotScenariosE2ETest : RestAPITestBase() {
     }
 
     @Test
-    @DisplayName("2b — Get single headline via dom_snapshot_scrape")
+    @DisplayName("2b — Get single headline via html_snapshot_scrape")
     fun test2b_getSingleHeadline() {
         val sessionId = openAndNavigate(TestUrls.MOCK_NEWS_URL)
 
@@ -307,7 +307,7 @@ class DomSnapshotScenariosE2ETest : RestAPITestBase() {
     fun test2c_exportNewsPage() {
         val sessionId = openAndNavigate(TestUrls.MOCK_NEWS_URL)
 
-        val html = exportDomSnapshot(sessionId)
+        val html = exportHtmlSnapshot(sessionId)
         assertTrue(html.contains("Hacker News"), "Exported HTML should contain page identity")
         assertTrue(html.contains("titleline"), "Exported HTML should contain article markup")
     }
@@ -317,7 +317,7 @@ class DomSnapshotScenariosE2ETest : RestAPITestBase() {
     // =========================================================================
 
     @Test
-    @DisplayName("3a — Count headings via dom_snapshot_scrape")
+    @DisplayName("3a — Count headings via html_snapshot_scrape")
     fun test3a_checkHeadingsExist() {
         val sessionId = openAndNavigate(TestUrls.MOCK_SEO_URL)
 
@@ -334,7 +334,7 @@ class DomSnapshotScenariosE2ETest : RestAPITestBase() {
         val sessionId = openAndNavigate(TestUrls.MOCK_SEO_URL)
 
         // The SEO page has images without alt — verify we can find them
-        // dom_snapshot_scrape returns the first match, which will be an img with alt
+        // html_snapshot_scrape returns the first match, which will be an img with alt
         val imgWithAlt = scrapeField(sessionId, "attr", "img[alt]", "alt")
         assertTrue(imgWithAlt.isNotBlank(), "Expected at least one image with alt text")
 
@@ -344,7 +344,7 @@ class DomSnapshotScenariosE2ETest : RestAPITestBase() {
     }
 
     @Test
-    @DisplayName("3c — Extract meta tags via dom_snapshot_scrape")
+    @DisplayName("3c — Extract meta tags via html_snapshot_scrape")
     fun test3c_extractMetaTags() {
         val sessionId = openAndNavigate(TestUrls.MOCK_SEO_URL)
 
@@ -394,7 +394,7 @@ class DomSnapshotScenariosE2ETest : RestAPITestBase() {
             FROM load_and_select(@url, 'body')
         """.trimIndent()
 
-        val result = queryDomSnapshot(sessionId, sql)
+        val result = queryHtmlSnapshot(sessionId, sql)
         val resultSet = requireResultSet(result)
         val row = resultSet[0]
         assertTrue(row["title"]?.asText()?.contains("4K OLED TV") == true, "Expected product title")
@@ -411,7 +411,7 @@ class DomSnapshotScenariosE2ETest : RestAPITestBase() {
             SELECT dom_first_text(dom, '#productTitle') AS title
             FROM load_and_select(@url, 'body')
         """.trimIndent()
-        val r1 = requireResultSet(queryDomSnapshot(sessionId, sql1))
+        val r1 = requireResultSet(queryHtmlSnapshot(sessionId, sql1))
         assertTrue(r1[0]["title"]?.asText()?.contains("4K OLED TV") == true)
 
         // Navigate to another product page (use a different product)
@@ -422,7 +422,7 @@ class DomSnapshotScenariosE2ETest : RestAPITestBase() {
             SELECT dom_first_text(dom, '#productTitle') AS title
             FROM load_and_select(@url, 'body')
         """.trimIndent()
-        val r2 = requireResultSet(queryDomSnapshot(sessionId, sql2))
+        val r2 = requireResultSet(queryHtmlSnapshot(sessionId, sql2))
         assertTrue(
             r2[0]["title"]?.asText()?.contains("Wireless") == true,
             "Expected second product title, got: ${r2[0]["title"]}"
@@ -444,14 +444,14 @@ class DomSnapshotScenariosE2ETest : RestAPITestBase() {
             FROM load_and_select(@url, '*')
         """.trimIndent()
 
-        val result = queryDomSnapshot(sessionId, sql)
+        val result = queryHtmlSnapshot(sessionId, sql)
         val resultSet = requireResultSet(result)
         val count = resultSet[0]["cnt"]?.asText()?.toIntOrNull() ?: 0
         assertTrue(count >= 1, "Expected at least 1 element, got $count")
     }
 
     @Test
-    @DisplayName("5b — Get single job title via dom_snapshot_scrape")
+    @DisplayName("5b — Get single job title via html_snapshot_scrape")
     fun test5b_getSingleField() {
         val sessionId = openAndNavigate(TestUrls.MOCK_JOBS_URL)
 
@@ -467,7 +467,7 @@ class DomSnapshotScenariosE2ETest : RestAPITestBase() {
     fun test5c_exportJobsPage() {
         val sessionId = openAndNavigate(TestUrls.MOCK_JOBS_URL)
 
-        val html = exportDomSnapshot(sessionId)
+        val html = exportHtmlSnapshot(sessionId)
         assertTrue(html.contains("Senior Frontend Engineer"), "Export should contain job title")
         assertTrue(html.contains("TechCorp"), "Export should contain company name")
     }
@@ -517,7 +517,7 @@ class DomSnapshotScenariosE2ETest : RestAPITestBase() {
     fun test6e_exportForAuditTrail() {
         val sessionId = openAndNavigate(TestUrls.MOCK_COMPLIANCE_URL)
 
-        val html = exportDomSnapshot(sessionId)
+        val html = exportHtmlSnapshot(sessionId)
         assertTrue(html.contains("Legal Disclaimer"), "Export should contain legal disclaimer")
         assertTrue(html.contains("cookie-consent-banner"), "Export should contain cookie banner")
     }
@@ -537,14 +537,14 @@ class DomSnapshotScenariosE2ETest : RestAPITestBase() {
             FROM load_and_select(@url, '*')
         """.trimIndent()
 
-        val result = queryDomSnapshot(sessionId, sql)
+        val result = queryHtmlSnapshot(sessionId, sql)
         val resultSet = requireResultSet(result)
         val count = resultSet[0]["cnt"]?.asText()?.toIntOrNull() ?: 0
         assertTrue(count >= 1, "Expected at least 1 element, got $count")
     }
 
     @Test
-    @DisplayName("7b — Extract paper details via dom_snapshot_scrape")
+    @DisplayName("7b — Extract paper details via html_snapshot_scrape")
     fun test7b_extractIndividualPaper() {
         val sessionId = openAndNavigate(TestUrls.MOCK_RESEARCH_URL)
 
@@ -570,14 +570,14 @@ class DomSnapshotScenariosE2ETest : RestAPITestBase() {
             FROM load_and_select(@url, '*')
         """.trimIndent()
 
-        val result = queryDomSnapshot(sessionId, sql)
+        val result = queryHtmlSnapshot(sessionId, sql)
         val resultSet = requireResultSet(result)
         val count = resultSet[0]["cnt"]?.asText()?.toIntOrNull() ?: 0
         assertTrue(count >= 1, "Expected at least 1 element, got $count")
     }
 
     @Test
-    @DisplayName("8b — Quick check via dom_snapshot_scrape")
+    @DisplayName("8b — Quick check via html_snapshot_scrape")
     fun test8b_quickDiffCheck() {
         val sessionId = openAndNavigate(TestUrls.MOCK_REAL_ESTATE_URL)
 
@@ -593,12 +593,12 @@ class DomSnapshotScenariosE2ETest : RestAPITestBase() {
     // =========================================================================
 
     @Test
-    @DisplayName("9a — Capture DOM snapshot and verify metadata")
+    @DisplayName("9a — Capture HTML snapshot and verify metadata")
     fun test9a_captureAndVerifyMetadata() {
         val sessionId = openAndNavigate(TestUrls.MOCK_PRODUCT_DETAIL_URL)
         awaitPageTitle(sessionId, "4K OLED TV")
 
-        val response = callTool("dom_snapshot_capture", mapOf("sessionId" to sessionId))
+        val response = callTool("html_snapshot_capture", mapOf("sessionId" to sessionId))
         assertNotError(response)
         val captureResult = objectMapper.readTree(textContent(response))
 
@@ -612,12 +612,12 @@ class DomSnapshotScenariosE2ETest : RestAPITestBase() {
     }
 
     @Test
-    @DisplayName("9b — Export DOM snapshot for diff")
+    @DisplayName("9b — Export HTML snapshot for diff")
     fun test9b_exportForDiff() {
         val sessionId = openAndNavigate(TestUrls.MOCK_PRODUCT_DETAIL_URL)
         awaitPageTitle(sessionId, "4K OLED TV")
 
-        val html = exportDomSnapshot(sessionId)
+        val html = exportHtmlSnapshot(sessionId)
         assertTrue(html.isNotBlank(), "Exported HTML should not be blank")
         assertTrue(
             html.contains("<") && html.contains(">"),
@@ -630,7 +630,7 @@ class DomSnapshotScenariosE2ETest : RestAPITestBase() {
     // =========================================================================
 
     @Test
-    @DisplayName("10a — Discover form input names via dom_snapshot_scrape")
+    @DisplayName("10a — Discover form input names via html_snapshot_scrape")
     fun test10a_discoverFormFields() {
         val sessionId = openAndNavigate(TestUrls.MOCK_FORM_PAGE_URL)
 
@@ -650,7 +650,7 @@ class DomSnapshotScenariosE2ETest : RestAPITestBase() {
             FROM load_and_select(@url, 'body')
         """.trimIndent()
 
-        val result = queryDomSnapshot(sessionId, sql)
+        val result = queryHtmlSnapshot(sessionId, sql)
         val resultSet = requireResultSet(result)
         val row = resultSet[0]
         val inputType = row["input_type"]?.asText() ?: ""

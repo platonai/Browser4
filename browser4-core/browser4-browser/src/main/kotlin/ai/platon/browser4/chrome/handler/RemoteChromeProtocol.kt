@@ -406,7 +406,7 @@ class RemoteChromeProtocol(
         )
     }
 
-    override suspend fun domSnapshotCaptureSnapshot(
+    override suspend fun htmlSnapshotCaptureSnapshot(
         computedStyles: List<String>,
         includePaintOrder: Boolean?,
         includeDOMRects: Boolean?,

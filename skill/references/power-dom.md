@@ -6,7 +6,7 @@ tier: catalog
 
 # PowerCSS — Visual Feature Selectors with `:expr()`
 
-> **Used in:** [X-SQL](x-sql.md) — `DOM_FIRST_TEXT(DOM, 'img:expr(width>400)')`, [DOM Snapshot](domsnapshot.md), [SKILL.md](../SKILL.md)
+> **Used in:** [X-SQL](x-sql.md) — `DOM_FIRST_TEXT(DOM, 'img:expr(width>400)')`, [HTML Snapshot](htmlsnapshot.md), [SKILL.md](../SKILL.md)
 >
 > **Underlying engine:** [jsoup](https://jsoup.org/) — parses HTML into the same DOM as modern browsers. See [jsoup selector-syntax](https://jsoup.org/cookbook/extracting-data/selector-syntax) and [CSS reference](https://www.w3schools.com/cssref/css_selectors.php).
 
@@ -36,7 +36,7 @@ Browser4 computes these features for every DOM node:
 | `seq` | Node sequence in document order |
 | `txt_dns` | Text node density |
 
-These are usable in any CSS selector via `:expr(...)`, in X-SQL `DOM_*` functions, and in `domsnapshot get` / `domsnapshot query` commands.
+These are usable in any CSS selector via `:expr(...)`, in X-SQL `DOM_*` functions, and in `htmlsnapshot get` / `htmlsnapshot query` commands.
 
 ---
 
@@ -148,14 +148,14 @@ LIMIT 5
 PowerCSS selectors work anywhere CSS selectors are accepted:
 
 ```bash
-# domsnapshot get with :expr()
-browser4-cli domsnapshot get all attr "img:expr(width>400)" src
+# htmlsnapshot get with :expr()
+browser4-cli htmlsnapshot get all attr "img:expr(width>400)" src
 
-# domsnapshot inspect with :expr()
-browser4-cli domsnapshot inspect "div:expr(width>400 && width<500)"
+# htmlsnapshot inspect with :expr()
+browser4-cli htmlsnapshot inspect "div:expr(width>400 && width<500)"
 
 # X-SQL query with :expr() in selectors
-browser4-cli domsnapshot query . --sql "
+browser4-cli htmlsnapshot query . --sql "
 SELECT DOM_FIRST_IMG(DOM, 'img:expr(width>400 && height>400)')
 FROM DOM_LOAD_AND_SELECT('https://www.amazon.com/dp/B0CXJ1NT4B', ':root')
 "

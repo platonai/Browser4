@@ -14,7 +14,7 @@ import ai.platon.pulsar.common.getLogger
  * Handler for DOMSnapshot domain operations.
  * Captures and processes layout snapshots with style and rect information.
  */
-class DomSnapshotHandler(private val bp: BrowserProtocol) {
+class HtmlSnapshotHandler(private val bp: BrowserProtocol) {
     private val logger = getLogger(this)
     private val tracer get() = logger.takeIf { it.isTraceEnabled }
 
@@ -147,7 +147,7 @@ class DomSnapshotHandler(private val bp: BrowserProtocol) {
         }
 
         tracer?.trace(
-            "DOMSnapshot captured | entries={} rowsApprox={} styles={} paintOrder={}",
+            "HtmlSnapshot captured | entries={} rowsApprox={} styles={} paintOrder={}",
             byBackend.size, totalRows, includeStyles, includePaintOrder
         )
 
@@ -177,7 +177,7 @@ class DomSnapshotHandler(private val bp: BrowserProtocol) {
         @ParamName("includeTextColorOpacities") @Optional @Experimental includeTextColorOpacities: Boolean? = null,
     ): CaptureSnapshot {
         return try {
-            bp.domSnapshotCaptureSnapshot(
+            bp.htmlSnapshotCaptureSnapshot(
                 computedStyles,
                 includePaintOrder = includePaintOrder,
                 includeDOMRects = includeDOMRects,

@@ -1,16 +1,16 @@
 ---
-title: "DOM Snapshot Scenarios — Amazon Discovery & Extraction"
+title: "HTML Snapshot Scenarios — Amazon Discovery & Extraction"
 description: "End-to-end Amazon workflows: home page discovery with summary + inspect, search results extraction, and product detail page extraction. Covers discovery-first patterns that work across Amazon locales and layout changes."
 tier: procedure
 ---
 
-# DOM Snapshot Scenarios — Amazon Discovery & Extraction
+# HTML Snapshot Scenarios — Amazon Discovery & Extraction
 
 These three scenarios form a complete Amazon extraction workflow: discover the home page structure → extract search results → extract product details. Each scenario is self-contained and emphasizes a **discovery-first** approach — use `summary` and `inspect` to find selectors before committing to extraction queries.
 
 > **Note:** CSS selectors are tied to live websites and may break over time. See [SKILL.md §5](../SKILL.md#5-critical-warnings). Always run `summary` + `inspect` first when targeting a new locale or product category.
 
-> **Parent document:** [domsnapshot-scenarios.md](domsnapshot-scenarios.md) — full scenario index, patterns & tips, and command reference.
+> **Parent document:** [htmlsnapshot-scenarios.md](htmlsnapshot-scenarios.md) — full scenario index, patterns & tips, and command reference.
 
 ## Scenarios
 
@@ -26,17 +26,17 @@ These three scenarios form a complete Amazon extraction workflow: discover the h
 
 **Problem:** You land on `amazon.com` and need to quickly understand the page structure — where is the search box? What navigation categories exist? What content blocks (recommendations, deals, featured products) are present?
 
-**Why DOM Snapshot:** `summary` generates a compressed WPSI that distills the page to its structural essence — headings, forms, lists, tables, and key content blocks — without drowning you in HTML. `inspect` then reveals the CSS selectors for the interactive and repeated elements you care about. Together they eliminate manual exploration on a page with 2000+ text nodes and dozens of sections.
+**Why HTML Snapshot:** `summary` generates a compressed WPSI that distills the page to its structural essence — headings, forms, lists, tables, and key content blocks — without drowning you in HTML. `inspect` then reveals the CSS selectors for the interactive and repeated elements you care about. Together they eliminate manual exploration on a page with 2000+ text nodes and dozens of sections.
 
 ### 14a. Get a bird's-eye view with summary
 
 ```bash
 # Navigate to Amazon's home page
 browser4-cli goto "https://www.amazon.com"
-browser4-cli domsnapshot
+browser4-cli htmlsnapshot
 
 # Generate the WPSI summary
-browser4-cli domsnapshot summary
+browser4-cli htmlsnapshot summary
 ```
 
 **Output (abridged — actual output is YAML):**
@@ -79,10 +79,10 @@ keyContent:
 
 ```bash
 # Auto-discover the page's most prominent repeating patterns
-browser4-cli domsnapshot inspect
+browser4-cli htmlsnapshot inspect
 
 # Then narrow down to discover navigation structure
-browser4-cli domsnapshot inspect "#nav-xshop"
+browser4-cli htmlsnapshot inspect "#nav-xshop"
 ```
 
 **Output (example):**
@@ -126,7 +126,7 @@ The search box is the most critical interactive element on the home page. Here a
 
 ```bash
 # Approach 1: From the WPSI summary keyContent, we see the search form
-browser4-cli domsnapshot get html "#nav-search-bar-form"
+browser4-cli htmlsnapshot get html "#nav-search-bar-form"
 
 # Approach 2: Use the interactive snapshot to find it by role
 browser4-cli snapshot | grep -i search
@@ -142,7 +142,7 @@ browser4-cli snapshot | grep -i search
 
 **Problem:** You've searched Amazon for a product category and need to extract titles, prices, ratings, and image URLs from the search results page. The DOM is complex and you don't know the selectors ahead of time. You need a repeatable discovery-to-extraction workflow.
 
-**Why DOM Snapshot:** `summary` confirms you are on a search-results page and reveals the result count. `inspect` discovers the repeating card structure and suggests selectors with coverage percentages — no manual HTML reading needed. `get all` validates the suggested selectors on real data. `query` then extracts structured data in a single X-SQL pass.
+**Why HTML Snapshot:** `summary` confirms you are on a search-results page and reveals the result count. `inspect` discovers the repeating card structure and suggests selectors with coverage percentages — no manual HTML reading needed. `get all` validates the suggested selectors on real data. `query` then extracts structured data in a single X-SQL pass.
 
 ### 15a. Navigate and confirm page type with summary
 
@@ -152,11 +152,11 @@ URL injection bypasses Amazon's problematic search form — the `press Enter` ap
 # Use URL injection to navigate directly to search results
 browser4-cli goto "https://www.amazon.com/s?k=wireless+mouse"
 
-# Capture the DOM snapshot
-browser4-cli domsnapshot
+# Capture the HTML snapshot
+browser4-cli htmlsnapshot
 
 # Confirm it's a search-results page and see the structure
-browser4-cli domsnapshot summary
+browser4-cli htmlsnapshot summary
 ```
 
 **Output (example):**
@@ -185,10 +185,10 @@ The summary confirms: this is a search-results page (h1 "Results"), there are 48
 
 ```bash
 # Auto-discover repeating containers (finds .s-result-item automatically)
-browser4-cli domsnapshot inspect
+browser4-cli htmlsnapshot inspect
 
 # Narrow to the search result cards using the Amazon-specific data attribute
-browser4-cli domsnapshot inspect ".s-result-item[data-component-type='s-search-result']"
+browser4-cli htmlsnapshot inspect ".s-result-item[data-component-type='s-search-result']"
 ```
 
 **Output (example):**
@@ -228,19 +228,19 @@ Take the suggested selectors and validate them before committing to a full X-SQL
 
 ```bash
 # Validate titles
-browser4-cli domsnapshot get all text "h2 a.a-link-normal" --limit 5
+browser4-cli htmlsnapshot get all text "h2 a.a-link-normal" --limit 5
 # → ["Logitech M720 Triathlon", "Logitech MX Master 3S", "Razer Basilisk X HyperSpeed", ...]
 
 # Validate prices
-browser4-cli domsnapshot get all text "span.a-offscreen" --limit 5
+browser4-cli htmlsnapshot get all text "span.a-offscreen" --limit 5
 # → ["$34.99", "$99.99", "$59.99", ...]
 
 # Validate ratings
-browser4-cli domsnapshot get all text "span.a-icon-alt" --limit 5
+browser4-cli htmlsnapshot get all text "span.a-icon-alt" --limit 5
 # → ["4.6 out of 5 stars", "4.7 out of 5 stars", "4.5 out of 5 stars", ...]
 
 # Validate image URLs
-browser4-cli domsnapshot get all attr "img.s-image" src --limit 3
+browser4-cli htmlsnapshot get all attr "img.s-image" src --limit 3
 # → ["https://m.media-amazon.com/images/I/61kU1j...", ...]
 ```
 
@@ -248,15 +248,15 @@ Once validated, extract all fields in bulk:
 
 ```bash
 # Full extraction — titles, prices, ratings
-browser4-cli domsnapshot get all text "h2 a.a-link-normal"
-browser4-cli domsnapshot get all text "span.a-offscreen"
-browser4-cli domsnapshot get all text "span.a-icon-alt"
+browser4-cli htmlsnapshot get all text "h2 a.a-link-normal"
+browser4-cli htmlsnapshot get all text "span.a-offscreen"
+browser4-cli htmlsnapshot get all text "span.a-icon-alt"
 
 # Full extraction — image URLs
-browser4-cli domsnapshot get all attr "img.s-image" src
+browser4-cli htmlsnapshot get all attr "img.s-image" src
 ```
 
-**Why `get all` here:** Unlike `domsnapshot get` (which returns only the first match), `get all` returns a JSON array of all matching elements. This is ideal for validating that your discovered selectors actually work across the full result set before writing a structured query.
+**Why `get all` here:** Unlike `htmlsnapshot get` (which returns only the first match), `get all` returns a JSON array of all matching elements. This is ideal for validating that your discovered selectors actually work across the full result set before writing a structured query.
 
 > **Note:** Why not just use `get all` for everything? Each `get all` call scans the entire document independently. If you run `get all text "h2 a"` (69 titles) and `get all text ".a-offscreen"` (91 prices), the two arrays have different lengths and can't be aligned — some products lack prices, some prices belong to non-product elements. Step 15d solves this with `DOM_LOAD_AND_SELECT` scoped to `.s-result-item`, so each row's fields stay together.
 
@@ -265,7 +265,7 @@ browser4-cli domsnapshot get all attr "img.s-image" src
 For the most efficient single-command workflow, combine all fields into one X-SQL query:
 
 ```bash
-browser4-cli domsnapshot query --sql "
+browser4-cli htmlsnapshot query --sql "
   SELECT
     dom_first_text(dom, 'h2 a.a-link-normal') AS title,
     dom_first_text(dom, 'span.a-offscreen') AS price,
@@ -282,7 +282,7 @@ browser4-cli domsnapshot query --sql "
 
 ```bash
 # Export the full page HTML for archival or later re-extraction
-browser4-cli domsnapshot export --file "amazon-search-wireless-mouse-$(date +%Y%m%d).html"
+browser4-cli htmlsnapshot export --file "amazon-search-wireless-mouse-$(date +%Y%m%d).html"
 
 # For scheduled monitoring, combine with load options (see audit scenarios)
 echo "
@@ -293,7 +293,7 @@ echo "
   WHERE dom_first_text(dom, 'h2 a.a-link-normal') IS NOT NULL
 " > search-results.sql
 
-browser4-cli domsnapshot query "
+browser4-cli htmlsnapshot query "
   https://www.amazon.com/s?k=wireless+mouse -i 1h -njr 3
 " --sql @search-results.sql
 ```
@@ -311,17 +311,17 @@ browser4-cli domsnapshot query "
 
 **Problem:** You need to extract comprehensive product data — title, price, rating, feature bullets, technical specifications, stock status, brand, and images — from an Amazon product detail page. The DOM is deeply nested with multiple sections. You need a discovery-first workflow to find the right selectors, then extract and archive the data.
 
-**Why DOM Snapshot:** `summary` reveals the page's structural sections at a glance (tables for specs, lists for features, forms for buying options). `inspect` drills into specific sections to reveal exact CSS selectors. `get` extracts data using those discovered selectors. `grep` provides instant presence checks for stock badges, deal labels, and other non-structured indicators. `export` archives the full page for offline analysis and price-trend tracking.
+**Why HTML Snapshot:** `summary` reveals the page's structural sections at a glance (tables for specs, lists for features, forms for buying options). `inspect` drills into specific sections to reveal exact CSS selectors. `get` extracts data using those discovered selectors. `grep` provides instant presence checks for stock badges, deal labels, and other non-structured indicators. `export` archives the full page for offline analysis and price-trend tracking.
 
 ### 16a. Discover page structure with summary
 
 ```bash
 # Navigate to the product page (use your target ASIN)
 browser4-cli goto "https://www.amazon.com/dp/B08PP5MSVB"
-browser4-cli domsnapshot
+browser4-cli htmlsnapshot
 
 # Get the WPSI summary
-browser4-cli domsnapshot summary
+browser4-cli htmlsnapshot summary
 ```
 
 **Output (example):**
@@ -361,13 +361,13 @@ The summary reveals: the product title lives in `#productTitle`, there are 2 tab
 
 ```bash
 # Inspect the main content column — title, price, rating, brand
-browser4-cli domsnapshot inspect "#centerCol"
+browser4-cli htmlsnapshot inspect "#centerCol"
 
 # Inspect the feature bullets section
-browser4-cli domsnapshot inspect "#feature-bullets"
+browser4-cli htmlsnapshot inspect "#feature-bullets"
 
 # Inspect the technical specifications table
-browser4-cli domsnapshot inspect "#productDetails_techSpec_section_1"
+browser4-cli htmlsnapshot inspect "#productDetails_techSpec_section_1"
 ```
 
 **Output (example):**
@@ -402,22 +402,22 @@ Now that `inspect` has revealed the CSS selectors, extract each field:
 
 ```bash
 # Title
-browser4-cli domsnapshot get text "#productTitle"
+browser4-cli htmlsnapshot get text "#productTitle"
 
 # Price
-browser4-cli domsnapshot get text ".a-price .a-offscreen"
+browser4-cli htmlsnapshot get text ".a-price .a-offscreen"
 
 # Rating
-browser4-cli domsnapshot get text "#acrCustomerReviewText"
+browser4-cli htmlsnapshot get text "#acrCustomerReviewText"
 
 # Product image
-browser4-cli domsnapshot get attr "#landingImage" src
+browser4-cli htmlsnapshot get attr "#landingImage" src
 
 # Brand / manufacturer
-browser4-cli domsnapshot get text "#bylineInfo"
+browser4-cli htmlsnapshot get text "#bylineInfo"
 
 # Availability
-browser4-cli domsnapshot get text "#availability"
+browser4-cli htmlsnapshot get text "#availability"
 ```
 
 **Output (example):**
@@ -434,21 +434,21 @@ In Stock
 
 ```bash
 # All feature bullets (using the suggested selector from inspect)
-browser4-cli domsnapshot get all text "#feature-bullets ul.a-unordered-list li span.a-list-item"
+browser4-cli htmlsnapshot get all text "#feature-bullets ul.a-unordered-list li span.a-list-item"
 # → ["Active Noise Cancellation...", "Sweat and water resistant...", "Adaptive Transparency...", ...]
 
 # Structured feature extraction with X-SQL
-browser4-cli domsnapshot query --sql "
+browser4-cli htmlsnapshot query --sql "
   SELECT dom_first_text(dom, 'span.a-list-item') AS feature
   FROM load_and_select(@url, '#feature-bullets li')
   WHERE dom_first_text(dom, 'span.a-list-item') IS NOT NULL
 "
 
 # Technical specification table — get the full HTML
-browser4-cli domsnapshot get html "#productDetails_techSpec_section_1"
+browser4-cli htmlsnapshot get html "#productDetails_techSpec_section_1"
 
 # Or extract specs as structured data with X-SQL
-browser4-cli domsnapshot query --sql "
+browser4-cli htmlsnapshot query --sql "
   SELECT
     dom_first_text(dom, 'th') AS spec_name,
     dom_first_text(dom, 'td') AS spec_value
@@ -463,20 +463,20 @@ For instant pass/fail checks that do not require writing CSS selectors:
 
 ```bash
 # Check stock status
-browser4-cli domsnapshot grep -l -F "In Stock" | grep -q domsnapshot && echo "IN STOCK" || echo "OUT OF STOCK"
+browser4-cli htmlsnapshot grep -l -F "In Stock" | grep -q htmlsnapshot && echo "IN STOCK" || echo "OUT OF STOCK"
 
 # Check for promotional badges
-browser4-cli domsnapshot grep -i 'limited time deal|lightning deal'
+browser4-cli htmlsnapshot grep -i 'limited time deal|lightning deal'
 
 # Check for "Amazon's Choice" or "Best Seller" badges
-browser4-cli domsnapshot grep -i "Amazon's Choice|Best Seller|#1 Best Seller"
+browser4-cli htmlsnapshot grep -i "Amazon's Choice|Best Seller|#1 Best Seller"
 
 # Count images to verify the gallery loaded
-browser4-cli domsnapshot grep -c '<img[^>]*id="landingImage"'
+browser4-cli htmlsnapshot grep -c '<img[^>]*id="landingImage"'
 # → 1
 
 # Check for coupon or promotion
-browser4-cli domsnapshot grep -i 'coupon|save.*off|extra savings' --selector "#centerCol"
+browser4-cli htmlsnapshot grep -i 'coupon|save.*off|extra savings' --selector "#centerCol"
 ```
 
 **Why `grep` here:** Product pages often have badges or status indicators (Best Seller, Amazon's Choice, Limited Time Deal, Coupon clipped to the price) that are not part of your standard extraction selectors. `grep` lets you instantly check for their presence without writing new CSS selectors or queries. Use `--selector` to scope the search to a specific page region and avoid false matches from footer or sidebar content.
@@ -485,17 +485,17 @@ browser4-cli domsnapshot grep -i 'coupon|save.*off|extra savings' --selector "#c
 
 ```bash
 # Export the full page for offline reference
-browser4-cli domsnapshot export --file "airpods-pro-2-$(date +%Y%m%d).html"
+browser4-cli htmlsnapshot export --file "airpods-pro-2-$(date +%Y%m%d).html"
 
 # Revisit the same product a week later
 browser4-cli goto "https://www.amazon.com/dp/B08PP5MSVB"
-browser4-cli domsnapshot
-browser4-cli domsnapshot export --file "airpods-pro-2-$(date +%Y%m%d).html"
+browser4-cli htmlsnapshot
+browser4-cli htmlsnapshot export --file "airpods-pro-2-$(date +%Y%m%d).html"
 
 # Diff the exported files to detect changes
 diff airpods-pro-2-20260622.html airpods-pro-2-20260629.html
 # Or grep the new export for specific price changes
-browser4-cli domsnapshot grep -o '\$[0-9]+\.[0-9]{2}'
+browser4-cli htmlsnapshot grep -o '\$[0-9]+\.[0-9]{2}'
 ```
 
 > **Why start with summary and inspect instead of jumping to extraction?** Scenario 1 demonstrated direct extraction using pre-known selectors. But when you encounter an unfamiliar product page — a different category, a new layout version, or an international Amazon locale — you cannot rely on assumptions. By starting with `summary` (structure overview) and `inspect` (selector discovery), you make the workflow robust against Amazon's frequent A/B tests and layout changes. Running `summary` before extraction is like reading the table of contents before diving into a book.
@@ -511,8 +511,8 @@ browser4-cli domsnapshot grep -o '\$[0-9]+\.[0-9]{2}'
 
 ## See Also
 
-- [domsnapshot-scenarios.md](domsnapshot-scenarios.md) — full scenario index, patterns & tips
-- [domsnapshot-scenarios-extraction.md](domsnapshot-scenarios-extraction.md) — e-commerce, news, jobs, academic, real estate extraction
-- [domsnapshot-scenarios-audit.md](domsnapshot-scenarios-audit.md) — SEO, compliance, CI, pricing, incident response
-- [domsnapshot-scenarios-advanced.md](domsnapshot-scenarios-advanced.md) — summary, inspect, and agent form discovery
-- [domsnapshot.md](domsnapshot.md) — full command reference
+- [htmlsnapshot-scenarios.md](htmlsnapshot-scenarios.md) — full scenario index, patterns & tips
+- [htmlsnapshot-scenarios-extraction.md](htmlsnapshot-scenarios-extraction.md) — e-commerce, news, jobs, academic, real estate extraction
+- [htmlsnapshot-scenarios-audit.md](htmlsnapshot-scenarios-audit.md) — SEO, compliance, CI, pricing, incident response
+- [htmlsnapshot-scenarios-advanced.md](htmlsnapshot-scenarios-advanced.md) — summary, inspect, and agent form discovery
+- [htmlsnapshot.md](htmlsnapshot.md) — full command reference

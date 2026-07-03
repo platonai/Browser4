@@ -161,7 +161,7 @@ class MCPToolController(
         /**
          * Returns true if the given value is an element reference pattern
          * (e.g. "e5", "backend:15") that should be rejected for static
-         * DOM snapshot queries.
+         * HTML snapshot queries.
          */
         private fun isElementReference(value: String): Boolean {
             val trimmed = value.trim()
@@ -257,14 +257,14 @@ class MCPToolController(
                 "command_batch" -> handleCommandBatch(request)
                 "command_status" -> handleCommandStatus(request)
                 "command_result" -> handleCommandResult(request)
-                // DOM snapshot tools
-                "dom_snapshot_capture" -> handleDomSnapshotCapture(request)
-                "dom_snapshot_scrape" -> handleDomSnapshotScrape(request)
-                "dom_snapshot_scrape_all" -> handleDomSnapshotScrapeAll(request)
-                "dom_snapshot_query" -> handleDomSnapshotQuery(request)
-                "dom_snapshot_export" -> handleDomSnapshotExport(request)
-                "dom_snapshot_summary" -> handleDomSnapshotSummary(request)
-                "dom_snapshot_inspect" -> handleDomSnapshotInspect(request)
+                // HTML snapshot tools
+                "html_snapshot_capture" -> handleHtmlSnapshotCapture(request)
+                "html_snapshot_scrape" -> handleHtmlSnapshotScrape(request)
+                "html_snapshot_scrape_all" -> handleHtmlSnapshotScrapeAll(request)
+                "html_snapshot_query" -> handleHtmlSnapshotQuery(request)
+                "html_snapshot_export" -> handleHtmlSnapshotExport(request)
+                "html_snapshot_summary" -> handleHtmlSnapshotSummary(request)
+                "html_snapshot_inspect" -> handleHtmlSnapshotInspect(request)
                 // All other tools are dispatched to the session's agent
                 else -> dispatchToAgentToolExecutor(request)
             }
@@ -321,13 +321,13 @@ class MCPToolController(
                     "browser_click",
                     "browser_handle_dialog",
                     "browser_tabs",
-                    "dom_snapshot_capture",
-                    "dom_snapshot_scrape",
-                    "dom_snapshot_scrape_all",
-                    "dom_snapshot_query",
-                    "dom_snapshot_export",
-                    "dom_snapshot_summary",
-                    "dom_snapshot_inspect",
+                    "html_snapshot_capture",
+                    "html_snapshot_scrape",
+                    "html_snapshot_scrape_all",
+                    "html_snapshot_query",
+                    "html_snapshot_export",
+                    "html_snapshot_summary",
+                    "html_snapshot_inspect",
                 )
             )
 
@@ -762,10 +762,10 @@ class MCPToolController(
     }
 
     // =========================================================================
-    // DOM snapshot handlers
+    // HTML snapshot handlers
     // =========================================================================
 
-    private suspend fun handleDomSnapshotCapture(
+    private suspend fun handleHtmlSnapshotCapture(
         request: MCPToolCallRequest
     ): ResponseEntity<MCPToolCallResponse> {
         val sessionId = requireSessionId(request)
@@ -842,12 +842,12 @@ class MCPToolController(
             }
             ResponseEntity.ok(textResponse(metadata))
         } catch (e: Exception) {
-            logger.error("dom_snapshot_capture failed | {}", e.message, e)
-            ResponseEntity.ok(errorResponse("dom_snapshot_capture failed: ${e.message}"))
+            logger.error("html_snapshot_capture failed | {}", e.message, e)
+            ResponseEntity.ok(errorResponse("html_snapshot_capture failed: ${e.message}"))
         }
     }
 
-    private suspend fun handleDomSnapshotScrape(
+    private suspend fun handleHtmlSnapshotScrape(
         request: MCPToolCallRequest
     ): ResponseEntity<MCPToolCallResponse> {
         val sessionId = requireSessionId(request)
@@ -870,7 +870,7 @@ class MCPToolController(
         if (isElementReference(selector)) {
             return ResponseEntity.ok(
                 errorResponse(
-                    "Element references ('$selector') are not supported in domsnapshot get. Use a CSS selector instead."
+                    "Element references ('$selector') are not supported in htmlsnapshot get. Use a CSS selector instead."
                 )
             )
         }
@@ -881,11 +881,11 @@ class MCPToolController(
         return try {
             val result = managed.withLock {
                 val pulsarSession = managed.agenticSession
-                // Use current URL to match the key used when pages are stored via domsnapshot capture.
+                // Use current URL to match the key used when pages are stored via htmlsnapshot capture.
                 // driver.currentUrl() reflects the actual page after navigations/redirects, whereas
                 // driver.userTypedUrl() stays at the originally-typed URL and misses search-results pages.
                 val url = pulsarSession.normalize(driver.currentUrl())
-                // Retrieve from database if exists, otherwise, capture a new dom snapshot
+                // Retrieve from database if exists, otherwise, capture a new html snapshot
                 val page = pulsarSession.getOrNull(url.urlString) ?: pulsarSession.capture(managed.driver)
                 // Parse the HTML to a DOM, the document can be cached
                 val document = pulsarSession.parse(page)
@@ -900,16 +900,16 @@ class MCPToolController(
 
             ResponseEntity.ok(textResponse(result))
         } catch (e: Exception) {
-            logger.error("dom_snapshot_scrape failed | {}", e.message, e)
-            ResponseEntity.ok(errorResponse("dom_snapshot_scrape failed: ${e.message}"))
+            logger.error("html_snapshot_scrape failed | {}", e.message, e)
+            ResponseEntity.ok(errorResponse("html_snapshot_scrape failed: ${e.message}"))
         }
     }
 
     /**
-     * Like [handleDomSnapshotScrape] but returns ALL matching elements (querySelectorAll
+     * Like [handleHtmlSnapshotScrape] but returns ALL matching elements (querySelectorAll
      * semantics) instead of only the first.  Supports [offset] and [limit] for pagination.
      */
-    private suspend fun handleDomSnapshotScrapeAll(
+    private suspend fun handleHtmlSnapshotScrapeAll(
         request: MCPToolCallRequest
     ): ResponseEntity<MCPToolCallResponse> {
         val sessionId = requireSessionId(request)
@@ -934,7 +934,7 @@ class MCPToolController(
         if (isElementReference(selector)) {
             return ResponseEntity.ok(
                 errorResponse(
-                    "Element references ('$selector') are not supported in domsnapshot get. Use a CSS selector instead."
+                    "Element references ('$selector') are not supported in htmlsnapshot get. Use a CSS selector instead."
                 )
             )
         }
@@ -967,12 +967,12 @@ class MCPToolController(
             val (paginatedJson, pagination) = paginateIfRequested(json, args)
             ResponseEntity.ok(textResponse(paginatedJson, pagination))
         } catch (e: Exception) {
-            logger.error("dom_snapshot_scrape_all failed | {}", e.message, e)
-            ResponseEntity.ok(errorResponse("dom_snapshot_scrape_all failed: ${e.message}"))
+            logger.error("html_snapshot_scrape_all failed | {}", e.message, e)
+            ResponseEntity.ok(errorResponse("html_snapshot_scrape_all failed: ${e.message}"))
         }
     }
 
-    private suspend fun handleDomSnapshotQuery(
+    private suspend fun handleHtmlSnapshotQuery(
         request: MCPToolCallRequest
     ): ResponseEntity<MCPToolCallResponse> {
         val scrapeService = this.scrapeService
@@ -1023,12 +1023,12 @@ class MCPToolController(
             val json = pulsarObjectMapper().writeValueAsString(response)
             ResponseEntity.ok(textResponse(json))
         } catch (e: Exception) {
-            logger.error("dom_snapshot_query failed | {}", e.message, e)
-            ResponseEntity.ok(errorResponse("dom_snapshot_query failed: ${e.message}"))
+            logger.error("html_snapshot_query failed | {}", e.message, e)
+            ResponseEntity.ok(errorResponse("html_snapshot_query failed: ${e.message}"))
         }
     }
 
-    private suspend fun handleDomSnapshotExport(
+    private suspend fun handleHtmlSnapshotExport(
         request: MCPToolCallRequest
     ): ResponseEntity<MCPToolCallResponse> {
         val sessionId = requireSessionId(request)
@@ -1049,12 +1049,12 @@ class MCPToolController(
             val (paginatedHtml, pagination) = paginateIfRequested(html, args)
             ResponseEntity.ok(textResponse(paginatedHtml, pagination))
         } catch (e: Exception) {
-            logger.error("dom_snapshot_export failed | {}", e.message, e)
-            ResponseEntity.ok(errorResponse("dom_snapshot_export failed: ${e.message}"))
+            logger.error("html_snapshot_export failed | {}", e.message, e)
+            ResponseEntity.ok(errorResponse("html_snapshot_export failed: ${e.message}"))
         }
     }
 
-    private suspend fun handleDomSnapshotSummary(
+    private suspend fun handleHtmlSnapshotSummary(
         request: MCPToolCallRequest
     ): ResponseEntity<MCPToolCallResponse> {
         val sessionId = requireSessionId(request)
@@ -1077,20 +1077,20 @@ class MCPToolController(
             }
             ResponseEntity.ok(textResponse(summary))
         } catch (e: Exception) {
-            logger.error("dom_snapshot_summary failed | {}", e.message, e)
-            ResponseEntity.ok(errorResponse("dom_snapshot_summary failed: ${e.message}"))
+            logger.error("html_snapshot_summary failed | {}", e.message, e)
+            ResponseEntity.ok(errorResponse("html_snapshot_summary failed: ${e.message}"))
         }
     }
 
     /**
-     * Inspect the DOM snapshot and suggest CSS selectors for recurring patterns.
+     * Inspect the HTML snapshot and suggest CSS selectors for recurring patterns.
      *
      * When [selector] matches multiple elements (e.g. `.product-card`), the
      * command compares descendant structures across matches to identify
      * recurring child selectors — useful for discovering selectors for titles,
      * prices, ratings, images, etc.
      */
-    private suspend fun handleDomSnapshotInspect(
+    private suspend fun handleHtmlSnapshotInspect(
         request: MCPToolCallRequest
     ): ResponseEntity<MCPToolCallResponse> {
         val sessionId = requireSessionId(request)
@@ -1116,8 +1116,8 @@ class MCPToolController(
             }
             ResponseEntity.ok(textResponse(result))
         } catch (e: Exception) {
-            logger.error("dom_snapshot_inspect failed | {}", e.message, e)
-            ResponseEntity.ok(errorResponse("dom_snapshot_inspect failed: ${e.message}"))
+            logger.error("html_snapshot_inspect failed | {}", e.message, e)
+            ResponseEntity.ok(errorResponse("html_snapshot_inspect failed: ${e.message}"))
         }
     }
 
@@ -1418,7 +1418,7 @@ class MCPToolController(
 }
 
 // =========================================================================
-// dom_snapshot_inspect — core algorithm (extracted for testability)
+// html_snapshot_inspect — core algorithm (extracted for testability)
 // =========================================================================
 
 /**

@@ -57,7 +57,7 @@ Filter tasks by category with `-Category`:
 # Universal browser tasks (any agent — Playwright, Puppeteer, Selenium):
 ./browser4-tests/real-world-scenarios/scripts/run-tests.ps1 -Category generic
 
-# Browser4-specific feature tests (X-SQL, crawl, agent, domsnapshot, loop):
+# Browser4-specific feature tests (X-SQL, crawl, agent, htmlsnapshot, loop):
 ./browser4-tests/real-world-scenarios/scripts/run-tests.ps1 -Category browser4
 
 # All real-world tasks (generic + browser4):
@@ -106,15 +106,15 @@ evaluate other browser automation agents (Playwright, Puppeteer, Selenium, etc.)
 ### Real-World — Browser4 Specific (`tasks/real-world/browser4/`)
 
 10 scenarios exercising browser4-unique features (X-SQL, crawl, agent, loop,
-domsnapshot, attach, named sessions, auto-diff).
+htmlsnapshot, attach, named sessions, auto-diff).
 
 | Task file | Target | Scenario |
 |-----------|--------|----------|
 | `session-management.md` | Wikipedia, HN | Open named sessions, switch between them, list/close all |
 | `snapshot-mastery.md` | Wikipedia | Full/interactive/scoped/depth-limited snapshots, auto-diff, grep with all flags |
-| `dom-snapshot-extraction.md` | books.toscrape.com | Capture DOM snapshot, get single/all values, export, summary, grep |
+| `html-snapshot-extraction.md` | books.toscrape.com | Capture HTML snapshot, get single/all values, export, summary, grep |
 | `x-sql-query-methods.md` | books.toscrape.com | X-SQL via inline, @file, stdin, and base64; inspect for selector discovery |
-| `domsnapshot-inspect-discovery.md` | books.toscrape.com | DOM inspection and selector discovery workflow |
+| `htmlsnapshot-inspect-discovery.md` | books.toscrape.com | HTML snapshot inspection and selector discovery workflow |
 | `tab-management.md` | Wikipedia, HN | Open, list, switch, and close multiple tabs across different sites |
 | `agent-extraction.md` | Wikipedia | extract with schema, summarize with --selector, agent run/status/result |
 | `crawl-link-discovery.md` | books.toscrape.com | Crawl with link discovery, seed files, format/output options |

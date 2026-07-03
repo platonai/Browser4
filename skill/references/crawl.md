@@ -29,7 +29,7 @@ browser4-cli crawl --seed-file urls.txt --sql @extract.sql --format csv -o resul
 
 ## When to Use
 
-Use **crawl** for sequential multi-page workflows with built-in link discovery, seed-file bulk processing, and X-SQL extraction to structured output (CSV/JSON/table). Prefer **swarm** for parallel high-throughput extraction. Prefer **loop** for repeated monitoring at intervals. Prefer **domsnapshot query** for extracting from a single page.
+Use **crawl** for sequential multi-page workflows with built-in link discovery, seed-file bulk processing, and X-SQL extraction to structured output (CSV/JSON/table). Prefer **swarm** for parallel high-throughput extraction. Prefer **loop** for repeated monitoring at intervals. Prefer **htmlsnapshot query** for extracting from a single page.
 
 ## How It Works
 
@@ -304,7 +304,7 @@ follow these guidelines:
 
 - Add `wait 1000-3000` (1-3 seconds) between rapid navigations on the same site
 - Amazon and similar sites may show CAPTCHAs under aggressive automated access — longer delays reduce risk
-- Use `eval` or `domsnapshot get all` to batch-extract from a single page load when possible, rather than navigating to each detail page individually
+- Use `eval` or `htmlsnapshot get all` to batch-extract from a single page load when possible, rather than navigating to each detail page individually
 - Prefer `crawl` with conservative `--depth` and `--page-load-timeout` for automated multi-page traversal
 - For `swarm`, control parallelism with `--max-browser-contexts` and `--max-open-tabs`
 
