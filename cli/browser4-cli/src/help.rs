@@ -767,7 +767,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         ));
         lines.push(format_with_gap(
             "  htmlsnapshot summary",
-            "Generate a compressed Web Page Summary Index (WPSI) from the stored DOM snapshot",
+            "Summarize: read the stored DOM snapshot and produce a compressed Web Page Summary Index (WPSI)",
             50,
         ));
         lines.push(format_with_gap(
@@ -783,7 +783,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push(String::new());
         lines.push("Notes:".to_string());
         lines.push(
-            "  - The base `htmlsnapshot` command captures a static DOM snapshot, saves it in Browser4's page storage, and returns enriched metadata (URL, title, timestamps, image/link counts, interactive elements with tag/class/id/aria/bounding-box)."
+            "  - The base `htmlsnapshot` command captures a static DOM snapshot, stores it in Browser4's page storage, and returns enriched metadata (URL, title, timestamps, image/link counts, interactive elements with tag/class/id/aria/bounding-box)."
                 .to_string(),
         );
         lines.push(
@@ -1395,7 +1395,7 @@ mod tests {
         let help = generate_command_help(cmd);
         // Header
         assert!(help.contains("browser4-cli htmlsnapshot"));
-        assert!(help.contains("Capture a static DOM snapshot, save it in Browser4's page storage"));
+        assert!(help.contains("Capture: take a static DOM snapshot of the current page and store it"));
         // Subcommands listing
         assert!(help.contains("Subcommands:"));
         assert!(help.contains("htmlsnapshot get <field> [selector] [name] [--page N] [--page-size N] [--all]"));
@@ -1407,9 +1407,9 @@ mod tests {
         assert!(help.contains("htmlsnapshot export"));
         assert!(help.contains("Export snapshot HTML from Browser4's page storage to a local file"));
         assert!(help.contains("htmlsnapshot summary"));
-        assert!(help.contains("Generate a compressed Web Page Summary Index (WPSI) from the stored DOM snapshot"));
+        assert!(help.contains("Summarize: read the stored DOM snapshot and produce a compressed Web Page Summary Index (WPSI)"));
         // Notes
-        assert!(help.contains("static DOM snapshot, saves it in Browser4's page storage, and returns enriched metadata"));
+        assert!(help.contains("static DOM snapshot, stores it in Browser4's page storage, and returns enriched metadata"));
         assert!(help.contains("CSS selectors only"));
         assert!(help.contains("@url"));
         assert!(help.contains("SQLTemplate handles escaping"));
@@ -1491,7 +1491,7 @@ mod tests {
         let cmd = cmds.iter().find(|c| c.name == "htmlsnapshot-summary").unwrap();
         let help = generate_command_help(cmd);
         assert!(help.contains("browser4-cli htmlsnapshot summary"));
-        assert!(help.contains("Generate a compressed Web Page Summary Index (WPSI) from the stored DOM snapshot"));
+        assert!(help.contains("Summarize: read the stored DOM snapshot and produce a compressed Web Page Summary Index (WPSI)"));
         assert!(!help.contains("browser4-cli htmlsnapshot-summary"));
     }
 
