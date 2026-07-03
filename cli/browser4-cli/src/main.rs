@@ -3014,6 +3014,29 @@ async fn handle_summarize(
 }
 
 // ---------------------------------------------------------------------------
+// htmlsnapshot helpers
+// ---------------------------------------------------------------------------
+
+/// Extract the HTML tag name from a Section-8 element reference.
+///
+/// Ref format: `"#ancestorId tag#ownId.class1.class2"` or `"tag#id.class"` or bare `"tag"`.
+/// Returns the tag portion (e.g. `"form"`, `"button"`, `"a"`).
+fn extract_tag_from_ref(elem_ref: &str) -> &str {
+    let after_ancestor = if elem_ref.starts_with('#') {
+        elem_ref
+            .find(' ')
+            .map(|i| &elem_ref[i + 1..])
+            .unwrap_or(elem_ref)
+    } else {
+        elem_ref
+    };
+    let tag_end = after_ancestor
+        .find(|c: char| c == '#' || c == '.')
+        .unwrap_or(after_ancestor.len());
+    &after_ancestor[..tag_end]
+}
+
+// ---------------------------------------------------------------------------
 // htmlsnapshot handlers
 // ---------------------------------------------------------------------------
 
@@ -3101,79 +3124,51 @@ async fn handle_html_snapshot_capture(
         }
     }
 
-    // Display interactive elements grouped by type
+    // Display interactive elements sorted by visual prominence (weight descending).
+    // The server returns elements in weight order; we preserve that order within
+    // each tier group.  Each element carries a `ref` field that serves as both
+    // its description and a unique CSS selector.
     if let Some(elements) = elements {
         if !elements.is_empty() {
             cli_println!("");
             cli_println!("### Interactive Elements");
 
-            // Group by category
+            // Group by tier, keeping server order (already sorted by weight descending).
+            // Tier "primary" = buttons, inputs, form controls (area-weighted).
+            // Tier "link"    = anchor elements (group-area-weighted).
+            let mut primary: Vec<&Value> = Vec::new();
             let mut links: Vec<&Value> = Vec::new();
-            let mut buttons: Vec<&Value> = Vec::new();
-            let mut inputs: Vec<&Value> = Vec::new();
             let mut other: Vec<&Value> = Vec::new();
 
             for el in elements.iter() {
-                let tag = el.get("tag").and_then(|v| v.as_str()).unwrap_or("");
-                match tag {
-                    "a" => links.push(el),
-                    "button" => buttons.push(el),
-                    "input" | "textarea" | "select" => {
-                        // Distinguish button-type inputs from text-type inputs
-                        let cls = el.get("class").and_then(|v| v.as_str()).unwrap_or("");
-                        let id_str = el.get("id").and_then(|v| v.as_str()).unwrap_or("");
-                        if cls.contains("btn") || id_str.contains("btn") || id_str.contains("submit") {
-                            buttons.push(el);
-                        } else {
-                            inputs.push(el);
-                        }
-                    },
-                    _ => {
-                        // Check for button-like roles/attributes
-                        let aria = el.get("aria");
-                        let has_button_role = aria
-                            .and_then(|a| a.get("role"))
-                            .and_then(|v| v.as_str())
-                            .map_or(false, |r| r == "button");
-                        if has_button_role {
-                            buttons.push(el);
-                        } else {
-                            other.push(el);
-                        }
-                    },
+                let tier = el.get("tier").and_then(|v| v.as_str()).unwrap_or("");
+                match tier {
+                    "link" => links.push(el),
+                    "primary" => primary.push(el),
+                    _ => other.push(el),
                 }
             }
 
             let mut global_index: usize = 0;
-            let desc_width: usize = 30;
+            let desc_width: usize = 44; // wider for CSS selectors
             let text_width: usize = 48;
 
-            // Helper to format a single element line
+
+            // Helper to format a single element line.
             let format_element = |i: usize, el: &Value| -> String {
-                let tag = el.get("tag").and_then(|v| v.as_str()).unwrap_or("");
-                let id_str = el.get("id").and_then(|v| v.as_str()).unwrap_or("");
-                let class = el.get("class").and_then(|v| v.as_str()).unwrap_or("");
+                let elem_ref = el.get("ref").and_then(|v| v.as_str()).unwrap_or("");
                 let box_val = el.get("box").and_then(|v| v.as_str()).unwrap_or("");
                 let text_val = el.get("text").and_then(|v| v.as_str()).unwrap_or("");
-                let aria = el.get("aria");
+                let weight = el.get("weight").and_then(|v| v.as_i64()).unwrap_or(0);
 
-                // Build element description (CSS-selector-like)
-                let mut desc = tag.to_string();
-                if !id_str.is_empty() {
-                    desc.push_str(&format!("#{}", id_str));
-                }
-                if !class.is_empty() {
-                    desc.push_str(&format!(".{}", class));
-                }
+                // The `ref` field IS the unique CSS selector (Section 8 format).
+                let desc = elem_ref.to_string();
 
                 // Truncate text
                 let display_text = if text_val.is_empty() {
                     String::new()
                 } else {
-                    let trimmed: String = text_val
-                        .chars()
-                        .take(text_width)
-                        .collect();
+                    let trimmed: String = text_val.chars().take(text_width).collect();
                     if trimmed.len() < text_val.chars().count() {
                         format!("\"{}\u{2026}\"", trimmed) // … (ellipsis)
                     } else {
@@ -3181,39 +3176,12 @@ async fn handle_html_snapshot_capture(
                     }
                 };
 
-                // Build extras
+                // Build extras: box and weight
                 let mut extras: Vec<String> = Vec::new();
                 if !box_val.is_empty() {
                     extras.push(format!("box={}", box_val));
                 }
-                if let Some(aria_obj) = aria.and_then(|v| v.as_object()) {
-                    // For inputs, extract placeholder first
-                    if (tag == "input" || tag == "textarea") && !text_val.is_empty() {
-                        let placeholder = aria_obj.get("placeholder")
-                            .or_else(|| aria_obj.get("aria-placeholder"))
-                            .and_then(|v| v.as_str());
-                        if let Some(ph) = placeholder {
-                            if !ph.is_empty() {
-                                extras.push(format!("ph=\"{}\"", ph));
-                            }
-                        }
-                    }
-                    // Remaining aria attrs (excluding placeholder since we handled it)
-                    let aria_pairs: Vec<String> = aria_obj
-                        .iter()
-                        .filter(|(k, _)| {
-                            if tag == "input" || tag == "textarea" {
-                                *k != "placeholder" && *k != "aria-placeholder"
-                            } else {
-                                true
-                            }
-                        })
-                        .map(|(k, v)| format!("{}={}", k, v.as_str().unwrap_or("")))
-                        .collect();
-                    if !aria_pairs.is_empty() {
-                        extras.push(format!("aria: {}", aria_pairs.join(", ")));
-                    }
-                }
+                extras.push(format!("w={}", weight));
 
                 let mut line = format!("  {:>3}. ", i + 1);
                 // Pad description to desc_width
@@ -3237,7 +3205,7 @@ async fn handle_html_snapshot_capture(
                 line
             };
 
-            // Helper to print a group
+            // Helper to print a group.
             let mut print_group = |label: &str, group: &Vec<&Value>| {
                 if !group.is_empty() {
                     cli_println!("  {} ({}):", label, group.len());
@@ -3249,9 +3217,26 @@ async fn handle_html_snapshot_capture(
                 }
             };
 
-            print_group("Links", &links);
+            // Sub-group primary controls by HTML tag for readability.
+            let mut buttons: Vec<&Value> = Vec::new();
+            let mut inputs: Vec<&Value> = Vec::new();
+            let mut controls: Vec<&Value> = Vec::new();
+            for el in &primary {
+                let elem_ref = el.get("ref").and_then(|v| v.as_str()).unwrap_or("");
+                let tag = extract_tag_from_ref(elem_ref);
+                match tag {
+                    "button" => buttons.push(el),
+                    "input" | "textarea" | "select" => inputs.push(el),
+                    _ => controls.push(el),
+                }
+            }
+
             print_group("Buttons", &buttons);
             print_group("Inputs", &inputs);
+            if !controls.is_empty() {
+                print_group("Controls", &controls);
+            }
+            print_group("Links", &links);
             print_group("Other", &other);
         }
     }
