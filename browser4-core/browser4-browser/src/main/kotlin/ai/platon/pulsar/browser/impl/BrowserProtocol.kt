@@ -220,7 +220,7 @@ interface BrowserProtocol {
         autoRepeat: Boolean? = null,
     ): Unit
 
-    suspend fun htmlSnapshotCaptureSnapshot(
+    suspend fun domSnapshotCaptureSnapshot(
         computedStyles: List<String>,
         includePaintOrder: Boolean? = null,
         includeDOMRects: Boolean? = null,
