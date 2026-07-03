@@ -7429,7 +7429,7 @@ fn format_uninstall_output(
 /// process exits.  On Windows the running executable is locked, so we
 /// schedule a deferred deletion via a detached PowerShell script.
 fn attempt_self_removal(exe_path: &std::path::Path) -> bool {
-    let exe_str = exe_path.display().to_string();
+    let _exe_str = exe_path.display().to_string();
 
     #[cfg(windows)]
     {
