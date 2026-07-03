@@ -3957,7 +3957,7 @@ async fn handle_html_snapshot_inspect(
                 cli_println!("  Auto-discovered selector \"{}\" from \"{}\" also had no matches.", selector, orig);
             }
         }
-        cli_println!("- No elements matched. Check the CSS selector and ensure a DOM snapshot has been captured (`browser4-cli htmlsnapshot`).");
+        cli_println!("- No elements matched. Check the CSS selector and ensure a HTML snapshot has been captured (`browser4-cli htmlsnapshot`).");
         json_field("matchCount", json!(0));
         json_field("selector", json!(selector));
         return Ok(());
@@ -4564,7 +4564,7 @@ struct PaginationMeta {
 
 /// Paginate `text` into pages of `page_size` **lines** (not characters).
 ///
-/// This is line-oriented because snapshot and DOM snapshot output is structured
+/// This is line-oriented because snapshot and HTML snapshot output is structured
 /// with one element/node per line.  Returns the content for `page` (1-based)
 /// and metadata about the pagination.  When `page_size` is 0 or the text fits
 /// in one page, returns the full text with `is_truncated: false`.
@@ -8370,7 +8370,7 @@ fn preferred_prefixed_group_form(command: &str) -> Option<&'static str> {
         "swarm" => Some("swarm <subcommand>"),
         "crawl" => Some("crawl <subcommand>"),
         "co" => Some("swarm <subcommand>"),
-        // `htmlsnapshot` is a valid standalone command (captures a DOM snapshot
+        // `htmlsnapshot` is a valid standalone command (captures a HTML snapshot
         // and returns metadata), not just a prefix group — so it is intentionally
         // absent here.  Use `browser4-cli htmlsnapshot --help` to see subcommands.
         _ => None,

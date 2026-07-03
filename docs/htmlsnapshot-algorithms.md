@@ -6,7 +6,7 @@ Comparison of the three `htmlsnapshot` subcommand algorithms: **capture**, **sum
 
 ## 1. `htmlsnapshot` — Capture
 
-**Purpose**: Take a static DOM snapshot of the current page and store it in Browser4's page storage for later querying.
+**Purpose**: Take a static HTML snapshot of the current page and store it in Browser4's page storage for later querying.
 
 **Entry point**: `MCPToolController.handleHtmlSnapshotCapture()` (server) → `handle_html_snapshot_capture()` (CLI)
 
@@ -79,7 +79,7 @@ Comparison of the three `htmlsnapshot` subcommand algorithms: **capture**, **sum
 │     Then: Next-step hints (htmlsnapshot get/inspect/query)   │
 │                                                              │
 │  OUTPUT: JSON metadata + interactive elements → stdout       │
-│          Stored DOM snapshot → page storage (server-side)    │
+│          Stored HTML snapshot → page storage (server-side)    │
 └──────────────────────────────────────────────────────────────┘
 ```
 
@@ -94,7 +94,7 @@ Comparison of the three `htmlsnapshot` subcommand algorithms: **capture**, **sum
 
 ## 2. `htmlsnapshot summary` — Summarize
 
-**Purpose**: Read the stored DOM snapshot and produce a compressed Web Page Summary Index (WPSI) in <1% of original HTML size. Deterministic — no AI model involved.
+**Purpose**: Read the stored HTML snapshot and produce a compressed Web Page Summary Index (WPSI) in <1% of original HTML size. Deterministic — no AI model involved.
 
 **Entry point**: `MCPToolController.handleHtmlSnapshotSummary()` (server) → `handle_html_snapshot_summary()` (CLI)
 
@@ -212,7 +212,7 @@ Comparison of the three `htmlsnapshot` subcommand algorithms: **capture**, **sum
 
 ## 3. `htmlsnapshot inspect` — Inspect
 
-**Purpose**: Read the stored DOM snapshot and discover CSS selectors for recurring patterns (product cards, prices, titles, etc.)
+**Purpose**: Read the stored HTML snapshot and discover CSS selectors for recurring patterns (product cards, prices, titles, etc.)
 
 **Entry point**: `MCPToolController.handleHtmlSnapshotInspect()` (server) → `handle_html_snapshot_inspect()` (CLI)
 

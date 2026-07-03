@@ -2161,7 +2161,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         // ---- HtmlSnapshot ----
         CommandDef {
             name: "htmlsnapshot",
-            description: "Capture a static DOM snapshot, save it in Browser4's page storage, and return metadata (URL, title, timestamps, image/link counts, interactive elements with tag/class/id/aria/bounding-box)",
+            description: "Capture: take a static HTML snapshot of the current page and store it for later querying. Returns page metadata — URL, title, size, timestamps, and interactive elements (tag, class, id, aria, bounding box). Follow with `htmlsnapshot get`, `inspect`, or `summary` to read from the stored snapshot.",
             category: Category::Snapshot,
             hidden: false,
             batch_supported: false,
@@ -2172,7 +2172,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "htmlsnapshot-get",
-            description: "Extract elements from the DOM snapshot stored in Browser4's page storage (text, html, attr)",
+            description: "Extract elements from the HTML snapshot stored in Browser4's page storage (text, html, attr)",
             category: Category::Snapshot,
             hidden: false,
             batch_supported: false,
@@ -2197,7 +2197,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "htmlsnapshot-get-all",
-            description: "Extract ALL matching elements from the DOM snapshot (querySelectorAll semantics); supports --offset and --limit for pagination",
+            description: "Extract ALL matching elements from the HTML snapshot (querySelectorAll semantics); supports --offset and --limit for pagination",
             category: Category::Snapshot,
             hidden: false,
             batch_supported: false,
@@ -2230,7 +2230,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "htmlsnapshot-query",
-            description: "Run X-SQL against the DOM snapshot stored in Browser4's page storage via the scrape API",
+            description: "Run X-SQL against the HTML snapshot stored in Browser4's page storage via the scrape API",
             category: Category::Snapshot,
             hidden: false,
             batch_supported: false,
@@ -2306,7 +2306,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "htmlsnapshot-summary",
-            description: "Generate a compressed Web Page Summary Index (WPSI) from the stored DOM snapshot — preserves page structure, key nodes, and stats in <1% of original HTML size",
+            description: "Summarize: read the stored HTML snapshot and produce a compressed Web Page Summary Index (WPSI) — preserves page structure, key nodes, and stats in <1% of original HTML size. Use `htmlsnapshot` first to capture the page into storage.",
             category: Category::Snapshot,
             hidden: false,
             batch_supported: false,
@@ -2325,7 +2325,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "htmlsnapshot-grep",
-            description: "Search the DOM snapshot HTML using regex patterns with grep-style output",
+            description: "Search the HTML snapshot HTML using regex patterns with grep-style output",
             category: Category::Snapshot,
             hidden: false,
             batch_supported: false,
@@ -2362,7 +2362,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "htmlsnapshot-inspect",
-            description: "Inspect DOM structure and suggest CSS selectors for recurring patterns (product cards, prices, titles)",
+            description: "Inspect: read the stored HTML snapshot and discover CSS selectors for recurring patterns (product cards, prices, titles). Use `htmlsnapshot` first to capture the page into storage.",
             category: Category::Snapshot,
             hidden: false,
             batch_supported: false,
