@@ -469,7 +469,7 @@ object PageSummaryIndexService {
      * Algorithm: cluster by visual geometry (bounding box), then walk up the
      * DOM to find the nearest container element.
      */
-    internal fun detectLinkGroups(document: FeaturedDocument): List<SummaryLinkGroup> {
+    fun detectLinkGroups(document: FeaturedDocument): List<SummaryLinkGroup> {
         // Phase 0: extract viewport dimensions
         val (viewportW, viewportH) = extractViewport(document)
         // Phase 1: collect card candidates

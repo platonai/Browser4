@@ -824,6 +824,9 @@ class MCPToolController(
                     obj
                 }
 
+                // Run visual geometry link group detection on the captured document
+                val linkGroups = PageSummaryIndexService.detectLinkGroups(document)
+
                 val json = pulsarObjectMapper().createObjectNode().apply {
                     put(
                         "url",
@@ -837,6 +840,9 @@ class MCPToolController(
                     put("imageCount", imageCount)
                     put("linkCount", linkCount)
                     putArray("interactiveElements").addAll(interactiveElements)
+                    if (linkGroups.isNotEmpty()) {
+                        set<ArrayNode>("linkGroups", linkGroupsToJson(linkGroups))
+                    }
                 }
                 json.toString()
             }
@@ -1776,6 +1782,9 @@ internal fun inspectDocument(
         suggestions.add(sug)
     }
 
+    // Run visual geometry link group detection on the document
+    val linkGroups = PageSummaryIndexService.detectLinkGroups(document)
+
     return pulsarObjectMapper().createObjectNode().apply {
         put("matchCount", matchCount)
         put("selector", effectiveSelector)
@@ -1786,6 +1795,9 @@ internal fun inspectDocument(
         }
         set<ArrayNode>("samples", samples)
         set<ArrayNode>("suggestions", suggestions)
+        if (linkGroups.isNotEmpty()) {
+            set<ArrayNode>("linkGroups", linkGroupsToJson(linkGroups))
+        }
     }.toString()
 }
 
@@ -1946,4 +1958,69 @@ internal fun computeInteractiveWeights(
         }
 
     return result
+}
+
+// =========================================================================
+// Link group serialization
+// =========================================================================
+
+/**
+ * Serialize detected link groups to a Jackson [ArrayNode] for inclusion in
+ * capture and inspect command outputs.
+ *
+ * Uses the same structure as the YAML output from [PageSummaryIndexService.generate]
+ * so consumers get a consistent representation regardless of output format.
+ */
+internal fun linkGroupsToJson(
+    linkGroups: List<PageSummaryIndexService.SummaryLinkGroup>,
+): ArrayNode {
+    val mapper = pulsarObjectMapper()
+    val array = mapper.createArrayNode()
+    for (lg in linkGroups) {
+        val obj = mapper.createObjectNode().apply {
+            val containerLabel = lg.containerTag + lg.containerSelector
+            put("container", containerLabel)
+            if (lg.containerSelector.isNotEmpty() && lg.containerSelector != lg.containerTag) {
+                put("selector", lg.containerSelector)
+            }
+            put("itemTag", lg.itemTag)
+            put("itemSelector", lg.itemSelector)
+            put("count", lg.count)
+            put("columnCount", lg.columnCount)
+            put("viewportWidth", lg.viewportWidth)
+            put("viewportHeight", lg.viewportHeight)
+            put("allHaveLinks", lg.allHaveLinks)
+            put("anyHaveImages", lg.anyHaveImages)
+            put("avgCardWidth", lg.avgCardWidth)
+            put("avgCardHeight", lg.avgCardHeight)
+            put("distinctTextCount", lg.distinctTextCount)
+            put("avgDescendants", lg.avgDescendants)
+            if (lg.samples.isNotEmpty()) {
+                val samplesArr = mapper.createArrayNode()
+                for (sample in lg.samples) {
+                    val sampleObj = mapper.createObjectNode().apply {
+                        put("box", sample.box)
+                        if (sample.links.isNotEmpty()) {
+                            val linksArr = mapper.createArrayNode()
+                            for (link in sample.links) {
+                                val linkObj = mapper.createObjectNode().apply {
+                                    put("text", link.text)
+                                    put("href", link.href)
+                                    put("box", link.box)
+                                }
+                                linksArr.add(linkObj)
+                            }
+                            set<ArrayNode>("links", linksArr)
+                        }
+                        put("hasImage", sample.hasImage)
+                    }
+                    samplesArr.add(sampleObj)
+                }
+                set<ArrayNode>("samples", samplesArr)
+            }
+            put("score", lg.score)
+        }
+        array.add(obj)
+    }
+    return array
 }
