@@ -3698,8 +3698,11 @@ async fn handle_html_snapshot_summary(
         cli_println!("### Page");
         cli_println!("- Page URL: {}", url);
         cli_println!("- Page Title: {}", title);
+        cli_println!("");
         cli_println!("### Summary");
-        cli_println!("[Summary]({})", out_path.display());
+        cli_println!("{}", summary);
+        cli_println!("");
+        cli_println!("💾 Saved to {}", out_path.display());
     }
     Ok(())
 }
