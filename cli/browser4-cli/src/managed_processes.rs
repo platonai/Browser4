@@ -224,7 +224,7 @@ pub fn stop_browser4_server_forcibly() -> ForceStopBrowser4ServerResult {
     // Final verification: catch processes that respawned or were slow to
     // materialise during the grace period.  Any stragglers are killed and
     // folded into the result.
-    let final_extra = find_unique_pulsar_browser_processes();
+    let mut final_extra = find_unique_pulsar_browser_processes();
     #[cfg(windows)]
     {
         // On Windows also run the exhaustive per-PID sweep to catch
@@ -362,17 +362,29 @@ fn notify_close_all_sessions_before_force_stop(
         return;
     }
 
-    let client = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(5))
-        .build()
-        .unwrap_or_else(|_| reqwest::blocking::Client::new());
+    // Run blocking HTTP calls on a dedicated OS thread so that
+    // reqwest::blocking's internal tokio runtime is created and
+    // destroyed outside the main #[tokio::main] async context.
+    // Dropping a tokio runtime inside another tokio runtime panics
+    // with "Cannot drop a runtime in a context where blocking is
+    // not allowed."
+    let handle = std::thread::spawn(move || {
+        let client = reqwest::blocking::Client::builder()
+            .timeout(std::time::Duration::from_secs(5))
+            .build()
+            .unwrap_or_else(|_| reqwest::blocking::Client::new());
 
-    for base_url in &base_urls {
-        match call_close_all_sessions(&client, base_url) {
-            Ok(_) => eprintln!("        Closed sessions on {}", base_url),
-            Err(err) => eprintln!("        Server {} unreachable ({}), skipping", base_url, err),
+        for base_url in &base_urls {
+            match call_close_all_sessions(&client, base_url) {
+                Ok(_) => eprintln!("        Closed sessions on {}", base_url),
+                Err(err) => {
+                    eprintln!("        Server {} unreachable ({}), skipping", base_url, err)
+                }
+            }
         }
-    }
+    });
+
+    let _ = handle.join();
 }
 
 #[allow(dead_code)]
