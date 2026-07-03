@@ -2311,9 +2311,17 @@ pub fn all_commands() -> Vec<CommandDef> {
             hidden: false,
             batch_supported: false,
             args: &[],
-            options: &[],
+            options: &[
+                OptionDef { name: "raw", description: "Print summary content directly to stdout (alias for --stdout)", is_bool: true, short: None },
+                OptionDef { name: "stdout", description: "Print summary content directly to stdout", is_bool: true, short: None },
+            ],
             tool_name_fn: |_| "html_snapshot_summary".to_string(),
-            tool_params_fn: |_| json!({}),
+            tool_params_fn: |args| {
+                let mut p = json!({});
+                if let Some(true) = get_bool(args, "raw") { p["raw"] = json!(true); }
+                if let Some(true) = get_bool(args, "stdout") { p["stdout"] = json!(true); }
+                p
+            },
         },
         CommandDef {
             name: "htmlsnapshot-grep",
