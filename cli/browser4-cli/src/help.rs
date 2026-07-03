@@ -12,6 +12,7 @@ pub fn public_command_name(name: &str) -> &str {
         "swarm-query" => "swarm query",
         "swarm-status" => "swarm status",
         "swarm-result" => "swarm result",
+        "htmlsnapshot-capture" => "htmlsnapshot capture",
         "htmlsnapshot-get" => "htmlsnapshot get",
         "htmlsnapshot-get-all" => "htmlsnapshot get all",
         "htmlsnapshot-query" => "htmlsnapshot query",

@@ -2161,6 +2161,17 @@ pub fn all_commands() -> Vec<CommandDef> {
         // ---- HtmlSnapshot ----
         CommandDef {
             name: "htmlsnapshot",
+            description: "Capture: take a static HTML snapshot of the current page and store it for later querying. Returns page metadata — URL, title, size, timestamps, and interactive elements (tag, class, id, aria, bounding box). Follow with `htmlsnapshot get`, `inspect`, or `summary` to read from the stored snapshot. Short form of `htmlsnapshot capture`.",
+            category: Category::Snapshot,
+            hidden: false,
+            batch_supported: false,
+            args: &[],
+            options: &[],
+            tool_name_fn: |_| "html_snapshot_capture".to_string(),
+            tool_params_fn: |_| json!({}),
+        },
+        CommandDef {
+            name: "htmlsnapshot-capture",
             description: "Capture: take a static HTML snapshot of the current page and store it for later querying. Returns page metadata — URL, title, size, timestamps, and interactive elements (tag, class, id, aria, bounding box). Follow with `htmlsnapshot get`, `inspect`, or `summary` to read from the stored snapshot.",
             category: Category::Snapshot,
             hidden: false,
@@ -3692,6 +3703,7 @@ mod tests {
         let map = commands_map();
         for expected in &[
             "htmlsnapshot",
+            "htmlsnapshot-capture",
             "htmlsnapshot-get",
             "htmlsnapshot-get-all",
             "htmlsnapshot-query",
@@ -3708,6 +3720,19 @@ mod tests {
     fn test_html_snapshot_capture_params() {
         let map = commands_map();
         let cmd = map.get("htmlsnapshot").unwrap();
+        let args = HashMap::new();
+        assert_eq!((cmd.tool_name_fn)(&args), "html_snapshot_capture");
+        let params = (cmd.tool_params_fn)(&args);
+        assert!(
+            params.as_object().unwrap().is_empty(),
+            "capture params should be empty"
+        );
+    }
+
+    #[test]
+    fn test_html_snapshot_capture_explicit_params() {
+        let map = commands_map();
+        let cmd = map.get("htmlsnapshot-capture").unwrap();
         let args = HashMap::new();
         assert_eq!((cmd.tool_name_fn)(&args), "html_snapshot_capture");
         let params = (cmd.tool_params_fn)(&args);
@@ -3807,6 +3832,7 @@ mod tests {
         let map = commands_map();
         for name in &[
             "htmlsnapshot",
+            "htmlsnapshot-capture",
             "htmlsnapshot-get",
             "htmlsnapshot-get-all",
             "htmlsnapshot-query",

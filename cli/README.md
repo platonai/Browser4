@@ -73,6 +73,7 @@ browser4-cli get text ".product-title"
 browser4-cli get attr ".product-image" data-src
 
 # HTML snapshot with X-SQL
+browser4-cli htmlsnapshot capture
 browser4-cli htmlsnapshot
 browser4-cli htmlsnapshot get text "#main-content"
 browser4-cli htmlsnapshot query --sql @query.sql
@@ -265,7 +266,8 @@ browser4-cli tab-close 1
 | `get <mode> <selector> [name]` | Extract data from a page element in one of six modes (see below). |
 | `eval <expression> [ref]` | Evaluate JavaScript on the page or a target element. `--file <path>` to read from file. `--json` to wrap scalar results. |
 | `generate-locator <ref>` | Generate a stable CSS selector path for an element. |
-| `htmlsnapshot` | Capture a static HTML snapshot. See [HTML Snapshot](#dom-snapshot) below. |
+| `htmlsnapshot` | Short form of `htmlsnapshot capture`. Capture a static HTML snapshot. See [HTML Snapshot](#dom-snapshot) below. |
+| `htmlsnapshot capture` | Capture a static HTML snapshot. See [HTML Snapshot](#dom-snapshot) below. |
 | `extract <instruction>` | Extract structured data with AI. `--schema <file>` for typed output. `--filename <path>`, `--raw`. |
 | `summarize [instruction]` | Summarize page content with AI. `--selector <css>`, `--filename <path>`, `--raw`. |
 
@@ -455,6 +457,7 @@ HTML capture stored in the backend that can be queried repeatedly without
 re-fetching. Unlike the accessibility `snapshot`, this works against the raw DOM.
 
 ```
+browser4-cli htmlsnapshot capture
 browser4-cli htmlsnapshot
 browser4-cli htmlsnapshot get <field> [selector] [name]
 browser4-cli htmlsnapshot get all <field> [selector] [name]
@@ -465,12 +468,14 @@ browser4-cli htmlsnapshot grep [OPTIONS] <pattern>
 browser4-cli htmlsnapshot inspect [selector] [--max N] [--depth D]
 ```
 
-#### htmlsnapshot
+#### htmlsnapshot / htmlsnapshot capture
 
 Capture the DOM and display metadata (URL, title, timestamps, image/link counts,
 interactive elements with tag, class, id, aria, and bounding boxes).
+`htmlsnapshot` is a short form of `htmlsnapshot capture`.
 
 ```bash
+browser4-cli htmlsnapshot capture
 browser4-cli htmlsnapshot
 ```
 

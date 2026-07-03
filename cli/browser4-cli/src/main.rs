@@ -327,6 +327,7 @@ fn no_snapshot_commands() -> HashSet<&'static str> {
         "crawl",
         "crawl-list",
         "htmlsnapshot",
+        "htmlsnapshot-capture",
         "htmlsnapshot-get",
         "htmlsnapshot-get-all",
         "htmlsnapshot-query",
@@ -3263,7 +3264,7 @@ async fn handle_html_snapshot_capture(
     cli_println!("   htmlsnapshot get all text \"a\" --limit 20 — link texts");
     cli_println!("   htmlsnapshot inspect                      — discover recurring patterns");
     if !url.is_empty() {
-        cli_println!("   htmlsnapshot query --sql \"SELECT text-content FROM load_and_select(@url, 'h1')\"");
+        cli_println!("   htmlsnapshot query --sql \"SELECT dom_text(dom) FROM load_and_select(@url, 'h1')\"");
     }
 
     Ok(())
@@ -4123,7 +4124,7 @@ async fn handle_html_snapshot_inspect(
                 cli_println!("     htmlsnapshot get all text \"{}\" --limit 20", sel);
             }
             if let Some(first) = actionable.first() {
-                cli_println!("     htmlsnapshot query --sql \"SELECT text-content FROM load_and_select(@url, '{}')\"", first);
+                cli_println!("     htmlsnapshot query --sql \"SELECT dom_text(dom) FROM load_and_select(@url, '{}')\"", first);
             }
         } else {
             // Fallback when no quality selectors found (e.g., all bare tags)
@@ -7429,7 +7430,7 @@ fn format_uninstall_output(
 /// process exits.  On Windows the running executable is locked, so we
 /// schedule a deferred deletion via a detached PowerShell script.
 fn attempt_self_removal(exe_path: &std::path::Path) -> bool {
-    let _exe_str = exe_path.display().to_string();
+    let exe_str = exe_path.display().to_string();
 
     #[cfg(windows)]
     {
@@ -8353,6 +8354,7 @@ fn preferred_spaced_command_form(command: &str) -> Option<&'static str> {
         "co-query" => Some("swarm query"),
         "co-status" => Some("swarm status"),
         "co-result" => Some("swarm result"),
+        "htmlsnapshot-capture" => Some("htmlsnapshot capture"),
         "htmlsnapshot-get" => Some("htmlsnapshot get"),
         "htmlsnapshot-get-all" => Some("htmlsnapshot get all"),
         "htmlsnapshot-query" => Some("htmlsnapshot query"),
@@ -10030,7 +10032,7 @@ async fn run(
         "loop" => {
             handle_loop(&client, &base_url, global).await?;
         }
-        "htmlsnapshot" => {
+        "htmlsnapshot" | "htmlsnapshot-capture" => {
             handle_html_snapshot_capture(
                 &client,
                 &base_url,
@@ -10384,6 +10386,7 @@ mod tests {
     #[test]
     fn no_snapshot_commands_include_html_snapshot_variants() {
         assert!(no_snapshot_commands().contains("htmlsnapshot"));
+        assert!(no_snapshot_commands().contains("htmlsnapshot-capture"));
         assert!(no_snapshot_commands().contains("htmlsnapshot-get"));
         assert!(no_snapshot_commands().contains("htmlsnapshot-get-all"));
         assert!(no_snapshot_commands().contains("htmlsnapshot-query"));
