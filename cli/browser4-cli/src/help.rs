@@ -7,11 +7,14 @@ pub fn public_command_name(name: &str) -> &str {
         "agent-run" => "agent run",
         "agent-status" => "agent status",
         "agent-result" => "agent result",
+        "agent-list" => "agent list",
         "swarm-create" => "swarm create",
         "swarm-submit" => "swarm submit",
         "swarm-query" => "swarm query",
         "swarm-status" => "swarm status",
         "swarm-result" => "swarm result",
+        "swarm-list" => "swarm list",
+        "crawl-list" => "crawl list",
         "htmlsnapshot-capture" => "htmlsnapshot capture",
         "htmlsnapshot-get" => "htmlsnapshot get",
         "htmlsnapshot-get-all" => "htmlsnapshot get all",
@@ -350,6 +353,14 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("  browser4-cli agent result agent-task-1".to_string());
     }
 
+    if cmd.name == "agent-list" {
+        lines.push("Notes:".to_string());
+        lines.push("  - Lists all tracked agent tasks and their status.".to_string());
+        lines.push(String::new());
+        lines.push("Examples:".to_string());
+        lines.push("  browser4-cli agent list".to_string());
+    }
+
     if cmd.name == "act" {
         lines.push("Notes:".to_string());
         lines.push(
@@ -672,6 +683,22 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push(String::new());
         lines.push("Examples:".to_string());
         lines.push("  browser4-cli swarm result scrape-task-4".to_string());
+    }
+
+    if cmd.name == "swarm-list" {
+        lines.push("Notes:".to_string());
+        lines.push("  - Lists all tracked swarm tasks and their current status.".to_string());
+        lines.push(String::new());
+        lines.push("Examples:".to_string());
+        lines.push("  browser4-cli swarm list".to_string());
+    }
+
+    if cmd.name == "crawl-list" {
+        lines.push("Notes:".to_string());
+        lines.push("  - Lists all tracked crawl tasks and their current status.".to_string());
+        lines.push(String::new());
+        lines.push("Examples:".to_string());
+        lines.push("  browser4-cli crawl list".to_string());
     }
 
     if cmd.name == "crawl" {
@@ -1143,7 +1170,7 @@ mod tests {
         assert!(!help.contains("  console "));
         assert!(help.contains("extract"));
         assert!(!help.contains("agent run"));
-        assert!(help.contains("act"));
+        assert!(!help.contains("act"));
         assert!(help.contains("swarm create"));
         assert!(help.contains("--json"));
         assert!(help.contains("suppresses tips, hints, and human-readable text"));
