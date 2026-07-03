@@ -691,7 +691,7 @@ class DirectChromeProtocol(
     // Input domain — mouse
     // ---------------------------------------------------------------------------
 
-    override suspend fun dispatchMouseMoved(x: Double, y: Double, buttons: Int?) {
+    override suspend fun dispatchMouseMoved(x: Double, y: Double, buttons: Int?, modifiers: Int?) {
         command(
             "Input.dispatchMouseEvent",
             params {
@@ -699,6 +699,7 @@ class DirectChromeProtocol(
                 put("x", x)
                 put("y", y)
                 buttons?.let { put("buttons", it) }
+                modifiers?.let { put("modifiers", it) }
             }
         )
     }
@@ -738,16 +739,17 @@ class DirectChromeProtocol(
         )
     }
 
-    override suspend fun dispatchMouseWheel(x: Double, y: Double, deltaX: Double, deltaY: Double) {
+    override suspend fun dispatchMouseWheel(x: Double, y: Double, deltaX: Double, deltaY: Double, modifiers: Int?) {
         command(
             "Input.dispatchMouseEvent",
-            mapOf(
-                "type" to DispatchMouseEventType.MOUSE_WHEEL,
-                "x" to x,
-                "y" to y,
-                "deltaX" to deltaX,
-                "deltaY" to deltaY,
-            )
+            params {
+                put("type", DispatchMouseEventType.MOUSE_WHEEL)
+                put("x", x)
+                put("y", y)
+                put("deltaX", deltaX)
+                put("deltaY", deltaY)
+                modifiers?.let { put("modifiers", it) }
+            }
         )
     }
 
