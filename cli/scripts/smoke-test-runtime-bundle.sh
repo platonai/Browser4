@@ -101,11 +101,16 @@ case "$BUNDLE_ARCHIVE" in
         tar xzf "$BUNDLE_ARCHIVE" -C "$EXTRACT_DIR"
         ;;
     *.zip)
+        # On Windows (Git Bash / MSYS2), Python is a native Windows program.
+        # MSYS2 auto-converts command-line *arguments* that look like Unix
+        # paths, but it cannot see paths embedded inside a -c string literal.
+        # Pass the paths as sys.argv entries so they are correctly translated
+        # to Windows-native paths before Python receives them.
         python3 -c "
 import zipfile, sys
-with zipfile.ZipFile('$BUNDLE_ARCHIVE', 'r') as z:
-    z.extractall('$EXTRACT_DIR')
-" 2>/dev/null || unzip -q "$BUNDLE_ARCHIVE" -d "$EXTRACT_DIR"
+with zipfile.ZipFile(sys.argv[1], 'r') as z:
+    z.extractall(sys.argv[2])
+" "$BUNDLE_ARCHIVE" "$EXTRACT_DIR" 2>/dev/null || unzip -q "$BUNDLE_ARCHIVE" -d "$EXTRACT_DIR"
         ;;
     *)
         fail "Unsupported archive format: $BUNDLE_ARCHIVE (expected .tar.gz or .zip)"
