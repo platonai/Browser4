@@ -1,0 +1,12 @@
+[
+  {
+    "name": "ai.platon.pulsar.apps.Browser4StandaloneApplication",
+    "allDeclaredConstructors": true,
+    "allPublicMethods": true
+  },
+  {
+    "name": "kotlin.reflect.full.KClasses",
+    "allDeclaredConstructors": true,
+    "allPublicMethods": true
+  }
+]

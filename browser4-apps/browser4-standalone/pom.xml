@@ -151,6 +151,56 @@
         </plugins>
     </build>
 
+    <profiles>
+        <profile>
+            <id>native</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.springframework.boot</groupId>
+                        <artifactId>spring-boot-maven-plugin</artifactId>
+                        <version>${spring-boot.version}</version>
+                        <executions>
+                            <execution>
+                                <id>process-aot</id>
+                                <goals>
+                                    <goal>process-aot</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.graalvm.buildtools</groupId>
+                        <artifactId>native-maven-plugin</artifactId>
+                        <version>0.10.6</version>
+                        <extensions>true</extensions>
+                        <configuration>
+                            <mainClass>ai.platon.pulsar.apps.Browser4StandaloneApplicationKt</mainClass>
+                            <imageName>browser4-standalone</imageName>
+                            <buildArgs>
+                                <arg>--enable-url-protocols=http,https</arg>
+                                <arg>-H:+ReportExceptionStackTraces</arg>
+                                <arg>-J-Xmx8G</arg>
+                            </buildArgs>
+                            <metadataRepository>
+                                <enabled>true</enabled>
+                            </metadataRepository>
+                        </configuration>
+                        <executions>
+                            <execution>
+                                <id>build-native</id>
+                                <goals>
+                                    <goal>compile-no-fork</goal>
+                                </goals>
+                                <phase>package</phase>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
+
     <dependencyManagement>
         <dependencies>
             <!-- spring-boot-dependencies FIRST -->

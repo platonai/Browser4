@@ -40,3 +40,7 @@ application-private.yml
 
 !browser4-apps/**/target/Browser4.jar
 !browser4-apps/browser4-standalone/target/Browser4.jar
+!browser4-apps/browser4-standalone/target/browser4-standalone
+!browser4-apps/browser4-standalone/target/browser4-standalone.exe
+!browser4-apps/**/target/browser4-standalone
+!browser4-apps/**/target/browser4-standalone.exe

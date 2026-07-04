@@ -1,0 +1,12 @@
+{
+  "resources": {
+    "includes": [
+      {"pattern": "application.*\\.properties"},
+      {"pattern": "application.*\\.yml"},
+      {"pattern": "META-INF/spring/.*"},
+      {"pattern": "META-INF/services/.*"},
+      {"pattern": "logback.*\\.xml"},
+      {"pattern": "org/springframework/boot/logging/.*"}
+    ]
+  }
+}
