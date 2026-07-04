@@ -151,6 +151,9 @@ open class PulsarWebDriver constructor(
     override suspend fun navigate(entry: NavigateEntry) {
         navigateHistory.add(entry)
         this.navigateEntry = entry
+        // Keep navigateUrl in sync so currentUrl() fallback returns the latest navigation
+        // target instead of a stale value from tab creation.
+        this.navigateUrl = entry.userTypedUrl
 
         browser.emit(BrowserEvents.willNavigate, entry)
 
