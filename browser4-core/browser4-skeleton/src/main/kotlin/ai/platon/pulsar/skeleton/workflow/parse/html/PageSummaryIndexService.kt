@@ -693,7 +693,28 @@ object PageSummaryIndexService {
         val candidates = mutableListOf<CardCandidate>()
         val maxW = viewportW * MAX_VIEWPORT_WIDTH_RATIO
 
+        // Tags that are never card containers: controls, forms, scripts, styles,
+        // embedded content, and other non-semantic structural elements.
+        val excludedTags = setOf(
+            // Controls
+            "input", "button", "select", "textarea", "label", "fieldset",
+            "legend", "datalist", "output", "option", "optgroup",
+            // Forms
+            "form",
+            // Scripts & styles
+            "script", "noscript", "style",
+            // Embedded / media
+            "iframe", "embed", "object", "canvas", "video", "audio",
+            "svg", "math", "picture", "source", "track", "map", "area",
+            // Structural / metadata
+            "html", "head", "body", "meta", "link", "base", "title",
+            "br", "hr", "wbr", "template", "slot",
+        )
+
         for (el in document.select("*")) {
+            val tag = el.tagName().lowercase()
+            if (tag in excludedTags) continue
+
             val vi = el.attr("vi").trim()
             if (vi.isBlank()) continue
             if (vi.contains("_h=1")) continue
