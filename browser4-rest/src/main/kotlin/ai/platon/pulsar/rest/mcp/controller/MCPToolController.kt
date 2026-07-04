@@ -270,7 +270,7 @@ class MCPToolController(
             }
         } catch (e: Exception) {
             logger.error("MCP tool call failed | tool={} | {}", request.tool, e.message, e)
-            ResponseEntity.ok(errorResponse("${request.tool} failed: ${e.message}"))
+            ResponseEntity.ok(errorResponse("${request.tool} failed: ${exceptionChainMessage(e)}"))
         }
     }
 
@@ -1408,6 +1408,23 @@ class MCPToolController(
 
     private fun errorResponse(message: String): MCPToolCallResponse =
         MCPToolCallResponse(content = listOf(MCPContent(text = "ERROR: $message")), isError = true)
+
+    /**
+     * Build a chain of exception messages from [e] through all its causes,
+     * joined by " ← ".  This ensures the CLI sees the root cause when the
+     * outermost message is generic (e.g. "browser_navigate failed" wrapping
+     * "Failed to launch browser" wrapping "libgbm.so.1: cannot open shared
+     * object file").
+     */
+    private fun exceptionChainMessage(e: Throwable): String {
+        val messages = LinkedHashSet<String>()
+        var current: Throwable? = e
+        while (current != null) {
+            current.message?.let { messages.add(it) }
+            current = current.cause
+        }
+        return messages.joinToString(" ← ")
+    }
 
     private fun addRequestId(response: HttpServletResponse) {
         response.addHeader("X-Request-Id", UUID.randomUUID().toString())

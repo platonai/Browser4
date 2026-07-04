@@ -916,6 +916,121 @@ jobs:
           path: browser4-apps/browser4-bundle/target/runtime-release/${{ matrix.asset_name }}
           retention-days: 7
 
+  smoke-test-runtime-bundle:
+    name: Smoke test (${{ matrix.name }})
+    needs: [prepare, build-runtime-bundles]
+    if: |
+      always() &&
+      needs.prepare.result == 'success' &&
+      needs.build-runtime-bundles.result == 'success'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows x64
+            os: windows-latest
+            asset_name: browser4-bundle-runtime-windows-x64.zip
+            artifact_name: browser4-bundle-runtime-windows-x64
+            target: x86_64-pc-windows-msvc
+          - name: Linux x64
+            os: ubuntu-latest
+            asset_name: browser4-bundle-runtime-linux-x64.tar.gz
+            artifact_name: browser4-bundle-runtime-linux-x64
+            target: x86_64-unknown-linux-gnu
+          - name: macOS ARM64
+            os: macos-14
+            asset_name: browser4-bundle-runtime-darwin-arm64.tar.gz
+            artifact_name: browser4-bundle-runtime-darwin-arm64
+            target: aarch64-apple-darwin
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Download runtime bundle artifact
+        uses: actions/download-artifact@v7
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: artifacts/
+
+      - name: Install Chrome (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if command -v google-chrome &>/dev/null || command -v google-chrome-stable &>/dev/null; then
+            echo "✅ Chrome found: $(which google-chrome google-chrome-stable 2>/dev/null || true)"
+          else
+            echo "::group::Installing chromium-browser..."
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq chromium-browser
+            echo "::endgroup::"
+          fi
+          df -h /dev/shm || true
+
+      - name: Install Chrome (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -x "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" ]; then
+            echo "✅ Google Chrome found"
+          elif command -v chromium &>/dev/null; then
+            echo "✅ Chromium found: $(which chromium)"
+          else
+            echo "::group::Installing Google Chrome..."
+            brew install --cask google-chrome
+            echo "::endgroup::"
+          fi
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Build CLI binary
+        shell: bash
+        run: |
+          cargo build --release --manifest-path ${{ env.CLI_MANIFEST_PATH }} --target ${{ matrix.target }}
+
+      - name: Run smoke test
+        shell: bash
+        timeout-minutes: 15
+        env:
+          BROWSER4_SERVER_LOG_DIR: ${{ runner.temp }}/browser4-server-logs
+        run: |
+          BUNDLE_ARCHIVE=$(ls artifacts/browser4-bundle-runtime-* 2>/dev/null | head -1)
+          if [ -z "$BUNDLE_ARCHIVE" ]; then
+            echo "❌ No bundle archive found in artifacts/"
+            ls -la artifacts/ || true
+            exit 1
+          fi
+          echo "Bundle archive: $BUNDLE_ARCHIVE"
+          chmod +x cli/scripts/smoke-test-runtime-bundle.sh
+          bash cli/scripts/smoke-test-runtime-bundle.sh \
+            "cli/browser4-cli/target/${{ matrix.target }}/release/browser4-cli" \
+            "$BUNDLE_ARCHIVE" 0 300
+
+      - name: Upload server logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: smoke-test-logs-${{ matrix.artifact_name }}
+          path: ${{ runner.temp }}/browser4-server-logs/
+          retention-days: 7
+
+      - name: Smoke test summary
+        if: always()
+        shell: bash
+        run: |
+          echo "::group::📊 Smoke Test Summary"
+          echo "🎯 Platform: ${{ matrix.name }}"
+          echo "📦 Bundle: ${{ matrix.asset_name }}"
+          echo "📊 Status: ${{ job.status }}"
+          echo "::endgroup::"
+
   publish-cli-npm:
     name: Publish browser4-cli to npm
     needs: [prepare, build-core-and-docker, build-cli-binaries]
@@ -1083,6 +1198,7 @@ jobs:
       - build-core-and-docker
       - build-cli-binaries
       - build-runtime-bundles
+      - smoke-test-runtime-bundle
       - publish-cli-npm
     if: |
       always() &&
@@ -1091,6 +1207,7 @@ jobs:
       needs.build-core-and-docker.result == 'success' &&
       (needs.build-cli-binaries.result == 'success' || needs.build-cli-binaries.result == 'skipped') &&
       needs.build-runtime-bundles.result == 'success' &&
+      (needs.smoke-test-runtime-bundle.result == 'success' || needs.smoke-test-runtime-bundle.result == 'skipped') &&
       (needs.publish-cli-npm.result == 'success' || needs.publish-cli-npm.result == 'skipped')
     runs-on: ubuntu-latest
     permissions:
@@ -1283,6 +1400,7 @@ jobs:
       - build-core-and-docker
       - build-cli-binaries
       - build-runtime-bundles
+      - smoke-test-runtime-bundle
       - publish-cli-npm
       - publish-github-release
     if: failure()

@@ -50,7 +50,9 @@ open class PulsarBrowserLauncher : BrowserLauncher {
             val chrome = launcher.launch(browserOptions)
             return PulsarBrowser(browserId, chrome, launcherOptions.settings, launcher)
         } catch (e: ChromeLaunchException) {
-            throw BrowserLaunchException("Failed to launch browser | $browserId", e)
+            throw BrowserLaunchException(
+                "Failed to launch browser | $browserId | ${e.message}", e
+            )
         }
     }
 }
