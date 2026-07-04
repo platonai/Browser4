@@ -65,7 +65,6 @@
         <dependency>
             <groupId>ai.platon.gora</groupId>
             <artifactId>gora-core-shaded</artifactId>
-            <version>1.0.5-slim</version>
         </dependency>
 
         <dependency>

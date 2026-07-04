@@ -91,6 +91,52 @@
                 <configuration>
                     <mainClass>ai.platon.pulsar.apps.Browser4StandaloneApplicationKt</mainClass>
                     <addResources>true</addResources>
+                    <!-- Exclude Tomcat (Jetty is used instead) and unused multi-platform native libraries -->
+                    <excludes>
+                        <!-- Exclude Tomcat embedded artifacts (Jetty is the chosen server) -->
+                        <exclude>
+                            <groupId>org.apache.tomcat.embed</groupId>
+                            <artifactId>tomcat-embed-core</artifactId>
+                        </exclude>
+                        <exclude>
+                            <groupId>org.apache.tomcat.embed</groupId>
+                            <artifactId>tomcat-embed-el</artifactId>
+                        </exclude>
+                        <exclude>
+                            <groupId>org.apache.tomcat.embed</groupId>
+                            <artifactId>tomcat-embed-websocket</artifactId>
+                        </exclude>
+                        <exclude>
+                            <groupId>org.springframework.boot</groupId>
+                            <artifactId>spring-boot-starter-tomcat</artifactId>
+                        </exclude>
+                        <exclude>
+                            <groupId>org.springframework.boot</groupId>
+                            <artifactId>spring-boot-starter-tomcat-runtime</artifactId>
+                        </exclude>
+                        <exclude>
+                            <groupId>org.springframework.boot</groupId>
+                            <artifactId>spring-boot-tomcat</artifactId>
+                        </exclude>
+                        <!-- Exclude multi-platform native QUIC libraries (not used by Browser4) -->
+                        <exclude>
+                            <groupId>io.netty</groupId>
+                            <artifactId>netty-codec-native-quic</artifactId>
+                        </exclude>
+                        <!-- Exclude platform-specific native transports (Netty falls back to Java NIO) -->
+                        <exclude>
+                            <groupId>io.netty</groupId>
+                            <artifactId>netty-transport-native-epoll</artifactId>
+                        </exclude>
+                        <exclude>
+                            <groupId>io.netty</groupId>
+                            <artifactId>netty-resolver-dns-native-macos</artifactId>
+                        </exclude>
+                        <exclude>
+                            <groupId>io.netty</groupId>
+                            <artifactId>netty-resolver-dns-classes-macos</artifactId>
+                        </exclude>
+                    </excludes>
                 </configuration>
             </plugin>
             <plugin>

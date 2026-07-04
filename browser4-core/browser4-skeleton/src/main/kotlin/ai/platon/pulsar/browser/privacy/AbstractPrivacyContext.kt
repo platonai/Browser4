@@ -134,7 +134,7 @@ abstract class AbstractPrivacyContext(
         get() {
             val leaked = isLeaked0
             if (leaked) {
-                throttlingLogger.warn("Privacy context is leaked | {}", state)
+                throttlingLogger.warn("Privacy context is leaked | id={}, display={}", id, display)
             }
             return leaked
         }
