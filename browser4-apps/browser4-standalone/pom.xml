@@ -172,13 +172,14 @@
                     <plugin>
                         <groupId>org.graalvm.buildtools</groupId>
                         <artifactId>native-maven-plugin</artifactId>
-                        <version>0.10.6</version>
+                        <version>0.11.5</version>
                         <extensions>true</extensions>
                         <configuration>
                             <mainClass>ai.platon.pulsar.apps.Browser4StandaloneApplicationKt</mainClass>
                             <imageName>browser4-standalone</imageName>
                             <buildArgs>
                                 <arg>--enable-url-protocols=http,https</arg>
+                                <arg>-O2</arg>
                                 <arg>-H:+ReportExceptionStackTraces</arg>
                                 <arg>-J-Xmx8G</arg>
                             </buildArgs>
@@ -192,7 +193,7 @@
                                 <goals>
                                     <goal>compile-no-fork</goal>
                                 </goals>
-                                <phase>package</phase>
+                                <phase>prepare-package</phase>
                             </execution>
                         </executions>
                     </plugin>
@@ -258,6 +259,13 @@
             <groupId>ai.platon.pulsar</groupId>
             <artifactId>browser4-rest</artifactId>
             <version>${project.version}</version>
+            <exclusions>
+                <!-- Ensure Tomcat is excluded from native image classpath (Jetty is used) -->
+                <exclusion>
+                    <groupId>org.springframework.boot</groupId>
+                    <artifactId>spring-boot-starter-tomcat</artifactId>
+                </exclusion>
+            </exclusions>
         </dependency>
 
 
