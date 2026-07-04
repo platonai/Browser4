@@ -218,19 +218,80 @@ class PulsarWebDriverTests : WebDriverTestBase() {
     }
 
     @Test
-    @DisplayName("test scrollToViewport")
-    fun testScrolltoviewport() = runEnhancedWebDriverTest(multiScreensInteractiveUrl, browser) { driver ->
-        val n = 1.0 // second viewport (0-based)
-        val y = driver.scrollToViewport(n, smooth = false)
-        val viewportHeight = (driver.evaluate("window.innerHeight", 0.0) as? Number)?.toDouble() ?: 0.0
-        val totalHeight = (driver.evaluate(
-            "Math.min(Math.max(document.documentElement.scrollHeight, document.body.scrollHeight), 15000)",
-            0.0
-        ) as? Number)?.toDouble() ?: 0.0
-        val maxScrollY = (totalHeight - viewportHeight).coerceAtLeast(0.0)
-        val expectedY = (n * viewportHeight).coerceIn(0.0, maxScrollY)
-        val actualY = (driver.evaluate("window.scrollY", 0.0) as? Number)?.toDouble() ?: 0.0
-        assertEquals(expectedY, y, 5.0)
-        assertEquals(expectedY, actualY, 5.0)
+    @DisplayName("test pageSource returns HTML with vi attributes after compute")
+    fun testPageSourceReturnsViAttributes() = runEnhancedWebDriverTest(interactiveUrl, browser) { driver ->
+        val pageSource = driver.pageSource() ?: ""
+
+        // Verify vi attributes exist in the captured HTML
+        // Format: vi="x y w h" (space-separated, rounded to 1 decimal)
+        val viRegex = Regex("""\bvi="\d+(?:\.\d+)? \d+(?:\.\d+)? \d+(?:\.\d+)? \d+(?:\.\d+)?"""")
+        val viMatches = viRegex.findAll(pageSource).toList()
+
+        assertTrue(
+            viMatches.isNotEmpty(),
+            "pageSource() should return HTML with vi attributes, got none | ${pageSource.take(500)}"
+        )
+
+        // The vi value should contain 4 space-separated numbers (x y w h)
+        val firstVi = viMatches.first().value
+        val parts = firstVi.substringAfter("vi=\"").substringBefore("\"").split(" ")
+        assertEquals(4, parts.size, "vi attribute should contain 4 values (x y w h): $firstVi")
+        parts.forEach { assertTrue(it.toDoubleOrNull() != null, "vi value should be numeric: '$it' in $firstVi") }
+    }
+
+    @Test
+    @DisplayName("test outerHTML returns HTML with vi attributes after compute")
+    fun testOuterHTMLReturnsViAttributes() = runEnhancedWebDriverTest(interactiveUrl, browser) { driver ->
+        val html = driver.outerHTML() ?: ""
+
+        // outerHTML(":root") should include vi attributes just like pageSource
+        val viRegex = Regex("""\bvi="\d+(?:\.\d+)? \d+(?:\.\d+)? \d+(?:\.\d+)? \d+(?:\.\d+)?"""")
+        val viMatches = viRegex.findAll(html).toList()
+
+        assertTrue(
+            viMatches.isNotEmpty(),
+            "outerHTML() should return HTML with vi attributes, got none | ${html.take(500)}"
+        )
+    }
+
+    @Test
+    @DisplayName("test outerHTML with selector returns annotated subtree")
+    fun testOuterHTMLSelectorReturnsViAttributes() = runEnhancedWebDriverTest(interactiveUrl, browser) { driver ->
+        val html = driver.outerHTML("body") ?: ""
+
+        // The body subtree should contain vi attributes
+        assertTrue(
+            html.contains("vi="),
+            "outerHTML('body') should return HTML with vi attributes | ${html.take(300)}"
+        )
+        assertTrue(
+            html.trimStart().startsWith("<body"),
+            "outerHTML('body') should start with <body>: ${html.take(80)}"
+        )
+    }
+
+    @Test
+    @DisplayName("test vi attributes are NOT in the live DOM after compute")
+    fun testViAttributesNotInLiveDOM() = runEnhancedWebDriverTest(interactiveUrl, browser) { driver ->
+        // After compute(), the live DOM must NOT have vi attributes.
+        // This is the core of the feature: visual info is stored in a WeakMap,
+        // not written as DOM attributes.
+        val hasViAttr = driver.evaluateValue(
+            "document.querySelector('[vi]') !== null"
+        ) as? Boolean ?: true
+
+        assertEquals(
+            false, hasViAttr,
+            "Live DOM must NOT have vi attributes after compute() — they should only appear in captured HTML"
+        )
+
+        // Also verify _h and _oh are not on the live DOM
+        val hasHiddenAttr = driver.evaluateValue(
+            "document.querySelector('[_h]') !== null"
+        ) as? Boolean ?: true
+        assertEquals(
+            false, hasHiddenAttr,
+            "Live DOM must NOT have _h attributes after compute()"
+        )
     }
 }

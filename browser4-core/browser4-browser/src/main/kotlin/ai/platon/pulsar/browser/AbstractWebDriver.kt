@@ -483,7 +483,7 @@ abstract class AbstractWebDriver(
     }
 
     @Throws(WebDriverException::class)
-    override suspend fun outerHTML() = outerHTML(":root")
+    override suspend fun outerHTML() = pageSource()
 
     @Throws(WebDriverException::class)
     override suspend fun textContent(selector: String?): String? {
