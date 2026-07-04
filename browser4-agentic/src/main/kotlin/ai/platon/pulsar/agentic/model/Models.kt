@@ -122,12 +122,12 @@ data class ToolCall constructor(
 
     val cliOptions: String
         get() {
-            return arguments.entries.joinToString { (k, v) -> "--$k=" + Strings.singleQuoteIfContainsWhitespace(v?.toString()) }
+            return arguments.entries.joinToString(separator = " ") { (k, v) -> "--$k " + Strings.singleQuoteIfContainsWhitespace(v?.toString()) }
         }
 
     /**
      * Command Line Interface style expression, which is more concise and suitable for CLI usage,
-     * e.g. "browser4-cli tab click --selector='#submit' --timeout=5000"
+     * e.g. "browser4-cli tab click --selector '#submit' --timeout 5000"
      * */
     val cli: String
         get() {

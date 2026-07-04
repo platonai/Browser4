@@ -100,6 +100,38 @@ jobs:
             echo "::endgroup::"
           fi
 
+      - name: Diagnostic — Chrome version & system info
+        shell: bash
+        run: |
+          echo "::group::🔍 Chrome / Chromium diagnostics"
+          echo "=== Which Chrome/Chromium ==="
+          which google-chrome google-chrome-stable chromium-browser chromium 2>/dev/null || echo "(none found via which)"
+          echo "=== Chrome versions ==="
+          google-chrome --version 2>/dev/null || google-chrome-stable --version 2>/dev/null || chromium-browser --version 2>/dev/null || echo "NO CHROME BINARY FOUND"
+          echo "=== /tmp mount ==="
+          df -h /tmp || true
+          mount | grep /tmp || true
+          echo "=== /dev/shm ==="
+          df -h /dev/shm || true
+          echo "=== System ==="
+          uname -a
+          echo "=== ldd check (Linux) ==="
+          if [ "$(uname -s)" = "Linux" ]; then
+            for b in google-chrome google-chrome-stable chromium-browser chromium; do
+              p=$(which "$b" 2>/dev/null || true)
+              if [ -n "$p" ] && [ -x "$p" ]; then
+                echo "--- ldd $p ---"
+                ldd "$p" 2>&1 | grep -E 'not found|libgbm|libnss|libatk' || echo "(all libs found)"
+              fi
+            done
+          fi
+          echo "::endgroup::"
+
+      - name: Diagnostic — configure debug logging
+        shell: bash
+        run: |
+          echo "BROWSER4_SERVER_OPTS=-Dapp.name=browser4-test -Dlogging.level.ai.platon.browser4.chrome=DEBUG -Dlogging.level.ai.platon.pulsar.browser=DEBUG" >> "$GITHUB_ENV"
+
       - name: Build e2e test binary
         shell: bash
         run: cargo test --test e2e --manifest-path ${{ env.CLI_MANIFEST_PATH }} --no-run
@@ -130,7 +162,7 @@ jobs:
 
       - name: Run browser4-cli E2E tests
         shell: bash
-        timeout-minutes: 30
+        timeout-minutes: 45
         run: |
           echo "::group::🧪 browser4-cli E2E Tests (${{ matrix.name }})"
 

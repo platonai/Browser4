@@ -170,6 +170,14 @@ class AgenticCliRunnerTest {
         }
 
         @Test
+        @DisplayName("parses command with --key value options (space-separated)")
+        fun parsesKeyValueSpaceOptions() {
+            val (name, args) = runner.parseCommand("snapshot --filename out.txt")
+            assertEquals("snapshot", name)
+            assertEquals("out.txt", args["filename"])
+        }
+
+        @Test
         @DisplayName("parses boolean --flag options")
         fun parsesBooleanFlag() {
             val (name, args) = runner.parseCommand("type hello --submit")

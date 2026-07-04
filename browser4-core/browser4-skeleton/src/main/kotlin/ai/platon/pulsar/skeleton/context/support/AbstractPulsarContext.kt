@@ -239,7 +239,14 @@ abstract class AbstractPulsarContext(
 
     override fun normalize(url: String, options: LoadOptions, toItemOption: Boolean): NormURL {
         val url0 = try {
-            url.takeIf { it.contains("://") } ?: String(Base64.getUrlDecoder().decode(url))
+            // Non-hierarchical URL schemes (about:, data:, blob:, javascript:, chrome:, edge:)
+            // don't contain "://" and are not valid base64. Pass them through directly
+            // to avoid falling back to the default search engine.
+            if (url.isNonHierarchicalScheme()) {
+                url
+            } else {
+                url.takeIf { it.contains("://") } ?: String(Base64.getUrlDecoder().decode(url))
+            }
         } catch (_: IllegalArgumentException) {
             logger.warn("Invalid URL, will goto the default search engine {}", Strings.compactInline(url))
             if (AppContext.isCN) AppConstants.SEARCH_ENGINE_URL else AppConstants.SEARCH_ENGINE_EN_URL
@@ -247,6 +254,16 @@ abstract class AbstractPulsarContext(
 
         val link = Hyperlink(url0, "", href = url0)
         return normalize(link, options, toItemOption)
+    }
+
+    /**
+     * Returns true for URL schemes that don't use the hierarchical "://" separator.
+     * These are valid browser-internal or pseudo-URLs that must be passed through
+     * without interpretation (base64 decoding or search-engine fallback).
+     */
+    private fun String.isNonHierarchicalScheme(): Boolean {
+        return startsWith("about:") || startsWith("data:") || startsWith("blob:")
+                || startsWith("javascript:") || startsWith("chrome:") || startsWith("edge:")
     }
 
     override fun normalizeOrNull(url: String?, options: LoadOptions, toItemOption: Boolean): NormURL? {

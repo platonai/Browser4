@@ -214,14 +214,14 @@ class PageHandler constructor(
             appendLine("# This page has ${s.viewportsTotal} viewports. You are currently viewing viewport $currentViewport.")
             appendLine("# To read the page viewport by viewport (like a human scrolling):")
             if (currentViewport > 0) {
-                appendLine("#   snapshot --viewport=0          # view the top of the page")
+                appendLine("#   snapshot -v 0          # view the top of the page")
             }
             if (currentViewport < s.viewportsTotal - 1) {
                 val next = currentViewport + 1
-                appendLine("#   snapshot --viewport=$next          # scroll down to viewport $next")
+                appendLine("#   snapshot -v $next          # scroll down to viewport $next")
             }
-            appendLine("#   snapshot --viewport=0-${s.viewportsTotal - 1}    # capture all viewports at once")
-            appendLine("#   snapshot --viewport=all       # capture all viewports (same as above)")
+            appendLine("#   snapshot -v 0-${s.viewportsTotal - 1}    # capture all viewports at once")
+            appendLine("#   snapshot -v all       # capture all viewports (same as above)")
             appendLine("#")
         }
     }

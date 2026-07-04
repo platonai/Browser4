@@ -53,8 +53,8 @@ FROM load_and_select(@url, 'body')
 SQL
 
 # Step 3 — parallel extraction
-browser4-cli swarm create --display-mode=HEADLESS --max-browser-contexts=3
-browser4-cli swarm query --sql @extract.sql --seed-file=urls.txt --refresh
+browser4-cli swarm create --display-mode HEADLESS --max-browser-contexts 3
+browser4-cli swarm query --sql @extract.sql --seed-file urls.txt --refresh
 browser4-cli swarm status scrape-task-1    # poll until isDone: true
 browser4-cli swarm result scrape-task-1    # structured JSON per product
 browser4-cli close
@@ -112,12 +112,12 @@ re-fetching is expensive.
 
 ```bash
 # Phase 1 — fetch and parse all detail pages
-browser4-cli swarm create --display-mode=HEADLESS
-browser4-cli swarm submit --seed-file=urls.txt --parse --store-content --refresh
+browser4-cli swarm create --display-mode HEADLESS
+browser4-cli swarm submit --seed-file urls.txt --parse --store-content --refresh
 
 # Phase 2 — run X-SQL extraction against the cached pages
 # (can iterate on this without re-fetching)
-browser4-cli swarm query --sql @extract.sql --seed-file=urls.txt
+browser4-cli swarm query --sql @extract.sql --seed-file urls.txt
 browser4-cli swarm result scrape-task-2
 ```
 
@@ -299,8 +299,8 @@ browser4-cli htmlsnapshot query --sql "
 cat search-results.json | jq -r '.[].url' > urls.txt
 
 # Phase 3 — parallel detail-page extraction
-browser4-cli swarm create --display-mode=HEADLESS
-browser4-cli swarm query --sql @extract.sql --seed-file=urls.txt --refresh
+browser4-cli swarm create --display-mode HEADLESS
+browser4-cli swarm query --sql @extract.sql --seed-file urls.txt --refresh
 browser4-cli swarm result scrape-task-1
 browser4-cli close
 ```

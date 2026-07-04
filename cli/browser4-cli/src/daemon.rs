@@ -3227,10 +3227,28 @@ pub fn find_chrome_executable() -> Option<std::path::PathBuf> {
 
     for path in candidates {
         if std::path::Path::new(path).exists() {
-            return Some(std::path::PathBuf::from(path));
+            // On Unix, verify the file is actually executable — not just a
+            // broken symlink, data file, or script without +x.  The Java side
+            // does its own isExecutable() check, but filtering here avoids
+            // passing a useless path via -Dchrome.path that would cause the
+            // JVM to throw a RuntimeException before even trying to launch.
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                if let Ok(meta) = std::fs::metadata(path) {
+                    if meta.permissions().mode() & 0o111 != 0 {
+                        return Some(std::path::PathBuf::from(path));
+                    }
+                }
+                // Not executable — keep searching.
+                continue;
+            }
+            #[cfg(not(unix))]
+            {
+                return Some(std::path::PathBuf::from(path));
+            }
         }
     }
-
     // Playwright-installed Chromium / Chrome (cross-platform)
     if let Some(path) = find_chrome_in_playwright() {
         return Some(path);
@@ -4671,9 +4689,19 @@ fn append_startup_log_message_impl(path: &Path, message: &str) -> std::io::Resul
 }
 
 fn server_startup_log_dir(log_dir: Option<&Path>) -> PathBuf {
-    log_dir
-        .map(Path::to_path_buf)
-        .unwrap_or_else(default_cli_temp_dir)
+    if let Some(dir) = log_dir {
+        return dir.to_path_buf();
+    }
+    if let Ok(dir) = std::env::var("BROWSER4_SERVER_LOG_DIR") {
+        let trimmed = dir.trim();
+        if !trimmed.is_empty() {
+            let p = PathBuf::from(trimmed);
+            // Create the directory early so callers don't have to.
+            let _ = fs::create_dir_all(&p);
+            return p;
+        }
+    }
+    default_cli_temp_dir()
 }
 
 fn server_startup_log_path(

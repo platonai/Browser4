@@ -146,6 +146,24 @@ fn quiet_active() -> bool {
 }
 
 // ---------------------------------------------------------------------------
+// Show-tip support (--show-tip / -tip global flag)
+// ---------------------------------------------------------------------------
+
+thread_local! {
+    /// When `--show-tip` / `-tip` is active, tips are shown on stderr after
+    /// each successful command.  Tips are suppressed by default.
+    static SHOW_TIP: RefCell<bool> = RefCell::new(false);
+}
+
+fn show_tip_init(show_tip: bool) {
+    SHOW_TIP.with(|cell| *cell.borrow_mut() = show_tip);
+}
+
+fn show_tip_active() -> bool {
+    SHOW_TIP.with(|cell| *cell.borrow())
+}
+
+// ---------------------------------------------------------------------------
 // Raw / stdout output support (--raw / --stdout per-command flags)
 // ---------------------------------------------------------------------------
 
@@ -572,7 +590,7 @@ fn build_swarm_create_capabilities(tool_params: &Value) -> Result<Value, String>
         "SEQUENTIAL" | "TEMPORARY" => {}
         _ => {
             return Err(format!(
-                "Swarm create only supports --profile-mode=SEQUENTIAL or --profile-mode=TEMPORARY. Received: {}",
+                "Swarm create only supports --profile-mode SEQUENTIAL or --profile-mode TEMPORARY. Received: {}",
                 profile_mode
             ))
         }
@@ -3465,14 +3483,21 @@ async fn handle_html_snapshot_capture(
     }
 
     // Next-step hints
-    cli_println!("💡 Next:");
+    cli_println!("  💡 Try these next:");
+    cli_println!("    Use `get all text` to extract visible text, or `get all attr <name>` for attribute values.");
+    cli_println!("    The SQL variant lets you query with full expressive power (joins, filters, aggregates).");
     if !title.is_empty() {
-        cli_println!("   htmlsnapshot get text \"h1\"              — page heading");
+        cli_println!("     htmlsnapshot get text \"h1\" --limit 5   # page heading");
     }
-    cli_println!("   htmlsnapshot get all text \"a\" --limit 20 — link texts");
-    cli_println!("   htmlsnapshot inspect                      — discover recurring patterns");
+    cli_println!("     htmlsnapshot get all text \"a\" --limit 20  # link texts");
+    cli_println!("     htmlsnapshot get attr \"img[src]\" src --limit 20  # image URLs");
+    cli_println!("     htmlsnapshot get attr \"a[href]\" href --limit 20  # link URLs");
+    if image_count > 0 {
+        cli_println!("     htmlsnapshot get attr \"img[src]:expr(width > 200 && height > 200)\" src --limit 20  # large images only");
+    }
+    cli_println!("     htmlsnapshot inspect  # discover recurring patterns");
     if !url.is_empty() {
-        cli_println!("   htmlsnapshot query --sql \"SELECT dom_text(dom) FROM load_and_select(@url, 'h1')\"");
+        cli_println!("     htmlsnapshot query --sql \"SELECT dom_text(dom) as text FROM load_and_select(@url, 'a')\"");
     }
 
     Ok(())
@@ -3974,13 +3999,11 @@ fn format_summary_outline(yaml: &str) -> String {
                     }
                 } else if let Some(w) = trim_prefix(trimmed, "avgCardWidth:") {
                     if let Some(last) = linkgroup_items.last_mut() {
-                        let w = w.trim().trim_end_matches('0').trim_end_matches('.');
-                        *last = format!("{}  avg:{}×", last, w);
+                        *last = format!("{}  avg:{}×", last, fmt_num(w));
                     }
                 } else if let Some(h) = trim_prefix(trimmed, "avgCardHeight:") {
                     if let Some(last) = linkgroup_items.last_mut() {
-                        let h = h.trim().trim_end_matches('0').trim_end_matches('.');
-                        *last = format!("{}{}", last, h);
+                        *last = format!("{}{}", last, fmt_num(h));
                     }
                 } else if let Some(links) = trim_prefix(trimmed, "allHaveLinks:") {
                     if links.trim() == "true" {
@@ -3996,7 +4019,7 @@ fn format_summary_outline(yaml: &str) -> String {
                     }
                 } else if let Some(score) = trim_prefix(trimmed, "score:") {
                     if let Some(last) = linkgroup_items.last_mut() {
-                        *last = format!("{}  score:{}", last, score.trim());
+                        *last = format!("{}  score:{}", last, fmt_num(score));
                     }
                 }
             }
@@ -4079,9 +4102,9 @@ fn format_summary_outline(yaml: &str) -> String {
                 text.clone()
             };
             if display_text.is_empty() {
-                outline.push_str(&format!("  {:>2}. {:<10} score:{}\n", i + 1, typ, score));
+                outline.push_str(&format!("  {:>2}. {:<10} score:{}\n", i + 1, typ, fmt_num(score)));
             } else {
-                outline.push_str(&format!("  {:>2}. {:<10} score:{:<4} \"{}\"\n", i + 1, typ, score, display_text));
+                outline.push_str(&format!("  {:>2}. {:<10} score:{:<4} \"{}\"\n", i + 1, typ, fmt_num(score), display_text));
             }
         }
         // Score legend: explain what the numbers mean
@@ -4121,6 +4144,18 @@ fn format_summary_outline(yaml: &str) -> String {
 /// Trim a prefix from a string, returning the remainder trimmed.
 fn trim_prefix<'a>(s: &'a str, prefix: &str) -> Option<&'a str> {
     s.strip_prefix(prefix).map(|r| r.trim())
+}
+
+/// Format a numeric string to at most one decimal place.
+fn fmt_num(s: &str) -> String {
+    match s.trim().parse::<f64>() {
+        Ok(v) => {
+            let s = format!("{:.1}", v);
+            let s = s.trim_end_matches('0').trim_end_matches('.');
+            s.to_string()
+        }
+        Err(_) => s.to_string(),
+    }
 }
 
 async fn handle_html_snapshot_summary(
@@ -4222,6 +4257,17 @@ async fn handle_html_snapshot_inspect(
     let analyzed = data.get("analyzed").and_then(|v| v.as_u64()).unwrap_or(0);
     let auto_discovered = data.get("autoDiscovered").and_then(|v| v.as_bool()).unwrap_or(false);
     let original_selector = data.get("originalSelector").and_then(|v| v.as_str());
+    let speculative_selector = data.get("speculativeSuggestion").and_then(|v| v.as_str());
+    let speculative_count = data.get("speculativeMatchCount").and_then(|v| v.as_i64());
+
+    // Render speculative suggestion (Mode B: visual detection found a better
+    // repeating pattern than the user's selector, but we didn't override).
+    let render_speculative = |sel: &str, count: i64| {
+        cli_println!("");
+        cli_println!("  💡 Visual geometry detection found a potentially better repeating pattern:");
+        cli_println!("     \"{}\" — {} occurrences with consistent bounding-box geometry.", sel, count);
+        cli_println!("     Try: htmlsnapshot inspect \"{}\"", sel);
+    };
 
     if match_count == 0 {
         cli_println!("### Inspect: \"{}\" (0 matches)", selector);
@@ -4229,6 +4275,9 @@ async fn handle_html_snapshot_inspect(
             if let Some(orig) = original_selector {
                 cli_println!("  Auto-discovered selector \"{}\" from \"{}\" also had no matches.", selector, orig);
             }
+        }
+        if let (Some(sel), Some(count)) = (speculative_selector, speculative_count) {
+            render_speculative(sel, count);
         }
         cli_println!("- No elements matched. Check the CSS selector and ensure a HTML snapshot has been captured (`browser4-cli htmlsnapshot`).");
         json_field("matchCount", json!(0));
@@ -4243,7 +4292,14 @@ async fn handle_html_snapshot_inspect(
     if auto_discovered {
         if let Some(orig) = original_selector {
             cli_println!("  🔍 Auto-discovered repeating pattern from \"{}\"", orig);
+            cli_println!("    The tool found that \"{}\" repeats as a sibling group (e.g. a product grid, search result list).", orig);
+            cli_println!("    It analyzed {} of the {} occurrences to find selectors that work consistently.", analyzed, match_count);
         }
+    } else if let (Some(sel), Some(count)) = (speculative_selector, speculative_count) {
+        // Only show speculative suggestion when we did NOT auto-discover
+        // (auto-discovery already overrides the selector; speculative is for
+        // when the user's selector was kept but a better one exists).
+        render_speculative(sel, count);
     }
 
     // Sample structures
@@ -4255,6 +4311,9 @@ async fn handle_html_snapshot_inspect(
                 samples.len(),
                 match_count
             );
+            cli_println!("    Showing {} representative element(s) out of {} total matches.", samples.len(), match_count);
+            cli_println!("    Each element shows its CSS selector and bounding box (x y width height in px).");
+            cli_println!("    Indented lines are child elements found inside it.");
             for (i, sample) in samples.iter().enumerate() {
                 // Section 8 format: use "ref" (e.g. "li.feed-carousel-card") instead of
                 // separate tag/id/class fields. Fall back to legacy fields for compatibility.
@@ -4367,6 +4426,11 @@ async fn handle_html_snapshot_inspect(
 
             cli_println!("");
             cli_println!("  Suggested selectors (recurring across matches):");
+            cli_println!("    Each row is a CSS selector that finds the same kind of element inside each match.");
+            cli_println!("    ★ = high-quality (specific enough to use reliably).");
+            cli_println!("    N/N (%) = how many of the analyzed matches contained this element / coverage.");
+            cli_println!("    → \"...\" = sample values extracted by this selector.");
+            cli_println!("    Use these selectors with `htmlsnapshot get` to extract data.");
 
             // Render quality suggestions first (with class/id/attr specificity)
             for sug in &quality_sugs {
@@ -4377,6 +4441,7 @@ async fn handle_html_snapshot_inspect(
             if !bare_sugs.is_empty() {
                 cli_println!("");
                 cli_println!("  Structural (bare tags, low specificity):");
+                cli_println!("    These match too broadly — use only as a fallback or with :expr() filters.");
                 for sug in &bare_sugs {
                     render_suggestion(sug);
                 }
@@ -4406,20 +4471,33 @@ async fn handle_html_snapshot_inspect(
 
         if !actionable.is_empty() {
             cli_println!("  💡 Try these next:");
+            cli_println!("    Use `get all text` to extract visible text, or `get all attr <name>` for attribute values.");
+            cli_println!("    The SQL variant lets you query with full expressive power (joins, filters, aggregates).");
             for sel in &actionable {
                 cli_println!("     htmlsnapshot get all text \"{}\" --limit 20", sel);
             }
+            cli_println!("     htmlsnapshot get attr \"img[src]\" src --limit 20  # image URLs");
+            cli_println!("     htmlsnapshot get attr \"a[href]\" href --limit 20  # link URLs");
+            cli_println!("     htmlsnapshot get attr \"img[src]:expr(width > 200 && height > 200)\" src --limit 20  # large images only");
             if let Some(first) = actionable.first() {
-                cli_println!("     htmlsnapshot query --sql \"SELECT dom_text(dom) FROM load_and_select(@url, '{}')\"", first);
+                cli_println!("     htmlsnapshot query --sql \"SELECT dom_text(dom) as text FROM load_and_select(@url, '{}')\"", first);
             }
         } else {
             // Fallback when no quality selectors found (e.g., all bare tags)
-            cli_println!("  💡 Try narrowing the scope with a more specific CSS selector:");
+            cli_println!("  💡 Try these next:");
+            cli_println!("     htmlsnapshot get attr \"img[src]\" src --limit 20  # image URLs");
+            cli_println!("     htmlsnapshot get attr \"a[href]\" href --limit 20  # link URLs");
+            cli_println!("     htmlsnapshot get attr \"img[src]:expr(width > 200 && height > 200)\" src --limit 20  # large images only");
+            cli_println!("    Use a more specific CSS selector for targeted extraction:");
             cli_println!("     htmlsnapshot inspect \".card\" --max 20 --depth 6");
         }
     } else {
         // Fallback when no suggestions at all
-        cli_println!("  💡 Try narrowing the scope with a more specific CSS selector:");
+        cli_println!("  💡 Try these next:");
+        cli_println!("     htmlsnapshot get attr \"img[src]\" src --limit 20  # image URLs");
+        cli_println!("     htmlsnapshot get attr \"a[href]\" href --limit 20  # link URLs");
+        cli_println!("     htmlsnapshot get attr \"img[src]:expr(width > 200 && height > 200)\" src --limit 20  # large images only");
+        cli_println!("    Narrow the scope with a more specific CSS selector for targeted extraction:");
         cli_println!("     htmlsnapshot inspect \".card\" --max 20 --depth 6");
     }
 
@@ -8681,6 +8759,7 @@ fn normalize_command_invocation(global: &args::GlobalFlags) -> (String, args::Gl
             json: global.json,
             quiet: global.quiet,
             proxy_url: global.proxy_url.clone(),
+            show_tip: global.show_tip,
             args: rewritten,
         };
         (cmd, new_global, true)
@@ -9617,6 +9696,8 @@ async fn run(
     }
     // Initialise quiet mode when -q / --quiet is active.
     quiet_init(global.quiet);
+    // Initialise show-tip mode when --show-tip / -tip is active.
+    show_tip_init(global.show_tip);
 
     // Handle help or no command — these always print human-readable text.
     if command.is_empty() || command == "help" || command == "--help" || command == "-h" {
@@ -10974,7 +11055,7 @@ mod tests {
 
         assert_eq!(
             error,
-            "Swarm create only supports --profile-mode=SEQUENTIAL or --profile-mode=TEMPORARY. Received: DEFAULT"
+            "Swarm create only supports --profile-mode SEQUENTIAL or --profile-mode TEMPORARY. Received: DEFAULT"
         );
     }
 
@@ -11201,6 +11282,7 @@ mod tests {
             json: false,
             quiet: false,
             proxy_url: None,
+            show_tip: false,
             args: vec![
                 "agent".to_string(),
                 "status".to_string(),
@@ -11224,6 +11306,7 @@ mod tests {
             json: false,
             quiet: false,
             proxy_url: None,
+            show_tip: false,
             args: vec!["agent-run".to_string(), "task".to_string()],
         };
 

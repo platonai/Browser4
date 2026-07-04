@@ -3357,6 +3357,7 @@ fn excluded_commands(include_batch_command: bool) -> HashSet<&'static str> {
         "wait",
         "get",
         "htmlsnapshot",
+        "htmlsnapshot-capture",
         "htmlsnapshot-get",
         "htmlsnapshot-get-all",
         "htmlsnapshot-query",

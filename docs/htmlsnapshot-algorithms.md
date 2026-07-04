@@ -527,7 +527,7 @@ Running `capture` → `summary` → `inspect` in sequence would previously parse
 │     matches = document.select(effectiveSelector)             │
 │     → If max < matchCount, output includes a note:           │
 │       "⚠ Based on sample: {max} of {matchCount} matches      │
-│        analyzed. Run with --max={matchCount} for full        │
+│        analyzed. Run with --max {matchCount} for full        │
 │        coverage."                                            │
 │                                                              │
 │  6. BUILD sample structures (first 3 matches)                │

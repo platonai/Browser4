@@ -100,7 +100,7 @@ class AgenticCliRunner(
      * Execute a pre-parsed command by name and arguments.
      *
      * @param commandName The CLI command name (e.g. "goto", "click").
-     * @param args Parsed arguments map (positional args keyed by name, options as --key=value).
+     * @param args Parsed arguments map (positional args keyed by name, options as --key value).
      * @return [AgenticCliResult] with the execution outcome.
      */
     suspend fun execute(commandName: String, args: Map<String, Any?>): AgenticCliResult {
@@ -158,11 +158,11 @@ class AgenticCliRunner(
     /**
      * Parse a raw CLI command string into a command name and arguments map.
      *
-     * Format: `<command> [pos-arg-1] [pos-arg-2] ... [--key=value] ...`
+     * Format: `<command> [pos-arg-1] [pos-arg-2] ... [--key value] ...`
      *
      * Positional arguments are mapped by index (0, 1, 2, ...) AND by their
      * resolved parameter name (see [resolvePositionalArgs]).
-     * Named options (--key=value) are stored directly by key.
+     * Named options (--key value) are stored directly by key.
      */
     internal fun parseCommand(raw: String): Pair<String, Map<String, Any?>> {
         val tokens = tokenize(raw)
@@ -176,21 +176,32 @@ class AgenticCliRunner(
         val positional = mutableListOf<String>()
         val options = mutableMapOf<String, Any?>()
 
-        for (token in rest) {
+        var i = 0
+        while (i < rest.size) {
+            val token = rest[i]
             when {
                 token.startsWith("--") -> {
                     val eqIndex = token.indexOf('=')
                     if (eqIndex >= 0) {
+                        // --key=value
                         val key = token.substring(2, eqIndex)
                         val value = token.substring(eqIndex + 1)
                         options[key] = parseOptionValue(value)
                     } else {
-                        // --flag (boolean true)
-                        options[token.substring(2)] = true
+                        val key = token.substring(2)
+                        // Look ahead: --key value (space-separated)
+                        if (i + 1 < rest.size && !rest[i + 1].startsWith("--")) {
+                            options[key] = parseOptionValue(rest[i + 1])
+                            i++ // consume the value token
+                        } else {
+                            // --flag (boolean true)
+                            options[key] = true
+                        }
                     }
                 }
                 else -> positional.add(token)
             }
+            i++
         }
 
         // Merge positional args with their resolved names

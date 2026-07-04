@@ -82,6 +82,11 @@ pub fn generate_help() -> String {
         "suppress normal output, only show errors",
         30,
     ));
+    lines.push(format_with_gap(
+        "  -tip, --show-tip",
+        "show a relevant tip on stderr after each command",
+        30,
+    ));
     lines.push(format_with_gap("  -s <name>", "named session label", 30));
     lines.push(format_with_gap(
         "  --server <url>",

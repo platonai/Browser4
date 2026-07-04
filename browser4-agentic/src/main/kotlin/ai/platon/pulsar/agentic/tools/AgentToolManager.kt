@@ -250,6 +250,7 @@ class AgentToolManager constructor(
         val method = tc.method
         when (method) {
             "switchTab" -> onDidSwitchTab(evaluate)
+            "closeTab" -> onDidCloseTab()
             "navigate" -> onDidNavigate(driver, tc, evaluate)
         }
 
@@ -281,6 +282,41 @@ class AgentToolManager constructor(
         }
 
         session.bindDriver(switchedDriver)
+    }
+
+    /**
+     * Handle tab close by rebinding the session to the next available tab driver.
+     *
+     * After [BrowserToolExecutor.closeTab] calls [Browser.destroyDriver], the closed
+     * driver is removed from the browser's driver map but the session may still hold a
+     * stale reference via [session.boundDriver].  If the closed tab was the currently
+     * bound driver, subsequent operations (including the CLI's post-command snapshot)
+     * would operate on a dead driver.
+     *
+     * This handler rebinds the session to the current front-most driver so that
+     * follow-up calls see the correct page.
+     */
+    private suspend fun onDidCloseTab() {
+        val oldBoundDriver = session.boundDriver ?: return
+        val remainingDrivers = session.boundBrowser?.listDrivers().orEmpty()
+
+        // If the old bound driver is still present in the browser's driver list, the
+        // tab was not actually destroyed (edge case or destroyDriver was a no-op).
+        // In that case there is nothing to rebind.
+        if (oldBoundDriver in remainingDrivers) {
+            return
+        }
+
+        val newFront = remainingDrivers.firstOrNull()
+        if (newFront == null) {
+            logger.warn("⚠️ All tabs closed — no driver to rebind after closeTab")
+            session.unbindDriver(oldBoundDriver)
+            return
+        }
+
+        session.bindDriver(newFront)
+        logger.info("👀 Session driver rebound after closeTab: {} -> {}",
+            oldBoundDriver, newFront)
     }
 
     /**
