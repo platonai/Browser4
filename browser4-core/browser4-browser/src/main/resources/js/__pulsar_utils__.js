@@ -4,6 +4,13 @@ let __pulsar_utils__ = function () {
     this.fineHeight = 4000;
     this.fineNumAnchor = 100;
     this.fineNumImage = 20;
+
+    // WeakMap to store computed visual information without polluting the live DOM.
+    // Keys are live DOM Elements; values are plain objects:
+    //   { vi?: string, hidden?: {attrName: string}, overflowHidden?: boolean,
+    //     textNodeRects?: (string|false)[], charWidth?: string }
+    this._viDataMap = new WeakMap();
+    this._viDataComputed = false;
 };
 
 __pulsar_utils__.getConfig = function() {
@@ -1180,6 +1187,137 @@ __pulsar_utils__.getReadableNodeName = function(node) {
 };
 
 /**
+ * Serialize the document (or a subtree) into an HTML string, injecting
+ * visual-information attributes (vi, _h, _oh, tv0, tv1, ...) from the
+ * _viDataMap WeakMap without mutating the live DOM.
+ *
+ * @param root {Node} defaults to document.documentElement
+ * @return {string} The annotated HTML string
+ */
+__pulsar_utils__.serializeAnnotatedHTML = function(root) {
+    const viMap = this._viDataMap;
+    const config = this.getConfig();
+    const VOID = new Set([
+        'area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input',
+        'link', 'meta', 'param', 'source', 'track', 'wbr'
+    ]);
+
+    function escAttr(s) {
+        return String(s).replace(/[&"<>]/g, function(c) {
+            return ({'&': '&amp;', '"': '&quot;', '<': '&lt;', '>': '&gt;'})[c];
+        });
+    }
+    function escText(s) {
+        return String(s).replace(/[&<>]/g, function(c) {
+            return ({'&': '&amp;', '<': '&lt;', '>': '&gt;'})[c];
+        });
+    }
+
+    var html = '';
+
+    function serializeNode(node) {
+        if (node.nodeType === Node.TEXT_NODE) {
+            html += escText(node.textContent);
+            return;
+        }
+        if (node.nodeType === Node.COMMENT_NODE) {
+            html += '<!--' + node.textContent + '-->';
+            return;
+        }
+        if (node.nodeType !== Node.ELEMENT_NODE) return;
+
+        // For non-HTML namespaced elements (SVG, MathML, etc.), fall back to
+        // native outerHTML which handles namespaces and case-sensitive tag names
+        // correctly.  vi data is never computed for these elements.
+        if (node.namespaceURI && node.namespaceURI !== 'http://www.w3.org/1999/xhtml') {
+            html += node.outerHTML;
+            return;
+        }
+
+        var tag = node.tagName.toLowerCase();
+        html += '<' + tag;
+
+        // Emit existing attributes
+        var attrs = node.attributes;
+        for (var i = 0; i < attrs.length; i++) {
+            var attr = attrs[i];
+            html += ' ' + attr.name + '="' + escAttr(attr.value) + '"';
+        }
+
+        // Inject vi attributes from WeakMap (no DOM mutation)
+        var data = viMap ? viMap.get(node) : null;
+        if (data) {
+            if (data.vi) {
+                html += ' ' + config.ATTR_ELEMENT_NODE_VI + '="' + data.vi + '"';
+            }
+            if (data.elementData) {
+                html += ' ' + config.ATTR_ELEMENT_NODE_DATA + '="' + data.elementData + '"';
+            }
+            if (data.hidden) {
+                html += ' ' + data.hidden.attrName + '="1"';
+            }
+            if (data.overflowHidden) {
+                html += ' ' + config.ATTR_OVERFLOW_HIDDEN + '="1"';
+            }
+            if (data.textNodeRects) {
+                for (var j = 0; j < data.textNodeRects.length; j++) {
+                    var tv = data.textNodeRects[j];
+                    if (tv) {
+                        html += ' ' + config.ATTR_TEXT_NODE_VI + j + '="' + tv + '"';
+                    }
+                }
+            }
+        }
+
+        // Void elements have no children and no closing tag
+        if (VOID.has(tag)) {
+            html += '>';
+            return;
+        }
+
+        html += '>';
+        for (var child = node.firstChild; child; child = child.nextSibling) {
+            serializeNode(child);
+        }
+        html += '</' + tag + '>';
+    }
+
+    serializeNode(root || document.documentElement);
+    return html;
+};
+
+/**
+ * Get the annotated HTML with vi attributes injected during serialization.
+ * Falls back to native outerHTML when no vi data has been computed
+ * (e.g., content-length estimation before compute() is called).
+ *
+ * @return {string} The annotated HTML string
+ */
+__pulsar_utils__.getAnnotatedHTML = function() {
+    if (!this._viDataComputed || !this._viDataMap) {
+        return document.documentElement.outerHTML;
+    }
+    return this.serializeAnnotatedHTML(document.documentElement);
+};
+
+/**
+ * Get the annotated HTML for a specific element matched by selector,
+ * with vi attributes injected during serialization.
+ * Falls back to native outerHTML when no vi data has been computed.
+ *
+ * @param selector {string} CSS selector for the target element
+ * @return {string|null} The annotated HTML string, or null if no element matches
+ */
+__pulsar_utils__.getAnnotatedOuterHTML = function(selector) {
+    var el = document.querySelector(selector);
+    if (!el) return null;
+    if (!this._viDataComputed || !this._viDataMap) {
+        return el.outerHTML;
+    }
+    return this.serializeAnnotatedHTML(el);
+};
+
+/**
  * Add to attribute
  *
  * @param node {Node|Element|Text}
@@ -1354,6 +1492,13 @@ __pulsar_utils__.compute = function() {
         ele.removeAttribute("tp")
     });
 
+    // Initialize the WeakMap that stores computed visual information (vi, _h, _oh, tvN)
+    // without polluting the live DOM.  NodeFeatureCalculator writes to this map instead
+    // of calling setAttribute.  The data is later injected into the captured HTML by
+    // serializeAnnotatedHTML().
+    this._viDataMap = new WeakMap();
+    this._viDataComputed = false;
+
     // traverse the DOM and compute necessary data, we must compute data before we perform humanization
     let calculator = new __pulsar_NodeFeatureCalculator();
     __pulsar_TreeWalker.traverseWithHeadTail(
@@ -1362,6 +1507,9 @@ __pulsar_utils__.compute = function() {
         function(node, depth) { calculator.tail(node, depth); },
         calculator
     );
+
+    // Flag that vi data is available for getAnnotatedHTML()
+    this._viDataComputed = true;
 
     this.generateMetadata();
 

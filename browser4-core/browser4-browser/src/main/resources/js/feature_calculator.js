@@ -5,6 +5,44 @@
  */
 
 /**
+ * Merge computed visual-information properties into the WeakMap entry for a node.
+ * Used by NodeFeatureCalculator to store vi, _h, _oh, tvN, etc. without mutating
+ * the live DOM.  The serializer later reads this map to inject attributes into
+ * the captured HTML.
+ *
+ * @param node {Element} the DOM element
+ * @param props {Object} properties to merge (vi, hidden, overflowHidden, textNodeRects, charWidth, elementData)
+ */
+function _storeViData(node, props) {
+    if (!node || node.nodeType !== Node.ELEMENT_NODE) return;
+    var map = __pulsar_utils__._viDataMap;
+    var existing = map.get(node) || {};
+    // Shallow merge is sufficient: each property is independently set by
+    // calcSelfIndicator / tail / calcCharacterWidth and never overlapping.
+    for (var key in props) {
+        if (props.hasOwnProperty(key)) {
+            existing[key] = props[key];
+        }
+    }
+    map.set(node, existing);
+}
+
+/**
+ * Check if a parent element has overflow-hidden, first consulting the WeakMap
+ * (where _storeViData records it) and falling back to a DOM attribute check
+ * for backward compatibility.
+ *
+ * @param parentNode {Element} the parent element
+ * @param config {Object} the config with ATTR_OVERFLOW_HIDDEN
+ * @return {boolean}
+ */
+function _isParentOverflowHidden(parentNode, config) {
+    var viData = __pulsar_utils__._viDataMap.get(parentNode);
+    if (viData && viData.overflowHidden) return true;
+    return parentNode.hasAttribute(config.ATTR_OVERFLOW_HIDDEN);
+}
+
+/**
  * Create a new NodeFeatureCalculator
  */
 let __pulsar_NodeFeatureCalculator = function() {
@@ -77,12 +115,11 @@ __pulsar_NodeFeatureCalculator.prototype.calcSelfIndicator = function(node, dept
             if (node.hasAttribute(attrName)) {
                 attrName = "_ps_" + this.config.ATTR_HIDDEN
             }
-            node.setAttribute(attrName, '1');
+            _storeViData(node, {hidden: {attrName: attrName}});
         }
 
-        if (nodeExt.isOverflowHidden() || (nodeExt.hasParent() && nodeExt.parent().node.hasAttribute(this.config.ATTR_OVERFLOW_HIDDEN))) {
-            // node.toggleAttribute(ATTR_OVERFLOW_HIDDEN, true);
-            node.setAttribute(this.config.ATTR_OVERFLOW_HIDDEN, '1');
+        if (nodeExt.isOverflowHidden() || (nodeExt.hasParent() && _isParentOverflowHidden(nodeExt.parent().node, this.config))) {
+            _storeViData(node, {overflowHidden: true});
         }
     }
 
@@ -115,21 +152,29 @@ __pulsar_NodeFeatureCalculator.prototype.tail = function(node, depth) {
     }
 
     if (NodeOps.isElement(node)) {
+        var viProps = {};
+
         if (config.ATTR_ELEMENT_NODE_DATA) {
             let data = nodeExt.formatDOMRect() + "|" + nodeExt.sequence + "|" + nodeExt.formatStyles()
-            NodeOps.setAttributeIfNotBlank(node, config.ATTR_ELEMENT_NODE_DATA, data);
+            viProps.elementData = data;
         }
 
-        NodeOps.setAttributeIfNotBlank(node, config.ATTR_ELEMENT_NODE_VI, nodeExt.formatDOMRect());
+        viProps.vi = nodeExt.formatDOMRect();
 
         // calculate the rectangle of each child text node
+        var textNodeRects = [];
         for (let i = 0; i < node.childNodes.length; ++i) {
             let childNodeExt = node.childNodes[i].__pulsar_nodeExt;
             if (childNodeExt && NodeOps.isText(childNodeExt.node)) {
                 // 'tv' is short for 'text node vision information'
-                NodeOps.setAttributeIfNotBlank(node, config.ATTR_TEXT_NODE_VI + i, childNodeExt.formatDOMRect());
+                textNodeRects[i] = childNodeExt.formatDOMRect();
             }
         }
+        if (textNodeRects.length > 0) {
+            viProps.textNodeRects = textNodeRects;
+        }
+
+        _storeViData(node, viProps);
     }
 
     if (this.debug > 0) {
@@ -148,14 +193,16 @@ __pulsar_NodeFeatureCalculator.prototype.tail = function(node, depth) {
  */
 __pulsar_NodeFeatureCalculator.prototype.calcCharacterWidth = function(node, depth) {
     let parent = node.parentElement;
-    let cw = parent.getAttribute('_cw');
+    // Read char-width from the WeakMap (no DOM pollution)
+    var parentViData = __pulsar_utils__._viDataMap.get(parent);
+    let cw = parentViData ? parentViData.charWidth : null;
     let width = 0;
     if (!cw) {
         let text = __pulsar_utils__.getTextContent(node);
         if (text.length > 0) {
             width = __pulsar_utils__.getElementTextWidth(text, parent);
             cw = Math.round(width / text.length * 10) / 10;
-            parent.setAttribute('_cw', cw.toString())
+            _storeViData(parent, {charWidth: cw.toString()});
         }
     }
     return width

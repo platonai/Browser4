@@ -1,0 +1,240 @@
+name: Cross-Platform Smoke Test
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'cli/scripts/smoke-test-runtime-bundle.sh'
+      - 'browser4-apps/browser4-bundle/build-runtime-bundle.ps1'
+      - 'browser4-apps/browser4-bundle/verify-runtime-bundle.ps1'
+      - 'browser4-apps/browser4-bundle/pom.xml'
+      - 'cli/browser4-cli/src/**'
+      - 'cli/browser4-cli/Cargo.toml'
+      - '.github/workflows/test-smoke-cross-platform.yml'
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  BUNDLE_MODULE_NAME: browser4-bundle
+  BUNDLE_MODULE_PATH: browser4-apps/browser4-bundle
+  BUNDLE_JAR_NAME: Browser4Bundle.jar
+  BUNDLE_JAR_PATH: browser4-apps/browser4-bundle/target/Browser4Bundle.jar
+  BUNDLE_JAVA_VERSION: '25'
+  CLI_PACKAGE_DIR: cli
+  CLI_PACKAGE_NAME: browser4-cli
+  CLI_MANIFEST_PATH: cli/browser4-cli/Cargo.toml
+
+jobs:
+  # --------------------------------------------------------------------------
+  # Build self-contained runtime bundles on each native platform.
+  # Mirrors release.yml → build-runtime-bundles.
+  # --------------------------------------------------------------------------
+  build-bundles:
+    name: Build bundle (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows x64
+            os: windows-latest
+            asset_name: browser4-bundle-runtime-windows-x64.zip
+            artifact_name: browser4-bundle-runtime-windows-x64
+          - name: Linux x64
+            os: ubuntu-latest
+            asset_name: browser4-bundle-runtime-linux-x64.tar.gz
+            artifact_name: browser4-bundle-runtime-linux-x64
+          - name: macOS ARM64
+            os: macos-14
+            asset_name: browser4-bundle-runtime-darwin-arm64.tar.gz
+            artifact_name: browser4-bundle-runtime-darwin-arm64
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Setup JDK ${{ env.BUNDLE_JAVA_VERSION }} for jlink
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: ${{ env.BUNDLE_JAVA_VERSION }}
+          cache: maven
+
+      - name: Prepare bundle build environment
+        shell: pwsh
+        run: |
+          if ($IsWindows) {
+            Write-Host "Using Windows Maven wrapper" -ForegroundColor Cyan
+          }
+          else {
+            chmod +x ./mvnw
+            Write-Host "Ensured execute permission for mvnw" -ForegroundColor Cyan
+          }
+
+          java -version
+
+      - name: Build Browser4 runtime bundle
+        shell: pwsh
+        run: |
+          ./browser4-apps/browser4-bundle/build-runtime-bundle.ps1 `
+            -JarPath "${{ env.BUNDLE_JAR_PATH }}" `
+            -OutputDirectory "browser4-apps/browser4-bundle/target/runtime-release" `
+            -AssetName "${{ matrix.asset_name }}" `
+            -Force
+
+      - name: Verify Browser4 runtime bundle (structure only)
+        if: runner.os != 'Linux'
+        shell: pwsh
+        run: |
+          ./browser4-apps/browser4-bundle/verify-runtime-bundle.ps1 `
+            -BundlePath "browser4-apps/browser4-bundle/target/runtime-release/${{ matrix.asset_name }}" `
+            -ExpectedAssetName "${{ matrix.asset_name }}" `
+            -SkipFunctionalTest
+
+      - name: Verify Browser4 runtime bundle (full functional test)
+        if: runner.os == 'Linux'
+        shell: pwsh
+        run: |
+          ./browser4-apps/browser4-bundle/verify-runtime-bundle.ps1 `
+            -BundlePath "browser4-apps/browser4-bundle/target/runtime-release/${{ matrix.asset_name }}" `
+            -ExpectedAssetName "${{ matrix.asset_name }}" `
+            -StartupTimeoutSeconds 300
+
+      - name: Upload runtime bundle artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: browser4-apps/browser4-bundle/target/runtime-release/${{ matrix.asset_name }}
+          retention-days: 1
+
+  # --------------------------------------------------------------------------
+  # Smoke-test each runtime bundle on its native platform.
+  # Mirrors release.yml → smoke-test-runtime-bundle.
+  # --------------------------------------------------------------------------
+  smoke-test:
+    name: Smoke test (${{ matrix.name }})
+    needs: build-bundles
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows x64
+            os: windows-latest
+            asset_name: browser4-bundle-runtime-windows-x64.zip
+            artifact_name: browser4-bundle-runtime-windows-x64
+            target: x86_64-pc-windows-msvc
+          - name: Linux x64
+            os: ubuntu-latest
+            asset_name: browser4-bundle-runtime-linux-x64.tar.gz
+            artifact_name: browser4-bundle-runtime-linux-x64
+            target: x86_64-unknown-linux-gnu
+          - name: macOS ARM64
+            os: macos-14
+            asset_name: browser4-bundle-runtime-darwin-arm64.tar.gz
+            artifact_name: browser4-bundle-runtime-darwin-arm64
+            target: aarch64-apple-darwin
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Download runtime bundle artifact
+        uses: actions/download-artifact@v7
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: artifacts/
+
+      - name: Install Chrome (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if command -v google-chrome &>/dev/null || command -v google-chrome-stable &>/dev/null; then
+            echo "✅ Chrome found: $(which google-chrome google-chrome-stable 2>/dev/null || true)"
+          else
+            echo "::group::Installing chromium-browser..."
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq chromium-browser
+            echo "::endgroup::"
+          fi
+          df -h /dev/shm || true
+
+      - name: Install Chrome (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -x "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" ]; then
+            echo "✅ Google Chrome found"
+          elif command -v chromium &>/dev/null; then
+            echo "✅ Chromium found: $(which chromium)"
+          else
+            echo "::group::Installing Google Chrome..."
+            brew install --cask google-chrome
+            echo "::endgroup::"
+          fi
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
+        with:
+          workspaces: cli/browser4-cli
+
+      - name: Build CLI binary
+        shell: bash
+        run: |
+          cargo build --release --manifest-path ${{ env.CLI_MANIFEST_PATH }} --target ${{ matrix.target }}
+
+      - name: Run smoke test
+        shell: bash
+        timeout-minutes: 15
+        env:
+          BROWSER4_SERVER_LOG_DIR: ${{ runner.temp }}/browser4-server-logs
+        run: |
+          BUNDLE_ARCHIVE=$(ls artifacts/browser4-bundle-runtime-* 2>/dev/null | head -1)
+          if [ -z "$BUNDLE_ARCHIVE" ]; then
+            echo "❌ No bundle archive found in artifacts/"
+            ls -la artifacts/ || true
+            exit 1
+          fi
+          echo "Bundle archive: $BUNDLE_ARCHIVE"
+          chmod +x cli/scripts/smoke-test-runtime-bundle.sh
+          # On Windows / Git Bash, cargo appends .exe; resolve it explicitly
+          # rather than relying on MSYS2 transparent extension handling.
+          CLI_BIN="cli/browser4-cli/target/${{ matrix.target }}/release/browser4-cli"
+          if [ ! -f "$CLI_BIN" ] && [ -f "${CLI_BIN}.exe" ]; then
+            CLI_BIN="${CLI_BIN}.exe"
+          fi
+          bash cli/scripts/smoke-test-runtime-bundle.sh \
+            "$CLI_BIN" \
+            "$BUNDLE_ARCHIVE" 0 300
+
+      - name: Upload server logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: smoke-test-logs-${{ matrix.artifact_name }}
+          path: ${{ runner.temp }}/browser4-server-logs/
+          retention-days: 7
+
+      - name: Smoke test summary
+        if: always()
+        shell: bash
+        run: |
+          echo "::group::📊 Smoke Test Summary"
+          echo "🎯 Platform: ${{ matrix.name }}"
+          echo "📦 Bundle: ${{ matrix.asset_name }}"
+          echo "📊 Status: ${{ job.status }}"
+          echo "::endgroup::"

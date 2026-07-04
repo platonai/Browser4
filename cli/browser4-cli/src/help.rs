@@ -845,6 +845,18 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(
+            "  - Use `--sql-stdin` to pipe X-SQL queries directly from stdin, avoiding shell quoting issues on Windows."
+                .to_string(),
+        );
+        lines.push(
+            "  - Use `--sql-base64` to decode the `--sql` value (or stdin input) as base64 before execution."
+                .to_string(),
+        );
+        lines.push(
+            "  - Use `--result-only` to extract and print only the `resultSet` array from the response JSON, omitting wrapper metadata."
+                .to_string(),
+        );
+        lines.push(
             "  - Export the full HTML snapshot from Browser4's page storage to a local file with `htmlsnapshot export --file <path>`."
                 .to_string(),
         );
@@ -904,6 +916,15 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push(String::new());
         lines.push("  # Run an X-SQL query from a file".to_string());
         lines.push("  browser4-cli htmlsnapshot query --sql @query.sql".to_string());
+        lines.push(String::new());
+        lines.push("  # Pipe an X-SQL query from stdin (avoids shell quoting issues)".to_string());
+        lines.push("  browser4-cli htmlsnapshot query --sql-stdin < query.sql".to_string());
+        lines.push(String::new());
+        lines.push("  # Decode a base64-encoded X-SQL query".to_string());
+        lines.push("  browser4-cli htmlsnapshot query --sql-base64 --sql \"U0VMRUNUIGRvbV9maXJzdF90ZXh0KGRvbSwgJ2gxJykgQVMgdGl0bGUgRlJPTSBsb2FkX2FuZF9zZWxlY3QoQHVybCwgJzpyb290Jyk=\"".to_string());
+        lines.push(String::new());
+        lines.push("  # Return only the resultSet array, omitting wrapper metadata".to_string());
+        lines.push("  browser4-cli htmlsnapshot query --sql @query.sql --result-only".to_string());
         lines.push(String::new());
         lines.push("  # Export the full snapshot HTML to a file".to_string());
         lines.push("  browser4-cli htmlsnapshot export --file snapshot.html".to_string());
@@ -1452,6 +1473,12 @@ mod tests {
         assert!(help.contains("@url"));
         assert!(help.contains("SQLTemplate handles escaping"));
         assert!(help.contains("@file.sql"));
+        assert!(help.contains("--sql-stdin"));
+        assert!(help.contains("pipe X-SQL queries directly from stdin"));
+        assert!(help.contains("--sql-base64"));
+        assert!(help.contains("decode the `--sql` value"));
+        assert!(help.contains("--result-only"));
+        assert!(help.contains("extract and print only the `resultSet`"));
         // Examples
         assert!(help.contains("browser4-cli htmlsnapshot"));
         assert!(help.contains("browser4-cli htmlsnapshot get text"));
@@ -1461,6 +1488,9 @@ mod tests {
         assert!(help.contains("browser4-cli htmlsnapshot get all text \".result\" --limit 5 --offset 10"));
         assert!(help.contains("browser4-cli htmlsnapshot query --sql"));
         assert!(help.contains("browser4-cli htmlsnapshot query --sql @query.sql"));
+        assert!(help.contains("browser4-cli htmlsnapshot query --sql-stdin < query.sql"));
+        assert!(help.contains("browser4-cli htmlsnapshot query --sql-base64 --sql"));
+        assert!(help.contains("browser4-cli htmlsnapshot query --sql @query.sql --result-only"));
         assert!(help.contains("browser4-cli htmlsnapshot export --file snapshot.html"));
         assert!(help.contains("browser4-cli htmlsnapshot summary"));
         // grep and inspect
@@ -1509,6 +1539,9 @@ mod tests {
         assert!(help.contains("browser4-cli htmlsnapshot query [url]"));
         assert!(help.contains("Run X-SQL against the HTML snapshot stored in Browser4's page storage via the scrape API"));
         assert!(help.contains("--sql"));
+        assert!(help.contains("--sql-stdin"));
+        assert!(help.contains("--sql-base64"));
+        assert!(help.contains("--result-only"));
         assert!(!help.contains("browser4-cli htmlsnapshot-query"));
     }
 
