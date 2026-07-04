@@ -511,7 +511,7 @@ paginated at 2000 lines by default; `get all text` is not paginated by default.
 > **correlated multi-field extraction** (title + price + URL per item), use
 > `htmlsnapshot query` with X-SQL's `DOM_LOAD_AND_SELECT` — it scopes each row
 > to a parent container so fields stay aligned. See the
-> [list-page scraping pattern](skill/references/x-sql-dom-load-select.md).
+> [list-page scraping pattern](skills/browser4-cli/references/x-sql-dom-load-select.md).
 
 ```bash
 browser4-cli htmlsnapshot get all text "h2 a"

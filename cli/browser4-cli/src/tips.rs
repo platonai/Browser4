@@ -51,7 +51,7 @@ const TIPS_HTMLSNAPSHOT_GET: &[Tip] = &[
         text: "Use `htmlsnapshot get all` (note the `all` keyword) to extract ALL matching elements, not just the first",
     },
     Tip {
-        text: "To correlate multiple fields (titles + prices + URLs) from a list page, use `htmlsnapshot query` with X-SQL — `get all` arrays can't be aligned across independent calls. See skill/references/x-sql-dom-load-select.md",
+        text: "To correlate multiple fields (titles + prices + URLs) from a list page, use `htmlsnapshot query` with X-SQL — `get all` arrays can't be aligned across independent calls. See skills/browser4-cli/references/x-sql-dom-load-select.md",
     },
     Tip {
         text: "Use `htmlsnapshot inspect <selector>` to analyze DOM structure and discover CSS selectors before extracting",
@@ -66,7 +66,7 @@ const TIPS_HTMLSNAPSHOT_GET: &[Tip] = &[
 
 const TIPS_HTMLSNAPSHOT_QUERY: &[Tip] = &[
     Tip {
-        text: "X-SQL has ~200 functions across DOM_*, STR_*, and ARRAY_* namespaces — see skill/references/x-sql.md",
+        text: "X-SQL has ~200 functions across DOM_*, STR_*, and ARRAY_* namespaces — see skills/browser4-cli/references/x-sql.md",
     },
     Tip {
         text: "Use `STR_DEFAULT_IF_BLANK(value, 'N/A')` to handle missing values gracefully in X-SQL results",

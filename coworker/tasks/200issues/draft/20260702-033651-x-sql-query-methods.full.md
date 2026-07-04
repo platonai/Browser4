@@ -20,7 +20,7 @@ Successfully extracted 20 book titles and prices from `http://books.toscrape.com
 |------|---------|--------|
 | 0 | Verified CWD was repo root, then `cli/browser4-cli` | Already in `cli/browser4-cli` |
 | 1 | `cargo run -- help` | Help output displayed; learned command structure |
-| 1a | Read `skill/SKILL.md`, `skill/references/x-sql.md`, `skill/references/domsnapshot.md` | Learned workflows, X-SQL syntax, input methods |
+| 1a | Read `skills/browser4-cli/SKILL.md`, `skills/browser4-cli/references/x-sql.md`, `skills/browser4-cli/references/domsnapshot.md` | Learned workflows, X-SQL syntax, input methods |
 | 2 | `cargo run -- goto "http://books.toscrape.com/"` | Page loaded (Session: DEFAULT) |
 | 3 | `cargo run -- domsnapshot` | Captured: 50KB, 20 images, 94 links, 100 interactive elements |
 | 4 | `cargo run -- domsnapshot inspect` (root) | Only 1 match (`:root`), too broad |
@@ -120,7 +120,7 @@ cargo run -- help
 
 **Root Cause:** The flag is documented at the subcommand level but not surfaced in the primary workflow documentation (SKILL.md) or quick-reference examples. Users extracting data will almost always want clean output; the verbose default creates unnecessary friction.
 
-**Code Pointer:** `skill/references/domsnapshot.md` and `skill/references/x-sql.md` — add `--result-only` to examples.
+**Code Pointer:** `skills/browser4-cli/references/domsnapshot.md` and `skills/browser4-cli/references/x-sql.md` — add `--result-only` to examples.
 
 **AI Suggested Improvement:**
 - Add `--result-only` to the quick-pattern examples in SKILL.md §6 (Bulk Extraction)
@@ -137,7 +137,7 @@ cargo run -- help
 
 **Category:** Documentation
 
-**Reproduction:** Read `skill/SKILL.md` — installation section only covers `npm install -g browser4-cli` and the Windows PowerShell installer. No mention of building from source with `cargo run`.
+**Reproduction:** Read `skills/browser4-cli/SKILL.md` — installation section only covers `npm install -g browser4-cli` and the Windows PowerShell installer. No mention of building from source with `cargo run`.
 
 **Expected:** Documentation should cover all supported installation methods, including `cargo build` / `cargo run` for developers working from source.
 
@@ -145,7 +145,7 @@ cargo run -- help
 
 **Root Cause:** The documentation assumes end-user installation via package managers. Developer/contributor workflows are not addressed.
 
-**Code Pointer:** `skill/SKILL.md` — Installation section.
+**Code Pointer:** `skills/browser4-cli/SKILL.md` — Installation section.
 
 **AI Suggested Improvement:**
 - Add a "Development" section: `cargo build` / `cargo run -- <command>`
@@ -175,7 +175,7 @@ cargo run -- domsnapshot query --sql "SELECT DOM_FIRST_TEXT(DOM, 'h3 a')"
 
 **Root Cause:** Shell quoting across cargo → clap → CDP backend layers. The documentation already warns about this and recommends file/stdin/base64 — which is the correct mitigation.
 
-**Code Pointer:** N/A — this is a known limitation with documented workarounds. The docs at `skill/references/domsnapshot.md` and `skill/SKILL.md` §5 already warn about this.
+**Code Pointer:** N/A — this is a known limitation with documented workarounds. The docs at `skills/browser4-cli/references/domsnapshot.md` and `skills/browser4-cli/SKILL.md` §5 already warn about this.
 
 **AI Suggested Improvement:**
 - The existing documentation warning is adequate — no code change needed

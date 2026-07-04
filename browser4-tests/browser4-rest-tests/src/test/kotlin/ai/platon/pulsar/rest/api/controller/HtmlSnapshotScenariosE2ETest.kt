@@ -16,7 +16,7 @@ import kotlin.test.assertTrue
 
 /**
  * E2E tests for the 10 HTML Snapshot scenarios defined in
- * skill/references/htmlsnapshot-scenarios.md.
+ * skills/browser4-cli/references/htmlsnapshot-scenarios.md.
  *
  * Each test navigates to a mock page served by the embedded mock EC server
  * (port 18080 via [MockEcServerConfiguration]) and exercises the html_snapshot_*

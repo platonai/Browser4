@@ -15,7 +15,7 @@ Detects:
 
 .PARAMETER SearchPaths
 Directories/files to scan. Default: "docs/", "README.md", "README.zh.md",
-"skill/", "coworker/", "AGENTS.md"
+"skills/", "coworker/", "AGENTS.md"
 
 .PARAMETER ExcludePatterns
 Patterns to exclude. Default: "node_modules", "target", ".git"

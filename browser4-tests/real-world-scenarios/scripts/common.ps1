@@ -7,7 +7,7 @@ Shared helpers for browser4-cli agent-scenario test scripts.
 Dot-source this module to reuse the shared usability-evaluation prompt and the
 standard agent invocation.  The prompt adapts to the environment automatically:
 
-  - Dev (default):  `cargo run -- help`  + local `skill/SKILL.md`.
+  - Dev (default):  `cargo run -- help`  + local `skills/browser4-cli/SKILL.md`.
   - Production:      `browser4-cli help` + `https://browser4.io/SKILL.md`.
 
 Set `$browser4cliMode = 'production'` BEFORE dot-sourcing this module to switch
@@ -45,7 +45,7 @@ if ($browser4cliMode -eq 'production') {
     # the daemon auto-starts the locally-built backend JAR.  The repo root
     # is the CWD when the agent runs, so the relative "cd" resolves correctly.
     $helpCmd        = '`cd cli/browser4-cli && cargo run -- help`'
-    $skillPath      = '`skill/SKILL.md`'
+    $skillPath      = '`skills/browser4-cli/SKILL.md`'
     $cliInvocation  = '`cd cli/browser4-cli && cargo run --`'
 }
 
@@ -66,7 +66,7 @@ You are evaluating the usability, discoverability, and reliability of browser4-c
 
 Before performing any browser interaction:
 
-0. Verify your working directory is the repository root (the directory containing `cli/`, `skill/`, `pom.xml`, etc.). If you are not in the repo root, navigate there first with `cd` using the absolute path to the repository. All `cd cli/browser4-cli` commands assume you start from the repo root.
+0. Verify your working directory is the repository root (the directory containing `cli/`, `skills/`, `pom.xml`, etc.). If you are not in the repo root, navigate there first with `cd` using the absolute path to the repository. All `cd cli/browser4-cli` commands assume you start from the repo root.
 1. Run $helpCmd.
 2. Read $skillPath completely.
 3. Learn the available commands, workflows, and conventions directly from the documentation.

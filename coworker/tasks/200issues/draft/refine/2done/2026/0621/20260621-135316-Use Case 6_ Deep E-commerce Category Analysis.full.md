@@ -31,7 +31,7 @@ The report contains:
 | Step | Command | Purpose |
 |------|---------|---------|
 | 1 | `cargo run -- help` | Failed — wrong directory; found CLI at `cli/browser4-cli` |
-| 2 | Read `skill/SKILL.md` | Learned CLI commands, workflows, conventions |
+| 2 | Read `skills/browser4-cli/SKILL.md` | Learned CLI commands, workflows, conventions |
 | 3 | `browser4-cli --version` | Confirmed v0.1.17 installed globally |
 | 4 | `browser4-cli list` + `status` | Confirmed backend running, active session |
 | 5 | `browser4-cli goto https://www.amazon.com/` | Navigated to Amazon |

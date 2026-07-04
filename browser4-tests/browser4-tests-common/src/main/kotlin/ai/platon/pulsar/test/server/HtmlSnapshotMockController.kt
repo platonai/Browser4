@@ -6,7 +6,7 @@ import org.springframework.web.bind.annotation.RestController
 
 /**
  * Serves mock HTML pages tailored to each scenario in
- * skill/references/htmlsnapshot-scenarios.md.
+ * skills/browser4-cli/references/htmlsnapshot-scenarios.md.
  *
  * All endpoints live under /htmlsnapshot-test/ and produce text/html.
  * Each page contains 5–8 repeating elements so X-SQL `load_and_select`

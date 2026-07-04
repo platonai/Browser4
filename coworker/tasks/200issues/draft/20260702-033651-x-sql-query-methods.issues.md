@@ -22,7 +22,7 @@ Successfully extracted 20 book titles and prices from `http://books.toscrape.com
 |------|---------|--------|
 | 0 | Verified CWD was repo root, then `cli/browser4-cli` | Already in `cli/browser4-cli` |
 | 1 | `cargo run -- help` | Help output displayed; learned command structure |
-| 1a | Read `skill/SKILL.md`, `skill/references/x-sql.md`, `skill/references/domsnapshot.md` | Learned workflows, X-SQL syntax, input methods |
+| 1a | Read `skills/browser4-cli/SKILL.md`, `skills/browser4-cli/references/x-sql.md`, `skills/browser4-cli/references/domsnapshot.md` | Learned workflows, X-SQL syntax, input methods |
 | 2 | `cargo run -- goto "http://books.toscrape.com/"` | Page loaded (Session: DEFAULT) |
 | 3 | `cargo run -- domsnapshot` | Captured: 50KB, 20 images, 94 links, 100 interactive elements |
 | 4 | `cargo run -- domsnapshot inspect` (root) | Only 1 match (`:root`), too broad |
@@ -144,7 +144,7 @@ The flag is documented at the subcommand level but not surfaced in the primary w
 
 #### Code Pointer
 
-``skill/references/domsnapshot.md` and `skill/references/x-sql.md` — add `--result-only` to examples.`
+``skills/browser4-cli/references/domsnapshot.md` and `skills/browser4-cli/references/x-sql.md` — add `--result-only` to examples.`
 
 #### AI Suggested Improvement
 
@@ -165,7 +165,7 @@ The flag is documented at the subcommand level but not surfaced in the primary w
 
 #### Reproduction
 
-Read `skill/SKILL.md` — installation section only covers `npm install -g browser4-cli` and the Windows PowerShell installer. No mention of building from source with `cargo run`.
+Read `skills/browser4-cli/SKILL.md` — installation section only covers `npm install -g browser4-cli` and the Windows PowerShell installer. No mention of building from source with `cargo run`.
 
 #### Expected Behavior
 
@@ -181,7 +181,7 @@ The documentation assumes end-user installation via package managers. Developer/
 
 #### Code Pointer
 
-``skill/SKILL.md` — Installation section.`
+``skills/browser4-cli/SKILL.md` — Installation section.`
 
 #### AI Suggested Improvement
 
@@ -222,7 +222,7 @@ Shell quoting across cargo → clap → CDP backend layers. The documentation al
 
 #### Code Pointer
 
-`N/A — this is a known limitation with documented workarounds. The docs at `skill/references/domsnapshot.md` and `skill/SKILL.md` §5 already warn about this.`
+`N/A — this is a known limitation with documented workarounds. The docs at `skills/browser4-cli/references/domsnapshot.md` and `skills/browser4-cli/SKILL.md` §5 already warn about this.`
 
 #### AI Suggested Improvement
 
@@ -314,7 +314,7 @@ cargo run -- help
 
 #### Issue 4: SKILL.md installation instructions don't cover source-build (cargo) workflow
 
-Read `skill/SKILL.md` — installation section only covers `npm install -g browser4-cli` and the Windows PowerShell installer. No mention of building from source with `cargo run`.
+Read `skills/browser4-cli/SKILL.md` — installation section only covers `npm install -g browser4-cli` and the Windows PowerShell installer. No mention of building from source with `cargo run`.
 
 #### Issue 5: Inline `--sql` quoting fragility on Windows/Git Bash
 

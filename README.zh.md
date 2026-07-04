@@ -91,7 +91,7 @@ Browser4 CLI 兼容 Playwright，支持丰富的导航、交互和数据提取�
 
 命令设计直观且可组合，允许你将多个操作串联起来完成复杂的工作流。
 
-Browser4 CLI 专为 AI 智能体通过 SKILLS + CLI 使用而设计 — 详见 [SKILL.md](skill/SKILL.md)。
+Browser4 CLI 专为 AI 智能体通过 SKILLS + CLI 使用而设计 — 详见 [SKILL.md](skills/browser4-cli/SKILL.md)。
 
 #### 全局标志
 
@@ -197,7 +197,7 @@ htmlsnapshot grep <pattern>                 使用正则表达式搜索快照 HT
                                            -i, -v, -c, -l, -F, -w, -A, -B, -C, --selector
 ```
 
-完整参考（包括同样需要 LLM 密钥的 X-SQL `llm_*` 函数），请参见 [DOM 快照参考](cli/skill/references/htmlsnapshot.md)。
+完整参考（包括同样需要 LLM 密钥的 X-SQL `llm_*` 函数），请参见 [DOM 快照参考](skills/browser4-cli/references/htmlsnapshot.md)。
 
 #### 导出
 
