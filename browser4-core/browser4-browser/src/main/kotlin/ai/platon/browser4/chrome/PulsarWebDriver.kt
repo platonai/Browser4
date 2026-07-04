@@ -1081,8 +1081,14 @@ open class PulsarWebDriver constructor(
         return rpc.invokeOnElement(selector, "outerHTML") { node ->
             when {
                 node.isNull() -> null
-                // TODO: performance issue for large HTML (memory copy), consider accept the raw byte stream and convert to string in native code
-                else -> browserProtocol.getOuterHTML(node.nodeId, node.backendNodeId, node.objectId)
+                // Use the JS serializer to inject vi attributes from the WeakMap
+                // during serialization, without mutating the live DOM.
+                // Falls back to native outerHTML when no vi data has been computed.
+                else -> {
+                    val escapedSelector = selector.replace("\\", "\\\\").replace("'", "\\'")
+                    val expression = "__pulsar_utils__.getAnnotatedOuterHTML('$escapedSelector')"
+                    js.evaluateValue(expression) as? String
+                }
             }
         }
     }
@@ -1339,10 +1345,12 @@ function() {
     @Throws(WebDriverException::class)
     override suspend fun pageSource(): String? {
         return rpc.invokeOnPage("pageSource") {
-            // TODO: add a BrowserProtocol facade wrapper for resource content retrieval for semantic consistency and performance
-            val document = browserProtocol.getDocument()
-            // TODO: pass only one of nodeId and backendNodeId
-            browserProtocol.getOuterHTML(document.nodeId, document.backendNodeId)
+            // Use the JS serializer that injects vi attributes from a WeakMap
+            // during serialization, without mutating the live DOM.
+            // Falls back to outerHTML when no vi data has been computed
+            // (e.g., content-length estimation before compute() is called).
+            val expression = "__pulsar_utils__.getAnnotatedHTML()"
+            js.evaluateValue(expression) as? String
         }
     }
 
