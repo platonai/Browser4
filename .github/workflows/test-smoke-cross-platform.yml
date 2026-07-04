@@ -211,8 +211,14 @@ jobs:
           fi
           echo "Bundle archive: $BUNDLE_ARCHIVE"
           chmod +x cli/scripts/smoke-test-runtime-bundle.sh
+          # On Windows / Git Bash, cargo appends .exe; resolve it explicitly
+          # rather than relying on MSYS2 transparent extension handling.
+          CLI_BIN="cli/browser4-cli/target/${{ matrix.target }}/release/browser4-cli"
+          if [ ! -f "$CLI_BIN" ] && [ -f "${CLI_BIN}.exe" ]; then
+            CLI_BIN="${CLI_BIN}.exe"
+          fi
           bash cli/scripts/smoke-test-runtime-bundle.sh \
-            "cli/browser4-cli/target/${{ matrix.target }}/release/browser4-cli" \
+            "$CLI_BIN" \
             "$BUNDLE_ARCHIVE" 0 300
 
       - name: Upload server logs on failure
