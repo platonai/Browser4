@@ -3751,13 +3751,11 @@ fn format_summary_outline(yaml: &str) -> String {
                     }
                 } else if let Some(w) = trim_prefix(trimmed, "avgCardWidth:") {
                     if let Some(last) = linkgroup_items.last_mut() {
-                        let w = w.trim().trim_end_matches('0').trim_end_matches('.');
-                        *last = format!("{}  avg:{}×", last, w);
+                        *last = format!("{}  avg:{}×", last, fmt_num(w));
                     }
                 } else if let Some(h) = trim_prefix(trimmed, "avgCardHeight:") {
                     if let Some(last) = linkgroup_items.last_mut() {
-                        let h = h.trim().trim_end_matches('0').trim_end_matches('.');
-                        *last = format!("{}{}", last, h);
+                        *last = format!("{}{}", last, fmt_num(h));
                     }
                 } else if let Some(links) = trim_prefix(trimmed, "allHaveLinks:") {
                     if links.trim() == "true" {
@@ -3773,7 +3771,7 @@ fn format_summary_outline(yaml: &str) -> String {
                     }
                 } else if let Some(score) = trim_prefix(trimmed, "score:") {
                     if let Some(last) = linkgroup_items.last_mut() {
-                        *last = format!("{}  score:{}", last, score.trim());
+                        *last = format!("{}  score:{}", last, fmt_num(score));
                     }
                 }
             }
@@ -3856,9 +3854,9 @@ fn format_summary_outline(yaml: &str) -> String {
                 text.clone()
             };
             if display_text.is_empty() {
-                outline.push_str(&format!("  {:>2}. {:<10} score:{}\n", i + 1, typ, score));
+                outline.push_str(&format!("  {:>2}. {:<10} score:{}\n", i + 1, typ, fmt_num(score)));
             } else {
-                outline.push_str(&format!("  {:>2}. {:<10} score:{:<4} \"{}\"\n", i + 1, typ, score, display_text));
+                outline.push_str(&format!("  {:>2}. {:<10} score:{:<4} \"{}\"\n", i + 1, typ, fmt_num(score), display_text));
             }
         }
         // Score legend: explain what the numbers mean
@@ -3898,6 +3896,18 @@ fn format_summary_outline(yaml: &str) -> String {
 /// Trim a prefix from a string, returning the remainder trimmed.
 fn trim_prefix<'a>(s: &'a str, prefix: &str) -> Option<&'a str> {
     s.strip_prefix(prefix).map(|r| r.trim())
+}
+
+/// Format a numeric string to at most one decimal place.
+fn fmt_num(s: &str) -> String {
+    match s.trim().parse::<f64>() {
+        Ok(v) => {
+            let s = format!("{:.1}", v);
+            let s = s.trim_end_matches('0').trim_end_matches('.');
+            s.to_string()
+        }
+        Err(_) => s.to_string(),
+    }
 }
 
 async fn handle_html_snapshot_summary(
