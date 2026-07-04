@@ -308,31 +308,25 @@ class MCPToolController(
                 val weighted = computeInteractiveWeights(allInteractive).take(maxInteractive)
                 val interactiveElements = weighted.map { (el, weight, tier) ->
                     val obj = pulsarObjectMapper().createObjectNode()
-                    obj.put("tag", el.tagName().lowercase())
-                    val cls = el.className()
-                    if (cls.isNotBlank()) obj.put("class", cls)
-                    val id = el.id()
-                    if (id.isNotBlank()) obj.put("id", id)
-                    // Collect aria-* attributes
-                    val ariaAttrs = el.attributes().filter { it.key.startsWith("aria-") }
-                    if (ariaAttrs.isNotEmpty()) {
-                        val ariaObj = pulsarObjectMapper().createObjectNode()
-                        for (attr in ariaAttrs) {
-                            ariaObj.put(attr.key, attr.value)
-                        }
-                        obj.set<ObjectNode>("aria", ariaObj)
-                    }
-                    // Bounding box (vi attribute, injected by feature_calculator.js)
+                    // Section 8 element reference: "#closestId tag#id.class1.class2"
+                    obj.put("ref", buildElementRef(el))
+                    // Bounding box: "x,y,w,h" from vi attr
                     val box = el.attr("vi")
                     if (box.isNotBlank()) obj.put("box", box)
-                    // Own text (direct text content, not including descendants)
-                    val ownText = el.ownText().trim().take(80)
+                    // Text: full descendant text truncated to ≤5 words / ≤5 CJK chars
+                    // (ownText is often empty — e.g. <a><em>$</em><span>140</span></a>)
+                    val ownText = truncateText(el.text().trim())
                     if (ownText.isNotBlank()) obj.put("text", ownText)
                     // Weight and tier
                     obj.put("weight", weight)
                     obj.put("tier", tier)
+                    // Semantic group: nearest semantic ancestor or "Page"
+                    obj.put("semanticGroup", findSemanticGroup(el))
                     obj
                 }
+
+                // Run visual geometry link group detection on the captured document
+                val linkGroups = PageSummaryIndexService.detectLinkGroups(document)
 
                 val json = pulsarObjectMapper().createObjectNode().apply {
                     put(
@@ -347,6 +341,9 @@ class MCPToolController(
                     put("imageCount", imageCount)
                     put("linkCount", linkCount)
                     putArray("interactiveElements").addAll(interactiveElements)
+                    if (linkGroups.isNotEmpty()) {
+                        set<ArrayNode>("linkGroups", linkGroupsToJson(linkGroups))
+                    }
                 }
                 json.toString()
             }
@@ -619,7 +616,7 @@ class MCPToolController(
 
                 val args = request.arguments ?: emptyMap()
                 val selector = args["selector"]?.toString()?.ifEmpty { ":root" } ?: ":root"
-                val maxMatches = (args["max"] as? Number)?.toInt() ?: 10
+                val maxMatches = (args["max"] as? Number)?.toInt() ?: 20
                 val maxDepth = (args["depth"] as? Number)?.toInt() ?: 5
 
                 inspectDocument(document, selector, maxMatches, maxDepth)
@@ -922,29 +919,30 @@ internal fun inspectDocument(
         }.toString()
     }
 
-    // Build sample structures for the first 3 matches
+    // Build sample structures for the first 3 matches (Section 8 format)
     val samples = pulsarObjectMapper().createArrayNode()
     for (m in matches.take(3)) {
         val sample = pulsarObjectMapper().createObjectNode()
-        sample.put("tag", m.tagName().lowercase())
-        val cls = m.className()
-        if (cls.isNotBlank()) sample.put("class", cls)
-        val id = m.id()
-        if (id.isNotBlank()) sample.put("id", id)
-        val ownText = m.ownText().trim()
-        if (ownText.isNotBlank()) sample.put("text", ownText.take(120))
+        // Section 8 element reference: "#closestId tag#id.class1.class2"
+        sample.put("ref", buildElementRef(m))
+        // Bounding box from vi attr
+        val mBox = m.attr("vi")
+        if (mBox.isNotBlank()) sample.put("box", mBox)
+        // Text: full descendant text ≤5 words / ≤5 CJK chars
+        // (ownText is often empty — e.g. <a><em>$</em><span>140</span></a>)
+        val ownText = truncateText(m.text().trim())
+        if (ownText.isNotBlank()) sample.put("text", ownText)
 
-        // Direct children
+        // Direct children (also in Section 8 format)
         val children = pulsarObjectMapper().createArrayNode()
         for (child in m.children().take(20)) {
+            val childEl = child as? org.jsoup.nodes.Element ?: continue
             val cObj = pulsarObjectMapper().createObjectNode()
-            cObj.put("tag", child.tagName().lowercase())
-            val cCls = child.className()
-            if (cCls.isNotBlank()) cObj.put("class", cCls)
-            val cId = child.id()
-            if (cId.isNotBlank()) cObj.put("id", cId)
-            val cText = (child as? org.jsoup.nodes.Element)?.ownText()?.trim()
-            if (!cText.isNullOrBlank()) cObj.put("text", cText.take(80))
+            cObj.put("ref", buildElementRef(childEl))
+            val cBox = childEl.attr("vi")
+            if (cBox.isNotBlank()) cObj.put("box", cBox)
+            val cText = truncateText(childEl.text().trim())
+            if (cText.isNotBlank()) cObj.put("text", cText)
             children.add(cObj)
         }
         sample.set<ArrayNode>("children", children)
@@ -1149,6 +1147,9 @@ internal fun inspectDocument(
         suggestions.add(sug)
     }
 
+    // Run visual geometry link group detection on the document
+    val linkGroups = PageSummaryIndexService.detectLinkGroups(document)
+
     return pulsarObjectMapper().createObjectNode().apply {
         put("matchCount", matchCount)
         put("selector", effectiveSelector)
@@ -1159,7 +1160,121 @@ internal fun inspectDocument(
         }
         set<ArrayNode>("samples", samples)
         set<ArrayNode>("suggestions", suggestions)
+        if (linkGroups.isNotEmpty()) {
+            set<ArrayNode>("linkGroups", linkGroupsToJson(linkGroups))
+        }
     }.toString()
+}
+
+// =========================================================================
+// Element serialization utilities (Section 8 format)
+// =========================================================================
+
+/** Semantic ancestor tags used for grouping interactive elements. */
+private val SEMANTIC_TAGS = setOf("nav", "form", "header", "main", "footer", "aside", "section", "article")
+
+/** ARIA roles that indicate a semantic container. */
+private val SEMANTIC_ROLES = setOf(
+    "navigation", "search", "form", "banner", "contentinfo", "complementary",
+    "main", "region", "article"
+)
+
+/**
+ * Build the compact element reference format defined in Section 8:
+ * `#closestId tag#id.class1.class2`
+ *
+ * - `#closestId`: id of the nearest ancestor that has an id attribute
+ *   (empty string if none within 6 levels)
+ * - `tag`: the element's own tag name
+ * - `#id`: the element's own id (omitted if none)
+ * - `.class1.class2`: up to 2 CSS classes (omitted if none)
+ */
+internal fun buildElementRef(el: org.jsoup.nodes.Element): String {
+    val closestId = findClosestId(el)
+    val idPart = if (closestId.isNotEmpty()) "#$closestId " else ""
+    val ownId = el.id().takeIf { it.isNotBlank() }?.let { "#$it" } ?: ""
+    val classPart = formatClassList(el)
+    return "$idPart${el.tagName().lowercase()}$ownId$classPart"
+}
+
+/** Find the id of the nearest ancestor element (up to [maxLevels] levels up). */
+internal fun findClosestId(el: org.jsoup.nodes.Element, maxLevels: Int = 6): String {
+    var current: org.jsoup.nodes.Element? = el.parent()
+    var level = 0
+    while (current != null && level < maxLevels) {
+        val id = current.id()
+        if (id.isNotBlank()) return id
+        current = current.parent()
+        level++
+    }
+    return ""
+}
+
+/** Format up to 2 CSS classes as `.class1.class2`, or empty string if none. */
+internal fun formatClassList(el: org.jsoup.nodes.Element): String {
+    val cls = el.className().trim()
+    if (cls.isBlank()) return ""
+    val classes = cls.split("\\s+".toRegex()).take(2)
+    return classes.joinToString("") { ".$it" }
+}
+
+/**
+ * Truncate text to fit the Section 8 compact format:
+ * ≤5 words for space-separated (Latin) languages, ≤5 characters for CJK.
+ */
+internal fun truncateText(text: String, maxWords: Int = 5): String {
+    val trimmed = text.trim()
+    if (trimmed.isEmpty()) return ""
+    // If any CJK character is present, use character-based truncation
+    if (trimmed.any { isCJK(it) }) {
+        return trimmed.take(maxWords)
+    }
+    // Otherwise, word-based truncation
+    val words = trimmed.split("\\s+".toRegex())
+    return words.take(maxWords).joinToString(" ")
+}
+
+/** Check if a character is in a CJK (Chinese/Japanese/Korean) Unicode range. */
+internal fun isCJK(c: Char): Boolean {
+    val cp = c.code
+    return cp in 0x4E00..0x9FFF   // CJK Unified Ideographs
+        || cp in 0x3400..0x4DBF   // CJK Unified Ideographs Extension A
+        || cp in 0xF900..0xFAFF   // CJK Compatibility Ideographs
+        || cp in 0x3040..0x309F   // Hiragana
+        || cp in 0x30A0..0x30FF   // Katakana
+        || cp in 0xAC00..0xD7AF   // Hangul Syllables
+        || cp in 0x2E80..0x2EFF   // CJK Radicals Supplement
+        || cp in 0x3000..0x303F   // CJK Symbols and Punctuation
+        || cp in 0xFF00..0xFFEF   // Halfwidth and Fullwidth Forms
+}
+
+/**
+ * Find the nearest semantic ancestor for grouping.
+ * Returns the tag name of the closest ancestor in [SEMANTIC_TAGS],
+ * the ARIA role if the ancestor has a [SEMANTIC_ROLES] role,
+ * or "Page" if no semantic ancestor is found within reasonable depth.
+ */
+internal fun findSemanticGroup(el: org.jsoup.nodes.Element): String {
+    var current: org.jsoup.nodes.Element? = el.parent()
+    var depth = 0
+    while (current != null && depth < 10) {
+        val tag = current.tagName().lowercase()
+        if (tag in SEMANTIC_TAGS) return tag
+        val role = current.attr("role").lowercase().trim()
+        if (role in SEMANTIC_ROLES) return role
+        // Also check for id-based grouping: common container patterns
+        val id = current.id().lowercase().trim()
+        if (id.isNotBlank() && (id.contains("nav") || id.contains("menu") ||
+                id.contains("header") || id.contains("footer") ||
+                id.contains("sidebar") || id.contains("content") ||
+                id.contains("search") || id.contains("form"))
+        ) {
+            return id
+        }
+        current = current.parent()
+        depth++
+    }
+    return "Page"
 }
 
 // =========================================================================
@@ -1319,4 +1434,69 @@ internal fun computeInteractiveWeights(
         }
 
     return result
+}
+
+// =========================================================================
+// Link group serialization
+// =========================================================================
+
+/**
+ * Serialize detected link groups to a Jackson [ArrayNode] for inclusion in
+ * capture and inspect command outputs.
+ *
+ * Uses the same structure as the YAML output from [PageSummaryIndexService.generate]
+ * so consumers get a consistent representation regardless of output format.
+ */
+internal fun linkGroupsToJson(
+    linkGroups: List<PageSummaryIndexService.SummaryLinkGroup>,
+): ArrayNode {
+    val mapper = pulsarObjectMapper()
+    val array = mapper.createArrayNode()
+    for (lg in linkGroups) {
+        val obj = mapper.createObjectNode().apply {
+            val containerLabel = lg.containerTag + lg.containerSelector
+            put("container", containerLabel)
+            if (lg.containerSelector.isNotEmpty() && lg.containerSelector != lg.containerTag) {
+                put("selector", lg.containerSelector)
+            }
+            put("itemTag", lg.itemTag)
+            put("itemSelector", lg.itemSelector)
+            put("count", lg.count)
+            put("columnCount", lg.columnCount)
+            put("viewportWidth", lg.viewportWidth)
+            put("viewportHeight", lg.viewportHeight)
+            put("allHaveLinks", lg.allHaveLinks)
+            put("anyHaveImages", lg.anyHaveImages)
+            put("avgCardWidth", lg.avgCardWidth)
+            put("avgCardHeight", lg.avgCardHeight)
+            put("distinctTextCount", lg.distinctTextCount)
+            put("avgDescendants", lg.avgDescendants)
+            if (lg.samples.isNotEmpty()) {
+                val samplesArr = mapper.createArrayNode()
+                for (sample in lg.samples) {
+                    val sampleObj = mapper.createObjectNode().apply {
+                        put("box", sample.box)
+                        if (sample.links.isNotEmpty()) {
+                            val linksArr = mapper.createArrayNode()
+                            for (link in sample.links) {
+                                val linkObj = mapper.createObjectNode().apply {
+                                    put("text", link.text)
+                                    put("href", link.href)
+                                    put("box", link.box)
+                                }
+                                linksArr.add(linkObj)
+                            }
+                            set<ArrayNode>("links", linksArr)
+                        }
+                        put("hasImage", sample.hasImage)
+                    }
+                    samplesArr.add(sampleObj)
+                }
+                set<ArrayNode>("samples", samplesArr)
+            }
+            put("score", lg.score)
+        }
+        array.add(obj)
+    }
+    return array
 }

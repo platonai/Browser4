@@ -20,6 +20,27 @@ vi="{x},{y},{w},{h}[,_h=1]"
 
 Additional flags may be appended for other element states. Downstream algorithms use this attribute for: visibility filtering, visual-prominence scoring, positional grouping, and PowerCSS `:expr()` selector generation.
 
+### PulsarMetaInformation
+
+During capture, a hidden `<input>` element is injected into the page carrying page-level metadata including the viewport dimensions used as the coordinate system for all `vi` bounding boxes:
+
+```html
+<input type="hidden" id="PulsarMetaInformation"
+       domain="www.amazon.com"
+       view-port="1920x1080"
+       date-time="2026/7/3 01:56:24"
+       timestamp="1783014984670">
+```
+
+| Attribute | Meaning |
+|---|---|
+| `domain` | The page's domain |
+| `view-port` | Viewport dimensions as `WxH` in CSS pixels — the coordinate space for all `vi` boxes |
+| `date-time` | Capture timestamp (local time) |
+| `timestamp` | Capture timestamp (Unix epoch ms) |
+
+Downstream algorithms read `view-port` to interpret bounding-box coordinates correctly (e.g., a card at `x=800` in a 1920px viewport is centered; the same coordinate in a 375px viewport is off-screen).
+
 ---
 
 ## Error Modes
@@ -42,7 +63,9 @@ Running `capture` → `summary` → `inspect` in sequence would previously parse
 
 ---
 
-## 1. `htmlsnapshot` — Capture
+## 1. `htmlsnapshot capture`
+
+> **Alias**: `htmlsnapshot` (without the subcommand) is the short form of `htmlsnapshot capture`. Both invoke the same capture logic.
 
 **Purpose**: Take a static HTML snapshot of the current page and store it in Browser4's page storage for later querying.
 
@@ -125,21 +148,46 @@ Running `capture` → `summary` → `inspect` in sequence would previously parse
 │     Elements with no semantic ancestor go into "Page" group. │
 │     Output is partitioned by group for readability.          │
 │                                                              │
-│  8. SERIALIZE interactive elements                           │
-│     For each element: tag, class, id, aria-* attrs,          │
-│     bounding-box (vi attr), ownText (≤80 chars for display;  │
-│     full text stored server-side for `htmlsnapshot get`),    │
-│     weight, tier, semanticGroup                              │
+│  8. DETECT link groups (visual geometry algorithm)           │
+│     Run PageSummaryIndexService.detectLinkGroups() on the     │
+│     captured document. Groups visually similar card elements  │
+│     (product grids, article lists, etc.) by bounding-box      │
+│     geometry and includes them as linkGroups in the output.   │
+│     See docs/htmlsnapshot-algorithms.v2.md for full details.  │
 │                                                              │
-│  9. DELTA DETECTION (if prior snapshot exists for this URL)  │
+│  9. SERIALIZE interactive elements                           │
+│     For each element, output a compact representation:       │
+│                                                              │
+│     ┌─ Element reference format:                              │
+│     │  "#closestId tag#id.class1.class2"                      │
+│     │                                                        │
+│     │  · #closestId: id of the nearest ancestor that has     │
+│     │    an id attribute (empty if none within 6 levels)     │
+│     │  · tag: the element's own tag name                     │
+│     │  · #id: the element's own id (omitted if none)         │
+│     │  · .class1.class2: up to 2 classes (omitted if none)   │
+│     │                                                        │
+│     ├─ Bounding box: "x,y,w,h" from vi attr                  │
+│     │                                                        │
+│     ├─ Text: full descendant text (`text()`), truncated to   │
+│     │  ≤5 words for Latin or ≤5 characters for CJK.          │
+│     │  Using `text()` rather than `ownText()` because many    │
+│     │  interactive elements wrap text in child nodes —        │
+│     │  e.g. `<a href="..."><em>$</em><span>140</span></a>`.  │
+│     │  Full text stored server-side for `htmlsnapshot get`.   │
+│     │                                                        │
+│     └─ Also include: weight, tier, semanticGroup             │
+│                                                              │
+│                                                              │
+│  10. DELTA DETECTION (if prior snapshot exists for this URL)  │
 │     Compute structural diff: elements added, removed, or     │
 │     whose text changed. Store delta alongside full snapshot.  │
 │     Enables `htmlsnapshot diff` for "what changed?" queries. │
 │                                                              │
-│  10. RETURN JSON to CLI                                      │
+│  11. RETURN JSON to CLI                                      │
 │      { url, href, sizeBytes, capturedAt, contentType,        │
 │        title, imageCount, linkCount, interactiveElements,    │
-│        semanticGroups, deltaSummary? }                       │
+│        linkGroups?, deltaSummary? }                          │
 │                                                              │
 │  CLI: FORMAT and PRINT                                       │
 │     Line 1: Snapshot: "<title>" or <url>                     │
@@ -147,8 +195,15 @@ Running `capture` → `summary` → `inspect` in sequence would previously parse
 │     Line 3: N images · N links · N interactive elements      │
 │     Then: interactive elements grouped by semantic context    │
 │           (Nav / Main Form / Header / Footer / Page)          │
-│           with numbered entries within each group             │
-│     Then: Next-step hints (htmlsnapshot get/inspect/query)   │
+│           each element on its own line:                       │
+│             1. #closestId tag#id.class  x,y,w,h  "text..."   │
+│     Then: Next-step hints (htmlsnapshot summary/inspect)     │
+│                                                              │
+│     Example elements:                                        │
+│       #main a#buy-btn.primary.lg  100,200,120,40  "Buy Now"  │
+│       #search-results div.product-card  200,300,220,380      │
+│       #nav li.nav-item  0,100,180,32  "Home"                 │
+│                                                              │
 │                                                              │
 │  OUTPUT: JSON metadata + interactive elements → stdout       │
 │          Stored HTML snapshot → page storage (server-side)   │
@@ -163,6 +218,7 @@ Running `capture` → `summary` → `inspect` in sequence would previously parse
 - **Context-aware weighting**: link-heavy pages compress the Tier 1/2 gap so navigation content isn't buried
 - **Resolution-independent link grouping**: ε based on viewport percentage, not absolute px
 - **Semantic grouping**: elements organized by nearest semantic ancestor for readability
+- **Visual link group detection**: runs the same geometry-first algorithm as summary, detecting product grids, article lists, and other repeating card patterns — included as `linkGroups` in the output
 - **Delta detection**: diff stored when re-capturing the same URL, enabling change queries
 - **Next-step hints**: shows relevant follow-up commands
 
@@ -345,11 +401,13 @@ Running `capture` → `summary` → `inspect` in sequence would previously parse
 │     │                                                        │
 │     └── PHASE 13: Build YAML ────────────────────────────    │
 │        Structured output with sections:                      │
-│        page: {title, url, type, contentTypeRatio}            │
-│        structure: [landmarks with box, tag, selector]        │
+│        page: {title, url, type, viewport, contentTypeRatio}  │
+│        structure: [landmarks with ref, box, tag, selector]   │
 │        outline: [heading hierarchy tree]                     │
-│        content: [key nodes with box, type, score, text,      │
-│                  selector]                                   │
+│        content: [key nodes with ref, box, type, score,       │
+│                  text, selector]                              │
+│          where ref = "#closestId tag#id.class1.class2"       │
+│          and text ≤ 5 words / 5 CJK chars                    │
 │        excerpt: [top 1-3 text paragraphs]                    │
 │        lists: [repeated patterns with samples]               │
 │        tables: [table dimensions with headers]               │
@@ -370,7 +428,10 @@ Running `capture` → `summary` → `inspect` in sequence would previously parse
 │     - Page Title: <title>                                    │
 │     - Page Type: <type> (content-to-chrome: <ratio>)         │
 │     ### Summary                                              │
-│     <YAML content>                                           │
+│     <YAML content with element refs in compact form>         │
+│     #### Content                                             │
+│       1. #main a#buy-btn.primary.lg  100,200,120,40  "Buy"   │
+│       2. #search div.product-card  200,300,220,380  "Sony"   │
 │     💾 Saved to <path>                                       │
 │                                                              │
 │  OUTPUT: YAML summary → stdout + saved to file               │
@@ -389,6 +450,7 @@ Running `capture` → `summary` → `inspect` in sequence would previously parse
 - **Text excerpts**: top paragraphs give a "what this page says" signal
 - **Multi-locale page type inference**: structural heuristics (language-independent) weighted 2× over keyword matching in 12+ languages
 - **Fully deterministic**: zero randomness, no AI model
+- **Full text extraction**: uses `text()` (all descendant text) rather than `ownText()` for display values, because many elements wrap their visible text in child nodes — scoring and inference still use `ownText()` for correct structural weighting
 - **Size compression**: typically 0.1%–1% of original HTML
 
 ---
@@ -405,7 +467,7 @@ Running `capture` → `summary` → `inspect` in sequence would previously parse
 ┌──────────────────────────────────────────────────────────────┐
 │                     INSPECT Algorithm                         │
 ├──────────────────────────────────────────────────────────────┤
-│  INPUT: sessionId, selector=":root", max=10, depth=5         │
+│  INPUT: sessionId, selector=":root", max=20, depth=5         │
 │                                                              │
 │  SERVER SIDE:                                                │
 │                                                              │
@@ -469,8 +531,10 @@ Running `capture` → `summary` → `inspect` in sequence would previously parse
 │        coverage."                                            │
 │                                                              │
 │  6. BUILD sample structures (first 3 matches)                │
-│     For each match: tag, class, id, ownText                  │
-│                     + direct children (tag, class, id, text)  │
+│     For each match: "#closestId tag#id.class" reference,     │
+│     bounding box, full descendant text truncated to          │
+│     ≤5 words / 5 CJK chars (using `text()`, not `ownText()`), │
+│     + direct children in same compact format                  │
 │                                                              │
 │  7. PRE-COMPUTE element weights                              │
 │     computeInteractiveWeights() across all interactive        │
@@ -585,7 +649,11 @@ Running `capture` → `summary` → `inspect` in sequence would previously parse
 │      Sample-size note (if max < matchCount)                  │
 │      Speculative suggestion (if auto-discovered better)      │
 │      Auto-discovery notice (if applicable)                   │
-│      Sample structures (3 samples with children)             │
+│      Sample structures (3 samples in compact form):          │
+│        1. #search div.product-card  200,300,220,380  "Sony"  │
+│           ├─ #card img.thumb  10,10,200,200  ""              │
+│           ├─ #card a.title  10,220,200,20  "Sony WH..."      │
+│           └─ #card span.price  10,340,80,20  "$349"          │
 │      Selector suggestions grouped by specificity:            │
 │        Class/ID selectors (high specificity)                 │
 │        Child/Sibling combinators (> .card > .title)          │
@@ -609,6 +677,7 @@ Running `capture` → `summary` → `inspect` in sequence would previously parse
 - **PowerCSS selectors**: `:expr(width>N)`, `:expr(width>N && height>N)`, `:expr(img>0)`, `:expr(width>N && img>0)`, `:expr(a>0)`, `:expr(char>N)`, `:expr(left>N)` — all using valid PowerCSS features (`width`, `height`, `img`, `a`, `char`, `left`)
 - **Dedup of equivalent selectors**: subset/superset relationships detected; most specific kept, broader flagged as alternative
 - **Reliability warnings**: per-selector structural-variance flagging when content shape differs across matches
+- **Visual link group detection**: runs the same geometry-first algorithm as summary, detecting product grids, article lists, etc. — included as `linkGroups` in the JSON output
 - **Sample-size caveat**: explicit note when `max` < `matchCount`, with hint to increase limit
 - **Absolute quality floor**: prevents misleading tier labels from purely-relative percentile thresholds
 - **Early pruning**: bare tags appearing in <50% of matches skip expensive class/id/attr/power generation
@@ -617,7 +686,7 @@ Running `capture` → `summary` → `inspect` in sequence would previously parse
 
 ## Side-by-Side Comparison
 
-| Dimension | `htmlsnapshot` (Capture) | `htmlsnapshot summary` | `htmlsnapshot inspect` |
+| Dimension | `htmlsnapshot capture` | `htmlsnapshot summary` | `htmlsnapshot inspect` |
 |---|---|---|---|
 | **Action** | Write: capture fresh DOM | Read: analyze stored DOM | Read: analyze stored DOM |
 | **Mutates storage** | ✅ Stores new snapshot (+ delta) | ❌ Read-only (re-captures if stale) | ❌ Read-only (re-captures if stale) |
@@ -635,9 +704,11 @@ Running `capture` → `summary` → `inspect` in sequence would previously parse
 | **Text excerpts** | ❌ | ✅ (top 3 paragraphs) | ❌ |
 | **Content-to-chrome ratio** | ❌ | ✅ | ❌ |
 | **List/table detection** | ❌ | ✅ (tag-name + structural similarity) | ❌ |
+| **Link group detection** | ✅ (visual geometry, same algorithm as summary) | ✅ (visual geometry algorithm) | ✅ (visual geometry, same algorithm as summary) |
 | **Selector generation** | ❌ | Hint only (#id or .class) | ✅ (class, id, attr, child, sibling, PowerCSS) |
 | **Selector dedup** | ❌ | ❌ | ✅ (subset/superset detection) |
 | **Reliability warnings** | ❌ | ❌ | ✅ (structural variance per selector) |
+| **Element format** | `#closestId tag#id.class` + box + ≤5-word text | Same compact format in YAML `ref` field | Same compact format in sample trees |
 | **Bounding boxes** | Extracted from `vi` attr | Used for visibility, position, area scoring | Used for PowerCSS :expr() generation |
 | **Semantic grouping** | ✅ (by nearest semantic ancestor) | ✅ (landmarks) | ❌ |
 | **Delta/diff support** | ✅ (delta stored on re-capture) | ❌ | ❌ |
@@ -655,7 +726,8 @@ Running `capture` → `summary` → `inspect` in sequence would previously parse
                         │ DOM HTML
                         ▼
 ┌──────────────────────────────────────────────────┐
-│              htmlsnapshot (capture)               │
+│            htmlsnapshot capture                   │
+│            (alias: htmlsnapshot)                  │
 │                                                  │
 │  driver.currentUrl() → capture() → parse()       │
 │  ┌─────────────────────────────────────────┐     │

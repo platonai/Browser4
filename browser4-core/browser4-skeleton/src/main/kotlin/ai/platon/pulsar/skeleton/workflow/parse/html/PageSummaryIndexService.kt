@@ -74,6 +74,9 @@ object PageSummaryIndexService {
         // Phase 6: list detection
         val lists = detectLists(indexedNodes)
 
+        // Phase 6b: link group detection
+        val linkGroups = detectLinkGroups(cleaned)
+
         // Phase 7: table summary
         val tables = summarizeTables(indexedNodes)
 
@@ -81,7 +84,7 @@ object PageSummaryIndexService {
         val stats = computeStats(indexedNodes)
 
         // Build YAML
-        val pageType = inferPageType(indexedNodes)
+        val pageType = inferPageType(indexedNodes, pageUrl)
         return buildYamlSummary(
             pageUrl = pageUrl,
             title = title,
@@ -89,6 +92,7 @@ object PageSummaryIndexService {
             landmarks = landmarks,
             keyNodes = keyNodes,
             lists = lists,
+            linkGroups = linkGroups,
             tables = tables,
             stats = stats,
         )
@@ -140,6 +144,64 @@ object PageSummaryIndexService {
         val images: Int,
         val inputs: Int,
     )
+
+    /** A single extracted link within a sample item. */
+    data class LinkInfo(
+        val text: String,
+        val href: String,
+        val box: String,
+    )
+
+    /** One sample item from a link group. */
+    data class LinkGroupItem(
+        val box: String,
+        val links: List<LinkInfo>,
+        val hasImage: Boolean,
+        val descendantCount: Int,
+        val textLength: Int,
+    )
+
+    /** A detected link group — repeating visual card pattern containing links. */
+    data class SummaryLinkGroup(
+        val containerTag: String,
+        val containerId: String,
+        val containerClass: String,
+        val containerSelector: String,
+        val itemTag: String,
+        val itemSelector: String,
+        val count: Int,
+        val columnCount: Int,
+        val viewportWidth: Double,
+        val viewportHeight: Double,
+        val allHaveLinks: Boolean,
+        val anyHaveImages: Boolean,
+        val avgCardWidth: Double,
+        val avgCardHeight: Double,
+        val distinctTextCount: Int,
+        val avgDescendants: Double,
+        val samples: List<LinkGroupItem>,
+        val score: Double,
+    )
+
+    // =========================================================================
+    // Constants (link group detection)
+    // =========================================================================
+
+    private const val MIN_CARD_WIDTH = 80.0
+    private const val MIN_CARD_HEIGHT = 30.0
+    private const val MIN_LINK_GROUP_SIZE = 3
+    private const val MIN_LINK_GROUP_SCORE = 20.0
+    private const val WIDTH_TOLERANCE = 0.10   // 10%
+    private const val HEIGHT_TOLERANCE = 0.15   // 15%
+    private const val MAX_VIEWPORT_WIDTH_RATIO = 0.95
+    private const val NAV_STRONG_MAX_HEIGHT = 36.0
+    private const val NAV_STRONG_MAX_WIDTH = 120.0
+    private const val NAV_MODERATE_PENALTY = 0.3
+    private const val MAX_LINK_TEXT_LEN = 20.0
+    private const val Y_SPACING_RATIO_THRESHOLD = 0.5
+    private const val MAX_GAP_PX = 100.0
+    private const val TOP_GROUPS = 5
+    private const val MAX_SAMPLES = 3
 
     // =========================================================================
     // Phase implementations
@@ -289,12 +351,69 @@ object PageSummaryIndexService {
         return ""
     }
 
+    /**
+     * Build the compact element reference format defined in Section 8:
+     * `#closestId tag#id.class1.class2`
+     */
+    private fun buildElementRef(node: SummaryIndexedNode): String {
+        val closestId = findClosestId(node.element)
+        val idPart = if (closestId.isNotEmpty()) "#$closestId " else ""
+        val ownId = node.id.takeIf { it.isNotBlank() }?.let { "#$it" } ?: ""
+        val classPart = formatClassList(node.className)
+        return "$idPart${node.tag}$ownId$classPart"
+    }
+
+    /** Find the id of the nearest ancestor element (up to [maxLevels] levels up). */
+    private fun findClosestId(el: org.jsoup.nodes.Element, maxLevels: Int = 6): String {
+        var current: org.jsoup.nodes.Element? = el.parent()
+        var level = 0
+        while (current != null && level < maxLevels) {
+            val id = current.id()
+            if (id.isNotBlank()) return id
+            current = current.parent()
+            level++
+        }
+        return ""
+    }
+
+    /** Format up to 2 CSS classes as `.class1.class2`, or empty string if none. */
+    private fun formatClassList(className: String): String {
+        if (className.isBlank()) return ""
+        val classes = className.split("\\s+".toRegex()).take(2)
+        return classes.joinToString("") { ".$it" }
+    }
+
+    /**
+     * Truncate text to ≤5 words (Latin) or ≤5 characters (CJK).
+     */
+    private fun truncateSummaryText(text: String, maxWords: Int = 5): String {
+        val trimmed = text.trim()
+        if (trimmed.isEmpty()) return ""
+        if (trimmed.any { isCJK(it) }) return trimmed.take(maxWords)
+        val words = trimmed.split("\\s+".toRegex())
+        return words.take(maxWords).joinToString(" ")
+    }
+
+    /** Check if a character is in a CJK Unicode range. */
+    private fun isCJK(c: Char): Boolean {
+        val cp = c.code
+        return cp in 0x4E00..0x9FFF   // CJK Unified Ideographs
+            || cp in 0x3400..0x4DBF   // CJK Unified Ideographs Extension A
+            || cp in 0xF900..0xFAFF   // CJK Compatibility Ideographs
+            || cp in 0x3040..0x309F   // Hiragana
+            || cp in 0x30A0..0x30FF   // Katakana
+            || cp in 0xAC00..0xD7AF   // Hangul Syllables
+            || cp in 0x2E80..0x2EFF   // CJK Radicals Supplement
+            || cp in 0x3000..0x303F   // CJK Symbols and Punctuation
+            || cp in 0xFF00..0xFFEF   // Halfwidth and Fullwidth Forms
+    }
+
     // =========================================================================
     // Page type inference
     // =========================================================================
 
-    /** Heuristic page-type detection from DOM text and tags. */
-    private fun inferPageType(nodes: List<SummaryIndexedNode>): String {
+    /** Heuristic page-type detection from DOM text, tags, and URL. */
+    private fun inferPageType(nodes: List<SummaryIndexedNode>, pageUrl: String): String {
         val text = nodes.joinToString(" ") { it.text }.lowercase()
         val tags = nodes.map { it.tag }.toSet()
 
@@ -312,13 +431,37 @@ object PageSummaryIndexService {
         val hasForm = tags.contains("form") && (text.contains("submit") || text.contains("提交"))
         val hasVideo = tags.contains("video") || text.contains("video") || text.contains("视频")
 
+        // URL-based signals
+        val urlLower = pageUrl.lowercase()
+        val urlPath = try {
+            java.net.URI(pageUrl).path.lowercase()
+        } catch (_: Exception) {
+            pageUrl.substringAfter("//").substringAfter("/").lowercase()
+        }
+
+        val isHomepage = urlPath.isBlank() || urlPath == "/" || urlPath == "/index.html" || urlPath == "/index.htm"
+        val isProductDetailUrl = Regex("""/(dp|product|ip|item|gp/product)/""").containsMatchIn(urlPath)
+        val isSearchUrl = urlPath.contains("search") ||
+                Regex("""[?&](s|q|k|query|search|keyword)=""").containsMatchIn(urlLower)
+
         return when {
-            hasAddToCart || (hasPrice && hasProduct) -> "Product Detail"
+            // Strong content signals take priority over URL hints
+            hasAddToCart -> "Product Detail"
             hasSearch && hasPrice -> "Search Results"
+            hasArticle -> "Article / Content"
             hasLogin && !hasArticle -> "Login / Auth"
             hasForm && !hasArticle -> "Form Page"
             hasVideo -> "Media Page"
-            hasArticle -> "Article / Content"
+
+            // URL-backed signals (refine or override content-ambiguous cases)
+            isProductDetailUrl && hasPrice -> "Product Detail"
+            isSearchUrl -> "Search Results"
+
+            // Homepage detection (only when no strong content signal above)
+            isHomepage && hasPrice -> "Product Listing"
+            isHomepage -> "Homepage"
+
+            // Remaining content heuristics
             text.contains("blog") || text.contains("博客") -> "Blog"
             text.contains("forum") || text.contains("论坛") -> "Forum"
             text.contains("documentation") || text.contains("文档") -> "Documentation"
@@ -376,6 +519,676 @@ object PageSummaryIndexService {
     }
 
     // =========================================================================
+    // Link group detection (Phase 6b)
+    // =========================================================================
+
+    /** Internal candidate collected from a DOM element with a bounding box and links. */
+    private data class CardCandidate(
+        val element: org.jsoup.nodes.Element,
+        val x: Double, val y: Double, val w: Double, val h: Double,
+        val area: Double,
+        val hasLinks: Boolean,
+        val hasImages: Boolean,
+        val linkCount: Int,
+        val textLength: Int,
+    )
+
+    /** Internal cluster produced by visual grouping phases. */
+    private data class VisualCluster(
+        val items: List<CardCandidate>,
+        val meanWidth: Double,
+        val meanHeight: Double,
+        val xPositions: List<Double>,
+        val yRegularity: Double,
+        val mergedFrom: Int,
+    )
+
+    /**
+     * Detect link groups — coherent collections of item cards where each card
+     * contains one or more links.
+     *
+     * Algorithm: cluster by visual geometry (bounding box), then walk up the
+     * DOM to find the nearest container element.
+     */
+    fun detectLinkGroups(document: FeaturedDocument): List<SummaryLinkGroup> {
+        // Phase 0: extract viewport dimensions
+        val (viewportW, viewportH) = extractViewport(document)
+        // Phase 1: collect card candidates
+        val candidates = collectCardCandidates(document, viewportW, viewportH)
+        if (candidates.size < MIN_LINK_GROUP_SIZE) return emptyList()
+
+        // Phase 2: cluster by visual similarity
+        val widthGroups = clusterByWidth(candidates)
+        val whGroups = widthGroups.flatMap { clusterByHeight(it) }
+        val xClusters = whGroups.flatMap { clusterByX(it, viewportW) }
+
+        // Phase 3: y-spacing regularity check
+        val regularClusters = xClusters.filter { checkYRegularity(it) }
+        if (regularClusters.isEmpty()) return emptyList()
+
+        // Phase 4: merge columns into grids
+        val visualGroups = mergeColumns(regularClusters)
+        if (visualGroups.isEmpty()) return emptyList()
+
+        // Phase 5: navigation menu suppression (strong signals only — reject)
+        val nonNavGroups = visualGroups.filter { cluster ->
+            val penalty = applyNavSuppression(cluster)
+            penalty > 0.0
+        }
+
+        // Phase 6: find nearest container for each group
+        data class GroupWithContainer(
+            val cluster: VisualCluster,
+            val container: org.jsoup.nodes.Element,
+            val itemSelector: String,
+        )
+
+        val withContainers = nonNavGroups.mapNotNull { cluster ->
+            val container = findContainer(cluster.items.map { it.element }, candidates)
+            if (container != null) {
+                val itemSelector = buildItemSelector(cluster.items.map { it.element })
+                GroupWithContainer(cluster, container, itemSelector)
+            } else {
+                null
+            }
+        }
+
+        // Phase 7: resolve overlapping groups + compute final scores
+        val asTriples = withContainers.map { Triple(it.cluster, it.container, it.itemSelector) }
+        val resolved = resolveOverlaps(asTriples, viewportW, viewportH)
+        if (resolved.isEmpty()) return emptyList()
+
+        // Phase 8: extract link data
+        return resolved.map { (cluster, container, itemSelector) ->
+            val items = cluster.items
+            val allHaveLinks = items.all { it.hasLinks }
+            val anyHaveImages = items.any { it.hasImages }
+            val distinctTexts = items.map { it.element.text().trim() }
+                .filter { it.isNotBlank() }.distinct()
+            val avgDesc = items.map { it.element.select("*").size.toDouble() }.average()
+            val avgW = items.map { it.w }.average()
+            val avgH = items.map { it.h }.average()
+            val samples = extractLinkData(items.take(MAX_SAMPLES).map { it.element })
+
+            // Compute score
+            val size = items.size.toDouble()
+            var score = size * 10.0
+            if (allHaveLinks) score += size * 5.0
+            if (anyHaveImages) score += size * 3.0
+            score += minOf(distinctTexts.size, 10) * 2.0
+            score += minOf(avgDesc, 6.0) * 2.0
+            val navPenalty = computeNavPenaltyForContainer(container, items)
+            score *= navPenalty
+
+            val containerTag = container.tagName().lowercase()
+            val containerId = container.id()
+            val containerClass = container.className()
+            val containerSelector = buildSelectorHint(containerClass, containerId)
+                .ifEmpty { containerTag }
+
+            SummaryLinkGroup(
+                containerTag = containerTag,
+                containerId = containerId,
+                containerClass = containerClass,
+                containerSelector = containerSelector,
+                itemTag = items.first().element.tagName().lowercase(),
+                itemSelector = itemSelector,
+                count = items.size,
+                columnCount = cluster.mergedFrom,
+                viewportWidth = viewportW,
+                viewportHeight = viewportH,
+                allHaveLinks = allHaveLinks,
+                anyHaveImages = anyHaveImages,
+                avgCardWidth = avgW,
+                avgCardHeight = avgH,
+                distinctTextCount = distinctTexts.size,
+                avgDescendants = avgDesc,
+                samples = samples,
+                score = score,
+            )
+        }.filter { it.score >= MIN_LINK_GROUP_SCORE }
+            .sortedByDescending { it.score }
+            .take(TOP_GROUPS)
+    }
+
+    // =========================================================================
+    // Phase 0: viewport extraction
+    // =========================================================================
+
+    private fun extractViewport(document: FeaturedDocument): Pair<Double, Double> {
+        // Primary source: PulsarMetaInformation hidden input
+        val meta = document.select("#PulsarMetaInformation").first()
+        if (meta != null) {
+            val viewport = meta.attr("view-port").trim()
+            if (viewport.isNotBlank()) {
+                val parts = viewport.split("x", "×", "X").map { it.trim() }
+                if (parts.size == 2) {
+                    val w = parts[0].toDoubleOrNull()
+                    val h = parts[1].toDoubleOrNull()
+                    if (w != null && h != null && w > 0 && h > 0) return w to h
+                }
+            }
+        }
+
+        // Fallback: <html> element's vi attribute
+        val htmlEl = document.select("html").first()
+        if (htmlEl != null) {
+            val (_, _, w, h) = parseVi(htmlEl.attr("vi"))
+            if (w != null && h != null && w > 0 && h > 0) return w to h
+        }
+
+        // Default
+        return 1920.0 to 1080.0
+    }
+
+    // =========================================================================
+    // Phase 1: collect card candidates
+    // =========================================================================
+
+    private fun collectCardCandidates(
+        document: FeaturedDocument,
+        viewportW: Double,
+        viewportH: Double,
+    ): List<CardCandidate> {
+        val candidates = mutableListOf<CardCandidate>()
+        val maxW = viewportW * MAX_VIEWPORT_WIDTH_RATIO
+
+        for (el in document.select("*")) {
+            val vi = el.attr("vi").trim()
+            if (vi.isBlank()) continue
+            if (vi.contains("_h=1")) continue
+
+            val (x, y, w, h) = parseVi(vi)
+            if (w == null || h == null || w <= 0 || h <= 0) continue
+
+            // Size filters
+            if (w < MIN_CARD_WIDTH || h < MIN_CARD_HEIGHT) continue
+            if (w > maxW) continue
+
+            // Must contain at least one link
+            val links = el.select("a[href]")
+            if (links.isEmpty()) continue
+
+            val hasImages = el.select("img").isNotEmpty()
+
+            candidates.add(
+                CardCandidate(
+                    element = el,
+                    x = x ?: 0.0,
+                    y = y ?: 0.0,
+                    w = w,
+                    h = h,
+                    area = w * h,
+                    hasLinks = true,
+                    hasImages = hasImages,
+                    linkCount = links.size,
+                    textLength = el.text().length,
+                )
+            )
+        }
+
+        return candidates
+    }
+
+    private fun parseVi(vi: String): Quadruple<Double?, Double?, Double?, Double?> {
+        val parts = vi.split(",", " ").map { it.trim() }.filter { it.isNotEmpty() }
+        if (parts.size < 4) return Quadruple(null, null, null, null)
+        // The first 4 numeric parts are x, y, w, h; extra flags like _h=1 follow
+        val nums = parts.take(4).map { it.toDoubleOrNull() }
+        return Quadruple(nums.getOrNull(0), nums.getOrNull(1), nums.getOrNull(2), nums.getOrNull(3))
+    }
+
+    private data class Quadruple<A, B, C, D>(val first: A, val second: B, val third: C, val fourth: D)
+
+    // =========================================================================
+    // Phase 2: visual clustering
+    // =========================================================================
+
+    /** Phase 2a: cluster by width (±WIDTH_TOLERANCE relative). */
+    private fun clusterByWidth(candidates: List<CardCandidate>): List<List<CardCandidate>> {
+        if (candidates.isEmpty()) return emptyList()
+        val sorted = candidates.sortedBy { it.w }
+        val groups = mutableListOf<MutableList<CardCandidate>>()
+        var current = mutableListOf(sorted.first())
+
+        for (c in sorted.drop(1)) {
+            val ref = current.first().w
+            if (ref > 0 && Math.abs(c.w - ref) / maxOf(c.w, ref) <= WIDTH_TOLERANCE) {
+                current.add(c)
+            } else {
+                groups.add(current)
+                current = mutableListOf(c)
+            }
+        }
+        groups.add(current)
+        return groups.filter { it.size >= MIN_LINK_GROUP_SIZE }
+    }
+
+    /** Phase 2b: within each width-group, cluster by height (±HEIGHT_TOLERANCE). */
+    private fun clusterByHeight(candidates: List<CardCandidate>): List<List<CardCandidate>> {
+        if (candidates.size < MIN_LINK_GROUP_SIZE) return emptyList()
+        val sorted = candidates.sortedBy { it.h }
+        val groups = mutableListOf<MutableList<CardCandidate>>()
+        var current = mutableListOf(sorted.first())
+
+        for (c in sorted.drop(1)) {
+            val ref = current.first().h
+            if (ref > 0 && Math.abs(c.h - ref) / maxOf(c.h, ref) <= HEIGHT_TOLERANCE) {
+                current.add(c)
+            } else {
+                groups.add(current)
+                current = mutableListOf(c)
+            }
+        }
+        groups.add(current)
+        return groups.filter { it.size >= MIN_LINK_GROUP_SIZE }
+    }
+
+    /** Phase 2c: within each (w,h) group, cluster by x-position.
+     *  Minimum of 1 item per x-cluster — columns with few items are merged in Phase 4. */
+    private fun clusterByX(candidates: List<CardCandidate>, viewportW: Double): List<List<CardCandidate>> {
+        if (candidates.isEmpty()) return emptyList()
+        val epsX = viewportW * 0.02  // 2% of viewport width
+        val sorted = candidates.sortedBy { it.x }
+        val groups = mutableListOf<MutableList<CardCandidate>>()
+        var current = mutableListOf(sorted.first())
+
+        for (c in sorted.drop(1)) {
+            if (Math.abs(c.x - current.first().x) <= epsX) {
+                current.add(c)
+            } else {
+                groups.add(current)
+                current = mutableListOf(c)
+            }
+        }
+        groups.add(current)
+        return groups
+    }
+
+    // =========================================================================
+    // Phase 3: Y-spacing regularity check
+    // =========================================================================
+
+    private fun checkYRegularity(cluster: List<CardCandidate>): Boolean {
+        // Single-item clusters pass through — they may be merged in Phase 4
+        if (cluster.size < 2) return true
+
+        val sorted = cluster.sortedBy { it.y }
+        val gaps = mutableListOf<Double>()
+        for (i in 0 until sorted.size - 1) {
+            val gap = sorted[i + 1].y - (sorted[i].y + sorted[i].h)
+            gaps.add(gap)
+        }
+
+        if (gaps.isEmpty()) return cluster.size >= MIN_LINK_GROUP_SIZE
+
+        // Detect and remove outlier gaps (gaps between separate sections).
+        // A gap is an outlier if it's > 3× the median of positive gaps.
+        val positiveGaps = gaps.filter { it > 0 }
+        if (positiveGaps.isEmpty()) return true  // all overlapping
+
+        val sortedGaps = positiveGaps.sorted()
+        val medianGap = if (sortedGaps.size % 2 == 0)
+            (sortedGaps[sortedGaps.size / 2] + sortedGaps[sortedGaps.size / 2 - 1]) / 2.0
+        else sortedGaps[sortedGaps.size / 2]
+
+        // Split at gaps > 3× median (section boundaries). Check the largest segment.
+        val segments = mutableListOf<MutableList<Double>>()
+        var current = mutableListOf<Double>()
+        for (gap in gaps) {
+            if (gap > 0 && medianGap > 0 && gap > 3.0 * medianGap && current.isNotEmpty()) {
+                segments.add(current)
+                current = mutableListOf()
+            } else {
+                current.add(gap)
+            }
+        }
+        if (current.isNotEmpty()) segments.add(current)
+
+        // A cluster is valid if its largest segment passes the regularity check
+        val bestSegment = segments.maxByOrNull { it.size } ?: return false
+        // For 1-2 gaps (2-3 items), skip outlier splitting and check directly
+        if (bestSegment.size < 2) {
+            // Small cluster: no meaningful outlier detection, check all gaps
+            if (gaps.size == 1) {
+                // Two items, one gap: check just this gap
+                val gap = gaps[0]
+                val medianH = sorted.map { it.h }.sorted().let { hs ->
+                    if (hs.size % 2 == 0) (hs[hs.size / 2] + hs[hs.size / 2 - 1]) / 2.0
+                    else hs[hs.size / 2]
+                }
+                return gap >= 0 && gap < 2.0 * medianH
+            }
+            if (gaps.size >= 2) return true  // pass through for merging
+            return false
+        }
+
+        val meanGap = bestSegment.average()
+        if (meanGap <= 0) return true
+
+        val variance = bestSegment.map { (it - meanGap) * (it - meanGap) }.average()
+        val stddev = Math.sqrt(variance)
+        val ratio = if (meanGap > 0) stddev / meanGap else 1.0
+
+        val isRegular = ratio <= Y_SPACING_RATIO_THRESHOLD
+
+        val medianH = sorted.map { it.h }.sorted().let {
+            if (it.size % 2 == 0) (it[it.size / 2] + it[it.size / 2 - 1]) / 2.0
+            else it[it.size / 2]
+        }
+        val isClose = meanGap < 2.0 * medianH
+        val allSmallGaps = bestSegment.all { it in 0.0..MAX_GAP_PX }
+
+        return isRegular && (isClose || allSmallGaps)
+    }
+
+    // =========================================================================
+    // Phase 4: merge columns into grids
+    // =========================================================================
+
+    private fun mergeColumns(clusters: List<List<CardCandidate>>): List<VisualCluster> {
+        if (clusters.isEmpty()) return emptyList()
+
+        // Assign each cluster a (widthGroup, heightGroup) signature
+        data class ClusterWithSig(
+            val items: List<CardCandidate>,
+            val meanW: Double,
+            val meanH: Double,
+            val xPos: Double,
+            val meanGap: Double,
+        )
+
+        val sigs = clusters.map { items ->
+            ClusterWithSig(
+                items = items,
+                meanW = items.map { it.w }.average(),
+                meanH = items.map { it.h }.average(),
+                xPos = items.map { it.x }.average(),
+                meanGap = computeMeanGap(items),
+            )
+        }
+
+        val merged = mutableListOf<VisualCluster>()
+        val used = mutableSetOf<Int>()
+
+        for (i in sigs.indices) {
+            if (i in used) continue
+            val a = sigs[i]
+            val sameGrid = mutableListOf(i)
+
+            for (j in (i + 1) until sigs.size) {
+                if (j in used) continue
+                val b = sigs[j]
+
+                // Same visual signature?
+                val sameW = Math.abs(a.meanW - b.meanW) / maxOf(a.meanW, b.meanW, 1.0) <= WIDTH_TOLERANCE
+                val sameH = Math.abs(a.meanH - b.meanH) / maxOf(a.meanH, b.meanH, 1.0) <= HEIGHT_TOLERANCE
+                val diffX = Math.abs(a.xPos - b.xPos) > 1.0
+                // Skip gap comparison if either cluster has <2 items or gaps are
+                // non-positive (overlapping items, typical of wrapper layouts)
+                val similarGap = if (a.items.size < 2 || b.items.size < 2) true
+                else if (a.meanGap <= 0 && b.meanGap <= 0) true  // both overlapping
+                else if (a.meanGap <= 0 || b.meanGap <= 0) false // one overlapping, one not
+                else maxOf(a.meanGap, b.meanGap) / maxOf(minOf(a.meanGap, b.meanGap), 1.0) <= 2.0
+
+                if (sameW && sameH && diffX && similarGap && yRangesOverlap(a.items, b.items)) {
+                    sameGrid.add(j)
+                }
+            }
+
+            used.addAll(sameGrid)
+            val allItems = sameGrid.flatMap { sigs[it].items }
+            val xPositions = sameGrid.map { sigs[it].xPos }.distinct()
+            val yReg = computeYRegularity(allItems)
+
+            merged.add(
+                VisualCluster(
+                    items = allItems,
+                    meanWidth = allItems.map { it.w }.average(),
+                    meanHeight = allItems.map { it.h }.average(),
+                    xPositions = xPositions,
+                    yRegularity = yReg,
+                    mergedFrom = sameGrid.size,
+                )
+            )
+        }
+
+        return merged.filter { it.items.size >= MIN_LINK_GROUP_SIZE }
+    }
+
+    private fun computeMeanGap(items: List<CardCandidate>): Double {
+        if (items.size < 2) return 0.0
+        val sorted = items.sortedBy { it.y }
+        val gaps = (0 until sorted.size - 1).map {
+            sorted[it + 1].y - (sorted[it].y + sorted[it].h)
+        }
+        return gaps.filter { it > 0 }.average().takeIf { !it.isNaN() } ?: 0.0
+    }
+
+    private fun yRangesOverlap(a: List<CardCandidate>, b: List<CardCandidate>): Boolean {
+        val aYs = a.map { it.y }.sorted()
+        val bYs = b.map { it.y }.sorted()
+        if (aYs.isEmpty() || bYs.isEmpty()) return false
+
+        // Count how many items in A share a y-row with an item in B
+        val epsY = 20.0  // px tolerance for "same row"
+        val aInBRow = a.count { ca -> b.any { cb -> Math.abs(ca.y - cb.y) <= epsY } }
+        return aInBRow.toDouble() / a.size >= 0.5
+    }
+
+    private fun computeYRegularity(items: List<CardCandidate>): Double {
+        if (items.size < 2) return 1.0
+        val sorted = items.sortedBy { it.y }
+        val gaps = (0 until sorted.size - 1).map {
+            sorted[it + 1].y - (sorted[it].y + sorted[it].h)
+        }
+        val meanGap = gaps.average()
+        if (meanGap <= 0) return 0.0
+        val variance = gaps.map { (it - meanGap) * (it - meanGap) }.average()
+        return Math.sqrt(variance) / meanGap
+    }
+
+    // =========================================================================
+    // Phase 5: navigation menu suppression
+    // =========================================================================
+
+    /**
+     * Returns the penalty multiplier for a visual cluster based on nav signals.
+     * Returns 0.0 if the group should be rejected entirely (strong nav signal).
+     * Returns 1.0 if no nav signal.
+     * Returns NAV_MODERATE_PENALTY for moderate signals.
+     */
+    private fun applyNavSuppression(cluster: VisualCluster): Double {
+        val items = cluster.items
+        val avgH = items.map { it.h }.average()
+        val avgW = items.map { it.w }.average()
+        val hasImages = items.any { it.hasImages }
+
+        // Strong signals → reject
+        if (!hasImages && avgH < NAV_STRONG_MAX_HEIGHT) return 0.0
+        if (!hasImages && avgW < NAV_STRONG_MAX_WIDTH) return 0.0
+
+        // Moderate signals are checked after container is found in Phase 6
+        return 1.0
+    }
+
+    /** Moderate nav check that requires the container element. Called in Phase 7 scoring. */
+    private fun computeNavPenaltyForContainer(
+        container: org.jsoup.nodes.Element,
+        items: List<CardCandidate>,
+    ): Double {
+        val containerTag = container.tagName().lowercase()
+        val containerRole = container.attr("role").lowercase()
+
+        // Direct semantic signal
+        if (containerTag == "nav" || containerRole == "navigation") return NAV_MODERATE_PENALTY
+
+        val hasImages = items.any { it.hasImages }
+        if (hasImages) return 1.0
+
+        // Check link text length
+        val linkTexts = items.mapNotNull { c ->
+            c.element.select("a[href]").first()?.text()?.trim()
+        }.filter { it.isNotBlank() }
+        val avgLinkTextLen = if (linkTexts.isNotEmpty()) linkTexts.map { it.length }.average() else 0.0
+
+        // Single column + short link text + no images → moderate
+        if (avgLinkTextLen < MAX_LINK_TEXT_LEN) return NAV_MODERATE_PENALTY
+
+        return 1.0
+    }
+
+    // =========================================================================
+    // Phase 6: find nearest container
+    // =========================================================================
+
+    private fun findContainer(
+        items: List<org.jsoup.nodes.Element>,
+        allCandidates: List<CardCandidate>,
+    ): org.jsoup.nodes.Element? {
+        if (items.isEmpty()) return null
+
+        // Build parent chains and find LCA
+        fun parentChain(el: org.jsoup.nodes.Element): List<org.jsoup.nodes.Element> {
+            val chain = mutableListOf<org.jsoup.nodes.Element>()
+            var cur: org.jsoup.nodes.Element? = el
+            while (cur != null) {
+                chain.add(cur)
+                cur = cur.parent()
+            }
+            return chain
+        }
+
+        val chains = items.map { parentChain(it).toSet() }
+        // LCA = deepest element present in all chains
+        val common = chains.reduce { a, b -> a.intersect(b) }
+        val lca = common.maxByOrNull { depthOf(it) } ?: return null
+
+        // Tighten: if LCA is too generic, walk down to the tightest container
+        var container = lca
+        val tooGeneric = container.tagName().lowercase() in setOf("html", "body") ||
+                allCandidates.count { isDescendantOf(it.element, container) } > allCandidates.size * 0.8
+
+        if (tooGeneric) {
+            // Walk down: find the child whose subtree contains the most items
+            var tightened = true
+            while (tightened) {
+                tightened = false
+                val children = container.children()
+                val bestChild = children.maxByOrNull { child ->
+                    items.count { item -> isDescendantOf(item, child) }
+                }
+                if (bestChild != null) {
+                    val covered = items.count { item -> isDescendantOf(item, bestChild) }
+                    if (covered >= items.size * 0.8) {
+                        container = bestChild
+                        tightened = true
+                    }
+                }
+            }
+        }
+
+        return container
+    }
+
+    private fun depthOf(el: org.jsoup.nodes.Element): Int {
+        var depth = 0
+        var cur: org.jsoup.nodes.Element? = el.parent()
+        while (cur != null) {
+            depth++
+            cur = cur.parent()
+        }
+        return depth
+    }
+
+    private fun isDescendantOf(
+        descendant: org.jsoup.nodes.Element,
+        ancestor: org.jsoup.nodes.Element,
+    ): Boolean {
+        var cur: org.jsoup.nodes.Element? = descendant
+        while (cur != null) {
+            if (cur === ancestor) return true
+            cur = cur.parent()
+        }
+        return false
+    }
+
+    private fun buildItemSelector(items: List<org.jsoup.nodes.Element>): String {
+        if (items.isEmpty()) return ""
+        val sigs = items.map { item ->
+            val tag = item.tagName().lowercase()
+            val cls = item.className().trim()
+            if (cls.isNotBlank()) {
+                val classes = cls.split("\\s+".toRegex()).take(2).sorted().joinToString(".") { it }
+                "$tag.$classes"
+            } else tag
+        }
+        val mostCommon = sigs.groupBy { it }.maxByOrNull { it.value.size }
+        return if (mostCommon != null && mostCommon.value.size >= items.size * 0.8) {
+            if (mostCommon.key.contains(".")) ".${mostCommon.key.substringAfter(".")}"
+            else mostCommon.key
+        } else {
+            items.first().tagName().lowercase()
+        }
+    }
+
+    // =========================================================================
+    // Phase 7: resolve overlapping groups
+    // =========================================================================
+
+    private fun resolveOverlaps(
+        groups: List<Triple<VisualCluster, org.jsoup.nodes.Element, String>>,
+        viewportW: Double,
+        viewportH: Double,
+    ): List<Triple<VisualCluster, org.jsoup.nodes.Element, String>> {
+        if (groups.isEmpty()) return emptyList()
+
+        // Sort by container depth descending (deepest first)
+        val sorted = groups.sortedByDescending { (_, container, _) -> depthOf(container) }
+
+        val claimed = mutableSetOf<org.jsoup.nodes.Element>()
+        val kept = mutableListOf<Triple<VisualCluster, org.jsoup.nodes.Element, String>>()
+
+        for ((cluster, container, itemSelector) in sorted) {
+            val itemElements = cluster.items.map { it.element }.toSet()
+            val uncovered = itemElements - claimed
+            if (uncovered.size >= MIN_LINK_GROUP_SIZE && uncovered.size >= itemElements.size * 0.5) {
+                kept.add(Triple(cluster, container, itemSelector))
+                claimed.addAll(uncovered)
+            }
+        }
+
+        return kept
+    }
+
+    // =========================================================================
+    // Phase 8: extract link data from samples
+    // =========================================================================
+
+    private fun extractLinkData(items: List<org.jsoup.nodes.Element>): List<LinkGroupItem> {
+        return items.map { item ->
+            val links = item.select("a[href]").mapNotNull { a ->
+                val href = a.attr("href").trim()
+                val text = a.text().trim()
+                if (href.isNotBlank() && text.isNotBlank()) {
+                    LinkInfo(
+                        text = text.take(100),
+                        href = href.take(200),
+                        box = a.attr("vi").trim(),
+                    )
+                } else null
+            }
+            LinkGroupItem(
+                box = item.attr("vi").trim(),
+                links = links,
+                hasImage = item.select("img").isNotEmpty(),
+                descendantCount = item.select("*").size,
+                textLength = item.text().length,
+            )
+        }
+    }
+
+    // =========================================================================
     // YAML builder
     // =========================================================================
 
@@ -387,6 +1200,7 @@ object PageSummaryIndexService {
         landmarks: List<SummaryIndexedNode>,
         keyNodes: List<SummaryScoredNode>,
         lists: List<SummaryListGroup>,
+        linkGroups: List<SummaryLinkGroup>,
         tables: List<SummaryTableInfo>,
         stats: SummaryStats,
     ): String = buildString {
@@ -410,9 +1224,11 @@ object PageSummaryIndexService {
         if (keyNodes.isNotEmpty()) {
             appendLine("content:")
             for (sn in keyNodes) {
+                val ref = buildElementRef(sn.indexed)
                 val selector = buildSelectorHint(sn.indexed.className, sn.indexed.id)
-                val text = sn.indexed.text.take(80)
-                appendLine("  - box: ${sn.indexed.box}")
+                val text = truncateSummaryText(sn.indexed.element.text().trim())
+                appendLine("  - ref: ${ref.toYamlValue()}")
+                appendLine("    box: ${sn.indexed.box}")
                 appendLine("    type: ${sn.typeLabel}")
                 appendLine("    score: ${sn.score}")
                 if (text.isNotEmpty()) appendLine("    text: ${text.toYamlValue()}")
@@ -438,6 +1254,46 @@ object PageSummaryIndexService {
                         if (s.text.isNotEmpty()) appendLine("        text: ${s.text.take(60).toYamlValue()}")
                     }
                 }
+            }
+            appendLine()
+        }
+
+        if (linkGroups.isNotEmpty()) {
+            appendLine("linkGroups:")
+            for (lg in linkGroups) {
+                val containerLabel = lg.containerTag + lg.containerSelector
+                appendLine("  - container: ${containerLabel.toYamlValue()}")
+                if (lg.containerSelector.isNotEmpty() && lg.containerSelector != lg.containerTag) {
+                    appendLine("    selector: ${lg.containerSelector.toYamlValue()}")
+                }
+                appendLine("    itemTag: ${lg.itemTag}")
+                appendLine("    itemSelector: ${lg.itemSelector.toYamlValue()}")
+                appendLine("    count: ${lg.count}")
+                appendLine("    columnCount: ${lg.columnCount}")
+                appendLine("    viewportWidth: ${lg.viewportWidth}")
+                appendLine("    viewportHeight: ${lg.viewportHeight}")
+                appendLine("    allHaveLinks: ${lg.allHaveLinks}")
+                appendLine("    anyHaveImages: ${lg.anyHaveImages}")
+                appendLine("    avgCardWidth: ${lg.avgCardWidth}")
+                appendLine("    avgCardHeight: ${lg.avgCardHeight}")
+                appendLine("    distinctTextCount: ${lg.distinctTextCount}")
+                appendLine("    avgDescendants: ${lg.avgDescendants}")
+                if (lg.samples.isNotEmpty()) {
+                    appendLine("    samples:")
+                    for (sample in lg.samples) {
+                        appendLine("      - box: ${sample.box}")
+                        if (sample.links.isNotEmpty()) {
+                            appendLine("        links:")
+                            for (link in sample.links) {
+                                appendLine("          - text: ${link.text.toYamlValue()}")
+                                appendLine("            href: ${link.href.toYamlValue()}")
+                                appendLine("            box: ${link.box}")
+                            }
+                        }
+                        appendLine("        hasImage: ${sample.hasImage}")
+                    }
+                }
+                appendLine("    score: ${lg.score}")
             }
             appendLine()
         }

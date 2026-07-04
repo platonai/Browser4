@@ -135,7 +135,8 @@ See [`cli/README.md`](../README.md) for the user-facing documentation.
 
 | Command | Description |
 |---|---|
-| `htmlsnapshot` | Capture a static HTML snapshot and return metadata |
+| `htmlsnapshot` | Short form of `htmlsnapshot capture` — capture a static HTML snapshot and return metadata |
+| `htmlsnapshot capture` | Capture a static HTML snapshot and return metadata |
 | `htmlsnapshot get <field> [selector] [name]` | Extract elements from the stored HTML snapshot (text, html, attr) |
 | `htmlsnapshot query [url]` | Run X-SQL against the stored HTML snapshot |
 | `htmlsnapshot export` | Export snapshot HTML to a local file |

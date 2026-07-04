@@ -480,6 +480,249 @@ Line Two</p>
     }
 
     // =========================================================================
+    // Link Group Detection
+    // =========================================================================
+
+    @Test
+    @DisplayName("product card grid is detected as a link group")
+    fun detectsProductCardGrid() {
+        val html = """
+            <html vi="0,0,1920,1080">
+              <body vi="0,0,1920,1080">
+                <div vi="0,100,800,900" id="search-results" class="s-result-list">
+                  <div vi="10,110,250,380" class="product-card">
+                    <a vi="20,120,230,20" href="/p/1">Sony WH-1000XM5 Headphones</a>
+                    <img vi="20,150,230,200" src="/img/1.jpg" alt="Sony">
+                    <span vi="20,360,80,20" class="price">$349.99</span>
+                  </div>
+                  <div vi="270,110,250,380" class="product-card">
+                    <a vi="280,120,230,20" href="/p/2">Bose QuietComfort 45</a>
+                    <img vi="280,150,230,200" src="/img/2.jpg" alt="Bose">
+                    <span vi="280,360,80,20" class="price">$299.99</span>
+                  </div>
+                  <div vi="530,110,250,380" class="product-card">
+                    <a vi="540,120,230,20" href="/p/3">Apple AirPods Max</a>
+                    <img vi="540,150,230,200" src="/img/3.jpg" alt="Apple">
+                    <span vi="540,360,80,20" class="price">$549.99</span>
+                  </div>
+                  <div vi="10,510,250,380" class="product-card">
+                    <a vi="20,520,230,20" href="/p/4">Sennheiser Momentum 4</a>
+                    <img vi="20,550,230,200" src="/img/4.jpg" alt="Sennheiser">
+                    <span vi="20,760,80,20" class="price">$379.99</span>
+                  </div>
+                </div>
+              </body>
+            </html>
+        """.trimIndent()
+
+        val result = PageSummaryIndexService.generate(parse(html), "https://example.com/search?q=headphones", "Search Results")
+
+        assertTrue(result.contains("linkGroups:"), "Should have linkGroups section")
+        assertTrue(result.contains("selector: \"#search-results\""), "Should identify container")
+        assertTrue(result.contains("itemSelector: \".product-card\""), "Should identify item selector")
+        assertTrue(result.contains("count: 4"), "Should count 4 product cards")
+        assertTrue(result.contains("columnCount: 3"), "Should detect 3 columns")
+        assertTrue(result.contains("allHaveLinks: true"), "All cards should have links")
+        assertTrue(result.contains("anyHaveImages: true"), "Cards should have images")
+        assertTrue(result.contains("Sony"), "Should include sample link text")
+    }
+
+    @Test
+    @DisplayName("article list is detected as a single-column link group")
+    fun detectsArticleList() {
+        val html = """
+            <html vi="0,0,1920,1080">
+              <body vi="0,0,1920,1080">
+                <section vi="200,100,680,500" class="latest-news">
+                  <article vi="200,100,680,120">
+                    <a vi="210,110,500,24" href="/news/1">Breaking News: Major Discovery</a>
+                    <img vi="210,140,80,60" src="/img/n1.jpg" alt="News 1">
+                    <p vi="300,140,570,60">Scientists announced a groundbreaking discovery today...</p>
+                  </article>
+                  <article vi="200,230,680,140">
+                    <a vi="210,240,500,24" href="/news/2">Tech Giants Merge in Record Deal</a>
+                    <img vi="210,270,80,60" src="/img/n2.jpg" alt="News 2">
+                    <p vi="300,270,570,80">The merger creates the world's largest tech conglomerate...</p>
+                  </article>
+                  <article vi="200,380,680,120">
+                    <a vi="210,390,500,24" href="/news/3">Olympic Games Opening Ceremony</a>
+                    <img vi="210,420,80,60" src="/img/n3.jpg" alt="News 3">
+                    <p vi="300,420,570,60">The ceremony featured performances from artists worldwide...</p>
+                  </article>
+                </section>
+              </body>
+            </html>
+        """.trimIndent()
+
+        val result = PageSummaryIndexService.generate(parse(html), "https://example.com/news", "Latest News")
+
+        assertTrue(result.contains("linkGroups:"), "Should have linkGroups section")
+        assertTrue(result.contains("selector: \".latest-news\""), "Should identify container")
+        assertTrue(result.contains("itemTag: article"), "Item tag should be article")
+        assertTrue(result.contains("count: 3"), "Should count 3 articles")
+        assertTrue(result.contains("columnCount: 1"), "Should be single-column list")
+        assertTrue(result.contains("allHaveLinks: true"), "All articles should have links")
+        assertTrue(result.contains("anyHaveImages: true"), "Articles should have images")
+    }
+
+    @Test
+    @DisplayName("navigation menu with short items is suppressed")
+    fun suppressesNavMenu() {
+        val html = """
+            <html vi="0,0,1920,1080">
+              <body vi="0,0,1920,1080">
+                <nav vi="0,0,200,1080" class="sidebar-nav">
+                  <ul vi="0,0,200,200">
+                    <li vi="0,0,200,28"><a vi="10,4,180,20" href="/home">Home</a></li>
+                    <li vi="0,28,200,28"><a vi="10,32,180,20" href="/products">Products</a></li>
+                    <li vi="0,56,200,28"><a vi="10,60,180,20" href="/about">About</a></li>
+                    <li vi="0,84,200,28"><a vi="10,88,180,20" href="/contact">Contact</a></li>
+                    <li vi="0,112,200,28"><a vi="10,116,180,20" href="/blog">Blog</a></li>
+                    <li vi="0,140,200,28"><a vi="10,144,180,20" href="/faq">FAQ</a></li>
+                  </ul>
+                </nav>
+                <main vi="200,0,1720,1080">
+                  <h1 vi="210,100,800,36">Welcome</h1>
+                </main>
+              </body>
+            </html>
+        """.trimIndent()
+
+        val result = PageSummaryIndexService.generate(parse(html), "https://example.com", "Home")
+
+        // Nav items are 28px tall, no images → should be suppressed as nav
+        assertFalse(result.contains("linkGroups:"), "Nav menu with short items should NOT appear as link group")
+    }
+
+    @Test
+    @DisplayName("grid with row wrappers is detected via fallback")
+    fun detectsGridWithRowWrappers() {
+        val html = """
+            <html vi="0,0,1920,1080">
+              <body vi="0,0,1920,1080">
+                <div vi="0,100,900,500" id="product-grid" class="grid">
+                  <div vi="0,100,900,240" class="row">
+                    <div vi="0,100,300,240" class="col">
+                      <div vi="10,110,280,220" class="card">
+                        <a vi="20,120,260,20" href="/p/1">Product One</a>
+                        <img vi="20,150,260,150" src="/img/1.jpg" alt="P1">
+                      </div>
+                    </div>
+                    <div vi="300,100,300,240" class="col">
+                      <div vi="310,110,280,220" class="card">
+                        <a vi="320,120,260,20" href="/p/2">Product Two</a>
+                        <img vi="320,150,260,150" src="/img/2.jpg" alt="P2">
+                      </div>
+                    </div>
+                    <div vi="600,100,300,240" class="col">
+                      <div vi="610,110,280,220" class="card">
+                        <a vi="620,120,260,20" href="/p/3">Product Three</a>
+                        <img vi="620,150,260,150" src="/img/3.jpg" alt="P3">
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </body>
+            </html>
+        """.trimIndent()
+
+        val result = PageSummaryIndexService.generate(parse(html), "https://example.com/grid", "Grid Page")
+
+        assertTrue(result.contains("linkGroups:"), "Should detect link group even with row wrappers")
+        assertTrue(result.contains("count: 3"), "Should count 3 cards")
+    }
+
+    @Test
+    @DisplayName("only 2 similar items does not trigger link group detection")
+    fun ignoresSmallGroups() {
+        val html = """
+            <html vi="0,0,1920,1080">
+              <body vi="0,0,1920,1080">
+                <div vi="0,100,800,400">
+                  <div vi="10,110,250,380" class="card">
+                    <a vi="20,120,230,20" href="/p/1">Product One</a>
+                    <img vi="20,150,230,200" src="/img/1.jpg" alt="P1">
+                  </div>
+                  <div vi="270,110,250,380" class="card">
+                    <a vi="280,120,230,20" href="/p/2">Product Two</a>
+                    <img vi="280,150,230,200" src="/img/2.jpg" alt="P2">
+                  </div>
+                </div>
+              </body>
+            </html>
+        """.trimIndent()
+
+        val result = PageSummaryIndexService.generate(parse(html), "https://example.com/two", "Two Items")
+
+        assertFalse(result.contains("linkGroups:"), "2 items should not trigger link group detection")
+    }
+
+    @Test
+    @DisplayName("nearest (deepest) container is chosen over broader ancestors")
+    fun nearestParentChosen() {
+        val html = """
+            <html vi="0,0,1920,1080">
+              <body vi="0,0,1920,1080">
+                <main vi="0,0,1920,1080" id="main-content">
+                  <section vi="200,100,800,600" id="tech-news">
+                    <article vi="200,100,800,120">
+                      <a vi="210,110,500,24" href="/tech/1">Tech Article One</a>
+                      <img vi="210,140,80,60" src="/img/t1.jpg" alt="Tech 1">
+                    </article>
+                    <article vi="200,230,800,120">
+                      <a vi="210,240,500,24" href="/tech/2">Tech Article Two</a>
+                      <img vi="210,270,80,60" src="/img/t2.jpg" alt="Tech 2">
+                    </article>
+                    <article vi="200,360,800,120">
+                      <a vi="210,370,500,24" href="/tech/3">Tech Article Three</a>
+                      <img vi="210,400,80,60" src="/img/t3.jpg" alt="Tech 3">
+                    </article>
+                  </section>
+                  <section vi="200,720,800,300" id="sports-news">
+                    <article vi="200,720,800,120">
+                      <a vi="210,730,500,24" href="/sports/1">Sports Article One</a>
+                      <img vi="210,760,80,60" src="/img/s1.jpg" alt="Sports 1">
+                    </article>
+                    <article vi="200,850,800,120">
+                      <a vi="210,860,500,24" href="/sports/2">Sports Article Two</a>
+                      <img vi="210,890,80,60" src="/img/s2.jpg" alt="Sports 2">
+                    </article>
+                  </section>
+                </main>
+              </body>
+            </html>
+        """.trimIndent()
+
+        val result = PageSummaryIndexService.generate(parse(html), "https://example.com/news", "News")
+
+        assertTrue(result.contains("linkGroups:"), "Should have linkGroups section")
+        // All 5 articles share the same visual dimensions, so they form one link group.
+        assertTrue(result.contains("count: 5"), "Should count all 5 articles in one group")
+        assertTrue(result.contains("itemTag: article"), "Item tag should be article")
+    }
+
+    @Test
+    @DisplayName("page with no repeating patterns returns no link groups")
+    fun noLinkGroupsOnSingleItemPage() {
+        val html = """
+            <html vi="0,0,1920,1080">
+              <body vi="0,0,1920,1080">
+                <main vi="0,0,1920,1080">
+                  <h1 vi="100,100,800,36">About Us</h1>
+                  <p vi="100,150,800,60">We are a small company making great products.</p>
+                  <a vi="100,220,200,20" href="/contact">Contact Us</a>
+                  <img vi="100,260,300,200" src="/about.jpg" alt="Team photo">
+                </main>
+              </body>
+            </html>
+        """.trimIndent()
+
+        val result = PageSummaryIndexService.generate(parse(html), "https://example.com/about", "About Us")
+
+        assertFalse(result.contains("linkGroups:"), "Single-item page should not have link groups")
+    }
+
+    // =========================================================================
     // Helper
     // =========================================================================
 

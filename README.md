@@ -189,7 +189,8 @@ X-SQL support     No                    Yes (query)
 ```
 
 ```
-htmlsnapshot                                Capture a static HTML snapshot and store it in page storage
+htmlsnapshot capture                        Capture a static HTML snapshot and store it in page storage
+htmlsnapshot                                Short form of `htmlsnapshot capture`
 htmlsnapshot get <field> [selector] [name]  Extract text, html, or attr from the stored HTML snapshot
 htmlsnapshot query [url]                    Run X-SQL against the stored HTML snapshot (--sql <query|@file>)
 htmlsnapshot export                         Export snapshot HTML to a local file (--file <path>)
@@ -401,6 +402,7 @@ browser4-cli get text ".product-title"
 browser4-cli get attr ".product-image" data-src
 
 # HTML snapshot with X-SQL
+browser4-cli htmlsnapshot capture
 browser4-cli htmlsnapshot
 browser4-cli htmlsnapshot get text "#main-content"
 browser4-cli htmlsnapshot query --sql @query.sql

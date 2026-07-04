@@ -187,7 +187,8 @@ X-SQL 支持        否                    是 (query)
 ```
 
 ```
-htmlsnapshot                                捕获静态 DOM 快照并将其存储在页面存储中
+htmlsnapshot capture                        捕获静态 DOM 快照并将其存储在页面存储中
+htmlsnapshot                                `htmlsnapshot capture` 的简写形式
 htmlsnapshot get <field> [selector] [name]  从存储的 DOM 快照中提取 text、html 或 attr
 htmlsnapshot query [url]                    对存储的 DOM 快照运行 X-SQL (--sql <query|@file>)
 htmlsnapshot export                         将快照 HTML 导出到本地文件 (--file <path>)
@@ -399,6 +400,7 @@ browser4-cli get text ".product-title"
 browser4-cli get attr ".product-image" data-src
 
 # 使用 X-SQL 进行 DOM 快照
+browser4-cli htmlsnapshot capture
 browser4-cli htmlsnapshot
 browser4-cli htmlsnapshot get text "#main-content"
 browser4-cli htmlsnapshot query --sql @query.sql

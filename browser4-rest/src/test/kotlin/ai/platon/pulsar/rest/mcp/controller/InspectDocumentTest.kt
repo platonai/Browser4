@@ -462,19 +462,25 @@ class InspectDocumentTest {
         }
 
         @Test
-        @DisplayName("sample structure contains tag, class, text, children")
+        @DisplayName("sample structure contains ref, box, text, children in Section 8 format")
         fun sampleStructure() {
             val result = inspect(productCardsHtml, ".product-card")
             val samples = result["samples"]
             assertTrue(samples.size() > 0, "Should have samples")
 
             val first = samples[0]
-            assertTrue(first.has("tag"))
-            assertEquals("div", first["tag"].asText())
-            assertTrue(first.has("class"))
-            assertEquals("product-card", first["class"].asText())
+            // Section 8 format: ref encodes closestId, tag, id, and classes
+            assertTrue(first.has("ref"), "Should have ref field")
+            val ref = first["ref"].asText()
+            assertTrue(ref.contains("div"), "ref should contain tag name: $ref")
+            assertTrue(ref.contains("product-card"), "ref should contain class: $ref")
+            // Bounding box
+            assertTrue(first.has("box"), "Should have box field")
+            // Children also use Section 8 format
             assertTrue(first.has("children"))
             assertTrue(first["children"].size() > 0, "Should have child elements")
+            val firstChild = first["children"][0]
+            assertTrue(firstChild.has("ref"), "Child should have ref field: $firstChild")
         }
 
         @Test
