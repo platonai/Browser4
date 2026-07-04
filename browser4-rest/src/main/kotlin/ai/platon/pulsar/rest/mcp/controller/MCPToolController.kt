@@ -1436,6 +1436,28 @@ class MCPToolController(
 // =========================================================================
 
 /**
+ * Run the visual geometry first link group detection algorithm
+ * ([PageSummaryIndexService.detectLinkGroups]) and extract the best
+ * repeating-pattern selector.
+ *
+ * The visual algorithm clusters elements by bounding-box geometry
+ * (width → height → x-position → y-spacing regularity), then walks
+ * up the DOM to find the container. It is language-independent,
+ * class-name-independent, and tolerant of varying internal DOM structure.
+ *
+ * @return Pair(bestItemSelector, linkGroups) where bestItemSelector is
+ *   the itemSelector of the highest-scoring link group, or null if none
+ *   found.
+ */
+private fun runVisualDetection(
+    document: FeaturedDocument
+): Pair<String?, List<PageSummaryIndexService.SummaryLinkGroup>> {
+    val linkGroups = PageSummaryIndexService.detectLinkGroups(document)
+    val bestSelector = linkGroups.maxByOrNull { it.score }?.itemSelector
+    return Pair(bestSelector, linkGroups)
+}
+
+/**
  * Auto-discovers the best CSS selector for repeating content patterns on a page.
  *
  * Used as a fallback when the user-specified selector (e.g. default `:root`)
@@ -1517,18 +1539,40 @@ internal fun inspectDocument(
     maxMatches: Int,
     maxDepth: Int,
 ): String {
-    // Auto-discovery: when the selector matches exactly 1 element (e.g. default
-    // :root), find the best repeating content pattern on the page and use it
-    // instead. Does NOT activate for 0 matches — the user's selector is wrong.
+    // ── Visual geometry first detection ──────────────────────────────────
+    // Always run visual detection early — it informs both auto-discovery
+    // (when the user hasn't specified a selector) and speculative suggestions
+    // (when the user's selector could be improved).
+    val (visualBestSelector, visualLinkGroups) = runVisualDetection(document)
+
+    // Auto-discovery: when the selector matches ≤1 element (e.g. default
+    // :root), find the best repeating content pattern.
+    // Prefer the visual geometry algorithm (language-independent,
+    // class-name-independent, structure-tolerant). Fall back to the
+    // structural-signature approach only when visual detection finds nothing.
     var effectiveSelector = selector
     var autoDiscovered = false
+    var speculativeSuggestion: String? = null
+    var speculativeMatchCount: Int? = null
     val initialMatchCount = document.select(selector).size
-    if (initialMatchCount == 1) {
-        val discovered = autoDiscoverRepeatingSelector(document)
-        if (discovered != null) {
-            effectiveSelector = discovered
+    if (initialMatchCount <= 1) {
+        if (visualBestSelector != null) {
+            effectiveSelector = visualBestSelector
             autoDiscovered = true
+        } else {
+            // Fallback: structural-signature discovery
+            val discovered = autoDiscoverRepeatingSelector(document)
+            if (discovered != null) {
+                effectiveSelector = discovered
+                autoDiscovered = true
+            }
         }
+    } else if (visualBestSelector != null && visualBestSelector != selector) {
+        // Mode B (speculative): user's selector already matches ≥2, but visual
+        // detection found a potentially better repeating pattern. Surface as a
+        // suggestion without overriding the user's choice.
+        speculativeSuggestion = visualBestSelector
+        speculativeMatchCount = document.select(visualBestSelector).size
     }
 
     val matches = document.select(effectiveSelector).take(maxMatches)
@@ -1559,7 +1603,14 @@ internal fun inspectDocument(
                 put("autoDiscovered", true)
                 put("originalSelector", selector)
             }
+            if (speculativeSuggestion != null) {
+                put("speculativeSuggestion", speculativeSuggestion)
+                speculativeMatchCount?.let { put("speculativeMatchCount", it) }
+            }
             putArray("suggestions")
+            if (visualLinkGroups.isNotEmpty()) {
+                set<ArrayNode>("linkGroups", linkGroupsToJson(visualLinkGroups))
+            }
         }.toString()
     }
 
@@ -1791,9 +1842,7 @@ internal fun inspectDocument(
         suggestions.add(sug)
     }
 
-    // Run visual geometry link group detection on the document
-    val linkGroups = PageSummaryIndexService.detectLinkGroups(document)
-
+    // Reuse visual link groups detected early (visual geometry first algorithm)
     return pulsarObjectMapper().createObjectNode().apply {
         put("matchCount", matchCount)
         put("selector", effectiveSelector)
@@ -1802,10 +1851,14 @@ internal fun inspectDocument(
             put("autoDiscovered", true)
             put("originalSelector", selector)
         }
+        if (speculativeSuggestion != null) {
+            put("speculativeSuggestion", speculativeSuggestion)
+            speculativeMatchCount?.let { put("speculativeMatchCount", it) }
+        }
         set<ArrayNode>("samples", samples)
         set<ArrayNode>("suggestions", suggestions)
-        if (linkGroups.isNotEmpty()) {
-            set<ArrayNode>("linkGroups", linkGroupsToJson(linkGroups))
+        if (visualLinkGroups.isNotEmpty()) {
+            set<ArrayNode>("linkGroups", linkGroupsToJson(visualLinkGroups))
         }
     }.toString()
 }

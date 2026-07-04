@@ -4027,6 +4027,17 @@ async fn handle_html_snapshot_inspect(
     let analyzed = data.get("analyzed").and_then(|v| v.as_u64()).unwrap_or(0);
     let auto_discovered = data.get("autoDiscovered").and_then(|v| v.as_bool()).unwrap_or(false);
     let original_selector = data.get("originalSelector").and_then(|v| v.as_str());
+    let speculative_selector = data.get("speculativeSuggestion").and_then(|v| v.as_str());
+    let speculative_count = data.get("speculativeMatchCount").and_then(|v| v.as_i64());
+
+    // Render speculative suggestion (Mode B: visual detection found a better
+    // repeating pattern than the user's selector, but we didn't override).
+    let render_speculative = |sel: &str, count: i64| {
+        cli_println!("");
+        cli_println!("  💡 Visual geometry detection found a potentially better repeating pattern:");
+        cli_println!("     \"{}\" — {} occurrences with consistent bounding-box geometry.", sel, count);
+        cli_println!("     Try: htmlsnapshot inspect \"{}\"", sel);
+    };
 
     if match_count == 0 {
         cli_println!("### Inspect: \"{}\" (0 matches)", selector);
@@ -4034,6 +4045,9 @@ async fn handle_html_snapshot_inspect(
             if let Some(orig) = original_selector {
                 cli_println!("  Auto-discovered selector \"{}\" from \"{}\" also had no matches.", selector, orig);
             }
+        }
+        if let (Some(sel), Some(count)) = (speculative_selector, speculative_count) {
+            render_speculative(sel, count);
         }
         cli_println!("- No elements matched. Check the CSS selector and ensure a HTML snapshot has been captured (`browser4-cli htmlsnapshot`).");
         json_field("matchCount", json!(0));
@@ -4048,7 +4062,14 @@ async fn handle_html_snapshot_inspect(
     if auto_discovered {
         if let Some(orig) = original_selector {
             cli_println!("  🔍 Auto-discovered repeating pattern from \"{}\"", orig);
+            cli_println!("    The tool found that \"{}\" repeats as a sibling group (e.g. a product grid, search result list).", orig);
+            cli_println!("    It analyzed {} of the {} occurrences to find selectors that work consistently.", analyzed, match_count);
         }
+    } else if let (Some(sel), Some(count)) = (speculative_selector, speculative_count) {
+        // Only show speculative suggestion when we did NOT auto-discover
+        // (auto-discovery already overrides the selector; speculative is for
+        // when the user's selector was kept but a better one exists).
+        render_speculative(sel, count);
     }
 
     // Sample structures
@@ -4060,6 +4081,9 @@ async fn handle_html_snapshot_inspect(
                 samples.len(),
                 match_count
             );
+            cli_println!("    Showing {} representative element(s) out of {} total matches.", samples.len(), match_count);
+            cli_println!("    Each element shows its CSS selector and bounding box (x y width height in px).");
+            cli_println!("    Indented lines are child elements found inside it.");
             for (i, sample) in samples.iter().enumerate() {
                 // Section 8 format: use "ref" (e.g. "li.feed-carousel-card") instead of
                 // separate tag/id/class fields. Fall back to legacy fields for compatibility.
@@ -4172,6 +4196,11 @@ async fn handle_html_snapshot_inspect(
 
             cli_println!("");
             cli_println!("  Suggested selectors (recurring across matches):");
+            cli_println!("    Each row is a CSS selector that finds the same kind of element inside each match.");
+            cli_println!("    ★ = high-quality (specific enough to use reliably).");
+            cli_println!("    N/N (%) = how many of the analyzed matches contained this element / coverage.");
+            cli_println!("    → \"...\" = sample values extracted by this selector.");
+            cli_println!("    Use these selectors with `htmlsnapshot get` to extract data.");
 
             // Render quality suggestions first (with class/id/attr specificity)
             for sug in &quality_sugs {
@@ -4182,6 +4211,7 @@ async fn handle_html_snapshot_inspect(
             if !bare_sugs.is_empty() {
                 cli_println!("");
                 cli_println!("  Structural (bare tags, low specificity):");
+                cli_println!("    These match too broadly — use only as a fallback or with :expr() filters.");
                 for sug in &bare_sugs {
                     render_suggestion(sug);
                 }
@@ -4211,6 +4241,8 @@ async fn handle_html_snapshot_inspect(
 
         if !actionable.is_empty() {
             cli_println!("  💡 Try these next:");
+            cli_println!("    Use `get all text` to extract visible text, or `get all attr <name>` for attribute values.");
+            cli_println!("    The SQL variant lets you query with full expressive power (joins, filters, aggregates).");
             for sel in &actionable {
                 cli_println!("     htmlsnapshot get all text \"{}\" --limit 20", sel);
             }
