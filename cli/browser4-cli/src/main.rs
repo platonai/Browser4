@@ -579,7 +579,7 @@ fn build_swarm_create_capabilities(tool_params: &Value) -> Result<Value, String>
         "SEQUENTIAL" | "TEMPORARY" => {}
         _ => {
             return Err(format!(
-                "Swarm create only supports --profile-mode=SEQUENTIAL or --profile-mode=TEMPORARY. Received: {}",
+                "Swarm create only supports --profile-mode SEQUENTIAL or --profile-mode TEMPORARY. Received: {}",
                 profile_mode
             ))
         }
@@ -10773,7 +10773,7 @@ mod tests {
 
         assert_eq!(
             error,
-            "Swarm create only supports --profile-mode=SEQUENTIAL or --profile-mode=TEMPORARY. Received: DEFAULT"
+            "Swarm create only supports --profile-mode SEQUENTIAL or --profile-mode TEMPORARY. Received: DEFAULT"
         );
     }
 

@@ -20,7 +20,7 @@ import kotlinx.io.buffered
  *
  * ### Direct invocation
  * ```bash
- * java -jar Browser4.jar --app=mcp
+ * java -jar Browser4.jar --app mcp
  * ```
  *
  * ### Claude Desktop configuration (`claude_desktop_config.json`)
@@ -29,7 +29,7 @@ import kotlinx.io.buffered
  *   "mcpServers": {
  *     "browser4": {
  *       "command": "java",
- *       "args": ["-jar", "/path/to/Browser4.jar", "--app=mcp"],
+ *       "args": ["-jar", "/path/to/Browser4.jar", "--app", "mcp"],
  *     }
  *   }
  * }

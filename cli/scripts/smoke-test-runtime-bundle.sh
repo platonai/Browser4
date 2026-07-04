@@ -172,7 +172,7 @@ done
 # step 3: determine server URL (let CLI auto-start the server)
 # ---------------------------------------------------------------------------
 # The CLI auto-starts the Browser4 server on the first command that needs it.
-# We DON'T pass --server= so the CLI manages the server lifecycle itself.
+# We DON'T pass --server so the CLI manages the server lifecycle itself.
 # This tests the full "CLI starts jlink JRE server" code path.
 
 SERVER_PORT=$(find_free_port)
@@ -186,7 +186,7 @@ run_cli() {
     BROWSER4_CLI_STATE_DIR="$STATE_DIR" \
     BROWSER4_RUNTIME_DIR="$RUNTIME_DIR" \
     BROWSER4_SERVER_LOG_DIR="$SERVER_LOG_DIR" \
-    "$CLI_BINARY" --server="$SERVER_URL" "$@"
+    "$CLI_BINARY" --server "$SERVER_URL" "$@"
 }
 
 FAILED_STEPS=0
@@ -224,7 +224,7 @@ check_step() {
 # ---------------------------------------------------------------------------
 
 # 4a. open — starts the server, opens a browser session, navigates to the page
-check_step "open" open "$TEST_URL" --profile-mode=SEQUENTIAL --interact-level=FASTEST
+check_step "open" open "$TEST_URL" --profile-mode SEQUENTIAL --interact-level FASTEST
 
 # 4b. goto — navigate to the page (should be a no-op or refresh)
 check_step "goto" goto "$TEST_URL"
