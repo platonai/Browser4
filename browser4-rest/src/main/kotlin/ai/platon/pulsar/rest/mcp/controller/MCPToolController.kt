@@ -160,7 +160,7 @@ class MCPToolController(
                 // All other tools are dispatched to the session's agent
                 else -> dispatchToAgentToolExecutor(request)
             }
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             logger.error("MCP tool call failed | tool={} | {}", request.tool, e.message, e)
             ResponseEntity.ok(errorResponse("${request.tool} failed: ${exceptionChainMessage(e)}"))
         }

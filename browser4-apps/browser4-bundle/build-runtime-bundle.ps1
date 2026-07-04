@@ -950,6 +950,43 @@ foreach ($pattern in $buildToolPatterns) {
     }
 }
 
+# -- Strip orphaned service file from gora-core-shaded (multi-release JAR without Multi-Release: true in manifest).
+#    dnsjava's InetAddressResolverProvider class is at META-INF/versions/18/ but the manifest
+#    lacks Multi-Release: true, so the ServiceLoader finds the declaration but can't load the
+#    class, throwing ServiceConfigurationError (which extends Error, not Exception) at runtime. --
+$goraShadedCandidates = Get-ChildItem -Path $libDirectory -File -Filter 'gora-core-shaded-*.jar' -ErrorAction SilentlyContinue
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+foreach ($jar in $goraShadedCandidates) {
+    $serviceEntry = 'META-INF/services/java.net.spi.InetAddressResolverProvider'
+    try {
+        $source = [System.IO.Compression.ZipFile]::OpenRead($jar.FullName)
+        $hasEntry = $false
+        foreach ($e in $source.Entries) {
+            if ($e.FullName -eq $serviceEntry) { $hasEntry = $true; break }
+        }
+        $source.Dispose()
+        if (-not $hasEntry) { continue }
+        Write-Host "  Stripping $serviceEntry from $($jar.Name)" -ForegroundColor DarkGray
+        # Rebuild the JAR without the offending entry
+        $tempFile = Join-Path $libDirectory ([System.IO.Path]::GetRandomFileName() + '.jar')
+        $source = [System.IO.Compression.ZipFile]::OpenRead($jar.FullName)
+        $dest = [System.IO.Compression.ZipFile]::Open($tempFile, 'Create')
+        foreach ($entry in $source.Entries) {
+            if ($entry.FullName -eq $serviceEntry) { continue }
+            $destEntry = $dest.CreateEntry($entry.FullName)
+            if ($entry.Length -gt 0) {
+                $s = $entry.Open(); $d = $destEntry.Open()
+                try { $s.CopyTo($d) } finally { $d.Dispose(); $s.Dispose() }
+            }
+        }
+        $source.Dispose(); $dest.Dispose()
+        Remove-Item -LiteralPath $jar.FullName -Force
+        Rename-Item -LiteralPath $tempFile -NewName $jar.Name -Force
+    } catch {
+        Write-Warning "  Failed to strip service entry from $($jar.Name): $($_.Exception.Message)"
+    }
+}
+
 # -- POM files (accidentally placed in lib/) --
 $pomFiles = Get-ChildItem -Path $libDirectory -File -Filter '*.pom' -ErrorAction SilentlyContinue
 foreach ($pom in $pomFiles) {
