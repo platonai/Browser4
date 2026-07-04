@@ -4246,17 +4246,28 @@ async fn handle_html_snapshot_inspect(
             for sel in &actionable {
                 cli_println!("     htmlsnapshot get all text \"{}\" --limit 20", sel);
             }
+            cli_println!("     htmlsnapshot get attr \"img[src]\" src --limit 20  # image URLs");
+            cli_println!("     htmlsnapshot get attr \"a[href]\" href --limit 20  # link URLs");
+            cli_println!("     htmlsnapshot get attr \"img[src]:expr(width > 200 && height > 200)\" src --limit 20  # large images only");
             if let Some(first) = actionable.first() {
                 cli_println!("     htmlsnapshot query --sql \"SELECT dom_text(dom) FROM load_and_select(@url, '{}')\"", first);
             }
         } else {
             // Fallback when no quality selectors found (e.g., all bare tags)
-            cli_println!("  💡 Try narrowing the scope with a more specific CSS selector:");
+            cli_println!("  💡 Try these next:");
+            cli_println!("     htmlsnapshot get attr \"img[src]\" src --limit 20  # image URLs");
+            cli_println!("     htmlsnapshot get attr \"a[href]\" href --limit 20  # link URLs");
+            cli_println!("     htmlsnapshot get attr \"img[src]:expr(width > 200 && height > 200)\" src --limit 20  # large images only");
+            cli_println!("    Use a more specific CSS selector for targeted extraction:");
             cli_println!("     htmlsnapshot inspect \".card\" --max 20 --depth 6");
         }
     } else {
         // Fallback when no suggestions at all
-        cli_println!("  💡 Try narrowing the scope with a more specific CSS selector:");
+        cli_println!("  💡 Try these next:");
+        cli_println!("     htmlsnapshot get attr \"img[src]\" src --limit 20  # image URLs");
+        cli_println!("     htmlsnapshot get attr \"a[href]\" href --limit 20  # link URLs");
+        cli_println!("     htmlsnapshot get attr \"img[src]:expr(width > 200 && height > 200)\" src --limit 20  # large images only");
+        cli_println!("    Narrow the scope with a more specific CSS selector for targeted extraction:");
         cli_println!("     htmlsnapshot inspect \".card\" --max 20 --depth 6");
     }
 

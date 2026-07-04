@@ -257,6 +257,12 @@ const TIPS_INSPECT: &[Tip] = &[
     Tip {
         text: "Use `htmlsnapshot inspect` without arguments to get a structural overview of the entire page",
     },
+    Tip {
+        text: "After inspect, use `htmlsnapshot get attr \"img[src]\" src` to extract image URLs, or `\"a[href]\" href` for links",
+    },
+    Tip {
+        text: "Use `:expr(width > 200 && height > 200)` in selectors to filter elements by size — perfect for finding large hero images",
+    },
 ];
 
 const TIPS_TABS: &[Tip] = &[
