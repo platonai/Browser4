@@ -484,6 +484,52 @@ pub async fn get_swarm_result(
 }
 
 
+fn build_endpoint_url(base_url: &str, path: &str) -> String {
+    format!("{}{}", base_url.trim_end_matches('/'), path)
+}
+
+fn format_http_error(status: reqwest::StatusCode, response_text: &str) -> String {
+    let message = response_text.trim();
+    if message.is_empty() {
+        format!(
+            "HTTP request failed with status {} and an empty response body.",
+            status
+        )
+    } else {
+        format!("HTTP request failed with status {}: {}", status, message)
+    }
+}
+
+async fn send_rest_request(
+    request: reqwest::RequestBuilder,
+) -> Result<String, String> {
+    let response = request
+        .send()
+        .await
+        .map_err(|e| format!("HTTP request failed: {e}"))?;
+
+    let status = response.status();
+    let response_text = response
+        .text()
+        .await
+        .map_err(|e| format!("Failed to read response body: {e}"))?;
+
+    if !status.is_success() {
+        return Err(format_http_error(status, &response_text));
+    }
+
+    Ok(response_text)
+}
+
+/// Submit a crawl task via the MCP `crawl_submit` tool.
+pub async fn submit_crawl(
+    client: &Client,
+    base_url: &str,
+    params: &Value,
+) -> Result<String, String> {
+    call_tool(client, base_url, "crawl_submit", params.clone()).await
+}
+
 pub fn crawl_request_timeout() -> std::time::Duration {
     std::time::Duration::from_secs(timeout_secs_from_env(
         CRAWL_REQUEST_TIMEOUT_ENV,

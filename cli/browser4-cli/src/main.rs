@@ -53,7 +53,7 @@ use help::{generate_command_help, generate_help, generate_help_entry, public_com
 use http::{
     call_tool, call_tool_with_result, crawl_request_timeout, get_command_result,
     get_command_status, is_stale_session_error, make_client,
-    submit_batch_commands, submit_plain_command, CallToolResult,
+    submit_batch_commands, submit_crawl, submit_plain_command, CallToolResult,
 };
 use managed_processes::{
     read_managed_server_processes, stop_browser4_server_forcibly, ManagedServerProcess,
@@ -11339,6 +11339,7 @@ mod tests {
             json: false,
             quiet: false,
             proxy_url: None,
+            show_tip: false,
             args: vec!["skill".to_string(), "list".to_string()],
         };
 
@@ -11357,6 +11358,7 @@ mod tests {
             json: false,
             quiet: false,
             proxy_url: None,
+            show_tip: false,
             args: vec!["skill-install".to_string(), "/path/to/skill".to_string()],
         };
 
