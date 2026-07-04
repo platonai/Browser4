@@ -795,6 +795,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             ],
             options: &[
                 OptionDef { name: "modifiers", description: "Modifier keys to press", is_bool: false, short: None },
+                OptionDef { name: "follow", description: "After clicking, detect and follow navigation to new tabs", is_bool: true, short: None },
             ],
             tool_name_fn: |_| "browser_click".to_string(),
             tool_params_fn: |args| {
@@ -816,6 +817,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             ],
             options: &[
                 OptionDef { name: "modifiers", description: "Modifier keys to press", is_bool: false, short: None },
+                OptionDef { name: "follow", description: "After clicking, detect and follow navigation to new tabs", is_bool: true, short: None },
             ],
             tool_name_fn: |_| "browser_click".to_string(),
             tool_params_fn: |args| {

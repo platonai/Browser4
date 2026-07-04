@@ -134,8 +134,8 @@ reload            重新加载当前页面
 #### 核心交互
 
 ```
-click <ref> [button]       点击元素。--modifiers
-dblclick <ref> [button]    双击元素。--modifiers
+click <ref> [button]       点击元素。--modifiers, --follow (检测新标签页)
+dblclick <ref> [button]    双击元素。--modifiers, --follow (检测新标签页)
 hover <ref>                悬停在元素上
 fill <ref> <text>          清空并填充文本到可编辑元素。--submit, --verify
 type <text> [ref]          向焦点元素或目标 ref 输入文本。--submit, --verify, --focus

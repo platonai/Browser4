@@ -169,8 +169,8 @@ browser4-cli -s mysession goto https://example.com
 
 | Command | Description |
 |---|---|
-| `click <ref> [button]` | Click an element. `--modifiers` for modifier keys. |
-| `dblclick <ref> [button]` | Double-click an element. `--modifiers` for modifier keys. |
+| `click <ref> [button]` | Click an element. `--modifiers` for modifier keys, `--follow` to detect and switch to new tabs opened by the click. |
+| `dblclick <ref> [button]` | Double-click an element. `--modifiers` for modifier keys, `--follow` to detect and switch to new tabs. |
 | `hover <ref>` | Hover over an element. |
 | `drag <startRef> <endRef>` | Drag and drop between two elements. |
 | `fill <ref> <text>` | Fill text into an editable element. `--submit` to press Enter after. `--verify` to confirm. |

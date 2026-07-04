@@ -136,8 +136,8 @@ reload            Reload the current page
 #### Core Interaction
 
 ```
-click <ref> [button]       Click an element. --modifiers
-dblclick <ref> [button]    Double-click an element. --modifiers
+click <ref> [button]       Click an element. --modifiers, --follow (detect new tabs)
+dblclick <ref> [button]    Double-click an element. --modifiers, --follow (detect new tabs)
 hover <ref>                Hover over an element
 fill <ref> <text>          Clear and fill text into an editable element. --submit, --verify
 type <text> [ref]          Type text into the focused element or a target ref. --submit, --verify, --focus

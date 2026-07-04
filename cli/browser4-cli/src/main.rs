@@ -518,6 +518,78 @@ async fn restore_active_selector(
     }
 }
 
+// ---------------------------------------------------------------------------
+// Tab tracking helpers (for click --follow)
+// ---------------------------------------------------------------------------
+
+/// Lightweight tab entry parsed from the `browser_tabs` list response.
+#[derive(Debug, Clone)]
+struct TabInfo {
+    index: usize,
+    url: String,
+    title: String,
+}
+
+/// Parse the JSON response from a `browser_tabs` "list" action into a vec of
+/// [TabInfo] entries.  The response can be a JSON array of tab objects, an
+/// object with a `"tabs"` array, or a plain text representation.
+fn parse_tab_list(response: &str) -> Vec<TabInfo> {
+    let trimmed = response.trim();
+    if trimmed.is_empty() {
+        return Vec::new();
+    }
+
+    // Try parsing as a JSON array first.
+    if let Ok(array) = serde_json::from_str::<Vec<Value>>(trimmed) {
+        return array
+            .into_iter()
+            .filter_map(|v| parse_tab_entry(&v))
+            .collect();
+    }
+
+    // Try parsing as a JSON object with a "tabs" key.
+    if let Ok(obj) = serde_json::from_str::<Value>(trimmed) {
+        if let Some(tabs) = obj.get("tabs").and_then(|t| t.as_array()) {
+            return tabs
+                .iter()
+                .filter_map(|v| parse_tab_entry(v))
+                .collect();
+        }
+        // It might be a single tab object — try that.
+        if let Some(tab) = parse_tab_entry(&obj) {
+            return vec![tab];
+        }
+    }
+
+    Vec::new()
+}
+
+fn parse_tab_entry(value: &Value) -> Option<TabInfo> {
+    let obj = value.as_object()?;
+    // Accept "index", "id" (if numeric), or derive position.
+    let index = obj
+        .get("index")
+        .and_then(|v| v.as_u64())
+        .or_else(|| obj.get("id").and_then(|v| v.as_str().and_then(|s| s.parse().ok())))
+        .map(|n| n as usize);
+    let url = obj
+        .get("url")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let title = obj
+        .get("title")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    // We need at least an index to track the tab.
+    index.map(|idx| TabInfo {
+        index: idx,
+        url,
+        title,
+    })
+}
+
 async fn create_session(
     client: &Client,
     base_url: &str,
@@ -1167,6 +1239,100 @@ fn format_navigation_failure_message(
     message.push("🧾 Details".to_string());
     message.push(format!("  {error}"));
     message.join("\n")
+}
+
+/// Handle the `click` and `dblclick` commands.
+///
+/// When `follow` is true, the handler detects new browser tabs that may have
+/// been opened by the click (common on JS-heavy search engines like Baidu) and
+/// switches to the newest one so the post-command snapshot reflects the
+/// navigated page.
+async fn handle_click(
+    client: &Client,
+    base_url: &str,
+    tool_name: &str,
+    tool_params: &Value,
+    session_name: Option<&str>,
+    follow: bool,
+) -> Result<(), String> {
+    if !follow {
+        return handle_tool_command(client, base_url, tool_name, tool_params, false, session_name)
+            .await;
+    }
+
+    // --- follow mode: detect new tabs after click ---
+
+    let state = require_session(session_name)?;
+    let sid = get_session_id(&state)?;
+
+    // 1. Record tabs before the click.
+    let tabs_before: HashSet<usize> = call_tool(
+        client,
+        base_url,
+        "browser_tabs",
+        json!({ "sessionId": &sid, "action": "list" }),
+    )
+    .await
+    .map(|resp| {
+        parse_tab_list(&resp)
+            .into_iter()
+            .map(|t| t.index)
+            .collect()
+    })
+    .unwrap_or_default();
+
+    // 2. Perform the click (backend handles same-tab navigation detection).
+    handle_tool_command(client, base_url, tool_name, tool_params, false, session_name).await?;
+
+    // 3. Check for new tabs.
+    let tabs_after: Vec<TabInfo> = call_tool(
+        client,
+        base_url,
+        "browser_tabs",
+        json!({ "sessionId": &sid, "action": "list" }),
+    )
+    .await
+    .map(|resp| parse_tab_list(&resp))
+    .unwrap_or_default();
+
+    let new_tabs: Vec<&TabInfo> = tabs_after
+        .iter()
+        .filter(|t| !tabs_before.contains(&t.index))
+        .collect();
+
+    if new_tabs.is_empty() {
+        // No new tabs — the post-command snapshot already reflects any
+        // same-tab navigation that the backend handled.
+        return Ok(());
+    }
+
+    // 4. Report new tabs and switch to the newest one.
+    cli_println!("🌐 {} new tab(s) opened by click:", new_tabs.len());
+    for tab in &new_tabs {
+        let label = if tab.title.is_empty() {
+            tab.url.clone()
+        } else {
+            format!("{} — {}", tab.title, tab.url)
+        };
+        cli_println!("  • [tab {}] {}", tab.index, label);
+    }
+
+    // Switch to the tab with the highest index (most recently opened).
+    let newest = new_tabs
+        .iter()
+        .max_by_key(|t| t.index)
+        .expect("new_tabs is non-empty");
+    call_tool(
+        client,
+        base_url,
+        "browser_tabs",
+        json!({ "sessionId": &sid, "action": "select", "index": newest.index }),
+    )
+    .await
+    .map_err(|e| format!("Failed to switch to new tab {}: {}", newest.index, e))?;
+
+    cli_println!("✓ Switched to tab {}", newest.index);
+    Ok(())
 }
 
 async fn handle_close(
@@ -10277,6 +10443,21 @@ async fn run(
                 &tool_name,
                 &tool_params,
                 global.session_name.as_deref(),
+            )
+            .await?;
+        }
+        "click" | "dblclick" => {
+            let follow = parsed
+                .get("follow")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            handle_click(
+                &client,
+                &base_url,
+                &tool_name,
+                &tool_params,
+                global.session_name.as_deref(),
+                follow,
             )
             .await?;
         }
