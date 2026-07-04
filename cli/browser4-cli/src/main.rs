@@ -3260,14 +3260,21 @@ async fn handle_html_snapshot_capture(
     }
 
     // Next-step hints
-    cli_println!("💡 Next:");
+    cli_println!("  💡 Try these next:");
+    cli_println!("    Use `get all text` to extract visible text, or `get all attr <name>` for attribute values.");
+    cli_println!("    The SQL variant lets you query with full expressive power (joins, filters, aggregates).");
     if !title.is_empty() {
-        cli_println!("   htmlsnapshot get text \"h1\"              — page heading");
+        cli_println!("     htmlsnapshot get text \"h1\" --limit 5   # page heading");
     }
-    cli_println!("   htmlsnapshot get all text \"a\" --limit 20 — link texts");
-    cli_println!("   htmlsnapshot inspect                      — discover recurring patterns");
+    cli_println!("     htmlsnapshot get all text \"a\" --limit 20  # link texts");
+    cli_println!("     htmlsnapshot get attr \"img[src]\" src --limit 20  # image URLs");
+    cli_println!("     htmlsnapshot get attr \"a[href]\" href --limit 20  # link URLs");
+    if image_count > 0 {
+        cli_println!("     htmlsnapshot get attr \"img[src]:expr(width > 200 && height > 200)\" src --limit 20  # large images only");
+    }
+    cli_println!("     htmlsnapshot inspect  # discover recurring patterns");
     if !url.is_empty() {
-        cli_println!("   htmlsnapshot query --sql \"SELECT dom_text(dom) FROM load_and_select(@url, 'h1')\"");
+        cli_println!("     htmlsnapshot query --sql \"SELECT dom_text(dom) as text FROM load_and_select(@url, 'a')\"");
     }
 
     Ok(())
@@ -4250,7 +4257,7 @@ async fn handle_html_snapshot_inspect(
             cli_println!("     htmlsnapshot get attr \"a[href]\" href --limit 20  # link URLs");
             cli_println!("     htmlsnapshot get attr \"img[src]:expr(width > 200 && height > 200)\" src --limit 20  # large images only");
             if let Some(first) = actionable.first() {
-                cli_println!("     htmlsnapshot query --sql \"SELECT dom_text(dom) FROM load_and_select(@url, '{}')\"", first);
+                cli_println!("     htmlsnapshot query --sql \"SELECT dom_text(dom) as text FROM load_and_select(@url, '{}')\"", first);
             }
         } else {
             // Fallback when no quality selectors found (e.g., all bare tags)
