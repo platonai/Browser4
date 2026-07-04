@@ -147,6 +147,24 @@ fn quiet_active() -> bool {
 }
 
 // ---------------------------------------------------------------------------
+// Show-tip support (--show-tip / -tip global flag)
+// ---------------------------------------------------------------------------
+
+thread_local! {
+    /// When `--show-tip` / `-tip` is active, tips are shown on stderr after
+    /// each successful command.  Tips are suppressed by default.
+    static SHOW_TIP: RefCell<bool> = RefCell::new(false);
+}
+
+fn show_tip_init(show_tip: bool) {
+    SHOW_TIP.with(|cell| *cell.borrow_mut() = show_tip);
+}
+
+fn show_tip_active() -> bool {
+    SHOW_TIP.with(|cell| *cell.borrow())
+}
+
+// ---------------------------------------------------------------------------
 // Raw / stdout output support (--raw / --stdout per-command flags)
 // ---------------------------------------------------------------------------
 
@@ -8461,6 +8479,7 @@ fn normalize_command_invocation(global: &args::GlobalFlags) -> (String, args::Gl
             json: global.json,
             quiet: global.quiet,
             proxy_url: global.proxy_url.clone(),
+            show_tip: global.show_tip,
             args: rewritten,
         };
         (cmd, new_global, true)
@@ -9397,6 +9416,8 @@ async fn run(
     }
     // Initialise quiet mode when -q / --quiet is active.
     quiet_init(global.quiet);
+    // Initialise show-tip mode when --show-tip / -tip is active.
+    show_tip_init(global.show_tip);
 
     // Handle help or no command — these always print human-readable text.
     if command.is_empty() || command == "help" || command == "--help" || command == "-h" {
@@ -10937,6 +10958,7 @@ mod tests {
             json: false,
             quiet: false,
             proxy_url: None,
+            show_tip: false,
             args: vec![
                 "agent".to_string(),
                 "status".to_string(),
@@ -10960,6 +10982,7 @@ mod tests {
             json: false,
             quiet: false,
             proxy_url: None,
+            show_tip: false,
             args: vec!["agent-run".to_string(), "task".to_string()],
         };
 

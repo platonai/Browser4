@@ -1,8 +1,11 @@
 //! CLI tip system — shows a relevant, rotating tip on stderr after each
 //! successful command to remind AI agents of advanced Browser4 capabilities.
 //!
-//! Tips are suppressed when `--json` or `--quiet` is active, and for
-//! infrastructure commands (help, version, install, etc.).
+//! Tips are **suppressed by default**.  They are only shown when the user
+//! passes the `--show-tip` / `-tip` global flag.
+//!
+//! Tips are additionally suppressed when `--json` or `--quiet` is active,
+//! and for infrastructure commands (help, version, install, etc.).
 
 use std::cell::Cell;
 
@@ -395,7 +398,10 @@ fn is_suppressed_command(command: &str) -> bool {
 
 /// Show a relevant tip on stderr for the given command.
 ///
-/// Suppressed when:
+/// Tips are **suppressed by default**.  They are only shown when the user
+/// explicitly passes the `--show-tip` / `-tip` global flag.
+///
+/// Additionally suppressed when:
 /// - The command is an infrastructure/meta command
 /// - `--json` output mode is active
 /// - `--raw` / `--stdout` output mode is active
@@ -403,6 +409,11 @@ fn is_suppressed_command(command: &str) -> bool {
 ///
 /// The function is a no-op in all of those cases.
 pub fn show_tip(command: &str) {
+    // Tips are suppressed by default — only show when --show-tip / -tip is active.
+    if !crate::show_tip_active() {
+        return;
+    }
+
     // Suppress for infrastructure commands
     if is_suppressed_command(command) {
         return;

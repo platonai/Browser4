@@ -21,6 +21,8 @@ pub struct GlobalFlags {
     pub quiet: bool,
     /// `--proxy <url>` or `--proxy=<url>` — manual HTTP proxy for downloads
     pub proxy_url: Option<String>,
+    /// `--show-tip` / `-tip` — show relevant tips on stderr after commands
+    pub show_tip: bool,
     /// Remaining arguments (command + its args/options)
     pub args: Vec<String>,
 }
@@ -39,6 +41,7 @@ pub struct BatchArgs {
 /// - `--server <url>` or `--server=<url>` → server URL override
 /// - `--proxy <url>` or `--proxy=<url>` → manual HTTP proxy override for downloads
 /// - `--json` → emit machine-parseable JSON to stdout
+/// - `--show-tip` / `-tip` → show relevant tips on stderr after commands
 /// - `--version` / `-v` → version flag (returned in `args`)
 /// - Everything else is forwarded unchanged in `args`
 pub fn parse_global_flags(argv: &[String]) -> GlobalFlags {
@@ -72,6 +75,8 @@ pub fn parse_global_flags(argv: &[String]) -> GlobalFlags {
             flags.json = true;
         } else if !seen_command && (arg == "-q" || arg == "--quiet") {
             flags.quiet = true;
+        } else if !seen_command && (arg == "--show-tip" || arg == "-tip") {
+            flags.show_tip = true;
         } else if arg.starts_with("--server=") {
             flags.server_url = Some(arg["--server=".len()..].to_string());
         } else if arg == "--server" {
