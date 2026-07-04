@@ -620,6 +620,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             ],
             options: &[
                 OptionDef { name: "verify", description: "Verify the key press was applied by reading the element value", is_bool: true, short: None },
+                OptionDef { name: "follow", description: "After pressing, detect and follow navigation to new tabs", is_bool: true, short: None },
             ],
             tool_name_fn: |_| "browser_press_key".to_string(),
             tool_params_fn: |args| {

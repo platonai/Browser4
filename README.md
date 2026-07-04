@@ -141,7 +141,7 @@ dblclick <ref> [button]    Double-click an element. --modifiers, --follow (detec
 hover <ref>                Hover over an element
 fill <ref> <text>          Clear and fill text into an editable element. --submit, --verify
 type <text> [ref]          Type text into the focused element or a target ref. --submit, --verify, --focus
-press <key> [ref]          Press a key on the focused element or a target ref. --verify
+press <key> [ref]          Press a key on the focused element or a target ref. --verify, --follow (detect new tabs)
 select <ref> <value>       Select an option in a dropdown. --verify
 check <ref>                Check a checkbox or radio button
 uncheck <ref>              Uncheck a checkbox or radio button

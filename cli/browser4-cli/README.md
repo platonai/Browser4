@@ -30,7 +30,7 @@ See [`cli/README.md`](../README.md) for the user-facing documentation.
 
 | Command | Description |
 |---|---|
-| `press <key> [ref]` | Press a key on the focused element or an optional target ref |
+| `press <key> [ref]` | Press a key on the focused element or an optional target ref. `--verify`, `--follow` (detect new tabs) |
 | `type <text> [ref]` | Type text into the focused element or an optional target ref |
 | `keydown <key>` | Press a key down on the keyboard |
 | `keyup <key>` | Press a key up on the keyboard |

@@ -1241,13 +1241,13 @@ fn format_navigation_failure_message(
     message.join("\n")
 }
 
-/// Handle the `click` and `dblclick` commands.
+/// Handle the `click`, `dblclick`, and `press` commands.
 ///
 /// When `follow` is true, the handler detects new browser tabs that may have
-/// been opened by the click (common on JS-heavy search engines like Baidu) and
+/// been opened by the action (common on JS-heavy search engines like Baidu) and
 /// switches to the newest one so the post-command snapshot reflects the
 /// navigated page.
-async fn handle_click(
+async fn handle_navigation_action(
     client: &Client,
     base_url: &str,
     tool_name: &str,
@@ -10228,15 +10228,31 @@ async fn run(
                 .get("verify")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
-            handle_press_command(
-                &client,
-                &base_url,
-                &tool_name,
-                &tool_params,
-                global.session_name.as_deref(),
-                verify,
-            )
-            .await?;
+            let follow = parsed
+                .get("follow")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            if follow {
+                handle_navigation_action(
+                    &client,
+                    &base_url,
+                    &tool_name,
+                    &tool_params,
+                    global.session_name.as_deref(),
+                    true,
+                )
+                .await?;
+            } else {
+                handle_press_command(
+                    &client,
+                    &base_url,
+                    &tool_name,
+                    &tool_params,
+                    global.session_name.as_deref(),
+                    verify,
+                )
+                .await?;
+            }
         }
         "select" => {
             let verify = parsed
@@ -10451,7 +10467,7 @@ async fn run(
                 .get("follow")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
-            handle_click(
+            handle_navigation_action(
                 &client,
                 &base_url,
                 &tool_name,

@@ -139,7 +139,7 @@ dblclick <ref> [button]    双击元素。--modifiers, --follow (检测新标签
 hover <ref>                悬停在元素上
 fill <ref> <text>          清空并填充文本到可编辑元素。--submit, --verify
 type <text> [ref]          向焦点元素或目标 ref 输入文本。--submit, --verify, --focus
-press <key> [ref]          在焦点元素或目标 ref 上按下按键。--verify
+press <key> [ref]          在焦点元素或目标 ref 上按下按键。--verify, --follow (检测新标签页)
 select <ref> <value>       在下拉菜单中选择选项。--verify
 check <ref>                勾选复选框或单选按钮
 uncheck <ref>              取消勾选复选框或单选按钮

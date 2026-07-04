@@ -193,7 +193,7 @@ browser4-cli select e12 "option-value"
 
 | Command | Description |
 |---|---|
-| `press <key> [ref]` | Press a key (`a`, `Enter`, `ArrowLeft`, `Escape`). Supports `--verify`. |
+| `press <key> [ref]` | Press a key (`a`, `Enter`, `ArrowLeft`, `Escape`). Supports `--verify`, `--follow` (detect new tabs). |
 | `keydown <key>` | Press and hold a key. |
 | `keyup <key>` | Release a key. |
 | `mousemove <x> <y>` | Move mouse to coordinates. |
