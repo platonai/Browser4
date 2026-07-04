@@ -74,15 +74,6 @@
         </repository>
     </repositories>
 
-    <!-- Required by dokka-maven-plugin -->
-    <pluginRepositories>
-        <pluginRepository>
-            <id>jcenter</id>
-            <name>JCenter</name>
-            <url>https://jcenter.bintray.com/</url>
-        </pluginRepository>
-    </pluginRepositories>
-
     <!-- Default active modules. The main goal is to allow the user to run PulsarApplication
      with a single click in the IDE right after opening the project. -->
     <modules>
@@ -529,42 +520,25 @@
 
         <dokka.version>1.9.10</dokka.version>
 
-        <surefire.version>3.5.4</surefire.version>
-
         <jacoco-maven-plugin.version>0.8.11</jacoco-maven-plugin.version>
         <central-publishing-maven-plugin.version>0.9.0</central-publishing-maven-plugin.version>
 
-        <version.apache-rat-plugin>0.16.1</version.apache-rat-plugin>
-        <version.apache-resource-bundles>1.7</version.apache-resource-bundles>
-        <version.checksum-maven-plugin>1.11</version.checksum-maven-plugin>
-        <version.maven-antrun-plugin>3.2.0</version.maven-antrun-plugin>
         <version.maven-assembly-plugin>3.8.0</version.maven-assembly-plugin>
         <version.maven-clean-plugin>3.5.0</version.maven-clean-plugin>
-        <version.maven-checkstyle-plugin>3.6.0</version.maven-checkstyle-plugin>
         <version.maven-compiler-plugin>3.14.1</version.maven-compiler-plugin>
         <version.maven-dependency-plugin>3.9.0</version.maven-dependency-plugin>
         <version.maven-deploy-plugin>3.1.4</version.maven-deploy-plugin>
-        <version.maven-ear-plugin>3.4.0</version.maven-ear-plugin>
         <version.maven-enforcer-plugin>3.6.2</version.maven-enforcer-plugin>
-        <version.maven-fluido-skin>2.1.0</version.maven-fluido-skin>
         <version.maven-gpg-plugin>3.2.8</version.maven-gpg-plugin>
-        <version.maven-help-plugin>3.5.1</version.maven-help-plugin>
         <version.maven-install-plugin>3.1.4</version.maven-install-plugin>
-        <version.maven-invoker-plugin>3.9.1</version.maven-invoker-plugin>
         <version.maven-jar-plugin>3.5.0</version.maven-jar-plugin>
         <version.maven-javadoc-plugin>3.12.0</version.maven-javadoc-plugin>
-        <version.maven-plugin-tools>3.15.2</version.maven-plugin-tools>
-        <version.maven-project-info-reports-plugin>3.9.0</version.maven-project-info-reports-plugin>
-        <version.maven-release-plugin>3.3.1</version.maven-release-plugin>
         <version.maven-remote-resources-plugin>3.3.0</version.maven-remote-resources-plugin>
         <version.maven-resources-plugin>3.4.0</version.maven-resources-plugin>
         <version.maven-scm-plugin>2.2.1</version.maven-scm-plugin>
-        <version.maven-scm-publish-plugin>3.3.0</version.maven-scm-publish-plugin>
         <version.maven-shade-plugin>3.6.1</version.maven-shade-plugin>
-        <version.maven-site-plugin>3.21.0</version.maven-site-plugin>
         <version.maven-source-plugin>3.4.0</version.maven-source-plugin>
-        <version.maven-surefire>${surefire.version}</version.maven-surefire>
-        <version.maven-war-plugin>3.5.1</version.maven-war-plugin>
+        <version.maven-surefire>3.5.4</version.maven-surefire>
 
         <!-- Test execution control properties -->
         <runITs>false</runITs>
@@ -586,17 +560,17 @@
 
         <!--  Language  -->
         <javaVersion>17</javaVersion>
-        <kotlinVersion>2.3.21</kotlinVersion>
         <kotlin.coroutine.version>1.10.2</kotlin.coroutine.version>
 
         <!--  Kotlin  -->
-        <kotlin.version>${kotlinVersion}</kotlin.version>
+        <kotlin.version>2.3.21</kotlin.version>
         <maven.compiler.release>${javaVersion}</maven.compiler.release>
         <kotlin.compiler.jvmTarget>${javaVersion}</kotlin.compiler.jvmTarget>
 
         <spring-boot.version>4.0.6</spring-boot.version>
         <browser4-base.version>4.9.2</browser4-base.version>
 
+        <mcp-sdk.version>0.8.1</mcp-sdk.version>
         <git-commit-id-maven-plugin.version>9.0.1</git-commit-id-maven-plugin.version>
     </properties>
 

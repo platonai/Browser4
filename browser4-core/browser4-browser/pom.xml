@@ -91,12 +91,9 @@
 
 
         <!-- javassist is deprecated since we will remove reflects from this project -->
-        <!-- Source: https://mvnrepository.com/artifact/org.javassist/javassist -->
         <dependency>
             <groupId>org.javassist</groupId>
             <artifactId>javassist</artifactId>
-            <version>3.31.0-GA</version>
-            <scope>compile</scope>
         </dependency>
 
 

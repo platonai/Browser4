@@ -125,7 +125,6 @@
         <dependency>
             <groupId>com.google.code.crawler-commons</groupId>
             <artifactId>crawler-commons</artifactId>
-            <version>0.5</version>
             <exclusions>
                 <!-- browser4 uses httpclient5; exclude the old httpclient 4.x -->
                 <exclusion>
