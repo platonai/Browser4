@@ -844,12 +844,37 @@ function Start-NativeCommand {
         }
     }
 
+    # ── Resolve executable path (handle .cmd/.bat wrappers on Windows) ───
+    # System.Diagnostics.Process uses CreateProcess, which only finds .exe
+    # and .com files.  On Windows, npm-installed tools (claude, node, etc.)
+    # are often .cmd wrappers.  Use Get-Command to resolve to the real path
+    # and, when the resolved file is a script, route through its interpreter.
+    $resolvedExe = $FilePath
+    $prependArgs = @()  # extra args inserted before user args (e.g. /c for cmd)
+    try {
+        $cmdInfo = Get-Command $FilePath -ErrorAction Stop
+        if ($cmdInfo.Source) {
+            $resolvedExe = $cmdInfo.Source
+        }
+    } catch {
+        # If Get-Command fails, use $FilePath as-is — Process.Start may still
+        # find it on PATH if it's a real .exe (or on non-Windows platforms).
+    }
+    if ($resolvedExe -match '\.(cmd|bat)$') {
+        $prependArgs = @('/c', $resolvedExe)
+        $resolvedExe = 'cmd.exe'
+    } elseif ($resolvedExe -match '\.ps1$') {
+        $prependArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $resolvedExe)
+        $resolvedExe = 'powershell.exe'
+    }
+
     # ── Build the process ──────────────────────────────────────────────────
     $psi = New-Object System.Diagnostics.ProcessStartInfo
-    $psi.FileName = $FilePath
-    # Build argument string with proper quoting for ProcessStartInfo
+    $psi.FileName = $resolvedExe
+    # Build full argument string: prepend interpreter args (if any), then user args
+    $allArgs = @($prependArgs) + @($ArgumentList)
     $argStr = ''
-    foreach ($a in $ArgumentList) {
+    foreach ($a in $allArgs) {
         if ($argStr.Length -gt 0) { $argStr += ' ' }
         if ($a -match '[\s"]') {
             $argStr += '"' + $a.Replace('"', '\"') + '"'
