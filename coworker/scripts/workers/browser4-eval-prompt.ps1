@@ -95,11 +95,13 @@ function New-Browser4EvalPrompt {
     }
 
     if ($effectiveMode -eq 'production') {
-        $helpCmd   = '`browser4-cli help`'
-        $skillPath = 'https://browser4.io/SKILL.md'
+        $helpCmd       = '`browser4-cli help`'
+        $cliInvocation = '`browser4-cli`'
+        $skillPath     = 'https://browser4.io/SKILL.md'
     } else {
-        $helpCmd   = '`browser4-cli help` (if not installed: `npm install -g browser4-cli`; if developing from source: `cd cli/browser4-cli && cargo run -- help`)'
-        $skillPath = '`skill/SKILL.md`'
+        $helpCmd       = '`browser4-cli help` (if not installed: `npm install -g browser4-cli`; if developing from source: `cd cli/browser4-cli && cargo run -- help`)'
+        $cliInvocation = '`cd cli/browser4-cli && cargo run --`'
+        $skillPath     = '`skill/SKILL.md`'
     }
 
     return @"
@@ -109,10 +111,24 @@ You are evaluating the usability, discoverability, and reliability of browser4-c
 
 Before performing any browser interaction:
 
-1. Run $helpCmd.
-2. Read $skillPath completely.
-3. Learn the available commands, workflows, and conventions directly from the documentation.
-4. Do not assume any prior knowledge of browser4-cli.
+1. Note the repository root directory (where `.git` resides). All `cd cli/browser4-cli && cargo run --` commands rely on being in the repository root — the shell's working directory persists between invocations. If any operation changes the working directory (e.g., JAR extraction, file browsing, `cd` into subdirectories), always `cd` back to the repository root before running the next `cd cli/browser4-cli && cargo run --` command. If `cd cli/browser4-cli` fails with "No such file or directory," you are likely not in the repository root — navigate back to it first.
+2. Run $helpCmd.
+3. Read $skillPath completely.
+4. Learn the available commands, workflows, and conventions directly from the documentation.
+5. Do not assume any prior knowledge of browser4-cli.
+
+## Command Invocation
+
+Every browser4-cli command in this session MUST be invoked as:
+
+$cliInvocation <command>
+
+For example:
+  $cliInvocation goto "https://example.com"
+  $cliInvocation snapshot -i
+  $cliInvocation click e5
+
+Do NOT use a plain `browser4-cli` command unless the invocation above fails after a genuine attempt. Using the wrong invocation will test a stale installed binary instead of the local source code, invalidating the evaluation.
 
 ## Tool Usage Rules
 
