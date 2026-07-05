@@ -8677,11 +8677,11 @@ fn preferred_prefixed_group_form(command: &str) -> Option<&'static str> {
     match command {
         "agent" => Some("agent <subcommand>"),
         "swarm" => Some("swarm <subcommand>"),
-        "crawl" => Some("crawl <subcommand>"),
         "co" => Some("swarm <subcommand>"),
         // `htmlsnapshot` is a valid standalone command (captures a HTML snapshot
         // and returns metadata), not just a prefix group — so it is intentionally
-        // absent here.  Use `browser4-cli htmlsnapshot --help` to see subcommands.
+        // absent here.  Likewise `crawl` can be used standalone (crawl <url>) as
+        // well as with subcommands via rewrite (crawl list → crawl-list).
         _ => None,
     }
 }
