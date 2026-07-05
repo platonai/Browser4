@@ -10732,9 +10732,14 @@ async fn run(
         }
     }
 
-    // Post-command snapshot for commands that modify browser state
+    // Post-command snapshot for commands that modify browser state.
+    // Users can opt out with --no-snapshot on individual interaction commands.
     let no_snap = no_snapshot_commands();
-    if !no_snap.contains(command) {
+    let no_snap_flag = parsed
+        .get("no-snapshot")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    if !no_snap.contains(command) && !no_snap_flag {
         let state = read_state(None, global.session_name.as_deref());
         if let Some(session_id) = state.session_id {
             post_command_snapshot(&client, &base_url, &session_id).await;
