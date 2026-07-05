@@ -649,6 +649,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             options: &[
                 OptionDef { name: "verify", description: "Verify the key press was applied by reading the element value", is_bool: true, short: None },
                 OptionDef { name: "follow", description: "After pressing, detect and follow navigation to new tabs", is_bool: true, short: None },
+                OptionDef { name: "no-snapshot", description: "Skip the automatic post-command accessibility tree snapshot", is_bool: true, short: None },
             ],
             tool_name_fn: |_| "browser_press_key".to_string(),
             tool_params_fn: |args| {
@@ -674,6 +675,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "submit", description: "Whether to submit entered text (press Enter after)", is_bool: true, short: None },
                 OptionDef { name: "verify", description: "Verify text was correctly typed after completion", is_bool: true, short: None },
                 OptionDef { name: "focus", description: "Click the target element to focus it before typing, ensuring the element is in an interactive state", is_bool: true, short: None },
+                OptionDef { name: "no-snapshot", description: "Skip the automatic post-command accessibility tree snapshot", is_bool: true, short: None },
             ],
             tool_name_fn: |_| "browser_press_sequentially".to_string(),
             tool_params_fn: |args| {
@@ -825,6 +827,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             options: &[
                 OptionDef { name: "modifiers", description: "Modifier keys to press", is_bool: false, short: None },
                 OptionDef { name: "follow", description: "After clicking, detect and follow navigation to new tabs", is_bool: true, short: None },
+                OptionDef { name: "no-snapshot", description: "Skip the automatic post-command accessibility tree snapshot", is_bool: true, short: None },
             ],
             tool_name_fn: |_| "browser_click".to_string(),
             tool_params_fn: |args| {
@@ -847,6 +850,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             options: &[
                 OptionDef { name: "modifiers", description: "Modifier keys to press", is_bool: false, short: None },
                 OptionDef { name: "follow", description: "After clicking, detect and follow navigation to new tabs", is_bool: true, short: None },
+                OptionDef { name: "no-snapshot", description: "Skip the automatic post-command accessibility tree snapshot", is_bool: true, short: None },
             ],
             tool_name_fn: |_| "browser_click".to_string(),
             tool_params_fn: |args| {
@@ -869,7 +873,9 @@ pub fn all_commands() -> Vec<CommandDef> {
                 ArgDef { name: "startRef", description: "Exact source element reference from the page snapshot", optional: false },
                 ArgDef { name: "endRef", description: "Exact target element reference from the page snapshot", optional: false },
             ],
-            options: &[],
+            options: &[
+                OptionDef { name: "no-snapshot", description: "Skip the automatic post-command accessibility tree snapshot", is_bool: true, short: None },
+            ],
             tool_name_fn: |_| "browser_drag".to_string(),
             tool_params_fn: |args| {
                 json!({
@@ -891,6 +897,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             options: &[
                 OptionDef { name: "submit", description: "Whether to submit entered text (press Enter after)", is_bool: true, short: None },
                 OptionDef { name: "verify", description: "Verify text was correctly typed after completion", is_bool: true, short: None },
+                OptionDef { name: "no-snapshot", description: "Skip the automatic post-command accessibility tree snapshot", is_bool: true, short: None },
             ],
             tool_name_fn: |_| "browser_type".to_string(),
             tool_params_fn: |args| {
@@ -911,7 +918,9 @@ pub fn all_commands() -> Vec<CommandDef> {
             hidden: false,
             batch_supported: true,
             args: &[ArgDef { name: "ref", description: "Exact target element reference from the page snapshot", optional: false }],
-            options: &[],
+            options: &[
+                OptionDef { name: "no-snapshot", description: "Skip the automatic post-command accessibility tree snapshot", is_bool: true, short: None },
+            ],
             tool_name_fn: |_| "browser_hover".to_string(),
             tool_params_fn: |args| json!({ "ref": get_str(args, "ref").unwrap_or_default() }),
         },
@@ -927,6 +936,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             ],
             options: &[
                 OptionDef { name: "verify", description: "Verify the correct option was selected by reading the element value", is_bool: true, short: None },
+                OptionDef { name: "no-snapshot", description: "Skip the automatic post-command accessibility tree snapshot", is_bool: true, short: None },
             ],
             tool_name_fn: |_| "browser_select_option".to_string(),
             tool_params_fn: |args| {
@@ -958,7 +968,9 @@ pub fn all_commands() -> Vec<CommandDef> {
             hidden: false,
             batch_supported: true,
             args: &[ArgDef { name: "ref", description: "Exact target element reference from the page snapshot", optional: false }],
-            options: &[],
+            options: &[
+                OptionDef { name: "no-snapshot", description: "Skip the automatic post-command accessibility tree snapshot", is_bool: true, short: None },
+            ],
             tool_name_fn: |_| "browser_check".to_string(),
             tool_params_fn: |args| json!({ "ref": get_str(args, "ref").unwrap_or_default() }),
         },
@@ -969,7 +981,9 @@ pub fn all_commands() -> Vec<CommandDef> {
             hidden: false,
             batch_supported: true,
             args: &[ArgDef { name: "ref", description: "Exact target element reference from the page snapshot", optional: false }],
-            options: &[],
+            options: &[
+                OptionDef { name: "no-snapshot", description: "Skip the automatic post-command accessibility tree snapshot", is_bool: true, short: None },
+            ],
             tool_name_fn: |_| "browser_uncheck".to_string(),
             tool_params_fn: |args| json!({ "ref": get_str(args, "ref").unwrap_or_default() }),
         },

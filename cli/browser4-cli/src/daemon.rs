@@ -4357,18 +4357,37 @@ async fn find_or_install_runtime() -> Result<InstalledBrowser4Runtime, String> {
             match try_build_local_runtime_bundle(root).await {
                 Ok(Some(runtime)) => return Ok(runtime),
                 Ok(None) => {
-                    eprintln!("Local Browser4 bundle is not available; checking installed runtime.");
+                    return Err(format!(
+                        "Local Browser4 runtime bundle is not available.\n\
+                         When running from a repository checkout, the local runtime bundle must \
+                         be built from source so that the server matches the CLI at HEAD.\n\
+                         \n\
+                         Build it manually:\n  \
+                         cd browser4-apps/browser4-bundle\n  \
+                         powershell -File build-runtime-bundle.ps1\n\
+                         \n\
+                         Or switch to the globally installed runtime (production mode):\n  \
+                         set BROWSER4_CLI_FORCE_REMOTE_BUNDLE=1\n  \
+                         browser4-cli <command>"
+                    ));
                 }
                 Err(error) => {
-                    eprintln!(
-                        "Local Browser4 bundle check failed: {error}; checking installed runtime."
-                    );
+                    return Err(format!(
+                        "Local Browser4 runtime bundle build failed: {error}\n\
+                         \n\
+                         When running from a repository checkout, the local runtime bundle must \
+                         be built from source so that the server matches the CLI at HEAD.\n\
+                         Fix the build issue above, or switch to the globally installed runtime \
+                         (production mode):\n  \
+                         set BROWSER4_CLI_FORCE_REMOTE_BUNDLE=1"
+                    ));
                 }
             }
         }
     }
 
-    // Fall back to a globally installed runtime (from a prior `install` command).
+    // Not running from a repository checkout — use a globally installed runtime
+    // (from a prior `install` command) or download one.
     if install_dir_contains_runtime(&browser4_install_dir()) {
         if let Some(metadata) = read_installed_browser4_runtime_metadata() {
             eprintln!(
