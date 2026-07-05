@@ -1464,9 +1464,14 @@ private fun runVisualDetection(
  * matches ≤1 element — making cross-match comparison impossible.
  *
  * Algorithm: walks the DOM, groups each parent's direct children by CSS
- * signature (tag + up to 2 classes), scores each group by size × specificity ×
- * content-variance × structural-richness, and returns the highest-scoring
- * group's selector.
+ * signature (tag + up to 2 classes), then scores each group by:
+ *   size × class-boost(2.0x) × text-diversity(graduated) ×
+ *   structural-richness(graduated) × image-presence(1.4x) ×
+ *   child-tag-diversity(graduated) × short-text-penalty(0.6x) ×
+ *   bare-div-penalty(0.5x)
+ *
+ * Product cards (images, diverse children, long varied text) score much higher
+ * than navigation items (no images, shallow, short uniform text).
  *
  * @return a CSS selector string (e.g. ".product-card", "li"), or null if no
  *   suitable repeating pattern found (single article pages, etc.)
@@ -1511,9 +1516,50 @@ internal fun autoDiscoverRepeatingSelector(document: FeaturedDocument): String? 
             val isStructuralDiv = !hasClasses && sig in structuralBare
 
             var score = members.size.toDouble()
-            if (hasClasses) score *= 1.5
-            if (distinctText >= 2) score *= 1.3
-            if (avgDesc >= 3) score *= 1.2
+            // Class-based selectors are far more reusable than bare tags
+            if (hasClasses) score *= 2.0
+
+            // Graduated text diversity: product cards have distinct titles/prices;
+            // navigation shortcuts are nearly uniform.
+            score *= when {
+                distinctText >= 5 -> 1.8
+                distinctText >= 3 -> 1.4
+                distinctText >= 2 -> 1.2
+                else -> 1.0
+            }
+
+            // Graduated structural richness: product cards contain many nested
+            // elements (img, h2, span, a); nav items are shallow.
+            score *= when {
+                avgDesc >= 15 -> 2.0
+                avgDesc >= 8  -> 1.6
+                avgDesc >= 3  -> 1.2
+                else -> 1.0
+            }
+
+            // Image presence: product cards almost always contain <img> tags;
+            // navigation shortcuts never do.
+            val membersWithImages = members.count { it.select("img").isNotEmpty() }
+            val imageRatio = membersWithImages.toDouble() / members.size
+            if (imageRatio >= 0.5) score *= 1.4
+
+            // Child tag-type diversity: diverse direct children (img, h2, span,
+            // a, button) signal a content card rather than a simple nav item.
+            val distinctChildTags = members.flatMap { member ->
+                member.children().map { it.tagName().lowercase() }
+            }.distinct().size
+            score *= when {
+                distinctChildTags >= 6 -> 1.5
+                distinctChildTags >= 4 -> 1.3
+                distinctChildTags >= 2 -> 1.1
+                else -> 1.0
+            }
+
+            // Short-text penalty: navigation items have very brief labels
+            // ("Home", "Next"); product cards have rich descriptive text.
+            val avgTextLength = members.map { it.text().trim().length.toDouble() }.average()
+            if (imageRatio < 0.3 && avgTextLength < 20.0) score *= 0.6
+
             if (isStructuralDiv) score *= 0.5
 
             if (score > bestScore) {
