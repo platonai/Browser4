@@ -64,7 +64,7 @@ use snapshot::{resolve_output_path, save_binary, save_snapshot, timestamped_file
 use state::{
     clear_all_state, clear_state, format_async_task_list, prune_async_tasks,
     read_async_tasks, read_state, resolve_default_state_dir, resolve_ref, track_async_task,
-    write_state, CliState, MousePosition,
+    write_async_tasks, write_state, CliState, MousePosition,
 };
 
 const VERSION: &str = env!("BROWSER4_CLI_VERSION");
@@ -5728,7 +5728,23 @@ async fn handle_agent_status(
         "raw",
         json!(serde_json::from_str::<Value>(&result).unwrap_or(Value::String(result.clone()))),
     );
+
+    // Sync the latest status back to the local task list so `agent list`
+    // reflects accurate status without requiring a server round-trip.
+    sync_agent_status_to_local(id, &result);
+
     Ok(())
+}
+
+/// Update the local task-tracking file with the latest server status for a task.
+fn sync_agent_status_to_local(task_id: &str, status_json: &str) {
+    let mut list = read_async_tasks(None);
+    if let Some(entry) = list.tasks.iter_mut().find(|t| t.task_id == task_id) {
+        if let Ok(parsed) = serde_json::from_str::<Value>(status_json) {
+            entry.last_status = extract_readable_agent_status(&parsed);
+            let _ = write_async_tasks(&list, None);
+        }
+    }
 }
 
 async fn handle_agent_result(
@@ -5752,13 +5768,68 @@ async fn handle_agent_result(
     Ok(())
 }
 
-async fn handle_agent_list() -> Result<(), String> {
+async fn handle_agent_list(client: &Client, base_url: &str) -> Result<(), String> {
     let _ = prune_async_tasks(None);
-    let list = read_async_tasks(None);
+    let mut list = read_async_tasks(None);
+
+    // Refresh status for agent tasks from the server so the display is consistent
+    // with `agent status`. Tasks that fail to query keep their cached last_status.
+    let mut updated = false;
+    for entry in &mut list.tasks {
+        if entry.command != "agent" {
+            continue;
+        }
+        if let Ok(status_json) = get_command_status(client, base_url, &entry.task_id).await {
+            if let Ok(parsed) = serde_json::from_str::<Value>(&status_json) {
+                entry.last_status = extract_readable_agent_status(&parsed);
+                updated = true;
+            }
+        }
+    }
+
+    if updated {
+        let _ = write_async_tasks(&list, None);
+    }
+
     let filtered: Vec<_> = list.tasks.iter().filter(|t| t.command == "agent").cloned().collect();
     let display = state::AsyncTaskList { tasks: filtered };
     cli_println!("{}", format_async_task_list(&display));
     Ok(())
+}
+
+/// Extract a human-readable status string from the server's `command_status` JSON response.
+fn extract_readable_agent_status(status: &Value) -> String {
+    let process_state = status
+        .get("processState")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let is_done = status
+        .get("isDone")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    if is_done || process_state == "done" {
+        if let Some(status_code) = status.get("statusCode").and_then(|v| v.as_str()) {
+            if status_code == "SC_OK" || status_code == "200" {
+                return "done".to_string();
+            }
+            return format!("done ({})", status_code);
+        }
+        return "done".to_string();
+    }
+
+    if !process_state.is_empty() {
+        return process_state.to_string();
+    }
+
+    // Fall back to top-level status field
+    if let Some(s) = status.get("status").and_then(|v| v.as_str()) {
+        if !s.is_empty() {
+            return s.to_string();
+        }
+    }
+
+    "running".to_string()
 }
 
 // ---------------------------------------------------------------------------
@@ -10316,7 +10387,7 @@ async fn run(
             handle_agent_result(&client, &base_url, &tool_params).await?;
         }
         "agent-list" => {
-            handle_agent_list().await?;
+            handle_agent_list(&client, &base_url).await?;
         }
         // Swarm commands
         "swarm-create" => {
