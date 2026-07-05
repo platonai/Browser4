@@ -9,7 +9,7 @@
 #   1. Extracts the platform runtime bundle (.tar.gz or .zip)
 #   2. Sets up a local "installed" runtime directory (no network download)
 #   3. Starts a Python HTTP server serving a minimal interactive page
-#   4. Runs CLI commands: open → goto → type → click → close → kill-all
+#   4. Runs CLI commands: open → goto → snapshot → type → click → get → eval → screenshot → wait → close → kill-all
 #   5. Reports pass/fail for each step
 #
 # Designed for CI (GitHub Actions) but also runs on developer machines.
@@ -158,6 +158,7 @@ cat > "$TEST_PAGE" <<'HTML'
 <h1>Browser4 Smoke Test</h1>
 <input id="input1" type="text" value="">
 <button id="btn1" onclick="document.getElementById('input1').value='clicked'">Click Me</button>
+<span id="output">ready</span>
 </body></html>
 HTML
 
@@ -240,10 +241,25 @@ check_step "type" type "hello-smoke" "#input1"
 # 4d. click — click the button
 check_step "click" click "#btn1"
 
-# 4e. close — close the active session
+# 4e. snapshot — capture page accessibility tree
+check_step "snapshot" snapshot
+
+# 4f. get text — extract text content from an element
+check_step "get text" get text "#output"
+
+# 4g. eval — execute JavaScript on the page
+check_step "eval" eval "document.title"
+
+# 4h. screenshot — capture page screenshot
+check_step "screenshot" screenshot
+
+# 4i. wait — wait for an element to be present
+check_step "wait" wait "#output"
+
+# 4j. close — close the active session
 check_step "close" close
 
-# 4f. kill-all — stop the server and clean up
+# 4k. kill-all — stop the server and clean up
 check_step "kill-all" kill-all
 
 # ---------------------------------------------------------------------------
