@@ -1,12 +1,12 @@
 ---
 title: "SKILL Document Methodology"
-description: "Governing principles, three-tier document model, section templates, and style conventions for all SKILL documents in the skill/ directory."
+description: "Governing principles, three-tier document model, section templates, and style conventions for all SKILL documents in the skills/browser4-cli/ directory."
 tier: decision
 ---
 
 # SKILL Document Methodology
 
-These principles and conventions govern all documents in the `skill/` directory. Every document must conform.
+These principles and conventions govern all documents in the `skills/browser4-cli/` directory. Every document must conform.
 
 ## Six Principles
 

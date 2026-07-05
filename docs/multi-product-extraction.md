@@ -343,11 +343,11 @@ come from a search/listing page and the real data is on detail pages.
 
 ## See also
 
-- [X-SQL: DOM_LOAD_AND_SELECT](skill/references/x-sql-dom-load-select.md) — the
+- [X-SQL: DOM_LOAD_AND_SELECT](skills/browser4-cli/references/x-sql-dom-load-select.md) — the
   table-source function for loading pages in X-SQL queries
-- [Swarm reference](skill/references/swarm.md) — parallel scraping and X-SQL
+- [Swarm reference](skills/browser4-cli/references/swarm.md) — parallel scraping and X-SQL
   extraction across multiple browser contexts
-- [HTML Snapshot extraction scenarios](skill/references/htmlsnapshot-scenarios-extraction.md) —
+- [HTML Snapshot extraction scenarios](skills/browser4-cli/references/htmlsnapshot-scenarios-extraction.md) —
   end-to-end e-commerce extraction recipes
-- [X-SQL reference](skill/references/x-sql.md) — ~200 functions across DOM_*,
+- [X-SQL reference](skills/browser4-cli/references/x-sql.md) — ~200 functions across DOM_*,
   STR_*, and ARRAY_* namespaces

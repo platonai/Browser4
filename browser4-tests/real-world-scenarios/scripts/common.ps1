@@ -7,7 +7,7 @@ Shared helpers for browser4-cli agent-scenario test scripts.
 Dot-source this module to reuse the shared usability-evaluation prompt and the
 standard agent invocation.  The prompt adapts to the environment automatically:
 
-  - Dev (default):  `cargo run -- help`  + local `skill/SKILL.md`.
+  - Dev (default):  `cargo run -- help`  + local `skills/browser4-cli/SKILL.md`.
   - Production:      `browser4-cli help` + `https://browser4.io/SKILL.md`.
 
 Set `$browser4cliMode = 'production'` BEFORE dot-sourcing this module to switch
@@ -45,7 +45,7 @@ if ($browser4cliMode -eq 'production') {
     # the daemon auto-starts the locally-built backend JAR.  The repo root
     # is the CWD when the agent runs, so the relative "cd" resolves correctly.
     $helpCmd        = '`cd cli/browser4-cli && cargo run -- help`'
-    $skillPath      = '`skill/SKILL.md`'
+    $skillPath      = '`skills/browser4-cli/SKILL.md`'
     $cliInvocation  = '`cd cli/browser4-cli && cargo run --`'
 }
 

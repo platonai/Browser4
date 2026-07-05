@@ -68,7 +68,7 @@ class AgentToolExecutor : AbstractToolExecutor() {
             "  - Environment variable: VOLCENGINE_API_KEY=...\n" +
             "  - Environment variable: OPENAI_API_KEY=sk-...\n" +
             "  - Or set LLM_PROVIDER, LLM_NAME, LLM_API_KEY system properties\n" +
-            "See skill/references/agent.md for full configuration details."
+            "See skills/browser4-cli/references/agent.md for full configuration details."
         )
     }
 

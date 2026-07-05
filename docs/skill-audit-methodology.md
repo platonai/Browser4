@@ -54,7 +54,7 @@ Every SKILL.md has at least one non-obvious invariant that, if violated, breaks 
 | Explanation | WHY the rule exists, not just what it is. Agents follow rules more reliably when they understand the reason |
 | Scope | Clear boundaries — when does the rule apply and when doesn't it? |
 
-**Example:** "Refs are single-use" in `skill/SKILL.md` — explains that refs are CDP backend node IDs, ephemeral, invalid after any page-modifying command. Without this, an agent would store refs across interactions and every subsequent command would fail.
+**Example:** "Refs are single-use" in `skills/browser4-cli/SKILL.md` — explains that refs are CDP backend node IDs, ephemeral, invalid after any page-modifying command. Without this, an agent would store refs across interactions and every subsequent command would fail.
 
 ### 4. Decision Guidance (P1 — agent picks wrong tool)
 
@@ -183,7 +183,7 @@ After auditing, produce:
 3. **Content gaps**: list of missing sections or missing information within sections
 4. **Example fixes**: specific examples that need correction
 
-## Example: Audit of `skill/SKILL.md` (2026-07-01)
+## Example: Audit of `skills/browser4-cli/SKILL.md` (2026-07-01)
 
 ### Findings addressed
 

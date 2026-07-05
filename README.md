@@ -93,7 +93,7 @@ It can be used in scripts, terminal sessions, or integrated into AI agents throu
 
 Commands are designed to be intuitive and composable, allowing you to chain multiple actions together for complex workflows.
 
-Browser4 CLI is designed for use by AI agents through SKILLS + CLI — see [SKILL.md](skill/SKILL.md).
+Browser4 CLI is designed for use by AI agents through SKILLS + CLI — see [SKILL.md](skills/browser4-cli/SKILL.md).
 
 #### Global Flags
 
@@ -199,7 +199,7 @@ htmlsnapshot grep <pattern>                 Search snapshot HTML with regex
                                            -i, -v, -c, -l, -F, -w, -A, -B, -C, --selector
 ```
 
-For the full reference (including X-SQL `llm_*` functions that also require an LLM key), see the [HTML Snapshot reference](cli/skill/references/htmlsnapshot.md).
+For the full reference (including X-SQL `llm_*` functions that also require an LLM key), see the [HTML Snapshot reference](skills/browser4-cli/references/htmlsnapshot.md).
 
 #### Export
 

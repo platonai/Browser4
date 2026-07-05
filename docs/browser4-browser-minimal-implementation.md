@@ -1,6 +1,6 @@
 # Browser4-Browser: Minimal Implementation Scope
 
-Analysis of which [SKILL.md](../skill/SKILL.md) commands can be minimally implemented in
+Analysis of which [SKILL.md](../skills/browser4-cli/SKILL.md) commands can be minimally implemented in
 `browser4-core/browser4-browser` alone, without dependencies on `browser4-rest`, `browser4-agentic`,
 `browser4-parse`, or the `cli/` Rust layer.
 

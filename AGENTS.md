@@ -272,7 +272,7 @@ browser.display.mode=GUI  # GUI | HEADLESS | SUPERVISED
 - [Configuration Guide](docs/config.md)
 - [Testing Taxonomy](docs/TESTING.md)
 - [Test Strategy](docs/test-strategy.md)
-- [Browser4 CLI Skill Guide](skill/SKILL.md)
+- [Browser4 CLI Skill Guide](skills/browser4-cli/SKILL.md)
 - [ARIA Snapshots](docs/aria-snapshots.md)
 - [Build from Source](docs/build-from-source.md)
 - [CLI Install & Upgrade](docs/cli-install-upgrade.md)
@@ -392,7 +392,7 @@ All `.ps1` and `.sh` scripts under `bin/tests-production/` and `bin/test-product
 2. Add the frontend alias in `browser4-rest/.../MCPToolController.kt` so names like `browser_my_tool` resolve to the internal tool name such as `my_tool`
 3. Reuse existing backend tools when possible; if a new browser capability is required, add an `@MCP` method in `WebDriver.kt`, implement it in the concrete driver, and only add an explicit `BrowserTabToolExecutor` case when parameter mapping is non-trivial
 4. Update `cli/browser4-cli/src/main.rs` only when the command needs custom dispatch, dynamic tool-name selection, stale-session recovery, inclusion in `no_snapshot_commands()` for read-only behavior, or custom batch handling in `compile_batch_request()`
-5. Update `skill/SKILL.md` for user-facing command documentation; CLI help is generated from `CommandDef`, so avoid hand-editing help infrastructure. For commands with extensive documentation, add a dedicated reference file under `skill/references/` (e.g. `crawl.md`, `loop.md`, `htmlsnapshot.md`)
+5. Update `skills/browser4-cli/SKILL.md` for user-facing command documentation; CLI help is generated from `CommandDef`, so avoid hand-editing help infrastructure. For commands with extensive documentation, add a dedicated reference file under `skills/browser4-cli/references/` (e.g. `crawl.md`, `loop.md`, `htmlsnapshot.md`)
 6. Cover the change with the smallest relevant tests: `cli/browser4-cli/src/commands.rs` unit tests, `browser4-rest` controller mapping tests, `cli/browser4-cli/tests/e2e.rs`, and `browser4-tests/browser4-rest-tests/.../MCPToolControllerE2ETest.kt` when the command changes the end-to-end flow
 7. Watch the common failure points: missing backend alias, omitted `sessionId` in custom handlers, forgetting `no_snapshot_commands()` for read-only commands, forgetting `batch_supported`/`compile_batch_request()` for batch-safe DOM commands, mismatched element-ref parameter names, broken `activeSelector` / `lastMousePosition` persistence in `cli/browser4-cli/src/state.rs`, and snake_case/camelCase argument normalization
 
