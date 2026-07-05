@@ -27,6 +27,17 @@ Every scenario script follows the same pattern:
 
 $ErrorActionPreference = "Stop"
 
+# ── Path resolution ──────────────────────────────────────────────────────────
+# Repo root is 3 levels up from scripts/ (scripts -> tests -> browser4-tests -> repo root)
+$script:RepoRoot = (Resolve-Path "$PSScriptRoot/../../..").Path
+$script:IssuesReadyDir = [System.IO.Path]::GetFullPath(
+    (Join-Path $script:RepoRoot 'coworker\tasks\200issues\draft')
+)
+
+# Local alias for string interpolation in the here-string below.  Forward
+# slashes are used so paths work in bash/Git Bash shells that agents run in.
+$RepoRootPath = $script:RepoRoot -replace '\\', '/'
+
 # ── Mode detection ──────────────────────────────────────────────────────────
 # The caller may set $browser4cliMode = 'production' before dot-sourcing, or
 # set $env:BROWSER4CLI_MODE = 'production' (useful when run-tests.ps1 spawns a
@@ -37,29 +48,17 @@ if (-not $browser4cliMode -and $env:BROWSER4CLI_MODE) {
 # PowerShell here-strings expand variables, so $helpCmd / $cliInvocation are
 # resolved when $generalPrompt is defined below.
 if ($browser4cliMode -eq 'production') {
-    $helpCmd        = '`browser4-cli help`'
+    $helpCmd        = 'browser4-cli help'
     $skillPath      = 'https://browser4.io/SKILL.md'
-    $cliInvocation  = '`browser4-cli`'
+    $cliInvocation  = 'browser4-cli'
 } else {
     # Dev mode: use cargo run so the agent tests the locally-built CLI and
     # the daemon auto-starts the locally-built backend JAR.  The repo root
-    # is the CWD when the agent runs, so the relative "cd" resolves correctly.
-    $helpCmd        = '`cd cli/browser4-cli && cargo run -- help`'
-    $skillPath      = '`skills/browser4-cli/SKILL.md`'
-    $cliInvocation  = '`cd cli/browser4-cli && cargo run --`'
+    # is the CWD when the agent runs.
+    $helpCmd        = "cd `"$RepoRootPath`" && cd cli/browser4-cli && cargo run -- help"
+    $skillPath      = 'skills/browser4-cli/SKILL.md'
+    $cliInvocation  = "cd `"$RepoRootPath`" && cd cli/browser4-cli && cargo run --"
 }
-
-# ── Path resolution ──────────────────────────────────────────────────────────
-# Repo root is 3 levels up from scripts/ (scripts -> tests -> browser4-cli -> repo root)
-$script:RepoRoot = (Resolve-Path "$PSScriptRoot/../../..").Path
-$script:IssuesReadyDir = [System.IO.Path]::GetFullPath(
-    (Join-Path $script:RepoRoot 'coworker\tasks\200issues\draft')
-)
-
-# Local alias for string interpolation in the here-string below.
-# $script:RepoRoot works in double-quoted strings but using a simple variable
-# avoids any subtle scoping issues with the script: prefix in interpolation.
-$RepoRootPath = $script:RepoRoot
 
 # ── Shared evaluation prompt ────────────────────────────────────────────────
 # Every scenario prepends this to its task-specific prompt so the agent
@@ -71,17 +70,9 @@ You are evaluating the usability, discoverability, and reliability of browser4-c
 
 Before performing any browser interaction:
 
-0. Verify your working directory is the repository root: `$RepoRootPath`. If `pwd` is anything other than this directory, navigate there immediately with:
-   ```
-   cd "$RepoRootPath"
-   ```
-   This is critical: all `cd cli/browser4-cli` relative paths only resolve correctly from the repo root. After every command that changes directory into a subdirectory, return to the repo root before running the next command. For example, always run:
-   ```
-   cd "$RepoRootPath" && cd cli/browser4-cli && cargo run -- <command>
-   ```
-   so that each command starts from a known location. Do NOT chain multiple relative `cd` calls — always start from the absolute repo root.
-1. Run $helpCmd.
-2. Read $skillPath completely.
+0. Verify your working directory is the repository root: `$RepoRootPath`. If `pwd` is anything other than this directory, navigate there immediately with `cd "$RepoRootPath"`. The `$cliInvocation` pattern already starts every command from the repo root — use it consistently for all browser4-cli commands and you never need to think about your current working directory.
+1. Run `$helpCmd`.
+2. Read `$skillPath` completely.
 3. Learn the available commands, workflows, and conventions directly from the documentation.
 4. Do not assume any prior knowledge of browser4-cli.
 
@@ -90,19 +81,19 @@ Before performing any browser interaction:
 $(if ($browser4cliMode -eq 'production') {
 "Production mode: browser4-cli connects to a separately-managed backend server. Ensure the **latest runtime bundle release** is deployed and running before starting the task. The CLI does not auto-start a server in production mode — if no server is reachable, commands will fail with a connection error."
 } else {
-"Dev mode: the CLI daemon **auto-starts the locally-built backend JAR** from the repository. No manual server setup is needed — the first \`cargo run\` command will start the daemon and backend automatically. The backend runs from the local source tree, matching the code currently checked out. Do NOT download or install a separate runtime bundle — that would test a stale release instead of the local changes."
+"Dev mode: the CLI daemon **auto-starts the locally-built backend JAR** from the repository. No manual server setup is needed — the first \`cargo run\` command will start the daemon and backend automatically. The backend runs from the local source tree, matching the code currently checked out. Do NOT download or install a separate runtime bundle — that would test a stale release instead of the local changes.`n`nIf the daemon or backend fails to start automatically: (a) check for port conflicts on the default port, (b) verify a Java runtime is available, (c) retry the command once. If it still fails after one retry, record the error as a **Reliability** issue with the full error output and continue with any commands that do not require a running browser."
 })
 
 ## Command Invocation
 
 Every browser4-cli command in this session MUST be invoked as:
 
-$cliInvocation <command>
+`$cliInvocation <command>`
 
 For example:
-  $cliInvocation goto "https://example.com"
-  $cliInvocation snapshot -i
-  $cliInvocation click e5
+  `$cliInvocation goto "https://example.com"`
+  `$cliInvocation snapshot -i`
+  `$cliInvocation click e5`
 
 Do NOT use a plain `browser4-cli` command unless the invocation above fails after a genuine attempt.  Using the wrong invocation will test a stale installed binary instead of the local source code, invalidating the evaluation.
 
@@ -116,66 +107,15 @@ Do NOT use a plain `browser4-cli` command unless the invocation above fails afte
 
 ## Evaluation Objective
 
-Your goal is not only to complete the task, but also to evaluate the usability of browser4-cli from the perspective of a first-time user.
+Your goal is not only to complete the task, but also to evaluate the usability of browser4-cli from the perspective of a first-time user. Actively look for issues in these categories:
 
-Actively look for issues involving:
-
-### Installation & Setup
-
-* Missing prerequisites
-* Environment assumptions
-* Setup complexity
-* Platform-specific issues
-
-### Discoverability
-
-* Help output quality
-* Command discoverability
-* Missing examples
-* Missing documentation
-
-### Documentation
-
-* Incomplete instructions
-* Incorrect instructions
-* Ambiguous wording
-* Undocumented behavior
-* Inconsistent terminology
-
-### CLI Experience
-
-* Command naming consistency
-* Parameter naming consistency
-* Workflow clarity
-* Session management
-* Browser lifecycle management
-* State management
-
-### Task Execution
-
-* Navigation workflow
-* Search workflow
-* Content extraction workflow
-* Form interaction workflow
-* Waiting/synchronization behavior
-* Error recovery
-
-### Reliability
-
-* Unexpected failures
-* Flaky behavior
-* Misleading outputs
-* Poor error messages
-* Silent failures
-
-### User Experience
-
-* Learnability
-* Efficiency
-* Cognitive load
-* Friction points
-* Missing shortcuts
-* Missing quality-of-life features
+* **Installation & Setup** — prerequisites, environment assumptions, setup complexity, platform-specific issues
+* **Discoverability** — help output quality, command discoverability, missing examples, missing documentation
+* **Documentation** — incomplete, incorrect, or ambiguous instructions; undocumented behavior; inconsistent terminology
+* **CLI Experience** — naming consistency, workflow clarity, session/browser lifecycle, state management
+* **Task Execution** — navigation, search, content extraction, form interaction, waiting/synchronization, error recovery
+* **Reliability** — unexpected failures, flaky behavior, misleading outputs, poor error messages, silent failures
+* **User Experience** — learnability, efficiency, cognitive load, friction points, missing shortcuts or quality-of-life features
 
 ## Investigation Guidelines
 
@@ -240,7 +180,13 @@ leave the value empty — a follow-up analysis will fill it in.
 - Second concrete suggestion
 - Additional suggestions as needed
 
-**Human Review (TOP PRIORITY):** (leave empty — reserved for human review)
+**Human Review:**
+- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- **Notes:** (free-text for refinement details, counter-arguments, or follow-up actions)
+
+Leave the checkboxes empty — they are for the human reviewer to fill in.
 
 Use `---` (horizontal rule) to separate issues.
 
@@ -346,7 +292,7 @@ function ConvertFrom-IssuesSection {
         'Actual'                       = 'Actual'
         'Root Cause'                   = 'RootCause'
         'Code Pointer'                 = 'CodePointer'
-        'Review'                       = 'Review'
+        'Human Review'                 = 'Review'
         'Human Review (TOP PRIORITY)'  = 'Review'
         'Suggested Improvement'        = 'Suggestion'
         'AI Suggested Improvement'     = 'Suggestion'
