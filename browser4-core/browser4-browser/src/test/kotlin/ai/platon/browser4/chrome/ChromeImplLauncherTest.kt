@@ -1,8 +1,8 @@
 package ai.platon.browser4.chrome
 
-import ai.platon.browser4.chrome.handler.RemoteChromeProtocol
 import ai.platon.pulsar.browser.ChromeOptions
 import ai.platon.pulsar.browser.LauncherOptions
+import ai.platon.pulsar.browser.protocol.BrowserProtocol
 import ai.platon.pulsar.common.browser.BrowserFiles
 import ai.platon.pulsar.common.browser.BrowserFiles.CDP_URL_FILE_NAME
 import ai.platon.pulsar.common.serialize.json.Pson
@@ -64,7 +64,7 @@ class ChromeImplLauncherTest {
             println(versionString)
 
             val devTools = chrome.createDevTools(tab)
-            val browserProtocol = RemoteChromeProtocol(devTools)
+            val browserProtocol = BrowserProtocol.create(devTools)
             runBlocking {
                 browserProtocol.pageEnable()
                 browserProtocol.navigate("https://vercel.com/")

@@ -21,7 +21,6 @@ package ai.platon.browser4.driver.examples
 
 import ai.platon.browser4.chrome.ChromeLauncher
 import ai.platon.browser4.chrome.RemoteDevTools
-import ai.platon.browser4.chrome.handler.RemoteChromeProtocol
 import ai.platon.pulsar.browser.ChromeOptions
 import ai.platon.pulsar.browser.common.BrowserSettings
 import ai.platon.pulsar.browser.protocol.BrowserProtocol
@@ -46,7 +45,7 @@ abstract class BrowserExampleBase(val headless: Boolean = false): AutoCloseable 
     val chrome = launcher.launch(launchOptions)
     val tab = chrome.createTab()
     val remoteDevTools: RemoteDevTools = chrome.createDevTools(tab, DevToolsConfig())
-    val devTools: BrowserProtocol = RemoteChromeProtocol(remoteDevTools)
+    val devTools: BrowserProtocol = BrowserProtocol.create(remoteDevTools)
 
     val mainFrame get() = runBlocking { devTools.mainFrame() }
 

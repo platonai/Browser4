@@ -26,12 +26,6 @@
         <dependency>
             <groupId>ai.platon.pulsar</groupId>
             <artifactId>pulsar-persist</artifactId>
-            <exclusions>
-                <exclusion>
-                    <groupId>ai.platon.gora</groupId>
-                    <artifactId>gora-core</artifactId>
-                </exclusion>
-            </exclusions>
         </dependency>
 
         <dependency>

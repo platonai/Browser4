@@ -1,8 +1,7 @@
 package ai.platon.browser4.driver.chrome
 
 import ai.platon.browser4.chrome.IsolatedWorldManager
-import ai.platon.browser4.chrome.RemoteDevTools
-import ai.platon.browser4.chrome.handler.RemoteChromeProtocol
+import ai.platon.pulsar.browser.protocol.BrowserProtocol
 import ai.platon.cdt.kt.protocol.types.page.*
 import ai.platon.pulsar.browser.common.BrowserSettings
 import kotlinx.coroutines.runBlocking
@@ -32,18 +31,14 @@ class IsolatedWorldManagerTest {
 
     @Test
     fun testCreateIsolatedWorldUsesResolvedMainFrameId() {
-        val devTools = mock<RemoteDevTools>()
-        val bp = RemoteChromeProtocol(devTools)
-        val page = mock<ai.platon.cdt.kt.protocol.commands.Page>()
-        whenever(devTools.page).thenReturn(page)
-
+        val bp = mock<BrowserProtocol>()
         val settings = mock<BrowserSettings>()
         val mgr = IsolatedWorldManager(bp, settings)
 
         val mainFrame = createFrame("main")
-        wheneverBlocking { page.getFrameTree() }.thenReturn(FrameTree(mainFrame, childFrames = null))
+        wheneverBlocking { bp.mainFrame() }.thenReturn(mainFrame)
         wheneverBlocking {
-            page.createIsolatedWorld(
+            bp.createIsolatedWorld(
                 frameId = eq("main"),
                 worldName = eq(IsolatedWorldManager.RUNTIME_WORLD_NAME),
                 grantUniveralAccess = eq(true),
@@ -55,22 +50,22 @@ class IsolatedWorldManagerTest {
         assertEquals(101, mgr.getContextId("main"))
 
         runBlocking {
-            verify(page).createIsolatedWorld(any(), any(), any())
+            verify(bp).createIsolatedWorld(any(), any(), any())
         }
     }
 
     @Test
     fun testCreateIsolatedWorldRejectsMissingFrameWhenTreeAvailable() {
-        val devTools = mock<RemoteDevTools>()
-        val bp = RemoteChromeProtocol(devTools)
-        val page = mock<ai.platon.cdt.kt.protocol.commands.Page>()
-        whenever(devTools.page).thenReturn(page)
-
+        val bp = mock<BrowserProtocol>()
         val settings = mock<BrowserSettings>()
         val mgr = IsolatedWorldManager(bp, settings)
 
         val mainFrame = createFrame("main")
-        wheneverBlocking { page.getFrameTree() }.thenReturn(FrameTree(mainFrame, childFrames = null))
+        wheneverBlocking { bp.mainFrame() }.thenReturn(mainFrame)
+        // createIsolatedWorld returns 0 (invalid context ID) to trigger retry exhaustion
+        wheneverBlocking {
+            bp.createIsolatedWorld(any(), any(), any())
+        }.thenReturn(0)
 
         assertThrows(IllegalStateException::class.java) {
             runBlocking { mgr.createIsolatedWorld("missing") }
