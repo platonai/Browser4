@@ -33,7 +33,7 @@ cli/ (Rust)  ──MCP/HTTP──▶  browser4-rest (server)  ──▶  browser
 | Capability | Key API |
 |---|---|
 | Chrome launching | `ChromeLauncher.launch()` |
-| CDP transport | `RemoteChromeProtocol` (Ktor WebSocket) |
+| CDP transport | `DirectChromeProtocol` (Ktor WebSocket) |
 | Navigation | `BrowserProtocol.navigate()`, `reload()`, `getNavigationHistory()` |
 | JS evaluation | `BrowserProtocol.evaluate()`, `callFunctionOn()` |
 | DOM/AX/Snapshot trees | `CDPSnapshotService.getDOMState()` / `getBrowserUseState()` |

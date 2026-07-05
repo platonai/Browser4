@@ -1,7 +1,7 @@
 package ai.platon.pulsar.browser
 
 import ai.platon.browser4.chrome.PulsarWebDriver
-import ai.platon.browser4.chrome.handler.RemoteChromeProtocol
+import ai.platon.browser4.chrome.handler.DirectChromeProtocol
 import ai.platon.pulsar.WebDriverTestBase
 import ai.platon.pulsar.common.printlnPro
 import ai.platon.pulsar.core.api.WebDriver
@@ -91,7 +91,7 @@ class PulsarWebDriverCDPTests : WebDriverTestBase() {
             browser.newDriver().use { driver ->
                 assertIs<PulsarWebDriver>(driver)
 
-                val protocol = driver.implementation as RemoteChromeProtocol
+                val protocol = driver.implementation as DirectChromeProtocol
 
                 protocol.dom.onAttributeModified { e ->
                     val message = MessageFormat.format("> {0}. node changed | {1} := {2}", e.nodeId, e.name, e.value)

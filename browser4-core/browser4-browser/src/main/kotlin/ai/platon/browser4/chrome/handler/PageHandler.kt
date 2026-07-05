@@ -35,9 +35,7 @@ class PageHandler constructor(
 
     private val logger = getLogger(this)
 
-    private val chromeProtocol = browserProtocol as RemoteChromeProtocol
-
-    private val isActive get() = AppContext.isActive && chromeProtocol.isOpen
+    private val isActive get() = AppContext.isActive && browserProtocol.isOpen
 
     private var lastBrowserUseState: BrowserUseState? = null
 
