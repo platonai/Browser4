@@ -1048,7 +1048,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "filename", description: "Save snapshot to file instead of returning it in the response", is_bool: false, short: None },
                 OptionDef { name: "boxes", description: "Include each element's bounding box as [box=x,y,width,height] (enabled by default)", is_bool: true, short: None },
                 OptionDef { name: "no-boxes", description: "Disable bounding boxes in snapshot output", is_bool: true, short: None },
-                OptionDef { name: "interactive", description: "Only show interactive elements (buttons, links, inputs)", is_bool: true, short: Some("i") },
+                OptionDef { name: "interactive", description: "Only show interactive elements (buttons, links, inputs). Combine with --stdout to see refs inline.", is_bool: true, short: Some("i") },
                 OptionDef { name: "urls", description: "Include href URLs for link elements", is_bool: true, short: Some("u") },
                 OptionDef { name: "compact", description: "Remove empty structural elements (enabled by default)", is_bool: true, short: Some("c") },
                 OptionDef { name: "no-compact", description: "Disable compact mode; include all structural nodes", is_bool: true, short: None },

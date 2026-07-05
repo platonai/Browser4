@@ -2610,6 +2610,16 @@ async fn handle_snapshot(
                  interaction. Re-run snapshot before reusing refs."
             );
         }
+        // Hint: when interactive mode is on but output goes to a file, suggest --stdout
+        let interactive = tool_params
+            .get("interactive")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        if interactive && !json_active() {
+            eprintln!(
+                "💡 Tip: Add --stdout to print element refs inline instead of opening the snapshot file"
+            );
+        }
     }
 
     // Auto-diff: compare against the previous snapshot in this directory
