@@ -1,4 +1,4 @@
-package ai.platon.pulsar.browser.detail
+package ai.platon.browser4.api.scripting
 
 import ai.platon.pulsar.browser.common.BrowserSettings
 import ai.platon.pulsar.browser.common.ScriptConfuser

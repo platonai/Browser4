@@ -1,4 +1,4 @@
-package ai.platon.pulsar.chrome.dom.model
+package ai.platon.browser4.api.model
 
 import ai.platon.browser4.chrome.dom.model.AriaSnapshotOptions
 import ai.platon.pulsar.browser.common.BrowserSettings.Companion.VIEWPORT

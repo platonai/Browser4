@@ -1,4 +1,4 @@
-package ai.platon.pulsar.chrome.dom.util
+package ai.platon.browser4.api.model
 
 import ai.platon.pulsar.chrome.dom.model.MergedDOMTreeNode
 import ai.platon.pulsar.chrome.dom.model.NodeType

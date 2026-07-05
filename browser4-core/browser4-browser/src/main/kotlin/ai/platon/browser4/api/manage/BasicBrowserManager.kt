@@ -1,4 +1,4 @@
-package ai.platon.pulsar.browser.manage
+package ai.platon.browser4.api.manage
 
 import ai.platon.pulsar.browser.*
 import ai.platon.pulsar.browser.common.BrowserEvents

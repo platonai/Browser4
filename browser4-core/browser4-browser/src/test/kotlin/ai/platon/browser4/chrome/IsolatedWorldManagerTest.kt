@@ -1,4 +1,4 @@
-package ai.platon.browser4.driver.chrome
+package ai.platon.browser4.chrome
 
 import ai.platon.browser4.chrome.IsolatedWorldManager
 import ai.platon.pulsar.browser.protocol.BrowserProtocol

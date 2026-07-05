@@ -1,4 +1,4 @@
-package ai.platon.browser4.driver.examples
+package ai.platon.browser4.chrome.integration
 
 import ai.platon.cdt.kt.protocol.events.tracing.DataCollected
 import ai.platon.cdt.kt.protocol.support.types.EventHandler

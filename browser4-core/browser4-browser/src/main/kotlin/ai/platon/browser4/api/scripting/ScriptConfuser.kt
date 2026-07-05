@@ -1,4 +1,4 @@
-package ai.platon.pulsar.browser.common
+package ai.platon.browser4.api.scripting
 
 interface ScriptConfuser {
     /**

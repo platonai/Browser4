@@ -1,4 +1,4 @@
-package ai.platon.browser4.chrome.handler.transport
+package ai.platon.browser4.chrome.protocol.transport
 
 import ai.platon.browser4.chrome.RemoteDevTools
 import ai.platon.browser4.chrome.Transport

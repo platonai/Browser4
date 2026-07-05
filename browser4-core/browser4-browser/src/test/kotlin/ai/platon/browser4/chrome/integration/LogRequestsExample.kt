@@ -1,4 +1,4 @@
-package ai.platon.browser4.driver.examples
+package ai.platon.browser4.chrome.integration
 
 class LogRequestsExample: BrowserExampleBase() {
     override val testUrl: String = "https://www.stbchina.cn/"

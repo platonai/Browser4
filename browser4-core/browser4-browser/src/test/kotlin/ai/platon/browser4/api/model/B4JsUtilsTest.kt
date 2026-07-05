@@ -1,4 +1,4 @@
-package ai.platon.pulsar.common.js
+package ai.platon.browser4.api.model
 
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.DisplayName

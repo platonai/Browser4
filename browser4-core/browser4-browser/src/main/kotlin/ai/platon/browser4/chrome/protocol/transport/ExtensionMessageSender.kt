@@ -1,4 +1,4 @@
-package ai.platon.browser4.chrome.handler.transport
+package ai.platon.browser4.chrome.protocol.transport
 
 /**
  * Abstraction over a WebSocket connection to the Browser4 Chrome Extension.

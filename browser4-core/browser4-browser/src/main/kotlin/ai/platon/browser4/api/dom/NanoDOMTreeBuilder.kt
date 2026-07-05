@@ -1,4 +1,4 @@
-package ai.platon.pulsar.chrome.dom.util
+package ai.platon.browser4.api.dom
 
 import ai.platon.pulsar.chrome.dom.model.NanoDOMTree
 import ai.platon.pulsar.chrome.dom.model.SerializableDOMTreeNode

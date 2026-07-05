@@ -1,4 +1,4 @@
-package ai.platon.pulsar.browser.common
+package ai.platon.browser4.api.model
 
 import ai.platon.pulsar.browser.protocol.NetworkResourceResponse
 import org.jsoup.Connection

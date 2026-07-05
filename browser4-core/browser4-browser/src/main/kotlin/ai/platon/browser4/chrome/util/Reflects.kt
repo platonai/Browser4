@@ -1,4 +1,4 @@
-package ai.platon.pulsar.deprecated.util
+package ai.platon.browser4.chrome.util
 
 import ai.platon.pulsar.common.alwaysTrue
 import ai.platon.pulsar.common.getLogger

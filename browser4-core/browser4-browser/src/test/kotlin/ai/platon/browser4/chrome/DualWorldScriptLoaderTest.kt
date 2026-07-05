@@ -1,4 +1,4 @@
-package ai.platon.browser4.driver.chrome
+package ai.platon.browser4.chrome
 
 import ai.platon.pulsar.browser.common.BrowserSettings
 import ai.platon.pulsar.browser.detail.DualWorldScriptLoader

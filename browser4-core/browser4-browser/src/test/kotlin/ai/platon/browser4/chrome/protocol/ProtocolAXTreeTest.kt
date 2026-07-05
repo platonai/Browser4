@@ -17,7 +17,7 @@
  * limitations under the License.
  * #L%
  */
-package ai.platon.browser4.driver.chrome.impl
+package ai.platon.browser4.chrome.protocol
 
 import ai.platon.browser4.chrome.handler.transport.EventDispatcher
 import ai.platon.browser4.common.B4ResourceLoader

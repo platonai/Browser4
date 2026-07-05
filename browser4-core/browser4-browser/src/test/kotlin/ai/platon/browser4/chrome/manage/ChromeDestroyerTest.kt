@@ -1,4 +1,4 @@
-package ai.platon.browser4.driver.chrome
+package ai.platon.browser4.chrome.manage
 
 import ai.platon.browser4.chrome.ChromeDestroyer
 import ai.platon.pulsar.common.browser.BrowserFiles.CDP_URL_FILE_NAME

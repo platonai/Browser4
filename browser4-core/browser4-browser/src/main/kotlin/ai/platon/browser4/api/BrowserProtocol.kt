@@ -1,4 +1,4 @@
-package ai.platon.pulsar.browser.protocol
+package ai.platon.browser4.api
 
 import ai.platon.browser4.chrome.RemoteDevTools
 import ai.platon.browser4.chrome.handler.DirectChromeProtocol

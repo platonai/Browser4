@@ -1,4 +1,4 @@
-package ai.platon.browser4.chrome.handler
+package ai.platon.browser4.chrome.protocol
 
 import ai.platon.browser4.chrome.dom.CDPSnapshotService
 import ai.platon.browser4.chrome.util.CDPReturnError

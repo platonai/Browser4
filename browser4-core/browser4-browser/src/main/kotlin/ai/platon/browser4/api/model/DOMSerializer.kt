@@ -1,4 +1,4 @@
-package ai.platon.pulsar.chrome.dom
+package ai.platon.browser4.api.model
 
 import ai.platon.pulsar.chrome.dom.model.*
 import ai.platon.pulsar.common.serialize.json.doubleBindModule

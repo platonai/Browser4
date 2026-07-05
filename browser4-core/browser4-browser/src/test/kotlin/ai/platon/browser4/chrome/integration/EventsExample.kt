@@ -1,4 +1,4 @@
-package ai.platon.browser4.driver.examples
+package ai.platon.browser4.chrome.integration
 
 class EventsExample: BrowserExampleBase() {
     override suspend fun run() {

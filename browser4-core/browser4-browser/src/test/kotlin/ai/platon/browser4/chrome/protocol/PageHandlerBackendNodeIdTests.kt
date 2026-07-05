@@ -1,4 +1,4 @@
-package ai.platon.browser4.driver.chrome
+package ai.platon.browser4.chrome.protocol
 
 import org.junit.jupiter.api.DisplayName
 

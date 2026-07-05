@@ -1,4 +1,4 @@
-package ai.platon.pulsar.browser.protocol
+package ai.platon.browser4.api.model
 
 import ai.platon.cdt.kt.protocol.types.network.LoadNetworkResourcePageResult
 import com.fasterxml.jackson.annotation.JsonProperty

@@ -1,4 +1,4 @@
-package ai.platon.browser4.chrome.dom.model
+package ai.platon.browser4.api.snapshot
 
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNull

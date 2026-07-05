@@ -1,4 +1,4 @@
-package ai.platon.browser4.chrome.dom.model
+package ai.platon.browser4.api.snapshot
 
 /**
  * Parses a viewport specification string into a list of 0-based viewport indices.

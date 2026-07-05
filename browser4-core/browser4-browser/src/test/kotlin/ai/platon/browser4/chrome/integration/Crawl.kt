@@ -1,4 +1,4 @@
-package ai.platon.browser4.driver.examples.site
+package ai.platon.browser4.chrome.integration
 
 import ai.platon.browser4.driver.examples.BrowserExampleBase
 

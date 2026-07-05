@@ -1,4 +1,4 @@
-package ai.platon.pulsar.chrome.dom.model
+package ai.platon.browser4.chrome.dom.util
 
 import ai.platon.browser4.chrome.dom.util.ScrollUtils
 import org.junit.jupiter.api.Assertions.*

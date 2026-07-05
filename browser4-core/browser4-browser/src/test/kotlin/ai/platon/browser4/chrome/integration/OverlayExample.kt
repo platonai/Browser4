@@ -1,4 +1,4 @@
-package ai.platon.browser4.driver.examples
+package ai.platon.browser4.chrome.integration
 
 import ai.platon.cdt.kt.protocol.events.overlay.ScreenshotRequested
 import ai.platon.cdt.kt.protocol.support.types.EventHandler

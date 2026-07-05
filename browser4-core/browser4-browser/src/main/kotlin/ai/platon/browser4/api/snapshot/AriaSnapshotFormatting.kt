@@ -1,4 +1,4 @@
-package ai.platon.pulsar.chrome.dom.model
+package ai.platon.browser4.api.snapshot
 
 import java.util.*
 

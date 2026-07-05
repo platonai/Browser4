@@ -1,4 +1,4 @@
-package ai.platon.browser4.driver.chrome.dom.util
+package ai.platon.browser4.chrome.dom.util
 
 import ai.platon.pulsar.chrome.dom.util.NanoDOMTreeBuilder
 import ai.platon.pulsar.chrome.dom.model.CleanedDOMTreeNode
