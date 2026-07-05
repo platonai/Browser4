@@ -108,6 +108,24 @@ fn is_snapshot_tool(tool: &str) -> bool {
     )
 }
 
+fn is_wait_tool(tool: &str) -> bool {
+    matches!(
+        tool,
+        "wait_for_selector" | "wait_for_function" | "wait_for_page" | "delay"
+    )
+}
+
+/// Extract the server-side timeout in milliseconds from wait-tool arguments.
+///
+/// Wait tools carry their own deadline (`timeoutMillis` or `millis`).  The HTTP
+/// client budget must be at least that deadline plus a small buffer so the
+/// server has time to send back a timeout error before the HTTP layer gives up.
+fn wait_tool_server_timeout_ms(args: &Value) -> Option<i64> {
+    args.get("timeoutMillis")
+        .or_else(|| args.get("millis"))
+        .and_then(|v| v.as_i64())
+}
+
 fn timeout_for_tool(tool: &str) -> std::time::Duration {
     if is_navigation_tool(tool) || is_navigation_triggering_tool(tool) {
         navigation_request_timeout()
@@ -335,7 +353,27 @@ pub async fn call_tool_with_result(
     tool: &str,
     args: Value,
 ) -> Result<CallToolResult, String> {
-    call_tool_with_timeout(client, base_url, tool, args, Some(timeout_for_tool(tool))).await
+    let timeout = effective_timeout(tool, &args);
+    call_tool_with_timeout(client, base_url, tool, args, Some(timeout)).await
+}
+
+/// Compute the HTTP-level timeout for a tool call.
+///
+/// For wait tools the server-side operation can take up to `timeoutMillis` (or
+/// `millis`).  We add a 5-second buffer so the server has time to send its
+/// timeout error before the HTTP layer gives up.
+fn effective_timeout(tool: &str, args: &Value) -> std::time::Duration {
+    let base = timeout_for_tool(tool);
+    if !is_wait_tool(tool) {
+        return base;
+    }
+    if let Some(server_ms) = wait_tool_server_timeout_ms(args) {
+        let server_secs = (server_ms as u64).div_ceil(1000);
+        let http_secs = server_secs.saturating_add(5); // 5 s buffer
+        return std::time::Duration::from_secs(http_secs.max(base.as_secs()));
+    }
+    // No explicit server timeout in params — use the default with a buffer.
+    base.saturating_add(std::time::Duration::from_secs(5))
 }
 
 async fn call_tool_with_timeout(

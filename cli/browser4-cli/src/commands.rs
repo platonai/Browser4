@@ -1008,7 +1008,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 } else if let Some(millis) = get_number_value(args, "target") {
                     json!({ "millis": millis })
                 } else {
-                    json!({ "selector": get_str(args, "target").unwrap_or_default() })
+                    json!({ "selector": get_str(args, "target").unwrap_or_default(), "timeoutMillis": timeout_millis })
                 }
             },
         },
@@ -1812,6 +1812,18 @@ pub fn all_commands() -> Vec<CommandDef> {
                     is_bool: false,
                     short: None,
                 },
+                OptionDef {
+                    name: "log-filter",
+                    description: "Filter log lines by substring or regex pattern (case-insensitive). Applied server-side before returning results.",
+                    is_bool: false,
+                    short: None,
+                },
+                OptionDef {
+                    name: "metric-filter",
+                    description: "Filter metric names by substring or regex pattern (case-insensitive). Applied server-side before returning results.",
+                    is_bool: false,
+                    short: None,
+                },
             ],
             tool_name_fn: |_| String::new(),
             tool_params_fn: |args| {
@@ -1824,6 +1836,12 @@ pub fn all_commands() -> Vec<CommandDef> {
                 }
                 if let Some(lines) = get_opt_str(args, "lines") {
                     params["lines"] = json!(lines);
+                }
+                if let Some(log_filter) = get_opt_str(args, "log-filter") {
+                    params["log_filter"] = json!(log_filter);
+                }
+                if let Some(metric_filter) = get_opt_str(args, "metric-filter") {
+                    params["metric_filter"] = json!(metric_filter);
                 }
                 params
             },
@@ -3323,11 +3341,13 @@ mod tests {
         assert_eq!(cmd.category, Category::Browsers);
         assert!(!cmd.batch_supported);
         assert_eq!(cmd.args.len(), 0);
-        assert_eq!(cmd.options.len(), 3);
+        assert_eq!(cmd.options.len(), 5);
         let option_names: Vec<&str> = cmd.options.iter().map(|o| o.name).collect();
         assert!(option_names.contains(&"server"));
         assert!(option_names.contains(&"file"));
         assert!(option_names.contains(&"lines"));
+        assert!(option_names.contains(&"log-filter"));
+        assert!(option_names.contains(&"metric-filter"));
         let args: HashMap<String, Value> = HashMap::new();
         assert!((cmd.tool_name_fn)(&args).is_empty());
     }
@@ -3452,6 +3472,29 @@ mod tests {
         assert_eq!((cmd.tool_name_fn)(&args), "wait_for_selector");
         let params = (cmd.tool_params_fn)(&args);
         assert_eq!(params["selector"], "e1");
+    }
+
+    #[test]
+    fn test_wait_selector_includes_default_timeout() {
+        let map = commands_map();
+        let cmd = map.get("wait").expect("wait command must exist");
+        let mut args = HashMap::new();
+        args.insert("target".to_string(), json!("#output"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["selector"], "#output");
+        assert_eq!(params["timeoutMillis"], 30000);
+    }
+
+    #[test]
+    fn test_wait_selector_respects_custom_timeout() {
+        let map = commands_map();
+        let cmd = map.get("wait").expect("wait command must exist");
+        let mut args = HashMap::new();
+        args.insert("target".to_string(), json!("#output"));
+        args.insert("timeout".to_string(), json!("5000"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["selector"], "#output");
+        assert_eq!(params["timeoutMillis"], 5000);
     }
 
     #[test]
