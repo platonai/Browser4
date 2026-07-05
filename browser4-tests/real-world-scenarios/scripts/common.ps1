@@ -56,6 +56,11 @@ $script:IssuesReadyDir = [System.IO.Path]::GetFullPath(
     (Join-Path $script:RepoRoot 'coworker\tasks\200issues\draft')
 )
 
+# Local alias for string interpolation in the here-string below.
+# $script:RepoRoot works in double-quoted strings but using a simple variable
+# avoids any subtle scoping issues with the script: prefix in interpolation.
+$RepoRootPath = $script:RepoRoot
+
 # ── Shared evaluation prompt ────────────────────────────────────────────────
 # Every scenario prepends this to its task-specific prompt so the agent
 # consistently evaluates browser4-cli usability while completing the task.
@@ -66,11 +71,27 @@ You are evaluating the usability, discoverability, and reliability of browser4-c
 
 Before performing any browser interaction:
 
-0. Verify your working directory is the repository root (the directory containing `cli/`, `skill/`, `pom.xml`, etc.). If you are not in the repo root, navigate there first with `cd` using the absolute path to the repository. All `cd cli/browser4-cli` commands assume you start from the repo root.
+0. Verify your working directory is the repository root: `$RepoRootPath`. If `pwd` is anything other than this directory, navigate there immediately with:
+   ```
+   cd "$RepoRootPath"
+   ```
+   This is critical: all `cd cli/browser4-cli` relative paths only resolve correctly from the repo root. After every command that changes directory into a subdirectory, return to the repo root before running the next command. For example, always run:
+   ```
+   cd "$RepoRootPath" && cd cli/browser4-cli && cargo run -- <command>
+   ```
+   so that each command starts from a known location. Do NOT chain multiple relative `cd` calls — always start from the absolute repo root.
 1. Run $helpCmd.
 2. Read $skillPath completely.
 3. Learn the available commands, workflows, and conventions directly from the documentation.
 4. Do not assume any prior knowledge of browser4-cli.
+
+## Backend Server
+
+$(if ($browser4cliMode -eq 'production') {
+"Production mode: browser4-cli connects to a separately-managed backend server. Ensure the **latest runtime bundle release** is deployed and running before starting the task. The CLI does not auto-start a server in production mode — if no server is reachable, commands will fail with a connection error."
+} else {
+"Dev mode: the CLI daemon **auto-starts the locally-built backend JAR** from the repository. No manual server setup is needed — the first \`cargo run\` command will start the daemon and backend automatically. The backend runs from the local source tree, matching the code currently checked out. Do NOT download or install a separate runtime bundle — that would test a stale release instead of the local changes."
+})
 
 ## Command Invocation
 
