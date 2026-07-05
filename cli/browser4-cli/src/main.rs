@@ -300,6 +300,8 @@ fn no_snapshot_commands() -> HashSet<&'static str> {
         "close-all",
         "kill-all",
         "list",
+        "status",
+        "stop",
         "loop",
         "install",
         "uninstall",
@@ -2857,19 +2859,8 @@ async fn handle_tool_command_with_options(
         }
     } else if !result.is_empty() {
         // Wait tools return internal driver JSON — replace with user-friendly messages
-        if tool_name == "wait_for_function" {
-            cli_println!("✓ Wait complete");
-        } else if tool_name == "wait_for_page" {
-            cli_println!("✓ URL matched");
-        } else if tool_name == "delay" {
-            let millis = tool_params.get("millis").and_then(|v| v.as_i64()).unwrap_or(0);
-            cli_println!("✓ Waited {}ms", millis);
-        } else if tool_name == "wait_for_selector" {
-            let selector = tool_params.get("selector").and_then(|v| v.as_str()).unwrap_or("?");
-            cli_println!("✓ Element found: {}", selector);
-        } else {
-            cli_println!("{}", result);
-        }
+        let formatted = format_wait_result(tool_name, tool_params, &result);
+        cli_println!("{}", formatted);
         json_field("result", json!(&result));
     }
 
@@ -10695,6 +10686,31 @@ fn print_help(command_name: Option<&str>) {
     cli_println!("{}", generate_help());
 }
 
+/// Format the result of wait-related tools into a user-friendly message.
+/// Wait tools (wait_for_function, delay, etc.) return internal driver JSON
+/// that is meaningless to users. This function maps them to readable messages.
+fn format_wait_result(tool_name: &str, tool_params: &Value, result: &str) -> String {
+    if tool_name == "wait_for_function" {
+        "✓ Wait complete".to_string()
+    } else if tool_name == "wait_for_page" {
+        "✓ URL matched".to_string()
+    } else if tool_name == "delay" {
+        let millis = tool_params
+            .get("millis")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
+        format!("✓ Waited {}ms", millis)
+    } else if tool_name == "wait_for_selector" {
+        let selector = tool_params
+            .get("selector")
+            .and_then(|v| v.as_str())
+            .unwrap_or("?");
+        format!("✓ Element found: {}", selector)
+    } else {
+        result.to_string()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -13084,5 +13100,89 @@ mod tests {
             result.is_err(),
             "non-UTF-8 bytes should fail, got: {result:?}",
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // format_wait_result tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn format_wait_result_wait_for_function() {
+        let msg = format_wait_result(
+            "wait_for_function",
+            &json!({"pageFunction": "document.readyState === 'complete'"}),
+            "{\"type\":\"Driver\"}",
+        );
+        assert_eq!(msg, "✓ Wait complete");
+    }
+
+    #[test]
+    fn format_wait_result_wait_for_page() {
+        let msg = format_wait_result(
+            "wait_for_page",
+            &json!({"url": "https://example.com/*"}),
+            "{}",
+        );
+        assert_eq!(msg, "✓ URL matched");
+    }
+
+    #[test]
+    fn format_wait_result_delay() {
+        let msg = format_wait_result(
+            "delay",
+            &json!({"millis": 3000}),
+            "",
+        );
+        assert_eq!(msg, "✓ Waited 3000ms");
+    }
+
+    #[test]
+    fn format_wait_result_delay_default_millis() {
+        let msg = format_wait_result(
+            "delay",
+            &json!({}),
+            "",
+        );
+        assert_eq!(msg, "✓ Waited 0ms");
+    }
+
+    #[test]
+    fn format_wait_result_wait_for_selector() {
+        let msg = format_wait_result(
+            "wait_for_selector",
+            &json!({"selector": ".product-card"}),
+            "",
+        );
+        assert_eq!(msg, "✓ Element found: .product-card");
+    }
+
+    #[test]
+    fn format_wait_result_wait_for_selector_default() {
+        let msg = format_wait_result(
+            "wait_for_selector",
+            &json!({}),
+            "",
+        );
+        assert_eq!(msg, "✓ Element found: ?");
+    }
+
+    #[test]
+    fn format_wait_result_non_wait_tool_unchanged() {
+        let msg = format_wait_result(
+            "browser_click",
+            &json!({"ref": "e5"}),
+            "clicked",
+        );
+        assert_eq!(msg, "clicked");
+    }
+
+    #[test]
+    fn format_wait_result_empty_result_for_non_wait() {
+        let msg = format_wait_result(
+            "browser_snapshot",
+            &json!({}),
+            "",
+        );
+        assert_eq!(msg, "");
     }
 }

@@ -4198,6 +4198,83 @@ mod tests {
         );
     }
 
+    // ---- screenshot viewport tests ----
+
+    #[test]
+    fn test_screenshot_viewport_single_value() {
+        let map = commands_map();
+        let cmd = map.get("screenshot").unwrap();
+        let mut args = HashMap::new();
+        args.insert("viewport".to_string(), json!("0"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(
+            params.get("viewport").and_then(|v| v.as_i64()),
+            Some(0),
+            "viewport should be passed as integer"
+        );
+    }
+
+    #[test]
+    fn test_screenshot_viewport_range_value() {
+        let map = commands_map();
+        let cmd = map.get("screenshot").unwrap();
+        let mut args = HashMap::new();
+        args.insert("viewport".to_string(), json!("2"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(
+            params.get("viewport").and_then(|v| v.as_i64()),
+            Some(2),
+            "viewport index 2 should be passed through"
+        );
+    }
+
+    #[test]
+    fn test_screenshot_viewport_not_set_by_default() {
+        let map = commands_map();
+        let cmd = map.get("screenshot").unwrap();
+        let args = HashMap::new();
+        let params = (cmd.tool_params_fn)(&args);
+        assert!(
+            params.get("viewport").is_none(),
+            "viewport should not be set when not provided"
+        );
+    }
+
+    #[test]
+    fn test_screenshot_viewport_non_numeric_ignored() {
+        let map = commands_map();
+        let cmd = map.get("screenshot").unwrap();
+        let mut args = HashMap::new();
+        args.insert("viewport".to_string(), json!("abc"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert!(
+            params.get("viewport").is_none(),
+            "non-numeric viewport should be ignored"
+        );
+    }
+
+    #[test]
+    fn test_screenshot_viewport_composes_with_ref() {
+        let map = commands_map();
+        let cmd = map.get("screenshot").unwrap();
+        let mut args = HashMap::new();
+        args.insert("viewport".to_string(), json!("0"));
+        args.insert("ref".to_string(), json!("e5"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params.get("viewport").and_then(|v| v.as_i64()), Some(0));
+        assert_eq!(params.get("ref").and_then(|v| v.as_str()), Some("e5"));
+    }
+
+    #[test]
+    fn test_screenshot_has_viewport_option() {
+        let map = commands_map();
+        let cmd = map.get("screenshot").unwrap();
+        let has_viewport_opt = cmd.options.iter().any(|o| o.name == "viewport");
+        assert!(has_viewport_opt, "screenshot should have --viewport option");
+        let has_v_short = cmd.options.iter().any(|o| o.name == "viewport" && o.short == Some("v"));
+        assert!(has_v_short, "screenshot --viewport should have -v short form");
+    }
+
     // ---- crawl command tests ----
 
     #[test]
