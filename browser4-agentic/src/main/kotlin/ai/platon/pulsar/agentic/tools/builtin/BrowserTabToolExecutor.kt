@@ -966,7 +966,18 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
                         )
                     }
 
-                    else -> throw IllegalArgumentException("screenshot allows none or one of: 'selector' | 'fullPage'")
+                    args.containsKey("viewport") -> {
+                        validateArgs(args, allowed("viewport"), setOf("viewport"), functionName)
+                        val viewportIndex = paramInt(args, "viewport", functionName)!!
+                        val w = driver.evaluateValue("window.innerWidth")?.toString()?.toDoubleOrNull() ?: 1920.0
+                        val h = driver.evaluateValue("window.innerHeight")?.toString()?.toDoubleOrNull() ?: 1080.0
+                        val rect = ai.platon.pulsar.common.math.geometric.RectD(
+                            0.0, viewportIndex * h, w, h
+                        )
+                        driver.screenshot(rect)
+                    }
+
+                    else -> throw IllegalArgumentException("screenshot allows none or one of: 'selector' | 'fullPage' | 'viewport'")
                 }
             }
 

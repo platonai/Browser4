@@ -648,6 +648,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             ],
             options: &[
                 OptionDef { name: "verify", description: "Verify the key press was applied by reading the element value", is_bool: true, short: None },
+                OptionDef { name: "follow", description: "After pressing, detect and follow navigation to new tabs", is_bool: true, short: None },
             ],
             tool_name_fn: |_| "browser_press_key".to_string(),
             tool_params_fn: |args| {
@@ -823,6 +824,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             ],
             options: &[
                 OptionDef { name: "modifiers", description: "Modifier keys to press", is_bool: false, short: None },
+                OptionDef { name: "follow", description: "After clicking, detect and follow navigation to new tabs", is_bool: true, short: None },
             ],
             tool_name_fn: |_| "browser_click".to_string(),
             tool_params_fn: |args| {
@@ -844,6 +846,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             ],
             options: &[
                 OptionDef { name: "modifiers", description: "Modifier keys to press", is_bool: false, short: None },
+                OptionDef { name: "follow", description: "After clicking, detect and follow navigation to new tabs", is_bool: true, short: None },
             ],
             tool_name_fn: |_| "browser_click".to_string(),
             tool_params_fn: |args| {
@@ -1064,7 +1067,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "snapshot",
-            description: "Capture page snapshot to obtain element ref",
+            description: "Capture page snapshot to obtain element refs. Use -v N for viewport pagination, -i for interactive, --auto-diff for change detection. Run `snapshot --help` for all flags.",
             category: Category::Core,
             hidden: false,
             batch_supported: true,
@@ -1073,7 +1076,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "filename", description: "Save snapshot to file instead of returning it in the response", is_bool: false, short: None },
                 OptionDef { name: "boxes", description: "Include each element's bounding box as [box=x,y,width,height] (enabled by default)", is_bool: true, short: None },
                 OptionDef { name: "no-boxes", description: "Disable bounding boxes in snapshot output", is_bool: true, short: None },
-                OptionDef { name: "interactive", description: "Only show interactive elements (buttons, links, inputs)", is_bool: true, short: Some("i") },
+                OptionDef { name: "interactive", description: "Only show interactive elements (buttons, links, inputs). Combine with --stdout to see refs inline.", is_bool: true, short: Some("i") },
                 OptionDef { name: "urls", description: "Include href URLs for link elements", is_bool: true, short: Some("u") },
                 OptionDef { name: "compact", description: "Remove empty structural elements (enabled by default)", is_bool: true, short: Some("c") },
                 OptionDef { name: "no-compact", description: "Disable compact mode; include all structural nodes", is_bool: true, short: None },
@@ -1164,17 +1167,19 @@ pub fn all_commands() -> Vec<CommandDef> {
             options: &[
                 OptionDef { name: "file", description: "Read JavaScript expression from a file instead of the command line", is_bool: false, short: None },
                 OptionDef { name: "stdin", description: "Read JavaScript expression from stdin (useful for piping multi-line scripts without shell quoting)", is_bool: true, short: None },
+                OptionDef { name: "base64", description: "Decode the expression argument as base64 before execution (avoids shell quoting issues on Windows)", is_bool: true, short: None },
                 OptionDef { name: "json", description: "Serialize the result as JSON (quotes strings, wraps scalars)", is_bool: true, short: None },
             ],
             tool_name_fn: |_| "browser_evaluate".to_string(),
             tool_params_fn: |args| {
                 let mut p = json!({ "expression": get_str(args, "expression").unwrap_or_default() });
                 if let Some(r) = get_opt_str(args, "ref") { p["ref"] = json!(r); }
-                // --file and --stdin are carried through tool_params so the
-                // dispatch logic in main.rs can detect them and read the
+                // --file, --stdin, and --base64 are carried through tool_params so the
+                // dispatch logic in main.rs can detect them and read/decode the
                 // expression content. They are stripped before the server call.
                 if let Some(f) = get_opt_str(args, "file") { p["file"] = json!(f); }
                 if get_bool(args, "stdin").unwrap_or(false) { p["stdin"] = json!(true); }
+                if get_bool(args, "base64").unwrap_or(false) { p["base64"] = json!(true); }
                 if get_bool(args, "json").unwrap_or(false) { p["json"] = json!(true); }
                 p
             },
@@ -1601,6 +1606,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             options: &[
                 OptionDef { name: "filename", description: "File name to save the screenshot to", is_bool: false, short: None },
                 OptionDef { name: "full-page", description: "When true, takes a screenshot of the full scrollable page", is_bool: true, short: None },
+                OptionDef { name: "viewport", description: "Capture a specific viewport by index (0 = top). Same semantics as snapshot -v.", is_bool: false, short: Some("v") },
             ],
             tool_name_fn: |_| "browser_take_screenshot".to_string(),
             tool_params_fn: |args| {
@@ -1608,6 +1614,9 @@ pub fn all_commands() -> Vec<CommandDef> {
                 if let Some(r) = get_opt_str(args, "ref") { p["ref"] = json!(r); }
                 if let Some(f) = get_opt_str(args, "filename") { p["filename"] = json!(f); }
                 if let Some(fp) = get_bool(args, "full-page") { p["fullPage"] = json!(fp); }
+                if let Some(v) = get_opt_str(args, "viewport") {
+                    if let Ok(n) = v.parse::<i32>() { p["viewport"] = json!(n); }
+                }
                 p
             },
         },
@@ -3242,6 +3251,45 @@ mod tests {
     }
 
     #[test]
+    fn test_eval_has_base64_option() {
+        let map = commands_map();
+        let cmd = map.get("eval").unwrap();
+        let base64_opt = cmd
+            .options
+            .iter()
+            .find(|o| o.name == "base64")
+            .expect("eval should have a --base64 option");
+        assert!(base64_opt.is_bool, "--base64 should be a boolean flag");
+        assert!(
+            base64_opt.description.contains("base64"),
+            "--base64 description should mention base64, got: {}",
+            base64_opt.description
+        );
+    }
+
+    #[test]
+    fn test_eval_params_passthrough_base64_flag() {
+        let map = commands_map();
+        let cmd = map.get("eval").unwrap();
+        let mut args = HashMap::new();
+        args.insert("expression".to_string(), json!("ZG9jdW1lbnQudGl0bGU="));
+        args.insert("base64".to_string(), json!(true));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["base64"], json!(true), "base64 flag should pass through to dispatch");
+        assert_eq!(params["expression"], json!("ZG9jdW1lbnQudGl0bGU="));
+    }
+
+    #[test]
+    fn test_eval_params_base64_not_set_by_default() {
+        let map = commands_map();
+        let cmd = map.get("eval").unwrap();
+        let mut args = HashMap::new();
+        args.insert("expression".to_string(), json!("document.title"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert!(params.get("base64").is_none(), "base64 should not be set when flag is absent");
+    }
+
+    #[test]
     fn test_mousewheel_params_preserve_decimal_numbers() {
         let map = commands_map();
         let cmd = map.get("mousewheel").unwrap();
@@ -4263,6 +4311,83 @@ mod tests {
             Some("1-3"),
             "viewport range should be passed through"
         );
+    }
+
+    // ---- screenshot viewport tests ----
+
+    #[test]
+    fn test_screenshot_viewport_single_value() {
+        let map = commands_map();
+        let cmd = map.get("screenshot").unwrap();
+        let mut args = HashMap::new();
+        args.insert("viewport".to_string(), json!("0"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(
+            params.get("viewport").and_then(|v| v.as_i64()),
+            Some(0),
+            "viewport should be passed as integer"
+        );
+    }
+
+    #[test]
+    fn test_screenshot_viewport_range_value() {
+        let map = commands_map();
+        let cmd = map.get("screenshot").unwrap();
+        let mut args = HashMap::new();
+        args.insert("viewport".to_string(), json!("2"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(
+            params.get("viewport").and_then(|v| v.as_i64()),
+            Some(2),
+            "viewport index 2 should be passed through"
+        );
+    }
+
+    #[test]
+    fn test_screenshot_viewport_not_set_by_default() {
+        let map = commands_map();
+        let cmd = map.get("screenshot").unwrap();
+        let args = HashMap::new();
+        let params = (cmd.tool_params_fn)(&args);
+        assert!(
+            params.get("viewport").is_none(),
+            "viewport should not be set when not provided"
+        );
+    }
+
+    #[test]
+    fn test_screenshot_viewport_non_numeric_ignored() {
+        let map = commands_map();
+        let cmd = map.get("screenshot").unwrap();
+        let mut args = HashMap::new();
+        args.insert("viewport".to_string(), json!("abc"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert!(
+            params.get("viewport").is_none(),
+            "non-numeric viewport should be ignored"
+        );
+    }
+
+    #[test]
+    fn test_screenshot_viewport_composes_with_ref() {
+        let map = commands_map();
+        let cmd = map.get("screenshot").unwrap();
+        let mut args = HashMap::new();
+        args.insert("viewport".to_string(), json!("0"));
+        args.insert("ref".to_string(), json!("e5"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params.get("viewport").and_then(|v| v.as_i64()), Some(0));
+        assert_eq!(params.get("ref").and_then(|v| v.as_str()), Some("e5"));
+    }
+
+    #[test]
+    fn test_screenshot_has_viewport_option() {
+        let map = commands_map();
+        let cmd = map.get("screenshot").unwrap();
+        let has_viewport_opt = cmd.options.iter().any(|o| o.name == "viewport");
+        assert!(has_viewport_opt, "screenshot should have --viewport option");
+        let has_v_short = cmd.options.iter().any(|o| o.name == "viewport" && o.short == Some("v"));
+        assert!(has_v_short, "screenshot --viewport should have -v short form");
     }
 
     // ---- crawl command tests ----

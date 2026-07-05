@@ -63,7 +63,7 @@ use snapshot::{resolve_output_path, save_binary, save_snapshot, timestamped_file
 use state::{
     clear_all_state, clear_state, format_async_task_list, prune_async_tasks,
     read_async_tasks, read_state, resolve_default_state_dir, resolve_ref, track_async_task,
-    write_state, CliState, MousePosition,
+    write_async_tasks, write_state, CliState, MousePosition,
 };
 
 const VERSION: &str = env!("BROWSER4_CLI_VERSION");
@@ -299,6 +299,8 @@ fn no_snapshot_commands() -> HashSet<&'static str> {
         "close-all",
         "kill-all",
         "list",
+        "status",
+        "stop",
         "loop",
         "install",
         "uninstall",
@@ -527,6 +529,78 @@ async fn restore_active_selector(
             "Unexpected focus result for saved active selector '{selector}': {other}"
         )),
     }
+}
+
+// ---------------------------------------------------------------------------
+// Tab tracking helpers (for click --follow)
+// ---------------------------------------------------------------------------
+
+/// Lightweight tab entry parsed from the `browser_tabs` list response.
+#[derive(Debug, Clone)]
+struct TabInfo {
+    index: usize,
+    url: String,
+    title: String,
+}
+
+/// Parse the JSON response from a `browser_tabs` "list" action into a vec of
+/// [TabInfo] entries.  The response can be a JSON array of tab objects, an
+/// object with a `"tabs"` array, or a plain text representation.
+fn parse_tab_list(response: &str) -> Vec<TabInfo> {
+    let trimmed = response.trim();
+    if trimmed.is_empty() {
+        return Vec::new();
+    }
+
+    // Try parsing as a JSON array first.
+    if let Ok(array) = serde_json::from_str::<Vec<Value>>(trimmed) {
+        return array
+            .into_iter()
+            .filter_map(|v| parse_tab_entry(&v))
+            .collect();
+    }
+
+    // Try parsing as a JSON object with a "tabs" key.
+    if let Ok(obj) = serde_json::from_str::<Value>(trimmed) {
+        if let Some(tabs) = obj.get("tabs").and_then(|t| t.as_array()) {
+            return tabs
+                .iter()
+                .filter_map(|v| parse_tab_entry(v))
+                .collect();
+        }
+        // It might be a single tab object — try that.
+        if let Some(tab) = parse_tab_entry(&obj) {
+            return vec![tab];
+        }
+    }
+
+    Vec::new()
+}
+
+fn parse_tab_entry(value: &Value) -> Option<TabInfo> {
+    let obj = value.as_object()?;
+    // Accept "index", "id" (if numeric), or derive position.
+    let index = obj
+        .get("index")
+        .and_then(|v| v.as_u64())
+        .or_else(|| obj.get("id").and_then(|v| v.as_str().and_then(|s| s.parse().ok())))
+        .map(|n| n as usize);
+    let url = obj
+        .get("url")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let title = obj
+        .get("title")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    // We need at least an index to track the tab.
+    index.map(|idx| TabInfo {
+        index: idx,
+        url,
+        title,
+    })
 }
 
 async fn create_session(
@@ -785,7 +859,11 @@ async fn post_command_snapshot(client: &Client, base_url: &str, session_id: &str
     };
 
     let out_path = resolve_output_path(None, "snapshot", "yml");
-    if let Err(e) = save_snapshot(&out_path, &snap_result) {
+    // Prepend a header comment documenting the snapshot.
+    let header = "# Auto-snapshot after command — full viewport (viewport 0).\n\
+                  # Use `browser4-cli snapshot grep <pattern>` to search the tree.\n";
+    let snap_with_header = format!("{}\n{}", header, snap_result);
+    if let Err(e) = save_snapshot(&out_path, &snap_with_header) {
         eprintln!("Warning: failed to save snapshot: {e}");
         return;
     }
@@ -1379,6 +1457,155 @@ fn format_navigation_failure_message(
     message.push("🧾 Details".to_string());
     message.push(format!("  {error}"));
     message.join("\n")
+}
+
+/// Handle the `click`, `dblclick`, and `press` commands.
+///
+/// When `follow` is true, the handler detects new browser tabs that may have
+/// been opened by the action (common on JS-heavy search engines like Baidu) and
+/// switches to the newest one so the post-command snapshot reflects the
+/// navigated page.
+async fn handle_navigation_action(
+    client: &Client,
+    base_url: &str,
+    tool_name: &str,
+    tool_params: &Value,
+    session_name: Option<&str>,
+    follow: bool,
+) -> Result<(), String> {
+    if !follow {
+        return handle_tool_command(client, base_url, tool_name, tool_params, false, session_name)
+            .await;
+    }
+
+    // --- follow mode: detect new tabs after click ---
+
+    let state = require_session(session_name)?;
+    let sid = get_session_id(&state)?;
+
+    // 1. Capture page URL before the click to detect silent navigation failures.
+    let url_before = call_tool(
+        client,
+        base_url,
+        "page_url",
+        json!({ "sessionId": &sid }),
+    )
+    .await
+    .ok();
+
+    // 2. Record tabs before the click.
+    let tabs_before: HashSet<usize> = call_tool(
+        client,
+        base_url,
+        "browser_tabs",
+        json!({ "sessionId": &sid, "action": "list" }),
+    )
+    .await
+    .map(|resp| {
+        parse_tab_list(&resp)
+            .into_iter()
+            .map(|t| t.index)
+            .collect()
+    })
+    .unwrap_or_default();
+
+    // 3. Perform the click (backend handles same-tab navigation detection).
+    handle_tool_command(client, base_url, tool_name, tool_params, false, session_name).await?;
+
+    // 4. Check for new tabs.
+    let tabs_after: Vec<TabInfo> = call_tool(
+        client,
+        base_url,
+        "browser_tabs",
+        json!({ "sessionId": &sid, "action": "list" }),
+    )
+    .await
+    .map(|resp| parse_tab_list(&resp))
+    .unwrap_or_default();
+
+    let new_tabs: Vec<&TabInfo> = tabs_after
+        .iter()
+        .filter(|t| !tabs_before.contains(&t.index))
+        .collect();
+
+    if new_tabs.is_empty() {
+        // No new tabs — verify same-tab navigation and warn if URL unchanged.
+        verify_click_navigation(client, base_url, &sid, tool_params, &url_before).await;
+        return Ok(());
+    }
+
+    // 5. Report new tabs and switch to the newest one.
+    cli_println!("🌐 {} new tab(s) opened by click:", new_tabs.len());
+    for tab in &new_tabs {
+        let label = if tab.title.is_empty() {
+            tab.url.clone()
+        } else {
+            format!("{} — {}", tab.title, tab.url)
+        };
+        cli_println!("  • [tab {}] {}", tab.index, label);
+    }
+
+    // Switch to the tab with the highest index (most recently opened).
+    let newest = new_tabs
+        .iter()
+        .max_by_key(|t| t.index)
+        .expect("new_tabs is non-empty");
+    call_tool(
+        client,
+        base_url,
+        "browser_tabs",
+        json!({ "sessionId": &sid, "action": "select", "index": newest.index }),
+    )
+    .await
+    .map_err(|e| format!("Failed to switch to new tab {}: {}", newest.index, e))?;
+
+    cli_println!("✓ Switched to tab {}", newest.index);
+    Ok(())
+}
+
+/// Verify that a click resulted in navigation. Emits a warning to stderr if
+/// the page URL is unchanged after the click, which may indicate a silent
+/// failure (e.g. clicking an off-screen element).
+async fn verify_click_navigation(
+    client: &Client,
+    base_url: &str,
+    session_id: &str,
+    tool_params: &Value,
+    url_before: &Option<String>,
+) {
+    let Some(ref before) = url_before else {
+        return;
+    };
+
+    let url_after = call_tool(
+        client,
+        base_url,
+        "page_url",
+        json!({ "sessionId": session_id }),
+    )
+    .await
+    .ok();
+
+    let Some(ref after) = url_after else {
+        return;
+    };
+
+    if before == after {
+        let ref_val = tool_params
+            .get("ref")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        // Suppress warning in --json or --quiet mode to keep machine output clean.
+        let suppressed = json_active() || quiet_active();
+        if !ref_val.is_empty() && !suppressed {
+            eprintln!(
+                "⚠️  Click on {} did not result in navigation — page URL is unchanged. \
+                 The element may be off-screen; try scrolling it into view first or \
+                 use --follow to detect new-tab navigation.",
+                ref_val
+            );
+        }
+    }
 }
 
 async fn handle_close(
@@ -2568,7 +2795,31 @@ async fn handle_snapshot(
     };
 
     let out_path = resolve_output_path(filename.as_deref(), "snapshot", "yml");
-    save_snapshot(&out_path, snap).map_err(|e| e.to_string())?;
+
+    // Prepend a YAML comment header documenting the snapshot scope so users
+    // understand that the file may not contain the full accessibility tree
+    // (e.g. when viewport filtering is active).  Use `snapshot grep <pattern>`
+    // to search the complete in-memory tree regardless of viewport.
+    let viewports = tool_params
+        .get("viewports")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty());
+    let header = if let Some(vp) = viewports {
+        format!(
+            "# Snapshot viewport(s): {}\n\
+             # This file contains the accessibility tree for the requested viewport(s) only.\n\
+             # Use `browser4-cli snapshot grep <pattern>` to search the full in-memory tree.\n\
+             # Use `browser4-cli snapshot -v all` to capture all viewports.\n",
+            vp
+        )
+    } else {
+        format!(
+            "# Snapshot — full viewport (viewport 0 by default).\n\
+             # Use `browser4-cli snapshot grep <pattern>` to search the tree.\n"
+        )
+    };
+    let snap_with_header = format!("{}\n{}", header, snap);
+    save_snapshot(&out_path, &snap_with_header).map_err(|e| e.to_string())?;
 
     let raw = tool_params
         .get("raw")
@@ -2665,6 +2916,36 @@ async fn handle_snapshot(
             eprintln!(
                 "ℹ️  Element refs (e.g. e5, e36) are valid only until the next browser \
                  interaction. Re-run snapshot before reusing refs."
+            );
+        }
+        // Hint: when interactive mode is on but output goes to a file, suggest --stdout
+        let interactive = tool_params
+            .get("interactive")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        if interactive && !json_active() {
+            eprintln!(
+                "💡 Tip: Add --stdout to print element refs inline instead of opening the snapshot file"
+            );
+        }
+        // Warn when a non-zero viewport snapshot is suspiciously small (may
+        // indicate the AX tree wasn't re-expanded after scrolling — a known
+        // server-side limitation).
+        let viewport_val = tool_params
+            .get("viewports")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let is_nonzero_viewport = !viewport_val.is_empty()
+            && viewport_val != "0"
+            && viewport_val != "all";
+        if is_nonzero_viewport && snap_lines <= 20 && !json_active() {
+            eprintln!(
+                "⚠️  Viewport snapshot for '{}' contains only {} lines ({} nodes). \
+                 The accessibility tree may not have been re-expanded after scrolling. \
+                 This is a known server-side limitation. As a workaround, use \
+                 `snapshot -v 0` for the current viewport or `snapshot grep <pattern>` \
+                 to search the full tree.",
+                viewport_val, snap_lines, snap_lines
             );
         }
     }
@@ -2903,7 +3184,9 @@ async fn handle_tool_command_with_options(
             json_field("ref", json!(r));
         }
     } else if !result.is_empty() {
-        cli_println!("{}", result);
+        // Wait tools return internal driver JSON — replace with user-friendly messages
+        let formatted = format_wait_result(tool_name, tool_params, &result);
+        cli_println!("{}", formatted);
         json_field("result", json!(&result));
     }
 
@@ -5785,7 +6068,23 @@ async fn handle_agent_status(
         "raw",
         json!(serde_json::from_str::<Value>(&result).unwrap_or(Value::String(result.clone()))),
     );
+
+    // Sync the latest status back to the local task list so `agent list`
+    // reflects accurate status without requiring a server round-trip.
+    sync_agent_status_to_local(id, &result);
+
     Ok(())
+}
+
+/// Update the local task-tracking file with the latest server status for a task.
+fn sync_agent_status_to_local(task_id: &str, status_json: &str) {
+    let mut list = read_async_tasks(None);
+    if let Some(entry) = list.tasks.iter_mut().find(|t| t.task_id == task_id) {
+        if let Ok(parsed) = serde_json::from_str::<Value>(status_json) {
+            entry.last_status = extract_readable_agent_status(&parsed);
+            let _ = write_async_tasks(&list, None);
+        }
+    }
 }
 
 async fn handle_agent_result(
@@ -5809,13 +6108,68 @@ async fn handle_agent_result(
     Ok(())
 }
 
-async fn handle_agent_list() -> Result<(), String> {
+async fn handle_agent_list(client: &Client, base_url: &str) -> Result<(), String> {
     let _ = prune_async_tasks(None);
-    let list = read_async_tasks(None);
+    let mut list = read_async_tasks(None);
+
+    // Refresh status for agent tasks from the server so the display is consistent
+    // with `agent status`. Tasks that fail to query keep their cached last_status.
+    let mut updated = false;
+    for entry in &mut list.tasks {
+        if entry.command != "agent" {
+            continue;
+        }
+        if let Ok(status_json) = get_command_status(client, base_url, &entry.task_id).await {
+            if let Ok(parsed) = serde_json::from_str::<Value>(&status_json) {
+                entry.last_status = extract_readable_agent_status(&parsed);
+                updated = true;
+            }
+        }
+    }
+
+    if updated {
+        let _ = write_async_tasks(&list, None);
+    }
+
     let filtered: Vec<_> = list.tasks.iter().filter(|t| t.command == "agent").cloned().collect();
     let display = state::AsyncTaskList { tasks: filtered };
     cli_println!("{}", format_async_task_list(&display));
     Ok(())
+}
+
+/// Extract a human-readable status string from the server's `command_status` JSON response.
+fn extract_readable_agent_status(status: &Value) -> String {
+    let process_state = status
+        .get("processState")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let is_done = status
+        .get("isDone")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    if is_done || process_state == "done" {
+        if let Some(status_code) = status.get("statusCode").and_then(|v| v.as_str()) {
+            if status_code == "SC_OK" || status_code == "200" {
+                return "done".to_string();
+            }
+            return format!("done ({})", status_code);
+        }
+        return "done".to_string();
+    }
+
+    if !process_state.is_empty() {
+        return process_state.to_string();
+    }
+
+    // Fall back to top-level status field
+    if let Some(s) = status.get("status").and_then(|v| v.as_str()) {
+        if !s.is_empty() {
+            return s.to_string();
+        }
+    }
+
+    "running".to_string()
 }
 
 // ---------------------------------------------------------------------------
@@ -8745,7 +9099,8 @@ fn preferred_prefixed_group_form(command: &str) -> Option<&'static str> {
         "co" => Some("swarm <subcommand>"),
         // `htmlsnapshot` is a valid standalone command (captures a HTML snapshot
         // and returns metadata), not just a prefix group — so it is intentionally
-        // absent here.  Use `browser4-cli htmlsnapshot --help` to see subcommands.
+        // absent here.  Likewise `crawl` can be used standalone (crawl <url>) as
+        // well as with subcommands via rewrite (crawl list → crawl-list).
         _ => None,
     }
 }
@@ -10148,6 +10503,35 @@ async fn run(
                 }
             }
 
+            // When --base64 is provided, decode the expression from base64.
+            // This avoids shell quoting issues on Windows for complex JavaScript.
+            let use_base64 = tool_params
+                .get("base64")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            if use_base64 {
+                let encoded = tool_params
+                    .get("expression")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .trim()
+                    .to_string();
+                if encoded.is_empty() {
+                    return Err(CliError(
+                        ExitCode::Usage,
+                        "--base64 was set but the expression argument is empty.".to_string(),
+                    ));
+                }
+                let decoded = base64::engine::general_purpose::STANDARD
+                    .decode(&encoded)
+                    .map_err(|e| format!("Failed to base64-decode eval expression: {e}"))?;
+                let expression = String::from_utf8(decoded)
+                    .map_err(|e| format!("Base64-decoded expression is not valid UTF-8: {e}"))?;
+                if let Value::Object(ref mut m) = tool_params {
+                    m.insert("expression".to_string(), json!(expression));
+                }
+            }
+
             // When --file is provided, read the expression from the file.
             if let Some(file_path) = tool_params
                 .get("file")
@@ -10155,8 +10539,8 @@ async fn run(
                 .map(str::trim)
                 .filter(|v| !v.is_empty())
                 {
-                    // --stdin takes precedence; skip --file if stdin was already used.
-                    if !use_stdin {
+                    // --stdin and --base64 take precedence; skip --file if they were already used.
+                    if !use_stdin && !use_base64 {
                         let expression = std::fs::read_to_string(file_path)
                             .map_err(|e| format!("Failed to read eval file '{}': {}", file_path, e))?;
                         let expression = expression.trim().to_string();
@@ -10175,13 +10559,14 @@ async fn run(
                     }
                 }
 
-            // Strip --file, --stdin, and --json keys so they aren't sent to the server
+            // Strip --file, --stdin, --base64, and --json keys so they aren't sent to the server
             // (they're CLI-side only — the content has already been read and
             // inserted as the "expression" parameter above; --json controls
             // local output formatting, not a server parameter).
             if let Value::Object(ref mut m) = tool_params {
                 m.remove("file");
                 m.remove("stdin");
+                m.remove("base64");
                 m.remove("json");
             }
 
@@ -10194,7 +10579,7 @@ async fn run(
             if expression_empty {
                 return Err(CliError(
                     ExitCode::Usage,
-                    "A JavaScript expression is required. Provide it as a positional argument, via --file, or via --stdin."
+                    "A JavaScript expression is required. Provide it as a positional argument, via --file, via --stdin, or via --base64."
                         .to_string(),
                 ));
             }
@@ -10309,15 +10694,31 @@ async fn run(
                 .get("verify")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
-            handle_press_command(
-                &client,
-                &base_url,
-                &tool_name,
-                &tool_params,
-                global.session_name.as_deref(),
-                verify,
-            )
-            .await?;
+            let follow = parsed
+                .get("follow")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            if follow {
+                handle_navigation_action(
+                    &client,
+                    &base_url,
+                    &tool_name,
+                    &tool_params,
+                    global.session_name.as_deref(),
+                    true,
+                )
+                .await?;
+            } else {
+                handle_press_command(
+                    &client,
+                    &base_url,
+                    &tool_name,
+                    &tool_params,
+                    global.session_name.as_deref(),
+                    verify,
+                )
+                .await?;
+            }
         }
         "select" => {
             let verify = parsed
@@ -10381,7 +10782,7 @@ async fn run(
             handle_agent_result(&client, &base_url, &tool_params).await?;
         }
         "agent-list" => {
-            handle_agent_list().await?;
+            handle_agent_list(&client, &base_url).await?;
         }
         // Swarm commands
         "swarm-create" => {
@@ -10530,6 +10931,21 @@ async fn run(
         "skill-list" | "skill-info" | "skill-install" | "skill-uninstall" | "skill-reload" => {
             handle_skill_command(&client, &base_url, &tool_name, &tool_params).await?;
         }
+        "click" | "dblclick" => {
+            let follow = parsed
+                .get("follow")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            handle_navigation_action(
+                &client,
+                &base_url,
+                &tool_name,
+                &tool_params,
+                global.session_name.as_deref(),
+                follow,
+            )
+            .await?;
+        }
         _ => {
             if tool_name.is_empty() {
                 cli_println!("Command '{}' is not yet implemented.", command);
@@ -10622,6 +11038,31 @@ fn print_help(command_name: Option<&str>) {
         }
     }
     cli_println!("{}", generate_help());
+}
+
+/// Format the result of wait-related tools into a user-friendly message.
+/// Wait tools (wait_for_function, delay, etc.) return internal driver JSON
+/// that is meaningless to users. This function maps them to readable messages.
+fn format_wait_result(tool_name: &str, tool_params: &Value, result: &str) -> String {
+    if tool_name == "wait_for_function" {
+        "✓ Wait complete".to_string()
+    } else if tool_name == "wait_for_page" {
+        "✓ URL matched".to_string()
+    } else if tool_name == "delay" {
+        let millis = tool_params
+            .get("millis")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
+        format!("✓ Waited {}ms", millis)
+    } else if tool_name == "wait_for_selector" {
+        let selector = tool_params
+            .get("selector")
+            .and_then(|v| v.as_str())
+            .unwrap_or("?");
+        format!("✓ Element found: {}", selector)
+    } else {
+        result.to_string()
+    }
 }
 
 #[cfg(test)]
@@ -10807,6 +11248,21 @@ mod tests {
         assert!(no_snapshot_commands().contains("skill-install"));
         assert!(no_snapshot_commands().contains("skill-uninstall"));
         assert!(no_snapshot_commands().contains("skill-reload"));
+    }
+
+    #[test]
+    fn no_snapshot_commands_include_status() {
+        assert!(no_snapshot_commands().contains("status"));
+    }
+
+    #[test]
+    fn no_snapshot_commands_include_stop() {
+        assert!(no_snapshot_commands().contains("stop"));
+    }
+
+    #[test]
+    fn no_snapshot_commands_include_list() {
+        assert!(no_snapshot_commands().contains("list"));
     }
 
     #[test]
@@ -13201,5 +13657,89 @@ mod tests {
             result.is_err(),
             "non-UTF-8 bytes should fail, got: {result:?}",
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // format_wait_result tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn format_wait_result_wait_for_function() {
+        let msg = format_wait_result(
+            "wait_for_function",
+            &json!({"pageFunction": "document.readyState === 'complete'"}),
+            "{\"type\":\"Driver\"}",
+        );
+        assert_eq!(msg, "✓ Wait complete");
+    }
+
+    #[test]
+    fn format_wait_result_wait_for_page() {
+        let msg = format_wait_result(
+            "wait_for_page",
+            &json!({"url": "https://example.com/*"}),
+            "{}",
+        );
+        assert_eq!(msg, "✓ URL matched");
+    }
+
+    #[test]
+    fn format_wait_result_delay() {
+        let msg = format_wait_result(
+            "delay",
+            &json!({"millis": 3000}),
+            "",
+        );
+        assert_eq!(msg, "✓ Waited 3000ms");
+    }
+
+    #[test]
+    fn format_wait_result_delay_default_millis() {
+        let msg = format_wait_result(
+            "delay",
+            &json!({}),
+            "",
+        );
+        assert_eq!(msg, "✓ Waited 0ms");
+    }
+
+    #[test]
+    fn format_wait_result_wait_for_selector() {
+        let msg = format_wait_result(
+            "wait_for_selector",
+            &json!({"selector": ".product-card"}),
+            "",
+        );
+        assert_eq!(msg, "✓ Element found: .product-card");
+    }
+
+    #[test]
+    fn format_wait_result_wait_for_selector_default() {
+        let msg = format_wait_result(
+            "wait_for_selector",
+            &json!({}),
+            "",
+        );
+        assert_eq!(msg, "✓ Element found: ?");
+    }
+
+    #[test]
+    fn format_wait_result_non_wait_tool_unchanged() {
+        let msg = format_wait_result(
+            "browser_click",
+            &json!({"ref": "e5"}),
+            "clicked",
+        );
+        assert_eq!(msg, "clicked");
+    }
+
+    #[test]
+    fn format_wait_result_empty_result_for_non_wait() {
+        let msg = format_wait_result(
+            "browser_snapshot",
+            &json!({}),
+            "",
+        );
+        assert_eq!(msg, "");
     }
 }

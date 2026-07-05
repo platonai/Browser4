@@ -169,8 +169,8 @@ browser4-cli -s mysession goto https://example.com
 
 | Command | Description |
 |---|---|
-| `click <ref> [button]` | Click an element. `--modifiers` for modifier keys. |
-| `dblclick <ref> [button]` | Double-click an element. `--modifiers` for modifier keys. |
+| `click <ref> [button]` | Click an element. `--modifiers` for modifier keys, `--follow` to detect and switch to new tabs opened by the click. |
+| `dblclick <ref> [button]` | Double-click an element. `--modifiers` for modifier keys, `--follow` to detect and switch to new tabs. |
 | `hover <ref>` | Hover over an element. |
 | `drag <startRef> <endRef>` | Drag and drop between two elements. |
 | `fill <ref> <text>` | Fill text into an editable element. `--submit` to press Enter after. `--verify` to confirm. |
@@ -193,7 +193,7 @@ browser4-cli select e12 "option-value"
 
 | Command | Description |
 |---|---|
-| `press <key> [ref]` | Press a key (`a`, `Enter`, `ArrowLeft`, `Escape`). Supports `--verify`. |
+| `press <key> [ref]` | Press a key (`a`, `Enter`, `ArrowLeft`, `Escape`). Supports `--verify`, `--follow` (detect new tabs). |
 | `keydown <key>` | Press and hold a key. |
 | `keyup <key>` | Release a key. |
 | `mousemove <x> <y>` | Move mouse to coordinates. |
@@ -264,11 +264,11 @@ browser4-cli tab-close 1
 |---|---|
 | `snapshot` | Capture an accessibility snapshot. See [Snapshot](#snapshot) below. |
 | `get <mode> <selector> [name]` | Extract data from a page element in one of six modes (see below). |
-| `eval <expression> [ref]` | Evaluate JavaScript on the page or a target element. `--file <path>` to read from file. `--json` to wrap scalar results. |
+| `eval <expression> [ref]` | Evaluate JavaScript on the page or a target element. `--file <path>`, `--base64`, or `--stdin` to provide the expression. `--json` to wrap scalar results. |
 | `generate-locator <ref>` | Generate a stable CSS selector path for an element. |
 | `htmlsnapshot` | Short form of `htmlsnapshot capture`. Capture a static HTML snapshot. See [HTML Snapshot](#dom-snapshot) below. |
 | `htmlsnapshot capture` | Capture a static HTML snapshot. See [HTML Snapshot](#dom-snapshot) below. |
-| `extract <instruction>` | Extract structured data with AI. `--schema <file>` for typed output. `--filename <path>`, `--raw`. |
+| `extract <instruction>` | Extract structured data with AI. `--schema <json>` for typed output. `--filename <path>`, `--raw`. |
 | `summarize [instruction]` | Summarize page content with AI. `--selector <css>`, `--filename <path>`, `--raw`. |
 
 `get` modes:
@@ -286,8 +286,10 @@ browser4-cli tab-close 1
 browser4-cli eval "document.title"
 browser4-cli eval "el => el.textContent" e15
 browser4-cli eval --file script.js
+browser4-cli eval --base64 ZG9jdW1lbnQudGl0bGU=
 browser4-cli generate-locator e5
 browser4-cli extract "product name, price, and rating"
+browser4-cli extract "contacts" --schema '{"type":"object","properties":{"name":{"type":"string"},"email":{"type":"string"}}}'
 browser4-cli summarize --selector "#reviews"
 ```
 

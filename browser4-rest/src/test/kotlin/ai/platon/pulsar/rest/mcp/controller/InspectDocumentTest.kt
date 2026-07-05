@@ -136,12 +136,17 @@ class InspectDocumentTest {
         }
 
         @Test
-        @DisplayName("handles selector with zero matches gracefully")
+        @DisplayName("handles selector with zero matches gracefully — auto-discovery kicks in")
         fun zeroMatches() {
             val result = inspect(productCardsHtml, ".nonexistent")
-            assertEquals(0, result["matchCount"].asInt())
-            assertEquals(".nonexistent", result["selector"].asText())
-            assertEquals(0, result["suggestions"].size())
+            // Auto-discovery overrides the non-matching selector with a discovered pattern
+            assertTrue(result["autoDiscovered"].asBoolean(),
+                "Should auto-discover when explicit selector matches 0 elements")
+            assertEquals(".nonexistent", result["originalSelector"].asText())
+            assertEquals(".product-card", result["selector"].asText())
+            assertEquals(3, result["matchCount"].asInt())
+            assertTrue(result["suggestions"].size() > 0,
+                "Should have suggestions from auto-discovered repeating pattern")
         }
     }
 

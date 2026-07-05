@@ -21,10 +21,10 @@ data class ScrapeRequest(
  * The query is an X-SQL with `@url` variable that can be used to refer to the URL and args passed in the request,
  * e.g. `select dom_first_text(dom, '#title') as title from load_and_select('@url', ':root')`.
  * */
-data class QueryRequest(
-    var url: String,
-    var args: String,
-    var query: String,
+data class QueryRequest @JsonCreator constructor(
+    @param:JsonProperty("url") var url: String = "",
+    @param:JsonProperty("args") var args: String = "",
+    @param:JsonProperty("query") var query: String = "",
 ) {
     fun toSQL(): String {
         return SQLTemplate(query).createSQL("$url $args")

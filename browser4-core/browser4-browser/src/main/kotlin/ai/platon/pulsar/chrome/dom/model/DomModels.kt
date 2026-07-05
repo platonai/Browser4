@@ -643,7 +643,8 @@ data class ScrollState constructor(
     val totalHeight: Double = VIEWPORT.height.toDouble(),
     val scrollYRatio: Double = 0.0,
 ) {
-    val viewportsTotal get() = ceil(totalHeight / viewport.height).roundToInt()
+    val viewportsTotal get() =
+        if (viewport.height > 0) ceil(totalHeight / viewport.height).roundToInt().coerceAtLeast(1) else 1
 
     // Height in pixels of the page area above the current viewport. (被隐藏在视口上方的部分的高度)
     val hiddenTopHeight get() = y.roundToInt().coerceAtLeast(0)
@@ -652,7 +653,8 @@ data class ScrollState constructor(
             .roundToInt().coerceAtLeast(0)
     val viewportHeight get() = viewport.height
 
-    val processingViewport get() = (hiddenTopHeight / viewportHeight)
+    val processingViewport get() =
+        if (viewportHeight > 0) (hiddenTopHeight / viewportHeight) else 0
 }
 
 /**

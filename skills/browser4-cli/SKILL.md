@@ -54,7 +54,13 @@ Each interactive element has a **ref** (`e5`, `e12`) — these are Chrome DevToo
 
 ### Ref Lifecycle
 
-Refs are **ephemeral** — they become invalid after ANY page-modifying command (click, type, fill, goto, reload, tab switch). **Re-snapshot before every interaction.** Never store refs across commands.
+Refs are **ephemeral** — they become invalid after commands that change the DOM tree structure:
+
+- **Safe (refs survive):** `fill`, `type`, `press`, `check`, `uncheck`, `select` — these only modify element *properties* (value, checked, selectedIndex) without adding/removing DOM nodes.
+- **Unsafe (re-snapshot after):** `click` on navigation links or buttons that trigger page updates, `goto`, `reload`, tab switches — these restructure the DOM or load new pages.
+- **Gray area:** `click` on checkboxes/radio buttons and some dropdown toggles may or may not mutate the DOM. When in doubt, capture a new snapshot after clicking.
+
+**In practice, you can fill an entire form from a single snapshot.** Only re-snapshot if a ref unexpectedly fails — the CLI will surface a clear error so you know when it's needed.
 
 ### Output Modes
 
@@ -72,6 +78,7 @@ Named sessions isolate browser state (cookies, localStorage, tabs). Use `-s <nam
 |---------------|---------|-------------|----------------|
 | `goto`, `open`, `close`, `reload` | Navigation & session management | Every session starts here | — |
 | `snapshot` | Capture accessibility tree with refs | Before/after interactions | [htmlsnapshot.md](references/htmlsnapshot.md) |
+| `snapshot grep` | Search snapshot content with regex | Find elements by text or pattern | — |
 | `click`, `fill`, `type`, `press`, `select`, `check`, `drag` | Page interaction | Form filling, button clicks, navigation | — |
 | `htmlsnapshot get`, `get all` | Extract text/html/attr via CSS selectors | Single-field data extraction | [htmlsnapshot.md](references/htmlsnapshot.md) |
 | `htmlsnapshot query` | X-SQL queries for structured extraction | Multi-field, filtered, sorted data | [x-sql.md](references/x-sql.md) |
@@ -130,7 +137,7 @@ Need to process multiple pages?
 
 > **Warning:** CSS selectors are tied to live websites — they break when sites change their HTML. Always discover selectors with `htmlsnapshot inspect` or `htmlsnapshot summary` before extraction. Treat scenario examples as patterns, not copy-paste recipes.
 
-> **Warning:** Shell quoting on Windows — complex JS/SQL with nested quotes causes escaping issues. Prefer `--sql @file.sql` (read from file), `--sql-stdin` (piped), `--sql-base64` (encoded), or `eval --file`/`eval --stdin` (JS from file). Never inline `--sql "..."` with double-quoted CSS selectors on Windows.
+> **Warning:** Shell quoting on Windows — complex JS/SQL with nested quotes causes escaping issues. Prefer `--sql @file.sql` (read from file), `--sql-stdin` (piped), `--sql-base64` (encoded), or `eval --file`/`eval --stdin`/`eval --base64` (JS from file or base64). Never inline `--sql "..."` with double-quoted CSS selectors on Windows.
 
 > **Warning:** Don't cat snapshot files — they can exceed 256KB. Use viewport pagination (`snapshot -v 0`), `snapshot grep <pattern>`, or `snapshot --stdout --page 1` instead.
 
@@ -150,6 +157,16 @@ browser4-cli fill <password-ref> "password"
 browser4-cli click <submit-ref>
 browser4-cli wait --load networkidle
 browser4-cli snapshot -v 0 --auto-diff
+```
+
+### Find Elements by Text (snapshot grep)
+
+```bash
+browser4-cli goto "https://example.com"
+browser4-cli snapshot -v 0                        # capture snapshot first
+browser4-cli snapshot grep "See also"             # search for text in the full AX tree
+browser4-cli snapshot grep -i "price|rating"      # case-insensitive regex alternation
+browser4-cli snapshot grep -A 3 -B 1 "Checkout"   # show surrounding context lines
 ```
 
 ### Static Data Extraction (Single Field)
@@ -220,3 +237,17 @@ browser4-cli install
 irm https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.ps1 | iex
 browser4-cli install
 ```
+
+## Development
+
+When running from source (not a globally installed binary), use `cargo run` from the CLI directory:
+
+```bash
+cd cli/browser4-cli
+cargo build                     # build the binary
+cargo run -- <command>          # run a command (the -- separates cargo args from CLI args)
+cargo run -- goto "https://example.com"
+cargo run -- snapshot -v 0
+```
+
+**Note:** All examples in this document use `browser4-cli` as the command. If running from source, substitute `cargo run --` (with the leading `cd cli/browser4-cli &&` if not already in that directory).

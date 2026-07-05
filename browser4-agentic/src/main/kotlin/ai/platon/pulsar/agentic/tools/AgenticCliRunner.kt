@@ -738,6 +738,7 @@ class AgenticCliRunner(
                 args["ref"]?.let { params["ref"] = it }
                 args["filename"]?.let { params["filename"] = it }
                 args["full-page"]?.let { params["fullPage"] = it }
+                args["viewport"]?.let { params["viewport"] = it }
                 params
             },
             "eval" to FixedCommandResolver("browser_evaluate") { args ->

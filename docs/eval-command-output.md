@@ -1,5 +1,16 @@
 # Eval Command Output
 
+## Input methods
+
+The `eval` command supports multiple ways to provide JavaScript expressions:
+
+| Flag | Description |
+|---|---|
+| *positional* | Inline expression: `eval "document.title"` |
+| `--file <path>` | Read from file: `eval --file script.js` |
+| `--stdin` | Read from stdin: `echo ... | eval --stdin` |
+| `--base64` | Base64-encoded expression (avoids shell quoting on Windows): `eval --base64 ZG9jdW1lbnQudGl0bGU=` |
+
 ## Return value display
 
 The `eval` command always produces visible output for every JavaScript completion value.

@@ -30,7 +30,7 @@ See [`cli/README.md`](../README.md) for the user-facing documentation.
 
 | Command | Description |
 |---|---|
-| `press <key> [ref]` | Press a key on the focused element or an optional target ref |
+| `press <key> [ref]` | Press a key on the focused element or an optional target ref. `--verify`, `--follow` (detect new tabs) |
 | `type <text> [ref]` | Type text into the focused element or an optional target ref |
 | `keydown <key>` | Press a key down on the keyboard |
 | `keyup <key>` | Press a key up on the keyboard |
@@ -40,8 +40,8 @@ See [`cli/README.md`](../README.md) for the user-facing documentation.
 
 | Command | Description |
 |---|---|
-| `click <ref> [button]` | Perform click on a web page |
-| `dblclick <ref> [button]` | Perform double click on a web page |
+| `click <ref> [button]` | Perform click on a web page. `--modifiers`, `--follow` (detect new tabs) |
+| `dblclick <ref> [button]` | Perform double click on a web page. `--modifiers`, `--follow` (detect new tabs) |
 | `hover <ref>` | Hover over element on page |
 | `drag <startRef> <endRef>` | Perform drag and drop between two elements |
 | `mousemove <x> <y>` | Move mouse to a given position |

@@ -9,12 +9,14 @@ const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 30;
 const NAVIGATION_REQUEST_TIMEOUT_SECS: u64 = 120;
 const TEXT_INPUT_REQUEST_TIMEOUT_SECS: u64 = 90;
 const AGENT_REQUEST_TIMEOUT_SECS: u64 = 180;
+const SNAPSHOT_REQUEST_TIMEOUT_SECS: u64 = 60;
 const BATCH_REQUEST_TIMEOUT_SECS: u64 = 120;
 const CRAWL_REQUEST_TIMEOUT_SECS: u64 = 600;
 const CRAWL_REQUEST_TIMEOUT_ENV: &str = "BROWSER4_CLI_CRAWL_TIMEOUT_SECS";
 const DEFAULT_REQUEST_TIMEOUT_ENV: &str = "BROWSER4_CLI_HTTP_TIMEOUT_SECS";
 const NAVIGATION_REQUEST_TIMEOUT_ENV: &str = "BROWSER4_CLI_NAVIGATION_TIMEOUT_SECS";
 const TEXT_INPUT_REQUEST_TIMEOUT_ENV: &str = "BROWSER4_CLI_INPUT_TIMEOUT_SECS";
+const SNAPSHOT_REQUEST_TIMEOUT_ENV: &str = "BROWSER4_CLI_SNAPSHOT_TIMEOUT_SECS";
 const AGENT_REQUEST_TIMEOUT_ENV: &str = "BROWSER4_CLI_AGENT_TIMEOUT_SECS";
 const ACT_REQUEST_TIMEOUT_SECS: u64 = 60;
 const ACT_REQUEST_TIMEOUT_ENV: &str = "BROWSER4_CLI_ACT_TIMEOUT_SECS";
@@ -55,6 +57,13 @@ fn agent_request_timeout() -> std::time::Duration {
     ))
 }
 
+fn snapshot_request_timeout() -> std::time::Duration {
+    std::time::Duration::from_secs(timeout_secs_from_env(
+        SNAPSHOT_REQUEST_TIMEOUT_ENV,
+        SNAPSHOT_REQUEST_TIMEOUT_SECS,
+    ))
+}
+
 fn is_navigation_tool(tool: &str) -> bool {
     matches!(
         tool,
@@ -83,6 +92,22 @@ fn is_agent_tool(tool: &str) -> bool {
     matches!(tool, "agent_extract" | "agent_summarize")
 }
 
+fn is_snapshot_tool(tool: &str) -> bool {
+    matches!(
+        tool,
+        "browser_snapshot"
+            | "aria_snapshot"
+            | "html_snapshot_inspect"
+            | "html_snapshot_capture"
+            | "html_snapshot_get"
+            | "html_snapshot_get_all"
+            | "html_snapshot_query"
+            | "html_snapshot_export"
+            | "html_snapshot_summary"
+            | "html_snapshot_grep"
+    )
+}
+
 fn timeout_for_tool(tool: &str) -> std::time::Duration {
     if is_navigation_tool(tool) || is_navigation_triggering_tool(tool) {
         navigation_request_timeout()
@@ -90,6 +115,8 @@ fn timeout_for_tool(tool: &str) -> std::time::Duration {
         text_input_request_timeout()
     } else if is_agent_tool(tool) {
         agent_request_timeout()
+    } else if is_snapshot_tool(tool) {
+        snapshot_request_timeout()
     } else {
         default_request_timeout()
     }
