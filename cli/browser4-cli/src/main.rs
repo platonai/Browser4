@@ -8697,10 +8697,17 @@ async fn handle_doctor(client: &Client, base_url: &str, args: &HashMap<String, V
         .and_then(|v| v.parse().ok())
         .unwrap_or(50)
         .min(500);
+    let log_filter = args.get("log_filter").and_then(|v| v.as_str()).unwrap_or("");
 
     cli_println!("");
-    cli_println!("-- Backend Logs: {}.log (last {} lines) --", log_file, log_lines);
-    let log_url = format!("{base_url}/api/doctor/logs?file={}&lines={}", log_file, log_lines);
+    if log_filter.is_empty() {
+        cli_println!("-- Backend Logs: {}.log (last {} lines) --", log_file, log_lines);
+    } else {
+        cli_println!("-- Backend Logs: {}.log (last {} lines, filter: \"{}\") --", log_file, log_lines, log_filter);
+    }
+    let log_url = format!("{base_url}/api/doctor/logs?file={}&lines={}&filter={}",
+        log_file, log_lines,
+        urlencoding::encode(log_filter));
     match get_json(client, &log_url).await {
         Ok(log_data) => {
             if let Some(entries) = log_data.get("lines").and_then(|v| v.as_array()) {
@@ -8710,7 +8717,11 @@ async fn handle_doctor(client: &Client, base_url: &str, args: &HashMap<String, V
                     }
                 }
                 if entries.is_empty() {
-                    cli_println!("  (log file empty or not found)");
+                    if log_filter.is_empty() {
+                        cli_println!("  (log file empty or not found)");
+                    } else {
+                        cli_println!("  (no log lines matched filter \"{}\")", log_filter);
+                    }
                 }
             }
             json_field("backend_logs", log_data);
@@ -8722,26 +8733,44 @@ async fn handle_doctor(client: &Client, base_url: &str, args: &HashMap<String, V
     }
 
     // ---- Backend Metrics (conditional) ----
+    let metric_filter = args.get("metric_filter").and_then(|v| v.as_str()).unwrap_or("");
+
     cli_println!("");
-    cli_println!("-- Backend Metrics --");
-    let metrics_url = format!("{base_url}/api/doctor/metrics");
+    if metric_filter.is_empty() {
+        cli_println!("-- Backend Metrics --");
+    } else {
+        cli_println!("-- Backend Metrics (filter: \"{}\") --", metric_filter);
+    }
+    let metrics_url = if metric_filter.is_empty() {
+        format!("{base_url}/api/doctor/metrics")
+    } else {
+        format!("{base_url}/api/doctor/metrics?filter={}", urlencoding::encode(metric_filter))
+    };
     match get_json(client, &metrics_url).await {
         Ok(metrics) => {
             if let Some(gauges) = metrics.get("gauges").and_then(|v| v.as_object()) {
                 for (key, value) in gauges {
+                    if is_zero_value(value) {
+                        continue;
+                    }
                     cli_println!("  {}: {}", key, value);
                 }
             }
             // Print meter summary counts
             if let Some(meters) = metrics.get("meters").and_then(|v| v.as_object()) {
-                if !meters.is_empty() {
-                    cli_println!("  -- Meters --");
-                    for (key, val) in meters {
-                        if let Some(obj) = val.as_object() {
-                            let count = obj.get("count").and_then(|v| v.as_u64()).unwrap_or(0);
-                            let rate = obj.get("meanRate").and_then(|v| v.as_f64()).unwrap_or(0.0);
-                            cli_println!("  {}: {} count, {:.2}/s avg", key, count, rate);
+                let mut shown_header = false;
+                for (key, val) in meters {
+                    if let Some(obj) = val.as_object() {
+                        let count = obj.get("count").and_then(|v| v.as_u64()).unwrap_or(0);
+                        let rate = obj.get("meanRate").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                        if count == 0 && rate == 0.0 {
+                            continue;
                         }
+                        if !shown_header {
+                            cli_println!("  -- Meters --");
+                            shown_header = true;
+                        }
+                        cli_println!("  {}: {} count, {:.2}/s avg", key, count, rate);
                     }
                 }
             }
@@ -8765,6 +8794,22 @@ async fn get_json(client: &Client, url: &str) -> Result<Value, String> {
     }
     response.json::<Value>().await
         .map_err(|e| format!("JSON parse failed: {e}"))
+}
+
+/// Returns true if a JSON value represents zero (0, 0.0, 0 as string, etc.).
+fn is_zero_value(value: &Value) -> bool {
+    match value {
+        Value::Number(n) => {
+            n.as_f64().map(|f| f == 0.0).unwrap_or(false)
+        }
+        Value::String(s) => {
+            s.is_empty() || s == "0" || s == "0.0"
+        }
+        Value::Null => true,
+        Value::Bool(b) => !*b,
+        Value::Array(a) => a.is_empty(),
+        Value::Object(o) => o.is_empty(),
+    }
 }
 
 fn should_ensure_server_running(command: &str) -> bool {
