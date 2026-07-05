@@ -2,7 +2,7 @@ package ai.platon.browser4.chrome.integration
 
 import ai.platon.browser4.chrome.ChromeLauncher
 import ai.platon.browser4.chrome.RemoteDevTools
-import ai.platon.pulsar.browser.protocol.BrowserProtocol
+import ai.platon.browser4.api.BrowserProtocol
 import ai.platon.cdt.kt.protocol.events.tracing.DataCollected
 import ai.platon.cdt.kt.protocol.support.types.EventHandler
 import com.fasterxml.jackson.databind.ObjectMapper

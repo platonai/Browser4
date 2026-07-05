@@ -1,8 +1,8 @@
 package ai.platon.pulsar.skeleton.context
 
-import ai.platon.pulsar.browser.Browser
-import ai.platon.pulsar.browser.BrowserManager
-import ai.platon.pulsar.browser.common.BrowserLaunchException
+import ai.platon.browser4.api.Browser
+import ai.platon.browser4.api.BrowserManager
+import ai.platon.browser4.api.model.BrowserLaunchException
 import ai.platon.pulsar.common.CheckState
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.common.urls.UrlAware

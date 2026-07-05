@@ -7,8 +7,8 @@ import ai.platon.cdt.kt.protocol.ChromeDevTools
 import ai.platon.cdt.kt.protocol.commands.*
 import ai.platon.cdt.kt.protocol.support.types.EventHandler
 import ai.platon.cdt.kt.protocol.support.types.EventListener
-import ai.platon.pulsar.browser.protocol.BrowserTab
-import ai.platon.pulsar.browser.protocol.MethodInvocation
+import ai.platon.browser4.api.model.BrowserTab
+import ai.platon.browser4.api.model.MethodInvocation
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
 import org.slf4j.LoggerFactory

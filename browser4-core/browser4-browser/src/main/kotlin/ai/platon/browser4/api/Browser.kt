@@ -1,8 +1,8 @@
 package ai.platon.browser4.api
 
-import ai.platon.pulsar.browser.common.BrowserSettings
-import ai.platon.pulsar.browser.common.NavigateHistory
-import ai.platon.pulsar.browser.common.WebDriverException
+import ai.platon.browser4.api.model.BrowserSettings
+import ai.platon.browser4.api.model.NavigateHistory
+import ai.platon.browser4.api.model.WebDriverException
 import ai.platon.pulsar.common.CheckState
 
 /**

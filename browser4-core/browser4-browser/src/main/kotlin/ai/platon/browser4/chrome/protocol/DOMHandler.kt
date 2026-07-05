@@ -3,11 +3,11 @@ package ai.platon.browser4.chrome.protocol
 import ai.platon.browser4.chrome.dom.CDPSnapshotService
 import ai.platon.browser4.chrome.util.CDPReturnError
 import ai.platon.browser4.chrome.util.ChromeDriverException
-import ai.platon.pulsar.browser.common.Locator
-import ai.platon.pulsar.browser.protocol.BrowserProtocol
-import ai.platon.pulsar.browser.protocol.NodeRef
-import ai.platon.pulsar.chrome.dom.SnapshotService
-import ai.platon.pulsar.chrome.dom.model.ElementRefCriteria
+import ai.platon.browser4.api.model.Locator
+import ai.platon.browser4.api.BrowserProtocol
+import ai.platon.browser4.api.model.NodeRef
+import ai.platon.browser4.api.snapshot.SnapshotService
+import ai.platon.browser4.api.model.ElementRefCriteria
 import ai.platon.pulsar.common.Strings
 import ai.platon.pulsar.common.brief
 import ai.platon.pulsar.common.getLogger

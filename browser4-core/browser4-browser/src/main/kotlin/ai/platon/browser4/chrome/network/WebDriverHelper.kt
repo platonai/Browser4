@@ -1,16 +1,16 @@
 package ai.platon.browser4.chrome.network
 
-import ai.platon.browser4.chrome.handler.PageHandler
+import ai.platon.browser4.chrome.protocol.PageHandler
 import ai.platon.cdt.kt.protocol.events.network.ResponseReceived
 import ai.platon.cdt.kt.protocol.types.network.Cookie
 import ai.platon.cdt.kt.protocol.types.network.ResourceType
 import ai.platon.cdt.kt.protocol.types.runtime.CallFunctionOn
 import ai.platon.cdt.kt.protocol.types.runtime.Evaluate
-import ai.platon.pulsar.browser.WebDriver
-import ai.platon.pulsar.browser.common.JsEvaluation
-import ai.platon.pulsar.browser.common.JsException
-import ai.platon.pulsar.browser.common.NavigateEntry
-import ai.platon.pulsar.browser.protocol.BrowserProtocol
+import ai.platon.browser4.api.WebDriver
+import ai.platon.browser4.api.model.JsEvaluation
+import ai.platon.browser4.api.model.JsException
+import ai.platon.browser4.api.model.NavigateEntry
+import ai.platon.browser4.api.BrowserProtocol
 import ai.platon.pulsar.common.AppPaths
 import ai.platon.pulsar.common.MultiSinkMessageWriter
 import ai.platon.pulsar.common.alwaysFalse

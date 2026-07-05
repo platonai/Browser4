@@ -4,9 +4,9 @@ import ai.platon.browser4.chrome.RemoteChrome
 import ai.platon.browser4.chrome.RemoteDevTools
 import ai.platon.browser4.chrome.util.ChromeIOException
 import ai.platon.browser4.chrome.util.ChromeServiceException
-import ai.platon.pulsar.browser.protocol.BrowserTab
-import ai.platon.pulsar.browser.protocol.ChromeVersion
-import ai.platon.pulsar.browser.protocol.DevToolsConfig
+import ai.platon.browser4.api.model.BrowserTab
+import ai.platon.browser4.api.model.ChromeVersion
+import ai.platon.browser4.api.model.DevToolsConfig
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
 import org.slf4j.LoggerFactory

@@ -1,8 +1,9 @@
 package ai.platon.browser4.chrome
 
 import ai.platon.browser4.chrome.util.CDPReturnError
-import ai.platon.pulsar.browser.common.BrowserSettings
-import ai.platon.pulsar.browser.protocol.BrowserProtocol
+import ai.platon.browser4.api.model.BrowserSettings
+import ai.platon.browser4.api.scripting.ScriptConfuser
+import ai.platon.browser4.api.BrowserProtocol
 import ai.platon.pulsar.common.getLogger
 import org.apache.commons.lang3.StringUtils
 

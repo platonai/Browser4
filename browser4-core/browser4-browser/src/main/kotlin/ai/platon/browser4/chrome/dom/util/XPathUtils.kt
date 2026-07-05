@@ -1,7 +1,7 @@
 package ai.platon.browser4.chrome.dom.util
 
-import ai.platon.pulsar.chrome.dom.model.MergedDOMTreeNode
-import ai.platon.pulsar.chrome.dom.model.NodeType
+import ai.platon.browser4.api.model.MergedDOMTreeNode
+import ai.platon.browser4.api.model.NodeType
 import java.util.concurrent.ConcurrentHashMap
 
 /**

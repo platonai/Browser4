@@ -1,6 +1,6 @@
 package ai.platon.pulsar.skeleton.workflow.fetch
 
-import ai.platon.pulsar.browser.WebDriver
+import ai.platon.browser4.api.WebDriver
 import ai.platon.pulsar.common.config.VolatileConfig
 import ai.platon.pulsar.core.api.WebPage
 import ai.platon.pulsar.skeleton.workflow.protocol.Response

@@ -1,6 +1,6 @@
 package ai.platon.browser4.api.snapshot
 
-import ai.platon.pulsar.chrome.dom.model.*
+import ai.platon.browser4.api.model.*
 
 /**
  * Kotlin-native snapshot service interface.

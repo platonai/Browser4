@@ -17,7 +17,7 @@ package ai.platon.pulsar.protocol.browser.emulator.context
 
 import ai.platon.browser4.chrome.ChromeDestroyer
 import ai.platon.browser4.protocol.browser.DefaultWebDriverPoolManager
-import ai.platon.pulsar.browser.BrowserProfile
+import ai.platon.browser4.api.BrowserProfile
 import ai.platon.pulsar.browser.privacy.AbstractPrivacyContext
 import ai.platon.pulsar.browser.privacy.PrivacyContext
 import ai.platon.pulsar.browser.privacy.PrivacyException

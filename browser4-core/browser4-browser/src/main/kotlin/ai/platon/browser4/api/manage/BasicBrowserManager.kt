@@ -1,9 +1,9 @@
 package ai.platon.browser4.api.manage
 
-import ai.platon.pulsar.browser.*
-import ai.platon.pulsar.browser.common.BrowserEvents
-import ai.platon.pulsar.browser.common.BrowserLaunchException
-import ai.platon.pulsar.browser.common.BrowserSettings
+import ai.platon.browser4.api.*
+import ai.platon.browser4.api.model.BrowserEvents
+import ai.platon.browser4.api.model.BrowserLaunchException
+import ai.platon.browser4.api.model.BrowserSettings
 import ai.platon.pulsar.common.browser.BrowserProfileMode
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.common.getLogger

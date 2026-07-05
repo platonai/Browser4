@@ -1,7 +1,7 @@
 package ai.platon.browser4.chrome.dom.util
 
 import ai.platon.browser4.chrome.dom.util.HashUtils
-import ai.platon.pulsar.chrome.dom.model.MergedDOMTreeNode
+import ai.platon.browser4.api.model.MergedDOMTreeNode
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.DisplayName

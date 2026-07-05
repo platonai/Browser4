@@ -1,6 +1,6 @@
 package ai.platon.browser4.api
 
-import ai.platon.pulsar.browser.common.*
+import ai.platon.browser4.api.model.*
 import ai.platon.pulsar.common.AppContext
 import ai.platon.pulsar.common.event.AbstractEventEmitter
 import ai.platon.pulsar.common.warnForClose

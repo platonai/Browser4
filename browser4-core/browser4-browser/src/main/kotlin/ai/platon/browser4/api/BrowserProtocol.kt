@@ -1,7 +1,7 @@
 package ai.platon.browser4.api
 
 import ai.platon.browser4.chrome.RemoteDevTools
-import ai.platon.browser4.chrome.handler.DirectChromeProtocol
+import ai.platon.browser4.chrome.protocol.DirectChromeProtocol
 import ai.platon.cdt.kt.protocol.ChromeDevTools
 import ai.platon.cdt.kt.protocol.events.console.MessageAdded
 import ai.platon.cdt.kt.protocol.events.fetch.AuthRequired

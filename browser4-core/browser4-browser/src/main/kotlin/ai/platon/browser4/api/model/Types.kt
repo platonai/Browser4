@@ -1,6 +1,6 @@
 package ai.platon.browser4.api.model
 
-import ai.platon.pulsar.browser.protocol.NetworkResourceResponse
+import ai.platon.browser4.api.model.NetworkResourceResponse
 import org.jsoup.Connection
 import java.util.*
 

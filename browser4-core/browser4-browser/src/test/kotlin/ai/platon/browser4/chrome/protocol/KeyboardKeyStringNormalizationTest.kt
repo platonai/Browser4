@@ -1,6 +1,6 @@
 package ai.platon.browser4.chrome.protocol
 
-import ai.platon.browser4.chrome.handler.normalizeKeyStringForPress
+import ai.platon.browser4.chrome.protocol.normalizeKeyStringForPress
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Test
 

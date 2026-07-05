@@ -1,10 +1,10 @@
 package ai.platon.browser4.api
 
-import ai.platon.pulsar.browser.common.NavigateEntry
-import ai.platon.pulsar.browser.common.NavigateHistory
-import ai.platon.pulsar.browser.common.NetworkResourceHelper
-import ai.platon.pulsar.browser.common.WebDriverException
-import ai.platon.pulsar.browser.protocol.NetworkResourceResponse
+import ai.platon.browser4.api.model.NavigateEntry
+import ai.platon.browser4.api.model.NavigateHistory
+import ai.platon.browser4.api.model.NetworkResourceHelper
+import ai.platon.browser4.api.model.WebDriverException
+import ai.platon.browser4.api.model.NetworkResourceResponse
 import ai.platon.pulsar.common.*
 import ai.platon.pulsar.common.urls.Hyperlink
 import ai.platon.pulsar.common.urls.URLUtils
@@ -151,7 +151,7 @@ abstract class AbstractWebDriver(
 
     // open val chatModel get() = ChatModelFactory.getOrCreateOrNull(config)
     open val implementation: Any = this
-    abstract val snapshotService: ai.platon.pulsar.chrome.dom.SnapshotService
+    abstract val snapshotService: ai.platon.browser4.api.snapshot.SnapshotService
 
     /** Idle timeout before a READY driver is considered stale and eligible for recycling/retirement. */
     var idleTimeout: Duration = Duration.ofMinutes(10)

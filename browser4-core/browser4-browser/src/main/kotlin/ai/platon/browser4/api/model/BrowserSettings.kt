@@ -1,10 +1,11 @@
 package ai.platon.browser4.api.model
 
-import ai.platon.pulsar.browser.ChromeOptions
-import ai.platon.pulsar.browser.InteractSettings
-import ai.platon.pulsar.browser.detail.DualWorldScriptLoader
-import ai.platon.pulsar.browser.detail.ScriptLoader
-import ai.platon.pulsar.browser.detail.SimpleScriptConfuser
+import ai.platon.browser4.api.ChromeOptions
+import ai.platon.browser4.api.InteractSettings
+import ai.platon.browser4.api.scripting.DualWorldScriptLoader
+import ai.platon.browser4.api.scripting.ScriptConfuser
+import ai.platon.browser4.api.scripting.ScriptLoader
+import ai.platon.browser4.api.scripting.SimpleScriptConfuser
 import ai.platon.pulsar.common.Runtimes
 import ai.platon.pulsar.common.browser.BrowserProfileMode
 import ai.platon.pulsar.common.browser.BrowserType

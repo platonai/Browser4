@@ -4,10 +4,10 @@ import ai.platon.browser4.chrome.PulsarWebDriver
 import ai.platon.browser4.chrome.dom.impl.OptimizedDOMTreeBuilder
 import ai.platon.browser4.chrome.dom.util.DomDebug
 import ai.platon.pulsar.WebDriverTestBase
-import ai.platon.pulsar.chrome.dom.model.MergedDOMTreeNode
-import ai.platon.pulsar.chrome.dom.model.NodeType
-import ai.platon.pulsar.chrome.dom.model.OptimizedDOMTreeNode
-import ai.platon.pulsar.chrome.dom.model.SnapshotOptions
+import ai.platon.browser4.api.model.MergedDOMTreeNode
+import ai.platon.browser4.api.model.NodeType
+import ai.platon.browser4.api.model.OptimizedDOMTreeNode
+import ai.platon.browser4.api.model.SnapshotOptions
 import ai.platon.pulsar.common.printlnPro
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.DisplayName

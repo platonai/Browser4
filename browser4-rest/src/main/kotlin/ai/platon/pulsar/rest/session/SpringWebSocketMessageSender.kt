@@ -1,6 +1,6 @@
 package ai.platon.pulsar.rest.session
 
-import ai.platon.browser4.chrome.handler.transport.ExtensionMessageSender
+import ai.platon.browser4.chrome.protocol.transport.ExtensionMessageSender
 import org.slf4j.LoggerFactory
 import org.springframework.web.socket.TextMessage
 import org.springframework.web.socket.WebSocketSession

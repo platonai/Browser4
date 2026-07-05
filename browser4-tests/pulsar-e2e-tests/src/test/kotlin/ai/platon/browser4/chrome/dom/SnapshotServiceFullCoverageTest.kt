@@ -3,10 +3,10 @@ package ai.platon.browser4.chrome.dom
 import ai.platon.browser4.chrome.PulsarWebDriver
 import ai.platon.browser4.chrome.dom.util.DomDebug
 import ai.platon.pulsar.WebDriverTestBase
-import ai.platon.pulsar.chrome.dom.model.ElementRefCriteria
-import ai.platon.pulsar.chrome.dom.model.MergedDOMTreeNode
-import ai.platon.pulsar.chrome.dom.model.PageTarget
-import ai.platon.pulsar.chrome.dom.model.SnapshotOptions
+import ai.platon.browser4.api.model.ElementRefCriteria
+import ai.platon.browser4.api.model.MergedDOMTreeNode
+import ai.platon.browser4.api.model.PageTarget
+import ai.platon.browser4.api.model.SnapshotOptions
 import ai.platon.pulsar.common.printlnPro
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.DisplayName

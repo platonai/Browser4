@@ -3,7 +3,7 @@ package ai.platon.pulsar.agentic.tools.builtin
 import ai.platon.browser4.chrome.dom.model.AriaSnapshotOptions
 import ai.platon.pulsar.agentic.model.ToolSpec
 import ai.platon.pulsar.agentic.tools.specs.ToolSpecGenerator
-import ai.platon.pulsar.browser.common.NavigateEntry
+import ai.platon.browser4.api.model.NavigateEntry
 import ai.platon.pulsar.core.api.WebDriver
 import kotlinx.coroutines.delay
 import java.time.Duration

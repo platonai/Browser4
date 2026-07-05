@@ -1,8 +1,8 @@
 package ai.platon.browser4.api.model
 
-import ai.platon.pulsar.chrome.dom.model.DefaultIncludeAttributes
-import ai.platon.pulsar.chrome.dom.model.MergedDOMTreeNode
-import ai.platon.pulsar.chrome.dom.model.NodeType
+import ai.platon.browser4.api.model.DefaultIncludeAttributes
+import ai.platon.browser4.api.model.MergedDOMTreeNode
+import ai.platon.browser4.api.model.NodeType
 
 object DOMUtils {
 

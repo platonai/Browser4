@@ -1,7 +1,7 @@
 package ai.platon.pulsar.browser.rpa
 
-import ai.platon.pulsar.browser.AbstractWebDriver
-import ai.platon.pulsar.browser.common.NavigateEntry
+import ai.platon.browser4.api.AbstractWebDriver
+import ai.platon.browser4.api.model.NavigateEntry
 import ai.platon.pulsar.common.AppContext
 import ai.platon.pulsar.common.CheckState
 import ai.platon.pulsar.common.Runtimes

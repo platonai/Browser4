@@ -1,6 +1,6 @@
 package ai.platon.browser4.api
 
-import ai.platon.pulsar.browser.common.ProfilePaths
+import ai.platon.browser4.api.model.ProfilePaths
 import ai.platon.pulsar.common.AppPaths
 import ai.platon.pulsar.common.browser.BrowserType
 import java.nio.file.Path

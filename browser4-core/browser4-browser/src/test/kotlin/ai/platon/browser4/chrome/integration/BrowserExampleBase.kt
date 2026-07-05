@@ -21,10 +21,10 @@ package ai.platon.browser4.chrome.integration
 
 import ai.platon.browser4.chrome.ChromeLauncher
 import ai.platon.browser4.chrome.RemoteDevTools
-import ai.platon.pulsar.browser.ChromeOptions
-import ai.platon.pulsar.browser.common.BrowserSettings
-import ai.platon.pulsar.browser.protocol.BrowserProtocol
-import ai.platon.pulsar.browser.protocol.DevToolsConfig
+import ai.platon.browser4.api.ChromeOptions
+import ai.platon.browser4.api.model.BrowserSettings
+import ai.platon.browser4.api.BrowserProtocol
+import ai.platon.browser4.api.model.DevToolsConfig
 import ai.platon.pulsar.common.browser.BrowserFiles
 import kotlinx.coroutines.runBlocking
 import org.slf4j.LoggerFactory

@@ -1,6 +1,6 @@
 package ai.platon.browser4.api.model
 
-import ai.platon.pulsar.chrome.dom.model.MergedDOMTreeNode
+import ai.platon.browser4.api.model.MergedDOMTreeNode
 import org.apache.commons.lang3.StringUtils
 
 open class Locator(

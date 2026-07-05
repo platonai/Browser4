@@ -1,7 +1,7 @@
 package ai.platon.browser4.chrome.dom.util
 
-import ai.platon.pulsar.chrome.dom.model.MergedDOMTreeNode
-import ai.platon.pulsar.chrome.dom.model.StaticAttributes
+import ai.platon.browser4.api.model.MergedDOMTreeNode
+import ai.platon.browser4.api.model.StaticAttributes
 import java.security.MessageDigest
 import java.util.concurrent.ConcurrentHashMap
 

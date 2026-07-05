@@ -1,6 +1,6 @@
 package ai.platon.browser4.api.model
 
-import ai.platon.pulsar.browser.WebDriver
+import ai.platon.browser4.api.WebDriver
 import ai.platon.pulsar.common.browser.BrowserErrorCode
 
 open class WebDriverException(

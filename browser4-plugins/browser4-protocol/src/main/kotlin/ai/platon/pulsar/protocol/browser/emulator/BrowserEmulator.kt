@@ -15,7 +15,7 @@
  */
 package ai.platon.pulsar.protocol.browser.emulator
 
-import ai.platon.pulsar.browser.common.WebDriverException
+import ai.platon.browser4.api.model.WebDriverException
 import ai.platon.pulsar.common.event.EventEmitter
 import ai.platon.pulsar.core.api.WebDriver
 import ai.platon.pulsar.persist.WebPage

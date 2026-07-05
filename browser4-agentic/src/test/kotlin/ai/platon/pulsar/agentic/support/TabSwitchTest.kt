@@ -1,10 +1,10 @@
 package ai.platon.pulsar.agentic.support
 
 import ai.platon.pulsar.agentic.common.SimpleKotlinParser
-import ai.platon.pulsar.chrome.dom.model.BrowserState
-import ai.platon.pulsar.chrome.dom.model.ClientInfo
-import ai.platon.pulsar.chrome.dom.model.ScrollState
-import ai.platon.pulsar.chrome.dom.model.TabState
+import ai.platon.browser4.api.model.BrowserState
+import ai.platon.browser4.api.model.ClientInfo
+import ai.platon.browser4.api.model.ScrollState
+import ai.platon.browser4.api.model.TabState
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.DisplayName

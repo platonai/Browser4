@@ -1,8 +1,8 @@
 package ai.platon.browser4.chrome.protocol.util
 
 import ai.platon.browser4.chrome.RemoteDevTools
-import ai.platon.pulsar.browser.protocol.BrowserProtocol
-import ai.platon.pulsar.browser.protocol.NodeRef
+import ai.platon.browser4.api.BrowserProtocol
+import ai.platon.browser4.api.model.NodeRef
 import ai.platon.pulsar.common.AppContext
 
 /**

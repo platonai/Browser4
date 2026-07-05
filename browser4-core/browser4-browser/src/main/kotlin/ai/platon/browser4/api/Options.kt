@@ -1,6 +1,6 @@
 package ai.platon.browser4.api
 
-import ai.platon.pulsar.browser.common.BrowserSettings
+import ai.platon.browser4.api.model.BrowserSettings
 import java.time.Duration
 
 /**

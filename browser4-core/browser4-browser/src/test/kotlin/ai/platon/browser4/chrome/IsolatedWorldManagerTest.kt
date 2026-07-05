@@ -1,9 +1,9 @@
 package ai.platon.browser4.chrome
 
 import ai.platon.browser4.chrome.IsolatedWorldManager
-import ai.platon.pulsar.browser.protocol.BrowserProtocol
+import ai.platon.browser4.api.BrowserProtocol
 import ai.platon.cdt.kt.protocol.types.page.*
-import ai.platon.pulsar.browser.common.BrowserSettings
+import ai.platon.browser4.api.model.BrowserSettings
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertThrows

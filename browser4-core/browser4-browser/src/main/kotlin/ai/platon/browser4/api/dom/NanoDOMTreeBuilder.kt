@@ -1,7 +1,7 @@
 package ai.platon.browser4.api.dom
 
-import ai.platon.pulsar.chrome.dom.model.NanoDOMTree
-import ai.platon.pulsar.chrome.dom.model.SerializableDOMTreeNode
+import ai.platon.browser4.api.model.NanoDOMTree
+import ai.platon.browser4.api.model.SerializableDOMTreeNode
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.common.math.roundTo
 import kotlin.math.max

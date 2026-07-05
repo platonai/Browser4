@@ -1,6 +1,6 @@
 package ai.platon.browser4.chrome.integration
 
-import ai.platon.browser4.driver.examples.BrowserExampleBase
+import ai.platon.browser4.chrome.integration.BrowserExampleBase
 
 class Crawler: BrowserExampleBase() {
 

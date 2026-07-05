@@ -1,7 +1,7 @@
 package ai.platon.browser4.api.scripting
 
-import ai.platon.pulsar.browser.common.BrowserSettings
-import ai.platon.pulsar.browser.common.ScriptConfuser
+import ai.platon.browser4.api.model.BrowserSettings
+import ai.platon.browser4.api.scripting.ScriptConfuser
 import ai.platon.pulsar.common.AppPaths
 import ai.platon.pulsar.common.ResourceLoader
 import ai.platon.pulsar.common.config.AppConstants

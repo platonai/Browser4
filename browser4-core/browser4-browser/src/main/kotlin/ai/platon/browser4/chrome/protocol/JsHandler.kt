@@ -1,13 +1,14 @@
 package ai.platon.browser4.chrome.protocol
 
 import ai.platon.browser4.chrome.IsolatedWorldManager
-import ai.platon.browser4.chrome.handler.util.releaseNodeObjectIfNeeded
-import ai.platon.browser4.chrome.handler.util.resolveNodeObjectId
+import ai.platon.browser4.chrome.protocol.util.releaseNodeObjectIfNeeded
+import ai.platon.browser4.chrome.protocol.util.resolveNodeObjectId
 import ai.platon.browser4.chrome.util.CDPReturnError
 import ai.platon.browser4.chrome.util.ChromeDriverException
 import ai.platon.cdt.kt.protocol.types.runtime.CallFunctionOn
 import ai.platon.cdt.kt.protocol.types.runtime.Evaluate
-import ai.platon.pulsar.browser.protocol.BrowserProtocol
+import ai.platon.browser4.api.BrowserProtocol
+import ai.platon.browser4.api.scripting.ScriptConfuser
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.common.js.JsUtils
 

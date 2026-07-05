@@ -15,11 +15,11 @@
  */
 package ai.platon.pulsar.protocol.browser.emulator.context
 
-import ai.platon.pulsar.browser.AbstractBrowser
-import ai.platon.pulsar.browser.BrowserId
-import ai.platon.pulsar.browser.common.BrowserUnavailableException
-import ai.platon.pulsar.browser.common.IllegalWebDriverStateException
-import ai.platon.pulsar.browser.common.WebDriverException
+import ai.platon.browser4.api.AbstractBrowser
+import ai.platon.browser4.api.BrowserId
+import ai.platon.browser4.api.model.BrowserUnavailableException
+import ai.platon.browser4.api.model.IllegalWebDriverStateException
+import ai.platon.browser4.api.model.WebDriverException
 import ai.platon.pulsar.common.AppContext
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.common.logging.ThrottlingLogger

@@ -1,16 +1,16 @@
 package ai.platon.browser4.api
 
 import ai.platon.browser4.chrome.dom.model.AriaSnapshotOptions
-import ai.platon.pulsar.browser.common.JsEvaluation
-import ai.platon.pulsar.browser.common.NavigateEntry
-import ai.platon.pulsar.browser.common.NavigateHistory
-import ai.platon.pulsar.browser.common.WebDriverException
-import ai.platon.pulsar.browser.protocol.NetworkResourceResponse
-import ai.platon.pulsar.browser.protocol.NodeRef
-import ai.platon.pulsar.chrome.dom.model.BrowserUseState
-import ai.platon.pulsar.chrome.dom.model.NanoDOMTree
-import ai.platon.pulsar.chrome.dom.model.PageTarget
-import ai.platon.pulsar.chrome.dom.model.SnapshotOptions
+import ai.platon.browser4.api.model.JsEvaluation
+import ai.platon.browser4.api.model.NavigateEntry
+import ai.platon.browser4.api.model.NavigateHistory
+import ai.platon.browser4.api.model.WebDriverException
+import ai.platon.browser4.api.model.NetworkResourceResponse
+import ai.platon.browser4.api.model.NodeRef
+import ai.platon.browser4.api.model.BrowserUseState
+import ai.platon.browser4.api.model.NanoDOMTree
+import ai.platon.browser4.api.model.PageTarget
+import ai.platon.browser4.api.model.SnapshotOptions
 import ai.platon.pulsar.common.CheckState
 import ai.platon.pulsar.common.ai.llm.MCP
 import ai.platon.pulsar.common.browser.BrowserType
@@ -129,7 +129,7 @@ import kotlin.time.Duration.Companion.milliseconds
  * @see [Document: referrer property](https://developer.mozilla.org/en-US/docs/Web/API/Document/referrer)
  * @see [Document: location property](https://developer.mozilla.org/en-US/docs/Web/API/Document/location)
  *
- * @see ai.platon.pulsar.browser.common.BrowserSettings
+ * @see ai.platon.browser4.api.model.BrowserSettings
  */
 interface WebDriver : Closeable {
     /**

@@ -5,13 +5,13 @@ import ai.platon.browser4.chrome.Transport
 import ai.platon.browser4.chrome.util.*
 import ai.platon.cdt.kt.protocol.support.types.EventHandler
 import ai.platon.cdt.kt.protocol.support.types.EventListener
-import ai.platon.pulsar.browser.protocol.DevToolsConfig
-import ai.platon.pulsar.browser.protocol.MethodInvocation
+import ai.platon.browser4.api.model.DevToolsConfig
+import ai.platon.browser4.api.model.MethodInvocation
 import ai.platon.pulsar.common.config.AppConstants
 import ai.platon.pulsar.common.readable
 import ai.platon.pulsar.common.warnForClose
-import ai.platon.pulsar.deprecated.util.ProxyClasses
-import ai.platon.pulsar.deprecated.util.SuspendAwareHandler
+import ai.platon.browser4.chrome.util.ProxyClasses
+import ai.platon.browser4.chrome.util.SuspendAwareHandler
 import com.codahale.metrics.Gauge
 import com.codahale.metrics.SharedMetricRegistries
 import com.fasterxml.jackson.databind.JsonNode

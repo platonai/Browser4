@@ -1,7 +1,7 @@
 package ai.platon.browser4.chrome.dom
 
-import ai.platon.pulsar.chrome.dom.model.MergedDOMTreeNode
-import ai.platon.pulsar.chrome.dom.model.NodeType
+import ai.platon.browser4.api.model.MergedDOMTreeNode
+import ai.platon.browser4.api.model.NodeType
 
 class ClickableElementDetector {
     /**

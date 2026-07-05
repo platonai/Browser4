@@ -1,6 +1,6 @@
 package ai.platon.pulsar.skeleton.session
 
-import ai.platon.pulsar.browser.Browser
+import ai.platon.browser4.api.Browser
 import ai.platon.pulsar.common.*
 import ai.platon.pulsar.common.AppPaths.WEB_CACHE_DIR
 import ai.platon.pulsar.common.browser.BrowserProfileMode

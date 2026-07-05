@@ -15,8 +15,8 @@
  */
 package ai.platon.pulsar.protocol.browser.emulator.context
 
-import ai.platon.pulsar.browser.BrowserId
-import ai.platon.pulsar.browser.BrowserProfile
+import ai.platon.browser4.api.BrowserId
+import ai.platon.browser4.api.BrowserProfile
 import ai.platon.pulsar.browser.privacy.AbstractPrivacyContext
 import ai.platon.pulsar.common.*
 import ai.platon.pulsar.common.PulsarParams.VAR_PRIVACY_CONTEXT_DISPLAY

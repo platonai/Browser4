@@ -289,11 +289,11 @@ object ProxyClasses {
      * paramTypes:
      *   - interface ai.platon.pulsar.driver.chrome.Transport,
      *   - interface ai.platon.pulsar.driver.chrome.Transport,
-     *   - class ai.platon.pulsar.browser.protocol.DevToolsConfig
+     *   - class ai.platon.browser4.api.model.DevToolsConfig
      * args:
      *   - ws://localhost:4644/devtools/browser/fefcf5b0-eb7f-4158-8a07-d5be61024292,
      *   - ws://localhost:4644/devtools/page/8A485D7DE2D7E9A0971C47686A81B645,
-     *   - ai.platon.pulsar.browser.protocol.DevToolsConfig@257cc1fc
+     *   - ai.platon.browser4.api.model.DevToolsConfig@257cc1fc
      * */
     private fun <T> debugParameters(clazz: Class<T>, paramTypes: Array<Class<*>>, args: Array<Any>? = null) {
 

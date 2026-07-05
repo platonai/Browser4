@@ -1,11 +1,11 @@
 package ai.platon.browser4.chrome.protocol
 
-import ai.platon.browser4.chrome.handler.util.withNodeObjectId
+import ai.platon.browser4.chrome.protocol.util.withNodeObjectId
 import ai.platon.cdt.kt.protocol.types.input.DispatchDragEventType
 import ai.platon.cdt.kt.protocol.types.input.DispatchKeyEventType
 import ai.platon.cdt.kt.protocol.types.input.DragData
-import ai.platon.pulsar.browser.protocol.BrowserProtocol
-import ai.platon.pulsar.browser.protocol.NodeRef
+import ai.platon.browser4.api.BrowserProtocol
+import ai.platon.browser4.api.model.NodeRef
 import ai.platon.pulsar.common.DescriptiveResult
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.common.io.KeyboardModifier

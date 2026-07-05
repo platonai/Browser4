@@ -1,8 +1,8 @@
 package ai.platon.pulsar.browser.privacy
 
-import ai.platon.pulsar.browser.BrowserProfile
-import ai.platon.pulsar.browser.WebDriver
-import ai.platon.pulsar.browser.common.BrowserErrorPageException
+import ai.platon.browser4.api.BrowserProfile
+import ai.platon.browser4.api.WebDriver
+import ai.platon.browser4.api.model.BrowserErrorPageException
 import ai.platon.pulsar.common.HtmlIntegrity
 import ai.platon.pulsar.common.config.AppConstants
 import ai.platon.pulsar.common.config.CapabilityTypes

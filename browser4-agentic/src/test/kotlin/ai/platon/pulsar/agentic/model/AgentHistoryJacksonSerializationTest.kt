@@ -1,6 +1,6 @@
 package ai.platon.pulsar.agentic.model
 
-import ai.platon.pulsar.chrome.dom.model.BrowserUseState
+import ai.platon.browser4.api.model.BrowserUseState
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue

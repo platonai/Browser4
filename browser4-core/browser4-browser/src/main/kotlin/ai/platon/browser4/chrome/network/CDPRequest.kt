@@ -6,8 +6,8 @@ import ai.platon.cdt.kt.protocol.types.network.ErrorReason
 import ai.platon.cdt.kt.protocol.types.network.Initiator
 import ai.platon.cdt.kt.protocol.types.network.Request
 import ai.platon.cdt.kt.protocol.types.network.ResourceType
-import ai.platon.pulsar.browser.WebDriver
-import ai.platon.pulsar.browser.protocol.BrowserProtocol
+import ai.platon.browser4.api.WebDriver
+import ai.platon.browser4.api.BrowserProtocol
 import ai.platon.pulsar.common.http.HttpStatus
 import java.lang.ref.WeakReference
 import java.util.*

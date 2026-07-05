@@ -1,8 +1,8 @@
 package ai.platon.browser4.api.snapshot
 
 import ai.platon.browser4.chrome.dom.model.AriaSnapshotOptions
-import ai.platon.pulsar.chrome.dom.model.CompactRect
-import ai.platon.pulsar.chrome.dom.model.NanoDOMTreeNode
+import ai.platon.browser4.api.model.CompactRect
+import ai.platon.browser4.api.model.NanoDOMTreeNode
 import java.util.*
 
 object NanoAriaSnapshotRenderer {

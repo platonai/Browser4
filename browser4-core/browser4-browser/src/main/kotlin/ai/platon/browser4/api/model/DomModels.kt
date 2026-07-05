@@ -1,15 +1,17 @@
 package ai.platon.browser4.api.model
 
 import ai.platon.browser4.chrome.dom.model.AriaSnapshotOptions
-import ai.platon.pulsar.browser.common.BrowserSettings.Companion.VIEWPORT
-import ai.platon.pulsar.browser.common.FBNLocator
-import ai.platon.pulsar.browser.common.LocatorMap
-import ai.platon.pulsar.chrome.dom.DOMSerializer
-import ai.platon.pulsar.chrome.dom.util.CSSSelectorUtils
-import ai.platon.pulsar.chrome.dom.util.DOMUtils
-import ai.platon.pulsar.chrome.dom.util.InteractiveNodeListBuilder
-import ai.platon.pulsar.chrome.dom.util.InteractiveNodeListBuilder.Companion.estimatedSize
-import ai.platon.pulsar.chrome.dom.util.NanoDOMTreeBuilder
+import ai.platon.browser4.api.model.BrowserSettings.Companion.VIEWPORT
+import ai.platon.browser4.api.model.FBNLocator
+import ai.platon.browser4.api.model.LocatorMap
+import ai.platon.browser4.api.model.DOMSerializer
+import ai.platon.browser4.api.model.CSSSelectorUtils
+import ai.platon.browser4.api.model.DOMUtils
+import ai.platon.browser4.api.snapshot.AriaSnapshotRenderer
+import ai.platon.browser4.api.snapshot.NanoAriaSnapshotRenderer
+import ai.platon.browser4.api.dom.InteractiveNodeListBuilder
+import ai.platon.browser4.api.dom.InteractiveNodeListBuilder.Companion.estimatedSize
+import ai.platon.browser4.api.dom.NanoDOMTreeBuilder
 import ai.platon.pulsar.common.math.geometric.DimI
 import ai.platon.pulsar.common.math.roundTo
 import ai.platon.pulsar.common.serialize.json.Pson

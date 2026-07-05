@@ -1,7 +1,7 @@
-package ai.platon.pulsar.browser
+package ai.platon.browser4.api
 
 import ai.platon.browser4.chrome.PulsarWebDriver
-import ai.platon.browser4.chrome.handler.DirectChromeProtocol
+import ai.platon.browser4.chrome.protocol.DirectChromeProtocol
 import ai.platon.pulsar.WebDriverTestBase
 import ai.platon.pulsar.common.printlnPro
 import ai.platon.pulsar.core.api.WebDriver
@@ -22,8 +22,8 @@ class PulsarWebDriverCDPTests : WebDriverTestBase() {
     }
 
     private val browserLoggerName = "ai.platon.pulsar.protocol.browser"
-    private val chromeLoggerName = "ai.platon.browser4.driver.chrome"
-    private val transportLoggerName = "ai.platon.browser4.driver.chrome.impl"
+    private val chromeLoggerName = "ai.platon.browser4.chrome"
+    private val transportLoggerName = "ai.platon.browser4.chrome.protocol"
     private val testURL get() = "$generatedAssetsBaseURL/interactive-4.html"
 
     fun increasesLogLevels() {

@@ -1,7 +1,7 @@
 package ai.platon.browser4.chrome.protocol.transport
 
-import ai.platon.pulsar.browser.protocol.BrowserTab
-import ai.platon.pulsar.browser.protocol.DevToolsConfig
+import ai.platon.browser4.api.model.BrowserTab
+import ai.platon.browser4.api.model.DevToolsConfig
 import com.fasterxml.jackson.databind.ObjectMapper
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.*

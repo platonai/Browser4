@@ -3,7 +3,7 @@ package ai.platon.browser4.chrome.dom
 import ai.platon.browser4.chrome.util.ChromeDriverException
 import ai.platon.pulsar.FastWebDriverService
 import ai.platon.pulsar.WebDriverTestBase
-import ai.platon.pulsar.browser.detail.ScriptLoader
+import ai.platon.browser4.api.scripting.ScriptLoader
 import ai.platon.pulsar.common.Strings
 import ai.platon.pulsar.common.config.AppConstants
 import ai.platon.pulsar.common.printlnPro

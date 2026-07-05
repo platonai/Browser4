@@ -1,8 +1,8 @@
 package ai.platon.browser4.chrome.integration
 
-import ai.platon.pulsar.browser.ChromeOptions
-import ai.platon.pulsar.browser.LauncherOptions
-import ai.platon.pulsar.browser.protocol.BrowserProtocol
+import ai.platon.browser4.api.ChromeOptions
+import ai.platon.browser4.api.LauncherOptions
+import ai.platon.browser4.api.BrowserProtocol
 import ai.platon.pulsar.common.browser.BrowserFiles
 import ai.platon.pulsar.common.serialize.json.Pson
 import ai.platon.pulsar.common.sleepSeconds

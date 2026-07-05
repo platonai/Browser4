@@ -13,7 +13,7 @@ import kotlin.concurrent.withLock
  * or through programmatic action — and is progressively updated as the browser emits network and frame
  * events. It serves as the shared mutable context between the CDP event layer
  * ([ChromeNavigateEntry][ai.platon.browser4.chrome.network.ChromeNavigateEntry]) and the high-level
- * driver API ([AbstractWebDriver][ai.platon.pulsar.browser.AbstractWebDriver]).
+ * driver API ([AbstractWebDriver][ai.platon.browser4.api.AbstractWebDriver]).
  *
  * ## Identity
  *

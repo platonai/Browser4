@@ -15,7 +15,7 @@
  */
 package ai.platon.pulsar.protocol.browser.emulator.impl
 
-import ai.platon.pulsar.browser.common.BrowserErrorPageException
+import ai.platon.browser4.api.model.BrowserErrorPageException
 import ai.platon.pulsar.common.*
 import ai.platon.pulsar.common.browser.BrowserErrorCode
 import ai.platon.pulsar.common.config.CapabilityTypes.PARSE_SUPPORT_ALL_CHARSETS
