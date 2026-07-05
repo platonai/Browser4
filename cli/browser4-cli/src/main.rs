@@ -848,7 +848,11 @@ async fn post_command_snapshot(client: &Client, base_url: &str, session_id: &str
     };
 
     let out_path = resolve_output_path(None, "snapshot", "yml");
-    if let Err(e) = save_snapshot(&out_path, &snap_result) {
+    // Prepend a header comment documenting the snapshot.
+    let header = "# Auto-snapshot after command — full viewport (viewport 0).\n\
+                  # Use `browser4-cli snapshot grep <pattern>` to search the tree.\n";
+    let snap_with_header = format!("{}\n{}", header, snap_result);
+    if let Err(e) = save_snapshot(&out_path, &snap_with_header) {
         eprintln!("Warning: failed to save snapshot: {e}");
         return;
     }
@@ -1267,7 +1271,17 @@ async fn handle_navigation_action(
     let state = require_session(session_name)?;
     let sid = get_session_id(&state)?;
 
-    // 1. Record tabs before the click.
+    // 1. Capture page URL before the click to detect silent navigation failures.
+    let url_before = call_tool(
+        client,
+        base_url,
+        "page_url",
+        json!({ "sessionId": &sid }),
+    )
+    .await
+    .ok();
+
+    // 2. Record tabs before the click.
     let tabs_before: HashSet<usize> = call_tool(
         client,
         base_url,
@@ -1283,10 +1297,10 @@ async fn handle_navigation_action(
     })
     .unwrap_or_default();
 
-    // 2. Perform the click (backend handles same-tab navigation detection).
+    // 3. Perform the click (backend handles same-tab navigation detection).
     handle_tool_command(client, base_url, tool_name, tool_params, false, session_name).await?;
 
-    // 3. Check for new tabs.
+    // 4. Check for new tabs.
     let tabs_after: Vec<TabInfo> = call_tool(
         client,
         base_url,
@@ -1303,12 +1317,12 @@ async fn handle_navigation_action(
         .collect();
 
     if new_tabs.is_empty() {
-        // No new tabs — the post-command snapshot already reflects any
-        // same-tab navigation that the backend handled.
+        // No new tabs — verify same-tab navigation and warn if URL unchanged.
+        verify_click_navigation(client, base_url, &sid, tool_params, &url_before).await;
         return Ok(());
     }
 
-    // 4. Report new tabs and switch to the newest one.
+    // 5. Report new tabs and switch to the newest one.
     cli_println!("🌐 {} new tab(s) opened by click:", new_tabs.len());
     for tab in &new_tabs {
         let label = if tab.title.is_empty() {
@@ -1335,6 +1349,51 @@ async fn handle_navigation_action(
 
     cli_println!("✓ Switched to tab {}", newest.index);
     Ok(())
+}
+
+/// Verify that a click resulted in navigation. Emits a warning to stderr if
+/// the page URL is unchanged after the click, which may indicate a silent
+/// failure (e.g. clicking an off-screen element).
+async fn verify_click_navigation(
+    client: &Client,
+    base_url: &str,
+    session_id: &str,
+    tool_params: &Value,
+    url_before: &Option<String>,
+) {
+    let Some(ref before) = url_before else {
+        return;
+    };
+
+    let url_after = call_tool(
+        client,
+        base_url,
+        "page_url",
+        json!({ "sessionId": session_id }),
+    )
+    .await
+    .ok();
+
+    let Some(ref after) = url_after else {
+        return;
+    };
+
+    if before == after {
+        let ref_val = tool_params
+            .get("ref")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        // Suppress warning in --json or --quiet mode to keep machine output clean.
+        let suppressed = json_active() || quiet_active();
+        if !ref_val.is_empty() && !suppressed {
+            eprintln!(
+                "⚠️  Click on {} did not result in navigation — page URL is unchanged. \
+                 The element may be off-screen; try scrolling it into view first or \
+                 use --follow to detect new-tab navigation.",
+                ref_val
+            );
+        }
+    }
 }
 
 async fn handle_close(
@@ -2513,7 +2572,31 @@ async fn handle_snapshot(
     };
 
     let out_path = resolve_output_path(filename.as_deref(), "snapshot", "yml");
-    save_snapshot(&out_path, snap).map_err(|e| e.to_string())?;
+
+    // Prepend a YAML comment header documenting the snapshot scope so users
+    // understand that the file may not contain the full accessibility tree
+    // (e.g. when viewport filtering is active).  Use `snapshot grep <pattern>`
+    // to search the complete in-memory tree regardless of viewport.
+    let viewports = tool_params
+        .get("viewports")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty());
+    let header = if let Some(vp) = viewports {
+        format!(
+            "# Snapshot viewport(s): {}\n\
+             # This file contains the accessibility tree for the requested viewport(s) only.\n\
+             # Use `browser4-cli snapshot grep <pattern>` to search the full in-memory tree.\n\
+             # Use `browser4-cli snapshot -v all` to capture all viewports.\n",
+            vp
+        )
+    } else {
+        format!(
+            "# Snapshot — full viewport (viewport 0 by default).\n\
+             # Use `browser4-cli snapshot grep <pattern>` to search the tree.\n"
+        )
+    };
+    let snap_with_header = format!("{}\n{}", header, snap);
+    save_snapshot(&out_path, &snap_with_header).map_err(|e| e.to_string())?;
 
     let raw = tool_params
         .get("raw")
@@ -2620,6 +2703,26 @@ async fn handle_snapshot(
         if interactive && !json_active() {
             eprintln!(
                 "💡 Tip: Add --stdout to print element refs inline instead of opening the snapshot file"
+            );
+        }
+        // Warn when a non-zero viewport snapshot is suspiciously small (may
+        // indicate the AX tree wasn't re-expanded after scrolling — a known
+        // server-side limitation).
+        let viewport_val = tool_params
+            .get("viewports")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let is_nonzero_viewport = !viewport_val.is_empty()
+            && viewport_val != "0"
+            && viewport_val != "all";
+        if is_nonzero_viewport && snap_lines <= 20 && !json_active() {
+            eprintln!(
+                "⚠️  Viewport snapshot for '{}' contains only {} lines ({} nodes). \
+                 The accessibility tree may not have been re-expanded after scrolling. \
+                 This is a known server-side limitation. As a workaround, use \
+                 `snapshot -v 0` for the current viewport or `snapshot grep <pattern>` \
+                 to search the full tree.",
+                viewport_val, snap_lines, snap_lines
             );
         }
     }
@@ -10880,6 +10983,21 @@ mod tests {
     #[test]
     fn no_snapshot_commands_include_generate_locator() {
         assert!(no_snapshot_commands().contains("generate-locator"));
+    }
+
+    #[test]
+    fn no_snapshot_commands_include_status() {
+        assert!(no_snapshot_commands().contains("status"));
+    }
+
+    #[test]
+    fn no_snapshot_commands_include_stop() {
+        assert!(no_snapshot_commands().contains("stop"));
+    }
+
+    #[test]
+    fn no_snapshot_commands_include_list() {
+        assert!(no_snapshot_commands().contains("list"));
     }
 
     #[test]

@@ -1039,7 +1039,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "snapshot",
-            description: "Capture page snapshot to obtain element ref",
+            description: "Capture page snapshot to obtain element refs. Use -v N for viewport pagination, -i for interactive, --auto-diff for change detection. Run `snapshot --help` for all flags.",
             category: Category::Core,
             hidden: false,
             batch_supported: true,

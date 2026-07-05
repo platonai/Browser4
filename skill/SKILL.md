@@ -78,6 +78,7 @@ Named sessions isolate browser state (cookies, localStorage, tabs). Use `-s <nam
 |---------------|---------|-------------|----------------|
 | `goto`, `open`, `close`, `reload` | Navigation & session management | Every session starts here | — |
 | `snapshot` | Capture accessibility tree with refs | Before/after interactions | [htmlsnapshot.md](references/htmlsnapshot.md) |
+| `snapshot grep` | Search snapshot content with regex | Find elements by text or pattern | — |
 | `click`, `fill`, `type`, `press`, `select`, `check`, `drag` | Page interaction | Form filling, button clicks, navigation | — |
 | `htmlsnapshot get`, `get all` | Extract text/html/attr via CSS selectors | Single-field data extraction | [htmlsnapshot.md](references/htmlsnapshot.md) |
 | `htmlsnapshot query` | X-SQL queries for structured extraction | Multi-field, filtered, sorted data | [x-sql.md](references/x-sql.md) |
@@ -158,6 +159,16 @@ browser4-cli wait --load networkidle
 browser4-cli snapshot -v 0 --auto-diff
 ```
 
+### Find Elements by Text (snapshot grep)
+
+```bash
+browser4-cli goto "https://example.com"
+browser4-cli snapshot -v 0                        # capture snapshot first
+browser4-cli snapshot grep "See also"             # search for text in the full AX tree
+browser4-cli snapshot grep -i "price|rating"      # case-insensitive regex alternation
+browser4-cli snapshot grep -A 3 -B 1 "Checkout"   # show surrounding context lines
+```
+
 ### Static Data Extraction (Single Field)
 
 ```bash
@@ -226,3 +237,17 @@ browser4-cli install
 irm https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.ps1 | iex
 browser4-cli install
 ```
+
+## Development
+
+When running from source (not a globally installed binary), use `cargo run` from the CLI directory:
+
+```bash
+cd cli/browser4-cli
+cargo build                     # build the binary
+cargo run -- <command>          # run a command (the -- separates cargo args from CLI args)
+cargo run -- goto "https://example.com"
+cargo run -- snapshot -v 0
+```
+
+**Note:** All examples in this document use `browser4-cli` as the command. If running from source, substitute `cargo run --` (with the leading `cd cli/browser4-cli &&` if not already in that directory).

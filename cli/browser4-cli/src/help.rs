@@ -100,6 +100,12 @@ pub fn generate_help() -> String {
     //     30,
     // ));
 
+    lines.push(String::new());
+    lines.push(
+        "Run `browser4-cli help <command>` or `<command> --help` for detailed options and examples."
+            .to_string(),
+    );
+
     lines.join("\n")
 }
 
@@ -1202,7 +1208,7 @@ mod tests {
         assert!(!help.contains("  console "));
         assert!(help.contains("extract"));
         assert!(!help.contains("agent run"));
-        assert!(!help.contains("act"));
+        assert!(!help.contains("  act "));
         assert!(help.contains("swarm create"));
         assert!(help.contains("--json"));
         assert!(help.contains("suppresses tips, hints, and human-readable text"));
