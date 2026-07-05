@@ -54,7 +54,13 @@ Each interactive element has a **ref** (`e5`, `e12`) — these are Chrome DevToo
 
 ### Ref Lifecycle
 
-Refs are **ephemeral** — they become invalid after ANY page-modifying command (click, type, fill, goto, reload, tab switch). **Re-snapshot before every interaction.** Never store refs across commands.
+Refs are **ephemeral** — they become invalid after commands that change the DOM tree structure:
+
+- **Safe (refs survive):** `fill`, `type`, `press`, `check`, `uncheck`, `select` — these only modify element *properties* (value, checked, selectedIndex) without adding/removing DOM nodes.
+- **Unsafe (re-snapshot after):** `click` on navigation links or buttons that trigger page updates, `goto`, `reload`, tab switches — these restructure the DOM or load new pages.
+- **Gray area:** `click` on checkboxes/radio buttons and some dropdown toggles may or may not mutate the DOM. When in doubt, capture a new snapshot after clicking.
+
+**In practice, you can fill an entire form from a single snapshot.** Only re-snapshot if a ref unexpectedly fails — the CLI will surface a clear error so you know when it's needed.
 
 ### Output Modes
 
