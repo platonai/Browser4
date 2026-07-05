@@ -183,11 +183,16 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
     if cmd.name == "eval" {
         lines.push("Notes:".to_string());
         lines.push(
-            "  - Use --file to read the JavaScript expression from a file, avoiding shell quoting issues."
+            "  - Use --file to read the JavaScript expression from a file, or --base64 to pass"
                 .to_string(),
         );
         lines.push(
-            "  - When --file is used, the expression positional argument is optional.".to_string(),
+            "    a base64-encoded expression — both approaches avoid shell quoting issues."
+                .to_string(),
+        );
+        lines.push(
+            "  - Use --stdin to pipe JavaScript from stdin (e.g. `echo ... | browser4-cli eval --stdin`)."
+                .to_string(),
         );
         lines.push(
             "  - Return values are always printed: `null` for JS null/undefined, `\"\"` for empty string,"
@@ -214,6 +219,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("  browser4-cli eval \"element => element.textContent\" e5".to_string());
         lines.push("  browser4-cli eval --file script.js".to_string());
         lines.push("  browser4-cli eval --file script.js e5".to_string());
+        lines.push("  browser4-cli eval --base64 ZG9jdW1lbnQudGl0bGU=".to_string());
         lines.push("  browser4-cli eval --json \"document.title\"".to_string());
     }
 

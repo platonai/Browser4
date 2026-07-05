@@ -10155,6 +10155,35 @@ async fn run(
                 }
             }
 
+            // When --base64 is provided, decode the expression from base64.
+            // This avoids shell quoting issues on Windows for complex JavaScript.
+            let use_base64 = tool_params
+                .get("base64")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            if use_base64 {
+                let encoded = tool_params
+                    .get("expression")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .trim()
+                    .to_string();
+                if encoded.is_empty() {
+                    return Err(CliError(
+                        ExitCode::Usage,
+                        "--base64 was set but the expression argument is empty.".to_string(),
+                    ));
+                }
+                let decoded = base64::engine::general_purpose::STANDARD
+                    .decode(&encoded)
+                    .map_err(|e| format!("Failed to base64-decode eval expression: {e}"))?;
+                let expression = String::from_utf8(decoded)
+                    .map_err(|e| format!("Base64-decoded expression is not valid UTF-8: {e}"))?;
+                if let Value::Object(ref mut m) = tool_params {
+                    m.insert("expression".to_string(), json!(expression));
+                }
+            }
+
             // When --file is provided, read the expression from the file.
             if let Some(file_path) = tool_params
                 .get("file")
@@ -10162,8 +10191,8 @@ async fn run(
                 .map(str::trim)
                 .filter(|v| !v.is_empty())
                 {
-                    // --stdin takes precedence; skip --file if stdin was already used.
-                    if !use_stdin {
+                    // --stdin and --base64 take precedence; skip --file if they were already used.
+                    if !use_stdin && !use_base64 {
                         let expression = std::fs::read_to_string(file_path)
                             .map_err(|e| format!("Failed to read eval file '{}': {}", file_path, e))?;
                         let expression = expression.trim().to_string();
@@ -10182,13 +10211,14 @@ async fn run(
                     }
                 }
 
-            // Strip --file, --stdin, and --json keys so they aren't sent to the server
+            // Strip --file, --stdin, --base64, and --json keys so they aren't sent to the server
             // (they're CLI-side only — the content has already been read and
             // inserted as the "expression" parameter above; --json controls
             // local output formatting, not a server parameter).
             if let Value::Object(ref mut m) = tool_params {
                 m.remove("file");
                 m.remove("stdin");
+                m.remove("base64");
                 m.remove("json");
             }
 
@@ -10201,7 +10231,7 @@ async fn run(
             if expression_empty {
                 return Err(CliError(
                     ExitCode::Usage,
-                    "A JavaScript expression is required. Provide it as a positional argument, via --file, or via --stdin."
+                    "A JavaScript expression is required. Provide it as a positional argument, via --file, via --stdin, or via --base64."
                         .to_string(),
                 ));
             }

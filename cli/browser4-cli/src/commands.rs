@@ -1139,17 +1139,19 @@ pub fn all_commands() -> Vec<CommandDef> {
             options: &[
                 OptionDef { name: "file", description: "Read JavaScript expression from a file instead of the command line", is_bool: false, short: None },
                 OptionDef { name: "stdin", description: "Read JavaScript expression from stdin (useful for piping multi-line scripts without shell quoting)", is_bool: true, short: None },
+                OptionDef { name: "base64", description: "Decode the expression argument as base64 before execution (avoids shell quoting issues on Windows)", is_bool: true, short: None },
                 OptionDef { name: "json", description: "Serialize the result as JSON (quotes strings, wraps scalars)", is_bool: true, short: None },
             ],
             tool_name_fn: |_| "browser_evaluate".to_string(),
             tool_params_fn: |args| {
                 let mut p = json!({ "expression": get_str(args, "expression").unwrap_or_default() });
                 if let Some(r) = get_opt_str(args, "ref") { p["ref"] = json!(r); }
-                // --file and --stdin are carried through tool_params so the
-                // dispatch logic in main.rs can detect them and read the
+                // --file, --stdin, and --base64 are carried through tool_params so the
+                // dispatch logic in main.rs can detect them and read/decode the
                 // expression content. They are stripped before the server call.
                 if let Some(f) = get_opt_str(args, "file") { p["file"] = json!(f); }
                 if get_bool(args, "stdin").unwrap_or(false) { p["stdin"] = json!(true); }
+                if get_bool(args, "base64").unwrap_or(false) { p["base64"] = json!(true); }
                 if get_bool(args, "json").unwrap_or(false) { p["json"] = json!(true); }
                 p
             },
