@@ -26,6 +26,10 @@ data class QueryRequest @JsonCreator constructor(
     @param:JsonProperty("args") var args: String = "",
     @param:JsonProperty("query") var query: String = "",
 ) {
+    init {
+        require(query.isNotBlank()) { "query must not be blank" }
+    }
+
     fun toSQL(): String {
         return SQLTemplate(query).createSQL("$url $args")
     }

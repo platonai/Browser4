@@ -186,4 +186,39 @@ class BrowserTabToolExecutorTest {
 			verify(driver).evaluateValueDetail("#page-marker", "(element) => element.textContent")
 		}
 	}
+
+		@Test
+		fun `screenshot viewport scrolls before capture`() {
+			runBlocking {
+				val driver = Mockito.mock(WebDriver::class.java)
+				`when`(driver.evaluateValue("window.innerWidth")).thenReturn(1920)
+				`when`(driver.evaluateValue("window.innerHeight")).thenReturn(1080)
+
+				executor.callFunctionOn(
+					ToolCall("tab", "screenshot", mutableMapOf<String, Any?>("viewport" to 2)),
+					driver
+				)
+
+				verify(driver).scrollToViewport(2.0)
+				verify(driver).screenshot(ai.platon.pulsar.common.math.geometric.RectD(0.0, 2160.0, 1920.0, 1080.0))
+			}
+		}
+
+		@Test
+		fun `screenshot viewport clamps negative index to zero`() {
+			runBlocking {
+				val driver = Mockito.mock(WebDriver::class.java)
+				`when`(driver.evaluateValue("window.innerWidth")).thenReturn(1920)
+				`when`(driver.evaluateValue("window.innerHeight")).thenReturn(1080)
+
+				executor.callFunctionOn(
+					ToolCall("tab", "screenshot", mutableMapOf<String, Any?>("viewport" to -1)),
+					driver
+				)
+
+				verify(driver).scrollToViewport(0.0)
+				verify(driver).screenshot(ai.platon.pulsar.common.math.geometric.RectD(0.0, 0.0, 1920.0, 1080.0))
+			}
+		}
+	}
 }

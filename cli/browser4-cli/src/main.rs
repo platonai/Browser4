@@ -583,6 +583,7 @@ fn parse_tab_entry(value: &Value) -> Option<TabInfo> {
     let index = obj
         .get("index")
         .and_then(|v| v.as_u64())
+        .or_else(|| obj.get("id").and_then(|v| v.as_u64()))
         .or_else(|| obj.get("id").and_then(|v| v.as_str().and_then(|s| s.parse().ok())))
         .map(|n| n as usize);
     let url = obj
@@ -1472,18 +1473,19 @@ async fn handle_navigation_action(
     tool_params: &Value,
     session_name: Option<&str>,
     follow: bool,
+    verify: bool,
 ) -> Result<(), String> {
     if !follow {
         return handle_tool_command(client, base_url, tool_name, tool_params, false, session_name)
             .await;
     }
 
-    // --- follow mode: detect new tabs after click ---
+    // --- follow mode: detect new tabs after action ---
 
     let state = require_session(session_name)?;
     let sid = get_session_id(&state)?;
 
-    // 1. Capture page URL before the click to detect silent navigation failures.
+    // 1. Capture page URL before the action to detect silent navigation failures.
     let url_before = call_tool(
         client,
         base_url,
@@ -1493,7 +1495,8 @@ async fn handle_navigation_action(
     .await
     .ok();
 
-    // 2. Record tabs before the click.
+    // 2. Record tabs before the action.
+    let mut tabs_before_failed = false;
     let tabs_before: HashSet<usize> = call_tool(
         client,
         base_url,
@@ -1507,10 +1510,30 @@ async fn handle_navigation_action(
             .map(|t| t.index)
             .collect()
     })
-    .unwrap_or_default();
+    .unwrap_or_else(|_| {
+        tabs_before_failed = true;
+        HashSet::new()
+    });
 
-    // 3. Perform the click (backend handles same-tab navigation detection).
+    if tabs_before_failed {
+        eprintln!(
+            "⚠️  Failed to query tabs before action — new-tab detection may be unreliable."
+        );
+    }
+
+    // 3. Perform the action (backend handles same-tab navigation detection).
     handle_tool_command(client, base_url, tool_name, tool_params, false, session_name).await?;
+
+    // 3b. When --verify is set for press, verify the key press result.
+    if verify && tool_name == "browser_press_key" {
+        let element_ref = tool_params.get("ref").and_then(|v| v.as_str());
+        let key = tool_params
+            .get("key")
+            .and_then(|v| v.as_str())
+            .unwrap_or("?");
+        let is_printable = key.len() == 1 && key.chars().all(|c| c.is_ascii_graphic());
+        let _ = verify_press_result(client, base_url, &sid, element_ref, key, is_printable).await;
+    }
 
     // 4. Check for new tabs.
     let tabs_after: Vec<TabInfo> = call_tool(
@@ -1535,7 +1558,11 @@ async fn handle_navigation_action(
     }
 
     // 5. Report new tabs and switch to the newest one.
-    cli_println!("🌐 {} new tab(s) opened by click:", new_tabs.len());
+    let action = match tool_name {
+        "browser_press_key" => "key press",
+        _ => "click",
+    };
+    cli_println!("🌐 {} new tab(s) opened by {}:", new_tabs.len(), action);
     for tab in &new_tabs {
         let label = if tab.title.is_empty() {
             tab.url.clone()
@@ -3220,6 +3247,13 @@ async fn handle_tool_command_with_options(
             }
             "browser_uncheck" => {
                 cli_println!("✓ Unchecked {}", ref_val);
+            }
+            "browser_press_key" => {
+                let key = tool_params
+                    .get("key")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("?");
+                cli_println!("✓ Pressed '{}' on {}", key, ref_val);
             }
             _ => {} // No confirmation for other tools
         }
@@ -6119,10 +6153,26 @@ async fn handle_agent_list(client: &Client, base_url: &str) -> Result<(), String
         if entry.command != "agent" {
             continue;
         }
-        if let Ok(status_json) = get_command_status(client, base_url, &entry.task_id).await {
-            if let Ok(parsed) = serde_json::from_str::<Value>(&status_json) {
-                entry.last_status = extract_readable_agent_status(&parsed);
-                updated = true;
+        match get_command_status(client, base_url, &entry.task_id).await {
+            Ok(status_json) => {
+                match serde_json::from_str::<Value>(&status_json) {
+                    Ok(parsed) => {
+                        entry.last_status = extract_readable_agent_status(&parsed);
+                        updated = true;
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "⚠️  Failed to parse status for task {}: {}",
+                            entry.task_id, e
+                        );
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!(
+                    "⚠️  Failed to query status for task {}: {}",
+                    entry.task_id, e
+                );
             }
         }
     }
@@ -10706,6 +10756,7 @@ async fn run(
                     &tool_params,
                     global.session_name.as_deref(),
                     true,
+                    verify,
                 )
                 .await?;
             } else {
@@ -10943,6 +10994,7 @@ async fn run(
                 &tool_params,
                 global.session_name.as_deref(),
                 follow,
+                false,
             )
             .await?;
         }
@@ -11051,7 +11103,7 @@ fn format_wait_result(tool_name: &str, tool_params: &Value, result: &str) -> Str
     } else if tool_name == "delay" {
         let millis = tool_params
             .get("millis")
-            .and_then(|v| v.as_i64())
+            .and_then(|v| v.as_i64().or_else(|| v.as_f64().map(|f| f as i64)))
             .unwrap_or(0);
         format!("✓ Waited {}ms", millis)
     } else if tool_name == "wait_for_selector" {
@@ -13741,5 +13793,44 @@ mod tests {
             "",
         );
         assert_eq!(msg, "");
+    }
+
+    #[test]
+    fn format_wait_result_delay_float_millis() {
+        // JSON floats (e.g. 1500.0) should be handled gracefully
+        let msg = format_wait_result(
+            "delay",
+            &serde_json::from_str::<Value>(r#"{"millis": 1500.0}"#).unwrap(),
+            "",
+        );
+        assert_eq!(msg, "✓ Waited 1500ms");
+    }
+
+    // -----------------------------------------------------------------------
+    // parse_tab_entry tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn parse_tab_entry_numeric_id_field() {
+        let json = json!({"id": 42, "url": "https://example.com", "title": "Test"});
+        let tab = parse_tab_entry(&json).expect("should parse tab with numeric id");
+        assert_eq!(tab.index, 42);
+        assert_eq!(tab.url, "https://example.com");
+        assert_eq!(tab.title, "Test");
+    }
+
+    #[test]
+    fn parse_tab_entry_string_id_field() {
+        let json = json!({"id": "42", "url": "https://example.com", "title": "Test"});
+        let tab = parse_tab_entry(&json).expect("should parse tab with string id");
+        assert_eq!(tab.index, 42);
+    }
+
+    #[test]
+    fn parse_tab_entry_index_field_primary() {
+        // "index" should take precedence over "id"
+        let json = json!({"index": 5, "id": 42, "url": "https://example.com", "title": "Test"});
+        let tab = parse_tab_entry(&json).expect("should parse tab with index field");
+        assert_eq!(tab.index, 5);
     }
 }

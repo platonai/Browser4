@@ -968,12 +968,14 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
 
                     args.containsKey("viewport") -> {
                         validateArgs(args, allowed("viewport"), setOf("viewport"), functionName)
-                        val viewportIndex = paramInt(args, "viewport", functionName)!!
+                        val viewportIndex = paramInt(args, "viewport", functionName)!!.coerceAtLeast(0)
                         val w = driver.evaluateValue("window.innerWidth")?.toString()?.toDoubleOrNull() ?: 1920.0
                         val h = driver.evaluateValue("window.innerHeight")?.toString()?.toDoubleOrNull() ?: 1080.0
                         val rect = ai.platon.pulsar.common.math.geometric.RectD(
                             0.0, viewportIndex * h, w, h
                         )
+                        // Scroll to the target viewport so lazy-loaded content renders before capture.
+                        driver.scrollToViewport(viewportIndex.toDouble())
                         driver.screenshot(rect)
                     }
 

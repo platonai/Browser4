@@ -108,7 +108,8 @@ class ScreenshotHandler(
             activeCdp()?.scrollIntoViewIfNeeded(node.nodeId)
         }
 
-        val visible = ClickableDOM.create(activeCdp(), node)?.isVisible() ?: false
+        // When node is null (viewport-by-rect path), skip DOM visibility check — the clip rect defines the capture region.
+        val visible = node == null || ClickableDOM.create(activeCdp(), node)?.isVisible() ?: false
         if (!visible) {
             return null
         }
@@ -118,7 +119,7 @@ class ScreenshotHandler(
             quality = quality,
             clip = viewport,
             fromSurface = true,
-            captureBeyondViewport = false,
+            captureBeyondViewport = true,
         )
     }
 

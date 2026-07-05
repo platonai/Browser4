@@ -234,11 +234,12 @@ All modes accept `--timeout <ms>` (default: 30000). Load states: `networkidle`,
 
 | Command | Description |
 |---|---|
-| `screenshot [ref]` | Take a screenshot. `--filename <path>`, `--full-page`. Optionally of a specific element. |
+| `screenshot [ref]` | Take a screenshot. `--filename <path>`, `--full-page`, `--viewport <n>`. Optionally of a specific element. |
 | `pdf` | Save page as PDF. `--filename <path>`. |
 
 ```bash
 browser4-cli screenshot --full-page --filename page.png
+browser4-cli screenshot --viewport 0 --filename top.png
 browser4-cli pdf --filename page.pdf
 ```
 
