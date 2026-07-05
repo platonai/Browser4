@@ -710,31 +710,28 @@ function Write-IssuesToReadyQueue {
 # Safe native-command invocation
 # ═══════════════════════════════════════════════════════════════════════════════
 #
-# When PowerShell pipes a native (non-PowerShell) command and writes the output
-# to a file, three things reliably produce garbled text.  Every ps1 script that
-# captures native-command output must handle ALL THREE:
+# Start-NativeCommand wraps System.Diagnostics.Process with .NET async output
+# handlers (OutputDataReceived / ErrorDataReceived) so the PowerShell thread
+# stays free to print periodic heartbeat messages during silent stretches.
 #
-# 1. ENCODING MISMATCH
-#    PowerShell decodes native-command stdout through [Console]::OutputEncoding,
-#    which defaults to the system ANSI code page (cp1252 / cp936 / …).
-#    Modern CLI tools (Node.js, Rust, Go) emit UTF-8.
-#    Mismatch → every non-ASCII byte is reinterpreted as a code-page glyph.
-#    FIX: set [Console]::OutputEncoding = UTF-8 before invocation; restore after.
+# This replaces the old pipeline-based approach (& cmd 2>&1 | ForEach-Object),
+# which suffered from three problems:
 #
-# 2. ERROR-OBJECT LEAKAGE
-#    The "2>&1" redirect merges stderr into the pipeline as ErrorRecord *objects*,
-#    not strings.  Writing them raw to a StreamWriter calls .ToString(), which
-#    emits the FQ type name ("System.Management.Automation.ErrorRecord …") instead
-#    of the error message.
-#    FIX: coerce every pipeline object to string with "$_" before writing.
+# 1. ENCODING MISMATCH — [Console]::OutputEncoding had to be swapped to UTF-8
+#    before every invocation.  Solved by setting StandardOutputEncoding on
+#    ProcessStartInfo directly.
 #
-# 3. BOM INCONSISTENCY
-#    [System.Text.Encoding]::UTF8 includes a 3-byte BOM in .NET Framework / .NET.
-#    Mixing BOM and non-BOM sources in a single pipeline writes garbage bytes at
-#    file boundaries.
-#    FIX: use [System.Text.UTF8Encoding]::new($false) for all file I/O.
+# 2. ERROR-OBJECT LEAKAGE — "2>&1" merged stderr as ErrorRecord *objects*,
+#    whose .ToString() emitted FQ type names instead of messages.
+#    Solved by reading stdout/stderr as separate streams.
 #
-# Use the Start-NativeCommand helper below; it applies all three fixes.
+# 3. BOM INCONSISTENCY — mixing BOM and non-BOM sources wrote garbage bytes.
+#    Solved by using UTF8Encoding($false) for all file I/O.
+#
+# Additional benefit: heartbeats.  The pipeline blocked the PS thread, making
+# it impossible to print "still running" messages while the child process was
+# alive but not emitting output.  The polling loop in WaitForExit(timeout)
+# gives us a natural heartbeat cadence.
 
 function Start-NativeCommand {
     <#
@@ -742,10 +739,14 @@ function Start-NativeCommand {
         Invoke a native command safely, capturing combined stdout+stderr to a file.
 
     .DESCRIPTION
-        Wraps a native command invocation with the three fixes described above:
-        UTF-8 output decoding, safe string coercion of ErrorRecord objects, and
-        BOM-free file I/O.  Output is streamed to the console in real time while
-        simultaneously written to the capture file.
+        Uses System.Diagnostics.Process with .NET async output handlers so the
+        PowerShell thread is free to print periodic heartbeat messages during
+        silent stretches.  Output streams to the console in real time while
+        simultaneously written to the capture file (UTF-8 without BOM).
+
+        Replaces the old pipeline-based approach (& cmd 2>&1 | ForEach-Object)
+        which blocked the PowerShell thread and offered no way to report progress
+        while the child process was running but not yet emitting output.
 
     .PARAMETER FilePath
         Path to the native executable.
@@ -755,10 +756,14 @@ function Start-NativeCommand {
 
     .PARAMETER CaptureFile
         File path to capture combined stdout+stderr (UTF-8 without BOM).  When
-        omitted, output goes to the console only.
+        omitted, a temp file is used and cleaned up on return.
 
     .PARAMETER PassThru
         When set, also returns the captured output as a single string.
+
+    .PARAMETER HeartbeatIntervalSec
+        Seconds between "still running" messages when no output is produced
+        (default 10).  Set to 0 to disable heartbeats.
 
     .EXAMPLE
         Start-NativeCommand -FilePath 'claude' -ArgumentList @('-p', $prompt) `
@@ -776,64 +781,202 @@ function Start-NativeCommand {
 
         [string] $CaptureFile,
 
-        [switch] $PassThru
+        [switch] $PassThru,
+
+        [int] $HeartbeatIntervalSec = 10
     )
 
-    $writer = $null
-    $exitCode = 0
     $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
 
-    try {
-        if ($CaptureFile) {
-            $writer = [System.IO.StreamWriter]::new($CaptureFile, $false, $utf8NoBom)
-            # Print a startup line so the user knows the process has launched
-            # even if it takes a while to produce its first output line.
-            # Omit the -p <prompt> value — it can be thousands of chars.
-            $displayArgs = @()
-            $skipNext = $false
-            foreach ($a in $ArgumentList) {
-                if ($skipNext) { $skipNext = $false; continue }
-                if ($a -eq '-p') { $skipNext = $true; continue }
-                $displayArgs += $a
-            }
-            [Console]::WriteLine("Running: $FilePath $($displayArgs -join ' ')...")
-        }
-
-        # Fix 1: decode native-command stdout as UTF-8
-        $prevEncoding = [Console]::OutputEncoding
-        [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-
-        try {
-            & $FilePath @ArgumentList 2>&1 | ForEach-Object {
-                # Fix 2: "$_" safely coerces ErrorRecord / string / etc.
-                $line = "$_"
-                if ($writer) {
-                    $writer.WriteLine($line)
-                    $writer.Flush()
-                }
-                # Write directly to the console host so the user sees real-time
-                # output without polluting the function's output stream.
-                # The function returns only the integer exit code (line 536).
-                [Console]::WriteLine($line)
-            }
-            $exitCode = $LASTEXITCODE
-        } finally {
-            [Console]::OutputEncoding = $prevEncoding
-        }
-    } finally {
-        if ($writer) { $writer.Dispose() }
+    # ── Build a display-friendly argument list (hide -p <prompt>) ──────────
+    $displayArgs = @()
+    $skipNext = $false
+    foreach ($a in $ArgumentList) {
+        if ($skipNext) { $skipNext = $false; continue }
+        if ($a -eq '-p') { $skipNext = $true; $displayArgs += '<prompt>'; continue }
+        $displayArgs += $a
     }
 
-    # Let the caller decide what to do with the exit code; also set it in the
-    # script scope so $LASTEXITCODE is visible to callers that check it directly.
+    $startTime = Get-Date
+    $startFmt = $startTime.ToString('HH:mm:ss')
+    Write-Host ''
+    Write-Host "-> Started at ${startFmt}: $FilePath $($displayArgs -join ' ')" -ForegroundColor Yellow
+    Write-Host ''
+
+    # ── Resolve a capture file path ────────────────────────────────────────
+    # Even when the caller doesn't need a capture file we still write to a temp
+    # file so the async output handlers (which run on .NET threadpool threads)
+    # always have a valid static file path to append to.
+    $capturePath = if ($CaptureFile) {
+        $CaptureFile
+    } else {
+        [System.IO.Path]::GetTempFileName()
+    }
+    # Initialize the capture file (create or truncate)
+    [System.IO.File]::WriteAllText($capturePath, '', $utf8NoBom)
+
+    # ── .NET event handlers for stdout / stderr ────────────────────────────
+    # Use *direct* .NET event delegates (proc.add_OutputDataReceived), not
+    # PowerShell's Register-ObjectEvent.  The latter queues actions that only
+    # run when the PS engine pumps events; direct delegates fire on threadpool
+    # threads immediately, giving true real-time console output.
+    $outHandler = [System.Diagnostics.DataReceivedEventHandler] {
+        param($sender, $e)
+        if ($e.Data -ne $null) {
+            [Console]::WriteLine($e.Data)
+            [System.IO.File]::AppendAllText(
+                $capturePath,
+                $e.Data + [Environment]::NewLine,
+                $utf8NoBom
+            )
+        }
+    }
+
+    $errHandler = [System.Diagnostics.DataReceivedEventHandler] {
+        param($sender, $e)
+        if ($e.Data -ne $null) {
+            [Console]::WriteLine($e.Data)
+            [System.IO.File]::AppendAllText(
+                $capturePath,
+                $e.Data + [Environment]::NewLine,
+                $utf8NoBom
+            )
+        }
+    }
+
+    # ── Build the process ──────────────────────────────────────────────────
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $FilePath
+    # Build argument string with proper quoting for ProcessStartInfo
+    $argStr = ''
+    foreach ($a in $ArgumentList) {
+        if ($argStr.Length -gt 0) { $argStr += ' ' }
+        if ($a -match '[\s"]') {
+            $argStr += '"' + $a.Replace('"', '\"') + '"'
+        } else {
+            $argStr += $a
+        }
+    }
+    $psi.Arguments = $argStr
+    $psi.UseShellExecute = $false
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $psi.StandardOutputEncoding = $utf8NoBom
+    $psi.StandardErrorEncoding = $utf8NoBom
+    $psi.CreateNoWindow = $true
+
+    $proc = New-Object System.Diagnostics.Process
+    $proc.StartInfo = $psi
+
+    # Wire up event handlers
+    $null = $proc.add_OutputDataReceived($outHandler)
+    $null = $proc.add_ErrorDataReceived($errHandler)
+
+    $exitCode = -1
+    $stopwatch = [System.Diagnostics.Stopwatch]::new()
+
+    try {
+        try {
+            $proc.Start() | Out-Null
+        } catch {
+            Write-Host "ERROR: Failed to start '$FilePath': $_" -ForegroundColor Red
+            Write-Host "  Is '$FilePath' installed and on your PATH?" -ForegroundColor DarkGray
+            $script:LastNativeExitCode = 127
+            return 127
+        }
+
+        # Begin async reading
+        $proc.BeginOutputReadLine()
+        $proc.BeginErrorReadLine()
+
+        # ── Heartbeat loop ─────────────────────────────────────────────────
+        # Poll the process with WaitForExit(timeout).  While waiting, the
+        # OutputDataReceived / ErrorDataReceived events fire on background
+        # .NET threads and call [Console]::WriteLine directly — that output
+        # interleaves naturally with the heartbeats below.
+        $stopwatch.Start()
+        $lastHeartbeatSec = 0
+
+        while (-not $proc.HasExited) {
+            $proc.WaitForExit(2000) | Out-Null
+            $elapsed = $stopwatch.Elapsed.TotalSeconds
+
+            if ($HeartbeatIntervalSec -gt 0 -and
+                ($elapsed - $lastHeartbeatSec) -ge $HeartbeatIntervalSec -and
+                -not $proc.HasExited) {
+                $mins = [Math]::Floor($elapsed / 60)
+                $secs = [Math]::Floor($elapsed % 60)
+                [Console]::WriteLine(
+                    "  ... still running (${mins}m ${secs}s elapsed) ..."
+                )
+                $lastHeartbeatSec = $elapsed
+            }
+        }
+
+        # ── Drain final output ─────────────────────────────────────────────
+        # The process has exited but async reads may still have data in flight.
+        # Cancel the async readers, then drain synchronously to capture
+        # everything that remains.
+        try { $proc.CancelOutputRead() } catch { }
+        try { $proc.CancelErrorRead() } catch { }
+
+        # Small grace period for in-flight async events to land
+        Start-Sleep -Milliseconds 300
+
+        # Synchronous drain of any remaining output
+        try {
+            $rem = $proc.StandardOutput.ReadToEnd()
+            if ($rem) {
+                [Console]::Write($rem)
+                [System.IO.File]::AppendAllText($capturePath, $rem, $utf8NoBom)
+            }
+        } catch { }
+        try {
+            $rem = $proc.StandardError.ReadToEnd()
+            if ($rem) {
+                [Console]::Write($rem)
+                [System.IO.File]::AppendAllText($capturePath, $rem, $utf8NoBom)
+            }
+        } catch { }
+
+        $exitCode = $proc.ExitCode
+
+    } finally {
+        # Clean up event handlers before Dispose
+        try { $proc.remove_OutputDataReceived($outHandler) } catch { }
+        try { $proc.remove_ErrorDataReceived($errHandler) } catch { }
+        if ($proc -and -not $proc.HasExited) {
+            try { $proc.Kill() } catch { }
+        }
+        $proc.Dispose()
+        $stopwatch.Stop()
+    }
+
+    # ── Finish banner ──────────────────────────────────────────────────────
+    $duration = $stopwatch.Elapsed
+    $color = if ($exitCode -eq 0) { 'Green' } else { 'Red' }
+    $durStr = "$([Math]::Floor($duration.TotalMinutes))m $($duration.Seconds)s"
+    Write-Host ''
+    Write-Host "<- Finished at $(Get-Date -Format 'HH:mm:ss') (duration: ${durStr}, exit code: $exitCode)" -ForegroundColor $color
+
     $script:LastNativeExitCode = $exitCode
 
-    if ($PassThru -and $CaptureFile -and (Test-Path -LiteralPath $CaptureFile)) {
-        $content = [System.IO.File]::ReadAllText(
-            [System.IO.Path]::GetFullPath($CaptureFile), $utf8NoBom
-        )
-        Remove-Item -LiteralPath $CaptureFile -ErrorAction SilentlyContinue
+    # ── PassThru / temp-file cleanup ───────────────────────────────────────
+    if ($PassThru) {
+        $content = ''
+        if (Test-Path -LiteralPath $capturePath) {
+            $content = [System.IO.File]::ReadAllText(
+                [System.IO.Path]::GetFullPath($capturePath), $utf8NoBom
+            )
+        }
+        if (-not $CaptureFile) {
+            Remove-Item -LiteralPath $capturePath -ErrorAction SilentlyContinue
+        }
         return $content
+    }
+
+    if (-not $CaptureFile -and (Test-Path -LiteralPath $capturePath)) {
+        Remove-Item -LiteralPath $capturePath -ErrorAction SilentlyContinue
     }
 
     return $exitCode
@@ -978,64 +1121,47 @@ function Invoke-Agent {
     if (-not $Silent) {
         $promptLen = $Prompt.Length
         $promptLines = ($Prompt -split "`n").Count
-        Write-Host "Invoking Claude Code agent..." -ForegroundColor Cyan
-        Write-Host "  Prompt: $promptLen chars, $promptLines lines" -ForegroundColor DarkGray
+        Write-Host "Invoking Claude Code agent (prompt: $promptLen chars, $promptLines lines)" -ForegroundColor Cyan
         if ($ScenarioName) {
-            Write-Host "  Scenario: $ScenarioName (output will be captured)" -ForegroundColor DarkGray
+            Write-Host "  Scenario: $ScenarioName" -ForegroundColor DarkGray
         }
-        Write-Host "  This may take several minutes -- the agent runs browser4-cli commands" -ForegroundColor DarkGray
-        Write-Host "  and evaluates usability. Output appears as the agent works." -ForegroundColor DarkGray
-        Write-Host ""
     }
 
-    # ── Path 1: Legacy mode (no capture) ─────────────────────────────────────
-    # Preserves the exact original behavior for backward compatibility.
-    if (-not $ScenarioName -and -not $OutputFile) {
-        $claudeArgs = @('--dangerously-skip-permissions', '-p', $Prompt)
-        if ($Silent) { $claudeArgs += '--silent' }
+    # ── Build claude arguments ──────────────────────────────────────────────
+    $claudeArgs = @('--dangerously-skip-permissions', '-p', $Prompt)
+    if ($Silent) { $claudeArgs += '--silent' }
 
-        if (-not $Silent) {
-            Write-Host "→ Agent started at $(Get-Date -Format 'HH:mm:ss'). Output will appear as the agent works..." -ForegroundColor Yellow
+    # ── Resolve capture file path (when needed) ─────────────────────────────
+    $tempFile = ''
+    if ($ScenarioName -or $OutputFile) {
+        $targetDir = Join-Path $script:RepoRoot 'target'
+        if (-not (Test-Path -LiteralPath $targetDir)) {
+            New-Item -ItemType Directory -Path $targetDir -Force | Out-Null
         }
-        claude @claudeArgs
+        $tempFile = Join-Path $targetDir ([System.IO.Path]::GetRandomFileName())
+    }
 
-        if (-not $Silent) {
-            Write-Host ""
-            Write-Host "Agent finished (exit code: $LASTEXITCODE)." `
-                -ForegroundColor $(if ($LASTEXITCODE -eq 0) { 'Green' } else { 'Red' })
+    # ── Invoke claude via Start-NativeCommand ───────────────────────────────
+    # Start-NativeCommand handles real-time output streaming, capture-file
+    # writes, and periodic heartbeat messages during silent stretches.
+    $startParams = @{
+        FilePath     = 'claude'
+        ArgumentList = $claudeArgs
+    }
+    if ($tempFile) {
+        $startParams['CaptureFile'] = $tempFile
+    }
+    $exitCode = Start-NativeCommand @startParams
+
+    # ── Post-processing (only when capture was requested) ───────────────────
+    if (-not $tempFile) {
+        if ($exitCode -ne 0) {
+            $host.UI.WriteErrorLine("Agent exited with non-zero code: $exitCode")
         }
         return
     }
 
-    # ── Path 2: Capture mode (with ScenarioName or OutputFile) ────────────────
-    $claudeArgs = @('--dangerously-skip-permissions', '-p', $Prompt)
-    if ($Silent) { $claudeArgs += '--silent' }
-
-    $targetDir = Join-Path $script:RepoRoot 'target'
-    if (-not (Test-Path -LiteralPath $targetDir)) {
-        New-Item -ItemType Directory -Path $targetDir -Force | Out-Null
-    }
-    $tempFile = Join-Path $targetDir ([System.IO.Path]::GetRandomFileName())
-
-    if (-not $Silent) {
-        Write-Host "→ Agent started at $(Get-Date -Format 'HH:mm:ss'). Output will appear as the agent works..." -ForegroundColor Yellow
-    }
-
-    # Start-NativeCommand applies all three anti-garbling fixes:
-    #   [Console]::OutputEncoding = UTF-8
-    #   ErrorRecord → string coercion
-    #   UTF-8 without BOM file I/O
-    $exitCode = Start-NativeCommand -FilePath 'claude' `
-        -ArgumentList $claudeArgs `
-        -CaptureFile $tempFile
-
-    if (-not $Silent) {
-        Write-Host ""
-        Write-Host "Agent finished (exit code: $exitCode)." `
-            -ForegroundColor $(if ($exitCode -eq 0) { 'Green' } else { 'Red' })
-    }
-
-    # Read back the captured output (Start-NativeCommand uses UTF-8 no-BOM)
+    # Read back the captured output (UTF-8 without BOM)
     $capturedOutput = ''
     if (Test-Path -LiteralPath $tempFile) {
         $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
