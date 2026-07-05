@@ -1326,6 +1326,9 @@ mod tests {
         assert!(help.contains("--file"));
         assert!(help.contains("Read JavaScript expression from a file"));
         assert!(help.contains("browser4-cli eval --file script.js"));
+        assert!(help.contains("--base64"));
+        assert!(help.contains("base64-encoded expression"));
+        assert!(help.contains("browser4-cli eval --base64 ZG9jdW1lbnQudGl0bGU="));
         assert!(help.contains("Objects and arrays are serialized as valid JSON"));
         assert!(help.contains("--json to JSON-wrap"));
         assert!(help.contains("browser4-cli eval --json \"document.title\""));

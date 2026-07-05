@@ -3133,6 +3133,45 @@ mod tests {
     }
 
     #[test]
+    fn test_eval_has_base64_option() {
+        let map = commands_map();
+        let cmd = map.get("eval").unwrap();
+        let base64_opt = cmd
+            .options
+            .iter()
+            .find(|o| o.name == "base64")
+            .expect("eval should have a --base64 option");
+        assert!(base64_opt.is_bool, "--base64 should be a boolean flag");
+        assert!(
+            base64_opt.description.contains("base64"),
+            "--base64 description should mention base64, got: {}",
+            base64_opt.description
+        );
+    }
+
+    #[test]
+    fn test_eval_params_passthrough_base64_flag() {
+        let map = commands_map();
+        let cmd = map.get("eval").unwrap();
+        let mut args = HashMap::new();
+        args.insert("expression".to_string(), json!("ZG9jdW1lbnQudGl0bGU="));
+        args.insert("base64".to_string(), json!(true));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["base64"], json!(true), "base64 flag should pass through to dispatch");
+        assert_eq!(params["expression"], json!("ZG9jdW1lbnQudGl0bGU="));
+    }
+
+    #[test]
+    fn test_eval_params_base64_not_set_by_default() {
+        let map = commands_map();
+        let cmd = map.get("eval").unwrap();
+        let mut args = HashMap::new();
+        args.insert("expression".to_string(), json!("document.title"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert!(params.get("base64").is_none(), "base64 should not be set when flag is absent");
+    }
+
+    #[test]
     fn test_mousewheel_params_preserve_decimal_numbers() {
         let map = commands_map();
         let cmd = map.get("mousewheel").unwrap();
