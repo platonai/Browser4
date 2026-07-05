@@ -323,7 +323,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push(String::new());
         lines.push("Examples:".to_string());
         lines.push("  browser4-cli extract \"product name, price, ratings\"".to_string());
-        lines.push("  browser4-cli extract \"all contact info\" --schema person_schema.json".to_string());
+        lines.push("  browser4-cli extract \"all contact info\" --schema '{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\"},\"email\":{\"type\":\"string\"}}}'".to_string());
         lines.push("  browser4-cli extract \"article titles and dates\" --stdout".to_string());
         lines.push("  browser4-cli extract \"page metadata\" --filename meta.json".to_string());
     }
