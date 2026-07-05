@@ -1578,6 +1578,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             options: &[
                 OptionDef { name: "filename", description: "File name to save the screenshot to", is_bool: false, short: None },
                 OptionDef { name: "full-page", description: "When true, takes a screenshot of the full scrollable page", is_bool: true, short: None },
+                OptionDef { name: "viewport", description: "Capture a specific viewport by index (0 = top). Same semantics as snapshot -v.", is_bool: false, short: Some("v") },
             ],
             tool_name_fn: |_| "browser_take_screenshot".to_string(),
             tool_params_fn: |args| {
@@ -1585,6 +1586,9 @@ pub fn all_commands() -> Vec<CommandDef> {
                 if let Some(r) = get_opt_str(args, "ref") { p["ref"] = json!(r); }
                 if let Some(f) = get_opt_str(args, "filename") { p["filename"] = json!(f); }
                 if let Some(fp) = get_bool(args, "full-page") { p["fullPage"] = json!(fp); }
+                if let Some(v) = get_opt_str(args, "viewport") {
+                    if let Ok(n) = v.parse::<i32>() { p["viewport"] = json!(n); }
+                }
                 p
             },
         },

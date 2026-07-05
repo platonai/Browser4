@@ -2856,7 +2856,20 @@ async fn handle_tool_command_with_options(
             json_field("ref", json!(r));
         }
     } else if !result.is_empty() {
-        cli_println!("{}", result);
+        // Wait tools return internal driver JSON — replace with user-friendly messages
+        if tool_name == "wait_for_function" {
+            cli_println!("✓ Wait complete");
+        } else if tool_name == "wait_for_page" {
+            cli_println!("✓ URL matched");
+        } else if tool_name == "delay" {
+            let millis = tool_params.get("millis").and_then(|v| v.as_i64()).unwrap_or(0);
+            cli_println!("✓ Waited {}ms", millis);
+        } else if tool_name == "wait_for_selector" {
+            let selector = tool_params.get("selector").and_then(|v| v.as_str()).unwrap_or("?");
+            cli_println!("✓ Element found: {}", selector);
+        } else {
+            cli_println!("{}", result);
+        }
         json_field("result", json!(&result));
     }
 
