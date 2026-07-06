@@ -224,6 +224,7 @@ pub fn stop_browser4_server_forcibly() -> ForceStopBrowser4ServerResult {
     // Final verification: catch processes that respawned or were slow to
     // materialise during the grace period.  Any stragglers are killed and
     // folded into the result.
+    #[cfg_attr(not(windows), allow(unused_mut))]
     let mut final_extra = find_unique_pulsar_browser_processes();
     #[cfg(windows)]
     {
@@ -1092,6 +1093,7 @@ fn force_stop(pid: u32) {
     }
 }
 
+#[cfg_attr(not(windows), allow(dead_code))]
 fn force_stop_browser_process(pid: u32) {
     #[cfg(unix)]
     {

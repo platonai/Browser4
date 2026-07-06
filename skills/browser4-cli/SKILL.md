@@ -133,7 +133,7 @@ Need to process multiple pages?
 
 ## 5. Critical Warnings
 
-> **Warning:** Refs are single-use. Re-snapshot after every page-modifying command (click, type, fill, goto, reload, tab switch). Never store refs across interactions.
+> **Warning:** Refs are single-use for navigation and DOM-mutating commands. Re-snapshot after `click` (on links/buttons), `goto`, `reload`, and tab switches. Form interactions (`fill`, `type`, `press`, `check`, `uncheck`, `select`) are safe — you can fill an entire form from a single snapshot. Never store refs across navigations.
 
 > **Warning:** CSS selectors are tied to live websites — they break when sites change their HTML. Always discover selectors with `htmlsnapshot inspect` or `htmlsnapshot summary` before extraction. Treat scenario examples as patterns, not copy-paste recipes.
 
