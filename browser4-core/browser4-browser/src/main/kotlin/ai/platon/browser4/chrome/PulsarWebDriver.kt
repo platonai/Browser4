@@ -1175,7 +1175,7 @@ open class PulsarWebDriver constructor(
                     )
 
                     // Parse the JSON result to check for errors
-                    val json = (result?.value as? String) ?: "{}"
+                    val json = (result.result.value as? String) ?: "{}"
                     val parsed = runCatching { jacksonObjectMapper().readTree(json) }.getOrNull()
                     if (parsed?.get("ok")?.asBoolean() != true) {
                         val error = parsed?.get("error")?.asText() ?: "Drag operation failed"

@@ -124,15 +124,15 @@ class DialogHandler(
             devTools.addEventListener(
                 "Page",
                 "javascriptDialogOpening",
-                { event: JavascriptDialogOpening ->
-                    onDialogOpening(event)
+                { event ->
+                    onDialogOpening(event as JavascriptDialogOpening)
                 },
                 JavascriptDialogOpening::class.java
             )
             devTools.addEventListener(
                 "Page",
                 "javascriptDialogClosed",
-                { _: JavascriptDialogClosed ->
+                { _ ->
                     onDialogClosed()
                 },
                 JavascriptDialogClosed::class.java
@@ -151,7 +151,7 @@ class DialogHandler(
     private fun onDialogOpening(event: JavascriptDialogOpening) {
         val dialogEvent = DialogEvent(
             message = event.message.orEmpty(),
-            type = event.type,
+            type = event.type.name.lowercase(),
             url = event.url,
             defaultPrompt = event.defaultPrompt,
             hasBrowserHandler = event.hasBrowserHandler ?: false,

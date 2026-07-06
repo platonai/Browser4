@@ -267,7 +267,7 @@ open class WebDriverPoolManager constructor(
         val idlePools = workingDriverPools.values.filter { it.isIdle }
         for (pool in idlePools) {
             try {
-                close(pool.browserId)
+                closeBrowserAccompaniedDriverPoolGracefully(pool.browserId, idleTimeout)
                 closed++
             } catch (e: Exception) {
                 logger.warn("Failed to close idle pool {}: {}", pool.browserId, e.message)

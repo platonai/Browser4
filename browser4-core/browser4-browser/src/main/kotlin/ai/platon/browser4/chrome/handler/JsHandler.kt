@@ -94,7 +94,7 @@ class JsHandler(
      *
      * @return List of frame IDs, or empty list if the frame tree is unavailable.
      */
-    fun listFrameIds(): List<String> {
+    suspend fun listFrameIds(): List<String> {
         return try {
             val frameIds = mutableListOf<String>()
             val frameTree = runCatching { bp.getFrameTree() }.getOrNull() ?: return emptyList()
@@ -132,7 +132,7 @@ class JsHandler(
             try {
                 val result = evaluateDetailInFrame(script, frameId)
                 if (result != null && result.exceptionDetails == null) {
-                    results[frameId] = result.value?.value
+                    results[frameId] = result.result.value
                 }
             } catch (_: Exception) {
                 // skip frames where evaluation fails
