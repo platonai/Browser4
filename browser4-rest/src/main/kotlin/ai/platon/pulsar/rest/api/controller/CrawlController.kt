@@ -70,6 +70,32 @@ class CrawlController(
         return crawlService.getResult(taskId)
     }
 
+    /**
+     * Cancel a running crawl task.
+     *
+     * @param id The task UUID returned by [startCrawl]
+     * @return true if the task was found and cancelled
+     */
+    @PostMapping("/{id}/cancel", consumes = [MediaType.ALL_VALUE], produces = [MediaType.APPLICATION_JSON_VALUE])
+    fun cancelCrawl(@PathVariable(value = "id") taskId: String): Map<String, Any> {
+        if (taskId.isBlank()) {
+            throw IllegalArgumentException("id must not be blank")
+        }
+        val cancelled = crawlService.cancel(taskId)
+        return mapOf("taskId" to taskId, "cancelled" to cancelled)
+    }
+
+    /**
+     * Remove all terminal-state tasks from the crawl task store.
+     *
+     * @return the number of tasks removed
+     */
+    @PostMapping("/clear", consumes = [MediaType.ALL_VALUE], produces = [MediaType.APPLICATION_JSON_VALUE])
+    fun clearCrawls(): Map<String, Any> {
+        val count = crawlService.clearTerminal()
+        return mapOf("cleared" to count)
+    }
+
     @ResponseStatus(HttpStatus.BAD_REQUEST)
     @ExceptionHandler(IllegalArgumentException::class)
     fun handleBadRequest(e: IllegalArgumentException): Map<String, Any> {

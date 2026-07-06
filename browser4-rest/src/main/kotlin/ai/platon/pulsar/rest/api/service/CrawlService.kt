@@ -35,7 +35,9 @@ data class CrawlResponse(
     val status: String = "CREATED",
     val pagesFound: Int = 0,
     val pages: List<CrawlPageResult>? = null,
-    val error: String? = null
+    val error: String? = null,
+    val createdAt: Long = System.currentTimeMillis(),
+    val taskTTLMinutes: Int = 60,
 )
 
 data class CrawlPageResult(
@@ -55,12 +57,29 @@ class CrawlService(
     /** Task store: taskId -> CrawlResponse */
     private val taskStore = ConcurrentHashMap<String, CrawlResponse>()
 
+    /** Active coroutine jobs: taskId -> Job (for cancellation) */
+    private val jobStore = ConcurrentHashMap<String, Job>()
+
     /** Dedicated dispatcher for crawl operations */
     private val crawlDispatcher = Dispatchers.IO.limitedParallelism(5)
 
     private val crawlScope = CoroutineScope(
         crawlDispatcher + SupervisorJob() + CoroutineName("crawl")
     )
+
+    /** How long to keep completed/failed tasks in the store (minutes). */
+    @Volatile
+    var taskTtlMinutes: Int = 60
+
+    init {
+        // Periodically purge expired tasks so stale entries don't accumulate
+        crawlScope.launch {
+            while (isActive) {
+                delay(5 * 60 * 1000L) // every 5 minutes
+                purgeExpiredTasks()
+            }
+        }
+    }
 
     @PreDestroy
     fun shutdown() {
@@ -97,7 +116,7 @@ class CrawlService(
             return taskId
         }
 
-        crawlScope.launch {
+        val job = crawlScope.launch {
             try {
                 val allPages = withContext(Dispatchers.IO) {
                     val results = mutableListOf<CrawlPageResult>()
@@ -120,11 +139,16 @@ class CrawlService(
                 )
                 logger.info("Crawl task {} completed: {} pages", taskId, allPages.size)
             } catch (e: CancellationException) {
-                taskStore[taskId] = CrawlResponse(
-                    taskId = taskId,
-                    status = ResourceStatus.getStatusText(ResourceStatus.SC_REQUEST_TIMEOUT),
-                    error = "Crawl cancelled or timed out"
-                )
+                // Only set error status if the depth methods haven't already saved
+                // partial results (which include the timeout status and collected pages)
+                val existing = taskStore[taskId]
+                if (existing == null || existing.status == ResourceStatus.getStatusText(ResourceStatus.SC_CREATED)) {
+                    taskStore[taskId] = CrawlResponse(
+                        taskId = taskId,
+                        status = ResourceStatus.getStatusText(ResourceStatus.SC_REQUEST_TIMEOUT),
+                        error = "Crawl cancelled or timed out"
+                    )
+                }
                 logger.warn("Crawl task {} cancelled", taskId)
             } catch (e: Exception) {
                 taskStore[taskId] = CrawlResponse(
@@ -133,11 +157,70 @@ class CrawlService(
                     error = e.message ?: "Unknown error"
                 )
                 logger.error("Crawl task {} failed: {}", taskId, e.message, e)
+            } finally {
+                jobStore.remove(taskId)
             }
         }
 
+        jobStore[taskId] = job
+
         logger.info("Crawl task submitted: {} seeds={} depth={}", taskId, seedUrls.size, request.depth)
         return taskId
+    }
+
+    /**
+     * Cancel a running crawl task by its ID.
+     * @return true if the task was found and cancelled, false otherwise.
+     */
+    fun cancel(taskId: String): Boolean {
+        val job = jobStore.remove(taskId) ?: return false
+        job.cancel()
+        taskStore[taskId] = CrawlResponse(
+            taskId = taskId,
+            status = ResourceStatus.getStatusText(ResourceStatus.SC_REQUEST_TIMEOUT),
+            error = "Cancelled by user"
+        )
+        logger.info("Crawl task {} cancelled by user", taskId)
+        return true
+    }
+
+    /**
+     * Remove all terminal-state tasks from the store.
+     * @return the number of tasks removed.
+     */
+    fun clearTerminal(): Int {
+        val terminalStatuses = setOf(
+            ResourceStatus.getStatusText(ResourceStatus.SC_OK),
+            ResourceStatus.getStatusText(ResourceStatus.SC_REQUEST_TIMEOUT),
+            ResourceStatus.getStatusText(ResourceStatus.SC_INTERNAL_SERVER_ERROR),
+        )
+        val toRemove = taskStore.entries.filter { it.value.status in terminalStatuses }
+        toRemove.forEach { taskStore.remove(it.key) }
+        logger.info("Cleared {} terminal crawl tasks", toRemove.size)
+        return toRemove.size
+    }
+
+    /**
+     * Purge tasks whose TTL has expired.  Only removes terminal-state tasks;
+     * actively-running tasks are never purged.
+     */
+    private fun purgeExpiredTasks() {
+        val now = System.currentTimeMillis()
+        val ttlMillis = taskTtlMinutes * 60_000L
+        val terminalStatuses = setOf(
+            ResourceStatus.getStatusText(ResourceStatus.SC_OK),
+            ResourceStatus.getStatusText(ResourceStatus.SC_REQUEST_TIMEOUT),
+            ResourceStatus.getStatusText(ResourceStatus.SC_INTERNAL_SERVER_ERROR),
+        )
+
+        val expired = taskStore.entries.filter {
+            it.value.status in terminalStatuses &&
+                (now - it.value.createdAt) > ttlMillis
+        }
+        expired.forEach { taskStore.remove(it.key) }
+        if (expired.isNotEmpty()) {
+            logger.info("Purged {} expired crawl tasks (TTL: {} min)", expired.size, taskTtlMinutes)
+        }
     }
 
     /**
@@ -239,7 +322,16 @@ class CrawlService(
 
             return results.toList()
         } catch (e: TimeoutCancellationException) {
-            logger.warn("Crawl {}: depth=1 timed out", taskId)
+            logger.warn("Crawl {}: depth=1 timed out after collecting {} pages; saving partial results", taskId, results.size)
+            // Save partial results BEFORE re-throwing — the outer launch catch
+            // guards against overwriting already-saved partial results
+            taskStore[taskId] = CrawlResponse(
+                taskId = taskId,
+                status = ResourceStatus.getStatusText(ResourceStatus.SC_REQUEST_TIMEOUT),
+                pagesFound = results.size,
+                pages = results.toList(),
+                error = "Crawl timed out after collecting ${results.size} pages (partial results saved)"
+            )
             throw e
         } finally {
             runCatching { session.close() }
@@ -330,7 +422,16 @@ class CrawlService(
 
             return results.toList()
         } catch (e: TimeoutCancellationException) {
-            logger.warn("Crawl {}: depth>1 timed out", taskId)
+            logger.warn("Crawl {}: depth>1 timed out after collecting {} pages; saving partial results", taskId, results.size)
+            // Save partial results BEFORE re-throwing — the outer launch catch
+            // guards against overwriting already-saved partial results
+            taskStore[taskId] = CrawlResponse(
+                taskId = taskId,
+                status = ResourceStatus.getStatusText(ResourceStatus.SC_REQUEST_TIMEOUT),
+                pagesFound = results.size,
+                pages = results.toList(),
+                error = "Crawl timed out after collecting ${results.size} pages (partial results saved)"
+            )
             throw e
         } finally {
             runCatching { session.close() }
@@ -363,6 +464,8 @@ class CrawlService(
     ): List<Map<String, Any?>>? {
         return try {
             val processedSql = SQLTemplate(sql).createSQL(pageUrl)
+            logger.debug("executeSqlQuery: raw='{}' processed='{}'", sql.take(200), processedSql.take(200))
+
             val sqlContext = session.context as? AbstractBrowser4SQLContext
                 ?: run {
                     logger.warn("Session context is not an SQL context; cannot execute X-SQL")
@@ -372,7 +475,7 @@ class CrawlService(
             val copied = ResultSetUtils.copyResultSet(rs)
             ResultSetUtils.getTextEntitiesFromResultSet(copied)
         } catch (e: Exception) {
-            logger.error("Failed to execute X-SQL on '{}': {}", pageUrl, e.message)
+            logger.error("Failed to execute X-SQL on '{}': {} (SQL: {})", pageUrl, e.message, sql.take(300))
             null
         }
     }
@@ -387,14 +490,38 @@ class CrawlService(
         options: LoadOptions
     ): List<String> {
         val normOptions = session.normalize(options)
-        val document = session.loadDocument(portalUrl, normOptions)
-        val selector = normOptions.outLinkSelector.orEmpty()
-        if (selector.isBlank()) return emptyList()
+        val rawSelector = normOptions.outLinkSelector.orEmpty()
+        if (rawSelector.isBlank()) return emptyList()
 
-        return document.select(selector) { element ->
+        // Diagnostic: log the selector as-provided and after normalization
+        // (correctOutLinkSelector may mangle selectors that already contain tag names)
+        val correctedSelector = normOptions.correctOutLinkSelector()
+        logger.debug(
+            "extractOutLinks: rawSelector='{}' correctedSelector='{}' ignoreUrlQuery={}",
+            rawSelector, correctedSelector, normOptions.ignoreUrlQuery
+        )
+
+        val document = session.loadDocument(portalUrl, normOptions)
+
+        // Diagnostic: verify the document has meaningful content
+        val docHtmlLength = document.html().length
+        val allAnchors = document.select("a").size
+        logger.debug(
+            "extractOutLinks: document.html().length={} document.select('a').size={}",
+            docHtmlLength, allAnchors
+        )
+
+        val selector = correctedSelector ?: rawSelector
+        val matchedElements = document.select(selector)
+        logger.debug(
+            "extractOutLinks: selector='{}' matched {} element(s)",
+            selector, matchedElements.size
+        )
+
+        return matchedElements.mapNotNull { element ->
             val href = element.attr("href").takeIf { it.isNotBlank() }
                 ?: element.attr("src").takeIf { it.isNotBlank() }
-                ?: return@select null
+                ?: return@mapNotNull null
             // Normalize: resolve relative URLs, optional query stripping
             val resolved = runCatching {
                 java.net.URI(portalUrl).resolve(href).toString()
@@ -406,7 +533,6 @@ class CrawlService(
                 resolved
             }
         }
-            .filterNotNull()
             .filter { link -> matchesPattern(link, normOptions.outLinkPattern) }
             .distinct()
             .take(normOptions.topLinks)

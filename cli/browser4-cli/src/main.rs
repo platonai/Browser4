@@ -51,8 +51,9 @@ use daemon::{
 };
 use help::{generate_command_help, generate_help, generate_help_entry, public_command_name};
 use http::{
-    call_tool, call_tool_with_result, crawl_request_timeout, get_command_result,
-    get_command_status, get_crawl_result, get_swarm_result, get_swarm_status,
+    call_tool, call_tool_with_result, cancel_crawl, clear_crawls, crawl_request_timeout,
+    get_command_result, get_command_status, get_crawl_result, get_crawl_status,
+    get_swarm_result, get_swarm_status,
     is_stale_session_error, make_client, submit_batch_commands, submit_crawl,
     submit_plain_command, submit_swarm_payload, submit_swarm_query, CallToolResult,
 };
@@ -64,6 +65,7 @@ use snapshot::{resolve_output_path, save_binary, save_snapshot, timestamped_file
 use state::{
     clear_all_state, clear_state, format_async_task_list, prune_async_tasks,
     read_async_tasks, read_state, resolve_default_state_dir, resolve_ref, track_async_task,
+    update_async_task_status,
     write_async_tasks, write_state, CliState, MousePosition,
 };
 
@@ -350,6 +352,10 @@ fn no_snapshot_commands() -> HashSet<&'static str> {
         "swarm-result",
         "swarm-list",
         "crawl",
+        "crawl-status",
+        "crawl-result",
+        "crawl-cancel",
+        "crawl-clear",
         "crawl-list",
         "htmlsnapshot",
         "htmlsnapshot-capture",
@@ -3737,8 +3743,24 @@ fn resolve_sql_file(file_path: &str) -> Result<String, String> {
 }
 
 /// Base64-decode the SQL string if `--sql-base64` was passed.
+/// Supports two modes:
+///   1. `--sql-base64 <base64-query>` — the value is read directly from the option.
+///   2. `--sql <base64-query> --sql-base64` — legacy boolean-flag mode.
 /// Applied after `@file` resolution so base64-encoded files are also supported.
 fn maybe_decode_base64_sql(sql: String, tool_params: &Value) -> Result<String, String> {
+    // Mode 1: --sql-base64 <value> (direct value mode)
+    if let Some(base64_val) = tool_params.get("sqlBase64").and_then(|v| v.as_str()) {
+        let trimmed = base64_val.trim();
+        if trimmed.is_empty() {
+            return Err("--sql-base64 was set but the value is empty.".to_string());
+        }
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(trimmed)
+            .map_err(|e| format!("Failed to base64-decode SQL: {e}"))?;
+        return String::from_utf8(bytes)
+            .map_err(|e| format!("Base64-decoded SQL is not valid UTF-8: {e}"));
+    }
+    // Mode 2: --sql <value> --sql-base64 (legacy boolean-flag mode)
     let use_base64 = tool_params
         .get("sqlBase64")
         .and_then(|v| v.as_bool())
@@ -3747,7 +3769,7 @@ fn maybe_decode_base64_sql(sql: String, tool_params: &Value) -> Result<String, S
         return Ok(sql);
     }
     if sql.trim().is_empty() {
-        return Err("--sql-base64 was set but the SQL value is empty.".to_string());
+        return Err("--sql-base64 was set but the SQL value is empty. Use --sql <base64-value> --sql-base64, or --sql-base64 <base64-value>.".to_string());
     }
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(sql.trim())
@@ -5742,6 +5764,71 @@ async fn handle_agent_run(
     }
     cli_println!("Task submitted: {}", task_id);
     json_field("task_id", json!(&task_id));
+
+    let wait = tool_params
+        .get("wait")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    if wait {
+        cli_println!("Waiting for agent to complete (task {})...", task_id);
+        let start = std::time::Instant::now();
+        let timeout = std::time::Duration::from_secs(600); // 10 minutes
+        loop {
+            if start.elapsed() > timeout {
+                return Err(format!(
+                    "Agent task {} timed out after {}s. Use 'agent status {}' to check later.",
+                    task_id,
+                    start.elapsed().as_secs(),
+                    task_id
+                ));
+            }
+
+            let status = get_command_status(client, base_url, &task_id).await?;
+            let parsed: Value = serde_json::from_str(&status)
+                .unwrap_or(Value::String(status.clone()));
+            let process_state = parsed
+                .get("processState")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+
+            match process_state {
+                "done" => {
+                    let result_text = get_command_result(client, base_url, &task_id).await?;
+                    cli_println!("Agent completed in {:.1}s:", start.elapsed().as_secs_f64());
+                    cli_println!("{}", result_text);
+                    json_field(
+                        "raw",
+                        json!(serde_json::from_str::<Value>(&result_text)
+                            .unwrap_or(Value::String(result_text.clone()))),
+                    );
+                    let _ = update_async_task_status(&task_id, "completed", None);
+                    return Ok(());
+                }
+                "failed" | "error" => {
+                    let message = parsed
+                        .get("message")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("Agent task failed");
+                    return Err(format!("Agent task failed: {}", message));
+                }
+                _ => {
+                    // Show progress indicator
+                    let elapsed = start.elapsed().as_secs();
+                    if elapsed > 0 && elapsed % 5 == 0 {
+                        let msg = parsed
+                            .get("message")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("processing...");
+                        cli_println!("  [{}s] {}", elapsed, msg);
+                    }
+                }
+            }
+
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        }
+    }
+
     cli_println!(
         "Use 'browser4-cli agent status {}' to check progress, or 'browser4-cli agent list' to view all tracked tasks.",
         task_id
@@ -6320,6 +6407,88 @@ async fn handle_crawl_list() -> Result<(), String> {
     Ok(())
 }
 
+async fn handle_crawl_status(
+    client: &Client,
+    base_url: &str,
+    tool_params: &Value,
+) -> Result<(), String> {
+    let id = tool_params
+        .get("id")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
+
+    if id.is_empty() {
+        return Err("Task ID is required. Use 'crawl list' to see tracked tasks.".to_string());
+    }
+
+    let result = get_crawl_status(client, base_url, id).await?;
+    cli_println!("{}", result);
+    json_field("task_id", json!(id));
+    json_field(
+        "raw",
+        json!(serde_json::from_str::<Value>(&result).unwrap_or(Value::String(result.clone()))),
+    );
+    Ok(())
+}
+
+async fn handle_crawl_result(
+    client: &Client,
+    base_url: &str,
+    tool_params: &Value,
+) -> Result<(), String> {
+    let id = tool_params
+        .get("id")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
+
+    if id.is_empty() {
+        return Err("Task ID is required. Use 'crawl list' to see tracked tasks.".to_string());
+    }
+
+    let result = get_crawl_result(client, base_url, id).await?;
+    cli_println!("{}", result);
+    json_field("task_id", json!(id));
+    json_field(
+        "raw",
+        json!(serde_json::from_str::<Value>(&result).unwrap_or(Value::String(result.clone()))),
+    );
+    Ok(())
+}
+
+async fn handle_crawl_cancel(
+    client: &Client,
+    base_url: &str,
+    tool_params: &Value,
+) -> Result<(), String> {
+    let id = tool_params
+        .get("id")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
+
+    if id.is_empty() {
+        return Err("Task ID is required. Use 'crawl list' to see tracked tasks.".to_string());
+    }
+
+    let result = cancel_crawl(client, base_url, id).await?;
+    cli_println!("{}", result);
+    json_field("task_id", json!(id));
+
+    // Update local tracking
+    let _ = update_async_task_status(id, "cancelled", None);
+    Ok(())
+}
+
+async fn handle_crawl_clear(
+    client: &Client,
+    base_url: &str,
+) -> Result<(), String> {
+    let result = clear_crawls(client, base_url).await?;
+    cli_println!("{}", result);
+    // Also clean local tracking
+    let _ = prune_async_tasks(None);
+    Ok(())
+}
+
 async fn handle_crawl(
     client: &Client,
     base_url: &str,
@@ -6454,9 +6623,18 @@ async fn handle_crawl(
     let poll_interval = std::time::Duration::from_secs(2);
     let timeout = crawl_request_timeout();
     let start = std::time::Instant::now();
+    let mut last_report = std::time::Duration::ZERO;
+    let report_interval = std::time::Duration::from_secs(15);
+
+    cli_println!("Waiting for crawl to complete (task {}). Use --background for long-running crawls.", task_id);
 
     loop {
         if start.elapsed() > timeout {
+            let _ = update_async_task_status(
+                &task_id,
+                &format!("timeout after {}s", timeout.as_secs()),
+                None,
+            );
             return Err(format!(
                 "Crawl timed out after {} seconds. Task ID: {}. \
                  Increase the timeout with the BROWSER4_CLI_CRAWL_TIMEOUT_SECS environment variable.",
@@ -6474,6 +6652,25 @@ async fn handle_crawl(
         let status = parsed["status"].as_str().unwrap_or("");
         let pages_found = parsed["pagesFound"].as_i64().unwrap_or(0);
         let error = parsed["error"].as_str();
+
+        // Periodic progress indicator so foreground crawls don't look hung
+        let elapsed = start.elapsed();
+        if elapsed - last_report >= report_interval {
+            last_report = elapsed;
+            if pages_found > 0 {
+                cli_println!(
+                    "Still crawling... {} pages found so far ({}s elapsed)",
+                    pages_found,
+                    elapsed.as_secs()
+                );
+            } else {
+                cli_println!(
+                    "Still waiting for crawl to start... ({}s elapsed). \
+                     If the queue is congested, try stopping old tasks or using --background.",
+                    elapsed.as_secs()
+                );
+            }
+        }
 
         match status {
             "OK" | "SC_OK" => {
@@ -6494,8 +6691,7 @@ async fn handle_crawl(
 
                 // Format output
                 if has_sql {
-                    cli_println!("");
-                    let output: String = if all_extracted.is_empty() {
+                    let extracted_output: String = if all_extracted.is_empty() {
                         "No extracted data.".to_string()
                     } else {
                         match format.as_str() {
@@ -6506,34 +6702,58 @@ async fn handle_crawl(
                         }
                     };
 
-                    if let Some(file_path) = output_file {
-                        std::fs::write(file_path, &output)
+                    if let Some(ref file_path) = output_file {
+                        std::fs::write(file_path, &extracted_output)
                             .map_err(|e| format!("Failed to write output file '{}': {}", file_path, e))?;
                         cli_println!("Results written to {}", file_path);
                     } else {
-                        cli_println!("{}", output);
+                        cli_println!("\n{}", extracted_output);
                     }
 
                     json_field("extracted", json!(all_extracted));
                 } else {
-                    cli_println!("\nCrawl completed. {} pages found.", page_count);
-
+                    let mut page_lines: Vec<String> = Vec::new();
+                    page_lines.push(format!("Crawl completed. {} pages found.", page_count));
                     if let Some(pages) = pages {
                         for page in pages {
                             let page_url = page["url"].as_str().unwrap_or("");
                             let page_title = page["title"].as_str().unwrap_or("");
                             let page_depth = page["depth"].as_i64().unwrap_or(0);
-                            cli_println!("  depth={} | {} | {}", page_depth, page_url, page_title);
+                            page_lines.push(format!(
+                                "  depth={} | {} | {}",
+                                page_depth, page_url, page_title
+                            ));
                         }
+                    }
+                    let page_output = page_lines.join("\n");
+
+                    if let Some(ref file_path) = output_file {
+                        std::fs::write(file_path, &page_output)
+                            .map_err(|e| format!("Failed to write output file '{}': {}", file_path, e))?;
+                        cli_println!("\nCrawl completed. {} pages found. Results written to {}", page_count, file_path);
+                    } else {
+                        cli_println!("\n{}", page_output);
                     }
                 }
 
                 json_field("pages", json!(pages));
                 json_field("pages_found", json!(page_count));
+                // Update the locally-tracked task status so `crawl list`
+                // reflects completion instead of forever showing "pending".
+                let _ = update_async_task_status(
+                    &task_id,
+                    &format!("{} ({} pages)", status, page_count),
+                    None,
+                );
                 return Ok(());
             }
             "SC_REQUEST_TIMEOUT" | "SC_INTERNAL_SERVER_ERROR" => {
                 let err_msg = error.unwrap_or("Unknown crawl error");
+                let _ = update_async_task_status(
+                    &task_id,
+                    &format!("error: {}", err_msg),
+                    None,
+                );
                 return Err(format!("Crawl failed: {}", err_msg));
             }
             _ => {
@@ -7930,10 +8150,10 @@ fn format_uninstall_output(
 /// process exits.  On Windows the running executable is locked, so we
 /// schedule a deferred deletion via a detached PowerShell script.
 fn attempt_self_removal(exe_path: &std::path::Path) -> bool {
-    let exe_str = exe_path.display().to_string();
-
     #[cfg(windows)]
     {
+        let exe_str = exe_path.display().to_string();
+
         // Use a PowerShell one-liner spawned through cmd.exe with
         // CREATE_NO_WINDOW so no console window flashes on screen.
         // The script sleeps briefly to let this process exit, then
@@ -8861,7 +9081,7 @@ fn rewrite_prefixed_command(args: &[String]) -> Option<Vec<String>> {
     // "crawl" works standalone (crawl <url>) AND as a prefix (crawl list).
     // Only rewrite known crawl subcommands so positional URLs pass through.
     if prefix == "crawl" {
-        let known_subs = ["list"];
+        let known_subs = ["status", "result", "cancel", "clear", "list"];
         if known_subs.contains(&sub.as_str()) {
             let mut rewritten = vec![format!("crawl-{}", sub)];
             rewritten.extend(args[2..].iter().cloned());
@@ -8893,6 +9113,10 @@ fn preferred_spaced_command_form(command: &str) -> Option<&'static str> {
         "swarm-status" => Some("swarm status"),
         "swarm-result" => Some("swarm result"),
         "swarm-list" => Some("swarm list"),
+        "crawl-status" => Some("crawl status"),
+        "crawl-result" => Some("crawl result"),
+        "crawl-cancel" => Some("crawl cancel"),
+        "crawl-clear" => Some("crawl clear"),
         "crawl-list" => Some("crawl list"),
         "co-create" => Some("swarm create"),
         "co-submit" => Some("swarm submit"),
@@ -9190,6 +9414,42 @@ fn compile_batch_request(
                     .get("stdin")
                     .and_then(|v| v.as_bool())
                     .unwrap_or(false);
+
+                // When --file or --stdin is used, migrate a positional ref
+                // (mis-parsed as the expression) to the ref field.
+                let has_batch_file = tool_params
+                    .get("file")
+                    .and_then(|v| v.as_str())
+                    .map(|s| !s.trim().is_empty())
+                    .unwrap_or(false);
+                if use_stdin || has_batch_file {
+                    let ref_empty = tool_params
+                        .get("ref")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.is_empty())
+                        .unwrap_or(true);
+                    if ref_empty {
+                        if let Some(expr_val) = tool_params
+                            .get("expression")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string())
+                        {
+                            let looks_like_ref = expr_val.starts_with("e")
+                                && expr_val[1..].chars().all(|c| c.is_ascii_digit())
+                                || expr_val.starts_with("backend:")
+                                || expr_val.starts_with('#')
+                                || expr_val.starts_with('.')
+                                || expr_val.starts_with('[');
+                            if looks_like_ref {
+                                if let Value::Object(ref mut m) = tool_params {
+                                    m.insert("ref".to_string(), json!(expr_val));
+                                    m.insert("expression".to_string(), json!(""));
+                                }
+                            }
+                        }
+                    }
+                }
+
                 if use_stdin {
                     let mut expression = String::new();
                     match std::io::stdin().read_to_string(&mut expression) {
@@ -10305,6 +10565,51 @@ async fn run(
                 .get("stdin")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
+
+            // When --file or --stdin or --base64 is used, the positional
+            // argument may be a ref (e.g. e34) that was mis-parsed as the
+            // expression. Move it to the ref field so the expression can be
+            // replaced by the file/stdin/base64 content.
+            let use_base64_arg = tool_params
+                .get("base64")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let has_file = tool_params
+                .get("file")
+                .and_then(|v| v.as_str())
+                .map(|s| !s.trim().is_empty())
+                .unwrap_or(false);
+            if use_stdin || use_base64_arg || has_file {
+                let ref_empty = tool_params
+                    .get("ref")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.is_empty())
+                    .unwrap_or(true);
+                if ref_empty {
+                    if let Some(expr_val) = tool_params
+                        .get("expression")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string())
+                    {
+                        // A ref looks like: eNNN, backend:NNN, or a CSS selector
+                        // (#id, .class, [attr]). JS expressions never start with
+                        // these patterns.
+                        let looks_like_ref = expr_val.starts_with("e")
+                            && expr_val[1..].chars().all(|c| c.is_ascii_digit())
+                            || expr_val.starts_with("backend:")
+                            || expr_val.starts_with('#')
+                            || expr_val.starts_with('.')
+                            || expr_val.starts_with('[');
+                        if looks_like_ref {
+                            if let Value::Object(ref mut m) = tool_params {
+                                m.insert("ref".to_string(), json!(expr_val));
+                                m.insert("expression".to_string(), json!(""));
+                            }
+                        }
+                    }
+                }
+            }
+
             if use_stdin {
                 let mut expression = String::new();
                 std::io::stdin()
@@ -10619,6 +10924,18 @@ async fn run(
                 global.session_name.as_deref(),
             )
             .await?;
+        }
+        "crawl-status" => {
+            handle_crawl_status(&client, &base_url, &tool_params).await?;
+        }
+        "crawl-result" => {
+            handle_crawl_result(&client, &base_url, &tool_params).await?;
+        }
+        "crawl-cancel" => {
+            handle_crawl_cancel(&client, &base_url, &tool_params).await?;
+        }
+        "crawl-clear" => {
+            handle_crawl_clear(&client, &base_url).await?;
         }
         "crawl-list" => {
             handle_crawl_list().await?;
@@ -13357,5 +13674,137 @@ mod tests {
             "",
         );
         assert_eq!(msg, "");
+    }
+
+    // -----------------------------------------------------------------------
+    // Crawl command rewriting tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn rewrite_prefixed_command_supports_crawl_status() {
+        let rewritten = rewrite_prefixed_command(&[
+            "crawl".to_string(),
+            "status".to_string(),
+            "task-id-123".to_string(),
+        ])
+        .unwrap();
+
+        assert_eq!(rewritten[0], "crawl-status");
+        assert_eq!(rewritten[1], "task-id-123");
+    }
+
+    #[test]
+    fn rewrite_prefixed_command_supports_crawl_result() {
+        let rewritten = rewrite_prefixed_command(&[
+            "crawl".to_string(),
+            "result".to_string(),
+            "task-id-456".to_string(),
+        ])
+        .unwrap();
+
+        assert_eq!(rewritten[0], "crawl-result");
+        assert_eq!(rewritten[1], "task-id-456");
+    }
+
+    #[test]
+    fn rewrite_prefixed_command_supports_crawl_cancel() {
+        let rewritten = rewrite_prefixed_command(&[
+            "crawl".to_string(),
+            "cancel".to_string(),
+            "task-id-789".to_string(),
+        ])
+        .unwrap();
+
+        assert_eq!(rewritten[0], "crawl-cancel");
+        assert_eq!(rewritten[1], "task-id-789");
+    }
+
+    #[test]
+    fn rewrite_prefixed_command_supports_crawl_clear() {
+        let rewritten = rewrite_prefixed_command(&[
+            "crawl".to_string(),
+            "clear".to_string(),
+        ])
+        .unwrap();
+
+        assert_eq!(rewritten[0], "crawl-clear");
+    }
+
+    #[test]
+    fn rewrite_prefixed_command_supports_crawl_list() {
+        let rewritten = rewrite_prefixed_command(&[
+            "crawl".to_string(),
+            "list".to_string(),
+        ])
+        .unwrap();
+
+        assert_eq!(rewritten[0], "crawl-list");
+    }
+
+    #[test]
+    fn rewrite_prefixed_command_crawl_with_url_passes_through() {
+        // crawl <url> should NOT be rewritten — it's a standalone crawl command
+        let result = rewrite_prefixed_command(&[
+            "crawl".to_string(),
+            "https://example.com".to_string(),
+        ]);
+
+        assert!(result.is_none(), "crawl <url> should not be rewritten");
+    }
+
+    #[test]
+    fn no_snapshot_commands_includes_crawl_status_and_result() {
+        let cmds = no_snapshot_commands();
+        assert!(cmds.contains("crawl-status"));
+        assert!(cmds.contains("crawl-result"));
+        assert!(cmds.contains("crawl-cancel"));
+        assert!(cmds.contains("crawl-clear"));
+        assert!(cmds.contains("crawl-list"));
+    }
+
+    #[test]
+    fn crawl_command_not_rewritten_for_unknown_subcommand() {
+        // crawl <unknown-sub> should pass through as-is (treated as positional URL)
+        let result = rewrite_prefixed_command(&[
+            "crawl".to_string(),
+            "unknown-sub".to_string(),
+        ]);
+        assert!(result.is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // preferred_spaced_command_form tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn preferred_spaced_command_form_includes_crawl_status() {
+        assert_eq!(
+            preferred_spaced_command_form("crawl-status"),
+            Some("crawl status")
+        );
+    }
+
+    #[test]
+    fn preferred_spaced_command_form_includes_crawl_result() {
+        assert_eq!(
+            preferred_spaced_command_form("crawl-result"),
+            Some("crawl result")
+        );
+    }
+
+    #[test]
+    fn preferred_spaced_command_form_includes_crawl_cancel() {
+        assert_eq!(
+            preferred_spaced_command_form("crawl-cancel"),
+            Some("crawl cancel")
+        );
+    }
+
+    #[test]
+    fn preferred_spaced_command_form_includes_crawl_clear() {
+        assert_eq!(
+            preferred_spaced_command_form("crawl-clear"),
+            Some("crawl clear")
+        );
     }
 }
