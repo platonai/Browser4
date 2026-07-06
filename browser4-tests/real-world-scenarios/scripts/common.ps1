@@ -27,6 +27,42 @@ Every scenario script follows the same pattern:
 
 $ErrorActionPreference = "Stop"
 
+# ── Compiled output handler (C#) ──────────────────────────────────────────────
+# DataReceived events fire on .NET threadpool threads.  PowerShell scriptblocks
+# cast to delegates require a Runspace on the executing thread, which threadpool
+# threads do not have — causing "There is no Runspace available to run scripts
+# in this thread."  A compiled C# class avoids PowerShell entirely for event
+# handling and works reliably on any thread.
+if (-not $script:_NativeCommandHandlerCompiled) {
+    Add-Type -TypeDefinition @'
+using System;
+using System.IO;
+using System.Text;
+
+public class NativeCommandOutputHandler
+{
+    private readonly string _capturePath;
+    private readonly UTF8Encoding _utf8;
+
+    public NativeCommandOutputHandler(string capturePath)
+    {
+        _capturePath = capturePath;
+        _utf8 = new UTF8Encoding(false);
+    }
+
+    public void OnOutputReceived(object sender, System.Diagnostics.DataReceivedEventArgs e)
+    {
+        if (e.Data != null)
+        {
+            Console.WriteLine(e.Data);
+            File.AppendAllText(_capturePath, e.Data + Environment.NewLine, _utf8);
+        }
+    }
+}
+'@
+    $script:_NativeCommandHandlerCompiled = $true
+}
+
 # ── Path resolution ──────────────────────────────────────────────────────────
 # Repo root is 3 levels up from scripts/ (scripts -> tests -> browser4-tests -> repo root)
 $script:RepoRoot = (Resolve-Path "$PSScriptRoot/../../..").Path
@@ -816,33 +852,16 @@ function Start-NativeCommand {
     [System.IO.File]::WriteAllText($capturePath, '', $utf8NoBom)
 
     # ── .NET event handlers for stdout / stderr ────────────────────────────
-    # Use *direct* .NET event delegates (proc.add_OutputDataReceived), not
-    # PowerShell's Register-ObjectEvent.  The latter queues actions that only
-    # run when the PS engine pumps events; direct delegates fire on threadpool
-    # threads immediately, giving true real-time console output.
-    $outHandler = [System.Diagnostics.DataReceivedEventHandler] {
-        param($sender, $e)
-        if ($e.Data -ne $null) {
-            [Console]::WriteLine($e.Data)
-            [System.IO.File]::AppendAllText(
-                $capturePath,
-                $e.Data + [Environment]::NewLine,
-                $utf8NoBom
-            )
-        }
-    }
-
-    $errHandler = [System.Diagnostics.DataReceivedEventHandler] {
-        param($sender, $e)
-        if ($e.Data -ne $null) {
-            [Console]::WriteLine($e.Data)
-            [System.IO.File]::AppendAllText(
-                $capturePath,
-                $e.Data + [Environment]::NewLine,
-                $utf8NoBom
-            )
-        }
-    }
+    # Use a compiled C# class (NativeCommandOutputHandler) instead of
+    # PowerShell scriptblocks cast to delegates.  DataReceived events fire
+    # on .NET threadpool threads where no PowerShell Runspace is guaranteed;
+    # pure-C# handlers avoid "There is no Runspace available" crashes.
+    $nativeHandler = New-Object NativeCommandOutputHandler $capturePath
+    $streamHandler = [Delegate]::CreateDelegate(
+        [System.Diagnostics.DataReceivedEventHandler],
+        $nativeHandler,
+        'OnOutputReceived'
+    )
 
     # ── Resolve executable path (handle .cmd/.bat wrappers on Windows) ───
     # System.Diagnostics.Process uses CreateProcess, which only finds .exe
@@ -893,9 +912,9 @@ function Start-NativeCommand {
     $proc = New-Object System.Diagnostics.Process
     $proc.StartInfo = $psi
 
-    # Wire up event handlers
-    $null = $proc.add_OutputDataReceived($outHandler)
-    $null = $proc.add_ErrorDataReceived($errHandler)
+    # Wire up event handlers (single C# delegate for both streams)
+    $null = $proc.add_OutputDataReceived($streamHandler)
+    $null = $proc.add_ErrorDataReceived($streamHandler)
 
     $exitCode = -1
     $stopwatch = [System.Diagnostics.Stopwatch]::new()
@@ -919,20 +938,42 @@ function Start-NativeCommand {
         # OutputDataReceived / ErrorDataReceived events fire on background
         # .NET threads and call [Console]::WriteLine directly — that output
         # interleaves naturally with the heartbeats below.
+        #
+        # Heartbeat interval uses progressive backoff so the user isn't
+        # spammed with repetitive "still running" messages:
+        #   0 –  5 min  → every 30 s
+        #   5 – 15 min  → every 60 s
+        #  15+ min      → every 120 s
         $stopwatch.Start()
         $lastHeartbeatSec = 0
+        $heartbeatCount = 0
 
         while (-not $proc.HasExited) {
             $proc.WaitForExit(2000) | Out-Null
             $elapsed = $stopwatch.Elapsed.TotalSeconds
 
+            # Progressive backoff
+            $interval = if ($elapsed -lt 300) {
+                30
+            } elseif ($elapsed -lt 900) {
+                60
+            } else {
+                120
+            }
+
             if ($HeartbeatIntervalSec -gt 0 -and
-                ($elapsed - $lastHeartbeatSec) -ge $HeartbeatIntervalSec -and
+                ($elapsed - $lastHeartbeatSec) -ge $interval -and
                 -not $proc.HasExited) {
+                $heartbeatCount++
                 $mins = [Math]::Floor($elapsed / 60)
                 $secs = [Math]::Floor($elapsed % 60)
+                $cmdLabel = if ($displayArgs.Count -gt 0) {
+                    "$FilePath $($displayArgs[0])"
+                } else {
+                    $FilePath
+                }
                 [Console]::WriteLine(
-                    "  ... still running (${mins}m ${secs}s elapsed) ..."
+                    "  · ${cmdLabel} — running (${mins}m ${secs}s elapsed, heartbeat #${heartbeatCount})"
                 )
                 $lastHeartbeatSec = $elapsed
             }
@@ -968,8 +1009,8 @@ function Start-NativeCommand {
 
     } finally {
         # Clean up event handlers before Dispose
-        try { $proc.remove_OutputDataReceived($outHandler) } catch { }
-        try { $proc.remove_ErrorDataReceived($errHandler) } catch { }
+        try { $proc.remove_OutputDataReceived($streamHandler) } catch { }
+        try { $proc.remove_ErrorDataReceived($streamHandler) } catch { }
         if ($proc -and -not $proc.HasExited) {
             try { $proc.Kill() } catch { }
         }
@@ -1156,64 +1197,66 @@ function Invoke-Agent {
     $claudeArgs = @('--dangerously-skip-permissions', '-p', $Prompt)
     if ($Silent) { $claudeArgs += '--silent' }
 
-    # ── Resolve capture file path (when needed) ─────────────────────────────
-    $tempFile = ''
+    # ── Resolve capture file path ──────────────────────────────────────────
+    # Write directly to the final output path (not a temp file) so partial
+    # output survives crashes.  The known path in target/ also makes it easy
+    # for the user to tail the file during long-running scenarios.
+    $captureFile = ''
     if ($ScenarioName -or $OutputFile) {
         $targetDir = Join-Path $script:RepoRoot 'target'
         if (-not (Test-Path -LiteralPath $targetDir)) {
             New-Item -ItemType Directory -Path $targetDir -Force | Out-Null
         }
-        $tempFile = Join-Path $targetDir ([System.IO.Path]::GetRandomFileName())
+        if ($OutputFile) {
+            $captureFile = $OutputFile
+        } else {
+            # Auto-generate a predictable path when only ScenarioName is provided
+            $timestamp = (Get-Date).ToUniversalTime().ToString('yyyyMMdd-HHmmss')
+            $safeName = $ScenarioName -replace '[\\/:*?"<>|]', '_'
+            $captureFile = Join-Path $targetDir "$timestamp-$safeName.raw.md"
+        }
+        # Ensure parent directory exists
+        $captureDir = Split-Path -Parent $captureFile
+        if ($captureDir -and -not (Test-Path -LiteralPath $captureDir)) {
+            New-Item -ItemType Directory -Path $captureDir -Force | Out-Null
+        }
+        Write-Host "  Output: $captureFile" -ForegroundColor DarkGray
     }
 
     # ── Invoke claude via Start-NativeCommand ───────────────────────────────
-    # Start-NativeCommand handles real-time output streaming, capture-file
-    # writes, and periodic heartbeat messages during silent stretches.
     $startParams = @{
         FilePath     = 'claude'
         ArgumentList = $claudeArgs
     }
-    if ($tempFile) {
-        $startParams['CaptureFile'] = $tempFile
+    if ($captureFile) {
+        $startParams['CaptureFile'] = $captureFile
     }
     $exitCode = Start-NativeCommand @startParams
 
     # ── Post-processing (only when capture was requested) ───────────────────
-    if (-not $tempFile) {
+    if (-not $captureFile) {
         if ($exitCode -ne 0) {
             $host.UI.WriteErrorLine("Agent exited with non-zero code: $exitCode")
         }
         return
     }
 
-    # Read back the captured output (UTF-8 without BOM)
+    # Read back the captured output (written incrementally by Start-NativeCommand)
     $capturedOutput = ''
-    if (Test-Path -LiteralPath $tempFile) {
-        $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+    $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+    if (Test-Path -LiteralPath $captureFile) {
         $capturedOutput = [System.IO.File]::ReadAllText(
-            [System.IO.Path]::GetFullPath($tempFile), $utf8NoBom
+            [System.IO.Path]::GetFullPath($captureFile), $utf8NoBom
         )
-        Remove-Item -LiteralPath $tempFile -ErrorAction SilentlyContinue
     }
 
     if ([string]::IsNullOrWhiteSpace($capturedOutput)) {
-        Write-Host "  WARNING: No output captured from agent." -ForegroundColor Yellow
+        Write-Host "  WARNING: No output captured from agent (file: $captureFile)" -ForegroundColor Yellow
         return
     }
 
     # Write to the 200issues ready queue
     if ($ScenarioName) {
         Write-IssuesToReadyQueue -ScenarioName $ScenarioName -Content $capturedOutput
-    }
-
-    # Save raw output to local file if requested
-    if ($OutputFile) {
-        $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
-        $outputDir = Split-Path -Parent $OutputFile
-        if ($outputDir -and -not (Test-Path $outputDir)) {
-            New-Item -ItemType Directory -Path $outputDir -Force | Out-Null
-        }
-        [System.IO.File]::WriteAllText($OutputFile, $capturedOutput, $utf8NoBom)
-        Write-Host "  Saved raw output: $OutputFile" -ForegroundColor DarkGray
     }
 }
