@@ -1,6 +1,6 @@
 package ai.platon.pulsar.heavy.browser.driver
 
-import ai.platon.browser4.protocol.browser.DefaultWebDriverPoolManager
+import ai.platon.pulsar.protocol.browser.DefaultWebDriverPoolManager
 import ai.platon.pulsar.browser.BrowserId
 import ai.platon.pulsar.common.LinkExtractors
 import ai.platon.pulsar.common.config.ImmutableConfig

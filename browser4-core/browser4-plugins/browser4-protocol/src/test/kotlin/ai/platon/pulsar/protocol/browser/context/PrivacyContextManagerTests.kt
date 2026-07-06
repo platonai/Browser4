@@ -1,6 +1,6 @@
 package ai.platon.pulsar.protocol.browser.context
 
-import ai.platon.browser4.protocol.browser.DefaultWebDriverPoolManager
+import ai.platon.pulsar.protocol.browser.DefaultWebDriverPoolManager
 import ai.platon.pulsar.browser.BrowserProfile
 import ai.platon.pulsar.browser.common.BrowserSettings
 import ai.platon.pulsar.browser.common.UserAgent
