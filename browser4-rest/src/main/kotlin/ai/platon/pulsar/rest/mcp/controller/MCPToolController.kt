@@ -162,7 +162,7 @@ class MCPToolController(
             }
         } catch (e: Throwable) {
             logger.error("MCP tool call failed | tool={} | {}", request.tool, e.message, e)
-            ResponseEntity.ok(errorResponse("${request.tool} failed: ${exceptionChainMessage(e)}"))
+            ResponseEntity.status(500).body(errorResponse("${request.tool} failed: ${exceptionChainMessage(e)}"))
         }
     }
 
@@ -280,7 +280,7 @@ class MCPToolController(
     ): ResponseEntity<MCPToolCallResponse> {
         val sessionId = requireSessionId(request)
         val managed = sessionManager.getSession(sessionId)
-            ?: return ResponseEntity.ok(errorResponse("${MCPConstants.ERROR_SESSION_NOT_FOUND}$sessionId"))
+            ?: return ResponseEntity.status(404).body(errorResponse("${MCPConstants.ERROR_SESSION_NOT_FOUND}$sessionId"))
 
         return try {
             val metadata = managed.withLock {
@@ -289,23 +289,38 @@ class MCPToolController(
                 val document = pulsarSession.parse(page, noCache = true)
                 val title = document.title
 
-                // Count images and links
-                val imageCount = document.select("img").size
-                val linkCount = document.select("a").size
+                // P1-4: Single-pass document scan replaces 3 independent full traversals
+                // (img count, link count, interactive element collection).
+                // Reduces DOM visits from O(3N) to O(N) — material at 100k-200k pages/day.
+                data class ScanResult(
+                    var imageCount: Int = 0,
+                    var linkCount: Int = 0,
+                    val interactives: MutableList<org.jsoup.nodes.Element> = mutableListOf()
+                )
+                val scan = ScanResult()
+                val maxInteractiveFetch = 200 // over-fetch to allow exclusions
+                for (el in document.select("*")) {
+                    val tag = el.tagName().lowercase()
+                    when (tag) {
+                        "img" -> scan.imageCount++
+                        "a"   -> scan.linkCount++
+                    }
+                    if (scan.interactives.size < maxInteractiveFetch && el.matches(SnapshotAlgoConstants.INTERACTIVE_SELECTOR)) {
+                        scan.interactives.add(el)
+                    }
+                }
 
-                // Extract non-trivial interactive elements and assign importance weights
-                val interactiveSelector = "a[href], button, input:not([type=hidden]), select, textarea, " +
-                        "details, summary, " +
-                        "[role=button], [role=link], [role=checkbox], [role=radio], " +
-                        "[role=tab], [role=menuitem], [role=switch], [role=combobox], " +
-                        "[role=searchbox], [role=textbox], [role=slider], [role=spinbutton], " +
-                        "[role=option], [role=treeitem], " +
-                        "[tabindex]:not([tabindex=\"-1\"]), [contenteditable=true], " +
-                        "[onclick], [onkeydown], [onsubmit]"
                 val maxInteractive = 100
-                val allInteractive =
-                    document.select(interactiveSelector).take(maxInteractive * 2) // over-fetch to allow exclusions
-                val weighted = computeInteractiveWeights(allInteractive).take(maxInteractive)
+                val weightResult = computeInteractiveWeights(scan.interactives)
+                val weighted = weightResult.weighted.take(maxInteractive)
+                if (weightResult.viDegraded) {
+                    logger.warn(
+                        "html_snapshot_capture: vi coverage low ({:.0%}) — " +
+                        "interactive element ranking degraded. Consider using capture() " +
+        "path that preserves vi attributes.",
+                        weightResult.viCoverage
+                    )
+                }
                 val interactiveElements = weighted.map { (el, weight, tier) ->
                     val obj = pulsarObjectMapper().createObjectNode()
                     // Section 8 element reference: "#closestId tag#id.class1.class2"
@@ -338,8 +353,8 @@ class MCPToolController(
                     put("capturedAt", page.prevFetchTime.toString())
                     put("contentType", page.contentType) // should be html/text
                     put("title", title)
-                    put("imageCount", imageCount)
-                    put("linkCount", linkCount)
+                    put("imageCount", scan.imageCount)
+                    put("linkCount", scan.linkCount)
                     putArray("interactiveElements").addAll(interactiveElements)
                     if (linkGroups.isNotEmpty()) {
                         set<ArrayNode>("linkGroups", linkGroupsToJson(linkGroups))
@@ -365,17 +380,17 @@ class MCPToolController(
 
         // Validate field
         if (field !in setOf("text", "html", "attr")) {
-            return ResponseEntity.ok(errorResponse("Unknown field '$field'. Use text, html, or attr."))
+            return ResponseEntity.status(400).body(errorResponse("Unknown field '$field'. Use text, html, or attr."))
         }
 
         // Validate attr field requires an attribute name
         if (field == "attr" && attrName.isNullOrBlank()) {
-            return ResponseEntity.ok(errorResponse("The 'attr' field requires an attribute name."))
+            return ResponseEntity.status(400).body(errorResponse("The 'attr' field requires an attribute name."))
         }
 
         // Reject element references
         if (isElementReference(selector)) {
-            return ResponseEntity.ok(
+            return ResponseEntity.status(400).body(
                 errorResponse(
                     "Element references ('$selector') are not supported in htmlsnapshot get. Use a CSS selector instead."
                 )
@@ -383,7 +398,7 @@ class MCPToolController(
         }
 
         val managed = sessionManager.getSession(sessionId)
-            ?: return ResponseEntity.ok(errorResponse("${MCPConstants.ERROR_SESSION_NOT_FOUND}$sessionId"))
+            ?: return ResponseEntity.status(404).body(errorResponse("${MCPConstants.ERROR_SESSION_NOT_FOUND}$sessionId"))
 
         return try {
             val result = managed.withLock {
@@ -429,17 +444,17 @@ class MCPToolController(
 
         // Validate field
         if (field !in setOf("text", "html", "attr")) {
-            return ResponseEntity.ok(errorResponse("Unknown field '$field'. Use text, html, or attr."))
+            return ResponseEntity.status(400).body(errorResponse("Unknown field '$field'. Use text, html, or attr."))
         }
 
         // Validate attr field requires an attribute name
         if (field == "attr" && attrName.isNullOrBlank()) {
-            return ResponseEntity.ok(errorResponse("The 'attr' field requires an attribute name."))
+            return ResponseEntity.status(400).body(errorResponse("The 'attr' field requires an attribute name."))
         }
 
         // Reject element references
         if (isElementReference(selector)) {
-            return ResponseEntity.ok(
+            return ResponseEntity.status(400).body(
                 errorResponse(
                     "Element references ('$selector') are not supported in htmlsnapshot get. Use a CSS selector instead."
                 )
@@ -447,7 +462,7 @@ class MCPToolController(
         }
 
         val managed = sessionManager.getSession(sessionId)
-            ?: return ResponseEntity.ok(errorResponse("${MCPConstants.ERROR_SESSION_NOT_FOUND}$sessionId"))
+            ?: return ResponseEntity.status(404).body(errorResponse("${MCPConstants.ERROR_SESSION_NOT_FOUND}$sessionId"))
 
         return try {
             val results = managed.withLock {
@@ -540,7 +555,7 @@ class MCPToolController(
     ): ResponseEntity<MCPToolCallResponse> {
         val sessionId = requireSessionId(request)
         val managed = sessionManager.getSession(sessionId)
-            ?: return ResponseEntity.ok(errorResponse("${MCPConstants.ERROR_SESSION_NOT_FOUND}$sessionId"))
+            ?: return ResponseEntity.status(404).body(errorResponse("${MCPConstants.ERROR_SESSION_NOT_FOUND}$sessionId"))
 
         return try {
             val html = managed.withLock {
@@ -566,7 +581,7 @@ class MCPToolController(
     ): ResponseEntity<MCPToolCallResponse> {
         val sessionId = requireSessionId(request)
         val managed = sessionManager.getSession(sessionId)
-            ?: return ResponseEntity.ok(errorResponse("${MCPConstants.ERROR_SESSION_NOT_FOUND}$sessionId"))
+            ?: return ResponseEntity.status(404).body(errorResponse("${MCPConstants.ERROR_SESSION_NOT_FOUND}$sessionId"))
 
         return try {
             val summary = managed.withLock {
@@ -602,7 +617,7 @@ class MCPToolController(
     ): ResponseEntity<MCPToolCallResponse> {
         val sessionId = requireSessionId(request)
         val managed = sessionManager.getSession(sessionId)
-            ?: return ResponseEntity.ok(errorResponse("${MCPConstants.ERROR_SESSION_NOT_FOUND}$sessionId"))
+            ?: return ResponseEntity.status(404).body(errorResponse("${MCPConstants.ERROR_SESSION_NOT_FOUND}$sessionId"))
 
         return try {
             val result = managed.withLock {
@@ -762,6 +777,41 @@ class MCPToolController(
 }
 
 // =========================================================================
+// Snapshot algorithm constants — single source of truth
+// =========================================================================
+
+/**
+ * Shared constants used by both [handleHtmlSnapshotCapture] and [inspectDocument]
+ * to eliminate duplicated string literals that drifted apart across 3+ sites.
+ */
+internal object SnapshotAlgoConstants {
+    /** CSS selector for interactive elements (buttons, links, form controls, ARIA roles). */
+    const val INTERACTIVE_SELECTOR =
+        "a[href], button, input:not([type=hidden]), select, textarea, " +
+        "details, summary, " +
+        "[role=button], [role=link], [role=checkbox], [role=radio], " +
+        "[role=tab], [role=menuitem], [role=switch], [role=combobox], " +
+        "[role=searchbox], [role=textbox], [role=slider], [role=spinbutton], " +
+        "[role=option], [role=treeitem], " +
+        "[tabindex]:not([tabindex=\"-1\"]), [contenteditable=true], " +
+        "[onclick], [onkeydown], [onsubmit]"
+
+    /** Tags excluded from selector discovery/inspection (non-content infrastructure). */
+    val STRUCTURAL_TAGS = setOf(
+        "html", "head", "body", "script", "style", "meta", "link", "noscript"
+    )
+
+    /** Bare tags penalized as low-specificity selectors. */
+    val STRUCTURAL_BARE_TAGS = setOf("div", "span")
+
+    /** Semantic tags carrying more meaning in suggestions. */
+    val SEMANTIC_TAGS_FOR_SCORING = setOf(
+        "h1", "h2", "h3", "h4", "h5", "h6", "a", "img", "button",
+        "input", "select", "textarea", "label"
+    )
+}
+
+// =========================================================================
 // Shared utilities
 // =========================================================================
 
@@ -850,8 +900,8 @@ private fun runVisualDetection(
  *   suitable repeating pattern found (single article pages, etc.)
  */
 internal fun autoDiscoverRepeatingSelector(document: FeaturedDocument): String? {
-    val structuralTags = setOf("html", "head", "body", "script", "style", "meta", "link", "noscript")
-    val structuralBare = setOf("div", "span")
+    val structuralTags = SnapshotAlgoConstants.STRUCTURAL_TAGS
+    val structuralBare = SnapshotAlgoConstants.STRUCTURAL_BARE_TAGS
 
     var bestSelector: String? = null
     var bestScore = 0.0
@@ -958,11 +1008,25 @@ internal fun inspectDocument(
     maxMatches: Int,
     maxDepth: Int,
 ): String {
-    // ── Visual geometry first detection ──────────────────────────────────
-    // Always run visual detection early — it informs both auto-discovery
-    // (when the user hasn't specified a selector) and speculative suggestions
-    // (when the user's selector could be improved).
-    val (visualBestSelector, visualLinkGroups) = runVisualDetection(document)
+    // ── Visual geometry first detection (lazy / conditional) ─────────────
+    // P2-12: detectLinkGroups is O(N) over all elements with vi attributes.
+    // Only run it when we actually need it:
+    //   - auto-discovery mode (initialMatchCount <= 1), OR
+    //   - speculative suggestion mode (user's selector matches but visual might find better)
+    // For the common case where user provides a good selector matching ≥2 elements,
+    // this saves a full document traversal.
+    var visualBestSelector: String? = null
+    var visualLinkGroups = emptyList<PageSummaryIndexService.SummaryLinkGroup>()
+    var visualDetectionRun = false
+
+    fun ensureVisualDetection() {
+        if (!visualDetectionRun) {
+            val (best, groups) = runVisualDetection(document)
+            visualBestSelector = best
+            visualLinkGroups = groups
+            visualDetectionRun = true
+        }
+    }
 
     // Auto-discovery: when the selector matches ≤1 element (e.g. default
     // :root), find the best repeating content pattern.
@@ -975,6 +1039,7 @@ internal fun inspectDocument(
     var speculativeMatchCount: Int? = null
     val initialMatchCount = document.select(selector).size
     if (initialMatchCount <= 1) {
+        ensureVisualDetection()
         if (visualBestSelector != null) {
             effectiveSelector = visualBestSelector
             autoDiscovered = true
@@ -986,7 +1051,12 @@ internal fun inspectDocument(
                 autoDiscovered = true
             }
         }
-    } else if (visualBestSelector != null && visualBestSelector != selector) {
+    } else if (initialMatchCount > 1) {
+        // Mode B (speculative): user's selector already matches ≥2, but visual
+        // detection might find a potentially better repeating pattern. Surface as a
+        // suggestion without overriding the user's choice.
+        ensureVisualDetection()
+        if (visualBestSelector != null && visualBestSelector != selector) {
         // Mode B (speculative): user's selector already matches ≥2, but visual
         // detection found a potentially better repeating pattern. Surface as a
         // suggestion without overriding the user's choice.
@@ -994,25 +1064,25 @@ internal fun inspectDocument(
         speculativeMatchCount = document.select(visualBestSelector).size
     }
 
-    val matches = document.select(effectiveSelector).take(maxMatches)
-    val matchCount = document.select(effectiveSelector).size
+    // P1-5: Single select call — avoid O(2N) duplicate DOM traversal.
+    // Previous code called document.select(effectiveSelector) twice (once for
+    // .take(maxMatches), once for .size). Now we select once and derive both.
+    val allMatches = document.select(effectiveSelector)
+    val matchCount = allMatches.size
+    val matches = allMatches.take(maxMatches)
 
     // Pre-compute element weights for all interactive elements in the document.
     // Used to boost selector candidates that target high-importance elements.
-    val interactiveSelector = "a[href], button, input:not([type=hidden]), select, textarea, " +
-            "details, summary, " +
-            "[role=button], [role=link], [role=checkbox], [role=radio], " +
-            "[role=tab], [role=menuitem], [role=switch], [role=combobox], " +
-            "[role=searchbox], [role=textbox], [role=slider], [role=spinbutton], " +
-            "[role=option], [role=treeitem], " +
-            "[tabindex]:not([tabindex=\"-1\"]), [contenteditable=true], " +
-            "[onclick], [onkeydown], [onsubmit]"
-    val elementWeightMap: Map<org.jsoup.nodes.Element, Int> = try {
-        val allInteractive = document.select(interactiveSelector)
-        computeInteractiveWeights(allInteractive).associate { (el, weight, _) -> el to weight }
+    val elementWeightMap: Map<org.jsoup.nodes.Element, Int>
+    var viDegradedInspect = false
+    val weightResultInspect: WeightResult = try {
+        val allInteractive = document.select(SnapshotAlgoConstants.INTERACTIVE_SELECTOR)
+        computeInteractiveWeights(allInteractive)
     } catch (e: Exception) {
-        emptyMap()
+        WeightResult(emptyList(), 0.0, false)
     }
+    elementWeightMap = weightResultInspect.weighted.associate { (el, weight, _) -> el to weight }
+    viDegradedInspect = weightResultInspect.viDegraded
 
     if (matches.isEmpty()) {
         return pulsarObjectMapper().createObjectNode().apply {
@@ -1082,7 +1152,8 @@ internal fun inspectDocument(
     // Attribute names worth surfacing as selectors (ordered by priority)
     val priorityAttrs = listOf("data-testid", "aria-label", "role", "itemprop")
     val dataAttrPattern = Regex("^data-.+")
-    val structuralTags = setOf("html", "head", "body", "script", "style", "meta", "link", "noscript")
+    // Use shared constants — was a local duplicate that drifted from capture handler.
+    val structuralTags = SnapshotAlgoConstants.STRUCTURAL_TAGS
 
     for ((matchIndex, match) in matches.withIndex()) {
         val seen = mutableSetOf<SelectorCandidate>()
@@ -1191,8 +1262,8 @@ internal fun inspectDocument(
 
     // ---- Quality scoring ----
 
-    val semanticTags =
-        setOf("h1", "h2", "h3", "h4", "h5", "h6", "a", "img", "button", "input", "select", "textarea", "label")
+    // Use shared constant — was a local duplicate that drifted from capture handler.
+    val semanticTags = SnapshotAlgoConstants.SEMANTIC_TAGS_FOR_SCORING
 
     fun distinctTextCount(stats: CandidateStats): Int =
         stats.textValues.values.filter { it.isNotBlank() }.distinct().size
@@ -1245,6 +1316,10 @@ internal fun inspectDocument(
         val sug = pulsarObjectMapper().createObjectNode()
         sug.put("selector", candidate.selector)
         sug.put("tag", candidate.tag)
+        // P0-2 fix: annotate non-standard selectors so downstream consumers
+        // (e.g., htmlsnapshot get / jsoup select) know they cannot be used directly.
+        val isStandardCss = candidate.selectorType != "power"
+        sug.put("standard", isStandardCss)
         // textPreview: first non-blank text (backward compat)
         val firstText = stats.textValues.values.firstOrNull { it.isNotBlank() }
         if (firstText != null) sug.put("textPreview", firstText)
@@ -1256,7 +1331,9 @@ internal fun inspectDocument(
             sug.set<ArrayNode>("textSamples", samplesArr)
         }
         sug.put("matchCount", stats.count)
-        sug.put("coverage", "%.0f%%".format(stats.count * 100.0 / matches.size))
+        // P0-3 fix: use full matchCount (not truncated matches.size) as denominator
+        // so "100% coverage" means truly present in all matches, not just the analyzed subset.
+        sug.put("coverage", "%.0f%%".format(stats.count * 100.0 / maxOf(matchCount, 1)))
         sug.put("quality", qualityTier(score))
         suggestions.add(sug)
     }
@@ -1266,6 +1343,8 @@ internal fun inspectDocument(
         put("matchCount", matchCount)
         put("selector", effectiveSelector)
         put("analyzed", matches.size)
+        // Expose vi quality so callers can decide whether to trust visual rankings.
+        if (viDegradedInspect) put("viDegraded", true)
         if (autoDiscovered) {
             put("autoDiscovered", true)
             put("originalSelector", selector)
@@ -1398,6 +1477,22 @@ internal fun findSemanticGroup(el: org.jsoup.nodes.Element): String {
 // =========================================================================
 
 /**
+ * Result of [computeInteractiveWeights] including diagnostic info about
+ * visual-info (vi attribute) coverage.
+ */
+internal data class WeightResult(
+    val weighted: List<Triple<org.jsoup.nodes.Element, Int, String>>,
+    /** Fraction of input elements that had a usable vi attribute (0.0..1.0). */
+    val viCoverage: Double,
+    /** True if vi coverage was too low for reliable geometry-based ranking. */
+    val viDegraded: Boolean
+) {
+    companion object {
+        const val VI_COVERAGE_THRESHOLD = 0.3
+    }
+}
+
+/**
  * Computes importance weights for interactive elements using a two-tier system.
  *
  * Tier 1 — Primary interactive controls (buttons, inputs, form controls, interactive ARIA roles).
@@ -1409,21 +1504,30 @@ internal fun findSemanticGroup(el: org.jsoup.nodes.Element): String {
  *
  * Excluded: hidden (_h attr), aria-hidden, disabled, type=hidden, zero-area, pointer-events:none.
  *
+ * **P0 fix**: When vi (visual-info bounding-box) attributes are missing or sparse
+ * ([WeightResult.viCoverage] < [WeightResult.VI_COVERAGE_THRESHOLD]), the method
+ * still returns results using DOM-only heuristics (tag/role/attribute presence as
+ * a proxy for importance), and sets [WeightResult.viDegraded] so callers can log
+ * a warning or fall back to pure-DOM strategies.
+ *
  * @param elements Jsoup Elements to weight
- * @return sorted list of (element, weight, tier) ordered by weight descending
+ * @return [WeightResult] with sorted weights and vi coverage diagnostics
  */
 internal fun computeInteractiveWeights(
     elements: List<org.jsoup.nodes.Element>
-): List<Triple<org.jsoup.nodes.Element, Int, String>> {
-    if (elements.isEmpty()) return emptyList()
+): WeightResult {
+    if (elements.isEmpty()) return WeightResult(emptyList(), 1.0, false)
 
     data class BoxInfo(
         val el: org.jsoup.nodes.Element,
         val x: Double, val y: Double, val w: Double, val h: Double,
-        val area: Double, val tag: String, val role: String?
+        val area: Double, val tag: String, val role: String?,
+        /** True when this element had a valid vi bounding box. */
+        val hasVi: Boolean
     )
 
     val infos = mutableListOf<BoxInfo>()
+    var viPresentCount = 0
 
     for (el in elements) {
         // ---- exclusion ----
@@ -1439,21 +1543,41 @@ internal fun computeInteractiveWeights(
 
         // ---- parse vi rect ----
         val vi = el.attr("vi")
-        if (vi.isBlank()) continue
-        val parts = vi.split("\\s+".toRegex())
-        if (parts.size < 4) continue
-        val x = parts[0].toDoubleOrNull() ?: continue
-        val y = parts[1].toDoubleOrNull() ?: continue
-        val w = parts[2].toDoubleOrNull() ?: continue
-        val h = parts[3].toDoubleOrNull() ?: continue
-        if (w <= 0 || h <= 0) continue
+        var hasVi = false
+        if (vi.isNotBlank()) {
+            val parts = vi.split("\\s+".toRegex())
+            if (parts.size >= 4) {
+                val x = parts[0].toDoubleOrNull()
+                val y = parts[1].toDoubleOrNull()
+                val w = parts[2].toDoubleOrNull()
+                val h = parts[3].toDoubleOrNull()
+                if (x != null && y != null && w != null && h != null && w > 0 && h > 0) {
+                    val area = w * h
+                    val tag = el.tagName().lowercase()
+                    val role = el.attr("role").takeIf { it.isNotBlank() }?.lowercase()
+                    infos.add(BoxInfo(el, x, y, w, h, area, tag, role, hasVi = true))
+                    viPresentCount++
+                    continue
+                }
+            }
+        }
 
-        val area = w * h
+        // --- DOM-only fallback: no vi, use tag/role/attrs as proxy ---
         val tag = el.tagName().lowercase()
         val role = el.attr("role").takeIf { it.isNotBlank() }?.lowercase()
-
-        infos.add(BoxInfo(el, x, y, w, h, area, tag, role))
+        // Assign a nominal area based on element type so it still ranks reasonably.
+        val fallbackArea = when {
+            tag in setOf("button", "select", "textarea") -> 10000.0
+            tag == "input" -> 5000.0
+            tag in setOf("details", "summary") -> 8000.0
+            else -> 2000.0  // links, generic interactive
+        }
+        infos.add(BoxInfo(el, 0.0, 0.0, fallbackArea, fallbackArea.sqrt(), fallbackArea, tag, role, hasVi = false))
     }
+
+    val totalConsidered = infos.size
+    val viCoverage = if (totalConsidered > 0) viPresentCount.toDouble() / totalConsidered else 1.0
+    val viDegraded = viCoverage < WeightResult.VI_COVERAGE_THRESHOLD && totalConsidered > 5
 
     // ---- classify ----
     val tier1Tags = setOf("button", "input", "select", "textarea", "details", "summary")
@@ -1549,7 +1673,7 @@ internal fun computeInteractiveWeights(
             result.add(Triple(link.el, linkWeights[link.el]!!, "link"))
         }
 
-    return result
+    return WeightResult(result, viCoverage, viDegraded)
 }
 
 // =========================================================================
