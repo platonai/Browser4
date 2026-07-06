@@ -35,6 +35,7 @@ import ai.platon.pulsar.skeleton.common.metrics.MetricsSystem
 import ai.platon.pulsar.skeleton.workflow.fetch.FetchTask
 import ai.platon.pulsar.skeleton.workflow.protocol.ForwardingResponse
 import ai.platon.pulsar.skeleton.workflow.protocol.Response
+import ai.platon.pulsar.skeleton.workflow.protocol.browser.EmulateEvents
 import kotlinx.coroutines.delay
 import org.apache.commons.io.FileUtils
 import org.apache.commons.lang3.RandomStringUtils

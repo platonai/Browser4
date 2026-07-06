@@ -1,9 +1,8 @@
-package ai.platon.browser4.protocol.browser
+package ai.platon.pulsar.skeleton.workflow.protocol.browser
 
-import ai.platon.browser4.protocol.crowd.ForwardingProtocol
 import ai.platon.pulsar.persist.WebPage
-import ai.platon.pulsar.protocol.browser.emulator.IncognitoBrowserFetcher
 import ai.platon.pulsar.skeleton.workflow.protocol.Response
+import ai.platon.pulsar.skeleton.workflow.protocol.crowd.ForwardingProtocol
 
 /**
  * Copyright (c) Vincent Zhang, ivincent.zhang@gmail.com, Platon.AI.

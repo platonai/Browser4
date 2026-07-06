@@ -28,15 +28,15 @@ import ai.platon.pulsar.common.stringify
 import ai.platon.pulsar.core.api.WebDriver
 import ai.platon.pulsar.persist.AbstractWebPage
 import ai.platon.pulsar.persist.WebPage
-import ai.platon.pulsar.protocol.browser.emulator.AbstractBrowserFetcher
 import ai.platon.pulsar.protocol.browser.emulator.BrowserEmulator
-import ai.platon.pulsar.protocol.browser.emulator.IncognitoBrowserFetcher
 import ai.platon.pulsar.skeleton.common.persist.ext.browseEventHandlers
 import ai.platon.pulsar.skeleton.workflow.fetch.FetchResult
 import ai.platon.pulsar.skeleton.workflow.fetch.FetchTask
 import ai.platon.pulsar.skeleton.workflow.fetch.WebDriverFetcher
 import ai.platon.pulsar.skeleton.workflow.protocol.ForwardingResponse
 import ai.platon.pulsar.skeleton.workflow.protocol.Response
+import ai.platon.pulsar.skeleton.workflow.protocol.browser.AbstractBrowserFetcher
+import ai.platon.pulsar.skeleton.workflow.protocol.browser.IncognitoBrowserFetcher
 import org.slf4j.LoggerFactory
 import java.util.concurrent.atomic.AtomicBoolean
 
