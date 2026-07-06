@@ -644,6 +644,25 @@ pub async fn get_crawl_result(
     send_rest_request(client.get(url)).await
 }
 
+/// Cancel a running crawl task via `CrawlController.cancelCrawl(id)`.
+pub async fn cancel_crawl(
+    client: &Client,
+    base_url: &str,
+    task_id: &str,
+) -> Result<String, String> {
+    let url = build_endpoint_url(base_url, &format!("/api/crawl/{task_id}/cancel"));
+    send_rest_request(client.post(url)).await
+}
+
+/// Clear all terminal-state crawl tasks via `CrawlController.clearCrawls()`.
+pub async fn clear_crawls(
+    client: &Client,
+    base_url: &str,
+) -> Result<String, String> {
+    let url = build_endpoint_url(base_url, "/api/crawl/clear");
+    send_rest_request(client.post(url)).await
+}
+
 /// Get the status of a command by its task ID via the MCP endpoint.
 pub async fn get_command_status(
     client: &Client,

@@ -4,8 +4,10 @@ import ai.platon.browser4.chrome.detail.*
 import ai.platon.browser4.chrome.dom.model.AriaSnapshotOptions
 import ai.platon.browser4.chrome.dom.model.ViewportSpec
 import ai.platon.browser4.chrome.handler.ClickableDOM
+import ai.platon.browser4.chrome.handler.DialogHandler
 import ai.platon.browser4.chrome.handler.EmulationHandler
 import ai.platon.browser4.chrome.handler.PageHandler
+import ai.platon.browser4.chrome.handler.RemoteChromeProtocol
 import ai.platon.browser4.chrome.handler.ScreenshotHandler
 import ai.platon.browser4.chrome.handler.transport.ChromeImpl
 import ai.platon.browser4.chrome.handler.util.CheckableElementJs
@@ -100,6 +102,8 @@ open class PulsarWebDriver constructor(
     private val screenshot = ScreenshotHandler(page, browserProtocol)
     private val emulator get() = EmulationHandler(browserProtocol, keyboard, mouse)
 
+    val dialogHandler = DialogHandler(browserProtocol)
+
     private val rpc = RobustRPC(this)
     private val networkManager by lazy { NetworkManager(rpc, browserProtocol) }
     private val messageWriter = MultiSinkMessageWriter()
@@ -124,6 +128,13 @@ open class PulsarWebDriver constructor(
 
     init {
         fingerprintApplier?.invoke(this)
+
+        // Subscribe to CDP dialog events so click/dblclick handlers can detect
+        // blocking dialogs before attempting post-click snapshots.
+        val devTools = (browserProtocol as? RemoteChromeProtocol)?.remoteDevToolsOrNull
+        if (devTools != null) {
+            dialogHandler.subscribe(devTools)
+        }
     }
 
     override val isOpen get() = browserProtocol.isOpen
@@ -684,6 +695,10 @@ open class PulsarWebDriver constructor(
             emulator.click(node, count, position = "center", modifier = null, delayMillis = delayMillis)
             // debugElementOnPoint(node)
         }
+        // Auto-dismiss any dialog that was triggered by this click (prevents
+        // deadlock when post-click snapshots attempt CDP communication while
+        // a JavaScript dialog blocks the page's JS thread).
+        dialogHandler.drainAutoDismiss()
     }
 
     @Throws(WebDriverException::class)
@@ -693,6 +708,7 @@ open class PulsarWebDriver constructor(
             waitForScrollSettled(selector)
             emulator.click(node, 1, position = "center", modifier = modifier, delayMillis = delayMillis)
         }
+        dialogHandler.drainAutoDismiss()
     }
 
     @Throws(WebDriverException::class)
@@ -788,10 +804,15 @@ open class PulsarWebDriver constructor(
     @Throws(WebDriverException::class)
     override suspend fun dblclick(selector: String, modifier: String) {
         rpc.invokeOnElement(selector, "dblclick") {
-            val node = page.focusOnSelector(selector) ?: return@invokeOnElement
+            // Use queryLocator to avoid focusability pre-check that fails on
+            // non-focusable elements (<div> without tabindex, etc.).
+            // dispatchDomClick (called by emulator.click) handles focus internally.
+            val node = page.dom.queryLocator(selector) ?: return@invokeOnElement
             emulator.click(node, 2)
             gap("dblclick")
         }
+        // Auto-dismiss any dialog triggered by this dblclick (same rationale as click).
+        dialogHandler.drainAutoDismiss()
     }
 
     @Throws(WebDriverException::class)
@@ -1073,6 +1094,97 @@ open class PulsarWebDriver constructor(
             }
         } catch (e: ChromeDriverException) {
             rpc.interceptChromeException(e, "dragAndDrop")
+        }
+    }
+
+    /**
+     * Drags the element identified by [sourceSelector] onto the element identified
+     * by [targetSelector].
+     *
+     * This override resolves `backend:N` node references (which
+     * `document.querySelector` cannot handle) via [page.dom.queryLocator] before
+     * dispatching the HTML5 drag sequence through CDP.  Plain CSS selectors
+     * delegate to the default JS-based implementation.
+     */
+    @Throws(WebDriverException::class)
+    override suspend fun drag(sourceSelector: String, targetSelector: String) {
+        val needsSourceResolution = sourceSelector.startsWith("backend:")
+        val needsTargetResolution = targetSelector.startsWith("backend:")
+
+        if (!needsSourceResolution && !needsTargetResolution) {
+            super.drag(sourceSelector, targetSelector)
+            return
+        }
+
+        rpc.invokeOnPage("drag") {
+            val sourceNode = page.dom.queryLocator(sourceSelector)
+                ?: throw WebDriverException("Source element was not found: $sourceSelector", driver = this@PulsarWebDriver)
+            val targetNode = page.dom.queryLocator(targetSelector)
+                ?: throw WebDriverException("Target element was not found: $targetSelector", driver = this@PulsarWebDriver)
+
+            withNodeObjectId(browserProtocol, sourceNode) { sourceObjectId ->
+                withNodeObjectId(browserProtocol, targetNode) { targetObjectId ->
+                    val script = """
+                        function() {
+                            const source = this;
+                            const target = arguments[0];
+                            if (typeof DataTransfer === 'undefined' || typeof DragEvent === 'undefined') {
+                                return JSON.stringify({
+                                    ok: false,
+                                    error: 'HTML5 drag-and-drop APIs are not available in the current page context'
+                                });
+                            }
+
+                            const sourceRect = source.getBoundingClientRect();
+                            const targetRect = target.getBoundingClientRect();
+                            const sourceX = Math.round(sourceRect.left + sourceRect.width / 2);
+                            const sourceY = Math.round(sourceRect.top + sourceRect.height / 2);
+                            const targetX = Math.round(targetRect.left + targetRect.width / 2);
+                            const targetY = Math.round(targetRect.top + targetRect.height / 2);
+                            const dataTransfer = new DataTransfer();
+
+                            const fire = (element, type, clientX, clientY) => {
+                                const event = new DragEvent(type, {
+                                    bubbles: true,
+                                    cancelable: true,
+                                    composed: true,
+                                    dataTransfer,
+                                    clientX,
+                                    clientY
+                                });
+                                element.dispatchEvent(event);
+                            };
+
+                            fire(source, 'dragstart', sourceX, sourceY);
+                            fire(target, 'dragenter', targetX, targetY);
+                            fire(target, 'dragover', targetX, targetY);
+                            fire(target, 'drop', targetX, targetY);
+                            fire(source, 'dragend', targetX, targetY);
+
+                            return JSON.stringify({ ok: true });
+                        }
+                    """.trimIndent()
+
+                    val result = browserProtocol.callFunctionOn(
+                        script,
+                        objectId = sourceObjectId,
+                        arguments = listOf(CallArgument(objectId = targetObjectId)),
+                        returnByValue = true,
+                        userGesture = true,
+                        awaitPromise = true
+                    )
+
+                    // Parse the JSON result to check for errors
+                    val json = (result?.value as? String) ?: "{}"
+                    val parsed = runCatching { jacksonObjectMapper().readTree(json) }.getOrNull()
+                    if (parsed?.get("ok")?.asBoolean() != true) {
+                        val error = parsed?.get("error")?.asText() ?: "Drag operation failed"
+                        throw WebDriverException(error, driver = this@PulsarWebDriver)
+                    }
+
+                    gap("drag")
+                }
+            }
         }
     }
 

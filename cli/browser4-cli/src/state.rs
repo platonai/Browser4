@@ -553,6 +553,20 @@ pub fn prune_async_tasks(
     Ok(removed)
 }
 
+/// Update the last_status field for a tracked async task.
+pub fn update_async_task_status(
+    task_id: &str,
+    status: &str,
+    state_dir: Option<&std::path::Path>,
+) -> std::io::Result<()> {
+    let mut list = read_async_tasks(state_dir);
+    if let Some(entry) = list.tasks.iter_mut().find(|t| t.task_id == task_id) {
+        entry.last_status = status.to_string();
+        write_async_tasks(&list, state_dir)?;
+    }
+    Ok(())
+}
+
 /// Format a list of tracked async tasks for CLI display.
 pub fn format_async_task_list(list: &AsyncTaskList) -> String {
     if list.tasks.is_empty() {

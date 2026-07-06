@@ -950,17 +950,41 @@ class MCPToolController(
                 val paginated = if (offset > 0) elements.drop(offset) else elements
                 val limited = if (limit > 0) paginated.take(limit) else paginated
 
-                limited.map { element ->
+                val resultValues = limited.map { element ->
                     when (field) {
                         "text" -> element.text()
                         "html" -> element.html()
-                        "attr" -> element.attr(attrName!!) ?: ""
+                        "attr" -> element.attr(attrName!!)  // null when attribute is absent
                         else -> ""
                     }
                 }
+
+                // Warn when elements lack the requested attribute (null = absent, "" = present but empty)
+                if (field == "attr") {
+                    val missingCount = resultValues.count { it == null }
+                    val presentCount = resultValues.size - missingCount
+                    if (missingCount > 0) {
+                        logger.debug(
+                            "html_snapshot_scrape_all: {} of {} matched elements lack attribute '{}' (null values inserted)",
+                            missingCount, resultValues.size, attrName
+                        )
+                    }
+                    if (presentCount == 0 && resultValues.isNotEmpty()) {
+                        return ResponseEntity.ok(
+                            errorResponse(
+                                "0 of ${resultValues.size} matched elements have attribute '$attrName'. " +
+                                    "Use 'htmlsnapshot get text' or 'htmlsnapshot get html' to extract content instead."
+                            )
+                        )
+                    }
+                }
+
+                resultValues
             }
 
-            val json = pulsarObjectMapper().writeValueAsString(results)
+            @Suppress("UNCHECKED_CAST")
+            val resultList = results as List<Any?>
+            val json = pulsarObjectMapper().writeValueAsString(resultList)
             val (paginatedJson, pagination) = paginateIfRequested(json, args)
             ResponseEntity.ok(textResponse(paginatedJson, pagination))
         } catch (e: Exception) {
@@ -1020,8 +1044,19 @@ class MCPToolController(
             val json = pulsarObjectMapper().writeValueAsString(response)
             ResponseEntity.ok(textResponse(json))
         } catch (e: Exception) {
-            logger.error("html_snapshot_query failed | {}", e.message, e)
-            ResponseEntity.ok(errorResponse("html_snapshot_query failed: ${e.message}"))
+            logger.error("html_snapshot_query failed | processedSql=[{}] | {}", processedSql.take(500), e.message, e)
+            val errorDetail = mapOf(
+                "error" to (e.message ?: "Unknown error"),
+                "sqlError" to (e.message ?: ""),
+                "resolvedSql" to processedSql.take(1000),
+                "timeout" to (e is java.util.concurrent.TimeoutException),
+            )
+            ResponseEntity.ok(
+                MCPToolCallResponse(
+                    content = listOf(MCPToolCallContent("text", pulsarObjectMapper().writeValueAsString(errorDetail))),
+                    isError = true,
+                )
+            )
         }
     }
 
@@ -1602,15 +1637,43 @@ internal fun inspectDocument(
     var speculativeMatchCount: Int? = null
     val initialMatchCount = document.select(selector).size
     if (initialMatchCount <= 1) {
-        if (visualBestSelector != null) {
-            effectiveSelector = visualBestSelector
-            autoDiscovered = true
-        } else {
-            // Fallback: structural-signature discovery
-            val discovered = autoDiscoverRepeatingSelector(document)
-            if (discovered != null) {
-                effectiveSelector = discovered
+        // If the user specified a container selector (matches exactly 1 element),
+        // scope the discovery to descendants of that container rather than searching
+        // the entire page. Only fall back to page-level discovery when the container
+        // has no repeating children.
+        val containerElement = if (initialMatchCount == 1 && selector != ":root") {
+            document.selectFirst(selector)
+        } else null
+
+        if (containerElement != null) {
+            // Try to discover repeating patterns within the container.
+            // Build a minimal JSoup document from the container's inner HTML so the
+            // discovery algorithm only sees the container's descendants.
+            val innerHtml = containerElement.html()
+            if (innerHtml.isNotBlank()) {
+                val subDoc = FeaturedDocument(org.jsoup.Jsoup.parse(innerHtml))
+                val discovered = autoDiscoverRepeatingSelector(subDoc)
+                if (discovered != null) {
+                    // Prefix the discovered selector with the container selector
+                    effectiveSelector = "$selector $discovered"
+                    autoDiscovered = true
+                }
+            }
+        }
+
+        // If container-scoped discovery didn't find anything (or there's no container),
+        // fall back to page-level discovery
+        if (!autoDiscovered) {
+            if (visualBestSelector != null) {
+                effectiveSelector = visualBestSelector
                 autoDiscovered = true
+            } else {
+                // Fallback: structural-signature discovery
+                val discovered = autoDiscoverRepeatingSelector(document)
+                if (discovered != null) {
+                    effectiveSelector = discovered
+                    autoDiscovered = true
+                }
             }
         }
     } else if (visualBestSelector != null && visualBestSelector != selector) {

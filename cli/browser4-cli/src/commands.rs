@@ -1151,6 +1151,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 ArgDef { name: "ref", description: "Optional CSS selector or snapshot ref (for example e5)", optional: true },
             ],
             options: &[
+                OptionDef { name: "ref", description: "CSS selector or snapshot ref to scope evaluation (equivalent to positional [ref])", is_bool: false, short: None },
                 OptionDef { name: "file", description: "Read JavaScript expression from a file instead of the command line", is_bool: false, short: None },
                 OptionDef { name: "stdin", description: "Read JavaScript expression from stdin (useful for piping multi-line scripts without shell quoting)", is_bool: true, short: None },
                 OptionDef { name: "base64", description: "Decode the expression argument as base64 before execution (avoids shell quoting issues on Windows)", is_bool: true, short: None },
@@ -2012,7 +2013,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             options: &[
                 OptionDef { name: "sql", description: "X-SQL query to execute. Use @url as placeholder for the target URL. Prefix with @ to read from file (e.g. --sql @query.sql)", is_bool: false, short: None },
                 OptionDef { name: "sql-stdin", description: "Read X-SQL query from stdin (avoids shell quoting issues on Windows)", is_bool: true, short: None },
-                OptionDef { name: "sql-base64", description: "Decode the --sql value (or stdin input) as base64 before execution", is_bool: true, short: None },
+                OptionDef { name: "sql-base64", description: "Base64-encoded X-SQL query (avoid shell quoting issues on Windows)", is_bool: false, short: None },
                 OptionDef { name: "seed-file", description: "File containing URLs to submit, one per line (direct path, no @ prefix)", is_bool: false, short: None },
                 OptionDef { name: "deadline", description: "Deadline for task completion (ISO 8601, e.g. 2026-02-24T23:59:59Z)", is_bool: false, short: None },
                 OptionDef { name: "expires", description: "Cache expiration duration (e.g. 1d, 1h)", is_bool: false, short: None },
@@ -2025,7 +2026,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 if let Some(v) = get_opt_str(args, "sql") { p["sql"] = json!(v); }
                 // --sql-stdin and --sql-base64 are handled in main.rs dispatch
                 if get_bool(args, "sql-stdin").unwrap_or(false) { p["sqlStdin"] = json!(true); }
-                if get_bool(args, "sql-base64").unwrap_or(false) { p["sqlBase64"] = json!(true); }
+                if let Some(v) = get_opt_str(args, "sql-base64") { p["sqlBase64"] = json!(v); }
                 if let Some(v) = get_opt_str(args, "seed-file") { p["seedFile"] = json!(v); }
                 if let Some(v) = get_opt_str(args, "deadline") { p["deadline"] = json!(v); }
                 if let Some(v) = get_opt_str(args, "expires") { p["expires"] = json!(v); }
@@ -2086,7 +2087,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "seed-file", description: "File containing URLs to crawl, one per line (lines starting with # are ignored)", is_bool: false, short: None },
                 OptionDef { name: "sql", description: "X-SQL query to extract structured data from each crawled page. Use @url as the page URL placeholder. Prefix with @ to read from file (e.g. --sql @query.sql)", is_bool: false, short: None },
                 OptionDef { name: "sql-stdin", description: "Read X-SQL query from stdin (avoids shell quoting issues on Windows)", is_bool: true, short: None },
-                OptionDef { name: "sql-base64", description: "Decode the --sql value (or stdin input) as base64 before execution", is_bool: true, short: None },
+                OptionDef { name: "sql-base64", description: "Base64-encoded X-SQL query (avoid shell quoting issues on Windows)", is_bool: false, short: None },
                 OptionDef { name: "format", description: "Output format for extracted data: json, csv, or table (default: table)", is_bool: false, short: None },
                 OptionDef { name: "output", description: "Write results to a file instead of stdout", is_bool: false, short: Some("o") },
                 OptionDef { name: "out-link-selector", description: "CSS selector to extract links from each page", is_bool: false, short: Some("ol") },
@@ -2121,9 +2122,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 if get_bool(args, "sql-stdin").unwrap_or(false) {
                     p["sqlStdin"] = json!(true);
                 }
-                if get_bool(args, "sql-base64").unwrap_or(false) {
-                    p["sqlBase64"] = json!(true);
-                }
+                if let Some(v) = get_opt_str(args, "sql-base64") { p["sqlBase64"] = json!(v); }
                 // Output options (CLI-side, not sent to server)
                 if let Some(v) = get_opt_str(args, "format") {
                     p["format"] = json!(v);
@@ -2304,8 +2303,8 @@ pub fn all_commands() -> Vec<CommandDef> {
                 },
                 OptionDef {
                     name: "sql-base64",
-                    description: "Decode the --sql value (or stdin input) as base64 before execution",
-                    is_bool: true,
+                    description: "Base64-encoded X-SQL query (avoid shell quoting issues on Windows)",
+                    is_bool: false,
                     short: None,
                 },
                 OptionDef {
@@ -2328,7 +2327,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 let mut p = json!({ "sql": sql, "url": url });
                 // Pass through CLI-side flags (--sql-stdin and --sql-base64 are handled in main.rs dispatch)
                 if get_bool(args, "sql-stdin").unwrap_or(false) { p["sqlStdin"] = json!(true); }
-                if get_bool(args, "sql-base64").unwrap_or(false) { p["sqlBase64"] = json!(true); }
+                if let Some(v) = get_opt_str(args, "sql-base64") { p["sqlBase64"] = json!(v); }
                 if let Some(true) = get_bool(args, "result-only") { p["resultOnly"] = json!(true); }
                 if let Some(f) = get_opt_str(args, "output-file") { p["outputFile"] = json!(f); }
                 p
@@ -4472,10 +4471,10 @@ mod tests {
         let cmd = map.get("crawl").unwrap();
         let mut args = HashMap::new();
         args.insert("sql-stdin".to_string(), json!(true));
-        args.insert("sql-base64".to_string(), json!(true));
+        args.insert("sql-base64".to_string(), json!("U0VMRUNUIDE="));
         let params = (cmd.tool_params_fn)(&args);
         assert_eq!(params["sqlStdin"].as_bool().unwrap(), true);
-        assert_eq!(params["sqlBase64"].as_bool().unwrap(), true);
+        assert_eq!(params["sqlBase64"].as_str().unwrap(), "U0VMRUNUIDE=");
     }
 
     #[test]
