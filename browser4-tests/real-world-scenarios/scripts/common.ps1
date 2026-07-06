@@ -27,6 +27,62 @@ Every scenario script follows the same pattern:
 
 $ErrorActionPreference = "Stop"
 
+# ── Windows command-line argument escaping ────────────────────────────────────
+# Adapted from coworker/scripts/workers/agent.ps1.
+# Windows CreateProcess receives a single lpCommandLine string; the child parses
+# it via CommandLineToArgvW.  Backslashes preceding a double-quote must be
+# doubled, and trailing backslashes must be doubled, to prevent the quote from
+# being treated as an escape.  The simplistic .Replace('"', '\"') is incorrect
+# and silently corrupts arguments containing Windows paths.
+function ConvertTo-WindowsCommandLineArgument {
+    param(
+        [AllowEmptyString()]
+        [string]$Argument
+    )
+
+    if ($null -eq $Argument -or $Argument.Length -eq 0) {
+        return '""'
+    }
+
+    if ($Argument -notmatch '[\s"]') {
+        return $Argument
+    }
+
+    $builder = [System.Text.StringBuilder]::new()
+    [void]$builder.Append('"')
+
+    $backslashCount = 0
+    foreach ($character in $Argument.ToCharArray()) {
+        if ($character -eq '\') {
+            $backslashCount++
+            continue
+        }
+
+        if ($character -eq '"') {
+            if ($backslashCount -gt 0) {
+                [void]$builder.Append('\' * ($backslashCount * 2))
+                $backslashCount = 0
+            }
+            [void]$builder.Append('\"')
+            continue
+        }
+
+        if ($backslashCount -gt 0) {
+            [void]$builder.Append('\' * $backslashCount)
+            $backslashCount = 0
+        }
+
+        [void]$builder.Append($character)
+    }
+
+    if ($backslashCount -gt 0) {
+        [void]$builder.Append('\' * ($backslashCount * 2))
+    }
+
+    [void]$builder.Append('"')
+    return $builder.ToString()
+}
+
 # ── Compiled output handler (C#) ──────────────────────────────────────────────
 # DataReceived events fire on .NET threadpool threads.  PowerShell scriptblocks
 # cast to delegates require a Runspace on the executing thread, which threadpool
@@ -863,44 +919,104 @@ function Start-NativeCommand {
         'OnOutputReceived'
     )
 
-    # ── Resolve executable path (handle .cmd/.bat wrappers on Windows) ───
-    # System.Diagnostics.Process uses CreateProcess, which only finds .exe
-    # and .com files.  On Windows, npm-installed tools (claude, node, etc.)
-    # are often .cmd wrappers.  Use Get-Command to resolve to the real path
-    # and, when the resolved file is a script, route through its interpreter.
-    $resolvedExe = $FilePath
-    $prependArgs = @()  # extra args inserted before user args (e.g. /c for cmd)
-    try {
-        $cmdInfo = Get-Command $FilePath -ErrorAction Stop
-        if ($cmdInfo.Source) {
-            $resolvedExe = $cmdInfo.Source
-        }
-    } catch {
-        # If Get-Command fails, use $FilePath as-is — Process.Start may still
-        # find it on PATH if it's a real .exe (or on non-Windows platforms).
+    # ── Resolve executable path (handle .cmd wrappers on Windows) ───
+    # System.Diagnostics.Process uses CreateProcess, which only directly
+    # launches .exe / .com files.  On Windows, npm-installed tools (claude,
+    # node, etc.) are often .cmd wrappers.  An extensionless executable like
+    # "claude" would match the npm-installed POSIX shell script (#!/bin/sh)
+    # rather than claude.cmd, producing:
+    #   "%1 is not a valid Win32 application"
+    # Resolve to the .cmd wrapper explicitly on Windows — CreateProcess
+    # delegates .cmd/.bat to cmd.exe internally without the extra quoting
+    # layer that "cmd.exe /c <script>" introduces.
+    $isWindowsPlatform = $false
+    if ($null -ne $PSVersionTable -and $PSVersionTable.PSEdition -eq 'Desktop') {
+        $isWindowsPlatform = $true
+    } elseif ($null -ne (Get-Variable -Name IsWindows -ErrorAction SilentlyContinue)) {
+        $isWindowsPlatform = [bool]$IsWindows
     }
-    if ($resolvedExe -match '\.(cmd|bat)$') {
-        $prependArgs = @('/c', $resolvedExe)
-        $resolvedExe = 'cmd.exe'
-    } elseif ($resolvedExe -match '\.ps1$') {
-        $prependArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $resolvedExe)
-        $resolvedExe = 'powershell.exe'
+
+    $resolvedExe = $FilePath
+    $stdinRedirectPath = $null
+
+    if ($isWindowsPlatform) {
+        if (-not [System.IO.Path]::HasExtension($resolvedExe) -and
+            -not $resolvedExe.Contains([System.IO.Path]::DirectorySeparatorChar)) {
+            $cmdCandidate = "$resolvedExe.cmd"
+            $resolvedCmd = Get-Command $cmdCandidate -ErrorAction SilentlyContinue
+            if ($resolvedCmd) {
+                $resolvedExe = $resolvedCmd.Source
+            }
+        }
     }
 
     # ── Build the process ──────────────────────────────────────────────────
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = $resolvedExe
-    # Build full argument string: prepend interpreter args (if any), then user args
-    $allArgs = @($prependArgs) + @($ArgumentList)
+
+    # Build full argument string with correct Windows command-line escaping.
+    # On Windows, CreateProcess receives a single lpCommandLine string; the
+    # child parses it via CommandLineToArgvW.  Backslashes before a quote must
+    # be doubled, and trailing backslashes must be doubled.
+    # On Unix, .NET joins ArgumentList entries with spaces — no escaping needed
+    # because argv is passed as an array via execve().
     $argStr = ''
-    foreach ($a in $allArgs) {
+    foreach ($a in $ArgumentList) {
         if ($argStr.Length -gt 0) { $argStr += ' ' }
-        if ($a -match '[\s"]') {
-            $argStr += '"' + $a.Replace('"', '\"') + '"'
+        if ($isWindowsPlatform) {
+            $argStr += ConvertTo-WindowsCommandLineArgument -Argument $a
+        } elseif ($a -match '[\s"]') {
+            # Unix: simple single-quote wrapping (sufficient for claude on macOS/Linux)
+            $argStr += "'" + ($a -replace "'", "''") + "'"
         } else {
             $argStr += $a
         }
     }
+
+    # ── Stdin redirect for large prompts on Windows ────────────────────────
+    # Windows CreateProcess has a command-line length limit (~32KiB, but
+    # cmd.exe imposes ~8191).  When the estimated total nears the safe margin,
+    # strip the -p <prompt> pair and pipe the prompt via stdin instead.
+    # We peek at the argument list to find the value that follows -p so we
+    # can estimate its size; we do NOT reconstruct the arg string from scratch
+    # — the loop above already built it with correct escaping.
+    if ($isWindowsPlatform) {
+        $estimatedLen = $resolvedExe.Length + 1 + $argStr.Length
+        # Find the prompt value after -p for a targeted estimate
+        $promptValue = $null
+        $foundP = $false
+        foreach ($a in $ArgumentList) {
+            if ($foundP) { $promptValue = $a; break }
+            if ($a -eq '-p') { $foundP = $true }
+        }
+        $promptLen = if ($promptValue) { $promptValue.Length } else { 0 }
+
+        if ($promptLen -gt 0 -and $estimatedLen -gt 6000) {
+            # Rebuild arguments without -p <prompt> and redirect stdin instead
+            $trimmedArgStr = ''
+            $skipNext = $false
+            foreach ($a in $ArgumentList) {
+                if ($skipNext) { $skipNext = $false; continue }
+                if ($a -eq '-p') { $skipNext = $true; continue }
+                if ($trimmedArgStr.Length -gt 0) { $trimmedArgStr += ' ' }
+                if ($isWindowsPlatform) {
+                    $trimmedArgStr += ConvertTo-WindowsCommandLineArgument -Argument $a
+                } elseif ($a -match '[\s"]') {
+                    $trimmedArgStr += "'" + ($a -replace "'", "''") + "'"
+                } else {
+                    $trimmedArgStr += $a
+                }
+            }
+            $argStr = $trimmedArgStr
+
+            # Write the prompt to a temp file for stdin redirection
+            $stdinRedirectPath = [System.IO.Path]::GetTempFileName()
+            [System.IO.File]::WriteAllText($stdinRedirectPath, $promptValue, $utf8NoBom)
+            $psi.RedirectStandardInput = $true
+            Write-Host "  · Prompt length ${promptLen} chars → redirected via stdin to avoid command-line limit" -ForegroundColor DarkGray
+        }
+    }
+
     $psi.Arguments = $argStr
     $psi.UseShellExecute = $false
     $psi.RedirectStandardOutput = $true
@@ -932,6 +1048,19 @@ function Start-NativeCommand {
         # Begin async reading
         $proc.BeginOutputReadLine()
         $proc.BeginErrorReadLine()
+
+        # ── Stdin redirect: feed the prompt after async readers are wired ──
+        if ($stdinRedirectPath -and (Test-Path -LiteralPath $stdinRedirectPath)) {
+            try {
+                $stdinContent = [System.IO.File]::ReadAllText(
+                    [System.IO.Path]::GetFullPath($stdinRedirectPath), $utf8NoBom
+                )
+                $proc.StandardInput.Write($stdinContent)
+            } finally {
+                $proc.StandardInput.Close()
+                Remove-Item -LiteralPath $stdinRedirectPath -ErrorAction SilentlyContinue
+            }
+        }
 
         # ── Heartbeat loop ─────────────────────────────────────────────────
         # Poll the process with WaitForExit(timeout).  While waiting, the
