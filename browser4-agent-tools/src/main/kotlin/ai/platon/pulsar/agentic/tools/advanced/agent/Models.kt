@@ -80,6 +80,17 @@ data class AgentTaskStatus(
     @get:JsonIgnore
     var serverSideAgentEventHandlers: ai.platon.pulsar.agentic.event.ServerSideAgentEventHandlers? = null
 
+    /**
+     * The original submitted task/command that triggered this agent execution.
+     * Recorded so callers can verify they're getting results for the right task.
+     */
+    var submittedTask: String? = null
+
+    /**
+     * The reason for failure when the agent task does not complete successfully.
+     */
+    var failureReason: String? = null
+
     companion object {
         fun notFound(id: String) = AgentTaskStatus(id, ResourceStatus.SC_NOT_FOUND, processState = "done")
 

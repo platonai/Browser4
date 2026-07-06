@@ -128,7 +128,7 @@ class StatefulAgentRunner(
 
         // Save the user's current page URL so we can restore it after the agent
         // runs, preventing the agent from polluting the shared browser session.
-        val savedUrl = runCatching { session.driver?.currentUrl() }.getOrNull()
+        val savedUrl = runCatching { session.boundDriver?.currentUrl() }.getOrNull()
         logger.debug("Agent task {}: saved user page URL before agent run: {}", status.id, savedUrl)
 
         val history = agent.run(plainCommand)
@@ -136,13 +136,13 @@ class StatefulAgentRunner(
         // Restore the user's page if the agent navigated away from it
         try {
             if (savedUrl != null && savedUrl.isNotBlank()) {
-                val currentUrl = session.driver?.currentUrl()
+                val currentUrl = session.boundDriver?.currentUrl()
                 if (currentUrl != savedUrl && currentUrl != "about:blank") {
                     logger.info(
                         "Agent task {}: restoring user page from '{}' back to '{}'",
                         status.id, currentUrl, savedUrl
                     )
-                    session.driver?.navigateTo(savedUrl)
+                    session.boundDriver?.navigateTo(savedUrl)
                 }
             }
         } catch (e: Exception) {
@@ -156,16 +156,17 @@ class StatefulAgentRunner(
             // The agent produced no result. Distinguish "empty page" (the agent
             // navigated somewhere with no useful content) from a genuine failure
             // (the agent didn't navigate at all or crashed).
-            val pageBytes = history.states.lastOrNull()?.pageContentBytes ?: 0L
-            if (pageBytes <= 0L) {
+            val lastState = history.states.lastOrNull()
+            val hasPageContent = lastState?.currentPageContentSummary != null
+            if (!hasPageContent) {
                 status.refresh(ResourceStatus.SC_EXPECTATION_FAILED)
-                status.message = "Agent produced no results (0 content bytes). " +
+                status.message = "Agent produced no results (no page content). " +
                     "The task may not have navigated to a valid page or the agent encountered an error."
-                status.failureReason = "Agent produced no results (0 content bytes)"
+                status.failureReason = "Agent produced no results (no page content)"
             } else {
                 status.refresh(ResourceStatus.SC_OK)
                 status.message = finalState?.summary ?: finalState?.description
-                    ?: "Agent completed but produced no summary (${pageBytes} content bytes loaded)"
+                    ?: "Agent completed but produced no summary (page content loaded)"
             }
         } else {
             // AgentState has 'summary' for the final result message

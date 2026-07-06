@@ -279,14 +279,13 @@ class CrawlService(
 
     private suspend fun crawlDepth1(taskId: String, request: CrawlRequest): List<CrawlPageResult> {
         val session = AgenticContexts.createSession()
+        val results = Collections.synchronizedList(mutableListOf<CrawlPageResult>())
         try {
             val options = parseOptions(session, request.args)
             if (options.outLinkSelector.isNullOrBlank()) {
                 logger.warn("Crawl {}: no outLinkSelector provided, returning empty result", taskId)
                 return emptyList()
             }
-
-            val results = Collections.synchronizedList(mutableListOf<CrawlPageResult>())
             val outLinks = extractOutLinks(session, request.url, options)
 
             if (outLinks.isEmpty()) {
@@ -347,11 +346,10 @@ class CrawlService(
         PulsarSettings.withSequentialBrowsers().maxOpenTabs(8)
 
         val session = AgenticContexts.createSession()
+        val results = Collections.synchronizedList(mutableListOf<CrawlPageResult>())
         try {
             val options = parseOptions(session, request.args)
             val maxDepth = request.depth
-
-            val results = Collections.synchronizedList(mutableListOf<CrawlPageResult>())
             val visited = ConcurrentHashMap.newKeySet<String>()
 
             // Use lateinit to allow recursive reference within the parse handler
@@ -493,9 +491,9 @@ class CrawlService(
         val rawSelector = normOptions.outLinkSelector.orEmpty()
         if (rawSelector.isBlank()) return emptyList()
 
-        // Diagnostic: log the selector as-provided and after normalization
-        // (correctOutLinkSelector may mangle selectors that already contain tag names)
-        val correctedSelector = normOptions.correctOutLinkSelector()
+        // Diagnostic: log the selector as-provided; normalize() already
+        // calls correctOutLinkSelector() internally, so outLinkSelector is corrected.
+        val correctedSelector = normOptions.outLinkSelector
         logger.debug(
             "extractOutLinks: rawSelector='{}' correctedSelector='{}' ignoreUrlQuery={}",
             rawSelector, correctedSelector, normOptions.ignoreUrlQuery
@@ -504,10 +502,10 @@ class CrawlService(
         val document = session.loadDocument(portalUrl, normOptions)
 
         // Diagnostic: verify the document has meaningful content
-        val docHtmlLength = document.html().length
+        val docHtmlLength = document.html.length
         val allAnchors = document.select("a").size
         logger.debug(
-            "extractOutLinks: document.html().length={} document.select('a').size={}",
+            "extractOutLinks: document.html.length={} document.select('a').size={}",
             docHtmlLength, allAnchors
         )
 

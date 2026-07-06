@@ -1053,7 +1053,7 @@ class MCPToolController(
             )
             ResponseEntity.ok(
                 MCPToolCallResponse(
-                    content = listOf(MCPToolCallContent("text", pulsarObjectMapper().writeValueAsString(errorDetail))),
+                    content = listOf(MCPContent("text", pulsarObjectMapper().writeValueAsString(errorDetail))),
                     isError = true,
                 )
             )
