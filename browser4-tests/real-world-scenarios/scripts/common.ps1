@@ -956,35 +956,18 @@ function Start-NativeCommand {
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = $resolvedExe
 
-    # Build full argument string with correct Windows command-line escaping.
-    # On Windows, CreateProcess receives a single lpCommandLine string; the
-    # child parses it via CommandLineToArgvW.  Backslashes before a quote must
-    # be doubled, and trailing backslashes must be doubled.
-    # On Unix, .NET joins ArgumentList entries with spaces — no escaping needed
-    # because argv is passed as an array via execve().
-    $argStr = ''
-    foreach ($a in $ArgumentList) {
-        if ($argStr.Length -gt 0) { $argStr += ' ' }
-        if ($isWindowsPlatform) {
-            $argStr += ConvertTo-WindowsCommandLineArgument -Argument $a
-        } elseif ($a -match '[\s"]') {
-            # Unix: simple single-quote wrapping (sufficient for claude on macOS/Linux)
-            $argStr += "'" + ($a -replace "'", "''") + "'"
-        } else {
-            $argStr += $a
-        }
-    }
+    # ── Build argument list ─────────────────────────────────────────────────
+    # Use ProcessStartInfo.ArgumentList (available in .NET 6+ / pwsh 7+) to
+    # pass each argument as a separate string.  This avoids the need for manual
+    # escaping entirely:
+    #   - On Unix: entries are passed directly as argv[] via execve().
+    #   - On Windows: .NET joins entries into lpCommandLine using correct
+    #     CommandLineToArgvW escaping — no manual quoting needed.
+    $stdinRedirectPath = $null
 
-    # ── Stdin redirect for large prompts on Windows ────────────────────────
-    # Windows CreateProcess has a command-line length limit (~32KiB, but
-    # cmd.exe imposes ~8191).  When the estimated total nears the safe margin,
-    # strip the -p <prompt> pair and pipe the prompt via stdin instead.
-    # We peek at the argument list to find the value that follows -p so we
-    # can estimate its size; we do NOT reconstruct the arg string from scratch
-    # — the loop above already built it with correct escaping.
+    # On Windows, redirect large prompts via stdin to avoid CreateProcess
+    # command-line length limits (~32 KiB, or ~8191 with legacy cmd.exe).
     if ($isWindowsPlatform) {
-        $estimatedLen = $resolvedExe.Length + 1 + $argStr.Length
-        # Find the prompt value after -p for a targeted estimate
         $promptValue = $null
         $foundP = $false
         foreach ($a in $ArgumentList) {
@@ -993,33 +976,31 @@ function Start-NativeCommand {
         }
         $promptLen = if ($promptValue) { $promptValue.Length } else { 0 }
 
+        # Estimate total command-line length to decide whether to redirect.
+        # We sum the lengths of all args plus separators as a rough estimate.
+        $estimatedLen = $resolvedExe.Length + 1
+        foreach ($a in $ArgumentList) { $estimatedLen += $a.Length + 1 }
+
         if ($promptLen -gt 0 -and $estimatedLen -gt 6000) {
-            # Rebuild arguments without -p <prompt> and redirect stdin instead
-            $trimmedArgStr = ''
+            # Strip -p <prompt> and pipe the prompt via stdin instead.
             $skipNext = $false
             foreach ($a in $ArgumentList) {
                 if ($skipNext) { $skipNext = $false; continue }
                 if ($a -eq '-p') { $skipNext = $true; continue }
-                if ($trimmedArgStr.Length -gt 0) { $trimmedArgStr += ' ' }
-                if ($isWindowsPlatform) {
-                    $trimmedArgStr += ConvertTo-WindowsCommandLineArgument -Argument $a
-                } elseif ($a -match '[\s"]') {
-                    $trimmedArgStr += "'" + ($a -replace "'", "''") + "'"
-                } else {
-                    $trimmedArgStr += $a
-                }
+                $psi.ArgumentList.Add($a)
             }
-            $argStr = $trimmedArgStr
 
-            # Write the prompt to a temp file for stdin redirection
             $stdinRedirectPath = [System.IO.Path]::GetTempFileName()
             [System.IO.File]::WriteAllText($stdinRedirectPath, $promptValue, $utf8NoBom)
             $psi.RedirectStandardInput = $true
             Write-Host "  · Prompt length ${promptLen} chars → redirected via stdin to avoid command-line limit" -ForegroundColor DarkGray
+        } else {
+            foreach ($a in $ArgumentList) { $psi.ArgumentList.Add($a) }
         }
+    } else {
+        # Unix: no command-line length concerns — pass all arguments directly.
+        foreach ($a in $ArgumentList) { $psi.ArgumentList.Add($a) }
     }
-
-    $psi.Arguments = $argStr
     $psi.UseShellExecute = $false
     $psi.RedirectStandardOutput = $true
     $psi.RedirectStandardError = $true
