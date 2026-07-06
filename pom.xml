@@ -275,6 +275,65 @@
             </build>
         </profile>
 
+        <!-- Quality gate: enforce a minimum JaCoCo coverage floor on the fast
+             unit-test subset. Activate with -Pquality-gate (used by pr.yml).
+             The instruction floor is a conservative STARTING point; raise it
+             toward 0.50 and then 0.70 as coverage improves (see docs/TESTING.md).
+             Modules with no tests produce no exec file and will fail the gate,
+             which is the intended pressure to add coverage. -->
+        <profile>
+            <id>quality-gate</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.jacoco</groupId>
+                        <artifactId>jacoco-maven-plugin</artifactId>
+                        <version>${jacoco-maven-plugin.version}</version>
+                        <executions>
+                            <execution>
+                                <id>prepare-agent</id>
+                                <goals>
+                                    <goal>prepare-agent</goal>
+                                </goals>
+                                <configuration>
+                                    <propertyName>jacocoArgLine</propertyName>
+                                </configuration>
+                            </execution>
+                            <execution>
+                                <id>report</id>
+                                <phase>test</phase>
+                                <goals>
+                                    <goal>report</goal>
+                                </goals>
+                            </execution>
+                            <execution>
+                                <id>check</id>
+                                <phase>test</phase>
+                                <goals>
+                                    <goal>check</goal>
+                                </goals>
+                                <configuration>
+                                    <haltOnFailure>true</haltOnFailure>
+                                    <rules>
+                                        <rule>
+                                            <element>BUNDLE</element>
+                                            <limits>
+                                                <limit>
+                                                    <counter>INSTRUCTION</counter>
+                                                    <value>COVEREDRATIO</value>
+                                                    <minimum>0.20</minimum>
+                                                </limit>
+                                            </limits>
+                                        </rule>
+                                    </rules>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+
     </profiles>
 
     <build>
@@ -368,8 +427,9 @@
                     <!-- All tests are in the same JVM process -->
                     <forkCount>1</forkCount>
                     <reuseForks>true</reuseForks>
-                    <!-- Enable byte-buddy-agent -->
-                    <argLine>-XX:+EnableDynamicAgentLoading</argLine>
+                    <!-- Enable byte-buddy-agent. ${jacocoArgLine} is injected by the
+                         quality-gate profile's prepare-agent; empty otherwise. -->
+                    <argLine>${jacocoArgLine} -XX:+EnableDynamicAgentLoading</argLine>
                     <useModulePath>false</useModulePath>
                 </configuration>
             </plugin>
@@ -546,17 +606,22 @@
         <runCoreTests>false</runCoreTests>
         <runRestTests>false</runRestTests>
 
-        <!-- Default excludedGroups: exclude all non-Fast tests
-             Includes both new taxonomy tags and legacy tags for backward compatibility:
-             - New tags: Slow, Heavy, Integration, E2E, RequiresXYZ, ManualOnly
-             - Legacy tags: IntegrationTest, E2ETest, HeavyTest, SkippableLowerLevelTest, TestInfraCheck, OptionalTest
-             Migration: Gradually migrate tests from legacy tags to new taxonomy -->
+        <!-- Default excludedGroups: exclude all non-Fast tests.
+             New taxonomy tags are preferred; the legacy tags below are still in
+             use by existing tests and must stay excluded until those tests are
+             migrated (see docs/TESTING.md). Unused legacy tags
+             (SkippableLowerLevelTest, OptionalTest) were removed because no test
+             references them anymore. -->
         <surefire.excludedGroups>
             Slow,Heavy,RequiresServer,RequiresBrowser,RequiresAI,RequiresDocker,
             Integration,E2E,ManualOnly,
-            SkippableLowerLevelTest,TestInfraCheck,OptionalTest,
+            TestInfraCheck,
             IntegrationTest,E2ETest,HeavyTest
         </surefire.excludedGroups>
+
+        <!-- Populated by the quality-gate profile's JaCoCo prepare-agent; empty
+             by default so Surefire's argLine is unaffected when coverage is off. -->
+        <jacocoArgLine></jacocoArgLine>
 
         <!--  Language  -->
         <javaVersion>17</javaVersion>
