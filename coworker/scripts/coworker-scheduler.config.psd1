@@ -44,7 +44,7 @@
         @{
             Name            = 'refine-github-issues'
             Description     = 'Extract issues from draft files, split into individual issues, refine as GitHub issues, and stage for creation.'
-            Enabled         = $true
+            Enabled         = $false
             IntervalSeconds = 15
             WindowStyle     = 'Minimized'
             PendingPaths    = @('coworker\tasks\200issues\draft\refine\0ready')
