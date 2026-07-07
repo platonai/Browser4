@@ -877,6 +877,11 @@ async fn post_command_snapshot(client: &Client, base_url: &str, session_id: &str
     cli_println!("- Page Title: {}", title_result);
     cli_println!("### Snapshot");
     cli_println!("[Snapshot]({})", out_path.display());
+    if !json_active() {
+        eprintln!(
+            "💡 Tip: Run `snapshot -v 0` to see interactive element refs"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2730,15 +2735,29 @@ async fn handle_snapshot(
                  interaction. Re-run snapshot before reusing refs."
             );
         }
-        // Hint: when interactive mode is on but output goes to a file, suggest --stdout
-        let interactive = tool_params
-            .get("interactive")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-        if interactive && !json_active() {
+        // Hint: suggest --stdout to print inline instead of opening the file
+        if !json_active() {
             eprintln!(
-                "💡 Tip: Add --stdout to print element refs inline instead of opening the snapshot file"
+                "💡 Tip: Use `--stdout` to print element refs inline instead of opening the snapshot file"
             );
+        }
+        // Brief preview: show first few non-comment lines of the snapshot
+        if !json_active() {
+            let preview_lines: Vec<&str> = snap
+                .lines()
+                .filter(|line| !line.starts_with('#') && !line.trim().is_empty())
+                .take(10)
+                .collect();
+            if !preview_lines.is_empty() {
+                eprintln!("\n--- Snapshot preview (first {} lines) ---", preview_lines.len());
+                for line in &preview_lines {
+                    eprintln!("{}", line);
+                }
+                if snap.lines().filter(|l| !l.starts_with('#') && !l.trim().is_empty()).count() > 10 {
+                    eprintln!("... (use --stdout or open the file for full content)");
+                }
+                eprintln!("---");
+            }
         }
         // Warn when a non-zero viewport snapshot is suspiciously small (may
         // indicate the AX tree wasn't re-expanded after scrolling — a known

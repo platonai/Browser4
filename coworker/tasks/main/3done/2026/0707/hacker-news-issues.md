@@ -44,55 +44,10 @@ Jan Iłowski argues that $/1M tokens is a misleading metric for comparing AI mod
 
 ---
 
-## Issues Found (8 issues)
-
-### Issue 1: Click action times out with no navigation and misleading error guidance
-
-**Severity:** High
-**Category:** Reliability
-
-#### Reproduction
-
-```bash
-cd cli/browser4-cli && cargo run -- goto "https://news.ycombinator.com/news"
-cargo run -- snapshot -v 0
-cargo run -- click e552   # click on story #2 link
-```
-
-#### Expected Behavior
-
-Click navigates to the linked page and returns a snapshot of the new page.
-
-#### Actual Behavior
-
-HTTP request timed out after 120 seconds. The error message suggests "Click/press actions may trigger page navigation that succeeds despite the timeout. Check the current page with `snapshot` to verify" — but in this case, no navigation occurred at all. The browser remained on the HN front page.
-
-#### Root Cause Analysis
-
-The HTTP client timeout (120s) fires before the page navigation completes. The reprog.wordpress.com site may be slow to respond, causing the CDP `click` + wait-for-navigation cycle to exceed the timeout. The error message's assumption that navigation might have succeeded anyway is incorrect for this case.
-
-#### Code Pointer
-
-``cli/browser4-cli/src/http.rs` — HTTP client timeout configuration; `cli/browser4-cli/src/commands.rs` — click command timeout/error handling.`
-
-#### AI Suggested Improvement
-
-- Increase the HTTP client timeout for navigation-triggering actions (click on links, press Enter on forms) beyond 120s, or make it configurable via a `--timeout` flag
-- After a click timeout, automatically check whether navigation actually occurred and report the result rather than showing a generic "might have worked" message
-- Consider decoupling the click action from the navigation wait: fire the click, then separately wait for navigation with its own timeout
-- The error message should say "Navigation did NOT occur" or "Navigation MAY have occurred" based on actually checking the page URL, not a generic guess
-
-#### Human Review
-
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
-- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
-- [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
-- [ ] **REJECT** — issue invalid, not a problem, or already addressed
-- **Notes:**
-
-
 ---
+
+## Issues Found (8 issues)
+> **Review complete:** 3 approved, 5 deferred/rejected
 
 ### Issue 2: goto command auto-captures snapshot but does not display element refs
 
@@ -130,12 +85,14 @@ The auto-snapshot after goto saves to a file but only shows the file path in the
 #### Human Review
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [x] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - **Notes:**
+add a tip after goto: "Run snapshot -v 0 to see interactive element refs"
 
+---
 
 ---
 
@@ -174,13 +131,14 @@ The default behavior saves to a file for persistence, which is useful for debugg
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - **Notes:**
 
+---
 
 ---
 
@@ -219,13 +177,29 @@ The tool is built on Rust's regex crate which uses ERE-style `|` alternation rat
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - **Notes:**
 
+---
+
+---
+
+### Issue 1: Click action times out with no navigation and misleading error guidance
+
+**Severity:** High
+**Category:** Reliability
+
+#### Review Result
+
+**Decision:** DEFER
+
+**Notes:** click action should al
+
+**Summary:** - Increase the HTTP client timeout for navigation-triggering actions (click on links, press Enter on forms) beyond 120s, or make it configurable via a `--timeout` flag
 
 ---
 
@@ -234,43 +208,11 @@ The tool is built on Rust's regex crate which uses ERE-style `|` alternation rat
 **Severity:** Medium
 **Category:** UX / Discoverability
 
-#### Reproduction
+#### Review Result
 
-1. Navigate to a content-heavy page (blog post, article)
-2. Run `snapshot -v 0`
-3. Try to read the article content from the YAML snapshot
+**Decision:** DEFER
 
-#### Expected Behavior
-
-A clear path from "I want to read this article" to seeing the article text.
-
-#### Actual Behavior
-
-The accessibility tree YAML is deeply nested with LayoutTable nodes, generic containers, and redundant text. Reading a full article requires hopping between viewports or switching to the separate `htmlsnapshot` → `htmlsnapshot get text` workflow. The SKILL.md core loop (§1) doesn't mention htmlsnapshot for content extraction, and the decision tree (§4a) only mentions it for static pages — not for post-navigation content reading.
-
-#### Root Cause Analysis
-
-The accessibility tree is optimized for interaction (finding refs for clickable elements), not for reading prose content. The `htmlsnapshot` path is documented but in a different section, making it less discoverable for the common "open article → read it" workflow.
-
-#### Code Pointer
-
-``skills/browser4-cli/SKILL.md` — §1 Core Loop could include a content-reading pattern; `skills/browser4-cli/references/htmlsnapshot.md` — could cross-reference from the core loop.`
-
-#### AI Suggested Improvement
-
-- Add a "Reading Content" pattern to the SKILL.md Core Loop section: `goto → htmlsnapshot → htmlsnapshot get all text "article p"`
-- In the snapshot output tip, mention: "For reading article text, try `htmlsnapshot` followed by `htmlsnapshot get all text`"
-- Consider a `snapshot text` subcommand that extracts readable text directly from the accessibility tree
-
-#### Human Review
-
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
-- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
-- [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
-- [ ] **REJECT** — issue invalid, not a problem, or already addressed
-- **Notes:**
-
+**Summary:** - Add a "Reading Content" pattern to the SKILL.md Core Loop section: `goto → htmlsnapshot → htmlsnapshot get all text "article p"`
 
 ---
 
@@ -279,44 +221,11 @@ The accessibility tree is optimized for interaction (finding refs for clickable 
 **Severity:** Medium
 **Category:** Reliability / UX
 
-#### Reproduction
+#### Review Result
 
-```bash
-cd cli/browser4-cli && cargo run -- click e552
-# Times out after 120s with no recourse
-```
+**Decision:** DEFER
 
-#### Expected Behavior
-
-Either a configurable timeout, automatic retry, or clear guidance on how to handle slow pages.
-
-#### Actual Behavior
-
-The 120-second timeout is hardcoded. When it fires, the only options are to try a different approach (e.g., `goto` directly to the URL). There's no `--timeout` flag, no automatic retry, and the click `--help` output doesn't mention timeout behavior at all.
-
-#### Root Cause Analysis
-
-The HTTP client in `src/http.rs` has a fixed timeout. The click command doesn't expose a timeout override. The help text for click doesn't document the timeout behavior.
-
-#### Code Pointer
-
-``cli/browser4-cli/src/http.rs` — HTTP client timeout; `cli/browser4-cli/src/args.rs` — CLI argument definitions.`
-
-#### AI Suggested Improvement
-
-- Add a global `--timeout <seconds>` option that overrides the default HTTP timeout
-- Document timeout behavior in command-specific help for navigation-triggering commands (click, press, goto)
-- Consider progressive timeout: start at 30s, retry once at 120s before giving up
-
-#### Human Review
-
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
-- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
-- [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
-- [ ] **REJECT** — issue invalid, not a problem, or already addressed
-- **Notes:**
-
+**Summary:** - Add a global `--timeout <seconds>` option that overrides the default HTTP timeout
 
 ---
 
@@ -325,44 +234,11 @@ The HTTP client in `src/http.rs` has a fixed timeout. The click command doesn't 
 **Severity:** Low
 **Category:** UX
 
-#### Reproduction
+#### Review Result
 
-1. `goto` HN → get refs for top stories
-2. Click story #1 → navigate away
-3. Return to HN with `goto` — previous refs are invalid
-4. Must re-run `snapshot -v 0` and re-discover story refs
+**Decision:** DEFER
 
-#### Expected Behavior
-
-Either refs persist across returns to the same page, or there's a shortcut to re-identify previously targeted elements.
-
-#### Actual Behavior
-
-Each return to a page requires a new full `snapshot -v 0` and manual inspection of the YAML to find the same elements again. `snapshot grep` helps but still requires knowing what text to search for.
-
-#### Root Cause Analysis
-
-CDP backend node IDs are per-document and are regenerated on each page load. This is a fundamental CDP limitation, but the CLI could provide higher-level abstractions (e.g., persistent locators, named bookmarks).
-
-#### Code Pointer
-
-`N/A — this is a design/architecture consideration.`
-
-#### AI Suggested Improvement
-
-- Add a `--bookmark <name> <ref>` command that saves a CSS selector path for a ref and allows re-targeting with `--use-bookmark <name>`
-- Or add a `snapshot find` command that takes a text pattern and returns the ref: `snapshot find "Jeff Bezos"` → e552
-- Document the `generate-locator <ref>` command more prominently as a way to create persistent CSS selectors from ephemeral refs
-
-#### Human Review
-
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
-- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
-- [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
-- [ ] **REJECT** — issue invalid, not a problem, or already addressed
-- **Notes:**
-
+**Summary:** - Add a `--bookmark <name> <ref>` command that saves a CSS selector path for a ref and allows re-targeting with `--use-bookmark <name>`
 
 ---
 
@@ -371,41 +247,11 @@ CDP backend node IDs are per-document and are regenerated on each page load. Thi
 **Severity:** Low
 **Category:** UX
 
-#### Reproduction
+#### Review Result
 
-Run any command from source on Windows: `cd cli/browser4-cli && cargo run -- <cmd>`
+**Decision:** WONTFIX
 
-#### Expected Behavior
-
-Near-instant command execution.
-
-#### Actual Behavior
-
-Every invocation prints `Finished 'dev' profile [unoptimized + debuginfo] target(s) in 0.12s` even when nothing changed. This output adds noise to the command results. On Windows, the total invocation string is also quite long: `cd "D:/workspace/Browser4/Browser4-4.11/cli/browser4-cli" && cargo run -- <cmd>`.
-
-#### Root Cause Analysis
-
-Cargo always checks freshness before running, and prints the "Finished" line to stderr. The long invocation path is inherent to running from source on Windows with absolute paths.
-
-#### Code Pointer
-
-`N/A — Cargo behavior, not fixable in browser4-cli itself. Could be mitigated with a wrapper script or alias.`
-
-#### AI Suggested Improvement
-
-- Document a Windows PowerShell alias or batch wrapper in the development section: `function b4 { cd D:/workspace/Browser4/Browser4-4.11/cli/browser4-cli; cargo run -- $args }`
-- Or provide a `dev.ps1` wrapper script in the repo that handles the cd + cargo run pattern
-- Suppress the cargo "Finished" line by redirecting stderr or using `cargo run -q`
-
-#### Human Review
-
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
-- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
-- [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
-- [ ] **REJECT** — issue invalid, not a problem, or already addressed
-- **Notes:**
-
+**Summary:** - Document a Windows PowerShell alias or batch wrapper in the development section: `function b4 { cd D:/workspace/Browser4/Browser4-4.11/cli/browser4-cli; cargo run -- $args }`
 
 ---
 
@@ -469,4 +315,3 @@ cd cli/browser4-cli && cargo run -- click e552
 #### Issue 8: Windows-specific: `cargo run` compilation overhead adds ~0.12s to every command
 
 Run any command from source on Windows: `cd cli/browser4-cli && cargo run -- <cmd>`
-
