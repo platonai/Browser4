@@ -1031,9 +1031,15 @@ async fn handle_attach(
         return Ok(());
     }
 
-    // Resolve the CDP endpoint
+    // Resolve the CDP endpoint — channel-name resolution uses blocking I/O
+    // (process scanning, port probing via reqwest::blocking) and must run
+    // outside the tokio async context to avoid runtime-drop panics.
     let cdp_endpoint = if let Some(raw) = cdp_raw {
-        resolve_cdp_endpoint(raw)?
+        let raw_owned = raw.to_string();
+        let resolved = tokio::task::spawn_blocking(move || resolve_cdp_endpoint(&raw_owned))
+            .await
+            .map_err(|e| format!("CDP endpoint resolution failed: {e}"))?;
+        resolved?
     } else {
         return Err(
             "attach requires --cdp <url|channel> or --endpoint <url>.\n\
@@ -1071,6 +1077,7 @@ async fn handle_attach(
     state.base_url = effective_base_url.clone();
     state.active_selector = None;
     state.last_mouse_position = None;
+    state.is_attached = true;
     write_state(&state, None, session_name).map_err(|e| e.to_string())?;
 
     json_field("session_id", json!(&session_id));
@@ -1444,6 +1451,7 @@ async fn handle_close(
         return Ok(());
     };
     json_field("session_id", json!(&session_id));
+    let is_attached = state.is_attached;
     // Ignore errors — session might already be closed
     let _ = call_tool(
         client,
@@ -1453,8 +1461,237 @@ async fn handle_close(
     )
     .await;
     clear_state(None, session_name);
-    cli_println!("Session closed.");
+    if is_attached {
+        cli_println!("Disconnected from attached browser. The browser remains running.");
+    } else {
+        cli_println!("Session closed. Browser terminated.");
+    }
     json_field("closed", json!(true));
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Tab command handlers
+// ---------------------------------------------------------------------------
+
+async fn handle_tab_list(
+    client: &Client,
+    base_url: &str,
+    session_name: Option<&str>,
+) -> Result<(), String> {
+    let state = read_state(None, session_name);
+    let Some(session_id) = state.session_id.as_deref() else {
+        return Err(no_active_session_message());
+    };
+
+    let result = call_tool(
+        client,
+        base_url,
+        "browser_tabs",
+        json!({ "sessionId": session_id, "action": "list" }),
+    )
+    .await?;
+
+    let tabs = parse_tab_list(&result);
+    if tabs.is_empty() {
+        if json_active() {
+            cli_println!("[]");
+        } else {
+            cli_println!("No tabs found.");
+        }
+        return Ok(());
+    }
+
+    if json_active() {
+        // Machine-readable JSON (consistent with other commands' --json behavior)
+        let json_tabs: Vec<Value> = tabs
+            .iter()
+            .map(|t| {
+                json!({
+                    "index": t.index,
+                    "url": t.url,
+                    "title": t.title,
+                })
+            })
+            .collect();
+        cli_println!("{}", serde_json::to_string_pretty(&json_tabs).unwrap_or_default());
+    } else {
+        // Human-readable table: Index | Title | URL
+        let idx_w = "Index".len().max(
+            tabs.last().map(|t| t.index.to_string().len()).unwrap_or(0),
+        );
+        let title_w = "Title".len().max(
+            tabs.iter().map(|t| t.title.len()).max().unwrap_or(0).min(60),
+        );
+        let url_w = "URL".len().max(
+            tabs.iter().map(|t| t.url.len()).max().unwrap_or(0).min(80),
+        );
+
+        cli_println!(
+            "  {:<idx_w$}  {:<title_w$}  {:<url_w$}",
+            "Index", "Title", "URL",
+            idx_w = idx_w,
+            title_w = title_w,
+            url_w = url_w,
+        );
+        cli_println!(
+            "  {:-<idx_w$}  {:-<title_w$}  {:-<url_w$}",
+            "", "", "",
+            idx_w = idx_w,
+            title_w = title_w,
+            url_w = url_w,
+        );
+        for tab in &tabs {
+            let title = if tab.title.len() > 60 {
+                format!("{}…", &tab.title[..59])
+            } else {
+                tab.title.clone()
+            };
+            let url = if tab.url.len() > 80 {
+                format!("{}…", &tab.url[..79])
+            } else {
+                tab.url.clone()
+            };
+            cli_println!(
+                "  {:<idx_w$}  {:<title_w$}  {:<url_w$}",
+                tab.index, title, url,
+                idx_w = idx_w,
+                title_w = title_w,
+                url_w = url_w,
+            );
+        }
+    }
+    Ok(())
+}
+
+async fn handle_tab_new(
+    client: &Client,
+    base_url: &str,
+    tool_params: &Value,
+    session_name: Option<&str>,
+) -> Result<(), String> {
+    let url = tool_params
+        .get("url")
+        .and_then(|v| v.as_str())
+        .unwrap_or("about:blank");
+
+    let state = read_state(None, session_name);
+    let Some(session_id) = state.session_id.as_deref() else {
+        return Err(no_active_session_message());
+    };
+
+    let result = call_tool(
+        client,
+        base_url,
+        "browser_tabs",
+        json!({ "sessionId": session_id, "action": "new", "url": url }),
+    )
+    .await?;
+
+    cli_println!("{}", result);
+
+    // Auto-switch to the newly created tab by listing tabs, finding the
+    // highest-index entry, and issuing a select action.
+    let list_result = call_tool(
+        client,
+        base_url,
+        "browser_tabs",
+        json!({ "sessionId": session_id, "action": "list" }),
+    )
+    .await?;
+
+    let tabs = parse_tab_list(&list_result);
+    if let Some(new_tab) = tabs.last() {
+        let new_index = new_tab.index;
+        // Select the new tab
+        let _ = call_tool(
+            client,
+            base_url,
+            "browser_tabs",
+            json!({ "sessionId": session_id, "action": "select", "index": new_index }),
+        )
+        .await;
+        cli_println!("Switched to tab {} ({})", new_index, url);
+
+        // Refresh page info for the "### Page" section
+        let (page_url, page_title) = tokio::join!(
+            call_tool(
+                client,
+                base_url,
+                "page_url",
+                json!({ "sessionId": session_id }),
+            ),
+            call_tool(
+                client,
+                base_url,
+                "page_title",
+                json!({ "sessionId": session_id }),
+            ),
+        );
+        if let (Ok(pu), Ok(pt)) = (page_url, page_title) {
+            json_field("page_url", json!(&pu));
+            json_field("page_title", json!(&pt));
+            cli_println!("### Page");
+            cli_println!("- Page URL: {}", pu);
+            cli_println!("- Page Title: {}", pt);
+        }
+    } else {
+        // Couldn't parse the tab list; still show a tip
+        if !json_active() {
+            eprintln!("💡 Tip: Use `tab-select <index>` to switch to the new tab.");
+        }
+    }
+
+    Ok(())
+}
+
+async fn handle_tab_select(
+    client: &Client,
+    base_url: &str,
+    tool_params: &Value,
+    session_name: Option<&str>,
+) -> Result<(), String> {
+    let index_val = tool_params.get("index").cloned().unwrap_or_default();
+
+    let state = read_state(None, session_name);
+    let Some(session_id) = state.session_id.as_deref() else {
+        return Err(no_active_session_message());
+    };
+
+    let result = call_tool(
+        client,
+        base_url,
+        "browser_tabs",
+        json!({ "sessionId": session_id, "action": "select", "index": index_val }),
+    )
+    .await?;
+
+    cli_println!("{}", result);
+
+    // Refresh page info after tab switch so the "### Page" section shows the
+    // newly selected tab's URL and title instead of stale cached metadata.
+    let (page_url, page_title) = tokio::join!(
+        call_tool(
+            client,
+            base_url,
+            "page_url",
+            json!({ "sessionId": session_id }),
+        ),
+        call_tool(
+            client,
+            base_url,
+            "page_title",
+            json!({ "sessionId": session_id }),
+        ),
+    );
+    if let (Ok(pu), Ok(pt)) = (page_url, page_title) {
+        json_field("page_url", json!(&pu));
+        json_field("page_title", json!(&pt));
+        cli_println!("### Page");
+        cli_println!("- Page URL: {}", pu);
+        cli_println!("- Page Title: {}", pt);
+    }
+
     Ok(())
 }
 
@@ -11296,6 +11533,27 @@ async fn run(
                 &tool_params,
                 global.session_name.as_deref(),
                 follow,
+            )
+            .await?;
+        }
+        "tab-list" => {
+            handle_tab_list(&client, &base_url, global.session_name.as_deref()).await?;
+        }
+        "tab-new" => {
+            handle_tab_new(
+                &client,
+                &base_url,
+                &tool_params,
+                global.session_name.as_deref(),
+            )
+            .await?;
+        }
+        "tab-select" => {
+            handle_tab_select(
+                &client,
+                &base_url,
+                &tool_params,
+                global.session_name.as_deref(),
             )
             .await?;
         }

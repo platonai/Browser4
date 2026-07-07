@@ -49,7 +49,10 @@ All 8 task steps completed successfully:
 
 ---
 
+---
+
 ## Issues Found (7 issues)
+> **Review complete:** 4 approved, 3 deferred/rejected
 
 ### Issue 1: `console` command fails with "Unknown tool" error
 
@@ -86,106 +89,14 @@ The CLI's `console` command sends a request to the backend MCP tool `browser_con
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - **Notes:**
-
 
 ---
-
-### Issue 2: Snapshot defaults to file output requiring an extra step to view refs
-
-**Severity:** Medium
-**Category:** UX
-
-#### Reproduction
-
-```bash
-cargo run -- snapshot -i
-```
-Output shows only a file path like `[Snapshot](D:\...\snapshot-2026-07-06T20-46-39-355Z.yml)`. The user must open that file separately to see element refs.
-
-#### Expected Behavior
-
-Either show element refs inline by default, or make the output mode immediately obvious. First-time users of Playwright/Puppeteer expect to see the page structure directly.
-
-#### Actual Behavior
-
-Only a file path is shown. A tip appears: `💡 Tip: Add --stdout to print element refs inline instead of opening the snapshot file` — but this is reactive (appears after the user already needs it).
-
-#### Root Cause Analysis
-
-The default behavior prioritizes saving to a file for archival/performance reasons, but the UX for interactive discovery (the most common first-time use case) is suboptimal. The `--stdout` flag exists and works, but new users don't know about it until after they've already run a snapshot.
-
-#### Code Pointer
-
-``cli/browser4-cli/src/snapshot.rs` (snapshot output behavior), `cli/browser4-cli/src/help.rs` (top-level help text)`
-
-#### AI Suggested Improvement
-
-- When `-i`/`--interactive` is passed (explicit discovery intent), default to `--stdout` behavior
-- Alternatively, show the first ~10 lines of the snapshot inline even in file mode, followed by the full file path
-- Add "use --stdout for inline output" to the top-level `--help` summary for snapshot
-- Consider a `--summary` flag that shows only element refs + labels (compact table) rather than the full YAML tree
-
-#### Human Review
-
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
-- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
-- [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
-- [ ] **REJECT** — issue invalid, not a problem, or already addressed
-- **Notes:**
-
-
----
-
-### Issue 3: Shell quoting of JavaScript expressions is painful on Windows
-
-**Severity:** Medium
-**Category:** UX
-
-#### Reproduction
-
-```bash
-cargo run -- eval "el => ({ tag: el.tagName, text: el.textContent.trim() })" --ref e84
-```
-On Windows bash, nested quotes in arrow functions and object literals require careful escaping. The CLI internally handles some escaping (visible in the process listing), but users encounter friction constructing expressions.
-
-#### Expected Behavior
-
-Common JavaScript patterns (arrow functions, object literals with property names) should be easy to express without escaping gymnastics.
-
-#### Actual Behavior
-
-The `--file`, `--stdin`, and `--base64` alternatives exist and work well — but the inline path (simplest and most obvious) is the most painful. The documentation acknowledges this (SKILL.md §5: "Shell quoting on Windows — complex JS/SQL with nested quotes causes escaping issues") but doesn't prevent users from hitting it first.
-
-#### Root Cause Analysis
-
-Shell quoting on Windows is inherently difficult, and JavaScript uses the same quote characters as the shell. The CLI provides good workarounds, but the default path (inline expression) leads users into the pain point first.
-
-#### Code Pointer
-
-`N/A (platform limitation, not a code bug)`
-
-#### AI Suggested Improvement
-
-- When `eval` receives no expression argument and no `--file`/`--stdin`/`--base64` flag, automatically enter stdin mode (like `eval --stdin`) and show a prompt or hint
-- Add a `--prompt` mode that opens the user's `$EDITOR` for authoring multi-line JavaScript
-- Surface the quoting warning earlier: show a brief "Tip: use --stdin for complex expressions" when the expression contains both single and double quotes
-
-#### Human Review
-
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
-- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
-- [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
-- [ ] **REJECT** — issue invalid, not a problem, or already addressed
-- **Notes:**
-
 
 ---
 
@@ -226,56 +137,14 @@ The top-level help summary is intentionally terse, but flag parity with position
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - **Notes:**
-
 
 ---
-
-### Issue 5: `cargo run --` invocation overhead is high for interactive use
-
-**Severity:** Low
-**Category:** UX
-
-#### Reproduction
-
-Every `cargo run --` invocation prints `Finished dev profile [unoptimized + debuginfo] target(s) in 0.12s` and takes ~0.12-0.13s of build-check overhead before the actual command runs.
-
-#### Expected Behavior
-
-Faster startup for development-mode usage. The `Finished` line is noise for a binary that's already built.
-
-#### Actual Behavior
-
-The overhead is minor (~0.12s) but the `Finished` line adds visual noise to every command output. In an interactive session with many commands, this accumulates.
-
-#### Root Cause Analysis
-
-`cargo run` always checks whether the binary needs rebuilding before executing. The binary is already built, so the check is fast, but the status line can't be suppressed.
-
-#### Code Pointer
-
-`N/A (cargo behavior)`
-
-#### AI Suggested Improvement
-
-- Document in the README that after an initial `cargo build`, users can invoke the binary directly: `./target/debug/browser4-cli.exe <command>` — this eliminates both the build check and the `Finished` line
-- Add a `--quiet` flag to the development invocation guidance
-- Consider a `browser4-cli-dev` wrapper script that runs the debug binary directly
-
-#### Human Review
-
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
-- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
-- [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
-- [ ] **REJECT** — issue invalid, not a problem, or already addressed
-- **Notes:**
-
 
 ---
 
@@ -312,13 +181,14 @@ The term "viewport" is overloaded — it means the visible browser area in web d
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - **Notes:**
 
+---
 
 ---
 
@@ -358,13 +228,53 @@ The snapshot command outputs YAML by design for human readability. The `htmlsnap
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - **Notes:**
 
+---
+
+---
+
+### Issue 2: Snapshot defaults to file output requiring an extra step to view refs
+
+**Severity:** Medium
+**Category:** UX
+
+#### Review Result
+
+**Decision:** REJECT
+
+**Summary:** - When `-i`/`--interactive` is passed (explicit discovery intent), default to `--stdout` behavior
+
+---
+
+### Issue 3: Shell quoting of JavaScript expressions is painful on Windows
+
+**Severity:** Medium
+**Category:** UX
+
+#### Review Result
+
+**Decision:** REJECT
+
+**Summary:** - When `eval` receives no expression argument and no `--file`/`--stdin`/`--base64` flag, automatically enter stdin mode (like `eval --stdin`) and show a prompt or hint
+
+---
+
+### Issue 5: `cargo run --` invocation overhead is high for interactive use
+
+**Severity:** Low
+**Category:** UX
+
+#### Review Result
+
+**Decision:** REJECT
+
+**Summary:** - Document in the README that after an initial `cargo build`, users can invoke the binary directly: `./target/debug/browser4-cli.exe <command>` — this eliminates both the build check and the `Finis...
 
 ---
 
@@ -421,4 +331,3 @@ The snapshot output shows "This page has 2 viewports. You are currently viewing 
 cargo run -- snapshot -i --stdout --json
 ```
 The `--json` global flag appears not to affect snapshot output format — output remains YAML.
-

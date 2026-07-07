@@ -36,6 +36,15 @@ pub struct CliState {
     /// Last known mouse position used to restore pointer state across CLI invocations.
     #[serde(rename = "lastMousePosition", skip_serializing_if = "Option::is_none")]
     pub last_mouse_position: Option<MousePosition>,
+    /// Whether this session was created via `attach` (external browser) rather
+    /// than `open` (Browser4-launched).  Attached sessions leave the browser
+    /// running after `close`.
+    #[serde(rename = "isAttached", default, skip_serializing_if = "is_false")]
+    pub is_attached: bool,
+}
+
+fn is_false(b: &bool) -> bool {
+    !b
 }
 
 impl Default for CliState {
@@ -46,6 +55,7 @@ impl Default for CliState {
             active_selector: None,
             session_name: None,
             last_mouse_position: None,
+            is_attached: false,
         }
     }
 }
@@ -678,6 +688,7 @@ mod tests {
             active_selector: None,
             session_name: None,
             last_mouse_position: Some(MousePosition { x: 120.0, y: 240.0 }),
+            is_attached: false,
         };
         write_state(&state, Some(tmp.path()), None).unwrap();
         let read = read_state(Some(tmp.path()), None);
@@ -716,6 +727,7 @@ mod tests {
             active_selector: None,
             session_name: Some("auth".to_string()),
             last_mouse_position: Some(MousePosition { x: 10.0, y: 20.0 }),
+            is_attached: false,
         };
         let state_public = CliState {
             session_id: Some("public456".to_string()),
@@ -723,6 +735,7 @@ mod tests {
             active_selector: None,
             session_name: Some("public".to_string()),
             last_mouse_position: Some(MousePosition { x: 30.0, y: 40.0 }),
+            is_attached: false,
         };
 
         write_state(&state_auth, Some(tmp.path()), Some("auth")).unwrap();

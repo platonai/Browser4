@@ -411,7 +411,15 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(
-            "  - --cdp accepts a CDP endpoint URL (e.g. http://localhost:9222) or a browser channel name (chrome, msedge, chrome-canary, chromium, ...)."
+            "  - --cdp accepts a CDP endpoint URL (e.g. http://localhost:9222) or a browser channel name."
+                .to_string(),
+        );
+        lines.push(
+            "    Supported channels: chrome, chrome-beta, chrome-dev, chrome-canary,"
+                .to_string(),
+        );
+        lines.push(
+            "                        msedge, msedge-beta, msedge-dev, msedge-canary"
                 .to_string(),
         );
         lines.push(
@@ -427,6 +435,8 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("  browser4-cli attach --cdp http://localhost:9222".to_string());
         lines.push("  browser4-cli attach --cdp chrome".to_string());
         lines.push("  browser4-cli attach --cdp msedge".to_string());
+        lines.push("  browser4-cli attach --endpoint http://browser4-server:8182".to_string());
+        lines.push("  browser4-cli attach --endpoint http://remote:8182 --cdp chrome".to_string());
     }
 
     if cmd.name == "open" {
