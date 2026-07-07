@@ -83,8 +83,8 @@ function Start-GuiServer {
     $guiDir = Split-Path -Parent $guiServerPath
     Write-Host "[coworker] Installing GUI dependencies (npm install)..."
     $npmArgs = @('install', '--no-audit', '--no-fund', '--loglevel=error')
-    $npmResult = Start-Process -FilePath 'npm' `
-        -ArgumentList $npmArgs `
+    $npmResult = Start-Process -FilePath 'cmd' `
+        -ArgumentList (@('/c', 'npm') + $npmArgs) `
         -WorkingDirectory $guiDir `
         -NoNewWindow `
         -Wait `
