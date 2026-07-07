@@ -103,9 +103,18 @@ body {
   margin: 0; min-height: 100vh; display: flex; flex-direction: column;
   font-family: var(--font); background: var(--bg-root); color: var(--text-primary);
 }
-::-webkit-scrollbar { width: 5px; height: 5px; }
-::-webkit-scrollbar-thumb { background: var(--scrollbar-thumb); border-radius: 10px; }
+/* Firefox */
+* { scrollbar-width: thin; scrollbar-color: var(--scrollbar-thumb) transparent; }
+::-webkit-scrollbar { width: 8px; height: 8px; }
 ::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb); border-radius: 10px;
+  border: 2px solid transparent; background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted); border: 2px solid transparent; background-clip: padding-box;
+}
+::-webkit-scrollbar-corner { background: transparent; }
 
 /* ═══════════════════════════════════════════════════════════════════════
    Header
@@ -304,6 +313,64 @@ body {
   font-weight: 500; color: var(--text-muted);
 }
 
+/* ═══════════════════════════════════════════════════════════════════════
+   Tree View
+   ═══════════════════════════════════════════════════════════════════════ */
+.tree-node { user-select: none; }
+.tree-dir {
+  display: flex; align-items: center; gap: 5px;
+  padding: 5px 0.5rem; cursor: pointer;
+  font-size: 0.74rem; font-weight: 550; color: var(--text-secondary);
+  transition: background 0.1s;
+  border-bottom: 1px solid var(--border-light);
+}
+.tree-dir:hover { background: var(--bg-hover); }
+.tree-dir .tree-arrow {
+  font-size: 0.5rem; width: 14px; text-align: center; flex-shrink: 0;
+  transition: transform 0.15s; color: var(--text-muted);
+  display: inline-block;
+}
+.tree-dir .tree-arrow.open { transform: rotate(90deg); }
+.tree-dir .tree-folder-icon { font-size: 0.8rem; flex-shrink: 0; }
+.tree-dir .tree-dir-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tree-dir .tree-dir-count {
+  font-size: 0.6rem; color: var(--text-muted); flex-shrink: 0;
+  background: var(--bg-inset); padding: 1px 6px; border-radius: 8px; font-weight: 500;
+}
+.tree-children { overflow: hidden; }
+.tree-children.collapsed { display: none; }
+.tree-leaf {
+  display: flex; align-items: center; gap: 8px;
+  padding: 5px 0.5rem 5px 1.5rem; cursor: pointer;
+  border-bottom: 1px solid var(--border-light);
+  font-size: 0.77rem; color: var(--text-primary);
+  transition: all 0.12s;
+}
+.tree-leaf:hover { background: var(--bg-hover); }
+.tree-leaf.selected { background: var(--bg-selected); box-shadow: inset 3px 0 0 var(--accent); }
+.tree-leaf .task-icon {
+  font-size: 0.7rem; flex-shrink: 0; width: 20px; text-align: center;
+}
+.tree-leaf .task-icon.md { color: var(--md-icon); }
+.tree-leaf .task-icon.json { color: var(--json-icon); }
+.tree-leaf .task-name {
+  flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-weight: 450;
+}
+.tree-leaf .task-meta {
+  font-size: 0.62rem; color: var(--text-muted); flex-shrink: 0;
+  display: flex; align-items: center; gap: 6px;
+}
+.tree-leaf .task-meta .size {
+  background: var(--bg-inset); padding: 1px 6px; border-radius: 8px;
+  font-weight: 500; color: var(--text-muted);
+}
+/* Indent levels for tree leaves when inside directories */
+.tree-leaf.l1 { padding-left: 1.8rem; }
+.tree-leaf.l2 { padding-left: 2.4rem; }
+.tree-leaf.l3 { padding-left: 3.0rem; }
+.tree-leaf.l4 { padding-left: 3.6rem; }
+
 .empty-message {
   padding: 3rem 1.5rem; text-align: center;
   color: var(--text-muted); font-size: 0.82rem; line-height: 1.6;
@@ -484,7 +551,7 @@ dialog .delete-warning {
   <div class="app-brand">
     <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="M3 9h18"/><path d="M9 21V9"/><circle cx="7.5" cy="6" r="1" fill="currentColor" stroke="none"/><circle cx="12.5" cy="6" r="1" fill="currentColor" stroke="none"/><circle cx="17.5" cy="6" r="1" fill="currentColor" stroke="none"/></svg>
     <h1>Coworker Task Manager</h1>
-    <a href="/review" style="color:#a78bfa;font-size:0.72rem;text-decoration:none;margin-left:6px;opacity:0.75;" title="Review issue files">→ Review</a>
+    <a href="/issues/review" style="color:#a78bfa;font-size:0.72rem;text-decoration:none;margin-left:6px;opacity:0.75;" title="Review issue files">→ Review</a>
   </div>
   <div class="header-right">
     <div class="total-badge">
@@ -832,7 +899,7 @@ async function selectStage(stageId) {
     var data = await apiGet('/api/tasks?stage=' + encodeURIComponent(stageId));
     state.allTasks = data.tasks;
     state.currentDateStamped = state.stageMap[stageId] ? state.stageMap[stageId].date_stamped : false;
-    renderTaskList(data.tasks, state.currentDateStamped);
+    renderTaskTree(data.tasks);
   } catch (e) {
     showToast('Failed to load tasks: ' + e.message, 'error');
     document.getElementById('task-list').innerHTML = '<div class="empty-message">Error loading tasks.</div>';
@@ -847,57 +914,178 @@ function refreshCurrentStage() {
 // ── Client-side filter ──
 function applyFilter() {
   var q = document.getElementById('task-filter').value.toLowerCase().trim();
-  if (!q) { renderTaskList(state.allTasks, state.currentDateStamped); return; }
+  if (!q) { renderTaskTree(state.allTasks); return; }
   var filtered = state.allTasks.filter(function(t) {
     return t.name.toLowerCase().indexOf(q) >= 0 || t.path.toLowerCase().indexOf(q) >= 0;
   });
-  renderTaskList(filtered, state.currentDateStamped);
+  renderTaskTree(filtered);
 }
 
-// ── Task list ──
-function renderTaskList(tasks, dateStamped) {
+// ── Tree builder ──
+function buildTree(tasks) {
+  var root = { name: '', children: {}, files: [], depth: 0 };
+  for (var i = 0; i < tasks.length; i++) {
+    var parts = tasks[i].path.split('/');
+    var node = root;
+    for (var j = 0; j < parts.length - 1; j++) {
+      var key = parts[j];
+      if (!node.children[key]) {
+        node.children[key] = { name: key, children: {}, files: [], depth: node.depth + 1, parent: node };
+      }
+      node = node.children[key];
+    }
+    node.files.push(tasks[i]);
+  }
+  return root;
+}
+
+// Flatten tree nodes in display order, returning a sorted tree
+function sortTree(node) {
+  // Sort children directories by name
+  var dirKeys = Object.keys(node.children).sort();
+  // Sort files by name
+  node.files.sort(function(a, b) { return a.name.localeCompare(b.name); });
+  for (var i = 0; i < dirKeys.length; i++) {
+    sortTree(node.children[dirKeys[i]]);
+  }
+  node._dirKeys = dirKeys;
+  return node;
+}
+
+// ── Task list (tree view) ──
+function renderTaskTree(tasks) {
   var container = document.getElementById('task-list');
   if (tasks.length === 0) {
     container.innerHTML = '<div class="empty-message"><span class="empty-icon">&#128451;</span>No tasks in this stage.</div>';
     return;
   }
-  var html = '';
-  if (dateStamped) {
-    var groups = {}; var groupOrder = [];
-    for (var i = 0; i < tasks.length; i++) {
-      var t = tasks[i];
-      var parts = t.path.split('/');
-      var dateKey = '';
-      if (parts.length >= 3) { dateKey = parts[parts.length - 3] + '/' + parts[parts.length - 2]; }
-      if (!groups[dateKey]) { groups[dateKey] = []; groupOrder.push(dateKey); }
-      groups[dateKey].push(t);
-    }
-    for (var gi = 0; gi < groupOrder.length; gi++) {
-      var dk = groupOrder[gi];
-      html += '<div class="date-group"><div class="date-group-header">' + escHtml(dk || 'Unknown date') + '</div>';
-      for (var ti = 0; ti < groups[dk].length; ti++) { html += renderTaskItem(groups[dk][ti]); }
-      html += '</div>';
-    }
-  } else {
-    for (var i = 0; i < tasks.length; i++) { html += renderTaskItem(tasks[i]); }
+
+  // Build and sort tree
+  var tree = buildTree(tasks);
+  // Find the common root: if all paths share the same first segment, start from there
+  var root = tree;
+  var depth = root.depth;
+  // Skip single-child roots to minimize nesting (e.g. skip 'main' if everything is under it)
+  while (Object.keys(root.children).length === 1 && root.files.length === 0) {
+    var onlyKey = Object.keys(root.children)[0];
+    root = root.children[onlyKey];
+    root.depth = depth; // keep depth relative to display root
   }
+  // If root is the empty "" node with children, use its first real child
+  if (root.name === '' && Object.keys(root.children).length > 0) {
+    // Just use root directly, but skip rendering the phantom root
+  }
+  sortTree(root);
+
+  var html = renderTreeNode(root, 0);
   container.innerHTML = html;
+
+  // Store expanded state: default expand first 2 levels
+  var expanded = {};
+  expandDefaults(root, expanded, 2);
+  applyExpandedState(container, expanded);
 }
 
-function renderTaskItem(t) {
+function expandDefaults(node, expanded, maxDepth) {
+  for (var i = 0; i < (node._dirKeys || []).length; i++) {
+    var child = node.children[node._dirKeys[i]];
+    if (node.depth < maxDepth || child.files.length > 0) {
+      expanded[child.name + '@' + child.depth] = true;
+      expandDefaults(child, expanded, maxDepth);
+    }
+  }
+}
+
+function applyExpandedState(container, expanded) {
+  var toggles = container.querySelectorAll('.tree-dir[data-expand-key]');
+  for (var i = 0; i < toggles.length; i++) {
+    var key = toggles[i].getAttribute('data-expand-key');
+    if (expanded[key]) {
+      toggles[i].querySelector('.tree-arrow').classList.add('open');
+      var children = toggles[i].nextElementSibling;
+      if (children && children.classList.contains('tree-children')) {
+        children.classList.remove('collapsed');
+      }
+    }
+  }
+}
+
+function renderTreeNode(node, inheritedDepth) {
+  if (node.name === '' && Object.keys(node.children).length === 0) {
+    // Leaf phantom root: just render files
+    var h = '';
+    for (var i = 0; i < node.files.length; i++) {
+      h += renderTreeLeaf(node.files[i], inheritedDepth);
+    }
+    return h;
+  }
+
+  var html = '';
+
+  // If this node has a name and has children or files, render as directory
+  if (node.name !== '') {
+    var dirCount = countAllDescendants(node);
+    var expandKey = node.name + '@' + node.depth;
+    html += '<div class="tree-dir" data-expand-key="' + escHtml(expandKey) + '" onclick="toggleTreeDir(this)" title="' + escHtml(node.name) + '/">';
+    html += '<span class="tree-arrow">▶</span>';
+    html += '<span class="tree-folder-icon">📁</span>';
+    html += '<span class="tree-dir-name">' + escHtml(node.name) + '</span>';
+    html += '<span class="tree-dir-count">' + dirCount + '</span>';
+    html += '</div>';
+    html += '<div class="tree-children collapsed">';
+    var childDepth = inheritedDepth + 1;
+  } else {
+    // Phantom root: no directory rendering, just children
+    html += '<div class="tree-children">';
+    var childDepth = inheritedDepth;
+  }
+
+  // Render child directories
+  for (var d = 0; d < (node._dirKeys || []).length; d++) {
+    html += renderTreeNode(node.children[node._dirKeys[d]], childDepth);
+  }
+
+  // Render files in this directory
+  for (var f = 0; f < node.files.length; f++) {
+    html += renderTreeLeaf(node.files[f], childDepth);
+  }
+
+  html += '</div>';
+  return html;
+}
+
+function renderTreeLeaf(t, depth) {
   var selectedClass = (state.selectedTaskPath === t.path) ? ' selected' : '';
   var ext = t.name.match(/\.(md|json)$/i);
   var iconClass = ext ? ext[1].toLowerCase() : 'md';
   var icon = iconClass === 'json' ? '&#128203;' : '&#128196;';
   var sizeStr = t.size < 1024 ? t.size + ' B' : (t.size < 1048576 ? (t.size / 1024).toFixed(1) + ' KB' : (t.size / 1048576).toFixed(1) + ' MB');
-  return '<div class="task-item' + selectedClass + '" onclick="selectTask(\'' + escJs(t.path) + '\')" title="' + escHtml(t.path) + '">' +
+  var levelClass = depth > 0 ? ' l' + Math.min(depth, 4) : '';
+  return '<div class="tree-leaf' + selectedClass + levelClass + '" onclick="selectTask(\'' + escJs(t.path) + '\')" title="' + escHtml(t.path) + '">' +
     '<span class="task-icon ' + iconClass + '">' + icon + '</span>' +
     '<span class="task-name">' + escHtml(t.name) + '</span>' +
     '<span class="task-meta"><span class="size">' + sizeStr + '</span></span>' +
     '</div>';
 }
 
-// ── Task selection ──
+function countAllDescendants(node) {
+  var count = node.files.length;
+  for (var i = 0; i < (node._dirKeys || []).length; i++) {
+    count += countAllDescendants(node.children[node._dirKeys[i]]);
+  }
+  return count;
+}
+
+function toggleTreeDir(el) {
+  var arrow = el.querySelector('.tree-arrow');
+  var children = el.nextElementSibling;
+  if (arrow) arrow.classList.toggle('open');
+  if (children && children.classList.contains('tree-children')) {
+    children.classList.toggle('collapsed');
+  }
+}
+
+// ── Task selection (keep existing, but update render call) ──
 async function selectTask(path) {
   state.selectedTaskPath = path; state.editMode = false;
   if (state.selectedStage) { applyFilter(); }

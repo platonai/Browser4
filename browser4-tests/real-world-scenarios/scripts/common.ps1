@@ -619,6 +619,192 @@ function Extract-BackgroundContext {
     return $result
 }
 
+# ── JSON conversion (shared schema with coworker/gui/frontend/issue-model.js) ─
+
+function ConvertTo-IssueJson {
+    <#
+    .SYNOPSIS
+        Convert parsed issues to the canonical JSON schema shared with the GUI.
+    .DESCRIPTION
+        Takes the output of ConvertFrom-IssuesSection plus background context
+        and produces a JSON string matching the schema in coworker/gui/frontend/issue-model.js.
+        This is the interchange format between PowerShell scripts and the web GUI.
+    .PARAMETER ScenarioName
+        Short scenario identifier (e.g. "form-filling").
+    .PARAMETER SourceFile
+        Source .full.md filename.
+    .PARAMETER Timestamp
+        ISO-style timestamp string (yyyyMMdd-HHmmss).
+    .PARAMETER Mode
+        "dev" or "production".
+    .PARAMETER Background
+        Hashtable from Extract-BackgroundContext.
+    .PARAMETER Issues
+        Array of issue hashtables from ConvertFrom-IssuesSection.
+    .OUTPUTS
+        JSON string.
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ScenarioName,
+        [string]$SourceFile = '',
+        [string]$Timestamp = '',
+        [string]$Mode = 'dev',
+        [hashtable]$Background = @{},
+        [object[]]$Issues = @()
+    )
+
+    $sectionLabels = @(
+        'Reproduction',
+        'Expected Behavior',
+        'Actual Behavior',
+        'Root Cause Analysis',
+        'Code Pointer',
+        'AI Suggested Improvement'
+    )
+
+    $issueArray = @()
+    $issueNum = 0
+    foreach ($issue in $Issues) {
+        $issueNum++
+        $sections = @()
+        foreach ($label in $sectionLabels) {
+            $body = ''
+            switch ($label) {
+                'Reproduction'           { $body = $issue.Reproduction }
+                'Expected Behavior'      { $body = $issue.Expected }
+                'Actual Behavior'        { $body = $issue.Actual }
+                'Root Cause Analysis'    { $body = $issue.RootCause }
+                'Code Pointer'           { $body = $issue.CodePointer }
+                'AI Suggested Improvement' { $body = $issue.Suggestion }
+            }
+            if ($body) {
+                $sections += @{ label = $label; body = $body }
+            }
+        }
+
+        $reviewDecision = $null
+        $reviewNotes = ''
+        if ($issue.Review) {
+            if ($issue.Review -match '\[x\]\s*\*\*(ACCEPT|ACCEPT with improvements|DEFER|WONTFIX|REJECT)\*\*') {
+                $reviewDecision = $Matches[1]
+            }
+            if ($issue.Review -match '\*\*Notes:\*\*\s*\n(.+)') {
+                $reviewNotes = $Matches[1].Trim()
+            }
+        }
+
+        $issueObj = [ordered]@{
+            number   = $issueNum
+            title    = $issue.Title
+            severity = $issue.Severity
+            category = $issue.Category
+            sections = $sections
+            review   = @{ decision = $reviewDecision; notes = $reviewNotes }
+        }
+        $issueArray += $issueObj
+    }
+
+    $result = [ordered]@{
+        meta       = @{
+            scenario = $ScenarioName
+            source   = $SourceFile
+            date     = $Timestamp
+            mode     = $Mode
+        }
+        background = @{
+            task             = $Background.TaskSummary
+            executionContext = $Background.ExecutionTrace
+        }
+        issues     = $issueArray
+    }
+
+    $jsonSettings = [System.Web.Script.Serialization.JavaScriptSerializer]::new()
+    return $jsonSettings.Serialize($result)
+}
+
+function ConvertFrom-IssueJson {
+    <#
+    .SYNOPSIS
+        Parse the canonical JSON schema back into PowerShell hashtables.
+    .DESCRIPTION
+        Inverse of ConvertTo-IssueJson.  Accepts a JSON string matching the
+        shared schema and returns the components as PowerShell objects.
+    .PARAMETER Json
+        JSON string in the canonical issue schema format.
+    .OUTPUTS
+        Hashtable with keys: ScenarioName, SourceFile, Timestamp, Mode,
+        Background (hashtable), Issues (array of hashtables).
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Json
+    )
+
+    $jsonSettings = [System.Web.Script.Serialization.JavaScriptSerializer]::new()
+    $data = $jsonSettings.DeserializeObject($Json)
+
+    $issues = @()
+    foreach ($iss in $data.issues) {
+        $suggestionBody = ''
+        foreach ($sec in $iss.sections) {
+            if ($sec.label -eq 'AI Suggested Improvement') {
+                $suggestionBody = $sec.body
+                break
+            }
+        }
+        $reviewText = ''
+        $decision = ''
+        if ($iss.review) {
+            $decision = if ($iss.review.decision) { $iss.review.decision } else { '' }
+            $notes = if ($iss.review.notes) { $iss.review.notes } else { '' }
+            if ($decision) {
+                $reviewText = "- [x] **${decision}**`n- **Notes:**"
+                if ($notes) { $reviewText += "`n${notes}" }
+            } else {
+                $reviewText = "- [ ] **ACCEPT**`n- [ ] **ACCEPT with improvements**`n- [ ] **DEFER**`n- [ ] **WONTFIX**`n- [ ] **REJECT**`n- **Notes:**"
+                if ($notes) { $reviewText += "`n${notes}" }
+            }
+        }
+
+        $issue = @{
+            Title        = $iss.title
+            Severity     = $iss.severity
+            Category     = $iss.category
+            Reproduction = ''
+            Expected     = ''
+            Actual       = ''
+            RootCause    = ''
+            CodePointer  = ''
+            Review       = $reviewText
+            Suggestion   = $suggestionBody
+        }
+        foreach ($sec in $iss.sections) {
+            switch ($sec.label) {
+                'Reproduction'              { $issue.Reproduction = $sec.body }
+                'Expected Behavior'         { $issue.Expected = $sec.body }
+                'Actual Behavior'           { $issue.Actual = $sec.body }
+                'Root Cause Analysis'       { $issue.RootCause = $sec.body }
+                'Code Pointer'              { $issue.CodePointer = $sec.body }
+                'AI Suggested Improvement'  { $issue.Suggestion = $sec.body }
+            }
+        }
+        $issues += $issue
+    }
+
+    return @{
+        ScenarioName = $data.meta.scenario
+        SourceFile   = $data.meta.source
+        Timestamp    = $data.meta.date
+        Mode         = $data.meta.mode
+        Background   = @{
+            TaskSummary    = $data.background.task
+            ExecutionTrace = $data.background.executionContext
+        }
+        Issues       = $issues
+    }
+}
+
 # ── Issue file output ─────────────────────────────────────────────────────────
 
 function Write-IssuesToReadyQueue {

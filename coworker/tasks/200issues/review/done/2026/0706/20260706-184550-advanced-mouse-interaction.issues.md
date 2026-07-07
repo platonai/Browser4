@@ -114,10 +114,9 @@ The evaluation template uses placeholder variables intended for automated substi
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
-- [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
+- [x] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - **Notes:**
-
 
 ---
 
@@ -158,13 +157,12 @@ The server-side `browser_drag` implementation translates the ref into `backend:<
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - **Notes:**
-
 
 ---
 
@@ -208,12 +206,12 @@ The `browser_click` (and by extension `dblclick`) server implementation checks `
 #### Human Review
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [x] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - **Notes:**
-
+Remove the focusability check for dblclick
 
 ---
 
@@ -251,12 +249,12 @@ The CLI command definitions use the same `<ref>` nomenclature across all command
 #### Human Review
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [x] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - **Notes:**
-
+`drag` and `dblclick` should accept snapshot refs
 
 ---
 
@@ -300,10 +298,9 @@ Browser dialogs (`alert`, `confirm`, `prompt`) are synchronous and block the Jav
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
-- [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
+- [x] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - **Notes:**
-
 
 ---
 
@@ -347,7 +344,6 @@ CSS-based tooltips that use the `title` attribute get rendered into the accessib
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - **Notes:**
 
-
 ---
 
 ### Issue 7: `cargo run --` from repo root fails (must cd into cli/browser4-cli first)
@@ -389,10 +385,9 @@ The repo root has no Cargo.toml. The Cargo.toml is at `cli/browser4-cli/Cargo.to
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
-- [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
+- [x] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - **Notes:**
-
 
 ---
 
@@ -432,13 +427,12 @@ The `generate-locator` implementation appears to use the simplest unique selecto
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - **Notes:**
-
 
 ---
 
@@ -474,13 +468,12 @@ The `--stdout` output includes viewport state metadata (`# This page has 2 viewp
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - **Notes:**
-
 
 ---
 
