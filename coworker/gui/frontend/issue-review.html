@@ -2240,8 +2240,9 @@ async function markDone() {
     showToast('✅ Review marked done. Summary → 1-ready, original → review/done.', 'success');
   } catch (e) {
     showToast('Mark done failed: ' + e.message, 'error');
-    if (btn) { btn.disabled = false; btn.textContent = '✅ Mark Done'; }
   }
+  // Always re-enable the button
+  if (btn) { btn.disabled = false; btn.textContent = '✅ Mark Done'; }
 }
 
 function reconstructFile() {

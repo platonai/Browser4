@@ -2691,6 +2691,30 @@ async fn handle_snapshot(
         cli_println!("### Snapshot");
         cli_println!("[Snapshot]({})", out_path.display());
         cli_println!("- Snapshot size: {} KB ({} nodes/lines)", snap_kb, snap_lines);
+        // Viewport count hint: when the page has multiple viewports and no
+        // viewport filter is in use, suggest scrolling down.
+        let viewports_used = tool_params
+            .get("viewports")
+            .and_then(|v| v.as_str())
+            .map_or(false, |s| !s.is_empty());
+        if !viewports_used && !json_active() {
+            // Parse viewportsTotal from the snapshot header (e.g. "# - viewportsTotal: 3")
+            if let Some(total_str) = snap
+                .lines()
+                .find(|line| line.starts_with("# - viewportsTotal:"))
+                .and_then(|line| line.split(':').nth(1))
+                .map(|s| s.trim())
+            {
+                if let Ok(total) = total_str.parse::<u32>() {
+                    if total > 1 {
+                        eprintln!(
+                            "💡 Tip: This page has {total} viewports. Use `snapshot -v 1` to scroll down, \
+                             or `snapshot -v all` to capture all viewports at once.",
+                        );
+                    }
+                }
+            }
+        }
         // Depth truncation warning (suppress in --json mode)
         if depth_used && !json_active() {
             eprintln!(

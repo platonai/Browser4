@@ -2439,7 +2439,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "generate-locator",
-            description: "Generate a unique CSS selector path for an element identified by a snapshot ref (e5) or CSS selector",
+            description: "Generate the best CSS selector (id, class, or nth-of-type path) for a snapshot ref or CSS selector",
             category: Category::Snapshot,
             hidden: false,
             batch_supported: false,

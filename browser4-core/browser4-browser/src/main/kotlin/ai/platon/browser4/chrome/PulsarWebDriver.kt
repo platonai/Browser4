@@ -1098,18 +1098,29 @@ open class PulsarWebDriver constructor(
     }
 
     /**
+     * Returns `true` if [selector] is a snapshot element reference (e.g. `e5`,
+     * `e79`) that must be resolved via CDP backend node ID rather than
+     * `document.querySelector`.
+     */
+    private fun isSnapshotRef(selector: String): Boolean {
+        val trimmed = selector.trim()
+        return trimmed.startsWith("e") && trimmed.length > 1
+                && trimmed.substring(1).all { it.isDigit() }
+    }
+
+    /**
      * Drags the element identified by [sourceSelector] onto the element identified
      * by [targetSelector].
      *
-     * This override resolves `backend:N` node references (which
-     * `document.querySelector` cannot handle) via [page.dom.queryLocator] before
-     * dispatching the HTML5 drag sequence through CDP.  Plain CSS selectors
+     * This override resolves both `backend:N` and `eN` (snapshot) node references
+     * (which `document.querySelector` cannot handle) via [page.dom.queryLocator]
+     * before dispatching the HTML5 drag sequence through CDP.  Plain CSS selectors
      * delegate to the default JS-based implementation.
      */
     @Throws(WebDriverException::class)
     override suspend fun drag(sourceSelector: String, targetSelector: String) {
-        val needsSourceResolution = sourceSelector.startsWith("backend:")
-        val needsTargetResolution = targetSelector.startsWith("backend:")
+        val needsSourceResolution = sourceSelector.startsWith("backend:") || isSnapshotRef(sourceSelector)
+        val needsTargetResolution = targetSelector.startsWith("backend:") || isSnapshotRef(targetSelector)
 
         if (!needsSourceResolution && !needsTargetResolution) {
             super.drag(sourceSelector, targetSelector)
