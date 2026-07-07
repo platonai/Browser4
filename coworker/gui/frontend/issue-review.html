@@ -357,6 +357,21 @@ body {
 .review-actions button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
 .review-actions button.primary:hover { background: var(--accent-light); border-color: var(--accent-light); color: #1e1b2e; }
 .review-actions button.primary:disabled { opacity: 0.5; cursor: not-allowed; }
+.auto-approve-label {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 0.72rem; font-weight: 500; color: var(--text-secondary);
+  cursor: pointer; user-select: none; white-space: nowrap;
+  padding: 4px 8px; border-radius: var(--radius-sm);
+  border: 1px solid var(--border); background: var(--bg-surface);
+  transition: all var(--transition);
+}
+.auto-approve-label:hover { background: var(--bg-hover); border-color: var(--accent-border); }
+.auto-approve-label input[type="checkbox"] {
+  width: 14px; height: 14px; cursor: pointer; accent-color: var(--accent); margin: 0;
+}
+.auto-approve-label:has(input:checked) {
+  background: var(--accent-bg); color: var(--accent); border-color: var(--accent-border);
+}
 .save-indicator {
   font-size: 0.65rem; color: var(--text-muted); display: flex; align-items: center; gap: 4px;
 }
@@ -790,6 +805,10 @@ body {
       </div>
       <div class="review-actions">
         <span id="save-indicator-inline" class="save-indicator-inline clean">✓ Saved</span>
+        <label class="auto-approve-label" id="auto-approve-label" title="When checked, the summary file gets #auto-approve tag — coworker will auto-move it to 5approved and trigger push.">
+          <input type="checkbox" id="chk-auto-approve" onchange="onAutoApproveChange()">
+          <span>Auto-approve</span>
+        </label>
         <button id="btn-mark-done" class="nav-btn" style="background:var(--success);color:#fff;border-color:var(--success);" onclick="markDone()" title="Finalize review: approved issues keep full detail, others condensed. Moves file to ready queue.">✅ Mark Done</button>
         <button id="btn-discard" class="nav-btn" style="background:var(--danger);color:#fff;border-color:var(--danger);" onclick="discardFile()" title="Discard this file — no issues or no valuable issues. Moves to review/done/discard.">🗑 Discard</button>
         <button id="btn-mode-toggle" class="nav-btn accent" onclick="toggleReviewMode()" title="Switch between one-at-a-time and all-issues view">📋 View All</button>
@@ -895,6 +914,7 @@ var state = {
   autoSaveTimer: null,
   reviewMode: 'single',  // 'single' or 'all'
   currentIssueIndex: 0,  // 0-based index for single-issue mode
+  autoApprove: localStorage.getItem('issue-review-auto-approve') === 'true',
 };
 
 // ── API ──
@@ -938,6 +958,8 @@ function showToast(message, type) {
 // ── Init ──
 async function init() {
   setThemeIcon();
+  // Restore auto-approve checkbox state
+  document.getElementById('chk-auto-approve').checked = state.autoApprove;
   try {
     await loadFiles();
   } catch (e) {
@@ -2136,6 +2158,13 @@ function cancelAutoSave() {
   }
 }
 
+// ── Auto-approve checkbox ──
+function onAutoApproveChange() {
+  var chk = document.getElementById('chk-auto-approve');
+  state.autoApprove = chk.checked;
+  localStorage.setItem('issue-review-auto-approve', chk.checked ? 'true' : 'false');
+}
+
 // ── Save ──
 // opts.silent: skip toast and non-essential DOM updates (used by auto-save to avoid stealing focus)
 async function saveReview(opts) {
@@ -2185,6 +2214,9 @@ async function markDone() {
   msg += '• Approved issues → keep full detail in 1-ready\n';
   msg += '• Other issues → condensed abstract\n';
   msg += '• Original file → moved to review/done';
+  if (state.autoApprove) {
+    msg += '\n• #auto-approve tag will be appended → auto-move to 5approved + auto-push';
+  }
 
   if (!confirm(msg)) return;
 
@@ -2203,7 +2235,7 @@ async function markDone() {
       updateSaveState();
     }
 
-    var result = await apiPost('/api/issue-review/mark-done', { path: state.selectedFilePath });
+    var result = await apiPost('/api/issue-review/mark-done', { path: state.selectedFilePath, auto_approve: state.autoApprove });
 
     // Remove file from state.files (the master list)
     var removedPath = state.selectedFilePath;
@@ -2239,7 +2271,8 @@ async function markDone() {
         '</div>';
     }
 
-    showToast('✅ Review marked done. Summary → 1-ready, original → review/done.', 'success');
+    var autoMsg = state.autoApprove ? ' with #auto-approve' : '';
+    showToast('✅ Review marked done' + autoMsg + '. Summary → 1-ready, original → review/done.', 'success');
   } catch (e) {
     showToast('Mark done failed: ' + e.message, 'error');
   }

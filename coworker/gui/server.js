@@ -474,7 +474,7 @@ app.post('/api/issue-review/discard', (req, res) => {
 // Creates a summary copy in main/1ready (approved issues keep full detail,
 // others condensed to abstract), then moves the original to review/done.
 app.post('/api/issue-review/mark-done', (req, res) => {
-  const { path: srcPath } = req.body;
+  const { path: srcPath, auto_approve } = req.body;
   if (!srcPath) return res.status(400).json({ error: 'path is required' });
 
   const src = safeResolve(srcPath, true);
@@ -490,7 +490,13 @@ app.post('/api/issue-review/mark-done', (req, res) => {
     const content = fs.readFileSync(src.abs, 'utf-8');
 
     // Build the summary version
-    const summaryContent = buildSummaryContent(content);
+    let summaryContent = buildSummaryContent(content);
+
+    // Append #auto-approve tag if requested — the coworker pipeline
+    // detects this tag and auto-moves the file to 5approved, then triggers push.
+    if (auto_approve) {
+      summaryContent = summaryContent.trimEnd() + '\n\n#auto-approve\n';
+    }
 
     // Destination: coworker/tasks/main/1ready/<basename>
     const filename = path.basename(srcPath);
