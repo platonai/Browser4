@@ -75,6 +75,24 @@ function Start-GuiServer {
         return
     }
 
+    if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
+        Write-Warning '[coworker] npm not found on PATH. Install Node.js or use --NoGui to skip the GUI.'
+        return
+    }
+
+    $guiDir = Split-Path -Parent $guiServerPath
+    Write-Host "[coworker] Installing GUI dependencies (npm install)..."
+    $npmArgs = @('install', '--no-audit', '--no-fund', '--loglevel=error')
+    $npmResult = Start-Process -FilePath 'npm' `
+        -ArgumentList $npmArgs `
+        -WorkingDirectory $guiDir `
+        -NoNewWindow `
+        -Wait `
+        -PassThru
+    if ($npmResult.ExitCode -ne 0) {
+        Write-Warning "[coworker] npm install failed (exit code $($npmResult.ExitCode)). GUI may not work."
+    }
+
     $guiArgs = @(
         $guiServerPath,
         '--port', $GuiPort,
