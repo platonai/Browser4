@@ -3783,10 +3783,10 @@ async fn handle_html_snapshot_get(
     Ok(())
 }
 
-/// Resolves an `@file` path for --sql. Tries CWD first (standard CLI behavior),
-/// then falls back to the Browser4 repo root so that `cargo run` from
-/// subdirectories like `cli/browser4-cli` still finds files placed at the
-/// workspace root.
+/// Resolves an `@file` path for --sql and --selector. Tries the Browser4 repo
+/// root first so that `@file` paths work consistently from any subdirectory
+/// (including `cli/browser4-cli` when using `cargo run`), then falls back to
+/// CWD for local file references.
 fn resolve_sql_file(file_path: &str) -> Result<String, String> {
     let path = std::path::Path::new(file_path);
 
@@ -3797,35 +3797,38 @@ fn resolve_sql_file(file_path: &str) -> Result<String, String> {
         });
     }
 
-    // Try CWD first
     let cwd = std::env::current_dir()
         .map_err(|e| format!("Cannot determine current directory: {e}"))?;
     let cwd_path = cwd.join(file_path);
 
-    if let Ok(content) = std::fs::read_to_string(&cwd_path) {
-        return Ok(content);
-    }
-
-    // Fall back to Browser4 repo root (for cargo run from subdirectories)
+    // Try Browser4 repo root first (consistent resolution from any subdirectory)
     if let Some(root) = daemon::find_browser4_root() {
         let root_path = root.join(file_path);
         if root_path != cwd_path {
             if let Ok(content) = std::fs::read_to_string(&root_path) {
                 return Ok(content);
             }
-            return Err(format!(
-                "Failed to read SQL file '{}'\n  Tried: '{}'\n  Tried: '{}'",
-                file_path,
-                cwd_path.display(),
-                root_path.display(),
-            ));
         }
     }
 
+    // Fall back to CWD (for files that only exist relative to the working directory)
+    if let Ok(content) = std::fs::read_to_string(&cwd_path) {
+        return Ok(content);
+    }
+
+    // Build a clear error message showing where we looked
+    let mut tried = vec![cwd_path.display().to_string()];
+    if let Some(root) = daemon::find_browser4_root() {
+        let root_path = root.join(file_path);
+        let root_display = root_path.display().to_string();
+        if root_display != tried[0] {
+            tried.push(root_display);
+        }
+    }
     Err(format!(
-        "Failed to read SQL file '{}' (looked in: '{}')",
+        "Failed to read file '{}'\n  Tried: {}",
         file_path,
-        cwd_path.display(),
+        tried.join("\n  Tried: "),
     ))
 }
 
@@ -13606,7 +13609,7 @@ mod tests {
     }
 
     #[test]
-    fn resolve_sql_file_falls_back_to_repo_root() {
+    fn resolve_sql_file_finds_at_repo_root_from_subdirectory() {
         let _cwd_guard = CWD_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
 
         // Set up a fake repo root with ROOT.md + pom.xml
@@ -13623,7 +13626,7 @@ mod tests {
         let previous_dir = std::env::current_dir().unwrap();
         std::env::set_current_dir(&sub_dir).unwrap();
 
-        // resolve_sql_file uses CWD; find_browser4_root walks up to repo_root
+        // Repo root is tried first; file at repo root is found without ../../ prefix
         let result = resolve_sql_file("query.sql");
         std::env::set_current_dir(previous_dir).unwrap();
 
@@ -13656,8 +13659,11 @@ mod tests {
     }
 
     #[test]
-    fn resolve_sql_file_repo_root_fallback_not_confused_by_cwd_file() {
-        // When the file exists in CWD, it should be used — NOT the repo root copy
+    fn resolve_sql_file_prefers_repo_root_over_cwd_file() {
+        // When the file exists in both CWD and repo root, repo root is preferred.
+        // This matches the common workflow: SQL files at the repo root, CLI
+        // invoked from cli/browser4-cli via cargo run. Use @./query.sql to
+        // explicitly target a CWD-local file instead.
         let _cwd_guard = CWD_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
 
         let repo_root = test_temp_dir();
@@ -13679,7 +13685,8 @@ mod tests {
         let result = resolve_sql_file("query.sql");
         std::env::set_current_dir(previous_dir).unwrap();
 
-        assert_eq!(result.unwrap(), "CWD VERSION");
+        // Repo root takes priority — this is the common case for @file paths
+        assert_eq!(result.unwrap(), "REPO ROOT VERSION");
     }
 
     // -----------------------------------------------------------------------

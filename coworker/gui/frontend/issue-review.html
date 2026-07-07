@@ -791,6 +791,7 @@ body {
       <div class="review-actions">
         <span id="save-indicator-inline" class="save-indicator-inline clean">✓ Saved</span>
         <button id="btn-mark-done" class="nav-btn" style="background:var(--success);color:#fff;border-color:var(--success);" onclick="markDone()" title="Finalize review: approved issues keep full detail, others condensed. Moves file to ready queue.">✅ Mark Done</button>
+        <button id="btn-discard" class="nav-btn" style="background:var(--danger);color:#fff;border-color:var(--danger);" onclick="discardFile()" title="Discard this file — no issues or no valuable issues. Moves to review/done/discard.">🗑 Discard</button>
         <button id="btn-mode-toggle" class="nav-btn accent" onclick="toggleReviewMode()" title="Switch between one-at-a-time and all-issues view">📋 View All</button>
       </div>
     </div>
@@ -823,6 +824,7 @@ body {
           <strong>Keyboard shortcuts:</strong><br>
           <kbd>Shift+1</kbd>-<kbd>Shift+5</kbd> Select decision<br>
           <kbd>Shift+A</kbd> AI review &nbsp;|&nbsp;
+          <kbd>Shift+D</kbd> Discard file<br>
           <kbd>Shift+←</kbd>/<kbd>Shift+→</kbd> Prev/next issue<br>
           <kbd>Shift+N</kbd>/<kbd>Shift+P</kbd> Prev/next file<br>
           <kbd>Ctrl+S</kbd> Save
@@ -2245,6 +2247,65 @@ async function markDone() {
   if (btn) { btn.disabled = false; btn.textContent = '✅ Mark Done'; }
 }
 
+// ── Discard ──
+async function discardFile() {
+  if (!state.selectedFilePath) return;
+
+  var msg = 'Discard this issue file?\n\n';
+  msg += 'The file will be moved to review/done/discard.\n';
+  msg += 'Use this for files that contain no issues or no valuable issues.\n\n';
+  msg += 'This cannot be undone from the UI.';
+
+  if (!confirm(msg)) return;
+
+  var btn = document.getElementById('btn-discard');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Moving…'; }
+
+  try {
+    var result = await apiPost('/api/issue-review/discard', { path: state.selectedFilePath });
+
+    // Remove file from state.files (the master list)
+    var removedPath = state.selectedFilePath;
+    for (var i = 0; i < state.files.length; i++) {
+      if (state.files[i].path === removedPath) { state.files.splice(i, 1); break; }
+    }
+
+    // Clear selection
+    state.selectedFilePath = null;
+    state.parsed = null;
+    state.selectedFileContent = null;
+    state.dirty = false;
+    state.currentIssueIndex = 0;
+    cancelAutoSave();
+    updateSaveState();
+
+    // Re-render the sidebar tree
+    renderFileList();
+    updateStats();
+
+    // Navigate to the next file in the updated filtered list
+    if (state.filteredFiles.length > 0) {
+      selectFile(state.filteredFiles[0].path);
+    } else {
+      // No files left
+      document.getElementById('review-header').style.display = 'none';
+      document.getElementById('issue-nav-top').style.display = 'none';
+      document.getElementById('issue-nav-bottom').style.display = 'none';
+      document.getElementById('review-content').innerHTML =
+        '<div class="review-placeholder">' +
+        '<svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/><path d="M9 14l2 2 4-4"/></svg>' +
+        '<p>No files in review queue.</p>' +
+        '</div>';
+    }
+
+    showToast('🗑 File discarded → review/done/discard.', 'success');
+  } catch (e) {
+    showToast('Discard failed: ' + e.message, 'error');
+  }
+  // Always re-enable the button
+  if (btn) { btn.disabled = false; btn.textContent = '🗑 Discard'; }
+}
+
 function reconstructFile() {
   var p = state.parsed;
   var content = p.originalContent;
@@ -2358,6 +2419,13 @@ document.addEventListener('keydown', function(e) {
     if (state.parsed && state.currentIssueIndex < state.parsed.issues.length) {
       triggerAiReview(state.currentIssueIndex);
     }
+    return;
+  }
+
+  // Shift+D → discard file
+  if (e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey && (e.key === 'D' || e.key === 'd')) {
+    e.preventDefault();
+    discardFile();
     return;
   }
 

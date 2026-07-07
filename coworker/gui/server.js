@@ -435,6 +435,41 @@ ${issueText}`;
   });
 });
 
+// POST /api/issue-review/discard
+// Moves the issue file to 200issues/review/done/discard/ — for files that
+// contain no issues or no valuable issues.
+app.post('/api/issue-review/discard', (req, res) => {
+  const { path: srcPath } = req.body;
+  if (!srcPath) return res.status(400).json({ error: 'path is required' });
+
+  const src = safeResolve(srcPath, true);
+  if (src.error) return res.status(src.error).json({ error: src.message });
+
+  // Safety: ensure the source is under 200issues/review/
+  const reviewRoot = path.join(TASKS_ROOT, '200issues', 'review');
+  if (!src.abs.startsWith(reviewRoot + path.sep)) {
+    return res.status(400).json({ error: 'Only files under 200issues/review can be discarded.' });
+  }
+
+  try {
+    // Move to 200issues/review/done/discard, preserving date subdirectory structure
+    const srcRelToReview = path.relative(reviewRoot, src.abs);
+    const discardDir = path.join(reviewRoot, 'done', 'discard');
+    const discardPath = path.join(discardDir, srcRelToReview);
+    fs.mkdirSync(path.dirname(discardPath), { recursive: true });
+    fs.renameSync(src.abs, discardPath);
+
+    const discardRel = path.relative(TASKS_ROOT, discardPath).replace(/\\/g, '/');
+
+    res.json({
+      success: true,
+      discarded_path: discardRel,
+    });
+  } catch (e) {
+    res.status(400).json({ error: `Failed to discard: ${e.message}` });
+  }
+});
+
 // POST /api/issue-review/mark-done
 // Creates a summary copy in main/1ready (approved issues keep full detail,
 // others condensed to abstract), then moves the original to review/done.
