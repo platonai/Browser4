@@ -876,7 +876,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(
-            "  - Search the HTML snapshot HTML with regex patterns using `htmlsnapshot grep <pattern>`. Supports standard grep flags: -e (repeatable), -i, -A, -B, -C, -v, -c, -l, -F, -w, --no-line-number, and --selector for CSS-scoped searches. Uses Rust regex syntax where | is alternation (not \\|). Line numbers are shown by default (unlike GNU grep's -n opt-in)."
+            "  - Search the HTML snapshot HTML with regex patterns using `htmlsnapshot grep <pattern>`. Supports standard grep flags: -e (repeatable), -i, -A, -B, -C, -v, -c, -l, -F, -w, --no-line-number. Use --selector to scope to the first matching CSS element (querySelector), or --selector-all to search across ALL matching elements (querySelectorAll) with element-index annotations. Uses Rust regex syntax where | is alternation (not \\|). Line numbers are shown by default (unlike GNU grep's -n opt-in)."
                 .to_string(),
         );
         lines.push(
@@ -955,8 +955,11 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("  # Literal string match with 2 lines of context".to_string());
         lines.push("  browser4-cli htmlsnapshot grep -F -C 2 \"404 Not Found\"".to_string());
         lines.push(String::new());
-        lines.push("  # Search only within <main> element".to_string());
+        lines.push("  # Search only within <main> element (first match)".to_string());
         lines.push("  browser4-cli htmlsnapshot grep --selector main \"Submit\"".to_string());
+        lines.push(String::new());
+        lines.push("  # Search across all .product_pod elements (querySelectorAll)".to_string());
+        lines.push("  browser4-cli htmlsnapshot grep --selector-all \".product_pod\" \"price_color\"".to_string());
         lines.push(String::new());
         lines.push("  # Search with pagination (page 2, custom page size)".to_string());
         lines.push("  browser4-cli htmlsnapshot grep -i error --page 2 --page-size 200".to_string());
@@ -1018,7 +1021,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(
-            "  - snapshot grep supports the same grep options as htmlsnapshot grep: -e (repeatable), -i, -A, -B, -C, -v, -c, -l, -F, -w, --no-line-number, --selector, --page N, --page-size N, and --all."
+            "  - snapshot grep supports the same grep options as htmlsnapshot grep: -e (repeatable), -i, -A, -B, -C, -v, -c, -l, -F, -w, --no-line-number, --selector, --selector-all, --page N, --page-size N, and --all."
                 .to_string(),
         );
         lines.push(
@@ -1515,6 +1518,7 @@ mod tests {
         // grep and inspect
         assert!(help.contains("htmlsnapshot grep [OPTIONS] <pattern>"));
         assert!(help.contains("browser4-cli htmlsnapshot grep --selector main \"Submit\""));
+        assert!(help.contains("browser4-cli htmlsnapshot grep --selector-all \".product_pod\" \"price_color\""));
         assert!(help.contains("htmlsnapshot inspect [selector] [--max N] [--depth D]"));
         assert!(help.contains("Analyze DOM structure and suggest CSS selectors for recurring patterns"));
         assert!(help.contains("browser4-cli htmlsnapshot inspect \".product_pod\""));

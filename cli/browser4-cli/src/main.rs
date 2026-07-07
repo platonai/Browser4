@@ -4055,7 +4055,7 @@ fn format_summary_outline(yaml: &str) -> String {
     let mut structure_count = 0;
     let mut structure_items: Vec<String> = Vec::new();
     let mut content_count = 0;
-    let mut content_items: Vec<(String, String, String)> = Vec::new(); // (type, score, text)
+    let mut content_items: Vec<(String, String, String, String)> = Vec::new(); // (type, score, text, repeats)
     let mut list_count = 0;
     let mut list_items: Vec<String> = Vec::new();
     let mut linkgroup_count = 0;
@@ -4068,6 +4068,7 @@ fn format_summary_outline(yaml: &str) -> String {
     let mut cur_content_type = String::new();
     let mut cur_content_score = String::new();
     let mut cur_content_text = String::new();
+    let mut cur_content_repeats = String::new();
 
     for line in yaml.lines() {
         // Detect top-level section keys
@@ -4127,16 +4128,20 @@ fn format_summary_outline(yaml: &str) -> String {
                             std::mem::take(&mut cur_content_type),
                             std::mem::take(&mut cur_content_score),
                             std::mem::take(&mut cur_content_text),
+                            std::mem::take(&mut cur_content_repeats),
                         ));
                     }
                     content_count += 1;
                     cur_content_type.clear();
                     cur_content_score.clear();
                     cur_content_text.clear();
+                    cur_content_repeats.clear();
                 } else if let Some(t) = trim_prefix(trimmed, "type:") {
                     cur_content_type = t.trim().to_string();
                 } else if let Some(s) = trim_prefix(trimmed, "score:") {
                     cur_content_score = s.trim().to_string();
+                } else if let Some(r) = trim_prefix(trimmed, "repeats:") {
+                    cur_content_repeats = r.trim().to_string();
                 } else if let Some(txt) = trim_prefix(trimmed, "text:") {
                     cur_content_text = txt.trim().trim_matches('"').to_string();
                 }
@@ -4234,7 +4239,7 @@ fn format_summary_outline(yaml: &str) -> String {
 
     // Flush final content item
     if !cur_content_type.is_empty() {
-        content_items.push((cur_content_type, cur_content_score, cur_content_text));
+        content_items.push((cur_content_type, cur_content_score, cur_content_text, cur_content_repeats));
     }
     // Close any open table bracket
     for item in &mut table_items {
@@ -4272,16 +4277,21 @@ fn format_summary_outline(yaml: &str) -> String {
     if !content_items.is_empty() {
         let shown = content_items.len().min(20);
         outline.push_str(&format!("\n### Content ({} of {} nodes)\n", shown, content_count));
-        for (i, (typ, score, text)) in content_items.iter().take(20).enumerate() {
+        for (i, (typ, score, text, repeats)) in content_items.iter().take(20).enumerate() {
             let display_text = if text.len() > 60 {
                 format!("{}…", &text[..60])
             } else {
                 text.clone()
             };
-            if display_text.is_empty() {
-                outline.push_str(&format!("  {:>2}. {:<10} score:{}\n", i + 1, typ, fmt_num(score)));
+            let repeat_suffix = if repeats.is_empty() || repeats == "1" {
+                String::new()
             } else {
-                outline.push_str(&format!("  {:>2}. {:<10} score:{:<4} \"{}\"\n", i + 1, typ, fmt_num(score), display_text));
+                format!(" ×{}", repeats)
+            };
+            if display_text.is_empty() {
+                outline.push_str(&format!("  {:>2}. {:<10} score:{}{}\n", i + 1, typ, fmt_num(score), repeat_suffix));
+            } else {
+                outline.push_str(&format!("  {:>2}. {:<10} score:{:<4} \"{}\"{}\n", i + 1, typ, fmt_num(score), display_text, repeat_suffix));
             }
         }
         // Score legend: explain what the numbers mean
@@ -4766,6 +4776,8 @@ struct GrepOptions {
     fixed_strings: bool,
     word_regexp: bool,
     selector: Option<String>,
+    /// CSS selector using querySelectorAll semantics — search across all matched elements.
+    selector_all: Option<String>,
 }
 
 fn parse_grep_options(tool_params: &Value) -> Result<GrepOptions, String> {
@@ -4839,6 +4851,11 @@ fn parse_grep_options(tool_params: &Value) -> Result<GrepOptions, String> {
             .get("selector")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string()),
+        selector_all: tool_params
+            .get("selector-all")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string()),
     })
 }
 
@@ -4850,8 +4867,35 @@ async fn handle_html_snapshot_grep(
     session_name: Option<&str>,
     grep_options: &GrepOptions,
 ) -> Result<(), String> {
-    let source = if let Some(selector) = &grep_options.selector {
-        // Scoped search: use html_snapshot_scrape to get inner HTML of the selector
+    let source = if let Some(selector) = &grep_options.selector_all {
+        // Scoped search across ALL matching elements (querySelectorAll semantics).
+        // Uses html_snapshot_scrape_all to get inner HTML of every matched element,
+        // then concatenates with element index annotations for traceable results.
+        let raw = with_session(client, base_url, session_name, false, |session_id| {
+            let client = client.clone();
+            let base_url = base_url.to_string();
+            let sel = selector.clone();
+            async move {
+                call_tool(
+                    &client,
+                    &base_url,
+                    "html_snapshot_scrape_all",
+                    json!({
+                        "sessionId": session_id,
+                        "field": "html",
+                        "selector": sel,
+                    }),
+                )
+                .await
+            }
+        })
+        .await?;
+
+        // Parse the JSON array of HTML strings and concatenate with separators
+        concat_scrape_all_results(&raw, selector)
+    } else if let Some(selector) = &grep_options.selector {
+        // Scoped search: use html_snapshot_scrape to get inner HTML of the first
+        // matching element (querySelector semantics).
         with_session(client, base_url, session_name, false, |session_id| {
             let client = client.clone();
             let base_url = base_url.to_string();
@@ -4892,6 +4936,39 @@ async fn handle_html_snapshot_grep(
 
     let (page, page_size, show_all) = parse_page_opts(tool_params);
     run_grep_on_source(&source, grep_options, "htmlsnapshot", page, page_size, show_all)
+}
+
+/// Parse the JSON array result from `html_snapshot_scrape_all` (field: "html")
+/// and concatenate all element HTML strings with annotated separators so grep
+/// output can trace matches back to the source element index.
+fn concat_scrape_all_results(raw: &str, selector: &str) -> String {
+    // Try to parse as JSON array of strings
+    let parsed: Vec<String> = match serde_json::from_str(raw) {
+        Ok(arr) => arr,
+        Err(_) => {
+            // If parsing fails, return raw as-is (might be an error message)
+            return raw.to_string();
+        }
+    };
+
+    if parsed.is_empty() {
+        return String::new();
+    }
+
+    let mut result = String::new();
+    for (i, html) in parsed.iter().enumerate() {
+        if i > 0 {
+            result.push('\n');
+        }
+        // Annotate each element's content with its index for traceability
+        result.push_str(&format!(
+            "--- element[{}] of {} ---\n{}",
+            i + 1,
+            selector,
+            html
+        ));
+    }
+    result
 }
 
 /// Convert grep-style escaped-alternation `\|` to Rust regex bare-pipe `|`.

@@ -98,7 +98,6 @@ The HTML snapshot text extraction likely applies a character limit per text node
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [x] **REJECT** — issue invalid, not a problem, or already addressed
 - **Notes:**
-it should be handled by the user.
 
 ---
 
@@ -184,11 +183,12 @@ The `--selector` flag uses `querySelector` (single element) semantics, not `quer
 #### Human Review
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [x] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - **Notes:**
+accept 1. Add a --selector-all flag that uses querySelectorAll semantics and counts across all matched elements
 
 ---
 
@@ -229,7 +229,7 @@ The inspect algorithm generates selectors at each DOM depth level independently.
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
-- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+- [x] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - **Notes:**
@@ -271,7 +271,7 @@ The scoring formula (h1=100, button=50, a=15, etc.) means all 20 "Add to basket"
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
@@ -317,8 +317,9 @@ Windows shell quoting differs from Unix. Nested quotes (SQL strings inside shell
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
-- [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [x] **REJECT** — issue invalid, not a problem, or already addressed
 - **Notes:**
+there are already ways to load sql from file, stdin, and base64 strings, no need to introduce other ways to address such issues.
 
 ---
 
@@ -356,7 +357,7 @@ The CLI help text for `htmlsnapshot inspect` in the main `--help` output is a si
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
