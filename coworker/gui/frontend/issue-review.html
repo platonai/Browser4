@@ -64,6 +64,9 @@ html[data-theme="light"] {
   --defer-color:    #d69e2e;
   --defer-bg:       #fffff0;
   --defer-border:   #fefcbf;
+  --duplicate-color:#9c27b0;
+  --duplicate-bg:   #faf5ff;
+  --duplicate-border:#e9d5ff;
 }
 
 html[data-theme="dark"] {
@@ -112,6 +115,9 @@ html[data-theme="dark"] {
   --defer-color:    #f6e05e;
   --defer-bg:       #2d2a10;
   --defer-border:   #5c5020;
+  --duplicate-color:#c084fc;
+  --duplicate-bg:   #1e1030;
+  --duplicate-border:#4a2860;
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
@@ -437,6 +443,7 @@ body {
 .issue-card.reviewed-reject { border-left: 3px solid var(--reject-color); }
 .issue-card.reviewed-defer { border-left: 3px solid var(--defer-color); }
 .issue-card.reviewed-improve { border-left: 3px solid var(--info); }
+.issue-card.reviewed-duplicate { border-left: 3px solid var(--duplicate-color); }
 
 .issue-card-header {
   padding: 12px 1.25rem;
@@ -463,6 +470,7 @@ body {
 .badge.review-decision.reject { background: var(--reject-bg); color: var(--reject-color); border: 1px solid var(--reject-border); }
 .badge.review-decision.defer { background: var(--defer-bg); color: var(--defer-color); border: 1px solid var(--defer-border); }
 .badge.review-decision.improve { background: var(--info-bg); color: var(--info); border: 1px solid var(--info-border); }
+.badge.review-decision.duplicate { background: var(--duplicate-bg); color: var(--duplicate-color); border: 1px solid var(--duplicate-border); }
 
 /* Collapse icon */
 .issue-card-header .collapse-icon {
@@ -518,6 +526,7 @@ body {
 .review-opt.selected-defer { background: var(--defer-bg); color: var(--defer-color); border-color: var(--defer-color); }
 .review-opt.selected-wontfix { background: var(--defer-bg); color: var(--defer-color); border-color: var(--defer-color); }
 .review-opt.selected-reject { background: var(--reject-bg); color: var(--reject-color); border-color: var(--reject-color); }
+.review-opt.selected-duplicate { background: var(--duplicate-bg); color: var(--duplicate-color); border-color: var(--duplicate-color); }
 
 .review-opt .key-hint {
   font-size: 0.58rem; opacity: 0.55; margin-left: 3px;
@@ -680,6 +689,7 @@ body {
 .single-review-block.has-decision { border-color: var(--accept-color); }
 .single-review-block.has-decision.reject { border-color: var(--reject-color); }
 .single-review-block.has-decision.defer { border-color: var(--defer-color); }
+.single-review-block.has-decision.duplicate { border-color: var(--duplicate-color); }
 .single-review-block .review-label {
   font-size: 0.7rem; font-weight: 700; text-transform: uppercase;
   letter-spacing: 0.04em; color: var(--text-muted); margin-bottom: 8px;
@@ -699,6 +709,7 @@ body {
 .single-review-block .review-opt.selected-defer { background: var(--defer-bg); color: var(--defer-color); border-color: var(--defer-color); }
 .single-review-block .review-opt.selected-wontfix { background: var(--defer-bg); color: var(--defer-color); border-color: var(--defer-color); }
 .single-review-block .review-opt.selected-reject { background: var(--reject-bg); color: var(--reject-color); border-color: var(--reject-color); }
+.single-review-block .review-opt.selected-duplicate { background: var(--duplicate-bg); color: var(--duplicate-color); border-color: var(--duplicate-color); }
 .single-review-block .review-opt .key-hint {
   font-size: 0.6rem; opacity: 0.5; margin-left: 3px; font-weight: 400;
 }
@@ -886,20 +897,22 @@ function setThemeIcon() {
 }
 
 // ── State ──
-var REVIEW_DECISIONS = ['ACCEPT', 'ACCEPT with improvements', 'DEFER', 'WONTFIX', 'REJECT'];
+var REVIEW_DECISIONS = ['ACCEPT', 'ACCEPT with improvements', 'DEFER', 'WONTFIX', 'REJECT', 'DUPLICATE'];
 var DECISION_CSS = {
   'ACCEPT': 'selected-accept',
   'ACCEPT with improvements': 'selected-improve',
   'DEFER': 'selected-defer',
   'WONTFIX': 'selected-wontfix',
-  'REJECT': 'selected-reject'
+  'REJECT': 'selected-reject',
+  'DUPLICATE': 'selected-duplicate'
 };
 var DECISION_BORDER = {
   'ACCEPT': 'reviewed-accept',
   'ACCEPT with improvements': 'reviewed-improve',
   'DEFER': 'reviewed-defer',
   'WONTFIX': 'reviewed-defer',
-  'REJECT': 'reviewed-reject'
+  'REJECT': 'reviewed-reject',
+  'DUPLICATE': 'reviewed-duplicate'
 };
 
 var state = {
@@ -2407,6 +2420,7 @@ function getDecisionDescription(decision) {
     case 'DEFER': return 'issue acknowledged but intentionally deferred (add rationale in Notes)';
     case 'WONTFIX': return 'issue acknowledged but will not be fixed (add rationale in Notes)';
     case 'REJECT': return 'issue invalid, not a problem, or already addressed';
+    case 'DUPLICATE': return 'issue duplicates another existing issue (reference in Notes)';
     default: return '';
   }
 }
@@ -2435,8 +2449,8 @@ document.addEventListener('keydown', function(e) {
   // ── Shift-modified shortcuts (work everywhere, including textareas) ──
   // All require Shift ONLY — Ctrl/Alt/Meta must NOT be pressed.
 
-  // Shift+1 through Shift+5 → select review decision
-  if (e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey && e.code >= 'Digit1' && e.code <= 'Digit5') {
+  // Shift+1 through Shift+6 → select review decision
+  if (e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey && e.code >= 'Digit1' && e.code <= 'Digit6') {
     e.preventDefault();
     var digit = parseInt(e.code.replace('Digit', ''), 10);
     var idx = state.reviewMode === 'single' ? state.currentIssueIndex : focusedIssueIndex;
