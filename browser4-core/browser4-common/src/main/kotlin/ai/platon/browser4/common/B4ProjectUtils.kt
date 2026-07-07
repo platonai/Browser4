@@ -372,7 +372,7 @@ object B4ProjectUtils {
     ): List<Path> {
         return Files.walk(baseDir)
             .filter { it.fileName.toString() == fileName }
-            .filter { path -> excludePaths.none { path.toString().contains(it) } }
+            .filter { path -> excludePaths.none { path.toString().replace('\\', '/').contains(it) } }
             .toList()
     }
 

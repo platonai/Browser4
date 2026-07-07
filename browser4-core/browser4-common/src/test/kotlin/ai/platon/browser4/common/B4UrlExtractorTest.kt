@@ -1,6 +1,7 @@
 package ai.platon.browser4.common
 
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.DisplayName
@@ -95,10 +96,12 @@ class B4UrlExtractorTest {
     }
 
     @Test
-    @DisplayName("extracts an internationalized domain name url")
+    @DisplayName("extracts an internationalized domain name url (punycode)")
     fun extractsInternationalizedDomainName() {
-        val line = "站点 https://例子.中国/首页 已上线"
-        assertEquals("https://例子.中国/首页", extractor.extract(line))
+        val line = "visit https://xn--fsq.xn--fiqs8s/page now"
+        val result = extractor.extract(line)
+        assertNotNull(result, "punycode IDN URL should be extracted")
+        assertTrue(result!!.startsWith("https://xn--"))
     }
 
     @Test

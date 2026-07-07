@@ -41,9 +41,8 @@ class B4ResourceLoaderTest {
     @Test
     @DisplayName("readAllLines with a custom predicate filters by it")
     fun readAllLinesWithCustomPredicate() {
-        val content = "alpha\nbeta\ngamma"
-        val lines = B4ResourceLoader.readAllLines(content, "ignored") { it.startsWith("a") || it.startsWith("g") }
-        assertEquals(listOf("alpha", "gamma"), lines)
+        val lines = B4ResourceLoader.readAllLines("loader-test.txt") { it.startsWith("valid") }
+        assertEquals(listOf("valid line 1", "valid line 2"), lines)
     }
 
     @Test
