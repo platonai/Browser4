@@ -554,6 +554,19 @@ pub fn all_commands() -> Vec<CommandDef> {
                     is_bool: true,
                     short: None,
                 },
+                OptionDef {
+                    name: "history",
+                    description: "Show recently completed loops (up to 200 most recent)",
+                    is_bool: true,
+                    short: None,
+                },
+                OptionDef {
+                    name: "keep-state",
+                    description: "Preserve the loop state file after normal completion \
+                                  (by default it is auto-cleaned)",
+                    is_bool: true,
+                    short: None,
+                },
             ],
             tool_name_fn: |_| String::new(),
             tool_params_fn: |args| {

@@ -57,6 +57,20 @@ Quote the entire shell command to avoid tokenization issues with pipes, redirect
 
 ### Subcommand (`--`)
 
+**Argument grammar:** `loop [LOOP_FLAGS] [TASK | --shell SHELL_CMD | -- CLI_ARGS]`
+
+Loop-level flags (`--name`, `--interval`, `--count`, `--timeout`, etc.) **must** appear before `--`. Everything after `--` is passed directly to the nested `browser4-cli` process.
+
+```bash
+# Correct: loop flags before --, subcommand args after
+browser4-cli loop --name my-check --count 5 -- status
+
+# Wrong: --name after -- is consumed as a subcommand argument, not a loop name
+browser4-cli loop -- status --name my-check
+
+# If the CLI detects a known loop flag after --, it emits a warning.
+```
+
 Everything after `--` is passed as arguments to a nested `browser4-cli` process.
 Uses the current binary path so the same version is always invoked.
 
@@ -76,12 +90,14 @@ browser4-cli loop -- screenshot --full-page -i 1800
 | `--name` | | string | `"default"` | Loop name for persistence. Named loops are stored in `~/.browser4/loops/<name>.json`. Only letters, digits, dots, hyphens, and underscores are allowed. |
 | `--shell` | | bool | — | Execute task as a shell command |
 | `--pause` | | bool | — | Pause a running loop (control op), or start a new loop in paused state (when combined with a task) |
-| `--resume` | | bool | — | Resume a paused loop (control op, no task allowed) |
-| `--stop` | | bool | — | Stop a running/paused loop and clear persisted state |
+| `--resume` | | bool | — | Resume a paused loop AND spawn a background process to start execution. Cannot be combined with a task. Optionally specify `--name` to target a named loop. |
+| `--stop` | | bool | — | Stop a running/paused loop and clear persisted state. Also writes a completion entry to the history log. |
 | `--status` | | bool | — | Show loop state and progress |
-| `--list` | | bool | — | List all persisted loops |
+| `--list` | | bool | — | List all persisted loops with name, iters (completed/max), interval, status, and task |
+| `--history` | | bool | — | Show recently completed loops (up to 200 most recent) |
+| `--keep-state` | | bool | — | Preserve the loop state file after normal completion (by default it is auto-cleaned) |
 | `--pause-all` | | bool | — | Pause all running loops at once |
-| `--resume-all` | | bool | — | Resume all paused loops at once |
+| `--resume-all` | | bool | — | Resume all paused loops at once and spawn background processes for each |
 | `--stop-all` | | bool | — | Stop and clear all persisted loops at once |
 
 ### Named loops
@@ -109,8 +125,8 @@ browser4-cli loop --stop --name health
 ### Start paused
 
 Combine `--pause` with a task to create a loop that is persisted but does not
-start executing immediately. Use `--resume` (control op) followed by the same
-command to begin execution.
+start executing immediately. Use `--resume` to change state to running AND
+spawn a background process that begins executing iterations.
 
 ```bash
 # Create a loop in paused state
@@ -121,13 +137,12 @@ browser4-cli loop --pause --shell "echo hi" -i 60 --name demo
 #   Mode: shell command
 # ⏸  Created as paused. Use `browser4-cli loop --resume --name demo` to start.
 
-# Resume the paused loop
+# Resume the paused loop — this changes state to "running" AND spawns
+# a background process that starts executing iterations immediately.
 browser4-cli loop --resume --name demo
-
-# Run the same command to actually start executing
-browser4-cli loop --shell "echo hi" -i 60 --name demo
-# Resuming loop: "echo hi" from iteration 1
-#   Loop was paused — resuming now.
+# ▶  Loop "demo" resumed (was paused).
+#    Spawned background process (PID: 12345). Use --list to monitor, --pause to pause, --stop to clear.
+#    State file: C:\Users\...\.browser4\loops\demo.json
 ```
 
 ### Normal completion
@@ -206,6 +221,35 @@ browser4-cli loop --status
 #   Iterations completed: 3
 #   Started at: 2026-06-27T10:00:00+00:00
 #   Updated at: 2026-06-27T13:00:05+00:00
+```
+
+### Loop history
+
+When a loop completes normally or is stopped via `--stop`, a completion entry
+is written to `~/.browser4/loop-history.jsonl`. Use `--history` to review
+past loop runs:
+
+```bash
+browser4-cli loop --history
+# 3 completed loop(s) in history (newest last):
+#
+#   ✓  (default)              2 iters  count reached     2026-06-27T...  echo hello
+#   ✓  health                  5 iters  timeout           2026-06-27T...  curl -s https://...
+#   ✓  demo                    1 iters  stopped by user   2026-06-27T...  eval document.title
+#
+# History keeps the most recent 200 completed loops.
+```
+
+### Keep state after completion
+
+By default, completed loops auto-clean their state file. Use `--keep-state`
+to preserve it for inspection:
+
+```bash
+browser4-cli loop --shell "echo done" --count 2 --keep-state --name my-loop
+# ... runs 2 iterations ...
+# ✓  Loop finished — 2 iteration(s) completed.
+#    State preserved at: C:\Users\...\.browser4\loops\my-loop.json
 ```
 
 ## Output

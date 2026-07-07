@@ -401,6 +401,12 @@ pub struct LoopListEntry {
     pub iterations_completed: u64,
     #[serde(rename = "updatedAt")]
     pub updated_at: String,
+    #[serde(rename = "intervalSecs")]
+    pub interval_secs: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub count: Option<u64>,
+    #[serde(rename = "timeoutSecs", skip_serializing_if = "Option::is_none")]
+    pub timeout_secs: Option<u64>,
 }
 
 /// List all persisted loops. Returns entries sorted by name (default first).
@@ -421,6 +427,9 @@ pub fn list_loop_states(state_dir: Option<&Path>) -> Vec<LoopListEntry> {
                 status: ls.status,
                 iterations_completed: ls.iterations_completed,
                 updated_at: ls.updated_at,
+                interval_secs: ls.interval_secs,
+                count: ls.count,
+                timeout_secs: ls.timeout_secs,
             });
         }
     }
@@ -445,6 +454,9 @@ pub fn list_loop_states(state_dir: Option<&Path>) -> Vec<LoopListEntry> {
                             status: ls.status,
                             iterations_completed: ls.iterations_completed,
                             updated_at: ls.updated_at,
+                            interval_secs: ls.interval_secs,
+                            count: ls.count,
+                            timeout_secs: ls.timeout_secs,
                         });
                     }
                 }
@@ -464,6 +476,94 @@ pub fn list_loop_states(state_dir: Option<&Path>) -> Vec<LoopListEntry> {
     });
 
     entries
+}
+
+/// Entry in the loop completion history.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LoopHistoryEntry {
+    /// Loop name ("default" or the user-provided name).
+    pub name: String,
+    /// The task tokens that were executed.
+    #[serde(rename = "taskTokens")]
+    pub task_tokens: Vec<String>,
+    /// Execution mode: "plain", "shell", or "subcommand".
+    pub mode: String,
+    /// Iterations completed before exit.
+    #[serde(rename = "iterationsCompleted")]
+    pub iterations_completed: u64,
+    /// Why the loop ended: "count-reached", "timeout", "stopped", "interrupted".
+    #[serde(rename = "exitReason")]
+    pub exit_reason: String,
+    /// ISO-8601 timestamp when the loop completed.
+    #[serde(rename = "completedAt")]
+    pub completed_at: String,
+}
+
+/// Maximum number of history entries to retain (prevents unbounded growth).
+pub const MAX_HISTORY_ENTRIES: usize = 200;
+
+/// Path to the loop history JSONL file.
+fn loop_history_path(state_dir: &Path) -> PathBuf {
+    state_dir.join("loop-history.jsonl")
+}
+
+/// Append a completion event to the loop history log.
+/// Keeps at most `MAX_HISTORY_ENTRIES` entries (trims oldest).
+pub fn write_loop_history(
+    entry: &LoopHistoryEntry,
+    state_dir: Option<&Path>,
+) -> std::io::Result<()> {
+    let dir = state_dir
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(resolve_default_state_dir);
+    fs::create_dir_all(&dir)?;
+    let path = loop_history_path(&dir);
+
+    // Read existing entries
+    let mut entries: Vec<LoopHistoryEntry> = if path.exists() {
+        let raw = fs::read_to_string(&path).unwrap_or_default();
+        raw.lines()
+            .filter(|l| !l.trim().is_empty())
+            .filter_map(|l| serde_json::from_str::<LoopHistoryEntry>(l).ok())
+            .collect()
+    } else {
+        Vec::new()
+    };
+
+    entries.push(entry.clone());
+
+    // Trim oldest entries if exceeding max
+    if entries.len() > MAX_HISTORY_ENTRIES {
+        let excess = entries.len() - MAX_HISTORY_ENTRIES;
+        entries.drain(0..excess);
+    }
+
+    // Write back as JSONL
+    let content: String = entries
+        .iter()
+        .map(|e| {
+            serde_json::to_string(e).expect("LoopHistoryEntry serialization should not fail")
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    fs::write(path, content)
+}
+
+/// Read the loop completion history. Returns entries in chronological order
+/// (oldest first).
+pub fn read_loop_history(state_dir: Option<&Path>) -> Vec<LoopHistoryEntry> {
+    let dir = state_dir
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(resolve_default_state_dir);
+    let path = loop_history_path(&dir);
+    match fs::read_to_string(&path) {
+        Ok(raw) => raw
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .filter_map(|l| serde_json::from_str::<LoopHistoryEntry>(l).ok())
+            .collect(),
+        Err(_) => Vec::new(),
+    }
 }
 
 // ---------------------------------------------------------------------------

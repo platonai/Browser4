@@ -52,7 +52,10 @@ cargo run -- close
 
 ---
 
+---
+
 ## Issues Found (7 issues)
+> **Review complete:** 5 approved, 2 deferred/rejected
 
 ### Issue 1: `--sql-base64` standalone (Mode 1) fails — validation rejects it before base64 decode
 
@@ -89,13 +92,15 @@ In `main.rs:3819`, the empty-check on `sql_raw` runs before the base64 decode at
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
 
+---
 
 ---
 
@@ -133,13 +138,15 @@ In `commands.rs:2029`, the `tool_params_fn` for `htmlsnapshot query` only captur
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
 
+---
 
 ---
 
@@ -179,13 +186,15 @@ The `--help` flag for subcommands doesn't include examples. The extended example
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
 
+---
 
 ---
 
@@ -222,102 +231,15 @@ Shell quoting is inherently platform/shell-specific. The CLI handles the SQL str
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-
 
 ---
-
-### Issue 5: `htmlsnapshot inspect` suggests `DOM_FIRST_TEXT` for title but `title` attribute is more complete
-
-**Severity:** Low
-**Category:** Documentation
-
-#### Reproduction
-
-```bash
-cargo run -- htmlsnapshot get all text "h3 a"    # truncated titles: "A Light in the ..."
-cargo run -- htmlsnapshot get all attr "h3 a" title  # full titles
-```
-
-#### Expected Behavior
-
-The `htmlsnapshot inspect` output should note that `h3 a` text content is truncated and recommend using the `title` attribute for full values.
-
-#### Actual Behavior
-
-`inspect` shows `h3` with truncated text like `"A Light in the ..."` but doesn't suggest checking the `title` attribute of the child `<a>` tag for full text. Users might extract truncated data and not realize full titles are available.
-
-#### Root Cause Analysis
-
-`inspect` displays the visible text content of elements, which may be CSS-truncated. It doesn't analyze attribute-based alternatives for completeness.
-
-#### Code Pointer
-
-`Server-side inspect logic, possibly in `DomInspectService` or similar.`
-
-#### AI Suggested Improvement
-
-- When inspect detects text truncation (ellipsis), add a note suggesting attribute-based alternatives
-- In the suggested selectors list, show both `DOM_FIRST_TEXT` and `DOM_FIRST_ATTR` options when attributes contain richer data
-
-#### Human Review
-
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
-- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
-- [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
-- [ ] **REJECT** — issue invalid, not a problem, or already addressed
-- **Notes:**
-
-
----
-
-### Issue 6: `goto` silently upgrades HTTP to HTTPS without notification
-
-**Severity:** Low
-**Category:** UX
-
-#### Reproduction
-
-```bash
-cargo run -- goto "http://books.toscrape.com/"
-```
-
-#### Expected Behavior
-
-Either preserve the user's protocol choice or clearly notify when an upgrade occurs.
-
-#### Actual Behavior
-
-`http://` is silently upgraded to `https://`. The output shows `Page URL: https://books.toscrape.com/` with no indication that the protocol was changed.
-
-#### Root Cause Analysis
-
-The navigation/load pipeline performs HTTP→HTTPS upgrade, likely as a security best practice. But the upgrade is not communicated to the user.
-
-#### Code Pointer
-
-`Server-side URL handling or CDP navigation logic.`
-
-#### AI Suggested Improvement
-
-- Add a log/stderr message: "Upgraded http:// to https:// for security"
-- Or add a `--no-upgrade` / `--allow-http` flag for users who explicitly need plain HTTP
-
-#### Human Review
-
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
-- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
-- [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
-- [ ] **REJECT** — issue invalid, not a problem, or already addressed
-- **Notes:**
-
 
 ---
 
@@ -350,13 +272,41 @@ Documentation is scattered across multiple files with no clear "development quic
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
 
+---
+
+---
+
+### Issue 5: `htmlsnapshot inspect` suggests `DOM_FIRST_TEXT` for title but `title` attribute is more complete
+
+**Severity:** Low
+**Category:** Documentation
+
+#### Review Result
+
+**Decision:** DEFER
+
+**Summary:** - When inspect detects text truncation (ellipsis), add a note suggesting attribute-based alternatives
+
+---
+
+### Issue 6: `goto` silently upgrades HTTP to HTTPS without notification
+
+**Severity:** Low
+**Category:** UX
+
+#### Review Result
+
+**Decision:** WONTFIX
+
+**Summary:** - Add a log/stderr message: "Upgraded http:// to https:// for security"
 
 ---
 
@@ -412,3 +362,4 @@ cargo run -- goto "http://books.toscrape.com/"
 
 A new developer cloning the repo needs to figure out how to run the CLI from source.
 
+#auto-approve

@@ -252,6 +252,14 @@ cargo run -- snapshot -v 0
 
 **Note:** All examples in this document use `browser4-cli` as the command. If running from source, substitute `cargo run --` (with the leading `cd cli/browser4-cli &&` if not already in that directory).
 
+**From repo root (no `cd` required):**
+
+```bash
+cargo run --manifest-path cli/browser4-cli/Cargo.toml -- <command>
+```
+
+This pattern works from any directory — no need to `cd` first.
+
 ### Output Redirection in Dev Mode
 
 The working directory during `cargo run` is `cli/browser4-cli/`, so relative file paths must account for this. Use `--quiet` to suppress cargo build output:

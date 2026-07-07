@@ -290,6 +290,10 @@ struct LoopArgs {
     pause_all: bool,
     /// True when `--resume-all` was specified — resume all paused loops.
     resume_all: bool,
+    /// True when `--history` was specified — show completed loop history.
+    history: bool,
+    /// True when `--keep-state` was specified — preserve state file on completion.
+    keep_state: bool,
 }
 
 /// Commands that should NOT trigger a post-command snapshot.
@@ -7420,10 +7424,44 @@ fn parse_loop_args(args: &[String]) -> Result<LoopArgs, String> {
     let mut after_dash_dash = false;
     let mut i = 0;
 
+    // Set of known loop-level flags. When any of these appear after `--`
+    // (i.e. in subcommand position), they are silently captured by the
+    // subcommand rather than being parsed by the loop command. We detect
+    // this and warn the user.
+    let known_loop_flags: &[&str] = &[
+        "--name", "--interval", "-i", "--count", "-n", "--timeout", "-t",
+        "--shell", "--pause", "--pause-all", "--resume", "--resume-all",
+        "--stop", "--stop-all", "--status", "--list",
+    ];
+
     while i < args.len() {
         let arg = &args[i];
 
         if after_dash_dash {
+            // Detect known loop flags that appear after `--` and warn.
+            // The user likely intended these as loop-level options.
+            let flag_name = if let Some(_val) = arg.strip_prefix("--name=") {
+                Some("--name")
+            } else if let Some(_val) = arg.strip_prefix("--interval=") {
+                Some("--interval")
+            } else if let Some(_val) = arg.strip_prefix("--count=") {
+                Some("--count")
+            } else if let Some(_val) = arg.strip_prefix("--timeout=") {
+                Some("--timeout")
+            } else if known_loop_flags.contains(&arg.as_str()) {
+                Some(arg.as_str())
+            } else {
+                None
+            };
+
+            if let Some(flag) = flag_name {
+                eprintln!(
+                    "[WARN] `{}` after `--` is treated as a nested browser4-cli argument, \
+                     not a loop option.  Did you mean `loop {} <value> -- ...`?",
+                    arg, flag,
+                );
+            }
+
             out.task_tokens.push(arg.clone());
             i += 1;
             continue;
@@ -7485,6 +7523,18 @@ fn parse_loop_args(args: &[String]) -> Result<LoopArgs, String> {
             continue;
         }
 
+        if arg == "--history" {
+            out.history = true;
+            i += 1;
+            continue;
+        }
+
+        if arg == "--keep-state" {
+            out.keep_state = true;
+            i += 1;
+            continue;
+        }
+
         if arg == "--shell" {
             out.is_shell = true;
             i += 1;
@@ -7523,7 +7573,7 @@ fn parse_loop_args(args: &[String]) -> Result<LoopArgs, String> {
     // --pause is excluded from this set: combining --pause with a task starts
     // the loop in paused state (the user can --resume later).
     let no_task_flags = out.stop || out.stop_all || out.status || out.list
-        || out.resume || out.pause_all || out.resume_all;
+        || out.resume || out.pause_all || out.resume_all || out.history;
 
     if no_task_flags {
         if !out.task_tokens.is_empty() {
@@ -7533,7 +7583,8 @@ fn parse_loop_args(args: &[String]) -> Result<LoopArgs, String> {
                 else if out.list { "--list" }
                 else if out.resume { "--resume" }
                 else if out.pause_all { "--pause-all" }
-                else { "--resume-all" };
+                else if out.resume_all { "--resume-all" }
+                else { "--history" };
             return Err(format!(
                 "The {} flag cannot be combined with a task. Use just `browser4-cli loop {}`.",
                 flag, flag,
@@ -7664,9 +7715,18 @@ fn run_shell_command(task: &str) -> Result<String, String> {
     #[cfg(not(windows))]
     let (shell, flag) = ("sh", "-c");
 
+    // On Windows, prepend `chcp 65001 >nul &&` to switch the console code
+    // page to UTF-8 (65001) so that non-ASCII characters (e.g. Chinese
+    // day-of-week from `date /t`) are captured correctly by the UTF-8
+    // String::from_utf8_lossy decoder.
+    #[cfg(windows)]
+    let command = format!("chcp 65001 >nul && {}", task);
+    #[cfg(not(windows))]
+    let command = task.to_string();
+
     let output = std::process::Command::new(shell)
         .arg(flag)
-        .arg(task)
+        .arg(&command)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .output()
@@ -7722,6 +7782,34 @@ async fn run_browser4_cli(tokens: &[String]) -> Result<String, String> {
     }
 }
 
+/// Spawn a detached background process that survives parent exit.
+///
+/// On Windows, uses `CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS` so the
+/// child is not tied to the parent console / process tree.  On Unix the
+/// child is simply spawned — the OS reparents it to init when the parent
+/// exits.
+fn spawn_detached(exe: &std::path::Path, args: &[String]) -> Result<u32, String> {
+    let mut cmd = std::process::Command::new(exe);
+    cmd.args(args)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .stdin(std::process::Stdio::null());
+
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+        const DETACHED_PROCESS: u32 = 0x0000_0008;
+        cmd.creation_flags(CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS);
+    }
+
+    let child = cmd
+        .spawn()
+        .map_err(|e| format!("Failed to spawn background process: {}", e))?;
+
+    Ok(child.id())
+}
+
 /// Handle the `loop` command — execute a task periodically with persistence,
 /// resume, pause, and stop support.
 async fn handle_loop(
@@ -7755,20 +7843,61 @@ async fn handle_loop(
                 };
                 let count_display = match entry.status.as_str() {
                     "completed" => entry.iterations_completed.to_string(),
-                    _ => format!("{}", entry.iterations_completed),
+                    _ => match entry.count {
+                        Some(max) => format!("{}/{}", entry.iterations_completed, max),
+                        None => format!("{}", entry.iterations_completed),
+                    },
                 };
+                let interval_display = format_duration(entry.interval_secs);
                 cli_println!(
-                    "  {}  {:<20}  {:>3} iters  {:<8}  {}",
+                    "  {}  {:<20}  {:>6} iters  {:>5} intv  {:<8}  {}",
                     icon,
                     name_display,
                     count_display,
+                    interval_display,
                     status_label,
                     entry.task,
                 );
             }
-            cli_println!("\nUse --status [name] for details, --pause/--resume [name] to control, --stop [name] to clear.");
+            cli_println!("\nColumns: name, iters (completed[/max]), interval, status, task.");
+            cli_println!("Use --status [name] for full details, --pause/--resume [name] to control, --stop [name] to clear.");
         }
         json_field("loops", json!(entries));
+        return Ok(());
+    }
+
+    // --- --history: show recently completed loops ---
+    if parsed.history {
+        let entries = state::read_loop_history(None);
+        if entries.is_empty() {
+            cli_println!("No completed loops in history. Start one with `browser4-cli loop <task>`.");
+        } else {
+            cli_println!("{} completed loop(s) in history (newest last):\n", entries.len());
+            for entry in &entries {
+                let reason_label = match entry.exit_reason.as_str() {
+                    "count-reached" => "count reached",
+                    "timeout" => "timeout",
+                    "stopped" => "stopped by user",
+                    "interrupted" => "interrupted",
+                    _ => &entry.exit_reason,
+                };
+                let name_display = if entry.name == "default" {
+                    "(default)".to_string()
+                } else {
+                    entry.name.clone()
+                };
+                cli_println!(
+                    "  ✓  {:<20}  {:>3} iters  {:<16}  {}  {}",
+                    name_display,
+                    entry.iterations_completed,
+                    reason_label,
+                    entry.completed_at,
+                    entry.task_tokens.join(" "),
+                );
+            }
+            cli_println!("\nHistory keeps the most recent {} completed loops.", state::MAX_HISTORY_ENTRIES);
+        }
+        json_field("history", json!(entries));
         return Ok(());
     }
 
@@ -7859,6 +7988,18 @@ async fn handle_loop(
             Some(ls) => {
                 let total = ls.iterations_completed;
                 let was_active = ls.status == "running" || ls.status == "paused";
+
+                // Write a history entry before clearing state.
+                let history_entry = state::LoopHistoryEntry {
+                    name: loop_name.unwrap_or("default").to_string(),
+                    task_tokens: ls.task_tokens.clone(),
+                    mode: ls.mode.clone(),
+                    iterations_completed: total,
+                    exit_reason: "stopped".to_string(),
+                    completed_at: Utc::now().to_rfc3339(),
+                };
+                let _ = state::write_loop_history(&history_entry, None);
+
                 state::clear_loop_state(None, loop_name);
                 let label = loop_name.unwrap_or("default");
                 if was_active {
@@ -8006,7 +8147,7 @@ async fn handle_loop(
         return Ok(());
     }
 
-    // --- --resume: set loop status to "running" ---
+    // --- --resume: set loop status to "running" and spawn execution ---
     if parsed.resume {
         let state_path = state::loop_state_path(None, loop_name);
         match state::set_loop_status(None, loop_name, "running") {
@@ -8014,13 +8155,79 @@ async fn handle_loop(
                 let label = loop_name.unwrap_or("default");
                 if prev == "running" {
                     cli_println!("▶  Loop \"{}\" is already running.", label);
+                    cli_println!("   State file: {}", state_path.display());
+                    json_field("resumed", json!(true));
+                    json_field("name", json!(label));
+                    json_field("previous_status", json!(prev));
                 } else {
                     cli_println!("▶  Loop \"{}\" resumed (was {}).", label, prev);
+
+                    // Read the full loop state to reconstruct the command and
+                    // spawn a detached background process that actually executes
+                    // the iterations.
+                    if let Some(ls) = state::read_loop_state(None, loop_name) {
+                        // Reconstruct the CLI arguments for the loop command.
+                        let mut cmd_args: Vec<String> = vec!["loop".to_string()];
+
+                        // Add --name if named
+                        if let Some(ref n) = parsed.name {
+                            cmd_args.push("--name".to_string());
+                            cmd_args.push(n.clone());
+                        }
+
+                        // Add mode flags
+                        match ls.mode.as_str() {
+                            "shell" => {
+                                cmd_args.push("--shell".to_string());
+                            }
+                            "subcommand" => {
+                                cmd_args.push("--".to_string());
+                            }
+                            _ => {} // plain mode — no flag
+                        }
+
+                        // Add task tokens
+                        cmd_args.extend(ls.task_tokens.clone());
+
+                        // Add scheduling flags
+                        cmd_args.push("--interval".to_string());
+                        cmd_args.push(ls.interval_secs.to_string());
+                        if let Some(c) = ls.count {
+                            cmd_args.push("--count".to_string());
+                            cmd_args.push(c.to_string());
+                        }
+                        if let Some(t) = ls.timeout_secs {
+                            cmd_args.push("--timeout".to_string());
+                            cmd_args.push(t.to_string());
+                        }
+
+                        // Spawn a detached background process.
+                        let exe = std::env::current_exe()
+                            .map_err(|e| format!("Cannot determine CLI path: {}", e))?;
+
+                        match spawn_detached(&exe, &cmd_args) {
+                            Ok(child_id) => {
+                                cli_println!(
+                                    "   Spawned background process (PID: {}). Use --list to monitor, \
+                                     --pause to pause, --stop to clear.",
+                                    child_id,
+                                );
+                            }
+                            Err(e) => {
+                                eprintln!(
+                                    "[WARN] Failed to spawn background process: {}. \
+                                     Run the same loop command manually to start execution.",
+                                    e,
+                                );
+                            }
+                        }
+                    }
+
+                    cli_println!("   State file: {}", state_path.display());
+                    json_field("resumed", json!(true));
+                    json_field("name", json!(label));
+                    json_field("previous_status", json!(prev));
                 }
-                cli_println!("   State file: {}", state_path.display());
-                json_field("resumed", json!(true));
-                json_field("name", json!(label));
-                json_field("previous_status", json!(prev));
             }
             None => {
                 if let Some(n) = loop_name {
@@ -8059,7 +8266,7 @@ async fn handle_loop(
         return Ok(());
     }
 
-    // --- --resume-all: resume all paused loops ---
+    // --- --resume-all: resume all paused loops and spawn execution ---
     if parsed.resume_all {
         let entries = state::list_loop_states(None);
         let paused: Vec<_> = entries.iter().filter(|e| e.status == "paused").collect();
@@ -8072,8 +8279,43 @@ async fn handle_loop(
         }
         let updated = state::set_all_loop_statuses_filtered(None, Some("paused"), "running");
         cli_println!("▶  Resumed {} paused loop(s):", updated);
+
+        let exe = std::env::current_exe().unwrap_or_default();
         for entry in &paused {
-            cli_println!("   - {}", entry.name);
+            let name = if entry.name == "default" { None } else { Some(entry.name.as_str()) };
+            if let Some(ls) = state::read_loop_state(None, name) {
+                // Reconstruct CLI arguments
+                let mut cmd_args: Vec<String> = vec!["loop".to_string()];
+                if let Some(n) = name {
+                    cmd_args.push("--name".to_string());
+                    cmd_args.push(n.to_string());
+                }
+                match ls.mode.as_str() {
+                    "shell" => { cmd_args.push("--shell".to_string()); }
+                    "subcommand" => { cmd_args.push("--".to_string()); }
+                    _ => {}
+                }
+                cmd_args.extend(ls.task_tokens.clone());
+                cmd_args.push("--interval".to_string());
+                cmd_args.push(ls.interval_secs.to_string());
+                if let Some(c) = ls.count {
+                    cmd_args.push("--count".to_string());
+                    cmd_args.push(c.to_string());
+                }
+                if let Some(t) = ls.timeout_secs {
+                    cmd_args.push("--timeout".to_string());
+                    cmd_args.push(t.to_string());
+                }
+
+                match spawn_detached(&exe, &cmd_args) {
+                    Ok(child_id) => {
+                        cli_println!("   - {} (PID: {})", entry.name, child_id);
+                    }
+                    Err(e) => {
+                        cli_println!("   - {} (failed to spawn: {})", entry.name, e);
+                    }
+                }
+            }
         }
         json_field("resumed_all", json!(true));
         json_field("resumed_count", json!(updated));
@@ -8449,15 +8691,53 @@ async fn handle_loop(
 
     // --- summary ---
     let total = iteration.saturating_sub(1);
+
+    // Determine the exit reason for the history log.
+    let exit_reason = {
+        let count_reached = parsed.count.map_or(false, |max| total >= max);
+        let timed_out = parsed.timeout_secs.map_or(false, |t| overall_start.elapsed().as_secs() >= t);
+        if count_reached && !timed_out {
+            "count-reached"
+        } else if timed_out {
+            "timeout"
+        } else {
+            "interrupted"
+        }
+    };
+
     cli_println!("\n========================================");
     cli_println!("✓  Loop finished — {} iteration(s) completed.", total);
 
+    // Write a history entry so users can review past loop completions.
+    let history_entry = state::LoopHistoryEntry {
+        name: loop_name.unwrap_or("default").to_string(),
+        task_tokens: parsed.task_tokens.clone(),
+        mode: mode_key.to_string(),
+        iterations_completed: total,
+        exit_reason: exit_reason.to_string(),
+        completed_at: Utc::now().to_rfc3339(),
+    };
+    let _ = state::write_loop_history(&history_entry, None);
+
     // Clear persisted state on normal completion — the summary was already
     // printed and re-running the same command starts a fresh loop anyway.
-    state::clear_loop_state(None, loop_name);
+    // Unless --keep-state was specified.
+    if !parsed.keep_state {
+        state::clear_loop_state(None, loop_name);
+    } else {
+        // Persist final completed state for inspection
+        persist(
+            &parsed.task_tokens, mode_key, parsed.interval_secs,
+            parsed.count, parsed.timeout_secs,
+            total, &started_at, "completed",
+        );
+        let state_path = state::loop_state_path(None, loop_name);
+        cli_println!("   State preserved at: {}", state_path.display());
+    }
 
     json_field("iterations", json!(results));
     json_field("total_iterations", json!(total));
+    json_field("exit_reason", json!(exit_reason));
 
     Ok(())
 }
