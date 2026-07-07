@@ -59,6 +59,8 @@ const STAGES = [
   { id: '200issues/github/commit/ready',  display_name: 'GH Commit Ready', path_suffix: '200issues/github/commit/ready',  date_stamped: false, group: 'issues', hidden: false },
   { id: '200issues/github/commit/done',   display_name: 'GH Committed',    path_suffix: '200issues/github/commit/done',   date_stamped: false, group: 'issues', hidden: false },
   { id: '200issues/github/commit/failed', display_name: 'GH Failed',       path_suffix: '200issues/github/commit/failed', date_stamped: false, group: 'issues', hidden: false },
+  // Issue review
+  { id: '200issues/review',             display_name: 'Review Queue',    path_suffix: '200issues/review',              date_stamped: true,  group: 'review', hidden: false },
 ];
 
 const stageById = Object.fromEntries(STAGES.map(s => [s.id, s]));
@@ -206,6 +208,11 @@ app.use(express.json({ limit: '1mb' }));
 // Serve frontend
 app.get('/', (_req, res) => {
   res.sendFile(path.join(__dirname, 'frontend', 'index.html'));
+});
+
+// Serve issue review SPA
+app.get('/review', (_req, res) => {
+  res.sendFile(path.join(__dirname, 'frontend', 'issue-review.html'));
 });
 
 // GET /api/stats
