@@ -1,0 +1,12 @@
+# Electronics products
+http://localhost:18080/ec/dp/B0E000001
+http://localhost:18080/ec/dp/B0E000002
+http://localhost:18080/ec/dp/B0E000003
+http://localhost:18080/ec/dp/B0E000004
+http://localhost:18080/ec/dp/B0E000005
+http://localhost:18080/ec/dp/B0E000006
+# Home products
+http://localhost:18080/ec/dp/B0H000001
+http://localhost:18080/ec/dp/B0H000002
+http://localhost:18080/ec/dp/B0H000003
+http://localhost:18080/ec/dp/B0H000004
