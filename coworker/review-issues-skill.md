@@ -211,6 +211,17 @@ When matching `old_string` for Edit, read the actual lines from the file to pres
 
 After writing, confirm: "Done! amazon.issues.md updated (7/7 reviewed)." Return to Phase 1 (show updated list) so the user can pick the next file.
 
+## GUI Alternative
+
+The Issue Review SPA at `http://127.0.0.1:8090/issues/review` provides a visual interface for the same workflow:
+
+- **One-by-one** or **all-issues** view modes
+- **AI Review** button (calls Claude for a suggested decision)
+- **Mark Done** — creates summary in `1ready`, archives original to `review/done`
+- **Discard** — moves valueless files (no issues / no valuable issues) to `review/done/discard/`
+- **Auto-approve checkbox** — appends `#auto-approve` tag to the summary so the coworker pipeline auto-routes to `5approved` and triggers git push
+- Keyboard shortcuts: `Shift+1`–`Shift+5` (decisions), `Shift+A` (AI review), `Shift+D` (discard), `Shift+N`/`Shift+P` (prev/next file), `Ctrl+S` (save)
+
 ## Quick Reference: Decision Codes
 
 | Code | Meaning |
