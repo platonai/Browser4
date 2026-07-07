@@ -2001,6 +2001,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "refresh", description: "Force a fresh fetch, ignoring cache", is_bool: true, short: None },
                 OptionDef { name: "parse", description: "Parse page immediately after fetching", is_bool: true, short: None },
                 OptionDef { name: "store-content", description: "Persist page content to storage", is_bool: true, short: None },
+                OptionDef { name: "wait", description: "Block until all submitted jobs complete", is_bool: true, short: None },
             ],
             tool_name_fn: |_| "command_run".to_string(),
             tool_params_fn: |args| {
@@ -2013,6 +2014,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 if let Some(b) = get_bool(args, "refresh") { p["refresh"] = json!(b); }
                 if let Some(b) = get_bool(args, "parse") { p["parse"] = json!(b); }
                 if let Some(b) = get_bool(args, "store-content") { p["storeContent"] = json!(b); }
+                if let Some(b) = get_bool(args, "wait") { p["wait"] = json!(b); }
                 p
             },
         },
@@ -2031,6 +2033,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "deadline", description: "Deadline for task completion (ISO 8601, e.g. 2026-02-24T23:59:59Z)", is_bool: false, short: None },
                 OptionDef { name: "expires", description: "Cache expiration duration (e.g. 1d, 1h)", is_bool: false, short: None },
                 OptionDef { name: "refresh", description: "Force a fresh fetch, ignoring cache", is_bool: true, short: None },
+                OptionDef { name: "wait", description: "Block until all submitted jobs complete", is_bool: true, short: None },
             ],
             tool_name_fn: |_| "swarm_query".to_string(),
             tool_params_fn: |args| {
@@ -2040,10 +2043,12 @@ pub fn all_commands() -> Vec<CommandDef> {
                 // --sql-stdin and --sql-base64 are handled in main.rs dispatch
                 if get_bool(args, "sql-stdin").unwrap_or(false) { p["sqlStdin"] = json!(true); }
                 if let Some(v) = get_opt_str(args, "sql-base64") { p["sqlBase64"] = json!(v); }
+                else if get_bool(args, "sql-base64").unwrap_or(false) { p["sqlBase64"] = json!(true); }
                 if let Some(v) = get_opt_str(args, "seed-file") { p["seedFile"] = json!(v); }
                 if let Some(v) = get_opt_str(args, "deadline") { p["deadline"] = json!(v); }
                 if let Some(v) = get_opt_str(args, "expires") { p["expires"] = json!(v); }
                 if let Some(b) = get_bool(args, "refresh") { p["refresh"] = json!(b); }
+                if let Some(b) = get_bool(args, "wait") { p["wait"] = json!(b); }
                 p
             },
         },
@@ -2076,6 +2081,23 @@ pub fn all_commands() -> Vec<CommandDef> {
         CommandDef {
             name: "swarm-list",
             description: "List all tracked swarm tasks and their status",
+            category: Category::Swarm,
+            hidden: false,
+            batch_supported: false,
+            args: &[],
+            options: &[
+                OptionDef { name: "clear", description: "Remove all tracked swarm tasks from the list", is_bool: true, short: None },
+            ],
+            tool_name_fn: |_| String::new(),
+            tool_params_fn: |args| {
+                let mut p = json!({});
+                if let Some(b) = get_bool(args, "clear") { p["clear"] = json!(b); }
+                p
+            },
+        },
+        CommandDef {
+            name: "swarm-close",
+            description: "Close the swarm session and release browser resources",
             category: Category::Swarm,
             hidden: false,
             batch_supported: false,
@@ -2136,6 +2158,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                     p["sqlStdin"] = json!(true);
                 }
                 if let Some(v) = get_opt_str(args, "sql-base64") { p["sqlBase64"] = json!(v); }
+                else if get_bool(args, "sql-base64").unwrap_or(false) { p["sqlBase64"] = json!(true); }
                 // Output options (CLI-side, not sent to server)
                 if let Some(v) = get_opt_str(args, "format") {
                     p["format"] = json!(v);
@@ -2332,6 +2355,12 @@ pub fn all_commands() -> Vec<CommandDef> {
                     is_bool: false,
                     short: None,
                 },
+                OptionDef {
+                    name: "format",
+                    description: "Output format: json, csv, or table (default: json)",
+                    is_bool: false,
+                    short: None,
+                },
             ],
             tool_name_fn: |_| "html_snapshot_query".to_string(),
             tool_params_fn: |args| {
@@ -2341,8 +2370,10 @@ pub fn all_commands() -> Vec<CommandDef> {
                 // Pass through CLI-side flags (--sql-stdin and --sql-base64 are handled in main.rs dispatch)
                 if get_bool(args, "sql-stdin").unwrap_or(false) { p["sqlStdin"] = json!(true); }
                 if let Some(v) = get_opt_str(args, "sql-base64") { p["sqlBase64"] = json!(v); }
+                else if get_bool(args, "sql-base64").unwrap_or(false) { p["sqlBase64"] = json!(true); }
                 if let Some(true) = get_bool(args, "result-only") { p["resultOnly"] = json!(true); }
                 if let Some(f) = get_opt_str(args, "output-file") { p["outputFile"] = json!(f); }
+                if let Some(f) = get_opt_str(args, "format") { p["format"] = json!(f); }
                 p
             },
         },
@@ -2459,7 +2490,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         CommandDef {
             name: "generate-locator",
             description: "Generate the best CSS selector (id, class, or nth-of-type path) for a snapshot ref or CSS selector",
-            category: Category::Snapshot,
+            category: Category::Core,
             hidden: false,
             batch_supported: false,
             args: &[ArgDef { name: "ref", description: "Element reference (e5, backend:15) or CSS selector", optional: false }],
@@ -3274,6 +3305,8 @@ mod tests {
         assert!(swarm_cmds.contains(&"swarm-query"));
         assert!(swarm_cmds.contains(&"swarm-status"));
         assert!(swarm_cmds.contains(&"swarm-result"));
+        assert!(swarm_cmds.contains(&"swarm-list"));
+        assert!(swarm_cmds.contains(&"swarm-close"));
     }
 
     #[test]
@@ -4087,10 +4120,10 @@ mod tests {
     }
 
     #[test]
-    fn test_generate_locator_category_is_snapshot() {
+    fn test_generate_locator_category_is_core() {
         let map = commands_map();
         let cmd = map.get("generate-locator").unwrap();
-        assert_eq!(cmd.category, Category::Snapshot);
+        assert_eq!(cmd.category, Category::Core);
     }
 
     #[test]

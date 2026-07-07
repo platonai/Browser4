@@ -4189,12 +4189,28 @@ async fn handle_html_snapshot_query(
             .to_string()
     };
 
-    if sql_raw.is_empty() {
+    // Allow --sql-base64 standalone (without --sql): the base64 value is decoded
+    // later by maybe_decode_base64_sql. If sqlBase64 has a non-empty string value,
+    // we can proceed with an empty sql_raw; the decode will supply the actual SQL.
+    let has_sql_base64_value = tool_params
+        .get("sqlBase64")
+        .and_then(|v| v.as_str())
+        .map(|s| !s.trim().is_empty())
+        .unwrap_or(false);
+
+    if sql_raw.is_empty() && !has_sql_base64_value {
         return Err(
             "--sql is required. Provide an inline X-SQL query, @file.sql, --sql-stdin, or --sql-base64."
                 .to_string(),
         );
     }
+
+    // Track whether the SQL was inline (not @file, not stdin, not base64)
+    // for a post-query tip suggesting @file.sql to avoid shell quoting issues
+    let is_inline_sql = !use_sql_stdin
+        && !sql_raw.starts_with('@')
+        && !sql_raw.is_empty()
+        && !has_sql_base64_value;
 
     // Handle --sql @file.sql pattern
     let sql = if sql_raw.starts_with('@') {
@@ -4238,29 +4254,60 @@ async fn handle_html_snapshot_query(
         .and_then(|v| v.as_str())
         .map(str::trim)
         .filter(|s| !s.is_empty());
+    let format = tool_params
+        .get("format")
+        .and_then(|v| v.as_str())
+        .unwrap_or("json")
+        .to_ascii_lowercase();
+
+    // Validate --format value
+    match format.as_str() {
+        "json" | "csv" | "table" => {}
+        _ => return Err(format!("Invalid --format '{}'. Expected: json, csv, or table", format)),
+    }
 
     // Process output: extract resultSet if --result-only, then write to file or stdout
-    let output = if result_only {
-        // Try to parse the server JSON and extract just the resultSet
+    let output = if result_only || format.as_str() != "json" {
+        // Try to parse the server JSON and extract the resultSet
         match serde_json::from_str::<Value>(&result) {
             Ok(parsed) => {
-                if let Some(result_set) = parsed.get("resultSet") {
-                    serde_json::to_string_pretty(result_set)
-                        .unwrap_or_else(|_| result.clone())
-                } else {
-                    // No resultSet found — return the raw result with a warning
-                    if !json_active() {
-                        eprintln!(
-                            "⚠️  --result-only set but no 'resultSet' field found in response. \
-                             Showing full result."
-                        );
+                let rows: Option<&Vec<Value>> = parsed
+                    .get("resultSet")
+                    .and_then(|rs| rs.as_array());
+
+                match rows {
+                    Some(rows) if format.as_str() != "json" => {
+                        // Format as table or CSV
+                        let summary = format!("\n{} row{} returned.\n", rows.len(), if rows.len() == 1 { "" } else { "s" });
+                        match format.as_str() {
+                            "csv" => format_csv(rows) + &summary,
+                            "table" => format_table(rows) + &summary,
+                            _ => unreachable!(),
+                        }
                     }
-                    result.clone()
+                    _ => {
+                        // JSON format: pretty-print resultSet or full result
+                        let output_data = if let Some(result_set) = parsed.get("resultSet") {
+                            serde_json::to_string_pretty(result_set)
+                                .unwrap_or_else(|_| result.clone())
+                        } else if result_only {
+                            if !json_active() {
+                                eprintln!(
+                                    "⚠️  --result-only set but no 'resultSet' field found in response. \
+                                     Showing full result."
+                                );
+                            }
+                            result.clone()
+                        } else {
+                            result.clone()
+                        };
+                        output_data
+                    }
                 }
             }
             Err(_) => {
                 // Not valid JSON — return as-is
-                if !json_active() {
+                if result_only && !json_active() {
                     eprintln!(
                         "⚠️  --result-only set but response is not valid JSON. \
                          Showing raw result."
@@ -4280,6 +4327,16 @@ async fn handle_html_snapshot_query(
     } else if !output.is_empty() {
         cli_println!("{}", output);
     }
+
+    // Tip: if SQL was provided inline (not @file, not stdin, not base64), suggest
+    // using @file.sql to avoid shell quoting issues on Windows.
+    if is_inline_sql {
+        cli_println!(
+            "\n💡 Tip: Use --sql @file.sql to avoid shell quoting issues. \
+             Write your X-SQL query to a file and reference it with @filename.sql."
+        );
+    }
+
     json_field("result", json!(&result));
 
     Ok(())
@@ -6629,10 +6686,7 @@ async fn handle_swarm_submit(
     let query = match query_raw {
         Some(q) if q.starts_with('@') => {
             let file_path = &q[1..];
-            Some(
-                std::fs::read_to_string(file_path)
-                    .map_err(|e| format!("Failed to read query file '{}': {}", file_path, e))?,
-            )
+            Some(resolve_sql_file(file_path)?)
         }
         Some(q) => Some(q.to_string()),
         None => None,
@@ -6736,6 +6790,22 @@ async fn handle_swarm_submit(
     if urls.len() > 1 {
         cli_println!("{} URL(s) submitted. Use 'browser4-cli swarm list' to view all tracked tasks.", urls.len());
     }
+
+    // Support --wait: poll until all submitted jobs complete
+    if tool_params
+        .get("wait")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
+        let task_ids: Vec<String> = json_submissions
+            .iter()
+            .filter_map(|s| s.get("task_id").and_then(|v| v.as_str()).map(|s| s.to_string()))
+            .collect();
+        if !task_ids.is_empty() {
+            swarm_wait_for_jobs(client, base_url, &task_ids).await?;
+        }
+    }
+
     Ok(())
 }
 
@@ -6777,7 +6847,16 @@ async fn handle_swarm_query(
     if url.is_empty() && seed_file.is_none() {
         return Err("A URL or --seed-file is required.".to_string());
     }
-    if query_raw.as_ref().map_or(true, |q| q.is_empty()) {
+    // Allow --sql-base64 standalone (without --sql): the base64 value is decoded
+    // later by maybe_decode_base64_sql. If sqlBase64 has a non-empty string value,
+    // we can proceed with an empty query_raw; the decode will supply the actual SQL.
+    let has_sql_base64_value = tool_params
+        .get("sqlBase64")
+        .and_then(|v| v.as_str())
+        .map(|s| !s.trim().is_empty())
+        .unwrap_or(false);
+
+    if query_raw.as_ref().map_or(true, |q| q.is_empty()) && !has_sql_base64_value {
         return Err(
             "--sql is required. Provide an inline X-SQL query, @file.sql, --sql-stdin, or --sql-base64."
                 .to_string(),
@@ -6791,6 +6870,7 @@ async fn handle_swarm_query(
             Some(resolve_sql_file(file_path)?)
         }
         Some(q) => Some(q.clone()),
+        None if has_sql_base64_value => Some(String::new()),
         None => None,
     };
 
@@ -6852,12 +6932,31 @@ async fn handle_swarm_query(
             "url": u,
             "task_id": task_id,
         }));
+
+        // Persist each task for cross-session tracking (so they appear in swarm list)
+        let _ = track_async_task(&task_id, "swarm", u, None);
     }
     json_field("submissions", json!(json_submissions));
 
     if urls.len() > 1 {
-        cli_println!("{} URL(s) queried.", urls.len());
+        cli_println!("{} URL(s) queried. Use 'browser4-cli swarm list' to view all tracked tasks.", urls.len());
     }
+
+    // Support --wait: poll until all submitted jobs complete
+    if tool_params
+        .get("wait")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
+        let task_ids: Vec<String> = json_submissions
+            .iter()
+            .filter_map(|s| s.get("task_id").and_then(|v| v.as_str()).map(|s| s.to_string()))
+            .collect();
+        if !task_ids.is_empty() {
+            swarm_wait_for_jobs(client, base_url, &task_ids).await?;
+        }
+    }
+
     Ok(())
 }
 
@@ -6876,12 +6975,20 @@ async fn handle_swarm_status(
     }
 
     let result = get_swarm_status(client, base_url, id).await?;
-    cli_println!("{}", result);
+    let parsed: Value =
+        serde_json::from_str(&result).unwrap_or(Value::String(result.clone()));
+
+    // Show metadata only: id, status, isDone, message, timestamps
+    let summary = json!({
+        "id": parsed.get("id").and_then(|v| v.as_str()).unwrap_or(&id),
+        "isDone": parsed.get("isDone").unwrap_or(&json!(null)),
+        "statusCode": parsed.get("statusCode").unwrap_or(&json!(null)),
+        "message": parsed.get("message").unwrap_or(&json!("")),
+        "lastModifiedTime": parsed.get("lastModifiedTime").unwrap_or(&json!(null)),
+    });
+    cli_println!("{}", serde_json::to_string_pretty(&summary).unwrap_or_default());
     json_field("task_id", json!(id));
-    json_field(
-        "raw",
-        json!(serde_json::from_str::<Value>(&result).unwrap_or(Value::String(result.clone()))),
-    );
+    json_field("raw", parsed);
     Ok(())
 }
 
@@ -6900,22 +7007,141 @@ async fn handle_swarm_result(
     }
 
     let result = get_swarm_result(client, base_url, id).await?;
-    cli_println!("{}", result);
+    let parsed: Value =
+        serde_json::from_str(&result).unwrap_or(Value::String(result.clone()));
+
+    // Show result payload only: resultSet, pageContentBytes
+    let payload = json!({
+        "id": parsed.get("id").and_then(|v| v.as_str()).unwrap_or(&id),
+        "resultSet": parsed.get("resultSet").unwrap_or(&json!([])),
+        "pageContentBytes": parsed.get("pageContentBytes").unwrap_or(&json!(null)),
+        "error": parsed.get("error").unwrap_or(&json!(null)),
+    });
+    cli_println!("{}", serde_json::to_string_pretty(&payload).unwrap_or_default());
     json_field("task_id", json!(id));
-    json_field(
-        "raw",
-        json!(serde_json::from_str::<Value>(&result).unwrap_or(Value::String(result.clone()))),
-    );
+    json_field("raw", parsed);
     Ok(())
 }
 
-async fn handle_swarm_list() -> Result<(), String> {
+async fn handle_swarm_list(tool_params: &Value) -> Result<(), String> {
+    // Support --clear to remove all tracked swarm tasks
+    if tool_params
+        .get("clear")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
+        let mut list = read_async_tasks(None);
+        let before = list.tasks.len();
+        list.tasks.retain(|t| t.command != "swarm");
+        let removed = before - list.tasks.len();
+        write_async_tasks(&list, None).map_err(|e| e.to_string())?;
+        cli_println!("Cleared {} tracked swarm task(s).", removed);
+        json_field("cleared", json!(removed));
+        return Ok(());
+    }
+
     let _ = prune_async_tasks(None);
     let list = read_async_tasks(None);
     let filtered: Vec<_> = list.tasks.iter().filter(|t| t.command == "swarm").cloned().collect();
     let display = state::AsyncTaskList { tasks: filtered };
     cli_println!("{}", format_async_task_list(&display));
     Ok(())
+}
+
+/// Poll a list of swarm task IDs until all complete or timeout.
+async fn swarm_wait_for_jobs(
+    client: &Client,
+    base_url: &str,
+    task_ids: &[String],
+) -> Result<(), String> {
+    let total = task_ids.len();
+    cli_println!(
+        "Waiting for {} job(s) to complete...",
+        total
+    );
+
+    let poll_interval = std::time::Duration::from_secs(2);
+    let max_wait = std::time::Duration::from_secs(300); // 5-minute timeout
+    let start = std::time::Instant::now();
+
+    let mut completed = vec![false; total];
+    let mut last_report = start;
+
+    loop {
+        let mut all_done = true;
+        for (i, id) in task_ids.iter().enumerate() {
+            if completed[i] {
+                continue;
+            }
+            match get_swarm_status(client, base_url, id).await {
+                Ok(result) => {
+                    let parsed: Value = serde_json::from_str(&result).unwrap_or_default();
+                    let is_done = parsed
+                        .get("isDone")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
+                    if is_done {
+                        completed[i] = true;
+                    } else {
+                        all_done = false;
+                    }
+                }
+                Err(_) => {
+                    // Keep waiting on transient errors
+                    all_done = false;
+                }
+            }
+        }
+
+        if all_done {
+            cli_println!(
+                "All {} job(s) completed in {:.0}s.",
+                total,
+                start.elapsed().as_secs_f64()
+            );
+            // Print a summary table
+            cli_println!("\n  {:^8}  {:^12}  {}", "STATUS", "TASK ID", "URL");
+            cli_println!("  {:-<8}  {:-<12}  {:-<40}", "", "", "");
+            for (i, id) in task_ids.iter().enumerate() {
+                let short_id = if id.len() > 8 { &id[..8] } else { id };
+                let status = if completed[i] { "done" } else { "timeout" };
+                cli_println!("  {:^8}  {:<12}  ...", status, short_id);
+            }
+            return Ok(());
+        }
+
+        if start.elapsed() > max_wait {
+            let pending: Vec<_> = task_ids
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| !completed[*i])
+                .map(|(_, id)| id.clone())
+                .collect();
+            cli_println!(
+                "Timeout after {:.0}s. {} of {} job(s) completed. {} job(s) still pending. Use 'swarm status <id>' to check manually.",
+                start.elapsed().as_secs_f64(),
+                completed.iter().filter(|&&c| c).count(),
+                total,
+                pending.len(),
+            );
+            json_field("pending_task_ids", json!(pending));
+            return Ok(());
+        }
+
+        // Progress report every 30 seconds
+        if last_report.elapsed() >= std::time::Duration::from_secs(30) {
+            let done_count = completed.iter().filter(|&&c| c).count();
+            cli_println!(
+                "  ... {}/{} job(s) completed (elapsed: {:.0}s)",
+                done_count,
+                total,
+                start.elapsed().as_secs_f64()
+            );
+            last_report = std::time::Instant::now();
+        }
+
+        tokio::time::sleep(poll_interval).await;
+    }
 }
 
 async fn handle_crawl_list() -> Result<(), String> {
@@ -9909,6 +10135,7 @@ fn preferred_spaced_command_form(command: &str) -> Option<&'static str> {
         "swarm-status" => Some("swarm status"),
         "swarm-result" => Some("swarm result"),
         "swarm-list" => Some("swarm list"),
+        "swarm-close" => Some("swarm close"),
         "crawl-status" => Some("crawl status"),
         "crawl-result" => Some("crawl result"),
         "crawl-cancel" => Some("crawl cancel"),
@@ -11710,7 +11937,10 @@ async fn run(
             handle_swarm_result(&client, &base_url, &tool_params).await?;
         }
         "swarm-list" => {
-            handle_swarm_list().await?;
+            handle_swarm_list(&tool_params).await?;
+        }
+        "swarm-close" => {
+            handle_close(&client, &base_url, global.session_name.as_deref()).await?;
         }
         "crawl" => {
             handle_crawl(

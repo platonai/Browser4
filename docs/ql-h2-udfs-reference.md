@@ -450,9 +450,6 @@ These functions integrate with LLM (AI) models for chat and structured data extr
 | Alias | Signature | Description |
 |-------|-----------|-------------|
 | `LLM_MODEL_NAME` | `modelName(): String` | Returns the configured LLM model name. |
-| `LLM_CHAT` | `chat(prompt: String): String` | Sends a prompt to the LLM and returns the response. Handles interruption gracefully (returns empty string). |
-| `LLM_CHAT` | `chat(dom: ValueDom, prompt: String): String` | Sends a DOM element and prompt to the LLM and returns the response. |
-| `LLM_EXTRACT` | `extract(dom: ValueDom, dataExtractionRules: String): ValueStringJSON` | Extracts structured fields from DOM content using the LLM. The `dataExtractionRules` describe the fields to extract as a JSON object. Handles interruption and JSON parsing failures gracefully. |
 
 ### LLM Extract Usage Example
 
@@ -714,19 +711,6 @@ SELECT STR_UPPER_CASE(STR_TRIM('  hello  '));
 
 -- Regex extraction
 SELECT STR_RE1('price: $99.99', '(\d+\.\d+)');
-```
-
-### LLM Integration
-
-```sql
--- Chat with the model
-SELECT LLM_CHAT('What is the capital of France?');
-
--- Extract structured data from a page
-SELECT LLM_EXTRACT(
-    DOM_LOAD('https://example.com/product'),
-    '{"name": "product name", "price": "product price", "description": "product description"}'
-);
 ```
 
 ---

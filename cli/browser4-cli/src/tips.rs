@@ -360,7 +360,7 @@ fn tips_for_command(command: &str) -> &'static [Tip] {
         "screenshot" | "pdf" => TIPS_SCREENSHOT,
         "crawl" | "crawl-list" => TIPS_CRAWL,
         "swarm-create" | "swarm-submit" | "swarm-query" | "swarm-status" | "swarm-result"
-        | "swarm-list" => TIPS_SWARM,
+        | "swarm-list" | "swarm-close" => TIPS_SWARM,
         "agent-run" | "agent-status" | "agent-result" | "agent-list" => TIPS_AGENT,
         "attach" => TIPS_ATTACH,
         "cookie-list" | "cookie-get" | "cookie-set" | "cookie-delete" | "cookie-clear" => {

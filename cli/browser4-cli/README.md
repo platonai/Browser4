@@ -3,6 +3,18 @@
 Rust CLI binary for controlling a [Browser4](https://github.com/platonai/Browser4) server.
 See [`cli/README.md`](../README.md) for the user-facing documentation.
 
+## Running from source
+
+```bash
+# From the repo root:
+cargo run --manifest-path cli/browser4-cli/Cargo.toml -- <command>
+
+# From this directory:
+cd cli/browser4-cli && cargo run -- <command>
+```
+
+The backend server starts automatically in dev mode. Build the CLI with `cargo build` (debug) or `cargo build --release` (optimized).
+
 ## Commands
 
 ### Browser sessions
