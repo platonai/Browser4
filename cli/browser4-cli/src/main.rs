@@ -1700,6 +1700,10 @@ async fn handle_tab_select(
 }
 
 async fn handle_close_all(client: &Client, base_url: &str) -> Result<(), String> {
+    // Count locally-tracked sessions the same way `list` does, so the
+    // count reported to the user matches what `list` would have shown.
+    let local_count = count_tracked_sessions();
+
     let close_summary = close_all_sessions_across_servers(client, base_url).await;
 
     // `close-all` is intentionally session-scoped. Keep any tracked Browser4
@@ -1710,7 +1714,12 @@ async fn handle_close_all(client: &Client, base_url: &str) -> Result<(), String>
     json_field("results", json!(close_summary.results));
     json_field("errors", json!(close_summary.errors));
 
-    log_close_all_summary(&close_summary, "close-all");
+    // Report the locally-tracked count instead of the server's count, which may
+    // include internal sessions that the user never sees in `list` output.
+    cli_println!("Closed {} session(s)", local_count);
+    if !close_summary.errors.is_empty() {
+        eprintln!("close-all warnings: {}", close_summary.errors.join(" | "));
+    }
     Ok(())
 }
 
@@ -2009,23 +2018,6 @@ async fn close_all_sessions_across_servers(client: &Client, base_url: &str) -> C
     summary
 }
 
-fn log_close_all_summary(summary: &CloseAllSummary, command_name: &str) {
-    if summary.results.is_empty() {
-        cli_println!(
-            "No reachable Browser4 servers responded to {}.",
-            command_name
-        );
-    } else {
-        for result in &summary.results {
-            cli_println!("{}", result);
-        }
-    }
-
-    if !summary.errors.is_empty() {
-        eprintln!("{} warnings: {}", command_name, summary.errors.join(" | "));
-    }
-}
-
 fn finalize_global_cleanup(action: &str, result: &ShutdownResult) {
     clear_all_state(None);
     log_shutdown_result(action, result);
@@ -2129,24 +2121,32 @@ async fn handle_list(client: &Client, base_url: &str) -> Result<(), String> {
         }
     }
 
-    // List default session
+    // List default session — only show when the backend also knows about it.
+    // A default session that exists in local state but not on the backend was
+    // auto-created by a previous run and never actually navigated; hide it to
+    // avoid session clutter when all commands use `-s <name>`.
     let default_state = read_state(None, None);
     if let Some(sid) = default_state.session_id {
-        let status = list_session_status(backend_sessions.as_deref(), &sid);
-        let next_open = list_session_next_open_action(backend_sessions.as_deref(), &sid);
-        cli_println!(
-            "{:<20} | {:<40} | {:<8} | {}",
-            "(default)",
-            sid,
-            status,
-            next_open
-        );
-        json_sessions.push(json!({
-            "name": "(default)",
-            "session_id": sid,
-            "status": status.to_lowercase(),
-            "next_open": next_open.to_lowercase(),
-        }));
+        let backend_knows_session = backend_sessions.as_ref().map_or(true, |records| {
+            records.iter().any(|r| r.session_id == sid)
+        });
+        if backend_knows_session {
+            let status = list_session_status(backend_sessions.as_deref(), &sid);
+            let next_open = list_session_next_open_action(backend_sessions.as_deref(), &sid);
+            cli_println!(
+                "{:<20} | {:<40} | {:<8} | {}",
+                "(default)",
+                sid,
+                status,
+                next_open
+            );
+            json_sessions.push(json!({
+                "name": "(default)",
+                "session_id": sid,
+                "status": status.to_lowercase(),
+                "next_open": next_open.to_lowercase(),
+            }));
+        }
     }
 
     json_field("sessions", json!(json_sessions));
@@ -2157,6 +2157,40 @@ async fn handle_list(client: &Client, base_url: &str) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+/// Count locally-tracked sessions the same way `handle_list` does:
+/// named sessions in the state directory + default session if present.
+fn count_tracked_sessions() -> usize {
+    let mut count: usize = 0;
+    let dir = resolve_default_state_dir();
+
+    // Count named sessions
+    let sessions_dir = dir.join("sessions");
+    if sessions_dir.exists() {
+        if let Ok(entries) = std::fs::read_dir(sessions_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().map_or(false, |ext| ext == "json") {
+                    if let Ok(content) = std::fs::read_to_string(&path) {
+                        if let Ok(state) = serde_json::from_str::<CliState>(&content) {
+                            if state.session_id.is_some() {
+                                count += 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Count default session
+    let default_state = read_state(Some(&dir), None);
+    if default_state.session_id.is_some() {
+        count += 1;
+    }
+
+    count
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -72,6 +72,10 @@ Refs are **ephemeral** — they become invalid after commands that change the DO
 
 Named sessions isolate browser state (cookies, localStorage, tabs). Use `-s <name>` to target a named session. `goto` auto-opens/reconnects — you rarely need to manage sessions manually.
 
+The `list` command displays a "Next open" column showing what happens when `goto` or `open` targets a named session that already exists:
+- **Reuse** — reconnects to the existing browser window (session is active on the backend).
+- **Refresh** — opens a fresh window (session is stale or missing).
+
 ## 3. Command Map
 
 | Command family | Purpose | When to use | Full reference |
@@ -239,6 +243,18 @@ browser4-cli install
 ```
 
 ## Development
+
+### Prerequisites for Development
+
+- **[Rust](https://rustup.rs/)** — via `rustup`; needed to compile the CLI binary.
+- **Java 17+** — required by the Browser4 backend server.
+- **[Git](https://git-scm.com/)** — for cloning the repository.
+
+Verify your setup with:
+
+```bash
+cargo --version && java -version
+```
 
 When running from source (not a globally installed binary), use `cargo run` from the CLI directory:
 
