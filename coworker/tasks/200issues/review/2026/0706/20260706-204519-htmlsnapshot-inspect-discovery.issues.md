@@ -96,9 +96,9 @@ The HTML snapshot text extraction likely applies a character limit per text node
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
-- [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [x] **REJECT** — issue invalid, not a problem, or already addressed
 - **Notes:**
-
+it should be handled by the user.
 
 ---
 
@@ -141,11 +141,10 @@ When a selector matches only one element, `inspect` activates auto-discovery mod
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
-- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+- [x] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - **Notes:**
-
 
 ---
 
@@ -191,7 +190,6 @@ The `--selector` flag uses `querySelector` (single element) semantics, not `quer
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - **Notes:**
 
-
 ---
 
 ### Issue 4: Suggested selectors from inspect don't include the most obvious ones for link text
@@ -235,7 +233,6 @@ The inspect algorithm generates selectors at each DOM depth level independently.
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - **Notes:**
-
 
 ---
 
@@ -281,7 +278,6 @@ The scoring formula (h1=100, button=50, a=15, etc.) means all 20 "Add to basket"
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - **Notes:**
 
-
 ---
 
 ### Issue 6: Windows shell escaping friction for X-SQL queries
@@ -323,7 +319,6 @@ Windows shell quoting differs from Unix. Nested quotes (SQL strings inside shell
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - **Notes:**
-
 
 ---
 
@@ -367,7 +362,6 @@ The CLI help text for `htmlsnapshot inspect` in the main `--help` output is a si
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - **Notes:**
-
 
 ---
 

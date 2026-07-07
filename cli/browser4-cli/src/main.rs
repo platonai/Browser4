@@ -366,6 +366,8 @@ fn no_snapshot_commands() -> HashSet<&'static str> {
         "htmlsnapshot-summary",
         "htmlsnapshot-grep",
         "htmlsnapshot-inspect",
+        "scroll",
+        "resize",
     ]
     .into()
 }
@@ -909,6 +911,20 @@ async fn get_or_create_navigation_session(
         cli_println!("Session opened: {}", new_id);
         new_id
     };
+
+    // When reconnecting to an existing session, inform the user what page is active
+    if reused_existing_session {
+        if let Ok(url_result) = call_tool(
+            client,
+            base_url,
+            "page_url",
+            json!({ "sessionId": session_id }),
+        ).await {
+            if !url_result.is_empty() {
+                cli_println!("Reconnected to existing session on {}", url_result);
+            }
+        }
+    }
 
     Ok((state, session_id, reused_existing_session))
 }
@@ -3014,10 +3030,14 @@ async fn handle_tool_command_with_options(
         if let Some(r) = tool_params.get("ref").and_then(|v| v.as_str()) {
             json_field("ref", json!(r));
         }
-    } else if !result.is_empty() {
-        // Wait tools return internal driver JSON — replace with user-friendly messages
+    } else if tool_name.starts_with("wait_") || tool_name == "delay" {
+        // Wait tools return internal driver JSON — replace with user-friendly messages.
+        // Always format even when the raw result is empty (e.g. `delay` returns "").
         let formatted = format_wait_result(tool_name, tool_params, &result);
         cli_println!("{}", formatted);
+        json_field("result", json!(&result));
+    } else if !result.is_empty() {
+        cli_println!("{}", result);
         json_field("result", json!(&result));
     }
 
@@ -3053,6 +3073,23 @@ async fn handle_tool_command_with_options(
                 cli_println!("✓ Unchecked {}", ref_val);
             }
             _ => {} // No confirmation for other tools
+        }
+    }
+
+    // Success confirmation for browser_resize (uses width/height, not ref).
+    if tool_name == "browser_resize" {
+        let w = tool_params
+            .get("width")
+            .and_then(|v| v.as_f64())
+            .map(|v| v as i64)
+            .unwrap_or(0);
+        let h = tool_params
+            .get("height")
+            .and_then(|v| v.as_f64())
+            .map(|v| v as i64)
+            .unwrap_or(0);
+        if w > 0 && h > 0 {
+            cli_println!("✓ Resized to {}×{}", w, h);
         }
     }
 
@@ -3097,8 +3134,15 @@ async fn handle_get(
             .unwrap_or(":root");
         cli_println!("{}", result);
         cli_println!(
-            "No elements matched \"{}\". Try `htmlsnapshot inspect \"{}\"` to discover valid selectors, or run `htmlsnapshot` to see the full DOM tree.",
-            selector, selector
+            "No elements matched \"{}\".",
+            selector
+        );
+        cli_println!(
+            "  The `get` command queries the live page through the accessibility tree — CSS selectors from htmlsnapshot may not apply here."
+        );
+        cli_println!(
+            "  For CSS selector-based extraction, capture the DOM first with `htmlsnapshot`, then use `htmlsnapshot get text \"{}\"`.",
+            selector
         );
     } else {
         cli_println!("{}", result);
@@ -5716,8 +5760,14 @@ async fn handle_select_command(
     session_name: Option<&str>,
     verify: bool,
 ) -> Result<(), String> {
+    // Read the display value from the "values" array (set by tool_params_fn).
+    // The user types a human-readable label like "United States", but the
+    // underlying <option> value may differ (e.g. "us"). We show what the user
+    // asked for so the confirmation message is meaningful.
     let expected_value = tool_params
-        .get("val")
+        .get("values")
+        .and_then(|v| v.as_array())
+        .and_then(|arr| arr.first())
         .and_then(|v| v.as_str())
         .unwrap_or("");
     let element_ref = tool_params.get("ref").and_then(|v| v.as_str());
@@ -11462,6 +11512,16 @@ mod tests {
     #[test]
     fn no_snapshot_commands_include_generate_locator() {
         assert!(no_snapshot_commands().contains("generate-locator"));
+    }
+
+    #[test]
+    fn no_snapshot_commands_include_scroll() {
+        assert!(no_snapshot_commands().contains("scroll"));
+    }
+
+    #[test]
+    fn no_snapshot_commands_include_resize() {
+        assert!(no_snapshot_commands().contains("resize"));
     }
 
     #[test]

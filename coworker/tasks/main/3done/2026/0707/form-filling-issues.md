@@ -59,48 +59,10 @@
 
 ---
 
-## Issues Found (6 issues)
-
-### Issue 1: Interactive snapshot (`-i`) does not display element refs inline
-
-**Severity:** Medium
-**Category:** UX
-
-#### Reproduction
-
-`cargo run -- snapshot -i`
-
-#### Expected Behavior
-
-Interactive mode should display element refs inline in the terminal output, since the user ran `-i` specifically to discover interactive elements.
-
-#### Actual Behavior
-
-Only metadata is shown (URL, title, file path, node count). A tip suggests `--stdout` but the tip is buried at the bottom and easily missed. The user must either add `--stdout` or manually open and read the snapshot YAML file.
-
-#### Root Cause Analysis
-
-The `-i` flag controls the snapshot capture mode (strips generic containers) but doesn't change the output format. The output logic in the snapshot module doesn't treat `-i` as a signal to also output refs inline.
-
-#### Code Pointer
-
-``cli/browser4-cli/src/snapshot.rs` — snapshot output formatting logic`
-
-#### AI Suggested Improvement
-
-- Make `-i` imply inline ref output (or at minimum, automatically print refs alongside the metadata). Interactive mode's purpose is element discovery — hiding the elements defeats the purpose.
-- Alternatively, print a prominent summary of interactive elements (tag + ref + label) at the bottom of the interactive snapshot output.
-
-#### Human Review
-
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
-- [x] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
-- [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
-- [ ] **REJECT** — issue invalid, not a problem, or already addressed
-- **Notes:**
-
 ---
+
+## Issues Found (6 issues)
+> **Review complete:** 2 approved, 4 deferred/rejected
 
 ### Issue 2: `select` command confirmation message shows empty string
 
@@ -134,12 +96,14 @@ The confirmation message likely reads back `element.value` after selection, whic
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - **Notes:**
+
+---
 
 ---
 
@@ -177,12 +141,29 @@ Two separate extraction subsystems exist: `get` (live DOM via CDP) and `htmlsnap
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - **Notes:**
+
+---
+
+---
+
+### Issue 1: Interactive snapshot (`-i`) does not display element refs inline
+
+**Severity:** Medium
+**Category:** UX
+
+#### Review Result
+
+**Decision:** REJECT
+
+**Notes:** no matter since ai agents can understand it easily
+
+**Summary:** - Make `-i` imply inline ref output (or at minimum, automatically print refs alongside the metadata). Interactive mode's purpose is element discovery — hiding the elements defeats the purpose.
 
 ---
 
@@ -191,40 +172,11 @@ Two separate extraction subsystems exist: `get` (live DOM via CDP) and `htmlsnap
 **Severity:** Low
 **Category:** UX
 
-#### Reproduction
+#### Review Result
 
-Running `cargo run -- <command>` from the repo root fails because the Cargo project is in `cli/browser4-cli/`. Every command requires `cd "D:/workspace/Browser4/Browser4-4.11/cli/browser4-cli" && cargo run -- ...`
+**Decision:** WONTFIX
 
-#### Expected Behavior
-
-A documented shortcut (e.g., `./bin/browser4-cli.ps1` or `cargo run --manifest-path cli/browser4-cli/Cargo.toml -- ...`) that works from the repo root.
-
-#### Actual Behavior
-
-The SKILL.md mentions the `cd` requirement in §Development, but it adds friction to every command. On Windows with bash, relative paths fail, requiring absolute paths.
-
-#### Root Cause Analysis
-
-The Cargo.toml is nested in `cli/browser4-cli/`, not at the repo root. No convenience wrapper script is documented or provided.
-
-#### Code Pointer
-
-`Documentation only — `skills/browser4-cli/SKILL.md` §Development section`
-
-#### AI Suggested Improvement
-
-- Document `cargo run --manifest-path cli/browser4-cli/Cargo.toml -- <command>` as a single-command invocation from repo root.
-- Add a small wrapper script at the repo root (`./bin/b4.ps1` or `./bin/b4.sh`) that handles the path resolution.
-- Add this to the SKILL.md §Development section as the primary invocation pattern for source builds.
-
-#### Human Review
-
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
-- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
-- [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
-- [ ] **REJECT** — issue invalid, not a problem, or already addressed
-- **Notes:**
+**Summary:** - Document `cargo run --manifest-path cli/browser4-cli/Cargo.toml -- <command>` as a single-command invocation from repo root.
 
 ---
 
@@ -233,40 +185,11 @@ The Cargo.toml is nested in `cli/browser4-cli/`, not at the repo root. No conven
 **Severity:** Low
 **Category:** UX
 
-#### Reproduction
+#### Review Result
 
-`cargo run -- snapshot -v 0` on the form-filling page produces 100+ lines of nested YAML. Interactive elements (textboxes, checkboxes, buttons) are deeply nested inside generic containers and banner/main/complementary landmarks.
+**Decision:** DEFER
 
-#### Expected Behavior
-
-A mode or flag that surfaces only interactive elements (inputs, buttons, selects, links) with their refs, labels, and types, in a flat table or compact list.
-
-#### Actual Behavior
-
-The full accessibility tree is shown, requiring careful reading to find refs. The `-i` flag helps by removing generic containers but doesn't change the nesting structure or output format.
-
-#### Root Cause Analysis
-
-The snapshot output format is designed for completeness (full AX tree) rather than scannability for the primary use case (finding element refs to interact with).
-
-#### Code Pointer
-
-``cli/browser4-cli/src/snapshot.rs` — snapshot YAML generation`
-
-#### AI Suggested Improvement
-
-- Add a `--refs-only` or `--interactive-only` flag that outputs a flat table of interactive elements: `| ref | type | label | state |`
-- The `htmlsnapshot` command already produces a nice "Interactive Elements" summary — surface a similar format in the snapshot output.
-- Consider making interactive element lists the default output mode, with `--full-tree` for the complete AX tree.
-
-#### Human Review
-
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
-- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
-- [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
-- [ ] **REJECT** — issue invalid, not a problem, or already addressed
-- **Notes:**
+**Summary:** - Add a `--refs-only` or `--interactive-only` flag that outputs a flat table of interactive elements: `| ref | type | label | state |`
 
 ---
 
@@ -275,40 +198,11 @@ The snapshot output format is designed for completeness (full AX tree) rather th
 **Severity:** Medium
 **Category:** Documentation
 
-#### Reproduction
+#### Review Result
 
-Reading `skills/browser4-cli/SKILL.md` as a first-time user. The document is ~250 lines with 7 major sections, 4 decision trees, a command map table, and references to 15+ separate reference files.
+**Decision:** WONTFIX
 
-#### Expected Behavior
-
-A quick-start section that walks through the most common workflow end-to-end, and a clear separation between "first read" and "reference" material.
-
-#### Actual Behavior
-
-The document mixes tutorial, reference, and warning content. The copy-paste template at the top is helpful but assumes understanding of concepts explained later. The reference map at the bottom points to 15+ separate files — daunting for a new user.
-
-#### Root Cause Analysis
-
-The SKILL.md serves dual purposes: AI agent instruction manual and human-readable documentation. These audiences have different needs.
-
-#### Code Pointer
-
-``skills/browser4-cli/SKILL.md` — document structure`
-
-#### AI Suggested Improvement
-
-- Add a 5-minute quick-start section with a single concrete end-to-end example (goto → snapshot → fill → click → verify) fully explained.
-- Move the decision trees and reference map to a separate reference index file.
-- Add "Common recipes" as the second section after quick-start, with copy-paste examples for the top 5 tasks (form fill, data extraction, screenshot, crawl, auth state reuse).
-
-#### Human Review
-
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
-- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
-- [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
-- [ ] **REJECT** — issue invalid, not a problem, or already addressed
-- **Notes:**
+**Summary:** - Add a 5-minute quick-start section with a single concrete end-to-end example (goto → snapshot → fill → click → verify) fully explained.
 
 ---
 
@@ -347,4 +241,3 @@ Running `cargo run -- <command>` from the repo root fails because the Cargo proj
 #### Issue 6: SKILL.md documentation is comprehensive but difficult to navigate for first-time users
 
 Reading `skills/browser4-cli/SKILL.md` as a first-time user. The document is ~250 lines with 7 major sections, 4 decision trees, a command map table, and references to 15+ separate reference files.
-

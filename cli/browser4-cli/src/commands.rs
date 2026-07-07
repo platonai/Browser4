@@ -1591,7 +1591,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: true,
             args: &[ArgDef { name: "ref", description: "Exact target element reference from the page snapshot", optional: true }],
             options: &[
-                OptionDef { name: "filename", description: "File name to save the screenshot to", is_bool: false, short: None },
+                OptionDef { name: "filename", description: "File name or path to save the screenshot to. Bare filenames are saved to the snapshot directory; paths (containing / or \\) are resolved relative to the current directory.", is_bool: false, short: None },
                 OptionDef { name: "full-page", description: "When true, takes a screenshot of the full scrollable page", is_bool: true, short: None },
                 OptionDef { name: "viewport", description: "Capture a specific viewport by index (0 = top). Same semantics as snapshot -v.", is_bool: false, short: Some("v") },
             ],
@@ -1615,7 +1615,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: true,
             args: &[],
             options: &[
-                OptionDef { name: "filename", description: "File name to save the pdf to", is_bool: false, short: None },
+                OptionDef { name: "filename", description: "File name or path to save the PDF to. Bare filenames are saved to the snapshot directory; paths (containing / or \\) are resolved relative to the current directory.", is_bool: false, short: None },
             ],
             tool_name_fn: |_| "browser_pdf_save".to_string(),
             tool_params_fn: |args| {

@@ -34,7 +34,7 @@ const CATEGORIES: &[(&str, &str)] = &[
     ("navigation", "Navigation"),
     ("keyboard", "Keyboard"),
     ("mouse", "Mouse"),
-    ("export", "Save as"),
+    ("export", "Capture"),
     ("tabs", "Tabs"),
     ("storage", "Storage"),
     ("devtools", "DevTools"),

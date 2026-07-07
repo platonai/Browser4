@@ -37,16 +37,31 @@ pub fn timestamped_filename(prefix: &str, ext: &str) -> String {
 
 /// Resolve the output path for a snapshot or screenshot, creating the directory
 /// if necessary. Returns the absolute path as a string.
+///
+/// When `filename` contains path separators (`/` or `\`) or is an absolute path,
+/// it is treated as a user-specified path relative to the current working directory.
+/// Bare filenames (no path separators) are saved to the default snapshot directory.
 pub fn resolve_output_path(filename: Option<&str>, prefix: &str, ext: &str) -> PathBuf {
     let name = filename
         .map(|f| f.to_string())
         .unwrap_or_else(|| timestamped_filename(prefix, ext));
 
-    let out = snapshot_dir().join(&name);
-    let canonical = std::env::current_dir()
+    let looks_like_path = name.contains('/') || name.contains('\\');
+    let is_absolute = Path::new(&name).is_absolute();
+
+    if is_absolute {
+        return PathBuf::from(&name);
+    }
+
+    let out = if looks_like_path {
+        PathBuf::from(&name)
+    } else {
+        snapshot_dir().join(&name)
+    };
+
+    std::env::current_dir()
         .unwrap_or_else(|_| PathBuf::from("."))
-        .join(&out);
-    canonical
+        .join(&out)
 }
 
 /// Save a text snapshot to disk, then rotate old snapshots into the archive.
@@ -160,6 +175,40 @@ mod tests {
         let path = resolve_output_path(Some("snap.yml"), "snapshot", "yml");
 
         assert!(path.ends_with(snapshot_dir().join("snap.yml")));
+    }
+
+    #[test]
+    fn test_resolve_output_path_with_relative_path() {
+        let path =
+            resolve_output_path(Some("subdir/my-shot.png"), "screenshot", "png");
+
+        // Should use the user-supplied path relative to cwd, NOT the snapshot dir
+        assert!(
+            !path.ends_with(snapshot_dir().join("subdir").join("my-shot.png")),
+            "path with separator should not be placed in snapshot dir"
+        );
+        assert!(path.ends_with(Path::new("subdir").join("my-shot.png")));
+    }
+
+    #[test]
+    fn test_resolve_output_path_with_absolute_path() {
+        // Use an absolute path that works on the current platform
+        let abs_path = if cfg!(windows) {
+            "C:\\tmp\\absolute-shot.png".to_string()
+        } else {
+            "/tmp/absolute-shot.png".to_string()
+        };
+        let path = resolve_output_path(Some(&abs_path), "screenshot", "png");
+
+        assert_eq!(path, PathBuf::from(&abs_path));
+    }
+
+    #[test]
+    fn test_resolve_output_path_bare_filename_still_uses_snapshot_dir() {
+        let path =
+            resolve_output_path(Some("bare-file.png"), "screenshot", "png");
+
+        assert!(path.ends_with(snapshot_dir().join("bare-file.png")));
     }
 
     #[test]
