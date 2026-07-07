@@ -877,7 +877,12 @@ function Start-NativeCommand {
 
         [switch] $PassThru,
 
-        [int] $HeartbeatIntervalSec = 10
+        [int] $HeartbeatIntervalSec = 10,
+
+        # Maximum seconds to wait before killing the process.
+        # 0 (default) means no timeout.  Exit code 124 is returned on timeout
+        # (matching the Unix `timeout` command convention).
+        [int] $TimeoutSeconds = 0
     )
 
     $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
@@ -1064,6 +1069,11 @@ function Start-NativeCommand {
             $proc.WaitForExit(2000) | Out-Null
             $elapsed = $stopwatch.Elapsed.TotalSeconds
 
+            # ── Timeout check ─────────────────────────────────────────────
+            if ($TimeoutSeconds -gt 0 -and $elapsed -ge $TimeoutSeconds -and -not $proc.HasExited) {
+                break
+            }
+
             # Progressive backoff
             $interval = if ($elapsed -lt 300) {
                 30
@@ -1117,7 +1127,19 @@ function Start-NativeCommand {
             }
         } catch { }
 
-        $exitCode = $proc.ExitCode
+        # ── Timeout: kill the process if it exceeded the limit ──────────
+        if ($TimeoutSeconds -gt 0 -and $elapsed -ge $TimeoutSeconds -and -not $proc.HasExited) {
+            try { $proc.Kill() } catch { }
+            # Brief wait for the kill to take effect
+            Start-Sleep -Milliseconds 500
+            $exitCode = 124
+            $timeoutMsg = "TIMEOUT: killed after ${TimeoutSeconds}s (elapsed: $([Math]::Floor($elapsed))s)"
+            [Console]::WriteLine("")
+            [Console]::WriteLine("  · $timeoutMsg")
+            [System.IO.File]::AppendAllText($capturePath, "`n`n$timeoutMsg`n", $utf8NoBom)
+        } else {
+            $exitCode = $proc.ExitCode
+        }
 
     } finally {
         # Clean up event handlers before Dispose
@@ -1132,10 +1154,11 @@ function Start-NativeCommand {
 
     # ── Finish banner ──────────────────────────────────────────────────────
     $duration = $stopwatch.Elapsed
-    $color = if ($exitCode -eq 0) { 'Green' } else { 'Red' }
+    $color = if ($exitCode -eq 0) { 'Green' } elseif ($exitCode -eq 124) { 'Yellow' } else { 'Red' }
     $durStr = "$([Math]::Floor($duration.TotalMinutes))m $($duration.Seconds)s"
+    $statusSuffix = if ($exitCode -eq 124) { ', TIMEOUT' } else { '' }
     Write-Host ''
-    Write-Host "<- Finished at $(Get-Date -Format 'HH:mm:ss') (duration: ${durStr}, exit code: $exitCode)" -ForegroundColor $color
+    Write-Host "<- Finished at $(Get-Date -Format 'HH:mm:ss') (duration: ${durStr}, exit code: $exitCode${statusSuffix})" -ForegroundColor $color
 
     $script:LastNativeExitCode = $exitCode
 
@@ -1283,6 +1306,10 @@ function Invoke-Agent {
         ScenarioName and timestamp when omitted.
     .PARAMETER Silent
         Suppress status messages (passed through to claude --silent).
+    .PARAMETER TimeoutSeconds
+        Maximum seconds to wait for the agent to complete.  0 (default) means
+        no timeout.  On timeout the process is killed and exit code 124 is
+        returned (matching the Unix `timeout` command convention).
     #>
     param(
         [Parameter(Mandatory = $true)]
@@ -1292,7 +1319,9 @@ function Invoke-Agent {
 
         [string]$OutputFile = '',
 
-        [switch]$Silent
+        [switch]$Silent,
+
+        [int]$TimeoutSeconds = 0
     )
 
     # ── Status header ────────────────────────────────────────────────────────
@@ -1342,6 +1371,9 @@ function Invoke-Agent {
     }
     if ($captureFile) {
         $startParams['CaptureFile'] = $captureFile
+    }
+    if ($TimeoutSeconds -gt 0) {
+        $startParams['TimeoutSeconds'] = $TimeoutSeconds
     }
     $exitCode = Start-NativeCommand @startParams
 

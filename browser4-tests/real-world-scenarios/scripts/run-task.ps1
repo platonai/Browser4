@@ -41,7 +41,12 @@ param(
 
     # Skip the browser4-cli version check (useful when intentionally testing
     # an older version or when the check cannot resolve the version).
-    [switch] $SkipVersionCheck
+    [switch] $SkipVersionCheck,
+
+    # Maximum minutes to wait for the agent to complete.
+    # 0 (default) means no timeout.  On timeout the process is killed and
+    # exit code 124 is returned (matching the Unix `timeout` convention).
+    [int] $TimeoutMinutes = 0
 )
 
 $ErrorActionPreference = 'Stop'
@@ -134,6 +139,9 @@ $invokeParams = @{
 }
 if ($Silent) {
     $invokeParams['Silent'] = $true
+}
+if ($TimeoutMinutes -gt 0) {
+    $invokeParams['TimeoutSeconds'] = $TimeoutMinutes * 60
 }
 
 Invoke-Agent @invokeParams
