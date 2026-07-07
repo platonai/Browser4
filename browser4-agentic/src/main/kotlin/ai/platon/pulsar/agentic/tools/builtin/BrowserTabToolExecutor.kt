@@ -189,6 +189,32 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
                 Restores cookies plus localStorage from a JSON string previously returned by tab.saveStorageState().
             """.trimIndent()
         )
+        toolSpec["consoleMessages"] = ToolSpec(
+            domain = domain,
+            method = "consoleMessages",
+            arguments = listOf(ToolSpec.Arg("level", "String", "info")),
+            returnType = "String",
+            description = "Retrieve buffered browser console messages (log/warn/error/info/debug).",
+            help = """
+                tab.consoleMessages()
+                tab.consoleMessages(level: String = "info")
+
+                Returns a JSON array of console messages filtered to the given minimum level.
+                Intercepts console.log/warn/error/info/debug on first call and buffers subsequent messages.
+            """.trimIndent()
+        )
+        toolSpec["consoleClear"] = ToolSpec(
+            domain = domain,
+            method = "consoleClear",
+            arguments = emptyList(),
+            returnType = "String",
+            description = "Clear the buffered console message list.",
+            help = """
+                tab.consoleClear()
+
+                Empties the in-browser console message buffer.
+            """.trimIndent()
+        )
     }
 
     override fun help(method: String): String {
@@ -1355,6 +1381,48 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
 
             "pageSource" -> {
                 validateArgs(args, emptySet(), emptySet(), functionName); driver.pageSource()
+            }
+
+            // Console messages
+            "consoleMessages" -> {
+                validateArgs(args, allowed("level"), emptySet(), functionName)
+                val level = paramString(args, "level", functionName, required = false) ?: "info"
+                val script = """
+                    (function() {
+                        if (!window.__b4_console_intercepted) {
+                            window.__b4_console = window.__b4_console || [];
+                            var levels = ['log', 'warn', 'error', 'info', 'debug'];
+                            levels.forEach(function(lvl) {
+                                var original = console[lvl];
+                                console[lvl] = function() {
+                                    var args = Array.prototype.slice.call(arguments);
+                                    window.__b4_console.push({
+                                        level: lvl,
+                                        text: args.map(function(a) {
+                                            return typeof a === 'object' ? JSON.stringify(a) : String(a);
+                                        }).join(' '),
+                                        timestamp: Date.now()
+                                    });
+                                    original.apply(console, arguments);
+                                };
+                            });
+                            window.__b4_console_intercepted = true;
+                        }
+                        var minPriority = { error: 0, warn: 1, info: 2, log: 2, debug: 3 };
+                        var min = minPriority['""" + level + """'] !== undefined ? minPriority['""" + level + """'] : 2;
+                        var filtered = (window.__b4_console || []).filter(function(e) {
+                            var p = minPriority[e.level] !== undefined ? minPriority[e.level] : 2;
+                            return p <= min;
+                        });
+                        return JSON.stringify(filtered);
+                    })()
+                """.trimIndent()
+                driver.evaluateValueDetail(script)
+            }
+
+            "consoleClear" -> {
+                validateArgs(args, emptySet(), emptySet(), functionName)
+                driver.evaluateValueDetail("window.__b4_console = []; 'Console cleared'")
             }
 
             "help" -> help()

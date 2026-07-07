@@ -1002,10 +1002,12 @@ pub(super) fn test_form_controls_and_exports(ctx: &mut E2ECtx) {
         "Expected uploadName to become 'upload.txt' after upload",
     );
 
-    run_command_expecting_failure(
-        ctx,
-        &["console", "info"],
-        "Unknown tool: browser_console_messages",
+    // Verify the console command is recognised by the backend (was previously "Unknown tool")
+    let console_result = run_command(ctx, &["console", "info"]);
+    assert!(
+        !console_result.stderr.contains("Unknown tool: browser_console_messages"),
+        "console command should be recognised by the backend:\n{}",
+        console_result.stderr
     );
 
     let snapshot_result = run_command(ctx, &["snapshot", "--filename=interactive.yml"]);

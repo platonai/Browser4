@@ -852,7 +852,7 @@ body {
         <p>Select a file to review its issues</p>
         <div class="shortcut-hints">
           <strong>Keyboard shortcuts:</strong><br>
-          <kbd>Shift+1</kbd>-<kbd>Shift+5</kbd> Select decision<br>
+          <kbd>Shift+1</kbd>-<kbd>Shift+6</kbd> Select decision<br>
           <kbd>Shift+A</kbd> AI review &nbsp;|&nbsp;
           <kbd>Shift+D</kbd> Discard file<br>
           <kbd>Shift+←</kbd>/<kbd>Shift+→</kbd> Prev/next issue<br>
@@ -1575,7 +1575,7 @@ function parseIssueBlock(block) {
   if (reviewIdx >= 0) {
     // Find checked checkbox
     for (var k = reviewIdx; k < lines.length; k++) {
-      var checkedMatch = lines[k].match(/^- \[x\] \*\*(ACCEPT|ACCEPT with improvements|DEFER|WONTFIX|REJECT)\*\*/);
+      var checkedMatch = lines[k].match(/^- \[x\] \*\*(ACCEPT|ACCEPT with improvements|DEFER|WONTFIX|REJECT|DUPLICATE)\*\*/);
       if (checkedMatch) {
         reviewDecision = checkedMatch[1];
         break;
@@ -1702,7 +1702,8 @@ function renderSingleIssue() {
   if (issue.reviewDecision) {
     var decClass = issue.reviewDecision === 'ACCEPT with improvements' ? 'improve' :
                    (issue.reviewDecision === 'ACCEPT' ? 'accept' :
-                    issue.reviewDecision === 'REJECT' ? 'reject' : 'defer');
+                    issue.reviewDecision === 'REJECT' ? 'reject' :
+                    issue.reviewDecision === 'DUPLICATE' ? 'duplicate' : 'defer');
     html += '<span class="badge review-decision ' + decClass + '">' + escHtml(issue.reviewDecision) + '</span>';
   }
   html += '</div>';
@@ -1723,6 +1724,7 @@ function renderSingleIssue() {
   if (issue.reviewDecision) {
     if (issue.reviewDecision === 'REJECT') decBorder = ' reject';
     else if (issue.reviewDecision === 'DEFER' || issue.reviewDecision === 'WONTFIX') decBorder = ' defer';
+    else if (issue.reviewDecision === 'DUPLICATE') decBorder = ' duplicate';
     else decBorder = '';
   }
   html += '<div class="single-review-block' + (issue.reviewDecision ? ' has-decision' + decBorder : '') + '">';
@@ -1837,7 +1839,8 @@ function renderIssueCard(issue, index) {
   if (issue.reviewDecision) {
     var decClass = issue.reviewDecision === 'ACCEPT with improvements' ? 'improve' :
                    (issue.reviewDecision === 'ACCEPT' ? 'accept' :
-                    issue.reviewDecision === 'REJECT' ? 'reject' : 'defer');
+                    issue.reviewDecision === 'REJECT' ? 'reject' :
+                    issue.reviewDecision === 'DUPLICATE' ? 'duplicate' : 'defer');
     html += '<span class="badge review-decision ' + decClass + '">' + escHtml(issue.reviewDecision) + '</span>';
   }
   html += '</span>';
@@ -1950,7 +1953,8 @@ function updateIssueCardUI(index) {
     if (issue.reviewDecision) {
       var decClass = issue.reviewDecision === 'ACCEPT with improvements' ? 'improve' :
                      (issue.reviewDecision === 'ACCEPT' ? 'accept' :
-                      issue.reviewDecision === 'REJECT' ? 'reject' : 'defer');
+                      issue.reviewDecision === 'REJECT' ? 'reject' :
+                    issue.reviewDecision === 'DUPLICATE' ? 'duplicate' : 'defer');
       var badge = document.createElement('span');
       badge.className = 'badge review-decision ' + decClass;
       badge.textContent = issue.reviewDecision;

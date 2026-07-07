@@ -2867,6 +2867,14 @@ async fn handle_snapshot(
     let snap_with_header = format!("{}\n{}", header, snap);
     save_snapshot(&out_path, &snap_with_header).map_err(|e| e.to_string())?;
 
+    // snapshot does not produce JSON output — warn if --json is active
+    if json_active() {
+        eprintln!(
+            "⚠️  snapshot does not support --json output (snapshots are YAML for human readability). \
+             Use `htmlsnapshot` commands (query, get, export) for machine-readable JSON output."
+        );
+    }
+
     let raw = tool_params
         .get("raw")
         .and_then(|v| v.as_bool())
@@ -2966,8 +2974,8 @@ async fn handle_snapshot(
                 if let Ok(total) = total_str.parse::<u32>() {
                     if total > 1 {
                         eprintln!(
-                            "💡 Tip: This page has {total} viewports. Use `snapshot -v 1` to scroll down, \
-                             or `snapshot -v all` to capture all viewports at once.",
+                            "💡 Tip: This page has {total} viewports (page chunks split by viewport height). \
+                             Use `snapshot -v 1` to scroll down, or `snapshot -v all` to capture all viewports at once.",
                         );
                     }
                 }

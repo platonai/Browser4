@@ -92,7 +92,7 @@ After presenting all issues, show the decision prompt:
 
   <N> <CODE> [optional notes]
 
-  Codes:  a=ACCEPT  a+=ACCEPT+  d=DEFER  w=WONTFIX  r=REJECT
+  Codes:  a=ACCEPT  a+=ACCEPT+  d=DEFER  w=WONTFIX  r=REJECT  dup=DUPLICATE
 
 Examples:
   1 a, 2 r not a real bug, 3 d too minor for now, 4 a+, 5 ACCEPT, 6 REJECT
@@ -118,6 +118,7 @@ Parse the user's response using these rules:
    - `d`, `defer` → **DEFER**
    - `w`, `wontfix` → **WONTFIX**
    - `r`, `reject` → **REJECT**
+   - `dup`, `duplicate` → **DUPLICATE**
 4. Notes = everything after the decision word until next comma/issue boundary, trimmed
 5. Validate: issue number must exist and not already be reviewed
 
@@ -231,6 +232,7 @@ The Issue Review SPA at `http://127.0.0.1:8090/issues/review` provides a visual 
 | `d` | DEFER — acknowledged but intentionally postponed |
 | `w` | WONTFIX — acknowledged but will not be fixed |
 | `r` | REJECT — issue invalid, not a problem, or already addressed |
+| `dup` | DUPLICATE — issue duplicates another existing issue (reference in Notes) |
 
 ## Edge Cases
 

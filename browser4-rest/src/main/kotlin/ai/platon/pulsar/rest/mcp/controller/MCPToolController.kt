@@ -133,6 +133,8 @@ class MCPToolController(
             "browser_pdf_save" to "pdf",
             "browser_save_storage_state" to "save_storage_state",
             "browser_load_storage_state" to "load_storage_state",
+            "browser_console_messages" to "consoleMessages",
+            "browser_console_clear" to "consoleClear",
         )
 
         private const val CLEAR_SESSION_STORAGE_SCRIPT = """
@@ -1245,6 +1247,8 @@ class MCPToolController(
             "mousedown" -> return ToolCall("tab", "mouseDown", args1)
             "mouseup" -> return ToolCall("tab", "mouseUp", args1)
             "mousewheel" -> return ToolCall("tab", "mouseWheel", args1)
+            "consoleMessages" -> return ToolCall("tab", "consoleMessages", args1)
+            "consoleClear" -> return ToolCall("tab", "consoleClear", args1)
         }
 
         // 2. Generic mapping

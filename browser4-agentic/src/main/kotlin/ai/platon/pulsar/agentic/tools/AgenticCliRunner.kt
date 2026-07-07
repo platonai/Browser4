@@ -594,6 +594,8 @@ class AgenticCliRunner(
             "browser_take_screenshot" to "screenshot",
             "browser_save_storage_state" to "save_storage_state",
             "browser_load_storage_state" to "load_storage_state",
+            "browser_console_messages" to "consoleMessages",
+            "browser_console_clear" to "consoleClear",
         )
 
         /**
@@ -615,6 +617,8 @@ class AgenticCliRunner(
             "mousedown" to ToolCall("tab", "mouseDown", mutableMapOf()),
             "mouseup" to ToolCall("tab", "mouseUp", mutableMapOf()),
             "mousewheel" to ToolCall("tab", "mouseWheel", mutableMapOf()),
+            "consoleMessages" to ToolCall("tab", "consoleMessages", mutableMapOf()),
+            "consoleClear" to ToolCall("tab", "consoleClear", mutableMapOf()),
         )
 
         /**
@@ -745,6 +749,13 @@ class AgenticCliRunner(
                 val params = mutableMapOf<String, Any?>()
                 args["expression"]?.let { params["expression"] = it }
                 args["ref"]?.let { params["ref"] = it }
+                params
+            },
+
+            // ---- DevTools ----
+            "console" to FixedCommandResolver("browser_console_messages") { args ->
+                val params = mutableMapOf<String, Any?>()
+                args["min-level"]?.let { params["level"] = it }
                 params
             },
 

@@ -33,7 +33,7 @@
  *         { "label": "AI Suggested Improvement", "body": "..." }
  *       ],
  *       "review": {
- *         "decision": null,                  // null | "ACCEPT" | "ACCEPT with improvements" | "DEFER" | "WONTFIX" | "REJECT"
+ *         "decision": null,                  // null | "ACCEPT" | "ACCEPT with improvements" | "DEFER" | "WONTFIX" | "REJECT" | "DUPLICATE"
  *         "notes": ""                        // free-text review notes
  *       }
  *     }
@@ -65,7 +65,8 @@ var ISSUE_MODEL = (function() {
     'ACCEPT with improvements',
     'DEFER',
     'WONTFIX',
-    'REJECT'
+    'REJECT',
+    'DUPLICATE'
   ];
 
   // ── Parse markdown → structured object ──────────────────────────────────
@@ -190,7 +191,7 @@ var ISSUE_MODEL = (function() {
     // Parse review state
     if (reviewIdx >= 0) {
       for (var k = reviewIdx; k < lines.length; k++) {
-        var decMatch = lines[k].match(/^- \[x\] \*\*(ACCEPT|ACCEPT with improvements|DEFER|WONTFIX|REJECT)\*\*/);
+        var decMatch = lines[k].match(/^- \[x\] \*\*(ACCEPT|ACCEPT with improvements|DEFER|WONTFIX|REJECT|DUPLICATE)\*\*/);
         if (decMatch) { issue.review.decision = decMatch[1]; break; }
       }
       // Parse notes
@@ -290,6 +291,7 @@ var ISSUE_MODEL = (function() {
       else if (d === 2) newHR += ' — issue acknowledged but intentionally deferred (add rationale in Notes)';
       else if (d === 3) newHR += ' — issue acknowledged but will not be fixed (add rationale in Notes)';
       else if (d === 4) newHR += ' — issue invalid, not a problem, or already addressed';
+      else if (d === 5) newHR += ' — issue duplicates another existing issue (reference in Notes)';
       newHR += '\n';
     }
     newHR += '- **Notes:**';
@@ -366,6 +368,7 @@ var ISSUE_MODEL = (function() {
       else if (d === 2) out += ' — issue acknowledged but intentionally deferred (add rationale in Notes)';
       else if (d === 3) out += ' — issue acknowledged but will not be fixed (add rationale in Notes)';
       else if (d === 4) out += ' — issue invalid, not a problem, or already addressed';
+      else if (d === 5) out += ' — issue duplicates another existing issue (reference in Notes)';
       out += '\n';
     }
     out += '- **Notes:**';
@@ -399,7 +402,7 @@ var ISSUE_MODEL = (function() {
   function quickParseStats(content) {
     if (!content) return { total: 0, reviewed: 0 };
     var total = (content.match(/^### Issue \d+:/gm) || []).length;
-    var reviewed = (content.match(/^- \[x\] \*\*(ACCEPT|DEFER|WONTFIX|REJECT)/gm) || []).length;
+    var reviewed = (content.match(/^- \[x\] \*\*(ACCEPT|DEFER|WONTFIX|REJECT|DUPLICATE)/gm) || []).length;
     return { total: total, reviewed: reviewed };
   }
 

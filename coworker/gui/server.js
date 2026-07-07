@@ -609,7 +609,7 @@ function buildSummaryContent(content) {
 }
 
 function extractDecision(block) {
-  const m = block.match(/^- \[x\] \*\*(ACCEPT|ACCEPT with improvements|DEFER|WONTFIX|REJECT)\*\*/m);
+  const m = block.match(/^- \[x\] \*\*(ACCEPT|ACCEPT with improvements|DEFER|WONTFIX|REJECT|DUPLICATE)\*\*/m);
   return m ? m[1] : null;
 }
 

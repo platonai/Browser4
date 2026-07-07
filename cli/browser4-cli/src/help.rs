@@ -1183,7 +1183,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
 }
 
 pub fn generate_help_entry(cmd: &CommandDef) -> String {
-    let args_text = cmd
+    let mut args_text = cmd
         .args
         .iter()
         .map(|a| {
@@ -1195,6 +1195,12 @@ pub fn generate_help_entry(cmd: &CommandDef) -> String {
         })
         .collect::<Vec<_>>()
         .join(" ");
+
+    // Surface the --ref flag alongside the positional [ref] arg for discoverability
+    if cmd.name == "eval" {
+        args_text = args_text.replace(" [ref]", "");
+        args_text = format!("{} [--ref <ref>]", args_text.trim_end());
+    }
 
     let prefix = format!("  {} {}", public_command_name(cmd.name), args_text);
     let prefix = prefix.trim_end();
