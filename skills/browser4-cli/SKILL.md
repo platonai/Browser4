@@ -137,7 +137,7 @@ Need to process multiple pages?
 
 > **Warning:** CSS selectors are tied to live websites — they break when sites change their HTML. Always discover selectors with `htmlsnapshot inspect` or `htmlsnapshot summary` before extraction. Treat scenario examples as patterns, not copy-paste recipes.
 
-> **Warning:** Shell quoting on Windows — complex JS/SQL with nested quotes causes escaping issues. Prefer `--sql @file.sql` (read from file), `--sql-stdin` (piped), `--sql-base64` (encoded), or `eval --file`/`eval --stdin`/`eval --base64` (JS from file or base64). Never inline `--sql "..."` with double-quoted CSS selectors on Windows.
+> **Warning:** Shell quoting on Windows — complex JS/SQL with nested quotes causes escaping issues. Prefer `--sql @file.sql` (read from file), `--sql-stdin` (piped), `--sql-base64` (encoded), or `eval --file`/`eval --stdin`/`eval --base64` (JS from file or base64). For `htmlsnapshot inspect`, use `@file`, `--stdin`, or `--selector-base64`. Never inline `--sql "..."` with double-quoted CSS selectors on Windows.
 
 > **Warning:** Don't cat snapshot files — they can exceed 256KB. Use viewport pagination (`snapshot -v 0`), `snapshot grep <pattern>`, or `snapshot --stdout --page 1` instead.
 
@@ -251,3 +251,17 @@ cargo run -- snapshot -v 0
 ```
 
 **Note:** All examples in this document use `browser4-cli` as the command. If running from source, substitute `cargo run --` (with the leading `cd cli/browser4-cli &&` if not already in that directory).
+
+### Output Redirection in Dev Mode
+
+The working directory during `cargo run` is `cli/browser4-cli/`, so relative file paths must account for this. Use `--quiet` to suppress cargo build output:
+
+```bash
+# From repo root: redirect query results to a file
+cd cli/browser4-cli && cargo run --quiet -- htmlsnapshot query --sql @../../query.sql --result-only > ../../results.json
+
+# From cli/browser4-cli/: same pattern with shorter relative paths
+cargo run --quiet -- htmlsnapshot query --sql @query.sql --result-only > results.json
+```
+
+> **Tip:** `--quiet` passes through to cargo and suppresses the "Finished" / "Running" build-status lines that would otherwise pollute the output file. Without `--quiet`, those lines appear on stderr but `2>&1` captures them along with the data — use `--quiet` instead of `2>&1` for clean output.

@@ -98,13 +98,12 @@ The resize command appears to delegate to a general page-interaction handler tha
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - **Notes:**
-
 
 ---
 
@@ -142,13 +141,13 @@ The command dispatch pipeline appears to trigger a snapshot after every state-mo
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - **Notes:**
-
+Decouple snapshot capture from resize/scroll
 
 ---
 
@@ -184,13 +183,12 @@ The time-based wait path (`wait <milliseconds>`) likely has a different code pat
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - **Notes:**
-
 
 ---
 
@@ -229,12 +227,12 @@ The browser session and its CDP connection persist beyond individual CLI invocat
 #### Human Review
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [x] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - **Notes:**
-
+only accept the first: When reconnecting to an existing session, print a notice: "Reconnected to existing session on {url}" so the user knows what page is active
 
 ---
 
@@ -271,13 +269,12 @@ The file-saving logic in snapshot.rs resolves paths relative to the snapshot dir
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - **Notes:**
-
 
 ---
 
@@ -319,9 +316,8 @@ No convenience wrapper (Makefile target, npm script, shell alias, or justfile) i
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
-- [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [x] **REJECT** — issue invalid, not a problem, or already addressed
 - **Notes:**
-
 
 ---
 
@@ -353,13 +349,12 @@ The category naming was chosen for conceptual grouping but diverges from the act
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - **Notes:**
-
 
 ---
 

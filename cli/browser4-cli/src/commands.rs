@@ -2418,11 +2418,13 @@ pub fn all_commands() -> Vec<CommandDef> {
             hidden: false,
             batch_supported: false,
             args: &[
-                ArgDef { name: "selector", description: "CSS selector to scope inspection (default: :root; use e.g. .product-card for recurring pattern detection)", optional: true },
+                ArgDef { name: "selector", description: "CSS selector to scope inspection (default: :root; use e.g. .product-card for recurring pattern detection). Prefix with @ to read from file (e.g. @selector.txt). Use --stdin to pipe or --selector-base64 for encoded selectors.", optional: true },
             ],
             options: &[
                 OptionDef { name: "max", description: "Max matching elements to analyze (default: 20)", is_bool: false, short: None },
                 OptionDef { name: "depth", description: "Max descendant depth for selector suggestions (default: 5)", is_bool: false, short: None },
+                OptionDef { name: "stdin", description: "Read the CSS selector from stdin instead of an inline argument (avoids shell quoting issues on Windows)", is_bool: true, short: None },
+                OptionDef { name: "selector-base64", description: "Base64-encoded CSS selector (avoids shell quoting issues on Windows)", is_bool: false, short: None },
             ],
             tool_name_fn: |_| "html_snapshot_inspect".to_string(),
             tool_params_fn: |args| {
@@ -2434,6 +2436,9 @@ pub fn all_commands() -> Vec<CommandDef> {
                 if let Some(d) = get_opt_str(args, "depth") {
                     if let Ok(n) = d.parse::<i32>() { p["depth"] = json!(n); }
                 }
+                // Pass through CLI-side flags for selector resolution in main.rs dispatch
+                if get_bool(args, "stdin").unwrap_or(false) { p["stdin"] = json!(true); }
+                if let Some(v) = get_opt_str(args, "selector-base64") { p["selectorBase64"] = json!(v); }
                 p
             },
         },

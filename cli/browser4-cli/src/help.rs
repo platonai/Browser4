@@ -969,6 +969,15 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push(String::new());
         lines.push("  # Inspect with deeper analysis and larger sample".to_string());
         lines.push("  browser4-cli htmlsnapshot inspect \".s-result-item\" --depth 6 --max 20".to_string());
+        lines.push(String::new());
+        lines.push("  # Read selector from file (avoids shell escaping on Windows)".to_string());
+        lines.push("  browser4-cli htmlsnapshot inspect @selector.txt".to_string());
+        lines.push(String::new());
+        lines.push("  # Pipe selector via stdin (avoids shell quoting issues)".to_string());
+        lines.push("  echo '[data-component-type=\"s-search-result\"]' | browser4-cli htmlsnapshot inspect --stdin".to_string());
+        lines.push(String::new());
+        lines.push("  # Base64-encoded selector (avoids Windows shell escaping)".to_string());
+        lines.push("  browser4-cli htmlsnapshot inspect --selector-base64 W2RhdGEtY29tcG9uZW50LXR5cGU9InMtc2VhcmNoLXJlc3VsdCJd".to_string());
     }
 
     if cmd.name == "snapshot" {

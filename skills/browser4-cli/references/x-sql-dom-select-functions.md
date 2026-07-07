@@ -163,7 +163,22 @@ SELECT DOM_NTH_MULTI_ATTRS(DOM, 'img', 2, ARRAY['src', 'alt', 'width', 'height']
 FROM DOM_LOAD_AND_SELECT('https://example.com', 'body');
 ```
 
-**Pattern — extract all links with multiple attributes:**
+> **Tip — Resolve relative URLs to absolute:** Use the `abs:` prefix on any URL-bearing attribute to resolve it against the document's base URI:
+> ```sql
+> -- Relative href → absolute URL
+> SELECT DOM_FIRST_ATTR(DOM, 'a', 'abs:href') AS absolute_link
+> FROM DOM_LOAD_AND_SELECT('https://example.com', 'body');
+> 
+> -- Relative src → absolute URL
+> SELECT DOM_FIRST_ATTR(DOM, 'img', 'abs:src') AS absolute_src
+> FROM DOM_LOAD_AND_SELECT('https://example.com', 'body');
+> ```
+> Without `abs:`, the raw attribute value is returned (e.g., `/-/zh/dp/B0FCLQZDHV/ref=sr_1_31?...`). With `abs:`, it is resolved to a full URL (e.g., `https://www.amazon.com/dp/B0FCLQZDHV`).
+
+```sql
+/**
+ * Pattern — extract all links with multiple attributes:
+ */
 
 ```sql
 SELECT

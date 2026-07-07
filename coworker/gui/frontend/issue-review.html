@@ -2326,22 +2326,23 @@ document.addEventListener('keydown', function(e) {
     return;
   }
 
-  // Shift+Arrow keys — prev/next issue (uses Shift to avoid textarea cursor conflict)
-  if (e.shiftKey && e.key === 'ArrowLeft' && state.reviewMode === 'single') {
+  // Shift+Arrow keys — prev/next issue (only Shift, no Ctrl/Alt/Meta)
+  if (e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey && e.key === 'ArrowLeft' && state.reviewMode === 'single') {
     e.preventDefault();
     navigateSingleIssue(-1);
     return;
   }
-  if (e.shiftKey && e.key === 'ArrowRight' && state.reviewMode === 'single') {
+  if (e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey && e.key === 'ArrowRight' && state.reviewMode === 'single') {
     e.preventDefault();
     navigateSingleIssue(1);
     return;
   }
 
   // ── Shift-modified shortcuts (work everywhere, including textareas) ──
+  // All require Shift ONLY — Ctrl/Alt/Meta must NOT be pressed.
 
   // Shift+1 through Shift+5 → select review decision
-  if (e.shiftKey && e.code >= 'Digit1' && e.code <= 'Digit5') {
+  if (e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey && e.code >= 'Digit1' && e.code <= 'Digit5') {
     e.preventDefault();
     var digit = parseInt(e.code.replace('Digit', ''), 10);
     var idx = state.reviewMode === 'single' ? state.currentIssueIndex : focusedIssueIndex;
@@ -2352,7 +2353,7 @@ document.addEventListener('keydown', function(e) {
   }
 
   // Shift+A → AI review
-  if (e.shiftKey && (e.key === 'A' || e.key === 'a')) {
+  if (e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey && (e.key === 'A' || e.key === 'a')) {
     e.preventDefault();
     if (state.parsed && state.currentIssueIndex < state.parsed.issues.length) {
       triggerAiReview(state.currentIssueIndex);
@@ -2361,24 +2362,24 @@ document.addEventListener('keydown', function(e) {
   }
 
   // Shift+N / Shift+P → prev/next file
-  if (e.shiftKey && (e.key === 'N' || e.key === 'n')) {
+  if (e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey && (e.key === 'N' || e.key === 'n')) {
     e.preventDefault();
     navigateFile(1);
     return;
   }
-  if (e.shiftKey && (e.key === 'P' || e.key === 'p')) {
+  if (e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey && (e.key === 'P' || e.key === 'p')) {
     e.preventDefault();
     navigateFile(-1);
     return;
   }
 
   // Shift+J / Shift+K → prev/next issue (all-issues mode)
-  if (e.shiftKey && (e.key === 'J' || e.key === 'j') && state.reviewMode !== 'single') {
+  if (e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey && (e.key === 'J' || e.key === 'j') && state.reviewMode !== 'single') {
     e.preventDefault();
     navigateIssue(1);
     return;
   }
-  if (e.shiftKey && (e.key === 'K' || e.key === 'k') && state.reviewMode !== 'single') {
+  if (e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey && (e.key === 'K' || e.key === 'k') && state.reviewMode !== 'single') {
     e.preventDefault();
     navigateIssue(-1);
     return;

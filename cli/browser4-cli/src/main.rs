@@ -4369,11 +4369,75 @@ async fn handle_html_snapshot_inspect(
     tool_params: &Value,
     session_name: Option<&str>,
 ) -> Result<(), String> {
+    // --- Resolve selector from file/stdin/base64 (CLI-side, stripped before server call) ---
+
+    // Check --stdin flag: read selector from stdin (avoids shell quoting issues on Windows)
+    let use_stdin = tool_params
+        .get("stdin")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    let raw_selector = if use_stdin {
+        let mut input = String::new();
+        std::io::stdin()
+            .read_to_string(&mut input)
+            .map_err(|e| format!("Failed to read CSS selector from stdin: {e}"))?;
+        if input.trim().is_empty() {
+            return Err("Stdin was empty but --stdin was specified.".to_string());
+        }
+        Some(input.trim().to_string())
+    } else {
+        tool_params
+            .get("selector")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+    };
+
+    // Resolve @file prefix: read selector from a file
+    let selector = match raw_selector {
+        Some(ref s) if s.starts_with('@') => {
+            let file_path = &s[1..];
+            resolve_sql_file(file_path)? // reuses the existing file-resolution helper
+        }
+        Some(s) => s,
+        None => String::new(), // empty = use server default (:root)
+    };
+
+    // Handle --selector-base64: decode base64-encoded selector
+    let selector = if let Some(base64_val) = tool_params
+        .get("selectorBase64")
+        .and_then(|v| v.as_str())
+    {
+        let trimmed = base64_val.trim();
+        if trimmed.is_empty() {
+            return Err("--selector-base64 was set but the value is empty.".to_string());
+        }
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(trimmed)
+            .map_err(|e| format!("Failed to base64-decode CSS selector: {e}"))?;
+        String::from_utf8(bytes)
+            .map_err(|e| format!("Base64-decoded CSS selector is not valid UTF-8: {e}"))?
+    } else {
+        selector
+    };
+
+    // Build server-bound params (strip CLI-only keys)
+    let mut server_params = tool_params.clone();
+    if let Value::Object(ref mut m) = server_params {
+        m.remove("stdin");
+        m.remove("selectorBase64");
+        if !selector.is_empty() {
+            m.insert("selector".to_string(), json!(selector));
+        } else {
+            m.remove("selector");
+        }
+    }
+
     let result = with_session(client, base_url, session_name, false, |session_id| {
         let client = client.clone();
         let base_url = base_url.to_string();
         let tool_name = tool_name.to_string();
-        let mut params = tool_params.clone();
+        let mut params = server_params.clone();
         params["sessionId"] = json!(session_id);
         async move { call_tool(&client, &base_url, &tool_name, params).await }
     })

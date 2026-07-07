@@ -129,10 +129,9 @@ This adds 2 lines of noise to every single command output. Over a session with 1
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
-- [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
+- [x] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - **Notes:**
-
 
 ---
 
@@ -179,12 +178,12 @@ When a `DOM_FIRST_TEXT` or `DOM_FIRST_ATTR` selector finds no match within a con
 #### Human Review
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [x] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - **Notes:**
-
+Return null for unmatched selectors instead of omitting the field entirely — this makes missing data visible. Only apply this fix.
 
 ---
 
@@ -221,13 +220,12 @@ The `cargo run` build status lines ("Finished...", "Running...") are on stderr b
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - **Notes:**
-
 
 ---
 
@@ -265,12 +263,12 @@ Amazon's HTML uses relative `href` attributes. The `DOM_FIRST_ATTR` function ret
 #### Human Review
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [x] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - **Notes:**
-
+use DOM_FIRST_ATTR(dom, "a", "abs:href") for the absolute url after resolving against the document's base URI.
 
 ---
 
@@ -310,10 +308,10 @@ The reference files are apparently hosted on `https://browser4.io/` (production 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
-- [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
+- [x] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - **Notes:**
-
+It does exist
 
 ---
 
@@ -353,12 +351,12 @@ The single quotes inside the CSS selector require careful escaping on Windows. T
 #### Human Review
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [x] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - **Notes:**
-
+support three format: read selector from file, from stdin, and inline with base64
 
 ---
 
@@ -397,10 +395,9 @@ Amazon.com uses geolocation and delivery address preferences to determine curren
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
-- [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
+- [x] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - **Notes:**
-
 
 ---
 

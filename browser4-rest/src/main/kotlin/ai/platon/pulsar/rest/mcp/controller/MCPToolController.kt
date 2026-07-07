@@ -1041,7 +1041,9 @@ class MCPToolController(
 
         return try {
             val response = scrapeService.executeQuery(ScrapeRequest(processedSql))
-            val json = pulsarObjectMapper().writeValueAsString(response)
+            val mapper = pulsarObjectMapper().copy()
+                .setSerializationInclusion(JsonInclude.Include.ALWAYS)
+            val json = mapper.writeValueAsString(response)
             ResponseEntity.ok(textResponse(json))
         } catch (e: Exception) {
             logger.error("html_snapshot_query failed | processedSql=[{}] | {}", processedSql.take(500), e.message, e)
