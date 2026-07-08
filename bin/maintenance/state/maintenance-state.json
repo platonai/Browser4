@@ -3,7 +3,15 @@
   "createdAt": "2026-06-20T00:00:00+08:00",
   "machine": "init",
   "Tasks": {
-    "check-dockerfile": {
+    "check-fast-tests": {
+      "lastMachine": "ALTAIR",
+      "lastRun": "2026-07-08T10:26:33+08:00",
+      "lastDurationMs": 0,
+      "lastResult": "passed",
+      "lastExitCode": 0,
+      "runCount": 2
+    },
+    "check-coverage": {
       "lastExitCode": 0,
       "lastMachine": "ALTAIR",
       "lastRun": "2026-06-29T13:10:22+08:00",
@@ -19,34 +27,26 @@
       "runCount": 1,
       "lastDurationMs": 0
     },
-    "check-fast-tests": {
+    "check-skill-frontmatter": {
       "lastExitCode": 0,
       "lastMachine": "ALTAIR",
-      "lastRun": "2026-06-29T13:10:13+08:00",
+      "lastRun": "2026-06-29T13:10:18+08:00",
       "lastResult": "passed",
       "runCount": 1,
       "lastDurationMs": 0
     },
     "check-rust-cli": {
-      "lastExitCode": 0,
       "lastMachine": "ALTAIR",
-      "lastRun": "2026-06-29T13:10:16+08:00",
+      "lastRun": "2026-07-08T10:26:37+08:00",
+      "lastDurationMs": 0,
       "lastResult": "passed",
-      "runCount": 1,
-      "lastDurationMs": 0
+      "lastExitCode": 0,
+      "runCount": 2
     },
     "check-skill-structure": {
       "lastExitCode": 0,
       "lastMachine": "ALTAIR",
       "lastRun": "2026-06-29T13:10:24+08:00",
-      "lastResult": "passed",
-      "runCount": 1,
-      "lastDurationMs": 0
-    },
-    "check-ps1-syntax": {
-      "lastExitCode": 0,
-      "lastMachine": "ALTAIR",
-      "lastRun": "2026-06-29T13:10:19+08:00",
       "lastResult": "passed",
       "runCount": 1,
       "lastDurationMs": 0
@@ -67,7 +67,15 @@
       "runCount": 1,
       "lastDurationMs": 0
     },
-    "check-coverage": {
+    "check-ps1-syntax": {
+      "lastExitCode": 0,
+      "lastMachine": "ALTAIR",
+      "lastRun": "2026-06-29T13:10:19+08:00",
+      "lastResult": "passed",
+      "runCount": 1,
+      "lastDurationMs": 0
+    },
+    "check-dockerfile": {
       "lastExitCode": 0,
       "lastMachine": "ALTAIR",
       "lastRun": "2026-06-29T13:10:22+08:00",
@@ -75,22 +83,14 @@
       "runCount": 1,
       "lastDurationMs": 0
     },
-    "check-skill-frontmatter": {
-      "lastExitCode": 0,
-      "lastMachine": "ALTAIR",
-      "lastRun": "2026-06-29T13:10:18+08:00",
-      "lastResult": "passed",
-      "runCount": 1,
-      "lastDurationMs": 0
-    },
     "check-compilation": {
-      "lastExitCode": 0,
       "lastMachine": "ALTAIR",
-      "lastRun": "2026-06-29T13:10:09+08:00",
+      "lastRun": "2026-07-08T10:26:23+08:00",
+      "lastDurationMs": 0,
       "lastResult": "passed",
-      "runCount": 1,
-      "lastDurationMs": 0
+      "lastExitCode": 0,
+      "runCount": 2
     }
   },
-  "updatedAt": "2026-06-29T13:10:24+08:00"
+  "updatedAt": "2026-07-08T10:26:37+08:00"
 }

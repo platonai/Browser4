@@ -4,7 +4,7 @@ AI 协作助手是一个代理（agent），可协助你在指定仓库中完成
 
 ## 使用方法
 
-1. 运行 `coworker-scheduler.ps1` 以启动定时自动化
+1. 运行 `start.ps1` 以启动定时自动化
 2. 在 `main/0draft` 下起草任务（或者任何地方）
 3. 将已完成草稿的任务复制到 `main/1ready` 目录以执行
 4. 执行后，您可以在 `main/3done` 中找到结果，在 `~\.browser4-coworker\tasks\300logs` 中找到详细日志
