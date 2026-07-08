@@ -3219,8 +3219,8 @@ fn open_resized_interactive_page(ctx: &mut E2ECtx) {
 
     let resize_result = run_command(ctx, &["resize", "1280", "900"]);
     assert!(
-        resize_result.stdout.contains("### Page"),
-        "Expected '### Page' in resize output:\n{}",
+        resize_result.stdout.contains("✓ Resized to"),
+        "Expected '✓ Resized to' in resize output:\n{}",
         resize_result.stdout
     );
 

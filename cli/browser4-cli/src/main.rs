@@ -588,8 +588,16 @@ fn parse_tab_entry(value: &Value) -> Option<TabInfo> {
     // Accept "index", "id" (if numeric), or derive position.
     let index = obj
         .get("index")
-        .and_then(|v| v.as_u64())
-        .or_else(|| obj.get("id").and_then(|v| v.as_str().and_then(|s| s.parse().ok())))
+        .and_then(|v| {
+            v.as_u64()
+                .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+        })
+        .or_else(|| {
+            obj.get("id").and_then(|v| {
+                v.as_u64()
+                    .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+            })
+        })
         .map(|n| n as usize);
     let url = obj
         .get("url")
