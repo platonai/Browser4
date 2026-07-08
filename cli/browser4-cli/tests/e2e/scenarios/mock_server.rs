@@ -622,9 +622,19 @@ pub(super) fn test_status_installed_runtime(ctx: &mut E2ECtx) {
     let mock_server = MockBrowser4Server::start();
     ctx.browser4_base_url = mock_server.base_url();
 
+    // Use the canonical runtime dir so that the test-created files are found
+    // by resolve_runtime_data_dir(), which calls .canonicalize() on
+    // BROWSER4_RUNTIME_DIR.  On some platforms (notably Windows with junction
+    // points or symlinks under %TEMP%) canonicalize may resolve to a different
+    // path than the raw env-var value.
+    let runtime_dir = ctx
+        .runtime_dir
+        .canonicalize()
+        .unwrap_or_else(|_| ctx.runtime_dir.clone());
+
     // Write a runtime install metadata file using the new versioned layout.
     let tag = "v4.10.0";
-    let versions_dir = ctx.runtime_dir.join("runtime");
+    let versions_dir = runtime_dir.join("runtime");
     let install_dir = versions_dir.join(tag);
     let metadata_path = install_dir.join("browser4-installation.json");
     fs::create_dir_all(metadata_path.parent().unwrap()).expect("create versioned runtime dir");
@@ -2204,7 +2214,7 @@ pub(super) fn test_swarm_command_help_and_validation(ctx: &mut E2ECtx) {
     assert!(
         swarm_status_help
             .stdout
-            .contains("browser4-cli swarm status scrape-task-4"),
+            .contains("browser4-cli swarm status <task-id>"),
         "Expected swarm-status example in:\n{}",
         swarm_status_help.stdout
     );
@@ -2213,7 +2223,7 @@ pub(super) fn test_swarm_command_help_and_validation(ctx: &mut E2ECtx) {
     assert!(
         swarm_result_help
             .stdout
-            .contains("browser4-cli swarm result scrape-task-4"),
+            .contains("browser4-cli swarm result <task-id>"),
         "Expected swarm-result example in:\n{}",
         swarm_result_help.stdout
     );

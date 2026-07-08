@@ -2367,7 +2367,8 @@ fn is_transient_retryable_failure(result: &CliRunResult) -> bool {
 // Output helpers
 // ---------------------------------------------------------------------------
 
-/// Strip the auto-appended `### Page` snapshot block from CLI stdout.
+/// Strip the auto-appended `### Page` snapshot block from CLI stdout and
+/// filter out CLI-formatted success confirmation lines (e.g. "✓ Pressed ...").
 fn strip_snapshot_output(stdout: &str) -> String {
     let marker = "\n### Page";
     let without = match stdout.find(marker) {
@@ -2377,7 +2378,11 @@ fn strip_snapshot_output(stdout: &str) -> String {
     without
         .lines()
         .map(str::trim)
-        .filter(|l| !l.is_empty() && *l != "ensuring server...")
+        .filter(|l| {
+            !l.is_empty()
+                && *l != "ensuring server..."
+                && !l.starts_with("✓ ")
+        })
         .collect::<Vec<_>>()
         .join("\n")
 }
@@ -2505,11 +2510,29 @@ fn swarm_done_flag(payload: &serde_json::Value) -> Option<bool> {
             return Some(true);
         }
     }
-    if payload.get("error").and_then(|v| v.as_str()).is_some() {
+    if payload
+        .get("error")
+        .and_then(|v| v.as_str())
+        .map(|e| !e.is_empty())
+        .unwrap_or(false)
+    {
         return Some(true);
     }
     // pageContentBytes being non-null also indicates a completed result.
-    if payload.get("pageContentBytes").and_then(|v| v.as_str()).is_some() {
+    if payload
+        .get("pageContentBytes")
+        .and_then(|v| v.as_str())
+        .is_some()
+    {
+        return Some(true);
+    }
+    // Terminal status codes (404, 500, etc.) indicate the task won't complete
+    // successfully — treat as done so tests can handle the error gracefully.
+    if payload["statusCode"]
+        .as_i64()
+        .map(|s| !(200..400).contains(&s))
+        .unwrap_or(false)
+    {
         return Some(true);
     }
     None
