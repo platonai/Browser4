@@ -41,8 +41,11 @@ class JsHandler(
                 evaluateInContext(confusedExpr, isolatedContextId, returnByValue = false)
             }.onFailure { e ->
                 if (e is CDPReturnError && e.errorMessage?.lowercase()?.contains("cannot find context") == true) {
-                    logger.debug("Isolated world context {} not found, falling back to default context", isolatedContextId)
-                    isolatedWorldManager.clearContexts()
+                    logger.debug(
+                        "Isolated world context {} not found, falling back to default context. " +
+                        "Context will be refreshed on next navigation.",
+                        isolatedContextId
+                    )
                 } else {
                     logger.debug("Failed to evaluate in isolated world: {}", e.message)
                 }
@@ -200,8 +203,11 @@ class JsHandler(
                 evaluateInContext(confusedExpr, isolatedContextId, returnByValue = true)
             }.onFailure { e ->
                 if (e is CDPReturnError && e.errorMessage?.lowercase()?.contains("cannot find context") == true) {
-                    logger.debug("Isolated world context {} not found, falling back to default context", isolatedContextId)
-                    isolatedWorldManager.clearContexts()
+                    logger.debug(
+                        "Isolated world context {} not found, falling back to default context. " +
+                        "Context will be refreshed on next navigation.",
+                        isolatedContextId
+                    )
                 } else {
                     logger.debug("Failed to evaluate in isolated world: {}", e.message)
                 }

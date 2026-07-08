@@ -200,8 +200,18 @@ object AriaSnapshotRenderer {
         val attributes = node.originalNode.attributes
         return when (nodeName) {
             "a" -> attributes["href"]?.takeIf { it.isNotBlank() }?.let { "link" }
+            "article" -> "article"
+            "aside" -> "complementary"
             "button" -> "button"
+            "footer" -> "contentinfo"
+            "h1", "h2", "h3", "h4", "h5", "h6" -> "heading"
+            "header" -> "banner"
+            "iframe" -> "iframe"
             "img" -> "img"
+            "li" -> "listitem"
+            "main" -> "main"
+            "nav" -> "navigation"
+            "ol" -> "list"
             "option" -> "option"
             "select" -> if (
                 attributes["multiple"]?.equals("true", ignoreCase = true) == true ||
@@ -212,7 +222,9 @@ object AriaSnapshotRenderer {
                 "combobox"
             }
             "summary" -> "button"
+            "table" -> "table"
             "textarea" -> "textbox"
+            "ul" -> "list"
             "input" -> when (attributes["type"]?.trim()?.lowercase(Locale.ROOT)) {
                 null, "", "email", "password", "tel", "text", "url" -> "textbox"
                 "button", "image", "reset", "submit" -> "button"
