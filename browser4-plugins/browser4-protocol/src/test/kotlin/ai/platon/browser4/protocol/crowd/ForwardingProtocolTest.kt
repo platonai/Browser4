@@ -2,6 +2,7 @@ package ai.platon.browser4.protocol.crowd
 
 import ai.platon.pulsar.persist.model.GoraWebPage
 import ai.platon.pulsar.skeleton.workflow.protocol.ForwardingResponse
+import ai.platon.pulsar.skeleton.workflow.protocol.crowd.ForwardingProtocol
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.DisplayName

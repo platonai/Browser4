@@ -1,6 +1,6 @@
-package ai.platon.browser4.chrome.handler
+package ai.platon.browser4.chrome.protocol
 
-import ai.platon.pulsar.browser.impl.BrowserProtocol
+import ai.platon.browser4.api.BrowserProtocol
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test

@@ -1,10 +1,10 @@
-package ai.platon.browser4.chrome.handler
+package ai.platon.browser4.chrome.protocol
 
 import ai.platon.browser4.chrome.RemoteDevTools
-import ai.platon.browser4.chrome.handler.util.resolveNodeObjectId
+import ai.platon.browser4.chrome.protocol.util.resolveNodeObjectId
 import ai.platon.cdt.kt.protocol.events.page.JavascriptDialogOpening
 import ai.platon.cdt.kt.protocol.events.page.JavascriptDialogClosed
-import ai.platon.pulsar.browser.impl.BrowserProtocol
+import ai.platon.browser4.api.BrowserProtocol
 import ai.platon.pulsar.common.getLogger
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicBoolean

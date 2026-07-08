@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package ai.platon.pulsar.protocol.browser
+package ai.platon.browser4.protocol.browser
 
 import ai.platon.browser4.api.manage.BasicBrowserManager
 import ai.platon.pulsar.browser.privacy.PrivacyManager

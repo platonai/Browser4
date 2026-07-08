@@ -15,9 +15,8 @@
  */
 package ai.platon.pulsar.protocol.browser.emulator.context
 
-import ai.platon.browser4.chrome.ChromeDestroyer
-import ai.platon.browser4.protocol.browser.DefaultWebDriverPoolManager
 import ai.platon.browser4.api.BrowserProfile
+import ai.platon.browser4.chrome.ChromeDestroyer
 import ai.platon.pulsar.browser.privacy.AbstractPrivacyContext
 import ai.platon.pulsar.browser.privacy.PrivacyContext
 import ai.platon.pulsar.browser.privacy.PrivacyException
@@ -35,6 +34,7 @@ import ai.platon.pulsar.persist.AbstractWebPage
 import ai.platon.pulsar.persist.RetryScope
 import ai.platon.pulsar.persist.WebPage
 import ai.platon.pulsar.persist.model.GoraWebPage
+import ai.platon.browser4.protocol.browser.DefaultWebDriverPoolManager
 import ai.platon.pulsar.protocol.browser.driver.WebDriverPoolManager
 import ai.platon.pulsar.skeleton.CoreMetrics
 import ai.platon.pulsar.skeleton.common.AppSystemInfo
