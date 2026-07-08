@@ -1,0 +1,2599 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Issue Review — Coworker</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script src="/static/issue-model.js"></script>
+<style>
+/* ═══════════════════════════════════════════════════════════════════════
+   Design Tokens — Light & Dark
+   ═══════════════════════════════════════════════════════════════════════ */
+:root {
+  --font: system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'SF Mono', 'Cascadia Code', 'Consolas', monospace;
+  --radius-sm: 6px; --radius: 10px; --radius-lg: 14px;
+  --transition: 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+html[data-theme="light"] {
+  --bg-root:        #f7f5f2;
+  --bg-surface:     #ffffff;
+  --bg-raised:      #fafaf9;
+  --bg-inset:       #f1efec;
+  --bg-hover:       #f3f0ed;
+  --bg-selected:    #eeecfa;
+  --border:         #e4e1dd;
+  --border-light:   #f0edea;
+  --text-primary:   #1e1b2e;
+  --text-secondary: #5c586b;
+  --text-muted:     #9e99aa;
+  --text-on-dark:   #f2f0f5;
+  --accent:         #6c5ce7;
+  --accent-light:   #a29bfe;
+  --accent-bg:      #f4f2ff;
+  --accent-border:  #d5d1f5;
+  --danger:         #e53e3e;
+  --danger-bg:      #fff5f5;
+  --danger-border:  #fed7d7;
+  --success:        #38a169;
+  --success-bg:     #f0fff4;
+  --success-border: #c6f6d5;
+  --warning:        #d69e2e;
+  --warning-bg:     #fffff0;
+  --warning-border: #fefcbf;
+  --info:           #3b82f6;
+  --info-bg:        #eff6ff;
+  --info-border:    #bfdbfe;
+  --header-bg:      #1a1730;
+  --header-bg-end:  #2d2752;
+  --pipeline-dark:  #1a1730;
+  --shadow-sm:      0 1px 2px rgba(0,0,0,0.04);
+  --shadow:         0 1px 3px rgba(0,0,0,0.05), 0 1px 2px rgba(0,0,0,0.03);
+  --shadow-md:      0 4px 14px rgba(0,0,0,0.06);
+  --shadow-lg:      0 16px 40px rgba(0,0,0,0.10);
+  --scrollbar-thumb:#d0ccc7;
+  --accept-color:   #38a169;
+  --accept-bg:      #f0fff4;
+  --accept-border:  #c6f6d5;
+  --reject-color:   #e53e3e;
+  --reject-bg:      #fff5f5;
+  --reject-border:  #fed7d7;
+  --defer-color:    #d69e2e;
+  --defer-bg:       #fffff0;
+  --defer-border:   #fefcbf;
+  --duplicate-color:#9c27b0;
+  --duplicate-bg:   #faf5ff;
+  --duplicate-border:#e9d5ff;
+}
+
+html[data-theme="dark"] {
+  --bg-root:        #0b1120;
+  --bg-surface:     #131c31;
+  --bg-raised:      #182540;
+  --bg-inset:       #0d1426;
+  --bg-hover:       #1a2a47;
+  --bg-selected:    #1e2c54;
+  --border:         #202d4a;
+  --border-light:   #1a2840;
+  --text-primary:   #e8e4f0;
+  --text-secondary: #a9a3be;
+  --text-muted:     #6b6580;
+  --text-on-dark:   #f2f0f5;
+  --accent:         #a78bfa;
+  --accent-light:   #c4b5fd;
+  --accent-bg:      #1e2040;
+  --accent-border:  #3d3570;
+  --danger:         #fc8181;
+  --danger-bg:      #2d1520;
+  --danger-border:  #5c2830;
+  --success:        #68d391;
+  --success-bg:     #13281e;
+  --success-border: #275a3a;
+  --warning:        #f6e05e;
+  --warning-bg:     #2d2a10;
+  --warning-border: #5c5020;
+  --info:           #60a5fa;
+  --info-bg:        #152238;
+  --info-border:    #2c4a70;
+  --header-bg:      #090d1c;
+  --header-bg-end:  #161f3a;
+  --pipeline-dark:  #090d1c;
+  --shadow-sm:      0 1px 2px rgba(0,0,0,0.18);
+  --shadow:         0 1px 3px rgba(0,0,0,0.24), 0 1px 2px rgba(0,0,0,0.16);
+  --shadow-md:      0 4px 14px rgba(0,0,0,0.28);
+  --shadow-lg:      0 16px 40px rgba(0,0,0,0.35);
+  --scrollbar-thumb:#2d3a5c;
+  --accept-color:   #68d391;
+  --accept-bg:      #13281e;
+  --accept-border:  #275a3a;
+  --reject-color:   #fc8181;
+  --reject-bg:      #2d1520;
+  --reject-border:  #5c2830;
+  --defer-color:    #f6e05e;
+  --defer-bg:       #2d2a10;
+  --defer-border:   #5c5020;
+  --duplicate-color:#c084fc;
+  --duplicate-bg:   #1e1030;
+  --duplicate-border:#4a2860;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   Base
+   ═══════════════════════════════════════════════════════════════════════ */
+* { box-sizing: border-box; }
+body {
+  margin: 0; min-height: 100vh; display: flex; flex-direction: column;
+  font-family: var(--font); background: var(--bg-root); color: var(--text-primary);
+}
+/* Firefox */
+* { scrollbar-width: thin; scrollbar-color: var(--scrollbar-thumb) transparent; }
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb); border-radius: 10px;
+  border: 2px solid transparent; background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted); border: 2px solid transparent; background-clip: padding-box;
+}
+::-webkit-scrollbar-corner { background: transparent; }
+
+/* ═══════════════════════════════════════════════════════════════════════
+   Header
+   ═══════════════════════════════════════════════════════════════════════ */
+.app-header {
+  background: linear-gradient(135deg, var(--header-bg) 0%, var(--header-bg-end) 100%);
+  color: #f1f5f9;
+  padding: 0 1.5rem; height: 52px;
+  display: flex; align-items: center; justify-content: space-between;
+  flex-shrink: 0; z-index: 100;
+  box-shadow: 0 1px 0 rgba(255,255,255,0.06) inset, 0 2px 10px rgba(0,0,0,0.25);
+}
+.app-brand { display: flex; align-items: center; gap: 10px; }
+.app-brand svg { flex-shrink: 0; }
+.app-brand h1 { font-size: 1.05rem; font-weight: 600; margin: 0; color: #f1f5f9; letter-spacing: -0.01em; }
+.app-brand .nav-link { color: #a78bfa; font-size: 0.72rem; text-decoration: none; margin-left: 6px; opacity: 0.75; }
+.app-brand .nav-link:hover { opacity: 1; }
+.header-right { display: flex; align-items: center; gap: 10px; }
+.header-stats { display: flex; align-items: center; gap: 12px; }
+.header-stats .stat-item {
+  display: flex; align-items: center; gap: 5px;
+  font-size: 0.75rem; color: rgba(255,255,255,0.8);
+}
+.header-stats .stat-item .stat-num { font-weight: 700; font-size: 0.85rem; color: #fff; }
+.header-stats .stat-divider { width: 1px; height: 18px; background: rgba(255,255,255,0.15); }
+.theme-toggle {
+  display: flex; align-items: center; justify-content: center;
+  width: 32px; height: 32px; border-radius: 50%;
+  border: 1px solid rgba(255,255,255,0.15);
+  background: rgba(255,255,255,0.06);
+  color: #e2e8f0; cursor: pointer;
+  font-size: 0.95rem; transition: all var(--transition);
+  line-height: 1; padding: 0;
+}
+.theme-toggle:hover { background: rgba(255,255,255,0.15); border-color: rgba(255,255,255,0.25); }
+
+/* ═══════════════════════════════════════════════════════════════════════
+   Main Layout
+   ═══════════════════════════════════════════════════════════════════════ */
+.main-content { display: flex; flex: 1; overflow: hidden; }
+
+/* ═══════════════════════════════════════════════════════════════════════
+   File List Panel (left)
+   ═══════════════════════════════════════════════════════════════════════ */
+.file-list-panel {
+  width: 340px; min-width: 260px;
+  background: var(--bg-surface); border-right: 1px solid var(--border);
+  display: flex; flex-direction: column; overflow: hidden;
+}
+.panel-header {
+  padding: 12px 1rem;
+  border-bottom: 1px solid var(--border-light);
+  display: flex; align-items: center; justify-content: space-between;
+  flex-shrink: 0;
+}
+.panel-header h2 { font-size: 0.9rem; font-weight: 600; margin: 0; color: var(--text-primary); }
+.search-bar {
+  padding: 8px 1rem; border-bottom: 1px solid var(--border-light); flex-shrink: 0;
+}
+.search-bar input {
+  width: 100%; padding: 7px 10px; border-radius: var(--radius-sm);
+  border: 1px solid var(--border); font-size: 0.76rem;
+  background: var(--bg-raised); color: var(--text-primary); transition: all var(--transition);
+  font-family: inherit;
+}
+.search-bar input:focus { outline: none; border-color: var(--accent); background: var(--bg-surface); }
+.search-bar input::placeholder { color: var(--text-muted); }
+
+.filter-row {
+  padding: 5px 1rem; border-bottom: 1px solid var(--border-light); flex-shrink: 0;
+  display: flex; gap: 4px;
+}
+.filter-row button {
+  font-size: 0.65rem; padding: 3px 10px; border-radius: 12px;
+  border: 1px solid var(--border); background: transparent; color: var(--text-secondary);
+  cursor: pointer; font-weight: 500; transition: all var(--transition);
+  font-family: inherit;
+}
+.filter-row button:hover { background: var(--bg-hover); }
+.filter-row button.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+
+.file-list { flex: 1; overflow-y: auto; }
+.date-group-header {
+  font-size: 0.65rem; font-weight: 600;
+  color: var(--text-muted); letter-spacing: 0.04em;
+  padding: 7px 1rem;
+  background: var(--bg-raised);
+  border-bottom: 1px solid var(--border-light);
+  position: sticky; top: 0; z-index: 2;
+  display: flex; align-items: center; gap: 6px;
+}
+.date-group-header::before {
+  content: ''; display: inline-block;
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--accent); flex-shrink: 0;
+}
+.file-item {
+  display: flex; flex-direction: column;
+  padding: 9px 1rem; cursor: pointer;
+  border-bottom: 1px solid var(--border-light);
+  transition: all 0.12s;
+}
+.file-item:hover { background: var(--bg-hover); }
+.file-item.selected { background: var(--bg-selected); box-shadow: inset 3px 0 0 var(--accent); }
+.file-item .file-name {
+  font-size: 0.8rem; font-weight: 500; color: var(--text-primary);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  margin-bottom: 3px;
+}
+.file-item .file-meta {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 0.68rem; color: var(--text-muted);
+}
+.file-item .file-meta .issue-count { font-weight: 500; }
+.file-item .file-meta .reviewed-badge {
+  font-size: 0.62rem; padding: 1px 7px; border-radius: 10px; font-weight: 600;
+}
+.reviewed-badge.none { background: var(--bg-inset); color: var(--text-muted); }
+.reviewed-badge.partial { background: var(--warning-bg); color: var(--warning); border: 1px solid var(--warning-border); }
+.reviewed-badge.done { background: var(--success-bg); color: var(--success); border: 1px solid var(--success-border); }
+.file-item .progress-bar-bg {
+  height: 3px; background: var(--bg-inset); border-radius: 3px; margin-top: 5px; overflow: hidden;
+}
+.file-item .progress-bar-fill {
+  height: 100%; background: var(--accent); border-radius: 3px; transition: width 0.3s;
+}
+.file-item .progress-bar-fill.done { background: var(--success); }
+
+/* ═══════════════════════════════════════════════════════════════════════
+   Tree View
+   ═══════════════════════════════════════════════════════════════════════ */
+.tree-node { user-select: none; }
+.tree-dir {
+  display: flex; align-items: center; gap: 5px;
+  padding: 5px 0.5rem; cursor: pointer;
+  font-size: 0.73rem; font-weight: 550; color: var(--text-secondary);
+  transition: background 0.1s;
+  border-bottom: 1px solid var(--border-light);
+}
+.tree-dir:hover { background: var(--bg-hover); }
+.tree-dir .tree-arrow {
+  font-size: 0.5rem; width: 14px; text-align: center; flex-shrink: 0;
+  transition: transform 0.15s; color: var(--text-muted);
+  display: inline-block;
+}
+.tree-dir .tree-arrow.open { transform: rotate(90deg); }
+.tree-dir .tree-folder-icon { font-size: 0.8rem; flex-shrink: 0; }
+.tree-dir .tree-dir-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tree-dir .tree-dir-count {
+  font-size: 0.6rem; color: var(--text-muted); flex-shrink: 0;
+  background: var(--bg-inset); padding: 1px 6px; border-radius: 8px; font-weight: 500;
+}
+.tree-children { overflow: hidden; }
+.tree-children.collapsed { display: none; }
+.tree-leaf {
+  display: flex; flex-direction: column;
+  padding: 7px 0.5rem 7px 1.5rem; cursor: pointer;
+  border-bottom: 1px solid var(--border-light);
+  transition: all 0.12s;
+}
+.tree-leaf:hover { background: var(--bg-hover); }
+.tree-leaf.selected { background: var(--bg-selected); box-shadow: inset 3px 0 0 var(--accent); }
+.tree-leaf .file-name {
+  font-size: 0.78rem; font-weight: 500; color: var(--text-primary);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  margin-bottom: 3px;
+}
+.tree-leaf .file-meta {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 0.66rem; color: var(--text-muted);
+}
+.tree-leaf .file-meta .issue-count { font-weight: 500; }
+.tree-leaf .file-meta .reviewed-badge {
+  font-size: 0.62rem; padding: 1px 7px; border-radius: 10px; font-weight: 600;
+}
+.tree-leaf .progress-bar-bg {
+  height: 3px; background: var(--bg-inset); border-radius: 3px; margin-top: 4px; overflow: hidden;
+}
+.tree-leaf .progress-bar-fill {
+  height: 100%; background: var(--accent); border-radius: 3px; transition: width 0.3s;
+}
+.tree-leaf .progress-bar-fill.done { background: var(--success); }
+/* Indent levels for tree leaves */
+.tree-leaf.l1 { padding-left: 1.8rem; }
+.tree-leaf.l2 { padding-left: 2.4rem; }
+.tree-leaf.l3 { padding-left: 3.0rem; }
+.tree-leaf.l4 { padding-left: 3.6rem; }
+/* Review status badge styles (shared) */
+.reviewed-badge.none { background: var(--bg-inset); color: var(--text-muted); }
+.reviewed-badge.partial { background: var(--warning-bg); color: var(--warning); border: 1px solid var(--warning-border); }
+.reviewed-badge.done { background: var(--success-bg); color: var(--success); border: 1px solid var(--success-border); }
+
+.empty-message {
+  padding: 3rem 1.5rem; text-align: center;
+  color: var(--text-muted); font-size: 0.82rem; line-height: 1.6;
+}
+.empty-message .empty-icon { font-size: 2.2rem; display: block; margin-bottom: 0.6rem; opacity: 0.4; }
+
+/* ═══════════════════════════════════════════════════════════════════════
+   Review Panel (right)
+   ═══════════════════════════════════════════════════════════════════════ */
+.review-panel { flex: 1; display: flex; flex-direction: column; overflow: hidden; background: var(--bg-raised); }
+.review-header {
+  padding: 10px 1.25rem; border-bottom: 1px solid var(--border-light);
+  display: flex; align-items: center; justify-content: space-between;
+  flex-shrink: 0; background: var(--bg-surface); flex-wrap: wrap; gap: 6px;
+}
+.review-header .file-info {
+  display: flex; align-items: center; gap: 8px; font-size: 0.82rem; font-weight: 500;
+  color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.review-header .file-info .file-icon { color: var(--accent); flex-shrink: 0; }
+.review-actions { display: flex; gap: 5px; flex-shrink: 0; align-items: center; }
+.review-actions button {
+  font-size: 0.72rem; padding: 5px 12px; border-radius: var(--radius-sm);
+  font-weight: 500; cursor: pointer; border: 1px solid var(--border);
+  background: var(--bg-surface); color: var(--text-secondary); transition: all var(--transition);
+  display: inline-flex; align-items: center; gap: 5px; font-family: inherit;
+}
+.review-actions button:hover { background: var(--bg-hover); border-color: var(--text-muted); }
+.review-actions button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+.review-actions button.primary:hover { background: var(--accent-light); border-color: var(--accent-light); color: #1e1b2e; }
+.review-actions button.primary:disabled { opacity: 0.5; cursor: not-allowed; }
+.auto-approve-label {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 0.72rem; font-weight: 500; color: var(--text-secondary);
+  cursor: pointer; user-select: none; white-space: nowrap;
+  padding: 4px 8px; border-radius: var(--radius-sm);
+  border: 1px solid var(--border); background: var(--bg-surface);
+  transition: all var(--transition);
+}
+.auto-approve-label:hover { background: var(--bg-hover); border-color: var(--accent-border); }
+.auto-approve-label input[type="checkbox"] {
+  width: 14px; height: 14px; cursor: pointer; accent-color: var(--accent); margin: 0;
+}
+.auto-approve-label:has(input:checked) {
+  background: var(--accent-bg); color: var(--accent); border-color: var(--accent-border);
+}
+.save-indicator {
+  font-size: 0.65rem; color: var(--text-muted); display: flex; align-items: center; gap: 4px;
+}
+.save-indicator.dirty { color: var(--warning); }
+
+.review-content {
+  flex: 1; overflow-y: auto; padding: 1.25rem 1.5rem 2rem;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   File Header Card
+   ═══════════════════════════════════════════════════════════════════════ */
+.file-header-card {
+  background: var(--bg-surface); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 1rem 1.25rem; margin-bottom: 1.25rem;
+  box-shadow: var(--shadow-sm);
+}
+.file-header-card .fh-title {
+  font-size: 1.05rem; font-weight: 700; color: var(--text-primary); margin: 0 0 4px;
+}
+.file-header-card .fh-meta {
+  font-size: 0.72rem; color: var(--text-muted);
+  display: flex; gap: 16px; flex-wrap: wrap;
+}
+.file-header-card .fh-meta span { display: flex; align-items: center; gap: 4px; }
+.file-header-card .fh-scenario-bg {
+  margin-top: 0.75rem; padding-top: 0.75rem; border-top: 1px solid var(--border-light);
+  font-size: 0.82rem; color: var(--text-secondary); line-height: 1.6;
+}
+.file-header-card .fh-scenario-bg h2 { font-size: 0.92rem; margin: 0.6rem 0 0.3rem; color: var(--text-primary); }
+.file-header-card .fh-scenario-bg h3 { font-size: 0.85rem; margin: 0.5rem 0 0.25rem; color: var(--text-primary); }
+.file-header-card .fh-scenario-bg h4 { font-size: 0.78rem; margin: 0.5rem 0 0.25rem; color: var(--text-primary); }
+.file-header-card .fh-scenario-bg p { margin: 0.3rem 0; }
+.file-header-card .fh-scenario-bg ul, .file-header-card .fh-scenario-bg ol { margin: 0.3rem 0; padding-left: 1.4rem; }
+.file-header-card .fh-scenario-bg li { margin: 0.1rem 0; }
+.file-header-card .fh-scenario-bg strong { color: var(--text-primary); }
+.file-header-card .fh-scenario-bg table { font-size: 0.78rem; border-collapse: collapse; width: 100%; }
+.file-header-card .fh-scenario-bg th, .file-header-card .fh-scenario-bg td { padding: 3px 8px; border: 1px solid var(--border); text-align: left; }
+.file-header-card .fh-scenario-bg th { background: var(--bg-inset); font-weight: 600; }
+.file-header-card .fh-scenario-bg code { font-size: 0.82em; background: var(--bg-inset); padding: 1px 4px; border-radius: 3px; color: var(--accent); }
+.file-header-card .fh-scenario-bg pre {
+  background: var(--pipeline-dark); color: #e2e8f0; padding: 0.6rem 0.8rem;
+  border-radius: var(--radius-sm); overflow-x: auto; font-size: 0.76rem; margin: 0.4rem 0;
+}
+.file-header-card .fh-scenario-bg pre code { background: none; padding: 0; color: inherit; font-size: inherit; }
+.file-header-card .fh-scenario-bg hr { border: none; border-top: 1px solid var(--border-light); margin: 0.5rem 0; }
+.file-header-card .fh-scenario-bg blockquote {
+  border-left: 3px solid var(--accent-border); margin: 0.4rem 0; padding: 0.2rem 0.7rem;
+  background: var(--bg-inset); color: var(--text-secondary);
+}
+.file-header-card .fh-scenario-bg a { color: var(--accent); }
+
+/* ═══════════════════════════════════════════════════════════════════════
+   Issue Card
+   ═══════════════════════════════════════════════════════════════════════ */
+.issue-card {
+  background: var(--bg-surface); border: 1px solid var(--border);
+  border-radius: var(--radius); margin-bottom: 1rem;
+  box-shadow: var(--shadow-sm);
+  transition: border-color var(--transition);
+}
+.issue-card.reviewed-accept { border-left: 3px solid var(--accept-color); }
+.issue-card.reviewed-reject { border-left: 3px solid var(--reject-color); }
+.issue-card.reviewed-defer { border-left: 3px solid var(--defer-color); }
+.issue-card.reviewed-improve { border-left: 3px solid var(--info); }
+.issue-card.reviewed-duplicate { border-left: 3px solid var(--duplicate-color); }
+
+.issue-card-header {
+  padding: 12px 1.25rem;
+  display: flex; align-items: flex-start; justify-content: space-between;
+  gap: 10px; cursor: pointer; user-select: none;
+}
+.issue-card-header:hover { background: var(--bg-hover); border-radius: var(--radius) var(--radius) 0 0; }
+.issue-card-header .issue-title {
+  flex: 1; font-size: 0.88rem; font-weight: 600; color: var(--text-primary); line-height: 1.4;
+}
+.issue-card-header .issue-badges { display: flex; gap: 5px; flex-shrink: 0; flex-wrap: wrap; }
+.badge {
+  font-size: 0.62rem; font-weight: 600; padding: 2px 8px; border-radius: 10px;
+  letter-spacing: 0.02em; white-space: nowrap;
+}
+.badge.sev-high { background: var(--danger-bg); color: var(--danger); border: 1px solid var(--danger-border); }
+.badge.sev-medium { background: var(--warning-bg); color: var(--warning); border: 1px solid var(--warning-border); }
+.badge.sev-low { background: var(--info-bg); color: var(--info); border: 1px solid var(--info-border); }
+.badge.cat { background: var(--accent-bg); color: var(--accent); border: 1px solid var(--accent-border); }
+.badge.review-decision {
+  font-size: 0.65rem; padding: 3px 10px;
+}
+.badge.review-decision.accept { background: var(--accept-bg); color: var(--accept-color); border: 1px solid var(--accept-border); }
+.badge.review-decision.reject { background: var(--reject-bg); color: var(--reject-color); border: 1px solid var(--reject-border); }
+.badge.review-decision.defer { background: var(--defer-bg); color: var(--defer-color); border: 1px solid var(--defer-border); }
+.badge.review-decision.improve { background: var(--info-bg); color: var(--info); border: 1px solid var(--info-border); }
+.badge.review-decision.duplicate { background: var(--duplicate-bg); color: var(--duplicate-color); border: 1px solid var(--duplicate-border); }
+
+/* Collapse icon */
+.issue-card-header .collapse-icon {
+  font-size: 0.6rem; color: var(--text-muted); transition: transform var(--transition);
+  flex-shrink: 0; margin-top: 3px;
+}
+.issue-card-header .collapse-icon.open { transform: rotate(90deg); }
+
+/* Issue body */
+.issue-card-body { padding: 0 1.25rem 1rem; display: none; }
+.issue-card-body.open { display: block; }
+.issue-card-body .section {
+  margin-bottom: 0.75rem;
+}
+.issue-card-body .section-title {
+  font-size: 0.7rem; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.04em; color: var(--text-muted); margin-bottom: 3px;
+}
+.issue-card-body .section-content {
+  font-size: 0.82rem; color: var(--text-secondary); line-height: 1.6;
+}
+.issue-card-body .section-content p { margin: 0.2rem 0; }
+.issue-card-body .section-content code { font-size: 0.82em; background: var(--bg-inset); padding: 1px 4px; border-radius: 3px; color: var(--accent); }
+.issue-card-body .section-content pre {
+  background: var(--pipeline-dark); color: #e2e8f0; padding: 0.6rem 0.8rem;
+  border-radius: var(--radius-sm); overflow-x: auto; font-size: 0.78rem; margin: 0.3rem 0;
+}
+.issue-card-body .section-content pre code { background: none; padding: 0; color: inherit; }
+
+/* ═══════════════════════════════════════════════════════════════════════
+   Review Controls (inside issue card)
+   ═══════════════════════════════════════════════════════════════════════ */
+.review-controls {
+  border-top: 1px solid var(--border-light);
+  padding-top: 0.75rem; margin-top: 0.5rem;
+}
+.review-controls-label {
+  font-size: 0.68rem; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.04em; color: var(--text-muted); margin-bottom: 6px;
+}
+.review-options {
+  display: flex; gap: 5px; flex-wrap: wrap; margin-bottom: 8px;
+}
+.review-opt {
+  padding: 5px 12px; border-radius: 16px; font-size: 0.7rem; font-weight: 600;
+  border: 1.5px solid var(--border); background: var(--bg-surface); color: var(--text-secondary);
+  cursor: pointer; transition: all var(--transition); font-family: inherit;
+  white-space: nowrap;
+}
+.review-opt:hover { border-color: var(--text-muted); background: var(--bg-hover); }
+.review-opt.selected-accept { background: var(--accept-bg); color: var(--accept-color); border-color: var(--accept-color); }
+.review-opt.selected-improve { background: var(--info-bg); color: var(--info); border-color: var(--info); }
+.review-opt.selected-defer { background: var(--defer-bg); color: var(--defer-color); border-color: var(--defer-color); }
+.review-opt.selected-wontfix { background: var(--defer-bg); color: var(--defer-color); border-color: var(--defer-color); }
+.review-opt.selected-reject { background: var(--reject-bg); color: var(--reject-color); border-color: var(--reject-color); }
+.review-opt.selected-duplicate { background: var(--duplicate-bg); color: var(--duplicate-color); border-color: var(--duplicate-color); }
+
+.review-opt .key-hint {
+  font-size: 0.58rem; opacity: 0.55; margin-left: 3px;
+  font-weight: 400;
+}
+
+.review-notes {
+  width: 100%; min-height: 48px; padding: 7px 10px;
+  font-size: 0.78rem; font-family: var(--font);
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--bg-raised); color: var(--text-primary);
+  resize: vertical; transition: all var(--transition);
+}
+.review-notes:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-bg); }
+.review-notes::placeholder { color: var(--text-muted); font-size: 0.75rem; }
+
+/* ═══════════════════════════════════════════════════════════════════════
+   No-issues message
+   ═══════════════════════════════════════════════════════════════════════ */
+.no-issues-card {
+  background: var(--bg-surface); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 2rem; text-align: center;
+  box-shadow: var(--shadow-sm);
+}
+.no-issues-card .ni-icon { font-size: 2.5rem; opacity: 0.3; display: block; margin-bottom: 0.5rem; }
+.no-issues-card p { color: var(--text-muted); font-size: 0.85rem; margin: 0; }
+
+/* ═══════════════════════════════════════════════════════════════════════
+   Placeholder
+   ═══════════════════════════════════════════════════════════════════════ */
+.review-placeholder {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  height: 100%; color: var(--text-muted); font-size: 0.85rem; gap: 0.5rem;
+}
+.review-placeholder svg { opacity: 0.25; }
+.review-placeholder p { color: var(--text-muted); margin: 0; }
+.review-placeholder .shortcut-hints {
+  margin-top: 1rem; font-size: 0.72rem; color: var(--text-muted); line-height: 1.8;
+}
+.review-placeholder .shortcut-hints kbd {
+  font-size: 0.68rem; background: var(--bg-inset); border: 1px solid var(--border);
+  border-radius: 3px; padding: 1px 6px; font-family: var(--font-mono);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   Toast
+   ═══════════════════════════════════════════════════════════════════════ */
+.toast-container {
+  position: fixed; bottom: 1.25rem; right: 1.25rem; z-index: 9999;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.toast {
+  padding: 10px 16px; border-radius: var(--radius);
+  font-size: 0.8rem; font-weight: 500;
+  box-shadow: var(--shadow-md);
+  animation: toastSlideIn 0.25s ease-out;
+  max-width: 380px; display: flex; align-items: center; gap: 8px;
+}
+.toast.error { background: var(--danger-bg); color: var(--danger); border: 1px solid var(--danger-border); }
+.toast.success { background: var(--success-bg); color: var(--success); border: 1px solid var(--success-border); }
+.toast.info { background: var(--info-bg); color: var(--info); border: 1px solid var(--info-border); }
+@keyframes toastSlideIn { from { opacity: 0; transform: translateX(16px); } to { opacity: 1; transform: translateX(0); } }
+
+/* ═══════════════════════════════════════════════════════════════════════
+   Single-Issue Review Mode (one at a time)
+   ═══════════════════════════════════════════════════════════════════════ */
+.issue-nav-top {
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 1.25rem;
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border-light);
+  flex-shrink: 0; flex-wrap: wrap;
+}
+.issue-nav-counter {
+  font-size: 0.85rem; font-weight: 700; color: var(--text-primary);
+  white-space: nowrap; display: flex; align-items: center; gap: 6px;
+}
+.issue-nav-counter .of { font-weight: 400; color: var(--text-muted); }
+.issue-nav-progress {
+  flex: 1; min-width: 80px; height: 4px;
+  background: var(--bg-inset); border-radius: 4px; overflow: hidden;
+}
+.issue-nav-progress .fill {
+  height: 100%; background: var(--accent); border-radius: 4px; transition: width 0.3s;
+}
+.issue-nav-progress .fill.done { background: var(--success); }
+.issue-nav-actions { display: flex; gap: 4px; flex-shrink: 0; align-items: center; }
+
+.nav-btn {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 5px 12px; border-radius: var(--radius-sm);
+  font-size: 0.72rem; font-weight: 500; cursor: pointer;
+  border: 1px solid var(--border);
+  background: var(--bg-surface); color: var(--text-secondary);
+  transition: all var(--transition); font-family: inherit;
+}
+.nav-btn:hover { background: var(--bg-hover); border-color: var(--text-muted); }
+.nav-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+.nav-btn.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+.nav-btn.primary:hover { background: var(--accent-light); border-color: var(--accent-light); color: #1e1b2e; }
+.nav-btn.primary:disabled { opacity: 0.5; cursor: not-allowed; background: var(--accent); }
+.nav-btn.accent { border-color: var(--accent); color: var(--accent); }
+.nav-btn.accent:hover { background: var(--accent-bg); }
+
+.issue-nav-bottom {
+  display: flex; align-items: center; justify-content: center; gap: 12px;
+  padding: 16px 1.25rem; border-top: 1px solid var(--border-light);
+  flex-shrink: 0; background: var(--bg-surface);
+}
+.issue-nav-bottom .nav-btn { font-size: 0.78rem; padding: 7px 20px; }
+
+/* Single-issue content area */
+.single-issue-view {
+  flex: 1; overflow-y: auto; padding: 1.5rem 2rem;
+}
+.single-issue-view .issue-header-block {
+  margin-bottom: 1.25rem;
+}
+.single-issue-view .issue-header-block .issue-title-large {
+  font-size: 1.15rem; font-weight: 700; color: var(--text-primary); line-height: 1.4; margin: 0 0 6px;
+}
+.single-issue-view .issue-header-block .issue-meta-row {
+  display: flex; gap: 8px; flex-wrap: wrap; align-items: center;
+  font-size: 0.75rem; color: var(--text-muted);
+}
+.single-issue-view .section-block {
+  background: var(--bg-surface); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 14px 1.25rem; margin-bottom: 0.75rem;
+}
+.single-issue-view .section-block .section-label {
+  font-size: 0.68rem; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.04em; color: var(--text-muted); margin-bottom: 6px;
+}
+.single-issue-view .section-block .section-body {
+  font-size: 0.84rem; color: var(--text-secondary); line-height: 1.7;
+}
+.single-issue-view .section-block .section-body p { margin: 0.4rem 0; }
+.single-issue-view .section-block .section-body ul,
+.single-issue-view .section-block .section-body ol { margin: 0.4rem 0; padding-left: 1.4rem; }
+.single-issue-view .section-block .section-body li { margin: 0.15rem 0; }
+.single-issue-view .section-block .section-body strong { color: var(--text-primary); }
+.single-issue-view .section-block .section-body code { font-size: 0.82em; background: var(--bg-inset); padding: 1px 5px; border-radius: 3px; color: var(--accent); }
+.single-issue-view .section-block .section-body pre {
+  background: var(--pipeline-dark); color: #e2e8f0; padding: 0.75rem 1rem;
+  border-radius: var(--radius-sm); overflow-x: auto; font-size: 0.78rem; margin: 0.5rem 0;
+  line-height: 1.55;
+}
+.single-issue-view .section-block .section-body pre code { background: none; padding: 0; color: inherit; font-size: inherit; }
+.single-issue-view .section-block .section-body blockquote {
+  border-left: 3px solid var(--accent-border); margin: 0.5rem 0; padding: 0.3rem 0.8rem;
+  background: var(--bg-inset); color: var(--text-secondary);
+}
+.single-issue-view .section-block .section-body a { color: var(--accent); }
+
+/* Review block in single view */
+.single-review-block {
+  background: var(--bg-surface); border: 2px solid var(--accent-border);
+  border-radius: var(--radius); padding: 1rem 1.25rem; margin-top: 0.5rem;
+}
+.single-review-block.has-decision { border-color: var(--accept-color); }
+.single-review-block.has-decision.reject { border-color: var(--reject-color); }
+.single-review-block.has-decision.defer { border-color: var(--defer-color); }
+.single-review-block.has-decision.duplicate { border-color: var(--duplicate-color); }
+.single-review-block .review-label {
+  font-size: 0.7rem; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.04em; color: var(--text-muted); margin-bottom: 8px;
+}
+.single-review-block .review-options {
+  display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px;
+}
+.single-review-block .review-opt {
+  padding: 7px 16px; border-radius: 20px; font-size: 0.76rem; font-weight: 600;
+  border: 2px solid var(--border); background: var(--bg-surface); color: var(--text-secondary);
+  cursor: pointer; transition: all var(--transition); font-family: inherit;
+  white-space: nowrap;
+}
+.single-review-block .review-opt:hover { border-color: var(--text-muted); background: var(--bg-hover); }
+.single-review-block .review-opt.selected-accept { background: var(--accept-bg); color: var(--accept-color); border-color: var(--accept-color); }
+.single-review-block .review-opt.selected-improve { background: var(--info-bg); color: var(--info); border-color: var(--info); }
+.single-review-block .review-opt.selected-defer { background: var(--defer-bg); color: var(--defer-color); border-color: var(--defer-color); }
+.single-review-block .review-opt.selected-wontfix { background: var(--defer-bg); color: var(--defer-color); border-color: var(--defer-color); }
+.single-review-block .review-opt.selected-reject { background: var(--reject-bg); color: var(--reject-color); border-color: var(--reject-color); }
+.single-review-block .review-opt.selected-duplicate { background: var(--duplicate-bg); color: var(--duplicate-color); border-color: var(--duplicate-color); }
+.single-review-block .review-opt .key-hint {
+  font-size: 0.6rem; opacity: 0.5; margin-left: 3px; font-weight: 400;
+}
+.single-review-block .review-notes {
+  width: 100%; min-height: 56px; padding: 8px 12px;
+  font-size: 0.8rem; font-family: var(--font);
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--bg-raised); color: var(--text-primary);
+  resize: vertical; transition: all var(--transition);
+  box-sizing: border-box;
+}
+.single-review-block .review-notes:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-bg); }
+.single-review-block .review-notes::placeholder { color: var(--text-muted); font-size: 0.76rem; }
+
+/* Save indicator in nav */
+.save-indicator-inline {
+  font-size: 0.65rem; display: flex; align-items: center; gap: 4px;
+  padding: 3px 8px; border-radius: 10px;
+}
+.save-indicator-inline.clean { color: var(--text-muted); }
+.save-indicator-inline.dirty { color: var(--warning); background: var(--warning-bg); }
+
+/* ═══════════════════════════════════════════════════════════════════════
+   Responsive
+   ═══════════════════════════════════════════════════════════════════════ */
+@media (max-width: 768px) {
+  .main-content { flex-direction: column; }
+  .file-list-panel { width: 100%; min-width: 0; max-height: 38vh; border-right: none; border-bottom: 1px solid var(--border); }
+  .review-panel { flex: 1; }
+  .review-content { padding: 1rem; }
+  .review-opt { font-size: 0.65rem; padding: 4px 8px; }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   Quick Jump (floating)
+   ═══════════════════════════════════════════════════════════════════════ */
+.quick-jump {
+  position: fixed; bottom: 1.25rem; left: 360px;
+  display: flex; gap: 4px; z-index: 50;
+}
+.quick-jump button {
+  width: 28px; height: 28px; border-radius: 50%;
+  border: 1px solid var(--border); background: var(--bg-surface);
+  color: var(--text-secondary); cursor: pointer;
+  font-size: 0.65rem; display: flex; align-items: center; justify-content: center;
+  box-shadow: var(--shadow); transition: all var(--transition);
+}
+.quick-jump button:hover { background: var(--bg-hover); border-color: var(--text-muted); }
+.quick-jump button:disabled { opacity: 0.35; cursor: not-allowed; }
+</style>
+</head>
+<body>
+
+<!-- ═══════ HEADER ═══════ -->
+<header class="app-header">
+  <div class="app-brand">
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/><path d="M9 14l2 2 4-4"/></svg>
+    <h1>Issue Review</h1>
+    <a href="/" class="nav-link" title="Back to Task Manager">← Tasks</a>
+  </div>
+  <div class="header-right">
+    <div class="header-stats" id="header-stats">
+      <div class="stat-item"><span class="stat-num" id="stat-files">—</span> files</div>
+      <div class="stat-divider"></div>
+      <div class="stat-item"><span class="stat-num" id="stat-issues">—</span> issues</div>
+      <div class="stat-divider"></div>
+      <div class="stat-item"><span class="stat-num" id="stat-reviewed">—</span> reviewed</div>
+    </div>
+    <button class="theme-toggle" id="theme-toggle" title="Toggle dark mode" onclick="toggleTheme()">☀</button>
+  </div>
+</header>
+
+<!-- ═══════ MAIN ═══════ -->
+<div class="main-content">
+  <!-- FILE LIST -->
+  <section class="file-list-panel">
+    <div class="panel-header">
+      <h2>Review Queue</h2>
+    </div>
+    <div class="search-bar">
+      <input type="text" id="file-filter" placeholder="Filter files…" oninput="applyFileFilter()" autocomplete="off">
+    </div>
+    <div class="filter-row">
+      <button data-filter="all" class="active" onclick="setFilter('all')">All</button>
+      <button data-filter="unreviewed" onclick="setFilter('unreviewed')">Unreviewed</button>
+      <button data-filter="partial" onclick="setFilter('partial')">In Progress</button>
+      <button data-filter="done" onclick="setFilter('done')">Done</button>
+    </div>
+    <div class="file-list" id="file-list">
+      <div class="empty-message">
+        <span class="empty-icon">📋</span>
+        Loading review queue…
+      </div>
+    </div>
+  </section>
+
+  <!-- REVIEW PANEL -->
+  <section class="review-panel">
+    <!-- File info bar (always visible when a file is selected) -->
+    <div class="review-header" id="review-header" style="display:none;">
+      <div class="file-info">
+        <svg class="file-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+        <span id="review-file-name"></span>
+      </div>
+      <div class="review-actions">
+        <span id="save-indicator-inline" class="save-indicator-inline clean">✓ Saved</span>
+        <label class="auto-approve-label" id="auto-approve-label" title="When checked, the summary file gets #auto-approve tag — coworker will auto-move it to 5approved and trigger push.">
+          <input type="checkbox" id="chk-auto-approve" onchange="onAutoApproveChange()">
+          <span>Auto-approve</span>
+        </label>
+        <button id="btn-mark-done" class="nav-btn" style="background:var(--success);color:#fff;border-color:var(--success);" onclick="markDone()" title="Finalize review: approved issues keep full detail, others condensed. Moves file to ready queue.">✅ Mark Done</button>
+        <button id="btn-discard" class="nav-btn" style="background:var(--danger);color:#fff;border-color:var(--danger);" onclick="discardFile()" title="Discard this file — no issues or no valuable issues. Moves to review/done/discard.">🗑 Discard</button>
+        <button id="btn-mode-toggle" class="nav-btn accent" onclick="toggleReviewMode()" title="Switch between one-at-a-time and all-issues view">📋 View All</button>
+      </div>
+    </div>
+
+    <!-- Single-issue navigation bar -->
+    <div class="issue-nav-top" id="issue-nav-top" style="display:none;">
+      <button class="nav-btn" id="btn-prev-file-top" onclick="navigateToFile(-1)" title="Previous file (P)">◀◀ File</button>
+      <button class="nav-btn" id="btn-prev-top" onclick="navigateSingleIssue(-1)" title="Previous issue (Shift+←)">◀ Issue</button>
+      <div class="issue-nav-counter">
+        <span id="issue-counter">Issue 1 of 6</span>
+      </div>
+      <div class="issue-nav-progress">
+        <div class="fill" id="issue-progress-fill" style="width:0%"></div>
+      </div>
+      <button class="nav-btn" id="btn-next-top" onclick="navigateSingleIssue(1)" title="Next issue (Shift+→)">Issue ▶</button>
+      <button class="nav-btn" id="btn-next-file-top" onclick="navigateToFile(1)" title="Next file (N)">File ▶▶</button>
+      <div class="issue-nav-actions">
+        <button id="btn-save-top" class="nav-btn primary" onclick="saveReview()" disabled>
+          💾 Save
+        </button>
+      </div>
+    </div>
+
+    <!-- Content area -->
+    <div class="review-content" id="review-content">
+      <div class="review-placeholder" id="review-placeholder">
+        <svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/><path d="M9 14l2 2 4-4"/></svg>
+        <p>Select a file to review its issues</p>
+        <div class="shortcut-hints">
+          <strong>Keyboard shortcuts:</strong><br>
+          <kbd>Shift+1</kbd>-<kbd>Shift+6</kbd> Select decision<br>
+          <kbd>Shift+A</kbd> AI review &nbsp;|&nbsp;
+          <kbd>Shift+D</kbd> Discard file<br>
+          <kbd>Shift+←</kbd>/<kbd>Shift+→</kbd> Prev/next issue<br>
+          <kbd>Shift+N</kbd>/<kbd>Shift+P</kbd> Prev/next file<br>
+          <kbd>Ctrl+S</kbd> Save
+        </div>
+      </div>
+    </div>
+
+    <!-- Bottom navigation (single-issue mode) -->
+    <div class="issue-nav-bottom" id="issue-nav-bottom" style="display:none;">
+      <button class="nav-btn" id="btn-prev-file-bottom" onclick="navigateToFile(-1)" title="Previous file (P)">◀◀ Previous File</button>
+      <button class="nav-btn" id="btn-prev-bottom" onclick="navigateSingleIssue(-1)" title="Previous issue (Shift+←)">◀ Previous Issue</button>
+      <span style="font-size:0.75rem;color:var(--text-muted);" id="issue-counter-bottom">1 / 6</span>
+      <button class="nav-btn" id="btn-next-bottom" onclick="navigateSingleIssue(1)" title="Next issue (Shift+→)">Next Issue ▶</button>
+      <button class="nav-btn" id="btn-next-file-bottom" onclick="navigateToFile(1)" title="Next file (N)">Next File ▶▶</button>
+    </div>
+  </section>
+</div>
+
+<!-- ═══════ TOAST ═══════ -->
+<div class="toast-container" id="toast-container"></div>
+
+<!-- ═══════ SCRIPTS ═══════ -->
+<script>
+// ── Theme ──
+(function() {
+  var saved = localStorage.getItem('coworker-gui-theme');
+  if (saved) document.documentElement.setAttribute('data-theme', saved);
+})();
+
+function toggleTheme() {
+  var current = document.documentElement.getAttribute('data-theme');
+  var next = current === 'dark' ? 'light' : 'dark';
+  document.documentElement.setAttribute('data-theme', next);
+  localStorage.setItem('coworker-gui-theme', next);
+  document.getElementById('theme-toggle').textContent = next === 'dark' ? '☀' : '🌙';
+}
+function setThemeIcon() {
+  var current = document.documentElement.getAttribute('data-theme');
+  document.getElementById('theme-toggle').textContent = current === 'dark' ? '☀' : '🌙';
+}
+
+// ── State ──
+var REVIEW_DECISIONS = ['ACCEPT', 'ACCEPT with improvements', 'DEFER', 'WONTFIX', 'REJECT', 'DUPLICATE'];
+var DECISION_CSS = {
+  'ACCEPT': 'selected-accept',
+  'ACCEPT with improvements': 'selected-improve',
+  'DEFER': 'selected-defer',
+  'WONTFIX': 'selected-wontfix',
+  'REJECT': 'selected-reject',
+  'DUPLICATE': 'selected-duplicate'
+};
+var DECISION_BORDER = {
+  'ACCEPT': 'reviewed-accept',
+  'ACCEPT with improvements': 'reviewed-improve',
+  'DEFER': 'reviewed-defer',
+  'WONTFIX': 'reviewed-defer',
+  'REJECT': 'reviewed-reject',
+  'DUPLICATE': 'reviewed-duplicate'
+};
+
+var state = {
+  files: [],           // all file entries from server
+  filteredFiles: [],   // after filter applied
+  selectedFilePath: null,
+  selectedFileContent: null,
+  fileFilter: '',
+  statusFilter: 'all',
+  parsed: null,        // { header, scenarioBackground, issues: [{num, title, severity, category, sections, reviewDecision, reviewNotes}] }
+  dirty: false,
+  autoSaveTimer: null,
+  reviewMode: 'single',  // 'single' or 'all'
+  currentIssueIndex: 0,  // 0-based index for single-issue mode
+  autoApprove: localStorage.getItem('issue-review-auto-approve') === 'true',
+};
+
+// ── API ──
+async function apiGet(url) {
+  var res = await fetch(url);
+  if (!res.ok) {
+    var body = await res.json().catch(function() { return { error: res.statusText }; });
+    throw new Error(body.error || 'HTTP ' + res.status);
+  }
+  return res.json();
+}
+
+async function apiPost(url, body) {
+  var res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    var eb = await res.json().catch(function() { return { error: res.statusText }; });
+    throw new Error(eb.error || 'HTTP ' + res.status);
+  }
+  return res.json();
+}
+
+// ── Toast ──
+function showToast(message, type) {
+  type = type || 'error';
+  var icons = { error: '⚠', success: '✓', info: 'ℹ' };
+  var container = document.getElementById('toast-container');
+  var toast = document.createElement('div');
+  toast.className = 'toast ' + type;
+  toast.innerHTML = '<span class="toast-icon">' + (icons[type] || '') + '</span>' + escHtml(message);
+  container.appendChild(toast);
+  setTimeout(function() {
+    toast.style.opacity = '0'; toast.style.transition = 'opacity 0.3s';
+    setTimeout(function() { toast.remove(); }, 300);
+  }, 4000);
+}
+
+// ── Init ──
+async function init() {
+  setThemeIcon();
+  // Restore auto-approve checkbox state
+  document.getElementById('chk-auto-approve').checked = state.autoApprove;
+  try {
+    await loadFiles();
+  } catch (e) {
+    showToast('Cannot connect to backend. Is the server running?', 'error');
+    document.getElementById('file-list').innerHTML =
+      '<div class="empty-message"><span class="empty-icon">⚠</span>Cannot reach backend at ' + location.origin + '</div>';
+  }
+}
+
+async function loadFiles() {
+  var data = await apiGet('/api/tasks?stage=200issues%2Freview');
+  // Only .issues.md files
+  state.files = data.tasks.filter(function(t) {
+    return /\.issues\.md$/i.test(t.name);
+  });
+  // Sort by name (which includes timestamp), newest first
+  state.files.sort(function(a, b) { return b.name.localeCompare(a.name); });
+  applyFileFilter();
+  updateStats();
+}
+
+function updateStats() {
+  var totalIssues = 0;
+  var reviewedIssues = 0;
+  for (var i = 0; i < state.files.length; i++) {
+    var f = state.files[i];
+    totalIssues += (f._issueCount || 0);
+    reviewedIssues += (f._reviewedCount || 0);
+  }
+  document.getElementById('stat-files').textContent = state.files.length;
+  document.getElementById('stat-issues').textContent = totalIssues;
+  document.getElementById('stat-reviewed').textContent = reviewedIssues;
+}
+
+// ── File list rendering ──
+function applyFileFilter() {
+  var q = document.getElementById('file-filter').value.toLowerCase().trim();
+  state.fileFilter = q;
+  renderFileList();
+}
+
+function setFilter(filter) {
+  state.statusFilter = filter;
+  var buttons = document.querySelectorAll('.filter-row button');
+  for (var i = 0; i < buttons.length; i++) {
+    buttons[i].classList.toggle('active', buttons[i].getAttribute('data-filter') === filter);
+  }
+  renderFileList();
+}
+
+function quickParseIssueCounts(file) {
+  // If we already have counts cached, use them
+  if (file._issueCount !== undefined) return;
+  // Otherwise, we'll parse when the file is selected
+  file._issueCount = null;
+  file._reviewedCount = null;
+  file._parseAttempted = false;
+}
+
+function renderFileList() {
+  var container = document.getElementById('file-list');
+
+  // Ensure all files have quick-parse attempted
+  for (var i = 0; i < state.files.length; i++) {
+    if (!state.files[i]._parseAttempted) {
+      quickParseIssueCounts(state.files[i]);
+    }
+  }
+
+  // Apply filters
+  var filtered = state.files;
+  if (state.fileFilter) {
+    filtered = filtered.filter(function(f) {
+      return f.name.toLowerCase().indexOf(state.fileFilter) >= 0 ||
+             f.path.toLowerCase().indexOf(state.fileFilter) >= 0;
+    });
+  }
+
+  // Parse for metadata display (issue counts, review progress)
+  // We do this lazily - show what we know, parse when selected
+
+  if (filtered.length === 0) {
+    container.innerHTML = '<div class="empty-message"><span class="empty-icon">📋</span>No files match.</div>';
+    state.filteredFiles = [];
+    return;
+  }
+
+  // Always render immediately with whatever data we have
+  var statusFiltered = applyStatusFilter(filtered);
+  renderFileTree(statusFiltered);
+  updateStats();
+
+  // Then asynchronously enrich with issue counts
+  var needParse = [];
+  for (var i = 0; i < filtered.length; i++) {
+    if (filtered[i]._issueCount === null) needParse.push(filtered[i]);
+  }
+
+  if (needParse.length > 0) {
+    parseFilesForCounts(needParse).then(function() {
+      // Re-render with enriched data
+      var enrichedFiltered = applyStatusFilter(filtered);
+      renderFileTree(enrichedFiltered);
+      updateStats();
+    });
+  }
+}
+
+function applyStatusFilter(files) {
+  if (state.statusFilter === 'all') return files;
+  return files.filter(function(f) {
+    var total = f._issueCount || 0;
+    var reviewed = f._reviewedCount || 0;
+    if (state.statusFilter === 'unreviewed') return reviewed === 0 && total > 0;
+    if (state.statusFilter === 'partial') return reviewed > 0 && reviewed < total;
+    if (state.statusFilter === 'done') return total > 0 && reviewed >= total;
+    return true;
+  });
+}
+
+async function parseFilesForCounts(files) {
+  // Parse up to 5 files at a time to avoid overwhelming the server
+  var batchSize = 5;
+  for (var i = 0; i < files.length; i += batchSize) {
+    var batch = files.slice(i, i + batchSize);
+    var results = await Promise.all(batch.map(function(f) {
+      return apiGet('/api/task?path=' + encodeURIComponent(f.path))
+        .then(function(data) { return { path: f.path, content: data.content }; })
+        .catch(function() { return { path: f.path, content: '' }; });
+    }));
+    for (var j = 0; j < results.length; j++) {
+      var file = batch[j];
+      file._parseAttempted = true;
+      var counts = parseIssueCountsFromContent(results[j].content);
+      file._issueCount = counts.total;
+      file._reviewedCount = counts.reviewed;
+    }
+  }
+}
+
+function parseIssueCountsFromContent(content) {
+  return ISSUE_MODEL.quickParseStats(content);
+}
+
+function renderFileTree(files) {
+  var container = document.getElementById('file-list');
+  if (files.length === 0) {
+    state.filteredFiles = [];
+    container.innerHTML = '<div class="empty-message"><span class="empty-icon">📋</span>No files in this filter.</div>';
+    return;
+  }
+
+  // Save current expanded state before rebuilding
+  var savedExpanded = saveExpandedState(container);
+
+  // Build tree from file paths
+  var root = { name: '', children: {}, files: [], depth: 0 };
+  for (var i = 0; i < files.length; i++) {
+    var parts = files[i].path.split('/');
+    var node = root;
+    for (var j = 0; j < parts.length - 1; j++) {
+      var key = parts[j];
+      if (!node.children[key]) {
+        node.children[key] = { name: key, children: {}, files: [], depth: node.depth + 1 };
+      }
+      node = node.children[key];
+    }
+    node.files.push(files[i]);
+  }
+
+  // Skip single-child roots to reduce nesting
+  while (Object.keys(root.children).length === 1 && root.files.length === 0) {
+    var onlyKey = Object.keys(root.children)[0];
+    root = root.children[onlyKey];
+    root.depth = 0;
+  }
+
+  sortFileTree(root);
+
+  // Flatten tree in depth-first order so prev/next file navigation
+  // matches the visual tree order in the sidebar
+  state.filteredFiles = flattenFileTree(root);
+
+  var html = renderFileTreeNode(root, 0);
+  container.innerHTML = html;
+
+  // Restore expanded state, or default expand first 3 levels
+  var hasSaved = savedExpanded && Object.keys(savedExpanded).length > 0;
+  if (hasSaved) {
+    applyFileExpanded(container, savedExpanded);
+  } else {
+    var expanded = {};
+    expandFileDefaults(root, expanded, 3);
+    applyFileExpanded(container, expanded);
+  }
+}
+
+// Flatten sorted tree into depth-first file list
+function flattenFileTree(node) {
+  var result = [];
+  // Direct files in this node first, already sorted by sortFileTree
+  for (var i = 0; i < node.files.length; i++) {
+    result.push(node.files[i]);
+  }
+  // Then recurse into sorted directories
+  for (var d = 0; d < (node._dirKeys || []).length; d++) {
+    var child = node.children[node._dirKeys[d]];
+    result = result.concat(flattenFileTree(child));
+  }
+  return result;
+}
+
+// Save which directories are currently expanded
+function saveExpandedState(container) {
+  var state = {};
+  var toggles = container.querySelectorAll('.tree-dir[data-expand-key]');
+  for (var i = 0; i < toggles.length; i++) {
+    var key = toggles[i].getAttribute('data-expand-key');
+    var arrow = toggles[i].querySelector('.tree-arrow');
+    if (arrow && arrow.classList.contains('open')) {
+      state[key] = true;
+    }
+  }
+  return state;
+}
+
+function sortFileTree(node) {
+  var dirKeys = Object.keys(node.children).sort();
+  node.files.sort(function(a, b) { return a.name.localeCompare(b.name); });
+  for (var i = 0; i < dirKeys.length; i++) {
+    sortFileTree(node.children[dirKeys[i]]);
+  }
+  node._dirKeys = dirKeys;
+  return node;
+}
+
+function expandFileDefaults(node, expanded, maxDepth) {
+  for (var i = 0; i < (node._dirKeys || []).length; i++) {
+    var child = node.children[node._dirKeys[i]];
+    if (node.depth < maxDepth || child.files.length > 0) {
+      expanded[child.name + '@' + child.depth] = true;
+      expandFileDefaults(child, expanded, maxDepth);
+    }
+  }
+}
+
+function applyFileExpanded(container, expanded) {
+  var toggles = container.querySelectorAll('.tree-dir[data-expand-key]');
+  for (var i = 0; i < toggles.length; i++) {
+    var key = toggles[i].getAttribute('data-expand-key');
+    if (expanded[key]) {
+      toggles[i].querySelector('.tree-arrow').classList.add('open');
+      var children = toggles[i].nextElementSibling;
+      if (children && children.classList.contains('tree-children')) {
+        children.classList.remove('collapsed');
+      }
+    }
+  }
+}
+
+function renderFileTreeNode(node, inheritedDepth) {
+  if (node.name === '' && Object.keys(node.children).length === 0) {
+    var h = '';
+    for (var i = 0; i < node.files.length; i++) {
+      h += renderFileLeaf(node.files[i], inheritedDepth);
+    }
+    return h;
+  }
+
+  var html = '';
+  if (node.name !== '') {
+    var dirCount = countFileDescendants(node);
+    var expandKey = node.name + '@' + node.depth;
+    html += '<div class="tree-dir" data-expand-key="' + escHtml(expandKey) + '" onclick="toggleTreeDir(this)" title="' + escHtml(node.name) + '/">';
+    html += '<span class="tree-arrow">▶</span>';
+    html += '<span class="tree-folder-icon">📁</span>';
+    html += '<span class="tree-dir-name">' + escHtml(node.name) + '</span>';
+    html += '<span class="tree-dir-count">' + dirCount + '</span>';
+    html += '</div>';
+    html += '<div class="tree-children collapsed">';
+    var childDepth = inheritedDepth + 1;
+  } else {
+    html += '<div class="tree-children">';
+    var childDepth = inheritedDepth;
+  }
+
+  for (var d = 0; d < (node._dirKeys || []).length; d++) {
+    html += renderFileTreeNode(node.children[node._dirKeys[d]], childDepth);
+  }
+
+  for (var f = 0; f < node.files.length; f++) {
+    html += renderFileLeaf(node.files[f], childDepth);
+  }
+
+  html += '</div>';
+  return html;
+}
+
+function renderFileLeaf(file, depth) {
+  var selectedClass = (state.selectedFilePath === file.path) ? ' selected' : '';
+  var total = file._issueCount || 0;
+  var reviewed = file._reviewedCount || 0;
+  var pct = total > 0 ? Math.round(reviewed / total * 100) : 0;
+  var progressClass = (total > 0 && reviewed >= total) ? ' done' : '';
+  var levelClass = depth > 0 ? ' l' + Math.min(depth, 4) : '';
+
+  var displayName = file.name
+    .replace(/^\d{8}-\d{6}-/, '')
+    .replace(/\.issues\.md$/i, '')
+    .replace(/-/g, ' ');
+
+  var statusHtml = '';
+  if (total === 0) {
+    statusHtml = '';
+  } else if (reviewed === 0) {
+    statusHtml = '<span class="reviewed-badge none">' + reviewed + '/' + total + '</span>';
+  } else if (reviewed < total) {
+    statusHtml = '<span class="reviewed-badge partial">' + reviewed + '/' + total + '</span>';
+  } else {
+    statusHtml = '<span class="reviewed-badge done">✓ ' + total + '/' + total + '</span>';
+  }
+
+  return '<div class="tree-leaf' + selectedClass + levelClass + '" onclick="selectFile(\'' + escJs(file.path) + '\')" title="' + escHtml(file.path) + '">' +
+    '<div class="file-name">' + escHtml(displayName) + '</div>' +
+    '<div class="file-meta">' +
+      '<span class="issue-count">' + (total > 0 ? total + ' issue' + (total !== 1 ? 's' : '') : 'No issues') + '</span>' +
+      statusHtml +
+    '</div>' +
+    (total > 0 ? '<div class="progress-bar-bg"><div class="progress-bar-fill' + progressClass + '" style="width:' + pct + '%"></div></div>' : '') +
+    '</div>';
+}
+
+function countFileDescendants(node) {
+  var count = node.files.length;
+  for (var i = 0; i < (node._dirKeys || []).length; i++) {
+    count += countFileDescendants(node.children[node._dirKeys[i]]);
+  }
+  return count;
+}
+
+function toggleTreeDir(el) {
+  var arrow = el.querySelector('.tree-arrow');
+  var children = el.nextElementSibling;
+  if (arrow) arrow.classList.toggle('open');
+  if (children && children.classList.contains('tree-children')) {
+    children.classList.toggle('collapsed');
+  }
+}
+
+// ── File selection & parsing ──
+async function selectFile(path) {
+  state.selectedFilePath = path;
+  state.dirty = false;
+  state.parsed = null;
+  state.selectedFileContent = null;
+  state.reviewMode = 'single';  // always start in single-issue mode
+  state.currentIssueIndex = 0;
+  focusedIssueIndex = 0;
+  updateSaveState();
+  cancelAutoSave();
+
+  // Update selection highlight without rebuilding the tree
+  highlightSelectedFile(path);
+
+  // Show loading
+  document.getElementById('review-content').innerHTML =
+    '<div class="review-placeholder"><p>Loading...</p></div>';
+
+  try {
+    var data = await apiGet('/api/task?path=' + encodeURIComponent(path));
+    state.selectedFileContent = data.content;
+    state.parsed = parseIssueFile(data.content);
+    document.getElementById('review-header').style.display = 'flex';
+    document.getElementById('review-file-name').textContent = data.path;
+    renderReview();
+    updateFileCounts(path, state.parsed);
+    updateStats();
+    // Update progress bars in tree without collapsing
+    updateFileTreeProgress(path, state.parsed);
+  } catch (e) {
+    showToast('Failed to load: ' + e.message, 'error');
+    document.getElementById('review-header').style.display = 'none';
+    document.getElementById('review-content').innerHTML =
+      '<div class="review-placeholder"><p>Error loading file.</p></div>';
+  }
+}
+
+// Lightweight highlight update without rebuilding tree
+function highlightSelectedFile(path) {
+  var leaves = document.querySelectorAll('.tree-leaf');
+  for (var i = 0; i < leaves.length; i++) {
+    var el = leaves[i];
+    var onclick = el.getAttribute('onclick') || '';
+    if (onclick.indexOf("selectFile('" + escJs(path) + "')") >= 0) {
+      el.classList.add('selected');
+    } else {
+      el.classList.remove('selected');
+    }
+  }
+}
+
+// Update progress bars for a single file in the tree without rebuild
+function updateFileTreeProgress(path, parsed) {
+  var total = parsed.issues.length;
+  var reviewed = parsed.issues.filter(function(iss) { return !!iss.reviewDecision; }).length;
+  var pct = total > 0 ? Math.round(reviewed / total * 100) : 0;
+
+  var leaves = document.querySelectorAll('.tree-leaf');
+  for (var i = 0; i < leaves.length; i++) {
+    var el = leaves[i];
+    var onclick = el.getAttribute('onclick') || '';
+    if (onclick.indexOf("selectFile('" + escJs(path) + "')") < 0) continue;
+
+    // Update issue count text
+    var countEl = el.querySelector('.issue-count');
+    if (countEl) {
+      countEl.textContent = total > 0 ? total + ' issue' + (total !== 1 ? 's' : '') : 'No issues';
+    }
+
+    // Update reviewed badge
+    var badgeEl = el.querySelector('.reviewed-badge');
+    if (badgeEl) {
+      if (total === 0) {
+        badgeEl.style.display = 'none';
+      } else if (reviewed === 0) {
+        badgeEl.className = 'reviewed-badge none';
+        badgeEl.textContent = reviewed + '/' + total;
+        badgeEl.style.display = '';
+      } else if (reviewed < total) {
+        badgeEl.className = 'reviewed-badge partial';
+        badgeEl.textContent = reviewed + '/' + total;
+        badgeEl.style.display = '';
+      } else {
+        badgeEl.className = 'reviewed-badge done';
+        badgeEl.textContent = '✓ ' + total + '/' + total;
+        badgeEl.style.display = '';
+      }
+    }
+
+    // Update progress bar
+    var fill = el.querySelector('.progress-bar-fill');
+    if (fill) {
+      fill.style.width = pct + '%';
+      fill.className = 'progress-bar-fill' + (total > 0 && reviewed >= total ? ' done' : '');
+    }
+  }
+}
+
+function updateFileCounts(path, parsed) {
+  for (var i = 0; i < state.files.length; i++) {
+    if (state.files[i].path === path) {
+      state.files[i]._parseAttempted = true;
+      state.files[i]._issueCount = parsed.issues.length;
+      state.files[i]._reviewedCount = parsed.issues.filter(function(iss) { return !!iss.reviewDecision; }).length;
+      break;
+    }
+  }
+}
+
+// ── Markdown Parsing ──
+function parseIssueFile(content) {
+  if (!content) return { scenarioName: '', metaSource: '', metaDate: '', metaMode: '', scenarioBackground: '', issues: [], hasNoIssues: false, originalContent: '' };
+
+  // Check for "no issues" pattern
+  var noIssuesMatch = content.match(/^## Issues Found \(0\)/m);
+  var hasNoIssues = !!noIssuesMatch;
+
+  // Parse title: "# Issues: scenario-name"
+  var scenarioName = '';
+  var titleMatch = content.match(/^# Issues:\s*(.+)/m);
+  if (titleMatch) scenarioName = titleMatch[1].trim();
+
+  // Parse meta line
+  var metaSource = '', metaDate = '', metaMode = '';
+  var metaMatch = content.match(/>\s*\*\*Source:\*\*\s*`([^`]+)`\s*\|\s*\*\*Date:\*\*\s*(\S+)\s*\|\s*\*\*Mode:\*\*\s*(\S+)/);
+  if (metaMatch) {
+    metaSource = metaMatch[1];
+    metaDate = metaMatch[2];
+    metaMode = metaMatch[3];
+  }
+
+  // Find the "## Issues Found" header
+  var issuesHeaderIdx = content.search(/^## Issues Found/m);
+
+  // Extract scenario background: everything between the meta line and ## Issues Found
+  // (## Scenario Background, ### Task, ### Execution Context)
+  var scenarioBg = '';
+  var issuesSection = '';
+
+  if (issuesHeaderIdx >= 0) {
+    // Find end of meta line (the "> **Source:**..." line)
+    var metaEndIdx = 0;
+    var metaLineMatch = content.match(/^>.*?\*\*Mode:\*\*\s*\S+/m);
+    if (metaLineMatch) {
+      metaEndIdx = content.indexOf(metaLineMatch[0]) + metaLineMatch[0].length;
+    }
+    // Background is between meta line end and ## Issues Found
+    scenarioBg = content.substring(metaEndIdx, issuesHeaderIdx).trim();
+
+    var afterHeader = content.substring(issuesHeaderIdx);
+    // Find first "### Issue N:" to split issues-heading from actual issues
+    var firstIssueIdx = afterHeader.search(/^### Issue \d+:/m);
+    if (firstIssueIdx >= 0) {
+      issuesSection = afterHeader.substring(firstIssueIdx);
+    }
+  } else {
+    // No issues found — everything after the meta line is background
+    var metaEndIdx2 = 0;
+    var metaLineMatch2 = content.match(/^>.*?\*\*Mode:\*\*\s*\S+/m);
+    if (metaLineMatch2) {
+      metaEndIdx2 = content.indexOf(metaLineMatch2[0]) + metaLineMatch2[0].length;
+    }
+    scenarioBg = content.substring(metaEndIdx2).trim();
+  }
+
+  // Parse individual issues
+  var issues = [];
+  if (issuesSection) {
+    var issueBlocks = splitIssues(issuesSection);
+    for (var i = 0; i < issueBlocks.length; i++) {
+      var parsed = parseIssueBlock(issueBlocks[i]);
+      if (parsed) issues.push(parsed);
+    }
+  }
+
+  return {
+    scenarioName: scenarioName,
+    metaSource: metaSource,
+    metaDate: metaDate,
+    metaMode: metaMode,
+    scenarioBackground: scenarioBg,
+    issues: issues,
+    hasNoIssues: hasNoIssues,
+    originalContent: content
+  };
+}
+
+function splitIssues(section) {
+  var blocks = [];
+  var lines = section.split('\n');
+  var currentBlock = [];
+  var inBlock = false;
+
+  for (var i = 0; i < lines.length; i++) {
+    var line = lines[i];
+    if (/^### Issue \d+:/i.test(line)) {
+      if (inBlock && currentBlock.length > 0) {
+        blocks.push(currentBlock.join('\n'));
+      }
+      currentBlock = [line];
+      inBlock = true;
+    } else if (inBlock) {
+      currentBlock.push(line);
+    }
+  }
+  if (inBlock && currentBlock.length > 0) {
+    blocks.push(currentBlock.join('\n'));
+  }
+  return blocks;
+}
+
+function parseIssueBlock(block) {
+  var lines = block.split('\n');
+
+  // Parse title: "### Issue N: Title"
+  var titleLine = lines[0];
+  var titleMatch = titleLine.match(/^### Issue (\d+):\s*(.+)/);
+  if (!titleMatch) return null;
+
+  var issueNum = parseInt(titleMatch[1], 10);
+  var title = titleMatch[2].trim();
+
+  // Find metadata (first few lines after title)
+  var severity = '';
+  var category = '';
+  for (var i = 1; i < Math.min(lines.length, 5); i++) {
+    var sevMatch = lines[i].match(/^\*\*Severity:\*\*\s*(.+)/);
+    var catMatch = lines[i].match(/^\*\*Category:\*\*\s*(.+)/);
+    if (sevMatch) severity = sevMatch[1].trim();
+    if (catMatch) category = catMatch[1].trim();
+  }
+
+  // Find the Human Review section
+  var reviewIdx = -1;
+  for (var j = 0; j < lines.length; j++) {
+    if (/^#### Human Review/.test(lines[j])) {
+      reviewIdx = j;
+      break;
+    }
+  }
+
+  // Extract sections: everything between metadata and Human Review
+  var contentLines = reviewIdx >= 0 ? lines.slice(1, reviewIdx) : lines.slice(1);
+  var sectionText = contentLines.join('\n').trim();
+
+  // Parse review decision
+  var reviewDecision = null;
+  var reviewNotes = '';
+
+  if (reviewIdx >= 0) {
+    // Find checked checkbox
+    for (var k = reviewIdx; k < lines.length; k++) {
+      var checkedMatch = lines[k].match(/^- \[x\] \*\*(ACCEPT|ACCEPT with improvements|DEFER|WONTFIX|REJECT|DUPLICATE)\*\*/);
+      if (checkedMatch) {
+        reviewDecision = checkedMatch[1];
+        break;
+      }
+    }
+
+    // Find notes
+    var notesIdx = -1;
+    for (var m = reviewIdx; m < lines.length; m++) {
+      if (/^\*\*Notes:\*\*/.test(lines[m])) {
+        notesIdx = m;
+        break;
+      }
+    }
+    if (notesIdx >= 0 && notesIdx + 1 < lines.length) {
+      // Notes are everything after the **Notes:** line until the next --- or end
+      var notesLines = [];
+      for (var n = notesIdx + 1; n < lines.length; n++) {
+        if (/^---\s*$/.test(lines[n])) break;
+        if (lines[n].trim() === '' && notesLines.length === 0) continue;
+        notesLines.push(lines[n]);
+      }
+      reviewNotes = notesLines.join('\n').trim();
+    }
+  }
+
+  return {
+    num: issueNum,
+    title: title,
+    severity: severity,
+    category: category,
+    sectionText: sectionText,
+    reviewDecision: reviewDecision,
+    reviewNotes: reviewNotes,
+    _blockText: block  // store original for reconstruction
+  };
+}
+
+// ── Review Rendering ──
+function renderReview() {
+  if (!state.parsed) return;
+
+  // Show/hide navigation based on mode and issue count
+  var hasIssues = !state.parsed.hasNoIssues && state.parsed.issues.length > 0;
+  var isSingle = state.reviewMode === 'single' && hasIssues;
+
+  document.getElementById('issue-nav-top').style.display = isSingle ? 'flex' : 'none';
+  document.getElementById('issue-nav-bottom').style.display = isSingle ? 'flex' : 'none';
+  document.getElementById('btn-mode-toggle').textContent = isSingle ? '📋 View All' : '🔍 One-by-One';
+
+  // Clamp issue index
+  if (state.currentIssueIndex >= state.parsed.issues.length) {
+    state.currentIssueIndex = Math.max(0, state.parsed.issues.length - 1);
+  }
+
+  // Render content based on mode
+  if (isSingle) {
+    renderSingleIssue();
+  } else {
+    renderAllIssues();
+  }
+
+  updateSaveState();
+  updateIssueNavState();
+}
+
+function renderAllIssues() {
+  var content = document.getElementById('review-content');
+  var html = '';
+
+  html += renderFileHeader();
+
+  if (state.parsed.hasNoIssues && state.parsed.issues.length === 0) {
+    html += '<div class="no-issues-card"><span class="ni-icon">✅</span><p>No issues found in this file.</p></div>';
+  } else {
+    for (var i = 0; i < state.parsed.issues.length; i++) {
+      html += renderIssueCard(state.parsed.issues[i], i);
+    }
+  }
+
+  content.innerHTML = html;
+}
+
+function renderSingleIssue() {
+  var content = document.getElementById('review-content');
+  var total = state.parsed.issues.length;
+  var idx = state.currentIssueIndex;
+  var issue = state.parsed.issues[idx];
+  if (!issue) return;
+
+  var html = '';
+
+  // Compact file header — scenario name + meta
+  html += '<div class="file-header-card" style="padding:8px 14px;margin-bottom:1rem;">';
+  html += '<div class="fh-title" style="font-size:0.9rem;">' + escHtml(state.parsed.scenarioName || 'Unknown scenario') + '</div>';
+  var reviewed = state.parsed.issues.filter(function(iss) { return !!iss.reviewDecision; }).length;
+  html += '<div class="fh-meta">';
+  if (state.parsed.metaSource) html += '<span>📄 Source: ' + escHtml(state.parsed.metaSource) + '</span>';
+  if (state.parsed.metaDate) html += '<span>📅 Date: ' + escHtml(state.parsed.metaDate) + '</span>';
+  if (state.parsed.metaMode) html += '<span>⚙ Mode: ' + escHtml(state.parsed.metaMode) + '</span>';
+  html += '<span>' + total + ' issues, ' + reviewed + ' reviewed</span>';
+  html += '</div>';
+  // Render scenario background as markdown
+  if (state.parsed.scenarioBackground) {
+    html += '<div class="fh-scenario-bg">' + marked.parse(state.parsed.scenarioBackground) + '</div>';
+  }
+  html += '</div>';
+
+  // Single issue view
+  html += '<div class="single-issue-view">';
+
+  // Issue header
+  var borderClass = issue.reviewDecision ? DECISION_BORDER[issue.reviewDecision] || '' : '';
+  html += '<div class="issue-header-block">';
+  html += '<div class="issue-title-large">Issue ' + issue.num + ': ' + escHtml(issue.title) + '</div>';
+  html += '<div class="issue-meta-row">';
+  if (issue.severity) {
+    var sevClass = 'sev-' + issue.severity.toLowerCase();
+    html += '<span class="badge ' + sevClass + '">' + escHtml(issue.severity) + '</span>';
+  }
+  if (issue.category) {
+    html += '<span class="badge cat">' + escHtml(issue.category) + '</span>';
+  }
+  if (issue.reviewDecision) {
+    var decClass = issue.reviewDecision === 'ACCEPT with improvements' ? 'improve' :
+                   (issue.reviewDecision === 'ACCEPT' ? 'accept' :
+                    issue.reviewDecision === 'REJECT' ? 'reject' :
+                    issue.reviewDecision === 'DUPLICATE' ? 'duplicate' : 'defer');
+    html += '<span class="badge review-decision ' + decClass + '">' + escHtml(issue.reviewDecision) + '</span>';
+  }
+  html += '</div>';
+  html += '</div>';
+
+  // Section blocks
+  var sections = parseIssueSections(issue);
+  for (var s = 0; s < sections.length; s++) {
+    var sec = sections[s];
+    html += '<div class="section-block">';
+    html += '<div class="section-label">' + escHtml(sec.label) + '</div>';
+    html += '<div class="section-body">' + marked.parse(sec.body) + '</div>';
+    html += '</div>';
+  }
+
+  // Review block
+  var decBorder = '';
+  if (issue.reviewDecision) {
+    if (issue.reviewDecision === 'REJECT') decBorder = ' reject';
+    else if (issue.reviewDecision === 'DEFER' || issue.reviewDecision === 'WONTFIX') decBorder = ' defer';
+    else if (issue.reviewDecision === 'DUPLICATE') decBorder = ' duplicate';
+    else decBorder = '';
+  }
+  html += '<div class="single-review-block' + (issue.reviewDecision ? ' has-decision' + decBorder : '') + '">';
+  html += '<div class="review-label">Review Decision</div>';
+  html += '<div class="review-options">';
+  for (var d = 0; d < REVIEW_DECISIONS.length; d++) {
+    var decision = REVIEW_DECISIONS[d];
+    var selClass = (issue.reviewDecision === decision) ? ' ' + DECISION_CSS[decision] : '';
+    html += '<button class="review-opt' + selClass + '" ' +
+            'onclick="setDecision(' + idx + ', \'' + escJs(decision) + '\')" ' +
+            'title="Press ' + (d + 1) + '">' +
+            escHtml(decision) + '<span class="key-hint">Shift+' + (d + 1) + '</span></button>';
+  }
+  html += '</div>';
+  html += '<div style="display:flex;gap:8px;align-items:flex-start;">';
+  html += '<textarea class="review-notes" id="single-review-notes" ' +
+          'placeholder="Optional review notes…" ' +
+          'oninput="onSingleNotesChange(' + idx + ', this.value)" ' +
+          'onfocus="focusedIssueIndex=' + idx + '">' +
+          escHtml(issue.reviewNotes || '') + '</textarea>';
+  html += '<button class="nav-btn accent" id="btn-ai-review" onclick="triggerAiReview(' + idx + ')" ' +
+          'title="AI review (A)" style="flex-shrink:0;white-space:nowrap;align-self:flex-start;">' +
+          '🤖 AI Review <span class="key-hint" style="font-size:0.6rem;opacity:0.5;">Shift+A</span></button>';
+  html += '</div>';
+  html += '</div>';
+
+  html += '</div>'; // .single-issue-view
+
+  content.innerHTML = html;
+}
+
+// Parse issue sections from the markdown body
+function parseIssueSections(issue) {
+  if (!issue.sectionText) return [];
+  var sections = [];
+  var lines = issue.sectionText.split('\n');
+  var currentLabel = 'Overview';
+  var currentBody = [];
+  for (var i = 0; i < lines.length; i++) {
+    var line = lines[i];
+    var h4Match = line.match(/^#### (.+)/);
+    if (h4Match) {
+      if (currentBody.length > 0) {
+        sections.push({ label: currentLabel, body: currentBody.join('\n').trim() });
+      }
+      currentLabel = h4Match[1].trim();
+      currentBody = [];
+    } else {
+      currentBody.push(line);
+    }
+  }
+  if (currentBody.length > 0) {
+    sections.push({ label: currentLabel, body: currentBody.join('\n').trim() });
+  }
+  // Filter out sections with empty bodies
+  return sections.filter(function(s) { return s.body.length > 0; });
+}
+
+function renderFileHeader() {
+  var p = state.parsed;
+  var html = '<div class="file-header-card">';
+  html += '<div class="fh-title">' + escHtml(p.scenarioName || 'Unknown scenario') + '</div>';
+
+  // Metadata line
+  if (p.metaSource || p.metaDate || p.metaMode) {
+    html += '<div class="fh-meta">';
+    if (p.metaSource) html += '<span>📄 Source: ' + escHtml(p.metaSource) + '</span>';
+    if (p.metaDate) html += '<span>📅 Date: ' + escHtml(p.metaDate) + '</span>';
+    if (p.metaMode) html += '<span>⚙ Mode: ' + escHtml(p.metaMode) + '</span>';
+    html += '</div>';
+  }
+
+  // Issues summary
+  var total = p.issues.length;
+  var reviewed = p.issues.filter(function(iss) { return !!iss.reviewDecision; }).length;
+  if (total > 0) {
+    html += '<div class="fh-meta" style="margin-top:4px;">';
+    html += '<span>' + total + ' issues, ' + reviewed + ' reviewed' +
+            (reviewed < total ? ' (' + (total - reviewed) + ' remaining)' : ' ✅ All done') + '</span>';
+    html += '</div>';
+  }
+
+  // Scenario background (rendered as markdown)
+  if (p.scenarioBackground) {
+    html += '<div class="fh-scenario-bg">' + marked.parse(p.scenarioBackground) + '</div>';
+  }
+
+  html += '</div>';
+  return html;
+}
+
+function renderIssueCard(issue, index) {
+  var borderClass = '';
+  if (issue.reviewDecision) {
+    borderClass = DECISION_BORDER[issue.reviewDecision] || '';
+  }
+
+  var html = '<div class="issue-card ' + borderClass + '" id="issue-card-' + index + '">';
+
+  // Header (clickable to expand/collapse)
+  html += '<div class="issue-card-header" onclick="toggleIssueBody(' + index + ')">';
+  html += '<span class="collapse-icon open" id="collapse-icon-' + index + '">▶</span>';
+  html += '<span class="issue-title">Issue ' + issue.num + ': ' + escHtml(issue.title) + '</span>';
+  html += '<span class="issue-badges">';
+  if (issue.severity) {
+    var sevClass = 'sev-' + issue.severity.toLowerCase();
+    html += '<span class="badge ' + sevClass + '">' + escHtml(issue.severity) + '</span>';
+  }
+  if (issue.category) {
+    html += '<span class="badge cat">' + escHtml(issue.category) + '</span>';
+  }
+  if (issue.reviewDecision) {
+    var decClass = issue.reviewDecision === 'ACCEPT with improvements' ? 'improve' :
+                   (issue.reviewDecision === 'ACCEPT' ? 'accept' :
+                    issue.reviewDecision === 'REJECT' ? 'reject' :
+                    issue.reviewDecision === 'DUPLICATE' ? 'duplicate' : 'defer');
+    html += '<span class="badge review-decision ' + decClass + '">' + escHtml(issue.reviewDecision) + '</span>';
+  }
+  html += '</span>';
+  html += '</div>';
+
+  // Body (collapsible)
+  html += '<div class="issue-card-body open" id="issue-body-' + index + '">';
+
+  // Section content rendered as markdown
+  if (issue.sectionText) {
+    html += '<div class="section"><div class="section-content">' + marked.parse(issue.sectionText) + '</div></div>';
+  }
+
+  // Review controls
+  html += renderReviewControls(issue, index);
+
+  html += '</div>'; // .issue-card-body
+  html += '</div>'; // .issue-card
+
+  return html;
+}
+
+function renderReviewControls(issue, index) {
+  var html = '<div class="review-controls" id="review-controls-' + index + '">';
+  html += '<div class="review-controls-label">Review Decision</div>';
+  html += '<div class="review-options">';
+  for (var d = 0; d < REVIEW_DECISIONS.length; d++) {
+    var decision = REVIEW_DECISIONS[d];
+    var selClass = (issue.reviewDecision === decision) ? ' ' + DECISION_CSS[decision] : '';
+    var keyLabel = d + 1;
+    html += '<button class="review-opt' + selClass + '" ' +
+            'onclick="setDecision(' + index + ', \'' + escJs(decision) + '\')" ' +
+            'title="Press ' + keyLabel + ' to select">' +
+            escHtml(decision) + '<span class="key-hint">' + keyLabel + '</span></button>';
+  }
+  html += '</div>';
+
+  html += '<textarea class="review-notes" id="review-notes-' + index + '" ' +
+          'placeholder="Optional review notes..." ' +
+          'oninput="onNotesChange(' + index + ', this.value)" ' +
+          'onkeydown="onNotesKeydown(event, ' + index + ')">' +
+          escHtml(issue.reviewNotes || '') + '</textarea>';
+
+  html += '</div>';
+  return html;
+}
+
+// ── Review Actions ──
+function setDecision(index, decision) {
+  if (!state.parsed) return;
+  var issue = state.parsed.issues[index];
+
+  // Toggle: if already selected, deselect
+  if (issue.reviewDecision === decision) {
+    issue.reviewDecision = null;
+  } else {
+    issue.reviewDecision = decision;
+  }
+
+  state.dirty = true;
+  updateSaveState();
+  scheduleAutoSave();
+
+  // Update UI based on mode
+  if (state.reviewMode === 'single') {
+    // In single mode, re-render the current issue to update badges & border
+    renderSingleIssue();
+    updateIssueNavState();
+    // Re-focus notes
+    var notesEl = document.getElementById('single-review-notes');
+    if (notesEl) { notesEl.focus(); notesEl.setSelectionRange(notesEl.value.length, notesEl.value.length); }
+  } else {
+    updateIssueCardUI(index);
+  }
+
+  // Update file counts and progress in tree (no full rebuild)
+  updateFileCounts(state.selectedFilePath, state.parsed);
+  updateStats();
+  if (state.selectedFilePath && state.parsed) {
+    updateFileTreeProgress(state.selectedFilePath, state.parsed);
+  }
+}
+
+function updateIssueCardUI(index) {
+  var issue = state.parsed.issues[index];
+  var card = document.getElementById('issue-card-' + index);
+  if (!card) return;
+
+  // Update border
+  card.className = 'issue-card';
+  if (issue.reviewDecision) {
+    card.classList.add(DECISION_BORDER[issue.reviewDecision] || '');
+  }
+
+  // Update decision buttons
+  var opts = card.querySelectorAll('.review-opt');
+  for (var i = 0; i < opts.length; i++) {
+    var d = REVIEW_DECISIONS[i];
+    opts[i].className = 'review-opt';
+    if (issue.reviewDecision === d) {
+      opts[i].classList.add(DECISION_CSS[d]);
+    }
+  }
+
+  // Update the badge in the header
+  var badges = card.querySelector('.issue-badges');
+  if (badges) {
+    var existingBadge = badges.querySelector('.review-decision');
+    if (existingBadge) existingBadge.remove();
+    if (issue.reviewDecision) {
+      var decClass = issue.reviewDecision === 'ACCEPT with improvements' ? 'improve' :
+                     (issue.reviewDecision === 'ACCEPT' ? 'accept' :
+                      issue.reviewDecision === 'REJECT' ? 'reject' :
+                    issue.reviewDecision === 'DUPLICATE' ? 'duplicate' : 'defer');
+      var badge = document.createElement('span');
+      badge.className = 'badge review-decision ' + decClass;
+      badge.textContent = issue.reviewDecision;
+      badges.appendChild(badge);
+    }
+  }
+}
+
+// Single-issue notes handler
+function onSingleNotesChange(index, value) {
+  if (!state.parsed) return;
+  state.parsed.issues[index].reviewNotes = value;
+  state.dirty = true;
+  updateSaveState();
+  scheduleAutoSave();
+}
+
+function onNotesChange(index, value) {
+  if (!state.parsed) return;
+  state.parsed.issues[index].reviewNotes = value;
+  state.dirty = true;
+  updateSaveState();
+  scheduleAutoSave();
+}
+
+// Track which notes field is focused for keyboard shortcuts
+var focusedIssueIndex = -1;
+
+function onNotesKeydown(event, index) {
+  focusedIssueIndex = index;
+}
+
+// ── Navigation & Mode ──
+function navigateSingleIssue(direction) {
+  if (!state.parsed || state.parsed.issues.length === 0) return;
+  var newIdx = state.currentIssueIndex + direction;
+  if (newIdx < 0 || newIdx >= state.parsed.issues.length) return;
+  state.currentIssueIndex = newIdx;
+  focusedIssueIndex = newIdx;
+  renderSingleIssue();
+  updateIssueNavState();
+  // Focus notes after render
+  setTimeout(function() {
+    var notesEl = document.getElementById('single-review-notes');
+    if (notesEl) notesEl.focus();
+  }, 50);
+}
+
+function updateIssueNavState() {
+  var total = state.parsed ? state.parsed.issues.length : 0;
+  var idx = state.currentIssueIndex;
+  var reviewed = state.parsed ? state.parsed.issues.filter(function(iss) { return !!iss.reviewDecision; }).length : 0;
+
+  // File nav buttons — find position in filtered list
+  var fileIdx = -1;
+  for (var i = 0; i < state.filteredFiles.length; i++) {
+    if (state.filteredFiles[i].path === state.selectedFilePath) { fileIdx = i; break; }
+  }
+  var hasPrevFile = fileIdx > 0;
+  var hasNextFile = fileIdx >= 0 && fileIdx < state.filteredFiles.length - 1;
+
+  // Top nav
+  document.getElementById('issue-counter').textContent = 'Issue ' + (idx + 1) + ' of ' + total;
+  document.getElementById('btn-prev-file-top').disabled = !hasPrevFile;
+  document.getElementById('btn-prev-top').disabled = idx <= 0;
+  document.getElementById('btn-next-top').disabled = idx >= total - 1;
+  document.getElementById('btn-next-file-top').disabled = !hasNextFile;
+
+  // Progress fill
+  var pct = total > 0 ? Math.round(reviewed / total * 100) : 0;
+  var fill = document.getElementById('issue-progress-fill');
+  fill.style.width = pct + '%';
+  fill.className = 'fill' + (reviewed >= total ? ' done' : '');
+
+  // Bottom nav
+  document.getElementById('issue-counter-bottom').textContent = (idx + 1) + ' / ' + total;
+  document.getElementById('btn-prev-file-bottom').disabled = !hasPrevFile;
+  document.getElementById('btn-prev-bottom').disabled = idx <= 0;
+  document.getElementById('btn-next-bottom').disabled = idx >= total - 1;
+  document.getElementById('btn-next-file-bottom').disabled = !hasNextFile;
+
+  // Mode toggle button
+  document.getElementById('btn-mode-toggle').textContent =
+    state.reviewMode === 'single' ? '📋 View All' : '🔍 One-by-One';
+}
+
+// ── AI Review ──
+async function triggerAiReview(index) {
+  if (!state.parsed) return;
+  var issue = state.parsed.issues[index];
+  if (!issue) return;
+
+  var btn = document.getElementById('btn-ai-review');
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = '⏳ Thinking…';
+  }
+
+  // Collect sections from parsed issue
+  var sections = parseIssueSections(issue);
+  var aiSections = sections.map(function(s) {
+    return { label: s.label, body: s.body };
+  });
+
+  // Extract the AI Suggested Improvement text from sections
+  var suggestedImprovement = '';
+  for (var i = 0; i < aiSections.length; i++) {
+    if (aiSections[i].label.toLowerCase().indexOf('ai suggested') >= 0 ||
+        aiSections[i].label.toLowerCase().indexOf('suggested improvement') >= 0) {
+      suggestedImprovement = aiSections[i].body;
+      break;
+    }
+  }
+
+  try {
+    var result = await apiPost('/api/issue-review/ai-suggest', {
+      title: issue.title,
+      severity: issue.severity,
+      category: issue.category,
+      sections: aiSections,
+      suggestedImprovement: suggestedImprovement,
+    });
+
+    // Apply the AI's decision
+    var decision = result.decision;
+    // Normalize: map common variations
+    var found = false;
+    for (var d = 0; d < REVIEW_DECISIONS.length; d++) {
+      if (decision === REVIEW_DECISIONS[d]) { found = true; break; }
+    }
+    if (!found) {
+      // Try fuzzy match
+      var dl = decision.toLowerCase();
+      if (dl.indexOf('accept with') >= 0) decision = 'ACCEPT with improvements';
+      else if (dl.indexOf('accept') >= 0) decision = 'ACCEPT';
+      else if (dl.indexOf('defer') >= 0) decision = 'DEFER';
+      else if (dl.indexOf('wontfix') >= 0 || dl.indexOf("won't fix") >= 0) decision = 'WONTFIX';
+      else if (dl.indexOf('reject') >= 0) decision = 'REJECT';
+    }
+
+    issue.reviewDecision = decision;
+    issue.reviewNotes = result.notes || '';
+    state.dirty = true;
+    updateSaveState();
+    scheduleAutoSave();
+
+    // Re-render to show the AI's decision
+    renderSingleIssue();
+    updateIssueNavState();
+
+    // Focus notes for user to review
+    setTimeout(function() {
+      var notesEl = document.getElementById('single-review-notes');
+      if (notesEl) { notesEl.focus(); notesEl.setSelectionRange(notesEl.value.length, notesEl.value.length); }
+    }, 50);
+
+    updateFileCounts(state.selectedFilePath, state.parsed);
+    updateStats();
+    if (state.selectedFilePath && state.parsed) {
+      updateFileTreeProgress(state.selectedFilePath, state.parsed);
+    }
+
+  } catch (e) {
+    showToast('AI review failed: ' + e.message, 'error');
+    if (btn) { btn.disabled = false; btn.textContent = '🤖 AI Review'; }
+  }
+}
+
+function toggleReviewMode() {
+  if (!state.parsed || state.parsed.issues.length === 0) return;
+  state.reviewMode = (state.reviewMode === 'single') ? 'all' : 'single';
+  if (state.reviewMode === 'single') {
+    state.currentIssueIndex = 0;
+    focusedIssueIndex = 0;
+  }
+  renderReview();
+  // In single mode, focus notes
+  if (state.reviewMode === 'single') {
+    setTimeout(function() {
+      var notesEl = document.getElementById('single-review-notes');
+      if (notesEl) notesEl.focus();
+    }, 50);
+  }
+}
+
+function updateSaveState() {
+  var btnTop = document.getElementById('btn-save-top');
+  var indicator = document.getElementById('save-indicator-inline');
+  if (state.dirty) {
+    if (btnTop) btnTop.disabled = false;
+    if (indicator) {
+      indicator.textContent = '● Unsaved';
+      indicator.className = 'save-indicator-inline dirty';
+    }
+  } else {
+    if (btnTop) btnTop.disabled = true;
+    if (indicator) {
+      indicator.textContent = '✓ Saved';
+      indicator.className = 'save-indicator-inline clean';
+    }
+  }
+}
+
+// ── Auto-save (2-second debounce) ──
+function scheduleAutoSave() {
+  cancelAutoSave();
+  state.autoSaveTimer = setTimeout(function() {
+    if (state.dirty && state.selectedFilePath) {
+      saveReview({silent: true});
+    }
+  }, 2000);
+}
+
+function cancelAutoSave() {
+  if (state.autoSaveTimer) {
+    clearTimeout(state.autoSaveTimer);
+    state.autoSaveTimer = null;
+  }
+}
+
+// ── Auto-approve checkbox ──
+function onAutoApproveChange() {
+  var chk = document.getElementById('chk-auto-approve');
+  state.autoApprove = chk.checked;
+  localStorage.setItem('issue-review-auto-approve', chk.checked ? 'true' : 'false');
+}
+
+// ── Save ──
+// opts.silent: skip toast and non-essential DOM updates (used by auto-save to avoid stealing focus)
+async function saveReview(opts) {
+  opts = opts || {};
+  if (!state.parsed || !state.selectedFilePath) return;
+  if (!state.dirty) {
+    if (!opts.silent) showToast('No changes to save.', 'info');
+    return;
+  }
+
+  try {
+    var newContent = reconstructFile();
+    await apiPost('/api/task?path=' + encodeURIComponent(state.selectedFilePath), { content: newContent });
+    state.selectedFileContent = newContent;
+    state.parsed.originalContent = newContent;
+    state.dirty = false;
+    cancelAutoSave();
+    // Always update save indicator (lightweight, no focus impact)
+    updateSaveState();
+    // Update file counts and sidebar progress (lightweight, no focus impact)
+    updateFileCounts(state.selectedFilePath, state.parsed);
+    updateStats();
+    if (state.selectedFilePath && state.parsed) {
+      updateFileTreeProgress(state.selectedFilePath, state.parsed);
+    }
+    if (!opts.silent) {
+      // Only refresh nav state and show toast on manual save
+      if (state.reviewMode === 'single') {
+        updateIssueNavState();
+      }
+      showToast('Review saved successfully.', 'success');
+    }
+  } catch (e) {
+    if (!opts.silent) showToast('Save failed: ' + e.message, 'error');
+  }
+}
+
+// ── Mark Done ──
+async function markDone() {
+  if (!state.selectedFilePath) return;
+  var unreviewed = state.parsed ? state.parsed.issues.filter(function(iss) { return !iss.reviewDecision; }).length : 0;
+
+  var msg = 'Finalize this review?\n\n';
+  if (unreviewed > 0) {
+    msg += unreviewed + ' issue' + (unreviewed !== 1 ? 's' : '') + ' still unreviewed — will be treated as WONTFIX.\n\n';
+  }
+  msg += '• Approved issues → keep full detail in 1-ready\n';
+  msg += '• Other issues → condensed abstract\n';
+  msg += '• Original file → moved to review/done';
+  if (state.autoApprove) {
+    msg += '\n• #auto-approve tag will be appended → auto-move to 5approved + auto-push';
+  }
+
+  if (!confirm(msg)) return;
+
+  var btn = document.getElementById('btn-mark-done');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Processing…'; }
+
+  try {
+    // Save any pending changes first
+    if (state.dirty) {
+      cancelAutoSave();
+      var newContent = reconstructFile();
+      await apiPost('/api/task?path=' + encodeURIComponent(state.selectedFilePath), { content: newContent });
+      state.selectedFileContent = newContent;
+      state.parsed.originalContent = newContent;
+      state.dirty = false;
+      updateSaveState();
+    }
+
+    var result = await apiPost('/api/issue-review/mark-done', { path: state.selectedFilePath, auto_approve: state.autoApprove });
+
+    // Remove file from state.files (the master list)
+    var removedPath = state.selectedFilePath;
+    for (var i = 0; i < state.files.length; i++) {
+      if (state.files[i].path === removedPath) { state.files.splice(i, 1); break; }
+    }
+
+    // Clear selection
+    state.selectedFilePath = null;
+    state.parsed = null;
+    state.selectedFileContent = null;
+    state.dirty = false;
+    state.currentIssueIndex = 0;
+    cancelAutoSave();
+    updateSaveState();
+
+    // Re-render the sidebar tree (also rebuilds state.filteredFiles in tree order)
+    renderFileList();
+    updateStats();
+
+    // Navigate to the next file in the updated filtered list
+    if (state.filteredFiles.length > 0) {
+      selectFile(state.filteredFiles[0].path);
+    } else {
+      // No files left
+      document.getElementById('review-header').style.display = 'none';
+      document.getElementById('issue-nav-top').style.display = 'none';
+      document.getElementById('issue-nav-bottom').style.display = 'none';
+      document.getElementById('review-content').innerHTML =
+        '<div class="review-placeholder">' +
+        '<svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/><path d="M9 14l2 2 4-4"/></svg>' +
+        '<p>All reviews complete! 🎉</p>' +
+        '</div>';
+    }
+
+    var autoMsg = state.autoApprove ? ' with #auto-approve' : '';
+    showToast('✅ Review marked done' + autoMsg + '. Summary → 1-ready, original → review/done.', 'success');
+  } catch (e) {
+    showToast('Mark done failed: ' + e.message, 'error');
+  }
+  // Always re-enable the button
+  if (btn) { btn.disabled = false; btn.textContent = '✅ Mark Done'; }
+}
+
+// ── Discard ──
+async function discardFile() {
+  if (!state.selectedFilePath) return;
+
+  var msg = 'Discard this issue file?\n\n';
+  msg += 'The file will be moved to review/done/discard.\n';
+  msg += 'Use this for files that contain no issues or no valuable issues.\n\n';
+  msg += 'This cannot be undone from the UI.';
+
+  if (!confirm(msg)) return;
+
+  var btn = document.getElementById('btn-discard');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Moving…'; }
+
+  try {
+    var result = await apiPost('/api/issue-review/discard', { path: state.selectedFilePath });
+
+    // Remove file from state.files (the master list)
+    var removedPath = state.selectedFilePath;
+    for (var i = 0; i < state.files.length; i++) {
+      if (state.files[i].path === removedPath) { state.files.splice(i, 1); break; }
+    }
+
+    // Clear selection
+    state.selectedFilePath = null;
+    state.parsed = null;
+    state.selectedFileContent = null;
+    state.dirty = false;
+    state.currentIssueIndex = 0;
+    cancelAutoSave();
+    updateSaveState();
+
+    // Re-render the sidebar tree
+    renderFileList();
+    updateStats();
+
+    // Navigate to the next file in the updated filtered list
+    if (state.filteredFiles.length > 0) {
+      selectFile(state.filteredFiles[0].path);
+    } else {
+      // No files left
+      document.getElementById('review-header').style.display = 'none';
+      document.getElementById('issue-nav-top').style.display = 'none';
+      document.getElementById('issue-nav-bottom').style.display = 'none';
+      document.getElementById('review-content').innerHTML =
+        '<div class="review-placeholder">' +
+        '<svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/><path d="M9 14l2 2 4-4"/></svg>' +
+        '<p>No files in review queue.</p>' +
+        '</div>';
+    }
+
+    showToast('🗑 File discarded → review/done/discard.', 'success');
+  } catch (e) {
+    showToast('Discard failed: ' + e.message, 'error');
+  }
+  // Always re-enable the button
+  if (btn) { btn.disabled = false; btn.textContent = '🗑 Discard'; }
+}
+
+function reconstructFile() {
+  var p = state.parsed;
+  var content = p.originalContent;
+
+  // For each issue, update the review section
+  for (var i = 0; i < p.issues.length; i++) {
+    var issue = p.issues[i];
+    content = updateIssueInContent(content, issue);
+  }
+
+  return content;
+}
+
+function updateIssueInContent(content, issue) {
+  // Find the Human Review section for this specific issue
+  // We search for "### Issue N:" for this issue number, then find its Human Review section
+  var issueHeaderPattern = new RegExp('^### Issue ' + issue.num + ':.+', 'm');
+  var issueStart = content.search(issueHeaderPattern);
+  if (issueStart < 0) return content;
+
+  // Find the next issue header or end of content
+  var nextIssuePattern = /^### Issue \d+:/gm;
+  nextIssuePattern.lastIndex = issueStart + 1;
+  var nextMatch = nextIssuePattern.exec(content);
+  var issueEnd = nextMatch ? nextMatch.index : content.length;
+
+  // Also check for "## How to Reproduce" or end-of-file markers
+  var howToIdx = content.indexOf('\n## How to Reproduce', issueStart);
+  if (howToIdx >= 0 && howToIdx < issueEnd) {
+    issueEnd = howToIdx;
+  }
+
+  var issueContent = content.substring(issueStart, issueEnd);
+
+  // Find Human Review section within this issue
+  var reviewMatch = issueContent.match(/#### Human Review\n([\s\S]*?)(?=\n---\n|\n## |$)/);
+  if (!reviewMatch) return content;
+
+  var reviewSection = reviewMatch[1];
+  var reviewStartInIssue = issueContent.indexOf('#### Human Review\n');
+  var reviewStart = issueStart + reviewStartInIssue;
+  var reviewEnd = reviewStart + '#### Human Review\n'.length + reviewSection.length;
+
+  // Build new review section
+  var newReview = '#### Human Review\n\n';
+  for (var d = 0; d < REVIEW_DECISIONS.length; d++) {
+    var decision = REVIEW_DECISIONS[d];
+    var checked = (issue.reviewDecision === decision) ? '[x]' : '[ ]';
+    var desc = getDecisionDescription(decision);
+    newReview += '- ' + checked + ' **' + decision + '**' + (desc ? ' — ' + desc : '') + '\n';
+  }
+  newReview += '- **Notes:**';
+  if (issue.reviewNotes && issue.reviewNotes.trim()) {
+    newReview += '\n' + issue.reviewNotes.trim();
+  }
+  newReview += '\n';
+
+  // Replace the review section
+  return content.substring(0, reviewStart) + newReview + content.substring(reviewEnd);
+}
+
+function getDecisionDescription(decision) {
+  switch (decision) {
+    case 'ACCEPT': return 'issue confirmed valid; suggested improvement is correct';
+    case 'ACCEPT with improvements': return 'issue valid but fix needs refinement (add details in Notes)';
+    case 'DEFER': return 'issue acknowledged but intentionally deferred (add rationale in Notes)';
+    case 'WONTFIX': return 'issue acknowledged but will not be fixed (add rationale in Notes)';
+    case 'REJECT': return 'issue invalid, not a problem, or already addressed';
+    case 'DUPLICATE': return 'issue duplicates another existing issue (reference in Notes)';
+    default: return '';
+  }
+}
+
+// ── Keyboard Shortcuts (Shift-modifier to avoid textarea conflicts) ──
+document.addEventListener('keydown', function(e) {
+  // Ctrl+S — save (always works, no textarea conflict)
+  if (e.ctrlKey && e.key === 's') {
+    e.preventDefault();
+    saveReview();
+    return;
+  }
+
+  // Shift+Arrow keys — prev/next issue (only Shift, no Ctrl/Alt/Meta)
+  if (e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey && e.key === 'ArrowLeft' && state.reviewMode === 'single') {
+    e.preventDefault();
+    navigateSingleIssue(-1);
+    return;
+  }
+  if (e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey && e.key === 'ArrowRight' && state.reviewMode === 'single') {
+    e.preventDefault();
+    navigateSingleIssue(1);
+    return;
+  }
+
+  // ── Shift-modified shortcuts (work everywhere, including textareas) ──
+  // All require Shift ONLY — Ctrl/Alt/Meta must NOT be pressed.
+
+  // Shift+1 through Shift+6 → select review decision
+  if (e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey && e.code >= 'Digit1' && e.code <= 'Digit6') {
+    e.preventDefault();
+    var digit = parseInt(e.code.replace('Digit', ''), 10);
+    var idx = state.reviewMode === 'single' ? state.currentIssueIndex : focusedIssueIndex;
+    if (idx >= 0 && idx < (state.parsed ? state.parsed.issues.length : 0)) {
+      setDecision(idx, REVIEW_DECISIONS[digit - 1]);
+    }
+    return;
+  }
+
+  // Shift+A → AI review
+  if (e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey && (e.key === 'A' || e.key === 'a')) {
+    e.preventDefault();
+    if (state.parsed && state.currentIssueIndex < state.parsed.issues.length) {
+      triggerAiReview(state.currentIssueIndex);
+    }
+    return;
+  }
+
+  // Shift+D → discard file
+  if (e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey && (e.key === 'D' || e.key === 'd')) {
+    e.preventDefault();
+    discardFile();
+    return;
+  }
+
+  // Shift+N / Shift+P → prev/next file
+  if (e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey && (e.key === 'N' || e.key === 'n')) {
+    e.preventDefault();
+    navigateFile(1);
+    return;
+  }
+  if (e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey && (e.key === 'P' || e.key === 'p')) {
+    e.preventDefault();
+    navigateFile(-1);
+    return;
+  }
+
+  // Shift+J / Shift+K → prev/next issue (all-issues mode)
+  if (e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey && (e.key === 'J' || e.key === 'j') && state.reviewMode !== 'single') {
+    e.preventDefault();
+    navigateIssue(1);
+    return;
+  }
+  if (e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey && (e.key === 'K' || e.key === 'k') && state.reviewMode !== 'single') {
+    e.preventDefault();
+    navigateIssue(-1);
+    return;
+  }
+});
+
+function navigateIssue(direction) {
+  if (!state.parsed || state.parsed.issues.length === 0) return;
+  var newIdx = focusedIssueIndex + direction;
+  if (newIdx < 0) newIdx = 0;
+  if (newIdx >= state.parsed.issues.length) newIdx = state.parsed.issues.length - 1;
+  focusedIssueIndex = newIdx;
+
+  // Focus the notes field for this issue
+  var notesEl = document.getElementById('review-notes-' + newIdx);
+  if (notesEl) {
+    notesEl.focus();
+    // Scroll the issue card into view
+    var card = document.getElementById('issue-card-' + newIdx);
+    if (card) card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+}
+
+// Navigate between files with auto-save
+async function navigateToFile(direction) {
+  if (state.filteredFiles.length === 0) return;
+
+  // Auto-save current file before navigating away
+  if (state.dirty && state.selectedFilePath) {
+    cancelAutoSave();
+    try {
+      var newContent = reconstructFile();
+      await apiPost('/api/task?path=' + encodeURIComponent(state.selectedFilePath), { content: newContent });
+      state.selectedFileContent = newContent;
+      state.parsed.originalContent = newContent;
+      state.dirty = false;
+    } catch (e) {
+      // Continue navigation even if save fails
+    }
+  }
+
+  var currentIdx = -1;
+  for (var i = 0; i < state.filteredFiles.length; i++) {
+    if (state.filteredFiles[i].path === state.selectedFilePath) { currentIdx = i; break; }
+  }
+  var newIdx = currentIdx + direction;
+  if (newIdx < 0 || newIdx >= state.filteredFiles.length) return;
+  if (newIdx === currentIdx) return;
+
+  selectFile(state.filteredFiles[newIdx].path);
+}
+
+// Quick keyboard-only file nav (no auto-save)
+function navigateFile(direction) {
+  if (state.filteredFiles.length === 0) return;
+  var currentIdx = -1;
+  for (var i = 0; i < state.filteredFiles.length; i++) {
+    if (state.filteredFiles[i].path === state.selectedFilePath) { currentIdx = i; break; }
+  }
+  var newIdx = currentIdx + direction;
+  if (newIdx < 0 || newIdx >= state.filteredFiles.length) return;
+  if (newIdx === currentIdx) return;
+  selectFile(state.filteredFiles[newIdx].path);
+}
+
+// ── Expand/Collapse ──
+function toggleIssueBody(index) {
+  var body = document.getElementById('issue-body-' + index);
+  var icon = document.getElementById('collapse-icon-' + index);
+  if (body && icon) {
+    body.classList.toggle('open');
+    icon.classList.toggle('open');
+  }
+}
+
+function expandAll() {
+  var bodies = document.querySelectorAll('.issue-card-body');
+  var icons = document.querySelectorAll('.collapse-icon');
+  for (var i = 0; i < bodies.length; i++) { bodies[i].classList.add('open'); }
+  for (var j = 0; j < icons.length; j++) { icons[j].classList.add('open'); }
+}
+
+function collapseAll() {
+  var bodies = document.querySelectorAll('.issue-card-body');
+  var icons = document.querySelectorAll('.collapse-icon');
+  for (var i = 0; i < bodies.length; i++) { bodies[i].classList.remove('open'); }
+  for (var j = 0; j < icons.length; j++) { icons[j].classList.remove('open'); }
+}
+
+// ── Escape helpers ──
+function escHtml(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function escJs(s) { return String(s).replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/"/g,'\\"'); }
+
+// ── Init ──
+init();
+</script>
+</body>
+</html>

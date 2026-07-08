@@ -5,7 +5,7 @@ It processes task files that you create, executes them, and can commit changes b
 
 ## How to Use
 
-1. run `coworker-scheduler.ps1` to start recurring automation
+1. run `start.ps1` to start recurring automation
 2. draft tasks in `main/0draft` (or anywhere)
 3. copy ready tasks to `main/1ready` for execution
 4. once executed, you can find results in `main/3done` and detailed logs in `~\.browser4-coworker\tasks\300logs`
@@ -30,6 +30,8 @@ Task files flow through a pipeline of numbered folders inside `coworker/tasks/`.
 
 Tasks in stages `3done`, `5approved`, and `6git-pushed` are organized by date via `organize-task-files.ps1`.
 
+Tasks with the `#auto-approve` tag skip `3done` and go directly from `2working` to `5approved`.
+
 ### GitHub issues pipeline
 
 | Stage | Folder | Description |
@@ -38,7 +40,10 @@ Tasks in stages `3done`, `5approved`, and `6git-pushed` are organized by date vi
 | In Process | `200issues/draft/refine/1working` | Agent is extracting and refining issues |
 | Done | `200issues/draft/refine/2done` | Extraction complete, issues staged |
 | Error | `200issues/draft/refine/0error` | Extraction failed after max retries |
-| Open | `200issues/github/commit/ready` | Refined issue files ready for creation via `gh` CLI |
+| Staged | `200issues/github/commit/ready` | Refined issue files ready for creation via `gh` CLI |
+| Created | `200issues/github/commit/done` | Issues successfully created on GitHub |
+| Failed | `200issues/github/commit/failed` | `gh` CLI returned an error — manual inspection needed |
+| Draft (manual) | `200issues/github/commit/draft` | Original drafts awaiting manual approval |
 
 ### Draft refinement pipeline (sub-pipeline of `main/0draft`)
 
@@ -126,7 +131,7 @@ Default scheduled tasks:
 |------|--------------|--------------|
 | `coworker` | `coworker.ps1` | `main/1ready` or `main/5approved` |
 | `draft-refinement` | `workers/refine-drafts.ps1` | `main/0draft/refine/1ready` |
-| `commit-github-issues` | `workers/commit-github-issues.ps1` | `200issues/github/commit/ready` |
+| `commit-github-issues` | `workers/commit-github-issues.ps1` | `200issues/github/commit/ready` (disabled by default) |
 | `refine-github-issues` | `workers/refine-github-issues.ps1` | `200issues/draft/refine/0ready` |
 | `fetch-github-issues` | `workers/fetch-github-issues.ps1` | _(always runs, every 10 min)_ |
 | `triage-github-issues` | `workers/triage-github-issues.ps1` | `main/0draft/issues/github` (every 30 min) |
@@ -189,4 +194,13 @@ Repo: owner/repo
 # Create issues on GitHub
 .\coworker\scripts\workers\commit-github-issues.ps1
 ```
+
+## Task-Source Ingestion
+
+Coworker can ingest tasks from external sources and queue them for execution:
+
+- **Fetch** (`fetch-github-issues.ps1`): Polls GitHub for open issues on the configured repo, self-assigns unassigned ones, and saves each as a markdown file in `main/0draft/issues/github/`.
+- **Triage** (`triage-github-issues.ps1`): Scans fetched issues and auto-queues low-risk, high-relevance ones for AI execution by moving them to `main/1ready`.
+
+Both workers are enabled by default in the scheduler.
 

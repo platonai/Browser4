@@ -20,5 +20,4 @@ Before running this scenario, ensure MockSite is running on localhost:18080 (`./
 6. Use `ARRAY_FIRST_NOT_BLANK` with multiple fallback selectors to handle variations in the page structure.
 7. If the page supports it, use PowerCSS `:expr()` to filter elements by visual properties (e.g., only elements wider than a threshold).
 8. Add `WHERE` clauses to filter the results, `ORDER BY` to sort by price or title, and `LIMIT` to restrict the output.
-9. If an LLM API key is configured, try `LLM_EXTRACT` to extract a structured field (like a product category or description) from the DOM element text, and `LLM_CHAT` to ask a question about the extracted data.
-10. Run the final query and review the extracted data.
+9. Run the final query and review the extracted data.

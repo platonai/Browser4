@@ -168,6 +168,7 @@ function Print-Usage {
     Write-Host "    --list                  List discovered scenarios, don't run"
     Write-Host "    --silent                Suppress agent output"
     Write-Host "    --skip-version-check    Skip browser4-cli version check"
+    Write-Host "    --timeout <minutes>     Kill each scenario task after N minutes (default: no timeout)"
     Write-Host "  resume      Resume from the last failed module (-rf)"
     Write-Host "  main    Run all Browser4 main tests (fast, rest, it, e2e)"
     Write-Host ""
@@ -186,6 +187,7 @@ function Print-Usage {
     Write-Host "  test.ps1 rws                        # Show RWS help (requires --scenarios or --task)"
     Write-Host "  test.ps1 rws --scenarios            # Run all agent-scenario tasks"
     Write-Host "  test.ps1 rws --scenarios amazon     # Run a specific scenario task"
+    Write-Host "  test.ps1 rws --scenarios --timeout 30  # Run all scenarios with 30-minute per-task timeout"
     Write-Host "  test.ps1 rws --scenarios --list     # List discovered scenario tasks"
     Write-Host "  test.ps1 rws --scenarios --production  # Run scenarios against installed CLI"
     Write-Host "  test.ps1 rws --task tasks/real-world/generic/amazon.md   # Run a single task file directly"
@@ -401,6 +403,11 @@ function Invoke-RealWorldScenarioTests([string[]]$additionalArgs) {
         elseif ($arg -in '--skip-version-check', '-SkipVersionCheck') {
             $passThroughArgs += '-SkipVersionCheck'
             $i++
+        }
+        elseif ($arg -eq '--timeout' -and ($i + 1) -lt $additionalArgs.Count) {
+            $timeoutVal = $additionalArgs[$i + 1]
+            $passThroughArgs += '-TimeoutMinutes', $timeoutVal
+            $i += 2
         }
         else {
             $passThroughArgs += $arg

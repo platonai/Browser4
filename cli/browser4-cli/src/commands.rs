@@ -333,7 +333,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             options: &[
                 OptionDef {
                     name: "cdp",
-                    description: "CDP endpoint URL (e.g. http://localhost:9222) or channel name (chrome, msedge, chrome-canary, ...)",
+                    description: "CDP endpoint URL (e.g. http://localhost:9222) or channel name. Supported channels: chrome, chrome-beta, chrome-dev, chrome-canary, msedge, msedge-beta, msedge-dev, msedge-canary",
                     is_bool: false,
                     short: None,
                 },
@@ -579,6 +579,19 @@ pub fn all_commands() -> Vec<CommandDef> {
                     name: "status",
                     description: "Show loop state and progress. \
                                   Optionally specify --name to target a named loop.",
+                    is_bool: true,
+                    short: None,
+                },
+                OptionDef {
+                    name: "history",
+                    description: "Show recently completed loops (up to 200 most recent)",
+                    is_bool: true,
+                    short: None,
+                },
+                OptionDef {
+                    name: "keep-state",
+                    description: "Preserve the loop state file after normal completion \
+                                  (by default it is auto-cleaned)",
                     is_bool: true,
                     short: None,
                 },
@@ -1036,7 +1049,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 } else if let Some(millis) = get_number_value(args, "target") {
                     json!({ "millis": millis })
                 } else {
-                    json!({ "selector": get_str(args, "target").unwrap_or_default() })
+                    json!({ "selector": get_str(args, "target").unwrap_or_default(), "timeoutMillis": timeout_millis })
                 }
             },
         },
@@ -1179,6 +1192,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 ArgDef { name: "ref", description: "Optional CSS selector or snapshot ref (for example e5)", optional: true },
             ],
             options: &[
+                OptionDef { name: "ref", description: "CSS selector or snapshot ref to scope evaluation (equivalent to positional [ref])", is_bool: false, short: None },
                 OptionDef { name: "file", description: "Read JavaScript expression from a file instead of the command line", is_bool: false, short: None },
                 OptionDef { name: "stdin", description: "Read JavaScript expression from stdin (useful for piping multi-line scripts without shell quoting)", is_bool: true, short: None },
                 OptionDef { name: "base64", description: "Decode the expression argument as base64 before execution (avoids shell quoting issues on Windows)", is_bool: true, short: None },
@@ -1618,7 +1632,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: true,
             args: &[ArgDef { name: "ref", description: "Exact target element reference from the page snapshot", optional: true }],
             options: &[
-                OptionDef { name: "filename", description: "File name to save the screenshot to", is_bool: false, short: None },
+                OptionDef { name: "filename", description: "File name or path to save the screenshot to. Bare filenames are saved to the snapshot directory; paths (containing / or \\) are resolved relative to the current directory.", is_bool: false, short: None },
                 OptionDef { name: "full-page", description: "When true, takes a screenshot of the full scrollable page", is_bool: true, short: None },
                 OptionDef { name: "viewport", description: "Capture a specific viewport by index (0 = top). Same semantics as snapshot -v.", is_bool: false, short: Some("v") },
             ],
@@ -1642,7 +1656,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: true,
             args: &[],
             options: &[
-                OptionDef { name: "filename", description: "File name to save the pdf to", is_bool: false, short: None },
+                OptionDef { name: "filename", description: "File name or path to save the PDF to. Bare filenames are saved to the snapshot directory; paths (containing / or \\) are resolved relative to the current directory.", is_bool: false, short: None },
             ],
             tool_name_fn: |_| "browser_pdf_save".to_string(),
             tool_params_fn: |args| {
@@ -1840,6 +1854,18 @@ pub fn all_commands() -> Vec<CommandDef> {
                     is_bool: false,
                     short: None,
                 },
+                OptionDef {
+                    name: "log-filter",
+                    description: "Filter log lines by substring or regex pattern (case-insensitive). Applied server-side before returning results.",
+                    is_bool: false,
+                    short: None,
+                },
+                OptionDef {
+                    name: "metric-filter",
+                    description: "Filter metric names by substring or regex pattern (case-insensitive). Applied server-side before returning results.",
+                    is_bool: false,
+                    short: None,
+                },
             ],
             tool_name_fn: |_| String::new(),
             tool_params_fn: |args| {
@@ -1852,6 +1878,12 @@ pub fn all_commands() -> Vec<CommandDef> {
                 }
                 if let Some(lines) = get_opt_str(args, "lines") {
                     params["lines"] = json!(lines);
+                }
+                if let Some(log_filter) = get_opt_str(args, "log-filter") {
+                    params["log_filter"] = json!(log_filter);
+                }
+                if let Some(metric_filter) = get_opt_str(args, "metric-filter") {
+                    params["metric_filter"] = json!(metric_filter);
                 }
                 params
             },
@@ -1997,6 +2029,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "refresh", description: "Force a fresh fetch, ignoring cache", is_bool: true, short: None },
                 OptionDef { name: "parse", description: "Parse page immediately after fetching", is_bool: true, short: None },
                 OptionDef { name: "store-content", description: "Persist page content to storage", is_bool: true, short: None },
+                OptionDef { name: "wait", description: "Block until all submitted jobs complete", is_bool: true, short: None },
             ],
             tool_name_fn: |_| "swarm_submit".to_string(),
             tool_params_fn: |args| {
@@ -2009,6 +2042,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 if let Some(b) = get_bool(args, "refresh") { p["refresh"] = json!(b); }
                 if let Some(b) = get_bool(args, "parse") { p["parse"] = json!(b); }
                 if let Some(b) = get_bool(args, "store-content") { p["storeContent"] = json!(b); }
+                if let Some(b) = get_bool(args, "wait") { p["wait"] = json!(b); }
                 p
             },
         },
@@ -2022,11 +2056,12 @@ pub fn all_commands() -> Vec<CommandDef> {
             options: &[
                 OptionDef { name: "sql", description: "X-SQL query to execute. Use @url as placeholder for the target URL. Prefix with @ to read from file (e.g. --sql @query.sql)", is_bool: false, short: None },
                 OptionDef { name: "sql-stdin", description: "Read X-SQL query from stdin (avoids shell quoting issues on Windows)", is_bool: true, short: None },
-                OptionDef { name: "sql-base64", description: "Decode the --sql value (or stdin input) as base64 before execution", is_bool: true, short: None },
+                OptionDef { name: "sql-base64", description: "Base64-encoded X-SQL query (avoid shell quoting issues on Windows)", is_bool: false, short: None },
                 OptionDef { name: "seed-file", description: "File containing URLs to submit, one per line (direct path, no @ prefix)", is_bool: false, short: None },
                 OptionDef { name: "deadline", description: "Deadline for task completion (ISO 8601, e.g. 2026-02-24T23:59:59Z)", is_bool: false, short: None },
                 OptionDef { name: "expires", description: "Cache expiration duration (e.g. 1d, 1h)", is_bool: false, short: None },
                 OptionDef { name: "refresh", description: "Force a fresh fetch, ignoring cache", is_bool: true, short: None },
+                OptionDef { name: "wait", description: "Block until all submitted jobs complete", is_bool: true, short: None },
             ],
             tool_name_fn: |_| "swarm_query".to_string(),
             tool_params_fn: |args| {
@@ -2035,11 +2070,13 @@ pub fn all_commands() -> Vec<CommandDef> {
                 if let Some(v) = get_opt_str(args, "sql") { p["sql"] = json!(v); }
                 // --sql-stdin and --sql-base64 are handled in main.rs dispatch
                 if get_bool(args, "sql-stdin").unwrap_or(false) { p["sqlStdin"] = json!(true); }
-                if get_bool(args, "sql-base64").unwrap_or(false) { p["sqlBase64"] = json!(true); }
+                if let Some(v) = get_opt_str(args, "sql-base64") { p["sqlBase64"] = json!(v); }
+                else if get_bool(args, "sql-base64").unwrap_or(false) { p["sqlBase64"] = json!(true); }
                 if let Some(v) = get_opt_str(args, "seed-file") { p["seedFile"] = json!(v); }
                 if let Some(v) = get_opt_str(args, "deadline") { p["deadline"] = json!(v); }
                 if let Some(v) = get_opt_str(args, "expires") { p["expires"] = json!(v); }
                 if let Some(b) = get_bool(args, "refresh") { p["refresh"] = json!(b); }
+                if let Some(b) = get_bool(args, "wait") { p["wait"] = json!(b); }
                 p
             },
         },
@@ -2076,6 +2113,23 @@ pub fn all_commands() -> Vec<CommandDef> {
             hidden: false,
             batch_supported: false,
             args: &[],
+            options: &[
+                OptionDef { name: "clear", description: "Remove all tracked swarm tasks from the list", is_bool: true, short: None },
+            ],
+            tool_name_fn: |_| String::new(),
+            tool_params_fn: |args| {
+                let mut p = json!({});
+                if let Some(b) = get_bool(args, "clear") { p["clear"] = json!(b); }
+                p
+            },
+        },
+        CommandDef {
+            name: "swarm-close",
+            description: "Close the swarm session and release browser resources",
+            category: Category::Swarm,
+            hidden: false,
+            batch_supported: false,
+            args: &[],
             options: &[],
             tool_name_fn: |_| String::new(),
             tool_params_fn: |_| json!({}),
@@ -2096,7 +2150,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "seed-file", description: "File containing URLs to crawl, one per line (lines starting with # are ignored)", is_bool: false, short: None },
                 OptionDef { name: "sql", description: "X-SQL query to extract structured data from each crawled page. Use @url as the page URL placeholder. Prefix with @ to read from file (e.g. --sql @query.sql)", is_bool: false, short: None },
                 OptionDef { name: "sql-stdin", description: "Read X-SQL query from stdin (avoids shell quoting issues on Windows)", is_bool: true, short: None },
-                OptionDef { name: "sql-base64", description: "Decode the --sql value (or stdin input) as base64 before execution", is_bool: true, short: None },
+                OptionDef { name: "sql-base64", description: "Base64-encoded X-SQL query (avoid shell quoting issues on Windows)", is_bool: false, short: None },
                 OptionDef { name: "format", description: "Output format for extracted data: json, csv, or table (default: table)", is_bool: false, short: None },
                 OptionDef { name: "output", description: "Write results to a file instead of stdout", is_bool: false, short: Some("o") },
                 OptionDef { name: "out-link-selector", description: "CSS selector to extract links from each page", is_bool: false, short: Some("ol") },
@@ -2131,9 +2185,8 @@ pub fn all_commands() -> Vec<CommandDef> {
                 if get_bool(args, "sql-stdin").unwrap_or(false) {
                     p["sqlStdin"] = json!(true);
                 }
-                if get_bool(args, "sql-base64").unwrap_or(false) {
-                    p["sqlBase64"] = json!(true);
-                }
+                if let Some(v) = get_opt_str(args, "sql-base64") { p["sqlBase64"] = json!(v); }
+                else if get_bool(args, "sql-base64").unwrap_or(false) { p["sqlBase64"] = json!(true); }
                 // Output options (CLI-side, not sent to server)
                 if let Some(v) = get_opt_str(args, "format") {
                     p["format"] = json!(v);
@@ -2314,8 +2367,8 @@ pub fn all_commands() -> Vec<CommandDef> {
                 },
                 OptionDef {
                     name: "sql-base64",
-                    description: "Decode the --sql value (or stdin input) as base64 before execution",
-                    is_bool: true,
+                    description: "Base64-encoded X-SQL query (avoid shell quoting issues on Windows)",
+                    is_bool: false,
                     short: None,
                 },
                 OptionDef {
@@ -2330,6 +2383,12 @@ pub fn all_commands() -> Vec<CommandDef> {
                     is_bool: false,
                     short: None,
                 },
+                OptionDef {
+                    name: "format",
+                    description: "Output format: json, csv, or table (default: json)",
+                    is_bool: false,
+                    short: None,
+                },
             ],
             tool_name_fn: |_| "html_snapshot_query".to_string(),
             tool_params_fn: |args| {
@@ -2338,9 +2397,11 @@ pub fn all_commands() -> Vec<CommandDef> {
                 let mut p = json!({ "sql": sql, "url": url });
                 // Pass through CLI-side flags (--sql-stdin and --sql-base64 are handled in main.rs dispatch)
                 if get_bool(args, "sql-stdin").unwrap_or(false) { p["sqlStdin"] = json!(true); }
-                if get_bool(args, "sql-base64").unwrap_or(false) { p["sqlBase64"] = json!(true); }
+                if let Some(v) = get_opt_str(args, "sql-base64") { p["sqlBase64"] = json!(v); }
+                else if get_bool(args, "sql-base64").unwrap_or(false) { p["sqlBase64"] = json!(true); }
                 if let Some(true) = get_bool(args, "result-only") { p["resultOnly"] = json!(true); }
                 if let Some(f) = get_opt_str(args, "output-file") { p["outputFile"] = json!(f); }
+                if let Some(f) = get_opt_str(args, "format") { p["format"] = json!(f); }
                 p
             },
         },
@@ -2406,7 +2467,8 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "files-with-matches", short: Some("l"), is_bool: true, description: "Print only whether matches exist" },
                 OptionDef { name: "fixed-strings", short: Some("F"), is_bool: true, description: "Treat pattern as a literal string, not regex" },
                 OptionDef { name: "word-regexp", short: Some("w"), is_bool: true, description: "Match only whole words" },
-                OptionDef { name: "selector", short: None, is_bool: false, description: "CSS selector to scope the search to" },
+                OptionDef { name: "selector", short: None, is_bool: false, description: "CSS selector to scope the search to (querySelector semantics: first match only). Use --selector-all to search across all matching elements." },
+                OptionDef { name: "selector-all", short: None, is_bool: false, description: "CSS selector to scope the search to all matching elements (querySelectorAll semantics). Each element's inner HTML is searched independently, and results are annotated with the element index." },
                 OptionDef { name: "page", short: None, is_bool: false, description: "Page number (1-based, default: 1)" },
                 OptionDef { name: "page-size", short: None, is_bool: false, description: "Lines per page (default: 2000)" },
                 OptionDef { name: "all", short: None, is_bool: true, description: "Show all output, disabling pagination" },
@@ -2508,11 +2570,13 @@ pub fn all_commands() -> Vec<CommandDef> {
             hidden: false,
             batch_supported: false,
             args: &[
-                ArgDef { name: "selector", description: "CSS selector to scope inspection (default: :root; use e.g. .product-card for recurring pattern detection)", optional: true },
+                ArgDef { name: "selector", description: "CSS selector to scope inspection (default: :root; use e.g. .product-card for recurring pattern detection). Prefix with @ to read from file (e.g. @selector.txt). Use --stdin to pipe or --selector-base64 for encoded selectors.", optional: true },
             ],
             options: &[
                 OptionDef { name: "max", description: "Max matching elements to analyze (default: 20)", is_bool: false, short: None },
                 OptionDef { name: "depth", description: "Max descendant depth for selector suggestions (default: 5)", is_bool: false, short: None },
+                OptionDef { name: "stdin", description: "Read the CSS selector from stdin instead of an inline argument (avoids shell quoting issues on Windows)", is_bool: true, short: None },
+                OptionDef { name: "selector-base64", description: "Base64-encoded CSS selector (avoids shell quoting issues on Windows)", is_bool: false, short: None },
             ],
             tool_name_fn: |_| "html_snapshot_inspect".to_string(),
             tool_params_fn: |args| {
@@ -2524,13 +2588,16 @@ pub fn all_commands() -> Vec<CommandDef> {
                 if let Some(d) = get_opt_str(args, "depth") {
                     if let Ok(n) = d.parse::<i32>() { p["depth"] = json!(n); }
                 }
+                // Pass through CLI-side flags for selector resolution in main.rs dispatch
+                if get_bool(args, "stdin").unwrap_or(false) { p["stdin"] = json!(true); }
+                if let Some(v) = get_opt_str(args, "selector-base64") { p["selectorBase64"] = json!(v); }
                 p
             },
         },
         CommandDef {
             name: "generate-locator",
-            description: "Generate a unique CSS selector path for an element identified by a snapshot ref (e5) or CSS selector",
-            category: Category::Snapshot,
+            description: "Generate the best CSS selector (id, class, or nth-of-type path) for a snapshot ref or CSS selector",
+            category: Category::Core,
             hidden: false,
             batch_supported: false,
             args: &[ArgDef { name: "ref", description: "Element reference (e5, backend:15) or CSS selector", optional: false }],
@@ -3352,6 +3419,8 @@ mod tests {
         assert!(swarm_cmds.contains(&"swarm-query"));
         assert!(swarm_cmds.contains(&"swarm-status"));
         assert!(swarm_cmds.contains(&"swarm-result"));
+        assert!(swarm_cmds.contains(&"swarm-list"));
+        assert!(swarm_cmds.contains(&"swarm-close"));
     }
 
     #[test]
@@ -3438,11 +3507,13 @@ mod tests {
         assert_eq!(cmd.category, Category::Browsers);
         assert!(!cmd.batch_supported);
         assert_eq!(cmd.args.len(), 0);
-        assert_eq!(cmd.options.len(), 3);
+        assert_eq!(cmd.options.len(), 5);
         let option_names: Vec<&str> = cmd.options.iter().map(|o| o.name).collect();
         assert!(option_names.contains(&"server"));
         assert!(option_names.contains(&"file"));
         assert!(option_names.contains(&"lines"));
+        assert!(option_names.contains(&"log-filter"));
+        assert!(option_names.contains(&"metric-filter"));
         let args: HashMap<String, Value> = HashMap::new();
         assert!((cmd.tool_name_fn)(&args).is_empty());
     }
@@ -3567,6 +3638,29 @@ mod tests {
         assert_eq!((cmd.tool_name_fn)(&args), "wait_for_selector");
         let params = (cmd.tool_params_fn)(&args);
         assert_eq!(params["selector"], "e1");
+    }
+
+    #[test]
+    fn test_wait_selector_includes_default_timeout() {
+        let map = commands_map();
+        let cmd = map.get("wait").expect("wait command must exist");
+        let mut args = HashMap::new();
+        args.insert("target".to_string(), json!("#output"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["selector"], "#output");
+        assert_eq!(params["timeoutMillis"], 30000);
+    }
+
+    #[test]
+    fn test_wait_selector_respects_custom_timeout() {
+        let map = commands_map();
+        let cmd = map.get("wait").expect("wait command must exist");
+        let mut args = HashMap::new();
+        args.insert("target".to_string(), json!("#output"));
+        args.insert("timeout".to_string(), json!("5000"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["selector"], "#output");
+        assert_eq!(params["timeoutMillis"], 5000);
     }
 
     #[test]
@@ -4141,10 +4235,10 @@ mod tests {
     }
 
     #[test]
-    fn test_generate_locator_category_is_snapshot() {
+    fn test_generate_locator_category_is_core() {
         let map = commands_map();
         let cmd = map.get("generate-locator").unwrap();
-        assert_eq!(cmd.category, Category::Snapshot);
+        assert_eq!(cmd.category, Category::Core);
     }
 
     #[test]
@@ -4558,10 +4652,10 @@ mod tests {
         let cmd = map.get("crawl").unwrap();
         let mut args = HashMap::new();
         args.insert("sql-stdin".to_string(), json!(true));
-        args.insert("sql-base64".to_string(), json!(true));
+        args.insert("sql-base64".to_string(), json!("U0VMRUNUIDE="));
         let params = (cmd.tool_params_fn)(&args);
         assert_eq!(params["sqlStdin"].as_bool().unwrap(), true);
-        assert_eq!(params["sqlBase64"].as_bool().unwrap(), true);
+        assert_eq!(params["sqlBase64"].as_str().unwrap(), "U0VMRUNUIDE=");
     }
 
     #[test]

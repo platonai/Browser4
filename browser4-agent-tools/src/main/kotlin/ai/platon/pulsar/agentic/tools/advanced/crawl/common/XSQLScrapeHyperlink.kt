@@ -102,7 +102,23 @@ open class XSQLHyperlink(
         }
 
         val rs = executeQuery(request, response)
-        response.resultSet = ResultSetUtils.getTextEntitiesFromResultSet(rs)
+        val rawResultSet = ResultSetUtils.getTextEntitiesFromResultSet(rs)
+
+        // Ensure all column keys are present in every row. When a selector
+        // finds no match, the corresponding column should contain null rather
+        // than being silently absent — missing data must be visible.
+        val allKeys = linkedSetOf<String>()
+        for (row in rawResultSet) {
+            allKeys.addAll(row.keys)
+        }
+        response.resultSet = rawResultSet.map { row ->
+            val filled = linkedMapOf<String, Any?>()
+            for (key in allKeys) {
+                filled[key] = row[key]
+            }
+            filled
+        }
+
         response.refresh(response.statusCode, page.protocolStatus.minorCode, false)
     }
 }

@@ -43,7 +43,7 @@ use args::{
     build_command_args, build_short_option_map, parse_batch_args, parse_batch_json_commands,
     parse_command_string, parse_global_flags, parse_raw_args,
 };
-use commands::{commands_map, is_bare_css_selector, is_element_reference};
+use commands::{commands_map, is_element_reference};
 use daemon::{
     ensure_chrome_available, ensure_server_running, init_root_search_start_dir_from_startup,
     install_browser4_runtime, read_current_tag, resolve_base_url, resolve_channel_to_endpoint,
@@ -51,9 +51,11 @@ use daemon::{
 };
 use help::{generate_command_help, generate_help, generate_help_entry, public_command_name};
 use http::{
-    call_tool, call_tool_with_result, crawl_request_timeout, get_command_result,
-    get_command_status, is_stale_session_error, make_client,
-    submit_batch_commands, submit_crawl, submit_plain_command, CallToolResult,
+    call_tool, call_tool_with_result, cancel_crawl, clear_crawls, crawl_request_timeout,
+    get_command_result, get_command_status, get_crawl_result, get_crawl_status,
+    get_swarm_result, get_swarm_status,
+    is_stale_session_error, make_client, submit_batch_commands, submit_crawl,
+    submit_plain_command, submit_swarm_payload, submit_swarm_query, CallToolResult,
 };
 use managed_processes::{
     read_managed_server_processes, stop_browser4_server_forcibly, ManagedServerProcess,
@@ -63,6 +65,7 @@ use snapshot::{resolve_output_path, save_binary, save_snapshot, timestamped_file
 use state::{
     clear_all_state, clear_state, format_async_task_list, prune_async_tasks,
     read_async_tasks, read_state, resolve_default_state_dir, resolve_ref, track_async_task,
+    update_async_task_status,
     write_async_tasks, write_state, CliState, MousePosition,
 };
 
@@ -287,6 +290,10 @@ struct LoopArgs {
     pause_all: bool,
     /// True when `--resume-all` was specified — resume all paused loops.
     resume_all: bool,
+    /// True when `--history` was specified — show completed loop history.
+    history: bool,
+    /// True when `--keep-state` was specified — preserve state file on completion.
+    keep_state: bool,
 }
 
 /// Commands that should NOT trigger a post-command snapshot.
@@ -295,8 +302,12 @@ fn no_snapshot_commands() -> HashSet<&'static str> {
         "open",
         "attach",
         "goto",
+        "act",
+        "batch",
         "close",
         "close-all",
+        "console",
+        "delete-data",
         "kill-all",
         "list",
         "status",
@@ -304,6 +315,7 @@ fn no_snapshot_commands() -> HashSet<&'static str> {
         "loop",
         "install",
         "uninstall",
+        "upgrade",
         "doctor",
         "help",
         "eval",
@@ -333,7 +345,6 @@ fn no_snapshot_commands() -> HashSet<&'static str> {
         "pdf",
         "get",
         "wait",
-        "scroll",
         "agent-run",
         "agent-status",
         "agent-result",
@@ -345,6 +356,10 @@ fn no_snapshot_commands() -> HashSet<&'static str> {
         "swarm-result",
         "swarm-list",
         "crawl",
+        "crawl-status",
+        "crawl-result",
+        "crawl-cancel",
+        "crawl-clear",
         "crawl-list",
         "htmlsnapshot",
         "htmlsnapshot-capture",
@@ -355,11 +370,8 @@ fn no_snapshot_commands() -> HashSet<&'static str> {
         "htmlsnapshot-summary",
         "htmlsnapshot-grep",
         "htmlsnapshot-inspect",
-        "skill-list",
-        "skill-info",
-        "skill-install",
-        "skill-uninstall",
-        "skill-reload",
+        "scroll",
+        "resize",
     ]
     .into()
 }
@@ -471,13 +483,7 @@ async fn restore_active_selector(
         return Ok(());
     }
 
-    // Strip `css:` prefix added by the `fill` command so that the selector can
-    // be used directly with `document.querySelector` in the browser.
-    let browser_selector = selector
-        .strip_prefix("css:")
-        .unwrap_or(selector);
-
-    let selector_literal = serde_json::to_string(browser_selector)
+    let selector_literal = serde_json::to_string(selector)
         .map_err(|e| format!("Failed to encode active selector: {e}"))?;
     let focus_expression = format!(
         "(() => {{ \
@@ -582,9 +588,16 @@ fn parse_tab_entry(value: &Value) -> Option<TabInfo> {
     // Accept "index", "id" (if numeric), or derive position.
     let index = obj
         .get("index")
-        .and_then(|v| v.as_u64())
-        .or_else(|| obj.get("id").and_then(|v| v.as_u64()))
-        .or_else(|| obj.get("id").and_then(|v| v.as_str().and_then(|s| s.parse().ok())))
+        .and_then(|v| {
+            v.as_u64()
+                .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+        })
+        .or_else(|| {
+            obj.get("id").and_then(|v| {
+                v.as_u64()
+                    .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+            })
+        })
         .map(|n| n as usize);
     let url = obj
         .get("url")
@@ -878,6 +891,11 @@ async fn post_command_snapshot(client: &Client, base_url: &str, session_id: &str
     cli_println!("- Page Title: {}", title_result);
     cli_println!("### Snapshot");
     cli_println!("[Snapshot]({})", out_path.display());
+    if !json_active() {
+        eprintln!(
+            "💡 Tip: Run `snapshot -v 0` to see interactive element refs"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -905,6 +923,20 @@ async fn get_or_create_navigation_session(
         cli_println!("Session opened: {}", new_id);
         new_id
     };
+
+    // When reconnecting to an existing session, inform the user what page is active
+    if reused_existing_session {
+        if let Ok(url_result) = call_tool(
+            client,
+            base_url,
+            "page_url",
+            json!({ "sessionId": session_id }),
+        ).await {
+            if !url_result.is_empty() {
+                cli_println!("Reconnected to existing session on {}", url_result);
+            }
+        }
+    }
 
     Ok((state, session_id, reused_existing_session))
 }
@@ -982,13 +1014,6 @@ async fn handle_attach(
         .map(str::trim)
         .filter(|s| !s.is_empty());
 
-    // --extension value (optional channel override, e.g. "chrome-canary", "msedge")
-    let extension_raw = parsed_args
-        .get("extension")
-        .and_then(|v| v.as_str())
-        .map(str::trim)
-        .filter(|s| !s.is_empty());
-
     let effective_base_url = if let Some(endpoint) = endpoint_override {
         if !endpoint.starts_with("http://") && !endpoint.starts_with("https://") {
             return Err("--endpoint must be an HTTP(S) URL".to_string());
@@ -1002,7 +1027,7 @@ async fn handle_attach(
     // remote server without calling attach_browser.  The remote server
     // manages its own browser sessions; subsequent commands (open, goto,
     // list, etc.) will target the remote endpoint.
-    if cdp_raw.is_none() && endpoint_override.is_some() && extension_raw.is_none() {
+    if cdp_raw.is_none() && endpoint_override.is_some() {
         let mut state = read_state(None, session_name);
         state.session_name = session_name.map(|s| s.to_string());
         state.session_id = None;
@@ -1018,28 +1043,23 @@ async fn handle_attach(
         return Ok(());
     }
 
-    // Extension-based attach
-    if let Some(ext_val) = extension_raw {
-        let channel = if ext_val == "true" { "chrome" } else { ext_val };
-        return handle_attach_extension(
-            client, &effective_base_url, session_name, channel, parsed_args,
-        )
-        .await;
-    }
-
-    // Resolve the CDP endpoint
+    // Resolve the CDP endpoint — channel-name resolution uses blocking I/O
+    // (process scanning, port probing via reqwest::blocking) and must run
+    // outside the tokio async context to avoid runtime-drop panics.
     let cdp_endpoint = if let Some(raw) = cdp_raw {
-        resolve_cdp_endpoint(raw)?
+        let raw_owned = raw.to_string();
+        let resolved = tokio::task::spawn_blocking(move || resolve_cdp_endpoint(&raw_owned))
+            .await
+            .map_err(|e| format!("CDP endpoint resolution failed: {e}"))?;
+        resolved?
     } else {
         return Err(
-            "attach requires --cdp=<url|channel>, --extension[=channel], or --endpoint=<url>.\n\
+            "attach requires --cdp <url|channel> or --endpoint <url>.\n\
              Examples:\n  \
-             browser4-cli attach --cdp=chrome\n  \
-             browser4-cli attach --extension\n  \
-             browser4-cli attach --extension=msedge\n  \
-             browser4-cli attach --cdp=http://localhost:9222\n  \
-             browser4-cli attach --endpoint=http://browser4-server:8182\n  \
-             browser4-cli attach --endpoint=http://remote:8182 --cdp=chrome"
+             browser4-cli attach --cdp chrome\n  \
+             browser4-cli attach --cdp http://localhost:9222\n  \
+             browser4-cli attach --endpoint http://browser4-server:8182\n  \
+             browser4-cli attach --endpoint http://remote:8182 --cdp chrome"
                 .to_string(),
         );
     };
@@ -1069,6 +1089,7 @@ async fn handle_attach(
     state.base_url = effective_base_url.clone();
     state.active_selector = None;
     state.last_mouse_position = None;
+    state.is_attached = true;
     write_state(&state, None, session_name).map_err(|e| e.to_string())?;
 
     json_field("session_id", json!(&session_id));
@@ -1081,189 +1102,6 @@ async fn handle_attach(
     post_command_snapshot(client, &effective_base_url, &session_id).await;
 
     Ok(())
-}
-
-/// Attach via the Browser4 Chrome Extension.
-///
-/// This flow:
-/// 1. Calls `attach_browser` with `{extension: true, channel: ...}` on the backend.
-/// 2. Launches the browser to the extension's connect page with the WebSocket relay URL.
-/// 3. Polls `check_session_ready` until the extension connects.
-/// 4. Persists session state and takes an initial snapshot.
-async fn handle_attach_extension(
-    client: &Client,
-    base_url: &str,
-    session_name: Option<&str>,
-    channel: &str,
-    _parsed_args: &HashMap<String, Value>,
-) -> Result<(), String> {
-    // Step 1: Call the backend to create a pending extension session.
-    let attach_params = json!({
-        "extension": true,
-        "channel": channel,
-    });
-
-    let result = call_tool(client, base_url, "attach_browser", attach_params).await?;
-    let parsed: Value =
-        serde_json::from_str(&result).map_err(|e| format!("Failed to parse attach response: {e}"))?;
-
-    let session_id = parsed
-        .get("sessionId")
-        .and_then(|v| v.as_str())
-        .ok_or("Missing sessionId in attach response")?;
-    let ws_endpoint = parsed
-        .get("wsEndpoint")
-        .and_then(|v| v.as_str())
-        .ok_or("Missing wsEndpoint in attach response")?;
-
-    // Step 2: Build the extension connect URL.
-    let ext_id = resolve_extension_id();
-    let client_info = urlencoding(&json!({"name":"browser4-cli"}).to_string());
-    let connect_url = format!(
-        "chrome-extension://{}/connect.html?mcpRelayUrl={}&client={}",
-        ext_id,
-        urlencoding(ws_endpoint),
-        client_info,
-    );
-
-    // Step 3: Launch the browser.
-    let exec_name = resolve_browser_executable(channel)?;
-    cli_println!(
-        "Launching {} with Browser4 Extension connect page...",
-        exec_name
-    );
-
-    #[cfg(windows)]
-    {
-        // On Windows, use `cmd /c start` to open the URL in the existing
-        // browser instance (if running) rather than launching a new process.
-        // The URL is double-quoted to prevent cmd.exe from interpreting `&`
-        // characters in query parameters as command separators.
-        let status = std::process::Command::new("cmd")
-            .args(["/c", "start", "", &exec_name, &format!("\"{}\"", connect_url)])
-            .spawn()
-            .map_err(|e| format!("Failed to launch browser: {e}"))?;
-        // Detach — we don't wait for the browser process.
-        drop(status);
-    }
-    #[cfg(not(windows))]
-    {
-        let status = std::process::Command::new(&exec_name)
-            .arg(&connect_url)
-            .spawn()
-            .map_err(|e| format!("Failed to launch {}: {}", exec_name, e))?;
-        drop(status);
-    }
-
-    // Step 4: Wait for the extension to connect (poll backend).
-    cli_println!(
-        "Waiting for Browser4 Extension to connect... (opens http://127.0.0.1:{})",
-        ws_endpoint
-            .strip_prefix("ws://127.0.0.1:")
-            .and_then(|rest| rest.split('/').next())
-            .unwrap_or("8182"),
-    );
-    cli_println!("Approve the connection in your browser when prompted.");
-
-    let timeout = std::time::Duration::from_secs(60);
-    let poll_interval = std::time::Duration::from_millis(1000);
-    let start = std::time::Instant::now();
-
-    loop {
-        if start.elapsed() > timeout {
-            return Err(
-                "Timed out waiting for Browser4 Extension to connect.\n\
-                 \n  Make sure:\n  \
-                 - The Browser4 Extension is installed in your browser\n  \
-                 - You clicked \"Allow\" on the extension connect page\n  \
-                 - No firewall is blocking loopback WebSocket connections\n\
-                 \n  Install the extension:\n  \
-                 1. cd chrome-extension && npm install && npm run build\n  \
-                 2. Open chrome://extensions, enable Developer mode\n  \
-                 3. Click \"Load unpacked\" and select the dist/ folder"
-                    .to_string(),
-            );
-        }
-
-        let status = call_tool(
-            client,
-            base_url,
-            "check_session_ready",
-            json!({"sessionId": session_id}),
-        )
-        .await?;
-
-        if let Ok(status_parsed) = serde_json::from_str::<Value>(&status) {
-            if status_parsed
-                .get("ready")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false)
-            {
-                break;
-            }
-        }
-
-        tokio::time::sleep(poll_interval).await;
-    }
-
-    // Step 5: Persist session state.
-    let mut state = read_state(None, session_name);
-    state.session_name = session_name.map(|s| s.to_string());
-    state.session_id = Some(session_id.to_string());
-    state.base_url = base_url.to_string();
-    state.active_selector = None;
-    state.last_mouse_position = None;
-    write_state(&state, None, session_name).map_err(|e| e.to_string())?;
-
-    json_field("session_id", json!(session_id));
-    json_field("ws_endpoint", json!(ws_endpoint));
-
-    cli_println!("Attached to browser via Browser4 Extension");
-    cli_println!("Session opened: {}", session_id);
-
-    // Take an initial snapshot.
-    post_command_snapshot(client, base_url, session_id).await;
-
-    Ok(())
-}
-
-/// Resolve the Browser4 Extension ID.
-///
-/// The production ID is deterministic and derived from the extension's
-/// `manifest.json` `key` field (SHA-256 of DER-encoded public key, first 128
-/// bits as hex mapped to a-p).  Set `BROWSER4_EXTENSION_ID` to override.
-///
-/// TODO: compute the actual ID from the key in manifest.json once the
-/// extension is published.  The deterministic `key` in manifest.json ensures
-/// a stable ID across installs.
-fn resolve_extension_id() -> String {
-    std::env::var("BROWSER4_EXTENSION_ID").unwrap_or_else(|_| {
-        // Placeholder — replace with the actual computed ID from the key.
-        // This value must match the extension loaded in the user's browser.
-        "fcagfeimnhdkkkkipkjjolahpakoddeb".to_string()
-    })
-}
-
-/// Resolve the browser executable path for a given channel name.
-/// Falls back to the channel name itself as a raw executable name.
-fn resolve_browser_executable(channel: &str) -> Result<String, String> {
-    // Try resolving via BrowserChannel enum (reuses daemon.rs logic).
-    // If that fails, treat the value as a raw executable name.
-    let exec = daemon::resolve_channel_executable_name(channel);
-    Ok(exec)
-}
-
-/// Simple URL encoding for query parameter values.
-fn urlencoding(s: &str) -> String {
-    s.replace('%', "%25")
-        .replace(' ', "%20")
-        .replace('"', "%22")
-        .replace('#', "%23")
-        .replace('&', "%26")
-        .replace('=', "%3D")
-        .replace(':', "%3A")
-        .replace('/', "%2F")
-        .replace('?', "%3F")
 }
 
 async fn handle_open(
@@ -1473,19 +1311,18 @@ async fn handle_navigation_action(
     tool_params: &Value,
     session_name: Option<&str>,
     follow: bool,
-    verify: bool,
 ) -> Result<(), String> {
     if !follow {
         return handle_tool_command(client, base_url, tool_name, tool_params, false, session_name)
             .await;
     }
 
-    // --- follow mode: detect new tabs after action ---
+    // --- follow mode: detect new tabs after click ---
 
     let state = require_session(session_name)?;
     let sid = get_session_id(&state)?;
 
-    // 1. Capture page URL before the action to detect silent navigation failures.
+    // 1. Capture page URL before the click to detect silent navigation failures.
     let url_before = call_tool(
         client,
         base_url,
@@ -1495,8 +1332,7 @@ async fn handle_navigation_action(
     .await
     .ok();
 
-    // 2. Record tabs before the action.
-    let mut tabs_before_failed = false;
+    // 2. Record tabs before the click.
     let tabs_before: HashSet<usize> = call_tool(
         client,
         base_url,
@@ -1510,30 +1346,10 @@ async fn handle_navigation_action(
             .map(|t| t.index)
             .collect()
     })
-    .unwrap_or_else(|_| {
-        tabs_before_failed = true;
-        HashSet::new()
-    });
+    .unwrap_or_default();
 
-    if tabs_before_failed {
-        eprintln!(
-            "⚠️  Failed to query tabs before action — new-tab detection may be unreliable."
-        );
-    }
-
-    // 3. Perform the action (backend handles same-tab navigation detection).
+    // 3. Perform the click (backend handles same-tab navigation detection).
     handle_tool_command(client, base_url, tool_name, tool_params, false, session_name).await?;
-
-    // 3b. When --verify is set for press, verify the key press result.
-    if verify && tool_name == "browser_press_key" {
-        let element_ref = tool_params.get("ref").and_then(|v| v.as_str());
-        let key = tool_params
-            .get("key")
-            .and_then(|v| v.as_str())
-            .unwrap_or("?");
-        let is_printable = key.len() == 1 && key.chars().all(|c| c.is_ascii_graphic());
-        let _ = verify_press_result(client, base_url, &sid, element_ref, key, is_printable).await;
-    }
 
     // 4. Check for new tabs.
     let tabs_after: Vec<TabInfo> = call_tool(
@@ -1558,11 +1374,7 @@ async fn handle_navigation_action(
     }
 
     // 5. Report new tabs and switch to the newest one.
-    let action = match tool_name {
-        "browser_press_key" => "key press",
-        _ => "click",
-    };
-    cli_println!("🌐 {} new tab(s) opened by {}:", new_tabs.len(), action);
+    cli_println!("🌐 {} new tab(s) opened by click:", new_tabs.len());
     for tab in &new_tabs {
         let label = if tab.title.is_empty() {
             tab.url.clone()
@@ -1651,6 +1463,7 @@ async fn handle_close(
         return Ok(());
     };
     json_field("session_id", json!(&session_id));
+    let is_attached = state.is_attached;
     // Ignore errors — session might already be closed
     let _ = call_tool(
         client,
@@ -1660,12 +1473,245 @@ async fn handle_close(
     )
     .await;
     clear_state(None, session_name);
-    cli_println!("Session closed.");
+    if is_attached {
+        cli_println!("Disconnected from attached browser. The browser remains running.");
+    } else {
+        cli_println!("Session closed. Browser terminated.");
+    }
     json_field("closed", json!(true));
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// Tab command handlers
+// ---------------------------------------------------------------------------
+
+async fn handle_tab_list(
+    client: &Client,
+    base_url: &str,
+    session_name: Option<&str>,
+) -> Result<(), String> {
+    let state = read_state(None, session_name);
+    let Some(session_id) = state.session_id.as_deref() else {
+        return Err(no_active_session_message());
+    };
+
+    let result = call_tool(
+        client,
+        base_url,
+        "browser_tabs",
+        json!({ "sessionId": session_id, "action": "list" }),
+    )
+    .await?;
+
+    let tabs = parse_tab_list(&result);
+    if tabs.is_empty() {
+        if json_active() {
+            cli_println!("[]");
+        } else {
+            cli_println!("No tabs found.");
+        }
+        return Ok(());
+    }
+
+    if json_active() {
+        // Machine-readable JSON (consistent with other commands' --json behavior)
+        let json_tabs: Vec<Value> = tabs
+            .iter()
+            .map(|t| {
+                json!({
+                    "index": t.index,
+                    "url": t.url,
+                    "title": t.title,
+                })
+            })
+            .collect();
+        cli_println!("{}", serde_json::to_string_pretty(&json_tabs).unwrap_or_default());
+    } else {
+        // Human-readable table: Index | Title | URL
+        let idx_w = "Index".len().max(
+            tabs.last().map(|t| t.index.to_string().len()).unwrap_or(0),
+        );
+        let title_w = "Title".len().max(
+            tabs.iter().map(|t| t.title.len()).max().unwrap_or(0).min(60),
+        );
+        let url_w = "URL".len().max(
+            tabs.iter().map(|t| t.url.len()).max().unwrap_or(0).min(80),
+        );
+
+        cli_println!(
+            "  {:<idx_w$}  {:<title_w$}  {:<url_w$}",
+            "Index", "Title", "URL",
+            idx_w = idx_w,
+            title_w = title_w,
+            url_w = url_w,
+        );
+        cli_println!(
+            "  {:-<idx_w$}  {:-<title_w$}  {:-<url_w$}",
+            "", "", "",
+            idx_w = idx_w,
+            title_w = title_w,
+            url_w = url_w,
+        );
+        for tab in &tabs {
+            let title = if tab.title.len() > 60 {
+                format!("{}…", &tab.title[..59])
+            } else {
+                tab.title.clone()
+            };
+            let url = if tab.url.len() > 80 {
+                format!("{}…", &tab.url[..79])
+            } else {
+                tab.url.clone()
+            };
+            cli_println!(
+                "  {:<idx_w$}  {:<title_w$}  {:<url_w$}",
+                tab.index, title, url,
+                idx_w = idx_w,
+                title_w = title_w,
+                url_w = url_w,
+            );
+        }
+    }
+    Ok(())
+}
+
+async fn handle_tab_new(
+    client: &Client,
+    base_url: &str,
+    tool_params: &Value,
+    session_name: Option<&str>,
+) -> Result<(), String> {
+    let url = tool_params
+        .get("url")
+        .and_then(|v| v.as_str())
+        .unwrap_or("about:blank");
+
+    let state = read_state(None, session_name);
+    let Some(session_id) = state.session_id.as_deref() else {
+        return Err(no_active_session_message());
+    };
+
+    let result = call_tool(
+        client,
+        base_url,
+        "browser_tabs",
+        json!({ "sessionId": session_id, "action": "new", "url": url }),
+    )
+    .await?;
+
+    cli_println!("{}", result);
+
+    // Auto-switch to the newly created tab by listing tabs, finding the
+    // highest-index entry, and issuing a select action.
+    let list_result = call_tool(
+        client,
+        base_url,
+        "browser_tabs",
+        json!({ "sessionId": session_id, "action": "list" }),
+    )
+    .await?;
+
+    let tabs = parse_tab_list(&list_result);
+    if let Some(new_tab) = tabs.last() {
+        let new_index = new_tab.index;
+        // Select the new tab
+        let _ = call_tool(
+            client,
+            base_url,
+            "browser_tabs",
+            json!({ "sessionId": session_id, "action": "select", "index": new_index }),
+        )
+        .await;
+        cli_println!("Switched to tab {} ({})", new_index, url);
+
+        // Refresh page info for the "### Page" section
+        let (page_url, page_title) = tokio::join!(
+            call_tool(
+                client,
+                base_url,
+                "page_url",
+                json!({ "sessionId": session_id }),
+            ),
+            call_tool(
+                client,
+                base_url,
+                "page_title",
+                json!({ "sessionId": session_id }),
+            ),
+        );
+        if let (Ok(pu), Ok(pt)) = (page_url, page_title) {
+            json_field("page_url", json!(&pu));
+            json_field("page_title", json!(&pt));
+            cli_println!("### Page");
+            cli_println!("- Page URL: {}", pu);
+            cli_println!("- Page Title: {}", pt);
+        }
+    } else {
+        // Couldn't parse the tab list; still show a tip
+        if !json_active() {
+            eprintln!("💡 Tip: Use `tab-select <index>` to switch to the new tab.");
+        }
+    }
+
+    Ok(())
+}
+
+async fn handle_tab_select(
+    client: &Client,
+    base_url: &str,
+    tool_params: &Value,
+    session_name: Option<&str>,
+) -> Result<(), String> {
+    let index_val = tool_params.get("index").cloned().unwrap_or_default();
+
+    let state = read_state(None, session_name);
+    let Some(session_id) = state.session_id.as_deref() else {
+        return Err(no_active_session_message());
+    };
+
+    let result = call_tool(
+        client,
+        base_url,
+        "browser_tabs",
+        json!({ "sessionId": session_id, "action": "select", "index": index_val }),
+    )
+    .await?;
+
+    cli_println!("{}", result);
+
+    // Refresh page info after tab switch so the "### Page" section shows the
+    // newly selected tab's URL and title instead of stale cached metadata.
+    let (page_url, page_title) = tokio::join!(
+        call_tool(
+            client,
+            base_url,
+            "page_url",
+            json!({ "sessionId": session_id }),
+        ),
+        call_tool(
+            client,
+            base_url,
+            "page_title",
+            json!({ "sessionId": session_id }),
+        ),
+    );
+    if let (Ok(pu), Ok(pt)) = (page_url, page_title) {
+        json_field("page_url", json!(&pu));
+        json_field("page_title", json!(&pt));
+        cli_println!("### Page");
+        cli_println!("- Page URL: {}", pu);
+        cli_println!("- Page Title: {}", pt);
+    }
+
+    Ok(())
+}
+
 async fn handle_close_all(client: &Client, base_url: &str) -> Result<(), String> {
+    // Count locally-tracked sessions the same way `list` does, so the
+    // count reported to the user matches what `list` would have shown.
+    let local_count = count_tracked_sessions();
+
     let close_summary = close_all_sessions_across_servers(client, base_url).await;
 
     // `close-all` is intentionally session-scoped. Keep any tracked Browser4
@@ -1676,18 +1722,12 @@ async fn handle_close_all(client: &Client, base_url: &str) -> Result<(), String>
     json_field("results", json!(close_summary.results));
     json_field("errors", json!(close_summary.errors));
 
-    log_close_all_summary(&close_summary, "close-all");
-    Ok(())
-}
-
-async fn handle_skill_command(
-    client: &Client,
-    base_url: &str,
-    tool_name: &str,
-    tool_params: &Value,
-) -> Result<(), String> {
-    let result = call_tool(client, base_url, tool_name, tool_params.clone()).await?;
-    cli_println!("{}", result);
+    // Report the locally-tracked count instead of the server's count, which may
+    // include internal sessions that the user never sees in `list` output.
+    cli_println!("Closed {} session(s)", local_count);
+    if !close_summary.errors.is_empty() {
+        eprintln!("close-all warnings: {}", close_summary.errors.join(" | "));
+    }
     Ok(())
 }
 
@@ -1986,23 +2026,6 @@ async fn close_all_sessions_across_servers(client: &Client, base_url: &str) -> C
     summary
 }
 
-fn log_close_all_summary(summary: &CloseAllSummary, command_name: &str) {
-    if summary.results.is_empty() {
-        cli_println!(
-            "No reachable Browser4 servers responded to {}.",
-            command_name
-        );
-    } else {
-        for result in &summary.results {
-            cli_println!("{}", result);
-        }
-    }
-
-    if !summary.errors.is_empty() {
-        eprintln!("{} warnings: {}", command_name, summary.errors.join(" | "));
-    }
-}
-
 fn finalize_global_cleanup(action: &str, result: &ShutdownResult) {
     clear_all_state(None);
     log_shutdown_result(action, result);
@@ -2106,24 +2129,32 @@ async fn handle_list(client: &Client, base_url: &str) -> Result<(), String> {
         }
     }
 
-    // List default session
+    // List default session — only show when the backend also knows about it.
+    // A default session that exists in local state but not on the backend was
+    // auto-created by a previous run and never actually navigated; hide it to
+    // avoid session clutter when all commands use `-s <name>`.
     let default_state = read_state(None, None);
     if let Some(sid) = default_state.session_id {
-        let status = list_session_status(backend_sessions.as_deref(), &sid);
-        let next_open = list_session_next_open_action(backend_sessions.as_deref(), &sid);
-        cli_println!(
-            "{:<20} | {:<40} | {:<8} | {}",
-            "(default)",
-            sid,
-            status,
-            next_open
-        );
-        json_sessions.push(json!({
-            "name": "(default)",
-            "session_id": sid,
-            "status": status.to_lowercase(),
-            "next_open": next_open.to_lowercase(),
-        }));
+        let backend_knows_session = backend_sessions.as_ref().map_or(true, |records| {
+            records.iter().any(|r| r.session_id == sid)
+        });
+        if backend_knows_session {
+            let status = list_session_status(backend_sessions.as_deref(), &sid);
+            let next_open = list_session_next_open_action(backend_sessions.as_deref(), &sid);
+            cli_println!(
+                "{:<20} | {:<40} | {:<8} | {}",
+                "(default)",
+                sid,
+                status,
+                next_open
+            );
+            json_sessions.push(json!({
+                "name": "(default)",
+                "session_id": sid,
+                "status": status.to_lowercase(),
+                "next_open": next_open.to_lowercase(),
+            }));
+        }
     }
 
     json_field("sessions", json!(json_sessions));
@@ -2134,6 +2165,40 @@ async fn handle_list(client: &Client, base_url: &str) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+/// Count locally-tracked sessions the same way `handle_list` does:
+/// named sessions in the state directory + default session if present.
+fn count_tracked_sessions() -> usize {
+    let mut count: usize = 0;
+    let dir = resolve_default_state_dir();
+
+    // Count named sessions
+    let sessions_dir = dir.join("sessions");
+    if sessions_dir.exists() {
+        if let Ok(entries) = std::fs::read_dir(sessions_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().map_or(false, |ext| ext == "json") {
+                    if let Ok(content) = std::fs::read_to_string(&path) {
+                        if let Ok(state) = serde_json::from_str::<CliState>(&content) {
+                            if state.session_id.is_some() {
+                                count += 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Count default session
+    let default_state = read_state(Some(&dir), None);
+    if default_state.session_id.is_some() {
+        count += 1;
+    }
+
+    count
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2848,6 +2913,14 @@ async fn handle_snapshot(
     let snap_with_header = format!("{}\n{}", header, snap);
     save_snapshot(&out_path, &snap_with_header).map_err(|e| e.to_string())?;
 
+    // snapshot does not produce JSON output — warn if --json is active
+    if json_active() {
+        eprintln!(
+            "⚠️  snapshot does not support --json output (snapshots are YAML for human readability). \
+             Use `htmlsnapshot` commands (query, get, export) for machine-readable JSON output."
+        );
+    }
+
     let raw = tool_params
         .get("raw")
         .and_then(|v| v.as_bool())
@@ -2930,6 +3003,30 @@ async fn handle_snapshot(
         cli_println!("### Snapshot");
         cli_println!("[Snapshot]({})", out_path.display());
         cli_println!("- Snapshot size: {} KB ({} nodes/lines)", snap_kb, snap_lines);
+        // Viewport count hint: when the page has multiple viewports and no
+        // viewport filter is in use, suggest scrolling down.
+        let viewports_used = tool_params
+            .get("viewports")
+            .and_then(|v| v.as_str())
+            .map_or(false, |s| !s.is_empty());
+        if !viewports_used && !json_active() {
+            // Parse viewportsTotal from the snapshot header (e.g. "# - viewportsTotal: 3")
+            if let Some(total_str) = snap
+                .lines()
+                .find(|line| line.starts_with("# - viewportsTotal:"))
+                .and_then(|line| line.split(':').nth(1))
+                .map(|s| s.trim())
+            {
+                if let Ok(total) = total_str.parse::<u32>() {
+                    if total > 1 {
+                        eprintln!(
+                            "💡 Tip: This page has {total} viewports (page chunks split by viewport height). \
+                             Use `snapshot -v 1` to scroll down, or `snapshot -v all` to capture all viewports at once.",
+                        );
+                    }
+                }
+            }
+        }
         // Depth truncation warning (suppress in --json mode)
         if depth_used && !json_active() {
             eprintln!(
@@ -2945,15 +3042,29 @@ async fn handle_snapshot(
                  interaction. Re-run snapshot before reusing refs."
             );
         }
-        // Hint: when interactive mode is on but output goes to a file, suggest --stdout
-        let interactive = tool_params
-            .get("interactive")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-        if interactive && !json_active() {
+        // Hint: suggest --stdout to print inline instead of opening the file
+        if !json_active() {
             eprintln!(
-                "💡 Tip: Add --stdout to print element refs inline instead of opening the snapshot file"
+                "💡 Tip: Use `--stdout` to print element refs inline instead of opening the snapshot file"
             );
+        }
+        // Brief preview: show first few non-comment lines of the snapshot
+        if !json_active() {
+            let preview_lines: Vec<&str> = snap
+                .lines()
+                .filter(|line| !line.starts_with('#') && !line.trim().is_empty())
+                .take(10)
+                .collect();
+            if !preview_lines.is_empty() {
+                eprintln!("\n--- Snapshot preview (first {} lines) ---", preview_lines.len());
+                for line in &preview_lines {
+                    eprintln!("{}", line);
+                }
+                if snap.lines().filter(|l| !l.starts_with('#') && !l.trim().is_empty()).count() > 10 {
+                    eprintln!("... (use --stdout or open the file for full content)");
+                }
+                eprintln!("---");
+            }
         }
         // Warn when a non-zero viewport snapshot is suspiciously small (may
         // indicate the AX tree wasn't re-expanded after scrolling — a known
@@ -3210,10 +3321,14 @@ async fn handle_tool_command_with_options(
         if let Some(r) = tool_params.get("ref").and_then(|v| v.as_str()) {
             json_field("ref", json!(r));
         }
-    } else if !result.is_empty() {
-        // Wait tools return internal driver JSON — replace with user-friendly messages
+    } else if tool_name.starts_with("wait_") || tool_name == "delay" {
+        // Wait tools return internal driver JSON — replace with user-friendly messages.
+        // Always format even when the raw result is empty (e.g. `delay` returns "").
         let formatted = format_wait_result(tool_name, tool_params, &result);
         cli_println!("{}", formatted);
+        json_field("result", json!(&result));
+    } else if !result.is_empty() {
+        cli_println!("{}", result);
         json_field("result", json!(&result));
     }
 
@@ -3248,14 +3363,24 @@ async fn handle_tool_command_with_options(
             "browser_uncheck" => {
                 cli_println!("✓ Unchecked {}", ref_val);
             }
-            "browser_press_key" => {
-                let key = tool_params
-                    .get("key")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("?");
-                cli_println!("✓ Pressed '{}' on {}", key, ref_val);
-            }
             _ => {} // No confirmation for other tools
+        }
+    }
+
+    // Success confirmation for browser_resize (uses width/height, not ref).
+    if tool_name == "browser_resize" {
+        let w = tool_params
+            .get("width")
+            .and_then(|v| v.as_f64())
+            .map(|v| v as i64)
+            .unwrap_or(0);
+        let h = tool_params
+            .get("height")
+            .and_then(|v| v.as_f64())
+            .map(|v| v as i64)
+            .unwrap_or(0);
+        if w > 0 && h > 0 {
+            cli_println!("✓ Resized to {}×{}", w, h);
         }
     }
 
@@ -3300,8 +3425,15 @@ async fn handle_get(
             .unwrap_or(":root");
         cli_println!("{}", result);
         cli_println!(
-            "No elements matched \"{}\". Try `htmlsnapshot inspect \"{}\"` to discover valid selectors, or run `htmlsnapshot` to see the full DOM tree.",
-            selector, selector
+            "No elements matched \"{}\".",
+            selector
+        );
+        cli_println!(
+            "  The `get` command queries the live page through the accessibility tree — CSS selectors from htmlsnapshot may not apply here."
+        );
+        cli_println!(
+            "  For CSS selector-based extraction, capture the DOM first with `htmlsnapshot`, then use `htmlsnapshot get text \"{}\"`.",
+            selector
         );
     } else {
         cli_println!("{}", result);
@@ -3942,10 +4074,10 @@ async fn handle_html_snapshot_get(
     Ok(())
 }
 
-/// Resolves an `@file` path for --sql. Tries CWD first (standard CLI behavior),
-/// then falls back to the Browser4 repo root so that `cargo run` from
-/// subdirectories like `cli/browser4-cli` still finds files placed at the
-/// workspace root.
+/// Resolves an `@file` path for --sql and --selector. Tries the Browser4 repo
+/// root first so that `@file` paths work consistently from any subdirectory
+/// (including `cli/browser4-cli` when using `cargo run`), then falls back to
+/// CWD for local file references.
 fn resolve_sql_file(file_path: &str) -> Result<String, String> {
     let path = std::path::Path::new(file_path);
 
@@ -3956,41 +4088,60 @@ fn resolve_sql_file(file_path: &str) -> Result<String, String> {
         });
     }
 
-    // Try CWD first
     let cwd = std::env::current_dir()
         .map_err(|e| format!("Cannot determine current directory: {e}"))?;
     let cwd_path = cwd.join(file_path);
 
-    if let Ok(content) = std::fs::read_to_string(&cwd_path) {
-        return Ok(content);
-    }
-
-    // Fall back to Browser4 repo root (for cargo run from subdirectories)
+    // Try Browser4 repo root first (consistent resolution from any subdirectory)
     if let Some(root) = daemon::find_browser4_root() {
         let root_path = root.join(file_path);
         if root_path != cwd_path {
             if let Ok(content) = std::fs::read_to_string(&root_path) {
                 return Ok(content);
             }
-            return Err(format!(
-                "Failed to read SQL file '{}'\n  Tried: '{}'\n  Tried: '{}'",
-                file_path,
-                cwd_path.display(),
-                root_path.display(),
-            ));
         }
     }
 
+    // Fall back to CWD (for files that only exist relative to the working directory)
+    if let Ok(content) = std::fs::read_to_string(&cwd_path) {
+        return Ok(content);
+    }
+
+    // Build a clear error message showing where we looked
+    let mut tried = vec![cwd_path.display().to_string()];
+    if let Some(root) = daemon::find_browser4_root() {
+        let root_path = root.join(file_path);
+        let root_display = root_path.display().to_string();
+        if root_display != tried[0] {
+            tried.push(root_display);
+        }
+    }
     Err(format!(
-        "Failed to read SQL file '{}' (looked in: '{}')",
+        "Failed to read file '{}'\n  Tried: {}",
         file_path,
-        cwd_path.display(),
+        tried.join("\n  Tried: "),
     ))
 }
 
 /// Base64-decode the SQL string if `--sql-base64` was passed.
+/// Supports two modes:
+///   1. `--sql-base64 <base64-query>` — the value is read directly from the option.
+///   2. `--sql <base64-query> --sql-base64` — legacy boolean-flag mode.
 /// Applied after `@file` resolution so base64-encoded files are also supported.
 fn maybe_decode_base64_sql(sql: String, tool_params: &Value) -> Result<String, String> {
+    // Mode 1: --sql-base64 <value> (direct value mode)
+    if let Some(base64_val) = tool_params.get("sqlBase64").and_then(|v| v.as_str()) {
+        let trimmed = base64_val.trim();
+        if trimmed.is_empty() {
+            return Err("--sql-base64 was set but the value is empty.".to_string());
+        }
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(trimmed)
+            .map_err(|e| format!("Failed to base64-decode SQL: {e}"))?;
+        return String::from_utf8(bytes)
+            .map_err(|e| format!("Base64-decoded SQL is not valid UTF-8: {e}"));
+    }
+    // Mode 2: --sql <value> --sql-base64 (legacy boolean-flag mode)
     let use_base64 = tool_params
         .get("sqlBase64")
         .and_then(|v| v.as_bool())
@@ -3999,7 +4150,7 @@ fn maybe_decode_base64_sql(sql: String, tool_params: &Value) -> Result<String, S
         return Ok(sql);
     }
     if sql.trim().is_empty() {
-        return Err("--sql-base64 was set but the SQL value is empty.".to_string());
+        return Err("--sql-base64 was set but the SQL value is empty. Use --sql <base64-value> --sql-base64, or --sql-base64 <base64-value>.".to_string());
     }
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(sql.trim())
@@ -4046,12 +4197,28 @@ async fn handle_html_snapshot_query(
             .to_string()
     };
 
-    if sql_raw.is_empty() {
+    // Allow --sql-base64 standalone (without --sql): the base64 value is decoded
+    // later by maybe_decode_base64_sql. If sqlBase64 has a non-empty string value,
+    // we can proceed with an empty sql_raw; the decode will supply the actual SQL.
+    let has_sql_base64_value = tool_params
+        .get("sqlBase64")
+        .and_then(|v| v.as_str())
+        .map(|s| !s.trim().is_empty())
+        .unwrap_or(false);
+
+    if sql_raw.is_empty() && !has_sql_base64_value {
         return Err(
             "--sql is required. Provide an inline X-SQL query, @file.sql, --sql-stdin, or --sql-base64."
                 .to_string(),
         );
     }
+
+    // Track whether the SQL was inline (not @file, not stdin, not base64)
+    // for a post-query tip suggesting @file.sql to avoid shell quoting issues
+    let is_inline_sql = !use_sql_stdin
+        && !sql_raw.starts_with('@')
+        && !sql_raw.is_empty()
+        && !has_sql_base64_value;
 
     // Handle --sql @file.sql pattern
     let sql = if sql_raw.starts_with('@') {
@@ -4095,29 +4262,60 @@ async fn handle_html_snapshot_query(
         .and_then(|v| v.as_str())
         .map(str::trim)
         .filter(|s| !s.is_empty());
+    let format = tool_params
+        .get("format")
+        .and_then(|v| v.as_str())
+        .unwrap_or("json")
+        .to_ascii_lowercase();
+
+    // Validate --format value
+    match format.as_str() {
+        "json" | "csv" | "table" => {}
+        _ => return Err(format!("Invalid --format '{}'. Expected: json, csv, or table", format)),
+    }
 
     // Process output: extract resultSet if --result-only, then write to file or stdout
-    let output = if result_only {
-        // Try to parse the server JSON and extract just the resultSet
+    let output = if result_only || format.as_str() != "json" {
+        // Try to parse the server JSON and extract the resultSet
         match serde_json::from_str::<Value>(&result) {
             Ok(parsed) => {
-                if let Some(result_set) = parsed.get("resultSet") {
-                    serde_json::to_string_pretty(result_set)
-                        .unwrap_or_else(|_| result.clone())
-                } else {
-                    // No resultSet found — return the raw result with a warning
-                    if !json_active() {
-                        eprintln!(
-                            "⚠️  --result-only set but no 'resultSet' field found in response. \
-                             Showing full result."
-                        );
+                let rows: Option<&Vec<Value>> = parsed
+                    .get("resultSet")
+                    .and_then(|rs| rs.as_array());
+
+                match rows {
+                    Some(rows) if format.as_str() != "json" => {
+                        // Format as table or CSV
+                        let summary = format!("\n{} row{} returned.\n", rows.len(), if rows.len() == 1 { "" } else { "s" });
+                        match format.as_str() {
+                            "csv" => format_csv(rows) + &summary,
+                            "table" => format_table(rows) + &summary,
+                            _ => unreachable!(),
+                        }
                     }
-                    result.clone()
+                    _ => {
+                        // JSON format: pretty-print resultSet or full result
+                        let output_data = if let Some(result_set) = parsed.get("resultSet") {
+                            serde_json::to_string_pretty(result_set)
+                                .unwrap_or_else(|_| result.clone())
+                        } else if result_only {
+                            if !json_active() {
+                                eprintln!(
+                                    "⚠️  --result-only set but no 'resultSet' field found in response. \
+                                     Showing full result."
+                                );
+                            }
+                            result.clone()
+                        } else {
+                            result.clone()
+                        };
+                        output_data
+                    }
                 }
             }
             Err(_) => {
                 // Not valid JSON — return as-is
-                if !json_active() {
+                if result_only && !json_active() {
                     eprintln!(
                         "⚠️  --result-only set but response is not valid JSON. \
                          Showing raw result."
@@ -4137,6 +4335,16 @@ async fn handle_html_snapshot_query(
     } else if !output.is_empty() {
         cli_println!("{}", output);
     }
+
+    // Tip: if SQL was provided inline (not @file, not stdin, not base64), suggest
+    // using @file.sql to avoid shell quoting issues on Windows.
+    if is_inline_sql {
+        cli_println!(
+            "\n💡 Tip: Use --sql @file.sql to avoid shell quoting issues. \
+             Write your X-SQL query to a file and reference it with @filename.sql."
+        );
+    }
+
     json_field("result", json!(&result));
 
     Ok(())
@@ -4195,7 +4403,7 @@ fn format_summary_outline(yaml: &str) -> String {
     let mut structure_count = 0;
     let mut structure_items: Vec<String> = Vec::new();
     let mut content_count = 0;
-    let mut content_items: Vec<(String, String, String)> = Vec::new(); // (type, score, text)
+    let mut content_items: Vec<(String, String, String, String)> = Vec::new(); // (type, score, text, repeats)
     let mut list_count = 0;
     let mut list_items: Vec<String> = Vec::new();
     let mut linkgroup_count = 0;
@@ -4208,6 +4416,7 @@ fn format_summary_outline(yaml: &str) -> String {
     let mut cur_content_type = String::new();
     let mut cur_content_score = String::new();
     let mut cur_content_text = String::new();
+    let mut cur_content_repeats = String::new();
 
     for line in yaml.lines() {
         // Detect top-level section keys
@@ -4267,16 +4476,20 @@ fn format_summary_outline(yaml: &str) -> String {
                             std::mem::take(&mut cur_content_type),
                             std::mem::take(&mut cur_content_score),
                             std::mem::take(&mut cur_content_text),
+                            std::mem::take(&mut cur_content_repeats),
                         ));
                     }
                     content_count += 1;
                     cur_content_type.clear();
                     cur_content_score.clear();
                     cur_content_text.clear();
+                    cur_content_repeats.clear();
                 } else if let Some(t) = trim_prefix(trimmed, "type:") {
                     cur_content_type = t.trim().to_string();
                 } else if let Some(s) = trim_prefix(trimmed, "score:") {
                     cur_content_score = s.trim().to_string();
+                } else if let Some(r) = trim_prefix(trimmed, "repeats:") {
+                    cur_content_repeats = r.trim().to_string();
                 } else if let Some(txt) = trim_prefix(trimmed, "text:") {
                     cur_content_text = txt.trim().trim_matches('"').to_string();
                 }
@@ -4374,7 +4587,7 @@ fn format_summary_outline(yaml: &str) -> String {
 
     // Flush final content item
     if !cur_content_type.is_empty() {
-        content_items.push((cur_content_type, cur_content_score, cur_content_text));
+        content_items.push((cur_content_type, cur_content_score, cur_content_text, cur_content_repeats));
     }
     // Close any open table bracket
     for item in &mut table_items {
@@ -4412,16 +4625,21 @@ fn format_summary_outline(yaml: &str) -> String {
     if !content_items.is_empty() {
         let shown = content_items.len().min(20);
         outline.push_str(&format!("\n### Content ({} of {} nodes)\n", shown, content_count));
-        for (i, (typ, score, text)) in content_items.iter().take(20).enumerate() {
+        for (i, (typ, score, text, repeats)) in content_items.iter().take(20).enumerate() {
             let display_text = if text.len() > 60 {
                 format!("{}…", &text[..60])
             } else {
                 text.clone()
             };
-            if display_text.is_empty() {
-                outline.push_str(&format!("  {:>2}. {:<10} score:{}\n", i + 1, typ, fmt_num(score)));
+            let repeat_suffix = if repeats.is_empty() || repeats == "1" {
+                String::new()
             } else {
-                outline.push_str(&format!("  {:>2}. {:<10} score:{:<4} \"{}\"\n", i + 1, typ, fmt_num(score), display_text));
+                format!(" ×{}", repeats)
+            };
+            if display_text.is_empty() {
+                outline.push_str(&format!("  {:>2}. {:<10} score:{}{}\n", i + 1, typ, fmt_num(score), repeat_suffix));
+            } else {
+                outline.push_str(&format!("  {:>2}. {:<10} score:{:<4} \"{}\"{}\n", i + 1, typ, fmt_num(score), display_text, repeat_suffix));
             }
         }
         // Score legend: explain what the numbers mean
@@ -4556,11 +4774,75 @@ async fn handle_html_snapshot_inspect(
     tool_params: &Value,
     session_name: Option<&str>,
 ) -> Result<(), String> {
+    // --- Resolve selector from file/stdin/base64 (CLI-side, stripped before server call) ---
+
+    // Check --stdin flag: read selector from stdin (avoids shell quoting issues on Windows)
+    let use_stdin = tool_params
+        .get("stdin")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    let raw_selector = if use_stdin {
+        let mut input = String::new();
+        std::io::stdin()
+            .read_to_string(&mut input)
+            .map_err(|e| format!("Failed to read CSS selector from stdin: {e}"))?;
+        if input.trim().is_empty() {
+            return Err("Stdin was empty but --stdin was specified.".to_string());
+        }
+        Some(input.trim().to_string())
+    } else {
+        tool_params
+            .get("selector")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+    };
+
+    // Resolve @file prefix: read selector from a file
+    let selector = match raw_selector {
+        Some(ref s) if s.starts_with('@') => {
+            let file_path = &s[1..];
+            resolve_sql_file(file_path)? // reuses the existing file-resolution helper
+        }
+        Some(s) => s,
+        None => String::new(), // empty = use server default (:root)
+    };
+
+    // Handle --selector-base64: decode base64-encoded selector
+    let selector = if let Some(base64_val) = tool_params
+        .get("selectorBase64")
+        .and_then(|v| v.as_str())
+    {
+        let trimmed = base64_val.trim();
+        if trimmed.is_empty() {
+            return Err("--selector-base64 was set but the value is empty.".to_string());
+        }
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(trimmed)
+            .map_err(|e| format!("Failed to base64-decode CSS selector: {e}"))?;
+        String::from_utf8(bytes)
+            .map_err(|e| format!("Base64-decoded CSS selector is not valid UTF-8: {e}"))?
+    } else {
+        selector
+    };
+
+    // Build server-bound params (strip CLI-only keys)
+    let mut server_params = tool_params.clone();
+    if let Value::Object(ref mut m) = server_params {
+        m.remove("stdin");
+        m.remove("selectorBase64");
+        if !selector.is_empty() {
+            m.insert("selector".to_string(), json!(selector));
+        } else {
+            m.remove("selector");
+        }
+    }
+
     let result = with_session(client, base_url, session_name, false, |session_id| {
         let client = client.clone();
         let base_url = base_url.to_string();
         let tool_name = tool_name.to_string();
-        let mut params = tool_params.clone();
+        let mut params = server_params.clone();
         params["sessionId"] = json!(session_id);
         async move { call_tool(&client, &base_url, &tool_name, params).await }
     })
@@ -4842,6 +5124,8 @@ struct GrepOptions {
     fixed_strings: bool,
     word_regexp: bool,
     selector: Option<String>,
+    /// CSS selector using querySelectorAll semantics — search across all matched elements.
+    selector_all: Option<String>,
 }
 
 fn parse_grep_options(tool_params: &Value) -> Result<GrepOptions, String> {
@@ -4915,6 +5199,11 @@ fn parse_grep_options(tool_params: &Value) -> Result<GrepOptions, String> {
             .get("selector")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string()),
+        selector_all: tool_params
+            .get("selector-all")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string()),
     })
 }
 
@@ -4926,8 +5215,35 @@ async fn handle_html_snapshot_grep(
     session_name: Option<&str>,
     grep_options: &GrepOptions,
 ) -> Result<(), String> {
-    let source = if let Some(selector) = &grep_options.selector {
-        // Scoped search: use html_snapshot_scrape to get inner HTML of the selector
+    let source = if let Some(selector) = &grep_options.selector_all {
+        // Scoped search across ALL matching elements (querySelectorAll semantics).
+        // Uses html_snapshot_scrape_all to get inner HTML of every matched element,
+        // then concatenates with element index annotations for traceable results.
+        let raw = with_session(client, base_url, session_name, false, |session_id| {
+            let client = client.clone();
+            let base_url = base_url.to_string();
+            let sel = selector.clone();
+            async move {
+                call_tool(
+                    &client,
+                    &base_url,
+                    "html_snapshot_scrape_all",
+                    json!({
+                        "sessionId": session_id,
+                        "field": "html",
+                        "selector": sel,
+                    }),
+                )
+                .await
+            }
+        })
+        .await?;
+
+        // Parse the JSON array of HTML strings and concatenate with separators
+        concat_scrape_all_results(&raw, selector)
+    } else if let Some(selector) = &grep_options.selector {
+        // Scoped search: use html_snapshot_scrape to get inner HTML of the first
+        // matching element (querySelector semantics).
         with_session(client, base_url, session_name, false, |session_id| {
             let client = client.clone();
             let base_url = base_url.to_string();
@@ -4968,6 +5284,39 @@ async fn handle_html_snapshot_grep(
 
     let (page, page_size, show_all) = parse_page_opts(tool_params);
     run_grep_on_source(&source, grep_options, "htmlsnapshot", page, page_size, show_all)
+}
+
+/// Parse the JSON array result from `html_snapshot_scrape_all` (field: "html")
+/// and concatenate all element HTML strings with annotated separators so grep
+/// output can trace matches back to the source element index.
+fn concat_scrape_all_results(raw: &str, selector: &str) -> String {
+    // Try to parse as JSON array of strings
+    let parsed: Vec<String> = match serde_json::from_str(raw) {
+        Ok(arr) => arr,
+        Err(_) => {
+            // If parsing fails, return raw as-is (might be an error message)
+            return raw.to_string();
+        }
+    };
+
+    if parsed.is_empty() {
+        return String::new();
+    }
+
+    let mut result = String::new();
+    for (i, html) in parsed.iter().enumerate() {
+        if i > 0 {
+            result.push('\n');
+        }
+        // Annotate each element's content with its index for traceability
+        result.push_str(&format!(
+            "--- element[{}] of {} ---\n{}",
+            i + 1,
+            selector,
+            html
+        ));
+    }
+    result
 }
 
 /// Convert grep-style escaped-alternation `\|` to Rust regex bare-pipe `|`.
@@ -5839,8 +6188,14 @@ async fn handle_select_command(
     session_name: Option<&str>,
     verify: bool,
 ) -> Result<(), String> {
+    // Read the display value from the "values" array (set by tool_params_fn).
+    // The user types a human-readable label like "United States", but the
+    // underlying <option> value may differ (e.g. "us"). We show what the user
+    // asked for so the confirmation message is meaningful.
     let expected_value = tool_params
-        .get("val")
+        .get("values")
+        .and_then(|v| v.as_array())
+        .and_then(|arr| arr.first())
         .and_then(|v| v.as_str())
         .unwrap_or("");
     let element_ref = tool_params.get("ref").and_then(|v| v.as_str());
@@ -5994,6 +6349,71 @@ async fn handle_agent_run(
     }
     cli_println!("Task submitted: {}", task_id);
     json_field("task_id", json!(&task_id));
+
+    let wait = tool_params
+        .get("wait")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    if wait {
+        cli_println!("Waiting for agent to complete (task {})...", task_id);
+        let start = std::time::Instant::now();
+        let timeout = std::time::Duration::from_secs(600); // 10 minutes
+        loop {
+            if start.elapsed() > timeout {
+                return Err(format!(
+                    "Agent task {} timed out after {}s. Use 'agent status {}' to check later.",
+                    task_id,
+                    start.elapsed().as_secs(),
+                    task_id
+                ));
+            }
+
+            let status = get_command_status(client, base_url, &task_id).await?;
+            let parsed: Value = serde_json::from_str(&status)
+                .unwrap_or(Value::String(status.clone()));
+            let process_state = parsed
+                .get("processState")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+
+            match process_state {
+                "done" => {
+                    let result_text = get_command_result(client, base_url, &task_id).await?;
+                    cli_println!("Agent completed in {:.1}s:", start.elapsed().as_secs_f64());
+                    cli_println!("{}", result_text);
+                    json_field(
+                        "raw",
+                        json!(serde_json::from_str::<Value>(&result_text)
+                            .unwrap_or(Value::String(result_text.clone()))),
+                    );
+                    let _ = update_async_task_status(&task_id, "completed", None);
+                    return Ok(());
+                }
+                "failed" | "error" => {
+                    let message = parsed
+                        .get("message")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("Agent task failed");
+                    return Err(format!("Agent task failed: {}", message));
+                }
+                _ => {
+                    // Show progress indicator
+                    let elapsed = start.elapsed().as_secs();
+                    if elapsed > 0 && elapsed % 5 == 0 {
+                        let msg = parsed
+                            .get("message")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("processing...");
+                        cli_println!("  [{}s] {}", elapsed, msg);
+                    }
+                }
+            }
+
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        }
+    }
+
     cli_println!(
         "Use 'browser4-cli agent status {}' to check progress, or 'browser4-cli agent list' to view all tracked tasks.",
         task_id
@@ -6153,26 +6573,10 @@ async fn handle_agent_list(client: &Client, base_url: &str) -> Result<(), String
         if entry.command != "agent" {
             continue;
         }
-        match get_command_status(client, base_url, &entry.task_id).await {
-            Ok(status_json) => {
-                match serde_json::from_str::<Value>(&status_json) {
-                    Ok(parsed) => {
-                        entry.last_status = extract_readable_agent_status(&parsed);
-                        updated = true;
-                    }
-                    Err(e) => {
-                        eprintln!(
-                            "⚠️  Failed to parse status for task {}: {}",
-                            entry.task_id, e
-                        );
-                    }
-                }
-            }
-            Err(e) => {
-                eprintln!(
-                    "⚠️  Failed to query status for task {}: {}",
-                    entry.task_id, e
-                );
+        if let Ok(status_json) = get_command_status(client, base_url, &entry.task_id).await {
+            if let Ok(parsed) = serde_json::from_str::<Value>(&status_json) {
+                entry.last_status = extract_readable_agent_status(&parsed);
+                updated = true;
             }
         }
     }
@@ -6290,10 +6694,7 @@ async fn handle_swarm_submit(
     let query = match query_raw {
         Some(q) if q.starts_with('@') => {
             let file_path = &q[1..];
-            Some(
-                std::fs::read_to_string(file_path)
-                    .map_err(|e| format!("Failed to read query file '{}': {}", file_path, e))?,
-            )
+            Some(resolve_sql_file(file_path)?)
         }
         Some(q) => Some(q.to_string()),
         None => None,
@@ -6350,29 +6751,29 @@ async fn handle_swarm_submit(
     }
     let opts_str = load_opts.join(" ");
 
-    // Submit each URL through the MCP interface.
+    // Submit each URL through the appropriate REST API.
     let mut json_submissions: Vec<serde_json::Value> = Vec::new();
     for u in &urls {
         let (result, method) = if let Some(ref q) = query {
-            // X-SQL query mode: send via MCP swarm_query
+            // X-SQL query mode: send structured JSON to /api/swarm/query
             let payload = json!({
                 "url": u,
                 "args": opts_str,
                 "query": q,
             });
             (
-                call_tool(client, base_url, "swarm_query", payload).await?,
+                submit_swarm_query(client, base_url, payload).await?,
                 "query",
             )
         } else {
-            // Plain scrape mode: send URL with options via MCP swarm_submit
+            // Plain scrape mode: send URL with options to /api/swarm/submit
             let command = if opts_str.is_empty() {
                 u.clone()
             } else {
                 format!("{} {}", u, opts_str)
             };
             (
-                call_tool(client, base_url, "swarm_submit", json!({ "payload": command })).await?,
+                submit_swarm_payload(client, base_url, &command).await?,
                 "submit",
             )
         };
@@ -6397,6 +6798,22 @@ async fn handle_swarm_submit(
     if urls.len() > 1 {
         cli_println!("{} URL(s) submitted. Use 'browser4-cli swarm list' to view all tracked tasks.", urls.len());
     }
+
+    // Support --wait: poll until all submitted jobs complete
+    if tool_params
+        .get("wait")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
+        let task_ids: Vec<String> = json_submissions
+            .iter()
+            .filter_map(|s| s.get("task_id").and_then(|v| v.as_str()).map(|s| s.to_string()))
+            .collect();
+        if !task_ids.is_empty() {
+            swarm_wait_for_jobs(client, base_url, &task_ids).await?;
+        }
+    }
+
     Ok(())
 }
 
@@ -6438,7 +6855,16 @@ async fn handle_swarm_query(
     if url.is_empty() && seed_file.is_none() {
         return Err("A URL or --seed-file is required.".to_string());
     }
-    if query_raw.as_ref().map_or(true, |q| q.is_empty()) {
+    // Allow --sql-base64 standalone (without --sql): the base64 value is decoded
+    // later by maybe_decode_base64_sql. If sqlBase64 has a non-empty string value,
+    // we can proceed with an empty query_raw; the decode will supply the actual SQL.
+    let has_sql_base64_value = tool_params
+        .get("sqlBase64")
+        .and_then(|v| v.as_str())
+        .map(|s| !s.trim().is_empty())
+        .unwrap_or(false);
+
+    if query_raw.as_ref().map_or(true, |q| q.is_empty()) && !has_sql_base64_value {
         return Err(
             "--sql is required. Provide an inline X-SQL query, @file.sql, --sql-stdin, or --sql-base64."
                 .to_string(),
@@ -6452,6 +6878,7 @@ async fn handle_swarm_query(
             Some(resolve_sql_file(file_path)?)
         }
         Some(q) => Some(q.clone()),
+        None if has_sql_base64_value => Some(String::new()),
         None => None,
     };
 
@@ -6497,7 +6924,7 @@ async fn handle_swarm_query(
     }
     let opts_str = load_opts.join(" ");
 
-    // Submit each URL via MCP swarm_query
+    // Submit each URL via /api/swarm/query
     let mut json_submissions: Vec<serde_json::Value> = Vec::new();
     let q = query.expect("query was validated above");
     for u in &urls {
@@ -6506,19 +6933,38 @@ async fn handle_swarm_query(
             "args": opts_str,
             "query": q,
         });
-        let result = call_tool(client, base_url, "swarm_query", payload).await?;
+        let result = submit_swarm_query(client, base_url, payload).await?;
         let task_id = result.trim().trim_matches('"').to_string();
         cli_println!("Query Submitted: {} -> Task ID: {}", u, task_id);
         json_submissions.push(json!({
             "url": u,
             "task_id": task_id,
         }));
+
+        // Persist each task for cross-session tracking (so they appear in swarm list)
+        let _ = track_async_task(&task_id, "swarm", u, None);
     }
     json_field("submissions", json!(json_submissions));
 
     if urls.len() > 1 {
-        cli_println!("{} URL(s) queried.", urls.len());
+        cli_println!("{} URL(s) queried. Use 'browser4-cli swarm list' to view all tracked tasks.", urls.len());
     }
+
+    // Support --wait: poll until all submitted jobs complete
+    if tool_params
+        .get("wait")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
+        let task_ids: Vec<String> = json_submissions
+            .iter()
+            .filter_map(|s| s.get("task_id").and_then(|v| v.as_str()).map(|s| s.to_string()))
+            .collect();
+        if !task_ids.is_empty() {
+            swarm_wait_for_jobs(client, base_url, &task_ids).await?;
+        }
+    }
+
     Ok(())
 }
 
@@ -6536,13 +6982,21 @@ async fn handle_swarm_status(
         return Err("Task ID is required.".to_string());
     }
 
-    let result = call_tool(client, base_url, "swarm_status", json!({ "id": id })).await?;
-    cli_println!("{}", result);
+    let result = get_swarm_status(client, base_url, id).await?;
+    let parsed: Value =
+        serde_json::from_str(&result).unwrap_or(Value::String(result.clone()));
+
+    // Show metadata only: id, status, isDone, message, timestamps
+    let summary = json!({
+        "id": parsed.get("id").and_then(|v| v.as_str()).unwrap_or(&id),
+        "isDone": parsed.get("isDone").unwrap_or(&json!(null)),
+        "statusCode": parsed.get("statusCode").unwrap_or(&json!(null)),
+        "message": parsed.get("message").unwrap_or(&json!("")),
+        "lastModifiedTime": parsed.get("lastModifiedTime").unwrap_or(&json!(null)),
+    });
+    cli_println!("{}", serde_json::to_string_pretty(&summary).unwrap_or_default());
     json_field("task_id", json!(id));
-    json_field(
-        "raw",
-        json!(serde_json::from_str::<Value>(&result).unwrap_or(Value::String(result.clone()))),
-    );
+    json_field("raw", parsed);
     Ok(())
 }
 
@@ -6560,7 +7014,168 @@ async fn handle_swarm_result(
         return Err("Task ID is required.".to_string());
     }
 
-    let result = call_tool(client, base_url, "swarm_result", json!({ "id": id })).await?;
+    let result = get_swarm_result(client, base_url, id).await?;
+    let parsed: Value =
+        serde_json::from_str(&result).unwrap_or(Value::String(result.clone()));
+
+    // Show result payload only: resultSet, pageContentBytes
+    let payload = json!({
+        "id": parsed.get("id").and_then(|v| v.as_str()).unwrap_or(&id),
+        "resultSet": parsed.get("resultSet").unwrap_or(&json!([])),
+        "pageContentBytes": parsed.get("pageContentBytes").unwrap_or(&json!(null)),
+        "error": parsed.get("error").unwrap_or(&json!(null)),
+    });
+    cli_println!("{}", serde_json::to_string_pretty(&payload).unwrap_or_default());
+    json_field("task_id", json!(id));
+    json_field("raw", parsed);
+    Ok(())
+}
+
+async fn handle_swarm_list(tool_params: &Value) -> Result<(), String> {
+    // Support --clear to remove all tracked swarm tasks
+    if tool_params
+        .get("clear")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
+        let mut list = read_async_tasks(None);
+        let before = list.tasks.len();
+        list.tasks.retain(|t| t.command != "swarm");
+        let removed = before - list.tasks.len();
+        write_async_tasks(&list, None).map_err(|e| e.to_string())?;
+        cli_println!("Cleared {} tracked swarm task(s).", removed);
+        json_field("cleared", json!(removed));
+        return Ok(());
+    }
+
+    let _ = prune_async_tasks(None);
+    let list = read_async_tasks(None);
+    let filtered: Vec<_> = list.tasks.iter().filter(|t| t.command == "swarm").cloned().collect();
+    let display = state::AsyncTaskList { tasks: filtered };
+    cli_println!("{}", format_async_task_list(&display));
+    Ok(())
+}
+
+/// Poll a list of swarm task IDs until all complete or timeout.
+async fn swarm_wait_for_jobs(
+    client: &Client,
+    base_url: &str,
+    task_ids: &[String],
+) -> Result<(), String> {
+    let total = task_ids.len();
+    cli_println!(
+        "Waiting for {} job(s) to complete...",
+        total
+    );
+
+    let poll_interval = std::time::Duration::from_secs(2);
+    let max_wait = std::time::Duration::from_secs(300); // 5-minute timeout
+    let start = std::time::Instant::now();
+
+    let mut completed = vec![false; total];
+    let mut last_report = start;
+
+    loop {
+        let mut all_done = true;
+        for (i, id) in task_ids.iter().enumerate() {
+            if completed[i] {
+                continue;
+            }
+            match get_swarm_status(client, base_url, id).await {
+                Ok(result) => {
+                    let parsed: Value = serde_json::from_str(&result).unwrap_or_default();
+                    let is_done = parsed
+                        .get("isDone")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
+                    if is_done {
+                        completed[i] = true;
+                    } else {
+                        all_done = false;
+                    }
+                }
+                Err(_) => {
+                    // Keep waiting on transient errors
+                    all_done = false;
+                }
+            }
+        }
+
+        if all_done {
+            cli_println!(
+                "All {} job(s) completed in {:.0}s.",
+                total,
+                start.elapsed().as_secs_f64()
+            );
+            // Print a summary table
+            cli_println!("\n  {:^8}  {:^12}  {}", "STATUS", "TASK ID", "URL");
+            cli_println!("  {:-<8}  {:-<12}  {:-<40}", "", "", "");
+            for (i, id) in task_ids.iter().enumerate() {
+                let short_id = if id.len() > 8 { &id[..8] } else { id };
+                let status = if completed[i] { "done" } else { "timeout" };
+                cli_println!("  {:^8}  {:<12}  ...", status, short_id);
+            }
+            return Ok(());
+        }
+
+        if start.elapsed() > max_wait {
+            let pending: Vec<_> = task_ids
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| !completed[*i])
+                .map(|(_, id)| id.clone())
+                .collect();
+            cli_println!(
+                "Timeout after {:.0}s. {} of {} job(s) completed. {} job(s) still pending. Use 'swarm status <id>' to check manually.",
+                start.elapsed().as_secs_f64(),
+                completed.iter().filter(|&&c| c).count(),
+                total,
+                pending.len(),
+            );
+            json_field("pending_task_ids", json!(pending));
+            return Ok(());
+        }
+
+        // Progress report every 30 seconds
+        if last_report.elapsed() >= std::time::Duration::from_secs(30) {
+            let done_count = completed.iter().filter(|&&c| c).count();
+            cli_println!(
+                "  ... {}/{} job(s) completed (elapsed: {:.0}s)",
+                done_count,
+                total,
+                start.elapsed().as_secs_f64()
+            );
+            last_report = std::time::Instant::now();
+        }
+
+        tokio::time::sleep(poll_interval).await;
+    }
+}
+
+async fn handle_crawl_list() -> Result<(), String> {
+    let _ = prune_async_tasks(None);
+    let list = read_async_tasks(None);
+    let filtered: Vec<_> = list.tasks.iter().filter(|t| t.command == "crawl").cloned().collect();
+    let display = state::AsyncTaskList { tasks: filtered };
+    cli_println!("{}", format_async_task_list(&display));
+    Ok(())
+}
+
+async fn handle_crawl_status(
+    client: &Client,
+    base_url: &str,
+    tool_params: &Value,
+) -> Result<(), String> {
+    let id = tool_params
+        .get("id")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
+
+    if id.is_empty() {
+        return Err("Task ID is required. Use 'crawl list' to see tracked tasks.".to_string());
+    }
+
+    let result = get_crawl_status(client, base_url, id).await?;
     cli_println!("{}", result);
     json_field("task_id", json!(id));
     json_field(
@@ -6570,21 +7185,61 @@ async fn handle_swarm_result(
     Ok(())
 }
 
-async fn handle_swarm_list() -> Result<(), String> {
-    let _ = prune_async_tasks(None);
-    let list = read_async_tasks(None);
-    let filtered: Vec<_> = list.tasks.iter().filter(|t| t.command == "swarm").cloned().collect();
-    let display = state::AsyncTaskList { tasks: filtered };
-    cli_println!("{}", format_async_task_list(&display));
+async fn handle_crawl_result(
+    client: &Client,
+    base_url: &str,
+    tool_params: &Value,
+) -> Result<(), String> {
+    let id = tool_params
+        .get("id")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
+
+    if id.is_empty() {
+        return Err("Task ID is required. Use 'crawl list' to see tracked tasks.".to_string());
+    }
+
+    let result = get_crawl_result(client, base_url, id).await?;
+    cli_println!("{}", result);
+    json_field("task_id", json!(id));
+    json_field(
+        "raw",
+        json!(serde_json::from_str::<Value>(&result).unwrap_or(Value::String(result.clone()))),
+    );
     Ok(())
 }
 
-async fn handle_crawl_list() -> Result<(), String> {
+async fn handle_crawl_cancel(
+    client: &Client,
+    base_url: &str,
+    tool_params: &Value,
+) -> Result<(), String> {
+    let id = tool_params
+        .get("id")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
+
+    if id.is_empty() {
+        return Err("Task ID is required. Use 'crawl list' to see tracked tasks.".to_string());
+    }
+
+    let result = cancel_crawl(client, base_url, id).await?;
+    cli_println!("{}", result);
+    json_field("task_id", json!(id));
+
+    // Update local tracking
+    let _ = update_async_task_status(id, "cancelled", None);
+    Ok(())
+}
+
+async fn handle_crawl_clear(
+    client: &Client,
+    base_url: &str,
+) -> Result<(), String> {
+    let result = clear_crawls(client, base_url).await?;
+    cli_println!("{}", result);
+    // Also clean local tracking
     let _ = prune_async_tasks(None);
-    let list = read_async_tasks(None);
-    let filtered: Vec<_> = list.tasks.iter().filter(|t| t.command == "crawl").cloned().collect();
-    let display = state::AsyncTaskList { tasks: filtered };
-    cli_println!("{}", format_async_task_list(&display));
     Ok(())
 }
 
@@ -6722,9 +7377,18 @@ async fn handle_crawl(
     let poll_interval = std::time::Duration::from_secs(2);
     let timeout = crawl_request_timeout();
     let start = std::time::Instant::now();
+    let mut last_report = std::time::Duration::ZERO;
+    let report_interval = std::time::Duration::from_secs(15);
+
+    cli_println!("Waiting for crawl to complete (task {}). Use --background for long-running crawls.", task_id);
 
     loop {
         if start.elapsed() > timeout {
+            let _ = update_async_task_status(
+                &task_id,
+                &format!("timeout after {}s", timeout.as_secs()),
+                None,
+            );
             return Err(format!(
                 "Crawl timed out after {} seconds. Task ID: {}. \
                  Increase the timeout with the BROWSER4_CLI_CRAWL_TIMEOUT_SECS environment variable.",
@@ -6735,13 +7399,32 @@ async fn handle_crawl(
 
         tokio::time::sleep(poll_interval).await;
 
-        let response_text = call_tool(client, base_url, "crawl_result", json!({ "id": &task_id })).await?;
+        let response_text = get_crawl_result(client, base_url, &task_id).await?;
         let parsed: Value = serde_json::from_str(&response_text)
             .map_err(|e| format!("Failed to parse crawl response: {}", e))?;
 
         let status = parsed["status"].as_str().unwrap_or("");
         let pages_found = parsed["pagesFound"].as_i64().unwrap_or(0);
         let error = parsed["error"].as_str();
+
+        // Periodic progress indicator so foreground crawls don't look hung
+        let elapsed = start.elapsed();
+        if elapsed - last_report >= report_interval {
+            last_report = elapsed;
+            if pages_found > 0 {
+                cli_println!(
+                    "Still crawling... {} pages found so far ({}s elapsed)",
+                    pages_found,
+                    elapsed.as_secs()
+                );
+            } else {
+                cli_println!(
+                    "Still waiting for crawl to start... ({}s elapsed). \
+                     If the queue is congested, try stopping old tasks or using --background.",
+                    elapsed.as_secs()
+                );
+            }
+        }
 
         match status {
             "OK" | "SC_OK" => {
@@ -6762,8 +7445,7 @@ async fn handle_crawl(
 
                 // Format output
                 if has_sql {
-                    cli_println!("");
-                    let output: String = if all_extracted.is_empty() {
+                    let extracted_output: String = if all_extracted.is_empty() {
                         "No extracted data.".to_string()
                     } else {
                         match format.as_str() {
@@ -6774,34 +7456,58 @@ async fn handle_crawl(
                         }
                     };
 
-                    if let Some(file_path) = output_file {
-                        std::fs::write(file_path, &output)
+                    if let Some(ref file_path) = output_file {
+                        std::fs::write(file_path, &extracted_output)
                             .map_err(|e| format!("Failed to write output file '{}': {}", file_path, e))?;
                         cli_println!("Results written to {}", file_path);
                     } else {
-                        cli_println!("{}", output);
+                        cli_println!("\n{}", extracted_output);
                     }
 
                     json_field("extracted", json!(all_extracted));
                 } else {
-                    cli_println!("\nCrawl completed. {} pages found.", page_count);
-
+                    let mut page_lines: Vec<String> = Vec::new();
+                    page_lines.push(format!("Crawl completed. {} pages found.", page_count));
                     if let Some(pages) = pages {
                         for page in pages {
                             let page_url = page["url"].as_str().unwrap_or("");
                             let page_title = page["title"].as_str().unwrap_or("");
                             let page_depth = page["depth"].as_i64().unwrap_or(0);
-                            cli_println!("  depth={} | {} | {}", page_depth, page_url, page_title);
+                            page_lines.push(format!(
+                                "  depth={} | {} | {}",
+                                page_depth, page_url, page_title
+                            ));
                         }
+                    }
+                    let page_output = page_lines.join("\n");
+
+                    if let Some(ref file_path) = output_file {
+                        std::fs::write(file_path, &page_output)
+                            .map_err(|e| format!("Failed to write output file '{}': {}", file_path, e))?;
+                        cli_println!("\nCrawl completed. {} pages found. Results written to {}", page_count, file_path);
+                    } else {
+                        cli_println!("\n{}", page_output);
                     }
                 }
 
                 json_field("pages", json!(pages));
                 json_field("pages_found", json!(page_count));
+                // Update the locally-tracked task status so `crawl list`
+                // reflects completion instead of forever showing "pending".
+                let _ = update_async_task_status(
+                    &task_id,
+                    &format!("{} ({} pages)", status, page_count),
+                    None,
+                );
                 return Ok(());
             }
             "SC_REQUEST_TIMEOUT" | "SC_INTERNAL_SERVER_ERROR" => {
                 let err_msg = error.unwrap_or("Unknown crawl error");
+                let _ = update_async_task_status(
+                    &task_id,
+                    &format!("error: {}", err_msg),
+                    None,
+                );
                 return Err(format!("Crawl failed: {}", err_msg));
             }
             _ => {
@@ -6986,10 +7692,44 @@ fn parse_loop_args(args: &[String]) -> Result<LoopArgs, String> {
     let mut after_dash_dash = false;
     let mut i = 0;
 
+    // Set of known loop-level flags. When any of these appear after `--`
+    // (i.e. in subcommand position), they are silently captured by the
+    // subcommand rather than being parsed by the loop command. We detect
+    // this and warn the user.
+    let known_loop_flags: &[&str] = &[
+        "--name", "--interval", "-i", "--count", "-n", "--timeout", "-t",
+        "--shell", "--pause", "--pause-all", "--resume", "--resume-all",
+        "--stop", "--stop-all", "--status", "--list",
+    ];
+
     while i < args.len() {
         let arg = &args[i];
 
         if after_dash_dash {
+            // Detect known loop flags that appear after `--` and warn.
+            // The user likely intended these as loop-level options.
+            let flag_name = if let Some(_val) = arg.strip_prefix("--name=") {
+                Some("--name")
+            } else if let Some(_val) = arg.strip_prefix("--interval=") {
+                Some("--interval")
+            } else if let Some(_val) = arg.strip_prefix("--count=") {
+                Some("--count")
+            } else if let Some(_val) = arg.strip_prefix("--timeout=") {
+                Some("--timeout")
+            } else if known_loop_flags.contains(&arg.as_str()) {
+                Some(arg.as_str())
+            } else {
+                None
+            };
+
+            if let Some(flag) = flag_name {
+                eprintln!(
+                    "[WARN] `{}` after `--` is treated as a nested browser4-cli argument, \
+                     not a loop option.  Did you mean `loop {} <value> -- ...`?",
+                    arg, flag,
+                );
+            }
+
             out.task_tokens.push(arg.clone());
             i += 1;
             continue;
@@ -7051,6 +7791,18 @@ fn parse_loop_args(args: &[String]) -> Result<LoopArgs, String> {
             continue;
         }
 
+        if arg == "--history" {
+            out.history = true;
+            i += 1;
+            continue;
+        }
+
+        if arg == "--keep-state" {
+            out.keep_state = true;
+            i += 1;
+            continue;
+        }
+
         if arg == "--shell" {
             out.is_shell = true;
             i += 1;
@@ -7089,7 +7841,7 @@ fn parse_loop_args(args: &[String]) -> Result<LoopArgs, String> {
     // --pause is excluded from this set: combining --pause with a task starts
     // the loop in paused state (the user can --resume later).
     let no_task_flags = out.stop || out.stop_all || out.status || out.list
-        || out.resume || out.pause_all || out.resume_all;
+        || out.resume || out.pause_all || out.resume_all || out.history;
 
     if no_task_flags {
         if !out.task_tokens.is_empty() {
@@ -7099,7 +7851,8 @@ fn parse_loop_args(args: &[String]) -> Result<LoopArgs, String> {
                 else if out.list { "--list" }
                 else if out.resume { "--resume" }
                 else if out.pause_all { "--pause-all" }
-                else { "--resume-all" };
+                else if out.resume_all { "--resume-all" }
+                else { "--history" };
             return Err(format!(
                 "The {} flag cannot be combined with a task. Use just `browser4-cli loop {}`.",
                 flag, flag,
@@ -7230,9 +7983,18 @@ fn run_shell_command(task: &str) -> Result<String, String> {
     #[cfg(not(windows))]
     let (shell, flag) = ("sh", "-c");
 
+    // On Windows, prepend `chcp 65001 >nul &&` to switch the console code
+    // page to UTF-8 (65001) so that non-ASCII characters (e.g. Chinese
+    // day-of-week from `date /t`) are captured correctly by the UTF-8
+    // String::from_utf8_lossy decoder.
+    #[cfg(windows)]
+    let command = format!("chcp 65001 >nul && {}", task);
+    #[cfg(not(windows))]
+    let command = task.to_string();
+
     let output = std::process::Command::new(shell)
         .arg(flag)
-        .arg(task)
+        .arg(&command)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .output()
@@ -7288,6 +8050,34 @@ async fn run_browser4_cli(tokens: &[String]) -> Result<String, String> {
     }
 }
 
+/// Spawn a detached background process that survives parent exit.
+///
+/// On Windows, uses `CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS` so the
+/// child is not tied to the parent console / process tree.  On Unix the
+/// child is simply spawned — the OS reparents it to init when the parent
+/// exits.
+fn spawn_detached(exe: &std::path::Path, args: &[String]) -> Result<u32, String> {
+    let mut cmd = std::process::Command::new(exe);
+    cmd.args(args)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .stdin(std::process::Stdio::null());
+
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+        const DETACHED_PROCESS: u32 = 0x0000_0008;
+        cmd.creation_flags(CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS);
+    }
+
+    let child = cmd
+        .spawn()
+        .map_err(|e| format!("Failed to spawn background process: {}", e))?;
+
+    Ok(child.id())
+}
+
 /// Handle the `loop` command — execute a task periodically with persistence,
 /// resume, pause, and stop support.
 async fn handle_loop(
@@ -7321,20 +8111,61 @@ async fn handle_loop(
                 };
                 let count_display = match entry.status.as_str() {
                     "completed" => entry.iterations_completed.to_string(),
-                    _ => format!("{}", entry.iterations_completed),
+                    _ => match entry.count {
+                        Some(max) => format!("{}/{}", entry.iterations_completed, max),
+                        None => format!("{}", entry.iterations_completed),
+                    },
                 };
+                let interval_display = format_duration(entry.interval_secs);
                 cli_println!(
-                    "  {}  {:<20}  {:>3} iters  {:<8}  {}",
+                    "  {}  {:<20}  {:>6} iters  {:>5} intv  {:<8}  {}",
                     icon,
                     name_display,
                     count_display,
+                    interval_display,
                     status_label,
                     entry.task,
                 );
             }
-            cli_println!("\nUse --status [name] for details, --pause/--resume [name] to control, --stop [name] to clear.");
+            cli_println!("\nColumns: name, iters (completed[/max]), interval, status, task.");
+            cli_println!("Use --status [name] for full details, --pause/--resume [name] to control, --stop [name] to clear.");
         }
         json_field("loops", json!(entries));
+        return Ok(());
+    }
+
+    // --- --history: show recently completed loops ---
+    if parsed.history {
+        let entries = state::read_loop_history(None);
+        if entries.is_empty() {
+            cli_println!("No completed loops in history. Start one with `browser4-cli loop <task>`.");
+        } else {
+            cli_println!("{} completed loop(s) in history (newest last):\n", entries.len());
+            for entry in &entries {
+                let reason_label = match entry.exit_reason.as_str() {
+                    "count-reached" => "count reached",
+                    "timeout" => "timeout",
+                    "stopped" => "stopped by user",
+                    "interrupted" => "interrupted",
+                    _ => &entry.exit_reason,
+                };
+                let name_display = if entry.name == "default" {
+                    "(default)".to_string()
+                } else {
+                    entry.name.clone()
+                };
+                cli_println!(
+                    "  ✓  {:<20}  {:>3} iters  {:<16}  {}  {}",
+                    name_display,
+                    entry.iterations_completed,
+                    reason_label,
+                    entry.completed_at,
+                    entry.task_tokens.join(" "),
+                );
+            }
+            cli_println!("\nHistory keeps the most recent {} completed loops.", state::MAX_HISTORY_ENTRIES);
+        }
+        json_field("history", json!(entries));
         return Ok(());
     }
 
@@ -7425,6 +8256,18 @@ async fn handle_loop(
             Some(ls) => {
                 let total = ls.iterations_completed;
                 let was_active = ls.status == "running" || ls.status == "paused";
+
+                // Write a history entry before clearing state.
+                let history_entry = state::LoopHistoryEntry {
+                    name: loop_name.unwrap_or("default").to_string(),
+                    task_tokens: ls.task_tokens.clone(),
+                    mode: ls.mode.clone(),
+                    iterations_completed: total,
+                    exit_reason: "stopped".to_string(),
+                    completed_at: Utc::now().to_rfc3339(),
+                };
+                let _ = state::write_loop_history(&history_entry, None);
+
                 state::clear_loop_state(None, loop_name);
                 let label = loop_name.unwrap_or("default");
                 if was_active {
@@ -7572,7 +8415,7 @@ async fn handle_loop(
         return Ok(());
     }
 
-    // --- --resume: set loop status to "running" ---
+    // --- --resume: set loop status to "running" and spawn execution ---
     if parsed.resume {
         let state_path = state::loop_state_path(None, loop_name);
         match state::set_loop_status(None, loop_name, "running") {
@@ -7580,13 +8423,79 @@ async fn handle_loop(
                 let label = loop_name.unwrap_or("default");
                 if prev == "running" {
                     cli_println!("▶  Loop \"{}\" is already running.", label);
+                    cli_println!("   State file: {}", state_path.display());
+                    json_field("resumed", json!(true));
+                    json_field("name", json!(label));
+                    json_field("previous_status", json!(prev));
                 } else {
                     cli_println!("▶  Loop \"{}\" resumed (was {}).", label, prev);
+
+                    // Read the full loop state to reconstruct the command and
+                    // spawn a detached background process that actually executes
+                    // the iterations.
+                    if let Some(ls) = state::read_loop_state(None, loop_name) {
+                        // Reconstruct the CLI arguments for the loop command.
+                        let mut cmd_args: Vec<String> = vec!["loop".to_string()];
+
+                        // Add --name if named
+                        if let Some(ref n) = parsed.name {
+                            cmd_args.push("--name".to_string());
+                            cmd_args.push(n.clone());
+                        }
+
+                        // Add mode flags
+                        match ls.mode.as_str() {
+                            "shell" => {
+                                cmd_args.push("--shell".to_string());
+                            }
+                            "subcommand" => {
+                                cmd_args.push("--".to_string());
+                            }
+                            _ => {} // plain mode — no flag
+                        }
+
+                        // Add task tokens
+                        cmd_args.extend(ls.task_tokens.clone());
+
+                        // Add scheduling flags
+                        cmd_args.push("--interval".to_string());
+                        cmd_args.push(ls.interval_secs.to_string());
+                        if let Some(c) = ls.count {
+                            cmd_args.push("--count".to_string());
+                            cmd_args.push(c.to_string());
+                        }
+                        if let Some(t) = ls.timeout_secs {
+                            cmd_args.push("--timeout".to_string());
+                            cmd_args.push(t.to_string());
+                        }
+
+                        // Spawn a detached background process.
+                        let exe = std::env::current_exe()
+                            .map_err(|e| format!("Cannot determine CLI path: {}", e))?;
+
+                        match spawn_detached(&exe, &cmd_args) {
+                            Ok(child_id) => {
+                                cli_println!(
+                                    "   Spawned background process (PID: {}). Use --list to monitor, \
+                                     --pause to pause, --stop to clear.",
+                                    child_id,
+                                );
+                            }
+                            Err(e) => {
+                                eprintln!(
+                                    "[WARN] Failed to spawn background process: {}. \
+                                     Run the same loop command manually to start execution.",
+                                    e,
+                                );
+                            }
+                        }
+                    }
+
+                    cli_println!("   State file: {}", state_path.display());
+                    json_field("resumed", json!(true));
+                    json_field("name", json!(label));
+                    json_field("previous_status", json!(prev));
                 }
-                cli_println!("   State file: {}", state_path.display());
-                json_field("resumed", json!(true));
-                json_field("name", json!(label));
-                json_field("previous_status", json!(prev));
             }
             None => {
                 if let Some(n) = loop_name {
@@ -7625,7 +8534,7 @@ async fn handle_loop(
         return Ok(());
     }
 
-    // --- --resume-all: resume all paused loops ---
+    // --- --resume-all: resume all paused loops and spawn execution ---
     if parsed.resume_all {
         let entries = state::list_loop_states(None);
         let paused: Vec<_> = entries.iter().filter(|e| e.status == "paused").collect();
@@ -7638,8 +8547,43 @@ async fn handle_loop(
         }
         let updated = state::set_all_loop_statuses_filtered(None, Some("paused"), "running");
         cli_println!("▶  Resumed {} paused loop(s):", updated);
+
+        let exe = std::env::current_exe().unwrap_or_default();
         for entry in &paused {
-            cli_println!("   - {}", entry.name);
+            let name = if entry.name == "default" { None } else { Some(entry.name.as_str()) };
+            if let Some(ls) = state::read_loop_state(None, name) {
+                // Reconstruct CLI arguments
+                let mut cmd_args: Vec<String> = vec!["loop".to_string()];
+                if let Some(n) = name {
+                    cmd_args.push("--name".to_string());
+                    cmd_args.push(n.to_string());
+                }
+                match ls.mode.as_str() {
+                    "shell" => { cmd_args.push("--shell".to_string()); }
+                    "subcommand" => { cmd_args.push("--".to_string()); }
+                    _ => {}
+                }
+                cmd_args.extend(ls.task_tokens.clone());
+                cmd_args.push("--interval".to_string());
+                cmd_args.push(ls.interval_secs.to_string());
+                if let Some(c) = ls.count {
+                    cmd_args.push("--count".to_string());
+                    cmd_args.push(c.to_string());
+                }
+                if let Some(t) = ls.timeout_secs {
+                    cmd_args.push("--timeout".to_string());
+                    cmd_args.push(t.to_string());
+                }
+
+                match spawn_detached(&exe, &cmd_args) {
+                    Ok(child_id) => {
+                        cli_println!("   - {} (PID: {})", entry.name, child_id);
+                    }
+                    Err(e) => {
+                        cli_println!("   - {} (failed to spawn: {})", entry.name, e);
+                    }
+                }
+            }
         }
         json_field("resumed_all", json!(true));
         json_field("resumed_count", json!(updated));
@@ -8015,15 +8959,53 @@ async fn handle_loop(
 
     // --- summary ---
     let total = iteration.saturating_sub(1);
+
+    // Determine the exit reason for the history log.
+    let exit_reason = {
+        let count_reached = parsed.count.map_or(false, |max| total >= max);
+        let timed_out = parsed.timeout_secs.map_or(false, |t| overall_start.elapsed().as_secs() >= t);
+        if count_reached && !timed_out {
+            "count-reached"
+        } else if timed_out {
+            "timeout"
+        } else {
+            "interrupted"
+        }
+    };
+
     cli_println!("\n========================================");
     cli_println!("✓  Loop finished — {} iteration(s) completed.", total);
 
+    // Write a history entry so users can review past loop completions.
+    let history_entry = state::LoopHistoryEntry {
+        name: loop_name.unwrap_or("default").to_string(),
+        task_tokens: parsed.task_tokens.clone(),
+        mode: mode_key.to_string(),
+        iterations_completed: total,
+        exit_reason: exit_reason.to_string(),
+        completed_at: Utc::now().to_rfc3339(),
+    };
+    let _ = state::write_loop_history(&history_entry, None);
+
     // Clear persisted state on normal completion — the summary was already
     // printed and re-running the same command starts a fresh loop anyway.
-    state::clear_loop_state(None, loop_name);
+    // Unless --keep-state was specified.
+    if !parsed.keep_state {
+        state::clear_loop_state(None, loop_name);
+    } else {
+        // Persist final completed state for inspection
+        persist(
+            &parsed.task_tokens, mode_key, parsed.interval_secs,
+            parsed.count, parsed.timeout_secs,
+            total, &started_at, "completed",
+        );
+        let state_path = state::loop_state_path(None, loop_name);
+        cli_println!("   State preserved at: {}", state_path.display());
+    }
 
     json_field("iterations", json!(results));
     json_field("total_iterations", json!(total));
+    json_field("exit_reason", json!(exit_reason));
 
     Ok(())
 }
@@ -8198,10 +9180,10 @@ fn format_uninstall_output(
 /// process exits.  On Windows the running executable is locked, so we
 /// schedule a deferred deletion via a detached PowerShell script.
 fn attempt_self_removal(exe_path: &std::path::Path) -> bool {
-    let exe_str = exe_path.display().to_string();
-
     #[cfg(windows)]
     {
+        let exe_str = exe_path.display().to_string();
+
         // Use a PowerShell one-liner spawned through cmd.exe with
         // CREATE_NO_WINDOW so no console window flashes on screen.
         // The script sleeps briefly to let this process exit, then
@@ -8970,10 +9952,17 @@ async fn handle_doctor(client: &Client, base_url: &str, args: &HashMap<String, V
         .and_then(|v| v.parse().ok())
         .unwrap_or(50)
         .min(500);
+    let log_filter = args.get("log_filter").and_then(|v| v.as_str()).unwrap_or("");
 
     cli_println!("");
-    cli_println!("-- Backend Logs: {}.log (last {} lines) --", log_file, log_lines);
-    let log_url = format!("{base_url}/api/doctor/logs?file={}&lines={}", log_file, log_lines);
+    if log_filter.is_empty() {
+        cli_println!("-- Backend Logs: {}.log (last {} lines) --", log_file, log_lines);
+    } else {
+        cli_println!("-- Backend Logs: {}.log (last {} lines, filter: \"{}\") --", log_file, log_lines, log_filter);
+    }
+    let log_url = format!("{base_url}/api/doctor/logs?file={}&lines={}&filter={}",
+        log_file, log_lines,
+        urlencoding::encode(log_filter));
     match get_json(client, &log_url).await {
         Ok(log_data) => {
             if let Some(entries) = log_data.get("lines").and_then(|v| v.as_array()) {
@@ -8983,7 +9972,11 @@ async fn handle_doctor(client: &Client, base_url: &str, args: &HashMap<String, V
                     }
                 }
                 if entries.is_empty() {
-                    cli_println!("  (log file empty or not found)");
+                    if log_filter.is_empty() {
+                        cli_println!("  (log file empty or not found)");
+                    } else {
+                        cli_println!("  (no log lines matched filter \"{}\")", log_filter);
+                    }
                 }
             }
             json_field("backend_logs", log_data);
@@ -8995,26 +9988,44 @@ async fn handle_doctor(client: &Client, base_url: &str, args: &HashMap<String, V
     }
 
     // ---- Backend Metrics (conditional) ----
+    let metric_filter = args.get("metric_filter").and_then(|v| v.as_str()).unwrap_or("");
+
     cli_println!("");
-    cli_println!("-- Backend Metrics --");
-    let metrics_url = format!("{base_url}/api/doctor/metrics");
+    if metric_filter.is_empty() {
+        cli_println!("-- Backend Metrics --");
+    } else {
+        cli_println!("-- Backend Metrics (filter: \"{}\") --", metric_filter);
+    }
+    let metrics_url = if metric_filter.is_empty() {
+        format!("{base_url}/api/doctor/metrics")
+    } else {
+        format!("{base_url}/api/doctor/metrics?filter={}", urlencoding::encode(metric_filter))
+    };
     match get_json(client, &metrics_url).await {
         Ok(metrics) => {
             if let Some(gauges) = metrics.get("gauges").and_then(|v| v.as_object()) {
                 for (key, value) in gauges {
+                    if is_zero_value(value) {
+                        continue;
+                    }
                     cli_println!("  {}: {}", key, value);
                 }
             }
             // Print meter summary counts
             if let Some(meters) = metrics.get("meters").and_then(|v| v.as_object()) {
-                if !meters.is_empty() {
-                    cli_println!("  -- Meters --");
-                    for (key, val) in meters {
-                        if let Some(obj) = val.as_object() {
-                            let count = obj.get("count").and_then(|v| v.as_u64()).unwrap_or(0);
-                            let rate = obj.get("meanRate").and_then(|v| v.as_f64()).unwrap_or(0.0);
-                            cli_println!("  {}: {} count, {:.2}/s avg", key, count, rate);
+                let mut shown_header = false;
+                for (key, val) in meters {
+                    if let Some(obj) = val.as_object() {
+                        let count = obj.get("count").and_then(|v| v.as_u64()).unwrap_or(0);
+                        let rate = obj.get("meanRate").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                        if count == 0 && rate == 0.0 {
+                            continue;
                         }
+                        if !shown_header {
+                            cli_println!("  -- Meters --");
+                            shown_header = true;
+                        }
+                        cli_println!("  {}: {} count, {:.2}/s avg", key, count, rate);
                     }
                 }
             }
@@ -9038,6 +10049,22 @@ async fn get_json(client: &Client, url: &str) -> Result<Value, String> {
     }
     response.json::<Value>().await
         .map_err(|e| format!("JSON parse failed: {e}"))
+}
+
+/// Returns true if a JSON value represents zero (0, 0.0, 0 as string, etc.).
+fn is_zero_value(value: &Value) -> bool {
+    match value {
+        Value::Number(n) => {
+            n.as_f64().map(|f| f == 0.0).unwrap_or(false)
+        }
+        Value::String(s) => {
+            s.is_empty() || s == "0" || s == "0.0"
+        }
+        Value::Null => true,
+        Value::Bool(b) => !*b,
+        Value::Array(a) => a.is_empty(),
+        Value::Object(o) => o.is_empty(),
+    }
 }
 
 fn should_ensure_server_running(command: &str) -> bool {
@@ -9084,7 +10111,7 @@ fn rewrite_prefixed_command(args: &[String]) -> Option<Vec<String>> {
     // "crawl" works standalone (crawl <url>) AND as a prefix (crawl list).
     // Only rewrite known crawl subcommands so positional URLs pass through.
     if prefix == "crawl" {
-        let known_subs = ["list"];
+        let known_subs = ["status", "result", "cancel", "clear", "list"];
         if known_subs.contains(&sub.as_str()) {
             let mut rewritten = vec![format!("crawl-{}", sub)];
             rewritten.extend(args[2..].iter().cloned());
@@ -9095,7 +10122,6 @@ fn rewrite_prefixed_command(args: &[String]) -> Option<Vec<String>> {
     let rewritten_command = match prefix {
         "swarm" => format!("swarm-{}", sub),
         "agent" => format!("agent-{}", sub),
-        "skill" => format!("skill-{}", sub),
         "htmlsnapshot" => format!("htmlsnapshot-{}", sub),
         "snapshot" => format!("snapshot-{}", sub),
         _ => return None,
@@ -9117,6 +10143,11 @@ fn preferred_spaced_command_form(command: &str) -> Option<&'static str> {
         "swarm-status" => Some("swarm status"),
         "swarm-result" => Some("swarm result"),
         "swarm-list" => Some("swarm list"),
+        "swarm-close" => Some("swarm close"),
+        "crawl-status" => Some("crawl status"),
+        "crawl-result" => Some("crawl result"),
+        "crawl-cancel" => Some("crawl cancel"),
+        "crawl-clear" => Some("crawl clear"),
         "crawl-list" => Some("crawl list"),
         "co-create" => Some("swarm create"),
         "co-submit" => Some("swarm submit"),
@@ -9131,11 +10162,6 @@ fn preferred_spaced_command_form(command: &str) -> Option<&'static str> {
         "htmlsnapshot-summary" => Some("htmlsnapshot summary"),
         "htmlsnapshot-grep" => Some("htmlsnapshot grep"),
         "htmlsnapshot-inspect" => Some("htmlsnapshot inspect"),
-        "skill-list" => Some("skill list"),
-        "skill-info" => Some("skill info"),
-        "skill-install" => Some("skill install"),
-        "skill-uninstall" => Some("skill uninstall"),
-        "skill-reload" => Some("skill reload"),
         _ => None,
     }
 }
@@ -9144,8 +10170,6 @@ fn preferred_prefixed_group_form(command: &str) -> Option<&'static str> {
     match command {
         "agent" => Some("agent <subcommand>"),
         "swarm" => Some("swarm <subcommand>"),
-        "skill" => Some("skill <subcommand>"),
-        "crawl" => Some("crawl <subcommand>"),
         "co" => Some("swarm <subcommand>"),
         // `htmlsnapshot` is a valid standalone command (captures a HTML snapshot
         // and returns metadata), not just a prefix group — so it is intentionally
@@ -9421,6 +10445,42 @@ fn compile_batch_request(
                     .get("stdin")
                     .and_then(|v| v.as_bool())
                     .unwrap_or(false);
+
+                // When --file or --stdin is used, migrate a positional ref
+                // (mis-parsed as the expression) to the ref field.
+                let has_batch_file = tool_params
+                    .get("file")
+                    .and_then(|v| v.as_str())
+                    .map(|s| !s.trim().is_empty())
+                    .unwrap_or(false);
+                if use_stdin || has_batch_file {
+                    let ref_empty = tool_params
+                        .get("ref")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.is_empty())
+                        .unwrap_or(true);
+                    if ref_empty {
+                        if let Some(expr_val) = tool_params
+                            .get("expression")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string())
+                        {
+                            let looks_like_ref = expr_val.starts_with("e")
+                                && expr_val[1..].chars().all(|c| c.is_ascii_digit())
+                                || expr_val.starts_with("backend:")
+                                || expr_val.starts_with('#')
+                                || expr_val.starts_with('.')
+                                || expr_val.starts_with('[');
+                            if looks_like_ref {
+                                if let Value::Object(ref mut m) = tool_params {
+                                    m.insert("ref".to_string(), json!(expr_val));
+                                    m.insert("expression".to_string(), json!(""));
+                                }
+                            }
+                        }
+                    }
+                }
+
                 if use_stdin {
                     let mut expression = String::new();
                     match std::io::stdin().read_to_string(&mut expression) {
@@ -10536,6 +11596,51 @@ async fn run(
                 .get("stdin")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
+
+            // When --file or --stdin or --base64 is used, the positional
+            // argument may be a ref (e.g. e34) that was mis-parsed as the
+            // expression. Move it to the ref field so the expression can be
+            // replaced by the file/stdin/base64 content.
+            let use_base64_arg = tool_params
+                .get("base64")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let has_file = tool_params
+                .get("file")
+                .and_then(|v| v.as_str())
+                .map(|s| !s.trim().is_empty())
+                .unwrap_or(false);
+            if use_stdin || use_base64_arg || has_file {
+                let ref_empty = tool_params
+                    .get("ref")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.is_empty())
+                    .unwrap_or(true);
+                if ref_empty {
+                    if let Some(expr_val) = tool_params
+                        .get("expression")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string())
+                    {
+                        // A ref looks like: eNNN, backend:NNN, or a CSS selector
+                        // (#id, .class, [attr]). JS expressions never start with
+                        // these patterns.
+                        let looks_like_ref = expr_val.starts_with("e")
+                            && expr_val[1..].chars().all(|c| c.is_ascii_digit())
+                            || expr_val.starts_with("backend:")
+                            || expr_val.starts_with('#')
+                            || expr_val.starts_with('.')
+                            || expr_val.starts_with('[');
+                        if looks_like_ref {
+                            if let Value::Object(ref mut m) = tool_params {
+                                m.insert("ref".to_string(), json!(expr_val));
+                                m.insert("expression".to_string(), json!(""));
+                            }
+                        }
+                    }
+                }
+            }
+
             if use_stdin {
                 let mut expression = String::new();
                 std::io::stdin()
@@ -10712,23 +11817,6 @@ async fn run(
                 .get("verify")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
-            // The `fill` command dispatches to `browser_type` which does not
-            // recognise bare CSS selectors in its `ref` parameter — it expects
-            // backend element references (`backend:<N>`).  Add the `css:` prefix
-            // so the backend can distinguish CSS selectors from node ids.
-            // Batch mode does this resolution server-side in `command_batch`.
-            if command == "fill" {
-                if let Some(ref_val) = tool_params
-                    .get("ref")
-                    .and_then(|v| v.as_str())
-                    .map(str::trim)
-                    .filter(|v| !v.is_empty())
-                {
-                    if is_bare_css_selector(ref_val) {
-                        tool_params["ref"] = json!(format!("css:{}", ref_val));
-                    }
-                }
-            }
             handle_text_input_command(
                 &client,
                 &base_url,
@@ -10756,7 +11844,6 @@ async fn run(
                     &tool_params,
                     global.session_name.as_deref(),
                     true,
-                    verify,
                 )
                 .await?;
             } else {
@@ -10858,7 +11945,10 @@ async fn run(
             handle_swarm_result(&client, &base_url, &tool_params).await?;
         }
         "swarm-list" => {
-            handle_swarm_list().await?;
+            handle_swarm_list(&tool_params).await?;
+        }
+        "swarm-close" => {
+            handle_close(&client, &base_url, global.session_name.as_deref()).await?;
         }
         "crawl" => {
             handle_crawl(
@@ -10868,6 +11958,18 @@ async fn run(
                 global.session_name.as_deref(),
             )
             .await?;
+        }
+        "crawl-status" => {
+            handle_crawl_status(&client, &base_url, &tool_params).await?;
+        }
+        "crawl-result" => {
+            handle_crawl_result(&client, &base_url, &tool_params).await?;
+        }
+        "crawl-cancel" => {
+            handle_crawl_cancel(&client, &base_url, &tool_params).await?;
+        }
+        "crawl-clear" => {
+            handle_crawl_clear(&client, &base_url).await?;
         }
         "crawl-list" => {
             handle_crawl_list().await?;
@@ -10979,9 +12081,6 @@ async fn run(
             )
             .await?;
         }
-        "skill-list" | "skill-info" | "skill-install" | "skill-uninstall" | "skill-reload" => {
-            handle_skill_command(&client, &base_url, &tool_name, &tool_params).await?;
-        }
         "click" | "dblclick" => {
             let follow = parsed
                 .get("follow")
@@ -10994,7 +12093,27 @@ async fn run(
                 &tool_params,
                 global.session_name.as_deref(),
                 follow,
-                false,
+            )
+            .await?;
+        }
+        "tab-list" => {
+            handle_tab_list(&client, &base_url, global.session_name.as_deref()).await?;
+        }
+        "tab-new" => {
+            handle_tab_new(
+                &client,
+                &base_url,
+                &tool_params,
+                global.session_name.as_deref(),
+            )
+            .await?;
+        }
+        "tab-select" => {
+            handle_tab_select(
+                &client,
+                &base_url,
+                &tool_params,
+                global.session_name.as_deref(),
             )
             .await?;
         }
@@ -11108,7 +12227,7 @@ fn format_wait_result(tool_name: &str, tool_params: &Value, result: &str) -> Str
     } else if tool_name == "delay" {
         let millis = tool_params
             .get("millis")
-            .and_then(|v| v.as_i64().or_else(|| v.as_f64().map(|f| f as i64)))
+            .and_then(|v| v.as_i64())
             .unwrap_or(0);
         format!("✓ Waited {}ms", millis)
     } else if tool_name == "wait_for_selector" {
@@ -11276,11 +12395,6 @@ mod tests {
     }
 
     #[test]
-    fn no_snapshot_commands_include_scroll() {
-        assert!(no_snapshot_commands().contains("scroll"));
-    }
-
-    #[test]
     fn no_snapshot_commands_include_html_snapshot_variants() {
         assert!(no_snapshot_commands().contains("htmlsnapshot"));
         assert!(no_snapshot_commands().contains("htmlsnapshot-capture"));
@@ -11299,12 +12413,13 @@ mod tests {
     }
 
     #[test]
-    fn no_snapshot_commands_include_skill_commands() {
-        assert!(no_snapshot_commands().contains("skill-list"));
-        assert!(no_snapshot_commands().contains("skill-info"));
-        assert!(no_snapshot_commands().contains("skill-install"));
-        assert!(no_snapshot_commands().contains("skill-uninstall"));
-        assert!(no_snapshot_commands().contains("skill-reload"));
+    fn no_snapshot_commands_include_scroll() {
+        assert!(no_snapshot_commands().contains("scroll"));
+    }
+
+    #[test]
+    fn no_snapshot_commands_include_resize() {
+        assert!(no_snapshot_commands().contains("resize"));
     }
 
     #[test]
@@ -11748,16 +12863,6 @@ mod tests {
     }
 
     #[test]
-    fn should_ensure_server_for_skill_commands() {
-        // Skill commands need the server running — they call MCP tools
-        assert!(should_ensure_server_running("skill-list"));
-        assert!(should_ensure_server_running("skill-info"));
-        assert!(should_ensure_server_running("skill-install"));
-        assert!(should_ensure_server_running("skill-uninstall"));
-        assert!(should_ensure_server_running("skill-reload"));
-    }
-
-    #[test]
     fn get_session_id_for_close_returns_none_without_session_id() {
         assert_eq!(get_session_id_for_close(&CliState::default()), None);
     }
@@ -11845,69 +12950,6 @@ mod tests {
     }
 
     #[test]
-    fn normalize_command_invocation_maps_skill_prefix_to_skill_command() {
-        let global = args::GlobalFlags {
-            session_name: None,
-            server_url: None,
-            json: false,
-            quiet: false,
-            proxy_url: None,
-            show_tip: false,
-            args: vec!["skill".to_string(), "list".to_string()],
-        };
-
-        let (command, normalized, from_spaced_prefix) = normalize_command_invocation(&global);
-
-        assert_eq!(command, "skill-list");
-        assert_eq!(normalized.args[0], "skill-list");
-        assert!(from_spaced_prefix);
-    }
-
-    #[test]
-    fn normalize_command_invocation_leaves_skill_prefixed_form_unchanged() {
-        let global = args::GlobalFlags {
-            session_name: None,
-            server_url: None,
-            json: false,
-            quiet: false,
-            proxy_url: None,
-            show_tip: false,
-            args: vec!["skill-install".to_string(), "/path/to/skill".to_string()],
-        };
-
-        let (command, normalized, from_spaced_prefix) = normalize_command_invocation(&global);
-
-        assert_eq!(command, "skill-install");
-        assert_eq!(normalized.args[0], "skill-install");
-        assert_eq!(normalized.args[1], "/path/to/skill");
-        assert!(!from_spaced_prefix);
-    }
-
-    #[test]
-    fn rewrite_prefixed_command_supports_skill_list() {
-        let rewritten = rewrite_prefixed_command(&[
-            "skill".to_string(),
-            "list".to_string(),
-        ])
-        .unwrap();
-
-        assert_eq!(rewritten[0], "skill-list");
-    }
-
-    #[test]
-    fn rewrite_prefixed_command_supports_skill_install() {
-        let rewritten = rewrite_prefixed_command(&[
-            "skill".to_string(),
-            "install".to_string(),
-            "/path/to/skill".to_string(),
-        ])
-        .unwrap();
-
-        assert_eq!(rewritten[0], "skill-install");
-        assert_eq!(rewritten[1], "/path/to/skill");
-    }
-
-    #[test]
     fn rewrite_prefixed_command_rejects_legacy_co_prefix() {
         assert!(rewrite_prefixed_command(&["co".to_string(), "create".to_string(),]).is_none());
     }
@@ -11984,26 +13026,6 @@ mod tests {
             preferred_spaced_command_form("htmlsnapshot-get-all"),
             Some("htmlsnapshot get all")
         );
-        assert_eq!(
-            preferred_spaced_command_form("skill-list"),
-            Some("skill list")
-        );
-        assert_eq!(
-            preferred_spaced_command_form("skill-info"),
-            Some("skill info")
-        );
-        assert_eq!(
-            preferred_spaced_command_form("skill-install"),
-            Some("skill install")
-        );
-        assert_eq!(
-            preferred_spaced_command_form("skill-uninstall"),
-            Some("skill uninstall")
-        );
-        assert_eq!(
-            preferred_spaced_command_form("skill-reload"),
-            Some("skill reload")
-        );
     }
 
     #[test]
@@ -12021,10 +13043,6 @@ mod tests {
             Some("swarm <subcommand>")
         );
         assert_eq!(preferred_prefixed_group_form("open"), None);
-        assert_eq!(
-            preferred_prefixed_group_form("skill"),
-            Some("skill <subcommand>")
-        );
         // `htmlsnapshot` is a valid standalone command — not just a prefix group.
         assert_eq!(preferred_prefixed_group_form("htmlsnapshot"), None);
     }
@@ -12964,83 +13982,6 @@ mod tests {
         assert!(opts.ignore_case);
     }
 
-    // =========================================================================
-    // Extension feature helpers
-    // =========================================================================
-
-    #[test]
-    fn test_urlencoding_special_chars() {
-        assert_eq!(urlencoding("hello"), "hello");
-        assert_eq!(
-            urlencoding("ws://127.0.0.1:8182/ws/extension/session"),
-            "ws%3A%2F%2F127.0.0.1%3A8182%2Fws%2Fextension%2Fsession"
-        );
-        assert_eq!(urlencoding("\"quoted\""), "%22quoted%22");
-        assert_eq!(urlencoding("a&b=c"), "a%26b%3Dc");
-        assert_eq!(urlencoding("100%"), "100%25");
-        assert_eq!(urlencoding("a b"), "a%20b");
-        assert_eq!(urlencoding("q?a#f"), "q%3Fa%23f");
-    }
-
-    #[test]
-    fn test_urlencoding_no_special_chars_does_nothing() {
-        assert_eq!(urlencoding("hello-world-123"), "hello-world-123");
-        assert_eq!(urlencoding("test_case.abc"), "test_case.abc");
-    }
-
-    #[test]
-    fn test_urlencoding_encodes_websocket_url() {
-        let ws_url = "ws://127.0.0.1:8182/ws/extension/session?id=123&token=abc";
-        let encoded = urlencoding(ws_url);
-        // Must not contain raw special chars that would break a URL query param
-        assert!(!encoded.contains("://"));
-        assert!(!encoded.contains('&'));
-        assert!(!encoded.contains('='));
-        assert!(!encoded.contains('?'));
-        assert!(!encoded.contains('#'));
-    }
-
-    #[test]
-    fn test_resolve_extension_id_returns_valid_length() {
-        let id = resolve_extension_id();
-        assert!(!id.is_empty());
-        // Chrome extension IDs are 32 lowercase a-p characters
-        assert_eq!(id.len(), 32);
-        assert!(id.chars().all(|c| c.is_ascii_lowercase()));
-    }
-
-    #[test]
-    fn test_resolve_extension_id_env_override() {
-        // Set env var before resolving
-        std::env::set_var("BROWSER4_EXTENSION_ID", "testoverrideabcdefghijklmnopqrstuv");
-        let id = resolve_extension_id();
-        assert_eq!(id, "testoverrideabcdefghijklmnopqrstuv");
-        // Clean up to avoid poisoning other tests
-        std::env::remove_var("BROWSER4_EXTENSION_ID");
-    }
-
-    #[test]
-    fn test_resolve_browser_executable_known_channels() {
-        assert_eq!(resolve_browser_executable("chrome").unwrap(), "chrome");
-        assert_eq!(resolve_browser_executable("msedge").unwrap(), "msedge");
-        assert_eq!(resolve_browser_executable("Chrome").unwrap(), "chrome");
-        assert_eq!(resolve_browser_executable("MsEdge").unwrap(), "msedge");
-    }
-
-    #[test]
-    fn test_resolve_browser_executable_unknown_passthrough() {
-        let result = resolve_browser_executable("my-custom-browser");
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), "my-custom-browser");
-    }
-
-    #[test]
-    fn test_resolve_browser_executable_empty_not_valid() {
-        let result = resolve_browser_executable("");
-        // Empty string passes through (daemon resolves it as unknown)
-        assert_eq!(result.unwrap(), "");
-    }
-
     // -----------------------------------------------------------------------
     // run_grep_on_source tests
     // -----------------------------------------------------------------------
@@ -13563,7 +14504,7 @@ mod tests {
     }
 
     #[test]
-    fn resolve_sql_file_falls_back_to_repo_root() {
+    fn resolve_sql_file_finds_at_repo_root_from_subdirectory() {
         let _cwd_guard = CWD_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
 
         // Set up a fake repo root with ROOT.md + pom.xml
@@ -13580,7 +14521,7 @@ mod tests {
         let previous_dir = std::env::current_dir().unwrap();
         std::env::set_current_dir(&sub_dir).unwrap();
 
-        // resolve_sql_file uses CWD; find_browser4_root walks up to repo_root
+        // Repo root is tried first; file at repo root is found without ../../ prefix
         let result = resolve_sql_file("query.sql");
         std::env::set_current_dir(previous_dir).unwrap();
 
@@ -13613,8 +14554,11 @@ mod tests {
     }
 
     #[test]
-    fn resolve_sql_file_repo_root_fallback_not_confused_by_cwd_file() {
-        // When the file exists in CWD, it should be used — NOT the repo root copy
+    fn resolve_sql_file_prefers_repo_root_over_cwd_file() {
+        // When the file exists in both CWD and repo root, repo root is preferred.
+        // This matches the common workflow: SQL files at the repo root, CLI
+        // invoked from cli/browser4-cli via cargo run. Use @./query.sql to
+        // explicitly target a CWD-local file instead.
         let _cwd_guard = CWD_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
 
         let repo_root = test_temp_dir();
@@ -13636,7 +14580,8 @@ mod tests {
         let result = resolve_sql_file("query.sql");
         std::env::set_current_dir(previous_dir).unwrap();
 
-        assert_eq!(result.unwrap(), "CWD VERSION");
+        // Repo root takes priority — this is the common case for @file paths
+        assert_eq!(result.unwrap(), "REPO ROOT VERSION");
     }
 
     // -----------------------------------------------------------------------
@@ -13800,42 +14745,135 @@ mod tests {
         assert_eq!(msg, "");
     }
 
+    // -----------------------------------------------------------------------
+    // Crawl command rewriting tests
+    // -----------------------------------------------------------------------
+
     #[test]
-    fn format_wait_result_delay_float_millis() {
-        // JSON floats (e.g. 1500.0) should be handled gracefully
-        let msg = format_wait_result(
-            "delay",
-            &serde_json::from_str::<Value>(r#"{"millis": 1500.0}"#).unwrap(),
-            "",
+    fn rewrite_prefixed_command_supports_crawl_status() {
+        let rewritten = rewrite_prefixed_command(&[
+            "crawl".to_string(),
+            "status".to_string(),
+            "task-id-123".to_string(),
+        ])
+        .unwrap();
+
+        assert_eq!(rewritten[0], "crawl-status");
+        assert_eq!(rewritten[1], "task-id-123");
+    }
+
+    #[test]
+    fn rewrite_prefixed_command_supports_crawl_result() {
+        let rewritten = rewrite_prefixed_command(&[
+            "crawl".to_string(),
+            "result".to_string(),
+            "task-id-456".to_string(),
+        ])
+        .unwrap();
+
+        assert_eq!(rewritten[0], "crawl-result");
+        assert_eq!(rewritten[1], "task-id-456");
+    }
+
+    #[test]
+    fn rewrite_prefixed_command_supports_crawl_cancel() {
+        let rewritten = rewrite_prefixed_command(&[
+            "crawl".to_string(),
+            "cancel".to_string(),
+            "task-id-789".to_string(),
+        ])
+        .unwrap();
+
+        assert_eq!(rewritten[0], "crawl-cancel");
+        assert_eq!(rewritten[1], "task-id-789");
+    }
+
+    #[test]
+    fn rewrite_prefixed_command_supports_crawl_clear() {
+        let rewritten = rewrite_prefixed_command(&[
+            "crawl".to_string(),
+            "clear".to_string(),
+        ])
+        .unwrap();
+
+        assert_eq!(rewritten[0], "crawl-clear");
+    }
+
+    #[test]
+    fn rewrite_prefixed_command_supports_crawl_list() {
+        let rewritten = rewrite_prefixed_command(&[
+            "crawl".to_string(),
+            "list".to_string(),
+        ])
+        .unwrap();
+
+        assert_eq!(rewritten[0], "crawl-list");
+    }
+
+    #[test]
+    fn rewrite_prefixed_command_crawl_with_url_passes_through() {
+        // crawl <url> should NOT be rewritten — it's a standalone crawl command
+        let result = rewrite_prefixed_command(&[
+            "crawl".to_string(),
+            "https://example.com".to_string(),
+        ]);
+
+        assert!(result.is_none(), "crawl <url> should not be rewritten");
+    }
+
+    #[test]
+    fn no_snapshot_commands_includes_crawl_status_and_result() {
+        let cmds = no_snapshot_commands();
+        assert!(cmds.contains("crawl-status"));
+        assert!(cmds.contains("crawl-result"));
+        assert!(cmds.contains("crawl-cancel"));
+        assert!(cmds.contains("crawl-clear"));
+        assert!(cmds.contains("crawl-list"));
+    }
+
+    #[test]
+    fn crawl_command_not_rewritten_for_unknown_subcommand() {
+        // crawl <unknown-sub> should pass through as-is (treated as positional URL)
+        let result = rewrite_prefixed_command(&[
+            "crawl".to_string(),
+            "unknown-sub".to_string(),
+        ]);
+        assert!(result.is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // preferred_spaced_command_form tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn preferred_spaced_command_form_includes_crawl_status() {
+        assert_eq!(
+            preferred_spaced_command_form("crawl-status"),
+            Some("crawl status")
         );
-        assert_eq!(msg, "✓ Waited 1500ms");
-    }
-
-    // -----------------------------------------------------------------------
-    // parse_tab_entry tests
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn parse_tab_entry_numeric_id_field() {
-        let json = json!({"id": 42, "url": "https://example.com", "title": "Test"});
-        let tab = parse_tab_entry(&json).expect("should parse tab with numeric id");
-        assert_eq!(tab.index, 42);
-        assert_eq!(tab.url, "https://example.com");
-        assert_eq!(tab.title, "Test");
     }
 
     #[test]
-    fn parse_tab_entry_string_id_field() {
-        let json = json!({"id": "42", "url": "https://example.com", "title": "Test"});
-        let tab = parse_tab_entry(&json).expect("should parse tab with string id");
-        assert_eq!(tab.index, 42);
+    fn preferred_spaced_command_form_includes_crawl_result() {
+        assert_eq!(
+            preferred_spaced_command_form("crawl-result"),
+            Some("crawl result")
+        );
     }
 
     #[test]
-    fn parse_tab_entry_index_field_primary() {
-        // "index" should take precedence over "id"
-        let json = json!({"index": 5, "id": 42, "url": "https://example.com", "title": "Test"});
-        let tab = parse_tab_entry(&json).expect("should parse tab with index field");
-        assert_eq!(tab.index, 5);
+    fn preferred_spaced_command_form_includes_crawl_cancel() {
+        assert_eq!(
+            preferred_spaced_command_form("crawl-cancel"),
+            Some("crawl cancel")
+        );
+    }
+
+    #[test]
+    fn preferred_spaced_command_form_includes_crawl_clear() {
+        assert_eq!(
+            preferred_spaced_command_form("crawl-clear"),
+            Some("crawl clear")
+        );
     }
 }

@@ -14,6 +14,7 @@ pub fn public_command_name(name: &str) -> &str {
         "swarm-status" => "swarm status",
         "swarm-result" => "swarm result",
         "swarm-list" => "swarm list",
+        "swarm-close" => "swarm close",
         "crawl-list" => "crawl list",
         "htmlsnapshot-capture" => "htmlsnapshot capture",
         "htmlsnapshot-get" => "htmlsnapshot get",
@@ -34,12 +35,11 @@ const CATEGORIES: &[(&str, &str)] = &[
     ("navigation", "Navigation"),
     ("keyboard", "Keyboard"),
     ("mouse", "Mouse"),
-    ("export", "Save as"),
+    ("export", "Capture"),
     ("tabs", "Tabs"),
     ("storage", "Storage"),
     ("devtools", "DevTools"),
-    ("agent", "Agent"),
-    ("snapshot", "Snapshot"),
+    ("snapshot", "HTML Snapshot (htmlsnapshot)"),
     ("agent", "Agent"),
     ("act", "Act"),
     ("swarm", "Swarm"),
@@ -55,6 +55,7 @@ pub fn generate_help() -> String {
         "Usage: browser4-cli -s <session> <command> [args] [options]".to_string(),
     ];
 
+    let mut first_category = true;
     for (cat_name, cat_title) in CATEGORIES {
         let cat_cmds: Vec<&CommandDef> = cmds
             .iter()
@@ -63,6 +64,10 @@ pub fn generate_help() -> String {
         if cat_cmds.is_empty() {
             continue;
         }
+        if !first_category {
+            lines.push("\n  ---".to_string());
+        }
+        first_category = false;
         lines.push(format!("\n{}:", cat_title));
         for cmd in cat_cmds {
             lines.push(generate_help_entry(cmd));
@@ -228,6 +233,35 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("  browser4-cli eval --file script.js e5".to_string());
         lines.push("  browser4-cli eval --base64 ZG9jdW1lbnQudGl0bGU=".to_string());
         lines.push("  browser4-cli eval --json \"document.title\"".to_string());
+    }
+
+    if cmd.name == "htmlsnapshot-query" {
+        lines.push("Notes:".to_string());
+        lines.push(
+            "  - Use --format table for human-readable output (json, csv, or table).".to_string(),
+        );
+        lines.push(
+            "  - Use --result-only to extract just the resultSet array, omitting wrapper metadata."
+                .to_string(),
+        );
+        lines.push(
+            "  - Use --sql @file.sql to avoid shell quoting issues on Windows.".to_string(),
+        );
+        lines.push(
+            "  - Use --sql-stdin or --sql-base64 to avoid shell quoting issues with inline SQL."
+                .to_string(),
+        );
+        lines.push(String::new());
+        lines.push("Examples:".to_string());
+        lines.push(
+            "  browser4-cli htmlsnapshot query --sql \"SELECT dom_first_text(dom, 'h1') AS title FROM load_and_select(@url, ':root')\""
+                .to_string(),
+        );
+        lines.push("  browser4-cli htmlsnapshot query --sql @query.sql".to_string());
+        lines.push("  browser4-cli htmlsnapshot query --sql-stdin < query.sql".to_string());
+        lines.push("  browser4-cli htmlsnapshot query --sql-base64 \"$(base64 -w0 query.sql)\"".to_string());
+        lines.push("  browser4-cli htmlsnapshot query --sql @query.sql --result-only".to_string());
+        lines.push("  browser4-cli htmlsnapshot query --sql @query.sql --format table".to_string());
     }
 
     if cmd.name == "wait" {
@@ -412,7 +446,15 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(
-            "  - --cdp accepts a CDP endpoint URL (e.g. http://localhost:9222) or a browser channel name (chrome, msedge, chrome-canary, chromium, ...)."
+            "  - --cdp accepts a CDP endpoint URL (e.g. http://localhost:9222) or a browser channel name."
+                .to_string(),
+        );
+        lines.push(
+            "    Supported channels: chrome, chrome-beta, chrome-dev, chrome-canary,"
+                .to_string(),
+        );
+        lines.push(
+            "                        msedge, msedge-beta, msedge-dev, msedge-canary"
                 .to_string(),
         );
         lines.push(
@@ -428,6 +470,8 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("  browser4-cli attach --cdp http://localhost:9222".to_string());
         lines.push("  browser4-cli attach --cdp chrome".to_string());
         lines.push("  browser4-cli attach --cdp msedge".to_string());
+        lines.push("  browser4-cli attach --endpoint http://browser4-server:8182".to_string());
+        lines.push("  browser4-cli attach --endpoint http://remote:8182 --cdp chrome".to_string());
     }
 
     if cmd.name == "open" {
@@ -605,6 +649,10 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push(
             "  - Use `@url` in the X-SQL as a placeholder for the target page URL.".to_string(),
         );
+        lines.push(
+            "  - Pass `--wait` to block until all submitted jobs complete instead of returning immediately."
+                .to_string(),
+        );
         lines.push(String::new());
         lines.push("Examples:".to_string());
         lines.push(
@@ -657,6 +705,10 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
             "  - `--seed-file` takes a direct file path (no `@` prefix); only `--sql` uses `@` to disambiguate inline X-SQL from file paths."
                 .to_string(),
         );
+        lines.push(
+            "  - Pass `--wait` to block until all submitted jobs complete instead of returning immediately."
+                .to_string(),
+        );
         lines.push(String::new());
         lines.push("Examples:".to_string());
         lines.push("  # Inline X-SQL:".to_string());
@@ -689,7 +741,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         );
         lines.push(String::new());
         lines.push("Examples:".to_string());
-        lines.push("  browser4-cli swarm status scrape-task-4".to_string());
+        lines.push("  browser4-cli swarm status <task-id>".to_string());
     }
 
     if cmd.name == "swarm-result" {
@@ -700,15 +752,26 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         );
         lines.push(String::new());
         lines.push("Examples:".to_string());
-        lines.push("  browser4-cli swarm result scrape-task-4".to_string());
+        lines.push("  browser4-cli swarm result <task-id>".to_string());
     }
 
     if cmd.name == "swarm-list" {
         lines.push("Notes:".to_string());
         lines.push("  - Lists all tracked swarm tasks and their current status.".to_string());
+        lines.push("  - Use `--clear` to remove all tracked swarm tasks from the list.".to_string());
         lines.push(String::new());
         lines.push("Examples:".to_string());
         lines.push("  browser4-cli swarm list".to_string());
+        lines.push("  browser4-cli swarm list --clear".to_string());
+    }
+
+    if cmd.name == "swarm-close" {
+        lines.push("Notes:".to_string());
+        lines.push("  - Closes the active swarm session and releases browser resources.".to_string());
+        lines.push("  - Equivalent to `close` when a swarm session is active.".to_string());
+        lines.push(String::new());
+        lines.push("Examples:".to_string());
+        lines.push("  browser4-cli swarm close".to_string());
     }
 
     if cmd.name == "crawl-list" {
@@ -803,7 +866,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         ));
         lines.push(format_with_gap(
             "  htmlsnapshot query [url]",
-            "Run X-SQL against the HTML snapshot stored in Browser4's page storage via the scrape API",
+            "Run X-SQL against the HTML snapshot stored in Browser4's page storage via the scrape API. Use --format table for human-readable output.",
             50,
         ));
         lines.push(format_with_gap(
@@ -877,7 +940,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(
-            "  - Search the HTML snapshot HTML with regex patterns using `htmlsnapshot grep <pattern>`. Supports standard grep flags: -e (repeatable), -i, -A, -B, -C, -v, -c, -l, -F, -w, --no-line-number, and --selector for CSS-scoped searches. Uses Rust regex syntax where | is alternation (not \\|). Line numbers are shown by default (unlike GNU grep's -n opt-in)."
+            "  - Search the HTML snapshot HTML with regex patterns using `htmlsnapshot grep <pattern>`. Supports standard grep flags: -e (repeatable), -i, -A, -B, -C, -v, -c, -l, -F, -w, --no-line-number. Use --selector to scope to the first matching CSS element (querySelector), or --selector-all to search across ALL matching elements (querySelectorAll) with element-index annotations. Uses Rust regex syntax where | is alternation (not \\|). Line numbers are shown by default (unlike GNU grep's -n opt-in)."
                 .to_string(),
         );
         lines.push(
@@ -932,8 +995,8 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("  # Pipe an X-SQL query from stdin (avoids shell quoting issues)".to_string());
         lines.push("  browser4-cli htmlsnapshot query --sql-stdin < query.sql".to_string());
         lines.push(String::new());
-        lines.push("  # Decode a base64-encoded X-SQL query".to_string());
-        lines.push("  browser4-cli htmlsnapshot query --sql-base64 --sql \"U0VMRUNUIGRvbV9maXJzdF90ZXh0KGRvbSwgJ2gxJykgQVMgdGl0bGUgRlJPTSBsb2FkX2FuZF9zZWxlY3QoQHVybCwgJzpyb290Jyk=\"".to_string());
+        lines.push("  # Decode a base64-encoded X-SQL query (avoids shell quoting issues)".to_string());
+        lines.push("  browser4-cli htmlsnapshot query --sql-base64 \"$(base64 -w0 query.sql)\"".to_string());
         lines.push(String::new());
         lines.push("  # Return only the resultSet array, omitting wrapper metadata".to_string());
         lines.push("  browser4-cli htmlsnapshot query --sql @query.sql --result-only".to_string());
@@ -956,8 +1019,11 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("  # Literal string match with 2 lines of context".to_string());
         lines.push("  browser4-cli htmlsnapshot grep -F -C 2 \"404 Not Found\"".to_string());
         lines.push(String::new());
-        lines.push("  # Search only within <main> element".to_string());
+        lines.push("  # Search only within <main> element (first match)".to_string());
         lines.push("  browser4-cli htmlsnapshot grep --selector main \"Submit\"".to_string());
+        lines.push(String::new());
+        lines.push("  # Search across all .product_pod elements (querySelectorAll)".to_string());
+        lines.push("  browser4-cli htmlsnapshot grep --selector-all \".product_pod\" \"price_color\"".to_string());
         lines.push(String::new());
         lines.push("  # Search with pagination (page 2, custom page size)".to_string());
         lines.push("  browser4-cli htmlsnapshot grep -i error --page 2 --page-size 200".to_string());
@@ -970,6 +1036,15 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push(String::new());
         lines.push("  # Inspect with deeper analysis and larger sample".to_string());
         lines.push("  browser4-cli htmlsnapshot inspect \".s-result-item\" --depth 6 --max 20".to_string());
+        lines.push(String::new());
+        lines.push("  # Read selector from file (avoids shell escaping on Windows)".to_string());
+        lines.push("  browser4-cli htmlsnapshot inspect @selector.txt".to_string());
+        lines.push(String::new());
+        lines.push("  # Pipe selector via stdin (avoids shell quoting issues)".to_string());
+        lines.push("  echo '[data-component-type=\"s-search-result\"]' | browser4-cli htmlsnapshot inspect --stdin".to_string());
+        lines.push(String::new());
+        lines.push("  # Base64-encoded selector (avoids Windows shell escaping)".to_string());
+        lines.push("  browser4-cli htmlsnapshot inspect --selector-base64 W2RhdGEtY29tcG9uZW50LXR5cGU9InMtc2VhcmNoLXJlc3VsdCJd".to_string());
     }
 
     if cmd.name == "snapshot" {
@@ -1010,7 +1085,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(
-            "  - snapshot grep supports the same grep options as htmlsnapshot grep: -e (repeatable), -i, -A, -B, -C, -v, -c, -l, -F, -w, --no-line-number, --selector, --page N, --page-size N, and --all."
+            "  - snapshot grep supports the same grep options as htmlsnapshot grep: -e (repeatable), -i, -A, -B, -C, -v, -c, -l, -F, -w, --no-line-number, --selector, --selector-all, --page N, --page-size N, and --all."
                 .to_string(),
         );
         lines.push(
@@ -1162,7 +1237,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
 }
 
 pub fn generate_help_entry(cmd: &CommandDef) -> String {
-    let args_text = cmd
+    let mut args_text = cmd
         .args
         .iter()
         .map(|a| {
@@ -1174,6 +1249,22 @@ pub fn generate_help_entry(cmd: &CommandDef) -> String {
         })
         .collect::<Vec<_>>()
         .join(" ");
+
+    // Surface the --ref flag alongside the positional [ref] arg for discoverability
+    if cmd.name == "eval" {
+        args_text = args_text.replace(" [ref]", "");
+        args_text = format!("{} [--ref <ref>]", args_text.trim_end());
+    }
+
+    // Surface key required options for swarm-query in the help summary
+    if cmd.name == "swarm-query" {
+        args_text = format!("{} --sql <query> [--seed-file <file>] [--wait]", args_text.trim_end());
+    }
+
+    // Surface key options for swarm-submit in the help summary
+    if cmd.name == "swarm-submit" {
+        args_text = format!("{} [--sql <query>] [--seed-file <file>] [--wait]", args_text.trim_end());
+    }
 
     let prefix = format!("  {} {}", public_command_name(cmd.name), args_text);
     let prefix = prefix.trim_end();
@@ -1206,14 +1297,10 @@ mod tests {
         assert!(help.contains("Evaluate JavaScript expression on page or element"));
         assert!(help.contains("Core:"));
         assert!(help.contains("batch"));
-        assert!(help.contains("console"));
+        assert!(!help.contains("  console "));
         assert!(help.contains("extract"));
-        assert!(help.contains("summarize"));
-        assert!(help.contains("agent run"));
-        assert!(help.contains("agent status"));
-        assert!(help.contains("agent result"));
-        assert!(help.contains("pdf"));
-        assert!(help.contains("act"));
+        assert!(!help.contains("agent run"));
+        assert!(!help.contains("  act "));
         assert!(help.contains("swarm create"));
         assert!(help.contains("--json"));
         assert!(help.contains("suppresses tips, hints, and human-readable text"));
@@ -1450,7 +1537,7 @@ mod tests {
         assert!(status_help.contains("browser4-cli swarm status <id>"));
         assert!(status_help.contains("scrape job status"));
         assert!(status_help.contains("SwarmController.getStatus(id)"));
-        assert!(status_help.contains("browser4-cli swarm status scrape-task-4"));
+        assert!(status_help.contains("browser4-cli swarm status <task-id>"));
         assert!(!status_help.contains("browser4-cli swarm-status"));
 
         let result = cmds.iter().find(|c| c.name == "swarm-result").unwrap();
@@ -1458,7 +1545,7 @@ mod tests {
         assert!(result_help.contains("browser4-cli swarm result <id>"));
         assert!(result_help.contains("scrape job result"));
         assert!(result_help.contains("SwarmController.getResult(id)"));
-        assert!(result_help.contains("browser4-cli swarm result scrape-task-4"));
+        assert!(result_help.contains("browser4-cli swarm result <task-id>"));
         assert!(!result_help.contains("browser4-cli swarm-result"));
     }
 
@@ -1504,13 +1591,14 @@ mod tests {
         assert!(help.contains("browser4-cli htmlsnapshot query --sql"));
         assert!(help.contains("browser4-cli htmlsnapshot query --sql @query.sql"));
         assert!(help.contains("browser4-cli htmlsnapshot query --sql-stdin < query.sql"));
-        assert!(help.contains("browser4-cli htmlsnapshot query --sql-base64 --sql"));
+        assert!(help.contains("browser4-cli htmlsnapshot query --sql-base64"));
         assert!(help.contains("browser4-cli htmlsnapshot query --sql @query.sql --result-only"));
         assert!(help.contains("browser4-cli htmlsnapshot export --file snapshot.html"));
         assert!(help.contains("browser4-cli htmlsnapshot summary"));
         // grep and inspect
         assert!(help.contains("htmlsnapshot grep [OPTIONS] <pattern>"));
         assert!(help.contains("browser4-cli htmlsnapshot grep --selector main \"Submit\""));
+        assert!(help.contains("browser4-cli htmlsnapshot grep --selector-all \".product_pod\" \"price_color\""));
         assert!(help.contains("htmlsnapshot inspect [selector] [--max N] [--depth D]"));
         assert!(help.contains("Analyze DOM structure and suggest CSS selectors for recurring patterns"));
         assert!(help.contains("browser4-cli htmlsnapshot inspect \".product_pod\""));
@@ -1557,7 +1645,15 @@ mod tests {
         assert!(help.contains("--sql-stdin"));
         assert!(help.contains("--sql-base64"));
         assert!(help.contains("--result-only"));
+        assert!(help.contains("--format"));
         assert!(!help.contains("browser4-cli htmlsnapshot-query"));
+        // Examples section
+        assert!(help.contains("Examples:"));
+        assert!(help.contains("--sql @query.sql"));
+        assert!(help.contains("--sql-stdin < query.sql"));
+        assert!(help.contains("--sql-base64 \"$(base64"));
+        assert!(help.contains("--result-only"));
+        assert!(help.contains("--format table"));
     }
 
     #[test]

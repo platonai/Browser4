@@ -1,6 +1,5 @@
 package ai.platon.browser4.boot.autoconfigure
 
-import ai.platon.browser4.protocol.browser.BrowserEmulatorProtocol
 import ai.platon.pulsar.agentic.context.AgenticContext
 import ai.platon.browser4.api.model.BrowserSettings
 import ai.platon.browser4.api.manage.BasicBrowserManager
@@ -18,7 +17,6 @@ import ai.platon.pulsar.protocol.browser.driver.WebDriverPoolManager
 import ai.platon.pulsar.protocol.browser.driver.WebDriverPoolMonitor
 import ai.platon.pulsar.protocol.browser.emulator.BrowserResponseHandler
 import ai.platon.pulsar.protocol.browser.emulator.BrowserResponseHandlerFactory
-import ai.platon.pulsar.protocol.browser.emulator.IncognitoBrowserFetcher
 import ai.platon.pulsar.protocol.browser.emulator.context.MultiPrivacyContextManager
 import ai.platon.pulsar.protocol.browser.emulator.impl.InteractiveBrowserEmulator
 import ai.platon.pulsar.protocol.browser.emulator.impl.PrivacyManagedBrowserFetcher
@@ -39,6 +37,8 @@ import ai.platon.pulsar.skeleton.workflow.parse.ParseFilters
 import ai.platon.pulsar.skeleton.workflow.parse.ParserFactory
 import ai.platon.pulsar.skeleton.workflow.parse.html.PrimerHtmlParser
 import ai.platon.pulsar.skeleton.workflow.protocol.ProtocolFactory
+import ai.platon.pulsar.skeleton.workflow.protocol.browser.BrowserEmulatorProtocol
+import ai.platon.pulsar.skeleton.workflow.protocol.browser.IncognitoBrowserFetcher
 import ai.platon.pulsar.skeleton.workflow.schedule.DefaultFetchSchedule
 import ai.platon.pulsar.tools.TikaParser
 import org.springframework.boot.autoconfigure.AutoConfiguration

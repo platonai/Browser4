@@ -2331,7 +2331,8 @@ fn is_transient_retryable_failure(result: &CliRunResult) -> bool {
 // Output helpers
 // ---------------------------------------------------------------------------
 
-/// Strip the auto-appended `### Page` snapshot block from CLI stdout.
+/// Strip the auto-appended `### Page` snapshot block from CLI stdout and
+/// filter out CLI-formatted success confirmation lines (e.g. "✓ Pressed ...").
 fn strip_snapshot_output(stdout: &str) -> String {
     let marker = "\n### Page";
     let without = match stdout.find(marker) {
@@ -2341,7 +2342,11 @@ fn strip_snapshot_output(stdout: &str) -> String {
     without
         .lines()
         .map(str::trim)
-        .filter(|l| !l.is_empty() && *l != "ensuring server...")
+        .filter(|l| {
+            !l.is_empty()
+                && *l != "ensuring server..."
+                && !l.starts_with("✓ ")
+        })
         .collect::<Vec<_>>()
         .join("\n")
 }
@@ -2396,9 +2401,33 @@ fn extract_tab_index(output: &str, url: &str) -> usize {
         .map(|cap| cap[1].to_string())
         .collect();
 
-    urls.iter()
-        .position(|candidate| candidate == url)
-        .unwrap_or_else(|| panic!("Could not find tab index for '{}' in:\n{}", url, output))
+    if !urls.is_empty() {
+        return urls
+            .iter()
+            .position(|candidate| candidate == url)
+            .unwrap_or_else(|| panic!("Could not find tab index for '{}' in:\n{}", url, output));
+    }
+
+    // Second fallback: parse human-readable table format (Index | Title | URL).
+    // Lines look like: "  0      My Title  http://example.com/path"
+    static TABLE_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let table_re = TABLE_RE.get_or_init(|| {
+        regex::Regex::new(r#"^\s*(\d+)\s+.*\s+(https?://\S+)\s*$"#)
+            .expect("tab table regex compile")
+    });
+
+    for line in output.lines() {
+        if let Some(caps) = table_re.captures(line) {
+            let line_url = caps[2].to_string();
+            if line_url == url {
+                return caps[1]
+                    .parse::<usize>()
+                    .unwrap_or_else(|_| panic!("Could not parse tab index from line: {}", line));
+            }
+        }
+    }
+
+    panic!("Could not find tab index for '{}' in:\n{}", url, output)
 }
 
 // ---------------------------------------------------------------------------
@@ -2430,10 +2459,47 @@ fn parse_json_output(stdout: &str, command_name: &str) -> serde_json::Value {
 }
 
 fn swarm_done_flag(payload: &serde_json::Value) -> Option<bool> {
-    payload
+    // Primary: check isDone/done (present in swarm status output).
+    if let Some(v) = payload
         .get("isDone")
         .and_then(|value| value.as_bool())
         .or_else(|| payload.get("done").and_then(|value| value.as_bool()))
+    {
+        return Some(v);
+    }
+    // Fallback: swarm result output omits isDone. Detect completion by the
+    // presence of a non-null resultSet with entries, or a non-null error.
+    if let Some(result_set) = payload.get("resultSet") {
+        if result_set.is_array() && !result_set.as_array().map(|a| a.is_empty()).unwrap_or(true) {
+            return Some(true);
+        }
+    }
+    if payload
+        .get("error")
+        .and_then(|v| v.as_str())
+        .map(|e| !e.is_empty())
+        .unwrap_or(false)
+    {
+        return Some(true);
+    }
+    // pageContentBytes being non-null also indicates a completed result.
+    if payload
+        .get("pageContentBytes")
+        .and_then(|v| v.as_str())
+        .is_some()
+    {
+        return Some(true);
+    }
+    // Terminal status codes (404, 500, etc.) indicate the task won't complete
+    // successfully — treat as done so tests can handle the error gracefully.
+    if payload["statusCode"]
+        .as_i64()
+        .map(|s| !(200..400).contains(&s))
+        .unwrap_or(false)
+    {
+        return Some(true);
+    }
+    None
 }
 
 fn wait_for_swarm_result(ctx: &mut E2ECtx, task_id: &str, timeout_ms: u64) -> serde_json::Value {
@@ -2475,17 +2541,25 @@ fn wait_for_swarm_result_with_error(
         }
         // Also consider the task finished when the server reports a terminal
         // error status (e.g. 4xx / 5xx), even if `done` is still false.
-        if let Some(status) = parsed["statusCode"].as_i64() {
-            if !(200..400).contains(&status) {
-                ctx.record_step(
-                    format!(
-                        "wait for swarm result {task_id} terminal error (timeout={}ms)",
-                        timeout_ms
-                    ),
-                    started_at.elapsed(),
-                );
-                return Ok(parsed);
-            }
+        // statusCode may be stripped from result output, so also check error field.
+        let has_terminal_error = parsed["statusCode"]
+            .as_i64()
+            .map(|s| !(200..400).contains(&s))
+            .unwrap_or(false)
+            || parsed
+                .get("error")
+                .and_then(|v| v.as_str())
+                .map(|e| !e.is_empty())
+                .unwrap_or(false);
+        if has_terminal_error {
+            ctx.record_step(
+                format!(
+                    "wait for swarm result {task_id} terminal error (timeout={}ms)",
+                    timeout_ms
+                ),
+                started_at.elapsed(),
+            );
+            return Ok(parsed);
         }
         thread::sleep(Duration::from_millis(500));
     }
@@ -3166,8 +3240,8 @@ fn open_resized_interactive_page(ctx: &mut E2ECtx) {
 
     let resize_result = run_command(ctx, &["resize", "1280", "900"]);
     assert!(
-        resize_result.stdout.contains("### Page"),
-        "Expected '### Page' in resize output:\n{}",
+        resize_result.stdout.contains("✓ Resized to"),
+        "Expected '✓ Resized to' in resize output:\n{}",
         resize_result.stdout
     );
 
@@ -3348,6 +3422,7 @@ fn excluded_commands(include_batch_command: bool) -> HashSet<&'static str> {
         // Not yet exercised by e2e scenarios; mock handler exists.
         "swarm-query",
         "swarm-list",
+        "swarm-close",
         // New commands pending e2e test scenarios.
         "agent-list",
         "attach",

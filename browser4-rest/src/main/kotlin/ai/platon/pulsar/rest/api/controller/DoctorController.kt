@@ -20,7 +20,8 @@ class DoctorController(
     @GetMapping("logs")
     fun logs(
         @RequestParam(defaultValue = "pulsar") file: String,
-        @RequestParam(defaultValue = "50") lines: Int
+        @RequestParam(defaultValue = "50") lines: Int,
+        @RequestParam(defaultValue = "") filter: String
     ): ResponseEntity<Map<String, Any?>> {
         val sanitizedFile = file.replace(Regex("[/\\\\]"), "")
         val cappedLines = lines.coerceIn(1, 500)
@@ -54,19 +55,34 @@ class DoctorController(
             )
         }
 
+        val (allLines, totalLines) = result
+        val filteredLines = if (filter.isBlank()) {
+            allLines
+        } else {
+            val regex = try {
+                Regex(filter, setOf(RegexOption.IGNORE_CASE))
+            } catch (e: Exception) {
+                Regex(Regex.escape(filter), setOf(RegexOption.IGNORE_CASE))
+            }
+            allLines.filter { regex.containsMatchIn(it) }
+        }
+
         return ResponseEntity.ok(
             mapOf(
                 "file" to logFile.name,
                 "path" to logFile.absolutePath,
-                "lines" to result.first,
-                "totalLines" to result.second,
-                "returnedLines" to result.first.size
+                "lines" to filteredLines,
+                "totalLines" to totalLines,
+                "returnedLines" to filteredLines.size,
+                "matchedLines" to if (filter.isNotBlank()) filteredLines.size else null
             )
         )
     }
 
     @GetMapping("metrics")
-    fun metrics(): Map<String, Any> {
+    fun metrics(
+        @RequestParam(defaultValue = "") filter: String
+    ): Map<String, Any> {
         val registry = MetricsSystem.reg
         val metricMap = registry.metrics
 
@@ -76,7 +92,18 @@ class DoctorController(
         val histograms = mutableMapOf<String, Map<String, Any>>()
         val timers = mutableMapOf<String, Map<String, Any>>()
 
+        val filterRegex = if (filter.isBlank()) null else {
+            try {
+                Regex(filter, setOf(RegexOption.IGNORE_CASE))
+            } catch (e: Exception) {
+                Regex(Regex.escape(filter), setOf(RegexOption.IGNORE_CASE))
+            }
+        }
+
         for ((name, metric) in metricMap) {
+            if (filterRegex != null && !filterRegex.containsMatchIn(name)) {
+                continue
+            }
             when (metric) {
                 is Gauge<*> -> {
                     val value = metric.value

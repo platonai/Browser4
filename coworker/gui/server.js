@@ -12,6 +12,7 @@ const express = require('express');
 const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
+const { execFile } = require('child_process');
 
 // ── CLI argument parsing ────────────────────────────────────────────────
 
@@ -59,6 +60,8 @@ const STAGES = [
   { id: '200issues/github/commit/ready',  display_name: 'GH Commit Ready', path_suffix: '200issues/github/commit/ready',  date_stamped: false, group: 'issues', hidden: false },
   { id: '200issues/github/commit/done',   display_name: 'GH Committed',    path_suffix: '200issues/github/commit/done',   date_stamped: false, group: 'issues', hidden: false },
   { id: '200issues/github/commit/failed', display_name: 'GH Failed',       path_suffix: '200issues/github/commit/failed', date_stamped: false, group: 'issues', hidden: false },
+  // Issue review
+  { id: '200issues/review',             display_name: 'Review Queue',    path_suffix: '200issues/review',              date_stamped: true,  group: 'review', hidden: false },
 ];
 
 const stageById = Object.fromEntries(STAGES.map(s => [s.id, s]));
@@ -203,9 +206,17 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: '1mb' }));
 
+// Serve static assets (JS, CSS) from the frontend directory
+app.use('/static', express.static(path.join(__dirname, 'frontend')));
+
 // Serve frontend
 app.get('/', (_req, res) => {
   res.sendFile(path.join(__dirname, 'frontend', 'index.html'));
+});
+
+// Serve issue review SPA
+app.get('/issues/review', (_req, res) => {
+  res.sendFile(path.join(__dirname, 'frontend', 'issue-review.html'));
 });
 
 // GET /api/stats
@@ -361,6 +372,292 @@ app.post('/api/move', (req, res) => {
     res.status(400).json({ error: `Failed to move: ${e.message}` });
   }
 });
+
+// POST /api/issue-review/ai-suggest
+app.post('/api/issue-review/ai-suggest', (req, res) => {
+  const { title, severity, category, sections, suggestedImprovement } = req.body;
+  if (!title) return res.status(400).json({ error: 'Issue title is required' });
+
+  // Build a focused prompt for the AI
+  const parts = [`Issue: ${title}`, `Severity: ${severity || 'N/A'}`, `Category: ${category || 'N/A'}`];
+  if (sections) {
+    for (const s of sections) {
+      parts.push(`${s.label}: ${s.body}`);
+    }
+  }
+  if (suggestedImprovement) {
+    parts.push(`AI Suggested Improvement: ${suggestedImprovement}`);
+  }
+  const issueText = parts.join('\n\n');
+
+  const prompt = `You are reviewing issues for a browser automation CLI tool (browser4-cli). Analyze this issue and decide:
+
+- ACCEPT — the issue is valid and the suggested fix is correct
+- ACCEPT with improvements — valid but the fix needs refinement
+- DEFER — acknowledged but intentionally deferred
+- WONTFIX — acknowledged but will not be fixed
+- REJECT — invalid, not a problem, or already addressed
+
+Respond with ONLY a single JSON object (no markdown, no backticks):
+{"decision": "<one of the five options above>", "notes": "<1-2 sentence rationale>"}
+
+${issueText}`;
+
+  const claudePath = process.env.CLAUDE_PATH || 'claude';
+  const child = execFile(claudePath, ['-p', prompt], {
+    timeout: 60000,
+    maxBuffer: 1024 * 1024,
+    env: { ...process.env },
+  }, (err, stdout, stderr) => {
+    if (err) {
+      if (err.killed) return res.status(504).json({ error: 'AI review timed out (60s)' });
+      return res.status(500).json({ error: `AI review failed: ${err.message}` });
+    }
+
+    // Parse JSON from output — find the first { } block
+    const jsonMatch = stdout.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) {
+      return res.status(500).json({ error: 'AI response did not contain valid JSON', raw: stdout.substring(0, 500) });
+    }
+
+    try {
+      const result = JSON.parse(jsonMatch[0]);
+      if (!result.decision) {
+        return res.status(500).json({ error: 'AI response missing decision field', raw: jsonMatch[0] });
+      }
+      res.json({
+        decision: result.decision.trim(),
+        notes: (result.notes || '').trim(),
+      });
+    } catch (e) {
+      res.status(500).json({ error: 'Failed to parse AI response', raw: jsonMatch[0] });
+    }
+  });
+});
+
+// POST /api/issue-review/discard
+// Moves the issue file to 200issues/review/done/discard/ — for files that
+// contain no issues or no valuable issues.
+app.post('/api/issue-review/discard', (req, res) => {
+  const { path: srcPath } = req.body;
+  if (!srcPath) return res.status(400).json({ error: 'path is required' });
+
+  const src = safeResolve(srcPath, true);
+  if (src.error) return res.status(src.error).json({ error: src.message });
+
+  // Safety: ensure the source is under 200issues/review/
+  const reviewRoot = path.join(TASKS_ROOT, '200issues', 'review');
+  if (!src.abs.startsWith(reviewRoot + path.sep)) {
+    return res.status(400).json({ error: 'Only files under 200issues/review can be discarded.' });
+  }
+
+  try {
+    // Move to 200issues/review/done/discard, preserving date subdirectory structure
+    const srcRelToReview = path.relative(reviewRoot, src.abs);
+    const discardDir = path.join(reviewRoot, 'done', 'discard');
+    const discardPath = path.join(discardDir, srcRelToReview);
+    fs.mkdirSync(path.dirname(discardPath), { recursive: true });
+    fs.renameSync(src.abs, discardPath);
+
+    const discardRel = path.relative(TASKS_ROOT, discardPath).replace(/\\/g, '/');
+
+    res.json({
+      success: true,
+      discarded_path: discardRel,
+    });
+  } catch (e) {
+    res.status(400).json({ error: `Failed to discard: ${e.message}` });
+  }
+});
+
+// POST /api/issue-review/mark-done
+// Creates a summary copy in main/1ready (approved issues keep full detail,
+// others condensed to abstract), then moves the original to review/done.
+app.post('/api/issue-review/mark-done', (req, res) => {
+  const { path: srcPath, auto_approve } = req.body;
+  if (!srcPath) return res.status(400).json({ error: 'path is required' });
+
+  const src = safeResolve(srcPath, true);
+  if (src.error) return res.status(src.error).json({ error: src.message });
+
+  // Safety: ensure the source is under 200issues/review/
+  const reviewRoot = path.join(TASKS_ROOT, '200issues', 'review');
+  if (!src.abs.startsWith(reviewRoot + path.sep)) {
+    return res.status(400).json({ error: 'Only files under 200issues/review can be marked done.' });
+  }
+
+  try {
+    const content = fs.readFileSync(src.abs, 'utf-8');
+
+    // Build the summary version
+    let summaryContent = buildSummaryContent(content);
+
+    // Append #auto-approve tag if requested — the coworker pipeline
+    // detects this tag and auto-moves the file to 5approved, then triggers push.
+    if (auto_approve) {
+      summaryContent = summaryContent.trimEnd() + '\n\n#auto-approve\n';
+    }
+
+    // Destination: coworker/tasks/main/1ready/<basename>
+    const filename = path.basename(srcPath);
+    const readyDir = path.join(TASKS_ROOT, 'main', '1ready');
+    fs.mkdirSync(readyDir, { recursive: true });
+    let readyPath = path.join(readyDir, filename);
+    // Unique filename
+    if (fs.existsSync(readyPath)) {
+      const stem = filename.replace(/\.(md|json)$/i, '');
+      const ext = filename.match(/\.(md|json)$/i)?.[0] || '.md';
+      for (let n = 2; n < 1000; n++) {
+        const alt = path.join(readyDir, `${stem}.${n}${ext}`);
+        if (!fs.existsSync(alt)) { readyPath = alt; break; }
+      }
+    }
+    fs.writeFileSync(readyPath, summaryContent, 'utf-8');
+
+    // Move original to 200issues/review/done, preserving date subdirectory structure
+    const srcRelToReview = path.relative(reviewRoot, src.abs);
+    const doneDir = path.join(reviewRoot, 'done');
+    const donePath = path.join(doneDir, srcRelToReview);
+    fs.mkdirSync(path.dirname(donePath), { recursive: true });
+    fs.renameSync(src.abs, donePath);
+
+    const readyRel = path.relative(TASKS_ROOT, readyPath).replace(/\\/g, '/');
+    const doneRel = path.relative(TASKS_ROOT, donePath).replace(/\\/g, '/');
+
+    res.json({
+      success: true,
+      summary_path: readyRel,
+      archived_path: doneRel,
+    });
+  } catch (e) {
+    res.status(400).json({ error: `Failed to mark done: ${e.message}` });
+  }
+});
+
+// Build a summary version of the issues file:
+// - Approved issues (ACCEPT, ACCEPT with improvements): keep full detail
+// - Other issues (DEFER, WONTFIX, REJECT, unreviewed): condensed abstract
+function buildSummaryContent(content) {
+  const APPROVED = ['ACCEPT', 'ACCEPT with improvements'];
+
+  // Split into preamble (everything before first "### Issue N:") and issue blocks
+  const firstIssueMatch = content.match(/^### Issue \d+:/m);
+  if (!firstIssueMatch) return content; // no issues, return as-is
+
+  const preamble = content.substring(0, firstIssueMatch.index).trim();
+
+  // Split remaining into individual issue blocks
+  const remainder = content.substring(firstIssueMatch.index);
+  const blocks = [];
+  const lines = remainder.split('\n');
+  let current = [];
+  let started = false;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (/^### Issue \d+:/i.test(line)) {
+      if (started && current.length > 0) blocks.push(current.join('\n'));
+      current = [line];
+      started = true;
+    } else if (started) {
+      // Stop at "## How to Reproduce" section
+      if (/^## How to Reproduce/.test(line)) break;
+      current.push(line);
+    }
+  }
+  if (started && current.length > 0) blocks.push(current.join('\n'));
+
+  // Process each block
+  const approvedBlocks = [];
+  const abstractBlocks = [];
+  let keptCount = 0;
+  let condensedCount = 0;
+
+  for (const block of blocks) {
+    const decision = extractDecision(block);
+    if (decision && APPROVED.includes(decision)) {
+      approvedBlocks.push(block);
+      keptCount++;
+    } else {
+      abstractBlocks.push(buildAbstract(block, decision));
+      condensedCount++;
+    }
+  }
+
+  // Strip the original "## Issues Found" line from preamble (we'll add a fresh one)
+  let cleanPreamble = preamble.replace(/\n## Issues Found[^\n]*\n?[\s\S]*$/, '').trim();
+
+  // Build output: clean preamble + updated header + review summary + issues
+  let out = cleanPreamble + '\n\n---\n\n';
+  out += '## Issues Found (' + blocks.length + ' issue' + (blocks.length !== 1 ? 's' : '') + ')\n';
+  out += '> **Review complete:** ' + keptCount + ' approved, ' + condensedCount + ' deferred/rejected\n\n';
+
+  // Output approved issues first (full detail), then abstracts
+  for (const b of approvedBlocks) {
+    out += b.trimEnd() + '\n\n---\n\n';
+  }
+  for (const a of abstractBlocks) {
+    out += a.trimEnd() + '\n\n---\n\n';
+  }
+
+  // Append "How to Reproduce" footer if present in original
+  const howToIdx = content.indexOf('\n## How to Reproduce');
+  if (howToIdx >= 0) {
+    out += content.substring(howToIdx).trim() + '\n';
+  }
+
+  return out.trim() + '\n';
+}
+
+function extractDecision(block) {
+  const m = block.match(/^- \[x\] \*\*(ACCEPT|ACCEPT with improvements|DEFER|WONTFIX|REJECT|DUPLICATE)\*\*/m);
+  return m ? m[1] : null;
+}
+
+function buildAbstract(block, decision) {
+  const lines = block.split('\n');
+  const titleLine = lines[0]; // "### Issue N: Title"
+  let severity = '', category = '';
+
+  for (let i = 1; i < Math.min(lines.length, 5); i++) {
+    const sevMatch = lines[i].match(/^\*\*Severity:\*\*\s*(.+)/);
+    const catMatch = lines[i].match(/^\*\*Category:\*\*\s*(.+)/);
+    if (sevMatch) severity = sevMatch[1].trim();
+    if (catMatch) category = catMatch[1].trim();
+  }
+
+  // Extract the AI Suggested Improvement text as a one-line summary
+  let suggestion = '';
+  const aiMatch = block.match(/#### AI Suggested Improvement\n([\s\S]*?)(?=\n#### |\n---|$)/);
+  if (aiMatch) {
+    suggestion = aiMatch[1].trim();
+    // Take just the first meaningful line
+    const firstLine = suggestion.split('\n').find(l => l.trim() && !l.trim().startsWith('- '));
+    if (firstLine) suggestion = firstLine.trim();
+    else suggestion = suggestion.split('\n')[0] || '';
+    if (suggestion.length > 200) suggestion = suggestion.substring(0, 197) + '...';
+  }
+
+  // Extract review notes
+  let notes = '';
+  const notesMatch = block.match(/\*\*Notes:\*\*\n([\s\S]*?)(?=\n---|$)/);
+  if (notesMatch) {
+    notes = notesMatch[1].trim();
+  }
+
+  let out = titleLine + '\n\n';
+  out += '**Severity:** ' + (severity || 'N/A') + '\n';
+  out += '**Category:** ' + (category || 'N/A') + '\n\n';
+  out += '#### Review Result\n\n';
+  out += '**Decision:** ' + (decision || 'WONTFIX') + '\n\n';
+  if (notes) {
+    out += '**Notes:** ' + notes + '\n\n';
+  }
+  if (suggestion) {
+    out += '**Summary:** ' + suggestion + '\n';
+  }
+
+  return out;
+}
 
 // ── Start server ────────────────────────────────────────────────────────
 

@@ -101,7 +101,7 @@ function New-Browser4EvalPrompt {
     } else {
         $helpCmd       = '`browser4-cli help` (if not installed: `npm install -g browser4-cli`; if developing from source: `cd cli/browser4-cli && cargo run -- help`)'
         $cliInvocation = '`cd cli/browser4-cli && cargo run --`'
-        $skillPath     = '`skill/SKILL.md`'
+        $skillPath     = '`skills/browser4-cli/SKILL.md`'
     }
 
     return @"

@@ -209,7 +209,7 @@ class PageHandler constructor(
         val currentViewport = s.processingViewport
         return buildString {
             appendLine("# ---")
-            appendLine("# This page has ${s.viewportsTotal} viewports. You are currently viewing viewport $currentViewport.")
+            appendLine("# This page has ${s.viewportsTotal} viewports (page chunks split by viewport height). You are currently viewing viewport $currentViewport.")
             appendLine("# To read the page viewport by viewport (like a human scrolling):")
             if (currentViewport > 0) {
                 appendLine("#   snapshot -v 0          # view the top of the page")

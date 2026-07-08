@@ -65,10 +65,36 @@ object PageSummaryIndexService {
         val landmarkTags = setOf("header", "nav", "main", "article", "aside", "footer", "section")
         val landmarks = indexedNodes.filter { it.tag in landmarkTags }
 
-        // Phase 5: key node extraction (top 100 by score)
+        // Phase 5: key node extraction (top 100 by score, deduplicated by type+text)
+        // Deduplication avoids repetitive elements (e.g. 20 "Add to basket" buttons)
+        // from crowding out diverse content. The first occurrence (highest score) is
+        // kept; subsequent duplicates are dropped with a count tracked for display.
         val keyNodes = scoredNodes
             .filter { it.score > 0 }
             .sortedByDescending { it.score }
+            .fold(mutableListOf<SummaryScoredNode>() to mutableMapOf<String, Int>()) { (acc, dupCounts), node ->
+                val key = "${node.typeLabel}|${node.indexed.element.text().trim()}"
+                if (key.isBlank()) {
+                    acc.add(node)
+                } else if (acc.none { "${it.typeLabel}|${it.indexed.element.text().trim()}" == key }) {
+                    acc.add(node)
+                } else {
+                    dupCounts[key] = (dupCounts[key] ?: 1) + 1
+                }
+                acc to dupCounts
+            }
+            .let { (nodes, dupCounts) ->
+                // Attach duplicate counts to the kept nodes for display
+                nodes.map { node ->
+                    val key = "${node.typeLabel}|${node.indexed.element.text().trim()}"
+                    val dupCount = dupCounts[key]
+                    if (dupCount != null && dupCount > 1) {
+                        node.copy(duplicateCount = dupCount)
+                    } else {
+                        node
+                    }
+                }
+            }
             .take(100)
 
         // Phase 6: list detection
@@ -117,6 +143,9 @@ object PageSummaryIndexService {
         val indexed: SummaryIndexedNode,
         val score: Int,
         val typeLabel: String,
+        /** Number of duplicates with the same (typeLabel, text) that were collapsed.
+         * 1 means unique; >1 means this entry represents N identical elements. */
+        val duplicateCount: Int = 1,
     )
 
     data class SummaryListGroup(
@@ -1252,6 +1281,7 @@ object PageSummaryIndexService {
                 appendLine("    box: ${sn.indexed.box}")
                 appendLine("    type: ${sn.typeLabel}")
                 appendLine("    score: ${sn.score}")
+                if (sn.duplicateCount > 1) appendLine("    repeats: ${sn.duplicateCount}")
                 if (text.isNotEmpty()) appendLine("    text: ${text.toYamlValue()}")
                 if (selector.isNotEmpty()) appendLine("    selector: ${selector.toYamlValue()}")
             }

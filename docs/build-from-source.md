@@ -58,3 +58,37 @@ If Chrome is not found, the CLI attempts automatic installation:
    ```shell
    ./mvnw -DskipTests
    ```
+
+## Building the CLI
+
+The CLI (`browser4-cli`) is a Rust binary that communicates with the Browser4 backend.
+It requires **Rust** (stable, edition 2021) — see the prerequisites table above.
+
+**Running without installing** (recommended for development):
+
+```bash
+# From the repo root:
+cargo run --manifest-path cli/browser4-cli/Cargo.toml -- <command>
+
+# Or from the CLI directory:
+cd cli/browser4-cli
+cargo run -- <command>
+```
+
+The backend server starts automatically on first use (no manual `./mvnw` required).
+
+**Building the release binary:**
+
+```bash
+cd cli/browser4-cli
+cargo build --release
+# Binary at: target/release/browser4-cli[.exe]
+```
+
+**Installing globally:**
+
+```bash
+cd cli/browser4-cli
+cargo install --path .
+# Now available as: browser4-cli <command>
+```

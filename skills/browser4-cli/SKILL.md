@@ -72,6 +72,10 @@ Refs are **ephemeral** — they become invalid after commands that change the DO
 
 Named sessions isolate browser state (cookies, localStorage, tabs). Use `-s <name>` to target a named session. `goto` auto-opens/reconnects — you rarely need to manage sessions manually.
 
+The `list` command displays a "Next open" column showing what happens when `goto` or `open` targets a named session that already exists:
+- **Reuse** — reconnects to the existing browser window (session is active on the backend).
+- **Refresh** — opens a fresh window (session is stale or missing).
+
 ## 3. Command Map
 
 | Command family | Purpose | When to use | Full reference |
@@ -133,11 +137,11 @@ Need to process multiple pages?
 
 ## 5. Critical Warnings
 
-> **Warning:** Refs are single-use. Re-snapshot after every page-modifying command (click, type, fill, goto, reload, tab switch). Never store refs across interactions.
+> **Warning:** Refs are single-use for navigation and DOM-mutating commands. Re-snapshot after `click` (on links/buttons), `goto`, `reload`, and tab switches. Form interactions (`fill`, `type`, `press`, `check`, `uncheck`, `select`) are safe — you can fill an entire form from a single snapshot. Never store refs across navigations.
 
 > **Warning:** CSS selectors are tied to live websites — they break when sites change their HTML. Always discover selectors with `htmlsnapshot inspect` or `htmlsnapshot summary` before extraction. Treat scenario examples as patterns, not copy-paste recipes.
 
-> **Warning:** Shell quoting on Windows — complex JS/SQL with nested quotes causes escaping issues. Prefer `--sql @file.sql` (read from file), `--sql-stdin` (piped), `--sql-base64` (encoded), or `eval --file`/`eval --stdin`/`eval --base64` (JS from file or base64). Never inline `--sql "..."` with double-quoted CSS selectors on Windows.
+> **Warning:** Shell quoting on Windows — complex JS/SQL with nested quotes causes escaping issues. Prefer `--sql @file.sql` (read from file), `--sql-stdin` (piped), `--sql-base64` (encoded), or `eval --file`/`eval --stdin`/`eval --base64` (JS from file or base64). For `htmlsnapshot inspect`, use `@file`, `--stdin`, or `--selector-base64`. Never inline `--sql "..."` with double-quoted CSS selectors on Windows.
 
 > **Warning:** Don't cat snapshot files — they can exceed 256KB. Use viewport pagination (`snapshot -v 0`), `snapshot grep <pattern>`, or `snapshot --stdout --page 1` instead.
 
@@ -240,14 +244,4 @@ browser4-cli install
 
 ## Development
 
-When running from source (not a globally installed binary), use `cargo run` from the CLI directory:
-
-```bash
-cd cli/browser4-cli
-cargo build                     # build the binary
-cargo run -- <command>          # run a command (the -- separates cargo args from CLI args)
-cargo run -- goto "https://example.com"
-cargo run -- snapshot -v 0
-```
-
-**Note:** All examples in this document use `browser4-cli` as the command. If running from source, substitute `cargo run --` (with the leading `cd cli/browser4-cli &&` if not already in that directory).
+See [development.md](references/development.md) — prerequisites, building from source, and `cargo run` patterns.

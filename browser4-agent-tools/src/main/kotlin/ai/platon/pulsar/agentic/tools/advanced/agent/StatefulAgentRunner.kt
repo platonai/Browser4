@@ -119,17 +119,60 @@ class StatefulAgentRunner(
     private suspend fun executeAgentCommand(plainCommand: String, status: AgentTaskStatus) {
         val agent = session.companionAgent
 
+        // Record the submitted instruction so callers can verify they're
+        // getting results for the right task (prevents cross-talk confusion).
+        status.submittedTask = plainCommand
+
         // Set agent history reference to allow real-time state tracking
         status.agentHistory = agent.stateHistory
 
+        // Save the user's current page URL so we can restore it after the agent
+        // runs, preventing the agent from polluting the shared browser session.
+        val savedUrl = runCatching { session.boundDriver?.currentUrl() }.getOrNull()
+        logger.debug("Agent task {}: saved user page URL before agent run: {}", status.id, savedUrl)
+
         val history = agent.run(plainCommand)
+
+        // Restore the user's page if the agent navigated away from it
+        try {
+            if (savedUrl != null && savedUrl.isNotBlank()) {
+                val currentUrl = session.boundDriver?.currentUrl()
+                if (currentUrl != savedUrl && currentUrl != "about:blank") {
+                    logger.info(
+                        "Agent task {}: restoring user page from '{}' back to '{}'",
+                        status.id, currentUrl, savedUrl
+                    )
+                    session.boundDriver?.navigateTo(savedUrl)
+                }
+            }
+        } catch (e: Exception) {
+            logger.warn("Agent task {}: failed to restore user page: {}", status.id, e.message)
+        }
 
         status.agentHistory = history
         val finalState = history.finalResult
 
-        // AgentState has 'summary' for the final result message
-        status.message = finalState?.summary ?: finalState?.description ?: ""
-        status.refresh(ResourceStatus.SC_OK)
+        if (finalState == null) {
+            // The agent produced no result. Distinguish "empty page" (the agent
+            // navigated somewhere with no useful content) from a genuine failure
+            // (the agent didn't navigate at all or crashed).
+            val lastState = history.states.lastOrNull()
+            val hasPageContent = lastState?.currentPageContentSummary != null
+            if (!hasPageContent) {
+                status.refresh(ResourceStatus.SC_EXPECTATION_FAILED)
+                status.message = "Agent produced no results (no page content). " +
+                    "The task may not have navigated to a valid page or the agent encountered an error."
+                status.failureReason = "Agent produced no results (no page content)"
+            } else {
+                status.refresh(ResourceStatus.SC_OK)
+                status.message = finalState?.summary ?: finalState?.description
+                    ?: "Agent completed but produced no summary (page content loaded)"
+            }
+        } else {
+            // AgentState has 'summary' for the final result message
+            status.message = finalState.summary ?: finalState.description ?: ""
+            status.refresh(ResourceStatus.SC_OK)
+        }
     }
 
     fun getStatus(id: String) = statusCache.getIfPresent(id)

@@ -36,6 +36,15 @@ pub struct CliState {
     /// Last known mouse position used to restore pointer state across CLI invocations.
     #[serde(rename = "lastMousePosition", skip_serializing_if = "Option::is_none")]
     pub last_mouse_position: Option<MousePosition>,
+    /// Whether this session was created via `attach` (external browser) rather
+    /// than `open` (Browser4-launched).  Attached sessions leave the browser
+    /// running after `close`.
+    #[serde(rename = "isAttached", default, skip_serializing_if = "is_false")]
+    pub is_attached: bool,
+}
+
+fn is_false(b: &bool) -> bool {
+    !b
 }
 
 impl Default for CliState {
@@ -46,6 +55,7 @@ impl Default for CliState {
             active_selector: None,
             session_name: None,
             last_mouse_position: None,
+            is_attached: false,
         }
     }
 }
@@ -391,6 +401,12 @@ pub struct LoopListEntry {
     pub iterations_completed: u64,
     #[serde(rename = "updatedAt")]
     pub updated_at: String,
+    #[serde(rename = "intervalSecs")]
+    pub interval_secs: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub count: Option<u64>,
+    #[serde(rename = "timeoutSecs", skip_serializing_if = "Option::is_none")]
+    pub timeout_secs: Option<u64>,
 }
 
 /// List all persisted loops. Returns entries sorted by name (default first).
@@ -411,6 +427,9 @@ pub fn list_loop_states(state_dir: Option<&Path>) -> Vec<LoopListEntry> {
                 status: ls.status,
                 iterations_completed: ls.iterations_completed,
                 updated_at: ls.updated_at,
+                interval_secs: ls.interval_secs,
+                count: ls.count,
+                timeout_secs: ls.timeout_secs,
             });
         }
     }
@@ -435,6 +454,9 @@ pub fn list_loop_states(state_dir: Option<&Path>) -> Vec<LoopListEntry> {
                             status: ls.status,
                             iterations_completed: ls.iterations_completed,
                             updated_at: ls.updated_at,
+                            interval_secs: ls.interval_secs,
+                            count: ls.count,
+                            timeout_secs: ls.timeout_secs,
                         });
                     }
                 }
@@ -454,6 +476,94 @@ pub fn list_loop_states(state_dir: Option<&Path>) -> Vec<LoopListEntry> {
     });
 
     entries
+}
+
+/// Entry in the loop completion history.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LoopHistoryEntry {
+    /// Loop name ("default" or the user-provided name).
+    pub name: String,
+    /// The task tokens that were executed.
+    #[serde(rename = "taskTokens")]
+    pub task_tokens: Vec<String>,
+    /// Execution mode: "plain", "shell", or "subcommand".
+    pub mode: String,
+    /// Iterations completed before exit.
+    #[serde(rename = "iterationsCompleted")]
+    pub iterations_completed: u64,
+    /// Why the loop ended: "count-reached", "timeout", "stopped", "interrupted".
+    #[serde(rename = "exitReason")]
+    pub exit_reason: String,
+    /// ISO-8601 timestamp when the loop completed.
+    #[serde(rename = "completedAt")]
+    pub completed_at: String,
+}
+
+/// Maximum number of history entries to retain (prevents unbounded growth).
+pub const MAX_HISTORY_ENTRIES: usize = 200;
+
+/// Path to the loop history JSONL file.
+fn loop_history_path(state_dir: &Path) -> PathBuf {
+    state_dir.join("loop-history.jsonl")
+}
+
+/// Append a completion event to the loop history log.
+/// Keeps at most `MAX_HISTORY_ENTRIES` entries (trims oldest).
+pub fn write_loop_history(
+    entry: &LoopHistoryEntry,
+    state_dir: Option<&Path>,
+) -> std::io::Result<()> {
+    let dir = state_dir
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(resolve_default_state_dir);
+    fs::create_dir_all(&dir)?;
+    let path = loop_history_path(&dir);
+
+    // Read existing entries
+    let mut entries: Vec<LoopHistoryEntry> = if path.exists() {
+        let raw = fs::read_to_string(&path).unwrap_or_default();
+        raw.lines()
+            .filter(|l| !l.trim().is_empty())
+            .filter_map(|l| serde_json::from_str::<LoopHistoryEntry>(l).ok())
+            .collect()
+    } else {
+        Vec::new()
+    };
+
+    entries.push(entry.clone());
+
+    // Trim oldest entries if exceeding max
+    if entries.len() > MAX_HISTORY_ENTRIES {
+        let excess = entries.len() - MAX_HISTORY_ENTRIES;
+        entries.drain(0..excess);
+    }
+
+    // Write back as JSONL
+    let content: String = entries
+        .iter()
+        .map(|e| {
+            serde_json::to_string(e).expect("LoopHistoryEntry serialization should not fail")
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    fs::write(path, content)
+}
+
+/// Read the loop completion history. Returns entries in chronological order
+/// (oldest first).
+pub fn read_loop_history(state_dir: Option<&Path>) -> Vec<LoopHistoryEntry> {
+    let dir = state_dir
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(resolve_default_state_dir);
+    let path = loop_history_path(&dir);
+    match fs::read_to_string(&path) {
+        Ok(raw) => raw
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .filter_map(|l| serde_json::from_str::<LoopHistoryEntry>(l).ok())
+            .collect(),
+        Err(_) => Vec::new(),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -551,6 +661,20 @@ pub fn prune_async_tasks(
         write_async_tasks(&list, state_dir)?;
     }
     Ok(removed)
+}
+
+/// Update the last_status field for a tracked async task.
+pub fn update_async_task_status(
+    task_id: &str,
+    status: &str,
+    state_dir: Option<&std::path::Path>,
+) -> std::io::Result<()> {
+    let mut list = read_async_tasks(state_dir);
+    if let Some(entry) = list.tasks.iter_mut().find(|t| t.task_id == task_id) {
+        entry.last_status = status.to_string();
+        write_async_tasks(&list, state_dir)?;
+    }
+    Ok(())
 }
 
 /// Format a list of tracked async tasks for CLI display.
@@ -664,6 +788,7 @@ mod tests {
             active_selector: None,
             session_name: None,
             last_mouse_position: Some(MousePosition { x: 120.0, y: 240.0 }),
+            is_attached: false,
         };
         write_state(&state, Some(tmp.path()), None).unwrap();
         let read = read_state(Some(tmp.path()), None);
@@ -702,6 +827,7 @@ mod tests {
             active_selector: None,
             session_name: Some("auth".to_string()),
             last_mouse_position: Some(MousePosition { x: 10.0, y: 20.0 }),
+            is_attached: false,
         };
         let state_public = CliState {
             session_id: Some("public456".to_string()),
@@ -709,6 +835,7 @@ mod tests {
             active_selector: None,
             session_name: Some("public".to_string()),
             last_mouse_position: Some(MousePosition { x: 30.0, y: 40.0 }),
+            is_attached: false,
         };
 
         write_state(&state_auth, Some(tmp.path()), Some("auth")).unwrap();

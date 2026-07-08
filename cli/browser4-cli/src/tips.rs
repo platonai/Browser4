@@ -291,7 +291,10 @@ const TIPS_HTMLSNAPSHOT_GREP: &[Tip] = &[
         text: "Use `htmlsnapshot grep -C 3 <pattern>` for context lines around matches",
     },
     Tip {
-        text: "Use `htmlsnapshot grep --selector main <pattern>` to search only within a CSS selector subtree",
+        text: "Use `htmlsnapshot grep --selector main <pattern>` to search within the first matching CSS element (querySelector). Use --selector-all to search across ALL matching elements (querySelectorAll).",
+    },
+    Tip {
+        text: "Use `htmlsnapshot grep --selector-all \".product-card\" <pattern>` to search within every matching element, each annotated with its index",
     },
 ];
 
@@ -357,7 +360,7 @@ fn tips_for_command(command: &str) -> &'static [Tip] {
         "screenshot" | "pdf" => TIPS_SCREENSHOT,
         "crawl" | "crawl-list" => TIPS_CRAWL,
         "swarm-create" | "swarm-submit" | "swarm-query" | "swarm-status" | "swarm-result"
-        | "swarm-list" => TIPS_SWARM,
+        | "swarm-list" | "swarm-close" => TIPS_SWARM,
         "agent-run" | "agent-status" | "agent-result" | "agent-list" => TIPS_AGENT,
         "attach" => TIPS_ATTACH,
         "cookie-list" | "cookie-get" | "cookie-set" | "cookie-delete" | "cookie-clear" => {

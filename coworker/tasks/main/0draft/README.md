@@ -2,7 +2,7 @@
 
 Draft your tasks here. This area is for tasks under preparation and not yet ready for execution.
 
-1. run `coworker-scheduler.ps1` to start recurring automation
+1. run `start.ps1` to start recurring automation
 2. draft tasks in `0draft` (or anywhere)
 3. copy ready tasks to `1ready` for execution
 4. once executed, you can find results in `main/3done` and detailed logs in `coworker/tasks/300logs`

@@ -1,39 +1,27 @@
 # Browser4 REST Tests
 
-E2E and integration test suites for the Browser4 REST API, plus a standalone mock-site
-launcher for test/demo infrastructure.
+This module provides REST API integration and E2E tests for Browser4 / Pulsar, plus a standalone launcher for the mock site defined in `browser4-tests-common`.
 
 ## MockSiteBoot (standalone main)
 
-Command-line launcher with a `main()` entrypoint that starts the mock site defined in
-`browser4-tests-common` (see `MockSiteApplication` / `MockSiteLauncher` / `MockSiteStarter`).
-It serves deterministic HTML pages for browser-agent testing.
+Command-line launcher with a `main()` entry point that starts the mock site served from `browser4-tests-common`. The mock site serves static deterministic pages under `browser4-tests-common`'s `src/main/resources/static/`, including the key demo page:
 
-Demo pages served from the mock site at `http://localhost:18080/`:
-
-| Path | Content |
-|------|---------|
-| `/` | Welcome page (JSON) |
-| `/hello` | Hello, World! |
-| `/text` | Plain text response |
-| `/csv` | CSV table |
-| `/json` | JSON message |
-| `/robots.txt` | Sample robots.txt |
-| `/amazon/home.htm` | Amazon-style home page |
-| `/amazon/product.htm` | Amazon-style product detail |
-| `/assets/test-pages/form-page.html` | Form with inputs, buttons, links |
-| `/assets/test-pages/error-page.html` | Empty/hidden/delayed-content divs |
-| `/assets/test-pages/keyboard-test.html` | Keyboard and focus event harness |
-
-### Running
-
-From the repo root:
-
-```shell
-./mvnw -pl browser4-tests/browser4-rest-tests -am -DskipTests spring-boot:run
+```
+http://localhost:18080/generated/interactive-1.html
 ```
 
-Or via the shared test helper:
+Pages emulate: search box, link list, infinite scroll, comment threads, and predictable anchors for agent action instructions.
+
+Run from the Browser4 repository root.
+
+### Via Maven:
+
+```shell
+cd browser4-tests/browser4-rest-tests
+./../../mvnw package -DskipTests -am spring-boot:run -D"spring-boot.run.mainClass=ai.platon.pulsar.test.server.MockSiteBoot"
+```
+
+### Via shared helper:
 
 ```shell
 ./bin/test.sh mock-site -Dmock.site.port=18080
@@ -41,73 +29,44 @@ Or via the shared test helper:
 
 ### Configuration
 
-System properties / environment variables:
+Environment variable alternatives:
+- `MOCK_SITE_PORT`
+- `MOCK_SITE_WAIT_SEC`
 
-| Property | Env | Default | Description |
-|----------|-----|---------|-------------|
-| `mock.site.port` | `MOCK_SITE_PORT` | `18080` | Desired port (`0` = random) |
-| `mock.site.waitSec` | `MOCK_SITE_WAIT_SEC` | `6` | Readiness wait seconds |
-| `mock.site.healthPath` | — | `/actuator/health` | Health-check path |
+Pass `--block` (program args) to keep the process alive if needed.
 
-Pass `--block` (program args) to keep the JVM alive after startup.
+### Key points
+- Tries health endpoint first (default `/actuator/health` or overridden by `mock.site.healthPath` JVM property)
+- Falls back to `/` if health path fails (unless disabled)
+- Configurable timeout, interval, verbosity, connect/read timeouts
+- Returns `true` on first 2xx/3xx response
 
-### Readiness
+## REST API Test Suite
 
-- Tries the health endpoint first (default `/actuator/health`, overridable via
-  `mock.site.healthPath`).
-- Falls back to `/` if the health path fails (unless disabled).
-- Configurable timeout, interval, and connect/read timeouts.
-- Returns `true` on the first 2xx/3xx response.
+Integration and E2E tests covering Browser4's REST API surface:
 
-## Test suites (`src/test/kotlin/`)
+- **`rest/api/controller/`** — E2E tests for command controller (sync/async, SSE), HTML snapshot scenarios, MCP tools, massive scrape tasks, and swarm controller
+- **`rest/api/service/`** — Unit/integration tests for command runner, command status conversion, conversation service, extract service, and scrape service
+- **`rest/api/common/`** — Shared test base classes and prompt tests
+- **`rest/api/config/`** — Mock server configuration for test environments
+- **`rest/api/entities/`** — Serialization tests for command status models
+- **`rest/mcp/`** — WebDriver serialization and concurrency tests
+- **`rest/util/server/`** — Mock web site access utilities
 
-E2E tests against the REST API controllers (`ai.platon.pulsar.rest.api.controller`):
+## Directory Structure
 
-| Class | Scope |
-|-------|-------|
-| `CommandControllerE2ETest` | Agent command execution via REST |
-| `CommandControllerSSETest` | Server-Sent Events streaming |
-| `DomSnapshotScenariosE2ETest` | DOM snapshot across 10 scenarios |
-| `MCPToolControllerE2ETest` | MCP tool endpoints |
-| `SwarmControllerE2ETest` | Swarm (multi-agent) endpoints |
-| `MassiveScrapeTaskTest` | Large-scale scraping tasks |
-
-Service-level integration tests (`ai.platon.pulsar.rest.api.service`):
-
-| Class | Scope |
-|-------|-------|
-| `ScrapeServiceTests` | Scrape service logic |
-| `ExtractServiceTest` | Extract service logic |
-| `ConversationServiceTest` | Conversation management |
-| `CommandRunnerTest` | Command runner lifecycle |
-| `CommandStatusConversionTest` | Status serialization |
-
-Base classes shared by E2E tests:
-
-- `IntegrationTestBase` — Spring Boot test harness with `RestTestClient`, port injection,
-  `Browser4AutoConfiguration`.
-- `RestAPITestBase` — extends `IntegrationTestBase` with mock EC server config and SQL
-  template fixtures for product-list / product-detail scrape tests.
-
-## Dependencies
-
-- **browser4-rest** — the REST API module under test
-- **browser4-tests-common** — `MockSiteApplication`, `MockSiteLauncher`, `MockSiteStarter`,
-  and demo page controllers
-- **Spring Boot Test** — `@SpringBootTest`, `RestTestClient`
-
-## Logs (`logs/`)
-
-Test and mock-site output is written to the `logs/` directory (logback config in
-`src/test/resources/logback-test.xml`):
-
-| File / dir | Contents |
-|------------|----------|
-| `pulsar.log` | Main application log (time-based rotation: `pulsar.log..YYYY-MM-DD`) |
-| `pulsar.m.log` | Metrics output |
-| `pulsar.dc.log` | Data-collector output |
-| `pulsar.sql.log` | SQL query log |
-| `agent/` | Per-session agent logs, organised as `YYYYMMDD.HHmmss/<session-uuid>/` |
+```
+browser4-rest-tests/
+├── src/main/kotlin/.../test/server/   MockSiteBoot (standalone launcher)
+├── src/test/kotlin/.../rest/          REST API integration & E2E tests
+├── src/test/resources/                Test configs and test data
+├── logs/                              Agent trace logs (not versioned)
+│   └── agent/<date>/<uuid>/
+│       ├── task-standalone/           Trace logs (agent-trace.jsonl, .log)
+│       ├── act/                       Action request/response pairs
+│       └── summary/                   Session summaries (act.jsonl)
+└── target/                            Build output (not versioned)
+```
 
 ---
-This README is intentionally concise; extend as the module grows.
+This README is intentionally concise; extend as the test suite grows.

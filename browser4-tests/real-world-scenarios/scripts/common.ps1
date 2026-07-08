@@ -27,6 +27,109 @@ Every scenario script follows the same pattern:
 
 $ErrorActionPreference = "Stop"
 
+# ── Windows command-line argument escaping ────────────────────────────────────
+# Adapted from coworker/scripts/workers/agent.ps1.
+# Windows CreateProcess receives a single lpCommandLine string; the child parses
+# it via CommandLineToArgvW.  Backslashes preceding a double-quote must be
+# doubled, and trailing backslashes must be doubled, to prevent the quote from
+# being treated as an escape.  The simplistic .Replace('"', '\"') is incorrect
+# and silently corrupts arguments containing Windows paths.
+function ConvertTo-WindowsCommandLineArgument {
+    param(
+        [AllowEmptyString()]
+        [string]$Argument
+    )
+
+    if ($null -eq $Argument -or $Argument.Length -eq 0) {
+        return '""'
+    }
+
+    if ($Argument -notmatch '[\s"]') {
+        return $Argument
+    }
+
+    $builder = [System.Text.StringBuilder]::new()
+    [void]$builder.Append('"')
+
+    $backslashCount = 0
+    foreach ($character in $Argument.ToCharArray()) {
+        if ($character -eq '\') {
+            $backslashCount++
+            continue
+        }
+
+        if ($character -eq '"') {
+            if ($backslashCount -gt 0) {
+                [void]$builder.Append('\' * ($backslashCount * 2))
+                $backslashCount = 0
+            }
+            [void]$builder.Append('\"')
+            continue
+        }
+
+        if ($backslashCount -gt 0) {
+            [void]$builder.Append('\' * $backslashCount)
+            $backslashCount = 0
+        }
+
+        [void]$builder.Append($character)
+    }
+
+    if ($backslashCount -gt 0) {
+        [void]$builder.Append('\' * ($backslashCount * 2))
+    }
+
+    [void]$builder.Append('"')
+    return $builder.ToString()
+}
+
+# ── Compiled output handler (C#) ──────────────────────────────────────────────
+# DataReceived events fire on .NET threadpool threads.  PowerShell scriptblocks
+# cast to delegates require a Runspace on the executing thread, which threadpool
+# threads do not have — causing "There is no Runspace available to run scripts
+# in this thread."  A compiled C# class avoids PowerShell entirely for event
+# handling and works reliably on any thread.
+if (-not $script:_NativeCommandHandlerCompiled) {
+    Add-Type -TypeDefinition @'
+using System;
+using System.IO;
+using System.Text;
+
+public class NativeCommandOutputHandler
+{
+    private readonly string _capturePath;
+    private readonly UTF8Encoding _utf8;
+
+    public NativeCommandOutputHandler(string capturePath)
+    {
+        _capturePath = capturePath;
+        _utf8 = new UTF8Encoding(false);
+    }
+
+    public void OnOutputReceived(object sender, System.Diagnostics.DataReceivedEventArgs e)
+    {
+        if (e.Data != null)
+        {
+            Console.WriteLine(e.Data);
+            File.AppendAllText(_capturePath, e.Data + Environment.NewLine, _utf8);
+        }
+    }
+}
+'@
+    $script:_NativeCommandHandlerCompiled = $true
+}
+
+# ── Path resolution ──────────────────────────────────────────────────────────
+# Repo root is 3 levels up from scripts/ (scripts -> tests -> browser4-tests -> repo root)
+$script:RepoRoot = (Resolve-Path "$PSScriptRoot/../../..").Path
+$script:IssuesReadyDir = [System.IO.Path]::GetFullPath(
+    (Join-Path $script:RepoRoot 'coworker\tasks\200issues\draft')
+)
+
+# Local alias for string interpolation in the here-string below.  Forward
+# slashes are used so paths work in bash/Git Bash shells that agents run in.
+$RepoRootPath = $script:RepoRoot -replace '\\', '/'
+
 # ── Mode detection ──────────────────────────────────────────────────────────
 # The caller may set $browser4cliMode = 'production' before dot-sourcing, or
 # set $env:BROWSER4CLI_MODE = 'production' (useful when run-tests.ps1 spawns a
@@ -37,24 +140,17 @@ if (-not $browser4cliMode -and $env:BROWSER4CLI_MODE) {
 # PowerShell here-strings expand variables, so $helpCmd / $cliInvocation are
 # resolved when $generalPrompt is defined below.
 if ($browser4cliMode -eq 'production') {
-    $helpCmd        = '`browser4-cli help`'
+    $helpCmd        = 'browser4-cli help'
     $skillPath      = 'https://browser4.io/SKILL.md'
-    $cliInvocation  = '`browser4-cli`'
+    $cliInvocation  = 'browser4-cli'
 } else {
     # Dev mode: use cargo run so the agent tests the locally-built CLI and
     # the daemon auto-starts the locally-built backend JAR.  The repo root
-    # is the CWD when the agent runs, so the relative "cd" resolves correctly.
-    $helpCmd        = '`cd cli/browser4-cli && cargo run -- help`'
-    $skillPath      = '`skills/browser4-cli/SKILL.md`'
-    $cliInvocation  = '`cd cli/browser4-cli && cargo run --`'
+    # is the CWD when the agent runs.
+    $helpCmd        = "cd `"$RepoRootPath`" && cd cli/browser4-cli && cargo run -- help"
+    $skillPath      = 'skills/browser4-cli/SKILL.md'
+    $cliInvocation  = "cd `"$RepoRootPath`" && cd cli/browser4-cli && cargo run --"
 }
-
-# ── Path resolution ──────────────────────────────────────────────────────────
-# Repo root is 3 levels up from scripts/ (scripts -> tests -> browser4-cli -> repo root)
-$script:RepoRoot = (Resolve-Path "$PSScriptRoot/../../..").Path
-$script:IssuesReadyDir = [System.IO.Path]::GetFullPath(
-    (Join-Path $script:RepoRoot 'coworker\tasks\200issues\draft')
-)
 
 # ── Shared evaluation prompt ────────────────────────────────────────────────
 # Every scenario prepends this to its task-specific prompt so the agent
@@ -66,22 +162,30 @@ You are evaluating the usability, discoverability, and reliability of browser4-c
 
 Before performing any browser interaction:
 
-0. Verify your working directory is the repository root (the directory containing `cli/`, `skills/`, `pom.xml`, etc.). If you are not in the repo root, navigate there first with `cd` using the absolute path to the repository. All `cd cli/browser4-cli` commands assume you start from the repo root.
-1. Run $helpCmd.
-2. Read $skillPath completely.
+0. Verify your working directory is the repository root: `$RepoRootPath`. If `pwd` is anything other than this directory, navigate there immediately with `cd "$RepoRootPath"`. The `$cliInvocation` pattern already starts every command from the repo root — use it consistently for all browser4-cli commands and you never need to think about your current working directory.
+1. Run `$helpCmd`.
+2. Read `$skillPath` completely.
 3. Learn the available commands, workflows, and conventions directly from the documentation.
 4. Do not assume any prior knowledge of browser4-cli.
+
+## Backend Server
+
+$(if ($browser4cliMode -eq 'production') {
+"Production mode: browser4-cli connects to a separately-managed backend server. Ensure the **latest runtime bundle release** is deployed and running before starting the task. The CLI does not auto-start a server in production mode — if no server is reachable, commands will fail with a connection error."
+} else {
+"Dev mode: the CLI daemon **auto-starts the locally-built backend JAR** from the repository. No manual server setup is needed — the first \`cargo run\` command will start the daemon and backend automatically. The backend runs from the local source tree, matching the code currently checked out. Do NOT download or install a separate runtime bundle — that would test a stale release instead of the local changes.`n`nIf the daemon or backend fails to start automatically: (a) check for port conflicts on the default port, (b) verify a Java runtime is available, (c) retry the command once. If it still fails after one retry, record the error as a **Reliability** issue with the full error output and continue with any commands that do not require a running browser."
+})
 
 ## Command Invocation
 
 Every browser4-cli command in this session MUST be invoked as:
 
-$cliInvocation <command>
+`$cliInvocation <command>`
 
 For example:
-  $cliInvocation goto "https://example.com"
-  $cliInvocation snapshot -i
-  $cliInvocation click e5
+  `$cliInvocation goto "https://example.com"`
+  `$cliInvocation snapshot -i`
+  `$cliInvocation click e5`
 
 Do NOT use a plain `browser4-cli` command unless the invocation above fails after a genuine attempt.  Using the wrong invocation will test a stale installed binary instead of the local source code, invalidating the evaluation.
 
@@ -95,66 +199,15 @@ Do NOT use a plain `browser4-cli` command unless the invocation above fails afte
 
 ## Evaluation Objective
 
-Your goal is not only to complete the task, but also to evaluate the usability of browser4-cli from the perspective of a first-time user.
+Your goal is not only to complete the task, but also to evaluate the usability of browser4-cli from the perspective of a first-time user. Actively look for issues in these categories:
 
-Actively look for issues involving:
-
-### Installation & Setup
-
-* Missing prerequisites
-* Environment assumptions
-* Setup complexity
-* Platform-specific issues
-
-### Discoverability
-
-* Help output quality
-* Command discoverability
-* Missing examples
-* Missing documentation
-
-### Documentation
-
-* Incomplete instructions
-* Incorrect instructions
-* Ambiguous wording
-* Undocumented behavior
-* Inconsistent terminology
-
-### CLI Experience
-
-* Command naming consistency
-* Parameter naming consistency
-* Workflow clarity
-* Session management
-* Browser lifecycle management
-* State management
-
-### Task Execution
-
-* Navigation workflow
-* Search workflow
-* Content extraction workflow
-* Form interaction workflow
-* Waiting/synchronization behavior
-* Error recovery
-
-### Reliability
-
-* Unexpected failures
-* Flaky behavior
-* Misleading outputs
-* Poor error messages
-* Silent failures
-
-### User Experience
-
-* Learnability
-* Efficiency
-* Cognitive load
-* Friction points
-* Missing shortcuts
-* Missing quality-of-life features
+* **Installation & Setup** — prerequisites, environment assumptions, setup complexity, platform-specific issues
+* **Discoverability** — help output quality, command discoverability, missing examples, missing documentation
+* **Documentation** — incomplete, incorrect, or ambiguous instructions; undocumented behavior; inconsistent terminology
+* **CLI Experience** — naming consistency, workflow clarity, session/browser lifecycle, state management
+* **Task Execution** — navigation, search, content extraction, form interaction, waiting/synchronization, error recovery
+* **Reliability** — unexpected failures, flaky behavior, misleading outputs, poor error messages, silent failures
+* **User Experience** — learnability, efficiency, cognitive load, friction points, missing shortcuts or quality-of-life features
 
 ## Investigation Guidelines
 
@@ -219,7 +272,15 @@ leave the value empty — a follow-up analysis will fill it in.
 - Second concrete suggestion
 - Additional suggestions as needed
 
-**Human Review (TOP PRIORITY):** (leave empty — reserved for human review)
+**Human Review:**
+- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+- [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
+- [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- **Notes:** (free-text for refinement details, counter-arguments, or follow-up actions)
+
+Leave the checkboxes empty — they are for the human reviewer to fill in.
 
 Use `---` (horizontal rule) to separate issues.
 
@@ -325,7 +386,7 @@ function ConvertFrom-IssuesSection {
         'Actual'                       = 'Actual'
         'Root Cause'                   = 'RootCause'
         'Code Pointer'                 = 'CodePointer'
-        'Review'                       = 'Review'
+        'Human Review'                 = 'Review'
         'Human Review (TOP PRIORITY)'  = 'Review'
         'Suggested Improvement'        = 'Suggestion'
         'AI Suggested Improvement'     = 'Suggestion'
@@ -558,6 +619,192 @@ function Extract-BackgroundContext {
     return $result
 }
 
+# ── JSON conversion (shared schema with coworker/gui/frontend/issue-model.js) ─
+
+function ConvertTo-IssueJson {
+    <#
+    .SYNOPSIS
+        Convert parsed issues to the canonical JSON schema shared with the GUI.
+    .DESCRIPTION
+        Takes the output of ConvertFrom-IssuesSection plus background context
+        and produces a JSON string matching the schema in coworker/gui/frontend/issue-model.js.
+        This is the interchange format between PowerShell scripts and the web GUI.
+    .PARAMETER ScenarioName
+        Short scenario identifier (e.g. "form-filling").
+    .PARAMETER SourceFile
+        Source .full.md filename.
+    .PARAMETER Timestamp
+        ISO-style timestamp string (yyyyMMdd-HHmmss).
+    .PARAMETER Mode
+        "dev" or "production".
+    .PARAMETER Background
+        Hashtable from Extract-BackgroundContext.
+    .PARAMETER Issues
+        Array of issue hashtables from ConvertFrom-IssuesSection.
+    .OUTPUTS
+        JSON string.
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ScenarioName,
+        [string]$SourceFile = '',
+        [string]$Timestamp = '',
+        [string]$Mode = 'dev',
+        [hashtable]$Background = @{},
+        [object[]]$Issues = @()
+    )
+
+    $sectionLabels = @(
+        'Reproduction',
+        'Expected Behavior',
+        'Actual Behavior',
+        'Root Cause Analysis',
+        'Code Pointer',
+        'AI Suggested Improvement'
+    )
+
+    $issueArray = @()
+    $issueNum = 0
+    foreach ($issue in $Issues) {
+        $issueNum++
+        $sections = @()
+        foreach ($label in $sectionLabels) {
+            $body = ''
+            switch ($label) {
+                'Reproduction'           { $body = $issue.Reproduction }
+                'Expected Behavior'      { $body = $issue.Expected }
+                'Actual Behavior'        { $body = $issue.Actual }
+                'Root Cause Analysis'    { $body = $issue.RootCause }
+                'Code Pointer'           { $body = $issue.CodePointer }
+                'AI Suggested Improvement' { $body = $issue.Suggestion }
+            }
+            if ($body) {
+                $sections += @{ label = $label; body = $body }
+            }
+        }
+
+        $reviewDecision = $null
+        $reviewNotes = ''
+        if ($issue.Review) {
+            if ($issue.Review -match '\[x\]\s*\*\*(ACCEPT|ACCEPT with improvements|DEFER|WONTFIX|REJECT)\*\*') {
+                $reviewDecision = $Matches[1]
+            }
+            if ($issue.Review -match '\*\*Notes:\*\*\s*\n(.+)') {
+                $reviewNotes = $Matches[1].Trim()
+            }
+        }
+
+        $issueObj = [ordered]@{
+            number   = $issueNum
+            title    = $issue.Title
+            severity = $issue.Severity
+            category = $issue.Category
+            sections = $sections
+            review   = @{ decision = $reviewDecision; notes = $reviewNotes }
+        }
+        $issueArray += $issueObj
+    }
+
+    $result = [ordered]@{
+        meta       = @{
+            scenario = $ScenarioName
+            source   = $SourceFile
+            date     = $Timestamp
+            mode     = $Mode
+        }
+        background = @{
+            task             = $Background.TaskSummary
+            executionContext = $Background.ExecutionTrace
+        }
+        issues     = $issueArray
+    }
+
+    $jsonSettings = [System.Web.Script.Serialization.JavaScriptSerializer]::new()
+    return $jsonSettings.Serialize($result)
+}
+
+function ConvertFrom-IssueJson {
+    <#
+    .SYNOPSIS
+        Parse the canonical JSON schema back into PowerShell hashtables.
+    .DESCRIPTION
+        Inverse of ConvertTo-IssueJson.  Accepts a JSON string matching the
+        shared schema and returns the components as PowerShell objects.
+    .PARAMETER Json
+        JSON string in the canonical issue schema format.
+    .OUTPUTS
+        Hashtable with keys: ScenarioName, SourceFile, Timestamp, Mode,
+        Background (hashtable), Issues (array of hashtables).
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Json
+    )
+
+    $jsonSettings = [System.Web.Script.Serialization.JavaScriptSerializer]::new()
+    $data = $jsonSettings.DeserializeObject($Json)
+
+    $issues = @()
+    foreach ($iss in $data.issues) {
+        $suggestionBody = ''
+        foreach ($sec in $iss.sections) {
+            if ($sec.label -eq 'AI Suggested Improvement') {
+                $suggestionBody = $sec.body
+                break
+            }
+        }
+        $reviewText = ''
+        $decision = ''
+        if ($iss.review) {
+            $decision = if ($iss.review.decision) { $iss.review.decision } else { '' }
+            $notes = if ($iss.review.notes) { $iss.review.notes } else { '' }
+            if ($decision) {
+                $reviewText = "- [x] **${decision}**`n- **Notes:**"
+                if ($notes) { $reviewText += "`n${notes}" }
+            } else {
+                $reviewText = "- [ ] **ACCEPT**`n- [ ] **ACCEPT with improvements**`n- [ ] **DEFER**`n- [ ] **WONTFIX**`n- [ ] **REJECT**`n- **Notes:**"
+                if ($notes) { $reviewText += "`n${notes}" }
+            }
+        }
+
+        $issue = @{
+            Title        = $iss.title
+            Severity     = $iss.severity
+            Category     = $iss.category
+            Reproduction = ''
+            Expected     = ''
+            Actual       = ''
+            RootCause    = ''
+            CodePointer  = ''
+            Review       = $reviewText
+            Suggestion   = $suggestionBody
+        }
+        foreach ($sec in $iss.sections) {
+            switch ($sec.label) {
+                'Reproduction'              { $issue.Reproduction = $sec.body }
+                'Expected Behavior'         { $issue.Expected = $sec.body }
+                'Actual Behavior'           { $issue.Actual = $sec.body }
+                'Root Cause Analysis'       { $issue.RootCause = $sec.body }
+                'Code Pointer'              { $issue.CodePointer = $sec.body }
+                'AI Suggested Improvement'  { $issue.Suggestion = $sec.body }
+            }
+        }
+        $issues += $issue
+    }
+
+    return @{
+        ScenarioName = $data.meta.scenario
+        SourceFile   = $data.meta.source
+        Timestamp    = $data.meta.date
+        Mode         = $data.meta.mode
+        Background   = @{
+            TaskSummary    = $data.background.task
+            ExecutionTrace = $data.background.executionContext
+        }
+        Issues       = $issues
+    }
+}
+
 # ── Issue file output ─────────────────────────────────────────────────────────
 
 function Write-IssuesToReadyQueue {
@@ -739,93 +986,32 @@ function Write-IssuesToReadyQueue {
     }
 }
 
-# ── Task file parsing ───────────────────────────────────────────────────────────
-
-function Read-TaskFile {
-    <#
-    .SYNOPSIS
-        Parse a task markdown file, returning the scenario name and body.
-    .DESCRIPTION
-        Reads a .md task file, extracts the first "# Heading" as the scenario
-        name, and returns the remaining content (heading stripped, leading
-        blank lines trimmed) as the body.
-
-        Returns a PSCustomObject with Name and Body properties.
-        Throws a terminating error if the file is missing, empty, or
-        contains no body content after the heading.
-    .PARAMETER Path
-        Absolute or relative path to the .md task file.
-    .OUTPUTS
-        PSCustomObject with Name (string) and Body (string).
-    .EXAMPLE
-        $task = Read-TaskFile -Path 'tasks/search-summary.md'
-        $task.Name  # "search-summary"
-        $task.Body  # "1. Go to ..."
-    #>
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$Path
-    )
-
-    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
-        throw "Task file not found: $Path"
-    }
-
-    $rawContent = Get-Content -Path $Path -Raw -Encoding UTF8
-    if ([string]::IsNullOrWhiteSpace($rawContent)) {
-        throw "Task file is empty: $Path"
-    }
-
-    $name = ''
-    $body = $rawContent
-
-    # Match the first "# Heading" (optionally preceded by whitespace).
-    if ($rawContent -match '(?m)^\s*#\s+(.+?)\s*$') {
-        $name = $Matches[1].Trim()
-        # Remove the heading line and any following blank lines.
-        $body = $rawContent -replace '(?m)^\s*#\s+.+?\s*\r?\n[\s\r\n]*', ''
-    }
-
-    $body = $body.TrimStart()
-    if ([string]::IsNullOrWhiteSpace($body)) {
-        throw "No task body found after heading in: $Path"
-    }
-
-    return [PSCustomObject]@{
-        Name = $name
-        Body = $body
-    }
-}
-
 # ═══════════════════════════════════════════════════════════════════════════════
 # Safe native-command invocation
 # ═══════════════════════════════════════════════════════════════════════════════
 #
-# When PowerShell pipes a native (non-PowerShell) command and writes the output
-# to a file, three things reliably produce garbled text.  Every ps1 script that
-# captures native-command output must handle ALL THREE:
+# Start-NativeCommand wraps System.Diagnostics.Process with .NET async output
+# handlers (OutputDataReceived / ErrorDataReceived) so the PowerShell thread
+# stays free to print periodic heartbeat messages during silent stretches.
 #
-# 1. ENCODING MISMATCH
-#    PowerShell decodes native-command stdout through [Console]::OutputEncoding,
-#    which defaults to the system ANSI code page (cp1252 / cp936 / …).
-#    Modern CLI tools (Node.js, Rust, Go) emit UTF-8.
-#    Mismatch → every non-ASCII byte is reinterpreted as a code-page glyph.
-#    FIX: set [Console]::OutputEncoding = UTF-8 before invocation; restore after.
+# This replaces the old pipeline-based approach (& cmd 2>&1 | ForEach-Object),
+# which suffered from three problems:
 #
-# 2. ERROR-OBJECT LEAKAGE
-#    The "2>&1" redirect merges stderr into the pipeline as ErrorRecord *objects*,
-#    not strings.  Writing them raw to a StreamWriter calls .ToString(), which
-#    emits the FQ type name ("System.Management.Automation.ErrorRecord …") instead
-#    of the error message.
-#    FIX: coerce every pipeline object to string with "$_" before writing.
+# 1. ENCODING MISMATCH — [Console]::OutputEncoding had to be swapped to UTF-8
+#    before every invocation.  Solved by setting StandardOutputEncoding on
+#    ProcessStartInfo directly.
 #
-# 3. BOM INCONSISTENCY
-#    [System.Text.Encoding]::UTF8 includes a 3-byte BOM in .NET Framework / .NET.
-#    Mixing BOM and non-BOM sources in a single pipeline writes garbage bytes at
-#    file boundaries.
-#    FIX: use [System.Text.UTF8Encoding]::new($false) for all file I/O.
+# 2. ERROR-OBJECT LEAKAGE — "2>&1" merged stderr as ErrorRecord *objects*,
+#    whose .ToString() emitted FQ type names instead of messages.
+#    Solved by reading stdout/stderr as separate streams.
 #
-# Use the Start-NativeCommand helper below; it applies all three fixes.
+# 3. BOM INCONSISTENCY — mixing BOM and non-BOM sources wrote garbage bytes.
+#    Solved by using UTF8Encoding($false) for all file I/O.
+#
+# Additional benefit: heartbeats.  The pipeline blocked the PS thread, making
+# it impossible to print "still running" messages while the child process was
+# alive but not emitting output.  The polling loop in WaitForExit(timeout)
+# gives us a natural heartbeat cadence.
 
 function Start-NativeCommand {
     <#
@@ -833,10 +1019,14 @@ function Start-NativeCommand {
         Invoke a native command safely, capturing combined stdout+stderr to a file.
 
     .DESCRIPTION
-        Wraps a native command invocation with the three fixes described above:
-        UTF-8 output decoding, safe string coercion of ErrorRecord objects, and
-        BOM-free file I/O.  Output is streamed to the console in real time while
-        simultaneously written to the capture file.
+        Uses System.Diagnostics.Process with .NET async output handlers so the
+        PowerShell thread is free to print periodic heartbeat messages during
+        silent stretches.  Output streams to the console in real time while
+        simultaneously written to the capture file (UTF-8 without BOM).
+
+        Replaces the old pipeline-based approach (& cmd 2>&1 | ForEach-Object)
+        which blocked the PowerShell thread and offered no way to report progress
+        while the child process was running but not yet emitting output.
 
     .PARAMETER FilePath
         Path to the native executable.
@@ -846,10 +1036,14 @@ function Start-NativeCommand {
 
     .PARAMETER CaptureFile
         File path to capture combined stdout+stderr (UTF-8 without BOM).  When
-        omitted, output goes to the console only.
+        omitted, a temp file is used and cleaned up on return.
 
     .PARAMETER PassThru
         When set, also returns the captured output as a single string.
+
+    .PARAMETER HeartbeatIntervalSec
+        Seconds between "still running" messages when no output is produced
+        (default 10).  Set to 0 to disable heartbeats.
 
     .EXAMPLE
         Start-NativeCommand -FilePath 'claude' -ArgumentList @('-p', $prompt) `
@@ -867,64 +1061,309 @@ function Start-NativeCommand {
 
         [string] $CaptureFile,
 
-        [switch] $PassThru
+        [switch] $PassThru,
+
+        [int] $HeartbeatIntervalSec = 10,
+
+        # Maximum seconds to wait before killing the process.
+        # 0 (default) means no timeout.  Exit code 124 is returned on timeout
+        # (matching the Unix `timeout` command convention).
+        [int] $TimeoutSeconds = 0
     )
 
-    $writer = $null
-    $exitCode = 0
     $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
 
-    try {
-        if ($CaptureFile) {
-            $writer = [System.IO.StreamWriter]::new($CaptureFile, $false, $utf8NoBom)
-            # Print a startup line so the user knows the process has launched
-            # even if it takes a while to produce its first output line.
-            # Omit the -p <prompt> value — it can be thousands of chars.
-            $displayArgs = @()
+    # ── Build a display-friendly argument list (hide -p <prompt>) ──────────
+    $displayArgs = @()
+    $skipNext = $false
+    foreach ($a in $ArgumentList) {
+        if ($skipNext) { $skipNext = $false; continue }
+        if ($a -eq '-p') { $skipNext = $true; $displayArgs += '<prompt>'; continue }
+        $displayArgs += $a
+    }
+
+    $startTime = Get-Date
+    $startFmt = $startTime.ToString('HH:mm:ss')
+    Write-Host ''
+    Write-Host "-> Started at ${startFmt}: $FilePath $($displayArgs -join ' ')" -ForegroundColor Yellow
+    Write-Host ''
+
+    # ── Resolve a capture file path ────────────────────────────────────────
+    # Even when the caller doesn't need a capture file we still write to a temp
+    # file so the async output handlers (which run on .NET threadpool threads)
+    # always have a valid static file path to append to.
+    $capturePath = if ($CaptureFile) {
+        $CaptureFile
+    } else {
+        [System.IO.Path]::GetTempFileName()
+    }
+    # Initialize the capture file (create or truncate)
+    [System.IO.File]::WriteAllText($capturePath, '', $utf8NoBom)
+
+    # ── .NET event handlers for stdout / stderr ────────────────────────────
+    # Use a compiled C# class (NativeCommandOutputHandler) instead of
+    # PowerShell scriptblocks cast to delegates.  DataReceived events fire
+    # on .NET threadpool threads where no PowerShell Runspace is guaranteed;
+    # pure-C# handlers avoid "There is no Runspace available" crashes.
+    $nativeHandler = New-Object NativeCommandOutputHandler $capturePath
+    $streamHandler = [Delegate]::CreateDelegate(
+        [System.Diagnostics.DataReceivedEventHandler],
+        $nativeHandler,
+        'OnOutputReceived'
+    )
+
+    # ── Resolve executable path (handle .cmd wrappers on Windows) ───
+    # System.Diagnostics.Process uses CreateProcess, which only directly
+    # launches .exe / .com files.  On Windows, npm-installed tools (claude,
+    # node, etc.) are often .cmd wrappers.  An extensionless executable like
+    # "claude" would match the npm-installed POSIX shell script (#!/bin/sh)
+    # rather than claude.cmd, producing:
+    #   "%1 is not a valid Win32 application"
+    # Resolve to the .cmd wrapper explicitly on Windows — CreateProcess
+    # delegates .cmd/.bat to cmd.exe internally without the extra quoting
+    # layer that "cmd.exe /c <script>" introduces.
+    $isWindowsPlatform = $false
+    if ($null -ne $PSVersionTable -and $PSVersionTable.PSEdition -eq 'Desktop') {
+        $isWindowsPlatform = $true
+    } elseif ($null -ne (Get-Variable -Name IsWindows -ErrorAction SilentlyContinue)) {
+        $isWindowsPlatform = [bool]$IsWindows
+    }
+
+    $resolvedExe = $FilePath
+    $stdinRedirectPath = $null
+
+    if ($isWindowsPlatform) {
+        if (-not [System.IO.Path]::HasExtension($resolvedExe) -and
+            -not $resolvedExe.Contains([System.IO.Path]::DirectorySeparatorChar)) {
+            $cmdCandidate = "$resolvedExe.cmd"
+            $resolvedCmd = Get-Command $cmdCandidate -ErrorAction SilentlyContinue
+            if ($resolvedCmd) {
+                $resolvedExe = $resolvedCmd.Source
+            }
+        }
+    }
+
+    # ── Build the process ──────────────────────────────────────────────────
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $resolvedExe
+
+    # ── Build argument list ─────────────────────────────────────────────────
+    # Use ProcessStartInfo.ArgumentList (available in .NET 6+ / pwsh 7+) to
+    # pass each argument as a separate string.  This avoids the need for manual
+    # escaping entirely:
+    #   - On Unix: entries are passed directly as argv[] via execve().
+    #   - On Windows: .NET joins entries into lpCommandLine using correct
+    #     CommandLineToArgvW escaping — no manual quoting needed.
+    $stdinRedirectPath = $null
+
+    # On Windows, redirect large prompts via stdin to avoid CreateProcess
+    # command-line length limits (~32 KiB, or ~8191 with legacy cmd.exe).
+    if ($isWindowsPlatform) {
+        $promptValue = $null
+        $foundP = $false
+        foreach ($a in $ArgumentList) {
+            if ($foundP) { $promptValue = $a; break }
+            if ($a -eq '-p') { $foundP = $true }
+        }
+        $promptLen = if ($promptValue) { $promptValue.Length } else { 0 }
+
+        # Estimate total command-line length to decide whether to redirect.
+        # We sum the lengths of all args plus separators as a rough estimate.
+        $estimatedLen = $resolvedExe.Length + 1
+        foreach ($a in $ArgumentList) { $estimatedLen += $a.Length + 1 }
+
+        if ($promptLen -gt 0 -and $estimatedLen -gt 6000) {
+            # Strip -p <prompt> and pipe the prompt via stdin instead.
             $skipNext = $false
             foreach ($a in $ArgumentList) {
                 if ($skipNext) { $skipNext = $false; continue }
                 if ($a -eq '-p') { $skipNext = $true; continue }
-                $displayArgs += $a
+                $psi.ArgumentList.Add($a)
             }
-            [Console]::WriteLine("Running: $FilePath $($displayArgs -join ' ')...")
+
+            $stdinRedirectPath = [System.IO.Path]::GetTempFileName()
+            [System.IO.File]::WriteAllText($stdinRedirectPath, $promptValue, $utf8NoBom)
+            $psi.RedirectStandardInput = $true
+            Write-Host "  · Prompt length ${promptLen} chars → redirected via stdin to avoid command-line limit" -ForegroundColor DarkGray
+        } else {
+            foreach ($a in $ArgumentList) { $psi.ArgumentList.Add($a) }
         }
+    } else {
+        # Unix: no command-line length concerns — pass all arguments directly.
+        foreach ($a in $ArgumentList) { $psi.ArgumentList.Add($a) }
+    }
+    $psi.UseShellExecute = $false
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $psi.StandardOutputEncoding = $utf8NoBom
+    $psi.StandardErrorEncoding = $utf8NoBom
+    $psi.CreateNoWindow = $true
 
-        # Fix 1: decode native-command stdout as UTF-8
-        $prevEncoding = [Console]::OutputEncoding
-        [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+    $proc = New-Object System.Diagnostics.Process
+    $proc.StartInfo = $psi
 
+    # Wire up event handlers (single C# delegate for both streams)
+    $null = $proc.add_OutputDataReceived($streamHandler)
+    $null = $proc.add_ErrorDataReceived($streamHandler)
+
+    $exitCode = -1
+    $stopwatch = [System.Diagnostics.Stopwatch]::new()
+
+    try {
         try {
-            & $FilePath @ArgumentList 2>&1 | ForEach-Object {
-                # Fix 2: "$_" safely coerces ErrorRecord / string / etc.
-                $line = "$_"
-                if ($writer) {
-                    $writer.WriteLine($line)
-                    $writer.Flush()
-                }
-                # Write directly to the console host so the user sees real-time
-                # output without polluting the function's output stream.
-                # The function returns only the integer exit code (line 536).
-                [Console]::WriteLine($line)
-            }
-            $exitCode = $LASTEXITCODE
-        } finally {
-            [Console]::OutputEncoding = $prevEncoding
+            $proc.Start() | Out-Null
+        } catch {
+            Write-Host "ERROR: Failed to start '$FilePath': $_" -ForegroundColor Red
+            Write-Host "  Is '$FilePath' installed and on your PATH?" -ForegroundColor DarkGray
+            $script:LastNativeExitCode = 127
+            return 127
         }
+
+        # Begin async reading
+        $proc.BeginOutputReadLine()
+        $proc.BeginErrorReadLine()
+
+        # ── Stdin redirect: feed the prompt after async readers are wired ──
+        if ($stdinRedirectPath -and (Test-Path -LiteralPath $stdinRedirectPath)) {
+            try {
+                $stdinContent = [System.IO.File]::ReadAllText(
+                    [System.IO.Path]::GetFullPath($stdinRedirectPath), $utf8NoBom
+                )
+                $proc.StandardInput.Write($stdinContent)
+            } finally {
+                $proc.StandardInput.Close()
+                Remove-Item -LiteralPath $stdinRedirectPath -ErrorAction SilentlyContinue
+            }
+        }
+
+        # ── Heartbeat loop ─────────────────────────────────────────────────
+        # Poll the process with WaitForExit(timeout).  While waiting, the
+        # OutputDataReceived / ErrorDataReceived events fire on background
+        # .NET threads and call [Console]::WriteLine directly — that output
+        # interleaves naturally with the heartbeats below.
+        #
+        # Heartbeat interval uses progressive backoff so the user isn't
+        # spammed with repetitive "still running" messages:
+        #   0 –  5 min  → every 30 s
+        #   5 – 15 min  → every 60 s
+        #  15+ min      → every 120 s
+        $stopwatch.Start()
+        $lastHeartbeatSec = 0
+        $heartbeatCount = 0
+
+        while (-not $proc.HasExited) {
+            $proc.WaitForExit(2000) | Out-Null
+            $elapsed = $stopwatch.Elapsed.TotalSeconds
+
+            # ── Timeout check ─────────────────────────────────────────────
+            if ($TimeoutSeconds -gt 0 -and $elapsed -ge $TimeoutSeconds -and -not $proc.HasExited) {
+                break
+            }
+
+            # Progressive backoff
+            $interval = if ($elapsed -lt 300) {
+                30
+            } elseif ($elapsed -lt 900) {
+                60
+            } else {
+                120
+            }
+
+            if ($HeartbeatIntervalSec -gt 0 -and
+                ($elapsed - $lastHeartbeatSec) -ge $interval -and
+                -not $proc.HasExited) {
+                $heartbeatCount++
+                $mins = [Math]::Floor($elapsed / 60)
+                $secs = [Math]::Floor($elapsed % 60)
+                $cmdLabel = if ($displayArgs.Count -gt 0) {
+                    "$FilePath $($displayArgs[0])"
+                } else {
+                    $FilePath
+                }
+                [Console]::WriteLine(
+                    "  · ${cmdLabel} — running (${mins}m ${secs}s elapsed, heartbeat #${heartbeatCount})"
+                )
+                $lastHeartbeatSec = $elapsed
+            }
+        }
+
+        # ── Drain final output ─────────────────────────────────────────────
+        # The process has exited but async reads may still have data in flight.
+        # Cancel the async readers, then drain synchronously to capture
+        # everything that remains.
+        try { $proc.CancelOutputRead() } catch { }
+        try { $proc.CancelErrorRead() } catch { }
+
+        # Small grace period for in-flight async events to land
+        Start-Sleep -Milliseconds 300
+
+        # Synchronous drain of any remaining output
+        try {
+            $rem = $proc.StandardOutput.ReadToEnd()
+            if ($rem) {
+                [Console]::Write($rem)
+                [System.IO.File]::AppendAllText($capturePath, $rem, $utf8NoBom)
+            }
+        } catch { }
+        try {
+            $rem = $proc.StandardError.ReadToEnd()
+            if ($rem) {
+                [Console]::Write($rem)
+                [System.IO.File]::AppendAllText($capturePath, $rem, $utf8NoBom)
+            }
+        } catch { }
+
+        # ── Timeout: kill the process if it exceeded the limit ──────────
+        if ($TimeoutSeconds -gt 0 -and $elapsed -ge $TimeoutSeconds -and -not $proc.HasExited) {
+            try { $proc.Kill() } catch { }
+            # Brief wait for the kill to take effect
+            Start-Sleep -Milliseconds 500
+            $exitCode = 124
+            $timeoutMsg = "TIMEOUT: killed after ${TimeoutSeconds}s (elapsed: $([Math]::Floor($elapsed))s)"
+            [Console]::WriteLine("")
+            [Console]::WriteLine("  · $timeoutMsg")
+            [System.IO.File]::AppendAllText($capturePath, "`n`n$timeoutMsg`n", $utf8NoBom)
+        } else {
+            $exitCode = $proc.ExitCode
+        }
+
     } finally {
-        if ($writer) { $writer.Dispose() }
+        # Clean up event handlers before Dispose
+        try { $proc.remove_OutputDataReceived($streamHandler) } catch { }
+        try { $proc.remove_ErrorDataReceived($streamHandler) } catch { }
+        if ($proc -and -not $proc.HasExited) {
+            try { $proc.Kill() } catch { }
+        }
+        $proc.Dispose()
+        $stopwatch.Stop()
     }
 
-    # Let the caller decide what to do with the exit code; also set it in the
-    # script scope so $LASTEXITCODE is visible to callers that check it directly.
+    # ── Finish banner ──────────────────────────────────────────────────────
+    $duration = $stopwatch.Elapsed
+    $color = if ($exitCode -eq 0) { 'Green' } elseif ($exitCode -eq 124) { 'Yellow' } else { 'Red' }
+    $durStr = "$([Math]::Floor($duration.TotalMinutes))m $($duration.Seconds)s"
+    $statusSuffix = if ($exitCode -eq 124) { ', TIMEOUT' } else { '' }
+    Write-Host ''
+    Write-Host "<- Finished at $(Get-Date -Format 'HH:mm:ss') (duration: ${durStr}, exit code: $exitCode${statusSuffix})" -ForegroundColor $color
+
     $script:LastNativeExitCode = $exitCode
 
-    if ($PassThru -and $CaptureFile -and (Test-Path -LiteralPath $CaptureFile)) {
-        $content = [System.IO.File]::ReadAllText(
-            [System.IO.Path]::GetFullPath($CaptureFile), $utf8NoBom
-        )
-        Remove-Item -LiteralPath $CaptureFile -ErrorAction SilentlyContinue
+    # ── PassThru / temp-file cleanup ───────────────────────────────────────
+    if ($PassThru) {
+        $content = ''
+        if (Test-Path -LiteralPath $capturePath) {
+            $content = [System.IO.File]::ReadAllText(
+                [System.IO.Path]::GetFullPath($capturePath), $utf8NoBom
+            )
+        }
+        if (-not $CaptureFile) {
+            Remove-Item -LiteralPath $capturePath -ErrorAction SilentlyContinue
+        }
         return $content
+    }
+
+    if (-not $CaptureFile -and (Test-Path -LiteralPath $capturePath)) {
+        Remove-Item -LiteralPath $capturePath -ErrorAction SilentlyContinue
     }
 
     return $exitCode
@@ -1053,6 +1492,10 @@ function Invoke-Agent {
         ScenarioName and timestamp when omitted.
     .PARAMETER Silent
         Suppress status messages (passed through to claude --silent).
+    .PARAMETER TimeoutSeconds
+        Maximum seconds to wait for the agent to complete.  0 (default) means
+        no timeout.  On timeout the process is killed and exit code 124 is
+        returned (matching the Unix `timeout` command convention).
     #>
     param(
         [Parameter(Mandatory = $true)]
@@ -1062,98 +1505,88 @@ function Invoke-Agent {
 
         [string]$OutputFile = '',
 
-        [switch]$Silent
+        [switch]$Silent,
+
+        [int]$TimeoutSeconds = 0
     )
 
     # ── Status header ────────────────────────────────────────────────────────
     if (-not $Silent) {
         $promptLen = $Prompt.Length
         $promptLines = ($Prompt -split "`n").Count
-        Write-Host "Invoking Claude Code agent..." -ForegroundColor Cyan
-        Write-Host "  Prompt: $promptLen chars, $promptLines lines" -ForegroundColor DarkGray
+        Write-Host "Invoking Claude Code agent (prompt: $promptLen chars, $promptLines lines)" -ForegroundColor Cyan
         if ($ScenarioName) {
-            Write-Host "  Scenario: $ScenarioName (output will be captured)" -ForegroundColor DarkGray
+            Write-Host "  Scenario: $ScenarioName" -ForegroundColor DarkGray
         }
-        Write-Host "  This may take several minutes -- the agent runs browser4-cli commands" -ForegroundColor DarkGray
-        Write-Host "  and evaluates usability. Output appears as the agent works." -ForegroundColor DarkGray
-        Write-Host ""
     }
 
-    # ── Path 1: Legacy mode (no capture) ─────────────────────────────────────
-    # Preserves the exact original behavior for backward compatibility.
-    if (-not $ScenarioName -and -not $OutputFile) {
-        $claudeArgs = @('--dangerously-skip-permissions', '-p', $Prompt)
-        if ($Silent) { $claudeArgs += '--silent' }
+    # ── Build claude arguments ──────────────────────────────────────────────
+    $claudeArgs = @('--dangerously-skip-permissions', '-p', $Prompt)
+    if ($Silent) { $claudeArgs += '--silent' }
 
-        if (-not $Silent) {
-            Write-Host "→ Agent started at $(Get-Date -Format 'HH:mm:ss'). Output will appear as the agent works..." -ForegroundColor Yellow
+    # ── Resolve capture file path ──────────────────────────────────────────
+    # Write directly to the final output path (not a temp file) so partial
+    # output survives crashes.  The known path in target/ also makes it easy
+    # for the user to tail the file during long-running scenarios.
+    $captureFile = ''
+    if ($ScenarioName -or $OutputFile) {
+        $targetDir = Join-Path $script:RepoRoot 'target'
+        if (-not (Test-Path -LiteralPath $targetDir)) {
+            New-Item -ItemType Directory -Path $targetDir -Force | Out-Null
         }
-        claude @claudeArgs
+        if ($OutputFile) {
+            $captureFile = $OutputFile
+        } else {
+            # Auto-generate a predictable path when only ScenarioName is provided
+            $timestamp = (Get-Date).ToUniversalTime().ToString('yyyyMMdd-HHmmss')
+            $safeName = $ScenarioName -replace '[\\/:*?"<>|]', '_'
+            $captureFile = Join-Path $targetDir "$timestamp-$safeName.raw.md"
+        }
+        # Ensure parent directory exists
+        $captureDir = Split-Path -Parent $captureFile
+        if ($captureDir -and -not (Test-Path -LiteralPath $captureDir)) {
+            New-Item -ItemType Directory -Path $captureDir -Force | Out-Null
+        }
+        Write-Host "  Output: $captureFile" -ForegroundColor DarkGray
+    }
 
-        if (-not $Silent) {
-            Write-Host ""
-            Write-Host "Agent finished (exit code: $LASTEXITCODE)." `
-                -ForegroundColor $(if ($LASTEXITCODE -eq 0) { 'Green' } else { 'Red' })
+    # ── Invoke claude via Start-NativeCommand ───────────────────────────────
+    $startParams = @{
+        FilePath     = 'claude'
+        ArgumentList = $claudeArgs
+    }
+    if ($captureFile) {
+        $startParams['CaptureFile'] = $captureFile
+    }
+    if ($TimeoutSeconds -gt 0) {
+        $startParams['TimeoutSeconds'] = $TimeoutSeconds
+    }
+    $exitCode = Start-NativeCommand @startParams
+
+    # ── Post-processing (only when capture was requested) ───────────────────
+    if (-not $captureFile) {
+        if ($exitCode -ne 0) {
+            $host.UI.WriteErrorLine("Agent exited with non-zero code: $exitCode")
         }
         return
     }
 
-    # ── Path 2: Capture mode (with ScenarioName or OutputFile) ────────────────
-    $claudeArgs = @('--dangerously-skip-permissions', '-p', $Prompt)
-    if ($Silent) { $claudeArgs += '--silent' }
-
-    $targetDir = Join-Path $script:RepoRoot 'target'
-    if (-not (Test-Path -LiteralPath $targetDir)) {
-        New-Item -ItemType Directory -Path $targetDir -Force | Out-Null
-    }
-    $tempFile = Join-Path $targetDir ([System.IO.Path]::GetRandomFileName())
-
-    if (-not $Silent) {
-        Write-Host "→ Agent started at $(Get-Date -Format 'HH:mm:ss'). Output will appear as the agent works..." -ForegroundColor Yellow
-    }
-
-    # Start-NativeCommand applies all three anti-garbling fixes:
-    #   [Console]::OutputEncoding = UTF-8
-    #   ErrorRecord → string coercion
-    #   UTF-8 without BOM file I/O
-    $exitCode = Start-NativeCommand -FilePath 'claude' `
-        -ArgumentList $claudeArgs `
-        -CaptureFile $tempFile
-
-    if (-not $Silent) {
-        Write-Host ""
-        Write-Host "Agent finished (exit code: $exitCode)." `
-            -ForegroundColor $(if ($exitCode -eq 0) { 'Green' } else { 'Red' })
-    }
-
-    # Read back the captured output (Start-NativeCommand uses UTF-8 no-BOM)
+    # Read back the captured output (written incrementally by Start-NativeCommand)
     $capturedOutput = ''
-    if (Test-Path -LiteralPath $tempFile) {
-        $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+    $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+    if (Test-Path -LiteralPath $captureFile) {
         $capturedOutput = [System.IO.File]::ReadAllText(
-            [System.IO.Path]::GetFullPath($tempFile), $utf8NoBom
+            [System.IO.Path]::GetFullPath($captureFile), $utf8NoBom
         )
-        Remove-Item -LiteralPath $tempFile -ErrorAction SilentlyContinue
     }
 
     if ([string]::IsNullOrWhiteSpace($capturedOutput)) {
-        Write-Host "  WARNING: No output captured from agent." -ForegroundColor Yellow
+        Write-Host "  WARNING: No output captured from agent (file: $captureFile)" -ForegroundColor Yellow
         return
     }
 
     # Write to the 200issues ready queue
     if ($ScenarioName) {
         Write-IssuesToReadyQueue -ScenarioName $ScenarioName -Content $capturedOutput
-    }
-
-    # Save raw output to local file if requested
-    if ($OutputFile) {
-        $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
-        $outputDir = Split-Path -Parent $OutputFile
-        if ($outputDir -and -not (Test-Path $outputDir)) {
-            New-Item -ItemType Directory -Path $outputDir -Force | Out-Null
-        }
-        [System.IO.File]::WriteAllText($OutputFile, $capturedOutput, $utf8NoBom)
-        Write-Host "  Saved raw output: $OutputFile" -ForegroundColor DarkGray
     }
 }

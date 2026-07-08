@@ -79,7 +79,12 @@ param(
     [switch] $Silent,
 
     # Skip the browser4-cli version check (forwarded to run-task.ps1).
-    [switch] $SkipVersionCheck
+    [switch] $SkipVersionCheck,
+
+    # Maximum minutes to wait for each individual task.
+    # 0 (default) means no timeout.  On timeout the task process is killed
+    # and the task is marked as TIMEOUT (exit code 124).
+    [int] $TimeoutMinutes = 0
 )
 
 $ErrorActionPreference = 'Stop'
@@ -278,6 +283,9 @@ foreach ($name in $Selected) {
             if ($SkipVersionCheck) {
                 $pwshArgs += '-SkipVersionCheck'
             }
+            if ($TimeoutMinutes -gt 0) {
+                $pwshArgs += '-TimeoutMinutes', $TimeoutMinutes
+            }
             & pwsh @pwshArgs
             $exitCode = $LASTEXITCODE
         } finally {
@@ -295,6 +303,11 @@ foreach ($name in $Selected) {
         $color  = 'Green'
         $icon   = '[OK]'
         $Passed++
+    } elseif ($exitCode -eq 124) {
+        $status = 'TIMEOUT'
+        $color  = 'Yellow'
+        $icon   = '[TIMEOUT]'
+        $Failed++
     } else {
         $status = 'FAIL'
         $color  = 'Red'
@@ -327,8 +340,8 @@ Write-Banner 'Results'
 Write-Host ''
 $total = $Passed + $Failed
 foreach ($entry in $Results) {
-    $icon  = if ($entry.Status -eq 'PASS') { '[OK]  ' } else { '[FAIL]' }
-    $color = if ($entry.Status -eq 'PASS') { 'Green' } else { 'Red' }
+    $icon  = if ($entry.Status -eq 'PASS') { '[OK]     ' } elseif ($entry.Status -eq 'TIMEOUT') { '[TIMEOUT]' } else { '[FAIL]   ' }
+    $color = if ($entry.Status -eq 'PASS') { 'Green' } elseif ($entry.Status -eq 'TIMEOUT') { 'Yellow' } else { 'Red' }
     Write-Host "  $icon $($entry.Name) -- $(Format-Duration $entry.Duration)" -ForegroundColor $color
 }
 
@@ -342,7 +355,12 @@ Write-Host " in $(Format-Duration $totalDuration)" -ForegroundColor Cyan
 
 if ($Failed -gt 0) {
     Write-Host ''
-    Write-Host 'Some tasks failed.' -ForegroundColor Red
+    $timeoutCount = ($Results | Where-Object { $_.Status -eq 'TIMEOUT' }).Count
+    $msg = 'Some tasks failed.'
+    if ($timeoutCount -gt 0) {
+        $msg += " ($timeoutCount timed out)"
+    }
+    Write-Host $msg -ForegroundColor Red
     exit 1
 }
 
