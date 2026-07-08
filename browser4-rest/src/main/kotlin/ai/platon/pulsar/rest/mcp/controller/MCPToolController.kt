@@ -305,7 +305,7 @@ class MCPToolController(
                         "img" -> scan.imageCount++
                         "a"   -> scan.linkCount++
                     }
-                    if (scan.interactives.size < maxInteractiveFetch && el.matches(SnapshotAlgoConstants.INTERACTIVE_SELECTOR)) {
+                    if (scan.interactives.size < maxInteractiveFetch && el.`is`(SnapshotAlgoConstants.INTERACTIVE_SELECTOR)) {
                         scan.interactives.add(el)
                     }
                 }
@@ -1040,10 +1040,11 @@ internal fun inspectDocument(
     val initialMatchCount = document.select(selector).size
     if (initialMatchCount <= 1) {
         ensureVisualDetection()
-        if (visualBestSelector != null) {
-            effectiveSelector = visualBestSelector
+        visualBestSelector?.let { vbs ->
+            effectiveSelector = vbs
             autoDiscovered = true
-        } else {
+        }
+        if (visualBestSelector == null) {
             // Fallback: structural-signature discovery
             val discovered = autoDiscoverRepeatingSelector(document)
             if (discovered != null) {
@@ -1057,11 +1058,12 @@ internal fun inspectDocument(
         // suggestion without overriding the user's choice.
         ensureVisualDetection()
         if (visualBestSelector != null && visualBestSelector != selector) {
-        // Mode B (speculative): user's selector already matches ≥2, but visual
-        // detection found a potentially better repeating pattern. Surface as a
-        // suggestion without overriding the user's choice.
-        speculativeSuggestion = visualBestSelector
-        speculativeMatchCount = document.select(visualBestSelector).size
+            // Mode B (speculative): user's selector already matches ≥2, but visual
+            // detection found a potentially better repeating pattern. Surface as a
+            // suggestion without overriding the user's choice.
+            speculativeSuggestion = visualBestSelector
+            speculativeMatchCount = visualBestSelector?.let { document.select(it).size }
+        }
     }
 
     // P1-5: Single select call — avoid O(2N) duplicate DOM traversal.
@@ -1572,7 +1574,7 @@ internal fun computeInteractiveWeights(
             tag in setOf("details", "summary") -> 8000.0
             else -> 2000.0  // links, generic interactive
         }
-        infos.add(BoxInfo(el, 0.0, 0.0, fallbackArea, fallbackArea.sqrt(), fallbackArea, tag, role, hasVi = false))
+        infos.add(BoxInfo(el, 0.0, 0.0, fallbackArea, kotlin.math.sqrt(fallbackArea), fallbackArea, tag, role, hasVi = false))
     }
 
     val totalConsidered = infos.size

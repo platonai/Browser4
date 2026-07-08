@@ -25,6 +25,10 @@
         <!-- Internal dependencies -->
         <dependency>
             <groupId>ai.platon.pulsar</groupId>
+            <artifactId>browser4-browser</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>ai.platon.pulsar</groupId>
             <artifactId>browser4-resources</artifactId>
         </dependency>
         <dependency>

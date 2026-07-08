@@ -3,7 +3,7 @@ package ai.platon.browser4.chrome.protocol
 import ai.platon.browser4.chrome.IsolatedWorldManager
 import ai.platon.browser4.chrome.dom.CDPSnapshotService
 import ai.platon.browser4.chrome.dom.model.AriaSnapshotOptions
-import ai.platon.browser4.chrome.dom.model.ViewportSpec
+import ai.platon.browser4.api.snapshot.ViewportSpec
 import ai.platon.browser4.chrome.protocol.util.CheckableElementJs
 import ai.platon.browser4.chrome.protocol.util.withNodeObjectId
 import ai.platon.browser4.chrome.util.ChromeDriverException
