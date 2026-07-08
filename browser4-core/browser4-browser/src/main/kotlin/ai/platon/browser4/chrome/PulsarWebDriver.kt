@@ -2,7 +2,7 @@ package ai.platon.browser4.chrome
 
 import ai.platon.browser4.chrome.dom.model.AriaSnapshotOptions
 import ai.platon.browser4.chrome.network.*
-import ai.platon.browser4.chrome.dom.model.ViewportSpec
+import ai.platon.browser4.api.snapshot.ViewportSpec
 import ai.platon.browser4.chrome.protocol.ClickableDOM
 import ai.platon.browser4.chrome.protocol.EmulationHandler
 import ai.platon.browser4.chrome.protocol.PageHandler

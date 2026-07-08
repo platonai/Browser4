@@ -3,6 +3,7 @@ package ai.platon.browser4.chrome.integration
 import ai.platon.browser4.api.ChromeOptions
 import ai.platon.browser4.api.LauncherOptions
 import ai.platon.browser4.api.BrowserProtocol
+import ai.platon.browser4.chrome.ChromeLauncher
 import ai.platon.pulsar.common.browser.BrowserFiles
 import ai.platon.pulsar.common.browser.BrowserFiles.CDP_URL_FILE_NAME
 import ai.platon.pulsar.common.serialize.json.Pson
