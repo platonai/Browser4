@@ -1,6 +1,7 @@
 package ai.platon.browser4.api.model
 
 import ai.platon.browser4.api.model.DOMSerializer
+import ai.platon.browser4.api.snapshot.NanoAriaSnapshotRenderer
 import ai.platon.browser4.chrome.dom.DOMStateBuilder
 import ai.platon.browser4.chrome.dom.model.AriaSnapshotOptions
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper

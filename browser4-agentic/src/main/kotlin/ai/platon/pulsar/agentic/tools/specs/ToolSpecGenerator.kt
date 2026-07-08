@@ -18,7 +18,7 @@ object ToolSpecGenerator {
     @Synchronized
     fun generateAllOnce() {
         if (isGenerated.compareAndSet(false, true)) {
-            var sourceCode = B4LLMUtils.readSourceFileFromResource("browser4-core", "WebDriver.kt")
+            var sourceCode = B4LLMUtils.readSourceFileFromResource("browser4-browser", "WebDriver.kt")
             extractInterface("tab", sourceCode, "WebDriver").toCollection(webDriverToolSpecs)
             require(webDriverToolSpecs.isNotEmpty()) { "WebDriver's tool call list is empty" }
 
