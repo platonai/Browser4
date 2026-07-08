@@ -12,9 +12,8 @@ import ai.platon.pulsar.core.api.WebDriver
 import ai.platon.pulsar.rest.api.entities.CommandResult
 import ai.platon.pulsar.rest.api.entities.CommandStatus
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
-import ai.platon.pulsar.rest.mcp.controller.dto.MCPContent
-import ai.platon.pulsar.rest.mcp.controller.dto.MCPToolCallRequest
-import ai.platon.pulsar.rest.mcp.controller.dto.MCPToolCallResponse
+// DTO classes are defined in ai.platon.pulsar.rest.mcp.controller (top-level in MCPToolController.kt)
+// and are available without explicit import since the test is in the same package.
 import jakarta.servlet.http.HttpServletResponse
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
@@ -70,7 +69,7 @@ class MCPToolControllerTest {
     @BeforeEach
     fun setUp() {
         MockitoAnnotations.openMocks(this)
-        controller = MCPToolController(sessionManager, commandExecutor, objectMapper = objectMapper)
+        controller = MCPToolController(sessionManager, commandExecutor)
 
         // Setup session structure
         `when`(sessionManager.getSession(sessionId)).thenReturn(managedSession)

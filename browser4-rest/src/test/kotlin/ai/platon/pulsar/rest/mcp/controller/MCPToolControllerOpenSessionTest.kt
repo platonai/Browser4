@@ -4,7 +4,6 @@ import ai.platon.pulsar.rest.session.PulsarSessionManager
 import ai.platon.pulsar.rest.session.ManagedSession
 import ai.platon.pulsar.agent.tool.UserCommandExecutor
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
-import ai.platon.pulsar.rest.mcp.controller.dto.MCPToolCallRequest
 import jakarta.servlet.http.HttpServletResponse
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -21,7 +20,7 @@ class MCPToolControllerOpenSessionTest {
             val commandService = Mockito.mock(UserCommandExecutor::class.java)
             val response = Mockito.mock(HttpServletResponse::class.java)
             val managedSession = Mockito.mock(ManagedSession::class.java)
-            val controller = MCPToolController(sessionManager, commandService, objectMapper = pulsarObjectMapper())
+            val controller = MCPToolController(sessionManager, commandService)
             val request = MCPToolCallRequest(
                 tool = "open_session",
                 arguments = mapOf(

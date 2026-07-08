@@ -9,7 +9,7 @@ import ai.platon.pulsar.agentic.model.ToolCall
 import ai.platon.pulsar.agentic.model.ToolSpec
 import ai.platon.pulsar.agentic.tools.AgentToolManager
 import ai.platon.pulsar.agentic.tools.advanced.crawl.ScrapeRequest
-import ai.platon.pulsar.common.PulsarSessionManager
+import ai.platon.pulsar.rest.session.PulsarSessionManager
 import ai.platon.pulsar.common.brief
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import ai.platon.pulsar.common.sql.SQLTemplate
@@ -78,6 +78,53 @@ data class PaginationMeta(
     @param:JsonProperty("pageSize") val pageSize: Int,
     @param:JsonProperty("truncated") val truncated: Boolean = true
 )
+
+/**
+ * Extension to safely convert an [Any]? to [Boolean]?.
+ * Used by [paginateIfRequested] and various tool argument parsers.
+ */
+internal fun Any?.toBooleanValue(): Boolean? = when (this) {
+    is Boolean -> this
+    is String -> this.toBooleanStrictOrNull()
+    else -> null
+}
+
+/**
+ * Parse pagination options from tool arguments and, when active, paginate
+ * [text] by lines.  Returns a pair of (paginatedContent, paginationMeta).
+ * When pagination is disabled (--all, no --page-size, or text fits), returns
+ * the full text with a null meta.
+ */
+internal fun paginateIfRequested(
+    text: String,
+    args: Map<String, Any?>
+): Pair<String, PaginationMeta?> {
+    val showAll = args["all"].toBooleanValue() ?: false
+    val pageSize = (args["page-size"] as? Number)?.toInt() ?: 0
+    if (showAll || pageSize <= 0) return Pair(text, null)
+
+    val page = (args["page"] as? Number)?.toInt() ?: 1
+    val effectivePage = if (page < 1) 1 else page
+
+    val lines = text.lines()
+    val totalLines = lines.size
+    if (totalLines <= pageSize) return Pair(text, null)
+
+    val totalPages = (totalLines + pageSize - 1) / pageSize
+    val currentPage = effectivePage.coerceAtMost(totalPages)
+    val startLine = (currentPage - 1) * pageSize
+    val endLine = (startLine + pageSize).coerceAtMost(totalLines)
+
+    val pageContent = lines.subList(startLine, endLine).joinToString("\n")
+    val meta = PaginationMeta(
+        page = currentPage,
+        totalPages = totalPages,
+        totalLines = totalLines,
+        pageSize = pageSize,
+        truncated = true
+    )
+    return Pair(pageContent, meta)
+}
 
 // ---------------------------------------------------------------------------
 // Controller
@@ -1384,12 +1431,6 @@ class MCPToolController(
         return ArgumentNormalizerFactory.normalize(toolName, args)
     }
 
-    private fun Any?.toBooleanValue(): Boolean? = when (this) {
-        is Boolean -> this
-        is String -> this.toBooleanStrictOrNull()
-        else -> null
-    }
-
     // =========================================================================
     // Helpers
     // =========================================================================
@@ -1402,43 +1443,6 @@ class MCPToolController(
     private fun requireSessionId(arguments: Map<String, Any?>): String {
         return arguments[MCPConstants.KEY_SESSION_ID]?.toString()
             ?: throw IllegalArgumentException("Missing required parameter: ${MCPConstants.KEY_SESSION_ID}")
-    }
-
-    /**
-     * Parse pagination options from tool arguments and, when active, paginate
-     * [text] by lines.  Returns a pair of (paginatedContent, paginationMeta).
-     * When pagination is disabled (--all, no --page-size, or text fits), returns
-     * the full text with a null meta.
-     */
-    private fun paginateIfRequested(
-        text: String,
-        args: Map<String, Any?>
-    ): Pair<String, PaginationMeta?> {
-        val showAll = args["all"].toBooleanValue() ?: false
-        val pageSize = (args["page-size"] as? Number)?.toInt() ?: 0
-        if (showAll || pageSize <= 0) return Pair(text, null)
-
-        val page = (args["page"] as? Number)?.toInt() ?: 1
-        val effectivePage = if (page < 1) 1 else page
-
-        val lines = text.lines()
-        val totalLines = lines.size
-        if (totalLines <= pageSize) return Pair(text, null)
-
-        val totalPages = (totalLines + pageSize - 1) / pageSize
-        val currentPage = effectivePage.coerceAtMost(totalPages)
-        val startLine = (currentPage - 1) * pageSize
-        val endLine = (startLine + pageSize).coerceAtMost(totalLines)
-
-        val pageContent = lines.subList(startLine, endLine).joinToString("\n")
-        val meta = PaginationMeta(
-            page = currentPage,
-            totalPages = totalPages,
-            totalLines = totalLines,
-            pageSize = pageSize,
-            truncated = true
-        )
-        return Pair(pageContent, meta)
     }
 
     private fun textResponse(text: String): MCPToolCallResponse =
