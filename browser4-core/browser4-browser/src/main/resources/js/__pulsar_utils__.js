@@ -1591,5 +1591,5 @@ __pulsar_utils__.typeInfo = function() {
 window.__pulsar_utils__ = __pulsar_utils__
 window.__pulsar_CONFIGS = __pulsar_CONFIGS
 window.__pulsar_NodeExt = __pulsar_NodeExt
-window.__pulsar_NodeTraversor = __pulsar_NodeTraversor
+window.__pulsar_TreeWalker = __pulsar_TreeWalker
 window.__pulsar_NodeFeatureCalculator = __pulsar_NodeFeatureCalculator

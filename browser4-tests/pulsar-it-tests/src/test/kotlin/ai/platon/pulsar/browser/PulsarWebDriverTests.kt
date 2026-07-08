@@ -102,7 +102,7 @@ class PulsarWebDriverTests : WebDriverTestBase() {
     @Test
     @DisplayName("test selectPropertyValueAll")
     fun testSelectPropertyValueAll() = runEnhancedWebDriverTest(simpleDomURL, browser) { driver ->
-        val selector = "input"
+        val selector = "input:not([type=hidden])"
 
         val propValues = driver.selectPropertyValueAll(selector, "tagName")
         printlnPro(propValues)
@@ -124,7 +124,7 @@ class PulsarWebDriverTests : WebDriverTestBase() {
     @Test
     @DisplayName("test setPropertyAll")
     fun testSetPropertyAll() = runEnhancedWebDriverTest(simpleDomURL, browser) { driver ->
-        val selector = "input"
+        val selector = "input:not([type=hidden])"
         val propName = "value"
 
         driver.setPropertyAll(selector, propName, text)
