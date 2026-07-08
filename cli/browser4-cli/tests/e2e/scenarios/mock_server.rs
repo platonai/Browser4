@@ -2008,15 +2008,17 @@ pub(super) fn test_swarm_submission_commands(ctx: &mut E2ECtx) {
         "Expected scrape result payload to contain the task id in:\n{}",
         swarm_result_result.stdout
     );
-    assert!(
-        swarm_result_payload.contains(r#""isDone": true"#) || swarm_result_payload.contains(r#""isDone":true"#),
-        "Expected scrape result payload to be done in:\n{}",
-        swarm_result_result.stdout
-    );
+    // The result payload contains resultSet and error, but not isDone
+    // (isDone is only present in swarm status, not swarm result).
     assert!(
         swarm_result_payload
             .contains("mock.browser4.local/result/swarm-job-42"),
         "Expected scrape result payload to contain a resultSet in:\n{}",
+        swarm_result_result.stdout
+    );
+    assert!(
+        swarm_result_payload.contains(r#""error": null"#) || swarm_result_payload.contains(r#""error":null"#),
+        "Expected scrape result payload to have no error in:\n{}",
         swarm_result_result.stdout
     );
 
@@ -2105,15 +2107,17 @@ pub(super) fn test_swarm_query_commands(ctx: &mut E2ECtx) {
         "Expected query result payload to contain the task id in:\n{}",
         swarm_result_result.stdout
     );
-    assert!(
-        swarm_result_payload.contains(r#""isDone": true"#) || swarm_result_payload.contains(r#""isDone":true"#),
-        "Expected query result payload to be done in:\n{}",
-        swarm_result_result.stdout
-    );
+    // The result payload contains resultSet and error, but not isDone
+    // (isDone is only present in swarm status, not swarm result).
     assert!(
         swarm_result_payload
             .contains("mock.browser4.local/result/swarm-job-42"),
         "Expected query result payload to contain a resultSet in:\n{}",
+        swarm_result_result.stdout
+    );
+    assert!(
+        swarm_result_payload.contains(r#""error": null"#) || swarm_result_payload.contains(r#""error":null"#),
+        "Expected query result payload to have no error in:\n{}",
         swarm_result_result.stdout
     );
 
