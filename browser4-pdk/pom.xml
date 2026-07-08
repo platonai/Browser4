@@ -1,0 +1,185 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Licensed to the Apache Software Foundation (ASF) under one or more contributor
+    license agreements. See the NOTICE file distributed with this work for additional
+    information regarding copyright ownership. The ASF licenses this file to
+    you under the Apache License, Version 2.0 (the "License"); you may not use
+    this file except in compliance with the License. You may obtain a copy of
+    the License at http://www.apache.org/licenses/LICENSE-2.0 Unless required
+    by applicable law or agreed to in writing, software distributed under the
+    License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS
+    OF ANY KIND, either express or implied. See the License for the specific
+    language governing permissions and limitations under the License. -->
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <!--
+        Standalone parent POM for Browser4 plugin development.
+
+        Extends pulsar-parent (published to Maven Central) directly so that
+        third-party plugin projects do NOT need to inherit from the browser4
+        aggregator POM (which would pull in the entire Browser4 repo).
+
+        Usage in a third-party plugin project:
+            groupId:    ai.platon.pulsar
+            artifactId: browser4-pdk
+            version:    4.12.0-rc.1
+            relativePath: leave empty to always resolve from Maven Central
+    -->
+
+    <parent>
+        <groupId>ai.platon</groupId>
+        <artifactId>pulsar-parent</artifactId>
+        <version>4.5.0</version>
+        <relativePath/>
+    </parent>
+
+    <groupId>ai.platon.pulsar</groupId>
+    <artifactId>browser4-pdk</artifactId>
+    <version>4.12.0-rc.1</version>
+    <packaging>pom</packaging>
+
+    <name>Browser4 Plugin Development Kit</name>
+    <description>
+        Parent POM for Browser4 plugin projects. Provides Kotlin + JVM 17 compiler
+        configuration, the PDK BOM for dependency management, and Maven Central
+        publishing setup. Use this as the parent of your plugin project to develop
+        Browser4 plugins without cloning the Browser4 repository.
+    </description>
+
+    <url>https://browser4.io</url>
+
+    <licenses>
+        <license>
+            <name>The Apache Software License, Version 2.0</name>
+            <url>https://www.apache.org/licenses/LICENSE-2.0.txt</url>
+        </license>
+    </licenses>
+
+    <developers>
+        <developer>
+            <name>Vincent Zhang</name>
+            <email>ivincent.zhang@gmail.com</email>
+            <organization>browser4.io</organization>
+            <timezone>+8</timezone>
+        </developer>
+    </developers>
+
+    <scm>
+        <connection>scm:git:https://github.com/platonai/browser4.git</connection>
+        <developerConnection>scm:git:https://github.com/platonai/browser4.git</developerConnection>
+        <url>https://github.com/platonai/browser4</url>
+        <tag>HEAD</tag>
+    </scm>
+
+    <modules>
+        <module>browser4-pdk-bom</module>
+        <module>browser4-plugin-archetype</module>
+        <module>browser4-pdk-test-plugin</module>
+    </modules>
+
+    <dependencyManagement>
+        <dependencies>
+            <!-- Import the PDK BOM for consistent dependency versions -->
+            <dependency>
+                <groupId>ai.platon.pulsar</groupId>
+                <artifactId>browser4-pdk-bom</artifactId>
+                <version>${project.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
+    <build>
+        <defaultGoal>install</defaultGoal>
+
+        <plugins>
+            <!-- Kotlin compiler: must come before maven-compiler-plugin -->
+            <plugin>
+                <groupId>org.jetbrains.kotlin</groupId>
+                <artifactId>kotlin-maven-plugin</artifactId>
+                <version>${kotlin.version}</version>
+                <extensions>true</extensions>
+                <executions>
+                    <execution>
+                        <id>compile</id>
+                        <phase>process-sources</phase>
+                        <goals>
+                            <goal>compile</goal>
+                        </goals>
+                        <configuration>
+                            <sourceDirs>
+                                <sourceDir>${project.basedir}/src/main/kotlin</sourceDir>
+                            </sourceDirs>
+                        </configuration>
+                    </execution>
+                    <execution>
+                        <id>test-compile</id>
+                        <goals>
+                            <goal>test-compile</goal>
+                        </goals>
+                        <configuration>
+                            <sourceDirs>
+                                <sourceDir>${project.basedir}/src/test/kotlin</sourceDir>
+                            </sourceDirs>
+                        </configuration>
+                    </execution>
+                </executions>
+                <!-- Required by Spring Boot auto-configuration -->
+                <dependencies>
+                    <dependency>
+                        <groupId>org.jetbrains.kotlin</groupId>
+                        <artifactId>kotlin-maven-allopen</artifactId>
+                        <version>${kotlin.version}</version>
+                    </dependency>
+                    <dependency>
+                        <groupId>org.jetbrains.kotlin</groupId>
+                        <artifactId>kotlin-maven-noarg</artifactId>
+                        <version>${kotlin.version}</version>
+                    </dependency>
+                </dependencies>
+                <configuration>
+                    <args>
+                        <arg>-Xjsr305=strict</arg>
+                    </args>
+                    <compilerPlugins>
+                        <plugin>spring</plugin>
+                        <plugin>jpa</plugin>
+                        <plugin>all-open</plugin>
+                    </compilerPlugins>
+                    <pluginOptions>
+                        <option>all-open:annotation=javax.persistence.Entity</option>
+                        <option>all-open:annotation=javax.persistence.Embeddable</option>
+                        <option>all-open:annotation=javax.persistence.MappedSuperclass</option>
+                    </pluginOptions>
+                    <jvmTarget>${kotlin.compiler.jvmTarget}</jvmTarget>
+                </configuration>
+            </plugin>
+
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <version>3.5.4</version>
+                <configuration>
+                    <useModulePath>false</useModulePath>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+
+    <properties>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
+
+        <!-- Language -->
+        <javaVersion>17</javaVersion>
+        <kotlin.version>2.3.21</kotlin.version>
+        <kotlin.coroutine.version>1.10.2</kotlin.coroutine.version>
+        <maven.compiler.release>${javaVersion}</maven.compiler.release>
+        <kotlin.compiler.jvmTarget>${javaVersion}</kotlin.compiler.jvmTarget>
+
+        <spring-boot.version>4.0.6</spring-boot.version>
+    </properties>
+
+</project>

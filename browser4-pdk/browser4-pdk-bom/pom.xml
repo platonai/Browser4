@@ -1,0 +1,144 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Licensed to the Apache Software Foundation (ASF) under one or more contributor
+    license agreements. See the NOTICE file distributed with this work for additional
+    information regarding copyright ownership. The ASF licenses this file to
+    you under the Apache License, Version 2.0 (the "License"); you may not use
+    this file except in compliance with the License. You may obtain a copy of
+    the License at http://www.apache.org/licenses/LICENSE-2.0 Unless required
+    by applicable law or agreed to in writing, software distributed under the
+    License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS
+    OF ANY KIND, either express or implied. See the License for the specific
+    language governing permissions and limitations under the License. -->
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <!--
+        Standalone BOM with no parent POM. This avoids any dependency cycle
+        (browser4-pdk imports this BOM, so this BOM must not have browser4-pdk
+        as its parent). All properties are self-contained for publishing.
+    -->
+
+    <groupId>ai.platon.pulsar</groupId>
+    <artifactId>browser4-pdk-bom</artifactId>
+    <version>4.12.0-rc.1</version>
+    <packaging>pom</packaging>
+
+    <name>Browser4 PDK BOM</name>
+    <description>
+        Standalone Bill of Materials for Browser4 plugin development.
+        Import this BOM in your plugin project's dependencyManagement section
+        to get consistent versions of all Browser4 API artifacts and their
+        transitive dependencies. No parent POM inheritance required.
+    </description>
+
+    <url>https://browser4.io</url>
+
+    <licenses>
+        <license>
+            <name>The Apache Software License, Version 2.0</name>
+            <url>https://www.apache.org/licenses/LICENSE-2.0.txt</url>
+        </license>
+    </licenses>
+
+    <scm>
+        <connection>scm:git:https://github.com/platonai/browser4.git</connection>
+        <developerConnection>scm:git:https://github.com/platonai/browser4.git</developerConnection>
+        <url>https://github.com/platonai/browser4</url>
+        <tag>HEAD</tag>
+    </scm>
+
+    <distributionManagement>
+        <repository>
+            <id>central</id>
+            <url>https://central.sonatype.com/api/v1/publisher</url>
+        </repository>
+    </distributionManagement>
+
+    <dependencyManagement>
+        <dependencies>
+
+            <!-- ============================================================
+                 External BOM imports (order matters for version precedence)
+                 ============================================================ -->
+
+            <dependency>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-dependencies</artifactId>
+                <version>4.0.6</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+
+            <dependency>
+                <groupId>ai.platon.pulsar</groupId>
+                <artifactId>pulsar-bom</artifactId>
+                <version>4.9.2</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+
+            <dependency>
+                <groupId>org.jetbrains.kotlin</groupId>
+                <artifactId>kotlin-bom</artifactId>
+                <version>2.3.21</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+
+            <dependency>
+                <groupId>org.jetbrains.kotlinx</groupId>
+                <artifactId>kotlinx-coroutines-bom</artifactId>
+                <version>1.10.2</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+
+            <!-- ============================================================
+                 Browser4 Core API artifacts (required for all plugins)
+                 ============================================================ -->
+
+            <dependency>
+                <groupId>ai.platon.pulsar</groupId>
+                <artifactId>browser4-common</artifactId>
+                <version>4.12.0-rc.1</version>
+            </dependency>
+
+            <dependency>
+                <groupId>ai.platon.pulsar</groupId>
+                <artifactId>browser4-browser</artifactId>
+                <version>4.12.0-rc.1</version>
+            </dependency>
+
+            <dependency>
+                <groupId>ai.platon.pulsar</groupId>
+                <artifactId>browser4-skeleton</artifactId>
+                <version>4.12.0-rc.1</version>
+            </dependency>
+
+            <!-- ============================================================
+                 Browser4 Optional API artifacts (for advanced plugins)
+                 ============================================================ -->
+
+            <dependency>
+                <groupId>ai.platon.pulsar</groupId>
+                <artifactId>browser4-protocol</artifactId>
+                <version>4.12.0-rc.1</version>
+            </dependency>
+
+            <dependency>
+                <groupId>ai.platon.pulsar</groupId>
+                <artifactId>browser4-agentic</artifactId>
+                <version>4.12.0-rc.1</version>
+            </dependency>
+
+            <dependency>
+                <groupId>ai.platon.pulsar</groupId>
+                <artifactId>browser4-boot</artifactId>
+                <version>4.12.0-rc.1</version>
+            </dependency>
+
+        </dependencies>
+    </dependencyManagement>
+
+</project>

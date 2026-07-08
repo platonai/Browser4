@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<archetype-descriptor name="browser4-plugin"
+                      xsi:schemaLocation="https://maven.apache.org/plugins/maven-archetype-plugin/archetype-descriptor/1.1.0
+                      http://maven.apache.org/xsd/archetype-descriptor-1.1.0.xsd"
+                      xmlns="https://maven.apache.org/plugins/maven-archetype-plugin/archetype-descriptor/1.1.0"
+                      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+
+    <requiredProperties>
+        <requiredProperty key="browser4-version">
+            <defaultValue>4.12.0-rc.1</defaultValue>
+        </requiredProperty>
+        <requiredProperty key="pluginName">
+            <defaultValue>My Browser4 Plugin</defaultValue>
+        </requiredProperty>
+        <requiredProperty key="pluginDescription">
+            <defaultValue>A Browser4 plugin that provides custom functionality</defaultValue>
+        </requiredProperty>
+    </requiredProperties>
+
+    <fileSets>
+        <!-- Kotlin source files: filtered + packaged. The "package" property
+             (defaults to groupId) determines the base package directory. Users
+             can override with -Dpackage=com.example.myplugin -->
+        <fileSet filtered="true" packaged="true" encoding="UTF-8">
+            <directory>src/main/kotlin</directory>
+            <includes>
+                <include>**/*.kt</include>
+            </includes>
+        </fileSet>
+        <!-- Resource files: filtered (property substitution in JSON, etc.) -->
+        <fileSet filtered="true" encoding="UTF-8">
+            <directory>src/main/resources</directory>
+            <includes>
+                <include>**/*.json</include>
+                <include>**/*.imports</include>
+            </includes>
+        </fileSet>
+        <!-- Root files: pom.xml, README, .gitignore -->
+        <fileSet filtered="true" encoding="UTF-8">
+            <directory></directory>
+            <includes>
+                <include>pom.xml</include>
+                <include>README.md</include>
+            </includes>
+        </fileSet>
+        <fileSet filtered="false" encoding="UTF-8">
+            <directory></directory>
+            <includes>
+                <include>.gitignore</include>
+            </includes>
+        </fileSet>
+    </fileSets>
+
+</archetype-descriptor>

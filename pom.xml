@@ -84,6 +84,7 @@
         <module>browser4-agent-tools</module>
         <module>browser4-agentic</module>
         <module>browser4-boot</module>
+        <module>browser4-pdk</module>
         <module>browser4-rest</module>
     </modules>
 

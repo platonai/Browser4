@@ -1,0 +1,9 @@
+{
+  "name": "browser4-pdk-test-plugin",
+  "version": "4.12.0-rc.1",
+  "description": "Reference plugin that verifies the PDK workflow works end-to-end. Demonstrates all PluginMount types.",
+  "dependsOn": ["browser4-skeleton", "browser4-browser", "browser4-protocol", "browser4-agentic"],
+  "autoConfigurationClasses": [
+    "ai.platon.pulsar.pdk.testplugin.config.TestPluginAutoConfiguration"
+  ]
+}

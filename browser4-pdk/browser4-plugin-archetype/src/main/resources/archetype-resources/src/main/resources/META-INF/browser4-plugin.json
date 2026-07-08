@@ -1,0 +1,9 @@
+{
+  "name": "${pluginName}",
+  "version": "${version}",
+  "description": "${pluginDescription}",
+  "dependsOn": ["browser4-skeleton", "browser4-browser"],
+  "autoConfigurationClasses": [
+    "${package}.config.PluginAutoConfiguration"
+  ]
+}
