@@ -5,92 +5,92 @@
   "Tasks": {
     "check-fast-tests": {
       "lastMachine": "ALTAIR",
-      "lastRun": "2026-07-08T10:26:33+08:00",
+      "lastRun": "2026-07-08T12:49:03+08:00",
+      "lastDurationMs": 0,
+      "lastResult": "passed",
+      "lastExitCode": 0,
+      "runCount": 3
+    },
+    "check-coverage": {
+      "lastMachine": "ALTAIR",
+      "lastRun": "2026-07-08T12:49:17+08:00",
       "lastDurationMs": 0,
       "lastResult": "passed",
       "lastExitCode": 0,
       "runCount": 2
     },
-    "check-coverage": {
-      "lastExitCode": 0,
-      "lastMachine": "ALTAIR",
-      "lastRun": "2026-06-29T13:10:22+08:00",
-      "lastResult": "passed",
-      "runCount": 1,
-      "lastDurationMs": 0
-    },
     "check-version-consistency": {
-      "lastExitCode": 1,
       "lastMachine": "ALTAIR",
-      "lastRun": "2026-06-29T13:10:18+08:00",
+      "lastRun": "2026-07-08T12:49:13+08:00",
+      "lastDurationMs": 0,
       "lastResult": "failed",
-      "runCount": 1,
-      "lastDurationMs": 0
+      "lastExitCode": 1,
+      "runCount": 2
     },
     "check-skill-frontmatter": {
-      "lastExitCode": 0,
       "lastMachine": "ALTAIR",
-      "lastRun": "2026-06-29T13:10:18+08:00",
+      "lastRun": "2026-07-08T12:49:11+08:00",
+      "lastDurationMs": 0,
       "lastResult": "passed",
-      "runCount": 1,
-      "lastDurationMs": 0
+      "lastExitCode": 0,
+      "runCount": 2
     },
-    "check-rust-cli": {
+    "check-dockerfile": {
       "lastMachine": "ALTAIR",
-      "lastRun": "2026-07-08T10:26:37+08:00",
+      "lastRun": "2026-07-08T12:49:16+08:00",
       "lastDurationMs": 0,
       "lastResult": "passed",
       "lastExitCode": 0,
       "runCount": 2
     },
     "check-skill-structure": {
-      "lastExitCode": 0,
       "lastMachine": "ALTAIR",
-      "lastRun": "2026-06-29T13:10:24+08:00",
-      "lastResult": "passed",
-      "runCount": 1,
-      "lastDurationMs": 0
-    },
-    "check-doc-links-internal": {
-      "lastExitCode": 0,
-      "lastMachine": "ALTAIR",
-      "lastRun": "2026-06-29T13:10:17+08:00",
-      "lastResult": "passed",
-      "runCount": 1,
-      "lastDurationMs": 0
-    },
-    "check-test-tags": {
-      "lastExitCode": 0,
-      "lastMachine": "ALTAIR",
-      "lastRun": "2026-06-29T13:10:23+08:00",
-      "lastResult": "passed",
-      "runCount": 1,
-      "lastDurationMs": 0
-    },
-    "check-ps1-syntax": {
-      "lastExitCode": 0,
-      "lastMachine": "ALTAIR",
-      "lastRun": "2026-06-29T13:10:19+08:00",
-      "lastResult": "passed",
-      "runCount": 1,
-      "lastDurationMs": 0
-    },
-    "check-dockerfile": {
-      "lastExitCode": 0,
-      "lastMachine": "ALTAIR",
-      "lastRun": "2026-06-29T13:10:22+08:00",
-      "lastResult": "passed",
-      "runCount": 1,
-      "lastDurationMs": 0
-    },
-    "check-compilation": {
-      "lastMachine": "ALTAIR",
-      "lastRun": "2026-07-08T10:26:23+08:00",
+      "lastRun": "2026-07-08T12:49:21+08:00",
       "lastDurationMs": 0,
       "lastResult": "passed",
       "lastExitCode": 0,
       "runCount": 2
+    },
+    "check-doc-links-internal": {
+      "lastMachine": "ALTAIR",
+      "lastRun": "2026-07-08T12:49:10+08:00",
+      "lastDurationMs": 0,
+      "lastResult": "passed",
+      "lastExitCode": 0,
+      "runCount": 2
+    },
+    "check-test-tags": {
+      "lastMachine": "ALTAIR",
+      "lastRun": "2026-07-08T12:49:20+08:00",
+      "lastDurationMs": 0,
+      "lastResult": "passed",
+      "lastExitCode": 0,
+      "runCount": 2
+    },
+    "check-ps1-syntax": {
+      "lastMachine": "ALTAIR",
+      "lastRun": "2026-07-08T12:49:14+08:00",
+      "lastDurationMs": 0,
+      "lastResult": "passed",
+      "lastExitCode": 0,
+      "runCount": 2
+    },
+    "check-rust-cli": {
+      "lastMachine": "ALTAIR",
+      "lastRun": "2026-07-08T12:49:08+08:00",
+      "lastDurationMs": 0,
+      "lastResult": "passed",
+      "lastExitCode": 0,
+      "runCount": 3
+    },
+    "check-compilation": {
+      "lastMachine": "ALTAIR",
+      "lastRun": "2026-07-08T12:48:56+08:00",
+      "lastDurationMs": 0,
+      "lastResult": "passed",
+      "lastExitCode": 0,
+      "runCount": 3
     }
   },
-  "updatedAt": "2026-07-08T10:26:37+08:00"
+  "updatedAt": "2026-07-08T12:49:21+08:00"
 }
