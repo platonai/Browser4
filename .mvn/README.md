@@ -20,8 +20,8 @@ Maven Wrapper version and distribution settings:
 |----------|-------|
 | Wrapper version | 3.3.4 |
 | Distribution type | `only-script` (scripts only, no bundled JAR) |
-| Maven version | 4.0.0-rc-5 |
-| Distribution URL | `https://repo.maven.apache.org/maven2/org/apache/maven/apache-maven/4.0.0-rc-5/apache-maven-4.0.0-rc-5-bin.zip` |
+| Maven version | 3.9.16 |
+| Distribution URL | `https://repo.maven.apache.org/maven2/org/apache/maven/apache-maven/3.9.16/apache-maven-3.9.16-bin.zip` |
 
 ## Usage
 
