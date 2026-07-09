@@ -1534,7 +1534,7 @@ function highlightSelectedFile(path) {
 // Update progress bars for a single file in the tree without rebuild
 function updateFileTreeProgress(path, parsed) {
   var total = parsed.issues.length;
-  var reviewed = parsed.issues.filter(function(iss) { return !!iss.reviewDecision; }).length;
+  var reviewed = parsed.issues.filter(function(iss) { return !!iss.review.decision; }).length;
   var pct = total > 0 ? Math.round(reviewed / total * 100) : 0;
 
   var leaves = document.querySelectorAll('.tree-leaf');
@@ -1583,7 +1583,7 @@ function updateFileCounts(path, parsed) {
     if (state.files[i].path === path) {
       state.files[i]._parseAttempted = true;
       state.files[i]._issueCount = parsed.issues.length;
-      state.files[i]._reviewedCount = parsed.issues.filter(function(iss) { return !!iss.reviewDecision; }).length;
+      state.files[i]._reviewedCount = parsed.issues.filter(function(iss) { return !!iss.review.decision; }).length;
       break;
     }
   }
@@ -1652,7 +1652,7 @@ function renderSingleIssue() {
   // Compact file header — scenario name + meta
   html += '<div class="file-header-card" style="padding:8px 14px;margin-bottom:1rem;">';
   html += '<div class="fh-title" style="font-size:0.9rem;">' + escHtml(state.parsed.meta.scenario || 'Unknown scenario') + '</div>';
-  var reviewed = state.parsed.issues.filter(function(iss) { return !!iss.reviewDecision; }).length;
+  var reviewed = state.parsed.issues.filter(function(iss) { return !!iss.review.decision; }).length;
   html += '<div class="fh-meta">';
   if (state.parsed.meta.source) html += '<span>📄 Source: ' + escHtml(state.parsed.meta.source) + '</span>';
   if (state.parsed.meta.date) html += '<span>📅 Date: ' + escHtml(state.parsed.meta.date) + '</span>';
@@ -1782,7 +1782,7 @@ function renderFileHeader() {
 
   // Issues summary
   var total = p.issues.length;
-  var reviewed = p.issues.filter(function(iss) { return !!iss.reviewDecision; }).length;
+  var reviewed = p.issues.filter(function(iss) { return !!iss.review.decision; }).length;
   if (total > 0) {
     html += '<div class="fh-meta" style="margin-top:4px;">';
     html += '<span>' + total + ' issues, ' + reviewed + ' reviewed' +
@@ -1970,7 +1970,7 @@ function updateIssueCardUI(index) {
 // Single-issue notes handler
 function onSingleNotesChange(index, value) {
   if (!state.parsed) return;
-  state.parsed.issues[index].reviewNotes = value;
+  state.parsed.issues[index].review.notes = value;
   state.dirty = true;
   updateSaveState();
   scheduleAutoSave();
@@ -1978,7 +1978,7 @@ function onSingleNotesChange(index, value) {
 
 function onNotesChange(index, value) {
   if (!state.parsed) return;
-  state.parsed.issues[index].reviewNotes = value;
+  state.parsed.issues[index].review.notes = value;
   state.dirty = true;
   updateSaveState();
   scheduleAutoSave();
@@ -2010,7 +2010,7 @@ function navigateSingleIssue(direction) {
 function updateIssueNavState() {
   var total = state.parsed ? state.parsed.issues.length : 0;
   var idx = state.currentIssueIndex;
-  var reviewed = state.parsed ? state.parsed.issues.filter(function(iss) { return !!iss.reviewDecision; }).length : 0;
+  var reviewed = state.parsed ? state.parsed.issues.filter(function(iss) { return !!iss.review.decision; }).length : 0;
 
   // File nav buttons — find position in filtered list
   var fileIdx = -1;
@@ -2082,7 +2082,7 @@ async function triggerAiReview(index) {
       siblingIssues.push({
         number: s + 1,
         title: sib.title,
-        decision: sib.reviewDecision || null,
+        decision: sib.review.decision || null,
       });
     }
   }
@@ -2117,7 +2117,13 @@ async function triggerAiReview(index) {
     }
     state.dirty = true;
     updateSaveState();
-    scheduleAutoSave();
+
+    // Force immediate save — don't rely on 2-second auto-save timer
+    try {
+      await saveReview({silent: true});
+    } catch (saveErr) {
+      // Continue even if save fails (decision is still in memory)
+    }
 
     // Re-render to show the AI's decision
     renderSingleIssue();
@@ -2199,13 +2205,13 @@ async function triggerAiReviewAll() {
         var idx = dec.issueNumber - 1;
         if (idx >= 0 && idx < state.parsed.issues.length) {
           var decision = normalizeDecision(dec.decision);
-          state.parsed.issues[idx].reviewDecision = decision;
-          state.parsed.issues[idx].reviewNotes = dec.notes || '';
+          state.parsed.issues[idx].review.decision = decision;
+          state.parsed.issues[idx].review.notes = dec.notes || '';
           // Track whether this was a heuristic fallback
           state.parsed.issues[idx]._heuristic = !!result.heuristic;
           // Store AI suggestion in notes for feedback tracking
-          if (state.parsed.issues[idx].reviewNotes.indexOf('[AI suggested:') < 0) {
-            state.parsed.issues[idx].reviewNotes = '[AI suggested: ' + decision + '] ' + state.parsed.issues[idx].reviewNotes;
+          if (state.parsed.issues[idx].review.notes.indexOf('[AI suggested:') < 0) {
+            state.parsed.issues[idx].review.notes = '[AI suggested: ' + decision + '] ' + state.parsed.issues[idx].review.notes;
           }
         }
       }
@@ -2213,7 +2219,13 @@ async function triggerAiReviewAll() {
 
     state.dirty = true;
     updateSaveState();
-    scheduleAutoSave();
+
+    // Force immediate save
+    try {
+      await saveReview({silent: true});
+    } catch (saveErr) {
+      // Continue even if save fails
+    }
 
     // Re-render
     renderReview();
@@ -2331,37 +2343,58 @@ async function triggerAiReviewDirectory() {
         scenarioTitle: (parsed.meta && parsed.meta.scenario) || '',
       });
 
-      // Update cached counts for this file
+      // Apply AI decisions and persist to disk immediately
       if (result.decisions) {
+        // Apply decisions to the parsed model
+        for (var d = 0; d < result.decisions.length; d++) {
+          var dec = result.decisions[d];
+          var idx = dec.issueNumber - 1;
+          if (idx >= 0 && idx < parsed.issues.length) {
+            var decision = normalizeDecision(dec.decision);
+            parsed.issues[idx].review.decision = decision;
+            parsed.issues[idx].review.notes = dec.notes || '';
+            if (parsed.issues[idx].review.notes.indexOf('[AI suggested:') < 0) {
+              parsed.issues[idx].review.notes = '[AI suggested: ' + decision + '] ' + parsed.issues[idx].review.notes;
+            }
+          }
+        }
+
+        // Persist to disk — reconstruct and POST immediately
+        var updatedContent = null;
+        try {
+          updatedContent = ISSUE_MODEL.reconstructMarkdown(parsed);
+          await apiPost('/api/task?path=' + encodeURIComponent(file.path), { content: updatedContent });
+        } catch (saveErr) {
+          console.error('Failed to save reviewed file ' + file.path + ':', saveErr.message);
+        }
+
         file._issueCount = parsed.issues.length;
         file._reviewedCount = result.decisions.length;
         file._parseAttempted = true;
         totalIssuesReviewed += result.decisions.length;
-      }
 
-      // If this is the currently selected file, apply decisions
-      if (state.selectedFilePath === file.path && state.parsed && result.decisions) {
-        for (var d = 0; d < result.decisions.length; d++) {
-          var dec = result.decisions[d];
-          var idx = dec.issueNumber - 1;
-          if (idx >= 0 && idx < state.parsed.issues.length) {
-            var decision = normalizeDecision(dec.decision);
-            state.parsed.issues[idx].reviewDecision = decision;
-            state.parsed.issues[idx].reviewNotes = dec.notes || '';
-            state.parsed.issues[idx]._heuristic = !!result.heuristic;
-            if (state.parsed.issues[idx].reviewNotes.indexOf('[AI suggested:') < 0) {
-              state.parsed.issues[idx].reviewNotes = '[AI suggested: ' + decision + '] ' + state.parsed.issues[idx].reviewNotes;
+        // If this is the currently selected file, sync live state from saved model
+        if (state.selectedFilePath === file.path && state.parsed) {
+          // Reload parsed content to keep state in sync with disk
+          state.parsed._originalContent = updatedContent || state.parsed._originalContent;
+          // Sync decisions into live state
+          for (var d2 = 0; d2 < result.decisions.length; d2++) {
+            var dec2 = result.decisions[d2];
+            var idx2 = dec2.issueNumber - 1;
+            if (idx2 >= 0 && idx2 < state.parsed.issues.length) {
+              state.parsed.issues[idx2].review.decision = normalizeDecision(dec2.decision);
+              state.parsed.issues[idx2].review.notes = parsed.issues[idx2].review.notes;
             }
           }
-        }
-        state.dirty = true;
-        updateSaveState();
-        scheduleAutoSave();
-        renderReview();
-        updateFileCounts(state.selectedFilePath, state.parsed);
-        updateStats();
-        if (state.selectedFilePath && state.parsed) {
-          updateFileTreeProgress(state.selectedFilePath, state.parsed);
+          state.dirty = false;
+          cancelAutoSave();
+          updateSaveState();
+          renderReview();
+          updateFileCounts(state.selectedFilePath, state.parsed);
+          updateStats();
+          if (state.selectedFilePath && state.parsed) {
+            updateFileTreeProgress(state.selectedFilePath, state.parsed);
+          }
         }
       }
 
@@ -2628,7 +2661,7 @@ async function saveReview(opts) {
 // ── Mark Done ──
 async function markDone() {
   if (!state.selectedFilePath) return;
-  var unreviewed = state.parsed ? state.parsed.issues.filter(function(iss) { return !iss.reviewDecision; }).length : 0;
+  var unreviewed = state.parsed ? state.parsed.issues.filter(function(iss) { return !iss.review.decision; }).length : 0;
 
   var msg = 'Finalize this review?\n\n';
   if (unreviewed > 0) {
