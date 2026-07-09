@@ -53,15 +53,15 @@ const STAGES = [
   // Source directories (input feeders)
   { id: '0draft/issues/github',         display_name: 'GitHub Issues',   path_suffix: 'main/0draft/issues/github',       date_stamped: true,  group: 'sources', hidden: false },
   // GitHub issues pipeline
-  { id: '200issues/draft/refine/0ready',  display_name: 'Issues Ready',    path_suffix: '200issues/draft/refine/0ready',  date_stamped: false, group: 'issues', hidden: false },
-  { id: '200issues/draft/refine/1working', display_name: 'Issues Working', path_suffix: '200issues/draft/refine/1working', date_stamped: false, group: 'issues', hidden: false },
-  { id: '200issues/draft/refine/2done',   display_name: 'Issues Done',     path_suffix: '200issues/draft/refine/2done',   date_stamped: true,  group: 'issues', hidden: false },
-  { id: '200issues/draft/refine/0error',  display_name: 'Issues Errors',   path_suffix: '200issues/draft/refine/0error',  date_stamped: false, group: 'issues', hidden: false },
-  { id: '200issues/github/commit/ready',  display_name: 'GH Commit Ready', path_suffix: '200issues/github/commit/ready',  date_stamped: false, group: 'issues', hidden: false },
-  { id: '200issues/github/commit/done',   display_name: 'GH Committed',    path_suffix: '200issues/github/commit/done',   date_stamped: false, group: 'issues', hidden: false },
-  { id: '200issues/github/commit/failed', display_name: 'GH Failed',       path_suffix: '200issues/github/commit/failed', date_stamped: false, group: 'issues', hidden: false },
+  { id: 'issues/draft/refine/0ready',  display_name: 'Issues Ready',    path_suffix: 'issues/draft/refine/0ready',  date_stamped: false, group: 'issues', hidden: false },
+  { id: 'issues/draft/refine/1working', display_name: 'Issues Working', path_suffix: 'issues/draft/refine/1working', date_stamped: false, group: 'issues', hidden: false },
+  { id: 'issues/draft/refine/2done',   display_name: 'Issues Done',     path_suffix: 'issues/draft/refine/2done',   date_stamped: true,  group: 'issues', hidden: false },
+  { id: 'issues/draft/refine/0error',  display_name: 'Issues Errors',   path_suffix: 'issues/draft/refine/0error',  date_stamped: false, group: 'issues', hidden: false },
+  { id: 'issues/github/commit/ready',  display_name: 'GH Commit Ready', path_suffix: 'issues/github/commit/ready',  date_stamped: false, group: 'issues', hidden: false },
+  { id: 'issues/github/commit/done',   display_name: 'GH Committed',    path_suffix: 'issues/github/commit/done',   date_stamped: false, group: 'issues', hidden: false },
+  { id: 'issues/github/commit/failed', display_name: 'GH Failed',       path_suffix: 'issues/github/commit/failed', date_stamped: false, group: 'issues', hidden: false },
   // Issue review
-  { id: '200issues/review',             display_name: 'Review Queue',    path_suffix: '200issues/review',              date_stamped: true,  group: 'review', hidden: false },
+  { id: 'issues/review',             display_name: 'Review Queue',    path_suffix: 'issues/review',              date_stamped: true,  group: 'review', hidden: false },
 ];
 
 const stageById = Object.fromEntries(STAGES.map(s => [s.id, s]));
@@ -72,7 +72,7 @@ const visibleStages = STAGES.filter(s => !s.hidden);
 // Moving to any stage NOT in the list is rejected by the server.
 const VALID_TRANSITIONS = {
   // Main pipeline
-  '0draft':       ['1ready', '0draft/refine/0draft', '0draft/issues/github', '200issues/draft/refine/0ready'],
+  '0draft':       ['1ready', '0draft/refine/0draft', '0draft/issues/github', 'issues/draft/refine/0ready'],
   '1ready':       ['2working', '0draft'],
   '2working':     ['3done', '5approved', '1ready', '0draft'],
   '3done':        ['4review', '5approved', '6git-pushed'],
@@ -89,13 +89,13 @@ const VALID_TRANSITIONS = {
 
   // GitHub issues pipeline
   '0draft/issues/github':   ['1ready', '0draft'],
-  '200issues/draft/refine/0ready':  ['200issues/draft/refine/1working', '0draft'],
-  '200issues/draft/refine/1working': ['200issues/draft/refine/2done', '200issues/github/commit/ready', '200issues/draft/refine/0error'],
-  '200issues/draft/refine/2done':   ['200issues/github/commit/ready', '0draft'],
-  '200issues/draft/refine/0error':  ['200issues/draft/refine/0ready', '0draft'],
-  '200issues/github/commit/ready':  ['200issues/github/commit/done', '200issues/github/commit/failed', '200issues/draft/refine/2done'],
-  '200issues/github/commit/done':   [],
-  '200issues/github/commit/failed': ['200issues/github/commit/ready', '0draft'],
+  'issues/draft/refine/0ready':  ['issues/draft/refine/1working', '0draft'],
+  'issues/draft/refine/1working': ['issues/draft/refine/2done', 'issues/github/commit/ready', 'issues/draft/refine/0error'],
+  'issues/draft/refine/2done':   ['issues/github/commit/ready', '0draft'],
+  'issues/draft/refine/0error':  ['issues/draft/refine/0ready', '0draft'],
+  'issues/github/commit/ready':  ['issues/github/commit/done', 'issues/github/commit/failed', 'issues/draft/refine/2done'],
+  'issues/github/commit/done':   [],
+  'issues/github/commit/failed': ['issues/github/commit/ready', '0draft'],
 };
 
 function resolveStageDir(stage, date) {
@@ -436,7 +436,7 @@ ${issueText}`;
 });
 
 // POST /api/issue-review/discard
-// Moves the issue file to 200issues/review/done/discard/ — for files that
+// Moves the issue file to issues/review/done/discard/ — for files that
 // contain no issues or no valuable issues.
 app.post('/api/issue-review/discard', (req, res) => {
   const { path: srcPath } = req.body;
@@ -445,14 +445,14 @@ app.post('/api/issue-review/discard', (req, res) => {
   const src = safeResolve(srcPath, true);
   if (src.error) return res.status(src.error).json({ error: src.message });
 
-  // Safety: ensure the source is under 200issues/review/
-  const reviewRoot = path.join(TASKS_ROOT, '200issues', 'review');
+  // Safety: ensure the source is under issues/review/
+  const reviewRoot = path.join(TASKS_ROOT, 'issues', 'review');
   if (!src.abs.startsWith(reviewRoot + path.sep)) {
-    return res.status(400).json({ error: 'Only files under 200issues/review can be discarded.' });
+    return res.status(400).json({ error: 'Only files under issues/review can be discarded.' });
   }
 
   try {
-    // Move to 200issues/review/done/discard, preserving date subdirectory structure
+    // Move to issues/review/done/discard, preserving date subdirectory structure
     const srcRelToReview = path.relative(reviewRoot, src.abs);
     const discardDir = path.join(reviewRoot, 'done', 'discard');
     const discardPath = path.join(discardDir, srcRelToReview);
@@ -480,10 +480,10 @@ app.post('/api/issue-review/mark-done', (req, res) => {
   const src = safeResolve(srcPath, true);
   if (src.error) return res.status(src.error).json({ error: src.message });
 
-  // Safety: ensure the source is under 200issues/review/
-  const reviewRoot = path.join(TASKS_ROOT, '200issues', 'review');
+  // Safety: ensure the source is under issues/review/
+  const reviewRoot = path.join(TASKS_ROOT, 'issues', 'review');
   if (!src.abs.startsWith(reviewRoot + path.sep)) {
-    return res.status(400).json({ error: 'Only files under 200issues/review can be marked done.' });
+    return res.status(400).json({ error: 'Only files under issues/review can be marked done.' });
   }
 
   try {
@@ -514,7 +514,7 @@ app.post('/api/issue-review/mark-done', (req, res) => {
     }
     fs.writeFileSync(readyPath, summaryContent, 'utf-8');
 
-    // Move original to 200issues/review/done, preserving date subdirectory structure
+    // Move original to issues/review/done, preserving date subdirectory structure
     const srcRelToReview = path.relative(reviewRoot, src.abs);
     const doneDir = path.join(reviewRoot, 'done');
     const donePath = path.join(doneDir, srcRelToReview);

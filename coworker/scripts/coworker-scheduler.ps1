@@ -53,7 +53,7 @@ function Test-PathHasPendingFiles {
     $fullPath = [System.IO.Path]::GetFullPath($item.FullName)
     $contentAwarePaths = @(
         [System.IO.Path]::GetFullPath((Resolve-TasksPath 'main\0draft\refine\1ready'))
-        [System.IO.Path]::GetFullPath((Resolve-TasksPath '200issues\draft\refine\0ready'))
+        [System.IO.Path]::GetFullPath((Resolve-TasksPath 'issues\draft\refine\0ready'))
     )
     $pendingFilePredicate = if ($fullPath -in $contentAwarePaths) {
         { param($candidate) Test-CoworkerActionableDraftRefinementFile -Item $candidate }
@@ -207,11 +207,16 @@ finally {
     Write-Host "Working directory: $WorkingDirectory"
     Write-Host "Console transcript log: $stdOutPath"
 
-    $process = Start-Process -FilePath $PowerShellExecutable `
-        -ArgumentList $argumentList `
-        -WorkingDirectory $WorkingDirectory `
-        -WindowStyle $TaskState.WindowStyle `
-        -PassThru
+    $startProcessParams = @{
+        FilePath         = $PowerShellExecutable
+        ArgumentList     = $argumentList
+        WorkingDirectory = $WorkingDirectory
+        PassThru         = $true
+    }
+    if ($IsWindows -and $TaskState.WindowStyle) {
+        $startProcessParams['WindowStyle'] = $TaskState.WindowStyle
+    }
+    $process = Start-Process @startProcessParams
 
     Register-ScheduledTaskProcessExitEvent -TaskState $TaskState -Process $process
 

@@ -5,7 +5,7 @@
     them, and stage them for creation via commit-github-issues.ps1.
 
 .DESCRIPTION
-    Scans coworker/tasks/200issues/draft/refine/0ready for draft files that may
+    Scans coworker/tasks/issues/draft/refine/0ready for draft files that may
     contain one or more issues described in natural language.
 
     For each file the worker:
@@ -13,9 +13,9 @@
     2. Calls the AI agent to extract individual issues, split them, and format
        each as a properly structured GitHub issue markdown file
     3. Writes each extracted issue based on #auto-approve:
-       - If #auto-approve is NOT found: writes to 200issues/draft/refine/2done
+       - If #auto-approve is NOT found: writes to issues/draft/refine/2done
          (manual review required before committing)
-       - If #auto-approve IS found: writes to 200issues/github/commit/ready (where
+       - If #auto-approve IS found: writes to issues/github/commit/ready (where
          commit-github-issues.ps1 will pick them up directly)
     4. Moves the original draft file to the same destination as the extracted
        issues (2done or github/commit/ready)
@@ -74,7 +74,7 @@ if ($null -eq $script:__CoworkerLock) {
 $repoRoot = Get-WorkspaceRoot
 
 # ── Directories ──────────────────────────────────────────────────────────────
-$issuesRoot     = Resolve-TasksPath '200issues'
+$issuesRoot     = Resolve-TasksPath 'issues'
 $refineRoot     = Join-Path $issuesRoot 'draft\refine'
 $readyDir       = Join-Path $refineRoot '0ready'
 $workingDir     = Join-Path $refineRoot '1working'

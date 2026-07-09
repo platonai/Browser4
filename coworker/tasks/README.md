@@ -116,13 +116,13 @@ Extracts, refines, and creates GitHub issues from natural-language drafts.
 
 ```
 ┌──────────────────────────────────┐
-│  200issues/draft/refine/0ready   │  ← Draft files describing issues
+│  issues/draft/refine/0ready   │  ← Draft files describing issues
 │            (Ready)               │
 └────────────┬─────────────────────┘
              │  refine-github-issues.ps1 picks it up
              ▼
 ┌──────────────────────────────────┐
-│  200issues/draft/refine/         │  ← Agent extracts individual issues
+│  issues/draft/refine/         │  ← Agent extracts individual issues
 │       1working                   │
 │       (In Process)               │
 └──────┬───────────────┬───────────┘
@@ -145,7 +145,7 @@ Extracts, refines, and creates GitHub issues from natural-language drafts.
 └─────────────────────────┘
 
 ┌──────────────────────────────────┐
-│  200issues/draft/refine/0error   │  ← Dead Letter (after max retries)
+│  issues/draft/refine/0error   │  ← Dead Letter (after max retries)
 └──────────────────────────────────┘
 ```
 
@@ -153,7 +153,7 @@ Extracts, refines, and creates GitHub issues from natural-language drafts.
 
 ```
 ┌───────────────────────────────────────┐
-│  200issues/github/commit/ready        │  ← Formatted issue .md files
+│  issues/github/commit/ready        │  ← Formatted issue .md files
 │            (Ready)                    │     (written by refine-github-issues)
 └────────────┬──────────────────────────┘
              │  commit-github-issues.ps1: gh issue create
@@ -171,15 +171,15 @@ Extracts, refines, and creates GitHub issues from natural-language drafts.
 
 **Daily commit guard:** `commit-github-issues.ps1` caps issue creation at **20 per UTC day**
 to avoid tripping GitHub spam detection. Overflow stays in `open` for the next run.
-Daily state is tracked in `200issues/github/commit/.daily-commit-state.json`.
+Daily state is tracked in `issues/github/commit/.daily-commit-state.json`.
 
 ### `#auto-approve` in GitHub issues
 
 When `#auto-approve` appears in the last 5 lines of a draft being processed:
 
-- Extracted issues AND the original draft are written directly to `200issues/github/commit/ready`,
+- Extracted issues AND the original draft are written directly to `issues/github/commit/ready`,
   where `commit-github-issues.ps1` will pick them up automatically.
-- **Without** `#auto-approve`, everything goes to `200issues/draft/refine/2done` for
+- **Without** `#auto-approve`, everything goes to `issues/draft/refine/2done` for
   manual review. After review, approved issues should be moved to `github/commit/ready`.
 
 ---
@@ -202,7 +202,7 @@ External sources → new task files.
 
 `fetch-github-issues.ps1` pulls open issues, self-assigns unassigned ones, and saves each
 as a markdown file in `0draft/issues/github/`. These drafts then flow into Pipeline 1
-(via `1ready`) or Pipeline 3 (via `200issues/draft/refine/0ready`).
+(via `1ready`) or Pipeline 3 (via `issues/draft/refine/0ready`).
 
 ---
 
@@ -321,7 +321,7 @@ coworker/tasks/
 ├── 6git-pushed/                      # Successfully pushed
 │   └── YYYY/MMDD/<file>              #   date-stamped
 │
-└── 200issues/                        # GitHub issues pipeline
+└── issues/                        # GitHub issues pipeline
     ├── draft/refine/
     │   ├── 0ready/                   # Issue drafts to refine
     │   ├── 1working/                 # Agent extracting issues
@@ -353,8 +353,8 @@ coworker/tasks/
 | `process-coworker-queue.ps1` | Main (watcher) | `1ready`, `5approved` | _(triggers `coworker.ps1`)_ |
 | `process-draft-refinement-queue.ps1` | Draft Refinement (watcher) | `0draft/refine/1ready` | _(triggers `refine-drafts.ps1`)_ |
 | `refine-drafts.ps1` | Draft Refinement | `0draft/refine/1ready` | `0draft/refine/3done` |
-| `refine-github-issues.ps1` | Issues: Refine | `200issues/draft/refine/0ready` | `200issues/draft/refine/2done` or `200issues/github/commit/ready` (see `#auto-approve`) |
-| `commit-github-issues.ps1` | Issues: Commit | `200issues/github/commit/ready` | `200issues/github/commit/done` |
+| `refine-github-issues.ps1` | Issues: Refine | `issues/draft/refine/0ready` | `issues/draft/refine/2done` or `issues/github/commit/ready` (see `#auto-approve`) |
+| `commit-github-issues.ps1` | Issues: Commit | `issues/github/commit/ready` | `issues/github/commit/done` |
 | `git-sync.ps1` | Git Push | `5approved` | `6git-pushed` |
 | `fetch-github-issues.ps1` | Ingestion | GitHub (external) | `0draft/issues/github` |
 | `coworker-scheduler.ps1` | All (orchestrator) | _(all above)_ | _(all above)_ |

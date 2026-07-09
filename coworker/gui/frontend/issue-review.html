@@ -828,16 +828,16 @@ body {
 
     <!-- Single-issue navigation bar -->
     <div class="issue-nav-top" id="issue-nav-top" style="display:none;">
-      <button class="nav-btn" id="btn-prev-file-top" onclick="navigateToFile(-1)" title="Previous file (P)">◀◀ File</button>
-      <button class="nav-btn" id="btn-prev-top" onclick="navigateSingleIssue(-1)" title="Previous issue (Shift+←)">◀ Issue</button>
+      <button class="nav-btn" id="btn-prev-file-top" onclick="navigateToFile(-1)" title="Previous file (Shift+P)">◀◀ File</button>
+      <button class="nav-btn" id="btn-prev-top" onclick="navigateSingleIssue(-1)" title="Previous issue (Alt+←)">◀ Issue</button>
       <div class="issue-nav-counter">
         <span id="issue-counter">Issue 1 of 6</span>
       </div>
       <div class="issue-nav-progress">
         <div class="fill" id="issue-progress-fill" style="width:0%"></div>
       </div>
-      <button class="nav-btn" id="btn-next-top" onclick="navigateSingleIssue(1)" title="Next issue (Shift+→)">Issue ▶</button>
-      <button class="nav-btn" id="btn-next-file-top" onclick="navigateToFile(1)" title="Next file (N)">File ▶▶</button>
+      <button class="nav-btn" id="btn-next-top" onclick="navigateSingleIssue(1)" title="Next issue (Alt+→)">Issue ▶</button>
+      <button class="nav-btn" id="btn-next-file-top" onclick="navigateToFile(1)" title="Next file (Shift+N)">File ▶▶</button>
       <div class="issue-nav-actions">
         <button id="btn-save-top" class="nav-btn primary" onclick="saveReview()" disabled>
           💾 Save
@@ -855,8 +855,8 @@ body {
           <kbd>Shift+1</kbd>-<kbd>Shift+6</kbd> Select decision<br>
           <kbd>Shift+A</kbd> AI review &nbsp;|&nbsp;
           <kbd>Shift+D</kbd> Discard file<br>
-          <kbd>Shift+←</kbd>/<kbd>Shift+→</kbd> Prev/next issue<br>
-          <kbd>Shift+N</kbd>/<kbd>Shift+P</kbd> Prev/next file<br>
+          <kbd>Alt+←</kbd>/<kbd>Alt+→</kbd> Prev/next issue<br>
+          <kbd>Shift+P</kbd>/<kbd>Shift+N</kbd> Prev/next file<br>
           <kbd>Ctrl+S</kbd> Save
         </div>
       </div>
@@ -864,11 +864,11 @@ body {
 
     <!-- Bottom navigation (single-issue mode) -->
     <div class="issue-nav-bottom" id="issue-nav-bottom" style="display:none;">
-      <button class="nav-btn" id="btn-prev-file-bottom" onclick="navigateToFile(-1)" title="Previous file (P)">◀◀ Previous File</button>
-      <button class="nav-btn" id="btn-prev-bottom" onclick="navigateSingleIssue(-1)" title="Previous issue (Shift+←)">◀ Previous Issue</button>
+      <button class="nav-btn" id="btn-prev-file-bottom" onclick="navigateToFile(-1)" title="Previous file (Shift+P)">◀◀ Previous File</button>
+      <button class="nav-btn" id="btn-prev-bottom" onclick="navigateSingleIssue(-1)" title="Previous issue (Alt+←)">◀ Previous Issue</button>
       <span style="font-size:0.75rem;color:var(--text-muted);" id="issue-counter-bottom">1 / 6</span>
-      <button class="nav-btn" id="btn-next-bottom" onclick="navigateSingleIssue(1)" title="Next issue (Shift+→)">Next Issue ▶</button>
-      <button class="nav-btn" id="btn-next-file-bottom" onclick="navigateToFile(1)" title="Next file (N)">Next File ▶▶</button>
+      <button class="nav-btn" id="btn-next-bottom" onclick="navigateSingleIssue(1)" title="Next issue (Alt+→)">Next Issue ▶</button>
+      <button class="nav-btn" id="btn-next-file-bottom" onclick="navigateToFile(1)" title="Next file (Shift+N)">Next File ▶▶</button>
     </div>
   </section>
 </div>
@@ -983,7 +983,7 @@ async function init() {
 }
 
 async function loadFiles() {
-  var data = await apiGet('/api/tasks?stage=200issues%2Freview');
+  var data = await apiGet('/api/tasks?stage=issues%2Freview');
   // Only .issues.md files
   state.files = data.tasks.filter(function(t) {
     return /\.issues\.md$/i.test(t.name);
@@ -2429,7 +2429,7 @@ function getDecisionDescription(decision) {
   }
 }
 
-// ── Keyboard Shortcuts (Shift-modifier to avoid textarea conflicts) ──
+// ── Keyboard Shortcuts ──
 document.addEventListener('keydown', function(e) {
   // Ctrl+S — save (always works, no textarea conflict)
   if (e.ctrlKey && e.key === 's') {
@@ -2438,13 +2438,13 @@ document.addEventListener('keydown', function(e) {
     return;
   }
 
-  // Shift+Arrow keys — prev/next issue (only Shift, no Ctrl/Alt/Meta)
-  if (e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey && e.key === 'ArrowLeft' && state.reviewMode === 'single') {
+  // Alt+Arrow keys — prev/next issue (single-issue mode)
+  if (!e.shiftKey && !e.ctrlKey && e.altKey && !e.metaKey && e.key === 'ArrowLeft' && state.reviewMode === 'single') {
     e.preventDefault();
     navigateSingleIssue(-1);
     return;
   }
-  if (e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey && e.key === 'ArrowRight' && state.reviewMode === 'single') {
+  if (!e.shiftKey && !e.ctrlKey && e.altKey && !e.metaKey && e.key === 'ArrowRight' && state.reviewMode === 'single') {
     e.preventDefault();
     navigateSingleIssue(1);
     return;

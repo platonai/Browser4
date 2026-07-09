@@ -28,7 +28,7 @@ Then open **http://127.0.0.1:8090**.
 | Route | File | Description |
 |-------|------|-------------|
 | `GET /` | `frontend/index.html` | Main Coworker Task Manager — pipeline dashboard with stage tabs and file tree |
-| `GET /issues/review` | `frontend/issue-review.html` | Issue Review SPA — review `.issues.md` files from the `200issues/review` queue |
+| `GET /issues/review` | `frontend/issue-review.html` | Issue Review SPA — review `.issues.md` files from the `issues/review` queue |
 
 ## API
 
@@ -41,8 +41,8 @@ The pipeline is organized into stage groups shown as tabs:
 | `main` | 0draft → 1ready → 2working → 3done → 4review → 5approved → 6git-pushed |
 | `refine` | Draft refinement sub-pipeline (0draft/refine/*) |
 | `sources` | Input feeders: `0draft/issues/github` (fetched GitHub issues) |
-| `issues` | GitHub issues pipeline (200issues/*) |
-| `review` | Issue review queue (`200issues/review`) |
+| `issues` | GitHub issues pipeline (issues/*) |
+| `review` | Issue review queue (`issues/review`) |
 
 ### Endpoints
 

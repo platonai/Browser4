@@ -35,14 +35,14 @@ AI 协作助手是一个代理（agent），可协助你在指定仓库中完成
 
 | 阶段   | 文件夹 | 说明 |
 |--------|--------|------|
-| 草稿   | `200issues/draft/refine/0ready` | 待提取和润色的 issue 描述草稿 |
-| 处理中 | `200issues/draft/refine/1working` | 代理正在提取和润色 issue |
-| 完成   | `200issues/draft/refine/2done` | 提取完成，已暂存 |
-| 错误   | `200issues/draft/refine/0error` | 达到最大重试次数后提取失败 |
-| 待创建 | `200issues/github/commit/ready` | 已润色的 issue 文件等待通过 `gh` CLI 创建 |
-| 已创建 | `200issues/github/commit/done` | issue 已在 GitHub 上成功创建 |
-| 失败   | `200issues/github/commit/failed` | `gh` CLI 返回错误 — 需人工处理 |
-| 草稿（人工） | `200issues/github/commit/draft` | 原始草稿等待人工审批 |
+| 草稿   | `issues/draft/refine/0ready` | 待提取和润色的 issue 描述草稿 |
+| 处理中 | `issues/draft/refine/1working` | 代理正在提取和润色 issue |
+| 完成   | `issues/draft/refine/2done` | 提取完成，已暂存 |
+| 错误   | `issues/draft/refine/0error` | 达到最大重试次数后提取失败 |
+| 待创建 | `issues/github/commit/ready` | 已润色的 issue 文件等待通过 `gh` CLI 创建 |
+| 已创建 | `issues/github/commit/done` | issue 已在 GitHub 上成功创建 |
+| 失败   | `issues/github/commit/failed` | `gh` CLI 返回错误 — 需人工处理 |
+| 草稿（人工） | `issues/github/commit/draft` | 原始草稿等待人工审批 |
 
 ### 草稿润色管道（`main/0draft` 的子管道）
 
@@ -130,8 +130,8 @@ Coworker 将控制数据保存在当前仓库中，但任务执行可以针对�
 |------|---------|---------|
 | `coworker` | `coworker.ps1` | `main/1ready` 或 `main/5approved` |
 | `draft-refinement` | `workers/refine-drafts.ps1` | `main/0draft/refine/1ready` |
-| `commit-github-issues` | `workers/commit-github-issues.ps1` | `200issues/github/commit/ready`（默认禁用） |
-| `refine-github-issues` | `workers/refine-github-issues.ps1` | `200issues/draft/refine/0ready` |
+| `commit-github-issues` | `workers/commit-github-issues.ps1` | `issues/github/commit/ready`（默认禁用） |
+| `refine-github-issues` | `workers/refine-github-issues.ps1` | `issues/draft/refine/0ready` |
 | `fetch-github-issues` | `workers/fetch-github-issues.ps1` | （始终运行，每 10 分钟） |
 | `triage-github-issues` | `workers/triage-github-issues.ps1` | `main/0draft/issues/github`（每 30 分钟） |
 | `organize-task-files` | `workers/organize-task-files.ps1` | （始终运行，每 5 分钟） |
@@ -168,9 +168,9 @@ Coworker 将控制数据保存在当前仓库中，但任务执行可以针对�
 
 Coworker 可以从自然语言的草稿文件中提取、润色并创建 GitHub issues。这是一个两阶段管道：
 
-1. **润色** (`refine-github-issues.ps1`)：扫描 `200issues/draft/refine/0ready` 中的草稿文件，调用代理提取各个独立的 issue，将每个 issue 格式化为结构化的 Markdown 文件，写入 `200issues/github/commit/ready`。
+1. **润色** (`refine-github-issues.ps1`)：扫描 `issues/draft/refine/0ready` 中的草稿文件，调用代理提取各个独立的 issue，将每个 issue 格式化为结构化的 Markdown 文件，写入 `issues/github/commit/ready`。
 
-2. **创建** (`commit-github-issues.ps1`)：扫描 `200issues/github/commit/ready` 中已格式化的 issue 文件，通过 `gh issue create` 在 GitHub 上创建它们。
+2. **创建** (`commit-github-issues.ps1`)：扫描 `issues/github/commit/ready` 中已格式化的 issue 文件，通过 `gh issue create` 在 GitHub 上创建它们。
 
 Issue 文件格式：
 ```markdown

@@ -36,14 +36,14 @@ Tasks with the `#auto-approve` tag skip `3done` and go directly from `2working` 
 
 | Stage | Folder | Description |
 |-------|--------|-------------|
-| Draft | `200issues/draft/refine/0ready` | Draft issue descriptions to be extracted and refined |
-| In Process | `200issues/draft/refine/1working` | Agent is extracting and refining issues |
-| Done | `200issues/draft/refine/2done` | Extraction complete, issues staged |
-| Error | `200issues/draft/refine/0error` | Extraction failed after max retries |
-| Staged | `200issues/github/commit/ready` | Refined issue files ready for creation via `gh` CLI |
-| Created | `200issues/github/commit/done` | Issues successfully created on GitHub |
-| Failed | `200issues/github/commit/failed` | `gh` CLI returned an error — manual inspection needed |
-| Draft (manual) | `200issues/github/commit/draft` | Original drafts awaiting manual approval |
+| Draft | `issues/draft/refine/0ready` | Draft issue descriptions to be extracted and refined |
+| In Process | `issues/draft/refine/1working` | Agent is extracting and refining issues |
+| Done | `issues/draft/refine/2done` | Extraction complete, issues staged |
+| Error | `issues/draft/refine/0error` | Extraction failed after max retries |
+| Staged | `issues/github/commit/ready` | Refined issue files ready for creation via `gh` CLI |
+| Created | `issues/github/commit/done` | Issues successfully created on GitHub |
+| Failed | `issues/github/commit/failed` | `gh` CLI returned an error — manual inspection needed |
+| Draft (manual) | `issues/github/commit/draft` | Original drafts awaiting manual approval |
 
 ### Draft refinement pipeline (sub-pipeline of `main/0draft`)
 
@@ -131,8 +131,8 @@ Default scheduled tasks:
 |------|--------------|--------------|
 | `coworker` | `coworker.ps1` | `main/1ready` or `main/5approved` |
 | `draft-refinement` | `workers/refine-drafts.ps1` | `main/0draft/refine/1ready` |
-| `commit-github-issues` | `workers/commit-github-issues.ps1` | `200issues/github/commit/ready` (disabled by default) |
-| `refine-github-issues` | `workers/refine-github-issues.ps1` | `200issues/draft/refine/0ready` |
+| `commit-github-issues` | `workers/commit-github-issues.ps1` | `issues/github/commit/ready` (disabled by default) |
+| `refine-github-issues` | `workers/refine-github-issues.ps1` | `issues/draft/refine/0ready` |
 | `fetch-github-issues` | `workers/fetch-github-issues.ps1` | _(always runs, every 10 min)_ |
 | `triage-github-issues` | `workers/triage-github-issues.ps1` | `main/0draft/issues/github` (every 30 min) |
 | `organize-task-files` | `workers/organize-task-files.ps1` | _(always runs, every 5 min)_ |
@@ -169,9 +169,9 @@ You can refine a single file or every file in a folder. When a folder is provide
 
 Coworker can extract, refine, and create GitHub issues from natural-language draft files. This is a two-stage pipeline:
 
-1. **Refine** (`refine-github-issues.ps1`): Scans `200issues/draft/refine/0ready` for draft files describing one or more issues, invokes the agent to extract individual issues, formats each as a structured markdown file, and writes them to `200issues/github/commit/ready`.
+1. **Refine** (`refine-github-issues.ps1`): Scans `issues/draft/refine/0ready` for draft files describing one or more issues, invokes the agent to extract individual issues, formats each as a structured markdown file, and writes them to `issues/github/commit/ready`.
 
-2. **Commit** (`commit-github-issues.ps1`): Scans `200issues/github/commit/ready` for formatted issue files and creates them on GitHub via `gh issue create`.
+2. **Commit** (`commit-github-issues.ps1`): Scans `issues/github/commit/ready` for formatted issue files and creates them on GitHub via `gh issue create`.
 
 Issue file format:
 ```markdown
