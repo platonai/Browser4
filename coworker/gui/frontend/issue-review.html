@@ -2296,7 +2296,7 @@ async function triggerAiReviewDirectory() {
   // Find all files in this directory
   var dirFiles = [];
   for (var i = 0; i < state.files.length; i++) {
-    if (state.files[i].path.indexOf(directory + '/') === 0 || state.files[i].path.indexOf(directory) === 0) {
+    if (state.files[i].path.indexOf(directory + '/') >= 0 || state.files[i].path.indexOf(directory) >= 0) {
       // Only include unreviewed or partially reviewed files
       var reviewed = state.files[i]._reviewedCount || 0;
       var total = state.files[i]._issueCount || 0;
@@ -2472,7 +2472,7 @@ async function markAllDone() {
   var fileCount = 0;
   var unreviewedCount = 0;
   for (var i = 0; i < state.files.length; i++) {
-    if (state.files[i].path.indexOf(directory + '/') === 0 || state.files[i].path.indexOf(directory) === 0) {
+    if (state.files[i].path.indexOf(directory + '/') >= 0 || state.files[i].path.indexOf(directory) >= 0) {
       fileCount++;
       if (state.files[i]._issueCount !== null && state.files[i]._reviewedCount !== null) {
         if (state.files[i]._reviewedCount < state.files[i]._issueCount) {
@@ -2490,7 +2490,7 @@ async function markAllDone() {
   // Count zero-issue files
   var zeroIssueFiles = [];
   for (var i2 = 0; i2 < state.files.length; i2++) {
-    if (state.files[i2].path.indexOf(directory + '/') === 0 || state.files[i2].path.indexOf(directory) === 0) {
+    if (state.files[i2].path.indexOf(directory + '/') >= 0 || state.files[i2].path.indexOf(directory) >= 0) {
       if (state.files[i2]._issueCount === 0) {
         zeroIssueFiles.push(state.files[i2]);
       }
