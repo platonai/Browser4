@@ -49,6 +49,147 @@ const STOPWORDS = new Set([
 
 let _tasksRoot = null;
 let _cache = null;          // { stats, byDecision, byCategory, bySeverity, allIssues, titles }
+let _feedbackLog = [];      // { timestamp, issueTitle, aiDecision, humanDecision, match }
+
+// ── Curated few-shot examples ─────────────────────────────────────────────
+//
+// Hand-picked exemplar issues that best illustrate each decision boundary.
+// These are used in preference to random samples because they show clearer
+// decision rationale than the average reviewed issue.
+
+const CURATED_EXAMPLES = [
+  // ── ACCEPT: clear bug, blocks AI agents, well-scoped fix ────────────
+  {
+    title: "`get all` arrays produce unaligned multi-field data",
+    severity: "High",
+    category: "Reliability",
+    decision: "ACCEPT",
+    notes: "Arrays for different fields have different lengths with no index alignment, making cross-field correlation impossible for agents. Clear data-integrity bug.",
+    scenario: "amazon",
+  },
+  {
+    title: "`htmlsnapshot capture` HTTP timeout on first attempt",
+    severity: "High",
+    category: "Reliability",
+    decision: "ACCEPT",
+    notes: "Reproducible timeout blocks agent extraction workflows. Needs retry logic or increased timeout.",
+    scenario: "html-snapshot-extraction",
+  },
+  {
+    title: "`drag` command fails with snapshot element refs",
+    severity: "High",
+    category: "Product",
+    decision: "ACCEPT",
+    notes: "The drag command silently fails when given snapshot refs — agents can't detect the failure.",
+    scenario: "advanced-mouse-interaction",
+  },
+
+  // ── ACCEPT with improvements: valid but fix needs refinement ────────
+  {
+    title: "Relative SQL file path resolution from CLI directory is confusing",
+    severity: "Low",
+    category: "UX",
+    decision: "ACCEPT with improvements",
+    notes: "Valid issue but fix should resolve @file paths relative to repo root first, then fall back to CWD — not the other way around.",
+    scenario: "amazon",
+  },
+  {
+    title: "`htmlsnapshot query` with URL submits asynchronously without clear indication",
+    severity: "Medium",
+    category: "UX",
+    decision: "ACCEPT with improvements",
+    notes: "Real UX issue for agents, but suggested fix (blocking wait) would break async workflows. Should add a --wait flag instead.",
+    scenario: "x-sql-query-methods",
+  },
+
+  // ── DEFER: real but large scope or low priority ─────────────────────
+  {
+    title: "`htmlsnapshot inspect` auto-discover fails on e-commerce product grids",
+    severity: "High",
+    category: "Reliability",
+    decision: "DEFER",
+    notes: "The inspect algorithm picks the first repeating element from :root, which on e-commerce pages is navigation, not products. Fixing requires refactoring the container-priority heuristic — postpone until inspect gets dedicated attention.",
+    scenario: "Calabi-Yau",
+  },
+  {
+    title: "`snapshot` vs `htmlsnapshot` — confusing two-system design for new users",
+    severity: "Medium",
+    category: "Discoverability",
+    decision: "DEFER",
+    notes: "Valid design concern but unifying two snapshot systems is an architectural change. Document the distinction clearly for now.",
+    scenario: "hacker-news",
+  },
+  {
+    title: "No automatic re-snapshot after navigation — silent ref staleness risk",
+    severity: "Medium",
+    category: "Reliability",
+    decision: "DEFER",
+    notes: "Real footgun for agents, but auto-re-snapshot would change core navigation semantics. Needs careful design.",
+    scenario: "hacker-news",
+  },
+
+  // ── WONTFIX: external, platform-specific, intentional design ────────
+  {
+    title: "Documentation's recommended CSS selectors fail on non-English Amazon locale",
+    severity: "Medium",
+    category: "Documentation",
+    decision: "WONTFIX",
+    notes: "Amazon serves different HTML per locale. The tool cannot control upstream DOM. Document the locale-specific selector discovery workflow instead.",
+    scenario: "amazon",
+  },
+  {
+    title: "Template variables in task specification are undefined",
+    severity: "Low",
+    category: "Documentation",
+    decision: "WONTFIX",
+    notes: "Template placeholders like \$cliInvocation are evaluation-framework artifacts, not product bugs. The template system is internal.",
+    scenario: "comprehensive-ecommerce-workflow",
+  },
+  {
+    title: "Cargo build status lines pollute command output",
+    severity: "Low",
+    category: "UX",
+    decision: "WONTFIX",
+    notes: "Cargo output during dev-mode runs is expected. Production builds don't have this. Not worth adding cargo output filtering.",
+    scenario: "amazon",
+  },
+
+  // ── REJECT: not a real problem, intentional, human-only concern ─────
+  {
+    title: "Interactive snapshot (`-i`) does not display element refs inline",
+    severity: "Medium",
+    category: "UX",
+    decision: "REJECT",
+    notes: "AI agents parse the YAML snapshot file directly — inline refs in the terminal preview are irrelevant. The -i flag is for human debugging, not agent workflows.",
+    scenario: "form-filling",
+  },
+  {
+    title: "Snapshot default output is a file path, not inline content",
+    severity: "Low",
+    category: "UX",
+    decision: "REJECT",
+    notes: "The file output is intentional — agents read the YAML file. Use --stdout for inline output. The default is correct for the primary (agent) user.",
+    scenario: "attach-remote-debug",
+  },
+
+  // ── DUPLICATE: same root cause as another issue ─────────────────────
+  {
+    title: "`tab-new` does not auto-switch to the new tab",
+    severity: "Medium",
+    category: "Reliability",
+    decision: "DUPLICATE",
+    notes: "Same root cause as Issue 3 (stale CDP session after tab creation). Fixing the session refresh will resolve both.",
+    scenario: "comprehensive-ecommerce-workflow",
+  },
+];
+
+const CURATED_BY_DECISION = {};
+(function _indexCurated() {
+  for (const ex of CURATED_EXAMPLES) {
+    if (!CURATED_BY_DECISION[ex.decision]) CURATED_BY_DECISION[ex.decision] = [];
+    CURATED_BY_DECISION[ex.decision].push(ex);
+  }
+})();
 
 // ── Public API ────────────────────────────────────────────────────────────
 
@@ -77,58 +218,45 @@ function getStats() {
 }
 
 /**
- * Return a stratified sample of reviewed issues for few-shot prompting.
- * @param {number} count - desired number of examples (default 5)
+ * Return curated few-shot examples for the AI review prompt.
+ * Uses hand-picked exemplars that best illustrate each decision boundary,
+ * with clear rationale in the notes field. Falls back to random stratified
+ * samples from the review history if not enough curated examples exist.
+ *
+ * @param {number} count - desired number of examples (default 6)
  * @returns {Array<{title, severity, category, decision, notes, scenario}>}
  */
 function getFewShotExamples(count) {
   _ensureLoaded();
-  count = count || 5;
+  count = count || 6;
 
-  // Stratify: pick examples proportionally from each decision bucket
-  const decisions = ['ACCEPT', 'DEFER', 'WONTFIX', 'REJECT', 'ACCEPT with improvements', 'DUPLICATE'];
+  // Use curated examples first — they have better rationale
   const selected = [];
-  const usedIds = new Set();
 
-  // Calculate how many to pick per decision (at least 1 for common decisions)
-  const totalReviewed = _cache.allIssues.filter(i => i.decision).length;
+  // Ensure at least one per decision type from curated set
+  const decisions = ['ACCEPT', 'ACCEPT with improvements', 'DEFER', 'WONTFIX', 'REJECT', 'DUPLICATE'];
   for (const dec of decisions) {
-    const bucket = (_cache.byDecision[dec] || [])
-      .filter(i => i.decision === dec && i.notes && i.notes.trim().length > 0); // prefer examples with notes
-    const bucketAll = (_cache.byDecision[dec] || []).filter(i => i.decision === dec);
-
-    // Prefer examples with notes, fall back to any
-    const pool = bucket.length > 0 ? bucket : bucketAll;
-    if (pool.length === 0) continue;
-
-    // Proportional allocation (minimum 1 for decisions with >5% share)
-    const share = bucketAll.length / Math.max(totalReviewed, 1);
-    const alloc = share > 0.05 ? Math.max(1, Math.round(count * share)) : 0;
-    const n = Math.min(alloc, pool.length);
-
-    for (let i = 0; i < n; i++) {
-      const cand = pool[i];
-      const id = cand.scenario + '|' + cand.title;
-      if (!usedIds.has(id)) {
-        usedIds.add(id);
-        selected.push({
-          title: cand.title,
-          severity: cand.severity,
-          category: cand.category,
-          decision: cand.decision,
-          notes: (cand.notes || '').substring(0, 200),
-          scenario: cand.scenario,
-        });
-      }
+    const curated = CURATED_BY_DECISION[dec] || [];
+    if (curated.length > 0) {
+      selected.push(curated[0]);
     }
   }
 
-  // If we didn't get enough, fill with random picks
+  // Fill up to count from remaining curated examples
+  for (const ex of CURATED_EXAMPLES) {
+    if (selected.length >= count) break;
+    if (!selected.includes(ex)) {
+      selected.push(ex);
+    }
+  }
+
+  // If still not enough, supplement from review history
   if (selected.length < count) {
-    for (const iss of _cache.allIssues) {
+    const usedIds = new Set(selected.map(e => e.title));
+    const reviewed = _cache.allIssues.filter(i => i.decision && i.notes && i.notes.trim().length > 0);
+    for (const iss of reviewed) {
       if (selected.length >= count) break;
-      if (!iss.decision) continue;
-      const id = iss.scenario + '|' + iss.title;
+      const id = iss.title;
       if (!usedIds.has(id)) {
         usedIds.add(id);
         selected.push({
@@ -143,7 +271,7 @@ function getFewShotExamples(count) {
     }
   }
 
-  return selected;
+  return selected.slice(0, count);
 }
 
 /**
@@ -487,6 +615,67 @@ function buildEnrichedContext(issueTitle) {
   };
 }
 
+// ── Feedback loop ─────────────────────────────────────────────────────────
+
+/**
+ * Record a feedback entry comparing an AI-suggested decision against the
+ * final human decision. Used to track AI review calibration over time.
+ *
+ * @param {string} issueTitle
+ * @param {string} aiDecision   - the decision the AI suggested
+ * @param {string} humanDecision - the final human decision (after review)
+ */
+function recordFeedback(issueTitle, aiDecision, humanDecision) {
+  const entry = {
+    timestamp: new Date().toISOString(),
+    issueTitle,
+    aiDecision,
+    humanDecision,
+    match: aiDecision === humanDecision,
+  };
+  _feedbackLog.push(entry);
+
+  // Log to stderr for operational visibility
+  const icon = entry.match ? '✓' : '✗';
+  console.error(`[review-history] Feedback ${icon}: AI="${aiDecision}" Human="${humanDecision}" — "${issueTitle.substring(0, 80)}"`);
+
+  return entry;
+}
+
+/**
+ * Get feedback statistics for calibration monitoring.
+ * @returns {{ total, matches, mismatches, accuracy, byAiDecision, recent }}
+ */
+function getFeedbackStats() {
+  const total = _feedbackLog.length;
+  const matches = _feedbackLog.filter(e => e.match).length;
+  const mismatches = total - matches;
+
+  // Accuracy by AI decision type
+  const byAiDecision = {};
+  for (const e of _feedbackLog) {
+    if (!byAiDecision[e.aiDecision]) {
+      byAiDecision[e.aiDecision] = { total: 0, correct: 0 };
+    }
+    byAiDecision[e.aiDecision].total++;
+    if (e.match) byAiDecision[e.aiDecision].correct++;
+  }
+
+  return {
+    total,
+    matches,
+    mismatches,
+    accuracy: total > 0 ? Math.round((matches / total) * 100) : null,
+    byAiDecision,
+    recent: _feedbackLog.slice(-20),
+  };
+}
+
+/** Clear the feedback log (e.g., for testing). */
+function clearFeedback() {
+  _feedbackLog = [];
+}
+
 // ── Exports ───────────────────────────────────────────────────────────────
 
 module.exports = {
@@ -501,4 +690,9 @@ module.exports = {
   buildFewShotSection,
   buildSimilarSection,
   buildEnrichedContext,
+  recordFeedback,
+  getFeedbackStats,
+  clearFeedback,
+  CURATED_EXAMPLES,
+  CURATED_BY_DECISION,
 };

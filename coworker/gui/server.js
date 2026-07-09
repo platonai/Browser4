@@ -14,6 +14,7 @@ const path = require('path');
 const fs = require('fs');
 const { execFile } = require('child_process');
 const reviewHistory = require('./review-history.js');
+const llm = require('./llm.js');
 
 // ── CLI argument parsing ────────────────────────────────────────────────
 
@@ -34,8 +35,9 @@ const DEFAULT_TASKS_ROOT = path.resolve(__dirname, '..', 'tasks');
 const TASKS_ROOT = path.resolve(argFlag('tasks-root', DEFAULT_TASKS_ROOT));
 const OPEN_BROWSER = argBool('open-browser');
 
-// Initialise the review-history index
+// Initialise the review-history index and LLM wrapper
 reviewHistory.init(TASKS_ROOT);
+llm.init({ claudePath: process.env.CLAUDE_PATH || 'claude', tasksRoot: TASKS_ROOT, reviewHistory: reviewHistory });
 
 // ── Stage registry ──────────────────────────────────────────────────────
 
@@ -447,35 +449,45 @@ ${issueText}
 Respond with ONLY a single JSON object (no markdown, no backticks):
 {"decision": "<one of the six options above>", "notes": "<1-2 sentence rationale>"}`;
 
-  const claudePath = process.env.CLAUDE_PATH || 'claude';
-  const child = execFile(claudePath, ['-p', prompt], {
+  // Use the resilient LLM wrapper with retry, circuit breaker, pre-warm, and heuristic fallback
+  llm.sendPrompt(prompt, {
     timeout: 60000,
-    maxBuffer: 1024 * 1024,
-    env: { ...process.env },
-  }, (err, stdout, stderr) => {
-    if (err) {
-      if (err.killed) return res.status(504).json({ error: 'AI review timed out (60s)' });
-      return res.status(500).json({ error: `AI review failed: ${err.message}` });
+    retries: 3,
+    heuristic: function() {
+      return llm.heuristicDecision({ title, severity, category, sections });
+    },
+  }).then(function(result) {
+    if (result.heuristic) {
+      // Heuristic fallback — return the heuristic decision with a flag
+      res.json({
+        decision: result.heuristicResult.decision,
+        notes: result.heuristicResult.notes,
+        heuristic: true,
+      });
+      return;
     }
 
-    // Parse JSON from output — find the first { } block
+    const stdout = result.stdout;
     const jsonMatch = stdout.match(/\{[\s\S]*\}/);
     if (!jsonMatch) {
       return res.status(500).json({ error: 'AI response did not contain valid JSON', raw: stdout.substring(0, 500) });
     }
 
     try {
-      const result = JSON.parse(jsonMatch[0]);
-      if (!result.decision) {
+      const parsed = JSON.parse(jsonMatch[0]);
+      if (!parsed.decision) {
         return res.status(500).json({ error: 'AI response missing decision field', raw: jsonMatch[0] });
       }
       res.json({
-        decision: result.decision.trim(),
-        notes: (result.notes || '').trim(),
+        decision: parsed.decision.trim(),
+        notes: (parsed.notes || '').trim(),
+        heuristic: false,
       });
     } catch (e) {
       res.status(500).json({ error: 'Failed to parse AI response', raw: jsonMatch[0] });
     }
+  }).catch(function(err) {
+    res.status(500).json({ error: `AI review failed: ${err.message}` });
   });
 });
 
@@ -565,6 +577,35 @@ app.post('/api/issue-review/mark-done', (req, res) => {
     fs.mkdirSync(path.dirname(donePath), { recursive: true });
     fs.renameSync(src.abs, donePath);
 
+    // ── Post-review actions ──────────────────────────────────────────
+
+    // Hot-reload: index the newly reviewed file so stats and similarity
+    // reflect the latest decisions without a server restart.
+    reviewHistory.invalidate();
+    reviewHistory.init(TASKS_ROOT);
+
+    // Feedback loop: compare pre-review decisions (if any were AI-suggested)
+    // against final human decisions for calibration tracking.
+    try {
+      const model = require('./frontend/issue-model.js').parseIssueFile(content);
+      for (const issue of model.issues) {
+        if (issue.review.decision) {
+          // We record the human decision. If the issue had an AI suggestion
+          // stored in notes (e.g., "[AI suggested: ACCEPT]"), compare it.
+          const humanDecision = issue.review.decision;
+          const notes = issue.review.notes || '';
+          const aiMatch = notes.match(/\[AI suggested:\s*([^\]]+)\]/);
+          if (aiMatch) {
+            const aiDecision = aiMatch[1].trim();
+            reviewHistory.recordFeedback(issue.title, aiDecision, humanDecision);
+          }
+        }
+      }
+    } catch (fbErr) {
+      // Feedback recording is best-effort — don't fail the request
+      console.error('[server] Feedback tracking error:', fbErr.message);
+    }
+
     const readyRel = path.relative(TASKS_ROOT, readyPath).replace(/\\/g, '/');
     const doneRel = path.relative(TASKS_ROOT, donePath).replace(/\\/g, '/');
 
@@ -648,37 +689,46 @@ Respond with ONLY a single JSON object (no markdown, no backticks). Include a de
   ...
 ]}`;
 
-  const claudePath = process.env.CLAUDE_PATH || 'claude';
-  const child = execFile(claudePath, ['-p', prompt], {
-    timeout: 120000,  // 2 min for batch
-    maxBuffer: 2 * 1024 * 1024,
-    env: { ...process.env },
-  }, (err, stdout, stderr) => {
-    if (err) {
-      if (err.killed) return res.status(504).json({ error: 'Batch AI review timed out (120s)' });
-      return res.status(500).json({ error: `Batch AI review failed: ${err.message}` });
+  // Use the resilient LLM wrapper for batch review
+  llm.sendPrompt(prompt, {
+    timeout: 120000,
+    retries: 2,  // fewer retries for batch (more expensive)
+    heuristic: function() {
+      // Apply per-issue heuristic for batch fallback
+      const decisions = issues.map(function(iss) {
+        const h = llm.heuristicDecision(iss);
+        return { issueNumber: iss.number, decision: h.decision, notes: h.notes };
+      });
+      return { decisions: decisions };
+    },
+  }).then(function(result) {
+    if (result.heuristic) {
+      res.json({ decisions: result.heuristicResult.decisions, heuristic: true });
+      return;
     }
 
+    const stdout = result.stdout;
     const jsonMatch = stdout.match(/\{[\s\S]*\}/);
     if (!jsonMatch) {
       return res.status(500).json({ error: 'AI response did not contain valid JSON', raw: stdout.substring(0, 500) });
     }
 
     try {
-      const result = JSON.parse(jsonMatch[0]);
-      if (!result.decisions || !Array.isArray(result.decisions)) {
+      const parsed = JSON.parse(jsonMatch[0]);
+      if (!parsed.decisions || !Array.isArray(parsed.decisions)) {
         return res.status(500).json({ error: 'AI response missing decisions array', raw: jsonMatch[0] });
       }
-      // Ensure each decision has the right fields
-      const decisions = result.decisions.map(d => ({
+      const decisions = parsed.decisions.map(d => ({
         issueNumber: d.issueNumber,
         decision: (d.decision || 'DEFER').trim(),
         notes: (d.notes || '').trim(),
       }));
-      res.json({ decisions });
+      res.json({ decisions, heuristic: false });
     } catch (e) {
       res.status(500).json({ error: 'Failed to parse AI response', raw: jsonMatch[0] });
     }
+  }).catch(function(err) {
+    res.status(500).json({ error: `Batch AI review failed: ${err.message}` });
   });
 });
 
@@ -698,6 +748,31 @@ app.get('/api/issue-review/stats', (req, res) => {
   const stats = reviewHistory.getStats();
   const reviewedCount = reviewHistory.getReviewedCount();
   res.json({ ...stats, reviewedCount });
+});
+
+// GET /api/issue-review/health
+// Check whether the LLM is reachable and the circuit breaker status.
+app.get('/api/issue-review/health', async (req, res) => {
+  const circuit = llm.getCircuitStatus();
+  const health = await llm.checkHealth();
+  const feedback = reviewHistory.getFeedbackStats();
+  res.json({
+    llm: health,
+    circuit: circuit,
+    feedback: {
+      total: feedback.total,
+      accuracy: feedback.accuracy,
+      matches: feedback.matches,
+      mismatches: feedback.mismatches,
+    },
+  });
+});
+
+// GET /api/issue-review/feedback
+// Return detailed feedback statistics (AI vs human decision comparison).
+app.get('/api/issue-review/feedback', (req, res) => {
+  const stats = reviewHistory.getFeedbackStats();
+  res.json(stats);
 });
 
 // Build a summary version of the issues file:

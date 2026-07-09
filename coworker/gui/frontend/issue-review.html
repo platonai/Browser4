@@ -471,6 +471,20 @@ body {
 .badge.review-decision.defer { background: var(--defer-bg); color: var(--defer-color); border: 1px solid var(--defer-border); }
 .badge.review-decision.improve { background: var(--info-bg); color: var(--info); border: 1px solid var(--info-border); }
 .badge.review-decision.duplicate { background: var(--duplicate-bg); color: var(--duplicate-color); border: 1px solid var(--duplicate-border); }
+.badge.review-decision.heuristic { background: #fff7ed; color: #c2410c; border: 1px solid #fed7aa; font-style: italic; }
+
+/* LLM health indicator */
+.llm-health { cursor: pointer; transition: background var(--transition); }
+.llm-health.healthy { background: var(--success-bg); color: var(--success); }
+.llm-health.unhealthy { background: var(--danger-bg); color: var(--danger); }
+.llm-health.checking { background: var(--warning-bg); color: var(--warning); }
+
+/* Heuristic note callout */
+.heuristic-note {
+  background: #fff7ed; border-left: 3px solid #f97316;
+  padding: 6px 12px; margin-top: 8px; border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  font-size: 0.75rem; color: #9a3412;
+}
 
 /* Collapse icon */
 .issue-card-header .collapse-icon {
@@ -816,6 +830,7 @@ body {
       </div>
       <div class="review-actions">
         <span id="save-indicator-inline" class="save-indicator-inline clean">✓ Saved</span>
+        <span id="llm-health-indicator" class="llm-health" title="LLM status" style="font-size:0.75rem;padding:2px 8px;border-radius:var(--radius-sm);">🔍</span>
         <label class="auto-approve-label" id="auto-approve-label" title="When checked, the summary file gets #auto-approve tag — coworker will auto-move it to 5approved and trigger push.">
           <input type="checkbox" id="chk-auto-approve" onchange="onAutoApproveChange()">
           <span>Auto-approve</span>
@@ -981,6 +996,67 @@ async function init() {
     showToast('Cannot connect to backend. Is the server running?', 'error');
     document.getElementById('file-list').innerHTML =
       '<div class="empty-message"><span class="empty-icon">⚠</span>Cannot reach backend at ' + location.origin + '</div>';
+  }
+  // Check LLM health and poll periodically
+  checkLlmHealth();
+  setInterval(checkLlmHealth, 30000); // every 30s
+}
+
+// ── LLM Health ──────────────────────────────────────────────────────────
+
+var llmHealthy = null; // null = checking, true = healthy, false = unhealthy
+
+async function checkLlmHealth() {
+  var indicator = document.getElementById('llm-health-indicator');
+  if (!indicator) return;
+
+  indicator.textContent = '🔍';
+  indicator.className = 'llm-health checking';
+  indicator.title = 'Checking LLM status...';
+
+  try {
+    var health = await apiGet('/api/issue-review/health');
+    llmHealthy = health.llm.ok;
+
+    if (health.circuit.open) {
+      indicator.textContent = '⚡ LLM paused (' + health.circuit.cooldownRemaining + 's)';
+      indicator.className = 'llm-health unhealthy';
+      indicator.title = 'Circuit breaker open — LLM had ' + health.circuit.consecutiveFailures + ' consecutive failures. Resuming in ' + health.circuit.cooldownRemaining + 's.';
+      llmHealthy = false;
+    } else if (health.llm.ok) {
+      indicator.textContent = '🤖 LLM ready';
+      indicator.className = 'llm-health healthy';
+      indicator.title = 'LLM is reachable';
+      llmHealthy = true;
+    } else {
+      indicator.textContent = '⚠ LLM offline';
+      indicator.className = 'llm-health unhealthy';
+      indicator.title = 'LLM is not reachable: ' + (health.llm.message || 'unknown error') + '. Heuristic fallback will be used.';
+      llmHealthy = false;
+    }
+  } catch (e) {
+    indicator.textContent = '⚠ LLM unknown';
+    indicator.className = 'llm-health unhealthy';
+    indicator.title = 'Cannot check LLM health: ' + e.message;
+    llmHealthy = false;
+  }
+
+  // Enable/disable AI buttons based on health
+  updateAiButtonStates();
+}
+
+function updateAiButtonStates() {
+  // In single-issue mode, we always allow the button — the LLM wrapper
+  // will use heuristic fallback if needed. But we style it differently.
+  var btnSingle = document.getElementById('btn-ai-review');
+  var btnAll = document.getElementById('btn-ai-review-all');
+
+  if (llmHealthy === false) {
+    if (btnSingle) btnSingle.title = 'AI review (heuristic fallback — LLM is offline)';
+    if (btnAll) btnAll.title = 'AI review all (heuristic fallback — LLM is offline)';
+  } else if (llmHealthy === true) {
+    if (btnSingle) btnSingle.title = 'AI review (Shift+A)';
+    if (btnAll) btnAll.title = 'AI review ALL issues in this file at once (Shift+Ctrl+A). Detects duplicates, sees cross-issue context.';
   }
 }
 
@@ -1706,7 +1782,11 @@ function renderSingleIssue() {
                    (issue.reviewDecision === 'ACCEPT' ? 'accept' :
                     issue.reviewDecision === 'REJECT' ? 'reject' :
                     issue.reviewDecision === 'DUPLICATE' ? 'duplicate' : 'defer');
+    if (issue._heuristic) decClass += ' heuristic';
     html += '<span class="badge review-decision ' + decClass + '">' + escHtml(issue.reviewDecision) + '</span>';
+    if (issue._heuristic) {
+      html += '<span class="badge review-decision heuristic" title="This decision was made by heuristic rules (LLM was unavailable). Review carefully.">⚠ Heuristic</span>';
+    }
   }
   html += '</div>';
   html += '</div>';
@@ -2117,10 +2197,17 @@ async function triggerAiReview(index) {
       else if (dl.indexOf('defer') >= 0) decision = 'DEFER';
       else if (dl.indexOf('wontfix') >= 0 || dl.indexOf("won't fix") >= 0) decision = 'WONTFIX';
       else if (dl.indexOf('reject') >= 0) decision = 'REJECT';
+      else if (dl.indexOf('duplicate') >= 0) decision = 'DUPLICATE';
     }
 
     issue.reviewDecision = decision;
     issue.reviewNotes = result.notes || '';
+    // Track whether this was a heuristic fallback
+    issue._heuristic = !!result.heuristic;
+    // Store AI suggestion in notes for feedback tracking
+    if (issue.reviewNotes.indexOf('[AI suggested:') < 0) {
+      issue.reviewNotes = '[AI suggested: ' + decision + '] ' + issue.reviewNotes;
+    }
     state.dirty = true;
     updateSaveState();
     scheduleAutoSave();
@@ -2221,6 +2308,12 @@ async function triggerAiReviewAll() {
           }
           state.parsed.issues[idx].reviewDecision = decision;
           state.parsed.issues[idx].reviewNotes = dec.notes || '';
+          // Track whether this was a heuristic fallback
+          state.parsed.issues[idx]._heuristic = !!result.heuristic;
+          // Store AI suggestion in notes for feedback tracking
+          if (state.parsed.issues[idx].reviewNotes.indexOf('[AI suggested:') < 0) {
+            state.parsed.issues[idx].reviewNotes = '[AI suggested: ' + decision + '] ' + state.parsed.issues[idx].reviewNotes;
+          }
         }
       }
     }
