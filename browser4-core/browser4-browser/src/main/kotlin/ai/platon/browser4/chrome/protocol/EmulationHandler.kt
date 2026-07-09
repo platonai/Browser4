@@ -5,6 +5,7 @@ import ai.platon.cdt.kt.protocol.types.input.DispatchKeyEventType
 import ai.platon.cdt.kt.protocol.types.input.DragData
 import ai.platon.browser4.api.BrowserProtocol
 import ai.platon.browser4.api.model.NodeRef
+import ai.platon.browser4.chrome.protocol.util.withNodeObjectId
 import ai.platon.pulsar.common.DescriptiveResult
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.common.io.KeyboardModifier
@@ -756,6 +757,23 @@ class EmulationHandler(
         node: NodeRef, count: Int, position: String = "center", modifier: String? = null, delayMillis: Long = 100
     ) {
         val point = getInteractPoint(node, position, useRandomOffset = true) ?: return
+
+        // Focus the target element so that follow-up keyboard events (e.g. press
+        // after click-right on an input) are routed to the correct element.  CDP
+        // Input.dispatchMouseEvent dispatches trusted mouse events synchronously
+        // but does not guarantee that the element under the cursor receives focus
+        // on all platforms — explicit focus removes the ambiguity.
+        val localBp = bp
+        if (localBp != null) {
+            withNodeObjectId(localBp, node) { objectId ->
+                localBp.callFunctionOn(
+                    """function() { if (this instanceof HTMLElement) { this.focus({ preventScroll: true }); } }""",
+                    objectId = objectId,
+                    returnByValue = false,
+                    userGesture = true,
+                )
+            }
+        }
 
         // Use CDP Input.dispatchMouseEvent (trusted, synchronous) instead of
         // synthetic DOM events.  Untrusted JS MouseEvent dispatch + setTimeout(0)
