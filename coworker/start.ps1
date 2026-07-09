@@ -83,12 +83,21 @@ function Start-GuiServer {
     $guiDir = Split-Path -Parent $guiServerPath
     Write-Host "[coworker] Installing GUI dependencies (npm install)..."
     $npmArgs = @('install', '--no-audit', '--no-fund', '--loglevel=error')
-    $npmResult = Start-Process -FilePath 'cmd' `
-        -ArgumentList (@('/c', 'npm') + $npmArgs) `
-        -WorkingDirectory $guiDir `
-        -NoNewWindow `
-        -Wait `
-        -PassThru
+    if ($IsWindows) {
+        $npmResult = Start-Process -FilePath 'cmd' `
+            -ArgumentList (@('/c', 'npm') + $npmArgs) `
+            -WorkingDirectory $guiDir `
+            -NoNewWindow `
+            -Wait `
+            -PassThru
+    } else {
+        $npmResult = Start-Process -FilePath 'npm' `
+            -ArgumentList $npmArgs `
+            -WorkingDirectory $guiDir `
+            -NoNewWindow `
+            -Wait `
+            -PassThru
+    }
     if ($npmResult.ExitCode -ne 0) {
         Write-Warning "[coworker] npm install failed (exit code $($npmResult.ExitCode)). GUI may not work."
     }
