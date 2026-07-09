@@ -11252,14 +11252,9 @@ async fn run(
         }
     }
 
-    // Ensure the Browser4 server is running (for relevant commands)
-    if should_ensure_server_running(command) {
-        ensure_server_running(&base_url).await?;
-    }
-
-    let client = make_client();
-
-    // Look up the command definition
+    // Look up the command definition — validate the command BEFORE starting
+    // the backend so that non-existent commands and help requests don't
+    // trigger an unnecessary server launch.
     let cmd_map = commands_map();
     let cmd_def = match cmd_map.get(command) {
         Some(def) => def,
@@ -11282,6 +11277,13 @@ async fn run(
             return Ok(());
         }
     };
+
+    // Ensure the Browser4 server is running (for relevant commands)
+    if should_ensure_server_running(command) {
+        ensure_server_running(&base_url).await?;
+    }
+
+    let client = make_client();
 
     // `act` is handled early — its description is variadic (multi-word),
     // so we join all remaining positionals before the standard arg parser
