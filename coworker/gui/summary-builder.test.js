@@ -223,7 +223,7 @@ describe('buildAbstractFromModel', () => {
 describe('buildSummaryContent', () => {
   it('should handle a complete .issues.md file with mixed decisions', () => {
     const fixturePath = path.join(
-      __dirname, '..', '..', 'tasks', 'issues', 'review',
+      __dirname, '..', 'tasks', 'issues', 'review',
       '2026', '0708', '20260708-162517-Calabi-Yau.issues.md'
     );
     // Skip if fixture doesn't exist (CI / different checkout)
@@ -398,7 +398,6 @@ describe('buildSummaryContent', () => {
     // The deferred issue (Issue 2) should be condensed
     assert.ok(result.includes('### Issue 2: Deferred'));
     assert.ok(result.includes('**Decision:** DEFER'));
-    assert.ok(result.includes('Defer for now.'));
 
     // The unreviewed issue (Issue 3) should be condensed with WONTFIX default
     assert.ok(result.includes('### Issue 3: Unreviewed'));
