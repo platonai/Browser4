@@ -612,8 +612,8 @@ body {
 }
 
 .review-notes {
-  width: 100%; min-height: 48px; padding: 7px 10px;
-  font-size: 0.78rem; font-family: var(--font);
+  width: 100%; min-height: 80px; padding: 8px 10px;
+  font-size: 0.8rem; font-family: var(--font); line-height: 1.5;
   border: 1px solid var(--border); border-radius: var(--radius-sm);
   background: var(--bg-raised); color: var(--text-primary);
   resize: vertical; transition: all var(--transition);
@@ -792,8 +792,8 @@ body {
   font-size: 0.6rem; opacity: 0.5; margin-left: 3px; font-weight: 400;
 }
 .single-review-block .review-notes {
-  width: 100%; min-height: 56px; padding: 8px 12px;
-  font-size: 0.8rem; font-family: var(--font);
+  width: 100%; min-height: 100px; padding: 10px 12px;
+  font-size: 0.82rem; font-family: var(--font); line-height: 1.5;
   border: 1px solid var(--border); border-radius: var(--radius-sm);
   background: var(--bg-raised); color: var(--text-primary);
   resize: vertical; transition: all var(--transition);
@@ -1725,8 +1725,20 @@ function renderSingleIssue() {
             escHtml(decision) + '<span class="key-hint">Shift+' + (d + 1) + '</span></button>';
   }
   html += '</div>';
+  // Textarea + AI Review button side by side
   html += '<div style="display:flex;gap:8px;align-items:flex-start;">';
-  // Show AI reasoning prominently above notes
+  var notesClass = 'review-notes' + (needsReviewNotes ? ' needs-review' : '');
+  html += '<textarea class="' + notesClass + '" id="single-review-notes" ' +
+          'placeholder="Add your review notes…" ' +
+          'oninput="onSingleNotesChange(' + idx + ', this.value)" ' +
+          'onfocus="focusedIssueIndex=' + idx + '">' +
+          escHtml(issue.review.notes || '') + '</textarea>';
+  html += '<button class="nav-btn accent" id="btn-ai-review" onclick="triggerAiReview(' + idx + ')" ' +
+          'title="AI review (A)" style="flex-shrink:0;white-space:nowrap;align-self:flex-start;">' +
+          '🤖 AI Review <span class="key-hint" style="font-size:0.6rem;opacity:0.5;">Shift+A</span></button>';
+  html += '</div>';
+
+  // AI reasoning and callout below the textarea
   var aiReason = extractAiReasoning(issue.review.notes);
   if (aiReason) {
     var badgeCls = aiBadgeClass(aiReason.decision);
@@ -1735,21 +1747,9 @@ function renderSingleIssue() {
     html += escHtml(aiReason.reasoning);
     html += '</div>';
   }
-
-  var notesClass = 'review-notes' + (needsReviewNotes ? ' needs-review' : '');
-  var notesPlaceholder = needsReviewNotes ? '⚠ Review the AI rationale — notes REQUIRED for ' + issue.review.decision : 'Optional review notes…';
-  html += '<textarea class="' + notesClass + '" id="single-review-notes" ' +
-          'placeholder="' + notesPlaceholder + '" ' +
-          'oninput="onSingleNotesChange(' + idx + ', this.value)" ' +
-          'onfocus="focusedIssueIndex=' + idx + '">' +
-          escHtml(issue.review.notes || '') + '</textarea>';
   if (needsReviewNotes) {
-    html += '<div class="notes-callout">⚠ ' + escHtml(issue.review.decision) + ' — verify the AI rationale in notes above</div>';
+    html += '<div class="notes-callout">⚠ This decision requires review notes — add your rationale in the textarea above</div>';
   }
-  html += '<button class="nav-btn accent" id="btn-ai-review" onclick="triggerAiReview(' + idx + ')" ' +
-          'title="AI review (A)" style="flex-shrink:0;white-space:nowrap;align-self:flex-start;">' +
-          '🤖 AI Review <span class="key-hint" style="font-size:0.6rem;opacity:0.5;">Shift+A</span></button>';
-  html += '</div>';
   html += '</div>';
 
   html += '</div>'; // .single-issue-view
@@ -1866,7 +1866,16 @@ function renderReviewControls(issue, index) {
   }
   html += '</div>';
 
-  // Show AI reasoning prominently above notes
+  // Notes textarea
+  var needsReview = issue.review.decision && issue.review.decision !== 'ACCEPT';
+  var notesCls = 'review-notes' + (needsReview ? ' needs-review' : '');
+  html += '<textarea class="' + notesCls + '" id="review-notes-' + index + '" ' +
+          'placeholder="Add your review notes…" ' +
+          'oninput="onNotesChange(' + index + ', this.value)" ' +
+          'onkeydown="onNotesKeydown(event, ' + index + ')">' +
+          escHtml(issue.review.notes || '') + '</textarea>';
+
+  // AI reasoning and callout below the textarea
   var aiReason = extractAiReasoning(issue.review.notes);
   if (aiReason) {
     var badgeCls = aiBadgeClass(aiReason.decision);
@@ -1875,17 +1884,8 @@ function renderReviewControls(issue, index) {
     html += escHtml(aiReason.reasoning);
     html += '</div>';
   }
-
-  var needsReview = issue.review.decision && issue.review.decision !== 'ACCEPT';
-  var notesCls = 'review-notes' + (needsReview ? ' needs-review' : '');
-  var placeholder = needsReview ? '⚠ Review the AI rationale — notes REQUIRED for ' + issue.review.decision : 'Optional review notes...';
-  html += '<textarea class="' + notesCls + '" id="review-notes-' + index + '" ' +
-          'placeholder="' + placeholder + '" ' +
-          'oninput="onNotesChange(' + index + ', this.value)" ' +
-          'onkeydown="onNotesKeydown(event, ' + index + ')">' +
-          escHtml(issue.review.notes || '') + '</textarea>';
   if (needsReview) {
-    html += '<div class="notes-callout">⚠ ' + escHtml(issue.review.decision) + ' — verify the AI rationale above</div>';
+    html += '<div class="notes-callout">⚠ This decision requires review notes — add your rationale in the textarea above</div>';
   }
 
   html += '</div>';
