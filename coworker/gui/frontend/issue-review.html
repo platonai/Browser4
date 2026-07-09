@@ -2268,11 +2268,17 @@ async function triggerAiReviewAll() {
 
 // ── AI Review Directory ──────────────────────────────────────────────────
 
-// Extracts the directory portion from a file path.
-// e.g., "2026/0708/some-file.issues.md" → "2026/0708"
+// Extracts the directory portion from a file path, relative to issues/review/.
+// e.g., "issues/review/2026/0708/some-file.issues.md" → "2026/0708"
 function extractDirectory(filePath) {
-  var lastSlash = filePath.lastIndexOf('/');
-  return lastSlash >= 0 ? filePath.substring(0, lastSlash) : '';
+  // Strip the review prefix if present (paths from API include it)
+  var prefix = 'issues/review/';
+  var rel = filePath;
+  if (rel.indexOf(prefix) === 0) {
+    rel = rel.substring(prefix.length);
+  }
+  var lastSlash = rel.lastIndexOf('/');
+  return lastSlash >= 0 ? rel.substring(0, lastSlash) : '';
 }
 
 async function triggerAiReviewDirectory() {
