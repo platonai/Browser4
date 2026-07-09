@@ -33,14 +33,3 @@ val FRONTEND_TOOL_NAME_ALIASES: Map<String, String> = mapOf(
     "browser_load_storage_state" to "load_storage_state",
 )
 
-/**
- * Returns true if the given value is an element reference pattern
- * (e.g. "e5", "backend:15") that should be rejected for static
- * DOM snapshot queries.
- */
-fun isElementReference(value: String): Boolean {
-    val trimmed = value.trim()
-    return (trimmed.startsWith('e') && trimmed.length > 1
-            && trimmed.substring(1).all { it.isDigit() })
-            || trimmed.startsWith("backend:")
-}
