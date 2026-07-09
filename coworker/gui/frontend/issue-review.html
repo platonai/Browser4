@@ -1739,7 +1739,7 @@ function renderSingleIssue() {
   html += '</div>';
 
   // AI reasoning and callout below the textarea
-  var aiReason = extractAiReasoning(issue.review.notes);
+  var aiReason = getAiReasoning(issue);
   if (aiReason) {
     var badgeCls = aiBadgeClass(aiReason.decision);
     html += '<div class="ai-reasoning-card">';
@@ -1876,7 +1876,7 @@ function renderReviewControls(issue, index) {
           escHtml(issue.review.notes || '') + '</textarea>';
 
   // AI reasoning and callout below the textarea
-  var aiReason = extractAiReasoning(issue.review.notes);
+  var aiReason = getAiReasoning(issue);
   if (aiReason) {
     var badgeCls = aiBadgeClass(aiReason.decision);
     html += '<div class="ai-reasoning-card">';
@@ -2109,9 +2109,12 @@ async function triggerAiReview(index) {
 
     issue.review.decision = decision;
     issue.review.notes = result.notes || '';
-    // Track whether this was a heuristic fallback
     issue._heuristic = !!result.heuristic;
-    // Store AI suggestion in notes for feedback tracking
+    // Store AI reasoning as a separate field for reliable display
+    if (result.notes && result.notes.trim()) {
+      issue._aiReasoning = { decision: decision, reasoning: result.notes.trim() };
+    }
+    // Store AI suggestion in notes for feedback tracking and persistence
     if (issue.review.notes.indexOf('[AI suggested:') < 0) {
       issue.review.notes = '[AI suggested: ' + decision + '] ' + issue.review.notes;
     }
@@ -2207,9 +2210,10 @@ async function triggerAiReviewAll() {
           var decision = normalizeDecision(dec.decision);
           state.parsed.issues[idx].review.decision = decision;
           state.parsed.issues[idx].review.notes = dec.notes || '';
-          // Track whether this was a heuristic fallback
           state.parsed.issues[idx]._heuristic = !!result.heuristic;
-          // Store AI suggestion in notes for feedback tracking
+          if (dec.notes && dec.notes.trim()) {
+            state.parsed.issues[idx]._aiReasoning = { decision: decision, reasoning: dec.notes.trim() };
+          }
           if (state.parsed.issues[idx].review.notes.indexOf('[AI suggested:') < 0) {
             state.parsed.issues[idx].review.notes = '[AI suggested: ' + decision + '] ' + state.parsed.issues[idx].review.notes;
           }
@@ -2353,6 +2357,9 @@ async function triggerAiReviewDirectory() {
             var decision = normalizeDecision(dec.decision);
             parsed.issues[idx].review.decision = decision;
             parsed.issues[idx].review.notes = dec.notes || '';
+            if (dec.notes && dec.notes.trim()) {
+              parsed.issues[idx]._aiReasoning = { decision: decision, reasoning: dec.notes.trim() };
+            }
             if (parsed.issues[idx].review.notes.indexOf('[AI suggested:') < 0) {
               parsed.issues[idx].review.notes = '[AI suggested: ' + decision + '] ' + parsed.issues[idx].review.notes;
             }
@@ -2384,6 +2391,7 @@ async function triggerAiReviewDirectory() {
             if (idx2 >= 0 && idx2 < state.parsed.issues.length) {
               state.parsed.issues[idx2].review.decision = normalizeDecision(dec2.decision);
               state.parsed.issues[idx2].review.notes = parsed.issues[idx2].review.notes;
+              state.parsed.issues[idx2]._aiReasoning = parsed.issues[idx2]._aiReasoning;
             }
           }
           state.dirty = false;
@@ -2996,9 +3004,15 @@ function collapseAll() {
 // ── Escape helpers ──
 // Extract AI reasoning from notes. Format: "[AI suggested: DECISION] reasoning..."
 // Returns { decision, reasoning } or null if no AI suggestion found.
-function extractAiReasoning(notes) {
+function getAiReasoning(issue) {
+  // Prefer in-memory field (most reliable)
+  if (issue._aiReasoning && issue._aiReasoning.reasoning) {
+    return issue._aiReasoning;
+  }
+  // Fall back to regex extraction from notes (for issues loaded from disk)
+  var notes = issue.review.notes;
   if (!notes) return null;
-  var match = notes.match(/^\[AI suggested:\s*([^\]]+)\]\s*(.*)/s);
+  var match = notes.match(/\[AI suggested:\s*([^\]]+)\]\s*(.*)/s);
   if (!match) return null;
   var reasoning = (match[2] || '').trim();
   if (!reasoning) return null;
