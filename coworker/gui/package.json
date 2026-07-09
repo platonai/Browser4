@@ -4,7 +4,8 @@
   "description": "Web-based GUI for managing the coworker task pipeline (Node.js edition)",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "test": "node --test summary-builder.test.js"
   },
   "dependencies": {
     "express": "^4.21.0",
