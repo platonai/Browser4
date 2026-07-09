@@ -1,11 +1,11 @@
 package ai.platon.browser4.chrome.protocol
 
-import ai.platon.browser4.chrome.protocol.util.withNodeObjectId
 import ai.platon.cdt.kt.protocol.types.input.DispatchDragEventType
 import ai.platon.cdt.kt.protocol.types.input.DispatchKeyEventType
 import ai.platon.cdt.kt.protocol.types.input.DragData
 import ai.platon.browser4.api.BrowserProtocol
 import ai.platon.browser4.api.model.NodeRef
+import ai.platon.browser4.chrome.protocol.util.withNodeObjectId
 import ai.platon.pulsar.common.DescriptiveResult
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.common.io.KeyboardModifier
@@ -758,11 +758,28 @@ class EmulationHandler(
     ) {
         val point = getInteractPoint(node, position, useRandomOffset = true) ?: return
 
-        if (dispatchDomClick(node, point, count, modifier, delayMillis)) {
-            // TODO: click/dblclick 事件不太可靠，先用 DOM 事件模拟，后续优化
-            return
+        // Focus the target element so that follow-up keyboard events (e.g. press
+        // after click-right on an input) are routed to the correct element.  CDP
+        // Input.dispatchMouseEvent dispatches trusted mouse events synchronously
+        // but does not guarantee that the element under the cursor receives focus
+        // on all platforms — explicit focus removes the ambiguity.
+        val localBp = bp
+        if (localBp != null) {
+            withNodeObjectId(localBp, node) { objectId ->
+                localBp.callFunctionOn(
+                    """function() { if (this instanceof HTMLElement) { this.focus({ preventScroll: true }); } }""",
+                    objectId = objectId,
+                    returnByValue = false,
+                    userGesture = true,
+                )
+            }
         }
 
+        // Use CDP Input.dispatchMouseEvent (trusted, synchronous) instead of
+        // synthetic DOM events.  Untrusted JS MouseEvent dispatch + setTimeout(0)
+        // races with follow-up keyboard input (e.g. type after click-right on an
+        // input element), corrupting the typed text.  CDP trusted events are
+        // processed synchronously by the browser — no deferred side-effects.
         if (modifier != null) {
             clickWithModifiers(point, modifier, count, delayMillis = delayMillis)
         } else {
@@ -911,119 +928,6 @@ class EmulationHandler(
             "shift" -> 8
             else -> 0
         }
-    }
-
-    private suspend fun dispatchDomClick(
-        node: NodeRef,
-        point: PointD,
-        count: Int,
-        modifier: String?,
-        delayMillis: Long,
-    ): Boolean {
-        val localCdp = bp ?: return false
-        val m = mouse ?: return false
-        val clickCount = max(1, count)
-        val modifierState = buildMouseModifierState(modifier)
-
-        return withNodeObjectId(localCdp, node) { objectId ->
-            m.moveTo(point)
-            if (delayMillis > 0) {
-                delay(delayMillis.milliseconds)
-            }
-
-            val script = """
-                function() {
-                    const target = this instanceof Element ? this : null;
-                    if (!target) return false;
-                    if (target instanceof HTMLElement) {
-                        target.focus({ preventScroll: true });
-                    }
-
-                    const createInit = (detail, buttons) => ({
-                        bubbles: true,
-                        cancelable: true,
-                        composed: true,
-                        button: 0,
-                        buttons,
-                        clientX: ${point.x},
-                        clientY: ${point.y},
-                        screenX: ${point.x},
-                        screenY: ${point.y},
-                        detail,
-                        altKey: ${modifierState.altKey},
-                        ctrlKey: ${modifierState.ctrlKey},
-                        metaKey: ${modifierState.metaKey},
-                        shiftKey: ${modifierState.shiftKey},
-                    });
-
-                    for (let detail = 1; detail <= $clickCount; detail += 1) {
-                        target.dispatchEvent(new MouseEvent('mousedown', createInit(detail, 1)));
-                        target.dispatchEvent(new MouseEvent('mouseup', createInit(detail, 0)));
-                        setTimeout(() => {
-                            if (!${modifierState.hasModifier} && target instanceof HTMLElement) {
-                                target.click();
-                            } else {
-                                target.dispatchEvent(new MouseEvent('click', createInit(detail, 0)));
-                            }
-                        }, 0);
-                    }
-
-                    if ($clickCount >= 2) {
-                        setTimeout(() => {
-                            target.dispatchEvent(new MouseEvent('dblclick', createInit($clickCount, 0)));
-                        }, 0);
-                    }
-
-                    return true;
-                }
-            """.trimIndent()
-
-            localCdp.callFunctionOn(
-                script,
-                objectId = objectId,
-                returnByValue = true,
-                userGesture = true,
-                awaitPromise = true,
-            ).result.value as? Boolean ?: false
-        } ?: false
-    }
-
-    private fun buildMouseModifierState(modifier: String?): MouseModifierState {
-        if (modifier.isNullOrBlank()) {
-            return MouseModifierState()
-        }
-
-        // Support combo modifiers like "Ctrl+Shift" by splitting on '+'
-        val parts = modifier.split("+").map { it.trim() }.filter { it.isNotEmpty() }
-        if (parts.isEmpty()) {
-            return MouseModifierState()
-        }
-
-        var altKey = false
-        var ctrlKey = false
-        var metaKey = false
-        var shiftKey = false
-
-        for (part in parts) {
-            when (mapModifierForOS(part).lowercase()) {
-                "alt" -> altKey = true
-                "control", "ctrl" -> ctrlKey = true
-                "meta", "command", "cmd", "win", "super" -> metaKey = true
-                "shift" -> shiftKey = true
-                // Unknown keys are silently ignored; the caller may warn
-            }
-        }
-
-        return MouseModifierState(altKey, ctrlKey, metaKey, shiftKey)
-    }
-
-    private data class MouseModifierState(
-        val altKey: Boolean = false,
-        val ctrlKey: Boolean = false,
-        val metaKey: Boolean = false,
-        val shiftKey: Boolean = false,
-    ) {
-        val hasModifier: Boolean get() = altKey || ctrlKey || metaKey || shiftKey
     }
 
     // Map Ctrl->Meta on macOS for consistency with platform conventions.

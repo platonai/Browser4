@@ -858,22 +858,8 @@ function Complete-BuildProgress {
 $phaseIndex = 1
 Write-BuildProgress -Status $buildPhases[$phaseIndex - 1].Label
 
-$mvnCommand = Get-Command mvn -ErrorAction SilentlyContinue
-if (-not $mvnCommand) {
-    # Check common locations
-    $mvnHome = $env:MAVEN_HOME
-    if ($mvnHome) {
-        $mvnExe = if (Get-IsWindows) { Join-Path $mvnHome 'bin/mvn.cmd' } else { Join-Path $mvnHome 'bin/mvn' }
-        if (Test-Path $mvnExe) {
-            $mvnCommand = $mvnExe
-        }
-    }
-    if (-not $mvnCommand) {
-        throw 'Maven (mvn) is required to collect dependencies. Ensure Maven is installed and on PATH, or set MAVEN_HOME.'
-    }
-}
-
-$mvnPath = if ($mvnCommand -is [string]) { $mvnCommand } else { $mvnCommand.Source }
+# Use the already-resolved Maven wrapper/command from earlier in this script.
+$mvnPath = $mvnCmd
 Write-Host "Collecting runtime dependencies with Maven..." -ForegroundColor Cyan
 $mvnArgs = @(
     'dependency:copy-dependencies',

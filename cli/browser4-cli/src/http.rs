@@ -621,6 +621,26 @@ pub async fn clear_crawls(
     send_rest_request(client.post(url)).await
 }
 
+/// Get the status of a crawl task via `CrawlController.getStatus(id)`.
+pub async fn get_crawl_status(
+    client: &Client,
+    base_url: &str,
+    task_id: &str,
+) -> Result<String, String> {
+    let url = build_endpoint_url(base_url, &format!("/api/crawl/{task_id}/status"));
+    send_rest_request(client.get(url)).await
+}
+
+/// Get the result of a crawl task via `CrawlController.getResult(id)`.
+pub async fn get_crawl_result(
+    client: &Client,
+    base_url: &str,
+    task_id: &str,
+) -> Result<String, String> {
+    let url = build_endpoint_url(base_url, &format!("/api/crawl/{task_id}/result"));
+    send_rest_request(client.get(url)).await
+}
+
 /// Get the status of a command by its task ID via the MCP endpoint.
 pub async fn get_command_status(
     client: &Client,
