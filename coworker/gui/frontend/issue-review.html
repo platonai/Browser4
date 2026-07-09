@@ -823,6 +823,7 @@ body {
         <button id="btn-mark-done" class="nav-btn" style="background:var(--success);color:#fff;border-color:var(--success);" onclick="markDone()" title="Finalize review: approved issues keep full detail, others condensed. Moves file to ready queue.">✅ Mark Done</button>
         <button id="btn-discard" class="nav-btn" style="background:var(--danger);color:#fff;border-color:var(--danger);" onclick="discardFile()" title="Discard this file — no issues or no valuable issues. Moves to review/done/discard.">🗑 Discard</button>
         <button id="btn-mode-toggle" class="nav-btn accent" onclick="toggleReviewMode()" title="Switch between one-at-a-time and all-issues view">📋 View All</button>
+        <button id="btn-ai-review-all" class="nav-btn accent" onclick="triggerAiReviewAll()" title="AI review ALL issues in this file at once (Shift+Ctrl+A). Detects duplicates, sees cross-issue context.">🤖🤖 AI Review All</button>
       </div>
     </div>
 
@@ -853,7 +854,8 @@ body {
         <div class="shortcut-hints">
           <strong>Keyboard shortcuts:</strong><br>
           <kbd>Shift+1</kbd>-<kbd>Shift+6</kbd> Select decision<br>
-          <kbd>Shift+A</kbd> AI review &nbsp;|&nbsp;
+          <kbd>Shift+A</kbd> AI review issue &nbsp;|&nbsp;
+          <kbd>Shift+Ctrl+A</kbd> AI review all<br>
           <kbd>Shift+D</kbd> Discard file<br>
           <kbd>Alt+←</kbd>/<kbd>Alt+→</kbd> Prev/next issue<br>
           <kbd>Shift+P</kbd>/<kbd>Shift+N</kbd> Prev/next file<br>
@@ -2069,6 +2071,26 @@ async function triggerAiReview(index) {
     }
   }
 
+  // Build sibling context: send other issues in this file so the AI
+  // can detect intra-file duplicates and make consistent decisions
+  var siblingIssues = [];
+  for (var s = 0; s < state.parsed.issues.length; s++) {
+    if (s !== index) {
+      var sib = state.parsed.issues[s];
+      siblingIssues.push({
+        number: s + 1,
+        title: sib.title,
+        decision: sib.reviewDecision || null,
+      });
+    }
+  }
+
+  // Extract scenario context (truncated to keep prompt reasonable)
+  var scenarioContext = '';
+  if (state.parsed.scenarioBackground) {
+    scenarioContext = state.parsed.scenarioBackground.substring(0, 2000);
+  }
+
   try {
     var result = await apiPost('/api/issue-review/ai-suggest', {
       title: issue.title,
@@ -2076,6 +2098,8 @@ async function triggerAiReview(index) {
       category: issue.category,
       sections: aiSections,
       suggestedImprovement: suggestedImprovement,
+      siblingIssues: siblingIssues,
+      scenarioContext: scenarioContext,
     });
 
     // Apply the AI's decision
@@ -2121,6 +2145,104 @@ async function triggerAiReview(index) {
     showToast('AI review failed: ' + e.message, 'error');
     if (btn) { btn.disabled = false; btn.textContent = '🤖 AI Review'; }
   }
+}
+
+// ── Batch AI Review All ──
+async function triggerAiReviewAll() {
+  if (!state.parsed || state.parsed.issues.length === 0) return;
+
+  var btn = document.getElementById('btn-ai-review-all');
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = '⏳ Reviewing all…';
+  }
+
+  // Collect all issues
+  var issues = [];
+  for (var i = 0; i < state.parsed.issues.length; i++) {
+    var issue = state.parsed.issues[i];
+    var sections = parseIssueSections(issue);
+    var aiSections = sections.map(function(s) {
+      return { label: s.label, body: s.body };
+    });
+
+    var suggestedImprovement = '';
+    for (var j = 0; j < aiSections.length; j++) {
+      if (aiSections[j].label.toLowerCase().indexOf('ai suggested') >= 0 ||
+          aiSections[j].label.toLowerCase().indexOf('suggested improvement') >= 0) {
+        suggestedImprovement = aiSections[j].body;
+        break;
+      }
+    }
+
+    issues.push({
+      number: i + 1,
+      title: issue.title,
+      severity: issue.severity,
+      category: issue.category,
+      sections: aiSections,
+      suggestedImprovement: suggestedImprovement,
+    });
+  }
+
+  // Extract scenario context
+  var scenarioContext = '';
+  if (state.parsed.scenarioBackground) {
+    scenarioContext = state.parsed.scenarioBackground.substring(0, 3000);
+  }
+
+  try {
+    var result = await apiPost('/api/issue-review/ai-suggest-batch', {
+      issues: issues,
+      scenarioContext: scenarioContext,
+      scenarioTitle: state.parsed.scenarioName || '',
+    });
+
+    // Apply decisions
+    if (result.decisions && Array.isArray(result.decisions)) {
+      for (var d = 0; d < result.decisions.length; d++) {
+        var dec = result.decisions[d];
+        var idx = dec.issueNumber - 1;
+        if (idx >= 0 && idx < state.parsed.issues.length) {
+          var decision = dec.decision;
+          // Normalize
+          var found = false;
+          for (var r = 0; r < REVIEW_DECISIONS.length; r++) {
+            if (decision === REVIEW_DECISIONS[r]) { found = true; break; }
+          }
+          if (!found) {
+            var dl = decision.toLowerCase();
+            if (dl.indexOf('accept with') >= 0) decision = 'ACCEPT with improvements';
+            else if (dl.indexOf('accept') >= 0) decision = 'ACCEPT';
+            else if (dl.indexOf('defer') >= 0) decision = 'DEFER';
+            else if (dl.indexOf('wontfix') >= 0 || dl.indexOf("won't fix") >= 0) decision = 'WONTFIX';
+            else if (dl.indexOf('reject') >= 0) decision = 'REJECT';
+            else if (dl.indexOf('duplicate') >= 0) decision = 'DUPLICATE';
+          }
+          state.parsed.issues[idx].reviewDecision = decision;
+          state.parsed.issues[idx].reviewNotes = dec.notes || '';
+        }
+      }
+    }
+
+    state.dirty = true;
+    updateSaveState();
+    scheduleAutoSave();
+
+    // Re-render
+    renderReview();
+    updateFileCounts(state.selectedFilePath, state.parsed);
+    updateStats();
+    if (state.selectedFilePath && state.parsed) {
+      updateFileTreeProgress(state.selectedFilePath, state.parsed);
+    }
+
+    showToast('AI reviewed ' + (result.decisions ? result.decisions.length : 0) + ' issues', 'success');
+  } catch (e) {
+    showToast('Batch AI review failed: ' + e.message, 'error');
+  }
+
+  if (btn) { btn.disabled = false; btn.textContent = '🤖🤖 AI Review All'; }
 }
 
 function toggleReviewMode() {
@@ -2464,11 +2586,20 @@ document.addEventListener('keydown', function(e) {
     return;
   }
 
-  // Shift+A → AI review
+  // Shift+A → AI review current issue
   if (e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey && (e.key === 'A' || e.key === 'a')) {
     e.preventDefault();
     if (state.parsed && state.currentIssueIndex < state.parsed.issues.length) {
       triggerAiReview(state.currentIssueIndex);
+    }
+    return;
+  }
+
+  // Shift+Ctrl+A → AI review ALL issues in file
+  if (e.shiftKey && e.ctrlKey && !e.altKey && !e.metaKey && (e.key === 'A' || e.key === 'a')) {
+    e.preventDefault();
+    if (state.parsed && state.parsed.issues.length > 0) {
+      triggerAiReviewAll();
     }
     return;
   }

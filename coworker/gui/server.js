@@ -13,6 +13,7 @@ const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
 const { execFile } = require('child_process');
+const reviewHistory = require('./review-history.js');
 
 // ── CLI argument parsing ────────────────────────────────────────────────
 
@@ -32,6 +33,9 @@ const PORT = parseInt(argFlag('port', '8090'), 10);
 const DEFAULT_TASKS_ROOT = path.resolve(__dirname, '..', 'tasks');
 const TASKS_ROOT = path.resolve(argFlag('tasks-root', DEFAULT_TASKS_ROOT));
 const OPEN_BROWSER = argBool('open-browser');
+
+// Initialise the review-history index
+reviewHistory.init(TASKS_ROOT);
 
 // ── Stage registry ──────────────────────────────────────────────────────
 
@@ -375,10 +379,13 @@ app.post('/api/move', (req, res) => {
 
 // POST /api/issue-review/ai-suggest
 app.post('/api/issue-review/ai-suggest', (req, res) => {
-  const { title, severity, category, sections, suggestedImprovement } = req.body;
+  const { title, severity, category, sections, suggestedImprovement, siblingIssues, scenarioContext } = req.body;
   if (!title) return res.status(400).json({ error: 'Issue title is required' });
 
-  // Build a focused prompt for the AI
+  // Build enriched context from review history
+  const ctx = reviewHistory.buildEnrichedContext(title);
+
+  // Build the issue text
   const parts = [`Issue: ${title}`, `Severity: ${severity || 'N/A'}`, `Category: ${category || 'N/A'}`];
   if (sections) {
     for (const s of sections) {
@@ -390,18 +397,55 @@ app.post('/api/issue-review/ai-suggest', (req, res) => {
   }
   const issueText = parts.join('\n\n');
 
-  const prompt = `You are reviewing issues for a browser automation CLI tool (browser4-cli). Analyze this issue and decide:
+  // Build sibling context if provided
+  let siblingText = '';
+  if (siblingIssues && siblingIssues.length > 0) {
+    siblingText = '\n## Other Issues in the Same Evaluation\n\n';
+    siblingText += 'The following issues were found in the same scenario. ';
+    siblingText += 'Consider whether this issue duplicates or relates to any of them:\n\n';
+    for (const sib of siblingIssues) {
+      const decTag = sib.decision ? ` (${sib.decision})` : ' (unreviewed)';
+      siblingText += `- Issue ${sib.number}: "${sib.title}"${decTag}\n`;
+    }
+    siblingText += '\n';
+  }
 
-- ACCEPT — the issue is valid and the suggested fix is correct
-- ACCEPT with improvements — valid but the fix needs refinement
-- DEFER — acknowledged but intentionally deferred
-- WONTFIX — acknowledged but will not be fixed
-- REJECT — invalid, not a problem, or already addressed
+  // Build scenario context if provided
+  let scenarioText = '';
+  if (scenarioContext) {
+    scenarioText = `\n## Scenario Context\n\n${scenarioContext}\n`;
+  }
+
+  const prompt = `You are reviewing issues for browser4-cli, a browser automation CLI tool built for AI AGENTS (not humans) to use. Analyze this issue and choose the best decision.
+
+## Review Guidelines
+
+- **ACCEPT** — Issue is valid and the suggested fix is correct. Use for real bugs, broken behavior, missing features that block AI agents.
+- **ACCEPT with improvements** — Issue is valid but the suggested fix needs refinement (describe what in Notes).
+- **DEFER** — Issue is acknowledged as real but intentionally deferred — typically large architectural changes, low-priority nice-to-haves, or things that need more design.
+- **WONTFIX** — Issue is acknowledged as real but will NOT be fixed. Use for: third-party behavior the tool can't control, platform-specific quirks that are impractical to fix, or intentional design decisions.
+- **REJECT** — Issue is NOT valid. Use when: the reported behavior is intentional and correct, the issue misunderstands the tool's purpose, or the problem only affects human readability (not AI agents). Remember: this tool is for AI AGENTS — what looks like a UX problem to a human may be perfectly fine for an AI.
+- **DUPLICATE** — Issue describes the same problem as another existing issue (reference which one in Notes).
+
+**Decision rules of thumb:**
+- If the issue blocks or misleads an AI agent → ACCEPT or ACCEPT with improvements
+- If the issue only matters for human readability (verbose output, not machine-parseable) → REJECT or DEFER
+- If the fix requires major architectural changes → DEFER
+- If the behavior is about external websites or platforms → WONTFIX
+- If the issue is about development-mode friction (cargo run overhead, cd into subdirs) → WONTFIX
+- If the same root cause appears in multiple issues → mark one ACCEPT, rest DUPLICATE
+
+${ctx.statsSection ? ctx.statsSection + '\n' : ''}\
+${ctx.examplesSection ? ctx.examplesSection + '\n' : ''}\
+${ctx.similarSection ? ctx.similarSection + '\n' : ''}\
+${scenarioText}\
+${siblingText}\
+## Issue to Review
+
+${issueText}
 
 Respond with ONLY a single JSON object (no markdown, no backticks):
-{"decision": "<one of the five options above>", "notes": "<1-2 sentence rationale>"}
-
-${issueText}`;
+{"decision": "<one of the six options above>", "notes": "<1-2 sentence rationale>"}`;
 
   const claudePath = process.env.CLAUDE_PATH || 'claude';
   const child = execFile(claudePath, ['-p', prompt], {
@@ -532,6 +576,128 @@ app.post('/api/issue-review/mark-done', (req, res) => {
   } catch (e) {
     res.status(400).json({ error: `Failed to mark done: ${e.message}` });
   }
+});
+
+// POST /api/issue-review/ai-suggest-batch
+// Reviews all issues in a file together. The AI sees cross-issue context,
+// scenario background, and historical review data, enabling consistent
+// decisions and intra-file duplicate detection.
+app.post('/api/issue-review/ai-suggest-batch', (req, res) => {
+  const { issues, scenarioContext, scenarioTitle } = req.body;
+  if (!issues || !Array.isArray(issues) || issues.length === 0) {
+    return res.status(400).json({ error: 'issues array is required' });
+  }
+
+  // Build stats + few-shot examples once for the batch
+  const statsSection = reviewHistory.buildStatsSection();
+  const examplesSection = reviewHistory.buildFewShotSection(6);
+
+  // Build per-issue text
+  let issuesText = '';
+  for (const iss of issues) {
+    issuesText += `### Issue ${iss.number}: ${iss.title}\n`;
+    issuesText += `**Severity:** ${iss.severity || 'N/A'} | **Category:** ${iss.category || 'N/A'}\n\n`;
+    if (iss.sections) {
+      for (const s of iss.sections) {
+        // Truncate long sections to keep prompt manageable
+        const body = (s.body || '').substring(0, 600);
+        issuesText += `**${s.label}:** ${body}\n\n`;
+      }
+    }
+    if (iss.suggestedImprovement) {
+      issuesText += `**AI Suggested Improvement:** ${iss.suggestedImprovement}\n\n`;
+    }
+    issuesText += '---\n\n';
+  }
+
+  let scenarioText = '';
+  if (scenarioContext) {
+    scenarioText = `\n## Scenario Background\n\n${scenarioContext}\n`;
+  }
+
+  const prompt = `You are reviewing ALL issues from a single browser4-cli evaluation scenario${scenarioTitle ? ': ' + scenarioTitle : ''}. Review each issue and choose the best decision. Consider how issues relate to each other — if multiple issues share the same root cause, mark one as ACCEPT and the rest as DUPLICATE.
+
+## Review Guidelines
+
+- **ACCEPT** — Issue is valid and the suggested fix is correct. Use for real bugs, broken behavior, missing features that block AI agents.
+- **ACCEPT with improvements** — Issue is valid but the suggested fix needs refinement (describe what in Notes).
+- **DEFER** — Issue is acknowledged as real but intentionally deferred — typically large architectural changes, low-priority nice-to-haves, or things that need more design.
+- **WONTFIX** — Issue is acknowledged as real but will NOT be fixed. Use for: third-party behavior the tool can't control, platform-specific quirks that are impractical to fix, or intentional design decisions.
+- **REJECT** — Issue is NOT valid. Use when: the reported behavior is intentional and correct, the issue misunderstands the tool's purpose, or the problem only affects human readability (not AI agents). Remember: this tool is for AI AGENTS — what looks like a UX problem to a human may be perfectly fine for an AI.
+- **DUPLICATE** — Issue describes the same problem as another issue IN THIS BATCH (reference which issue number in Notes).
+
+**Decision rules of thumb:**
+- If the issue blocks or misleads an AI agent → ACCEPT or ACCEPT with improvements
+- If the issue only matters for human readability → REJECT or DEFER
+- If the fix requires major architectural changes → DEFER
+- If the behavior is about external websites or platforms → WONTFIX
+- If the issue is about development-mode friction (cargo run overhead, cd into subdirs) → WONTFIX
+- If the same root cause appears in multiple issues → mark one ACCEPT, rest DUPLICATE
+
+${statsSection ? statsSection + '\n' : ''}\
+${examplesSection ? examplesSection + '\n' : ''}\
+${scenarioText}\
+## Issues to Review (${issues.length} issues)
+
+${issuesText}
+
+Respond with ONLY a single JSON object (no markdown, no backticks). Include a decision for EVERY issue:
+{"decisions": [
+  {"issueNumber": 1, "decision": "ACCEPT", "notes": "..."},
+  {"issueNumber": 2, "decision": "DEFER", "notes": "..."},
+  ...
+]}`;
+
+  const claudePath = process.env.CLAUDE_PATH || 'claude';
+  const child = execFile(claudePath, ['-p', prompt], {
+    timeout: 120000,  // 2 min for batch
+    maxBuffer: 2 * 1024 * 1024,
+    env: { ...process.env },
+  }, (err, stdout, stderr) => {
+    if (err) {
+      if (err.killed) return res.status(504).json({ error: 'Batch AI review timed out (120s)' });
+      return res.status(500).json({ error: `Batch AI review failed: ${err.message}` });
+    }
+
+    const jsonMatch = stdout.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) {
+      return res.status(500).json({ error: 'AI response did not contain valid JSON', raw: stdout.substring(0, 500) });
+    }
+
+    try {
+      const result = JSON.parse(jsonMatch[0]);
+      if (!result.decisions || !Array.isArray(result.decisions)) {
+        return res.status(500).json({ error: 'AI response missing decisions array', raw: jsonMatch[0] });
+      }
+      // Ensure each decision has the right fields
+      const decisions = result.decisions.map(d => ({
+        issueNumber: d.issueNumber,
+        decision: (d.decision || 'DEFER').trim(),
+        notes: (d.notes || '').trim(),
+      }));
+      res.json({ decisions });
+    } catch (e) {
+      res.status(500).json({ error: 'Failed to parse AI response', raw: jsonMatch[0] });
+    }
+  });
+});
+
+// POST /api/issue-review/similar
+// Find previously reviewed issues that are similar to the given title.
+app.post('/api/issue-review/similar', (req, res) => {
+  const { title, threshold } = req.body;
+  if (!title) return res.status(400).json({ error: 'title is required' });
+
+  const matches = reviewHistory.findSimilarIssues(title, threshold);
+  res.json({ matches });
+});
+
+// GET /api/issue-review/stats
+// Return aggregate review statistics from past reviews.
+app.get('/api/issue-review/stats', (req, res) => {
+  const stats = reviewHistory.getStats();
+  const reviewedCount = reviewHistory.getReviewedCount();
+  res.json({ ...stats, reviewedCount });
 });
 
 // Build a summary version of the issues file:
