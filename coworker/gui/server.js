@@ -570,6 +570,15 @@ app.post('/api/issue-review/mark-done', (req, res) => {
   try {
     const content = fs.readFileSync(src.abs, 'utf-8');
 
+    // Check for zero issues — should be discarded instead
+    const issueModel = require('./frontend/issue-model.js');
+    const parsed = issueModel.parseIssueFile(content);
+    if (!parsed.issues || parsed.issues.length === 0) {
+      return res.status(400).json({
+        error: 'This file has no issues. Use the Discard endpoint instead — zero-issue files should not enter the ready queue.',
+      });
+    }
+
     // Build the summary version
     let summaryContent = buildSummaryContent(content);
 
@@ -999,6 +1008,26 @@ app.post('/api/issue-review/mark-all-done', (req, res) => {
     try {
       const content = fs.readFileSync(filePath, 'utf-8');
 
+      // Parse to check for zero issues
+      const model = require('./frontend/issue-model.js').parseIssueFile(content);
+
+      // Auto-discard zero-issue files — they shouldn't create empty tasks
+      if (!model.issues || model.issues.length === 0) {
+        const srcRelToReview = path.relative(reviewRoot, filePath);
+        const discardDir = path.join(reviewRoot, 'done', 'discard');
+        const discardPath = path.join(discardDir, srcRelToReview);
+        fs.mkdirSync(path.dirname(discardPath), { recursive: true });
+        fs.renameSync(filePath, discardPath);
+        results.push({
+          file: srcRelToReview.replace(/\\/g, '/'),
+          issues: 0,
+          approved: 0,
+          condensed: 0,
+          status: 'auto-discarded',
+        });
+        continue;
+      }
+
       // Build the summary version using the same logic as mark-done
       let summaryContent = buildSummaryContent(content);
 
@@ -1031,9 +1060,8 @@ app.post('/api/issue-review/mark-all-done', (req, res) => {
       const readyRel = path.relative(TASKS_ROOT, readyPath).replace(/\\/g, '/');
 
       // Count decisions
-      const model = require('./frontend/issue-model.js').parseIssueFile(content);
       const approved = model.issues.filter(iss =>
-        iss.reviewDecision === 'ACCEPT' || iss.reviewDecision === 'ACCEPT with improvements'
+        iss.review.decision === 'ACCEPT' || iss.review.decision === 'ACCEPT with improvements'
       ).length;
       totalApproved += approved;
       totalCondensed += model.issues.length - approved;
@@ -1114,7 +1142,23 @@ function buildSummaryContent(content) {
   const issueModel = require('./frontend/issue-model.js');
   const model = issueModel.parseIssueFile(content);
 
-  if (!model.issues || model.issues.length === 0) return content;
+  // Zero-issue files: build a clean "no issues" summary instead of raw content
+  if (!model.issues || model.issues.length === 0) {
+    let out = '# Issues: ' + (model.meta.scenario || 'unknown') + '\n\n';
+    out += '> **Source:** `' + (model.meta.source || '') + '` | ';
+    out += '**Date:** ' + (model.meta.date || '') + ' | ';
+    out += '**Mode:** ' + (model.meta.mode || 'dev') + '\n\n';
+    if (model.background.task) {
+      out += '## Scenario Background\n\n### Task\n\n' + model.background.task + '\n\n';
+    }
+    out += '---\n\n';
+    out += '## Issues Found (0)\n\n';
+    out += '> **Review complete:** No issues were detected in this evaluation.\n\n';
+    if (model.meta.source) {
+      out += 'See `' + model.meta.source + '` for the complete evaluation output.\n';
+    }
+    return out.trim() + '\n';
+  }
 
   // Build preamble from meta + background
   let preamble = '# Issues: ' + (model.meta.scenario || 'unknown') + '\n\n';

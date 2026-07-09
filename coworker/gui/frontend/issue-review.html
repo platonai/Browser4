@@ -1630,8 +1630,27 @@ function renderAllIssues() {
   html += renderFileHeader();
 
   if (state.parsed.issues.length === 0) {
-    html += '<div class="no-issues-card"><span class="ni-icon">✅</span><p>No issues found in this file.</p></div>';
+    html += '<div class="no-issues-card">';
+    html += '<span class="ni-icon">✅</span>';
+    html += '<p><strong>No issues found in this file.</strong></p>';
+    html += '<p style="font-size:0.8rem;margin-top:8px;">This file should be <strong>discarded</strong> — it has no actionable issues.</p>';
+    html += '<p style="font-size:0.75rem;color:var(--text-muted);">Use the <strong>🗑 Discard</strong> button or press <kbd>Shift+D</kbd> to move it to review/done/discard.</p>';
+    html += '</div>';
+    // Hide mark-done button for zero-issue files
+    var markDoneBtn = document.getElementById('btn-mark-done');
+    if (markDoneBtn) { markDoneBtn.style.display = 'none'; }
+    var aiReviewAllBtn = document.getElementById('btn-ai-review-all');
+    if (aiReviewAllBtn) { aiReviewAllBtn.style.display = 'none'; }
+    var modeToggleBtn = document.getElementById('btn-mode-toggle');
+    if (modeToggleBtn) { modeToggleBtn.style.display = 'none'; }
   } else {
+    // Show buttons in case they were hidden
+    var markDoneBtn2 = document.getElementById('btn-mark-done');
+    if (markDoneBtn2) { markDoneBtn2.style.display = ''; }
+    var aiReviewAllBtn2 = document.getElementById('btn-ai-review-all');
+    if (aiReviewAllBtn2) { aiReviewAllBtn2.style.display = ''; }
+    var modeToggleBtn2 = document.getElementById('btn-mode-toggle');
+    if (modeToggleBtn2) { modeToggleBtn2.style.display = ''; }
     for (var i = 0; i < state.parsed.issues.length; i++) {
       html += renderIssueCard(state.parsed.issues[i], i);
     }
@@ -2462,12 +2481,26 @@ async function markAllDone() {
     return;
   }
 
+  // Count zero-issue files
+  var zeroIssueFiles = [];
+  for (var i2 = 0; i2 < state.files.length; i2++) {
+    if (state.files[i2].path.indexOf(directory + '/') === 0 || state.files[i2].path.indexOf(directory) === 0) {
+      if (state.files[i2]._issueCount === 0) {
+        zeroIssueFiles.push(state.files[i2]);
+      }
+    }
+  }
+
   var msg = 'Mark ALL ' + fileCount + ' file(s) in "' + directory + '" as done?\n\n';
+  if (zeroIssueFiles.length > 0) {
+    msg += '📌 ' + zeroIssueFiles.length + ' file(s) have zero issues — these will be auto-discarded.\n\n';
+  }
   if (unreviewedCount > 0) {
     msg += '⚠ ' + unreviewedCount + ' issue(s) still unreviewed — will be treated as WONTFIX.\n\n';
   }
   msg += '• Approved issues → keep full detail in 1-ready\n';
   msg += '• Other issues → condensed abstract\n';
+  msg += '• Zero-issue files → auto-discarded\n';
   msg += '• Original files → moved to review/done';
   if (state.autoApprove) {
     msg += '\n• #auto-approve tag will be appended → auto-move to 5approved + auto-push';
@@ -2669,6 +2702,13 @@ async function saveReview(opts) {
 // ── Mark Done ──
 async function markDone() {
   if (!state.selectedFilePath) return;
+
+  // Zero-issue files should be discarded, not marked done
+  if (state.parsed && state.parsed.issues.length === 0) {
+    showToast('This file has no issues — use "Discard" instead of "Mark Done". Zero-issue files should not enter the ready queue.', 'error');
+    return;
+  }
+
   var unreviewed = state.parsed ? state.parsed.issues.filter(function(iss) { return !iss.review.decision; }).length : 0;
 
   var msg = 'Finalize this review?\n\n';
