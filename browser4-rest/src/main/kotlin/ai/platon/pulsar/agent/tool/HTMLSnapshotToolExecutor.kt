@@ -27,7 +27,7 @@ import kotlin.reflect.KClass
  * - `summary(sessionId)` — Generate a page summary with link groups
  * - `inspect(sessionId, selector?, max?, depth?)` — Inspect the HTML snapshot for selector suggestions
  */
-class DomSnapshotToolExecutor(
+class HTMLSnapshotToolExecutor(
     private val sessionManager: PulsarSessionManager,
     private val scrapeService: ScrapeService? = null,
 ) : AbstractToolExecutor() {
@@ -133,7 +133,7 @@ class DomSnapshotToolExecutor(
             "export" -> export(args)
             "summary" -> summary(args)
             "inspect" -> inspect(args)
-            else -> throw IllegalArgumentException("Unsupported dom_snapshot method: $functionName")
+            else -> throw IllegalArgumentException("Unsupported html_snapshot method: $functionName")
         }
     }
 
