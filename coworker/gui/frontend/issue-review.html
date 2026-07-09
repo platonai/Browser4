@@ -386,6 +386,31 @@ body {
 .status-chip.dirty { color: var(--warning); background: var(--warning-bg); }
 .status-chip.saved { color: var(--success); background: var(--success-bg); }
 
+/* AI reasoning display card */
+.ai-reasoning-card {
+  background: var(--accent-bg);
+  border: 1px solid var(--accent-border);
+  border-left: 4px solid var(--accent);
+  border-radius: var(--radius-sm);
+  padding: 10px 14px; margin-bottom: 8px;
+  font-size: 0.82rem; line-height: 1.6; color: var(--text-primary);
+}
+.ai-reasoning-card .ai-reasoning-label {
+  font-size: 0.65rem; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.04em; color: var(--accent);
+  margin-bottom: 4px; display: flex; align-items: center; gap: 6px;
+}
+.ai-reasoning-card .ai-reasoning-label .ai-decision-badge {
+  font-size: 0.6rem; padding: 1px 7px; border-radius: 10px;
+  font-weight: 600; white-space: nowrap;
+}
+.ai-decision-badge.accept { background: var(--accept-bg); color: var(--accept-color); border: 1px solid var(--accept-border); }
+.ai-decision-badge.reject { background: var(--reject-bg); color: var(--reject-color); border: 1px solid var(--reject-border); }
+.ai-decision-badge.defer { background: var(--defer-bg); color: var(--defer-color); border: 1px solid var(--defer-border); }
+.ai-decision-badge.wontfix { background: var(--defer-bg); color: var(--defer-color); border: 1px solid var(--defer-border); }
+.ai-decision-badge.improve { background: var(--info-bg); color: var(--info); border: 1px solid var(--info-border); }
+.ai-decision-badge.duplicate { background: var(--duplicate-bg); color: var(--duplicate-color); border: 1px solid var(--duplicate-border); }
+
 /* Notes emphasis for non-ACCEPT AI decisions */
 .review-notes.needs-review {
   border-color: var(--warning); border-width: 2px;
@@ -1701,6 +1726,16 @@ function renderSingleIssue() {
   }
   html += '</div>';
   html += '<div style="display:flex;gap:8px;align-items:flex-start;">';
+  // Show AI reasoning prominently above notes
+  var aiReason = extractAiReasoning(issue.review.notes);
+  if (aiReason) {
+    var badgeCls = aiBadgeClass(aiReason.decision);
+    html += '<div class="ai-reasoning-card">';
+    html += '<div class="ai-reasoning-label">🤖 AI Reasoning → <span class="ai-decision-badge ' + badgeCls + '">' + escHtml(aiReason.decision) + '</span></div>';
+    html += escHtml(aiReason.reasoning);
+    html += '</div>';
+  }
+
   var notesClass = 'review-notes' + (needsReviewNotes ? ' needs-review' : '');
   var notesPlaceholder = needsReviewNotes ? '⚠ Review the AI rationale — notes REQUIRED for ' + issue.review.decision : 'Optional review notes…';
   html += '<textarea class="' + notesClass + '" id="single-review-notes" ' +
@@ -1830,6 +1865,16 @@ function renderReviewControls(issue, index) {
             escHtml(decision) + '<span class="key-hint">' + keyLabel + '</span></button>';
   }
   html += '</div>';
+
+  // Show AI reasoning prominently above notes
+  var aiReason = extractAiReasoning(issue.review.notes);
+  if (aiReason) {
+    var badgeCls = aiBadgeClass(aiReason.decision);
+    html += '<div class="ai-reasoning-card">';
+    html += '<div class="ai-reasoning-label">🤖 AI Reasoning → <span class="ai-decision-badge ' + badgeCls + '">' + escHtml(aiReason.decision) + '</span></div>';
+    html += escHtml(aiReason.reasoning);
+    html += '</div>';
+  }
 
   var needsReview = issue.review.decision && issue.review.decision !== 'ACCEPT';
   var notesCls = 'review-notes' + (needsReview ? ' needs-review' : '');
@@ -2916,7 +2961,30 @@ function collapseAll() {
 }
 
 // ── Escape helpers ──
-// Build a combined scenario background string from the model's background fields
+// Extract AI reasoning from notes. Format: "[AI suggested: DECISION] reasoning..."
+// Returns { decision, reasoning } or null if no AI suggestion found.
+function extractAiReasoning(notes) {
+  if (!notes) return null;
+  var match = notes.match(/^\[AI suggested:\s*([^\]]+)\]\s*(.*)/s);
+  if (!match) return null;
+  var reasoning = (match[2] || '').trim();
+  if (!reasoning) return null;
+  return { decision: match[1].trim(), reasoning: reasoning };
+}
+
+// Get CSS class for AI decision badge
+function aiBadgeClass(decision) {
+  if (!decision) return '';
+  var d = decision.toLowerCase();
+  if (d.indexOf('accept with') >= 0) return 'improve';
+  if (d.indexOf('accept') >= 0) return 'accept';
+  if (d.indexOf('reject') >= 0) return 'reject';
+  if (d.indexOf('defer') >= 0 || d.indexOf('wontfix') >= 0) return 'defer';
+  if (d.indexOf('duplicate') >= 0) return 'duplicate';
+  return '';
+}
+
+// Build a scenario background string from the model's background fields
 function getScenarioBackground(model) {
   if (!model || !model.background) return '';
   var parts = [];
