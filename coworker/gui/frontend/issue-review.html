@@ -1475,7 +1475,7 @@ async function selectFile(path) {
 
   try {
     var data = await apiGet('/api/task?path=' + encodeURIComponent(path));
-    state.selectedFileContent = data.content;
+    state.selectedFileContent = data.content;  // raw cache (synced with parsed._originalContent)
     state.parsed = parseIssueFile(data.content);
     document.getElementById('review-header').style.display = 'flex';
     document.getElementById('review-file-name').textContent = data.path;
@@ -1566,184 +1566,8 @@ function updateFileCounts(path, parsed) {
 
 // ── Markdown Parsing ──
 function parseIssueFile(content) {
-  if (!content) return { scenarioName: '', metaSource: '', metaDate: '', metaMode: '', scenarioBackground: '', issues: [], hasNoIssues: false, originalContent: '' };
-
-  // Check for "no issues" pattern
-  var noIssuesMatch = content.match(/^## Issues Found \(0\)/m);
-  var hasNoIssues = !!noIssuesMatch;
-
-  // Parse title: "# Issues: scenario-name"
-  var scenarioName = '';
-  var titleMatch = content.match(/^# Issues:\s*(.+)/m);
-  if (titleMatch) scenarioName = titleMatch[1].trim();
-
-  // Parse meta line
-  var metaSource = '', metaDate = '', metaMode = '';
-  var metaMatch = content.match(/>\s*\*\*Source:\*\*\s*`([^`]+)`\s*\|\s*\*\*Date:\*\*\s*(\S+)\s*\|\s*\*\*Mode:\*\*\s*(\S+)/);
-  if (metaMatch) {
-    metaSource = metaMatch[1];
-    metaDate = metaMatch[2];
-    metaMode = metaMatch[3];
-  }
-
-  // Find the "## Issues Found" header
-  var issuesHeaderIdx = content.search(/^## Issues Found/m);
-
-  // Extract scenario background: everything between the meta line and ## Issues Found
-  // (## Scenario Background, ### Task, ### Execution Context)
-  var scenarioBg = '';
-  var issuesSection = '';
-
-  if (issuesHeaderIdx >= 0) {
-    // Find end of meta line (the "> **Source:**..." line)
-    var metaEndIdx = 0;
-    var metaLineMatch = content.match(/^>.*?\*\*Mode:\*\*\s*\S+/m);
-    if (metaLineMatch) {
-      metaEndIdx = content.indexOf(metaLineMatch[0]) + metaLineMatch[0].length;
-    }
-    // Background is between meta line end and ## Issues Found
-    scenarioBg = content.substring(metaEndIdx, issuesHeaderIdx).trim();
-
-    var afterHeader = content.substring(issuesHeaderIdx);
-    // Find first "### Issue N:" to split issues-heading from actual issues
-    var firstIssueIdx = afterHeader.search(/^### Issue \d+:/m);
-    if (firstIssueIdx >= 0) {
-      issuesSection = afterHeader.substring(firstIssueIdx);
-    }
-  } else {
-    // No issues found — everything after the meta line is background
-    var metaEndIdx2 = 0;
-    var metaLineMatch2 = content.match(/^>.*?\*\*Mode:\*\*\s*\S+/m);
-    if (metaLineMatch2) {
-      metaEndIdx2 = content.indexOf(metaLineMatch2[0]) + metaLineMatch2[0].length;
-    }
-    scenarioBg = content.substring(metaEndIdx2).trim();
-  }
-
-  // Parse individual issues
-  var issues = [];
-  if (issuesSection) {
-    var issueBlocks = splitIssues(issuesSection);
-    for (var i = 0; i < issueBlocks.length; i++) {
-      var parsed = parseIssueBlock(issueBlocks[i]);
-      if (parsed) issues.push(parsed);
-    }
-  }
-
-  return {
-    scenarioName: scenarioName,
-    metaSource: metaSource,
-    metaDate: metaDate,
-    metaMode: metaMode,
-    scenarioBackground: scenarioBg,
-    issues: issues,
-    hasNoIssues: hasNoIssues,
-    originalContent: content
-  };
-}
-
-function splitIssues(section) {
-  var blocks = [];
-  var lines = section.split('\n');
-  var currentBlock = [];
-  var inBlock = false;
-
-  for (var i = 0; i < lines.length; i++) {
-    var line = lines[i];
-    if (/^### Issue \d+:/i.test(line)) {
-      if (inBlock && currentBlock.length > 0) {
-        blocks.push(currentBlock.join('\n'));
-      }
-      currentBlock = [line];
-      inBlock = true;
-    } else if (inBlock) {
-      currentBlock.push(line);
-    }
-  }
-  if (inBlock && currentBlock.length > 0) {
-    blocks.push(currentBlock.join('\n'));
-  }
-  return blocks;
-}
-
-function parseIssueBlock(block) {
-  var lines = block.split('\n');
-
-  // Parse title: "### Issue N: Title"
-  var titleLine = lines[0];
-  var titleMatch = titleLine.match(/^### Issue (\d+):\s*(.+)/);
-  if (!titleMatch) return null;
-
-  var issueNum = parseInt(titleMatch[1], 10);
-  var title = titleMatch[2].trim();
-
-  // Find metadata (first few lines after title)
-  var severity = '';
-  var category = '';
-  for (var i = 1; i < Math.min(lines.length, 5); i++) {
-    var sevMatch = lines[i].match(/^\*\*Severity:\*\*\s*(.+)/);
-    var catMatch = lines[i].match(/^\*\*Category:\*\*\s*(.+)/);
-    if (sevMatch) severity = sevMatch[1].trim();
-    if (catMatch) category = catMatch[1].trim();
-  }
-
-  // Find the Human Review section
-  var reviewIdx = -1;
-  for (var j = 0; j < lines.length; j++) {
-    if (/^#### Human Review/.test(lines[j])) {
-      reviewIdx = j;
-      break;
-    }
-  }
-
-  // Extract sections: everything between metadata and Human Review
-  var contentLines = reviewIdx >= 0 ? lines.slice(1, reviewIdx) : lines.slice(1);
-  var sectionText = contentLines.join('\n').trim();
-
-  // Parse review decision
-  var reviewDecision = null;
-  var reviewNotes = '';
-
-  if (reviewIdx >= 0) {
-    // Find checked checkbox
-    for (var k = reviewIdx; k < lines.length; k++) {
-      var checkedMatch = lines[k].match(/^- \[x\] \*\*(ACCEPT|ACCEPT with improvements|DEFER|WONTFIX|REJECT|DUPLICATE)\*\*/);
-      if (checkedMatch) {
-        reviewDecision = checkedMatch[1];
-        break;
-      }
-    }
-
-    // Find notes
-    var notesIdx = -1;
-    for (var m = reviewIdx; m < lines.length; m++) {
-      if (/^\*\*Notes:\*\*/.test(lines[m])) {
-        notesIdx = m;
-        break;
-      }
-    }
-    if (notesIdx >= 0 && notesIdx + 1 < lines.length) {
-      // Notes are everything after the **Notes:** line until the next --- or end
-      var notesLines = [];
-      for (var n = notesIdx + 1; n < lines.length; n++) {
-        if (/^---\s*$/.test(lines[n])) break;
-        if (lines[n].trim() === '' && notesLines.length === 0) continue;
-        notesLines.push(lines[n]);
-      }
-      reviewNotes = notesLines.join('\n').trim();
-    }
-  }
-
-  return {
-    num: issueNum,
-    title: title,
-    severity: severity,
-    category: category,
-    sectionText: sectionText,
-    reviewDecision: reviewDecision,
-    reviewNotes: reviewNotes,
-    _blockText: block  // store original for reconstruction
-  };
+  if (!content) return ISSUE_MODEL.emptyResult();
+  return ISSUE_MODEL.parseIssueFile(content);
 }
 
 // ── Review Rendering ──
@@ -1751,7 +1575,7 @@ function renderReview() {
   if (!state.parsed) return;
 
   // Show/hide navigation based on mode and issue count
-  var hasIssues = !state.parsed.hasNoIssues && state.parsed.issues.length > 0;
+  var hasIssues = !(state.parsed.issues.length === 0) && state.parsed.issues.length > 0;
   var isSingle = state.reviewMode === 'single' && hasIssues;
 
   document.getElementById('issue-nav-top').style.display = isSingle ? 'flex' : 'none';
@@ -1780,7 +1604,7 @@ function renderAllIssues() {
 
   html += renderFileHeader();
 
-  if (state.parsed.hasNoIssues && state.parsed.issues.length === 0) {
+  if (state.parsed.issues.length === 0) {
     html += '<div class="no-issues-card"><span class="ni-icon">✅</span><p>No issues found in this file.</p></div>';
   } else {
     for (var i = 0; i < state.parsed.issues.length; i++) {
@@ -1802,17 +1626,17 @@ function renderSingleIssue() {
 
   // Compact file header — scenario name + meta
   html += '<div class="file-header-card" style="padding:8px 14px;margin-bottom:1rem;">';
-  html += '<div class="fh-title" style="font-size:0.9rem;">' + escHtml(state.parsed.scenarioName || 'Unknown scenario') + '</div>';
+  html += '<div class="fh-title" style="font-size:0.9rem;">' + escHtml(state.parsed.meta.scenario || 'Unknown scenario') + '</div>';
   var reviewed = state.parsed.issues.filter(function(iss) { return !!iss.reviewDecision; }).length;
   html += '<div class="fh-meta">';
-  if (state.parsed.metaSource) html += '<span>📄 Source: ' + escHtml(state.parsed.metaSource) + '</span>';
-  if (state.parsed.metaDate) html += '<span>📅 Date: ' + escHtml(state.parsed.metaDate) + '</span>';
-  if (state.parsed.metaMode) html += '<span>⚙ Mode: ' + escHtml(state.parsed.metaMode) + '</span>';
+  if (state.parsed.meta.source) html += '<span>📄 Source: ' + escHtml(state.parsed.meta.source) + '</span>';
+  if (state.parsed.meta.date) html += '<span>📅 Date: ' + escHtml(state.parsed.meta.date) + '</span>';
+  if (state.parsed.meta.mode) html += '<span>⚙ Mode: ' + escHtml(state.parsed.meta.mode) + '</span>';
   html += '<span>' + total + ' issues, ' + reviewed + ' reviewed</span>';
   html += '</div>';
   // Render scenario background as markdown
-  if (state.parsed.scenarioBackground) {
-    html += '<div class="fh-scenario-bg">' + marked.parse(state.parsed.scenarioBackground) + '</div>';
+  if (getScenarioBackground(state.parsed)) {
+    html += '<div class="fh-scenario-bg">' + marked.parse(getScenarioBackground(state.parsed)) + '</div>';
   }
   html += '</div>';
 
@@ -1820,9 +1644,9 @@ function renderSingleIssue() {
   html += '<div class="single-issue-view">';
 
   // Issue header
-  var borderClass = issue.reviewDecision ? DECISION_BORDER[issue.reviewDecision] || '' : '';
+  var borderClass = issue.review.decision ? DECISION_BORDER[issue.review.decision] || '' : '';
   html += '<div class="issue-header-block">';
-  html += '<div class="issue-title-large">Issue ' + issue.num + ': ' + escHtml(issue.title) + '</div>';
+  html += '<div class="issue-title-large">Issue ' + issue.number + ': ' + escHtml(issue.title) + '</div>';
   html += '<div class="issue-meta-row">';
   if (issue.severity) {
     var sevClass = 'sev-' + issue.severity.toLowerCase();
@@ -1831,13 +1655,13 @@ function renderSingleIssue() {
   if (issue.category) {
     html += '<span class="badge cat">' + escHtml(issue.category) + '</span>';
   }
-  if (issue.reviewDecision) {
-    var decClass = issue.reviewDecision === 'ACCEPT with improvements' ? 'improve' :
-                   (issue.reviewDecision === 'ACCEPT' ? 'accept' :
-                    issue.reviewDecision === 'REJECT' ? 'reject' :
-                    issue.reviewDecision === 'DUPLICATE' ? 'duplicate' : 'defer');
+  if (issue.review.decision) {
+    var decClass = issue.review.decision === 'ACCEPT with improvements' ? 'improve' :
+                   (issue.review.decision === 'ACCEPT' ? 'accept' :
+                    issue.review.decision === 'REJECT' ? 'reject' :
+                    issue.review.decision === 'DUPLICATE' ? 'duplicate' : 'defer');
     if (issue._heuristic) decClass += ' heuristic';
-    html += '<span class="badge review-decision ' + decClass + '">' + escHtml(issue.reviewDecision) + '</span>';
+    html += '<span class="badge review-decision ' + decClass + '">' + escHtml(issue.review.decision) + '</span>';
     if (issue._heuristic) {
       html += '<span class="badge review-decision heuristic" title="This decision was made by heuristic rules (LLM was unavailable). Review carefully.">⚠ Heuristic</span>';
     }
@@ -1857,19 +1681,19 @@ function renderSingleIssue() {
 
   // Review block
   var decBorder = '';
-  if (issue.reviewDecision) {
-    if (issue.reviewDecision === 'REJECT') decBorder = ' reject';
-    else if (issue.reviewDecision === 'DEFER' || issue.reviewDecision === 'WONTFIX') decBorder = ' defer';
-    else if (issue.reviewDecision === 'DUPLICATE') decBorder = ' duplicate';
+  if (issue.review.decision) {
+    if (issue.review.decision === 'REJECT') decBorder = ' reject';
+    else if (issue.review.decision === 'DEFER' || issue.review.decision === 'WONTFIX') decBorder = ' defer';
+    else if (issue.review.decision === 'DUPLICATE') decBorder = ' duplicate';
     else decBorder = '';
   }
-  var needsReviewNotes = issue.reviewDecision && issue.reviewDecision !== 'ACCEPT';
-  html += '<div class="single-review-block' + (issue.reviewDecision ? ' has-decision' + decBorder : '') + '">';
+  var needsReviewNotes = issue.review.decision && issue.review.decision !== 'ACCEPT';
+  html += '<div class="single-review-block' + (issue.review.decision ? ' has-decision' + decBorder : '') + '">';
   html += '<div class="review-label">Review Decision</div>';
   html += '<div class="review-options">';
   for (var d = 0; d < REVIEW_DECISIONS.length; d++) {
     var decision = REVIEW_DECISIONS[d];
-    var selClass = (issue.reviewDecision === decision) ? ' ' + DECISION_CSS[decision] : '';
+    var selClass = (issue.review.decision === decision) ? ' ' + DECISION_CSS[decision] : '';
     html += '<button class="review-opt' + selClass + '" ' +
             'onclick="setDecision(' + idx + ', \'' + escJs(decision) + '\')" ' +
             'title="Press ' + (d + 1) + '">' +
@@ -1878,14 +1702,14 @@ function renderSingleIssue() {
   html += '</div>';
   html += '<div style="display:flex;gap:8px;align-items:flex-start;">';
   var notesClass = 'review-notes' + (needsReviewNotes ? ' needs-review' : '');
-  var notesPlaceholder = needsReviewNotes ? '⚠ Review the AI rationale — notes REQUIRED for ' + issue.reviewDecision : 'Optional review notes…';
+  var notesPlaceholder = needsReviewNotes ? '⚠ Review the AI rationale — notes REQUIRED for ' + issue.review.decision : 'Optional review notes…';
   html += '<textarea class="' + notesClass + '" id="single-review-notes" ' +
           'placeholder="' + notesPlaceholder + '" ' +
           'oninput="onSingleNotesChange(' + idx + ', this.value)" ' +
           'onfocus="focusedIssueIndex=' + idx + '">' +
-          escHtml(issue.reviewNotes || '') + '</textarea>';
+          escHtml(issue.review.notes || '') + '</textarea>';
   if (needsReviewNotes) {
-    html += '<div class="notes-callout">⚠ ' + escHtml(issue.reviewDecision) + ' — verify the AI rationale in notes above</div>';
+    html += '<div class="notes-callout">⚠ ' + escHtml(issue.review.decision) + ' — verify the AI rationale in notes above</div>';
   }
   html += '<button class="nav-btn accent" id="btn-ai-review" onclick="triggerAiReview(' + idx + ')" ' +
           'title="AI review (A)" style="flex-shrink:0;white-space:nowrap;align-self:flex-start;">' +
@@ -1900,29 +1724,11 @@ function renderSingleIssue() {
 
 // Parse issue sections from the markdown body
 function parseIssueSections(issue) {
-  if (!issue.sectionText) return [];
-  var sections = [];
-  var lines = issue.sectionText.split('\n');
-  var currentLabel = 'Overview';
-  var currentBody = [];
-  for (var i = 0; i < lines.length; i++) {
-    var line = lines[i];
-    var h4Match = line.match(/^#### (.+)/);
-    if (h4Match) {
-      if (currentBody.length > 0) {
-        sections.push({ label: currentLabel, body: currentBody.join('\n').trim() });
-      }
-      currentLabel = h4Match[1].trim();
-      currentBody = [];
-    } else {
-      currentBody.push(line);
-    }
+  // Sections are already parsed by ISSUE_MODEL as [{ label, body }]
+  if (Array.isArray(issue.sections)) {
+    return issue.sections.filter(function(s) { return s.body && s.body.trim().length > 0; });
   }
-  if (currentBody.length > 0) {
-    sections.push({ label: currentLabel, body: currentBody.join('\n').trim() });
-  }
-  // Filter out sections with empty bodies
-  return sections.filter(function(s) { return s.body.length > 0; });
+  return [];
 }
 
 function renderFileHeader() {
@@ -1960,8 +1766,8 @@ function renderFileHeader() {
 
 function renderIssueCard(issue, index) {
   var borderClass = '';
-  if (issue.reviewDecision) {
-    borderClass = DECISION_BORDER[issue.reviewDecision] || '';
+  if (issue.review.decision) {
+    borderClass = DECISION_BORDER[issue.review.decision] || '';
   }
 
   var html = '<div class="issue-card ' + borderClass + '" id="issue-card-' + index + '">';
@@ -1969,7 +1775,7 @@ function renderIssueCard(issue, index) {
   // Header (clickable to expand/collapse)
   html += '<div class="issue-card-header" onclick="toggleIssueBody(' + index + ')">';
   html += '<span class="collapse-icon open" id="collapse-icon-' + index + '">▶</span>';
-  html += '<span class="issue-title">Issue ' + issue.num + ': ' + escHtml(issue.title) + '</span>';
+  html += '<span class="issue-title">Issue ' + issue.number + ': ' + escHtml(issue.title) + '</span>';
   html += '<span class="issue-badges">';
   if (issue.severity) {
     var sevClass = 'sev-' + issue.severity.toLowerCase();
@@ -1978,12 +1784,12 @@ function renderIssueCard(issue, index) {
   if (issue.category) {
     html += '<span class="badge cat">' + escHtml(issue.category) + '</span>';
   }
-  if (issue.reviewDecision) {
-    var decClass = issue.reviewDecision === 'ACCEPT with improvements' ? 'improve' :
-                   (issue.reviewDecision === 'ACCEPT' ? 'accept' :
-                    issue.reviewDecision === 'REJECT' ? 'reject' :
-                    issue.reviewDecision === 'DUPLICATE' ? 'duplicate' : 'defer');
-    html += '<span class="badge review-decision ' + decClass + '">' + escHtml(issue.reviewDecision) + '</span>';
+  if (issue.review.decision) {
+    var decClass = issue.review.decision === 'ACCEPT with improvements' ? 'improve' :
+                   (issue.review.decision === 'ACCEPT' ? 'accept' :
+                    issue.review.decision === 'REJECT' ? 'reject' :
+                    issue.review.decision === 'DUPLICATE' ? 'duplicate' : 'defer');
+    html += '<span class="badge review-decision ' + decClass + '">' + escHtml(issue.review.decision) + '</span>';
   }
   html += '</span>';
   html += '</div>';
@@ -1991,9 +1797,14 @@ function renderIssueCard(issue, index) {
   // Body (collapsible)
   html += '<div class="issue-card-body open" id="issue-body-' + index + '">';
 
-  // Section content rendered as markdown
-  if (issue.sectionText) {
-    html += '<div class="section"><div class="section-content">' + marked.parse(issue.sectionText) + '</div></div>';
+  // Section content — already parsed by ISSUE_MODEL
+  if (issue.sections && issue.sections.length > 0) {
+    var secs = parseIssueSections(issue);
+    for (var si = 0; si < secs.length; si++) {
+      var sec = secs[si];
+      html += '<div class="section"><div class="section-title">' + escHtml(sec.label) + '</div>';
+      html += '<div class="section-content">' + marked.parse(sec.body) + '</div></div>';
+    }
   }
 
   // Review controls
@@ -2011,7 +1822,7 @@ function renderReviewControls(issue, index) {
   html += '<div class="review-options">';
   for (var d = 0; d < REVIEW_DECISIONS.length; d++) {
     var decision = REVIEW_DECISIONS[d];
-    var selClass = (issue.reviewDecision === decision) ? ' ' + DECISION_CSS[decision] : '';
+    var selClass = (issue.review.decision === decision) ? ' ' + DECISION_CSS[decision] : '';
     var keyLabel = d + 1;
     html += '<button class="review-opt' + selClass + '" ' +
             'onclick="setDecision(' + index + ', \'' + escJs(decision) + '\')" ' +
@@ -2020,16 +1831,16 @@ function renderReviewControls(issue, index) {
   }
   html += '</div>';
 
-  var needsReview = issue.reviewDecision && issue.reviewDecision !== 'ACCEPT';
+  var needsReview = issue.review.decision && issue.review.decision !== 'ACCEPT';
   var notesCls = 'review-notes' + (needsReview ? ' needs-review' : '');
-  var placeholder = needsReview ? '⚠ Review the AI rationale — notes REQUIRED for ' + issue.reviewDecision : 'Optional review notes...';
+  var placeholder = needsReview ? '⚠ Review the AI rationale — notes REQUIRED for ' + issue.review.decision : 'Optional review notes...';
   html += '<textarea class="' + notesCls + '" id="review-notes-' + index + '" ' +
           'placeholder="' + placeholder + '" ' +
           'oninput="onNotesChange(' + index + ', this.value)" ' +
           'onkeydown="onNotesKeydown(event, ' + index + ')">' +
-          escHtml(issue.reviewNotes || '') + '</textarea>';
+          escHtml(issue.review.notes || '') + '</textarea>';
   if (needsReview) {
-    html += '<div class="notes-callout">⚠ ' + escHtml(issue.reviewDecision) + ' — verify the AI rationale above</div>';
+    html += '<div class="notes-callout">⚠ ' + escHtml(issue.review.decision) + ' — verify the AI rationale above</div>';
   }
 
   html += '</div>';
@@ -2042,10 +1853,10 @@ function setDecision(index, decision) {
   var issue = state.parsed.issues[index];
 
   // Toggle: if already selected, deselect
-  if (issue.reviewDecision === decision) {
-    issue.reviewDecision = null;
+  if (issue.review.decision === decision) {
+    issue.review.decision = null;
   } else {
-    issue.reviewDecision = decision;
+    issue.review.decision = decision;
   }
 
   state.dirty = true;
@@ -2079,8 +1890,8 @@ function updateIssueCardUI(index) {
 
   // Update border
   card.className = 'issue-card';
-  if (issue.reviewDecision) {
-    card.classList.add(DECISION_BORDER[issue.reviewDecision] || '');
+  if (issue.review.decision) {
+    card.classList.add(DECISION_BORDER[issue.review.decision] || '');
   }
 
   // Update decision buttons
@@ -2088,7 +1899,7 @@ function updateIssueCardUI(index) {
   for (var i = 0; i < opts.length; i++) {
     var d = REVIEW_DECISIONS[i];
     opts[i].className = 'review-opt';
-    if (issue.reviewDecision === d) {
+    if (issue.review.decision === d) {
       opts[i].classList.add(DECISION_CSS[d]);
     }
   }
@@ -2098,14 +1909,14 @@ function updateIssueCardUI(index) {
   if (badges) {
     var existingBadge = badges.querySelector('.review-decision');
     if (existingBadge) existingBadge.remove();
-    if (issue.reviewDecision) {
-      var decClass = issue.reviewDecision === 'ACCEPT with improvements' ? 'improve' :
-                     (issue.reviewDecision === 'ACCEPT' ? 'accept' :
-                      issue.reviewDecision === 'REJECT' ? 'reject' :
-                    issue.reviewDecision === 'DUPLICATE' ? 'duplicate' : 'defer');
+    if (issue.review.decision) {
+      var decClass = issue.review.decision === 'ACCEPT with improvements' ? 'improve' :
+                     (issue.review.decision === 'ACCEPT' ? 'accept' :
+                      issue.review.decision === 'REJECT' ? 'reject' :
+                    issue.review.decision === 'DUPLICATE' ? 'duplicate' : 'defer');
       var badge = document.createElement('span');
       badge.className = 'badge review-decision ' + decClass;
-      badge.textContent = issue.reviewDecision;
+      badge.textContent = issue.review.decision;
       badges.appendChild(badge);
     }
   }
@@ -2233,8 +2044,8 @@ async function triggerAiReview(index) {
 
   // Extract scenario context (truncated to keep prompt reasonable)
   var scenarioContext = '';
-  if (state.parsed.scenarioBackground) {
-    scenarioContext = state.parsed.scenarioBackground.substring(0, 2000);
+  if (getScenarioBackground(state.parsed)) {
+    scenarioContext = getScenarioBackground(state.parsed).substring(0, 2000);
   }
 
   try {
@@ -2251,13 +2062,13 @@ async function triggerAiReview(index) {
     // Apply the AI's decision
     var decision = normalizeDecision(result.decision);
 
-    issue.reviewDecision = decision;
-    issue.reviewNotes = result.notes || '';
+    issue.review.decision = decision;
+    issue.review.notes = result.notes || '';
     // Track whether this was a heuristic fallback
     issue._heuristic = !!result.heuristic;
     // Store AI suggestion in notes for feedback tracking
-    if (issue.reviewNotes.indexOf('[AI suggested:') < 0) {
-      issue.reviewNotes = '[AI suggested: ' + decision + '] ' + issue.reviewNotes;
+    if (issue.review.notes.indexOf('[AI suggested:') < 0) {
+      issue.review.notes = '[AI suggested: ' + decision + '] ' + issue.review.notes;
     }
     state.dirty = true;
     updateSaveState();
@@ -2325,15 +2136,15 @@ async function triggerAiReviewAll() {
 
   // Extract scenario context
   var scenarioContext = '';
-  if (state.parsed.scenarioBackground) {
-    scenarioContext = state.parsed.scenarioBackground.substring(0, 3000);
+  if (getScenarioBackground(state.parsed)) {
+    scenarioContext = getScenarioBackground(state.parsed).substring(0, 3000);
   }
 
   try {
     var result = await apiPost('/api/issue-review/ai-suggest-batch', {
       issues: issues,
       scenarioContext: scenarioContext,
-      scenarioTitle: state.parsed.scenarioName || '',
+      scenarioTitle: state.parsed.meta.scenario || '',
     });
 
     // Apply decisions
@@ -2457,7 +2268,7 @@ async function triggerAiReviewDirectory() {
         }
 
         issues.push({
-          number: issue.num || (j + 1),
+          number: issue.number || (j + 1),
           title: issue.title,
           severity: issue.severity,
           category: issue.category,
@@ -2466,13 +2277,13 @@ async function triggerAiReviewDirectory() {
         });
       }
 
-      var scenarioContext = (parsed.scenarioBackground || '').substring(0, 3000);
+      var scenarioContext = getScenarioBackground(parsed).substring(0, 3000);
 
       // Send batch review for this file
       var result = await apiPost('/api/issue-review/ai-suggest-batch', {
         issues: issues,
         scenarioContext: scenarioContext,
-        scenarioTitle: parsed.scenarioName || '',
+        scenarioTitle: (parsed.meta && parsed.meta.scenario) || '',
       });
 
       // Update cached counts for this file
@@ -2586,7 +2397,7 @@ async function markAllDone() {
       var newContent = reconstructFile();
       await apiPost('/api/task?path=' + encodeURIComponent(state.selectedFilePath), { content: newContent });
       state.selectedFileContent = newContent;
-      state.parsed.originalContent = newContent;
+      state.parsed._originalContent = newContent;
       state.dirty = false;
       updateSaveState();
     } catch (e) {
@@ -2746,7 +2557,7 @@ async function saveReview(opts) {
     var newContent = reconstructFile();
     await apiPost('/api/task?path=' + encodeURIComponent(state.selectedFilePath), { content: newContent });
     state.selectedFileContent = newContent;
-    state.parsed.originalContent = newContent;
+    state.parsed._originalContent = newContent;
     state.dirty = false;
     cancelAutoSave();
     // Always update save indicator (lightweight, no focus impact)
@@ -2797,7 +2608,7 @@ async function markDone() {
       var newContent = reconstructFile();
       await apiPost('/api/task?path=' + encodeURIComponent(state.selectedFilePath), { content: newContent });
       state.selectedFileContent = newContent;
-      state.parsed.originalContent = newContent;
+      state.parsed._originalContent = newContent;
       state.dirty = false;
       updateSaveState();
     }
@@ -2907,64 +2718,7 @@ async function discardFile() {
 }
 
 function reconstructFile() {
-  var p = state.parsed;
-  var content = p.originalContent;
-
-  // For each issue, update the review section
-  for (var i = 0; i < p.issues.length; i++) {
-    var issue = p.issues[i];
-    content = updateIssueInContent(content, issue);
-  }
-
-  return content;
-}
-
-function updateIssueInContent(content, issue) {
-  // Find the Human Review section for this specific issue
-  // We search for "### Issue N:" for this issue number, then find its Human Review section
-  var issueHeaderPattern = new RegExp('^### Issue ' + issue.num + ':.+', 'm');
-  var issueStart = content.search(issueHeaderPattern);
-  if (issueStart < 0) return content;
-
-  // Find the next issue header or end of content
-  var nextIssuePattern = /^### Issue \d+:/gm;
-  nextIssuePattern.lastIndex = issueStart + 1;
-  var nextMatch = nextIssuePattern.exec(content);
-  var issueEnd = nextMatch ? nextMatch.index : content.length;
-
-  // Also check for "## How to Reproduce" or end-of-file markers
-  var howToIdx = content.indexOf('\n## How to Reproduce', issueStart);
-  if (howToIdx >= 0 && howToIdx < issueEnd) {
-    issueEnd = howToIdx;
-  }
-
-  var issueContent = content.substring(issueStart, issueEnd);
-
-  // Find Human Review section within this issue
-  var reviewMatch = issueContent.match(/#### Human Review\n([\s\S]*?)(?=\n---\n|\n## |$)/);
-  if (!reviewMatch) return content;
-
-  var reviewSection = reviewMatch[1];
-  var reviewStartInIssue = issueContent.indexOf('#### Human Review\n');
-  var reviewStart = issueStart + reviewStartInIssue;
-  var reviewEnd = reviewStart + '#### Human Review\n'.length + reviewSection.length;
-
-  // Build new review section
-  var newReview = '#### Human Review\n\n';
-  for (var d = 0; d < REVIEW_DECISIONS.length; d++) {
-    var decision = REVIEW_DECISIONS[d];
-    var checked = (issue.reviewDecision === decision) ? '[x]' : '[ ]';
-    var desc = getDecisionDescription(decision);
-    newReview += '- ' + checked + ' **' + decision + '**' + (desc ? ' — ' + desc : '') + '\n';
-  }
-  newReview += '- **Notes:**';
-  if (issue.reviewNotes && issue.reviewNotes.trim()) {
-    newReview += '\n' + issue.reviewNotes.trim();
-  }
-  newReview += '\n';
-
-  // Replace the review section
-  return content.substring(0, reviewStart) + newReview + content.substring(reviewEnd);
+  return ISSUE_MODEL.reconstructMarkdown(state.parsed);
 }
 
 function getDecisionDescription(decision) {
@@ -3106,7 +2860,7 @@ async function navigateToFile(direction) {
       var newContent = reconstructFile();
       await apiPost('/api/task?path=' + encodeURIComponent(state.selectedFilePath), { content: newContent });
       state.selectedFileContent = newContent;
-      state.parsed.originalContent = newContent;
+      state.parsed._originalContent = newContent;
       state.dirty = false;
     } catch (e) {
       // Continue navigation even if save fails
@@ -3162,6 +2916,15 @@ function collapseAll() {
 }
 
 // ── Escape helpers ──
+// Build a combined scenario background string from the model's background fields
+function getScenarioBackground(model) {
+  if (!model || !model.background) return '';
+  var parts = [];
+  if (model.background.task) parts.push('### Task\n\n' + model.background.task);
+  if (model.background.executionContext) parts.push('### Execution Context\n\n' + model.background.executionContext);
+  return parts.join('\n\n');
+}
+
 function escHtml(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 function escJs(s) { return String(s).replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/"/g,'\\"'); }
 

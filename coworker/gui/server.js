@@ -661,7 +661,7 @@ app.post('/api/issue-review/ai-suggest-batch', (req, res) => {
   // Build per-issue text
   let issuesText = '';
   for (const iss of issues) {
-    issuesText += `### Issue ${iss.number}: ${iss.title}\n`;
+    issuesText += `### Issue ${iss.numberber}: ${iss.title}\n`;
     issuesText += `**Severity:** ${iss.severity || 'N/A'} | **Category:** ${iss.category || 'N/A'}\n\n`;
     if (iss.sections) {
       for (const s of iss.sections) {
@@ -728,7 +728,7 @@ Respond with ONLY a single JSON object (no markdown, no backticks). Include a de
       // Apply per-issue heuristic for batch fallback
       const decisions = issues.map(function(iss) {
         const h = llm.heuristicDecision(iss);
-        return { issueNumber: iss.number, decision: h.decision, notes: h.notes };
+        return { issueNumber: iss.numberber, decision: h.decision, notes: h.notes };
       });
       return { decisions: decisions };
     },
@@ -818,42 +818,25 @@ app.post('/api/issue-review/ai-suggest-directory', async (req, res) => {
       const model = require('./frontend/issue-model.js').parseIssueFile(content);
       if (!model.issues || model.issues.length === 0) continue;
 
-      // Build per-issue text for this file
+      // Build per-issue text for this file (sections already parsed by issue-model)
       let issuesText = '';
       for (const iss of model.issues) {
-        // Parse sections from the issue's section text
-        const sections = [];
-        if (iss.sectionText) {
-          const lines = iss.sectionText.split('\n');
-          let currentLabel = 'Overview';
-          let currentBody = [];
-          for (const line of lines) {
-            const h4Match = line.match(/^#### (.+)/);
-            if (h4Match) {
-              if (currentBody.length > 0) sections.push({ label: currentLabel, body: currentBody.join('\n').trim() });
-              currentLabel = h4Match[1].trim();
-              currentBody = [];
-            } else {
-              currentBody.push(line);
-            }
-          }
-          if (currentBody.length > 0) sections.push({ label: currentLabel, body: currentBody.join('\n').trim() });
-        }
+        const sections = iss.sections || [];
 
-        issuesText += `### Issue ${iss.num}: ${iss.title}\n`;
+        issuesText += `### Issue ${iss.numberber}: ${iss.title}\n`;
         issuesText += `**Severity:** ${iss.severity || 'N/A'} | **Category:** ${iss.category || 'N/A'}\n\n`;
         for (const s of sections) {
-          if (s.body.trim()) {
+          if (s.body && s.body.trim()) {
             issuesText += `**${s.label}:** ${(s.body || '').substring(0, 600)}\n\n`;
           }
         }
         issuesText += '---\n\n';
       }
 
-      const scenarioBg = (model.scenarioBackground || '').substring(0, 3000);
+      const scenarioBg = ((model.background && model.background.task || '') + '\n\n' + (model.background && model.background.executionContext || '')).substring(0, 3000);
       const fileRel = path.relative(reviewRoot, filePath).replace(/\\/g, '/');
 
-      const prompt = `You are reviewing ALL issues from a browser4-cli evaluation scenario: "${model.scenarioName || 'Unknown'}". Review each issue and choose the best decision. Consider how issues relate to each other — if multiple issues share the same root cause, mark one as ACCEPT and the rest as DUPLICATE.
+      const prompt = `You are reviewing ALL issues from a browser4-cli evaluation scenario: "${(model.meta && model.meta.scenario) || 'Unknown'}". Review each issue and choose the best decision. Consider how issues relate to each other — if multiple issues share the same root cause, mark one as ACCEPT and the rest as DUPLICATE.
 
 ## Review Guidelines
 
@@ -903,7 +886,7 @@ Respond with ONLY a single JSON object (no markdown, no backticks):
                 severity: iss.severity,
                 category: iss.category,
               });
-              return { issueNumber: iss.num, decision: h.decision, notes: h.notes };
+              return { issueNumber: iss.number, decision: h.decision, notes: h.notes };
             });
             return { decisions: decisions };
           },
@@ -916,7 +899,7 @@ Respond with ONLY a single JSON object (no markdown, no backticks):
           const jsonMatch = stdout.match(/\{[\s\S]*\}/);
           if (!jsonMatch) {
             resolve({ heuristic: true, decisions: model.issues.map(iss => ({
-              issueNumber: iss.num, decision: 'DEFER',
+              issueNumber: iss.number, decision: 'DEFER',
               notes: '[AI response unparseable — review required]',
             })), file: fileRel });
             return;
@@ -925,7 +908,7 @@ Respond with ONLY a single JSON object (no markdown, no backticks):
             const parsed = JSON.parse(jsonMatch[0]);
             if (!parsed.decisions || !Array.isArray(parsed.decisions)) {
               resolve({ heuristic: true, decisions: model.issues.map(iss => ({
-                issueNumber: iss.num, decision: 'DEFER',
+                issueNumber: iss.number, decision: 'DEFER',
                 notes: '[AI response missing decisions — review required]',
               })), file: fileRel });
               return;
@@ -941,13 +924,13 @@ Respond with ONLY a single JSON object (no markdown, no backticks):
             resolve({ heuristic: false, decisions, file: fileRel });
           } catch (e) {
             resolve({ heuristic: true, decisions: model.issues.map(iss => ({
-              issueNumber: iss.num, decision: 'DEFER',
+              issueNumber: iss.number, decision: 'DEFER',
               notes: '[AI response JSON parse error — review required]',
             })), file: fileRel });
           }
         }).catch(function(err) {
           resolve({ heuristic: true, decisions: model.issues.map(iss => ({
-            issueNumber: iss.num, decision: 'DEFER',
+            issueNumber: iss.number, decision: 'DEFER',
             notes: '[LLM unavailable: ' + err.message + ' — review required]',
           })), file: fileRel });
         });
@@ -1123,64 +1106,48 @@ app.get('/api/issue-review/feedback', (req, res) => {
   res.json(stats);
 });
 
-// Build a summary version of the issues file:
+// Build a summary version of the issues file using the issue model.
 // - Approved issues (ACCEPT, ACCEPT with improvements): keep full detail
 // - Other issues (DEFER, WONTFIX, REJECT, unreviewed): condensed abstract
 function buildSummaryContent(content) {
   const APPROVED = ['ACCEPT', 'ACCEPT with improvements'];
+  const issueModel = require('./frontend/issue-model.js');
+  const model = issueModel.parseIssueFile(content);
 
-  // Split into preamble (everything before first "### Issue N:") and issue blocks
-  const firstIssueMatch = content.match(/^### Issue \d+:/m);
-  if (!firstIssueMatch) return content; // no issues, return as-is
+  if (!model.issues || model.issues.length === 0) return content;
 
-  const preamble = content.substring(0, firstIssueMatch.index).trim();
-
-  // Split remaining into individual issue blocks
-  const remainder = content.substring(firstIssueMatch.index);
-  const blocks = [];
-  const lines = remainder.split('\n');
-  let current = [];
-  let started = false;
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    if (/^### Issue \d+:/i.test(line)) {
-      if (started && current.length > 0) blocks.push(current.join('\n'));
-      current = [line];
-      started = true;
-    } else if (started) {
-      // Stop at "## How to Reproduce" section
-      if (/^## How to Reproduce/.test(line)) break;
-      current.push(line);
-    }
+  // Build preamble from meta + background
+  let preamble = '# Issues: ' + (model.meta.scenario || 'unknown') + '\n\n';
+  preamble += '> **Source:** `' + (model.meta.source || '') + '` | ';
+  preamble += '**Date:** ' + (model.meta.date || '') + ' | ';
+  preamble += '**Mode:** ' + (model.meta.mode || 'dev') + '\n\n';
+  if (model.background.task) {
+    preamble += '## Scenario Background\n\n### Task\n\n' + model.background.task + '\n\n';
   }
-  if (started && current.length > 0) blocks.push(current.join('\n'));
+  if (model.background.executionContext) {
+    preamble += '### Execution Context\n\n' + model.background.executionContext + '\n\n';
+  }
+  preamble += '---';
 
-  // Process each block
   const approvedBlocks = [];
   const abstractBlocks = [];
   let keptCount = 0;
   let condensedCount = 0;
 
-  for (const block of blocks) {
-    const decision = extractDecision(block);
-    if (decision && APPROVED.includes(decision)) {
-      approvedBlocks.push(block);
+  for (const issue of model.issues) {
+    if (issue.review.decision && APPROVED.includes(issue.review.decision)) {
+      approvedBlocks.push(buildIssueBlockFromModel(issue));
       keptCount++;
     } else {
-      abstractBlocks.push(buildAbstract(block, decision));
+      abstractBlocks.push(buildAbstractFromModel(issue));
       condensedCount++;
     }
   }
 
-  // Strip the original "## Issues Found" line from preamble (we'll add a fresh one)
-  let cleanPreamble = preamble.replace(/\n## Issues Found[^\n]*\n?[\s\S]*$/, '').trim();
-
-  // Build output: clean preamble + updated header + review summary + issues
-  let out = cleanPreamble + '\n\n---\n\n';
-  out += '## Issues Found (' + blocks.length + ' issue' + (blocks.length !== 1 ? 's' : '') + ')\n';
+  let out = preamble + '\n\n';
+  out += '## Issues Found (' + model.issues.length + ' issue' + (model.issues.length !== 1 ? 's' : '') + ')\n';
   out += '> **Review complete:** ' + keptCount + ' approved, ' + condensedCount + ' deferred/rejected\n\n';
 
-  // Output approved issues first (full detail), then abstracts
   for (const b of approvedBlocks) {
     out += b.trimEnd() + '\n\n---\n\n';
   }
@@ -1197,49 +1164,53 @@ function buildSummaryContent(content) {
   return out.trim() + '\n';
 }
 
-function extractDecision(block) {
-  const m = block.match(/^- \[x\] \*\*(ACCEPT|ACCEPT with improvements|DEFER|WONTFIX|REJECT|DUPLICATE)\*\*/m);
-  return m ? m[1] : null;
+// Build full detail block from model issue (for approved issues)
+function buildIssueBlockFromModel(issue) {
+  let out = '### Issue ' + issue.number + ': ' + issue.title + '\n\n';
+  out += '**Severity:** ' + (issue.severity || 'N/A') + '\n';
+  out += '**Category:** ' + (issue.category || 'N/A') + '\n\n';
+  for (const s of (issue.sections || [])) {
+    if (s.body && s.body.trim()) {
+      out += '#### ' + s.label + '\n\n' + s.body + '\n\n';
+    }
+  }
+  out += '#### Human Review\n\n';
+  for (const d of issueModel.DECISIONS) {
+    const checked = (issue.review.decision === d) ? '[x]' : '[ ]';
+    out += '- ' + checked + ' **' + d + '**\n';
+  }
+  out += '- **Notes:**';
+  if (issue.review.notes && issue.review.notes.trim()) {
+    out += '\n' + issue.review.notes.trim();
+  }
+  out += '\n';
+  return out;
 }
 
-function buildAbstract(block, decision) {
-  const lines = block.split('\n');
-  const titleLine = lines[0]; // "### Issue N: Title"
-  let severity = '', category = '';
+// Build condensed abstract from model issue (for non-approved issues)
+function buildAbstractFromModel(issue) {
+  const decision = issue.review.decision || 'WONTFIX';
 
-  for (let i = 1; i < Math.min(lines.length, 5); i++) {
-    const sevMatch = lines[i].match(/^\*\*Severity:\*\*\s*(.+)/);
-    const catMatch = lines[i].match(/^\*\*Category:\*\*\s*(.+)/);
-    if (sevMatch) severity = sevMatch[1].trim();
-    if (catMatch) category = catMatch[1].trim();
-  }
-
-  // Extract the AI Suggested Improvement text as a one-line summary
+  // Get the AI Suggested Improvement text as a one-line summary
   let suggestion = '';
-  const aiMatch = block.match(/#### AI Suggested Improvement\n([\s\S]*?)(?=\n#### |\n---|$)/);
-  if (aiMatch) {
-    suggestion = aiMatch[1].trim();
-    // Take just the first meaningful line
+  const aiSection = (issue.sections || []).find(s =>
+    s.label && s.label.toLowerCase().indexOf('ai suggested') >= 0
+  );
+  if (aiSection && aiSection.body) {
+    suggestion = aiSection.body.trim();
     const firstLine = suggestion.split('\n').find(l => l.trim() && !l.trim().startsWith('- '));
     if (firstLine) suggestion = firstLine.trim();
     else suggestion = suggestion.split('\n')[0] || '';
     if (suggestion.length > 200) suggestion = suggestion.substring(0, 197) + '...';
   }
 
-  // Extract review notes
-  let notes = '';
-  const notesMatch = block.match(/\*\*Notes:\*\*\n([\s\S]*?)(?=\n---|$)/);
-  if (notesMatch) {
-    notes = notesMatch[1].trim();
-  }
-
-  let out = titleLine + '\n\n';
-  out += '**Severity:** ' + (severity || 'N/A') + '\n';
-  out += '**Category:** ' + (category || 'N/A') + '\n\n';
+  let out = '### Issue ' + issue.number + ': ' + issue.title + '\n\n';
+  out += '**Severity:** ' + (issue.severity || 'N/A') + '\n';
+  out += '**Category:** ' + (issue.category || 'N/A') + '\n\n';
   out += '#### Review Result\n\n';
-  out += '**Decision:** ' + (decision || 'WONTFIX') + '\n\n';
-  if (notes) {
-    out += '**Notes:** ' + notes + '\n\n';
+  out += '**Decision:** ' + decision + '\n\n';
+  if (issue.review.notes) {
+    out += '**Notes:** ' + issue.review.notes + '\n\n';
   }
   if (suggestion) {
     out += '**Summary:** ' + suggestion + '\n';
