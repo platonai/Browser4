@@ -353,6 +353,51 @@ body {
 }
 .review-header .file-info .file-icon { color: var(--accent); flex-shrink: 0; }
 .review-actions { display: flex; gap: 5px; flex-shrink: 0; align-items: center; }
+
+/* ── Toolbar groups ── */
+.review-toolbar { display: flex; align-items: center; gap: 4px; flex-shrink: 0; flex-wrap: wrap; }
+.review-toolbar .tb-group { display: flex; align-items: center; gap: 3px; padding: 0 5px; }
+.review-toolbar .tb-divider { width: 1px; height: 22px; background: var(--border); flex-shrink: 0; margin: 0 1px; }
+.tb-btn {
+  font-size: 0.7rem; padding: 4px 10px; border-radius: var(--radius-sm);
+  font-weight: 500; cursor: pointer; border: 1px solid var(--border);
+  background: var(--bg-surface); color: var(--text-secondary);
+  transition: all var(--transition);
+  display: inline-flex; align-items: center; gap: 4px; font-family: inherit;
+  white-space: nowrap; line-height: 1.4;
+}
+.tb-btn:hover { background: var(--bg-hover); border-color: var(--text-muted); }
+.tb-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.tb-btn.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+.tb-btn.primary:hover { background: var(--accent-light); border-color: var(--accent-light); color: #1e1b2e; }
+.tb-btn.success { background: var(--success); color: #fff; border-color: var(--success); }
+.tb-btn.success:hover { filter: brightness(1.1); }
+.tb-btn.danger { background: var(--danger); color: #fff; border-color: var(--danger); }
+.tb-btn.danger:hover { filter: brightness(1.15); }
+.tb-btn.accent { border-color: var(--accent); color: var(--accent); }
+.tb-btn.accent:hover { background: var(--accent-bg); }
+.tb-btn .kb-hint { font-size: 0.55rem; opacity: 0.45; font-weight: 400; margin-left: 1px; }
+.status-chip {
+  font-size: 0.66rem; padding: 2px 8px; border-radius: 10px;
+  display: inline-flex; align-items: center; gap: 3px;
+  white-space: nowrap; font-weight: 500;
+}
+.status-chip.clean { color: var(--text-muted); }
+.status-chip.dirty { color: var(--warning); background: var(--warning-bg); }
+.status-chip.saved { color: var(--success); background: var(--success-bg); }
+
+/* Notes emphasis for non-ACCEPT AI decisions */
+.review-notes.needs-review {
+  border-color: var(--warning); border-width: 2px;
+  box-shadow: 0 0 0 1px var(--warning-border);
+}
+.notes-callout {
+  font-size: 0.68rem; color: var(--warning); font-weight: 600;
+  display: flex; align-items: center; gap: 4px; margin-top: 4px;
+  padding: 4px 8px; background: var(--warning-bg);
+  border-radius: var(--radius-sm); border-left: 3px solid var(--warning);
+}
+
 .review-actions button {
   font-size: 0.72rem; padding: 5px 12px; border-radius: var(--radius-sm);
   font-weight: 500; cursor: pointer; border: 1px solid var(--border);
@@ -472,12 +517,6 @@ body {
 .badge.review-decision.improve { background: var(--info-bg); color: var(--info); border: 1px solid var(--info-border); }
 .badge.review-decision.duplicate { background: var(--duplicate-bg); color: var(--duplicate-color); border: 1px solid var(--duplicate-border); }
 .badge.review-decision.heuristic { background: #fff7ed; color: #c2410c; border: 1px solid #fed7aa; font-style: italic; }
-
-/* LLM health indicator */
-.llm-health { cursor: pointer; transition: background var(--transition); }
-.llm-health.healthy { background: var(--success-bg); color: var(--success); }
-.llm-health.unhealthy { background: var(--danger-bg); color: var(--danger); }
-.llm-health.checking { background: var(--warning-bg); color: var(--warning); }
 
 /* Heuristic note callout */
 .heuristic-note {
@@ -738,14 +777,6 @@ body {
 .single-review-block .review-notes:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-bg); }
 .single-review-block .review-notes::placeholder { color: var(--text-muted); font-size: 0.76rem; }
 
-/* Save indicator in nav */
-.save-indicator-inline {
-  font-size: 0.65rem; display: flex; align-items: center; gap: 4px;
-  padding: 3px 8px; border-radius: 10px;
-}
-.save-indicator-inline.clean { color: var(--text-muted); }
-.save-indicator-inline.dirty { color: var(--warning); background: var(--warning-bg); }
-
 /* ═══════════════════════════════════════════════════════════════════════
    Responsive
    ═══════════════════════════════════════════════════════════════════════ */
@@ -828,19 +859,38 @@ body {
         <svg class="file-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
         <span id="review-file-name"></span>
       </div>
-      <div class="review-actions">
-        <span id="save-indicator-inline" class="save-indicator-inline clean">✓ Saved</span>
-        <span id="llm-health-indicator" class="llm-health" title="LLM status" style="font-size:0.75rem;padding:2px 8px;border-radius:var(--radius-sm);">🔍</span>
-        <label class="auto-approve-label" id="auto-approve-label" title="When checked, the summary file gets #auto-approve tag — coworker will auto-move it to 5approved and trigger push.">
-          <input type="checkbox" id="chk-auto-approve" onchange="onAutoApproveChange()">
-          <span>Auto-approve</span>
-        </label>
-        <button id="btn-mark-done" class="nav-btn" style="background:var(--success);color:#fff;border-color:var(--success);" onclick="markDone()" title="Finalize review: approved issues keep full detail, others condensed. Moves file to ready queue.">✅ Mark Done</button>
-        <button id="btn-discard" class="nav-btn" style="background:var(--danger);color:#fff;border-color:var(--danger);" onclick="discardFile()" title="Discard this file — no issues or no valuable issues. Moves to review/done/discard.">🗑 Discard</button>
-        <button id="btn-mode-toggle" class="nav-btn accent" onclick="toggleReviewMode()" title="Switch between one-at-a-time and all-issues view">📋 View All</button>
-        <button id="btn-ai-review-all" class="nav-btn accent" onclick="triggerAiReviewAll()" title="AI review ALL issues in this file at once (Shift+Ctrl+A). Detects duplicates, sees cross-issue context.">🤖🤖 AI Review All</button>
-        <button id="btn-ai-review-dir" class="nav-btn accent" onclick="triggerAiReviewDirectory()" title="AI review ALL issues in ALL files in the current directory (Shift+Ctrl+D).">📂🤖 AI Review Directory</button>
-        <button id="btn-mark-all-done" class="nav-btn" style="background:var(--success);color:#fff;border-color:var(--success);" onclick="markAllDone()" title="Mark ALL reviewed files in this directory as done. Sends summaries to ready queue and archives originals.">✅✅ Mark All Done</button>
+      <div class="review-toolbar" id="review-toolbar">
+        <!-- Status group -->
+        <div class="tb-group">
+          <span id="save-chip" class="status-chip clean">✓ Saved</span>
+          <span id="llm-chip" class="status-chip" title="LLM status">🔍</span>
+        </div>
+        <span class="tb-divider"></span>
+        <!-- Options group -->
+        <div class="tb-group">
+          <label class="auto-approve-label" id="auto-approve-label" title="Auto-move to approved and trigger push after mark-done">
+            <input type="checkbox" id="chk-auto-approve" onchange="onAutoApproveChange()">
+            <span>Auto</span>
+          </label>
+        </div>
+        <span class="tb-divider"></span>
+        <!-- Primary actions -->
+        <div class="tb-group">
+          <button id="btn-mark-done" class="tb-btn success" onclick="markDone()" title="Finalize this file: approved issues keep full detail, others condensed. Moves to ready queue.">✅ Mark Done <span class="kb-hint">Shift+Ctrl+M</span></button>
+          <button id="btn-discard" class="tb-btn danger" onclick="discardFile()" title="Discard this file — no valuable issues. Moves to review/done/discard.">🗑 Discard</button>
+        </div>
+        <span class="tb-divider"></span>
+        <!-- AI actions -->
+        <div class="tb-group">
+          <button id="btn-mode-toggle" class="tb-btn accent" onclick="toggleReviewMode()" title="Switch between one-at-a-time and all-issues view">📋</button>
+          <button id="btn-ai-review-all" class="tb-btn accent" onclick="triggerAiReviewAll()" title="AI review ALL issues in this file at once. Detects duplicates, sees cross-issue context.">🤖🤖 Review All <span class="kb-hint">Shift+Ctrl+A</span></button>
+          <button id="btn-ai-review-dir" class="tb-btn accent" onclick="triggerAiReviewDirectory()" title="AI review ALL issues in ALL files in the current directory.">📂🤖 Review Dir <span class="kb-hint">Shift+Ctrl+D</span></button>
+        </div>
+        <span class="tb-divider"></span>
+        <!-- Batch action -->
+        <div class="tb-group">
+          <button id="btn-mark-all-done" class="tb-btn success" onclick="markAllDone()" title="Mark ALL reviewed files in this directory as done. Sends summaries to ready queue.">✅✅ All Done</button>
+        </div>
       </div>
     </div>
 
@@ -1011,56 +1061,56 @@ async function init() {
 var llmHealthy = null; // null = checking, true = healthy, false = unhealthy
 
 async function checkLlmHealth() {
-  var indicator = document.getElementById('llm-health-indicator');
-  if (!indicator) return;
+  var chip = document.getElementById('llm-chip');
+  if (!chip) return;
 
-  indicator.textContent = '🔍';
-  indicator.className = 'llm-health checking';
-  indicator.title = 'Checking LLM status...';
+  chip.textContent = '🔍';
+  chip.className = 'status-chip';
+  chip.title = 'Checking LLM status...';
 
   try {
     var health = await apiGet('/api/issue-review/health');
     llmHealthy = health.llm.ok;
 
     if (health.circuit.open) {
-      indicator.textContent = '⚡ LLM paused (' + health.circuit.cooldownRemaining + 's)';
-      indicator.className = 'llm-health unhealthy';
-      indicator.title = 'Circuit breaker open — LLM had ' + health.circuit.consecutiveFailures + ' consecutive failures. Resuming in ' + health.circuit.cooldownRemaining + 's.';
+      chip.textContent = '⚡ LLM paused';
+      chip.className = 'status-chip dirty';
+      chip.title = 'Circuit breaker open — cooldown ' + health.circuit.cooldownRemaining + 's';
       llmHealthy = false;
     } else if (health.llm.ok) {
-      indicator.textContent = '🤖 LLM ready';
-      indicator.className = 'llm-health healthy';
-      indicator.title = 'LLM is reachable';
+      chip.textContent = '🤖 LLM ready';
+      chip.className = 'status-chip saved';
+      chip.title = 'LLM is reachable (' + (health.llm.provider || 'claude') + ')';
       llmHealthy = true;
     } else {
-      indicator.textContent = '⚠ LLM offline';
-      indicator.className = 'llm-health unhealthy';
-      indicator.title = 'LLM is not reachable: ' + (health.llm.message || 'unknown error') + '. Heuristic fallback will be used.';
+      chip.textContent = '⚠ LLM offline';
+      chip.className = 'status-chip dirty';
+      chip.title = 'LLM unreachable. Heuristic fallback active.';
       llmHealthy = false;
     }
   } catch (e) {
-    indicator.textContent = '⚠ LLM unknown';
-    indicator.className = 'llm-health unhealthy';
-    indicator.title = 'Cannot check LLM health: ' + e.message;
+    chip.textContent = '⚠ LLM ?';
+    chip.className = 'status-chip dirty';
+    chip.title = 'Cannot check LLM health: ' + e.message;
     llmHealthy = false;
   }
 
-  // Enable/disable AI buttons based on health
   updateAiButtonStates();
 }
 
 function updateAiButtonStates() {
-  // In single-issue mode, we always allow the button — the LLM wrapper
-  // will use heuristic fallback if needed. But we style it differently.
   var btnSingle = document.getElementById('btn-ai-review');
   var btnAll = document.getElementById('btn-ai-review-all');
+  var btnDir = document.getElementById('btn-ai-review-dir');
 
   if (llmHealthy === false) {
-    if (btnSingle) btnSingle.title = 'AI review (heuristic fallback — LLM is offline)';
-    if (btnAll) btnAll.title = 'AI review all (heuristic fallback — LLM is offline)';
+    if (btnSingle) btnSingle.title = 'AI review (heuristic fallback — LLM offline)';
+    if (btnAll) btnAll.title = 'AI review all (heuristic fallback — LLM offline)';
+    if (btnDir) btnDir.title = 'AI review directory (heuristic fallback — LLM offline)';
   } else if (llmHealthy === true) {
     if (btnSingle) btnSingle.title = 'AI review (Shift+A)';
-    if (btnAll) btnAll.title = 'AI review ALL issues in this file at once (Shift+Ctrl+A). Detects duplicates, sees cross-issue context.';
+    if (btnAll) btnAll.title = 'AI review all issues in this file (Shift+Ctrl+A)';
+    if (btnDir) btnDir.title = 'AI review all issues in directory (Shift+Ctrl+D)';
   }
 }
 
@@ -1813,6 +1863,7 @@ function renderSingleIssue() {
     else if (issue.reviewDecision === 'DUPLICATE') decBorder = ' duplicate';
     else decBorder = '';
   }
+  var needsReviewNotes = issue.reviewDecision && issue.reviewDecision !== 'ACCEPT';
   html += '<div class="single-review-block' + (issue.reviewDecision ? ' has-decision' + decBorder : '') + '">';
   html += '<div class="review-label">Review Decision</div>';
   html += '<div class="review-options">';
@@ -1826,11 +1877,16 @@ function renderSingleIssue() {
   }
   html += '</div>';
   html += '<div style="display:flex;gap:8px;align-items:flex-start;">';
-  html += '<textarea class="review-notes" id="single-review-notes" ' +
-          'placeholder="Optional review notes…" ' +
+  var notesClass = 'review-notes' + (needsReviewNotes ? ' needs-review' : '');
+  var notesPlaceholder = needsReviewNotes ? '⚠ Review the AI rationale — notes REQUIRED for ' + issue.reviewDecision : 'Optional review notes…';
+  html += '<textarea class="' + notesClass + '" id="single-review-notes" ' +
+          'placeholder="' + notesPlaceholder + '" ' +
           'oninput="onSingleNotesChange(' + idx + ', this.value)" ' +
           'onfocus="focusedIssueIndex=' + idx + '">' +
           escHtml(issue.reviewNotes || '') + '</textarea>';
+  if (needsReviewNotes) {
+    html += '<div class="notes-callout">⚠ ' + escHtml(issue.reviewDecision) + ' — verify the AI rationale in notes above</div>';
+  }
   html += '<button class="nav-btn accent" id="btn-ai-review" onclick="triggerAiReview(' + idx + ')" ' +
           'title="AI review (A)" style="flex-shrink:0;white-space:nowrap;align-self:flex-start;">' +
           '🤖 AI Review <span class="key-hint" style="font-size:0.6rem;opacity:0.5;">Shift+A</span></button>';
@@ -1964,11 +2020,17 @@ function renderReviewControls(issue, index) {
   }
   html += '</div>';
 
-  html += '<textarea class="review-notes" id="review-notes-' + index + '" ' +
-          'placeholder="Optional review notes..." ' +
+  var needsReview = issue.reviewDecision && issue.reviewDecision !== 'ACCEPT';
+  var notesCls = 'review-notes' + (needsReview ? ' needs-review' : '');
+  var placeholder = needsReview ? '⚠ Review the AI rationale — notes REQUIRED for ' + issue.reviewDecision : 'Optional review notes...';
+  html += '<textarea class="' + notesCls + '" id="review-notes-' + index + '" ' +
+          'placeholder="' + placeholder + '" ' +
           'oninput="onNotesChange(' + index + ', this.value)" ' +
           'onkeydown="onNotesKeydown(event, ' + index + ')">' +
           escHtml(issue.reviewNotes || '') + '</textarea>';
+  if (needsReview) {
+    html += '<div class="notes-callout">⚠ ' + escHtml(issue.reviewDecision) + ' — verify the AI rationale above</div>';
+  }
 
   html += '</div>';
   return html;
@@ -2310,7 +2372,7 @@ async function triggerAiReviewAll() {
     showToast('Batch AI review failed: ' + e.message, 'error');
   }
 
-  if (btn) { btn.disabled = false; btn.textContent = '🤖🤖 AI Review All'; }
+  if (btn) { btn.disabled = false; btn.textContent = '🤖🤖 Review All'; }
 }
 
 // ── AI Review Directory ──────────────────────────────────────────────────
@@ -2334,107 +2396,141 @@ async function triggerAiReviewDirectory() {
     return;
   }
 
-  var fileCount = 0;
+  // Find all files in this directory
+  var dirFiles = [];
   for (var i = 0; i < state.files.length; i++) {
     if (state.files[i].path.indexOf(directory + '/') === 0 || state.files[i].path.indexOf(directory) === 0) {
-      fileCount++;
+      // Only include unreviewed or partially reviewed files
+      var reviewed = state.files[i]._reviewedCount || 0;
+      var total = state.files[i]._issueCount || 0;
+      if (reviewed < total || total === 0) {
+        dirFiles.push(state.files[i]);
+      }
     }
   }
 
-  if (!confirm('AI review ALL issues in ALL ' + fileCount + ' file(s) in directory "' + directory + '"?\n\nThis will send each file\'s issues to the LLM for batch review. It may take a while.')) return;
+  if (dirFiles.length === 0) {
+    showToast('No unreviewed files in directory "' + directory + '". All done! 🎉', 'success');
+    return;
+  }
+
+  if (!confirm('AI review ' + dirFiles.length + ' file(s) in "' + directory + '"?\n\nEach file\'s issues will be sent to the LLM for batch review. You\'ll see progress as each file completes.')) return;
 
   var btn = document.getElementById('btn-ai-review-dir');
   if (btn) {
     btn.disabled = true;
-    btn.textContent = '⏳ Reviewing directory…';
+    btn.textContent = '⏳ 0/' + dirFiles.length;
   }
 
-  try {
-    var result = await apiPost('/api/issue-review/ai-suggest-directory', {
-      directory: directory,
-    });
+  var totalIssuesReviewed = 0;
+  var filesCompleted = 0;
+  var errorsEncountered = 0;
 
-    var totalReviewed = 0;
-    var currentFileDecisions = null;
+  // Process each file sequentially with progress updates
+  for (var f = 0; f < dirFiles.length; f++) {
+    var file = dirFiles[f];
+    if (btn) btn.textContent = '⏳ ' + filesCompleted + '/' + dirFiles.length;
 
-    // Apply decisions for the currently selected file (if in results)
-    for (var r = 0; r < result.results.length; r++) {
-      var fileResult = result.results[r];
-      totalReviewed += fileResult.issueCount;
-
-      // Check if this result matches the currently selected file
-      var resultFilePath = directory + '/' + fileResult.file.replace(/^.*[\\/]/, '');
-      // Also try matching the full relative path
-      for (var f = 0; f < state.files.length; f++) {
-        if (state.files[f].path === fileResult.file ||
-            state.files[f].path.indexOf(fileResult.file) >= 0) {
-          resultFilePath = state.files[f].path;
-          break;
-        }
+    try {
+      // Fetch file content
+      var data = await apiGet('/api/task?path=' + encodeURIComponent(file.path));
+      var parsed = parseIssueFile(data.content);
+      if (!parsed.issues || parsed.issues.length === 0) {
+        filesCompleted++;
+        continue;
       }
 
-      if (state.selectedFilePath === resultFilePath ||
-          state.selectedFilePath === fileResult.file) {
-        currentFileDecisions = fileResult.decisions;
-      }
-    }
+      // Build issues array for batch review
+      var issues = [];
+      for (var j = 0; j < parsed.issues.length; j++) {
+        var issue = parsed.issues[j];
+        var sections = parseIssueSections(issue);
+        var aiSections = sections.map(function(s) { return { label: s.label, body: s.body }; });
 
-    // Apply decisions to current file if found
-    if (currentFileDecisions && state.parsed) {
-      for (var d = 0; d < currentFileDecisions.length; d++) {
-        var dec = currentFileDecisions[d];
-        var idx = dec.issueNumber - 1;
-        if (idx >= 0 && idx < state.parsed.issues.length) {
-          var decision = normalizeDecision(dec.decision);
-          state.parsed.issues[idx].reviewDecision = decision;
-          state.parsed.issues[idx].reviewNotes = dec.notes || '';
-          state.parsed.issues[idx]._heuristic = !!result.heuristic;
-          if (state.parsed.issues[idx].reviewNotes.indexOf('[AI suggested:') < 0) {
-            state.parsed.issues[idx].reviewNotes = '[AI suggested: ' + decision + '] ' + state.parsed.issues[idx].reviewNotes;
+        var suggestedImprovement = '';
+        for (var k = 0; k < aiSections.length; k++) {
+          if (aiSections[k].label.toLowerCase().indexOf('ai suggested') >= 0 ||
+              aiSections[k].label.toLowerCase().indexOf('suggested improvement') >= 0) {
+            suggestedImprovement = aiSections[k].body;
+            break;
           }
         }
-      }
-      state.dirty = true;
-      updateSaveState();
-      scheduleAutoSave();
-      renderReview();
-      updateFileCounts(state.selectedFilePath, state.parsed);
-      updateStats();
-      if (state.selectedFilePath && state.parsed) {
-        updateFileTreeProgress(state.selectedFilePath, state.parsed);
-      }
-    }
 
-    // Refresh the file list to show updated review progress for all files
-    // Re-parse file counts from results
-    for (var r2 = 0; r2 < result.results.length; r2++) {
-      var fr = result.results[r2];
-      // Update cached counts for files that were reviewed
-      for (var f2 = 0; f2 < state.files.length; f2++) {
-        if (state.files[f2].path === fr.file ||
-            state.files[f2].path.indexOf(fr.file.replace(/^.*[\\/]/, '')) >= 0) {
-          var reviewedCount = 0;
-          for (var rd = 0; rd < fr.decisions.length; rd++) {
-            if (fr.decisions[rd].decision && fr.decisions[rd].decision !== '') {
-              reviewedCount++;
+        issues.push({
+          number: issue.num || (j + 1),
+          title: issue.title,
+          severity: issue.severity,
+          category: issue.category,
+          sections: aiSections,
+          suggestedImprovement: suggestedImprovement,
+        });
+      }
+
+      var scenarioContext = (parsed.scenarioBackground || '').substring(0, 3000);
+
+      // Send batch review for this file
+      var result = await apiPost('/api/issue-review/ai-suggest-batch', {
+        issues: issues,
+        scenarioContext: scenarioContext,
+        scenarioTitle: parsed.scenarioName || '',
+      });
+
+      // Update cached counts for this file
+      if (result.decisions) {
+        file._issueCount = parsed.issues.length;
+        file._reviewedCount = result.decisions.length;
+        file._parseAttempted = true;
+        totalIssuesReviewed += result.decisions.length;
+      }
+
+      // If this is the currently selected file, apply decisions
+      if (state.selectedFilePath === file.path && state.parsed && result.decisions) {
+        for (var d = 0; d < result.decisions.length; d++) {
+          var dec = result.decisions[d];
+          var idx = dec.issueNumber - 1;
+          if (idx >= 0 && idx < state.parsed.issues.length) {
+            var decision = normalizeDecision(dec.decision);
+            state.parsed.issues[idx].reviewDecision = decision;
+            state.parsed.issues[idx].reviewNotes = dec.notes || '';
+            state.parsed.issues[idx]._heuristic = !!result.heuristic;
+            if (state.parsed.issues[idx].reviewNotes.indexOf('[AI suggested:') < 0) {
+              state.parsed.issues[idx].reviewNotes = '[AI suggested: ' + decision + '] ' + state.parsed.issues[idx].reviewNotes;
             }
           }
-          state.files[f2]._issueCount = fr.issueCount;
-          state.files[f2]._reviewedCount = reviewedCount;
-          state.files[f2]._parseAttempted = true;
-          break;
+        }
+        state.dirty = true;
+        updateSaveState();
+        scheduleAutoSave();
+        renderReview();
+        updateFileCounts(state.selectedFilePath, state.parsed);
+        updateStats();
+        if (state.selectedFilePath && state.parsed) {
+          updateFileTreeProgress(state.selectedFilePath, state.parsed);
         }
       }
-    }
-    renderFileList();
-    updateStats();
 
-    showToast('🤖 AI reviewed ' + totalReviewed + ' issues across ' + result.totalFiles + ' file(s).', 'success');
-  } catch (e) {
-    showToast('Directory AI review failed: ' + e.message, 'error');
+      filesCompleted++;
+      // Refresh sidebar after each file to show progress
+      renderFileList();
+      updateStats();
+
+    } catch (e) {
+      errorsEncountered++;
+      filesCompleted++;
+      console.error('Error reviewing file ' + file.path + ':', e.message);
+      // Continue with next file
+    }
   }
 
-  if (btn) { btn.disabled = false; btn.textContent = '📂🤖 AI Review Directory'; }
+  // Final render
+  renderFileList();
+  updateStats();
+
+  var msg = '🤖 AI reviewed ' + totalIssuesReviewed + ' issues across ' + filesCompleted + ' file(s).';
+  if (errorsEncountered > 0) msg += ' ⚠ ' + errorsEncountered + ' error(s) encountered.';
+  showToast(msg, errorsEncountered > 0 ? 'error' : 'success');
+
+  if (btn) { btn.disabled = false; btn.textContent = '📂🤖 AI Review Dir'; }
 }
 
 // ── Mark All Done ─────────────────────────────────────────────────────────
@@ -2557,7 +2653,7 @@ async function markAllDone() {
     showToast('Mark all done failed: ' + e.message, 'error');
   }
 
-  if (btn) { btn.disabled = false; btn.textContent = '✅✅ Mark All Done'; }
+  if (btn) { btn.disabled = false; btn.textContent = '✅✅ All Done'; }
 }
 
 // ── Decision normalization helper ─────────────────────────────────────────
@@ -2596,18 +2692,18 @@ function toggleReviewMode() {
 
 function updateSaveState() {
   var btnTop = document.getElementById('btn-save-top');
-  var indicator = document.getElementById('save-indicator-inline');
+  var chip = document.getElementById('save-chip');
   if (state.dirty) {
     if (btnTop) btnTop.disabled = false;
-    if (indicator) {
-      indicator.textContent = '● Unsaved';
-      indicator.className = 'save-indicator-inline dirty';
+    if (chip) {
+      chip.textContent = '● Unsaved';
+      chip.className = 'status-chip dirty';
     }
   } else {
     if (btnTop) btnTop.disabled = true;
-    if (indicator) {
-      indicator.textContent = '✓ Saved';
-      indicator.className = 'save-indicator-inline clean';
+    if (chip) {
+      chip.textContent = '✓ Saved';
+      chip.className = 'status-chip saved';
     }
   }
 }
