@@ -252,7 +252,16 @@ foreach ($taskRoot in $taskRoots) {
         $descriptiveName = ""
 
         # Read content for fallback title
-        $content = Get-Content -Path $file.FullName -Raw -Encoding UTF8
+        if (-not (Test-Path -Path $file.FullName)) {
+            Write-LogMessage "[SKIP] Task file vanished before reading: $($file.FullName) — likely moved/renamed by another process" WARN
+            continue
+        }
+        try {
+            $content = Get-Content -Path $file.FullName -Raw -Encoding UTF8 -ErrorAction Stop
+        } catch {
+            Write-LogMessage "[ERROR] Failed to read task file: $($file.FullName) — $($_.Exception.Message)" ERROR
+            continue
+        }
         $safeTitle = $file.BaseName -replace '[\\/*?:"<>|]', '_'
         if ([string]::IsNullOrWhiteSpace($safeTitle)) { $safeTitle = "task" }
 
@@ -460,7 +469,7 @@ Agent Execution Output:
                         if ($currentLineCount -gt $lastOutputLineCount) {
                             $newLines = $currentLines[$lastOutputLineCount..($currentLineCount - 1)]
                             foreach ($line in $newLines) {
-                                if ($line -and $line.Trim()) {
+                                if (-not [string]::IsNullOrWhiteSpace($line)) {
                                     Write-ConsoleLine -Message $line
                                 }
                             }
@@ -468,6 +477,7 @@ Agent Execution Output:
                         }
                     } catch {
                         # File may be temporarily locked by the writer; retry next iteration
+                        Write-LogVerbose "Stdout monitor: unable to read $stdOutLog (retrying): $_"
                     }
                 }
 
