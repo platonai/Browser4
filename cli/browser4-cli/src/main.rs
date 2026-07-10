@@ -7152,12 +7152,45 @@ async fn swarm_wait_for_jobs(
     }
 }
 
-async fn handle_crawl_list() -> Result<(), String> {
+async fn handle_crawl_list(
+    client: &Client,
+    base_url: &str,
+) -> Result<(), String> {
     let _ = prune_async_tasks(None);
     let list = read_async_tasks(None);
     let filtered: Vec<_> = list.tasks.iter().filter(|t| t.command == "crawl").cloned().collect();
-    let display = state::AsyncTaskList { tasks: filtered };
-    cli_println!("{}", format_async_task_list(&display));
+
+    if filtered.is_empty() {
+        cli_println!("No tracked crawl tasks. Start one with 'crawl <url>'.");
+        return Ok(());
+    }
+
+    // Query backend for live status of each tracked task, merging
+    // backend state with local tracking for a unified view.
+    cli_println!("{:<38}  {:<12}  {:<12}  {}", "TASK ID", "CLI STATUS", "SERVER STATUS", "URL");
+    cli_println!("{}", "-".repeat(100));
+
+    for task in &filtered {
+        let server_status = match get_crawl_result(client, base_url, &task.id).await {
+            Ok(text) => {
+                serde_json::from_str::<Value>(&text)
+                    .ok()
+                    .and_then(|v| v["status"].as_str().map(String::from))
+                    .unwrap_or_else(|| "parse error".to_string())
+            }
+            Err(_) => "unreachable".to_string(),
+        };
+
+        cli_println!(
+            "{:<38}  {:<12}  {:<12}  {}",
+            task.id,
+            task.status,
+            server_status,
+            task.url.as_deref().unwrap_or("-")
+        );
+    }
+
+    cli_println!("\nTip: use 'crawl cancel <id>' to cancel a stuck task, 'crawl clear' to remove terminal tasks.");
     Ok(())
 }
 
@@ -7312,6 +7345,57 @@ async fn handle_crawl(
         None => None,
     };
 
+    // ---- Resolve args: @file prefix and --args-stdin ----
+    let use_args_stdin = tool_params
+        .get("argsStdin")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    let args_stdin_content: Option<String> = if use_args_stdin {
+        let mut input = String::new();
+        std::io::stdin()
+            .read_to_string(&mut input)
+            .map_err(|e| format!("Failed to read args from stdin: {e}"))?;
+        if input.trim().is_empty() {
+            return Err("Stdin was empty but --args-stdin was specified.".to_string());
+        }
+        Some(input.trim().to_string())
+    } else {
+        None
+    };
+
+    // If any --args value starts with '@', treat it as a file path and read its content.
+    // Resolve after the initial tool_params_fn assembly, before sending to server.
+    let resolved_args: Option<String> = {
+        let raw_args = tool_params
+            .get("args")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        if raw_args.is_empty() && args_stdin_content.is_none() {
+            None
+        } else {
+            let mut parts: Vec<String> = Vec::new();
+            // Split existing args by whitespace and resolve any @file entries
+            for part in raw_args.split_whitespace() {
+                if part.starts_with('@') {
+                    let file_path = &part[1..];
+                    let content = std::fs::read_to_string(file_path)
+                        .map_err(|e| format!("Failed to read args file '{}': {}", file_path, e))?;
+                    parts.push(content.trim().to_string());
+                } else {
+                    parts.push(part.to_string());
+                }
+            }
+            // Append stdin content if provided
+            if let Some(ref stdin_content) = args_stdin_content {
+                parts.push(stdin_content.clone());
+            }
+            Some(parts.join(" "))
+        }
+    };
+
     // ---- Resolve output options ----
     let format = tool_params
         .get("format")
@@ -7334,6 +7418,7 @@ async fn handle_crawl(
         m.remove("seedFile");
         m.remove("sqlStdin");
         m.remove("sqlBase64");
+        m.remove("argsStdin");
         m.remove("format");
         m.remove("output");
         // Insert resolved urls array and resolved sql
@@ -7341,6 +7426,13 @@ async fn handle_crawl(
         m.insert("urls".to_string(), json!(url_array));
         if let Some(ref sql) = resolved_sql {
             m.insert("sql".to_string(), json!(sql));
+        }
+        // Override args with resolved value (handles @file and stdin)
+        if let Some(ref args) = resolved_args {
+            m.insert("args".to_string(), json!(args));
+        } else {
+            // Ensure args is always present (Issue 2 fix: prevent Kotlin null)
+            m.entry("args".to_string()).or_insert(json!(""));
         }
         // Ensure url is set to the first URL for backward compat
         if url.is_empty() {
@@ -7420,8 +7512,10 @@ async fn handle_crawl(
             } else {
                 cli_println!(
                     "Still waiting for crawl to start... ({}s elapsed). \
-                     If the queue is congested, try stopping old tasks or using --background.",
-                    elapsed.as_secs()
+                     If the queue is congested, try stopping old tasks or using --background. \
+                     Run 'crawl cancel {}' to cancel this task.",
+                    elapsed.as_secs(),
+                    task_id
                 );
             }
         }
@@ -7468,6 +7562,17 @@ async fn handle_crawl(
                 } else {
                     let mut page_lines: Vec<String> = Vec::new();
                     page_lines.push(format!("Crawl completed. {} pages found.", page_count));
+
+                    // Display diagnostic info when 0 pages found (e.g. selector matched no elements)
+                    if page_count == 0 {
+                        if let Some(diag) = parsed["diagnostic"].as_str() {
+                            page_lines.push(format!("\n  Diagnostic: {}", diag));
+                        }
+                        page_lines.push("\n  Tips:".to_string());
+                        page_lines.push("    - Verify the --out-link-selector targets the correct elements".to_string());
+                        page_lines.push("    - Use 'snapshot' or 'htmlsnapshot' to inspect the page structure first".to_string());
+                    }
+
                     if let Some(pages) = pages {
                         for page in pages {
                             let page_url = page["url"].as_str().unwrap_or("");
@@ -11974,7 +12079,7 @@ async fn run(
             handle_crawl_clear(&client, &base_url).await?;
         }
         "crawl-list" => {
-            handle_crawl_list().await?;
+            handle_crawl_list(&client, &base_url).await?;
         }
         "loop" => {
             handle_loop(&client, &base_url, global).await?;

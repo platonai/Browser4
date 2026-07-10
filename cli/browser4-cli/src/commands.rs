@@ -2128,7 +2128,8 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "out-link-selector", description: "CSS selector to extract links from each page", is_bool: false, short: Some("ol") },
                 OptionDef { name: "out-link-pattern", description: "Regex pattern to filter extracted links (default: .+)", is_bool: false, short: Some("olp") },
                 OptionDef { name: "top-links", description: "Maximum links to extract per page (default: 20)", is_bool: false, short: Some("tl") },
-                OptionDef { name: "args", description: "Additional LoadOptions passthrough (e.g. -a \"-refresh -nMaxRetry 5\")", is_bool: false, short: Some("a") },
+                OptionDef { name: "args", description: "Additional LoadOptions passthrough. Prefix with @ to read from file (e.g. -a @loadopts.txt). Use --args-stdin to pipe from stdin.", is_bool: false, short: Some("a") },
+                OptionDef { name: "args-stdin", description: "Read LoadOptions args from stdin (avoids shell quoting issues on Windows)", is_bool: true, short: None },
                 OptionDef { name: "refresh", description: "Force a fresh fetch, ignoring cache", is_bool: true, short: None },
                 OptionDef { name: "parse", description: "Parse each page immediately after fetching", is_bool: true, short: None },
                 OptionDef { name: "expires", description: "Cache expiration duration (e.g. 1d, 1h, 30m)", is_bool: false, short: None },
@@ -2209,9 +2210,13 @@ pub fn all_commands() -> Vec<CommandDef> {
                 if let Some(v) = get_opt_str(args, "args") {
                     load_opts.push(v.to_string());
                 }
-                if !load_opts.is_empty() {
-                    p["args"] = json!(load_opts.join(" "));
+                // Flag for stdin-based args (CLI-side resolution in main.rs)
+                if get_bool(args, "args-stdin").unwrap_or(false) {
+                    p["argsStdin"] = json!(true);
                 }
+                // Always include args, even when empty — the backend's
+                // CrawlRequest.args must not be null (Kotlin non-null).
+                p["args"] = json!(load_opts.join(" "));
 
                 // Depth
                 if let Some(v) = get_opt_str(args, "depth") {
@@ -2222,6 +2227,68 @@ pub fn all_commands() -> Vec<CommandDef> {
 
                 p
             },
+        },
+        CommandDef {
+            name: "crawl-status",
+            description: "Check status of a crawl task by its ID",
+            category: Category::Swarm,
+            hidden: false,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "id", description: "Task ID", optional: false },
+            ],
+            options: &[],
+            tool_name_fn: |_| String::new(),
+            tool_params_fn: |args| {
+                let mut p = json!({});
+                if let Some(v) = get_opt_str(args, "id") { p["id"] = json!(v); }
+                p
+            },
+        },
+        CommandDef {
+            name: "crawl-result",
+            description: "Get the result of a completed crawl task by its ID",
+            category: Category::Swarm,
+            hidden: false,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "id", description: "Task ID", optional: false },
+            ],
+            options: &[],
+            tool_name_fn: |_| String::new(),
+            tool_params_fn: |args| {
+                let mut p = json!({});
+                if let Some(v) = get_opt_str(args, "id") { p["id"] = json!(v); }
+                p
+            },
+        },
+        CommandDef {
+            name: "crawl-cancel",
+            description: "Cancel a running crawl task by its ID",
+            category: Category::Swarm,
+            hidden: false,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "id", description: "Task ID", optional: false },
+            ],
+            options: &[],
+            tool_name_fn: |_| String::new(),
+            tool_params_fn: |args| {
+                let mut p = json!({});
+                if let Some(v) = get_opt_str(args, "id") { p["id"] = json!(v); }
+                p
+            },
+        },
+        CommandDef {
+            name: "crawl-clear",
+            description: "Remove all terminal-state crawl tasks from the task store",
+            category: Category::Swarm,
+            hidden: false,
+            batch_supported: false,
+            args: &[],
+            options: &[],
+            tool_name_fn: |_| String::new(),
+            tool_params_fn: |_| json!({}),
         },
         CommandDef {
             name: "crawl-list",
@@ -4459,14 +4526,14 @@ mod tests {
     }
 
     #[test]
-    fn test_crawl_params_no_args_when_no_options() {
+    fn test_crawl_params_args_always_present() {
         let map = commands_map();
         let cmd = map.get("crawl").unwrap();
         let mut args = HashMap::new();
         args.insert("url".to_string(), json!("https://example.com"));
         let params = (cmd.tool_params_fn)(&args);
-        // No args string should be present since no options were set
-        assert!(params.get("args").is_none());
+        // args is always present (even when empty) to avoid Kotlin non-null violation
+        assert_eq!(params["args"].as_str().unwrap(), "");
     }
 
     #[test]
