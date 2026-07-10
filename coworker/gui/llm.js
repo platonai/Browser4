@@ -659,4 +659,7 @@ module.exports = {
   sendPrompt,
   heuristicDecision,
   PROVIDER_DEFS,
+  // Exported for testing
+  _buildArgs,
+  _writePromptFile,
 };
