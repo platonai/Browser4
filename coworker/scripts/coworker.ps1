@@ -500,39 +500,57 @@ Agent Execution Output:
 
             # Final output capture after process ends
             if (Test-Path $stdOutLog) {
-                $remainingLines = @(Get-Content $stdOutLog -Encoding UTF8 -ErrorAction SilentlyContinue)
-                if ($remainingLines.Count -gt $lastOutputLineCount) {
-                    $newLines = $remainingLines[$lastOutputLineCount..($remainingLines.Count - 1)]
-                    foreach ($line in $newLines) {
-                        if (-not [string]::IsNullOrWhiteSpace($line)) {
-                            Write-ConsoleLine -Message $line
+                try {
+                    $remainingLines = @(Get-Content $stdOutLog -Encoding UTF8 -ErrorAction Stop)
+                    if ($remainingLines.Count -gt $lastOutputLineCount) {
+                        $newLines = $remainingLines[$lastOutputLineCount..($remainingLines.Count - 1)]
+                        foreach ($line in $newLines) {
+                            if (-not [string]::IsNullOrWhiteSpace($line)) {
+                                Write-ConsoleLine -Message $line
+                            }
                         }
                     }
+                } catch {
+                    Write-LogVerbose "Failed to read remaining stdout from $stdOutLog : $_"
                 }
             }
 
             # Capture stderr output and display to console
             if (Test-Path $stdErrLog) {
-                $errContent = @(Get-Content $stdErrLog -Encoding UTF8 -ErrorAction SilentlyContinue)
-                if ($errContent) {
-                    Write-ConsoleLine -Message "`n[STDERR OUTPUT]" -ForegroundColor Yellow -ErrorStream
-                    foreach ($line in $errContent) {
-                        if (-not [string]::IsNullOrWhiteSpace($line)) {
-                            Write-ConsoleLine -Message $line -ForegroundColor Yellow -ErrorStream
+                try {
+                    $errContent = @(Get-Content $stdErrLog -Encoding UTF8 -ErrorAction Stop)
+                    if ($errContent) {
+                        Write-ConsoleLine -Message "`n[STDERR OUTPUT]" -ForegroundColor Yellow -ErrorStream
+                        foreach ($line in $errContent) {
+                            if (-not [string]::IsNullOrWhiteSpace($line)) {
+                                Write-ConsoleLine -Message $line -ForegroundColor Yellow -ErrorStream
+                            }
                         }
                     }
+                } catch {
+                    Write-LogVerbose "Failed to read stderr from $stdErrLog : $_"
                 }
             }
 
             # Combine agent stdout and stderr logs into the agent-specific log
             # First append stdout if it exists
-            if (Test-Path $stdOutLog) { Get-Content $stdOutLog -Encoding UTF8 | Out-File -FilePath $agentLogPath -Append -Encoding UTF8 }
+            if (Test-Path $stdOutLog) {
+                try {
+                    Get-Content $stdOutLog -Encoding UTF8 -ErrorAction Stop | Out-File -FilePath $agentLogPath -Append -Encoding UTF8
+                } catch {
+                    Write-LogMessage "Failed to append stdout to agent log: $_" WARN
+                }
+            }
             # Then append stderr if it exists and contains content
             if (Test-Path $stdErrLog) {
-                $errContent = Get-Content $stdErrLog -Encoding UTF8
-                if ($errContent) {
-                    "`r`n=== AGENT STDERR ===`r`n" | Out-File -FilePath $agentLogPath -Append -Encoding UTF8
-                    $errContent | Out-File -FilePath $agentLogPath -Append -Encoding UTF8
+                try {
+                    $errContent = Get-Content $stdErrLog -Encoding UTF8 -ErrorAction Stop
+                    if ($errContent) {
+                        "`r`n=== AGENT STDERR ===`r`n" | Out-File -FilePath $agentLogPath -Append -Encoding UTF8
+                        $errContent | Out-File -FilePath $agentLogPath -Append -Encoding UTF8
+                    }
+                } catch {
+                    Write-LogMessage "Failed to append stderr to agent log: $_" WARN
                 }
             }
 
