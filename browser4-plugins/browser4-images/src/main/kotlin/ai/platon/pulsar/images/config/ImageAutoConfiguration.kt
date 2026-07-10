@@ -19,6 +19,7 @@ import ai.platon.pulsar.agentic.tools.ToolMount
 import ai.platon.pulsar.agentic.tools.builtin.ToolExecutor
 import ai.platon.pulsar.common.config.MutableConfig
 import ai.platon.pulsar.common.getLogger
+import ai.platon.pulsar.images.ImagesPlugin
 import ai.platon.pulsar.images.integration.ImageBrowseEventHandler
 import ai.platon.pulsar.images.service.ImageDetector
 import ai.platon.pulsar.images.service.ImageDownloader
@@ -75,6 +76,12 @@ open class ImageAutoConfiguration(
     }
 
     // ---- Beans ----
+
+    @Bean(name = ["imagesPlugin"])
+    @ConditionalOnMissingBean(name = ["imagesPlugin"])
+    open fun imagesPlugin(): ImagesPlugin {
+        return ImagesPlugin()
+    }
 
     @Bean(name = ["imageConfig"])
     @ConditionalOnMissingBean(name = ["imageConfig"])
