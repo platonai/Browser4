@@ -113,6 +113,7 @@ if (-not [string]::IsNullOrWhiteSpace($TaskFile)) {
 $currentYear = (Get-Date).ToUniversalTime().ToString("yyyy")
 $currentMonth = (Get-Date).ToUniversalTime().ToString("MM")
 $currentDay = (Get-Date).ToUniversalTime().ToString("dd")
+$currentDate = "$currentMonth$currentDay"
 $currentTime = (Get-Date).ToUniversalTime().ToString("HHmmss")
 $logsSubDir = Join-Path $logsDir "$currentYear\$currentMonth\$currentDay"
 if (!(Test-Path $logsSubDir)) { New-Item -ItemType Directory -Path $logsSubDir | Out-Null }
@@ -157,12 +158,6 @@ foreach ($taskRoot in $taskRoots) {
     $approvedDir = $taskRoot.Approved
     $pushedDir = $taskRoot.Pushed
     $logsDir = $taskRoot.Logs
-
-    $currentYear = (Get-Date).ToUniversalTime().ToString("yyyy")
-    $currentMonth = (Get-Date).ToUniversalTime().ToString("MM")
-    $currentDay = (Get-Date).ToUniversalTime().ToString("dd")
-    $currentDate = "$currentMonth$currentDay"
-    $currentTime = (Get-Date).ToUniversalTime().ToString("HHmmss")
 
     Ensure-DraftPlaceholders -DraftDirectory $draftDir
 
@@ -414,11 +409,7 @@ INSTRUCTIONS:
             $prompt += "`n`n$memoryInstructions`n`n$memoryContext"
         }
 
-        # Define log file paths
-
-        $logsSubDir = Join-Path $logsDir "$currentYear\$currentMonth\$currentDay"
-        if (!(Test-Path $logsSubDir)) { New-Item -ItemType Directory -Path $logsSubDir | Out-Null }
-
+        # Define log file paths (reusing script-level $logsSubDir and $currentTime)
         $taskLogPath = Join-Path $logsSubDir "${currentTime}-${workingBaseName}.task.log"
         $agentLogPath = Join-Path $logsSubDir "${currentTime}-${workingBaseName}.agent.log"
 
