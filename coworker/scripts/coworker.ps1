@@ -49,7 +49,12 @@ if ($null -eq $script:__CoworkerLock) {
 if (-not [string]::IsNullOrWhiteSpace($TaskFile)) {
     # Resolve full path before changing location
     if (Test-Path $TaskFile) {
-        $TaskFile = Resolve-Path $TaskFile
+        try {
+            $TaskFile = Resolve-Path $TaskFile -ErrorAction Stop
+        } catch {
+            Write-Error "Failed to resolve path '$TaskFile': $_"
+            exit 1
+        }
     }
 }
 
