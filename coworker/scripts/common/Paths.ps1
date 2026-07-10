@@ -45,7 +45,7 @@ function Get-CoworkerConfigData {
 
 function Get-WorkspaceRoot {
     $pathsConfig = Get-CoworkerConfigValue -Map $script:configData -Key 'Paths' -DefaultValue @{}
-    $path = [string](Get-CoworkerConfigValue -Map $pathsConfig -Key 'WorkspaceRoot' -DefaultValue '..\..')
+    $path = [string](Get-CoworkerConfigValue -Map $pathsConfig -Key 'WorkspaceRoot' -DefaultValue '../..')
     return Resolve-CoworkerConfiguredPath -Path $path
 }
 
@@ -73,13 +73,13 @@ function Get-CoworkerRoot {
 
 function Get-TasksRoot {
     $pathsConfig = Get-CoworkerConfigValue -Map $script:configData -Key 'Paths' -DefaultValue @{}
-    $path = [string](Get-CoworkerConfigValue -Map $pathsConfig -Key 'TasksRoot' -DefaultValue '..\tasks')
+    $path = [string](Get-CoworkerConfigValue -Map $pathsConfig -Key 'TasksRoot' -DefaultValue '../tasks')
     return Resolve-CoworkerConfiguredPath -Path $path
 }
 
 function Get-LogDirectory {
     $pathsConfig = Get-CoworkerConfigValue -Map $script:configData -Key 'Paths' -DefaultValue @{}
-    $path = [string](Get-CoworkerConfigValue -Map $pathsConfig -Key 'LogDirectory' -DefaultValue '~\.browser4-coworker\tasks\300logs')
+    $path = [string](Get-CoworkerConfigValue -Map $pathsConfig -Key 'LogDirectory' -DefaultValue '~/.browser4-coworker/tasks/300logs')
     $resolved = Resolve-CoworkerConfiguredPath -Path $path -BaseDirectory (Get-WorkspaceRoot)
 
     # Ensure the log directory exists
@@ -92,7 +92,7 @@ function Get-LogDirectory {
 
 function Get-SchedulerWorkingDirectory {
     $schedulerConfig = Get-CoworkerConfigValue -Map $script:configData -Key 'Scheduler' -DefaultValue @{}
-    $path = [string](Get-CoworkerConfigValue -Map $schedulerConfig -Key 'WorkingDirectory' -DefaultValue '..\..')
+    $path = [string](Get-CoworkerConfigValue -Map $schedulerConfig -Key 'WorkingDirectory' -DefaultValue '../..')
     return Resolve-CoworkerConfiguredPath -Path $path
 }
 

@@ -1,10 +1,10 @@
 @{
     Paths = @{
-        WorkspaceRoot        = '..\..'
+        WorkspaceRoot        = '../..'
         CoworkerRoot         = '..'
-        TasksRoot            = '..\tasks'
-        TargetRepositoryRoot = '..\'
-        LogDirectory         = '~\.browser4-coworker\tasks\300logs'
+        TasksRoot            = '../tasks'
+        TargetRepositoryRoot = '../'
+        LogDirectory         = '~/.browser4-coworker/tasks/300logs'
     }
 
     Scheduler = @{

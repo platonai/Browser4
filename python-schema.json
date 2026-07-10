@@ -1,0 +1,34 @@
+{
+  "type": "object",
+  "properties": {
+    "language_name": {
+      "type": "string",
+      "description": "The name of the programming language"
+    },
+    "first_release_year": {
+      "type": "integer",
+      "description": "The year the language was first released"
+    },
+    "created_by": {
+      "type": "string",
+      "description": "The original creator or designer of the language"
+    },
+    "typing_system": {
+      "type": "string",
+      "description": "The typing discipline (e.g., dynamic, static, strong, weak, duck)"
+    },
+    "license_type": {
+      "type": "string",
+      "description": "The software license under which the language is distributed"
+    },
+    "latest_version": {
+      "type": "string",
+      "description": "The latest stable version number"
+    },
+    "website": {
+      "type": "string",
+      "description": "The official website URL"
+    }
+  },
+  "required": ["language_name", "first_release_year", "created_by", "typing_system", "license_type"]
+}

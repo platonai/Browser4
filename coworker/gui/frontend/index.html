@@ -1203,7 +1203,7 @@ async function doDeleteTask() {
 
 // ── Valid move transitions ──
 var VALID_TRANSITIONS = {
-  '0draft':       ['1ready', '0draft/refine/0draft', '0draft/issues/github', '200issues/draft/refine/0ready'],
+  '0draft':       ['1ready', '0draft/refine/0draft', '0draft/issues/github', 'issues/draft/refine/0ready'],
   '1ready':       ['2working', '0draft'],
   '2working':     ['3done', '5approved', '1ready', '0draft'],
   '3done':        ['4review', '5approved', '6git-pushed'],
@@ -1216,13 +1216,13 @@ var VALID_TRANSITIONS = {
   '0draft/refine/3done':    ['0draft', '1ready', '0draft/refine/0draft'],
   '0draft/refine/0error':   ['0draft/refine/0draft', '0draft'],
   '0draft/issues/github':   ['1ready', '0draft'],
-  '200issues/draft/refine/0ready':  ['200issues/draft/refine/1working', '0draft'],
-  '200issues/draft/refine/1working': ['200issues/draft/refine/2done', '200issues/github/commit/ready', '200issues/draft/refine/0error'],
-  '200issues/draft/refine/2done':   ['200issues/github/commit/ready', '0draft'],
-  '200issues/draft/refine/0error':  ['200issues/draft/refine/0ready', '0draft'],
-  '200issues/github/commit/ready':  ['200issues/github/commit/done', '200issues/github/commit/failed', '200issues/draft/refine/2done'],
-  '200issues/github/commit/done':   [],
-  '200issues/github/commit/failed': ['200issues/github/commit/ready', '0draft'],
+  'issues/draft/refine/0ready':  ['issues/draft/refine/1working', '0draft'],
+  'issues/draft/refine/1working': ['issues/draft/refine/2done', 'issues/github/commit/ready', 'issues/draft/refine/0error'],
+  'issues/draft/refine/2done':   ['issues/github/commit/ready', '0draft'],
+  'issues/draft/refine/0error':  ['issues/draft/refine/0ready', '0draft'],
+  'issues/github/commit/ready':  ['issues/github/commit/done', 'issues/github/commit/failed', 'issues/draft/refine/2done'],
+  'issues/github/commit/done':   [],
+  'issues/github/commit/failed': ['issues/github/commit/ready', '0draft'],
 };
 
 // ── Move task ──

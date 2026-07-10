@@ -576,7 +576,7 @@ The `coworker/` directory contains a file-queue automation system for task-drive
 
 **Task lifecycle directories** (under `coworker/tasks/`):
 - `main/0draft/` → `main/1ready/` → `main/2working/` → `main/3complete/` (or `3aborted/`, `4review/`, `5approved/`)
-- `200issues/` — GitHub issues pipeline with draft + commit + post stages
+- `issues/` — GitHub issues pipeline with draft + commit + post stages
 
 **Key conventions:**
 - Task files use optional `Title:`, `Description:`, `Prompt:` headers; if absent, the full file is the prompt

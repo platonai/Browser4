@@ -1,7 +1,7 @@
 #!/usr/bin/env pwsh
 <#
 .SYNOPSIS
-    Scan coworker/tasks/200issues/github/commit/ready for issue files and create them
+    Scan coworker/tasks/issues/github/commit/ready for issue files and create them
     on GitHub via the gh CLI.
 
 .DESCRIPTION
@@ -38,7 +38,7 @@ if ($null -eq $script:__CoworkerLock) {
 
 $repoRoot = Get-WorkspaceRoot
 
-$issuesRoot = Resolve-TasksPath '200issues\github\commit'
+$issuesRoot = Resolve-TasksPath 'issues\github\commit'
 $readyDir = Join-Path $issuesRoot 'ready'
 $doneDir = Join-Path $issuesRoot 'done'
 $failedDir = Join-Path $issuesRoot 'failed'

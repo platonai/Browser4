@@ -293,7 +293,15 @@ function Start-AgentProcess {
         }
     }
     else {
-        $startProcessArgs.ArgumentList = $arguments
+        # On Linux, Start-Process -ArgumentList with an array splits each
+        # element on whitespace, turning multi-word arguments (like prompts
+        # containing "`snapshot -i`") into separate argv entries.  Join into
+        # a single double-quote-escaped string (same algorithm as Windows) to
+        # preserve argument boundaries.
+        $escapedArguments = foreach ($argument in $arguments) {
+            ConvertTo-WindowsCommandLineArgument -Argument $argument
+        }
+        $startProcessArgs.ArgumentList = ($escapedArguments -join ' ')
     }
 
     if ($PSBoundParameters.ContainsKey('WorkingDirectory') -and -not [string]::IsNullOrWhiteSpace($WorkingDirectory)) {

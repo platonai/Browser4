@@ -369,6 +369,37 @@ foreach ($taskRoot in $taskRoots) {
             $prompt = $content
         }
 
+        # ── Task framing preamble ─────────────────────────────────────────
+        # Wrap the task content with clear instructions so the AI agent
+        # understands what these files are and how to approach them.
+        $taskPreamble = @"
+
+You are working on the Browser4 project in the repository at: $targetRepoRoot
+
+The task file below contains issues, feature requests, or improvements for this project.
+Each item may be:
+  - A new feature to implement
+  - An improvement to existing code or documentation
+  - A bug in the code that needs to be fixed
+
+INSTRUCTIONS:
+1. Read the task file carefully and identify each distinct issue/feature/improvement it describes.
+2. If the file contains multiple issues, work through them ONE BY ONE — fix each completely
+   before moving to the next.
+3. For each issue:
+   a. Search the codebase to find the relevant source files.
+   b. Understand the root cause before making changes.
+   c. Implement the fix or feature.
+   d. Verify your change is correct (review the diff, run tests if applicable).
+4. After all issues are addressed, provide a brief summary of what was changed and why.
+5. If an issue is already fixed, unclear, or not actionable, note that explicitly instead
+   of making unnecessary changes.
+
+--- TASK CONTENT BELOW ---
+
+"@
+        $prompt = $taskPreamble + $prompt
+
         # Append Memory Instructions and Context (if any)
         if ($memoryInstructions -or $memoryContext) {
             $prompt += "`n`n$memoryInstructions`n`n$memoryContext"

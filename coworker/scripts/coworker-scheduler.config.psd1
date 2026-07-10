@@ -37,7 +37,7 @@
             Enabled         = $false
             IntervalSeconds = 15
             WindowStyle     = 'Minimized'
-            PendingPaths    = @('coworker\tasks\200issues\github\commit\ready')
+            PendingPaths    = @('coworker\tasks\issues\github\commit\ready')
             ScriptPath      = 'coworker\scripts\workers\commit-github-issues.ps1'
             Arguments       = @()
         }
@@ -47,7 +47,7 @@
             Enabled         = $false
             IntervalSeconds = 15
             WindowStyle     = 'Minimized'
-            PendingPaths    = @('coworker\tasks\200issues\draft\refine\0ready')
+            PendingPaths    = @('coworker\tasks\issues\draft\refine\0ready')
             ScriptPath      = 'coworker\scripts\workers\refine-github-issues.ps1'
             Arguments       = @()
         }

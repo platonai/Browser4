@@ -13,6 +13,9 @@ const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
 const { execFile } = require('child_process');
+const reviewHistory = require('./review-history.js');
+const llm = require('./llm.js');
+const { buildSummaryContent } = require('./summary-builder.js');
 
 // ── CLI argument parsing ────────────────────────────────────────────────
 
@@ -32,6 +35,16 @@ const PORT = parseInt(argFlag('port', '8090'), 10);
 const DEFAULT_TASKS_ROOT = path.resolve(__dirname, '..', 'tasks');
 const TASKS_ROOT = path.resolve(argFlag('tasks-root', DEFAULT_TASKS_ROOT));
 const OPEN_BROWSER = argBool('open-browser');
+
+// Initialise the review-history index and LLM wrapper
+reviewHistory.init(TASKS_ROOT);
+llm.init({
+  provider: process.env.LLM_PROVIDER || null,
+  binary: process.env.LLM_PATH || null,
+  baseArgs: process.env.LLM_ARGS ? process.env.LLM_ARGS.split(/\s+/).filter(Boolean) : null,
+  tasksRoot: TASKS_ROOT,
+  reviewHistory: reviewHistory,
+});
 
 // ── Stage registry ──────────────────────────────────────────────────────
 
@@ -53,15 +66,15 @@ const STAGES = [
   // Source directories (input feeders)
   { id: '0draft/issues/github',         display_name: 'GitHub Issues',   path_suffix: 'main/0draft/issues/github',       date_stamped: true,  group: 'sources', hidden: false },
   // GitHub issues pipeline
-  { id: '200issues/draft/refine/0ready',  display_name: 'Issues Ready',    path_suffix: '200issues/draft/refine/0ready',  date_stamped: false, group: 'issues', hidden: false },
-  { id: '200issues/draft/refine/1working', display_name: 'Issues Working', path_suffix: '200issues/draft/refine/1working', date_stamped: false, group: 'issues', hidden: false },
-  { id: '200issues/draft/refine/2done',   display_name: 'Issues Done',     path_suffix: '200issues/draft/refine/2done',   date_stamped: true,  group: 'issues', hidden: false },
-  { id: '200issues/draft/refine/0error',  display_name: 'Issues Errors',   path_suffix: '200issues/draft/refine/0error',  date_stamped: false, group: 'issues', hidden: false },
-  { id: '200issues/github/commit/ready',  display_name: 'GH Commit Ready', path_suffix: '200issues/github/commit/ready',  date_stamped: false, group: 'issues', hidden: false },
-  { id: '200issues/github/commit/done',   display_name: 'GH Committed',    path_suffix: '200issues/github/commit/done',   date_stamped: false, group: 'issues', hidden: false },
-  { id: '200issues/github/commit/failed', display_name: 'GH Failed',       path_suffix: '200issues/github/commit/failed', date_stamped: false, group: 'issues', hidden: false },
+  { id: 'issues/draft/refine/0ready',  display_name: 'Issues Ready',    path_suffix: 'issues/draft/refine/0ready',  date_stamped: false, group: 'issues', hidden: false },
+  { id: 'issues/draft/refine/1working', display_name: 'Issues Working', path_suffix: 'issues/draft/refine/1working', date_stamped: false, group: 'issues', hidden: false },
+  { id: 'issues/draft/refine/2done',   display_name: 'Issues Done',     path_suffix: 'issues/draft/refine/2done',   date_stamped: true,  group: 'issues', hidden: false },
+  { id: 'issues/draft/refine/0error',  display_name: 'Issues Errors',   path_suffix: 'issues/draft/refine/0error',  date_stamped: false, group: 'issues', hidden: false },
+  { id: 'issues/github/commit/ready',  display_name: 'GH Commit Ready', path_suffix: 'issues/github/commit/ready',  date_stamped: false, group: 'issues', hidden: false },
+  { id: 'issues/github/commit/done',   display_name: 'GH Committed',    path_suffix: 'issues/github/commit/done',   date_stamped: false, group: 'issues', hidden: false },
+  { id: 'issues/github/commit/failed', display_name: 'GH Failed',       path_suffix: 'issues/github/commit/failed', date_stamped: false, group: 'issues', hidden: false },
   // Issue review
-  { id: '200issues/review',             display_name: 'Review Queue',    path_suffix: '200issues/review',              date_stamped: true,  group: 'review', hidden: false },
+  { id: 'issues/review',             display_name: 'Review Queue',    path_suffix: 'issues/review',              date_stamped: true,  group: 'review', hidden: false },
 ];
 
 const stageById = Object.fromEntries(STAGES.map(s => [s.id, s]));
@@ -72,7 +85,7 @@ const visibleStages = STAGES.filter(s => !s.hidden);
 // Moving to any stage NOT in the list is rejected by the server.
 const VALID_TRANSITIONS = {
   // Main pipeline
-  '0draft':       ['1ready', '0draft/refine/0draft', '0draft/issues/github', '200issues/draft/refine/0ready'],
+  '0draft':       ['1ready', '0draft/refine/0draft', '0draft/issues/github', 'issues/draft/refine/0ready'],
   '1ready':       ['2working', '0draft'],
   '2working':     ['3done', '5approved', '1ready', '0draft'],
   '3done':        ['4review', '5approved', '6git-pushed'],
@@ -89,13 +102,13 @@ const VALID_TRANSITIONS = {
 
   // GitHub issues pipeline
   '0draft/issues/github':   ['1ready', '0draft'],
-  '200issues/draft/refine/0ready':  ['200issues/draft/refine/1working', '0draft'],
-  '200issues/draft/refine/1working': ['200issues/draft/refine/2done', '200issues/github/commit/ready', '200issues/draft/refine/0error'],
-  '200issues/draft/refine/2done':   ['200issues/github/commit/ready', '0draft'],
-  '200issues/draft/refine/0error':  ['200issues/draft/refine/0ready', '0draft'],
-  '200issues/github/commit/ready':  ['200issues/github/commit/done', '200issues/github/commit/failed', '200issues/draft/refine/2done'],
-  '200issues/github/commit/done':   [],
-  '200issues/github/commit/failed': ['200issues/github/commit/ready', '0draft'],
+  'issues/draft/refine/0ready':  ['issues/draft/refine/1working', '0draft'],
+  'issues/draft/refine/1working': ['issues/draft/refine/2done', 'issues/github/commit/ready', 'issues/draft/refine/0error'],
+  'issues/draft/refine/2done':   ['issues/github/commit/ready', '0draft'],
+  'issues/draft/refine/0error':  ['issues/draft/refine/0ready', '0draft'],
+  'issues/github/commit/ready':  ['issues/github/commit/done', 'issues/github/commit/failed', 'issues/draft/refine/2done'],
+  'issues/github/commit/done':   [],
+  'issues/github/commit/failed': ['issues/github/commit/ready', '0draft'],
 };
 
 function resolveStageDir(stage, date) {
@@ -375,10 +388,13 @@ app.post('/api/move', (req, res) => {
 
 // POST /api/issue-review/ai-suggest
 app.post('/api/issue-review/ai-suggest', (req, res) => {
-  const { title, severity, category, sections, suggestedImprovement } = req.body;
+  const { title, severity, category, sections, suggestedImprovement, siblingIssues, scenarioContext } = req.body;
   if (!title) return res.status(400).json({ error: 'Issue title is required' });
 
-  // Build a focused prompt for the AI
+  // Build enriched context from review history
+  const ctx = reviewHistory.buildEnrichedContext(title);
+
+  // Build the issue text
   const parts = [`Issue: ${title}`, `Severity: ${severity || 'N/A'}`, `Category: ${category || 'N/A'}`];
   if (sections) {
     for (const s of sections) {
@@ -390,53 +406,119 @@ app.post('/api/issue-review/ai-suggest', (req, res) => {
   }
   const issueText = parts.join('\n\n');
 
-  const prompt = `You are reviewing issues for a browser automation CLI tool (browser4-cli). Analyze this issue and decide:
+  // Build sibling context if provided
+  let siblingText = '';
+  if (siblingIssues && siblingIssues.length > 0) {
+    siblingText = '\n## Other Issues in the Same Evaluation\n\n';
+    siblingText += 'The following issues were found in the same scenario. ';
+    siblingText += 'Consider whether this issue duplicates or relates to any of them:\n\n';
+    for (const sib of siblingIssues) {
+      const decTag = sib.decision ? ` (${sib.decision})` : ' (unreviewed)';
+      siblingText += `- Issue ${sib.number}: "${sib.title}"${decTag}\n`;
+    }
+    siblingText += '\n';
+  }
 
-- ACCEPT — the issue is valid and the suggested fix is correct
-- ACCEPT with improvements — valid but the fix needs refinement
-- DEFER — acknowledged but intentionally deferred
-- WONTFIX — acknowledged but will not be fixed
-- REJECT — invalid, not a problem, or already addressed
+  // Build scenario context if provided
+  let scenarioText = '';
+  if (scenarioContext) {
+    scenarioText = `\n## Scenario Context\n\n${scenarioContext}\n`;
+  }
+
+  const prompt = `You are reviewing issues for browser4-cli, a browser automation CLI tool built for AI AGENTS (not humans) to use. Analyze this issue and choose the best decision.
+
+## Review Guidelines
+
+- **ACCEPT** — Issue is valid and the suggested fix is correct. Use for real bugs, broken behavior, missing features that block AI agents.
+- **ACCEPT with improvements** — Issue is valid but the suggested fix needs refinement (describe what in Notes).
+- **DEFER** — Issue is acknowledged as real but intentionally deferred — typically large architectural changes, low-priority nice-to-haves, or things that need more design.
+- **WONTFIX** — Issue is acknowledged as real but will NOT be fixed. Use for: third-party behavior the tool can't control, platform-specific quirks that are impractical to fix, or intentional design decisions.
+- **REJECT** — Issue is NOT valid. Use when: the reported behavior is intentional and correct, the issue misunderstands the tool's purpose, or the problem only affects human readability (not AI agents). Remember: this tool is for AI AGENTS — what looks like a UX problem to a human may be perfectly fine for an AI.
+- **DUPLICATE** — Issue describes the same problem as another existing issue (reference which one in Notes).
+
+**Decision rules of thumb:**
+- If the issue blocks or misleads an AI agent → ACCEPT or ACCEPT with improvements
+- If the issue only matters for human readability (verbose output, not machine-parseable) → REJECT or DEFER
+- If the fix requires major architectural changes → DEFER
+- If the behavior is about external websites or platforms → WONTFIX
+- If the issue is about development-mode friction (cargo run overhead, cd into subdirs) → WONTFIX
+- If the same root cause appears in multiple issues → mark one ACCEPT, rest DUPLICATE
+
+**CRITICAL — Notes requirement:**
+- If your decision is ACCEPT, notes are OPTIONAL (can be empty or brief).
+- If your decision is ANYTHING OTHER THAN ACCEPT (DEFER, WONTFIX, REJECT, DUPLICATE, ACCEPT with improvements), you MUST provide specific, actionable notes explaining WHY. Include: (1) the reason, and (2) what would need to change for a different outcome.
+- Never leave notes empty for a non-ACCEPT decision.
+
+${ctx.statsSection ? ctx.statsSection + '\n' : ''}\
+${ctx.examplesSection ? ctx.examplesSection + '\n' : ''}\
+${ctx.similarSection ? ctx.similarSection + '\n' : ''}\
+${scenarioText}\
+${siblingText}\
+## Issue to Review
+
+${issueText}
 
 Respond with ONLY a single JSON object (no markdown, no backticks):
-{"decision": "<one of the five options above>", "notes": "<1-2 sentence rationale>"}
+{"decision": "<one of the six options above>", "notes": "<rationale — REQUIRED unless decision is ACCEPT>"}`;
 
-${issueText}`;
+  // Validate and enforce notes for non-ACCEPT decisions
+  function validateDecisionNotes(parsed) {
+    const decision = (parsed.decision || '').trim();
+    if (decision !== 'ACCEPT') {
+      const notes = (parsed.notes || '').trim();
+      if (!notes || notes.length < 5) {
+        // If notes are missing/too short for non-ACCEPT, add a default note
+        parsed.notes = '[AI did not provide rationale — review required] Decision: ' + decision + '. Original notes: ' + (notes || '(none)');
+      }
+    }
+    return parsed;
+  }
 
-  const claudePath = process.env.CLAUDE_PATH || 'claude';
-  const child = execFile(claudePath, ['-p', prompt], {
+  // Use the resilient LLM wrapper with retry, circuit breaker, pre-warm, and heuristic fallback
+  llm.sendPrompt(prompt, {
     timeout: 60000,
-    maxBuffer: 1024 * 1024,
-    env: { ...process.env },
-  }, (err, stdout, stderr) => {
-    if (err) {
-      if (err.killed) return res.status(504).json({ error: 'AI review timed out (60s)' });
-      return res.status(500).json({ error: `AI review failed: ${err.message}` });
+    retries: 3,
+    heuristic: function() {
+      return llm.heuristicDecision({ title, severity, category, sections });
+    },
+  }).then(function(result) {
+    if (result.heuristic) {
+      // Heuristic fallback — return the heuristic decision with a flag
+      res.json({
+        decision: result.heuristicResult.decision,
+        notes: result.heuristicResult.notes,
+        heuristic: true,
+      });
+      return;
     }
 
-    // Parse JSON from output — find the first { } block
+    const stdout = result.stdout;
     const jsonMatch = stdout.match(/\{[\s\S]*\}/);
     if (!jsonMatch) {
       return res.status(500).json({ error: 'AI response did not contain valid JSON', raw: stdout.substring(0, 500) });
     }
 
     try {
-      const result = JSON.parse(jsonMatch[0]);
-      if (!result.decision) {
+      const parsed = JSON.parse(jsonMatch[0]);
+      if (!parsed.decision) {
         return res.status(500).json({ error: 'AI response missing decision field', raw: jsonMatch[0] });
       }
+      const validated = validateDecisionNotes(parsed);
       res.json({
-        decision: result.decision.trim(),
-        notes: (result.notes || '').trim(),
+        decision: validated.decision.trim(),
+        notes: validated.notes.trim(),
+        heuristic: false,
       });
     } catch (e) {
       res.status(500).json({ error: 'Failed to parse AI response', raw: jsonMatch[0] });
     }
+  }).catch(function(err) {
+    res.status(500).json({ error: `AI review failed: ${err.message}` });
   });
 });
 
 // POST /api/issue-review/discard
-// Moves the issue file to 200issues/review/done/discard/ — for files that
+// Moves the issue file to issues/review/done/discard/ — for files that
 // contain no issues or no valuable issues.
 app.post('/api/issue-review/discard', (req, res) => {
   const { path: srcPath } = req.body;
@@ -445,14 +527,14 @@ app.post('/api/issue-review/discard', (req, res) => {
   const src = safeResolve(srcPath, true);
   if (src.error) return res.status(src.error).json({ error: src.message });
 
-  // Safety: ensure the source is under 200issues/review/
-  const reviewRoot = path.join(TASKS_ROOT, '200issues', 'review');
+  // Safety: ensure the source is under issues/review/
+  const reviewRoot = path.join(TASKS_ROOT, 'issues', 'review');
   if (!src.abs.startsWith(reviewRoot + path.sep)) {
-    return res.status(400).json({ error: 'Only files under 200issues/review can be discarded.' });
+    return res.status(400).json({ error: 'Only files under issues/review can be discarded.' });
   }
 
   try {
-    // Move to 200issues/review/done/discard, preserving date subdirectory structure
+    // Move to issues/review/done/discard, preserving date subdirectory structure
     const srcRelToReview = path.relative(reviewRoot, src.abs);
     const discardDir = path.join(reviewRoot, 'done', 'discard');
     const discardPath = path.join(discardDir, srcRelToReview);
@@ -480,14 +562,23 @@ app.post('/api/issue-review/mark-done', (req, res) => {
   const src = safeResolve(srcPath, true);
   if (src.error) return res.status(src.error).json({ error: src.message });
 
-  // Safety: ensure the source is under 200issues/review/
-  const reviewRoot = path.join(TASKS_ROOT, '200issues', 'review');
+  // Safety: ensure the source is under issues/review/
+  const reviewRoot = path.join(TASKS_ROOT, 'issues', 'review');
   if (!src.abs.startsWith(reviewRoot + path.sep)) {
-    return res.status(400).json({ error: 'Only files under 200issues/review can be marked done.' });
+    return res.status(400).json({ error: 'Only files under issues/review can be marked done.' });
   }
 
   try {
     const content = fs.readFileSync(src.abs, 'utf-8');
+
+    // Check for zero issues — should be discarded instead
+    const issueModel = require('./frontend/issue-model.js');
+    const parsed = issueModel.parseIssueFile(content);
+    if (!parsed.issues || parsed.issues.length === 0) {
+      return res.status(400).json({
+        error: 'This file has no issues. Use the Discard endpoint instead — zero-issue files should not enter the ready queue.',
+      });
+    }
 
     // Build the summary version
     let summaryContent = buildSummaryContent(content);
@@ -514,12 +605,41 @@ app.post('/api/issue-review/mark-done', (req, res) => {
     }
     fs.writeFileSync(readyPath, summaryContent, 'utf-8');
 
-    // Move original to 200issues/review/done, preserving date subdirectory structure
+    // Move original to issues/review/done, preserving date subdirectory structure
     const srcRelToReview = path.relative(reviewRoot, src.abs);
     const doneDir = path.join(reviewRoot, 'done');
     const donePath = path.join(doneDir, srcRelToReview);
     fs.mkdirSync(path.dirname(donePath), { recursive: true });
     fs.renameSync(src.abs, donePath);
+
+    // ── Post-review actions ──────────────────────────────────────────
+
+    // Hot-reload: index the newly reviewed file so stats and similarity
+    // reflect the latest decisions without a server restart.
+    reviewHistory.invalidate();
+    reviewHistory.init(TASKS_ROOT);
+
+    // Feedback loop: compare pre-review decisions (if any were AI-suggested)
+    // against final human decisions for calibration tracking.
+    try {
+      const model = require('./frontend/issue-model.js').parseIssueFile(content);
+      for (const issue of model.issues) {
+        if (issue.review.decision) {
+          // We record the human decision. If the issue had an AI suggestion
+          // stored in notes (e.g., "[AI suggested: ACCEPT]"), compare it.
+          const humanDecision = issue.review.decision;
+          const notes = issue.review.notes || '';
+          const aiMatch = notes.match(/\[AI suggested:\s*([^\]]+)\]/);
+          if (aiMatch) {
+            const aiDecision = aiMatch[1].trim();
+            reviewHistory.recordFeedback(issue.title, aiDecision, humanDecision);
+          }
+        }
+      }
+    } catch (fbErr) {
+      // Feedback recording is best-effort — don't fail the request
+      console.error('[server] Feedback tracking error:', fbErr.message);
+    }
 
     const readyRel = path.relative(TASKS_ROOT, readyPath).replace(/\\/g, '/');
     const doneRel = path.relative(TASKS_ROOT, donePath).replace(/\\/g, '/');
@@ -534,130 +654,486 @@ app.post('/api/issue-review/mark-done', (req, res) => {
   }
 });
 
-// Build a summary version of the issues file:
-// - Approved issues (ACCEPT, ACCEPT with improvements): keep full detail
-// - Other issues (DEFER, WONTFIX, REJECT, unreviewed): condensed abstract
-function buildSummaryContent(content) {
-  const APPROVED = ['ACCEPT', 'ACCEPT with improvements'];
+// POST /api/issue-review/ai-suggest-batch
+// Reviews all issues in a file together. The AI sees cross-issue context,
+// scenario background, and historical review data, enabling consistent
+// decisions and intra-file duplicate detection.
+app.post('/api/issue-review/ai-suggest-batch', (req, res) => {
+  const { issues, scenarioContext, scenarioTitle } = req.body;
+  if (!issues || !Array.isArray(issues) || issues.length === 0) {
+    return res.status(400).json({ error: 'issues array is required' });
+  }
 
-  // Split into preamble (everything before first "### Issue N:") and issue blocks
-  const firstIssueMatch = content.match(/^### Issue \d+:/m);
-  if (!firstIssueMatch) return content; // no issues, return as-is
+  // Build stats + few-shot examples once for the batch
+  const statsSection = reviewHistory.buildStatsSection();
+  const examplesSection = reviewHistory.buildFewShotSection(6);
 
-  const preamble = content.substring(0, firstIssueMatch.index).trim();
+  // Build per-issue text
+  let issuesText = '';
+  for (const iss of issues) {
+    issuesText += `### Issue ${iss.numberber}: ${iss.title}\n`;
+    issuesText += `**Severity:** ${iss.severity || 'N/A'} | **Category:** ${iss.category || 'N/A'}\n\n`;
+    if (iss.sections) {
+      for (const s of iss.sections) {
+        // Truncate long sections to keep prompt manageable
+        const body = (s.body || '').substring(0, 600);
+        issuesText += `**${s.label}:** ${body}\n\n`;
+      }
+    }
+    if (iss.suggestedImprovement) {
+      issuesText += `**AI Suggested Improvement:** ${iss.suggestedImprovement}\n\n`;
+    }
+    issuesText += '---\n\n';
+  }
 
-  // Split remaining into individual issue blocks
-  const remainder = content.substring(firstIssueMatch.index);
-  const blocks = [];
-  const lines = remainder.split('\n');
-  let current = [];
-  let started = false;
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    if (/^### Issue \d+:/i.test(line)) {
-      if (started && current.length > 0) blocks.push(current.join('\n'));
-      current = [line];
-      started = true;
-    } else if (started) {
-      // Stop at "## How to Reproduce" section
-      if (/^## How to Reproduce/.test(line)) break;
-      current.push(line);
+  let scenarioText = '';
+  if (scenarioContext) {
+    scenarioText = `\n## Scenario Background\n\n${scenarioContext}\n`;
+  }
+
+  const prompt = `You are reviewing ALL issues from a single browser4-cli evaluation scenario${scenarioTitle ? ': ' + scenarioTitle : ''}. Review each issue and choose the best decision. Consider how issues relate to each other — if multiple issues share the same root cause, mark one as ACCEPT and the rest as DUPLICATE.
+
+## Review Guidelines
+
+- **ACCEPT** — Issue is valid and the suggested fix is correct. Use for real bugs, broken behavior, missing features that block AI agents.
+- **ACCEPT with improvements** — Issue is valid but the suggested fix needs refinement (describe what in Notes).
+- **DEFER** — Issue is acknowledged as real but intentionally deferred — typically large architectural changes, low-priority nice-to-haves, or things that need more design.
+- **WONTFIX** — Issue is acknowledged as real but will NOT be fixed. Use for: third-party behavior the tool can't control, platform-specific quirks that are impractical to fix, or intentional design decisions.
+- **REJECT** — Issue is NOT valid. Use when: the reported behavior is intentional and correct, the issue misunderstands the tool's purpose, or the problem only affects human readability (not AI agents). Remember: this tool is for AI AGENTS — what looks like a UX problem to a human may be perfectly fine for an AI.
+- **DUPLICATE** — Issue describes the same problem as another issue IN THIS BATCH (reference which issue number in Notes).
+
+**Decision rules of thumb:**
+- If the issue blocks or misleads an AI agent → ACCEPT or ACCEPT with improvements
+- If the issue only matters for human readability → REJECT or DEFER
+- If the fix requires major architectural changes → DEFER
+- If the behavior is about external websites or platforms → WONTFIX
+- If the issue is about development-mode friction (cargo run overhead, cd into subdirs) → WONTFIX
+- If the same root cause appears in multiple issues → mark one ACCEPT, rest DUPLICATE
+
+**CRITICAL — Notes requirement:**
+- If your decision is ACCEPT, notes are OPTIONAL (can be empty or brief).
+- If your decision is ANYTHING OTHER THAN ACCEPT (DEFER, WONTFIX, REJECT, DUPLICATE, ACCEPT with improvements), you MUST provide specific, actionable notes explaining WHY. Include: (1) the reason, and (2) what would need to change for a different outcome.
+- Never leave notes empty for a non-ACCEPT decision.
+
+${statsSection ? statsSection + '\n' : ''}\
+${examplesSection ? examplesSection + '\n' : ''}\
+${scenarioText}\
+## Issues to Review (${issues.length} issues)
+
+${issuesText}
+
+Respond with ONLY a single JSON object (no markdown, no backticks). Include a decision for EVERY issue:
+{"decisions": [
+  {"issueNumber": 1, "decision": "ACCEPT", "notes": "optional for ACCEPT"},
+  {"issueNumber": 2, "decision": "DEFER", "notes": "REQUIRED: explain why deferred"},
+  ...
+  ...
+]}`;
+
+  // Use the resilient LLM wrapper for batch review
+  llm.sendPrompt(prompt, {
+    timeout: 120000,
+    retries: 2,  // fewer retries for batch (more expensive)
+    heuristic: function() {
+      // Apply per-issue heuristic for batch fallback
+      const decisions = issues.map(function(iss) {
+        const h = llm.heuristicDecision(iss);
+        return { issueNumber: iss.numberber, decision: h.decision, notes: h.notes };
+      });
+      return { decisions: decisions };
+    },
+  }).then(function(result) {
+    if (result.heuristic) {
+      res.json({ decisions: result.heuristicResult.decisions, heuristic: true });
+      return;
+    }
+
+    const stdout = result.stdout;
+    const jsonMatch = stdout.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) {
+      return res.status(500).json({ error: 'AI response did not contain valid JSON', raw: stdout.substring(0, 500) });
+    }
+
+    try {
+      const parsed = JSON.parse(jsonMatch[0]);
+      if (!parsed.decisions || !Array.isArray(parsed.decisions)) {
+        return res.status(500).json({ error: 'AI response missing decisions array', raw: jsonMatch[0] });
+      }
+      const decisions = parsed.decisions.map(d => {
+        const decision = (d.decision || 'DEFER').trim();
+        let notes = (d.notes || '').trim();
+        // Enforce notes for non-ACCEPT decisions
+        if (decision !== 'ACCEPT' && (!notes || notes.length < 5)) {
+          notes = '[AI did not provide rationale — review required] Decision: ' + decision + '. Original notes: ' + (notes || '(none)');
+        }
+        return { issueNumber: d.issueNumber, decision, notes };
+      });
+      res.json({ decisions, heuristic: false });
+    } catch (e) {
+      res.status(500).json({ error: 'Failed to parse AI response', raw: jsonMatch[0] });
+    }
+  }).catch(function(err) {
+    res.status(500).json({ error: `Batch AI review failed: ${err.message}` });
+  });
+});
+
+// POST /api/issue-review/ai-suggest-directory
+// Reviews ALL issues across ALL .issues.md files in a directory.
+// Accepts a relative directory path under issues/review/ (e.g., "2026/0708").
+// Each file gets its own batch review with scenario context.
+app.post('/api/issue-review/ai-suggest-directory', async (req, res) => {
+  const { directory } = req.body;
+  if (!directory) return res.status(400).json({ error: 'directory is required (relative path under issues/review/)' });
+
+  const reviewRoot = path.join(TASKS_ROOT, 'issues', 'review');
+  const dirPath = path.join(reviewRoot, directory);
+
+  // Safety check
+  const r = safeResolve(path.join('issues', 'review', directory), false);
+  if (r.error) return res.status(r.error).json({ error: r.message });
+
+  if (!fs.existsSync(dirPath) || !fs.statSync(dirPath).isDirectory()) {
+    return res.status(404).json({ error: `Directory not found: ${directory}` });
+  }
+
+  // Find all .issues.md files recursively
+  const issueFiles = [];
+  function findIssueFiles(dir) {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (entry.name.startsWith('.')) continue;
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        findIssueFiles(full);
+      } else if (entry.isFile() && /\.issues\.md$/i.test(entry.name)) {
+        issueFiles.push(full);
+      }
     }
   }
-  if (started && current.length > 0) blocks.push(current.join('\n'));
+  findIssueFiles(dirPath);
 
-  // Process each block
-  const approvedBlocks = [];
-  const abstractBlocks = [];
-  let keptCount = 0;
-  let condensedCount = 0;
+  if (issueFiles.length === 0) {
+    return res.json({ results: [], totalFiles: 0, totalIssues: 0 });
+  }
 
-  for (const block of blocks) {
-    const decision = extractDecision(block);
-    if (decision && APPROVED.includes(decision)) {
-      approvedBlocks.push(block);
-      keptCount++;
-    } else {
-      abstractBlocks.push(buildAbstract(block, decision));
-      condensedCount++;
+  // Build stats + few-shot examples once for the entire batch
+  const statsSection = reviewHistory.buildStatsSection();
+  const examplesSection = reviewHistory.buildFewShotSection(8);
+
+  const allResults = [];
+  let totalIssues = 0;
+
+  for (const filePath of issueFiles) {
+    try {
+      const content = fs.readFileSync(filePath, 'utf-8');
+      const model = require('./frontend/issue-model.js').parseIssueFile(content);
+      if (!model.issues || model.issues.length === 0) continue;
+
+      // Build per-issue text for this file (sections already parsed by issue-model)
+      let issuesText = '';
+      for (const iss of model.issues) {
+        const sections = iss.sections || [];
+
+        issuesText += `### Issue ${iss.numberber}: ${iss.title}\n`;
+        issuesText += `**Severity:** ${iss.severity || 'N/A'} | **Category:** ${iss.category || 'N/A'}\n\n`;
+        for (const s of sections) {
+          if (s.body && s.body.trim()) {
+            issuesText += `**${s.label}:** ${(s.body || '').substring(0, 600)}\n\n`;
+          }
+        }
+        issuesText += '---\n\n';
+      }
+
+      const scenarioBg = ((model.background && model.background.task || '') + '\n\n' + (model.background && model.background.executionContext || '')).substring(0, 3000);
+      const fileRel = path.relative(reviewRoot, filePath).replace(/\\/g, '/');
+
+      const prompt = `You are reviewing ALL issues from a browser4-cli evaluation scenario: "${(model.meta && model.meta.scenario) || 'Unknown'}". Review each issue and choose the best decision. Consider how issues relate to each other — if multiple issues share the same root cause, mark one as ACCEPT and the rest as DUPLICATE.
+
+## Review Guidelines
+
+- **ACCEPT** — Issue is valid and the suggested fix is correct.
+- **ACCEPT with improvements** — Issue is valid but the suggested fix needs refinement.
+- **DEFER** — Issue is real but intentionally deferred (architectural changes, needs more design).
+- **WONTFIX** — Issue is real but will NOT be fixed (third-party behavior, intentional design).
+- **REJECT** — Issue is NOT valid (intentional behavior, misunderstands tool's purpose, human-only concern).
+- **DUPLICATE** — Issue describes the same problem as another issue IN THIS BATCH.
+
+**Decision rules:**
+- If the issue blocks or misleads an AI agent → ACCEPT or ACCEPT with improvements
+- If the issue only matters for human readability → REJECT or DEFER
+- If the fix requires major architectural changes → DEFER
+- If the behavior is about external websites or platforms → WONTFIX
+
+**CRITICAL — Notes requirement:**
+- If your decision is ACCEPT, notes are OPTIONAL.
+- For ANY other decision, you MUST provide specific notes explaining why.
+
+${statsSection ? statsSection + '\n' : ''}\
+${examplesSection ? examplesSection + '\n' : ''}\
+## Scenario Background
+
+${scenarioBg}
+
+## Issues to Review (${model.issues.length} issues)
+
+${issuesText}
+
+Respond with ONLY a single JSON object (no markdown, no backticks):
+{"decisions": [
+  {"issueNumber": 1, "decision": "ACCEPT", "notes": "optional for ACCEPT"},
+  {"issueNumber": 2, "decision": "DEFER", "notes": "REQUIRED: reason for deferral"},
+  ...
+]}`;
+
+      // Use the resilient LLM wrapper for this file
+      const result = await new Promise((resolve, reject) => {
+        llm.sendPrompt(prompt, {
+          timeout: 120000,
+          retries: 2,
+          heuristic: function() {
+            const decisions = model.issues.map(function(iss) {
+              const h = llm.heuristicDecision({
+                title: iss.title,
+                severity: iss.severity,
+                category: iss.category,
+              });
+              return { issueNumber: iss.number, decision: h.decision, notes: h.notes };
+            });
+            return { decisions: decisions };
+          },
+        }).then(function(r) {
+          if (r.heuristic) {
+            resolve({ heuristic: true, decisions: r.heuristicResult.decisions, file: fileRel });
+            return;
+          }
+          const stdout = r.stdout;
+          const jsonMatch = stdout.match(/\{[\s\S]*\}/);
+          if (!jsonMatch) {
+            resolve({ heuristic: true, decisions: model.issues.map(iss => ({
+              issueNumber: iss.number, decision: 'DEFER',
+              notes: '[AI response unparseable — review required]',
+            })), file: fileRel });
+            return;
+          }
+          try {
+            const parsed = JSON.parse(jsonMatch[0]);
+            if (!parsed.decisions || !Array.isArray(parsed.decisions)) {
+              resolve({ heuristic: true, decisions: model.issues.map(iss => ({
+                issueNumber: iss.number, decision: 'DEFER',
+                notes: '[AI response missing decisions — review required]',
+              })), file: fileRel });
+              return;
+            }
+            const decisions = parsed.decisions.map(d => {
+              const decision = (d.decision || 'DEFER').trim();
+              let notes = (d.notes || '').trim();
+              if (decision !== 'ACCEPT' && (!notes || notes.length < 5)) {
+                notes = '[AI did not provide rationale — review required] ' + decision;
+              }
+              return { issueNumber: d.issueNumber, decision, notes };
+            });
+            resolve({ heuristic: false, decisions, file: fileRel });
+          } catch (e) {
+            resolve({ heuristic: true, decisions: model.issues.map(iss => ({
+              issueNumber: iss.number, decision: 'DEFER',
+              notes: '[AI response JSON parse error — review required]',
+            })), file: fileRel });
+          }
+        }).catch(function(err) {
+          resolve({ heuristic: true, decisions: model.issues.map(iss => ({
+            issueNumber: iss.number, decision: 'DEFER',
+            notes: '[LLM unavailable: ' + err.message + ' — review required]',
+          })), file: fileRel });
+        });
+      });
+
+      allResults.push({
+        file: result.file,
+        scenarioName: model.scenarioName || 'Unknown',
+        issueCount: model.issues.length,
+        decisions: result.decisions,
+        heuristic: result.heuristic,
+      });
+      totalIssues += model.issues.length;
+
+    } catch (fileErr) {
+      console.error(`[server] Error processing ${filePath}:`, fileErr.message);
+      // Continue with next file
     }
   }
 
-  // Strip the original "## Issues Found" line from preamble (we'll add a fresh one)
-  let cleanPreamble = preamble.replace(/\n## Issues Found[^\n]*\n?[\s\S]*$/, '').trim();
+  res.json({
+    results: allResults,
+    totalFiles: allResults.length,
+    totalIssues: totalIssues,
+  });
+});
 
-  // Build output: clean preamble + updated header + review summary + issues
-  let out = cleanPreamble + '\n\n---\n\n';
-  out += '## Issues Found (' + blocks.length + ' issue' + (blocks.length !== 1 ? 's' : '') + ')\n';
-  out += '> **Review complete:** ' + keptCount + ' approved, ' + condensedCount + ' deferred/rejected\n\n';
+// POST /api/issue-review/mark-all-done
+// Marks all reviewed .issues.md files in a directory as done.
+// Each file is processed: approved issues keep full detail, others condensed,
+// summary goes to 1ready, original moved to review/done.
+app.post('/api/issue-review/mark-all-done', (req, res) => {
+  const { directory, auto_approve } = req.body;
+  if (!directory) return res.status(400).json({ error: 'directory is required (relative path under issues/review/)' });
 
-  // Output approved issues first (full detail), then abstracts
-  for (const b of approvedBlocks) {
-    out += b.trimEnd() + '\n\n---\n\n';
-  }
-  for (const a of abstractBlocks) {
-    out += a.trimEnd() + '\n\n---\n\n';
-  }
+  const reviewRoot = path.join(TASKS_ROOT, 'issues', 'review');
+  const dirPath = path.join(reviewRoot, directory);
 
-  // Append "How to Reproduce" footer if present in original
-  const howToIdx = content.indexOf('\n## How to Reproduce');
-  if (howToIdx >= 0) {
-    out += content.substring(howToIdx).trim() + '\n';
-  }
+  const r = safeResolve(path.join('issues', 'review', directory), false);
+  if (r.error) return res.status(r.error).json({ error: r.message });
 
-  return out.trim() + '\n';
-}
-
-function extractDecision(block) {
-  const m = block.match(/^- \[x\] \*\*(ACCEPT|ACCEPT with improvements|DEFER|WONTFIX|REJECT|DUPLICATE)\*\*/m);
-  return m ? m[1] : null;
-}
-
-function buildAbstract(block, decision) {
-  const lines = block.split('\n');
-  const titleLine = lines[0]; // "### Issue N: Title"
-  let severity = '', category = '';
-
-  for (let i = 1; i < Math.min(lines.length, 5); i++) {
-    const sevMatch = lines[i].match(/^\*\*Severity:\*\*\s*(.+)/);
-    const catMatch = lines[i].match(/^\*\*Category:\*\*\s*(.+)/);
-    if (sevMatch) severity = sevMatch[1].trim();
-    if (catMatch) category = catMatch[1].trim();
+  if (!fs.existsSync(dirPath) || !fs.statSync(dirPath).isDirectory()) {
+    return res.status(404).json({ error: `Directory not found: ${directory}` });
   }
 
-  // Extract the AI Suggested Improvement text as a one-line summary
-  let suggestion = '';
-  const aiMatch = block.match(/#### AI Suggested Improvement\n([\s\S]*?)(?=\n#### |\n---|$)/);
-  if (aiMatch) {
-    suggestion = aiMatch[1].trim();
-    // Take just the first meaningful line
-    const firstLine = suggestion.split('\n').find(l => l.trim() && !l.trim().startsWith('- '));
-    if (firstLine) suggestion = firstLine.trim();
-    else suggestion = suggestion.split('\n')[0] || '';
-    if (suggestion.length > 200) suggestion = suggestion.substring(0, 197) + '...';
+  // Find all .issues.md files recursively
+  const issueFiles = [];
+  function findIssueFiles(dir) {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (entry.name.startsWith('.')) continue;
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        findIssueFiles(full);
+      } else if (entry.isFile() && /\.issues\.md$/i.test(entry.name)) {
+        issueFiles.push(full);
+      }
+    }
+  }
+  findIssueFiles(dirPath);
+
+  const results = [];
+  let totalApproved = 0;
+  let totalCondensed = 0;
+
+  for (const filePath of issueFiles) {
+    try {
+      const content = fs.readFileSync(filePath, 'utf-8');
+
+      // Parse to check for zero issues
+      const model = require('./frontend/issue-model.js').parseIssueFile(content);
+
+      // Auto-discard zero-issue files — they shouldn't create empty tasks
+      if (!model.issues || model.issues.length === 0) {
+        const srcRelToReview = path.relative(reviewRoot, filePath);
+        const discardDir = path.join(reviewRoot, 'done', 'discard');
+        const discardPath = path.join(discardDir, srcRelToReview);
+        fs.mkdirSync(path.dirname(discardPath), { recursive: true });
+        fs.renameSync(filePath, discardPath);
+        results.push({
+          file: srcRelToReview.replace(/\\/g, '/'),
+          issues: 0,
+          approved: 0,
+          condensed: 0,
+          status: 'auto-discarded',
+        });
+        continue;
+      }
+
+      // Build the summary version using the same logic as mark-done
+      let summaryContent = buildSummaryContent(content);
+
+      if (auto_approve) {
+        summaryContent = summaryContent.trimEnd() + '\n\n#auto-approve\n';
+      }
+
+      // Destination: coworker/tasks/main/1ready/<basename>
+      const filename = path.basename(filePath);
+      const readyDir = path.join(TASKS_ROOT, 'main', '1ready');
+      fs.mkdirSync(readyDir, { recursive: true });
+      let readyPath = path.join(readyDir, filename);
+      if (fs.existsSync(readyPath)) {
+        const stem = filename.replace(/\.(md|json)$/i, '');
+        const ext = filename.match(/\.(md|json)$/i)?.[0] || '.md';
+        for (let n = 2; n < 1000; n++) {
+          const alt = path.join(readyDir, `${stem}.${n}${ext}`);
+          if (!fs.existsSync(alt)) { readyPath = alt; break; }
+        }
+      }
+      fs.writeFileSync(readyPath, summaryContent, 'utf-8');
+
+      // Move original to issues/review/done
+      const srcRelToReview = path.relative(reviewRoot, filePath);
+      const doneDir = path.join(reviewRoot, 'done');
+      const donePath = path.join(doneDir, srcRelToReview);
+      fs.mkdirSync(path.dirname(donePath), { recursive: true });
+      fs.renameSync(filePath, donePath);
+
+      const readyRel = path.relative(TASKS_ROOT, readyPath).replace(/\\/g, '/');
+
+      // Count decisions
+      const approved = model.issues.filter(iss =>
+        iss.review.decision === 'ACCEPT' || iss.review.decision === 'ACCEPT with improvements'
+      ).length;
+      totalApproved += approved;
+      totalCondensed += model.issues.length - approved;
+
+      results.push({
+        file: srcRelToReview.replace(/\\/g, '/'),
+        readyPath: readyRel,
+        issues: model.issues.length,
+        approved: approved,
+        condensed: model.issues.length - approved,
+        status: 'done',
+      });
+    } catch (fileErr) {
+      results.push({
+        file: path.relative(reviewRoot, filePath).replace(/\\/g, '/'),
+        status: 'error',
+        error: fileErr.message,
+      });
+    }
   }
 
-  // Extract review notes
-  let notes = '';
-  const notesMatch = block.match(/\*\*Notes:\*\*\n([\s\S]*?)(?=\n---|$)/);
-  if (notesMatch) {
-    notes = notesMatch[1].trim();
-  }
+  res.json({
+    results,
+    totalFiles: results.length,
+    totalApproved,
+    totalCondensed,
+  });
+});
 
-  let out = titleLine + '\n\n';
-  out += '**Severity:** ' + (severity || 'N/A') + '\n';
-  out += '**Category:** ' + (category || 'N/A') + '\n\n';
-  out += '#### Review Result\n\n';
-  out += '**Decision:** ' + (decision || 'WONTFIX') + '\n\n';
-  if (notes) {
-    out += '**Notes:** ' + notes + '\n\n';
-  }
-  if (suggestion) {
-    out += '**Summary:** ' + suggestion + '\n';
-  }
+// POST /api/issue-review/similar
+// Find previously reviewed issues that are similar to the given title.
+app.post('/api/issue-review/similar', (req, res) => {
+  const { title, threshold } = req.body;
+  if (!title) return res.status(400).json({ error: 'title is required' });
 
-  return out;
-}
+  const matches = reviewHistory.findSimilarIssues(title, threshold);
+  res.json({ matches });
+});
+
+// GET /api/issue-review/stats
+// Return aggregate review statistics from past reviews.
+app.get('/api/issue-review/stats', (req, res) => {
+  const stats = reviewHistory.getStats();
+  const reviewedCount = reviewHistory.getReviewedCount();
+  res.json({ ...stats, reviewedCount });
+});
+
+// GET /api/issue-review/health
+// Check whether the LLM is reachable and the circuit breaker status.
+app.get('/api/issue-review/health', async (req, res) => {
+  const circuit = llm.getCircuitStatus();
+  const health = await llm.checkHealth();
+  const feedback = reviewHistory.getFeedbackStats();
+  res.json({
+    llm: health,
+    circuit: circuit,
+    feedback: {
+      total: feedback.total,
+      accuracy: feedback.accuracy,
+      matches: feedback.matches,
+      mismatches: feedback.mismatches,
+    },
+  });
+});
+
+// GET /api/issue-review/feedback
+// Return detailed feedback statistics (AI vs human decision comparison).
+app.get('/api/issue-review/feedback', (req, res) => {
+  const stats = reviewHistory.getFeedbackStats();
+  res.json(stats);
+});
 
 // ── Start server ────────────────────────────────────────────────────────
 
