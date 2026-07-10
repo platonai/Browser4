@@ -352,7 +352,9 @@ foreach ($taskRoot in $taskRoots) {
         # Call standalone memory-context script (handles generator + robust JSON parsing)
         $memoryContextScript = Join-Path $PSScriptRoot "workers\coworker-memory-context.ps1"
         try {
-            $memoryResultJson = & $memoryContextScript -Type init -Date "$currentYear-$currentMonth-$currentDay" 2>$null
+            # Capture stderr to a temp file so failures are diagnosable
+            $memStderrPath = Join-Path $logsSubDir "${currentTime}-memory-context.err"
+            $memoryResultJson = & $memoryContextScript -Type init -Date "$currentYear-$currentMonth-$currentDay" 2>$memStderrPath
             if ($memoryResultJson) {
                 $memoryResult = ($memoryResultJson -join "`n") | ConvertFrom-Json
                 $memoryContext = $memoryResult.context
@@ -362,7 +364,13 @@ foreach ($taskRoot in $taskRoots) {
                 } else {
                     Write-LogVerbose "Memory context empty (no relevant memories found)."
                 }
+            } elseif (Test-Path $memStderrPath) {
+                $memStderr = Get-Content $memStderrPath -Raw -ErrorAction SilentlyContinue
+                if ($memStderr) {
+                    Write-LogMessage "Memory context script produced no output. Stderr: $memStderr" WARN
+                }
             }
+            Remove-Item $memStderrPath -ErrorAction SilentlyContinue
         } catch {
             Write-LogMessage "Failed to initialize memory context: $_" WARN
         }
