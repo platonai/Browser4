@@ -19,8 +19,6 @@
 | 7 | List sessions again | Only "research" remains |
 | 8 | Close all remaining | 1 session closed, list confirms empty |
 
----
-
 ### Execution Context
 
 **Key Commands:**
@@ -56,45 +54,19 @@
 
 ---
 
----
-
 ## Issues Found (6 issues)
+> **Review complete:** 0 approved, 6 deferred/rejected
 
 ### Issue 1: Template variables not substituted in task instructions
 
 **Severity:** Low
 **Category:** Documentation
 
-#### Reproduction
+#### Review Result
 
-Read the task instructions at the top of this evaluation. The variables `$RepoRootPath`, `$helpCmd`, `$cliInvocation`, and `$skillPath` appear as literal template variables rather than their resolved values.
+**Decision:** WONTFIX
 
-#### Expected Behavior
-
-Template variables should be substituted with concrete values before the instructions are given to an evaluator (e.g., `$cliInvocation` → `cargo run --manifest-path cli/browser4-cli/Cargo.toml --`).
-
-#### Actual Behavior
-
-Variables appear as raw `$variableName` tokens requiring the evaluator to infer the correct values from the project documentation.
-
-#### Root Cause Analysis
-
-The evaluation framework uses a templating system that didn't apply variable substitution before emitting the task prompt. The substitution definitions likely exist in a harness configuration but weren't applied.
-
-#### AI Suggested Improvement
-
-- Add a pre-processing step in the evaluation harness to substitute template variables with values defined in the evaluation configuration
-- Alternatively, provide a legend at the top of the task that maps each variable to its concrete value
-
-#### Human Review
-
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
-- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
-- [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
-- [ ] **REJECT** — issue invalid, not a problem, or already addressed
-- **Notes:**
-
+**Summary:** - Add a pre-processing step in the evaluation harness to substitute template variables with values defined in the evaluation configuration
 
 ---
 
@@ -103,40 +75,11 @@ The evaluation framework uses a templating system that didn't apply variable sub
 **Severity:** Medium
 **Category:** Discoverability
 
-#### Reproduction
+#### Review Result
 
-Run `cargo run --manifest-path cli/browser4-cli/Cargo.toml -- open --help`. The output describes session reuse behavior but never mentions the `-s <name>` global flag that enables named sessions.
+**Decision:** WONTFIX
 
-#### Expected Behavior
-
-Since named sessions are a core feature, `open --help` should mention `-s <name>` in its examples or notes section (e.g., `browser4-cli -s mysession open https://example.com`).
-
-#### Actual Behavior
-
-The help output shows only `browser4-cli open https://browser4.io` and `browser4-cli open --headed https://browser4.io` examples. Named session usage is documented only in the top-level `--help` and `cli/README.md`.
-
-#### Root Cause Analysis
-
-The `-s` flag is a global option rendered by the top-level help generator, but per-command help doesn't cross-reference global options that are essential to that command's operation.
-
-#### Code Pointer
-
-``cli/browser4-cli/src/help.rs` or `cli/browser4-cli/src/commands.rs` — the `CommandDef` for `open` should include a note or example showing `-s` usage.`
-
-#### AI Suggested Improvement
-
-- Add a note to `open --help`: "Combine with `-s <name>` to manage multiple independent sessions"
-- Add an example: `browser4-cli -s mysession open https://example.com`
-
-#### Human Review
-
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
-- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
-- [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
-- [ ] **REJECT** — issue invalid, not a problem, or already addressed
-- **Notes:**
-
+**Summary:** - Add a note to `open --help`: "Combine with `-s <name>` to manage multiple independent sessions"
 
 ---
 
@@ -145,44 +88,11 @@ The `-s` flag is a global option rendered by the top-level help generator, but p
 **Severity:** Medium
 **Category:** Documentation
 
-#### Reproduction
+#### Review Result
 
-Run `cargo run --manifest-path cli/browser4-cli/Cargo.toml -- close --help`. Output is a single line: "Close the browser" with no arguments, options, notes, or examples.
+**Decision:** WONTFIX
 
-#### Expected Behavior
-
-The help should explain:
-- That `-s <name>` targets a specific named session
-- What happens when no `-s` is provided (closes the default session)
-- An example closing a named session
-
-#### Actual Behavior
-
-A single description line with no additional context.
-
-#### Root Cause Analysis
-
-The `CommandDef` for `close` in `commands.rs` lacks notes and examples. This is particularly impactful because `close` and `close-all` have different semantics (one closes a single session, the other closes all), and a new user needs help to distinguish them.
-
-#### Code Pointer
-
-``cli/browser4-cli/src/commands.rs` — the `CommandDef` for `close` needs notes and examples added.`
-
-#### AI Suggested Improvement
-
-- Add notes explaining the difference between `close`, `close-all`, and `kill-all`
-- Add examples: `browser4-cli -s mysession close` and `browser4-cli close`
-- Mention that `close` terminates the browser process for the current/default session
-
-#### Human Review
-
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
-- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
-- [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
-- [ ] **REJECT** — issue invalid, not a problem, or already addressed
-- **Notes:**
-
+**Summary:** - Add notes explaining the difference between `close`, `close-all`, and `kill-all`
 
 ---
 
@@ -191,40 +101,11 @@ The `CommandDef` for `close` in `commands.rs` lacks notes and examples. This is 
 **Severity:** Low
 **Category:** UX
 
-#### Reproduction
+#### Review Result
 
-Run `cargo run --manifest-path cli/browser4-cli/Cargo.toml -- -s research goto "https://en.wikipedia.org/wiki/Browser_automation"`. The output shows `Page URL: https://en.wikipedia.org/wiki/Headless_browser` with no indication that a redirect from `Browser_automation` → `Headless_browser` took place.
+**Decision:** WONTFIX
 
-#### Expected Behavior
-
-The output should note that a redirect occurred, or at least show the originally requested URL alongside the final URL. This helps users understand why they landed on a different page.
-
-#### Actual Behavior
-
-Only the final URL is shown. The user could mistakenly think they navigated to the wrong page.
-
-#### Root Cause Analysis
-
-The page metadata display in the `goto` command handler shows the final `document.location.href` without comparing it to the requested URL.
-
-#### Code Pointer
-
-``cli/browser4-cli/src/main.rs` — the `goto` command handler where page metadata is printed.`
-
-#### AI Suggested Improvement
-
-- When the final URL differs from the requested URL, add a line: `Redirected to: <final URL>` or `(redirected from <original URL>)`
-- Consider showing both URLs: `Requested: ... → Final: ...`
-
-#### Human Review
-
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
-- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
-- [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
-- [ ] **REJECT** — issue invalid, not a problem, or already addressed
-- **Notes:**
-
+**Summary:** - When the final URL differs from the requested URL, add a line: `Redirected to: <final URL>` or `(redirected from <original URL>)`
 
 ---
 
@@ -233,41 +114,11 @@ The page metadata display in the `goto` command handler shows the final `documen
 **Severity:** Medium
 **Category:** UX
 
-#### Reproduction
+#### Review Result
 
-Run `list` with multiple active sessions. The output shows Name, Session ID, Status, and Next open — but no page URL or title.
+**Decision:** WONTFIX
 
-#### Expected Behavior
-
-In a multi-session workflow, users need to distinguish sessions by more than just name. Showing the current page URL and/or title would help users identify which session is which without having to snapshot each one.
-
-#### Actual Behavior
-
-Only session metadata (name, ID, status) is shown. To find out what page a session is on, the user must run a separate `snapshot` command.
-
-#### Root Cause Analysis
-
-The `list` command handler queries session metadata from the backend but doesn't include page-level information in the response or display.
-
-#### Code Pointer
-
-``cli/browser4-cli/src/main.rs` — the `list` command handler; `browser4-rest` — the session listing endpoint may need to include current URL/title.`
-
-#### AI Suggested Improvement
-
-- Add `URL` and `Title` columns to the `list` output when sessions are active
-- Consider a `list --verbose` flag that shows full page details
-- The `--json` output already includes `sessions` array — adding URL/title fields there would be backward-compatible
-
-#### Human Review
-
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
-- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
-- [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
-- [ ] **REJECT** — issue invalid, not a problem, or already addressed
-- **Notes:**
-
+**Summary:** - Add `URL` and `Title` columns to the `list` output when sessions are active
 
 ---
 
@@ -276,41 +127,11 @@ The `list` command handler queries session metadata from the backend but doesn't
 **Severity:** Low
 **Category:** UX
 
-#### Reproduction
+#### Review Result
 
-Run `snapshot -i`. The output shows a preview of 10 lines and a file path, with tips about using `--stdout` to print inline.
+**Decision:** WONTFIX
 
-#### Expected Behavior
-
-For a CLI tool, the default behavior of printing to stdout (or at least printing the full snapshot inline) would be more intuitive for first-time users, especially when using `-i` (interactive-only) which produces compact output.
-
-#### Actual Behavior
-
-The snapshot is saved to a timestamped YAML file and only a 10-line preview is shown. The user must discover `--stdout` to get inline output.
-
-#### Root Cause Analysis
-
-This is likely a deliberate design choice for large snapshots (200KB+), but the threshold for file-vs-inline could be adaptive — small snapshots from `-i` mode are often small enough to display inline.
-
-#### Code Pointer
-
-``cli/browser4-cli/src/snapshot.rs` — the snapshot rendering logic.`
-
-#### AI Suggested Improvement
-
-- When `-i` (interactive) is combined with default viewport, show the full output inline (interactive snapshots are typically small)
-- Add a clear hint after the preview: "Run with `--stdout` to see full output in terminal"
-- Consider a configurable size threshold: auto-display inline when snapshot is under N KB
-
-#### Human Review
-
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
-- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
-- [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
-- [ ] **REJECT** — issue invalid, not a problem, or already addressed
-- **Notes:**
-
+**Summary:** - When `-i` (interactive) is combined with default viewport, show the full output inline (interactive snapshots are typically small)
 
 ---
 
@@ -348,4 +169,3 @@ Run `list` with multiple active sessions. The output shows Name, Session ID, Sta
 #### Issue 6: Snapshot defaults to file output rather than stdout
 
 Run `snapshot -i`. The output shows a preview of 10 lines and a file path, with tips about using `--stdout` to print inline.
-
