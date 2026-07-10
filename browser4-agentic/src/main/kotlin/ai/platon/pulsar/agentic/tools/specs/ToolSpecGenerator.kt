@@ -5,11 +5,13 @@ import ai.platon.browser4.common.B4ProjectUtils
 import ai.platon.pulsar.agentic.model.ToolSpec
 import ai.platon.pulsar.common.ExperimentalApi
 import ai.platon.pulsar.common.Strings
+import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.common.serialize.json.prettyPulsarObjectMapper
 import java.util.concurrent.atomic.AtomicBoolean
 
 @ExperimentalApi
 object ToolSpecGenerator {
+    private val logger = getLogger(this)
     private val isGenerated: AtomicBoolean = AtomicBoolean()
 
     val webDriverToolSpecs = mutableListOf<ToolSpec>()
@@ -18,23 +20,61 @@ object ToolSpecGenerator {
     @Synchronized
     fun generateAllOnce() {
         if (isGenerated.compareAndSet(false, true)) {
-            var sourceCode = B4LLMUtils.readSourceFileFromResource("browser4-browser", "WebDriver.kt")
-            extractInterface("tab", sourceCode, "WebDriver").toCollection(webDriverToolSpecs)
-            require(webDriverToolSpecs.isNotEmpty()) { "WebDriver's tool call list is empty" }
+            try {
+                loadToolSpecs()
+            } catch (e: Exception) {
+                logger.warn("Failed to generate tool specs: {}", e.message)
+                webDriverToolSpecs.clear()
+                agentToolSpecs.clear()
+                isGenerated.set(false)
+            }
+        }
+    }
 
-            sourceCode = B4LLMUtils.readSourceFileFromResource("browser4-agentic", "PerceptiveAgent.kt")
-            extractInterface("agent", sourceCode, "PerceptiveAgent").toCollection(agentToolSpecs)
-            require(agentToolSpecs.isNotEmpty()) { "PerceptiveAgent's tool call list is empty" }
+    private fun loadToolSpecs() {
+        val webDriverSource = try {
+            B4LLMUtils.readSourceFileFromResource("browser4-core", "WebDriver.kt")
+        } catch (e: Exception) {
+            logger.warn("Could not read WebDriver.kt source: {}", e.message)
+            ""
+        }
+        if (webDriverSource.isNotBlank()) {
+            extractInterface("tab", webDriverSource, "WebDriver").toCollection(webDriverToolSpecs)
+        }
+        if (webDriverToolSpecs.isEmpty()) {
+            logger.warn("WebDriver tool call list is empty")
+        }
 
-            if (!B4ProjectUtils.isInJar()) {
-                var fileName = "driver-tool-call-specs.json"
-                var content = normalizeToLinuxLineEndings(toSnapshotJson(webDriverToolSpecs))
-                B4LLMUtils.writeAsResource(fileName, content)
+        val agentSource = try {
+            B4LLMUtils.readSourceFileFromResource("browser4-agentic", "PerceptiveAgent.kt")
+        } catch (e: Exception) {
+            logger.warn("Could not read PerceptiveAgent.kt source: {}", e.message)
+            ""
+        }
+        if (agentSource.isNotBlank()) {
+            extractInterface("agent", agentSource, "PerceptiveAgent").toCollection(agentToolSpecs)
+        }
+        if (agentToolSpecs.isEmpty()) {
+            logger.warn("PerceptiveAgent tool call list is empty")
+        }
 
-                fileName = "agent-tool-call-specs.json"
-                content = normalizeToLinuxLineEndings(toSnapshotJson(agentToolSpecs))
+        if (!B4ProjectUtils.isInJar()) {
+            if (webDriverToolSpecs.isNotEmpty()) {
+                val fileName = "driver-tool-call-specs.json"
+                val content = normalizeToLinuxLineEndings(toSnapshotJson(webDriverToolSpecs))
                 B4LLMUtils.writeAsResource(fileName, content)
             }
+
+            if (agentToolSpecs.isNotEmpty()) {
+                val fileName = "agent-tool-call-specs.json"
+                val content = normalizeToLinuxLineEndings(toSnapshotJson(agentToolSpecs))
+                B4LLMUtils.writeAsResource(fileName, content)
+            }
+        }
+
+        // If both lists are still empty, allow future retries
+        if (webDriverToolSpecs.isEmpty() && agentToolSpecs.isEmpty()) {
+            isGenerated.set(false)
         }
     }
 
