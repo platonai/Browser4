@@ -25,8 +25,6 @@
     <name>Browser4 Plugins</name>
 
     <modules>
-        <module>browser4-protocol</module>
-        <module>browser4-parse</module>
         <module>browser4-captcha</module>
         <module>browser4-media</module>
         <module>browser4-images</module>

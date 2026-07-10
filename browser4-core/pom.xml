@@ -31,5 +31,7 @@
         <module>browser4-resources</module>
         <module>browser4-skeleton</module>
         <module>browser4-browser</module>
+        <module>browser4-protocol</module>
+        <module>browser4-parse</module>
     </modules>
 </project>
