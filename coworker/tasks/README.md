@@ -103,7 +103,7 @@ invoked by the queue watcher `coworker/scripts/process-draft-refinement-queue.ps
 └──────────────────────────┘
 ```
 
-Orphaned files in `2working` (older than 30 min) are recovered: returned to `1ready` for
+Orphaned files in `2working` (older than 2 hours) are recovered: returned to `1ready` for
 retry, or moved to `0error` if max retries are exhausted.
 
 ---

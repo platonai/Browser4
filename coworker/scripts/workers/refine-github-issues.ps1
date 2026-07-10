@@ -96,7 +96,7 @@ $script:IssueBoundary = '<!-- COWORKER_ISSUE_BOUNDARY -->'
 
 # ── Recovery: return orphaned files from working back to ready ───────────────
 function Restore-OrphanedWorkingFiles {
-    param([int]$MaxAgeMinutes = 30)
+    param([int]$MaxAgeMinutes = 120)
 
     $orphans = Get-ChildItem -Path $workingDir -File -ErrorAction SilentlyContinue |
         Where-Object { -not (Test-CoworkerIgnoredFile -Item $_) }
@@ -520,7 +520,7 @@ function Invoke-IssueExtraction {
 # Main processing loop
 # ══════════════════════════════════════════════════════════════════════════════
 
-Restore-OrphanedWorkingFiles -MaxAgeMinutes 30
+Restore-OrphanedWorkingFiles -MaxAgeMinutes 120
 
 $targets = Get-IssueDraftTargets -InputPath $Path
 if ($targets.Count -eq 0) {

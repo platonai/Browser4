@@ -71,7 +71,7 @@ if ([string]::IsNullOrWhiteSpace($Path)) {
 
 # ── Recovery: return orphaned files from working back to ready ───────────────
 function Restore-OrphanedWorkingFiles {
-    param([int]$MaxAgeMinutes = 30)
+    param([int]$MaxAgeMinutes = 120)
 
     $orphans = Get-ChildItem -Path $workingDir -File -ErrorAction SilentlyContinue `
         | Where-Object { -not (Test-CoworkerIgnoredFile -Item $_) }
@@ -285,7 +285,7 @@ function Invoke-DraftRefinement {
 
 # ── Main processing loop ─────────────────────────────────────────────────────
 
-Restore-OrphanedWorkingFiles -MaxAgeMinutes 30
+Restore-OrphanedWorkingFiles -MaxAgeMinutes 120
 
 $targets = Get-RefineTargets -InputPath $Path
 if ($targets.Count -eq 0) {
