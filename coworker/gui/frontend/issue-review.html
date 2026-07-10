@@ -669,30 +669,8 @@ body {
 @keyframes toastSlideIn { from { opacity: 0; transform: translateX(16px); } to { opacity: 1; transform: translateX(0); } }
 
 /* ═══════════════════════════════════════════════════════════════════════
-   Single-Issue Review Mode (one at a time)
+   Navigation buttons (shared)
    ═══════════════════════════════════════════════════════════════════════ */
-.issue-nav-top {
-  display: flex; align-items: center; gap: 8px;
-  padding: 10px 1.25rem;
-  background: var(--bg-surface);
-  border-bottom: 1px solid var(--border-light);
-  flex-shrink: 0; flex-wrap: wrap;
-}
-.issue-nav-counter {
-  font-size: 0.85rem; font-weight: 700; color: var(--text-primary);
-  white-space: nowrap; display: flex; align-items: center; gap: 6px;
-}
-.issue-nav-counter .of { font-weight: 400; color: var(--text-muted); }
-.issue-nav-progress {
-  flex: 1; min-width: 80px; height: 4px;
-  background: var(--bg-inset); border-radius: 4px; overflow: hidden;
-}
-.issue-nav-progress .fill {
-  height: 100%; background: var(--accent); border-radius: 4px; transition: width 0.3s;
-}
-.issue-nav-progress .fill.done { background: var(--success); }
-.issue-nav-actions { display: flex; gap: 4px; flex-shrink: 0; align-items: center; }
-
 .nav-btn {
   display: inline-flex; align-items: center; gap: 4px;
   padding: 5px 12px; border-radius: var(--radius-sm);
@@ -709,12 +687,34 @@ body {
 .nav-btn.accent { border-color: var(--accent); color: var(--accent); }
 .nav-btn.accent:hover { background: var(--accent-bg); }
 
-.issue-nav-bottom {
-  display: flex; align-items: center; justify-content: center; gap: 12px;
-  padding: 16px 1.25rem; border-top: 1px solid var(--border-light);
-  flex-shrink: 0; background: var(--bg-surface);
+/* ═══════════════════════════════════════════════════════════════════════
+   Float Panel Navigation Row
+   ═══════════════════════════════════════════════════════════════════════ */
+.float-nav-row {
+  display: flex; align-items: center; gap: 6px;
+  padding: 8px 0; border-top: 1px solid var(--border-light);
+  border-bottom: 1px solid var(--border-light);
+  flex-shrink: 0; flex-wrap: wrap;
 }
-.issue-nav-bottom .nav-btn { font-size: 0.78rem; padding: 7px 20px; }
+.float-nav-group {
+  display: flex; align-items: center; gap: 3px;
+}
+.float-nav-center {
+  flex: 1; min-width: 60px;
+  display: flex; flex-direction: column; align-items: center; gap: 3px;
+}
+.float-nav-counter {
+  font-size: 0.72rem; font-weight: 700; color: var(--text-primary);
+  white-space: nowrap;
+}
+.float-nav-progress {
+  width: 100%; height: 3px;
+  background: var(--bg-inset); border-radius: 3px; overflow: hidden;
+}
+.float-nav-progress .fill {
+  height: 100%; background: var(--accent); border-radius: 3px; transition: width 0.3s;
+}
+.float-nav-progress .fill.done { background: var(--success); }
 
 /* Single-issue content area */
 .single-issue-view {
@@ -1041,25 +1041,6 @@ body {
       </div>
     </div>
 
-    <!-- Single-issue navigation bar -->
-    <div class="issue-nav-top" id="issue-nav-top" style="display:none;">
-      <button class="nav-btn" id="btn-prev-file-top" onclick="navigateToFile(-1)" title="Previous file (Shift+P)">◀◀ File</button>
-      <button class="nav-btn" id="btn-prev-top" onclick="navigateSingleIssue(-1)" title="Previous issue (Alt+←)">◀ Issue</button>
-      <div class="issue-nav-counter">
-        <span id="issue-counter">Issue 1 of 6</span>
-      </div>
-      <div class="issue-nav-progress">
-        <div class="fill" id="issue-progress-fill" style="width:0%"></div>
-      </div>
-      <button class="nav-btn" id="btn-next-top" onclick="navigateSingleIssue(1)" title="Next issue (Alt+→)">Issue ▶</button>
-      <button class="nav-btn" id="btn-next-file-top" onclick="navigateToFile(1)" title="Next file (Shift+N)">File ▶▶</button>
-      <div class="issue-nav-actions">
-        <button id="btn-save-top" class="nav-btn primary" onclick="saveReview()" disabled>
-          💾 Save
-        </button>
-      </div>
-    </div>
-
     <!-- Content area -->
     <div class="review-content" id="review-content">
       <div class="review-placeholder" id="review-placeholder">
@@ -1080,14 +1061,6 @@ body {
       </div>
     </div>
 
-    <!-- Bottom navigation (single-issue mode) -->
-    <div class="issue-nav-bottom" id="issue-nav-bottom" style="display:none;">
-      <button class="nav-btn" id="btn-prev-file-bottom" onclick="navigateToFile(-1)" title="Previous file (Shift+P)">◀◀ Previous File</button>
-      <button class="nav-btn" id="btn-prev-bottom" onclick="navigateSingleIssue(-1)" title="Previous issue (Alt+←)">◀ Previous Issue</button>
-      <span style="font-size:0.75rem;color:var(--text-muted);" id="issue-counter-bottom">1 / 6</span>
-      <button class="nav-btn" id="btn-next-bottom" onclick="navigateSingleIssue(1)" title="Next issue (Alt+→)">Next Issue ▶</button>
-      <button class="nav-btn" id="btn-next-file-bottom" onclick="navigateToFile(1)" title="Next file (Shift+N)">Next File ▶▶</button>
-    </div>
   </section>
 </div>
 
@@ -1110,6 +1083,23 @@ body {
               style="flex-shrink:0; white-space:nowrap; align-self:flex-start;">
         🤖 AI Review <span class="key-hint" style="font-size:0.6rem;opacity:0.5;">Shift+A</span>
       </button>
+    </div>
+    <div class="float-nav-row" id="float-nav-row">
+      <div class="float-nav-group">
+        <button class="nav-btn" id="float-btn-prev-file" onclick="navigateToFile(-1)" title="Previous file (Shift+P)">◀◀ File</button>
+        <button class="nav-btn" id="float-btn-prev-issue" onclick="navigateSingleIssue(-1)" title="Previous issue (Alt+←)">◀ Issue</button>
+      </div>
+      <div class="float-nav-center">
+        <span class="float-nav-counter" id="float-nav-counter">Issue 1 of 6</span>
+        <div class="float-nav-progress">
+          <div class="fill" id="float-progress-fill" style="width:0%"></div>
+        </div>
+      </div>
+      <div class="float-nav-group">
+        <button class="nav-btn" id="float-btn-next-issue" onclick="navigateSingleIssue(1)" title="Next issue (Alt+→)">Issue ▶</button>
+        <button class="nav-btn" id="float-btn-next-file" onclick="navigateToFile(1)" title="Next file (Shift+N)">File ▶▶</button>
+      </div>
+      <button id="float-btn-save" class="nav-btn primary" onclick="saveReview()" disabled title="Save review (Ctrl+S)">💾 Save</button>
     </div>
     <div id="float-ai-reasoning"></div>
     <div id="float-callout"></div>
@@ -1964,8 +1954,7 @@ function renderReview() {
   var hasIssues = !(state.parsed.issues.length === 0) && state.parsed.issues.length > 0;
   var isSingle = state.reviewMode === 'single' && hasIssues;
 
-  document.getElementById('issue-nav-top').style.display = isSingle ? 'flex' : 'none';
-  document.getElementById('issue-nav-bottom').style.display = isSingle ? 'flex' : 'none';
+  // Float panel visibility is managed by renderSingleIssue / renderAllIssues
   document.getElementById('btn-mode-toggle').textContent = isSingle ? '📋 View All' : '🔍 One-by-One';
 
   // Clamp issue index
@@ -2359,25 +2348,27 @@ function updateIssueNavState() {
   var hasPrevFile = fileIdx > 0;
   var hasNextFile = fileIdx >= 0 && fileIdx < state.filteredFiles.length - 1;
 
-  // Top nav
-  document.getElementById('issue-counter').textContent = 'Issue ' + (idx + 1) + ' of ' + total;
-  document.getElementById('btn-prev-file-top').disabled = !hasPrevFile;
-  document.getElementById('btn-prev-top').disabled = idx <= 0;
-  document.getElementById('btn-next-top').disabled = idx >= total - 1;
-  document.getElementById('btn-next-file-top').disabled = !hasNextFile;
+  // Float panel nav
+  var counter = document.getElementById('float-nav-counter');
+  if (counter) counter.textContent = 'Issue ' + (idx + 1) + ' of ' + total;
+  var pfe = document.getElementById('float-btn-prev-file');
+  if (pfe) pfe.disabled = !hasPrevFile;
+  var pie = document.getElementById('float-btn-prev-issue');
+  if (pie) pie.disabled = idx <= 0;
+  var nie = document.getElementById('float-btn-next-issue');
+  if (nie) nie.disabled = idx >= total - 1;
+  var nfe = document.getElementById('float-btn-next-file');
+  if (nfe) nfe.disabled = !hasNextFile;
+  var saveBtn = document.getElementById('float-btn-save');
+  if (saveBtn) saveBtn.disabled = !state.dirty;
 
   // Progress fill
   var pct = total > 0 ? Math.round(reviewed / total * 100) : 0;
-  var fill = document.getElementById('issue-progress-fill');
-  fill.style.width = pct + '%';
-  fill.className = 'fill' + (reviewed >= total ? ' done' : '');
-
-  // Bottom nav
-  document.getElementById('issue-counter-bottom').textContent = (idx + 1) + ' / ' + total;
-  document.getElementById('btn-prev-file-bottom').disabled = !hasPrevFile;
-  document.getElementById('btn-prev-bottom').disabled = idx <= 0;
-  document.getElementById('btn-next-bottom').disabled = idx >= total - 1;
-  document.getElementById('btn-next-file-bottom').disabled = !hasNextFile;
+  var fill = document.getElementById('float-progress-fill');
+  if (fill) {
+    fill.style.width = pct + '%';
+    fill.className = 'fill' + (reviewed >= total ? ' done' : '');
+  }
 
   // Mode toggle button
   document.getElementById('btn-mode-toggle').textContent =
@@ -2894,8 +2885,6 @@ async function markAllDone() {
       selectFile(state.filteredFiles[0].path);
     } else {
       document.getElementById('review-header').style.display = 'none';
-      document.getElementById('issue-nav-top').style.display = 'none';
-      document.getElementById('issue-nav-bottom').style.display = 'none';
       document.getElementById('review-content').innerHTML =
         '<div class="review-placeholder">' +
         '<svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/><path d="M9 14l2 2 4-4"/></svg>' +
@@ -2948,16 +2937,16 @@ function toggleReviewMode() {
 }
 
 function updateSaveState() {
-  var btnTop = document.getElementById('btn-save-top');
+  var btnFloat = document.getElementById('float-btn-save');
   var chip = document.getElementById('save-chip');
   if (state.dirty) {
-    if (btnTop) btnTop.disabled = false;
+    if (btnFloat) btnFloat.disabled = false;
     if (chip) {
       chip.textContent = '● Unsaved';
       chip.className = 'status-chip dirty';
     }
   } else {
-    if (btnTop) btnTop.disabled = true;
+    if (btnFloat) btnFloat.disabled = true;
     if (chip) {
       chip.textContent = '✓ Saved';
       chip.className = 'status-chip saved';
@@ -3094,8 +3083,6 @@ async function markDone() {
     } else {
       // No files left
       document.getElementById('review-header').style.display = 'none';
-      document.getElementById('issue-nav-top').style.display = 'none';
-      document.getElementById('issue-nav-bottom').style.display = 'none';
       document.getElementById('review-content').innerHTML =
         '<div class="review-placeholder">' +
         '<svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/><path d="M9 14l2 2 4-4"/></svg>' +
@@ -3155,8 +3142,6 @@ async function discardFile() {
     } else {
       // No files left
       document.getElementById('review-header').style.display = 'none';
-      document.getElementById('issue-nav-top').style.display = 'none';
-      document.getElementById('issue-nav-bottom').style.display = 'none';
       document.getElementById('review-content').innerHTML =
         '<div class="review-placeholder">' +
         '<svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/><path d="M9 14l2 2 4-4"/></svg>' +
