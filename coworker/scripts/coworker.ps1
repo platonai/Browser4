@@ -285,12 +285,12 @@ foreach ($taskRoot in $taskRoots) {
                     } else {
                         Write-LogVerbose "Rename returned invalid name: $generatedName"
                         $retryCount++
-                        if ($retryCount -lt $maxRetries) { Start-Sleep -Seconds 2 }
+                        if ($retryCount -lt $maxRetries) { Start-Sleep -Seconds ([Math]::Pow(2, $retryCount)) }
                     }
                 } catch {
                     $retryCount++
                     Write-LogMessage "Rename script failed (Attempt $retryCount/$maxRetries): $_" WARN
-                    if ($retryCount -lt $maxRetries) { Start-Sleep -Seconds 2 }
+                    if ($retryCount -lt $maxRetries) { Start-Sleep -Seconds ([Math]::Pow(2, $retryCount)) }
                 }
             }
 
