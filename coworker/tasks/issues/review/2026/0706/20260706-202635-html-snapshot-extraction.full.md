@@ -36,5 +36,5 @@ All 10 task steps completed successfully on `http://books.toscrape.com/`. Here's
 **Strong points:** `htmlsnapshot inspect` auto-discovery is excellent, the `get` → `get all` → `query` pipeline is coherent, documentation is thorough. **Main weakness:** the text truncation issue (Issue 1) is a data-integrity problem that silently returns incomplete data.
 
 Full reports written to:
-- `coworker/tasks/200issues/draft/20260707-htmlsnapshot-evaluation.full.md`
-- `coworker/tasks/200issues/draft/20260707-htmlsnapshot-evaluation.issues.md`
+- `coworker/tasks/issues/draft/20260707-htmlsnapshot-evaluation.full.md`
+- `coworker/tasks/issues/draft/20260707-htmlsnapshot-evaluation.issues.md`

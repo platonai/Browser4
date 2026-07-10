@@ -123,7 +123,7 @@ public class NativeCommandOutputHandler
 # Repo root is 3 levels up from scripts/ (scripts -> tests -> browser4-tests -> repo root)
 $script:RepoRoot = (Resolve-Path "$PSScriptRoot/../../..").Path
 $script:IssuesReadyDir = [System.IO.Path]::GetFullPath(
-    (Join-Path $script:RepoRoot 'coworker\tasks\200issues\draft')
+    (Join-Path $script:RepoRoot 'coworker\tasks\issues\draft')
 )
 
 # Local alias for string interpolation in the here-string below.  Forward
@@ -810,11 +810,11 @@ function ConvertFrom-IssueJson {
 function Write-IssuesToReadyQueue {
     <#
     .SYNOPSIS
-        Write the agent evaluation output to the 200issues draft ready queue.
+        Write the agent evaluation output to the issues draft ready queue.
     .DESCRIPTION
         Saves the complete agent output (containing A. Task Result, B. Execution Trace,
         C. Issues Found, D. Overall Assessment) as a markdown file in the
-        200issues/draft directory for downstream refinement.
+        issues/draft directory for downstream refinement.
 
         Also extracts background context (Sections A + B) and parses individual
         issues from Section C, then writes a SINGLE consolidated issues file
@@ -1475,7 +1475,7 @@ function Invoke-Agent {
         Invoke Claude Code agent to run a scenario and evaluate browser4-cli usability.
     .DESCRIPTION
         Runs claude with the given prompt. When -ScenarioName is provided, captures
-        output and writes evaluation results to the 200issues draft ready queue.
+        output and writes evaluation results to the issues draft ready queue.
         When -ScenarioName is omitted, preserves the original behavior (direct call,
         real-time output, no capture).
 
@@ -1585,7 +1585,7 @@ function Invoke-Agent {
         return
     }
 
-    # Write to the 200issues ready queue
+    # Write to the issues ready queue
     if ($ScenarioName) {
         Write-IssuesToReadyQueue -ScenarioName $ScenarioName -Content $capturedOutput
     }

@@ -26,5 +26,5 @@ The LLM-powered features (`extract`, `summarize`, `agent run`) produce **excelle
 
 ### Deliverables
 
-- **Full report**: `coworker/tasks/200issues/draft/20260707-ai-agent-workflow-evaluation.full.md`
-- **Issues only**: `coworker/tasks/200issues/draft/20260707-ai-agent-workflow-evaluation.issues.md`
+- **Full report**: `coworker/tasks/issues/draft/20260707-ai-agent-workflow-evaluation.full.md`
+- **Issues only**: `coworker/tasks/issues/draft/20260707-ai-agent-workflow-evaluation.issues.md`

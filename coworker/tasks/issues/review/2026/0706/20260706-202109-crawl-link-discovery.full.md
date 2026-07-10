@@ -2,7 +2,7 @@
 
 ## Evaluation Complete
 
-The evaluation report has been written to `coworker/tasks/200issues/draft/20260707-crawl-evaluation.md`.
+The evaluation report has been written to `coworker/tasks/issues/draft/20260707-crawl-evaluation.md`.
 
 ### Summary of Findings
 

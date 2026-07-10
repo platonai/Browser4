@@ -39,5 +39,5 @@ The plain `swarm submit` job returned only the URL (no extraction), confirming t
 - **Overall rating**: **7/10** — functionally solid, but held back by discoverability and UX papercuts
 
 Full reports written to:
-- `coworker/tasks/200issues/draft/20260707-103000-swarm-evaluation.full.md`
-- `coworker/tasks/200issues/draft/20260707-103000-swarm-evaluation.issues.md`
+- `coworker/tasks/issues/draft/20260707-103000-swarm-evaluation.full.md`
+- `coworker/tasks/issues/draft/20260707-103000-swarm-evaluation.issues.md`
