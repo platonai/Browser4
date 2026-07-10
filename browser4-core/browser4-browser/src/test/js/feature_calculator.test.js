@@ -20,6 +20,9 @@ beforeAll(() => {
 
 beforeEach(() => {
     setupDOM('<div id="root"><span>hello</span><p>world</p></div>');
+    // _viDataMap is normally initialized by __pulsar_utils__.compute().
+    // The tests call calc.head() directly, so we must initialize it here.
+    __pulsar_utils__._viDataMap = new WeakMap();
 });
 
 describe('__pulsar_NodeFeatureCalculator construction', () => {

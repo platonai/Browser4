@@ -6,6 +6,8 @@ const { loadScript, loadAllScripts, ensureConfig, setupDOM } = require('./test-h
 beforeAll(() => {
     loadScript('tree_walker.js');
     loadScript('configs.js');
+    loadScript('node_ext_data.js');
+    loadScript('feature_calculator.js');
     // node_ops depends on __pulsar_utils__ for getClientRect, getConfig
     loadScript('__pulsar_utils__.js');
     loadScript('dom_rect.js');

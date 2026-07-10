@@ -7,6 +7,8 @@ beforeAll(() => {
     loadScript('configs.js');
     loadScript('tree_walker.js');
     loadScript('node_ops.js');
+    loadScript('node_ext_data.js');
+    loadScript('feature_calculator.js');
     loadScript('__pulsar_utils__.js');
     loadScript('dom_rect.js');
     loadScript('dom_text.js');
