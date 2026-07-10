@@ -328,9 +328,15 @@ object B4ProjectUtils {
 
         if (projectRootDir == null && deepSearch) {
             // The working directory may not be the project root, try to find the module directory first and then search for the project root.
-            val moduleDir = Files.walk(startDir)
-                .filter { it.fileName.toString().endsWith("browser4-common") }
-                .findFirst().orElse(null)?.toAbsolutePath()
+            val moduleDir = try {
+                Files.walk(startDir, 10).use { stream ->
+                    stream.filter { it.fileName.toString().endsWith("browser4-common") }
+                        .findFirst().orElse(null)?.toAbsolutePath()
+                }
+            } catch (e: IOException) {
+                logger.warn("Error walking directory '{}' during deep project root search: {}", startDir, e.message)
+                null
+            }
 
             if (moduleDir != null) {
                 return findProjectRootDir(moduleDir, false)
@@ -370,10 +376,16 @@ object B4ProjectUtils {
         fileName: String, baseDir: Path,
         excludePaths: List<String> = listOf("/target/", "/build/", "/test/")
     ): List<Path> {
-        return Files.walk(baseDir)
-            .filter { it.fileName.toString() == fileName }
-            .filter { path -> excludePaths.none { path.toString().contains(it) } }
-            .toList()
+        return try {
+            Files.walk(baseDir, 20).use { stream ->
+                stream.filter { it.fileName.toString() == fileName }
+                    .filter { path -> excludePaths.none { path.toString().contains(it) } }
+                    .toList()
+            }
+        } catch (e: IOException) {
+            logger.warn("Error walking directory '{}' to find '{}': {}", baseDir, fileName, e.message)
+            emptyList()
+        }
     }
 
     /**
@@ -405,7 +417,14 @@ object B4ProjectUtils {
      */
     fun findFiles(moduleName: String, fileName: String): List<Path> {
         val projectRootDir = findProjectRootDir() ?: return emptyList()
-        val moduleRootDir = Files.walk(projectRootDir).filter { it.fileName.toString() == moduleName }.toList()
+        val moduleRootDir = try {
+            Files.walk(projectRootDir, 5).use { stream ->
+                stream.filter { it.fileName.toString() == moduleName }.toList()
+            }
+        } catch (e: IOException) {
+            logger.warn("Error walking project root '{}' to find module '{}': {}", projectRootDir, moduleName, e.message)
+            emptyList()
+        }
         return if (moduleRootDir.isNotEmpty()) {
             walkToFindFiles(fileName, moduleRootDir.first())
         } else emptyList()

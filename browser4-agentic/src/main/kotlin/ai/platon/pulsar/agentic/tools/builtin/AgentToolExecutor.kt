@@ -15,7 +15,10 @@ class AgentToolExecutor : AbstractToolExecutor() {
     override val receiverClass: KClass<*> = PerceptiveAgent::class
 
     init {
-        ToolSpecGenerator.agentToolSpecs.associateByTo(toolSpec) { it.method }
+        ToolSpecGenerator.apply {
+            generateAllOnce()
+            agentToolSpecs.associateByTo(toolSpec) { it.method }
+        }
     }
 
     override fun help(method: String): String {
