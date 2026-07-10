@@ -324,7 +324,12 @@ foreach ($taskRoot in $taskRoots) {
             Write-LogMessage "Renamed in created: $($file.Name) -> $(Split-Path $renamedPath -Leaf)" INFO
 
             # Update $file to point to the new location for the next step (move to working)
-            $file = Get-Item $renamedPath
+            try {
+                $file = Get-Item $renamedPath -ErrorAction Stop
+            } catch {
+                Write-LogMessage "[SKIP] Renamed file vanished before moving to working: $renamedPath — $_" WARN
+                continue
+            }
         }
 
         # 3. Move to working directory
