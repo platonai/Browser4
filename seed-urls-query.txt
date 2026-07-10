@@ -1,0 +1,3 @@
+http://localhost:18080/ec/dp/B0E000001?ref=homepage&utm_source=test
+http://localhost:18080/ec/dp/B0E000002?ref=homepage&utm_source=test
+http://localhost:18080/ec/dp/B0E000003?ref=homepage&utm_source=test

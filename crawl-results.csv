@@ -1,4 +1,11 @@
-Crawl completed. 3 pages found.
-  depth=0 | https://books.toscrape.com/catalogue/a-light-in-the-attic_1000/index.html | 
-  depth=0 | https://books.toscrape.com/catalogue/tipping-the-velvet_999/index.html | 
-  depth=0 | https://books.toscrape.com/catalogue/soumission_998/index.html | 
+#,text,url
+1,Books,https://books.toscrape.com/catalogue/category/books_1/index.html
+2,Travel,https://books.toscrape.com/catalogue/category/books/travel_2/index.html
+3,Mystery,https://books.toscrape.com/catalogue/category/books/mystery_3/index.html
+4,Historical Fiction,https://books.toscrape.com/catalogue/category/books/historical-fiction_4/index.html
+5,Sequential Art,https://books.toscrape.com/catalogue/category/books/sequential-art_5/index.html
+6,Classics,https://books.toscrape.com/catalogue/category/books/classics_6/index.html
+7,Philosophy,https://books.toscrape.com/catalogue/category/books/philosophy_7/index.html
+8,Romance,https://books.toscrape.com/catalogue/category/books/romance_8/index.html
+9,Womens Fiction,https://books.toscrape.com/catalogue/category/books/womens-fiction_9/index.html
+10,Fiction,https://books.toscrape.com/catalogue/category/books/fiction_10/index.html

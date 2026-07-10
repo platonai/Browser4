@@ -1,0 +1,26 @@
+{
+  "type": "object",
+  "properties": {
+    "language_name": {
+      "type": "string",
+      "description": "Name of the programming language"
+    },
+    "first_release_year": {
+      "type": "integer",
+      "description": "Year the language was first released"
+    },
+    "original_developer": {
+      "type": "string",
+      "description": "Name of the original creator/developer"
+    },
+    "typing_discipline": {
+      "type": "string",
+      "description": "Type system (e.g., dynamic, strong, duck)"
+    },
+    "license": {
+      "type": "string",
+      "description": "Software license name"
+    }
+  },
+  "required": ["language_name", "first_release_year", "original_developer", "typing_discipline", "license"]
+}
