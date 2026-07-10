@@ -1010,7 +1010,6 @@ body {
         <!-- Status group -->
         <div class="tb-group">
           <span id="save-chip" class="status-chip clean">✓ Saved</span>
-          <span id="llm-chip" class="status-chip" title="LLM status">🔍</span>
         </div>
         <span class="tb-divider"></span>
         <!-- Options group -->
@@ -1424,67 +1423,6 @@ async function init() {
     showToast('Cannot connect to backend. Is the server running?', 'error');
     document.getElementById('file-list').innerHTML =
       '<div class="empty-message"><span class="empty-icon">⚠</span>Cannot reach backend at ' + location.origin + '</div>';
-  }
-  // Check LLM health and poll periodically
-  checkLlmHealth();
-  setInterval(checkLlmHealth, 30000); // every 30s
-}
-
-// ── LLM Health ──────────────────────────────────────────────────────────
-
-var llmHealthy = null; // null = checking, true = healthy, false = unhealthy
-
-async function checkLlmHealth() {
-  var chip = document.getElementById('llm-chip');
-  if (!chip) return;
-
-  chip.textContent = '🔍';
-  chip.className = 'status-chip';
-  chip.title = 'Checking LLM status...';
-
-  try {
-    var health = await apiGet('/api/issue-review/health');
-    llmHealthy = health.llm.ok;
-
-    if (health.circuit.open) {
-      chip.textContent = '⚡ LLM paused';
-      chip.className = 'status-chip dirty';
-      chip.title = 'Circuit breaker open — cooldown ' + health.circuit.cooldownRemaining + 's';
-      llmHealthy = false;
-    } else if (health.llm.ok) {
-      chip.textContent = '🤖 LLM ready';
-      chip.className = 'status-chip saved';
-      chip.title = 'LLM is reachable (' + (health.llm.provider || 'claude') + ')';
-      llmHealthy = true;
-    } else {
-      chip.textContent = '⚠ LLM offline';
-      chip.className = 'status-chip dirty';
-      chip.title = 'LLM unreachable. Heuristic fallback active.';
-      llmHealthy = false;
-    }
-  } catch (e) {
-    chip.textContent = '⚠ LLM ?';
-    chip.className = 'status-chip dirty';
-    chip.title = 'Cannot check LLM health: ' + e.message;
-    llmHealthy = false;
-  }
-
-  updateAiButtonStates();
-}
-
-function updateAiButtonStates() {
-  var btnSingle = document.getElementById('float-ai-review-btn');
-  var btnAll = document.getElementById('btn-ai-review-all');
-  var btnDir = document.getElementById('btn-ai-review-dir');
-
-  if (llmHealthy === false) {
-    if (btnSingle) btnSingle.title = 'AI review (heuristic fallback — LLM offline)';
-    if (btnAll) btnAll.title = 'AI review all (heuristic fallback — LLM offline)';
-    if (btnDir) btnDir.title = 'AI review directory (heuristic fallback — LLM offline)';
-  } else if (llmHealthy === true) {
-    if (btnSingle) btnSingle.title = 'AI review (Shift+A)';
-    if (btnAll) btnAll.title = 'AI review all issues in this file (Shift+Ctrl+A)';
-    if (btnDir) btnDir.title = 'AI review all issues in directory (Shift+Ctrl+D)';
   }
 }
 
