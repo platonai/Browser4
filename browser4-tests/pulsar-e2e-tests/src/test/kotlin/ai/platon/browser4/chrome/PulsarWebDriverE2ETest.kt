@@ -1,4 +1,4 @@
-package ai.platon.pulsar.skeleton.workflow.fetch.driver
+package ai.platon.browser4.chrome
 
 import ai.platon.pulsar.WebDriverTestBase
 import ai.platon.browser4.api.AbstractWebDriver
