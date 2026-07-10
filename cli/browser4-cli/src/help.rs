@@ -1081,6 +1081,14 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(
+            "  - Use --depth / -d <n> to limit the accessibility tree depth (e.g. -d 4)."
+                .to_string(),
+        );
+        lines.push(
+            "    A warning is printed on stderr when content has been truncated by the depth limit."
+                .to_string(),
+        );
+        lines.push(
             "  - snapshot grep searches the accessibility-tree YAML, not the DOM HTML."
                 .to_string(),
         );
@@ -1105,6 +1113,12 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push(String::new());
         lines.push("  # Capture snapshot and print to stdout for piping".to_string());
         lines.push("  browser4-cli snapshot --stdout | head -20".to_string());
+        lines.push(String::new());
+        lines.push("  # Print raw snapshot content (no page info, no header)".to_string());
+        lines.push("  browser4-cli snapshot --raw | grep \"button\"".to_string());
+        lines.push(String::new());
+        lines.push("  # Limit tree depth to reduce output size".to_string());
+        lines.push("  browser4-cli snapshot --depth 4".to_string());
         lines.push(String::new());
         lines.push("  # Search for 'error' in snapshot YAML".to_string());
         lines.push("  browser4-cli snapshot grep -i error".to_string());

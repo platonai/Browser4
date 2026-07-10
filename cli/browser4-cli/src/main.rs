@@ -7171,7 +7171,7 @@ async fn handle_crawl_list(
     cli_println!("{}", "-".repeat(100));
 
     for task in &filtered {
-        let server_status = match get_crawl_result(client, base_url, &task.id).await {
+        let server_status = match get_crawl_result(client, base_url, &task.task_id).await {
             Ok(text) => {
                 serde_json::from_str::<Value>(&text)
                     .ok()
@@ -7183,10 +7183,10 @@ async fn handle_crawl_list(
 
         cli_println!(
             "{:<38}  {:<12}  {:<12}  {}",
-            task.id,
-            task.status,
+            task.task_id,
+            task.last_status,
             server_status,
-            task.url.as_deref().unwrap_or("-")
+            task.description
         );
     }
 
