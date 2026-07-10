@@ -26,6 +26,7 @@
 'use strict';
 
 const { execFile } = require('child_process');
+const os = require('os');
 const path = require('path');
 const fs = require('fs');
 
@@ -432,6 +433,11 @@ function _buildArgs(prompt) {
   _ensureProvider();
   const p = _provider;
 
+  // No prompt → return base args + print flag only (prompt will come via stdin)
+  if (!prompt) {
+    return [...p.baseArgs, p.promptFlag];
+  }
+
   // Copilot style: gh copilot [args] -- -p "<prompt>"
   if (p.promptPosition === 'separator') {
     return [...p.baseArgs, p.promptSeparator || '--', p.promptFlag, prompt];
@@ -468,19 +474,50 @@ function _buildEnv() {
   return env;
 }
 
+// ── Internal: prompt file ──────────────────────────────────────────────────
+
+/**
+ * Write the prompt to a temp file for stdin-based invocation.
+ * Avoids passing long prompts as CLI positional arguments, which can hit
+ * command-line length limits and cause escaping issues.
+ */
+function _writePromptFile(prompt) {
+  const tmpDir = os.tmpdir();
+  const tmpFile = path.join(tmpDir, `llm-prompt-${Date.now()}-${Math.random().toString(36).slice(2)}.txt`);
+  fs.writeFileSync(tmpFile, prompt, 'utf-8');
+  return tmpFile;
+}
+
 // ── Internal: invocation ──────────────────────────────────────────────────
 
 function _invoke(prompt, timeout) {
   _ensureProvider();
-  const args = _buildArgs(prompt);
+  const args = _buildArgs(null);  // No positional prompt arg — prompt via stdin
+  const promptFile = _writePromptFile(prompt);
 
-  console.error(`[llm] Invoking: ${_provider.binary} ${args.slice(0, -1).join(' ')} "..." (${_provider.type})`);
+  console.error(`[llm] Invoking: ${_provider.binary} ${args.join(' ')} (${_provider.type}, prompt via stdin ${promptFile})`);
 
   return new Promise((resolve, reject) => {
-    const child = execFile(_provider.binary, args, _execFileOpts({
+    let stdinFd;
+    try {
+      stdinFd = fs.openSync(promptFile, 'r');
+    } catch (e) {
+      try { fs.unlinkSync(promptFile); } catch (_) {}
+      reject(new Error(`Failed to open prompt file: ${e.message}`));
+      return;
+    }
+
+    const opts = _execFileOpts({
       timeout: timeout,
       maxBuffer: 2 * 1024 * 1024,
-    }), (err, stdout, stderr) => {
+    });
+    opts.stdio = [stdinFd, 'pipe', 'pipe'];  // stdin from prompt file
+
+    const child = execFile(_provider.binary, args, opts, (err, stdout, stderr) => {
+      // Always clean up temp resources
+      try { fs.closeSync(stdinFd); } catch (_) {}
+      try { fs.unlinkSync(promptFile); } catch (_) {}
+
       if (err) {
         if (err.killed) {
           reject(new Error(`LLM request timed out after ${timeout / 1000}s`));
