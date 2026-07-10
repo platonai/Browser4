@@ -34,7 +34,7 @@ import ai.platon.pulsar.skeleton.common.options.LoadOptions
 import ai.platon.pulsar.skeleton.common.proxy.UniversalProxyParser
 import ai.platon.pulsar.skeleton.workflow.fetch.FetchResult
 import ai.platon.pulsar.skeleton.workflow.fetch.FetchTask
-import com.google.common.annotations.Beta
+
 
 open class BrowserPrivacyContext(
     val proxyPoolManager: ProxyPoolManager? = null,
@@ -120,7 +120,6 @@ open class BrowserPrivacyContext(
 
     override fun promisedWebDriverCount() = driverPoolManager.promisedDriverCount(browserId)
 
-    @Beta
     override fun subscribeWebDriver() = driverPoolManager.subscribeDriver(browserId)
 
     override fun buildReport(): String {

@@ -190,11 +190,6 @@
                 <version>${poi-ooxml.version}</version>
             </dependency>
 
-            <dependency>
-                <groupId>com.google.guava</groupId>
-                <artifactId>guava</artifactId>
-                <version>${guava.version}</version>
-            </dependency>
 
             <dependency>
                 <groupId>org.apache.httpcomponents</groupId>
@@ -508,7 +503,7 @@
         <EvalEx.version>2.0</EvalEx.version>
         <jcommander.version>1.82</jcommander.version>
 
-        <guava.version>33.2.1-jre</guava.version>
+
         <dataframe.version>0.13.1</dataframe.version>
         <jgrapht.version>1.0.1</jgrapht.version>
 

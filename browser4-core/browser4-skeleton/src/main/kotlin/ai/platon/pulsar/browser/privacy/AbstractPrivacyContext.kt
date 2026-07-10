@@ -17,7 +17,7 @@ import ai.platon.pulsar.skeleton.common.options.LoadOptions
 import ai.platon.pulsar.skeleton.workflow.fetch.FetchResult
 import ai.platon.pulsar.skeleton.workflow.fetch.FetchTask
 import ai.platon.pulsar.skeleton.workflow.fetch.WebDriverFetcher
-import com.google.common.annotations.Beta
+
 import org.slf4j.LoggerFactory
 import java.time.Duration
 import java.time.Instant
@@ -184,7 +184,6 @@ abstract class AbstractPrivacyContext(
      * */
     override fun hasWebDriverPromise() = promisedWebDriverCount() > 0
 
-    @Beta
     abstract fun subscribeWebDriver(): WebDriver?
 
     /**

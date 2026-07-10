@@ -2,7 +2,7 @@ package ai.platon.pulsar.skeleton.workflow.protocol
 
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.skeleton.workflow.common.LazyConfigurable
-import com.google.common.io.Files
+import java.nio.file.Files
 import crawlercommons.robots.BaseRobotRules
 import crawlercommons.robots.SimpleRobotRules
 import crawlercommons.robots.SimpleRobotRules.RobotRulesMode
@@ -110,7 +110,7 @@ abstract class RobotRulesParser(
             }
 
             try {
-                val robotsBytes = Files.toByteArray(File(argv[0]))
+                val robotsBytes = Files.readAllBytes(File(argv[0]).toPath())
                 val rules = robotParser.parseContent(
                     argv[0], robotsBytes,
                     "text/plain", argv[2]

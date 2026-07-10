@@ -11,7 +11,7 @@ import ai.platon.pulsar.skeleton.common.ApiPublic
 import ai.platon.pulsar.skeleton.event.PageEventHandlers
 import ai.platon.pulsar.skeleton.event.impl.PageEventHandlersFactory
 import com.beust.jcommander.Parameter
-import com.google.common.annotations.Beta
+
 import java.time.Duration
 import java.time.Instant
 import java.time.temporal.ChronoUnit
@@ -262,7 +262,6 @@ open class LoadOptions(
         names = ["-rnb", "-requireNotBlank"],
         description = "The selector specified element should have a non-blank text"
     )
-    @Beta
     var requireNotBlank: String = ""
 
     /**

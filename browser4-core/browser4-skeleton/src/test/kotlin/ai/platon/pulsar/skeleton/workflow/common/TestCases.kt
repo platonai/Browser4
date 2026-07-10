@@ -6,8 +6,6 @@ import ai.platon.pulsar.common.urls.URLUtils.splitUrlArgs
 import ai.platon.pulsar.skeleton.common.options.LoadOptionDefaults
 import ai.platon.pulsar.skeleton.common.options.LoadOptions
 import ai.platon.pulsar.test.TestUrls
-import com.google.common.collect.Lists
-import com.google.common.collect.Sets
 import org.apache.commons.lang3.StringUtils
 import java.io.IOException
 import java.nio.file.Files
@@ -35,11 +33,11 @@ class TestCases {
             "config/seeds/national.txt",
             "config/seeds/papers.txt"
         )
-        val lines: MutableList<String> = Lists.newArrayList()
+        val lines: MutableList<String> = ArrayList()
         for (file in files) {
             lines.addAll(Files.readAllLines(Paths.get(file)))
         }
-        val lines2: MutableSet<String?> = Sets.newHashSet()
+        val lines2: MutableSet<String?> = HashSet()
         lines.forEach(Consumer { url: String? ->
             var pattern = StringUtils.substringBetween(url, "://", "/")
             pattern = "+http://$pattern/(.+)"

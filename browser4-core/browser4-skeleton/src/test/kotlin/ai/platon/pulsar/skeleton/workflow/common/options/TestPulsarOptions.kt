@@ -5,7 +5,6 @@ import ai.platon.pulsar.common.options.OptionUtils
 import ai.platon.pulsar.common.printlnPro
 import ai.platon.pulsar.skeleton.common.options.LoadOptions
 import ai.platon.pulsar.skeleton.common.options.PulsarOptions
-import com.google.common.collect.Lists
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -15,7 +14,7 @@ import kotlin.test.assertTrue
  * Copyright @ 2013-2016 Platon AI. All rights reserved
  */
 class TestPulsarOptions {
-    private val links = Lists.newArrayList(
+    private val links = mutableListOf(
         "http://www.news.cn/comments/index.htm",
         "http://xinhuanet.com/silkroad/index.htm",
         "http://www.news.cn/video/xhwsp/index.htm",
