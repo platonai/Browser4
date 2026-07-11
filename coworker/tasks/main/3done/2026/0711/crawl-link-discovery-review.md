@@ -1,5 +1,15 @@
 # Issues: crawl-link-discovery
 
+> **Status:** ✅ ALL ACCEPTED ISSUES VERIFIED FIXED — 2026-07-11
+>
+> All 7 ACCEPTed issues were fixed on 2026-07-10 and re-verified on 2026-07-11.
+> No new code changes needed. See [MEMORY.20260710.md](../../../.browser4-coworker/tasks/300logs/2026/07/10/MEMORY.20260710.md)
+> and [MEMORY.20260711.md](../../../.browser4-coworker/tasks/300logs/2026/07/11/MEMORY.20260711.md) for details.
+>
+> Fix all issues with ACCEPT state in this file.
+> Fix all issues with ACCEPT state in this file.
+> Fix all issues with ACCEPT state in this file.
+
 > **Source:** `20260709-220827-crawl-link-discovery.full.md` | **Date:** 20260709-220827 | **Mode:** dev
 
 ## Scenario Background
@@ -86,6 +96,10 @@ Two interacting bugs:
 - [ ] **DUPLICATE**
 - **Notes:**
 
+#### ✅ Resolution (2026-07-11)
+
+**Verified fixed.** `CrawlService.kt:315-348` — Per-crawl `CompletableDeferred<Unit>()` + `AtomicInteger` counter replaces `AgenticContexts.await()`. Each crawl now tracks its own completion independently; a `withTimeout(300_000L)` wrapper provides a 5-minute timeout with clear error reporting. Same pattern applied to `crawlDepthN()` at lines 383-460. No code changes needed.
+
 ---
 
 ### Issue 2: CrawlRequest `args` parameter null when `--args` flag not provided
@@ -136,6 +150,10 @@ In `cli/browser4-cli/src/commands.rs`, the `args` key is only added to the param
 - [ ] **DUPLICATE**
 - **Notes:**
 
+#### ✅ Resolution (2026-07-11)
+
+**Verified fixed.** `commands.rs:2217-2219` — `p["args"]` is now always included in the JSON body, defaulting to `json!(load_opts.join(" "))` (which is an empty string `""` when no options are specified). This ensures the Kotlin backend's non-null `args: String = ""` parameter never receives null. No code changes needed.
+
 ---
 
 ### Issue 3: No way to cancel/clear stuck crawl tasks from CLI
@@ -185,6 +203,10 @@ The `crawl` CLI command only exposes `crawl [url]` and `crawl list`. The cancel,
 - [ ] **REJECT**
 - [ ] **DUPLICATE**
 - **Notes:**
+
+#### ✅ Resolution (2026-07-11)
+
+**Verified fixed.** `commands.rs:2232-2285` — `crawl-status`, `crawl-result`, `crawl-cancel`, `crawl-clear` command definitions with proper arg specs. `main.rs:7328-7410` — All dispatch handlers wired up (`handle_crawl_status`, `handle_crawl_result`, `handle_crawl_cancel`, `handle_crawl_clear`). `main.rs:12201-12210` — Spaced forms (e.g., "crawl cancel") also routed. No code changes needed.
 
 ---
 
@@ -238,6 +260,10 @@ The backend creates new `StaticAgenticContext` instances for each crawl submissi
 - [ ] **DUPLICATE**
 - **Notes:**
 
+#### ✅ Resolution (2026-07-11)
+
+**Verified fixed.** Fixed by the same per-crawl `CompletableDeferred` change as Issue 1. `CrawlService.kt:315-348` — each crawl now tracks its own completion via `CompletableDeferred<Unit>()` + `AtomicInteger` counter rather than relying on the global `PulsarContexts.await()`. Stale contexts from prior sessions no longer block new crawl submissions. No code changes needed.
+
 ---
 
 ### Issue 5: `crawl list` only shows CLI-tracked tasks, not backend tasks
@@ -288,6 +314,10 @@ The CLI maintains its own task tracking file (`~/.browser4/async-tasks.json`) se
 - [ ] **REJECT**
 - [ ] **DUPLICATE**
 - **Notes:**
+
+#### ✅ Resolution (2026-07-11)
+
+**Verified fixed.** `main.rs:7299-7324` — `handle_crawl_list()` now queries `GET /api/crawl/{id}/result` for each tracked task and displays both "CLI STATUS" and "SERVER STATUS" columns in a unified view. Includes tip line for cancel/clear commands. No code changes needed.
 
 ---
 
@@ -340,6 +370,10 @@ The `-a` flag requires a single string argument, but the LoadOptions syntax uses
 - [ ] **DUPLICATE**
 - **Notes:**
 
+#### ✅ Resolution (2026-07-11)
+
+**Verified fixed.** `commands.rs:2131-2132` — `--args` option description documents `@file` prefix and `--args-stdin` flag. `main.rs:7479-7527` — CLI resolves `@file.txt` by reading file content, handles `--args-stdin` from stdin pipe with error on empty input, then appends to the resolved args string. No code changes needed.
+
 ---
 
 ### Issue 8: `crawl` with link discovery returns 0 pages silently on partial failure
@@ -389,6 +423,10 @@ In `crawlDepth1`, when `extractOutLinks` returns empty, the crawl returns `empty
 - [ ] **REJECT**
 - [ ] **DUPLICATE**
 - **Notes:**
+
+#### ✅ Resolution (2026-07-11)
+
+**Verified fixed.** `CrawlService.kt:40` — `diagnostic: String? = null` field in `CrawlResponse`. Lines 297-308 — writes diagnostic message when out-link selector matches 0 elements, including the selector that was used. `main.rs:7697-7701` — CLI displays the diagnostic message plus actionable tips ("Check the selector syntax", "Try --refresh", etc.) when 0 pages are found. No code changes needed.
 
 ---
 
