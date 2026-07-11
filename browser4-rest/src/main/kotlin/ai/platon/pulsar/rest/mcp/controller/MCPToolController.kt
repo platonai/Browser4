@@ -849,7 +849,14 @@ class MCPToolController(
             ResponseEntity.ok(textResponse(metadata))
         } catch (e: Exception) {
             logger.error("html_snapshot_capture failed | {}", e.message, e)
-            ResponseEntity.ok(errorResponse("html_snapshot_capture failed: ${e.message}"))
+            val errorMsg = if (e.message?.contains("Nil url") == true) {
+                "htmlsnapshot failed: ${e.message}. The session URL is not available — " +
+                    "the page may have redirected or the browser tab state is stale. " +
+                    "Try 'goto <url>' to re-establish the session, then run htmlsnapshot again."
+            } else {
+                "html_snapshot_capture failed: ${e.message}"
+            }
+            ResponseEntity.ok(errorResponse(errorMsg))
         }
     }
 

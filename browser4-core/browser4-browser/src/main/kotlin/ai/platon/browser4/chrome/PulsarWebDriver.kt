@@ -1846,7 +1846,12 @@ function() {
         val finalUrl = currentUrl()
         // redirect
         if (finalUrl.isNotBlank() && finalUrl != navigateUrl) {
-            // browser.addHistory(NavigateEntry(finalUrl))
+            // Update navigateUrl so that currentUrl() can fall back to the
+            // correct final URL after a redirect chain, even if document.URL
+            // returns blank in edge cases (tab state race, interstitial pages).
+            // Without this, htmlsnapshot and other capture-based commands fail
+            // with "Nil url is not allowed" after complex redirects.
+            navigateUrl = finalUrl
         }
     }
 

@@ -65,9 +65,21 @@ pub fn resolve_default_state_dir() -> PathBuf {
     if let Ok(override_dir) = std::env::var("BROWSER4_CLI_STATE_DIR") {
         let trimmed = override_dir.trim().to_string();
         if !trimmed.is_empty() {
-            return PathBuf::from(&trimmed)
-                .canonicalize()
-                .unwrap_or(PathBuf::from(trimmed));
+            // Reject values that look like CLI flags (e.g. "--help", "-v").
+            // These are almost certainly misconfigurations and would create
+            // confusing directory names on disk.
+            if trimmed.starts_with('-') {
+                eprintln!(
+                    "browser4-cli: ignoring BROWSER4_CLI_STATE_DIR=\"{}\" — \
+                    directory names that start with '-' are not allowed. \
+                    Using default state directory (~/.browser4) instead.",
+                    trimmed
+                );
+            } else {
+                return PathBuf::from(&trimmed)
+                    .canonicalize()
+                    .unwrap_or(PathBuf::from(trimmed));
+            }
         }
     }
     dirs::home_dir()
