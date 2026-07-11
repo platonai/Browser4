@@ -5150,6 +5150,18 @@ async fn handle_html_snapshot_inspect(
         cli_println!("     htmlsnapshot inspect \".card\" --max 20 --depth 6");
     }
 
+    // When auto-discovery was triggered, also suggest htmlsnapshot summary as
+    // a complementary exploration path — it uses a different algorithm
+    // (visual geometry + text clustering) that can surface product data even
+    // when DOM-based pattern discovery picks up page chrome.
+    if auto_discovered {
+        cli_println!("");
+        cli_println!("  📋 Tip: htmlsnapshot summary uses visual clustering (not DOM patterns)");
+        cli_println!("    to group visible content. It can surface product info even when");
+        cli_println!("    auto-discovery picks up navigation elements.");
+        cli_println!("    Try: browser4-cli htmlsnapshot summary");
+    }
+
     json_field("inspect", data);
     Ok(())
 }

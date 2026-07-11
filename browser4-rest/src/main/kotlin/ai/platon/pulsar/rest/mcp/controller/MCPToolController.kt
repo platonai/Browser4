@@ -1603,6 +1603,61 @@ internal fun autoDiscoverRepeatingSelector(document: FeaturedDocument): String? 
 
             if (isStructuralDiv) score *= 0.5
 
+            // Chrome penalty: patterns inside nav/header/footer/aside containers
+            // (or elements with ARIA navigation roles) are page chrome, not
+            // primary content. This prevents nav shortcuts from outscoring
+            // product cards when they appear more frequently on the page.
+            val chromeAncestorTags = setOf("nav", "header", "footer", "aside")
+            val chromeAncestorRoles = setOf("navigation", "banner", "contentinfo", "complementary")
+            var isChrome = false
+            for (member in members.take(3)) {
+                var anc: org.jsoup.nodes.Element? = member.parent()
+                while (anc != null) {
+                    if (anc.tagName().lowercase() in chromeAncestorTags) {
+                        isChrome = true; break
+                    }
+                    val role = anc.attr("role").lowercase()
+                    if (role in chromeAncestorRoles) {
+                        isChrome = true; break
+                    }
+                    anc = anc.parent()
+                }
+                if (isChrome) break
+            }
+            if (isChrome) score *= 0.3
+
+            // Viewport position weighting: elements near the top of the page
+            // are more likely to be primary content. Navigation tends to sit
+            // in a narrow band at the very top; product cards span the
+            // main content area below.
+            val yPositions = members.mapNotNull { member ->
+                val vi = member.attr("vi").trim()
+                if (vi.isNotBlank()) {
+                    val parts = vi.split("\\s+".toRegex())
+                    if (parts.size >= 2) parts[1].toDoubleOrNull() else null
+                } else null
+            }.take(5)
+            if (yPositions.isNotEmpty()) {
+                val avgY = yPositions.average()
+                when {
+                    // Prime content band (100–800px): title, price, key details
+                    avgY in 100.0..800.0 -> score *= 1.3
+                    // Deep page / footer region (> 2500px): likely related items
+                    avgY > 2500.0 -> score *= 0.7
+                    // Very top (< 100px): likely site header / nav bar
+                    avgY in 0.0..100.0 -> score *= 0.8
+                }
+            }
+
+            // Content-area bonus: if the parent is a semantic content container
+            // (<main>, <article>, role="main"), it's more likely to hold
+            // meaningful content than a generic <div> wrapper.
+            val parentTagLc = parent.tagName().lowercase()
+            val parentRole = parent.attr("role").lowercase()
+            if (parentTagLc in setOf("main", "article") || parentRole == "main") {
+                score *= 1.5
+            }
+
             if (score > bestScore) {
                 bestScore = score
                 // Build usable CSS selector: use class if present, otherwise bare tag

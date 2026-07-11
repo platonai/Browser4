@@ -2307,7 +2307,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             description: "Capture: take a static HTML snapshot of the current page and store it for later querying. Returns page metadata — URL, title, size, timestamps, and interactive elements (tag, class, id, aria, bounding box). Follow with `htmlsnapshot get`, `inspect`, or `summary` to read from the stored snapshot. Short form of `htmlsnapshot capture`.",
             category: Category::Snapshot,
             hidden: false,
-            batch_supported: false,
+            batch_supported: true,
             args: &[],
             options: &[],
             tool_name_fn: |_| "html_snapshot_capture".to_string(),
@@ -2318,7 +2318,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             description: "Capture: take a static HTML snapshot of the current page and store it for later querying. Returns page metadata — URL, title, size, timestamps, and interactive elements (tag, class, id, aria, bounding box). Follow with `htmlsnapshot get`, `inspect`, or `summary` to read from the stored snapshot.",
             category: Category::Snapshot,
             hidden: false,
-            batch_supported: false,
+            batch_supported: true,
             args: &[],
             options: &[],
             tool_name_fn: |_| "html_snapshot_capture".to_string(),
@@ -2326,10 +2326,10 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "htmlsnapshot-get",
-            description: "Extract elements from the HTML snapshot stored in Browser4's page storage (text, html, attr)",
+            description: "Extract elements from the HTML snapshot stored in Browser4's page storage (text, html, attr). Supports batch mode for multi-step workflows.",
             category: Category::Snapshot,
             hidden: false,
-            batch_supported: false,
+            batch_supported: true,
             args: &[
                 ArgDef { name: "field", description: "What to extract: text, html, or attr", optional: false },
                 ArgDef { name: "selector", description: "CSS selector (defaults to :root; required for attr)", optional: true },
@@ -2351,10 +2351,10 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "htmlsnapshot-get-all",
-            description: "Extract ALL matching elements from the HTML snapshot (querySelectorAll semantics); supports --offset and --limit for pagination",
+            description: "Extract ALL matching elements from the HTML snapshot (querySelectorAll semantics); supports --offset and --limit for pagination. Supports batch mode.",
             category: Category::Snapshot,
             hidden: false,
-            batch_supported: false,
+            batch_supported: true,
             args: &[
                 ArgDef { name: "field", description: "What to extract: text, html, or attr", optional: false },
                 ArgDef { name: "selector", description: "CSS selector (defaults to :root; required for attr)", optional: true },
