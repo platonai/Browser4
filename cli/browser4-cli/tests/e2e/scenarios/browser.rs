@@ -790,6 +790,42 @@ pub(super) fn test_eval_command(ctx: &mut E2ECtx) {
     run_command(ctx, &["close"]);
 }
 
+pub(super) fn test_eval_await_command(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    run_command(
+        ctx,
+        &["open", &ctx.interactive_url(), OPEN_PROFILE_MODE_ARG],
+    );
+    open_resized_interactive_page(ctx);
+
+    // Without --await, Promise.resolve returns an unresolved Promise (empty/object).
+    // With --await, the resolved value is returned instead — verified below.
+
+    // Use --await to resolve a Promise
+    let await_result = run_command(
+        ctx,
+        &["eval", "--await", "new Promise(resolve => setTimeout(() => resolve('async-done'), 50))"],
+    );
+    let trimmed = strip_snapshot_output(&await_result.stdout);
+    assert_eq!(
+        trimmed, "async-done",
+        "eval --await should resolve the Promise and return 'async-done', got: {trimmed}"
+    );
+
+    // Verify --await works with fetch-like patterns (immediate resolve)
+    let fetch_result = run_command(
+        ctx,
+        &["eval", "--await", "Promise.resolve({status: 200, ok: true})"],
+    );
+    let fetch_trimmed = strip_snapshot_output(&fetch_result.stdout);
+    assert!(
+        fetch_trimmed.contains("200") && fetch_trimmed.contains("ok"),
+        "eval --await with Promise.resolve object should contain status and ok, got: {fetch_trimmed}"
+    );
+
+    run_command(ctx, &["close"]);
+}
+
 pub(super) fn test_eval_return_types(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
     run_command(

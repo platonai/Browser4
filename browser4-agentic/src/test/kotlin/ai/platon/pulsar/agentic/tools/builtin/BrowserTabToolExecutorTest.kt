@@ -186,4 +186,71 @@ class BrowserTabToolExecutorTest {
 			verify(driver).evaluateValueDetail("#page-marker", "(element) => element.textContent")
 		}
 	}
+
+	// ── awaitPromise tests ──────────────────────────────────────────────
+
+	@Test
+	fun `eval with awaitPromise calls two-arg evaluateValueDetail`() {
+		runBlocking {
+			val driver = Mockito.mock(WebDriver::class.java)
+			`when`(driver.evaluateValueDetail("fetch('/api/data')", true))
+				.thenReturn(JsEvaluation(value = mapOf("status" to 200)))
+
+			val result = executor.callFunctionOn(
+				ToolCall(
+					"tab",
+					"eval",
+					mutableMapOf<String, Any?>(
+						"expression" to "fetch('/api/data')",
+						"awaitPromise" to true
+					)
+				),
+				driver
+			)
+
+			assertEquals(mapOf("status" to 200), result.value)
+			verify(driver).evaluateValueDetail("fetch('/api/data')", true)
+		}
+	}
+
+	@Test
+	fun `eval without awaitPromise defaults to one-arg overload`() {
+		runBlocking {
+			val driver = Mockito.mock(WebDriver::class.java)
+			`when`(driver.evaluateValueDetail("document.title"))
+				.thenReturn(JsEvaluation(value = "Browser4 CLI Other Fixture"))
+
+			val result = executor.callFunctionOn(
+				ToolCall("tab", "eval", mutableMapOf<String, Any?>("expression" to "document.title")),
+				driver
+			)
+
+			assertEquals("Browser4 CLI Other Fixture", result.value)
+			verify(driver).evaluateValueDetail("document.title")
+		}
+	}
+
+	@Test
+	fun `evaluateValue with awaitPromise calls two-arg evaluateValueDetail`() {
+		runBlocking {
+			val driver = Mockito.mock(WebDriver::class.java)
+			`when`(driver.evaluateValueDetail("new Promise(r => setTimeout(() => r(42), 100))", true))
+				.thenReturn(JsEvaluation(value = 42))
+
+			val result = executor.callFunctionOn(
+				ToolCall(
+					"tab",
+					"evaluateValue",
+					mutableMapOf<String, Any?>(
+						"expression" to "new Promise(r => setTimeout(() => r(42), 100))",
+						"awaitPromise" to true
+					)
+				),
+				driver
+			)
+
+			assertEquals(42, result.value)
+			verify(driver).evaluateValueDetail("new Promise(r => setTimeout(() => r(42), 100))", true)
+		}
+	}
 }

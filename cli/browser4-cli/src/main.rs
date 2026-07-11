@@ -15140,4 +15140,52 @@ mod tests {
             Some("crawl clear")
         );
     }
+
+    // -----------------------------------------------------------------------
+    // is_not_focusable_error / is_timeout_error_message tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn not_focusable_error_detects_lowercase() {
+        assert!(is_not_focusable_error("element is not focusable"));
+    }
+
+    #[test]
+    fn not_focusable_error_detects_mixed_case() {
+        assert!(is_not_focusable_error("Element is Not Focusable"));
+    }
+
+    #[test]
+    fn not_focusable_error_detects_in_message() {
+        // The helper looks for the substring "not focusable" (case-insensitive)
+        assert!(is_not_focusable_error("Element is not focusable: #shadow-root"));
+    }
+
+    #[test]
+    fn not_focusable_error_rejects_unrelated() {
+        assert!(!is_not_focusable_error("element not found"));
+        assert!(!is_not_focusable_error("timeout waiting for selector"));
+        assert!(!is_not_focusable_error(""));
+    }
+
+    #[test]
+    fn timeout_error_detects_timed_out() {
+        assert!(is_timeout_error_message("operation timed out after 30s"));
+    }
+
+    #[test]
+    fn timeout_error_detects_deadline_elapsed() {
+        assert!(is_timeout_error_message("deadline has elapsed"));
+    }
+
+    #[test]
+    fn timeout_error_detects_mixed_case() {
+        assert!(is_timeout_error_message("Operation Timed Out"));
+    }
+
+    #[test]
+    fn timeout_error_rejects_unrelated() {
+        assert!(!is_timeout_error_message("element not found"));
+        assert!(!is_timeout_error_message(""));
+    }
 }
