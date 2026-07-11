@@ -454,9 +454,19 @@ object PageSummaryIndexService {
         val hasProduct = text.contains("product") || text.contains("商品") || text.contains("产品")
         val hasSearch = tags.contains("input") && (text.contains("search") || text.contains("搜索"))
         val hasLogin = text.contains("login") || text.contains("sign in") || text.contains("登录")
+        // Use element.text() (all descendant text) rather than ownText() because
+        // headlines often nest text inside child elements: <h1><a>headline</a></h1>.
+        // ownText() would be empty for such headings, causing false negatives.
         val hasArticle = tags.contains("article") || nodes.any {
-            it.tag in listOf("h1", "h2") && it.text.length > 30
+            it.tag in listOf("h1", "h2") && it.element.text().trim().length > 30
         }
+        // Content richness: count content-bearing elements (headings, paragraphs)
+        // with substantial text. A news portal with dozens of headlines should not
+        // be classified as "Login / Auth" just because a login link exists.
+        val contentNodeCount = nodes.count {
+            it.tag in listOf("h1", "h2", "h3", "h4", "h5", "h6", "p") && it.element.text().trim().length > 10
+        }
+        val isContentRich = contentNodeCount >= 5
         val hasForm = tags.contains("form") && (text.contains("submit") || text.contains("提交"))
         val hasVideo = tags.contains("video") || text.contains("video") || text.contains("视频")
 
@@ -478,7 +488,11 @@ object PageSummaryIndexService {
             hasAddToCart -> "Product Detail"
             hasSearch && hasPrice -> "Search Results"
             hasArticle -> "Article / Content"
-            hasLogin && !hasArticle -> "Login / Auth"
+            // Only classify as Login/Auth when login signal is present AND the page
+            // lacks article patterns AND is not content-rich. A news portal with a
+            // small login link in the header has isContentRich=true from its headlines,
+            // so it won't be misclassified here.
+            hasLogin && !hasArticle && !isContentRich -> "Login / Auth"
             hasForm && !hasArticle -> "Form Page"
             hasVideo -> "Media Page"
 
@@ -491,6 +505,8 @@ object PageSummaryIndexService {
             isHomepage -> "Homepage"
 
             // Remaining content heuristics
+            isContentRich && isHomepage -> "News / Content"
+            isContentRich -> "Article / Content"
             text.contains("blog") || text.contains("博客") -> "Blog"
             text.contains("forum") || text.contains("论坛") -> "Forum"
             text.contains("documentation") || text.contains("文档") -> "Documentation"

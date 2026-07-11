@@ -1066,7 +1066,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "snapshot",
-            description: "Capture page snapshot to obtain element refs. Use -v N for viewport pagination, -i for interactive, --auto-diff for change detection. Run `snapshot --help` for all flags.",
+            description: "Capture page snapshot to obtain element refs. Use -v N to capture a specific screen-height chunk of the page (viewport pagination), -i for interactive, --auto-diff for change detection. Run `snapshot --help` for all flags.",
             category: Category::Core,
             hidden: false,
             batch_supported: true,
@@ -1083,7 +1083,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "selector", description: "Scope snapshot to a CSS selector", is_bool: false, short: Some("s") },
                 OptionDef { name: "raw", description: "Strip page info and return only snapshot content (alias for --stdout)", is_bool: true, short: None },
                 OptionDef { name: "stdout", description: "Print snapshot content to stdout instead of saving to file", is_bool: true, short: None },
-                OptionDef { name: "viewport", description: "Capture only specified viewports: single index (3), comma list (0,2,4), range (1-3), or mixed (0,2-4,7)", is_bool: false, short: Some("v") },
+                OptionDef { name: "viewport", description: "Capture specific screen-height page chunks (viewports). Each chunk = one screen height (~viewport height px). Formats: single index (3), comma list (0,2,4), range (1-3), or mixed (0,2-4,7). Example: -v 1-3 captures the 2nd through 4th screen-heights.", is_bool: false, short: Some("v") },
                 OptionDef { name: "auto-diff", description: "Diff against the previous snapshot — show only what changed since the last capture", is_bool: true, short: None },
                 OptionDef { name: "page", short: None, is_bool: false, description: "Page number for paginated snapshot output (1-based, default: 1)" },
                 OptionDef { name: "page-size", short: None, is_bool: false, description: "Lines per page for snapshot output (default: 2000)" },
@@ -1156,7 +1156,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "eval",
-            description: "Evaluate JavaScript expression on page or element. Prefer --file or --stdin on Windows to avoid shell quoting issues. Use --await for async code (fetch, Promises). Objects and arrays are serialized as JSON; use --json to JSON-wrap scalar results.",
+            description: "Evaluate JavaScript expression on page or element. Prefer --file or --stdin on Windows to avoid shell quoting issues. Use --await for async code (fetch, Promises). Use --wait-selector for pages that render content asynchronously (React/SPA). Objects and arrays are serialized as JSON; use --json to JSON-wrap scalar results.",
             category: Category::Core,
             hidden: false,
             batch_supported: true,
@@ -1171,6 +1171,8 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "base64", description: "Decode the expression argument as base64 before execution (avoids shell quoting issues on Windows)", is_bool: true, short: None },
                 OptionDef { name: "json", description: "Serialize the result as JSON (quotes strings, wraps scalars)", is_bool: true, short: None },
                 OptionDef { name: "await", description: "Wait for the evaluated expression's Promise to resolve before returning the result", is_bool: true, short: None },
+                OptionDef { name: "wait-selector", description: "Wait for a CSS selector to appear in the DOM before evaluating (use for async-rendered content like React/SPA pages)", is_bool: false, short: None },
+                OptionDef { name: "wait-timeout", description: "Max time in ms to wait for --wait-selector (default: 30000)", is_bool: false, short: None },
             ],
             tool_name_fn: |_| "browser_evaluate".to_string(),
             tool_params_fn: |args| {
@@ -1184,6 +1186,8 @@ pub fn all_commands() -> Vec<CommandDef> {
                 if get_bool(args, "base64").unwrap_or(false) { p["base64"] = json!(true); }
                 if get_bool(args, "json").unwrap_or(false) { p["json"] = json!(true); }
                 if get_bool(args, "await").unwrap_or(false) { p["awaitPromise"] = json!(true); }
+                if let Some(sel) = get_opt_str(args, "wait-selector") { p["waitSelector"] = json!(sel); }
+                if let Some(t) = get_opt_str(args, "wait-timeout") { p["waitTimeout"] = json!(t); }
                 p
             },
         },
@@ -2479,6 +2483,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             options: &[
                 OptionDef { name: "raw", description: "Print summary content directly to stdout (alias for --stdout)", is_bool: true, short: None },
                 OptionDef { name: "stdout", description: "Print summary content directly to stdout", is_bool: true, short: None },
+                OptionDef { name: "verbose", short: Some("v"), description: "Show internal scoring details and score legend", is_bool: true },
             ],
             tool_name_fn: |_| "html_snapshot_summary".to_string(),
             tool_params_fn: |args| {

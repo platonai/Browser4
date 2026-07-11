@@ -1527,6 +1527,19 @@ class MCPToolController(
  *   the itemSelector of the highest-scoring link group, or null if none
  *   found.
  */
+/**
+ * A single candidate selector discovered by [autoDiscoverRepeatingSelector],
+ * ranked by its structural score. Returned as a list so the CLI can show
+ * alternatives when the top pick isn't what the user wants (e.g. `li`
+ * nav items on a news portal).
+ */
+data class DiscoveredSelector(
+    val selector: String,
+    val matchCount: Int,
+    val score: Double,
+    val sampleText: String,
+)
+
 private fun runVisualDetection(
     document: FeaturedDocument
 ): Pair<String?, List<PageSummaryIndexService.SummaryLinkGroup>> {
@@ -1554,12 +1567,11 @@ private fun runVisualDetection(
  * @return a CSS selector string (e.g. ".product-card", "li"), or null if no
  *   suitable repeating pattern found (single article pages, etc.)
  */
-internal fun autoDiscoverRepeatingSelector(document: FeaturedDocument): String? {
+internal fun autoDiscoverRepeatingSelector(document: FeaturedDocument, topN: Int = 5): List<DiscoveredSelector> {
     val structuralTags = setOf("html", "head", "body", "script", "style", "meta", "link", "noscript")
     val structuralBare = setOf("div", "span")
 
-    var bestSelector: String? = null
-    var bestScore = 0.0
+    val allCandidates = mutableListOf<DiscoveredSelector>()
 
     for (parent in document.select("*")) {
         val parentTag = parent.tagName().lowercase()
@@ -1638,6 +1650,18 @@ internal fun autoDiscoverRepeatingSelector(document: FeaturedDocument): String? 
             val avgTextLength = members.map { it.text().trim().length.toDouble() }.average()
             if (imageRatio < 0.3 && avgTextLength < 20.0) score *= 0.6
 
+            // Text-length bonus: content elements (headlines, descriptions)
+            // have significantly longer text than navigation shortcuts.
+            // News headlines: 20-100+ chars; nav items: 2-8 chars.
+            // This bonus counteracts the sheer-number advantage of nav <li>
+            // elements on sites like people.com.cn (302 nav items vs 15 news).
+            score *= when {
+                avgTextLength >= 50 -> 2.5
+                avgTextLength >= 30 -> 1.8
+                avgTextLength >= 20 -> 1.4
+                else -> 1.0
+            }
+
             if (isStructuralDiv) score *= 0.5
 
             // Chrome penalty: patterns inside nav/header/footer/aside containers
@@ -1695,15 +1719,23 @@ internal fun autoDiscoverRepeatingSelector(document: FeaturedDocument): String? 
                 score *= 1.5
             }
 
-            if (score > bestScore) {
-                bestScore = score
-                // Build usable CSS selector: use class if present, otherwise bare tag
-                bestSelector = if (hasClasses) ".${sig.substringAfter(".")}" else sig
-            }
+            // Build usable CSS selector: use class if present, otherwise bare tag
+            val usableSelector = if (hasClasses) ".${sig.substringAfter(".")}" else sig
+            val sampleTexts = members.map { it.text().trim() }.filter { it.isNotBlank() }.take(3)
+            allCandidates.add(
+                DiscoveredSelector(
+                    selector = usableSelector,
+                    matchCount = members.size,
+                    score = score,
+                    sampleText = sampleTexts.joinToString(" | ")
+                )
+            )
         }
     }
 
-    return bestSelector
+    return allCandidates
+        .sortedByDescending { it.score }
+        .take(topN)
 }
 
 /**
@@ -1731,6 +1763,7 @@ internal fun inspectDocument(
     // structural-signature approach only when visual detection finds nothing.
     var effectiveSelector = selector
     var autoDiscovered = false
+    var autoDiscoveredCandidates: List<DiscoveredSelector> = emptyList()
     var speculativeSuggestion: String? = null
     var speculativeMatchCount: Int? = null
     val initialMatchCount = document.select(selector).size
@@ -1750,10 +1783,11 @@ internal fun inspectDocument(
             val innerHtml = containerElement.html()
             if (innerHtml.isNotBlank()) {
                 val subDoc = FeaturedDocument(org.jsoup.Jsoup.parse(innerHtml))
-                val discovered = autoDiscoverRepeatingSelector(subDoc)
+                val candidates = autoDiscoverRepeatingSelector(subDoc)
+                val discovered = candidates.firstOrNull()
                 if (discovered != null) {
                     // Prefix the discovered selector with the container selector
-                    effectiveSelector = "$selector $discovered"
+                    effectiveSelector = "$selector ${discovered.selector}"
                     autoDiscovered = true
                 }
             }
@@ -1767,11 +1801,14 @@ internal fun inspectDocument(
                 autoDiscovered = true
             } else {
                 // Fallback: structural-signature discovery
-                val discovered = autoDiscoverRepeatingSelector(document)
+                val candidates = autoDiscoverRepeatingSelector(document)
+                val discovered = candidates.firstOrNull()
                 if (discovered != null) {
-                    effectiveSelector = discovered
+                    effectiveSelector = discovered.selector
                     autoDiscovered = true
                 }
+                // Collect remaining candidates for the user to explore
+                autoDiscoveredCandidates = candidates.drop(1)
             }
         }
     } else if (visualBestSelector != null && visualBestSelector != selector) {
@@ -1809,6 +1846,9 @@ internal fun inspectDocument(
             if (autoDiscovered) {
                 put("autoDiscovered", true)
                 put("originalSelector", selector)
+            }
+            if (autoDiscoveredCandidates.isNotEmpty()) {
+                set<ArrayNode>("autoDiscoveredCandidates", candidatesToJson(autoDiscoveredCandidates))
             }
             if (speculativeSuggestion != null) {
                 put("speculativeSuggestion", speculativeSuggestion)
@@ -2057,6 +2097,9 @@ internal fun inspectDocument(
         if (autoDiscovered) {
             put("autoDiscovered", true)
             put("originalSelector", selector)
+        }
+        if (autoDiscoveredCandidates.isNotEmpty()) {
+            set<ArrayNode>("autoDiscoveredCandidates", candidatesToJson(autoDiscoveredCandidates))
         }
         if (speculativeSuggestion != null) {
             put("speculativeSuggestion", speculativeSuggestion)
@@ -2399,6 +2442,29 @@ internal fun linkGroupsToJson(
                 set<ArrayNode>("samples", samplesArr)
             }
             put("score", lg.score)
+        }
+        array.add(obj)
+    }
+    return array
+}
+
+/**
+ * Serialize auto-discovered selector candidates into a JSON array.
+ * Each entry contains the selector, match count, score, and sample text
+ * so the CLI can display alternatives when the top pick isn't ideal
+ * (e.g. `li` nav items on a news portal — the user can pick a better one).
+ */
+internal fun candidatesToJson(
+    candidates: List<DiscoveredSelector>,
+): ArrayNode {
+    val mapper = pulsarObjectMapper()
+    val array = mapper.createArrayNode()
+    for (c in candidates) {
+        val obj = mapper.createObjectNode().apply {
+            put("selector", c.selector)
+            put("matchCount", c.matchCount)
+            put("score", c.score)
+            put("sampleText", c.sampleText)
         }
         array.add(obj)
     }

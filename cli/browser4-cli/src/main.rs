@@ -3785,6 +3785,20 @@ fn extract_tag_from_ref(elem_ref: &str) -> &str {
     &after_ancestor[..tag_end]
 }
 
+/// Returns true if the element ref contains an auto-generated CSS module class name
+/// (e.g. `a.css-2ietpx` where `css-2ietpx` is a hash-based CSS Module identifier).
+/// These class names change on every site deployment and shouldn't be relied on
+/// for long-lived extraction scripts.
+fn is_ephemeral_css_module_ref(elem_ref: &str) -> bool {
+    // Match patterns like "css-2ietpx" or "css-1a2b3c" (hash-based CSS module classes)
+    // Also match patterns like "sc-bdvvtL", "sc-dkPtRN" (styled-components)
+    // and "jss123", "emotion-1a2b3c" (other CSS-in-JS libraries)
+    let re = regex::Regex::new(
+        r"\b(css-[a-z0-9]+|sc-[a-zA-Z]+|jss\d+|emotion-[a-z0-9]+)\b"
+    ).expect("ephemeral CSS class regex");
+    re.is_match(elem_ref)
+}
+
 // ---------------------------------------------------------------------------
 // htmlsnapshot handlers
 // ---------------------------------------------------------------------------
@@ -3987,6 +4001,22 @@ async fn handle_html_snapshot_capture(
             }
             print_group("Links", &links);
             print_group("Other", &other);
+
+            // Warn if auto-generated CSS module class names are present.
+            // These are ephemeral — they change on every site redeployment.
+            let has_ephemeral = elements.iter().any(|el| {
+                el.get("ref")
+                    .and_then(|v| v.as_str())
+                    .map(|r| is_ephemeral_css_module_ref(r))
+                    .unwrap_or(false)
+            });
+            if has_ephemeral {
+                cli_println!("  ⚠️  Auto-generated CSS class names detected (e.g. `css-2ietpx`).");
+                cli_println!("    These are ephemeral — they may change on page reload or site redeployment.");
+                cli_println!("    Use `htmlsnapshot inspect` to discover more resilient structural selectors,");
+                cli_println!("    or `htmlsnapshot summary` to explore content by visual clustering.");
+                cli_println!("");
+            }
         }
     }
 
@@ -4465,7 +4495,7 @@ async fn handle_html_snapshot_export(
 
 /// Parse the WPSI YAML summary and produce a compact outline for stdout display.
 /// The full summary is always saved to file; this extracts the key structure.
-fn format_summary_outline(yaml: &str) -> String {
+fn format_summary_outline(yaml: &str, verbose: bool) -> String {
     let mut outline = String::new();
 
     // Track which top-level section we're in and accumulate items.
@@ -4480,6 +4510,8 @@ fn format_summary_outline(yaml: &str) -> String {
     let mut list_items: Vec<String> = Vec::new();
     let mut linkgroup_count = 0;
     let mut linkgroup_items: Vec<String> = Vec::new();
+    let mut linkgroup_selectors: Vec<String> = Vec::new(); // for suggested commands
+    let mut cur_linkgroup_selector = String::new();
     let mut table_count = 0;
     let mut table_items: Vec<String> = Vec::new();
     let mut stats_lines: Vec<String> = Vec::new();
@@ -4586,7 +4618,14 @@ fn format_summary_outline(yaml: &str) -> String {
                 if let Some(container) = trim_prefix(trimmed, "- container:") {
                     linkgroup_count += 1;
                     linkgroup_items.push(format!("  {}", container.trim().trim_matches('"')));
+                    cur_linkgroup_selector.clear();
+                } else if let Some(sel) = trim_prefix(trimmed, "selector:") {
+                    cur_linkgroup_selector = sel.trim().trim_matches('"').to_string();
                 } else if let Some(item) = trim_prefix(trimmed, "itemTag:") {
+                    // When we see the itemTag, the selector for this group is complete
+                    if !cur_linkgroup_selector.is_empty() {
+                        linkgroup_selectors.push(cur_linkgroup_selector.clone());
+                    }
                     if let Some(last) = linkgroup_items.last_mut() {
                         *last = format!("{} > {}", last, item.trim());
                     }
@@ -4620,8 +4659,10 @@ fn format_summary_outline(yaml: &str) -> String {
                         }
                     }
                 } else if let Some(score) = trim_prefix(trimmed, "score:") {
-                    if let Some(last) = linkgroup_items.last_mut() {
-                        *last = format!("{}  score:{}", last, fmt_num(score));
+                    if verbose {
+                        if let Some(last) = linkgroup_items.last_mut() {
+                            *last = format!("{}  score:{}", last, fmt_num(score));
+                        }
                     }
                 }
             }
@@ -4708,14 +4749,24 @@ fn format_summary_outline(yaml: &str) -> String {
             } else {
                 format!(" ×{}", repeats)
             };
-            if display_text.is_empty() {
-                outline.push_str(&format!("  {:>2}. {:<10} score:{}{}\n", i + 1, typ, fmt_num(score), repeat_suffix));
+            if verbose {
+                if display_text.is_empty() {
+                    outline.push_str(&format!("  {:>2}. {:<10} score:{}{}\n", i + 1, typ, fmt_num(score), repeat_suffix));
+                } else {
+                    outline.push_str(&format!("  {:>2}. {:<10} score:{:<4} \"{}\"{}\n", i + 1, typ, fmt_num(score), display_text, repeat_suffix));
+                }
             } else {
-                outline.push_str(&format!("  {:>2}. {:<10} score:{:<4} \"{}\"{}\n", i + 1, typ, fmt_num(score), display_text, repeat_suffix));
+                if display_text.is_empty() {
+                    outline.push_str(&format!("  {:>2}. {:<10}{}\n", i + 1, typ, repeat_suffix));
+                } else {
+                    outline.push_str(&format!("  {:>2}. {:<10} \"{}\"{}\n", i + 1, typ, display_text, repeat_suffix));
+                }
             }
         }
-        // Score legend: explain what the numbers mean
-        outline.push_str("  ── Score scale: h1=100 h2=50 h3=30 table=60 btn/input=50 form=40 img=20(alt)/5 a=15 p~len/4 +id(10) +cls(5)\n");
+        if verbose {
+            // Score legend: explain what the numbers mean
+            outline.push_str("  ── Score scale: h1=100 h2=50 h3=30 table=60 btn/input=50 form=40 img=20(alt)/5 a=15 p~len/4 +id(10) +cls(5)\n");
+        }
     }
 
     // Lists section
@@ -4743,6 +4794,38 @@ fn format_summary_outline(yaml: &str) -> String {
         // Format as compact single line
         let compact: Vec<String> = stats_lines.iter().map(|s| s.trim().to_string()).collect();
         outline.push_str(&format!("  {}\n", compact.join("  ")));
+    }
+
+    // Suggested commands — copy-paste ready extraction commands based on
+    // discovered link groups and content sections
+    let has_actionable_selectors = !linkgroup_selectors.is_empty()
+        || content_items.iter().any(|(typ, _, _, _)| typ == "h1" || typ == "h2");
+    if has_actionable_selectors {
+        outline.push_str("\n### Suggested Commands\n");
+        outline.push_str("  Copy-paste ready — use these to extract data:\n");
+
+        // Suggest commands for link groups (best available targets)
+        for sel in linkgroup_selectors.iter().take(3) {
+            let cmd = format!("htmlsnapshot get all text \"{} a\" --limit 20", sel);
+            outline.push_str(&format!("  {}\n", cmd));
+        }
+
+        // If no link groups, suggest based on content types
+        if linkgroup_selectors.is_empty() {
+            if content_items.iter().any(|(typ, _, _, _)| typ == "h1") {
+                outline.push_str("  htmlsnapshot get all text \"h1\"\n");
+            }
+            if content_items.iter().any(|(typ, _, _, _)| typ == "h2") {
+                outline.push_str("  htmlsnapshot get all text \"h2\"\n");
+            }
+            outline.push_str("  htmlsnapshot get all text \"a\" --limit 20\n");
+        }
+
+        if verbose {
+            outline.push_str("  # Use --verbose to see internal scoring that ranks these suggestions.\n");
+        } else {
+            outline.push_str("  # Add --verbose to see internal scoring and score legend.\n");
+        }
     }
 
     outline
@@ -4781,6 +4864,11 @@ async fn handle_html_snapshot_summary(
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
     raw_init(raw);
+
+    let verbose = tool_params
+        .get("verbose")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
 
     let combined = with_session(client, base_url, session_name, false, |session_id| {
         let client = client.clone();
@@ -4828,7 +4916,7 @@ async fn handle_html_snapshot_summary(
     if raw {
         println!("{}", summary);
     } else {
-        let outline = format_summary_outline(summary);
+        let outline = format_summary_outline(summary, verbose);
         cli_println!("### Page");
         cli_println!("- Page URL: {}", url);
         cli_println!("- Page Title: {}", title);
@@ -5172,11 +5260,30 @@ async fn handle_html_snapshot_inspect(
         cli_println!("     htmlsnapshot inspect \".card\" --max 20 --depth 6");
     }
 
-    // When auto-discovery was triggered, also suggest htmlsnapshot summary as
-    // a complementary exploration path — it uses a different algorithm
-    // (visual geometry + text clustering) that can surface product data even
-    // when DOM-based pattern discovery picks up page chrome.
+    // When auto-discovery was triggered, show alternative candidates that were
+    // also found — the user may prefer one of these over the auto-selected one.
     if auto_discovered {
+        if let Some(candidates) = data.get("autoDiscoveredCandidates").and_then(|v| v.as_array()) {
+            if !candidates.is_empty() {
+                cli_println!("");
+                cli_println!("  📋 Alternative repeating patterns also found:");
+                for (i, c) in candidates.iter().take(5).enumerate() {
+                    let sel = c.get("selector").and_then(|v| v.as_str()).unwrap_or("");
+                    let count = c.get("matchCount").and_then(|v| v.as_i64()).unwrap_or(0);
+                    let sample = c.get("sampleText").and_then(|v| v.as_str()).unwrap_or("");
+                    let sample_hint = if sample.len() > 50 {
+                        format!("\"{}…\"", &sample[..50])
+                    } else if !sample.is_empty() {
+                        format!("\"{}\"", sample)
+                    } else {
+                        String::new()
+                    };
+                    cli_println!("    {}. \"{}\" ({} matches) {}", i + 1, sel, count, sample_hint);
+                    cli_println!("       Try: htmlsnapshot inspect \"{}\" --max 20", sel);
+                }
+            }
+        }
+
         cli_println!("");
         cli_println!("  📋 Tip: htmlsnapshot summary uses visual clustering (not DOM patterns)");
         cli_println!("    to group visible content. It can surface product info even when");

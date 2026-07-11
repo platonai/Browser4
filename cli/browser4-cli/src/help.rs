@@ -103,7 +103,7 @@ pub fn generate_help() -> String {
     // Common workflows — show the 5 most common patterns
     lines.push("\nCommon workflows:".to_string());
     lines.push("  Navigate & inspect:".to_string());
-    lines.push("    goto <url>  →  snapshot -v 0  →  click <ref>  →  snapshot -v 0".to_string());
+    lines.push("    goto <url>  →  snapshot -v 0  →  click <ref>  →  snapshot -v 0    # -v 0 = top-of-page chunk".to_string());
     lines.push("  Extract data:".to_string());
     lines.push("    htmlsnapshot get text \"<css>\"           # single field".to_string());
     lines.push("    htmlsnapshot query --sql @query.sql       # structured extraction".to_string());
@@ -1182,6 +1182,11 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
             "  - Output is paginated by default (2000 lines per page). Use --page N for subsequent pages, --page-size N to change the page size, or --all to show all content."
                 .to_string(),
         );
+        lines.push(String::new());
+        lines.push("Viewports (page chunks):".to_string());
+        lines.push("  A viewport is one screen-height chunk of the page (~viewport height px).".to_string());
+        lines.push("  Long pages are split into multiple viewports. -v N captures chunk N (0-indexed).".to_string());
+        lines.push("  The snapshot filters the accessibility tree by Y-range — the page is not scrolled.".to_string());
         lines.push(String::new());
         lines.push("Examples:".to_string());
         lines.push("  # Read the page viewport by viewport (start from the top)".to_string());

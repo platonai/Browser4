@@ -1220,11 +1220,23 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
             "eval", "evaluateValue" -> {
                 val normalizedArgs = normalizeEvaluateValueArgs(args)
                 val awaitPromise = (normalizedArgs["awaitPromise"] as? Boolean) ?: false
+
+                // --wait-selector: wait for an element before evaluating.
+                // Useful for pages that render content asynchronously (React, SPA)
+                // where document.querySelectorAll may return empty if called too early.
+                val waitSelector = normalizedArgs["waitSelector"] as? String
+                if (!waitSelector.isNullOrBlank()) {
+                    val waitTimeout = (normalizedArgs["waitTimeout"] as? String)?.toLongOrNull()
+                        ?: (normalizedArgs["waitTimeout"] as? Number)?.toLong()
+                        ?: 30_000L
+                    driver.waitForSelector(waitSelector, waitTimeout)
+                }
+
                 when {
                     normalizedArgs.containsKey("selector") && normalizedArgs.containsKey("functionDeclaration") -> {
                         validateArgs(
                             normalizedArgs,
-                            allowed("selector", "functionDeclaration", "awaitPromise"),
+                            allowed("selector", "functionDeclaration", "awaitPromise", "waitSelector", "waitTimeout"),
                             setOf("selector", "functionDeclaration"),
                             functionName
                         )
@@ -1235,7 +1247,7 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
                     }
 
                     normalizedArgs.containsKey("expression") -> {
-                        validateArgs(normalizedArgs, allowed("expression", "awaitPromise"), setOf("expression"), functionName)
+                        validateArgs(normalizedArgs, allowed("expression", "awaitPromise", "waitSelector", "waitTimeout"), setOf("expression"), functionName)
                         if (awaitPromise) {
                             driver.evaluateValueDetail(paramString(normalizedArgs, "expression", functionName)!!, awaitPromise = true)
                         } else {
