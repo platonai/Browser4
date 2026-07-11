@@ -21,6 +21,8 @@ All 8 task steps completed successfully:
 
 **Key finding:** All six eval invocation modes (`eval`, `--json`, `--file`, `--stdin`, `--base64`, `--ref`) work correctly and produce consistent output. The page (interactive-1.html) genuinely has 0 links, 0 images, and 0 forms — it uses non-link interactive elements (textboxes, comboboxes, spinbuttons, buttons) instead.
 
+---
+
 ### Execution Context
 
 **Key Commands:**
@@ -48,19 +50,58 @@ All 8 task steps completed successfully:
 
 ---
 
+---
+
 ## Issues Found (6 issues)
-> **Review complete:** 0 approved, 6 deferred/rejected
 
 ### Issue 1: `console.log` output from `eval --file` scripts is silently discarded
 
 **Severity:** Medium
 **Category:** Reliability
 
-#### Review Result
+#### Reproduction
 
-**Decision:** WONTFIX
+```bash
+# Create a script with console.log
+cat > page_info.js << 'EOF'
+console.log("IMAGES:", document.querySelectorAll('img').length);
+({images: document.querySelectorAll('img').length})
+EOF
+cd cli/browser4-cli && cargo run -- eval --file page_info.js
+```
+Only `{"images":0}` appears. The `console.log("IMAGES:", ...)` output is silently discarded.
 
-**Summary:** - Document in `eval --help` that `console.log` output is not captured; only `return` values are shown
+#### Expected Behavior
+
+`console.log` output from `eval --file` scripts should be captured and displayed (on stderr or as part of the output), or the documentation should clearly state that `console.log` is not captured.
+
+#### Actual Behavior
+
+All `console.log` calls are silently discarded. Only the expression's return value is printed. A user who writes logging-heavy scripts (as the task instructions suggest: "computes and logs") will be confused when their logs vanish.
+
+#### Root Cause Analysis
+
+The `eval` command uses CDP's `Runtime.evaluate` which returns only the expression result. `console.log` messages go to the browser's console log, which requires a separate CDP subscription (`Runtime.consoleAPICalled`). The CLI does not subscribe to console events during `eval` execution.
+
+#### Code Pointer
+
+``cli/browser4-cli/src/commands.rs` (eval command handler) and the backend's CDP Runtime.evaluate call.`
+
+#### AI Suggested Improvement
+
+- Document in `eval --help` that `console.log` output is not captured; only `return` values are shown
+- Consider subscribing to `Runtime.consoleAPICalled` during `eval --file` execution and forwarding messages to stderr
+- Add an example in the help text showing `return` instead of `console.log`
+
+#### Human Review
+
+- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+- [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
+- [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- **Notes:**
+
 
 ---
 
@@ -69,11 +110,44 @@ All 8 task steps completed successfully:
 **Severity:** Low
 **Category:** UX
 
-#### Review Result
+#### Reproduction
 
-**Decision:** WONTFIX
+```bash
+cd /home/vincent/workspace/Browser4 && echo 'document.title' | cd cli/browser4-cli && cargo run -- eval --stdin
+```
+Produces: `error: could not find Cargo.toml in /home/vincent/workspace/Browser4`
 
-**Summary:** - Add a note to `eval --help` and SKILL.md about the pipe precedence pitfall
+#### Expected Behavior
+
+The pipe should deliver stdin to `cargo run -- eval --stdin` regardless of how the user chains `cd` with `&&` and `|`.
+
+#### Actual Behavior
+
+Because `|` has higher precedence than `&&` in bash, the command parses as `cd ... && (echo ... | cd cli/browser4-cli) && cargo run ...`, where the `cd` in the subshell doesn't affect the parent. `cargo run` executes from the wrong directory.
+
+#### Root Cause Analysis
+
+Shell precedence: `|` binds tighter than `&&`. The user must either `cd` into the cli directory first, or group with parentheses: `echo ... | (cd cli/browser4-cli && cargo run -- eval --stdin)`.
+
+#### Code Pointer
+
+`Not a code fix — documentation/clarification issue.`
+
+#### AI Suggested Improvement
+
+- Add a note to `eval --help` and SKILL.md about the pipe precedence pitfall
+- Suggest the `(cd cli/browser4-cli && cargo run -- eval --stdin)` subshell pattern in documentation
+- Consider a wrapper script or shell alias to reduce friction
+
+#### Human Review
+
+- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+- [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
+- [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- **Notes:**
+
 
 ---
 
@@ -82,11 +156,41 @@ All 8 task steps completed successfully:
 **Severity:** Medium
 **Category:** Documentation
 
-#### Review Result
+#### Reproduction
 
-**Decision:** WONTFIX
+Read the task specification. It references `$cliInvocation`, `$helpCmd`, `$skillPath`, and `$RepoRootPath` as if they are defined variables, but they are literal strings with no substitution. A first-time evaluator must reverse-engineer their values from `common.ps1`.
 
-**Summary:** - Perform variable substitution in the PowerShell template before emitting the prompt (resolve `$cliInvocation`, `$helpCmd`, `$skillPath`, `$RepoRootPath` to their actual values)
+#### Expected Behavior
+
+The prompt should either substitute the variables (e.g., show the actual `cargo run --` command) or define them explicitly at the top of the prompt with their resolved values.
+
+#### Actual Behavior
+
+The evaluator must infer: `$RepoRootPath` = `/home/vincent/workspace/Browser4`, `$skillPath` = `skills/browser4-cli/SKILL.md`, `$cliInvocation` = `cd ... && cd cli/browser4-cli && cargo run --`, `$helpCmd` = `cd ... && cd cli/browser4-cli && cargo run -- help`.
+
+#### Root Cause Analysis
+
+The prompt is generated from a PowerShell template (`browser4-eval-prompt.ps1`) that does variable substitution for PowerShell but emits strings containing `$variable` references into the prompt text. The AI agent receives the literal `$variable` strings without substitution context.
+
+#### Code Pointer
+
+``coworker/scripts/workers/browser4-eval-prompt.ps1` (prompt template generation)`
+
+#### AI Suggested Improvement
+
+- Perform variable substitution in the PowerShell template before emitting the prompt (resolve `$cliInvocation`, `$helpCmd`, `$skillPath`, `$RepoRootPath` to their actual values)
+- Alternatively, add a "Variable Reference" section at the top of the prompt defining each variable explicitly
+- This issue has been reported in at least 3 prior evaluations (advanced-mouse-interaction, htmlsnapshot-inspect-discovery, x-sql-query-methods) without being resolved
+
+#### Human Review
+
+- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+- [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
+- [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- **Notes:**
+
 
 ---
 
@@ -95,11 +199,44 @@ All 8 task steps completed successfully:
 **Severity:** Low
 **Category:** Discoverability
 
-#### Review Result
+#### Reproduction
 
-**Decision:** WONTFIX
+```bash
+cd /home/vincent/workspace/Browser4 && cd cli/browser4-cli && cargo run -- eval --file page_info.js
+```
+If `page_info.js` is at the repo root (`/home/vincent/workspace/Browser4/page_info.js`), this fails because `cargo run` resolves relative paths from `cli/browser4-cli/`, not the repo root.
 
-**Summary:** - Document in `eval --help` that `--file` paths resolve relative to the current working directory
+#### Expected Behavior
+
+Either the path should resolve relative to the user's CWD (the repo root), or the documentation should clearly state that `--file` paths resolve relative to the CLI binary's working directory.
+
+#### Actual Behavior
+
+The path resolves from `cli/browser4-cli/`. Users must use absolute paths (e.g., `/home/vincent/workspace/Browser4/page_info.js`) or paths relative to `cli/browser4-cli/` (e.g., `../../page_info.js`).
+
+#### Root Cause Analysis
+
+`cargo run` changes the process CWD to `cli/browser4-cli/` (where `Cargo.toml` lives). The `--file` argument is a plain string passed to the binary; file resolution happens relative to the process CWD. This is standard `cargo run` behavior but surprising to users who think of the repo root as their working context.
+
+#### Code Pointer
+
+`Not a code fix — documentation issue. Could also be addressed by resolving `--file` paths relative to the original CWD before `cargo run` changed it.`
+
+#### AI Suggested Improvement
+
+- Document in `eval --help` that `--file` paths resolve relative to the current working directory
+- Consider adding a `--file` path resolution note to the examples section
+- The SKILL.md already hints at this for Windows quoting issues but doesn't explicitly address path resolution
+
+#### Human Review
+
+- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+- [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
+- [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- **Notes:**
+
 
 ---
 
@@ -108,11 +245,44 @@ All 8 task steps completed successfully:
 **Severity:** Low
 **Category:** UX
 
-#### Review Result
+#### Reproduction
 
-**Decision:** WONTFIX
+```bash
+cd cli/browser4-cli && cargo run -- snapshot -i
+```
+Output shows only 10 lines with `... (use --stdout or open the file for full content)`. The user must re-run `snapshot -i --stdout` to see all element refs inline.
 
-**Summary:** - When `-i`/`--interactive` is passed, default to `--stdout` behavior (the user explicitly asked for interactive discovery)
+#### Expected Behavior
+
+Interactive mode (`-i`) signals "I want to explore interactively." It could default to `--stdout` behavior or at minimum show all interactive elements (not just the first 10 lines of YAML).
+
+#### Actual Behavior
+
+The user must run the command twice — once to learn about `--stdout` from the tip, and again with `--stdout` to actually see the refs. This is a two-step discovery process.
+
+#### Root Cause Analysis
+
+`snapshot -i` writes to a file by default and shows a preview. The `--stdout` flag exists but is not the default. This was reported in a prior evaluation (Issue 2, REJECTED), but the UX friction remains.
+
+#### Code Pointer
+
+``cli/browser4-cli/src/snapshot.rs` (snapshot output mode selection)`
+
+#### AI Suggested Improvement
+
+- When `-i`/`--interactive` is passed, default to `--stdout` behavior (the user explicitly asked for interactive discovery)
+- Increase the preview line count for interactive mode (at least 25-30 lines to show most interactive elements on a typical page)
+- Add a tip: "Use `snapshot -i --stdout` next time to see all refs inline"
+
+#### Human Review
+
+- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+- [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
+- [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- **Notes:**
+
 
 ---
 
@@ -121,11 +291,55 @@ All 8 task steps completed successfully:
 **Severity:** Low
 **Category:** Discoverability
 
-#### Review Result
+#### Reproduction
 
-**Decision:** WONTFIX
+```bash
+cd cli/browser4-cli && cargo run -- eval --base64 "document.title"
+```
+Without pre-encoding to base64, the raw string is interpreted as base64, yielding garbage or errors.
 
-**Summary:** - Add a tip to `eval --help`: "Generate base64: `echo -n 'document.title' | base64`"
+#### Expected Behavior
+
+Since `--base64` exists for quoting workarounds, there should be a convenient way to encode. Either document how to encode (e.g., `echo -n 'expr' | base64`), or provide a subcommand to encode.
+
+#### Actual Behavior
+
+The `--base64` flag works correctly with pre-encoded input (`ZG9jdW1lbnQudGl0bGU=` = `document.title`), but users must know to pre-encode. The help text mentions it as a workaround for Windows quoting but doesn't show the encoding step.
+
+#### Root Cause Analysis
+
+Documentation gap — `eval --help` shows the base64 example but doesn't explain how to produce the base64 value.
+
+#### Code Pointer
+
+``cli/browser4-cli/src/help.rs` (eval help text)`
+
+#### AI Suggested Improvement
+
+- Add a tip to `eval --help`: "Generate base64: `echo -n 'document.title' | base64`"
+- Consider a convenience mode where `--base64 -` reads the raw expression from stdin and auto-encodes
+- Document the encoding workflow in SKILL.md's eval section
+
+#### Human Review
+
+- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+- [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
+- [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- **Notes:**
+
+---
+
+## Previously Reported Issues — Status Update
+
+| Prior Issue | Status | Evidence |
+|---|---|---|
+| `--ref` flag discoverability in top-level help (Issue 4) | **FIXED** | `help` now shows `eval [expression] [--ref <ref>]` |
+| Snapshot viewport concept explanation (Issue 6) | **IMPROVED** | Output now says "page chunks split by viewport height" |
+| `console` command fails (Issue 1) | Not tested | Outside task scope |
+| No `--json` from snapshot (Issue 7) | Still present | Snapshot output remains YAML only |
+
 
 ---
 
@@ -183,3 +397,4 @@ Output shows only 10 lines with `... (use --stdout or open the file for full con
 cd cli/browser4-cli && cargo run -- eval --base64 "document.title"
 ```
 Without pre-encoding to base64, the raw string is interpreted as base64, yielding garbage or errors.
+

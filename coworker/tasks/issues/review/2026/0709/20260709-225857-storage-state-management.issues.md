@@ -28,6 +28,8 @@ All 17 steps completed successfully:
 | 16 | Load state, verify cookie restored | ✓ `test_cookie` restored |
 | 17 | Delete `browser_state.json` | ✓ Cleaned up |
 
+---
+
 ### Execution Context
 
 **Key Commands:**
@@ -71,19 +73,52 @@ cargo run --manifest-path ... -- close
 
 ---
 
+---
+
 ## Issues Found (5 issues)
-> **Review complete:** 0 approved, 5 deferred/rejected
 
 ### Issue 1: Typo "entrie(s)" in localStorage/sessionStorage clear output
 
 **Severity:** Low
 **Category:** Product
 
-#### Review Result
+#### Reproduction
 
-**Decision:** WONTFIX
+```
+browser4-cli localstorage-clear
+browser4-cli sessionstorage-clear
+```
 
-**Summary:** - Change `"entrie(s)"` to `"entries"` in the output string
+#### Expected Behavior
+
+Output reads "Cleared: 0 entries" or "Cleared 0 entries."
+
+#### Actual Behavior
+
+Output reads "Cleared: 0 entrie(s)." — the word "entrie(s)" is misspelled (should be "entries") and the parenthesized plural form is grammatically awkward.
+
+#### Root Cause Analysis
+
+Typo in the output format string in the clear command handler. The parenthesized `(s)` pattern is also an unusual/non-standard i18n shortcut.
+
+#### Code Pointer
+
+`(Likely in the CLI output formatting for `localstorage-clear`/`sessionstorage-clear` commands.)`
+
+#### AI Suggested Improvement
+
+- Change `"entrie(s)"` to `"entries"` in the output string
+- Or use proper singular/plural logic: `"1 entry"` vs `"N entries"`
+
+#### Human Review
+
+- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+- [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
+- [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- **Notes:**
+
 
 ---
 
@@ -92,11 +127,54 @@ cargo run --manifest-path ... -- close
 **Severity:** Low
 **Category:** Documentation / UX
 
-#### Review Result
+#### Reproduction
 
-**Decision:** WONTFIX
+```
+browser4-cli cookie-get theme
+```
 
-**Summary:** - Add a `--value-only` flag to `cookie-get` that returns just the value string, matching `localstorage-get`/`sessionstorage-get` behavior
+#### Expected Behavior
+
+The value `"dark"` is returned (since the command is named "get" and takes a cookie name, implying value retrieval).
+
+#### Actual Behavior
+
+The full cookie JSON object is returned:
+```json
+{
+  "domain": "localhost",
+  "expires": 1784246400.0,
+  "httpOnly": false,
+  "name": "theme",
+  "path": "/",
+  "sameSite": "Lax",
+  "secure": false,
+  "value": "dark"
+}
+```
+
+#### Root Cause Analysis
+
+The command is designed to return the full cookie descriptor for completeness. However, this is inconsistent with `localstorage-get` which returns only the value (e.g., `1` for `sessionstorage-get visit_count`). Users may expect `cookie-get` to behave symmetrically.
+
+#### Code Pointer
+
+`(Likely in the cookie-get command handler — compare with localstorage-get for consistency.)`
+
+#### AI Suggested Improvement
+
+- Add a `--value-only` flag to `cookie-get` that returns just the value string, matching `localstorage-get`/`sessionstorage-get` behavior
+- Alternatively, document the full-object return format explicitly in `cookie-get --help` and the README
+
+#### Human Review
+
+- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+- [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
+- [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- **Notes:**
+
 
 ---
 
@@ -105,11 +183,43 @@ cargo run --manifest-path ... -- close
 **Severity:** Medium
 **Category:** Documentation
 
-#### Review Result
+#### Reproduction
 
-**Decision:** WONTFIX
+1. Set a sessionStorage value
+2. Run `state-save`
+3. Clear sessionStorage
+4. Run `state-load`
 
-**Summary:** - Add a note to the `state-save`/`state-load` documentation: "Note: sessionStorage is not persisted because it is inherently session-scoped. Only cookies and localStorage are saved/restored."
+#### Expected Behavior
+
+The README says `state-save` saves "cookies & localStorage" only. Either sessionStorage should not be restored, or the documentation should list it.
+
+#### Actual Behavior
+
+The README description reads: "Save cookies & localStorage to a JSON file" — sessionStorage is not mentioned. The output file also doesn't show sessionStorage in its structure (`cookies` + `origins[].localStorage` only). This means `state-save`/`state-load` cannot save/restore sessionStorage, which is expected (sessionStorage is session-bound), but this isn't documented.
+
+#### Root Cause Analysis
+
+Documentation gap. The `state-save`/`state-load` description omits clarifying that sessionStorage is intentionally excluded (it's session-scoped by nature).
+
+#### Code Pointer
+
+`(In `cli/browser4-cli/README.md` around the Browser Storage section.)`
+
+#### AI Suggested Improvement
+
+- Add a note to the `state-save`/`state-load` documentation: "Note: sessionStorage is not persisted because it is inherently session-scoped. Only cookies and localStorage are saved/restored."
+- Inline with the browser storage command table
+
+#### Human Review
+
+- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+- [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
+- [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- **Notes:**
+
 
 ---
 
@@ -118,11 +228,40 @@ cargo run --manifest-path ... -- close
 **Severity:** Low
 **Category:** UX
 
-#### Review Result
+#### Reproduction
 
-**Decision:** WONTFIX
+Run any command when an existing session is active.
 
-**Summary:** - Suppress the "Reconnected" message when `--quiet` or `--json` is used (it may already be suppressed — verify)
+#### Expected Behavior
+
+The output focuses on the command result. Session reconnect info could be a brief one-liner or suppressed after the first invocation.
+
+#### Actual Behavior
+
+Every command prints "Reconnected to existing session on <URL>" which adds noise. For example, `cookie-set` prints:
+```
+Reconnected to existing session on http://localhost:18080/generated/interactive-1.html
+Cookie set: session_id
+```
+
+#### Root Cause Analysis
+
+Session reconnection status is emitted at `info` level unconditionally. For rapid-fire CLI usage, this adds cognitive load.
+
+#### AI Suggested Improvement
+
+- Suppress the "Reconnected" message when `--quiet` or `--json` is used (it may already be suppressed — verify)
+- Consider demoting this to a `--verbose`-only message or suppressing it for non-navigation commands where reconnect is an implementation detail
+
+#### Human Review
+
+- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+- [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
+- [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- **Notes:**
+
 
 ---
 
@@ -131,11 +270,36 @@ cargo run --manifest-path ... -- close
 **Severity:** Low
 **Category:** Discoverability
 
-#### Review Result
+#### Reproduction
 
-**Decision:** WONTFIX
+Run `cookie-list` vs `cookie-get` vs `localstorage-list`.
 
-**Summary:** - Ensure `--json` produces consistent `{"status":"ok","command":"...","output":{...}}` envelopes for ALL commands including `*-clear`
+#### Expected Behavior
+
+Consistent output format (or clearly documented differences).
+
+#### Actual Behavior
+
+All storage commands produce JSON arrays/objects (consistent 👍), but the `localstorage-clear` and `sessionstorage-clear` commands produce human-readable text ("localStorage cleared: 0 entrie(s).") rather than a JSON envelope even though `--json` is a global flag. It's unclear whether `--json` wraps these messages or if the commands ignore it.
+
+#### Root Cause Analysis
+
+The `--json` flag's interaction with each subcommand may not be uniform. Some commands emit human-readable strings by default instead of JSON.
+
+#### AI Suggested Improvement
+
+- Ensure `--json` produces consistent `{"status":"ok","command":"...","output":{...}}` envelopes for ALL commands including `*-clear`
+- Add `localstorage-list --json` validation to tests
+
+#### Human Review
+
+- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+- [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
+- [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- **Notes:**
+
 
 ---
 
@@ -177,3 +341,4 @@ Run any command when an existing session is active.
 #### Issue 5: No `--json` flag used — output format inconsistency between commands
 
 Run `cookie-list` vs `cookie-get` vs `localstorage-list`.
+
