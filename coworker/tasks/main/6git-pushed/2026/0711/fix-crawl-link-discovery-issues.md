@@ -17,8 +17,6 @@ The task was **partially completed** with significant workarounds.
 **Failed:**
 - ❌ `crawl` command with depth 1 (link discovery mode) — perpetually stuck in "pending", never processes
 
----
-
 ### Execution Context
 
 | Step | Command | Result |
@@ -36,55 +34,14 @@ The task was **partially completed** with significant workarounds.
 ---
 
 ## Issues Found (8 issues)
-
-### Issue 1: Crawl with link discovery (depth >= 1) perpetually stuck in "pending"
-
-**Severity:** Critical
-**Category:** Reliability
-
-#### Reproduction
-
-```
-cargo run --manifest-path cli/browser4-cli/Cargo.toml -- crawl "http://books.toscrape.com/" --depth 1 --out-link-selector "a[href*=catalogue]" --out-link-pattern ".*catalogue.*" --top-links 10 --format table
-```
-
-#### Expected Behavior
-
-Crawl completes, discovers links matching the selector, loads linked pages, returns results in table format.
-
-#### Actual Behavior
-
-Task remains "pending" forever. CLI shows "Still waiting for crawl to start..." repeatedly until timeout. Server log shows the task was submitted and a `StreamingTaskLoop` was created, but the coroutine never starts processing. One attempt found 0 out-links (loaded URL with args appended), another attempt timed out at 600s.
-
-#### Root Cause Analysis
-
-Two interacting bugs:
-1. In `CrawlService.crawlDepth1()`, `session.load(request.url, options)` and/or `session.loadDocument(portalUrl, normOptions)` internally concatenates the URL with args string (e.g., `http://books.toscrape.com/ -outLinkPattern ... -outLinkSelector ... -topLinks 10`), producing an invalid URL. The page load fails silently and returns no out-links.
-2. Each crawl submission creates a new `StaticAgenticContext` that accumulates in `PulsarContexts`. The `AgenticContexts.await()` in `crawlDepth1` waits on the global `activeContext`, which may not be the crawl's own context, causing a deadlock.
-
-#### Code Pointer
-
-``browser4-rest/src/main/kotlin/ai/platon/pulsar/rest/api/service/CrawlService.kt:crawlDepth1()` and `extractOutLinks()`.`
-
-#### AI Suggested Improvement
-
-- Separate URL from LoadOptions args in `session.load()` and `session.loadDocument()` calls — do not concatenate them
-- Scope `AgenticContexts.await()` to the crawl's own context, not the global active context
-- Add proper error propagation — if `loadDocument` fails or returns empty, surface a clear error instead of silently returning 0 links
-
-#### Human Review
-
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
-- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
-- [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
-- [ ] **REJECT** — issue invalid, not a problem, or already addressed
-- **Notes:**
-
-
----
+> **Review complete:** 6 approved, 2 deferred/rejected
 
 ### Issue 2: CrawlRequest `args` parameter null when `--args` flag not provided
+
+**Severity:** High
+**Category:** Reliability
+
+#### Overview
 
 **Severity:** High
 **Category:** Reliability
@@ -119,17 +76,22 @@ In `cli/browser4-cli/src/commands.rs`, the `args` key is only added to the param
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
-- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
-- [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
-- [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [x] **ACCEPT**
+- [ ] **ACCEPT with improvements**
+- [ ] **DEFER**
+- [ ] **WONTFIX**
+- [ ] **REJECT**
+- [ ] **DUPLICATE**
 - **Notes:**
-
 
 ---
 
 ### Issue 3: No way to cancel/clear stuck crawl tasks from CLI
+
+**Severity:** High
+**Category:** Product
+
+#### Overview
 
 **Severity:** High
 **Category:** Product
@@ -164,17 +126,22 @@ The `crawl` CLI command only exposes `crawl [url]` and `crawl list`. The cancel,
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
-- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
-- [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
-- [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [x] **ACCEPT**
+- [ ] **ACCEPT with improvements**
+- [ ] **DEFER**
+- [ ] **WONTFIX**
+- [ ] **REJECT**
+- [ ] **DUPLICATE**
 - **Notes:**
-
 
 ---
 
 ### Issue 4: Stale async task state blocks new crawl submissions
+
+**Severity:** High
+**Category:** Reliability
+
+#### Overview
 
 **Severity:** High
 **Category:** Reliability
@@ -211,17 +178,22 @@ The backend creates new `StaticAgenticContext` instances for each crawl submissi
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
-- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
-- [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
-- [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [x] **ACCEPT**
+- [ ] **ACCEPT with improvements**
+- [ ] **DEFER**
+- [ ] **WONTFIX**
+- [ ] **REJECT**
+- [ ] **DUPLICATE**
 - **Notes:**
-
 
 ---
 
 ### Issue 5: `crawl list` only shows CLI-tracked tasks, not backend tasks
+
+**Severity:** Medium
+**Category:** Product
+
+#### Overview
 
 **Severity:** Medium
 **Category:** Product
@@ -257,17 +229,22 @@ The CLI maintains its own task tracking file (`~/.browser4/async-tasks.json`) se
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
-- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
-- [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
-- [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [x] **ACCEPT**
+- [ ] **ACCEPT with improvements**
+- [ ] **DEFER**
+- [ ] **WONTFIX**
+- [ ] **REJECT**
+- [ ] **DUPLICATE**
 - **Notes:**
-
 
 ---
 
 ### Issue 6: `--args` / `-a` flag quoting is confusing and error-prone
+
+**Severity:** Medium
+**Category:** UX
+
+#### Overview
 
 **Severity:** Medium
 **Category:** UX
@@ -303,61 +280,22 @@ The `-a` flag requires a single string argument, but the LoadOptions syntax uses
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
-- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
-- [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
-- [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [x] **ACCEPT**
+- [ ] **ACCEPT with improvements**
+- [ ] **DEFER**
+- [ ] **WONTFIX**
+- [ ] **REJECT**
+- [ ] **DUPLICATE**
 - **Notes:**
-
-
----
-
-### Issue 7: `htmlsnapshot get` requires re-capture after each navigation
-
-**Severity:** Low
-**Category:** UX / Documentation
-
-#### Reproduction
-
-1. `goto url1` → `htmlsnapshot` → `htmlsnapshot get text "h1"` — works
-2. `goto url2` → `htmlsnapshot get text "h1"` — returns "No elements matched" without warning
-
-#### Expected Behavior
-
-Either auto-capture on first `get` after navigation, or a clear error telling the user to run `htmlsnapshot` first.
-
-#### Actual Behavior
-
-Silent failure — "No elements matched" which could mean "the selector is wrong" rather than "the snapshot is from the previous page."
-
-#### Root Cause Analysis
-
-`htmlsnapshot get` reads from the last captured HTML snapshot in page storage. After `goto`, the snapshot is stale but no warning is given.
-
-#### Code Pointer
-
-``browser4-rest/.../HtmlSnapshotController.kt` — get endpoint should check snapshot freshness.`
-
-#### AI Suggested Improvement
-
-- Auto-capture a snapshot when `htmlsnapshot get` is called after navigation (if snapshot is stale)
-- Or, return a clear error: "No snapshot captured for this page. Run `htmlsnapshot` first."
-- Add a `--capture` flag to `htmlsnapshot get` for one-shot capture-and-extract
-
-#### Human Review
-
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
-- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
-- [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
-- [ ] **REJECT** — issue invalid, not a problem, or already addressed
-- **Notes:**
-
 
 ---
 
 ### Issue 8: `crawl` with link discovery returns 0 pages silently on partial failure
+
+**Severity:** Medium
+**Category:** UX
+
+#### Overview
 
 **Severity:** Medium
 **Category:** UX
@@ -392,13 +330,39 @@ In `crawlDepth1`, when `extractOutLinks` returns empty, the crawl returns `empty
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
-- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
-- [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
-- [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [x] **ACCEPT**
+- [ ] **ACCEPT with improvements**
+- [ ] **DEFER**
+- [ ] **WONTFIX**
+- [ ] **REJECT**
+- [ ] **DUPLICATE**
 - **Notes:**
 
+---
+
+### Issue 1: Crawl with link discovery (depth >= 1) perpetually stuck in "pending"
+
+**Severity:** Critical
+**Category:** Reliability
+
+#### Review Result
+
+**Decision:** DUPLICATE
+
+**Summary:** - Separate URL from LoadOptions args in `session.load()` and `session.loadDocument()` calls — do not concatenate them
+
+---
+
+### Issue 7: `htmlsnapshot get` requires re-capture after each navigation
+
+**Severity:** Low
+**Category:** UX / Documentation
+
+#### Review Result
+
+**Decision:** DEFER
+
+**Summary:** - Auto-capture a snapshot when `htmlsnapshot get` is called after navigation (if snapshot is stale)
 
 ---
 
@@ -462,3 +426,4 @@ cargo run ... -- crawl "https://books.toscrape.com/" -d 1 -a "-outLink \"a[href*
 crawl "http://books.toscrape.com/" -d 1 -ol "a[href*=catalogue]" -olp ".*catalogue.*" -tl 10 --format table
 ```
 
+#auto-approve

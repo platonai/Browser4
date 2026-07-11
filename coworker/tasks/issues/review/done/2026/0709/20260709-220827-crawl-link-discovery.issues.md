@@ -75,11 +75,11 @@ Two interacting bugs:
 #### Human Review
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [x] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
-- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
+- [x] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
 
 ---
