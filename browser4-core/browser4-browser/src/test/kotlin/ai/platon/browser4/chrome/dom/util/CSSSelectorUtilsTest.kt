@@ -1,9 +1,10 @@
 package ai.platon.browser4.chrome.dom.util
 
-import ai.platon.pulsar.chrome.dom.model.MergedDOMTreeNode
-import ai.platon.pulsar.chrome.dom.model.NodeType
+import ai.platon.browser4.api.model.MergedDOMTreeNode
+import ai.platon.browser4.api.model.NodeType
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.DisplayName
+import ai.platon.browser4.api.model.CSSSelectorUtils
 import org.junit.jupiter.api.Test
 
 class CSSSelectorUtilsTest {

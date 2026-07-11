@@ -1,6 +1,6 @@
 package ai.platon.browser4.chrome.dom.util
 
-import ai.platon.pulsar.chrome.dom.model.MergedDOMTreeNode
+import ai.platon.browser4.api.model.MergedDOMTreeNode
 
 /**
  * Utility functions for scroll-related logic.

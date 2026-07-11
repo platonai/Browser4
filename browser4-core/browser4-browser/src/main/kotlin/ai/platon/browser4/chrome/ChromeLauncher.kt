@@ -1,9 +1,9 @@
 package ai.platon.browser4.chrome
 
-import ai.platon.browser4.chrome.handler.transport.ChromeImpl
+import ai.platon.browser4.chrome.protocol.transport.ChromeImpl
 import ai.platon.browser4.chrome.util.ChromeLaunchException
-import ai.platon.browser4.chrome.util.ChromeOptions
-import ai.platon.browser4.chrome.util.LauncherOptions
+import ai.platon.browser4.api.ChromeOptions
+import ai.platon.browser4.api.LauncherOptions
 import ai.platon.pulsar.common.*
 import ai.platon.pulsar.common.browser.BrowserFiles
 import ai.platon.pulsar.common.browser.Browsers
