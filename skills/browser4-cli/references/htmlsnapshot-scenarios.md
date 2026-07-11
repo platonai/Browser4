@@ -80,7 +80,7 @@ All scenarios using `get`, `export`, `grep`, and `summary` commands have been te
 | 11. Summary (WPSI) | en.wikipedia.org | ✅ YAML output with headings, stats, keyContent |
 | 12. Grep incident response | Multiple sites | ✅ `-i`, `-v`, `-C`, `-F`, `--selector` all functional |
 
-**X-SQL `query` note:** The X-SQL query path (`htmlsnapshot query`) has a known Jackson serialization issue with `java.time.Instant` fields in `ScrapeResponse`. A fix has been applied in `MCPToolController.kt` (using the Spring-configured `ObjectMapper` with `JavaTimeModule` instead of `jacksonObjectMapper()`). This requires a server rebuild to take effect.
+**X-SQL `query` note:** The X-SQL query path (`htmlsnapshot query`) previously had a Jackson serialization issue with `java.time.Instant` fields in `ScrapeResponse`. This was fixed by using `pulsarObjectMapper()` (which includes `JavaTimeModule`) instead of `jacksonObjectMapper()` in `MCPToolController.kt`. Verified 2026-07-11 — no further action needed.
 
 ---
 

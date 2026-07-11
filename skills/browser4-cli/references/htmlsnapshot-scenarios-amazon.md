@@ -9,6 +9,8 @@ tier: procedure
 These three scenarios form a complete Amazon extraction workflow: discover the home page structure → extract search results → extract product details. Each scenario is self-contained and emphasizes a **discovery-first** approach — use `summary` and `inspect` to find selectors before committing to extraction queries.
 
 > **Note:** CSS selectors are tied to live websites and may break over time. See [SKILL.md §5](../SKILL.md#5-critical-warnings). Always run `summary` + `inspect` first when targeting a new locale or product category.
+>
+> **Last verified:** 2026-07-10 (Amazon.com, US locale). Selectors may differ by locale, device, or after Amazon layout updates.
 
 > **Parent document:** [htmlsnapshot-scenarios.md](htmlsnapshot-scenarios.md) — full scenario index, patterns & tips, and command reference.
 
@@ -23,6 +25,8 @@ These three scenarios form a complete Amazon extraction workflow: discover the h
 ---
 
 ## 14. Amazon Home Page Discovery
+
+> ⚠️ **Always run `htmlsnapshot inspect` first** to verify selectors on your locale. Amazon's DOM structure changes frequently and varies by region. Selectors shown below were verified on 2026-07-10 (Amazon.com, US locale).
 
 **Problem:** You land on `amazon.com` and need to quickly understand the page structure — where is the search box? What navigation categories exist? What content blocks (recommendations, deals, featured products) are present?
 
@@ -140,9 +144,21 @@ browser4-cli snapshot | grep -i search
 
 ## 15. Amazon Search Results Extraction
 
+> ⚠️ **Always run `htmlsnapshot inspect` first** to verify selectors on your locale. Amazon's DOM structure changes frequently and varies by region. Selectors shown below were verified on 2026-07-10 (Amazon.com, US locale).
+
 **Problem:** You've searched Amazon for a product category and need to extract titles, prices, ratings, and image URLs from the search results page. The DOM is complex and you don't know the selectors ahead of time. You need a repeatable discovery-to-extraction workflow.
 
 **Why HTML Snapshot:** `summary` confirms you are on a search-results page and reveals the result count. `inspect` discovers the repeating card structure and suggests selectors with coverage percentages — no manual HTML reading needed. `get all` validates the suggested selectors on real data. `query` then extracts structured data in a single X-SQL pass.
+
+### Step 0: Auto-discover selectors (always do this first)
+
+Before using any documented selectors, verify the current page structure:
+
+```bash
+browser4-cli htmlsnapshot inspect
+```
+
+This discovers the repeating card CSS classes, element hierarchy, and suggested selectors with coverage percentages — adapting to whatever Amazon's current DOM looks like for your locale and product category. Documented selectors like `.s-result-item[data-component-type='s-search-result']` are a starting point; actual selectors may differ.
 
 ### 15a. Navigate and confirm page type with summary
 
@@ -309,9 +325,21 @@ browser4-cli htmlsnapshot query "
 
 ## 16. Amazon Product Detail Page Extraction
 
+> ⚠️ **Always run `htmlsnapshot inspect` first** to verify selectors on your locale. Amazon's DOM structure changes frequently and varies by region. Selectors shown below were verified on 2026-07-10 (Amazon.com, US locale).
+
 **Problem:** You need to extract comprehensive product data — title, price, rating, feature bullets, technical specifications, stock status, brand, and images — from an Amazon product detail page. The DOM is deeply nested with multiple sections. You need a discovery-first workflow to find the right selectors, then extract and archive the data.
 
 **Why HTML Snapshot:** `summary` reveals the page's structural sections at a glance (tables for specs, lists for features, forms for buying options). `inspect` drills into specific sections to reveal exact CSS selectors. `get` extracts data using those discovered selectors. `grep` provides instant presence checks for stock badges, deal labels, and other non-structured indicators. `export` archives the full page for offline analysis and price-trend tracking.
+
+### Step 0: Auto-discover selectors (always do this first)
+
+Before using any documented selectors, verify the current page structure:
+
+```bash
+browser4-cli htmlsnapshot inspect
+```
+
+Amazon product page layouts vary by category, locale, and over time. Run `htmlsnapshot inspect` first to discover current selectors for title, price, rating, feature bullets, and specs on your specific product page.
 
 ### 16a. Discover page structure with summary
 

@@ -3327,6 +3327,56 @@ async fn handle_tool_command_with_options(
         let formatted = format_wait_result(tool_name, tool_params, &result);
         cli_println!("{}", formatted);
         json_field("result", json!(&result));
+    } else if tool_name == "scroll_by" {
+        // scroll_by returns the absolute scrollY position.  Format it with the
+        // requested direction and pixel count for a descriptive output.
+        let pixels = tool_params
+            .get("pixels")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0);
+        let direction = if pixels >= 0.0 { "down" } else { "up" };
+        let abs_pixels = pixels.abs();
+        let position = result.trim();
+        cli_println!(
+            "Scrolled {} {:.0}px (position: {})",
+            direction,
+            abs_pixels,
+            position
+        );
+        json_field("result", json!(&result));
+        json_field("pixels", json!(pixels));
+        json_field("position", json!(position));
+    } else if tool_name == "browser_mouse_wheel" {
+        // browser_mouse_wheel uses deltaX/deltaY for horizontal/vertical scrolling.
+        let delta_x = tool_params
+            .get("deltaX")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0);
+        let delta_y = tool_params
+            .get("deltaY")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0);
+        let h_dir = if delta_x >= 0.0 { "right" } else { "left" };
+        let v_dir = if delta_y >= 0.0 { "down" } else { "up" };
+        if delta_x.abs() > 0.0 && delta_y.abs() > 0.0 {
+            cli_println!(
+                "Scrolled {} {:.0}px, {} {:.0}px (position: {})",
+                h_dir, delta_x.abs(), v_dir, delta_y.abs(), result.trim()
+            );
+        } else if delta_x.abs() > 0.0 {
+            cli_println!(
+                "Scrolled {} {:.0}px (position: {})",
+                h_dir, delta_x.abs(), result.trim()
+            );
+        } else {
+            cli_println!(
+                "Scrolled {} {:.0}px (position: {})",
+                v_dir, delta_y.abs(), result.trim()
+            );
+        }
+        json_field("result", json!(&result));
+        json_field("deltaX", json!(delta_x));
+        json_field("deltaY", json!(delta_y));
     } else if !result.is_empty() {
         cli_println!("{}", result);
         json_field("result", json!(&result));
@@ -5126,6 +5176,9 @@ struct GrepOptions {
     selector: Option<String>,
     /// CSS selector using querySelectorAll semantics — search across all matched elements.
     selector_all: Option<String>,
+    /// When true, search the raw HTML including <script> and <style> content.
+    /// By default (false), script and style tag content is stripped before matching.
+    raw_html: bool,
 }
 
 fn parse_grep_options(tool_params: &Value) -> Result<GrepOptions, String> {
@@ -5204,6 +5257,10 @@ fn parse_grep_options(tool_params: &Value) -> Result<GrepOptions, String> {
             .and_then(|v| v.as_str())
             .filter(|s| !s.is_empty())
             .map(|s| s.to_string()),
+        raw_html: tool_params
+            .get("raw-html")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
     })
 }
 
@@ -5355,6 +5412,68 @@ fn convert_alternation(pattern: &str) -> String {
     pattern.to_string()
 }
 
+/// Strip `<script>...</script>` and `<style>...</style>` tag content from HTML.
+///
+/// On JS-heavy pages (e.g. Amazon: 2.5 MB HTML with massive minified JS),
+/// script and style content dwarfs actual page text.  Grep without stripping
+/// produces hundreds of KB of false-positive matches, making the output
+/// unusable.  This function replaces each `<script>...</script>` and
+/// `<style>...</style>` block with a blank line so line numbering is
+/// preserved for the remaining content.
+///
+/// The stripping is case-insensitive for the tag names.  Nested content is
+/// removed via a simple scan — it handles the vast majority of real-world
+/// HTML.  Edge cases (script/style tags inside CDATA or comments) are left
+/// as-is since they are rare and the cost of a full HTML parser is not
+/// justified for a grep pre-processor.
+fn strip_html_scripts_and_styles(html: &str) -> String {
+    // Early return for obviously clean input (no script/style tags at all).
+    let lower = html.to_lowercase();
+    if !lower.contains("<script") && !lower.contains("<style") {
+        return html.to_string();
+    }
+
+    let mut result = String::with_capacity(html.len());
+    let bytes = html.as_bytes();
+    let mut i = 0;
+    let len = bytes.len();
+
+    while i < len {
+        // Check for <script or <style tag (case-insensitive)
+        if bytes[i] == b'<' && i + 7 < len {
+            let tag_check = &lower[i..std::cmp::min(i + 8, lower.len())];
+            let (close_tag, tag_len) = if tag_check.starts_with("<script") {
+                ("</script>", 7usize)
+            } else if tag_check.starts_with("<style") {
+                ("</style>", 7usize)
+            } else {
+                ("", 0)
+            };
+
+            if tag_len > 0 {
+                // Find the closing tag (case-insensitive)
+                let close_lower = close_tag.to_lowercase();
+                if let Some(end_pos) = lower[i + tag_len..].find(&close_lower) {
+                    let abs_end = i + tag_len + end_pos + close_tag.len();
+                    // Replace the entire script/style block with a newline
+                    // to preserve approximate line numbering.
+                    let newlines = html[i..abs_end].chars().filter(|&c| c == '\n').count();
+                    for _ in 0..newlines.max(1) {
+                        result.push('\n');
+                    }
+                    i = abs_end;
+                    continue;
+                }
+                // No closing tag found — fall through and output the '<' char.
+            }
+        }
+        result.push(bytes[i] as char);
+        i += 1;
+    }
+
+    result
+}
+
 /// Run grep matching on an already-fetched source text, printing results
 /// via cli_println! and recording json fields via json_field().
 ///
@@ -5368,8 +5487,20 @@ fn run_grep_on_source(
     page_size: usize,
     show_all: bool,
 ) -> Result<(), String> {
+    // Strip <script> and <style> tag content from HTML source before matching,
+    // unless --raw-html is set.  On JS-heavy pages like Amazon (2.5 MB HTML
+    // with massive minified JS payloads), script content can produce hundreds
+    // of KB of false-positive matches, drowning out actual page content.
+    let effective_source: std::borrow::Cow<'_, str>;
+    let source_to_search = if grep_options.raw_html {
+        source
+    } else {
+        effective_source = std::borrow::Cow::Owned(strip_html_scripts_and_styles(source));
+        &effective_source
+    };
+
     // If the source is "null", no element matched the selector
-    if source == "null" || source.is_empty() {
+    if source_to_search == "null" || source_to_search.is_empty() {
         if grep_options.count {
             cli_println!("0");
             json_field("count", json!(0));
@@ -5440,7 +5571,7 @@ fn run_grep_on_source(
         })?;
 
     // Split into lines and find matches
-    let lines: Vec<&str> = source.lines().collect();
+    let lines: Vec<&str> = source_to_search.lines().collect();
     let total_lines = lines.len();
 
     let context_before = grep_options

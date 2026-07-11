@@ -768,7 +768,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "scroll",
-            description: "Scroll the page in a given direction by the specified number of pixels",
+            description: "Scroll the page in a given direction by the specified number of pixels (relative to current position). Output shows direction, amount, and new scroll position.",
             category: Category::Mouse,
             hidden: false,
             batch_supported: true,
@@ -2511,6 +2511,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "page", short: None, is_bool: false, description: "Page number (1-based, default: 1)" },
                 OptionDef { name: "page-size", short: None, is_bool: false, description: "Lines per page (default: 2000)" },
                 OptionDef { name: "all", short: None, is_bool: true, description: "Show all output, disabling pagination" },
+                OptionDef { name: "raw-html", short: None, is_bool: true, description: "Search the raw HTML including <script> and <style> content. By default, script/style tags are stripped to avoid false positives from JavaScript code." },
             ],
             tool_name_fn: |_| "html_snapshot_export".to_string(),
             tool_params_fn: |args| {
