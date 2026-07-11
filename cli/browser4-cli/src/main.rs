@@ -49,7 +49,10 @@ use daemon::{
     install_browser4_runtime, read_current_tag, resolve_base_url, resolve_channel_to_endpoint,
     InstalledBrowser4Runtime,
 };
-use help::{generate_command_help, generate_help, generate_help_entry, public_command_name};
+use help::{
+    commands_in_category, generate_command_help, generate_help, generate_help_entry,
+    public_command_name, resolve_category_alias, CATEGORY_TITLES,
+};
 use http::{
     call_tool, call_tool_with_result, cancel_crawl, clear_crawls, crawl_request_timeout,
     get_command_result, get_command_status, get_crawl_result, get_crawl_status,
@@ -12486,6 +12489,24 @@ fn print_help(command_name: Option<&str>) {
                 }
                 cli_println!("{}", lines.join("\n"));
                 return;
+            }
+            // Try category alias — shows all commands in that category
+            if let Some(canonical) = resolve_category_alias(name) {
+                let cat_cmds = commands_in_category(canonical);
+                if !cat_cmds.is_empty() {
+                    // Find the display title for this category
+                    let title = CATEGORY_TITLES
+                        .iter()
+                        .find(|(c, _)| *c == canonical)
+                        .map(|(_, t)| *t)
+                        .unwrap_or(canonical);
+                    let mut lines: Vec<String> = vec![format!("\n{} commands:\n", title)];
+                    for cmd in &cat_cmds {
+                        lines.push(generate_help_entry(cmd));
+                    }
+                    cli_println!("{}", lines.join("\n"));
+                    return;
+                }
             }
             eprintln!("Unknown command: {}", name);
         }

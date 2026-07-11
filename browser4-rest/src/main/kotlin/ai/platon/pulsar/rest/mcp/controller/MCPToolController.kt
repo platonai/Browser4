@@ -737,7 +737,14 @@ class MCPToolController(
 
         val evaluate = result.evaluate
         evaluate.exception?.let { exception ->
-            throw IllegalArgumentException("$toolName failed: ${exception.message} help: ${exception.help}")
+            val errorMsg = buildString {
+                append("$toolName failed: ${exception.message}")
+                val causeMsg = exception.cause?.message
+                if (causeMsg != null && causeMsg != exception.message) {
+                    append(" ($causeMsg)")
+                }
+            }
+            throw IllegalArgumentException(errorMsg)
         }
         // Distinguish JS null (className == "null") from JS undefined (className == "undefined")
         // and Kotlin Unit (no meaningful return value).

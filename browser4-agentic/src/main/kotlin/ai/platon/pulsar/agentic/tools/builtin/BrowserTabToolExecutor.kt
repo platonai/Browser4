@@ -586,16 +586,22 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
             "type" -> {
                 when {
                     args.containsKey("selector") && args.containsKey("text") -> {
-                        validateArgs(args, allowed("selector", "text"), setOf("selector", "text"), functionName)
+                        validateArgs(args, allowed("selector", "text", "submit"), setOf("selector", "text"), functionName)
                         driver.type(
                             paramString(args, "text", functionName)!!,
                             paramString(args, "selector", functionName)!!
                         )
+                        if (args["submit"] == true) {
+                            driver.press("Enter")
+                        }
                     }
 
                     args.containsKey("text") -> {
-                        validateArgs(args, allowed("text"), setOf("text"), functionName)
+                        validateArgs(args, allowed("text", "submit"), setOf("text"), functionName)
                         driver.type(paramString(args, "text", functionName)!!)
+                        if (args["submit"] == true) {
+                            driver.press("Enter")
+                        }
                     }
 
                     else -> throw IllegalArgumentException("type requires 'text' and optionally 'selector'")
@@ -603,10 +609,13 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
             }
 
             "fill" -> {
-                validateArgs(args, allowed("selector", "text"), setOf("selector", "text"), functionName); driver.fill(
+                validateArgs(args, allowed("selector", "text", "submit"), setOf("selector", "text"), functionName); driver.fill(
                     paramString(args, "selector", functionName)!!,
                     paramString(args, "text", functionName)!!
                 )
+                if (args["submit"] == true) {
+                    driver.press("Enter")
+                }
             }
 
             "click" -> {
