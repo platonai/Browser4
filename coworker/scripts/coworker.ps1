@@ -406,6 +406,9 @@ Each item may be:
 
 INSTRUCTIONS:
 1. Read the task file carefully and identify each distinct issue/feature/improvement it describes.
+   a. Fix all issues with ACCEPT state in the file.
+   b. Fix all issues with ACCEPT state in the file.
+   c. Fix all issues with ACCEPT state in the file.
 2. If the file contains multiple issues, work through them ONE BY ONE — fix each completely
    before moving to the next.
 3. For each issue:
