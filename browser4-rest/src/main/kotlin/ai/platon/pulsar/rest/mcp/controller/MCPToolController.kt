@@ -1,6 +1,7 @@
 package ai.platon.pulsar.rest.mcp.controller
 
 import ai.platon.pulsar.agentic.agents.BasicBrowserAgent
+import ai.platon.pulsar.agentic.model.TcException
 import ai.platon.pulsar.agentic.model.ToolCall
 import ai.platon.pulsar.agentic.model.ToolSpec
 import ai.platon.pulsar.agentic.tools.CustomToolRegistry
@@ -496,7 +497,7 @@ class MCPToolController(
             val evaluate = result
             val exception = evaluate.exception
             if (exception != null) {
-                ResponseEntity.ok(errorResponse("$toolName failed: ${exception.message} help: ${exception.help}"))
+                ResponseEntity.ok(errorResponse(buildErrorMessage(toolName, exception)))
             } else {
                 val text = when (val v = evaluate.value) {
                     null -> if (evaluate.className == "null") "null" else ""
@@ -547,7 +548,7 @@ class MCPToolController(
             val evaluate = result.evaluate
             val exception = evaluate.exception
             if (exception != null) {
-                ResponseEntity.ok(errorResponse("${request.tool} failed: ${exception.message} help: ${exception.help}"))
+                ResponseEntity.ok(errorResponse(buildErrorMessage(request.tool, exception)))
             } else {
                 // Distinguish JS null (className == "null") from JS undefined (className == "undefined")
                 // and Kotlin Unit (no meaningful return value).
@@ -765,6 +766,27 @@ class MCPToolController(
 
     private fun errorResponse(message: String): MCPToolCallResponse =
         MCPToolCallResponse(content = listOf(MCPContent(text = "ERROR: $message")), isError = true)
+
+    /**
+     * Build an error message for a tool call failure, enriching it with
+     * contextual tips when the error matches known patterns (e.g. "not focusable").
+     */
+    private fun buildErrorMessage(toolName: String, exception: TcException): String {
+        val message = exception.message ?: "unknown error"
+        val sb = StringBuilder("$toolName failed: $message")
+
+        // Contextual tips for known error patterns
+        if (message.contains("not focusable", ignoreCase = true)) {
+            sb.append(" Tip: Use 'click <ref>' first to focus the element")
+        }
+
+        // Explicit help from the tool executor
+        if (!exception.help.isNullOrBlank()) {
+            sb.append(" help: ${exception.help}")
+        }
+
+        return sb.toString()
+    }
 
     /**
      * Build a chain of exception messages from [e] through all its causes,
