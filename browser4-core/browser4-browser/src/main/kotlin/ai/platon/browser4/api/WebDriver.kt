@@ -1876,6 +1876,17 @@ interface WebDriver : Closeable {
     suspend fun evaluateValueDetail(expression: String): JsEvaluation?
 
     /**
+     * Returns detailed value evaluation metadata with optional async await support.
+     *
+     * @param expression The JavaScript expression to evaluate.
+     * @param awaitPromise Whether to wait for the evaluated expression's Promise to resolve.
+     * @return A [JsEvaluation] object containing the result value and metadata.
+     * */
+    @Throws(WebDriverException::class)
+    @MCP
+    suspend fun evaluateValueDetail(expression: String, awaitPromise: Boolean): JsEvaluation?
+
+    /**
      * Executes JavaScript for the element located by [selector] and returns the result as a JSON-serializable value. @mcp
      *
      * @param selector The selector of the element, multiple formats supported.
