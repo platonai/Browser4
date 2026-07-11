@@ -4062,7 +4062,20 @@ async fn handle_html_snapshot_get(
         params["sessionId"] = json!(session_id);
         async move { call_tool_with_result(&client, &base_url, &tool_name, params).await }
     })
-    .await?;
+    .await
+    .map_err(|e| {
+        // Improve error messages for htmlsnapshot get failures.
+        // The backend auto-captures when no snapshot exists, but if capture
+        // itself fails, guide the user toward a fix.
+        if e.contains("htmlsnapshot get failed") || e.contains("html_snapshot_scrape") {
+            format!(
+                "{}\n\nTip: Run `htmlsnapshot` first to explicitly capture the page, then try again.",
+                e
+            )
+        } else {
+            e
+        }
+    })?;
 
     let server_pagination = result.pagination;
     let text = result.text;

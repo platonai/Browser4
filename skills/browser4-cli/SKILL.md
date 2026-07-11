@@ -36,6 +36,11 @@ browser4-cli snapshot -v 0 --auto-diff  # verify what changed
 browser4-cli htmlsnapshot get text "<css-selector>" --all
 ```
 
+For quick inline viewing without opening a file, add `--stdout`:
+```bash
+browser4-cli snapshot -v 0 --stdout   # print snapshot to stdout instead of file
+```
+
 ## 2. Key Concepts
 
 ### Element Refs

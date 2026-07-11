@@ -900,7 +900,13 @@ class MCPToolController(
             ResponseEntity.ok(textResponse(result))
         } catch (e: Exception) {
             logger.error("html_snapshot_scrape failed | {}", e.message, e)
-            ResponseEntity.ok(errorResponse("html_snapshot_scrape failed: ${e.message}"))
+            ResponseEntity.ok(
+                errorResponse(
+                    "htmlsnapshot get failed: ${e.message}. " +
+                    "Make sure you're on a valid page (use `goto <url>` first). " +
+                    "If the problem persists, run `htmlsnapshot` first to explicitly capture the page, then try `htmlsnapshot get` again."
+                )
+            )
         }
     }
 
@@ -991,7 +997,13 @@ class MCPToolController(
             ResponseEntity.ok(textResponse(paginatedJson, pagination))
         } catch (e: Exception) {
             logger.error("html_snapshot_scrape_all failed | {}", e.message, e)
-            ResponseEntity.ok(errorResponse("html_snapshot_scrape_all failed: ${e.message}"))
+            ResponseEntity.ok(
+                errorResponse(
+                    "htmlsnapshot get all failed: ${e.message}. " +
+                    "Make sure you're on a valid page (use `goto <url>` first). " +
+                    "If the problem persists, run `htmlsnapshot` first to explicitly capture the page, then try `htmlsnapshot get all` again."
+                )
+            )
         }
     }
 
