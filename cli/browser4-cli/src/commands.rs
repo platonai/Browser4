@@ -796,7 +796,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "scroll",
-            description: "Scroll the page in a given direction by the specified number of pixels",
+            description: "Scroll the page in a given direction by the specified number of pixels (relative to current position). Output shows direction, amount, and new scroll position.",
             category: Category::Mouse,
             hidden: false,
             batch_supported: true,
@@ -1183,7 +1183,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "eval",
-            description: "Evaluate JavaScript expression on page or element. Objects and arrays are serialized as JSON; use --json to JSON-wrap scalar results.",
+            description: "Evaluate JavaScript expression on page or element. Use --await for async code (fetch, Promises). Objects and arrays are serialized as JSON; use --json to JSON-wrap scalar results.",
             category: Category::Core,
             hidden: false,
             batch_supported: true,
@@ -1197,6 +1197,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "stdin", description: "Read JavaScript expression from stdin (useful for piping multi-line scripts without shell quoting)", is_bool: true, short: None },
                 OptionDef { name: "base64", description: "Decode the expression argument as base64 before execution (avoids shell quoting issues on Windows)", is_bool: true, short: None },
                 OptionDef { name: "json", description: "Serialize the result as JSON (quotes strings, wraps scalars)", is_bool: true, short: None },
+                OptionDef { name: "await", description: "Wait for the evaluated expression's Promise to resolve before returning the result", is_bool: true, short: None },
             ],
             tool_name_fn: |_| "browser_evaluate".to_string(),
             tool_params_fn: |args| {
@@ -1209,6 +1210,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 if get_bool(args, "stdin").unwrap_or(false) { p["stdin"] = json!(true); }
                 if get_bool(args, "base64").unwrap_or(false) { p["base64"] = json!(true); }
                 if get_bool(args, "json").unwrap_or(false) { p["json"] = json!(true); }
+                if get_bool(args, "await").unwrap_or(false) { p["awaitPromise"] = json!(true); }
                 p
             },
         },
@@ -2156,7 +2158,8 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "out-link-selector", description: "CSS selector to extract links from each page", is_bool: false, short: Some("ol") },
                 OptionDef { name: "out-link-pattern", description: "Regex pattern to filter extracted links (default: .+)", is_bool: false, short: Some("olp") },
                 OptionDef { name: "top-links", description: "Maximum links to extract per page (default: 20)", is_bool: false, short: Some("tl") },
-                OptionDef { name: "args", description: "Additional LoadOptions passthrough (e.g. -a \"-refresh -nMaxRetry 5\")", is_bool: false, short: Some("a") },
+                OptionDef { name: "args", description: "Additional LoadOptions passthrough. Prefix with @ to read from file (e.g. -a @loadopts.txt). Use --args-stdin to pipe from stdin.", is_bool: false, short: Some("a") },
+                OptionDef { name: "args-stdin", description: "Read LoadOptions args from stdin (avoids shell quoting issues on Windows)", is_bool: true, short: None },
                 OptionDef { name: "refresh", description: "Force a fresh fetch, ignoring cache", is_bool: true, short: None },
                 OptionDef { name: "parse", description: "Parse each page immediately after fetching", is_bool: true, short: None },
                 OptionDef { name: "expires", description: "Cache expiration duration (e.g. 1d, 1h, 30m)", is_bool: false, short: None },
@@ -2237,9 +2240,13 @@ pub fn all_commands() -> Vec<CommandDef> {
                 if let Some(v) = get_opt_str(args, "args") {
                     load_opts.push(v.to_string());
                 }
-                if !load_opts.is_empty() {
-                    p["args"] = json!(load_opts.join(" "));
+                // Flag for stdin-based args (CLI-side resolution in main.rs)
+                if get_bool(args, "args-stdin").unwrap_or(false) {
+                    p["argsStdin"] = json!(true);
                 }
+                // Always include args, even when empty — the backend's
+                // CrawlRequest.args must not be null (Kotlin non-null).
+                p["args"] = json!(load_opts.join(" "));
 
                 // Depth
                 if let Some(v) = get_opt_str(args, "depth") {
@@ -2250,6 +2257,68 @@ pub fn all_commands() -> Vec<CommandDef> {
 
                 p
             },
+        },
+        CommandDef {
+            name: "crawl-status",
+            description: "Check status of a crawl task by its ID",
+            category: Category::Swarm,
+            hidden: false,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "id", description: "Task ID", optional: false },
+            ],
+            options: &[],
+            tool_name_fn: |_| String::new(),
+            tool_params_fn: |args| {
+                let mut p = json!({});
+                if let Some(v) = get_opt_str(args, "id") { p["id"] = json!(v); }
+                p
+            },
+        },
+        CommandDef {
+            name: "crawl-result",
+            description: "Get the result of a completed crawl task by its ID",
+            category: Category::Swarm,
+            hidden: false,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "id", description: "Task ID", optional: false },
+            ],
+            options: &[],
+            tool_name_fn: |_| String::new(),
+            tool_params_fn: |args| {
+                let mut p = json!({});
+                if let Some(v) = get_opt_str(args, "id") { p["id"] = json!(v); }
+                p
+            },
+        },
+        CommandDef {
+            name: "crawl-cancel",
+            description: "Cancel a running crawl task by its ID",
+            category: Category::Swarm,
+            hidden: false,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "id", description: "Task ID", optional: false },
+            ],
+            options: &[],
+            tool_name_fn: |_| String::new(),
+            tool_params_fn: |args| {
+                let mut p = json!({});
+                if let Some(v) = get_opt_str(args, "id") { p["id"] = json!(v); }
+                p
+            },
+        },
+        CommandDef {
+            name: "crawl-clear",
+            description: "Remove all terminal-state crawl tasks from the task store",
+            category: Category::Swarm,
+            hidden: false,
+            batch_supported: false,
+            args: &[],
+            options: &[],
+            tool_name_fn: |_| String::new(),
+            tool_params_fn: |_| json!({}),
         },
         CommandDef {
             name: "crawl-list",
@@ -2268,7 +2337,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             description: "Capture: take a static HTML snapshot of the current page and store it for later querying. Returns page metadata — URL, title, size, timestamps, and interactive elements (tag, class, id, aria, bounding box). Follow with `htmlsnapshot get`, `inspect`, or `summary` to read from the stored snapshot. Short form of `htmlsnapshot capture`.",
             category: Category::Snapshot,
             hidden: false,
-            batch_supported: false,
+            batch_supported: true,
             args: &[],
             options: &[],
             tool_name_fn: |_| "html_snapshot_capture".to_string(),
@@ -2279,7 +2348,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             description: "Capture: take a static HTML snapshot of the current page and store it for later querying. Returns page metadata — URL, title, size, timestamps, and interactive elements (tag, class, id, aria, bounding box). Follow with `htmlsnapshot get`, `inspect`, or `summary` to read from the stored snapshot.",
             category: Category::Snapshot,
             hidden: false,
-            batch_supported: false,
+            batch_supported: true,
             args: &[],
             options: &[],
             tool_name_fn: |_| "html_snapshot_capture".to_string(),
@@ -2287,10 +2356,10 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "htmlsnapshot-get",
-            description: "Extract elements from the HTML snapshot stored in Browser4's page storage (text, html, attr)",
+            description: "Extract elements from the HTML snapshot stored in Browser4's page storage (text, html, attr). Supports batch mode for multi-step workflows.",
             category: Category::Snapshot,
             hidden: false,
-            batch_supported: false,
+            batch_supported: true,
             args: &[
                 ArgDef { name: "field", description: "What to extract: text, html, or attr", optional: false },
                 ArgDef { name: "selector", description: "CSS selector (defaults to :root; required for attr)", optional: true },
@@ -2312,10 +2381,10 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "htmlsnapshot-get-all",
-            description: "Extract ALL matching elements from the HTML snapshot (querySelectorAll semantics); supports --offset and --limit for pagination",
+            description: "Extract ALL matching elements from the HTML snapshot (querySelectorAll semantics); supports --offset and --limit for pagination. Supports batch mode.",
             category: Category::Snapshot,
             hidden: false,
-            batch_supported: false,
+            batch_supported: true,
             args: &[
                 ArgDef { name: "field", description: "What to extract: text, html, or attr", optional: false },
                 ArgDef { name: "selector", description: "CSS selector (defaults to :root; required for attr)", optional: true },
@@ -2472,6 +2541,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "page", short: None, is_bool: false, description: "Page number (1-based, default: 1)" },
                 OptionDef { name: "page-size", short: None, is_bool: false, description: "Lines per page (default: 2000)" },
                 OptionDef { name: "all", short: None, is_bool: true, description: "Show all output, disabling pagination" },
+                OptionDef { name: "raw-html", short: None, is_bool: true, description: "Search the raw HTML including <script> and <style> content. By default, script/style tags are stripped to avoid false positives from JavaScript code." },
             ],
             tool_name_fn: |_| "html_snapshot_export".to_string(),
             tool_params_fn: |args| {
@@ -4588,14 +4658,14 @@ mod tests {
     }
 
     #[test]
-    fn test_crawl_params_no_args_when_no_options() {
+    fn test_crawl_params_args_always_present() {
         let map = commands_map();
         let cmd = map.get("crawl").unwrap();
         let mut args = HashMap::new();
         args.insert("url".to_string(), json!("https://example.com"));
         let params = (cmd.tool_params_fn)(&args);
-        // No args string should be present since no options were set
-        assert!(params.get("args").is_none());
+        // args is always present (even when empty) to avoid Kotlin non-null violation
+        assert_eq!(params["args"].as_str().unwrap(), "");
     }
 
     #[test]

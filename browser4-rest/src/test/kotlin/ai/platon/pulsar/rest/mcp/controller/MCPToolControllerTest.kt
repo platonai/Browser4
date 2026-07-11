@@ -837,6 +837,136 @@ class MCPToolControllerTest {
         }
     }
 
+    // ── awaitPromise / improved error tests ──────────────────────────────
+
+    @Test
+    fun `test browser evaluate with awaitPromise passes through to tool call`() = runBlocking {
+        mockTool("tab", "evaluateValue")
+
+        val request = MCPToolCallRequest(
+            tool = "browser_evaluate",
+            arguments = mapOf(
+                "sessionId" to sessionId,
+                "expression" to "fetch('/api/data')",
+                "awaitPromise" to true
+            )
+        )
+
+        `when`(agentToolManager.execute(any())).thenReturn(toolCallResult(mapOf("status" to 200)))
+
+        val result = controller.callTool(request, response)
+
+        assertEquals(HttpStatus.OK, result.statusCode)
+
+        val captor = ArgumentCaptor.forClass(ToolCall::class.java)
+        Mockito.verify(agentToolManager).execute(capture(captor))
+        val toolCall = captor.value
+
+        assertEquals("tab", toolCall.domain)
+        assertEquals("evaluateValue", toolCall.method)
+        assertEquals("fetch('/api/data')", toolCall.arguments["expression"])
+        assertEquals(true, toolCall.arguments["awaitPromise"])
+        Unit
+    }
+
+    @Test
+    fun `test evaluateValue exception formats tool prefix and message`() = runBlocking {
+        mockTool("tab", "evaluateValue")
+
+        `when`(agentToolManager.execute(any())).thenReturn(
+            toolCallResult(
+                evaluate = TcEvaluate(
+                    expression = "tab.evaluateValue(expression=\"bad code\")",
+                    exception = TcException(
+                        expression = "tab.evaluateValue(expression=\"bad code\")",
+                        cause = RuntimeException("something went wrong")
+                    )
+                )
+            )
+        )
+
+        val request = MCPToolCallRequest(
+            tool = "browser_evaluate",
+            arguments = mapOf("sessionId" to sessionId, "expression" to "bad code")
+        )
+
+        val result = controller.callTool(request, response)
+
+        assertEquals(HttpStatus.OK, result.statusCode)
+        assertTrue(result.body!!.isError)
+        val errorText = result.body!!.content[0].text
+        assertTrue(errorText.contains("browser_evaluate failed:"), "Expected tool prefix, got: $errorText")
+        assertTrue(errorText.contains("something went wrong"), "Expected error message in: $errorText")
+        Unit
+    }
+
+    @Test
+    fun `test evaluateValue exception with not focusable adds tip`() = runBlocking {
+        mockTool("tab", "evaluateValue")
+        val cause = RuntimeException("Element is not focusable")
+
+        `when`(agentToolManager.execute(any())).thenReturn(
+            toolCallResult(
+                evaluate = TcEvaluate(
+                    expression = "tab.evaluateValue(expression=\"...\")",
+                    exception = TcException(
+                        expression = "tab.evaluateValue(expression=\"...\")",
+                        cause = cause
+                    )
+                )
+            )
+        )
+
+        val request = MCPToolCallRequest(
+            tool = "browser_evaluate",
+            arguments = mapOf("sessionId" to sessionId, "expression" to "document.querySelector('#q').focus()")
+        )
+
+        val result = controller.callTool(request, response)
+
+        assertEquals(HttpStatus.OK, result.statusCode)
+        assertTrue(result.body!!.isError)
+        val errorText = result.body!!.content[0].text
+        assertTrue(errorText.contains("not focusable"), "Expected 'not focusable' in: $errorText")
+        assertTrue(
+            errorText.contains("Tip: Use 'click <ref>' first to focus the element"),
+            "Expected focus tip in: $errorText"
+        )
+        Unit
+    }
+
+    @Test
+    fun `test evaluateValue exception without not focusable has no tip`() = runBlocking {
+        mockTool("tab", "evaluateValue")
+
+        `when`(agentToolManager.execute(any())).thenReturn(
+            toolCallResult(
+                evaluate = TcEvaluate(
+                    expression = "tab.evaluateValue(expression=\"broken\")",
+                    exception = TcException(
+                        expression = "tab.evaluateValue(expression=\"broken\")",
+                        cause = RuntimeException("some other error")
+                    )
+                )
+            )
+        )
+
+        val request = MCPToolCallRequest(
+            tool = "browser_evaluate",
+            arguments = mapOf("sessionId" to sessionId, "expression" to "broken")
+        )
+
+        val result = controller.callTool(request, response)
+
+        assertEquals(HttpStatus.OK, result.statusCode)
+        assertTrue(result.body!!.isError)
+        val errorText = result.body!!.content[0].text
+        assertTrue(errorText.contains("some other error"), "Expected 'some other error' in: $errorText")
+        // Should NOT include the "not focusable" tip for unrelated errors
+        assertFalse(errorText.contains("Tip: Use 'click <ref>'"), "Should not have focus tip for non-focus error: $errorText")
+        Unit
+    }
+
     private fun toolCallResult(value: Any? = null, evaluate: TcEvaluate? = null): ToolCallResult {
         val resolvedEvaluate = evaluate ?: TcEvaluate(value = value)
         return ToolCallResult(

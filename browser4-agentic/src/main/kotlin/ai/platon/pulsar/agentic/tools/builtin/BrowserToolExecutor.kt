@@ -74,7 +74,9 @@ class BrowserToolExecutor : AbstractToolExecutor() {
 
             "newTab" -> {
                 val url = paramString(args, "url", functionName) ?: "about:blank"
-                val driver = browser.newDriver(url)
+                val driver = browser.newDriver()
+                // call navigate so JavaScript injection works
+                driver.navigate(url)
                 mapOf("guid" to driver.guid, "url" to driver.currentUrl())
             }
 

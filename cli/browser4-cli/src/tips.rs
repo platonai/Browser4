@@ -93,6 +93,9 @@ const TIPS_INTERACTION: &[Tip] = &[
         text: "Use `fill` instead of `click` + `type` — it clears the field first, avoiding appended text",
     },
     Tip {
+        text: "If 'fill' fails with 'not focusable', try 'click <ref>' first then 'type <text>' — some elements need a click to gain focus",
+    },
+    Tip {
         text: "Use `press Enter` after `fill` to submit forms — `fill` alone does not trigger submission",
     },
     Tip {
@@ -121,6 +124,9 @@ const TIPS_EVAL: &[Tip] = &[
     },
     Tip {
         text: "Use `eval --json` for machine-parseable JSON output — perfect for piping to other tools",
+    },
+    Tip {
+        text: "Use `eval --await` for async JavaScript (fetch, setTimeout, etc.) — waits for the Promise to resolve",
     },
     Tip {
         text: "For structured data extraction without quoting pain, consider X-SQL: `htmlsnapshot query --sql \"...\"`",

@@ -116,7 +116,7 @@ function Write-SchedulerStatus {
     )
 
     $statusDocument = @{
-        'GeneratedAtUtc' = (Get-Date).ToUniversalTime().ToString('o')
+        'GeneratedAtUtc' = Get-CoworkerTimestamp
         'ConfigPath'     = $ConfigPath
         'TickSeconds'    = $TickSeconds
         'Tasks'          = @($TaskStates.Values | Sort-Object Name | ForEach-Object { Get-TaskSnapshot -TaskState $_ })
@@ -223,8 +223,8 @@ finally {
     $TaskState.Process = $process
     $TaskState.Status = 'Running'
     $TaskState.CurrentPid = $process.Id
-    $TaskState.LastStartedUtc = $startTime.ToString('o')
-    $TaskState.NextRunUtc = $startTime.AddSeconds($TaskState.IntervalSeconds).ToString('o')
+    $TaskState.LastStartedUtc = Get-CoworkerTimestamp
+    $TaskState.NextRunUtc = $startTime.AddSeconds($TaskState.IntervalSeconds).ToString('yyyy-MM-ddTHH:mm:sszzz')
     $TaskState.StdOutLogPath = $stdOutPath
     $TaskState.StdErrLogPath = $stdErrPath
     $TaskState.RunCount = $TaskState.RunCount + 1
@@ -249,7 +249,7 @@ function Update-ScheduledTaskRun {
 
     $finishedAt = (Get-Date).ToUniversalTime()
     $startedAt = [DateTimeOffset]::Parse($TaskState.LastStartedUtc)
-    $TaskState.LastFinishedUtc = $finishedAt.ToString('o')
+    $TaskState.LastFinishedUtc = Get-CoworkerTimestamp
     $TaskState.LastExitCode = $TaskState.Process.ExitCode
     $TaskState.LastDurationSeconds = [Math]::Round(($finishedAt - $startedAt.UtcDateTime).TotalSeconds, 2)
     if ($TaskState.Process.ExitCode -eq 0) {
@@ -308,7 +308,7 @@ function Set-ScheduledTaskWaitingForWork {
     )
 
     $TaskState.Status = 'WaitingForWork'
-    $TaskState.NextRunUtc = $Now.AddSeconds($TaskState.IntervalSeconds).ToString('o')
+    $TaskState.NextRunUtc = $Now.AddSeconds($TaskState.IntervalSeconds).ToString('yyyy-MM-ddTHH:mm:sszzz')
 }
 
 function Test-ScheduledTaskCanStart {
@@ -567,7 +567,7 @@ foreach ($task in $config.Tasks) {
         LastExitCode                = $null
         LastDurationSeconds         = $null
         CurrentPid                  = $null
-        NextRunUtc                  = (Get-Date).ToUniversalTime().ToString('o')
+        NextRunUtc                  = Get-CoworkerTimestamp
         StdOutLogPath               = $null
         StdErrLogPath               = $null
         RunCount                    = 0

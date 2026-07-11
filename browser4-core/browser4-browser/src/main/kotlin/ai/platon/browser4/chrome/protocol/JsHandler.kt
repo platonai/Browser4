@@ -192,6 +192,11 @@ class JsHandler(
      * */
     @Throws(ChromeDriverException::class)
     suspend fun evaluateValueDetail(script: String): Evaluate? {
+        return evaluateValueDetail(script, awaitPromise = false)
+    }
+
+    @Throws(ChromeDriverException::class)
+    suspend fun evaluateValueDetail(script: String, awaitPromise: Boolean): Evaluate? {
         val expression: String = JsUtils.toCDPCompatibleExpression(script)
 
         val confusedExpr = confuser.confuse(expression)
@@ -200,7 +205,7 @@ class JsHandler(
             .getContextId(runCatching { bp.mainFrame().id }.getOrNull())
         if (isolatedContextId != null && isolatedContextId > 0) {
             val isolatedResult = runCatching {
-                evaluateInContext(confusedExpr, isolatedContextId, returnByValue = true)
+                evaluateInContext(confusedExpr, isolatedContextId, returnByValue = true, awaitPromise = awaitPromise)
             }.onFailure { e ->
                 if (e is CDPReturnError && e.errorMessage?.lowercase()?.contains("cannot find context") == true) {
                     logger.debug(
@@ -218,7 +223,7 @@ class JsHandler(
         }
 
         // Propagate CDP communication errors — the RobustRPC layer handles retry
-        return bp.evaluate(confusedExpr, returnByValue = true)
+        return bp.evaluate(confusedExpr, returnByValue = true, awaitPromise = awaitPromise)
     }
 
     /**
@@ -277,7 +282,7 @@ class JsHandler(
      * @param returnByValue Whether to return the value or a remote object reference
      * @return Detailed evaluation result, or null if evaluation fails
      * */
-    private suspend fun evaluateInContext(expression: String, contextId: Int, returnByValue: Boolean): Evaluate? {
-        return bp.evaluate(expression = expression, contextId = contextId, returnByValue = returnByValue)
+    private suspend fun evaluateInContext(expression: String, contextId: Int, returnByValue: Boolean, awaitPromise: Boolean = false): Evaluate? {
+        return bp.evaluate(expression = expression, contextId = contextId, returnByValue = returnByValue, awaitPromise = awaitPromise)
     }
 }

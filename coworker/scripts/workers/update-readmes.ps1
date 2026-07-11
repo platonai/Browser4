@@ -408,7 +408,7 @@ function New-ReadmeUpdateTaskFile {
     $taskContent = @"
 # README Update Task
 
-**Generated:** $($today.ToString('yyyy-MM-dd HH:mm:ss UTC'))
+**Generated:** $(Get-CoworkerTimestamp)
 **README:** `$($Result.Path)`
 **Staleness Score:** $($Result.Score)/100 ($($Result.Severity) severity)
 
@@ -549,7 +549,7 @@ $jsonSummary = @{
     threshold    = $Threshold
     updateMode   = $Update.IsPresent
     dryRun       = $DryRun.IsPresent
-    completedAt  = $today.ToString('o')
+    completedAt  = Get-CoworkerTimestamp
 } | ConvertTo-Json -Compress
 
 Write-Host $jsonSummary

@@ -1212,11 +1212,12 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
 
             "eval", "evaluateValue" -> {
                 val normalizedArgs = normalizeEvaluateValueArgs(args)
+                val awaitPromise = (normalizedArgs["awaitPromise"] as? Boolean) ?: false
                 when {
                     normalizedArgs.containsKey("selector") && normalizedArgs.containsKey("functionDeclaration") -> {
                         validateArgs(
                             normalizedArgs,
-                            allowed("selector", "functionDeclaration"),
+                            allowed("selector", "functionDeclaration", "awaitPromise"),
                             setOf("selector", "functionDeclaration"),
                             functionName
                         )
@@ -1227,8 +1228,12 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
                     }
 
                     normalizedArgs.containsKey("expression") -> {
-                        validateArgs(normalizedArgs, allowed("expression"), setOf("expression"), functionName)
-                        driver.evaluateValueDetail(paramString(normalizedArgs, "expression", functionName)!!)
+                        validateArgs(normalizedArgs, allowed("expression", "awaitPromise"), setOf("expression"), functionName)
+                        if (awaitPromise) {
+                            driver.evaluateValueDetail(paramString(normalizedArgs, "expression", functionName)!!, awaitPromise = true)
+                        } else {
+                            driver.evaluateValueDetail(paramString(normalizedArgs, "expression", functionName)!!)
+                        }
                     }
 
                     else -> throw IllegalArgumentException(evaluationValueUsage(functionName))

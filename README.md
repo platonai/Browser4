@@ -40,20 +40,15 @@ English | [简体中文](README.zh.md) | [中国镜像](https://gitee.com/platon
 
 ## Quick Start
 
-Just ask any LLM agent to use browser4-cli for browser interactions, and it will be able to perform complex tasks like this:
+Paste the following instruction to your favorite AI agent like claude, codex, workbuddy or openclaw and run it:
 
-```shell
-$prompt = @"
-Read https://browser4.io/SKILL.md and install browser4-cli for browser automation to perform the following task:
+```
+Read https://browser4.io/SKILL.md and install browser4-cli (if not installed) for browser automation to perform the following task:
 
 1. go to amazon.com
 2. search for pens to draw on whiteboards
 3. compare the first 4 ones
 4. write the result to a markdown file
-"@
-
-# copilot -p "$prompt"
-claude -p "$prompt"
 ```
 
 ## 📦 Manually Installation (Optional)

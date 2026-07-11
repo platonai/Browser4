@@ -750,6 +750,40 @@ if (Get-Command Get-CoworkerConfigData -ErrorAction SilentlyContinue) {
 }
 
 # ============================================================================
+# PART 16B: config.ps1 - Get-CoworkerTimestamp (OffsetDateTime format)
+# ============================================================================
+Write-Host "━━━ PART 16B: Get-CoworkerTimestamp (OffsetDateTime) ━━━" -ForegroundColor Cyan
+
+if (Get-Command Get-CoworkerTimestamp -ErrorAction SilentlyContinue) {
+    $ts = Get-CoworkerTimestamp
+    Assert-NotNull -Label 'Get-CoworkerTimestamp: returns a value' -Value $ts
+    Assert-True -Label 'Get-CoworkerTimestamp: is a string' `
+        -Condition ($ts -is [string])
+
+    # Format: 2026-07-11T19:32:00+08:00
+    $pattern = '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}$'
+    Assert-True -Label 'Get-CoworkerTimestamp: matches OffsetDateTime format (yyyy-MM-ddTHH:mm:ss±HH:mm)' `
+        -Condition ($ts -match $pattern)
+
+    # Verify the components parse correctly
+    $parsed = [DateTimeOffset]::Parse($ts)
+    Assert-True -Label 'Get-CoworkerTimestamp: parses back to DateTimeOffset' `
+        -Condition ($null -ne $parsed)
+    Assert-True -Label 'Get-CoworkerTimestamp: year is reasonable (>=2025)' `
+        -Condition ($parsed.Year -ge 2025)
+    Assert-True -Label 'Get-CoworkerTimestamp: has non-UTC offset' `
+        -Condition ($parsed.Offset.TotalMinutes -ne 0 -or $ts -match '[+-](0[89]|1[0-5]):')
+
+    # Verify no fractional seconds (clean, compact format)
+    Assert-True -Label 'Get-CoworkerTimestamp: no fractional seconds' `
+        -Condition ($ts -notmatch '\.\d+')
+
+    # Verify it differs from UTC 'o' format (which ends with Z)
+    Assert-True -Label 'Get-CoworkerTimestamp: does not end with Z (not UTC-only)' `
+        -Condition ($ts -notmatch 'Z$')
+}
+
+# ============================================================================
 # PART 17: config.ps1 - New-CoworkerFileWatcher / Remove-CoworkerFileWatcher
 # ============================================================================
 Write-Host "━━━ PART 17: New-CoworkerFileWatcher / Remove-CoworkerFileWatcher ━━━" -ForegroundColor Cyan
@@ -1010,12 +1044,12 @@ $testState = @{
     ScriptPath          = 'C:\scripts\test.ps1'
     Arguments           = @('-Once')
     Status              = 'Idle'
-    LastStartedUtc      = (Get-Date).ToUniversalTime().ToString('o')
+    LastStartedUtc      = (Get-Date).ToString('yyyy-MM-ddTHH:mm:sszzz')
     LastFinishedUtc     = $null
     LastExitCode        = 0
     LastDurationSeconds = 120.5
     CurrentPid          = $null
-    NextRunUtc          = (Get-Date).ToUniversalTime().AddMinutes(1).ToString('o')
+    NextRunUtc          = (Get-Date).AddMinutes(1).ToString('yyyy-MM-ddTHH:mm:sszzz')
     StdOutLogPath       = 'C:\logs\test.stdout.log'
     StdErrLogPath       = $null
     RunCount            = 5
@@ -1066,8 +1100,8 @@ function Test-ScheduledTaskCanStart {
 }
 
 $now = (Get-Date).ToUniversalTime()
-$pastTime = $now.AddMinutes(-1).ToString('o')
-$futureTime = $now.AddMinutes(10).ToString('o')
+$pastTime = $now.AddMinutes(-1).ToString('yyyy-MM-ddTHH:mm:sszzz')
+$futureTime = $now.AddMinutes(10).ToString('yyyy-MM-ddTHH:mm:sszzz')
 
 # Ready task
 $readyTask = @{ Name = 'ready-task'; Enabled = $true; Process = $null; NextRunUtc = $pastTime; DependsOn = @(); RunCount = 0 }
@@ -1118,7 +1152,7 @@ Write-Host "━━━ PART 25: Set-ScheduledTaskWaitingForWork ━━━" -Foreg
 function Set-ScheduledTaskWaitingForWork {
     param([hashtable]$TaskState, [datetime]$Now)
     $TaskState.Status = 'WaitingForWork'
-    $TaskState.NextRunUtc = $Now.AddSeconds($TaskState.IntervalSeconds).ToString('o')
+    $TaskState.NextRunUtc = $Now.AddSeconds($TaskState.IntervalSeconds).ToString('yyyy-MM-ddTHH:mm:sszzz')
 }
 
 $waitingTask = @{ Name = 'waiting-task'; Status = 'Idle'; IntervalSeconds = 30; NextRunUtc = '' }

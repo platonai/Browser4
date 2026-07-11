@@ -21,6 +21,7 @@ import org.springframework.stereotype.Service
 import java.sql.ResultSet
 import java.util.*
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicInteger
 
 data class CrawlRequest @JsonCreator constructor(
     @param:JsonProperty("url") val url: String = "",
@@ -36,6 +37,7 @@ data class CrawlResponse(
     val pagesFound: Int = 0,
     val pages: List<CrawlPageResult>? = null,
     val error: String? = null,
+    val diagnostic: String? = null,
     val createdAt: Long = System.currentTimeMillis(),
     val taskTTLMinutes: Int = 60,
 )
@@ -131,11 +133,15 @@ class CrawlService(
                     }
                     results
                 }
+                // Preserve any diagnostic that the crawl method already wrote
+                // (e.g. outLinkSelector matched 0 elements)
+                val existingDiagnostic = taskStore[taskId]?.diagnostic
                 taskStore[taskId] = CrawlResponse(
                     taskId = taskId,
                     status = ResourceStatus.getStatusText(ResourceStatus.SC_OK),
                     pagesFound = allPages.size,
-                    pages = allPages
+                    pages = allPages,
+                    diagnostic = existingDiagnostic
                 )
                 logger.info("Crawl task {} completed: {} pages", taskId, allPages.size)
             } catch (e: CancellationException) {
@@ -289,11 +295,29 @@ class CrawlService(
             val outLinks = extractOutLinks(session, request.url, options)
 
             if (outLinks.isEmpty()) {
-                logger.info("Crawl {}: no out-links found on portal page", taskId)
+                val message = "No out-links found on portal page. " +
+                    "The page loaded but the CSS selector '${options.outLinkSelector}' " +
+                    "matched zero elements. Verify the selector or check that the " +
+                    "page content loaded correctly."
+                logger.info("Crawl {}: {}", taskId, message)
+                // Write diagnostic to taskStore so the CLI can display it
+                taskStore[taskId] = CrawlResponse(
+                    taskId = taskId,
+                    status = ResourceStatus.getStatusText(ResourceStatus.SC_OK),
+                    pagesFound = 0,
+                    diagnostic = message
+                )
                 return emptyList()
             }
 
             logger.info("Crawl {}: found {} out-links, submitting...", taskId, outLinks.size)
+
+            // Per-crawl completion tracking: use a CompletableDeferred signaled by
+            // an AtomicInteger counter instead of AgenticContexts.await(), which
+            // relies on the global activeContext and can deadlock when multiple
+            // crawls run concurrently or stale contexts persist in PulsarContexts.
+            val pendingCount = AtomicInteger(outLinks.size)
+            val allCompleted = CompletableDeferred<Unit>()
 
             // Submit each out-link as a ParsableHyperlink so we can collect results
             outLinks.forEach { linkUrl ->
@@ -310,13 +334,17 @@ class CrawlService(
                             extracted = extracted
                         )
                     )
+                    // Signal completion when the last out-link finishes processing
+                    if (pendingCount.decrementAndGet() == 0) {
+                        allCompleted.complete(Unit)
+                    }
                 }
                 session.submit(hyperlink)
             }
 
-            // Wait until all submitted out-pages are processed
+            // Wait until all submitted out-pages are processed (per-crawl, not global)
             withTimeout(300_000L) { // 5 minute timeout for depth=1
-                AgenticContexts.await()
+                allCompleted.await()
             }
 
             return results.toList()
@@ -351,6 +379,13 @@ class CrawlService(
             val options = parseOptions(session, request.args)
             val maxDepth = request.depth
             val visited = ConcurrentHashMap.newKeySet<String>()
+
+            // Per-crawl completion tracking: submitted count increments when new
+            // links are submitted, completed count increments when parseHandler
+            // finishes processing a page.  When they match the pool is drained.
+            val submittedCount = AtomicInteger(1) // seed URL counts as submitted
+            val completedCount = AtomicInteger(0)
+            val allCompleted = CompletableDeferred<Unit>()
 
             // Use lateinit to allow recursive reference within the parse handler
             lateinit var parseHandler: (WebPage, FeaturedDocument) -> Any?
@@ -390,6 +425,7 @@ class CrawlService(
                             .toList()
 
                         if (newLinks.isNotEmpty()) {
+                            submittedCount.addAndGet(newLinks.size)
                             val args = buildArgsForDepth(options, currentDepth + 1)
                             newLinks.forEach { link ->
                                 visited.add(normalizeForVisit(link))
@@ -405,6 +441,11 @@ class CrawlService(
                         }
                     }
                 }
+
+                // Signal completion when all submitted pages have been processed
+                if (completedCount.incrementAndGet() == submittedCount.get()) {
+                    allCompleted.complete(Unit)
+                }
             } // parseHandler defined
 
             // Submit the seed URL
@@ -412,10 +453,10 @@ class CrawlService(
             val seedHyperlink = ParsableHyperlink("${request.url} $seedArgs", parseHandler)
             session.submit(seedHyperlink)
 
-            // Wait until the URL pool is drained
+            // Wait until the URL pool is drained (per-crawl completion, not global)
             val timeoutMs = (maxDepth * 300_000L).coerceAtMost(1_800_000L) // max 30 min
             withTimeout(timeoutMs) {
-                AgenticContexts.await()
+                allCompleted.await()
             }
 
             return results.toList()
@@ -511,6 +552,13 @@ class CrawlService(
 
         val selector = correctedSelector ?: rawSelector
         val matchedElements = document.select(selector)
+        if (matchedElements.isEmpty() && allAnchors > 0) {
+            logger.warn(
+                "extractOutLinks: document has {} anchors but selector '{}' matched 0 elements. " +
+                "Verify the CSS selector targets the correct elements.",
+                allAnchors, selector
+            )
+        }
         logger.debug(
             "extractOutLinks: selector='{}' matched {} element(s)",
             selector, matchedElements.size

@@ -933,7 +933,8 @@ async fn get_or_create_navigation_session(
             json!({ "sessionId": session_id }),
         ).await {
             if !url_result.is_empty() {
-                cli_println!("Reconnected to existing session on {}", url_result);
+                let label = session_name.unwrap_or("DEFAULT");
+                cli_println!("Using existing session {} (current page: {}).", label, url_result);
             }
         }
     }
@@ -1258,6 +1259,11 @@ async fn handle_goto(
 fn is_timeout_error_message(error: &str) -> bool {
     let lower = error.to_ascii_lowercase();
     lower.contains("timed out") || lower.contains("deadline has elapsed")
+}
+
+fn is_not_focusable_error(error: &str) -> bool {
+    let lower = error.to_ascii_lowercase();
+    lower.contains("not focusable")
 }
 
 fn format_navigation_failure_message(
@@ -3327,6 +3333,56 @@ async fn handle_tool_command_with_options(
         let formatted = format_wait_result(tool_name, tool_params, &result);
         cli_println!("{}", formatted);
         json_field("result", json!(&result));
+    } else if tool_name == "scroll_by" {
+        // scroll_by returns the absolute scrollY position.  Format it with the
+        // requested direction and pixel count for a descriptive output.
+        let pixels = tool_params
+            .get("pixels")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0);
+        let direction = if pixels >= 0.0 { "down" } else { "up" };
+        let abs_pixels = pixels.abs();
+        let position = result.trim();
+        cli_println!(
+            "Scrolled {} {:.0}px (position: {})",
+            direction,
+            abs_pixels,
+            position
+        );
+        json_field("result", json!(&result));
+        json_field("pixels", json!(pixels));
+        json_field("position", json!(position));
+    } else if tool_name == "browser_mouse_wheel" {
+        // browser_mouse_wheel uses deltaX/deltaY for horizontal/vertical scrolling.
+        let delta_x = tool_params
+            .get("deltaX")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0);
+        let delta_y = tool_params
+            .get("deltaY")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0);
+        let h_dir = if delta_x >= 0.0 { "right" } else { "left" };
+        let v_dir = if delta_y >= 0.0 { "down" } else { "up" };
+        if delta_x.abs() > 0.0 && delta_y.abs() > 0.0 {
+            cli_println!(
+                "Scrolled {} {:.0}px, {} {:.0}px (position: {})",
+                h_dir, delta_x.abs(), v_dir, delta_y.abs(), result.trim()
+            );
+        } else if delta_x.abs() > 0.0 {
+            cli_println!(
+                "Scrolled {} {:.0}px (position: {})",
+                h_dir, delta_x.abs(), result.trim()
+            );
+        } else {
+            cli_println!(
+                "Scrolled {} {:.0}px (position: {})",
+                v_dir, delta_y.abs(), result.trim()
+            );
+        }
+        json_field("result", json!(&result));
+        json_field("deltaX", json!(delta_x));
+        json_field("deltaY", json!(delta_y));
     } else if !result.is_empty() {
         cli_println!("{}", result);
         json_field("result", json!(&result));
@@ -5100,6 +5156,18 @@ async fn handle_html_snapshot_inspect(
         cli_println!("     htmlsnapshot inspect \".card\" --max 20 --depth 6");
     }
 
+    // When auto-discovery was triggered, also suggest htmlsnapshot summary as
+    // a complementary exploration path — it uses a different algorithm
+    // (visual geometry + text clustering) that can surface product data even
+    // when DOM-based pattern discovery picks up page chrome.
+    if auto_discovered {
+        cli_println!("");
+        cli_println!("  📋 Tip: htmlsnapshot summary uses visual clustering (not DOM patterns)");
+        cli_println!("    to group visible content. It can surface product info even when");
+        cli_println!("    auto-discovery picks up navigation elements.");
+        cli_println!("    Try: browser4-cli htmlsnapshot summary");
+    }
+
     json_field("inspect", data);
     Ok(())
 }
@@ -5126,6 +5194,9 @@ struct GrepOptions {
     selector: Option<String>,
     /// CSS selector using querySelectorAll semantics — search across all matched elements.
     selector_all: Option<String>,
+    /// When true, search the raw HTML including <script> and <style> content.
+    /// By default (false), script and style tag content is stripped before matching.
+    raw_html: bool,
 }
 
 fn parse_grep_options(tool_params: &Value) -> Result<GrepOptions, String> {
@@ -5204,6 +5275,10 @@ fn parse_grep_options(tool_params: &Value) -> Result<GrepOptions, String> {
             .and_then(|v| v.as_str())
             .filter(|s| !s.is_empty())
             .map(|s| s.to_string()),
+        raw_html: tool_params
+            .get("raw-html")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
     })
 }
 
@@ -5355,6 +5430,68 @@ fn convert_alternation(pattern: &str) -> String {
     pattern.to_string()
 }
 
+/// Strip `<script>...</script>` and `<style>...</style>` tag content from HTML.
+///
+/// On JS-heavy pages (e.g. Amazon: 2.5 MB HTML with massive minified JS),
+/// script and style content dwarfs actual page text.  Grep without stripping
+/// produces hundreds of KB of false-positive matches, making the output
+/// unusable.  This function replaces each `<script>...</script>` and
+/// `<style>...</style>` block with a blank line so line numbering is
+/// preserved for the remaining content.
+///
+/// The stripping is case-insensitive for the tag names.  Nested content is
+/// removed via a simple scan — it handles the vast majority of real-world
+/// HTML.  Edge cases (script/style tags inside CDATA or comments) are left
+/// as-is since they are rare and the cost of a full HTML parser is not
+/// justified for a grep pre-processor.
+fn strip_html_scripts_and_styles(html: &str) -> String {
+    // Early return for obviously clean input (no script/style tags at all).
+    let lower = html.to_lowercase();
+    if !lower.contains("<script") && !lower.contains("<style") {
+        return html.to_string();
+    }
+
+    let mut result = String::with_capacity(html.len());
+    let bytes = html.as_bytes();
+    let mut i = 0;
+    let len = bytes.len();
+
+    while i < len {
+        // Check for <script or <style tag (case-insensitive)
+        if bytes[i] == b'<' && i + 7 < len {
+            let tag_check = &lower[i..std::cmp::min(i + 8, lower.len())];
+            let (close_tag, tag_len) = if tag_check.starts_with("<script") {
+                ("</script>", 7usize)
+            } else if tag_check.starts_with("<style") {
+                ("</style>", 7usize)
+            } else {
+                ("", 0)
+            };
+
+            if tag_len > 0 {
+                // Find the closing tag (case-insensitive)
+                let close_lower = close_tag.to_lowercase();
+                if let Some(end_pos) = lower[i + tag_len..].find(&close_lower) {
+                    let abs_end = i + tag_len + end_pos + close_tag.len();
+                    // Replace the entire script/style block with a newline
+                    // to preserve approximate line numbering.
+                    let newlines = html[i..abs_end].chars().filter(|&c| c == '\n').count();
+                    for _ in 0..newlines.max(1) {
+                        result.push('\n');
+                    }
+                    i = abs_end;
+                    continue;
+                }
+                // No closing tag found — fall through and output the '<' char.
+            }
+        }
+        result.push(bytes[i] as char);
+        i += 1;
+    }
+
+    result
+}
+
 /// Run grep matching on an already-fetched source text, printing results
 /// via cli_println! and recording json fields via json_field().
 ///
@@ -5368,8 +5505,20 @@ fn run_grep_on_source(
     page_size: usize,
     show_all: bool,
 ) -> Result<(), String> {
+    // Strip <script> and <style> tag content from HTML source before matching,
+    // unless --raw-html is set.  On JS-heavy pages like Amazon (2.5 MB HTML
+    // with massive minified JS payloads), script content can produce hundreds
+    // of KB of false-positive matches, drowning out actual page content.
+    let effective_source: std::borrow::Cow<'_, str>;
+    let source_to_search = if grep_options.raw_html {
+        source
+    } else {
+        effective_source = std::borrow::Cow::Owned(strip_html_scripts_and_styles(source));
+        &effective_source
+    };
+
     // If the source is "null", no element matched the selector
-    if source == "null" || source.is_empty() {
+    if source_to_search == "null" || source_to_search.is_empty() {
         if grep_options.count {
             cli_println!("0");
             json_field("count", json!(0));
@@ -5440,7 +5589,7 @@ fn run_grep_on_source(
         })?;
 
     // Split into lines and find matches
-    let lines: Vec<&str> = source.lines().collect();
+    let lines: Vec<&str> = source_to_search.lines().collect();
     let total_lines = lines.len();
 
     let context_before = grep_options
@@ -6012,8 +6161,16 @@ async fn handle_text_input_command(
                 };
                 let enriched = format!("{}\n{}", err, verify_msg);
                 Err(enriched)
+            } else if is_not_focusable_error(&err) {
+                // Element can't receive focus — suggest click-first workaround.
+                let enriched = format!(
+                    "{}\n\nTip: Some elements (e.g. Google search box) cannot receive focus directly.\n\
+                     Try 'click <ref>' first to focus the element, then 'type <text>' to enter text.",
+                    err
+                );
+                Err(enriched)
             } else {
-                // Not a timeout — propagate as-is.
+                // Not a timeout or focusability issue — propagate as-is.
                 Err(err)
             }
         }
@@ -7152,12 +7309,45 @@ async fn swarm_wait_for_jobs(
     }
 }
 
-async fn handle_crawl_list() -> Result<(), String> {
+async fn handle_crawl_list(
+    client: &Client,
+    base_url: &str,
+) -> Result<(), String> {
     let _ = prune_async_tasks(None);
     let list = read_async_tasks(None);
     let filtered: Vec<_> = list.tasks.iter().filter(|t| t.command == "crawl").cloned().collect();
-    let display = state::AsyncTaskList { tasks: filtered };
-    cli_println!("{}", format_async_task_list(&display));
+
+    if filtered.is_empty() {
+        cli_println!("No tracked crawl tasks. Start one with 'crawl <url>'.");
+        return Ok(());
+    }
+
+    // Query backend for live status of each tracked task, merging
+    // backend state with local tracking for a unified view.
+    cli_println!("{:<38}  {:<12}  {:<12}  {}", "TASK ID", "CLI STATUS", "SERVER STATUS", "URL");
+    cli_println!("{}", "-".repeat(100));
+
+    for task in &filtered {
+        let server_status = match get_crawl_result(client, base_url, &task.task_id).await {
+            Ok(text) => {
+                serde_json::from_str::<Value>(&text)
+                    .ok()
+                    .and_then(|v| v["status"].as_str().map(String::from))
+                    .unwrap_or_else(|| "parse error".to_string())
+            }
+            Err(_) => "unreachable".to_string(),
+        };
+
+        cli_println!(
+            "{:<38}  {:<12}  {:<12}  {}",
+            task.task_id,
+            task.last_status,
+            server_status,
+            task.description
+        );
+    }
+
+    cli_println!("\nTip: use 'crawl cancel <id>' to cancel a stuck task, 'crawl clear' to remove terminal tasks.");
     Ok(())
 }
 
@@ -7312,6 +7502,57 @@ async fn handle_crawl(
         None => None,
     };
 
+    // ---- Resolve args: @file prefix and --args-stdin ----
+    let use_args_stdin = tool_params
+        .get("argsStdin")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    let args_stdin_content: Option<String> = if use_args_stdin {
+        let mut input = String::new();
+        std::io::stdin()
+            .read_to_string(&mut input)
+            .map_err(|e| format!("Failed to read args from stdin: {e}"))?;
+        if input.trim().is_empty() {
+            return Err("Stdin was empty but --args-stdin was specified.".to_string());
+        }
+        Some(input.trim().to_string())
+    } else {
+        None
+    };
+
+    // If any --args value starts with '@', treat it as a file path and read its content.
+    // Resolve after the initial tool_params_fn assembly, before sending to server.
+    let resolved_args: Option<String> = {
+        let raw_args = tool_params
+            .get("args")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        if raw_args.is_empty() && args_stdin_content.is_none() {
+            None
+        } else {
+            let mut parts: Vec<String> = Vec::new();
+            // Split existing args by whitespace and resolve any @file entries
+            for part in raw_args.split_whitespace() {
+                if part.starts_with('@') {
+                    let file_path = &part[1..];
+                    let content = std::fs::read_to_string(file_path)
+                        .map_err(|e| format!("Failed to read args file '{}': {}", file_path, e))?;
+                    parts.push(content.trim().to_string());
+                } else {
+                    parts.push(part.to_string());
+                }
+            }
+            // Append stdin content if provided
+            if let Some(ref stdin_content) = args_stdin_content {
+                parts.push(stdin_content.clone());
+            }
+            Some(parts.join(" "))
+        }
+    };
+
     // ---- Resolve output options ----
     let format = tool_params
         .get("format")
@@ -7334,6 +7575,7 @@ async fn handle_crawl(
         m.remove("seedFile");
         m.remove("sqlStdin");
         m.remove("sqlBase64");
+        m.remove("argsStdin");
         m.remove("format");
         m.remove("output");
         // Insert resolved urls array and resolved sql
@@ -7341,6 +7583,13 @@ async fn handle_crawl(
         m.insert("urls".to_string(), json!(url_array));
         if let Some(ref sql) = resolved_sql {
             m.insert("sql".to_string(), json!(sql));
+        }
+        // Override args with resolved value (handles @file and stdin)
+        if let Some(ref args) = resolved_args {
+            m.insert("args".to_string(), json!(args));
+        } else {
+            // Ensure args is always present (Issue 2 fix: prevent Kotlin null)
+            m.entry("args".to_string()).or_insert(json!(""));
         }
         // Ensure url is set to the first URL for backward compat
         if url.is_empty() {
@@ -7420,8 +7669,10 @@ async fn handle_crawl(
             } else {
                 cli_println!(
                     "Still waiting for crawl to start... ({}s elapsed). \
-                     If the queue is congested, try stopping old tasks or using --background.",
-                    elapsed.as_secs()
+                     If the queue is congested, try stopping old tasks or using --background. \
+                     Run 'crawl cancel {}' to cancel this task.",
+                    elapsed.as_secs(),
+                    task_id
                 );
             }
         }
@@ -7468,6 +7719,17 @@ async fn handle_crawl(
                 } else {
                     let mut page_lines: Vec<String> = Vec::new();
                     page_lines.push(format!("Crawl completed. {} pages found.", page_count));
+
+                    // Display diagnostic info when 0 pages found (e.g. selector matched no elements)
+                    if page_count == 0 {
+                        if let Some(diag) = parsed["diagnostic"].as_str() {
+                            page_lines.push(format!("\n  Diagnostic: {}", diag));
+                        }
+                        page_lines.push("\n  Tips:".to_string());
+                        page_lines.push("    - Verify the --out-link-selector targets the correct elements".to_string());
+                        page_lines.push("    - Use 'snapshot' or 'htmlsnapshot' to inspect the page structure first".to_string());
+                    }
+
                     if let Some(pages) = pages {
                         for page in pages {
                             let page_url = page["url"].as_str().unwrap_or("");
@@ -11974,7 +12236,7 @@ async fn run(
             handle_crawl_clear(&client, &base_url).await?;
         }
         "crawl-list" => {
-            handle_crawl_list().await?;
+            handle_crawl_list(&client, &base_url).await?;
         }
         "loop" => {
             handle_loop(&client, &base_url, global).await?;
@@ -14877,5 +15139,53 @@ mod tests {
             preferred_spaced_command_form("crawl-clear"),
             Some("crawl clear")
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // is_not_focusable_error / is_timeout_error_message tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn not_focusable_error_detects_lowercase() {
+        assert!(is_not_focusable_error("element is not focusable"));
+    }
+
+    #[test]
+    fn not_focusable_error_detects_mixed_case() {
+        assert!(is_not_focusable_error("Element is Not Focusable"));
+    }
+
+    #[test]
+    fn not_focusable_error_detects_in_message() {
+        // The helper looks for the substring "not focusable" (case-insensitive)
+        assert!(is_not_focusable_error("Element is not focusable: #shadow-root"));
+    }
+
+    #[test]
+    fn not_focusable_error_rejects_unrelated() {
+        assert!(!is_not_focusable_error("element not found"));
+        assert!(!is_not_focusable_error("timeout waiting for selector"));
+        assert!(!is_not_focusable_error(""));
+    }
+
+    #[test]
+    fn timeout_error_detects_timed_out() {
+        assert!(is_timeout_error_message("operation timed out after 30s"));
+    }
+
+    #[test]
+    fn timeout_error_detects_deadline_elapsed() {
+        assert!(is_timeout_error_message("deadline has elapsed"));
+    }
+
+    #[test]
+    fn timeout_error_detects_mixed_case() {
+        assert!(is_timeout_error_message("Operation Timed Out"));
+    }
+
+    #[test]
+    fn timeout_error_rejects_unrelated() {
+        assert!(!is_timeout_error_message("element not found"));
+        assert!(!is_timeout_error_message(""));
     }
 }

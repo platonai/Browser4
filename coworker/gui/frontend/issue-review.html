@@ -669,30 +669,8 @@ body {
 @keyframes toastSlideIn { from { opacity: 0; transform: translateX(16px); } to { opacity: 1; transform: translateX(0); } }
 
 /* ═══════════════════════════════════════════════════════════════════════
-   Single-Issue Review Mode (one at a time)
+   Navigation buttons (shared)
    ═══════════════════════════════════════════════════════════════════════ */
-.issue-nav-top {
-  display: flex; align-items: center; gap: 8px;
-  padding: 10px 1.25rem;
-  background: var(--bg-surface);
-  border-bottom: 1px solid var(--border-light);
-  flex-shrink: 0; flex-wrap: wrap;
-}
-.issue-nav-counter {
-  font-size: 0.85rem; font-weight: 700; color: var(--text-primary);
-  white-space: nowrap; display: flex; align-items: center; gap: 6px;
-}
-.issue-nav-counter .of { font-weight: 400; color: var(--text-muted); }
-.issue-nav-progress {
-  flex: 1; min-width: 80px; height: 4px;
-  background: var(--bg-inset); border-radius: 4px; overflow: hidden;
-}
-.issue-nav-progress .fill {
-  height: 100%; background: var(--accent); border-radius: 4px; transition: width 0.3s;
-}
-.issue-nav-progress .fill.done { background: var(--success); }
-.issue-nav-actions { display: flex; gap: 4px; flex-shrink: 0; align-items: center; }
-
 .nav-btn {
   display: inline-flex; align-items: center; gap: 4px;
   padding: 5px 12px; border-radius: var(--radius-sm);
@@ -709,16 +687,38 @@ body {
 .nav-btn.accent { border-color: var(--accent); color: var(--accent); }
 .nav-btn.accent:hover { background: var(--accent-bg); }
 
-.issue-nav-bottom {
-  display: flex; align-items: center; justify-content: center; gap: 12px;
-  padding: 16px 1.25rem; border-top: 1px solid var(--border-light);
-  flex-shrink: 0; background: var(--bg-surface);
+/* ═══════════════════════════════════════════════════════════════════════
+   Float Panel Navigation Row
+   ═══════════════════════════════════════════════════════════════════════ */
+.float-nav-row {
+  display: flex; align-items: center; gap: 6px;
+  padding: 8px 0; border-top: 1px solid var(--border-light);
+  border-bottom: 1px solid var(--border-light);
+  flex-shrink: 0; flex-wrap: wrap;
 }
-.issue-nav-bottom .nav-btn { font-size: 0.78rem; padding: 7px 20px; }
+.float-nav-group {
+  display: flex; align-items: center; gap: 3px;
+}
+.float-nav-center {
+  flex: 1; min-width: 60px;
+  display: flex; flex-direction: column; align-items: center; gap: 3px;
+}
+.float-nav-counter {
+  font-size: 0.72rem; font-weight: 700; color: var(--text-primary);
+  white-space: nowrap;
+}
+.float-nav-progress {
+  width: 100%; height: 3px;
+  background: var(--bg-inset); border-radius: 3px; overflow: hidden;
+}
+.float-nav-progress .fill {
+  height: 100%; background: var(--accent); border-radius: 3px; transition: width 0.3s;
+}
+.float-nav-progress .fill.done { background: var(--success); }
 
 /* Single-issue content area */
 .single-issue-view {
-  flex: 1; overflow-y: auto; padding: 1.5rem 2rem;
+  padding: 1.5rem 2rem;
 }
 .single-issue-view .issue-header-block {
   margin-bottom: 1.25rem;
@@ -829,6 +829,128 @@ body {
 }
 .quick-jump button:hover { background: var(--bg-hover); border-color: var(--text-muted); }
 .quick-jump button:disabled { opacity: 0.35; cursor: not-allowed; }
+
+/* ═══════════════════════════════════════════════════════════════════════
+   Floating Review Decision Panel
+   ═══════════════════════════════════════════════════════════════════════ */
+.review-float-panel {
+  position: fixed;
+  top: 120px; right: 24px;
+  z-index: 1000;
+  width: 460px;
+  min-width: 320px; min-height: 200px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  display: flex; flex-direction: column;
+  overflow: hidden;
+  transition: opacity 0.2s, box-shadow 0.2s;
+}
+.review-float-panel.hidden { display: none; }
+.review-float-panel.dragging {
+  box-shadow: 0 20px 50px rgba(0,0,0,0.18);
+  opacity: 0.92;
+  transition: none;
+}
+.float-drag-handle {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 14px;
+  background: var(--accent-bg);
+  border-bottom: 1px solid var(--accent-border);
+  cursor: grab; user-select: none;
+  flex-shrink: 0;
+}
+.float-drag-handle:active { cursor: grabbing; }
+.float-drag-handle .float-title {
+  font-size: 0.72rem; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.04em; color: var(--accent);
+  display: flex; align-items: center; gap: 6px;
+}
+.float-drag-handle .float-issue-indicator {
+  font-size: 0.68rem; color: var(--text-muted); font-weight: 500;
+}
+.float-close-btn {
+  width: 24px; height: 24px; border-radius: 50%;
+  border: none; background: transparent;
+  color: var(--text-muted); cursor: pointer;
+  font-size: 1rem; line-height: 1;
+  display: flex; align-items: center; justify-content: center;
+  transition: all var(--transition);
+  flex-shrink: 0;
+}
+.float-close-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
+.float-resize-handle {
+  position: absolute;
+  bottom: 0; right: 0;
+  width: 16px; height: 16px;
+  cursor: nwse-resize;
+  background: linear-gradient(135deg, transparent 40%, var(--text-muted) 40%, var(--text-muted) 50%, transparent 50%),
+              linear-gradient(135deg, transparent 40%, var(--text-muted) 40%, var(--text-muted) 50%, transparent 50%) 4px 4px;
+  background-size: 8px 8px;
+  opacity: 0.5;
+  transition: opacity var(--transition);
+  z-index: 2;
+}
+.float-resize-handle:hover { opacity: 1; }
+.float-panel-body {
+  padding: 12px 14px;
+  flex: 1; overflow-y: auto;
+  display: flex; flex-direction: column; gap: 10px;
+}
+.float-panel-body .review-options {
+  display: flex; gap: 5px; flex-wrap: wrap;
+}
+.float-panel-body .review-opt {
+  padding: 5px 12px; border-radius: 16px; font-size: 0.7rem; font-weight: 600;
+  border: 1.5px solid var(--border); background: var(--bg-surface); color: var(--text-secondary);
+  cursor: pointer; transition: all var(--transition); font-family: inherit;
+  white-space: nowrap;
+}
+.float-panel-body .review-opt:hover { border-color: var(--text-muted); background: var(--bg-hover); }
+.float-panel-body .review-opt.selected-accept { background: var(--accept-bg); color: var(--accept-color); border-color: var(--accept-color); }
+.float-panel-body .review-opt.selected-improve { background: var(--info-bg); color: var(--info); border-color: var(--info); }
+.float-panel-body .review-opt.selected-defer { background: var(--defer-bg); color: var(--defer-color); border-color: var(--defer-color); }
+.float-panel-body .review-opt.selected-wontfix { background: var(--defer-bg); color: var(--defer-color); border-color: var(--defer-color); }
+.float-panel-body .review-opt.selected-reject { background: var(--reject-bg); color: var(--reject-color); border-color: var(--reject-color); }
+.float-panel-body .review-opt.selected-duplicate { background: var(--duplicate-bg); color: var(--duplicate-color); border-color: var(--duplicate-color); }
+.float-panel-body .review-opt .key-hint {
+  font-size: 0.58rem; opacity: 0.55; margin-left: 3px; font-weight: 400;
+}
+.float-notes-row {
+  display: flex; gap: 8px; align-items: flex-start;
+}
+.float-panel-body .review-notes {
+  flex: 1; min-height: 80px; padding: 8px 10px;
+  font-size: 0.8rem; font-family: var(--font); line-height: 1.5;
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--bg-raised); color: var(--text-primary);
+  resize: vertical; transition: all var(--transition);
+}
+.float-panel-body .review-notes:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-bg); }
+.float-panel-body .review-notes::placeholder { color: var(--text-muted); font-size: 0.75rem; }
+.float-panel-body .review-notes.needs-review {
+  border-color: var(--warning); border-width: 2px;
+}
+.float-panel-body .ai-reasoning-card {
+  background: var(--accent-bg);
+  border: 1px solid var(--accent-border);
+  border-left: 4px solid var(--accent);
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+  font-size: 0.78rem; line-height: 1.6; color: var(--text-primary);
+}
+.float-panel-body .ai-reasoning-card .ai-reasoning-label {
+  font-size: 0.65rem; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.04em; color: var(--accent);
+  margin-bottom: 4px; display: flex; align-items: center; gap: 6px;
+}
+.float-panel-body .notes-callout {
+  font-size: 0.68rem; color: var(--warning); font-weight: 600;
+  display: flex; align-items: center; gap: 4px;
+  padding: 4px 8px; background: var(--warning-bg);
+  border-radius: var(--radius-sm); border-left: 3px solid var(--warning);
+}
 </style>
 </head>
 <body>
@@ -888,7 +1010,6 @@ body {
         <!-- Status group -->
         <div class="tb-group">
           <span id="save-chip" class="status-chip clean">✓ Saved</span>
-          <span id="llm-chip" class="status-chip" title="LLM status">🔍</span>
         </div>
         <span class="tb-divider"></span>
         <!-- Options group -->
@@ -901,7 +1022,7 @@ body {
         <span class="tb-divider"></span>
         <!-- Primary actions -->
         <div class="tb-group">
-          <button id="btn-mark-done" class="tb-btn success" onclick="markDone()" title="Finalize this file: approved issues keep full detail, others condensed. Moves to ready queue.">✅ Mark Done <span class="kb-hint">Shift+Ctrl+M</span></button>
+          <button id="btn-mark-done" class="tb-btn success" onclick="markDone()" title="Finalize this file: approved issues keep full detail, others condensed. Moves to ready queue.">✅ Mark Done</button>
           <button id="btn-discard" class="tb-btn danger" onclick="discardFile()" title="Discard this file — no valuable issues. Moves to review/done/discard.">🗑 Discard</button>
         </div>
         <span class="tb-divider"></span>
@@ -914,27 +1035,8 @@ body {
         <span class="tb-divider"></span>
         <!-- Batch action -->
         <div class="tb-group">
-          <button id="btn-mark-all-done" class="tb-btn success" onclick="markAllDone()" title="Mark ALL reviewed files in this directory as done. Sends summaries to ready queue.">✅✅ All Done</button>
+          <button id="btn-mark-all-done" class="tb-btn success" onclick="markAllDone()" title="Mark ALL reviewed files in this directory as done. Sends summaries to ready queue.">✅✅ All Done <span class="kb-hint">Shift+Ctrl+M</span></button>
         </div>
-      </div>
-    </div>
-
-    <!-- Single-issue navigation bar -->
-    <div class="issue-nav-top" id="issue-nav-top" style="display:none;">
-      <button class="nav-btn" id="btn-prev-file-top" onclick="navigateToFile(-1)" title="Previous file (Shift+P)">◀◀ File</button>
-      <button class="nav-btn" id="btn-prev-top" onclick="navigateSingleIssue(-1)" title="Previous issue (Alt+←)">◀ Issue</button>
-      <div class="issue-nav-counter">
-        <span id="issue-counter">Issue 1 of 6</span>
-      </div>
-      <div class="issue-nav-progress">
-        <div class="fill" id="issue-progress-fill" style="width:0%"></div>
-      </div>
-      <button class="nav-btn" id="btn-next-top" onclick="navigateSingleIssue(1)" title="Next issue (Alt+→)">Issue ▶</button>
-      <button class="nav-btn" id="btn-next-file-top" onclick="navigateToFile(1)" title="Next file (Shift+N)">File ▶▶</button>
-      <div class="issue-nav-actions">
-        <button id="btn-save-top" class="nav-btn primary" onclick="saveReview()" disabled>
-          💾 Save
-        </button>
       </div>
     </div>
 
@@ -958,15 +1060,50 @@ body {
       </div>
     </div>
 
-    <!-- Bottom navigation (single-issue mode) -->
-    <div class="issue-nav-bottom" id="issue-nav-bottom" style="display:none;">
-      <button class="nav-btn" id="btn-prev-file-bottom" onclick="navigateToFile(-1)" title="Previous file (Shift+P)">◀◀ Previous File</button>
-      <button class="nav-btn" id="btn-prev-bottom" onclick="navigateSingleIssue(-1)" title="Previous issue (Alt+←)">◀ Previous Issue</button>
-      <span style="font-size:0.75rem;color:var(--text-muted);" id="issue-counter-bottom">1 / 6</span>
-      <button class="nav-btn" id="btn-next-bottom" onclick="navigateSingleIssue(1)" title="Next issue (Alt+→)">Next Issue ▶</button>
-      <button class="nav-btn" id="btn-next-file-bottom" onclick="navigateToFile(1)" title="Next file (Shift+N)">Next File ▶▶</button>
-    </div>
   </section>
+</div>
+
+<!-- ═══════ FLOATING REVIEW PANEL ═══════ -->
+<div class="review-float-panel hidden" id="review-float-panel">
+  <div class="float-drag-handle" id="float-drag-handle">
+    <span class="float-title">↕ Review Decision</span>
+    <span class="float-issue-indicator" id="float-issue-indicator"></span>
+    <button class="float-close-btn" onclick="hideFloatPanel()" title="Close panel">×</button>
+  </div>
+  <div class="float-panel-body">
+    <div class="review-options" id="float-review-options"></div>
+    <div class="float-notes-row">
+      <textarea class="review-notes" id="float-review-notes"
+                placeholder="Add your review notes…"
+                oninput="onFloatNotesChange(this.value)"></textarea>
+      <button class="nav-btn accent" id="float-ai-review-btn"
+              onclick="triggerFloatAiReview()"
+              title="AI review (Shift+A)"
+              style="flex-shrink:0; white-space:nowrap; align-self:flex-start;">
+        🤖 AI Review <span class="key-hint" style="font-size:0.6rem;opacity:0.5;">Shift+A</span>
+      </button>
+    </div>
+    <div class="float-nav-row" id="float-nav-row">
+      <div class="float-nav-group">
+        <button class="nav-btn" id="float-btn-prev-file" onclick="navigateToFile(-1)" title="Previous file (Shift+P)">◀◀ File</button>
+        <button class="nav-btn" id="float-btn-prev-issue" onclick="navigateSingleIssue(-1)" title="Previous issue (Alt+←)">◀ Issue</button>
+      </div>
+      <div class="float-nav-center">
+        <span class="float-nav-counter" id="float-nav-counter">Issue 1 of 6</span>
+        <div class="float-nav-progress">
+          <div class="fill" id="float-progress-fill" style="width:0%"></div>
+        </div>
+      </div>
+      <div class="float-nav-group">
+        <button class="nav-btn" id="float-btn-next-issue" onclick="navigateSingleIssue(1)" title="Next issue (Alt+→)">Issue ▶</button>
+        <button class="nav-btn" id="float-btn-next-file" onclick="navigateToFile(1)" title="Next file (Shift+N)">File ▶▶</button>
+      </div>
+      <button id="float-btn-save" class="nav-btn primary" onclick="saveReview()" disabled title="Save review (Ctrl+S)">💾 Save</button>
+    </div>
+    <div id="float-ai-reasoning"></div>
+    <div id="float-callout"></div>
+  </div>
+  <div class="float-resize-handle" id="float-resize-handle"></div>
 </div>
 
 <!-- ═══════ TOAST ═══════ -->
@@ -1026,6 +1163,216 @@ var state = {
   autoApprove: localStorage.getItem('issue-review-auto-approve') === 'true',
 };
 
+// Floating panel drag & resize state
+var floatDrag = {
+  dragging: false,
+  resizing: false,
+  startX: 0, startY: 0,
+  panelX: 0, panelY: 0,
+  startW: 0, startH: 0,
+};
+
+// ── Floating Review Panel ─────────────────────────────────────────────────
+
+function initFloatPanel() {
+  var panel = document.getElementById('review-float-panel');
+  var handle = document.getElementById('float-drag-handle');
+  var resizeHandle = document.getElementById('float-resize-handle');
+  if (!panel || !handle) return;
+
+  // Restore saved size & position
+  var saved = localStorage.getItem('issue-review-float-panel-pos');
+  if (saved) {
+    try {
+      var pos = JSON.parse(saved);
+      panel.style.top = pos.top + 'px';
+      panel.style.left = pos.left + 'px';
+      panel.style.right = 'auto';
+      if (pos.w) panel.style.width = pos.w + 'px';
+      if (pos.h) panel.style.height = pos.h + 'px';
+    } catch (e) { /* use default */ }
+  }
+
+  // ── Drag ──
+  handle.addEventListener('mousedown', function(e) {
+    if (e.target.closest('.float-close-btn')) return;
+    floatDrag.dragging = true;
+    floatDrag.startX = e.clientX;
+    floatDrag.startY = e.clientY;
+    var rect = panel.getBoundingClientRect();
+    floatDrag.panelX = rect.left;
+    floatDrag.panelY = rect.top;
+    panel.classList.add('dragging');
+    e.preventDefault();
+  });
+
+  // ── Resize ──
+  if (resizeHandle) {
+    resizeHandle.addEventListener('mousedown', function(e) {
+      floatDrag.resizing = true;
+      floatDrag.startX = e.clientX;
+      floatDrag.startY = e.clientY;
+      var rect = panel.getBoundingClientRect();
+      floatDrag.startW = rect.width;
+      floatDrag.startH = rect.height;
+      e.preventDefault();
+      e.stopPropagation();
+    });
+  }
+
+  document.addEventListener('mousemove', function(e) {
+    if (floatDrag.resizing) {
+      var dw = e.clientX - floatDrag.startX;
+      var dh = e.clientY - floatDrag.startY;
+      var newW = Math.max(320, floatDrag.startW + dw);
+      var newH = Math.max(200, floatDrag.startH + dh);
+      newW = Math.min(newW, window.innerWidth - 16);
+      newH = Math.min(newH, window.innerHeight - 80);
+      panel.style.width = newW + 'px';
+      panel.style.height = newH + 'px';
+    } else if (floatDrag.dragging) {
+      var dx = e.clientX - floatDrag.startX;
+      var dy = e.clientY - floatDrag.startY;
+      var newLeft = floatDrag.panelX + dx;
+      var newTop = floatDrag.panelY + dy;
+
+      // Clamp to viewport
+      var maxLeft = window.innerWidth - panel.offsetWidth - 8;
+      var maxTop = window.innerHeight - 60;
+      newLeft = Math.max(8, Math.min(newLeft, maxLeft));
+      newTop = Math.max(52, Math.min(newTop, maxTop));
+
+      panel.style.left = newLeft + 'px';
+      panel.style.top = newTop + 'px';
+      panel.style.right = 'auto';
+    }
+  });
+
+  document.addEventListener('mouseup', function() {
+    if (floatDrag.dragging || floatDrag.resizing) {
+      floatDrag.dragging = false;
+      floatDrag.resizing = false;
+      panel.classList.remove('dragging');
+      // Save position & size
+      localStorage.setItem('issue-review-float-panel-pos', JSON.stringify({
+        top: parseInt(panel.style.top) || 120,
+        left: parseInt(panel.style.left) || 0,
+        w: parseInt(panel.style.width) || 460,
+        h: parseInt(panel.style.height) || 0,
+      }));
+    }
+  });
+}
+
+function updateFloatPanel(issue, index, total) {
+  var panel = document.getElementById('review-float-panel');
+  if (!panel || !issue) return;
+
+  // Show panel
+  panel.classList.remove('hidden');
+
+  // Issue indicator
+  var indicator = document.getElementById('float-issue-indicator');
+  if (indicator) {
+    indicator.textContent = 'Issue ' + (index + 1) + ' of ' + total;
+  }
+
+  // Decision buttons
+  var optsContainer = document.getElementById('float-review-options');
+  if (optsContainer) {
+    var optsHtml = '';
+    for (var d = 0; d < REVIEW_DECISIONS.length; d++) {
+      var decision = REVIEW_DECISIONS[d];
+      var selClass = (issue.review.decision === decision) ? ' ' + DECISION_CSS[decision] : '';
+      optsHtml += '<button class="review-opt' + selClass + '" ' +
+                  'onclick="floatSetDecision(' + index + ', \'' + escJs(decision) + '\')" ' +
+                  'title="Press Shift+' + (d + 1) + '">' +
+                  escHtml(decision) + '<span class="key-hint">Shift+' + (d + 1) + '</span></button>';
+    }
+    optsContainer.innerHTML = optsHtml;
+  }
+
+  // Notes textarea
+  var notesEl = document.getElementById('float-review-notes');
+  if (notesEl) {
+    var needsReview = issue.review.decision && issue.review.decision !== 'ACCEPT';
+    notesEl.className = 'review-notes' + (needsReview ? ' needs-review' : '');
+    notesEl.value = issue.review.notes || '';
+  }
+
+  // AI reasoning
+  var reasoningEl = document.getElementById('float-ai-reasoning');
+  if (reasoningEl) {
+    var aiReason = getAiReasoning(issue);
+    if (aiReason) {
+      var badgeCls = aiBadgeClass(aiReason.decision);
+      reasoningEl.innerHTML = '<div class="ai-reasoning-card">' +
+        '<div class="ai-reasoning-label">🤖 AI Reasoning → <span class="ai-decision-badge ' + badgeCls + '">' + escHtml(aiReason.decision) + '</span></div>' +
+        escHtml(aiReason.reasoning) + '</div>';
+      reasoningEl.style.display = '';
+    } else {
+      reasoningEl.innerHTML = '';
+      reasoningEl.style.display = 'none';
+    }
+  }
+
+  // Notes callout
+  var calloutEl = document.getElementById('float-callout');
+  if (calloutEl) {
+    var needsReviewNotes = issue.review.decision && issue.review.decision !== 'ACCEPT';
+    if (needsReviewNotes) {
+      calloutEl.innerHTML = '<div class="notes-callout">⚠ This decision requires review notes — add your rationale in the textarea above</div>';
+      calloutEl.style.display = '';
+    } else {
+      calloutEl.innerHTML = '';
+      calloutEl.style.display = 'none';
+    }
+  }
+}
+
+function hideFloatPanel() {
+  var panel = document.getElementById('review-float-panel');
+  if (panel) panel.classList.add('hidden');
+}
+
+function onFloatNotesChange(value) {
+  if (!state.parsed) return;
+  var idx = state.reviewMode === 'single' ? state.currentIssueIndex : focusedIssueIndex;
+  if (idx < 0 || idx >= state.parsed.issues.length) return;
+  state.parsed.issues[idx].review.notes = value;
+  state.dirty = true;
+  updateSaveState();
+  scheduleAutoSave();
+  // Update callout visibility
+  var issue = state.parsed.issues[idx];
+  var calloutEl = document.getElementById('float-callout');
+  if (calloutEl) {
+    var needsReview = issue.review.decision && issue.review.decision !== 'ACCEPT';
+    calloutEl.style.display = (needsReview && !value.trim()) ? '' : 'none';
+  }
+}
+
+function floatSetDecision(index, decision) {
+  setDecision(index, decision);
+  // Re-update the floating panel (setDecision re-renders, but we need the float panel refreshed)
+  if (state.parsed && index < state.parsed.issues.length) {
+    updateFloatPanel(state.parsed.issues[index], index, state.parsed.issues.length);
+  }
+}
+
+async function triggerFloatAiReview() {
+  if (!state.parsed) return;
+  var idx = state.reviewMode === 'single' ? state.currentIssueIndex : focusedIssueIndex;
+  if (idx < 0 || idx >= state.parsed.issues.length) return;
+
+  // Reuse existing triggerAiReview, which calls renderSingleIssue → updateFloatPanel
+  await triggerAiReview(idx);
+  // After AI review, update the float panel
+  if (state.parsed && idx < state.parsed.issues.length) {
+    updateFloatPanel(state.parsed.issues[idx], idx, state.parsed.issues.length);
+  }
+}
+
 // ── API ──
 async function apiGet(url) {
   var res = await fetch(url);
@@ -1067,6 +1414,7 @@ function showToast(message, type) {
 // ── Init ──
 async function init() {
   setThemeIcon();
+  initFloatPanel();
   // Restore auto-approve checkbox state
   document.getElementById('chk-auto-approve').checked = state.autoApprove;
   try {
@@ -1075,67 +1423,6 @@ async function init() {
     showToast('Cannot connect to backend. Is the server running?', 'error');
     document.getElementById('file-list').innerHTML =
       '<div class="empty-message"><span class="empty-icon">⚠</span>Cannot reach backend at ' + location.origin + '</div>';
-  }
-  // Check LLM health and poll periodically
-  checkLlmHealth();
-  setInterval(checkLlmHealth, 30000); // every 30s
-}
-
-// ── LLM Health ──────────────────────────────────────────────────────────
-
-var llmHealthy = null; // null = checking, true = healthy, false = unhealthy
-
-async function checkLlmHealth() {
-  var chip = document.getElementById('llm-chip');
-  if (!chip) return;
-
-  chip.textContent = '🔍';
-  chip.className = 'status-chip';
-  chip.title = 'Checking LLM status...';
-
-  try {
-    var health = await apiGet('/api/issue-review/health');
-    llmHealthy = health.llm.ok;
-
-    if (health.circuit.open) {
-      chip.textContent = '⚡ LLM paused';
-      chip.className = 'status-chip dirty';
-      chip.title = 'Circuit breaker open — cooldown ' + health.circuit.cooldownRemaining + 's';
-      llmHealthy = false;
-    } else if (health.llm.ok) {
-      chip.textContent = '🤖 LLM ready';
-      chip.className = 'status-chip saved';
-      chip.title = 'LLM is reachable (' + (health.llm.provider || 'claude') + ')';
-      llmHealthy = true;
-    } else {
-      chip.textContent = '⚠ LLM offline';
-      chip.className = 'status-chip dirty';
-      chip.title = 'LLM unreachable. Heuristic fallback active.';
-      llmHealthy = false;
-    }
-  } catch (e) {
-    chip.textContent = '⚠ LLM ?';
-    chip.className = 'status-chip dirty';
-    chip.title = 'Cannot check LLM health: ' + e.message;
-    llmHealthy = false;
-  }
-
-  updateAiButtonStates();
-}
-
-function updateAiButtonStates() {
-  var btnSingle = document.getElementById('btn-ai-review');
-  var btnAll = document.getElementById('btn-ai-review-all');
-  var btnDir = document.getElementById('btn-ai-review-dir');
-
-  if (llmHealthy === false) {
-    if (btnSingle) btnSingle.title = 'AI review (heuristic fallback — LLM offline)';
-    if (btnAll) btnAll.title = 'AI review all (heuristic fallback — LLM offline)';
-    if (btnDir) btnDir.title = 'AI review directory (heuristic fallback — LLM offline)';
-  } else if (llmHealthy === true) {
-    if (btnSingle) btnSingle.title = 'AI review (Shift+A)';
-    if (btnAll) btnAll.title = 'AI review all issues in this file (Shift+Ctrl+A)';
-    if (btnDir) btnDir.title = 'AI review all issues in directory (Shift+Ctrl+D)';
   }
 }
 
@@ -1490,6 +1777,7 @@ async function selectFile(path) {
   focusedIssueIndex = 0;
   updateSaveState();
   cancelAutoSave();
+  hideFloatPanel();
 
   // Update selection highlight without rebuilding the tree
   highlightSelectedFile(path);
@@ -1512,6 +1800,7 @@ async function selectFile(path) {
   } catch (e) {
     showToast('Failed to load: ' + e.message, 'error');
     document.getElementById('review-header').style.display = 'none';
+    hideFloatPanel();
     document.getElementById('review-content').innerHTML =
       '<div class="review-placeholder"><p>Error loading file.</p></div>';
   }
@@ -1603,8 +1892,7 @@ function renderReview() {
   var hasIssues = !(state.parsed.issues.length === 0) && state.parsed.issues.length > 0;
   var isSingle = state.reviewMode === 'single' && hasIssues;
 
-  document.getElementById('issue-nav-top').style.display = isSingle ? 'flex' : 'none';
-  document.getElementById('issue-nav-bottom').style.display = isSingle ? 'flex' : 'none';
+  // Float panel visibility is managed by renderSingleIssue / renderAllIssues
   document.getElementById('btn-mode-toggle').textContent = isSingle ? '📋 View All' : '🔍 One-by-One';
 
   // Clamp issue index
@@ -1624,6 +1912,9 @@ function renderReview() {
 }
 
 function renderAllIssues() {
+  // Floating panel is only for single-issue mode
+  hideFloatPanel();
+
   var content = document.getElementById('review-content');
   var html = '';
 
@@ -1723,57 +2014,13 @@ function renderSingleIssue() {
     html += '</div>';
   }
 
-  // Review block
-  var decBorder = '';
-  if (issue.review.decision) {
-    if (issue.review.decision === 'REJECT') decBorder = ' reject';
-    else if (issue.review.decision === 'DEFER' || issue.review.decision === 'WONTFIX') decBorder = ' defer';
-    else if (issue.review.decision === 'DUPLICATE') decBorder = ' duplicate';
-    else decBorder = '';
-  }
-  var needsReviewNotes = issue.review.decision && issue.review.decision !== 'ACCEPT';
-  html += '<div class="single-review-block' + (issue.review.decision ? ' has-decision' + decBorder : '') + '">';
-  html += '<div class="review-label">Review Decision</div>';
-  html += '<div class="review-options">';
-  for (var d = 0; d < REVIEW_DECISIONS.length; d++) {
-    var decision = REVIEW_DECISIONS[d];
-    var selClass = (issue.review.decision === decision) ? ' ' + DECISION_CSS[decision] : '';
-    html += '<button class="review-opt' + selClass + '" ' +
-            'onclick="setDecision(' + idx + ', \'' + escJs(decision) + '\')" ' +
-            'title="Press ' + (d + 1) + '">' +
-            escHtml(decision) + '<span class="key-hint">Shift+' + (d + 1) + '</span></button>';
-  }
-  html += '</div>';
-  // Textarea + AI Review button side by side
-  html += '<div style="display:flex;gap:8px;align-items:flex-start;">';
-  var notesClass = 'review-notes' + (needsReviewNotes ? ' needs-review' : '');
-  html += '<textarea class="' + notesClass + '" id="single-review-notes" ' +
-          'placeholder="Add your review notes…" ' +
-          'oninput="onSingleNotesChange(' + idx + ', this.value)" ' +
-          'onfocus="focusedIssueIndex=' + idx + '">' +
-          escHtml(issue.review.notes || '') + '</textarea>';
-  html += '<button class="nav-btn accent" id="btn-ai-review" onclick="triggerAiReview(' + idx + ')" ' +
-          'title="AI review (A)" style="flex-shrink:0;white-space:nowrap;align-self:flex-start;">' +
-          '🤖 AI Review <span class="key-hint" style="font-size:0.6rem;opacity:0.5;">Shift+A</span></button>';
-  html += '</div>';
-
-  // AI reasoning and callout below the textarea
-  var aiReason = getAiReasoning(issue);
-  if (aiReason) {
-    var badgeCls = aiBadgeClass(aiReason.decision);
-    html += '<div class="ai-reasoning-card">';
-    html += '<div class="ai-reasoning-label">🤖 AI Reasoning → <span class="ai-decision-badge ' + badgeCls + '">' + escHtml(aiReason.decision) + '</span></div>';
-    html += escHtml(aiReason.reasoning);
-    html += '</div>';
-  }
-  if (needsReviewNotes) {
-    html += '<div class="notes-callout">⚠ This decision requires review notes — add your rationale in the textarea above</div>';
-  }
-  html += '</div>';
-
+  // Review decision is now in the floating panel — populated below
   html += '</div>'; // .single-issue-view
 
   content.innerHTML = html;
+
+  // Populate the floating review panel for this issue
+  updateFloatPanel(issue, idx, state.parsed.issues.length);
 }
 
 // Parse issue sections from the markdown body
@@ -1933,7 +2180,7 @@ function setDecision(index, decision) {
     renderSingleIssue();
     updateIssueNavState();
     // Re-focus notes
-    var notesEl = document.getElementById('single-review-notes');
+    var notesEl = document.getElementById('float-review-notes');
     if (notesEl) { notesEl.focus(); notesEl.setSelectionRange(notesEl.value.length, notesEl.value.length); }
   } else {
     updateIssueCardUI(index);
@@ -2021,7 +2268,7 @@ function navigateSingleIssue(direction) {
   updateIssueNavState();
   // Focus notes after render
   setTimeout(function() {
-    var notesEl = document.getElementById('single-review-notes');
+    var notesEl = document.getElementById('float-review-notes');
     if (notesEl) notesEl.focus();
   }, 50);
 }
@@ -2039,25 +2286,27 @@ function updateIssueNavState() {
   var hasPrevFile = fileIdx > 0;
   var hasNextFile = fileIdx >= 0 && fileIdx < state.filteredFiles.length - 1;
 
-  // Top nav
-  document.getElementById('issue-counter').textContent = 'Issue ' + (idx + 1) + ' of ' + total;
-  document.getElementById('btn-prev-file-top').disabled = !hasPrevFile;
-  document.getElementById('btn-prev-top').disabled = idx <= 0;
-  document.getElementById('btn-next-top').disabled = idx >= total - 1;
-  document.getElementById('btn-next-file-top').disabled = !hasNextFile;
+  // Float panel nav
+  var counter = document.getElementById('float-nav-counter');
+  if (counter) counter.textContent = 'Issue ' + (idx + 1) + ' of ' + total;
+  var pfe = document.getElementById('float-btn-prev-file');
+  if (pfe) pfe.disabled = !hasPrevFile;
+  var pie = document.getElementById('float-btn-prev-issue');
+  if (pie) pie.disabled = idx <= 0;
+  var nie = document.getElementById('float-btn-next-issue');
+  if (nie) nie.disabled = idx >= total - 1;
+  var nfe = document.getElementById('float-btn-next-file');
+  if (nfe) nfe.disabled = !hasNextFile;
+  var saveBtn = document.getElementById('float-btn-save');
+  if (saveBtn) saveBtn.disabled = !state.dirty;
 
   // Progress fill
   var pct = total > 0 ? Math.round(reviewed / total * 100) : 0;
-  var fill = document.getElementById('issue-progress-fill');
-  fill.style.width = pct + '%';
-  fill.className = 'fill' + (reviewed >= total ? ' done' : '');
-
-  // Bottom nav
-  document.getElementById('issue-counter-bottom').textContent = (idx + 1) + ' / ' + total;
-  document.getElementById('btn-prev-file-bottom').disabled = !hasPrevFile;
-  document.getElementById('btn-prev-bottom').disabled = idx <= 0;
-  document.getElementById('btn-next-bottom').disabled = idx >= total - 1;
-  document.getElementById('btn-next-file-bottom').disabled = !hasNextFile;
+  var fill = document.getElementById('float-progress-fill');
+  if (fill) {
+    fill.style.width = pct + '%';
+    fill.className = 'fill' + (reviewed >= total ? ' done' : '');
+  }
 
   // Mode toggle button
   document.getElementById('btn-mode-toggle').textContent =
@@ -2070,7 +2319,7 @@ async function triggerAiReview(index) {
   var issue = state.parsed.issues[index];
   if (!issue) return;
 
-  var btn = document.getElementById('btn-ai-review');
+  var btn = document.getElementById('float-ai-review-btn');
   if (btn) {
     btn.disabled = true;
     btn.textContent = '⏳ Thinking…';
@@ -2153,7 +2402,7 @@ async function triggerAiReview(index) {
 
     // Focus notes for user to review
     setTimeout(function() {
-      var notesEl = document.getElementById('single-review-notes');
+      var notesEl = document.getElementById('float-review-notes');
       if (notesEl) { notesEl.focus(); notesEl.setSelectionRange(notesEl.value.length, notesEl.value.length); }
     }, 50);
 
@@ -2564,6 +2813,7 @@ async function markAllDone() {
     state.currentIssueIndex = 0;
     cancelAutoSave();
     updateSaveState();
+    hideFloatPanel();
 
     renderFileList();
     updateStats();
@@ -2573,8 +2823,6 @@ async function markAllDone() {
       selectFile(state.filteredFiles[0].path);
     } else {
       document.getElementById('review-header').style.display = 'none';
-      document.getElementById('issue-nav-top').style.display = 'none';
-      document.getElementById('issue-nav-bottom').style.display = 'none';
       document.getElementById('review-content').innerHTML =
         '<div class="review-placeholder">' +
         '<svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/><path d="M9 14l2 2 4-4"/></svg>' +
@@ -2617,26 +2865,26 @@ function toggleReviewMode() {
     focusedIssueIndex = 0;
   }
   renderReview();
-  // In single mode, focus notes
+  // In single mode, focus float panel notes
   if (state.reviewMode === 'single') {
     setTimeout(function() {
-      var notesEl = document.getElementById('single-review-notes');
+      var notesEl = document.getElementById('float-review-notes');
       if (notesEl) notesEl.focus();
     }, 50);
   }
 }
 
 function updateSaveState() {
-  var btnTop = document.getElementById('btn-save-top');
+  var btnFloat = document.getElementById('float-btn-save');
   var chip = document.getElementById('save-chip');
   if (state.dirty) {
-    if (btnTop) btnTop.disabled = false;
+    if (btnFloat) btnFloat.disabled = false;
     if (chip) {
       chip.textContent = '● Unsaved';
       chip.className = 'status-chip dirty';
     }
   } else {
-    if (btnTop) btnTop.disabled = true;
+    if (btnFloat) btnFloat.disabled = true;
     if (chip) {
       chip.textContent = '✓ Saved';
       chip.className = 'status-chip saved';
@@ -2761,6 +3009,7 @@ async function markDone() {
     state.currentIssueIndex = 0;
     cancelAutoSave();
     updateSaveState();
+    hideFloatPanel();
 
     // Re-render the sidebar tree (also rebuilds state.filteredFiles in tree order)
     renderFileList();
@@ -2772,8 +3021,6 @@ async function markDone() {
     } else {
       // No files left
       document.getElementById('review-header').style.display = 'none';
-      document.getElementById('issue-nav-top').style.display = 'none';
-      document.getElementById('issue-nav-bottom').style.display = 'none';
       document.getElementById('review-content').innerHTML =
         '<div class="review-placeholder">' +
         '<svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/><path d="M9 14l2 2 4-4"/></svg>' +
@@ -2821,6 +3068,7 @@ async function discardFile() {
     state.currentIssueIndex = 0;
     cancelAutoSave();
     updateSaveState();
+    hideFloatPanel();
 
     // Re-render the sidebar tree
     renderFileList();
@@ -2832,8 +3080,6 @@ async function discardFile() {
     } else {
       // No files left
       document.getElementById('review-header').style.display = 'none';
-      document.getElementById('issue-nav-top').style.display = 'none';
-      document.getElementById('issue-nav-bottom').style.display = 'none';
       document.getElementById('review-content').innerHTML =
         '<div class="review-placeholder">' +
         '<svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/><path d="M9 14l2 2 4-4"/></svg>' +

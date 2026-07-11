@@ -1,0 +1,42 @@
+[
+  {
+    "title": "Backend Engineer (Kotlin / Java)",
+    "company": "Productboard",
+    "location": "Prague, Czech Republic",
+    "skills": ["Kotlin", "Java", "Backend Systems", "Scalable Architecture", "Customer-facing Products"],
+    "url": "https://wellfound.com/jobs/3316836-backend-engineer-kotlin-java",
+    "source": "wellfound.com"
+  },
+  {
+    "title": "Backend Engineer",
+    "company": "B2 Systems",
+    "location": "Remote",
+    "skills": ["Backend Development", "System Reliability", "Product Engineering"],
+    "url": "https://wellfound.com/jobs/4199850-backend-engineer",
+    "source": "wellfound.com"
+  },
+  {
+    "title": "Kotlin Backend Engineer (m/f/d) (2 years fixed contract)",
+    "company": "Unknown",
+    "location": "Not specified",
+    "skills": ["Kotlin", "Backend Development", "Microservices"],
+    "url": "https://wellfound.com/jobs/3199820-kotlin-backend-engineer-m-f-d-2-years-fixed-contract",
+    "source": "wellfound.com"
+  },
+  {
+    "title": "Kotlin - Senior Backend Software Engineer (all genders) (Remote, Europe)",
+    "company": "upday",
+    "location": "Remote, Europe",
+    "skills": ["Kotlin", "Backend Development", "Software Engineering"],
+    "url": "https://wellfound.com/jobs/2449387-kotlin-senior-backend-software-engineer-all-genders-remote-europe",
+    "source": "wellfound.com"
+  },
+  {
+    "title": "Senior Back End Engineer - USA only",
+    "company": "Unknown",
+    "location": "USA",
+    "skills": ["Java", "Backend Development", "Software Engineering"],
+    "url": "https://wellfound.com/jobs/3962608-senior-back-end-engineer-usa-only",
+    "source": "wellfound.com"
+  }
+]

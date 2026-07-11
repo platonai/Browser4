@@ -1668,6 +1668,80 @@ pub(super) fn test_eval_complex_expression_falls_to_default(ctx: &mut E2ECtx) {
     );
 }
 
+pub(super) fn test_eval_await_command(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let mock_server = MockBrowser4Server::start();
+    ctx.browser4_base_url = mock_server.base_url();
+
+    let open_result = run_open_command(ctx);
+    assert!(
+        open_result
+            .stdout
+            .contains("Session opened: swarm-session-1"),
+        "Expected mocked session open output in:\n{}",
+        open_result.stdout
+    );
+
+    // eval --await should pass awaitPromise: true through to the MCP tool call
+    let result = run_command(ctx, &["eval", "--await", "new Promise(r => setTimeout(() => r(42), 100))"]);
+    assert_eq!(
+        strip_snapshot_output(&result.stdout),
+        "mock evaluation result"
+    );
+
+    let tool_calls = mock_server.snapshot().tool_calls;
+    let eval_calls: Vec<_> = tool_calls
+        .iter()
+        .filter(|call| call.tool == "browser_evaluate")
+        .collect();
+    assert_eq!(eval_calls.len(), 1, "expected one browser_evaluate call");
+    assert_eq!(
+        eval_calls[0].arguments["awaitPromise"], true,
+        "expected awaitPromise: true in tool call arguments, got: {:?}",
+        eval_calls[0].arguments
+    );
+    assert_eq!(
+        eval_calls[0].arguments["expression"],
+        "new Promise(r => setTimeout(() => r(42), 100))"
+    );
+}
+
+pub(super) fn test_eval_without_await_omits_flag(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let mock_server = MockBrowser4Server::start();
+    ctx.browser4_base_url = mock_server.base_url();
+
+    let open_result = run_open_command(ctx);
+    assert!(
+        open_result
+            .stdout
+            .contains("Session opened: swarm-session-1"),
+        "Expected mocked session open output in:\n{}",
+        open_result.stdout
+    );
+
+    // eval without --await should NOT include awaitPromise in the arguments
+    let result = run_command(ctx, &["eval", "document.title"]);
+    assert_eq!(
+        strip_snapshot_output(&result.stdout),
+        "Mock Browser4 Page"
+    );
+
+    let tool_calls = mock_server.snapshot().tool_calls;
+    let eval_calls: Vec<_> = tool_calls
+        .iter()
+        .filter(|call| call.tool == "browser_evaluate")
+        .collect();
+    assert_eq!(eval_calls.len(), 1, "expected one browser_evaluate call");
+    assert!(
+        eval_calls[0].arguments.get("awaitPromise").is_none(),
+        "expected no awaitPromise in tool call arguments without --await, got: {:?}",
+        eval_calls[0].arguments
+    );
+}
+
 pub(super) fn test_eval_in_standalone_batch(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
 

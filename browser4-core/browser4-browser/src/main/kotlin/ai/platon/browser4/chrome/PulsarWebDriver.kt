@@ -353,8 +353,13 @@ open class PulsarWebDriver constructor(
 
     @Throws(WebDriverException::class)
     override suspend fun evaluateValueDetail(expression: String): JsEvaluation? {
+        return evaluateValueDetail(expression, awaitPromise = false)
+    }
+
+    @Throws(WebDriverException::class)
+    override suspend fun evaluateValueDetail(expression: String, awaitPromise: Boolean): JsEvaluation? {
         return rpc.invokeOnPage("evaluateValueDetail") {
-            val evaluate = js.evaluateValueDetail(expression)
+            val evaluate = js.evaluateValueDetail(expression, awaitPromise)
             driverHelper.createJsEvaluate(evaluate)
         }
     }

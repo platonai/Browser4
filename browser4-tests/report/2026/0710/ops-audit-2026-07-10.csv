@@ -1,0 +1,25 @@
+timestamp_utc,action,subsystem,metric_name,metric_value,threshold,baseline,anomaly,status,retry_count,notes
+2026-07-10T14:15:50Z,backend_check,CLI Backend,server_health,UP,N/A,N/A,false,OK,0,Backend v4.11.18 on port 8182
+2026-07-10T14:16:09Z,navigate,Dashboard,page_load,OK,N/A,N/A,false,OK,0,githubstatus.com loaded
+2026-07-10T14:16:30Z,screenshot,Dashboard,full_page_capture,OK,N/A,N/A,false,OK,0,Saved to .browser4-cli/snapshot/
+2026-07-10T14:16:46Z,htmlsnapshot,Dashboard,page_size_kb,395,N/A,N/A,false,OK,0,82 links 11 interactive elements
+2026-07-10T14:17:40Z,extract,API Requests,uptime_90d_pct,99.94,99.9,99.94,false,NORMAL,0,Within SLA
+2026-07-10T14:17:40Z,extract,Git Operations,uptime_90d_pct,99.99,99.9,99.99,false,NORMAL,0,Within SLA
+2026-07-10T14:17:40Z,extract,Webhooks,uptime_90d_pct,100.0,99.9,100.0,false,NORMAL,0,Optimal
+2026-07-10T14:17:40Z,extract,Issues,uptime_90d_pct,99.98,99.9,99.98,false,NORMAL,0,Within SLA
+2026-07-10T14:17:40Z,extract,Pull Requests,uptime_90d_pct,99.71,99.9,99.71,true,WARNING,0,Below 99.9% threshold - investigate
+2026-07-10T14:17:40Z,extract,Actions,uptime_90d_pct,99.8,99.5,99.8,false,NORMAL,0,Within SLA (job queue threshold)
+2026-07-10T14:17:40Z,extract,Packages,uptime_90d_pct,100.0,99.9,100.0,false,NORMAL,0,Optimal
+2026-07-10T14:17:40Z,extract,Pages,uptime_90d_pct,99.96,99.9,99.96,false,NORMAL,0,Within SLA
+2026-07-10T14:17:40Z,extract,Copilot,uptime_90d_pct,99.89,99.9,99.89,true,WARNING,0,Below 99.9% threshold - investigate
+2026-07-10T14:17:40Z,extract,Codespaces,uptime_90d_pct,99.84,99.9,99.84,true,WARNING,0,Below 99.9% threshold - investigate
+2026-07-10T14:17:40Z,extract,Copilot AI Model Providers,uptime_90d_pct,99.88,99.9,99.88,true,WARNING,0,Below 99.9% threshold - investigate
+2026-07-10T14:18:08Z,check,Overall,all_systems_status,Operational,N/A,N/A,false,OK,0,No active incidents
+2026-07-10T14:18:30Z,navigate,Incident History,page_load,OK,N/A,N/A,false,OK,0,History page loaded
+2026-07-10T14:18:45Z,extract,Incident History,recent_incidents_count,8,N/A,N/A,false,INFO,0,4 critical 2 major 2 minor in visible history
+2026-07-10T14:18:45Z,extract,Incident History,latest_incident,Delays starting Actions runs,N/A,N/A,false,RESOLVED,0,Critical - resolved
+2026-07-10T14:18:45Z,extract,Incident History,incident_2,Actions and Codespaces APIs experiencing partial failures,N/A,N/A,false,RESOLVED,0,Major - resolved
+2026-07-10T14:18:45Z,extract,Incident History,incident_3,Disruption with OpenAI Models,N/A,N/A,false,RESOLVED,0,Critical - resolved
+2026-07-10T14:18:45Z,extract,Incident History,incident_4,Webhook APIs and UI Degraded,N/A,N/A,false,RESOLVED,0,Minor - resolved
+2026-07-10T14:19:05Z,navigate,Uptime History,page_load,OK,N/A,N/A,false,OK,0,Uptime page loaded (JS-rendered data)
+2026-07-10T14:19:36Z,extract,Uptime History,uptime_chart_data,N/A,N/A,N/A,true,WARNING,0,Client-side rendered - static extraction failed

@@ -539,7 +539,7 @@ def main():
                     "stage": f["stage"],
                     "name": f["name"],
                     "type": f["type"],
-                    "ts": f["ts"].isoformat() if f["ts"] else None,
+                    "ts": f["ts"].astimezone().isoformat(timespec='seconds') if f["ts"] else None,
                     "fname": f["fname"],
                     "size": f["size"],
                 }

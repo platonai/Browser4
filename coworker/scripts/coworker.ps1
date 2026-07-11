@@ -49,7 +49,12 @@ if ($null -eq $script:__CoworkerLock) {
 if (-not [string]::IsNullOrWhiteSpace($TaskFile)) {
     # Resolve full path before changing location
     if (Test-Path $TaskFile) {
-        $TaskFile = Resolve-Path $TaskFile
+        try {
+            $TaskFile = Resolve-Path $TaskFile -ErrorAction Stop
+        } catch {
+            Write-Error "Failed to resolve path '$TaskFile': $_"
+            exit 1
+        }
     }
 }
 
@@ -113,6 +118,7 @@ if (-not [string]::IsNullOrWhiteSpace($TaskFile)) {
 $currentYear = (Get-Date).ToUniversalTime().ToString("yyyy")
 $currentMonth = (Get-Date).ToUniversalTime().ToString("MM")
 $currentDay = (Get-Date).ToUniversalTime().ToString("dd")
+$currentDate = "$currentMonth$currentDay"
 $currentTime = (Get-Date).ToUniversalTime().ToString("HHmmss")
 $logsSubDir = Join-Path $logsDir "$currentYear\$currentMonth\$currentDay"
 if (!(Test-Path $logsSubDir)) { New-Item -ItemType Directory -Path $logsSubDir | Out-Null }
@@ -157,12 +163,6 @@ foreach ($taskRoot in $taskRoots) {
     $approvedDir = $taskRoot.Approved
     $pushedDir = $taskRoot.Pushed
     $logsDir = $taskRoot.Logs
-
-    $currentYear = (Get-Date).ToUniversalTime().ToString("yyyy")
-    $currentMonth = (Get-Date).ToUniversalTime().ToString("MM")
-    $currentDay = (Get-Date).ToUniversalTime().ToString("dd")
-    $currentDate = "$currentMonth$currentDay"
-    $currentTime = (Get-Date).ToUniversalTime().ToString("HHmmss")
 
     Ensure-DraftPlaceholders -DraftDirectory $draftDir
 
@@ -252,7 +252,16 @@ foreach ($taskRoot in $taskRoots) {
         $descriptiveName = ""
 
         # Read content for fallback title
-        $content = Get-Content -Path $file.FullName -Raw -Encoding UTF8
+        if (-not (Test-Path -Path $file.FullName)) {
+            Write-LogMessage "[SKIP] Task file vanished before reading: $($file.FullName) — likely moved/renamed by another process" WARN
+            continue
+        }
+        try {
+            $content = Get-Content -Path $file.FullName -Raw -Encoding UTF8 -ErrorAction Stop
+        } catch {
+            Write-LogMessage "[ERROR] Failed to read task file: $($file.FullName) — $($_.Exception.Message)" ERROR
+            continue
+        }
         $safeTitle = $file.BaseName -replace '[\\/*?:"<>|]', '_'
         if ([string]::IsNullOrWhiteSpace($safeTitle)) { $safeTitle = "task" }
 
@@ -281,12 +290,12 @@ foreach ($taskRoot in $taskRoots) {
                     } else {
                         Write-LogVerbose "Rename returned invalid name: $generatedName"
                         $retryCount++
-                        if ($retryCount -lt $maxRetries) { Start-Sleep -Seconds 2 }
+                        if ($retryCount -lt $maxRetries) { Start-Sleep -Seconds ([Math]::Pow(2, $retryCount)) }
                     }
                 } catch {
                     $retryCount++
                     Write-LogMessage "Rename script failed (Attempt $retryCount/$maxRetries): $_" WARN
-                    if ($retryCount -lt $maxRetries) { Start-Sleep -Seconds 2 }
+                    if ($retryCount -lt $maxRetries) { Start-Sleep -Seconds ([Math]::Pow(2, $retryCount)) }
                 }
             }
 
@@ -320,7 +329,12 @@ foreach ($taskRoot in $taskRoots) {
             Write-LogMessage "Renamed in created: $($file.Name) -> $(Split-Path $renamedPath -Leaf)" INFO
 
             # Update $file to point to the new location for the next step (move to working)
-            $file = Get-Item $renamedPath
+            try {
+                $file = Get-Item $renamedPath -ErrorAction Stop
+            } catch {
+                Write-LogMessage "[SKIP] Renamed file vanished before moving to working: $renamedPath — $_" WARN
+                continue
+            }
         }
 
         # 3. Move to working directory
@@ -343,7 +357,9 @@ foreach ($taskRoot in $taskRoots) {
         # Call standalone memory-context script (handles generator + robust JSON parsing)
         $memoryContextScript = Join-Path $PSScriptRoot "workers\coworker-memory-context.ps1"
         try {
-            $memoryResultJson = & $memoryContextScript -Type init -Date "$currentYear-$currentMonth-$currentDay" 2>$null
+            # Capture stderr to a temp file so failures are diagnosable
+            $memStderrPath = Join-Path $logsSubDir "${currentTime}-memory-context.err"
+            $memoryResultJson = & $memoryContextScript -Type init -Date "$currentYear-$currentMonth-$currentDay" 2>$memStderrPath
             if ($memoryResultJson) {
                 $memoryResult = ($memoryResultJson -join "`n") | ConvertFrom-Json
                 $memoryContext = $memoryResult.context
@@ -353,7 +369,13 @@ foreach ($taskRoot in $taskRoots) {
                 } else {
                     Write-LogVerbose "Memory context empty (no relevant memories found)."
                 }
+            } elseif (Test-Path $memStderrPath) {
+                $memStderr = Get-Content $memStderrPath -Raw -ErrorAction SilentlyContinue
+                if ($memStderr) {
+                    Write-LogMessage "Memory context script produced no output. Stderr: $memStderr" WARN
+                }
             }
+            Remove-Item $memStderrPath -ErrorAction SilentlyContinue
         } catch {
             Write-LogMessage "Failed to initialize memory context: $_" WARN
         }
@@ -384,6 +406,9 @@ Each item may be:
 
 INSTRUCTIONS:
 1. Read the task file carefully and identify each distinct issue/feature/improvement it describes.
+   a. Fix all issues with ACCEPT state in the file.
+   b. Fix all issues with ACCEPT state in the file.
+   c. Fix all issues with ACCEPT state in the file.
 2. If the file contains multiple issues, work through them ONE BY ONE — fix each completely
    before moving to the next.
 3. For each issue:
@@ -405,11 +430,7 @@ INSTRUCTIONS:
             $prompt += "`n`n$memoryInstructions`n`n$memoryContext"
         }
 
-        # Define log file paths
-
-        $logsSubDir = Join-Path $logsDir "$currentYear\$currentMonth\$currentDay"
-        if (!(Test-Path $logsSubDir)) { New-Item -ItemType Directory -Path $logsSubDir | Out-Null }
-
+        # Define log file paths (reusing script-level $logsSubDir and $currentTime)
         $taskLogPath = Join-Path $logsSubDir "${currentTime}-${workingBaseName}.task.log"
         $agentLogPath = Join-Path $logsSubDir "${currentTime}-${workingBaseName}.agent.log"
 
@@ -427,7 +448,7 @@ Original File: $($file.Name)
 Control Repo: $repoRoot
 Target Repo: $targetRepoRoot
 Agent Working Directory: $agentWorkingDirectory
-Started: $((Get-Date).ToUniversalTime().ToString('yyyy-MM-dd HH:mm:ss'))
+Started: $(Get-CoworkerTimestamp)
 Prompt:
 $prompt
 ---
@@ -460,7 +481,7 @@ Agent Execution Output:
                         if ($currentLineCount -gt $lastOutputLineCount) {
                             $newLines = $currentLines[$lastOutputLineCount..($currentLineCount - 1)]
                             foreach ($line in $newLines) {
-                                if ($line -and $line.Trim()) {
+                                if (-not [string]::IsNullOrWhiteSpace($line)) {
                                     Write-ConsoleLine -Message $line
                                 }
                             }
@@ -468,6 +489,7 @@ Agent Execution Output:
                         }
                     } catch {
                         # File may be temporarily locked by the writer; retry next iteration
+                        Write-LogVerbose "Stdout monitor: unable to read $stdOutLog (retrying): $_"
                     }
                 }
 
@@ -490,39 +512,57 @@ Agent Execution Output:
 
             # Final output capture after process ends
             if (Test-Path $stdOutLog) {
-                $remainingLines = @(Get-Content $stdOutLog -Encoding UTF8 -ErrorAction SilentlyContinue)
-                if ($remainingLines.Count -gt $lastOutputLineCount) {
-                    $newLines = $remainingLines[$lastOutputLineCount..($remainingLines.Count - 1)]
-                    foreach ($line in $newLines) {
-                        if (-not [string]::IsNullOrWhiteSpace($line)) {
-                            Write-ConsoleLine -Message $line
+                try {
+                    $remainingLines = @(Get-Content $stdOutLog -Encoding UTF8 -ErrorAction Stop)
+                    if ($remainingLines.Count -gt $lastOutputLineCount) {
+                        $newLines = $remainingLines[$lastOutputLineCount..($remainingLines.Count - 1)]
+                        foreach ($line in $newLines) {
+                            if (-not [string]::IsNullOrWhiteSpace($line)) {
+                                Write-ConsoleLine -Message $line
+                            }
                         }
                     }
+                } catch {
+                    Write-LogVerbose "Failed to read remaining stdout from $stdOutLog : $_"
                 }
             }
 
             # Capture stderr output and display to console
             if (Test-Path $stdErrLog) {
-                $errContent = @(Get-Content $stdErrLog -Encoding UTF8 -ErrorAction SilentlyContinue)
-                if ($errContent) {
-                    Write-ConsoleLine -Message "`n[STDERR OUTPUT]" -ForegroundColor Yellow -ErrorStream
-                    foreach ($line in $errContent) {
-                        if (-not [string]::IsNullOrWhiteSpace($line)) {
-                            Write-ConsoleLine -Message $line -ForegroundColor Yellow -ErrorStream
+                try {
+                    $errContent = @(Get-Content $stdErrLog -Encoding UTF8 -ErrorAction Stop)
+                    if ($errContent) {
+                        Write-ConsoleLine -Message "`n[STDERR OUTPUT]" -ForegroundColor Yellow -ErrorStream
+                        foreach ($line in $errContent) {
+                            if (-not [string]::IsNullOrWhiteSpace($line)) {
+                                Write-ConsoleLine -Message $line -ForegroundColor Yellow -ErrorStream
+                            }
                         }
                     }
+                } catch {
+                    Write-LogVerbose "Failed to read stderr from $stdErrLog : $_"
                 }
             }
 
             # Combine agent stdout and stderr logs into the agent-specific log
             # First append stdout if it exists
-            if (Test-Path $stdOutLog) { Get-Content $stdOutLog -Encoding UTF8 | Out-File -FilePath $agentLogPath -Append -Encoding UTF8 }
+            if (Test-Path $stdOutLog) {
+                try {
+                    Get-Content $stdOutLog -Encoding UTF8 -ErrorAction Stop | Out-File -FilePath $agentLogPath -Append -Encoding UTF8
+                } catch {
+                    Write-LogMessage "Failed to append stdout to agent log: $_" WARN
+                }
+            }
             # Then append stderr if it exists and contains content
             if (Test-Path $stdErrLog) {
-                $errContent = Get-Content $stdErrLog -Encoding UTF8
-                if ($errContent) {
-                    "`r`n=== AGENT STDERR ===`r`n" | Out-File -FilePath $agentLogPath -Append -Encoding UTF8
-                    $errContent | Out-File -FilePath $agentLogPath -Append -Encoding UTF8
+                try {
+                    $errContent = Get-Content $stdErrLog -Encoding UTF8 -ErrorAction Stop
+                    if ($errContent) {
+                        "`r`n=== AGENT STDERR ===`r`n" | Out-File -FilePath $agentLogPath -Append -Encoding UTF8
+                        $errContent | Out-File -FilePath $agentLogPath -Append -Encoding UTF8
+                    }
+                } catch {
+                    Write-LogMessage "Failed to append stderr to agent log: $_" WARN
                 }
             }
 
