@@ -194,8 +194,8 @@ class SkillControllerTest {
 
         assertEquals(HttpStatus.OK, response.statusCode)
         val body = response.body!!
-        assertEquals(true, body["success"])
         Mockito.verify(service).uninstallSkill("web-scraping")
+        assertEquals(true, body["success"])
     }
 
     @Test
@@ -224,8 +224,8 @@ class SkillControllerTest {
 
         assertEquals(HttpStatus.OK, response.statusCode)
         val body = response.body!!
-        assertEquals(true, body["success"])
         Mockito.verify(service).reloadSkill("web-scraping")
+        assertEquals(true, body["success"])
     }
 
     @Test
