@@ -1,0 +1,262 @@
+{
+  "capture_date": "2026-07-10",
+  "tools_compared": ["Notion", "Confluence", "Coda (now Superhuman Docs)"],
+  "notion": {
+    "url": "https://www.notion.so/pricing",
+    "resolved_url": "https://www.notion.com/pricing",
+    "page_title": "Notion Pricing Plans: Free, Plus, Business, & Enterprise.",
+    "plans": [
+      {
+        "name": "Free",
+        "price": "$0",
+        "billing": "per member / month",
+        "cta": "Sign up",
+        "highlights": [
+          "Trial AI capabilities like generating docs, or autofilling databases",
+          "Trial of Notion AI",
+          "Capture, organize, and act on responses right inside Notion",
+          "Basic forms",
+          "Publish a Notion page to the web",
+          "Basic sites",
+          "Connect multiple Calendars to manage work and time together",
+          "Notion Calendar",
+          "Databases including subtasks, dependencies, custom properties and more"
+        ]
+      },
+      {
+        "name": "Plus",
+        "price": "$10",
+        "billing": "per member / month",
+        "cta": "Get started",
+        "highlights": [
+          "Everything in Free",
+          "Trial AI capabilities like generating docs, or autofilling databases",
+          "Trial of Notion AI",
+          "Remove Notion branding from public forms",
+          "Custom forms",
+          "Custom sites (header, theme, favicon, Google Analytics)",
+          "Unlimited charts",
+          "Unlimited collaborative blocks",
+          "Unlimited file uploads",
+          "Basic connections (Slack, Google Drive)"
+        ]
+      },
+      {
+        "name": "Business",
+        "price": "$20",
+        "billing": "per member / month",
+        "badge": "Recommended",
+        "cta": "Get started",
+        "highlights": [
+          "Everything in Plus",
+          "Notion Agent (completes complex, multi-step tasks)",
+          "AI Meeting Notes",
+          "Enterprise Search Beta (search across Slack, Github, etc.)",
+          "SAML SSO",
+          "Granular database permissions",
+          "Verify any page",
+          "Private teamspaces",
+          "Domain verification",
+          "Premium connections (GitHub, Asana, etc.)"
+        ]
+      },
+      {
+        "name": "Enterprise",
+        "price": "Custom pricing",
+        "billing": "per organization",
+        "cta": "Contact Sales",
+        "highlights": [
+          "Everything in Business",
+          "Zero data retention with LLM providers",
+          "User provisioning (SCIM)",
+          "Advanced security & controls",
+          "Audit log",
+          "Customer success manager",
+          "Security & Compliance connections (DLP, SIEM)",
+          "Domain management",
+          "Advanced connections"
+        ]
+      }
+    ]
+  },
+  "confluence": {
+    "url": "https://www.atlassian.com/software/confluence/pricing",
+    "resolved_url": "https://www.atlassian.com/software/confluence/pricing",
+    "page_title": "Confluence Pricing: Free and Paid Plans | Atlassian",
+    "note": "Exact prices for Standard and Premium tiers are dynamically rendered and not extractable from static HTML snapshot. Accessibility tree contains full feature comparison table.",
+    "plans": [
+      {
+        "name": "Free",
+        "price": "$0",
+        "billing": "per site",
+        "user_limit": "10 users",
+        "cta": "Start free trial",
+        "key_features": {
+          "sites": "One",
+          "whiteboards": "3 active per user",
+          "automation": "10 rule runs per month",
+          "spaces_pages": "Unlimited",
+          "database": "Yes",
+          "page_versioning": "Yes",
+          "template_library": "Yes",
+          "apps_integrations": "Yes",
+          "support": "Atlassian Community"
+        }
+      },
+      {
+        "name": "Standard",
+        "price": "Dynamic (JS-rendered)",
+        "billing": "per user / month",
+        "user_limit": "250,000 users",
+        "cta": "Start free trial",
+        "key_features": {
+          "sites": "One",
+          "whiteboards": "10 active per user",
+          "automation": "100 rule runs per month",
+          "spaces_pages": "Unlimited",
+          "guest_access": "Free",
+          "page_versioning": "Yes",
+          "support": "9/5 regional support"
+        }
+      },
+      {
+        "name": "Premium",
+        "price": "Dynamic (JS-rendered)",
+        "billing": "per user / month",
+        "user_limit": "250,000 users",
+        "cta": "Start free trial",
+        "key_features": {
+          "sites": "One",
+          "whiteboards": "Unlimited",
+          "automation": "1,000 rule runs per paid user/month",
+          "analytics": "Atlassian Analytics + Data Lake",
+          "admin_controls": "Advanced admin controls",
+          "ai": "Atlassian Rovo (AI search, agents)",
+          "support": "24/7 support for critical issues"
+        }
+      },
+      {
+        "name": "Enterprise",
+        "price": "Custom pricing",
+        "billing": "per organization",
+        "user_limit": "250,000 users",
+        "cta": "Contact sales",
+        "key_features": {
+          "sites": "Up to 150",
+          "whiteboards": "Unlimited",
+          "automation": "Unlimited",
+          "security": "Atlassian Guard (SSO, SCIM, MDM)",
+          "audit_logs": "Yes",
+          "data_residency": "Yes",
+          "support": "24/7 support for all issues",
+          "centralized_licensing": "Per-user licensing"
+        }
+      }
+    ]
+  },
+  "coda_superhuman": {
+    "url": "https://coda.io/pricing",
+    "resolved_url": "https://superhuman.com/docs/pricing",
+    "page_title": "Superhuman Docs | Pricing & Plans",
+    "redirect_detected": true,
+    "redirect_note": "coda.io/pricing automatically redirects to superhuman.com/docs/pricing. Coda was acquired by Grammarly (Dec 2024), and Grammarly rebranded to Superhuman (Oct 2025). Coda is now 'Superhuman Docs' within the Superhuman suite.",
+    "plan_model": "Doc Maker billing (only pay for users who create docs)",
+    "plans": [
+      {
+        "name": "Free",
+        "price": "$0",
+        "billing": "USD",
+        "cta": "Get Superhuman Free",
+        "highlights": [
+          "Collaborative docs",
+          "Try Docs AI",
+          "Try MCP",
+          "Connected tables, views, and forms",
+          "Formulas and automations",
+          "Try Grammarly for free",
+          "Integrate with 36+ tools"
+        ]
+      },
+      {
+        "name": "Pro",
+        "price": "$12",
+        "billing": "USD / month per Doc Maker, billed annually ($15 monthly)",
+        "cta": "Get Superhuman Pro",
+        "highlights": [
+          "Everything in Free",
+          "Unlimited doc size",
+          "Write, edit, and ask with AI (Beta)",
+          "Build AI trackers, pages, and views (Beta)",
+          "Create with Claude and more via MCP",
+          "30-day version history",
+          "Hide specific pages",
+          "Custom icons, branding, domains",
+          "Grammarly Go",
+          "Integrate with 46+ tools"
+        ]
+      },
+      {
+        "name": "Business",
+        "price": "$33",
+        "billing": "USD / month per Doc Maker, billed annually ($40 monthly)",
+        "badge": "Best value",
+        "cta": "Get Superhuman Business",
+        "highlights": [
+          "Everything in Pro",
+          "Databases (Beta)",
+          "Unlimited automations",
+          "Unlimited version history",
+          "Private folders for teams",
+          "Doc and page locking",
+          "Restrict who can unlock",
+          "Sync and take actions across docs",
+          "Group trainings",
+          "Grammarly Go Mail",
+          "Integrate with 72+ tools"
+        ]
+      },
+      {
+        "name": "Enterprise",
+        "price": "Custom",
+        "billing": "per organization",
+        "cta": "Contact Sales",
+        "highlights": [
+          "Everything in Business",
+          "SAML SSO",
+          "Provision users via SCIM",
+          "AI admin controls",
+          "Doc & folder governance",
+          "Advanced access controls",
+          "Audit events",
+          "Advanced user management",
+          "SOC 2 Type 2 report",
+          "HIPAA compliance",
+          "Grammarly Go Mail",
+          "Integrate with 85+ tools"
+        ]
+      }
+    ]
+  },
+  "cross_comparison": {
+    "free_tier": {
+      "notion": "Yes - $0/member/month",
+      "confluence": "Yes - $0, up to 10 users",
+      "coda_superhuman": "Yes - $0"
+    },
+    "entry_paid_tier": {
+      "notion": "Plus: $10/member/month",
+      "confluence": "Standard: dynamic pricing",
+      "coda_superhuman": "Pro: $12/Doc Maker/month (annual)"
+    },
+    "mid_tier": {
+      "notion": "Business: $20/member/month",
+      "confluence": "Premium: dynamic pricing",
+      "coda_superhuman": "Business: $33/Doc Maker/month (annual)"
+    },
+    "enterprise": {
+      "notion": "Custom pricing",
+      "confluence": "Custom pricing",
+      "coda_superhuman": "Custom pricing"
+    }
+  }
+}
