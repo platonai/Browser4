@@ -122,7 +122,20 @@ internal class KtorTransport : Transport {
 
         tracer?.trace("▶ Send {}", shortenMessage(message))
 
-        ws.send(Frame.Text(message))
+        try {
+            withTimeout(SEND_TIMEOUT_MS.milliseconds) {
+                ws.send(Frame.Text(message))
+            }
+        } catch (e: TimeoutCancellationException) {
+            // Transport is likely dead (e.g., half-open TCP connection on Windows).
+            // Close it so the caller can detect the failure and reconnect.
+            close()
+            throw ChromeIOException(
+                "WebSocket send timed out after ${SEND_TIMEOUT_MS}ms | $uri",
+                e,
+                isOpen
+            )
+        }
     }
 
     override fun addMessageHandler(consumer: Consumer<String>) {
@@ -180,6 +193,7 @@ internal class KtorTransport : Transport {
         private const val DEFAULT_SOCKET_TIMEOUT_MS: Long = 20_000
         private const val DEFAULT_PING_INTERVAL_MS: Long = 15_000
         private const val DEFAULT_KEEP_ALIVE_TIME_MS: Long = 5_000
+        private const val SEND_TIMEOUT_MS: Long = 10_000
         private const val CLOSE_TIMEOUT_MS: Long = 3_000
 
         @Throws(ChromeIOException::class)

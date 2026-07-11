@@ -25,7 +25,7 @@ class ChromeDevToolsTest {
 
     @BeforeTest
     fun createDevTools() {
-        val userDataDir = BrowserFiles.computeTestContextDir()
+        val userDataDir = BrowserFiles.computeRandomTmpContextDir()
 
         launcher = ChromeLauncher(userDataDir, options = LauncherOptions())
         val options = ChromeOptions().also { it.noSandbox = true }

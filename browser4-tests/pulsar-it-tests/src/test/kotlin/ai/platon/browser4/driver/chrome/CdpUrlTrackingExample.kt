@@ -17,7 +17,7 @@ import java.nio.file.Path
  * 3. How browser reuse works with the same userDataDir
  */
 fun main() {
-    val userDataDir = BrowserFiles.computeTestContextDir()
+    val userDataDir = BrowserFiles.computeRandomTmpContextDir()
     val cdpUrlPath = userDataDir.resolveSibling(CDP_URL_FILE_NAME)
 
     println("=".repeat(60))

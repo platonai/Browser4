@@ -96,7 +96,12 @@ internal abstract class ChromeDevToolsImpl(
         // Non-blocking
         val message = dispatcher.serialize(invocation.id, invocation.method, invocation.params, null)
 
-        val rpcResult = sendAndReceive(invocation.id, method, returnProperty, message) ?: return null
+        val rpcResult = sendAndReceive(invocation.id, method, returnProperty, message)
+        if (rpcResult == null) {
+            throw ChromeRPCTimeoutException(
+                "No response | $method | #${numInvokes.count}, (${config.readTimeout})"
+            )
+        }
         val jsonNode = rpcResult.result ?: return null
 
         return dispatcher.deserialize(returnClass.java, jsonNode)
