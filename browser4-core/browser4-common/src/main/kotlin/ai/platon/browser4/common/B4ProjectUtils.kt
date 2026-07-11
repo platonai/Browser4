@@ -379,7 +379,10 @@ object B4ProjectUtils {
         return try {
             Files.walk(baseDir, 20).use { stream ->
                 stream.filter { it.fileName.toString() == fileName }
-                    .filter { path -> excludePaths.none { path.toString().contains(it) } }
+                    .filter { path ->
+                        val normalizedPath = path.toString().replace('\\', '/')
+                        excludePaths.none { normalizedPath.contains(it) }
+                    }
                     .toList()
             }
         } catch (e: IOException) {
