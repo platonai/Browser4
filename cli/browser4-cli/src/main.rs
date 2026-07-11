@@ -24,6 +24,7 @@ mod daemon;
 mod help;
 mod http;
 mod managed_processes;
+mod skills;
 mod snapshot;
 mod snapshot_diff;
 mod state;
@@ -375,6 +376,10 @@ fn no_snapshot_commands() -> HashSet<&'static str> {
         "htmlsnapshot-inspect",
         "scroll",
         "resize",
+        "skills",
+        "skills-list",
+        "skills-get",
+        "skills-path",
     ]
     .into()
 }
@@ -9434,6 +9439,120 @@ async fn handle_install(tool_params: &Value) -> Result<(), String> {
     );
     json_field("reused_existing", json!(runtime.reused_existing));
     json_field("source_url", json!(&runtime.download_url));
+
+    // Unpack bundled skill files into the versioned installation directory.
+    // The skills directory is at <install_dir>/skills/ alongside the runtime.
+    if !runtime.reused_existing {
+        let skills_dir = runtime.install_dir.join("skills");
+        match skills::unpack_skills_to(&skills_dir) {
+            Ok(n) => {
+                eprintln!("📦 Unpacked {n} skill files to {}", skills_dir.display());
+            }
+            Err(e) => {
+                eprintln!("⚠  Failed to unpack skill files: {e}");
+            }
+        }
+    }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// skills command handlers
+// ---------------------------------------------------------------------------
+
+fn handle_skills_list() -> Result<(), String> {
+    let names = skills::list_skill_names();
+    if names.is_empty() {
+        cli_println!("No skills bundled.");
+        return Ok(());
+    }
+    cli_println!("Bundled skills:");
+    for name in &names {
+        let file_count = skills::skill_files_for(name).len();
+        cli_println!("  {} ({} files)", name, file_count);
+    }
+    Ok(())
+}
+
+fn handle_skills_get(tool_params: &Value) -> Result<(), String> {
+    let all = tool_params
+        .get("all")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let full = tool_params
+        .get("full")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let name = tool_params
+        .get("name")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty());
+
+    if all {
+        cli_println!("{}", skills::get_all_skills());
+        return Ok(());
+    }
+
+    let skill_name = match name {
+        Some(n) => n.to_string(),
+        None => {
+            // No name given — list available skills.
+            return handle_skills_list();
+        }
+    };
+
+    match skills::get_skill(&skill_name, full) {
+        Some(content) => {
+            cli_println!("{}", content);
+            Ok(())
+        }
+        None => {
+            let available = skills::list_skill_names();
+            Err(format!(
+                "Unknown skill '{}'. Available skills: {}",
+                skill_name,
+                available.join(", ")
+            ))
+        }
+    }
+}
+
+fn handle_skills_path(tool_params: &Value) -> Result<(), String> {
+    // Check BROWSER4_SKILLS_DIR first, then the current versioned install dir,
+    // then the default skills directory.
+    let skills_dir = if std::env::var("BROWSER4_SKILLS_DIR")
+        .map(|v| !v.trim().is_empty())
+        .unwrap_or(false)
+    {
+        skills::get_skills_dir()
+    } else if let Some(tag) = daemon::read_current_tag() {
+        let versioned = state::resolve_runtime_data_dir()
+            .join("versions")
+            .join(&tag)
+            .join("skills");
+        if versioned.is_dir() {
+            versioned
+        } else {
+            skills::get_skills_dir()
+        }
+    } else {
+        skills::get_skills_dir()
+    };
+
+    let name = tool_params
+        .get("name")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty());
+
+    match name {
+        Some(n) => {
+            cli_println!("{}", skills_dir.join(n).display());
+        }
+        None => {
+            cli_println!("{}", skills_dir.display());
+        }
+    }
     Ok(())
 }
 
@@ -10457,6 +10576,10 @@ fn should_ensure_server_running(command: &str) -> bool {
         && command != "agent-list"
         && command != "crawl-list"
         && command != "swarm-list"
+        && command != "skills"
+        && command != "skills-list"
+        && command != "skills-get"
+        && command != "skills-path"
 }
 
 // ---------------------------------------------------------------------------
@@ -10500,6 +10623,7 @@ fn rewrite_prefixed_command(args: &[String]) -> Option<Vec<String>> {
         "agent" => format!("agent-{}", sub),
         "htmlsnapshot" => format!("htmlsnapshot-{}", sub),
         "snapshot" => format!("snapshot-{}", sub),
+        "skills" => format!("skills-{}", sub),
         _ => return None,
     };
     let mut rewritten = vec![rewritten_command];
@@ -10538,6 +10662,9 @@ fn preferred_spaced_command_form(command: &str) -> Option<&'static str> {
         "htmlsnapshot-summary" => Some("htmlsnapshot summary"),
         "htmlsnapshot-grep" => Some("htmlsnapshot grep"),
         "htmlsnapshot-inspect" => Some("htmlsnapshot inspect"),
+        "skills-list" => Some("skills list"),
+        "skills-get" => Some("skills get"),
+        "skills-path" => Some("skills path"),
         _ => None,
     }
 }
@@ -10547,10 +10674,9 @@ fn preferred_prefixed_group_form(command: &str) -> Option<&'static str> {
         "agent" => Some("agent <subcommand>"),
         "swarm" => Some("swarm <subcommand>"),
         "co" => Some("swarm <subcommand>"),
-        // `htmlsnapshot` is a valid standalone command (captures a HTML snapshot
-        // and returns metadata), not just a prefix group — so it is intentionally
-        // absent here.  Likewise `crawl` can be used standalone (crawl <url>) as
-        // well as with subcommands via rewrite (crawl list → crawl-list).
+        // `skills` is a valid standalone command (lists skills) as well as a
+        // prefix for subcommands (skills list → skills-list), so it is
+        // intentionally absent here.  Likewise `htmlsnapshot` and `crawl`.
         _ => None,
     }
 }
@@ -11094,7 +11220,8 @@ fn compile_batch_request(
             "list" | "close-all" | "kill-all" | "delete-data" | "install" | "uninstall"
             | "upgrade" | "agent-run" | "agent-status" | "agent-result" | "swarm-create"
             | "swarm-submit" | "swarm-query" | "swarm-status" | "swarm-result"
-            | "agent-list" | "crawl-list" | "swarm-list" => {
+            | "agent-list" | "crawl-list" | "swarm-list"
+            | "skills" | "skills-list" | "skills-get" | "skills-path" => {
                 if push_batch_local_failure(
                     &mut entries,
                     spec,
@@ -11736,6 +11863,15 @@ async fn run(
         }
         "install" => {
             handle_install(&tool_params).await?;
+        }
+        "skills" | "skills-list" => {
+            handle_skills_list()?;
+        }
+        "skills-get" => {
+            handle_skills_get(&tool_params)?;
+        }
+        "skills-path" => {
+            handle_skills_path(&tool_params)?;
         }
         "uninstall" => {
             handle_uninstall(&tool_params).await?;

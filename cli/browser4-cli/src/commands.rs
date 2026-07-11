@@ -23,6 +23,7 @@ pub enum Category {
     Swarm,
     Snapshot,
     Act,
+    Skills,
 }
 
 impl Category {
@@ -44,6 +45,7 @@ impl Category {
             Category::Swarm => "swarm",
             Category::Snapshot => "snapshot",
             Category::Act => "act",
+            Category::Skills => "skills",
         }
     }
 }
@@ -414,6 +416,86 @@ pub fn all_commands() -> Vec<CommandDef> {
                 }
                 if let Some(dry) = get_bool(args, "dry-run") {
                     params["dry_run"] = json!(dry);
+                }
+                params
+            },
+        },
+        // ---- Skills (bundled skill files) ----
+        CommandDef {
+            name: "skills",
+            description: "List bundled skill names (AI agent instructions for browser4-cli)",
+            category: Category::Skills,
+            hidden: false,
+            batch_supported: false,
+            args: &[],
+            options: &[],
+            tool_name_fn: |_| String::new(),
+            tool_params_fn: |_| json!({}),
+        },
+        CommandDef {
+            name: "skills-list",
+            description: "List available bundled skills",
+            category: Category::Skills,
+            hidden: true,
+            batch_supported: false,
+            args: &[],
+            options: &[],
+            tool_name_fn: |_| String::new(),
+            tool_params_fn: |_| json!({}),
+        },
+        CommandDef {
+            name: "skills-get",
+            description: "Output a skill's full content",
+            category: Category::Skills,
+            hidden: true,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "name", description: "Skill name to retrieve (e.g. browser4-cli)", optional: true },
+            ],
+            options: &[
+                OptionDef {
+                    name: "full",
+                    description: "Include references and extra documentation",
+                    is_bool: true,
+                    short: None,
+                },
+                OptionDef {
+                    name: "all",
+                    description: "Output every bundled skill",
+                    is_bool: true,
+                    short: None,
+                },
+            ],
+            tool_name_fn: |_| String::new(),
+            tool_params_fn: |args| {
+                let mut params = json!({});
+                if let Some(name) = get_opt_str(args, "name") {
+                    params["name"] = json!(name);
+                }
+                if let Some(full) = get_bool(args, "full") {
+                    params["full"] = json!(full);
+                }
+                if let Some(all) = get_bool(args, "all") {
+                    params["all"] = json!(all);
+                }
+                params
+            },
+        },
+        CommandDef {
+            name: "skills-path",
+            description: "Print the skill directory path",
+            category: Category::Skills,
+            hidden: true,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "name", description: "Skill name (if given, prints path to that skill's directory)", optional: true },
+            ],
+            options: &[],
+            tool_name_fn: |_| String::new(),
+            tool_params_fn: |args| {
+                let mut params = json!({});
+                if let Some(name) = get_opt_str(args, "name") {
+                    params["name"] = json!(name);
                 }
                 params
             },

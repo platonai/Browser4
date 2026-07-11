@@ -2,4 +2,5 @@
 
 pub mod commands;
 pub mod managed_processes;
+pub mod skills;
 pub mod state;

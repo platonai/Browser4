@@ -46,6 +46,7 @@ pub const CATEGORY_TITLES: &[(&str, &str)] = &[
     ("swarm", "Swarm"),
     ("install", "Install"),
     ("browsers", "Browser sessions"),
+    ("skills", "Skills"),
 ];
 
 /// Short aliases for category-based help filtering.
@@ -63,6 +64,7 @@ const CATEGORY_ALIASES: &[(&str, &str)] = &[
     ("capture", "export"),
     ("ss", "snapshot"),
     ("state", "storage"),
+    ("skill", "skills"),
 ];
 
 /// Resolve a category alias to its canonical category name, or return the

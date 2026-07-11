@@ -3504,6 +3504,12 @@ fn excluded_commands(include_batch_command: bool) -> HashSet<&'static str> {
         "act",
         // Uninstall requires npm/cargo on $PATH; not exercised in e2e.
         "uninstall",
+        // Skills commands are local-only (no server interaction); exercised via
+        // unit tests and manual CLI verification.
+        "skills",
+        "skills-list",
+        "skills-get",
+        "skills-path",
     ]
     .into();
 
