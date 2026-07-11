@@ -41,7 +41,7 @@ class ExtensionWebSocketHandler(
 
             sessionManager.onExtensionConnected(sessionId, sender)
         } catch (e: Exception) {
-            logger.error("Failed to bind extension connection | sessionId={} | {}", sessionId, e.message, e)
+            logger.warn("Failed to bind extension connection | sessionId={} | {}", sessionId, e.message, e)
             try { session.close(CloseStatus.SERVER_ERROR) } catch (_: Exception) {}
             wsSessions.remove(sessionId)
         }
