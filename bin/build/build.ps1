@@ -333,7 +333,7 @@ function Invoke-BugReportAgent {
   Write-Host ""
   Write-Host "[BUG-REPORT] Generating AI bug report for $BuildSystem failure..." -ForegroundColor Yellow
 
-  $bugReportDir = Join-Path $repoRoot "coworker\tasks\200issues\draft"
+  $bugReportDir = Join-Path $repoRoot "coworker\tasks\issues\draft"
   if (-not (Test-Path $bugReportDir)) {
     New-Item -ItemType Directory -Path $bugReportDir -Force | Out-Null
   }

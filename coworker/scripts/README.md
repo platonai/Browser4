@@ -108,8 +108,8 @@ Task definitions live in `coworker-scheduler.config.psd1`. Each task supports:
 |------|----------|--------------|---------|
 | `coworker` | 15s | `coworker.ps1` | `main/1ready` or `main/5approved` |
 | `draft-refinement` | 15s | `workers/refine-drafts.ps1` | `main/0draft/refine/1ready` |
-| `commit-github-issues` | _disabled_ | `workers/commit-github-issues.ps1` | `200issues/github/commit/ready` |
-| `refine-github-issues` | 15s | `workers/refine-github-issues.ps1` | `200issues/draft/refine/0ready` |
+| `commit-github-issues` | _disabled_ | `workers/commit-github-issues.ps1` | `issues/github/commit/ready` |
+| `refine-github-issues` | 15s | `workers/refine-github-issues.ps1` | `issues/draft/refine/0ready` |
 | `fetch-github-issues` | 10m | `workers/fetch-github-issues.ps1` | _(always runs)_ |
 | `organize-task-files` | 5m | `workers/organize-task-files.ps1` | _(always runs)_ |
 | `triage-github-issues` | 30m | `workers/triage-github-issues.ps1` | `main/0draft/issues/github` |
@@ -197,12 +197,12 @@ File system watcher wrappers and file validation predicates:
 
 ### GitHub Issues Pipeline
 
-| Script | Role |
-|--------|------|
-| `fetch-github-issues.ps1` | Fetches recent open issues from `platonai/Browser4` via `gh issue list`, saves each as markdown in `main/0draft/issues/github/`, self-assigns unassigned issues (capped at 5/run), detects closed/deleted issues to update or remove local copies. Persists `.fetch-state.json`. |
+| Script | Role                                                                                                                                                                                                                                                                                                             |
+|--------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `fetch-github-issues.ps1` | Fetches recent open issues from `platonai/Browser4` via `gh issue list`, saves each as markdown in `main/0draft/issues/github/`, self-assigns unassigned issues (capped at 5/run), detects closed/deleted issues to update or remove local copies. Persists `.fetch-state.json`.                                 |
 | `triage-github-issues.ps1` | Evaluates fetched issues for AI execution suitability via agent. Assesses relevance (to Browser4) and risk (of AI fix). Approved issues (high relevance + low risk) are moved to `main/1ready`. Persists `.triage-state.json` to avoid re-evaluation. `-MaxPerRun` (default 5), `-TimeoutSeconds` (default 120). |
-| `refine-github-issues.ps1` | Extracts individual GitHub issues from natural-language draft files. Uses `<!-- COWORKER_ISSUE_BOUNDARY -->` markers, parses title/body/labels/assignees/repo, and routes output based on `#auto-approve` (to `github/commit/ready` or `draft/refine/2done`). |
-| `commit-github-issues.ps1` | Creates GitHub issues via `gh issue create` from formatted markdown files in `200issues/github/commit/ready`. Enforces a daily commit cap (20/day) to avoid GitHub spam detection. Moves successful creations to `done/`, failures to `failed/`. |
+| `refine-github-issues.ps1` | Extracts individual GitHub issues from natural-language draft files. Uses `<!-- COWORKER_ISSUE_BOUNDARY -->` markers, parses title/body/labels/assignees/repo, and routes output based on `#auto-approve` (to `github/commit/ready` or `draft/refine/2done`).                                                    |
+| `commit-github-issues.ps1` | Creates GitHub issues via `gh issue create` from formatted markdown files in `issues/github/commit/ready`. Enforces a daily commit cap (20/day) to avoid GitHub spam detection. Moves successful creations to `done/`, failures to `failed/`.                                                                    |
 
 ### Maintenance
 
