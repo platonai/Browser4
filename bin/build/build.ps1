@@ -257,24 +257,40 @@ function Invoke-MavenBuild {
 
     # Capture output to detect currently-building module for --resume tracking
     $currentModule = ""
+    $currentArtifactId = ""
     $mvnOutput = & $MvnwScript @BuildArgs 2>&1
     $exitCode = $LASTEXITCODE
 
     # Stream output to console, while tracking "Building ..." lines
+    # and extracting the artifactId from "@ artifactId ---" plugin lines.
+    # Maven -rf requires the artifactId, but "Building" lines show the
+    # display <name> — which can differ (e.g. "Browser4" vs "browser4").
     foreach ($line in $mvnOutput) {
       Write-Host $line
       if ($line -match '^\s*\[INFO\]\s+Building\s+(\S+)\s+') {
         $currentModule = $Matches[1]
+        $currentArtifactId = ""
+        # Always write the display name first (fallback); artifactId
+        # will overwrite it once we see a plugin-execution line.
         Write-TrackedFile -Path $LastFailedModuleFile -Content $currentModule
+      }
+      elseif ($line -match '@\s+(\S+)\s+---') {
+        $currentArtifactId = $Matches[1]
+        if ($currentArtifactId) {
+          Write-TrackedFile -Path $LastFailedModuleFile -Content $currentArtifactId
+        }
       }
     }
 
     if ($exitCode -ne 0) {
       $errMsg = "Maven command failed in $Directory (exit code $exitCode)"
       Add-Content -Path $BuildLogFile -Value "[$ts] FAILED: $errMsg"
-      if ($currentModule) {
-        Write-TrackedFile -Path $LastFailedModuleFile -Content $currentModule
-        Write-Host "[TRACK] Last module before failure: $currentModule" -ForegroundColor Yellow
+      # Use artifactId if we captured one (Maven -rf needs it);
+      # fall back to the display name from the "Building" line.
+      $resumeFrom = if ($currentArtifactId) { $currentArtifactId } else { $currentModule }
+      if ($resumeFrom) {
+        Write-TrackedFile -Path $LastFailedModuleFile -Content $resumeFrom
+        Write-Host "[TRACK] Last module before failure: $resumeFrom" -ForegroundColor Yellow
       }
       throw $errMsg
     }
