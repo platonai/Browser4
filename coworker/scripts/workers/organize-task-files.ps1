@@ -262,7 +262,7 @@ try {
         dirsScanned  = $result.dirsScanned
         dirsSkipped  = $result.dirsSkipped
         dryRun       = $DryRun.IsPresent
-        completedAt  = (Get-Date).ToUniversalTime().ToString('o')
+        completedAt  = Get-CoworkerTimestamp
     } | ConvertTo-Json -Compress
 
     Write-Host $jsonSummary

@@ -125,7 +125,7 @@ function New-CoworkerScriptLock {
     $lockData = @{
         PID        = $PID
         ScriptPath = $resolvedPath
-        StartedAt  = (Get-Date).ToUniversalTime().ToString('o')
+        StartedAt  = Get-CoworkerTimestamp
     } | ConvertTo-Json -Compress
 
     $lockBytes = [System.Text.Encoding]::UTF8.GetBytes($lockData)

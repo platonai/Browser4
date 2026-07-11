@@ -67,7 +67,7 @@ function Write-MemoryDiagnostic {
         [ValidateSet('INFO', 'WARN', 'ERROR')]
         [string]$Level = 'INFO'
     )
-    $timestamp = (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd HH:mm:ss')
+    $timestamp = Get-CoworkerTimestamp
     [Console]::Error.WriteLine("[${timestamp}] [${Level}] [memory-context] $Message")
 }
 

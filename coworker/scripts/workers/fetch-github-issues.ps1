@@ -361,7 +361,7 @@ if ($fetchState.IssuesOnDisk.Count -gt 0) {
 }
 
 # ── Persist fetch state ──────────────────────────────────────────────────────
-$fetchState.LastFetchedAt = (Get-Date).ToUniversalTime().ToString('o')
+$fetchState.LastFetchedAt = Get-CoworkerTimestamp
 if ($issues.Count -gt 0) {
     $fetchState.LastIssueNumber = ($issues | Sort-Object { $_.number } -Descending | Select-Object -First 1).number
 }

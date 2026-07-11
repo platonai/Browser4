@@ -83,7 +83,7 @@ Describe 'Write-LogMessage' {
                 [ValidateSet('INFO', 'WARN', 'ERROR')][string]$Level = 'INFO',
                 [Parameter(Mandatory=$true)][string]$ScriptLogPath
             )
-            $timestamp = (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd HH:mm:ss')
+            $timestamp = (Get-Date).ToString('yyyy-MM-ddTHH:mm:sszzz')
             $logEntry = "[$timestamp] [$Level] $Message"
             switch ($Level) {
                 'INFO'  { Write-ConsoleLine -Message $logEntry }
@@ -195,7 +195,7 @@ Describe 'Write-LogVerbose' {
                 [Parameter(Mandatory=$true)][string]$Message,
                 [Parameter(Mandatory=$true)][string]$ScriptLogPath
             )
-            $timestamp = (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd HH:mm:ss')
+            $timestamp = (Get-Date).ToString('yyyy-MM-ddTHH:mm:sszzz')
             $logEntry = "[$timestamp] [DEBUG] $Message"
             $logEntry | Out-File -FilePath $ScriptLogPath -Append -Encoding UTF8
         }
@@ -1193,7 +1193,7 @@ Original File: $fileName
 Control Repo: $repoRoot
 Target Repo: $repoRoot
 Agent Working Directory: $repoRoot
-Started: $((Get-Date).ToUniversalTime().ToString('yyyy-MM-dd HH:mm:ss'))
+Started: $(Get-Date -Format 'yyyy-MM-ddTHH:mm:sszzz')
 Prompt:
 $prompt
 ---

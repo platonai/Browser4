@@ -50,7 +50,7 @@ function Write-LogMessage {
         [string]$Level = 'INFO'
     )
 
-    $timestamp = (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd HH:mm:ss')
+    $timestamp = Get-CoworkerTimestamp
     $logEntry = "[$timestamp] [$Level] $Message"
 
     switch ($Level) {
@@ -71,7 +71,7 @@ function Write-LogVerbose {
         [string]$Message
     )
 
-    $timestamp = (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd HH:mm:ss')
+    $timestamp = Get-CoworkerTimestamp
     $logEntry = "[$timestamp] [DEBUG] $Message"
 
     if ($script:__ScriptLogPath) {

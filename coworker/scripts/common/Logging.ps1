@@ -10,7 +10,7 @@ function Write-CoworkerLog {
         [switch]$NoColor
     )
 
-    $timestamp = (Get-Date).ToUniversalTime().ToString('o')
+    $timestamp = Get-CoworkerTimestamp
     $formattedMessage = "[{0}] [{1}] [{2}] {3}" -f $timestamp, $Level, $Component, $Message
     $color = switch ($Level) {
         'DEBUG' { 'DarkGray' }

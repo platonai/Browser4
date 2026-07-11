@@ -100,7 +100,7 @@ function Set-TriageState {
 
     $jsonObj = [PSCustomObject]@{
         files         = $State.files
-        lastRunAt     = (Get-Date).ToUniversalTime().ToString('o')
+        lastRunAt     = Get-CoworkerTimestamp
         totalChecked  = $State.totalChecked
         totalApproved = $State.totalApproved
     }
@@ -309,7 +309,7 @@ foreach ($candidate in $candidates) {
     $evaluatedThisRun++
 
     # Record in state
-    $checkedAt = (Get-Date).ToUniversalTime().ToString('o')
+    $checkedAt = Get-CoworkerTimestamp
     $stateEntry = @{
         checkedAt = $checkedAt
         verdict   = $evalResult.verdict

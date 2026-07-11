@@ -448,7 +448,7 @@ Original File: $($file.Name)
 Control Repo: $repoRoot
 Target Repo: $targetRepoRoot
 Agent Working Directory: $agentWorkingDirectory
-Started: $((Get-Date).ToUniversalTime().ToString('yyyy-MM-dd HH:mm:ss'))
+Started: $(Get-CoworkerTimestamp)
 Prompt:
 $prompt
 ---

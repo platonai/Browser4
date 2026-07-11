@@ -45,6 +45,25 @@ const STOPWORDS = new Set([
   'using', 'used', 'rather', 'instead', 'already', 'yet', 'still',
 ]);
 
+// ── Offset datetime helper ─────────────────────────────────────────────────
+
+/**
+ * Format a Date as an ISO 8601 string with local timezone offset.
+ * Example: 2026-07-11T19:32:00+08:00
+ */
+function toOffsetISOString(date) {
+  const offset = -date.getTimezoneOffset();
+  const sign = offset >= 0 ? '+' : '-';
+  const pad = n => String(Math.floor(Math.abs(n))).padStart(2, '0');
+  return date.getFullYear() + '-' +
+    pad(date.getMonth() + 1) + '-' +
+    pad(date.getDate()) + 'T' +
+    pad(date.getHours()) + ':' +
+    pad(date.getMinutes()) + ':' +
+    pad(date.getSeconds()) +
+    sign + pad(offset / 60) + ':' + pad(offset % 60);
+}
+
 // ── Internal state ────────────────────────────────────────────────────────
 
 let _tasksRoot = null;
@@ -627,7 +646,7 @@ function buildEnrichedContext(issueTitle) {
  */
 function recordFeedback(issueTitle, aiDecision, humanDecision) {
   const entry = {
-    timestamp: new Date().toISOString(),
+    timestamp: toOffsetISOString(new Date()),
     issueTitle,
     aiDecision,
     humanDecision,

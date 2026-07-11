@@ -17,6 +17,13 @@ $script:configData = Import-PowerShellDataFile -Path $configDataPath
 # Scripts directory (used by Paths.ps1 for relative path resolution)
 $script:__CoworkerScriptsRoot = $PSScriptRoot
 
+# ── Shared datetime helper ─────────────────────────────────────────────────
+# All coworker scripts MUST use this for timestamps written to file contents.
+# Produces OffsetDateTime format: 2026-07-11T19:32:00+08:00
+function Get-CoworkerTimestamp {
+    [DateTimeOffset]::Now.ToString('yyyy-MM-ddTHH:mm:sszzz')
+}
+
 # ── Dot-source shared modules ─────────────────────────────────────────────
 . (Join-Path $PSScriptRoot 'common\Paths.ps1')
 . (Join-Path $PSScriptRoot 'common\Watchers.ps1')

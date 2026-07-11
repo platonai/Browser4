@@ -560,8 +560,8 @@ function Invoke-TrackedCli {
 ================================================================================
 COMMAND     : $cmdLabel
 CLI BINARY  : $cliBin
-STARTED     : $($startTime.ToString('yyyy-MM-dd HH:mm:ss.fff'))
-FINISHED    : $($endTime.ToString('yyyy-MM-dd HH:mm:ss.fff'))
+STARTED     : $($startTime.ToString('yyyy-MM-ddTHH:mm:ss.fffzzz'))
+FINISHED    : $($endTime.ToString('yyyy-MM-ddTHH:mm:ss.fffzzz'))
 ELAPSED     : $('{0:F1}' -f $elapsed.TotalSeconds)s
 EXIT CODE   : $exitCode
 EXPECTED    : $ExpectedExitCode
@@ -751,8 +751,8 @@ function Write-FailureReport {
     $report = [PSCustomObject]@{
         testName    = $script:TestName
         logDir      = $script:LogDir
-        startedAt   = $script:TestStartTime.ToString('yyyy-MM-dd HH:mm:ss')
-        generatedAt = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
+        startedAt   = $script:TestStartTime.ToString('yyyy-MM-ddTHH:mm:sszzz')
+        generatedAt = (Get-Date).ToString('yyyy-MM-ddTHH:mm:sszzz')
         totalCommands = $script:CommandLogs.Count
         passed       = (Get-PassCount)
         failed       = $script:Failures.Count
@@ -938,8 +938,8 @@ function Finish-TestSession {
     if (Test-Path (Get-CliBin)) {
         try { $ver = & (Get-CliBin) --version 2>&1; Write-Host "  CLI version   : $($ver -join ' ')" -ForegroundColor DarkGray } catch {}
     }
-    Write-Host "  Started       : $($script:TestStartTime.ToString('yyyy-MM-dd HH:mm:ss'))"
-    Write-Host "  Finished      : $((Get-Date).ToString('yyyy-MM-dd HH:mm:ss'))"
+    Write-Host "  Started       : $($script:TestStartTime.ToString('yyyy-MM-ddTHH:mm:sszzz'))"
+    Write-Host "  Finished      : $((Get-Date).ToString('yyyy-MM-ddTHH:mm:sszzz'))"
     Write-Host ("  Elapsed       : {0:hh\:mm\:ss}" -f $elapsed)
     Write-Host "  ─────────────────────────────────────────────"
     Write-Host "  Commands      : $total"
@@ -1007,7 +1007,7 @@ function Write-TestHeader {
     param([string]$Name)
     Write-Host "`n══════════════════════════════════════════════════════════" -ForegroundColor Cyan
     Write-Host "  TEST: $Name" -ForegroundColor Cyan
-    Write-Host "  TIME: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')" -ForegroundColor Cyan
+    Write-Host "  TIME: $(Get-Date -Format 'yyyy-MM-ddTHH:mm:sszzz')" -ForegroundColor Cyan
     Write-Host "══════════════════════════════════════════════════════════" -ForegroundColor Cyan
 }
 
