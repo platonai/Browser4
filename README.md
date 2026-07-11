@@ -43,7 +43,7 @@ English | [简体中文](README.zh.md) | [中国镜像](https://gitee.com/platon
 Paste the following instruction to your favorite AI agent like claude, codex, workbuddy or openclaw and run it:
 
 ```
-Read https://browser4.io/SKILL.md and install browser4-cli for browser automation to perform the following task:
+Read https://browser4.io/SKILL.md and install browser4-cli (if not installed) for browser automation to perform the following task:
 
 1. go to amazon.com
 2. search for pens to draw on whiteboards

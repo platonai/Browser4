@@ -43,7 +43,7 @@
 将以下指令粘贴到你喜欢的 AI 智能体（如 claude、codex、workbuddy 或 openclaw）中并运行：
 
 ```
-Read https://browser4.io/SKILL.md and install browser4-cli for browser automation to perform the following task:
+Read https://browser4.io/SKILL.md and install browser4-cli (if not installed) for browser automation to perform the following task:
 
 1. go to amazon.com
 2. search for pens to draw on whiteboards
