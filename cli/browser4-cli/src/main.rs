@@ -5429,19 +5429,10 @@ fn convert_alternation(pattern: &str) -> String {
         return pattern.to_string();
     }
     // Contains \| → convert to bare | (grep BRE → Rust regex).
+    // Conversion is silent — Rust regex syntax is documented in --help.
+    // Users who need literal pipe matching can use -F (fixed strings).
     if pattern.contains("\\|") {
-        let converted = pattern.replace("\\|", "|");
-        // Only log the conversion once per session (avoid spam in loops).
-        use std::sync::atomic::{AtomicBool, Ordering};
-        static LOGGED: AtomicBool = AtomicBool::new(false);
-        if !LOGGED.swap(true, Ordering::Relaxed) && !json_active() {
-            eprintln!(
-                "Note: Converted grep-style alternation `\\\\|` to `|` in pattern. \
-                 Rust regex uses bare `|` for alternation (like ERE/egrep). \
-                 Use `snapshot grep -F` for literal matching."
-            );
-        }
-        return converted;
+        return pattern.replace("\\|", "|");
     }
     pattern.to_string()
 }

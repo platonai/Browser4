@@ -1167,6 +1167,14 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(
+            "  - Uses Rust regex syntax (bare `|` for alternation, not `\\|`). Use `-F` for literal matching."
+                .to_string(),
+        );
+        lines.push(
+            "    The `-E` (extended regex) flag is accepted for grep compatibility but is a no-op: Rust regex is always ERE-like."
+                .to_string(),
+        );
+        lines.push(
             "  - snapshot grep supports the same grep options as htmlsnapshot grep: -e (repeatable), -i, -A, -B, -C, -v, -c, -l, -F, -w, --no-line-number, --selector, --selector-all, --page N, --page-size N, and --all."
                 .to_string(),
         );
