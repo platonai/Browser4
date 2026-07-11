@@ -933,7 +933,8 @@ async fn get_or_create_navigation_session(
             json!({ "sessionId": session_id }),
         ).await {
             if !url_result.is_empty() {
-                cli_println!("Reconnected to existing session on {}", url_result);
+                let label = session_name.unwrap_or("DEFAULT");
+                cli_println!("Using existing session {} (current page: {}).", label, url_result);
             }
         }
     }
@@ -1258,6 +1259,11 @@ async fn handle_goto(
 fn is_timeout_error_message(error: &str) -> bool {
     let lower = error.to_ascii_lowercase();
     lower.contains("timed out") || lower.contains("deadline has elapsed")
+}
+
+fn is_not_focusable_error(error: &str) -> bool {
+    let lower = error.to_ascii_lowercase();
+    lower.contains("not focusable")
 }
 
 fn format_navigation_failure_message(
@@ -6155,8 +6161,16 @@ async fn handle_text_input_command(
                 };
                 let enriched = format!("{}\n{}", err, verify_msg);
                 Err(enriched)
+            } else if is_not_focusable_error(&err) {
+                // Element can't receive focus — suggest click-first workaround.
+                let enriched = format!(
+                    "{}\n\nTip: Some elements (e.g. Google search box) cannot receive focus directly.\n\
+                     Try 'click <ref>' first to focus the element, then 'type <text>' to enter text.",
+                    err
+                );
+                Err(enriched)
             } else {
-                // Not a timeout — propagate as-is.
+                // Not a timeout or focusability issue — propagate as-is.
                 Err(err)
             }
         }

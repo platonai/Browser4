@@ -49,6 +49,8 @@ The file `kotlin-backend-jobs.json` has been created at `D:/workspace/Browser4/B
 ## Issues Found (10 issues)
 > **Review complete:** 4 approved, 6 deferred/rejected
 
+> **Resolution (2026-07-11):** All 4 ACCEPTed issues fixed. See details below.
+
 ### Issue 2: `fill` command fails on Google search box with misleading error
 
 **Severity:** Medium

@@ -1188,7 +1188,18 @@ class MCPToolController(
             val evaluate = result.evaluate
             val exception = evaluate.exception
             if (exception != null) {
-                ResponseEntity.ok(errorResponse("${request.tool} failed: ${exception.message} help: ${exception.help}"))
+                val errorMsg = buildString {
+                    append("${request.tool} failed: ${exception.message}")
+                    val causeMsg = exception.cause?.message
+                    if (causeMsg != null && causeMsg != exception.message) {
+                        append(" (${causeMsg})")
+                    }
+                    // Append CLI-friendly suggestion for known error patterns.
+                    if (exception.message?.contains("not focusable", ignoreCase = true) == true) {
+                        append("\nTip: Use 'click <ref>' first to focus the element, then 'type <text>' to enter text.")
+                    }
+                }
+                ResponseEntity.ok(errorResponse(errorMsg))
             } else {
                 // Distinguish JS null (className == "null") from JS undefined (className == "undefined")
                 // and Kotlin Unit (no meaningful return value).
