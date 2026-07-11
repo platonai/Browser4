@@ -40,7 +40,7 @@ abstract class BrowserExampleBase(val headless: Boolean = false): AutoCloseable 
     val launchOptions = ChromeOptions()
             .addArgument("window-size", formatViewPort())
             .also { it.headless = headless }
-    val userDataDir = BrowserFiles.computeTestContextDir()
+    val userDataDir = BrowserFiles.computeRandomTmpContextDir()
     val launcher = ChromeLauncher(userDataDir)
 
     val chrome = launcher.launch(launchOptions)
