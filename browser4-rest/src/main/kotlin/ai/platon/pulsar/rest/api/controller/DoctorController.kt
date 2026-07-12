@@ -30,7 +30,7 @@ class DoctorController(
 
         val logFiles = logDir.listFiles { f ->
             f.isFile && f.name.endsWith(".log")
-        }?.sortedBy { it.name } ?: emptyArray()
+        }?.sortedBy { it.name } ?: emptyList<File>()
 
         val fileInfos = logFiles.map { f ->
             mapOf(
@@ -59,7 +59,7 @@ class DoctorController(
         @RequestParam(defaultValue = "") filter: String
     ): ResponseEntity<Map<String, Any?>> {
         val sanitizedFile = file.replace(Regex("[/\\\\]"), "")
-        val cappedLines = lines.coerceIn(1, 50000)
+        val cappedLines = lines.coerceIn(1, 5000)
         val logFile = File(loggingDir, "$sanitizedFile.log")
 
         if (!logFile.exists() || !logFile.isFile) {
