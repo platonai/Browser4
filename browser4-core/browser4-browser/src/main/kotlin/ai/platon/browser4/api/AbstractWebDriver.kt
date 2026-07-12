@@ -5,6 +5,7 @@ import ai.platon.browser4.api.model.NavigateHistory
 import ai.platon.browser4.api.model.NetworkResourceHelper
 import ai.platon.browser4.api.model.WebDriverException
 import ai.platon.browser4.api.model.NetworkResourceResponse
+import ai.platon.pulsar.browser.WebDriver as PulsarWebDriverShim
 import ai.platon.pulsar.common.*
 import ai.platon.pulsar.common.urls.Hyperlink
 import ai.platon.pulsar.common.urls.URLUtils
@@ -34,7 +35,7 @@ abstract class AbstractWebDriver(
     override val guid: String,
     override val browser: AbstractBrowser,
     override val id: Int = ID_SUPPLIER.incrementAndGet()
-) : Comparable<AbstractWebDriver>, WebDriver {
+) : Comparable<AbstractWebDriver>, PulsarWebDriverShim {
     companion object {
         private val ID_SUPPLIER = AtomicInteger()
     }

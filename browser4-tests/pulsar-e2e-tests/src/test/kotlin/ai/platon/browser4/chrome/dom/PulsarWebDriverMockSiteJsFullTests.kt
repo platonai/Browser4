@@ -3,7 +3,7 @@ package ai.platon.browser4.chrome.dom
 import ai.platon.pulsar.WebDriverTestBase
 import ai.platon.pulsar.common.printlnPro
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
-import ai.platon.pulsar.browser.WebDriver
+import ai.platon.browser4.api.WebDriver
 import ai.platon.pulsar.persist.model.ActiveDOMMetadata
 import com.fasterxml.jackson.module.kotlin.readValue
 import kotlin.test.*

@@ -6,7 +6,7 @@ import ai.platon.browser4.api.AbstractWebDriver
 import ai.platon.browser4.api.model.JsEvaluation
 import ai.platon.pulsar.common.js.JsUtils
 import ai.platon.pulsar.common.printlnPro
-import ai.platon.pulsar.browser.WebDriver
+import ai.platon.browser4.api.WebDriver
 import org.junit.jupiter.api.assertNull
 import kotlin.test.Test
 import kotlin.test.assertEquals

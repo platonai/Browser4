@@ -11,7 +11,7 @@ import ai.platon.pulsar.agentic.skills.tools.SkillToolExecutor
 import ai.platon.pulsar.agentic.skills.tools.SkillToolTarget
 import ai.platon.pulsar.agentic.tools.builtin.*
 import ai.platon.pulsar.common.getLogger
-import ai.platon.pulsar.browser.WebDriver
+import ai.platon.browser4.api.WebDriver
 import kotlinx.coroutines.delay
 import java.nio.file.Path
 import kotlin.time.Duration.Companion.milliseconds

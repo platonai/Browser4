@@ -15,9 +15,9 @@ import ai.platon.pulsar.common.config.MutableConfig
 import ai.platon.pulsar.common.config.VolatileConfig
 import ai.platon.pulsar.common.readable
 import ai.platon.pulsar.common.stringify
-import ai.platon.pulsar.browser.Browser
-import ai.platon.pulsar.browser.BrowserManager
-import ai.platon.pulsar.browser.WebDriver
+import ai.platon.browser4.api.Browser
+import ai.platon.browser4.api.BrowserManager
+import ai.platon.browser4.api.WebDriver
 import ai.platon.pulsar.persist.WebPage
 import ai.platon.pulsar.protocol.browser.emulator.WebDriverPoolExhaustedException
 import ai.platon.pulsar.skeleton.common.AppSystemInfo

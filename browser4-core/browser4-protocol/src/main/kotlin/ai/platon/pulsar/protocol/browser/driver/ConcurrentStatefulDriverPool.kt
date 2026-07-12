@@ -3,8 +3,8 @@ package ai.platon.pulsar.protocol.browser.driver
 import ai.platon.browser4.api.AbstractWebDriver
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.common.warnInterruptible
-import ai.platon.pulsar.browser.BrowserManager
-import ai.platon.pulsar.browser.WebDriver
+import ai.platon.browser4.api.BrowserManager
+import ai.platon.browser4.api.WebDriver
 import kotlinx.coroutines.runBlocking
 import java.util.*
 import java.util.concurrent.ArrayBlockingQueue
