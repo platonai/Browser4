@@ -3,7 +3,6 @@ package ai.platon.browser4.api.model
 import ai.platon.pulsar.common.js.JsUtils
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.DisplayName
-import ai.platon.pulsar.common.js.JsUtils
 import org.junit.jupiter.api.Test
 
 class JsUtilsTest {
