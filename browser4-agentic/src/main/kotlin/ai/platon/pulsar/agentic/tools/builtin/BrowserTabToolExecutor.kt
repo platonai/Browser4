@@ -1,9 +1,9 @@
 package ai.platon.pulsar.agentic.tools.builtin
 
+import ai.platon.browser4.api.model.NavigateEntry
 import ai.platon.browser4.chrome.dom.model.AriaSnapshotOptions
 import ai.platon.pulsar.agentic.model.ToolSpec
 import ai.platon.pulsar.agentic.tools.specs.ToolSpecGenerator
-import ai.platon.pulsar.browser.common.NavigateEntry
 import ai.platon.pulsar.core.api.WebDriver
 import kotlinx.coroutines.delay
 import java.time.Duration
@@ -594,6 +594,7 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
                         if (args["submit"] == true) {
                             driver.press("Enter")
                         }
+                        Unit
                     }
 
                     args.containsKey("text") -> {
@@ -602,6 +603,7 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
                         if (args["submit"] == true) {
                             driver.press("Enter")
                         }
+                        Unit
                     }
 
                     else -> throw IllegalArgumentException("type requires 'text' and optionally 'selector'")
@@ -616,6 +618,7 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
                 if (args["submit"] == true) {
                     driver.press("Enter")
                 }
+                Unit
             }
 
             "click" -> {
