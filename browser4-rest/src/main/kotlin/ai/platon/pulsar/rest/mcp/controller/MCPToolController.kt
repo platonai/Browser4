@@ -525,13 +525,6 @@ class MCPToolController(
         }
     }
 
-    private suspend fun restoreBatchMousePosition(sessionId: String, position: BatchMousePosition) {
-        executeAgentToolText(
-            "browser_mouse_move_xy",
-            mapOf(MCPConstants.KEY_SESSION_ID to sessionId, "x" to position.x, "y" to position.y),
-        )
-    }
-
     private suspend fun executeAgentToolText(toolName: String, args: Map<String, Any?>): String {
         val sessionId = requireSessionId(args)
         val managed = sessionManager.getSession(sessionId)
