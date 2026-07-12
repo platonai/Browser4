@@ -15,7 +15,7 @@
  */
 package ai.platon.pulsar.skeleton.workflow.protocol.browser
 
-import ai.platon.browser4.api.privacy.PrivacyManager
+import ai.platon.pulsar.browser.privacy.PrivacyManager
 import ai.platon.pulsar.skeleton.workflow.fetch.BrowserFetcher
 import ai.platon.pulsar.skeleton.workflow.fetch.Fetcher
 import ai.platon.pulsar.skeleton.workflow.fetch.WebDriverFetcher

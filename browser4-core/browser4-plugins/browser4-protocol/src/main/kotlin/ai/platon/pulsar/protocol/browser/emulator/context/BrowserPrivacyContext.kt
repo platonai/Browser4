@@ -17,7 +17,7 @@ package ai.platon.pulsar.protocol.browser.emulator.context
 
 import ai.platon.browser4.api.BrowserId
 import ai.platon.browser4.api.BrowserProfile
-import ai.platon.browser4.api.privacy.AbstractPrivacyContext
+import ai.platon.pulsar.browser.privacy.AbstractPrivacyContext
 import ai.platon.pulsar.common.*
 import ai.platon.pulsar.common.PulsarParams.VAR_PRIVACY_CONTEXT_DISPLAY
 import ai.platon.pulsar.common.config.ImmutableConfig
@@ -35,6 +35,7 @@ import ai.platon.pulsar.skeleton.common.proxy.UniversalProxyParser
 import ai.platon.pulsar.skeleton.workflow.fetch.FetchResult
 import ai.platon.pulsar.skeleton.workflow.fetch.FetchTask
 import com.google.common.annotations.Beta
+import jdk.internal.org.jline.keymap.KeyMap.display
 
 open class BrowserPrivacyContext(
     val proxyPoolManager: ProxyPoolManager? = null,

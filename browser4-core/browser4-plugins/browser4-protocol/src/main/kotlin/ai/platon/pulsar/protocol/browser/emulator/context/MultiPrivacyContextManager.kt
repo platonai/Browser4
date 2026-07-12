@@ -15,11 +15,11 @@
  */
 package ai.platon.pulsar.protocol.browser.emulator.context
 
-import ai.platon.browser4.chrome.ChromeDestroyer
 import ai.platon.browser4.api.BrowserProfile
-import ai.platon.browser4.api.privacy.AbstractPrivacyContext
-import ai.platon.browser4.api.privacy.PrivacyContext
-import ai.platon.browser4.api.privacy.PrivacyException
+import ai.platon.browser4.chrome.ChromeDestroyer
+import ai.platon.pulsar.browser.privacy.AbstractPrivacyContext
+import ai.platon.pulsar.browser.privacy.PrivacyContext
+import ai.platon.pulsar.browser.privacy.PrivacyException
 import ai.platon.pulsar.common.*
 import ai.platon.pulsar.common.browser.fingerprint.Fingerprint
 import ai.platon.pulsar.common.config.CapabilityTypes.BROWSER_CONTEXT_NUMBER

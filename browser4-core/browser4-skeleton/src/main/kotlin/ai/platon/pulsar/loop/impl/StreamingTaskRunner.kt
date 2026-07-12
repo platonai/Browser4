@@ -1,6 +1,6 @@
 package ai.platon.pulsar.loop.impl
 
-import ai.platon.browser4.api.privacy.AbstractPrivacyContext
+import ai.platon.pulsar.browser.privacy.AbstractPrivacyContext
 import ai.platon.pulsar.common.*
 import ai.platon.pulsar.common.collect.ConcurrentLoadingIterable
 import ai.platon.pulsar.common.collect.DelayUrl
