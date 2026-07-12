@@ -1,10 +1,13 @@
 package ai.platon.browser4.chrome.protocol
 
+import ai.platon.browser4.api.BrowserProtocol
+import ai.platon.browser4.api.model.*
+import ai.platon.browser4.api.snapshot.NanoAriaSnapshotRenderer
+import ai.platon.browser4.api.snapshot.SnapshotService
+import ai.platon.browser4.api.snapshot.ViewportSpec
 import ai.platon.browser4.chrome.IsolatedWorldManager
 import ai.platon.browser4.chrome.dom.CDPSnapshotService
 import ai.platon.browser4.chrome.dom.model.AriaSnapshotOptions
-import ai.platon.browser4.api.snapshot.NanoAriaSnapshotRenderer
-import ai.platon.browser4.api.snapshot.ViewportSpec
 import ai.platon.browser4.chrome.protocol.util.CheckableElementJs
 import ai.platon.browser4.chrome.protocol.util.withNodeObjectId
 import ai.platon.browser4.chrome.util.ChromeDriverException
@@ -13,13 +16,6 @@ import ai.platon.cdt.kt.protocol.types.dom.Rect
 import ai.platon.cdt.kt.protocol.types.page.Navigate
 import ai.platon.cdt.kt.protocol.types.page.ReferrerPolicy
 import ai.platon.cdt.kt.protocol.types.page.TransitionType
-import ai.platon.browser4.api.model.BrowserSettings
-import ai.platon.browser4.api.BrowserProtocol
-import ai.platon.browser4.api.model.NodeRef
-import ai.platon.browser4.api.snapshot.SnapshotService
-import ai.platon.browser4.api.model.BrowserUseState
-import ai.platon.browser4.api.model.PageTarget
-import ai.platon.browser4.api.model.SnapshotOptions
 import ai.platon.pulsar.common.AppContext
 import ai.platon.pulsar.common.brief
 import ai.platon.pulsar.common.getLogger
@@ -263,7 +259,7 @@ class PageHandler constructor(
 
         // `attributes`: n1, v1, n2, v2, n3, v3, ...
         if (!isActive) return null
-        val attributes = browserProtocol.getAttributes(node.nodeId) ?: return null
+        val attributes = browserProtocol.getAttributes(node.nodeId)
         val nameIndex = attributes.indexOf(attrName)
         if (nameIndex < 0) {
             return null
