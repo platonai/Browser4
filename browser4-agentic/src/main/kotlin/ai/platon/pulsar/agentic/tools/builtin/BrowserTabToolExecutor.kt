@@ -1451,6 +1451,14 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
                 driver.evaluateValueDetail("window.__b4_console = []; 'Console cleared'")
             }
 
+            "executeCdpCommand" -> {
+                validateArgs(args, allowed("method", "params"), setOf("method"), functionName)
+                val method = paramString(args, "method", functionName)!!
+                @Suppress("UNCHECKED_CAST")
+                val params = args["params"] as? Map<String, Any?>
+                driver.executeCdpCommand(method, params)
+            }
+
             "help" -> help()
 
             else -> throw IllegalArgumentException("Unsupported WebDriver tool function: $functionName, call $domain.help() for more details")

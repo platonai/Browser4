@@ -487,6 +487,10 @@ class RemoteChromeProtocol(
 
     override suspend fun setIgnoreCertificateErrors(ignore: Boolean) = security.setIgnoreCertificateErrors(ignore)
 
+    override suspend fun executeCdpCommand(method: String, params: Map<String, Any?>?): Any? {
+        return remoteDevTools.invoke(method, params, Any::class)
+    }
+
     override fun onConsoleMessageAdded(handler: suspend (MessageAdded) -> Unit) = console.onMessageAdded(handler)
 
     override fun awaitTermination() {

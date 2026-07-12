@@ -47,7 +47,8 @@ use args::{
 use commands::{commands_map, is_element_reference};
 use daemon::{
     ensure_chrome_available, ensure_server_running, init_root_search_start_dir_from_startup,
-    install_browser4_runtime, read_current_tag, resolve_base_url, resolve_channel_to_endpoint,
+    install_browser4_runtime, is_local_port_open, read_current_tag, resolve_base_url,
+    resolve_channel_to_endpoint,
     InstalledBrowser4Runtime,
 };
 use help::{
@@ -321,6 +322,7 @@ fn no_snapshot_commands() -> HashSet<&'static str> {
         "uninstall",
         "upgrade",
         "doctor",
+        "doctor-log",
         "help",
         "eval",
         "generate-locator",
@@ -8972,6 +8974,11 @@ async fn handle_loop(
         return Ok(());
     }
 
+    // Ensure the server is running before loop execution.
+    // (Loop control-flow commands like --list / --stop return early above
+    // without reaching here, so the server is only started when needed.)
+    ensure_server_running(base_url).await?;
+
     // --- build the mode label ---
     let mode_label = if parsed.is_subcommand {
         "browser4-cli subcommand"
@@ -10402,7 +10409,20 @@ async fn handle_doctor(client: &Client, base_url: &str, args: &HashMap<String, V
     cli_println!("================");
     cli_println!("");
 
+    let is_fix = args.get("fix").and_then(|v| v.as_bool()).unwrap_or(false);
+
+    // ---- Auto-clean Stale Daemon Files ----
+    cli_println!("-- Stale File Cleanup --");
+    let cleaned = clean_stale_daemon_files();
+    if cleaned > 0 {
+        cli_println!("  Cleaned {} stale daemon file(s)", cleaned);
+    } else {
+        cli_println!("  No stale daemon files found");
+    }
+    json_field("stale_files_cleaned", json!(cleaned));
+
     // ---- CLI Build Info (always available) ----
+    cli_println!("");
     cli_println!("-- CLI Build Info --");
     cli_println!("  CLI version: {}", VERSION);
     json_field("cli_version", json!(VERSION));
@@ -10532,6 +10552,18 @@ async fn handle_doctor(client: &Client, base_url: &str, args: &HashMap<String, V
         }
     }
 
+    // ---- Destructive Repairs (--fix) ----
+    if is_fix {
+        cli_println!("");
+        cli_println!("-- Destructive Repairs (--fix) --");
+        let fix_count = run_destructive_repairs();
+        cli_println!("  Repairs applied: {}", fix_count);
+        json_field("repairs_applied", json!(fix_count));
+    } else {
+        cli_println!("");
+        cli_println!("💡 Tip: Run 'browser4-cli doctor --fix' to auto-repair common issues (reinstall Chrome, purge old state, clean temp files).");
+    }
+
     Ok(())
 }
 
@@ -10562,6 +10594,249 @@ fn is_zero_value(value: &Value) -> bool {
     }
 }
 
+/// Clean up stale daemon files (PID files, socket files, lock files) from the
+/// state directory that may have been left behind by previous runs.
+/// Returns the number of files cleaned.
+fn clean_stale_daemon_files() -> usize {
+    let state_dir = state::resolve_default_state_dir();
+    let mut cleaned = 0usize;
+
+    // Patterns to clean: PID files, socket files, lock files, temp files
+    let stale_patterns = [".pid", ".sock", ".lock", ".tmp"];
+    let stale_extensions = ["pid", "sock", "lock", "tmp"];
+
+    // Clean files in the state directory root
+    if let Ok(entries) = std::fs::read_dir(&state_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_file() {
+                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                    let should_clean = stale_patterns.iter().any(|p| name.contains(p))
+                        || stale_extensions.iter().any(|ext| {
+                            path.extension().and_then(|e| e.to_str()) == Some(ext)
+                        });
+                    if should_clean {
+                        if std::fs::remove_file(&path).is_ok() {
+                            cleaned += 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Clean dedicated sessions directory
+    let sessions_dir = state_dir.join("sessions");
+    if let Ok(entries) = std::fs::read_dir(&sessions_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_file() {
+                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                    if stale_patterns.iter().any(|p| name.contains(p)) {
+                        if std::fs::remove_file(&path).is_ok() {
+                            cleaned += 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Clean the tmp directory if it exists
+    let tmp_dir = state_dir.join("tmp");
+    if tmp_dir.exists() && tmp_dir.is_dir() {
+        if let Ok(entries) = std::fs::read_dir(&tmp_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_file() {
+                    if std::fs::remove_file(&path).is_ok() {
+                        cleaned += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    cleaned
+}
+
+/// Run destructive repairs when `--fix` is passed.
+/// - Removes Chrome profile directories that may be corrupted
+/// - Purges the runtime download cache
+/// - Removes temp cli directories
+/// Returns the number of repair actions applied.
+fn run_destructive_repairs() -> usize {
+    let mut repairs = 0usize;
+    let runtime_data_dir = state::resolve_runtime_data_dir();
+    let runtime_cache_dir = state::resolve_runtime_cache_dir();
+
+    // 1. Clean stale daemon files (same as auto-clean)
+    repairs += clean_stale_daemon_files();
+
+    // 2. Clean temp/cli directory under runtime data dir
+    let cli_tmp = runtime_data_dir.join("tmp").join("cli");
+    if cli_tmp.exists() {
+        if std::fs::remove_dir_all(&cli_tmp).is_ok() {
+            repairs += 1;
+        }
+    }
+
+    // 3. Clean downloads cache (frees disk space, forces fresh downloads)
+    let downloads_dir = runtime_cache_dir.join("downloads");
+    if downloads_dir.exists() {
+        if std::fs::remove_dir_all(&downloads_dir).is_ok() {
+            repairs += 1;
+        }
+    }
+
+    // 4. Remove install lock directory (may be stale from interrupted installs)
+    let install_lock = runtime_data_dir.join(".install.lock");
+    if install_lock.exists() {
+        if install_lock.is_dir() {
+            let _ = std::fs::remove_dir_all(&install_lock);
+        } else {
+            let _ = std::fs::remove_file(&install_lock);
+        }
+        repairs += 1;
+    }
+
+    repairs
+}
+
+/// Handle `doctor log` subcommand:
+/// - `doctor log` or `doctor log list` → list available log files
+/// - `doctor log <name>` → show log file content
+/// - `doctor log <name> --tail` → show last few lines
+/// - `doctor log <name> grep <pattern>` → search log file with grep syntax
+async fn handle_doctor_log(
+    client: &Client,
+    base_url: &str,
+    args: &HashMap<String, Value>,
+) -> Result<(), String> {
+    let log_name = args.get("name").and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty() && *s != "list");
+    let is_tail = args.get("tail").and_then(|v| v.as_bool()).unwrap_or(false);
+    let grep_pattern = args.get("grep").and_then(|v| v.as_str()).map(String::from);
+
+    // Mode: list log files (no name, or name == "list")
+    if log_name.is_none() {
+        cli_println!("Available Log Files");
+        cli_println!("===================");
+        cli_println!("");
+
+        let list_url = format!("{base_url}/api/doctor/log-files");
+        match get_json(client, &list_url).await {
+            Ok(data) => {
+                if let Some(files) = data.get("files").and_then(|v| v.as_array()) {
+                    if files.is_empty() {
+                        cli_println!("  (no log files found)");
+                    } else {
+                        cli_println!("  {:<25} {:>10}  {:>20}", "NAME", "SIZE", "LAST MODIFIED");
+                        cli_println!("  {:<25} {:>10}  {:>20}", "----", "----", "-------------");
+                        for file in files {
+                            let name = file.get("nameWithoutExt").and_then(|v| v.as_str()).unwrap_or("?");
+                            let size = file.get("sizeHuman").and_then(|v| v.as_str()).unwrap_or("?");
+                            let modified_ms = file.get("lastModified").and_then(|v| v.as_i64()).unwrap_or(0);
+                            let modified_str = if modified_ms > 0 {
+                                let secs = modified_ms / 1000;
+                                let datetime = chrono::DateTime::from_timestamp(secs, 0)
+                                    .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
+                                    .unwrap_or_else(|| "unknown".to_string());
+                                datetime
+                            } else {
+                                "unknown".to_string()
+                            };
+                            cli_println!("  {:<25} {:>10}  {:>20}", name, size, modified_str);
+                        }
+                        cli_println!("");
+                        cli_println!("  {} log file(s). Use 'doctor log <name>' to view a specific log.", files.len());
+                    }
+                }
+                json_field("log_files", data);
+            }
+            Err(e) => {
+                cli_println!("  (server not running or log listing unavailable: {})", e);
+                json_field("log_files", json!(null));
+            }
+        }
+        return Ok(());
+    }
+
+    let name = log_name.unwrap();
+    let display_name = format!("{}.log", name);
+
+    // Mode: grep — search log file content using grep syntax
+    if let Some(pattern) = grep_pattern {
+        let lines: u32 = args.get("lines")
+            .and_then(|v| v.as_str())
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(50000);
+        let log_url = format!("{base_url}/api/doctor/logs?file={}&lines={}&filter=",
+            name, lines.min(50000));
+        let log_content = match get_json(client, &log_url).await {
+            Ok(data) => {
+                if let Some(entries) = data.get("lines").and_then(|v| v.as_array()) {
+                    entries.iter()
+                        .filter_map(|v| v.as_str())
+                        .collect::<Vec<&str>>()
+                        .join("\n")
+                } else {
+                    return Err(format!("Failed to read log file: {}", display_name));
+                }
+            }
+            Err(e) => return Err(format!("Failed to fetch log file '{}': {}", display_name, e)),
+        };
+
+        // Build GrepOptions from args, using the grep pattern
+        let mut grep_params = args.clone();
+        grep_params.insert("pattern".to_string(), json!(pattern));
+        let grep_params_value: Value = json!(grep_params);
+        let grep_options = parse_grep_options(&grep_params_value)?;
+
+        let (page, page_size, show_all) = parse_page_opts(&grep_params_value);
+        cli_println!("--- doctor log {} grep \"{}\" ---", display_name, grep_options.pattern);
+        run_grep_on_source(&log_content, &grep_options, &display_name, page, page_size, show_all)?;
+        return Ok(());
+    }
+
+    // Mode: view log file (with or without --tail)
+    let lines: u32 = args.get("lines")
+        .and_then(|v| v.as_str())
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(if is_tail { 200 } else { 50000 });
+    let log_url = format!("{base_url}/api/doctor/logs?file={}&lines={}&filter=",
+        name, lines.min(50000));
+
+    cli_println!("--- doctor log {} ({}) ---", display_name,
+        if is_tail { format!("last {} lines", lines) } else { "full".to_string() });
+    cli_println!("");
+
+    match get_json(client, &log_url).await {
+        Ok(log_data) => {
+            if let Some(entries) = log_data.get("lines").and_then(|v| v.as_array()) {
+                if entries.is_empty() {
+                    cli_println!("  (log file empty or not found)");
+                } else {
+                    for line in entries {
+                        if let Some(text) = line.as_str() {
+                            cli_println!("{}", text);
+                        }
+                    }
+                    cli_println!("");
+                    cli_println!("  {} line(s). Use 'doctor log {} grep <pattern>' to search, '--tail' for recent lines.", entries.len(), name);
+                }
+            }
+            json_field("log_content", log_data);
+        }
+        Err(e) => {
+            cli_println!("  (server not running or log unavailable: {})", e);
+            json_field("log_content", json!(null));
+        }
+    }
+
+    Ok(())
+}
+
 fn should_ensure_server_running(command: &str) -> bool {
     command != "close"
         && command != "close-all"
@@ -10573,6 +10848,7 @@ fn should_ensure_server_running(command: &str) -> bool {
         && command != "stop"
         && command != "status"
         && command != "doctor"
+        && command != "doctor-log"
         && command != "agent-list"
         && command != "crawl-list"
         && command != "swarm-list"
@@ -10580,6 +10856,79 @@ fn should_ensure_server_running(command: &str) -> bool {
         && command != "skills-list"
         && command != "skills-get"
         && command != "skills-path"
+        && command != "loop"
+}
+
+/// Commands that require a web page to already be loaded in the browser.
+/// For these commands, the CLI will NOT auto-start the server — instead
+/// it guides the user to run `open <url>` or `goto <url>` first.
+fn is_page_dependent_command(command: &str) -> bool {
+    matches!(command,
+        // Interaction — needs elements on a page
+        "click" | "dblclick" | "hover"
+        | "type" | "fill" | "press" | "key" | "keydown" | "keyup"
+        | "check" | "uncheck"
+        | "mousemove" | "mousedown" | "mouseup" | "mousewheel"
+        // Snapshot / screenshot / export — needs page content
+        | "snapshot" | "snapshot-grep"
+        | "screenshot" | "pdf"
+        // HTML snapshot commands — need page content
+        | "htmlsnapshot" | "htmlsnapshot-capture" | "htmlsnapshot-get"
+        | "htmlsnapshot-get-all" | "htmlsnapshot-query" | "htmlsnapshot-export"
+        | "htmlsnapshot-summary" | "htmlsnapshot-grep" | "htmlsnapshot-inspect"
+        // Queries — need page content
+        | "get" | "extract" | "summarize" | "eval"
+        | "generate-locator"
+        // Viewport management — needs a page
+        | "scroll" | "resize"
+        // Console — needs a page to intercept messages
+        | "console"
+        // Storage commands — need page origin context
+        | "cookie-list" | "cookie-get" | "cookie-set" | "cookie-delete" | "cookie-clear"
+        | "localstorage-list" | "localstorage-get" | "localstorage-set"
+        | "localstorage-delete" | "localstorage-clear"
+        | "sessionstorage-list" | "sessionstorage-get" | "sessionstorage-set"
+        | "sessionstorage-delete" | "sessionstorage-clear"
+        // Storage state — needs a page for save/load
+        | "state-save" | "state-load" | "delete-data"
+        // Wait — needs timing on a page
+        | "wait"
+    )
+}
+
+/// Validate that all required (non-optional) positional arguments are present
+/// in the parsed argument map.  Catches malformed commands (e.g. `htmlsnapshot grep`
+/// without a pattern) before the backend is started.
+fn validate_required_args(cmd_def: &commands::CommandDef, parsed: &HashMap<String, Value>) -> Result<(), String> {
+    for arg in cmd_def.args {
+        if !arg.optional {
+            let has_value = parsed
+                .get(arg.name)
+                .and_then(|v| v.as_str())
+                .map_or(false, |s| !s.is_empty());
+            if !has_value {
+                // Build a concise usage line from the command definition
+                let usage_args: Vec<String> = cmd_def
+                    .args
+                    .iter()
+                    .map(|a| {
+                        if a.optional {
+                            format!("[{}]", a.name)
+                        } else {
+                            format!("<{}>", a.name)
+                        }
+                    })
+                    .collect();
+                return Err(format!(
+                    "Missing required argument: <{}>.\nUsage: browser4-cli {} {}",
+                    arg.name,
+                    cmd_def.name,
+                    usage_args.join(" ")
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -10613,6 +10962,31 @@ fn rewrite_prefixed_command(args: &[String]) -> Option<Vec<String>> {
         let known_subs = ["status", "result", "cancel", "clear", "list"];
         if known_subs.contains(&sub.as_str()) {
             let mut rewritten = vec![format!("crawl-{}", sub)];
+            rewritten.extend(args[2..].iter().cloned());
+            return Some(rewritten);
+        }
+        return None;
+    }
+    // "doctor" works standalone (doctor) AND as a prefix (doctor log).
+    if prefix == "doctor" {
+        let known_subs = ["log"];
+        if known_subs.contains(&sub.as_str()) {
+            let rest: Vec<String> = args[2..].iter().cloned().collect();
+            // Handle `doctor log <name> grep <pattern> [grep-options]`:
+            // rewrite so that "grep" and its pattern become --grep <pattern>,
+            // while the log name stays as the first positional arg.
+            // Example: doctor log pulsar grep ERROR -i
+            //      → doctor-log pulsar --grep ERROR -i
+            if let Some(grep_pos) = rest.iter().position(|a| a == "grep") {
+                let mut rewritten = vec!["doctor-log".to_string()];
+                // Everything before "grep" (the log name)
+                rewritten.extend(rest[..grep_pos].iter().cloned());
+                // Replace "grep" with "--grep" and add the pattern
+                rewritten.push("--grep".to_string());
+                rewritten.extend(rest[grep_pos + 1..].iter().cloned());
+                return Some(rewritten);
+            }
+            let mut rewritten = vec![format!("doctor-{}", sub)];
             rewritten.extend(args[2..].iter().cloned());
             return Some(rewritten);
         }
@@ -10665,6 +11039,7 @@ fn preferred_spaced_command_form(command: &str) -> Option<&'static str> {
         "skills-list" => Some("skills list"),
         "skills-get" => Some("skills get"),
         "skills-path" => Some("skills path"),
+        "doctor-log" => Some("doctor log"),
         _ => None,
     }
 }
@@ -11781,13 +12156,6 @@ async fn run(
         }
     };
 
-    // Ensure the Browser4 server is running (for relevant commands)
-    if should_ensure_server_running(command) {
-        ensure_server_running(&base_url).await?;
-    }
-
-    let client = make_client();
-
     // `act` is handled early — its description is variadic (multi-word),
     // so we join all remaining positionals before the standard arg parser
     // would reject them as "too many positional arguments".
@@ -11803,19 +12171,52 @@ async fn run(
                 "A description is required. Usage: browser4-cli act \"<natural language description>\"".to_string()
             ));
         }
+        // Ensure the server is running before dispatching to act
+        ensure_server_running(&base_url).await?;
+        let client = make_client();
         handle_act(&client, &base_url, &description).await?;
         return Ok(());
     }
 
-    // Parse positional + named arguments (with short-option resolution)
+    // Parse positional + named arguments BEFORE starting the backend, so
+    // malformed/illegal commands fail fast without a 30 s server launch.
     let (short_to_long, bool_opts) = build_short_option_map(cmd_def.options);
     let raw_parsed = parse_raw_args(&global.args, Some(&short_to_long), Some(&bool_opts));
     let arg_names: Vec<&str> = cmd_def.args.iter().map(|a| a.name).collect();
     let parsed = build_command_args(&raw_parsed, &arg_names).map_err(|e| e.to_string())?;
 
+    // Validate required positional arguments (fast-fail for malformed commands).
+    validate_required_args(cmd_def, &parsed)?;
+
     // Resolve tool name and parameters
     let tool_name = (cmd_def.tool_name_fn)(&parsed);
     let mut tool_params = (cmd_def.tool_params_fn)(&parsed);
+
+    // Early validation for grep commands — at least one of <pattern> or -e
+    // must be provided, so catch the missing-pattern case before server start.
+    if command == "htmlsnapshot-grep" || command == "snapshot-grep" {
+        parse_grep_options(&tool_params)?;
+    }
+
+    // Ensure the Browser4 server is running (for relevant commands).
+    // Page-dependent commands targeting localhost do NOT auto-start the server
+    // — the user should run `open <url>` or `goto <url>` first so a page is
+    // already loaded.  Remote servers (--server <url>) always proceed normally.
+    if should_ensure_server_running(command) {
+        let is_local = base_url.contains("localhost") || base_url.contains("127.0.0.1");
+        if is_page_dependent_command(command) && is_local && !is_local_port_open(&base_url) {
+            return Err(CliError(
+                ExitCode::Session,
+                format!(
+                    "No active browser session. Run 'browser4-cli open <url>' or 'browser4-cli goto <url>' first to load a page, then try '{}' again.",
+                    command
+                ),
+            ));
+        }
+        ensure_server_running(&base_url).await?;
+    }
+
+    let client = make_client();
 
     // Dispatch the command
     match command {
@@ -11887,6 +12288,9 @@ async fn run(
         }
         "doctor" => {
             handle_doctor(&client, &base_url, &parsed).await?;
+        }
+        "doctor-log" => {
+            handle_doctor_log(&client, &base_url, &parsed).await?;
         }
         "delete-data" => {
             handle_delete_data(&client, &base_url, global.session_name.as_deref()).await?;
@@ -12627,6 +13031,113 @@ async fn run(
                 &client,
                 &base_url,
                 &tool_params,
+                global.session_name.as_deref(),
+            )
+            .await?;
+        }
+        "cdp" => {
+            // Support --json, --file, and --stdin for CDP params.
+            // After resolving params, pass method and params to execute_cdp_command.
+            let method = tool_params
+                .get("method")
+                .and_then(|v| v.as_str())
+                .map(String::from)
+                .unwrap_or_default();
+
+            if method.is_empty() {
+                return Err(CliError(
+                    ExitCode::Usage,
+                    "A CDP method name is required (e.g. 'cdp Page.captureScreenshot'). Use 'cdp --help' for details."
+                        .to_string(),
+                ));
+            }
+
+            // Resolve params from --json, --file, or --stdin
+            let params_str = {
+                let use_stdin = tool_params
+                    .get("stdin")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+
+                let from_json = tool_params
+                    .get("json")
+                    .and_then(|v| v.as_str())
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty());
+
+                let from_file = tool_params
+                    .get("file")
+                    .and_then(|v| v.as_str())
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty());
+
+                if use_stdin {
+                    let mut input = String::new();
+                    std::io::stdin()
+                        .read_to_string(&mut input)
+                        .map_err(|e| CliError(ExitCode::General, format!("Failed to read stdin: {}", e)))?;
+                    Some(input.trim().to_string())
+                } else if let Some(path) = from_file {
+                    let file_path = std::path::Path::new(path);
+                    if file_path.is_absolute() {
+                        std::fs::read_to_string(file_path)
+                            .map(|s| s.trim().to_string())
+                            .map_err(|e| {
+                                CliError(
+                                    ExitCode::General,
+                                    format!("Failed to read params file '{}': {}", path, e),
+                                )
+                            })?
+                            .into()
+                    } else {
+                        let cwd = std::env::current_dir().map_err(|e| {
+                            CliError(ExitCode::General, format!("Cannot determine current directory: {}", e))
+                        })?;
+                        let cwd_path = cwd.join(file_path);
+                        std::fs::read_to_string(&cwd_path)
+                            .map(|s| s.trim().to_string())
+                            .map_err(|e| {
+                                CliError(
+                                    ExitCode::General,
+                                    format!("Failed to read params file '{}': {}", cwd_path.display(), e),
+                                )
+                            })?
+                            .into()
+                    }
+                } else if let Some(js) = from_json {
+                    Some(js.to_string())
+                } else {
+                    None
+                }
+            };
+
+            // Parse the params as JSON if provided
+            let mut final_params = json!({ "method": method });
+            if let Some(ref ps) = params_str {
+                if !ps.is_empty() {
+                    let parsed_json: Value = serde_json::from_str(ps).map_err(|e| {
+                        CliError(
+                            ExitCode::Usage,
+                            format!("Invalid JSON for CDP params: {}\nParams must be a valid JSON object, e.g. '{{\"format\": \"jpeg\"}}'", e),
+                        )
+                    })?;
+                    if let Value::Object(map) = parsed_json {
+                        final_params["params"] = json!(map);
+                    } else {
+                        return Err(CliError(
+                            ExitCode::Usage,
+                            "CDP params must be a JSON object, e.g. '{\"format\": \"jpeg\"}'".to_string(),
+                        ));
+                    }
+                }
+            }
+
+            handle_tool_command(
+                &client,
+                &base_url,
+                &tool_name,
+                &final_params,
+                false,
                 global.session_name.as_deref(),
             )
             .await?;
@@ -13392,6 +13903,183 @@ mod tests {
     #[test]
     fn should_ensure_server_for_open() {
         assert!(should_ensure_server_running("open"));
+    }
+
+    // -----------------------------------------------------------------------
+    // is_page_dependent_command tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn is_page_dependent_for_interaction_commands() {
+        assert!(is_page_dependent_command("click"));
+        assert!(is_page_dependent_command("dblclick"));
+        assert!(is_page_dependent_command("hover"));
+        assert!(is_page_dependent_command("type"));
+        assert!(is_page_dependent_command("fill"));
+        assert!(is_page_dependent_command("press"));
+        assert!(is_page_dependent_command("check"));
+        assert!(is_page_dependent_command("uncheck"));
+    }
+
+    #[test]
+    fn is_page_dependent_for_snapshot_commands() {
+        assert!(is_page_dependent_command("snapshot"));
+        assert!(is_page_dependent_command("snapshot-grep"));
+        assert!(is_page_dependent_command("screenshot"));
+        assert!(is_page_dependent_command("pdf"));
+    }
+
+    #[test]
+    fn is_page_dependent_for_htmlsnapshot_commands() {
+        assert!(is_page_dependent_command("htmlsnapshot"));
+        assert!(is_page_dependent_command("htmlsnapshot-capture"));
+        assert!(is_page_dependent_command("htmlsnapshot-get"));
+        assert!(is_page_dependent_command("htmlsnapshot-get-all"));
+        assert!(is_page_dependent_command("htmlsnapshot-query"));
+        assert!(is_page_dependent_command("htmlsnapshot-export"));
+        assert!(is_page_dependent_command("htmlsnapshot-summary"));
+        assert!(is_page_dependent_command("htmlsnapshot-grep"));
+        assert!(is_page_dependent_command("htmlsnapshot-inspect"));
+    }
+
+    #[test]
+    fn is_page_dependent_for_query_commands() {
+        assert!(is_page_dependent_command("get"));
+        assert!(is_page_dependent_command("extract"));
+        assert!(is_page_dependent_command("summarize"));
+        assert!(is_page_dependent_command("eval"));
+        assert!(is_page_dependent_command("generate-locator"));
+    }
+
+    #[test]
+    fn is_page_dependent_for_viewport_commands() {
+        assert!(is_page_dependent_command("scroll"));
+        assert!(is_page_dependent_command("resize"));
+    }
+
+    #[test]
+    fn is_page_dependent_for_storage_commands() {
+        assert!(is_page_dependent_command("cookie-list"));
+        assert!(is_page_dependent_command("localstorage-get"));
+        assert!(is_page_dependent_command("sessionstorage-clear"));
+        assert!(is_page_dependent_command("state-save"));
+        assert!(is_page_dependent_command("state-load"));
+        assert!(is_page_dependent_command("delete-data"));
+        assert!(is_page_dependent_command("wait"));
+        assert!(is_page_dependent_command("console"));
+    }
+
+    #[test]
+    fn is_not_page_dependent_for_navigation() {
+        assert!(!is_page_dependent_command("open"));
+        assert!(!is_page_dependent_command("goto"));
+        assert!(!is_page_dependent_command("attach"));
+    }
+
+    #[test]
+    fn is_not_page_dependent_for_management() {
+        assert!(!is_page_dependent_command("close"));
+        assert!(!is_page_dependent_command("close-all"));
+        assert!(!is_page_dependent_command("list"));
+        assert!(!is_page_dependent_command("stop"));
+        assert!(!is_page_dependent_command("install"));
+        assert!(!is_page_dependent_command("doctor"));
+        assert!(!is_page_dependent_command("status"));
+    }
+
+    #[test]
+    fn is_not_page_dependent_for_async() {
+        assert!(!is_page_dependent_command("act"));
+        assert!(!is_page_dependent_command("batch"));
+        assert!(!is_page_dependent_command("crawl"));
+        assert!(!is_page_dependent_command("swarm-create"));
+        assert!(!is_page_dependent_command("agent-run"));
+        assert!(!is_page_dependent_command("loop"));
+    }
+
+    #[test]
+    fn is_not_page_dependent_for_skills() {
+        assert!(!is_page_dependent_command("skills"));
+        assert!(!is_page_dependent_command("skills-list"));
+        assert!(!is_page_dependent_command("skills-get"));
+        assert!(!is_page_dependent_command("skills-path"));
+    }
+
+    // -----------------------------------------------------------------------
+    // validate_required_args tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn validate_required_args_passes_when_optional_only() {
+        let cmd_def = commands::CommandDef {
+            name: "test-cmd",
+            description: "",
+            category: commands::Category::Core,
+            hidden: false,
+            batch_supported: false,
+            args: &[commands::ArgDef { name: "x", description: "", optional: true }],
+            options: &[],
+            tool_name_fn: |_| "test".to_string(),
+            tool_params_fn: |_| json!({}),
+        };
+        let parsed = HashMap::new(); // no args provided, but all are optional
+        assert!(validate_required_args(&cmd_def, &parsed).is_ok());
+    }
+
+    #[test]
+    fn validate_required_args_fails_when_required_missing() {
+        let cmd_def = commands::CommandDef {
+            name: "test-cmd",
+            description: "",
+            category: commands::Category::Core,
+            hidden: false,
+            batch_supported: false,
+            args: &[commands::ArgDef { name: "url", description: "", optional: false }],
+            options: &[],
+            tool_name_fn: |_| "test".to_string(),
+            tool_params_fn: |_| json!({}),
+        };
+        let parsed = HashMap::new(); // missing required "url"
+        let err = validate_required_args(&cmd_def, &parsed).unwrap_err();
+        assert!(err.contains("Missing required argument"));
+        assert!(err.contains("url"));
+    }
+
+    #[test]
+    fn validate_required_args_passes_when_required_provided() {
+        let cmd_def = commands::CommandDef {
+            name: "test-cmd",
+            description: "",
+            category: commands::Category::Core,
+            hidden: false,
+            batch_supported: false,
+            args: &[commands::ArgDef { name: "url", description: "", optional: false }],
+            options: &[],
+            tool_name_fn: |_| "test".to_string(),
+            tool_params_fn: |_| json!({}),
+        };
+        let mut parsed = HashMap::new();
+        parsed.insert("url".to_string(), json!("https://example.com"));
+        assert!(validate_required_args(&cmd_def, &parsed).is_ok());
+    }
+
+    #[test]
+    fn validate_required_args_fails_when_required_empty_string() {
+        let cmd_def = commands::CommandDef {
+            name: "test-cmd",
+            description: "",
+            category: commands::Category::Core,
+            hidden: false,
+            batch_supported: false,
+            args: &[commands::ArgDef { name: "url", description: "", optional: false }],
+            options: &[],
+            tool_name_fn: |_| "test".to_string(),
+            tool_params_fn: |_| json!({}),
+        };
+        let mut parsed = HashMap::new();
+        parsed.insert("url".to_string(), json!("")); // empty string
+        let err = validate_required_args(&cmd_def, &parsed).unwrap_err();
+        assert!(err.contains("Missing required argument"));
     }
 
     #[test]

@@ -932,7 +932,7 @@ fn print_server_starting_message() {
     eprintln!("Starting Browser4 server...");
 }
 
-fn is_local_port_open(base_url: &str) -> bool {
+pub fn is_local_port_open(base_url: &str) -> bool {
     let Ok(url) = reqwest::Url::parse(base_url) else {
         return false;
     };

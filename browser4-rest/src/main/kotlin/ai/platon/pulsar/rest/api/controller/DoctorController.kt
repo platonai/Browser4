@@ -15,6 +15,43 @@ import java.io.RandomAccessFile
 class DoctorController(
     @Value("\${logging.dir:logs}") private val loggingDir: String
 ) {
+    @GetMapping("log-files")
+    fun logFiles(): ResponseEntity<Map<String, Any?>> {
+        val logDir = File(loggingDir)
+        if (!logDir.exists() || !logDir.isDirectory) {
+            return ResponseEntity.ok(
+                mapOf(
+                    "files" to emptyList<Map<String, Any?>>(),
+                    "directory" to logDir.absolutePath,
+                    "exists" to false
+                )
+            )
+        }
+
+        val logFiles = logDir.listFiles { f ->
+            f.isFile && f.name.endsWith(".log")
+        }?.sortedBy { it.name } ?: emptyArray()
+
+        val fileInfos = logFiles.map { f ->
+            mapOf(
+                "name" to f.name,
+                "nameWithoutExt" to f.nameWithoutExtension,
+                "size" to f.length(),
+                "sizeHuman" to formatFileSize(f.length()),
+                "lastModified" to f.lastModified(),
+                "path" to f.absolutePath
+            )
+        }
+
+        return ResponseEntity.ok(
+            mapOf(
+                "files" to fileInfos,
+                "directory" to logDir.absolutePath,
+                "count" to fileInfos.size
+            )
+        )
+    }
+
     @GetMapping("logs")
     fun logs(
         @RequestParam(defaultValue = "pulsar") file: String,
@@ -22,7 +59,7 @@ class DoctorController(
         @RequestParam(defaultValue = "") filter: String
     ): ResponseEntity<Map<String, Any?>> {
         val sanitizedFile = file.replace(Regex("[/\\\\]"), "")
-        val cappedLines = lines.coerceIn(1, 500)
+        val cappedLines = lines.coerceIn(1, 50000)
         val logFile = File(loggingDir, "$sanitizedFile.log")
 
         if (!logFile.exists() || !logFile.isFile) {
@@ -206,5 +243,16 @@ class DoctorController(
 
     companion object {
         private val logger = LoggerFactory.getLogger(DoctorController::class.java)
+
+        private fun formatFileSize(bytes: Long): String {
+            val units = arrayOf("B", "KB", "MB", "GB")
+            var size = bytes.toDouble()
+            var unitIndex = 0
+            while (size >= 1024 && unitIndex < units.size - 1) {
+                size /= 1024
+                unitIndex++
+            }
+            return "%.1f %s".format(size, units[unitIndex])
+        }
     }
 }

@@ -346,6 +346,13 @@ open class PulsarWebDriver constructor(
         }
     }
 
+    @Throws(WebDriverException::class)
+    override suspend fun executeCdpCommand(method: String, params: Map<String, Any?>?): Any? {
+        return rpc.invokeOnPage("executeCdpCommand") {
+            browserProtocol.executeCdpCommand(method, params)
+        }
+    }
+
     private fun normalizeElementFunctionDeclaration(functionDeclaration: String): String {
         val callable = functionDeclaration.trim().removeSuffix(";").trim()
         return """

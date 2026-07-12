@@ -277,6 +277,18 @@ interface BrowserProtocol {
 
     fun onConsoleMessageAdded(handler: suspend (MessageAdded) -> Unit): EventListener
 
+    /**
+     * Sends an arbitrary Chrome DevTools Protocol (CDP) command and returns the result.
+     *
+     * This method allows sending raw CDP commands (e.g. "Page.navigate", "Runtime.evaluate") that
+     * are not directly exposed through the typed BrowserProtocol interface.
+     *
+     * @param method The full CDP method name (e.g. "Page.captureScreenshot", "DOM.getDocument").
+     * @param params Optional parameters for the CDP command.
+     * @return The deserialized result (Map for objects, List for arrays, or primitive), or null.
+     */
+    suspend fun executeCdpCommand(method: String, params: Map<String, Any?>? = null): Any?
+
     fun awaitTermination(): Unit
 
     fun close(): Unit

@@ -25,6 +25,7 @@ pub fn public_command_name(name: &str) -> &str {
         "htmlsnapshot-grep" => "htmlsnapshot grep",
         "htmlsnapshot-inspect" => "htmlsnapshot inspect",
         "snapshot-grep" => "snapshot grep",
+        "doctor-log" => "doctor log",
         _ => name,
     }
 }

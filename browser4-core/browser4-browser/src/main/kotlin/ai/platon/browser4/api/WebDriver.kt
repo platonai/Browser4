@@ -1910,6 +1910,38 @@ interface WebDriver : Closeable {
     suspend fun evaluateValueDetail(selector: String, functionDeclaration: String): JsEvaluation?
 
     /**
+     * Sends an arbitrary Chrome DevTools Protocol (CDP) command and returns the result. @mcp
+     *
+     * This method provides direct access to the underlying CDP connection, allowing
+     * advanced browser interactions that are not covered by the standard WebDriver API.
+     *
+     * The `method` must be a full CDP method name, such as:
+     * - `"Page.captureScreenshot"`
+     * - `"Runtime.evaluate"`
+     * - `"DOM.getDocument"`
+     * - `"Network.getCookies"`
+     *
+     * The `params` is an optional map of parameters to pass to the CDP command.
+     * The return value is the deserialized CDP response (Map, List, String, Number, Boolean, or null).
+     *
+     * Example:
+     * ```kotlin
+     * // Screenshot the page as JPEG
+     * val result = driver.executeCdpCommand("Page.captureScreenshot", mapOf("format" to "jpeg", "quality" to 80))
+     *
+     * // Get all cookies
+     * val cookies = driver.executeCdpCommand("Network.getCookies")
+     * ```
+     *
+     * @param method The full CDP method name (e.g. "Page.captureScreenshot").
+     * @param params Optional parameters for the CDP command.
+     * @return The deserialized result (Map for objects, List for arrays, or primitive), or null.
+     */
+    @Throws(WebDriverException::class)
+    @MCP
+    suspend fun executeCdpCommand(method: String, params: Map<String, Any?>? = null): Any?
+
+    /**
      * Generates a unique CSS selector path for the element located by [selector]. @mcp
      *
      * Walks up the DOM from the target element, building a CSS selector segment for
