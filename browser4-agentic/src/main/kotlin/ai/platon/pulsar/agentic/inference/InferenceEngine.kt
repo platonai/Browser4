@@ -1,5 +1,7 @@
 package ai.platon.pulsar.agentic.inference
 
+import ai.platon.browser4.api.AbstractWebDriver
+import ai.platon.browser4.api.snapshot.SnapshotService
 import ai.platon.pulsar.agentic.agents.BasicBrowserAgent
 import ai.platon.pulsar.agentic.event.AgentEventBus
 import ai.platon.pulsar.agentic.event.AgenticEvents
@@ -8,8 +10,6 @@ import ai.platon.pulsar.agentic.model.ActionDescription
 import ai.platon.pulsar.agentic.model.AgentState
 import ai.platon.pulsar.agentic.model.ExecutionContext
 import ai.platon.pulsar.agentic.model.ExtractionSchema
-import ai.platon.browser4.api.AbstractWebDriver
-import ai.platon.browser4.api.snapshot.SnapshotService
 import ai.platon.pulsar.common.AppPaths
 import ai.platon.pulsar.common.DateTimes
 import ai.platon.pulsar.common.MultiSinkMessageWriter
