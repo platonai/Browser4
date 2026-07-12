@@ -9,10 +9,13 @@ import ai.platon.pulsar.agentic.tools.builtin.ToolExecutor
 import ai.platon.pulsar.rest.session.PulsarSessionManager
 import ai.platon.pulsar.common.brief
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
+import ai.platon.pulsar.dom.FeaturedDocument
+import ai.platon.pulsar.skeleton.workflow.parse.html.PageSummaryIndexService
 import com.fasterxml.jackson.annotation.JsonInclude
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.fasterxml.jackson.annotation.JsonSetter
 import com.fasterxml.jackson.annotation.Nulls
+import com.fasterxml.jackson.databind.node.ArrayNode
 import jakarta.servlet.http.HttpServletResponse
 import org.slf4j.LoggerFactory
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean
@@ -739,6 +742,8 @@ class MCPToolController(
                     "If the problem persists, run `htmlsnapshot` first to explicitly capture the page, then try `htmlsnapshot get` again."
                 )
             )
+        }
+    }
 
     /**
      * Like [handleHtmlSnapshotScrape] but returns ALL matching elements (querySelectorAll
