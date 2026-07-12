@@ -10902,10 +10902,13 @@ fn is_page_dependent_command(command: &str) -> bool {
 fn validate_required_args(cmd_def: &commands::CommandDef, parsed: &HashMap<String, Value>) -> Result<(), String> {
     for arg in cmd_def.args {
         if !arg.optional {
-            let has_value = parsed
-                .get(arg.name)
-                .and_then(|v| v.as_str())
-                .map_or(false, |s| !s.is_empty());
+            let has_value = match parsed.get(arg.name) {
+                Some(Value::String(s)) => !s.is_empty(),
+                Some(Value::Number(_)) => true,
+                Some(Value::Bool(_)) => true,
+                Some(Value::Array(arr)) => !arr.is_empty(),
+                _ => false,
+            };
             if !has_value {
                 // Build a concise usage line from the command definition
                 let usage_args: Vec<String> = cmd_def
