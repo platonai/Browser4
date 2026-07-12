@@ -9,7 +9,7 @@ import ai.platon.pulsar.persist.WebPage
 import ai.platon.pulsar.skeleton.common.options.LoadOptions
 import ai.platon.pulsar.skeleton.context.PulsarContexts
 import ai.platon.pulsar.skeleton.session.PulsarSession
-import com.google.gson.GsonBuilder
+import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.asFlow
@@ -101,5 +101,5 @@ suspend fun main() {
     val crawler = RestaurantCrawler(session)
 
     val fields = session.scrape(url, crawler.options(args), crawler.fieldSelectors)
-    println(GsonBuilder().setPrettyPrinting().create().toJson(fields))
+    println(pulsarObjectMapper().writerWithDefaultPrettyPrinter().writeValueAsString(fields))
 }

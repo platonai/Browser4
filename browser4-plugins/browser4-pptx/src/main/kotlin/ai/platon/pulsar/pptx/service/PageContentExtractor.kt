@@ -18,52 +18,52 @@ package ai.platon.pulsar.pptx.service
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.core.api.WebDriver
 import ai.platon.pulsar.pptx.config.PptxConfig
-import com.google.gson.Gson
-import com.google.gson.annotations.SerializedName
-import com.google.gson.reflect.TypeToken
+import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
+import com.fasterxml.jackson.annotation.JsonProperty
+import com.fasterxml.jackson.module.kotlin.readValue
 
 /**
  * A content block extracted from a web page, ready to be placed on a PPTX slide.
  */
 data class ContentBlock(
     /** Block type: "title", "heading", "paragraph", "image", "table", "list", "code", "blockquote" */
-    @SerializedName("type")
+    @JsonProperty("type")
     val type: String = "",
 
     /** Text content for text-based blocks */
-    @SerializedName("text")
+    @JsonProperty("text")
     val text: String? = null,
 
     /** Heading level (1-6), or 0 for page title */
-    @SerializedName("level")
+    @JsonProperty("level")
     val level: Int? = null,
 
     /** Image source URL */
-    @SerializedName("src")
+    @JsonProperty("src")
     val src: String? = null,
 
     /** Image alt text / caption */
-    @SerializedName("alt")
+    @JsonProperty("alt")
     val alt: String? = null,
 
     /** Image natural width */
-    @SerializedName("width")
+    @JsonProperty("width")
     val width: Int? = null,
 
     /** Image natural height */
-    @SerializedName("height")
+    @JsonProperty("height")
     val height: Int? = null,
 
     /** Table rows: each row is a list of cell text values */
-    @SerializedName("rows")
+    @JsonProperty("rows")
     val rows: List<List<String>>? = null,
 
     /** List items for ordered/unordered lists */
-    @SerializedName("items")
+    @JsonProperty("items")
     val items: List<String>? = null,
 
     /** Whether the list is ordered (ol) vs unordered (ul) */
-    @SerializedName("ordered")
+    @JsonProperty("ordered")
     val ordered: Boolean? = null,
 )
 
@@ -78,7 +78,6 @@ open class PageContentExtractor(
     private val config: PptxConfig = PptxConfig(),
 ) {
     private val logger = getLogger(PageContentExtractor::class)
-    private val gson = Gson()
 
     /**
      * Extract structured content from the current page.
@@ -106,8 +105,7 @@ open class PageContentExtractor(
         if (json.isBlank() || json == "null" || json == "[]") return emptyList()
 
         return try {
-            val type = object : TypeToken<List<ContentBlock>>() {}.type
-            val blocks: List<ContentBlock> = gson.fromJson(json, type)
+            val blocks: List<ContentBlock> = pulsarObjectMapper().readValue(json)
             blocks
         } catch (e: Exception) {
             logger.warn("Failed to parse content extraction result: {}", e.message, e)

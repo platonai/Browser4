@@ -148,11 +148,6 @@
             </exclusions>
         </dependency>
 
-        <dependency>
-            <groupId>com.google.code.gson</groupId>
-            <artifactId>gson</artifactId>
-        </dependency>
-
         <!-- Required option parser -->
         <dependency>
             <groupId>com.beust</groupId>

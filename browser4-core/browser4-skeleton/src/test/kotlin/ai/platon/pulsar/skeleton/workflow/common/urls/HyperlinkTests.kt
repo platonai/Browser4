@@ -7,7 +7,6 @@ import ai.platon.pulsar.skeleton.common.options.LoadOptions
 import ai.platon.pulsar.skeleton.common.urls.CombinedUrlNormalizer
 import ai.platon.pulsar.skeleton.workflow.common.url.ParsableHyperlink
 import com.fasterxml.jackson.module.kotlin.readValue
-import com.google.gson.GsonBuilder
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotEquals
@@ -61,11 +60,10 @@ class HyperlinkTests {
             UrlCommon.urlString1, "fully", 100, args = "-i 1s",
             referrer = "http://bar.tt/", href = "http://foo.com/sp?se=1"
         )
-        val gson = GsonBuilder().create()
-        val json = gson.toJson(u1.data())
+        val json = pulsarObjectMapper().writeValueAsString(u1.data())
         printlnPro(json)
         assertTrue { json.contains(UrlCommon.urlString1) }
-        val u2 = gson.fromJson(json, HyperlinkDatum::class.java)
+        val u2 = pulsarObjectMapper().readValue(json, HyperlinkDatum::class.java)
         printlnPro(u2)
         assertEquals(u1.url, u2.url)
         assertEquals(u1.text, u2.text)

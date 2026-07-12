@@ -154,7 +154,6 @@ browser4-markdown/
 - `browser4-agentic` — `ToolExecutor` / `ToolMount` / `ToolSpec` agent infrastructure
 - `pulsar-jsoup` — HTML parsing for HTTP fetch mode
 - OkHttp — HTTP client for page fetching and image downloads
-- Gson — JSON serialization
 - Jackson Kotlin — JSON serialization
 - Commons IO — file I/O utilities
 - Kotlinx Coroutines — async concurrency control

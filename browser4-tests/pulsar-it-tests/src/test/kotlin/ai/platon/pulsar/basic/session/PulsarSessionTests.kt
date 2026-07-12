@@ -6,7 +6,7 @@ import ai.platon.pulsar.common.config.AppConstants.LOCAL_FILE_BASE_URL
 import ai.platon.pulsar.common.printlnPro
 import ai.platon.pulsar.common.urls.URLUtils
 import ai.platon.pulsar.persist.model.WebPageFormatter
-import com.google.gson.Gson
+import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Assumptions.assumeTrue
 import org.junit.jupiter.api.BeforeEach
@@ -54,9 +54,8 @@ class PulsarSessionTests: TestBase() {
         if (page2 != null) {
             printlnPro(WebPageFormatter(page2))
             printlnPro(page2.vividLinks)
-            val gson = Gson()
-            printlnPro(gson.toJson(page2.activeDOMStatus))
-            printlnPro(gson.toJson(page2.activeDOMStatTrace))
+            printlnPro(pulsarObjectMapper().writeValueAsString(page2.activeDOMStatus))
+            printlnPro(pulsarObjectMapper().writeValueAsString(page2.activeDOMStatTrace))
         }
     }
 

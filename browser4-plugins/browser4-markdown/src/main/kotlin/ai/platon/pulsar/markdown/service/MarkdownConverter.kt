@@ -18,9 +18,9 @@ package ai.platon.pulsar.markdown.service
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.core.api.WebDriver
 import ai.platon.pulsar.markdown.config.MarkdownConfig
-import com.google.gson.Gson
-import com.google.gson.annotations.SerializedName
-import com.google.gson.reflect.TypeToken
+import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
+import com.fasterxml.jackson.annotation.JsonProperty
+import com.fasterxml.jackson.module.kotlin.readValue
 
 /**
  * Result of converting a web page to markdown.
@@ -49,16 +49,16 @@ data class MarkdownResult(
  * A link extracted from the page DOM.
  */
 data class PageLink(
-    @SerializedName("href")
+    @JsonProperty("href")
     val href: String = "",
 
-    @SerializedName("text")
+    @JsonProperty("text")
     val text: String? = null,
 
-    @SerializedName("resolvedUrl")
+    @JsonProperty("resolvedUrl")
     val resolvedUrl: String? = null,
 
-    @SerializedName("isInternal")
+    @JsonProperty("isInternal")
     val isInternal: Boolean = false,
 )
 
@@ -75,7 +75,6 @@ open class MarkdownConverter(
     private val config: MarkdownConfig = MarkdownConfig(),
 ) {
     private val logger = getLogger(MarkdownConverter::class)
-    private val gson = Gson()
 
     /**
      * Convert the current page to a [MarkdownResult] containing the markdown content,
@@ -165,8 +164,7 @@ open class MarkdownConverter(
         return try {
             val json = result.toString()
             if (json.isBlank() || json == "[]") return emptyList()
-            val type = object : TypeToken<List<PageLink>>() {}.type
-            gson.fromJson<List<PageLink>>(json, type)
+            pulsarObjectMapper().readValue<List<PageLink>>(json)
         } catch (e: Exception) {
             logger.debug("Failed to parse link discovery result: {}", e.message)
             emptyList()

@@ -1,6 +1,6 @@
 package ai.platon.pulsar.examples.sites.food.dianping
 
-import com.google.gson.GsonBuilder
+import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 
 suspend fun main() {
     val portalUrl = "https://www.dianping.com/beijing/ch10/g110"
@@ -8,5 +8,5 @@ suspend fun main() {
 
     val crawler = RestaurantCrawler()
     val fields = crawler.session.scrapeOutPages(portalUrl, crawler.options(args), crawler.fieldSelectors)
-    println(GsonBuilder().setPrettyPrinting().create().toJson(fields))
+    println(pulsarObjectMapper().writerWithDefaultPrettyPrinter().writeValueAsString(fields))
 }

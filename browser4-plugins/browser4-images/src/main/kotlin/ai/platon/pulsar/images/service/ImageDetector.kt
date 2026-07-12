@@ -18,9 +18,9 @@ package ai.platon.pulsar.images.service
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.core.api.WebDriver
 import ai.platon.pulsar.images.config.ImageConfig
-import com.google.gson.Gson
-import com.google.gson.annotations.SerializedName
-import com.google.gson.reflect.TypeToken
+import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
+import com.fasterxml.jackson.annotation.JsonProperty
+import com.fasterxml.jackson.module.kotlin.readValue
 
 /**
  * Detects image elements and sources on a web page via CDP JavaScript evaluation.
@@ -32,54 +32,53 @@ open class ImageDetector(
     private val config: ImageConfig = ImageConfig(),
 ) {
     private val logger = getLogger(ImageDetector::class)
-    private val gson = Gson()
 
     /**
      * A detected image source on a web page.
      */
     data class ImageSource(
         /** HTML tag name: "img", "picture", "source", "a", "background", "link", "meta", "svg:image" */
-        @SerializedName("tagName")
+        @JsonProperty("tagName")
         val tagName: String = "",
 
         /** Raw src/srcset/href/content attribute value */
-        @SerializedName("srcUrl")
+        @JsonProperty("srcUrl")
         val srcUrl: String? = null,
 
         /** Resolved absolute URL (currentSrc for <img>, href for others) */
-        @SerializedName("resolvedUrl")
+        @JsonProperty("resolvedUrl")
         val resolvedUrl: String? = null,
 
         /** MIME type if available from type attribute or Content-Type */
-        @SerializedName("type")
+        @JsonProperty("type")
         val type: String? = null,
 
         /** CSS display width in pixels (0 if unknown) */
-        @SerializedName("width")
+        @JsonProperty("width")
         val width: Int? = null,
 
         /** CSS display height in pixels (0 if unknown) */
-        @SerializedName("height")
+        @JsonProperty("height")
         val height: Int? = null,
 
         /** Natural (intrinsic) width in pixels (0 if unknown) */
-        @SerializedName("naturalWidth")
+        @JsonProperty("naturalWidth")
         val naturalWidth: Int? = null,
 
         /** Natural (intrinsic) height in pixels (0 if unknown) */
-        @SerializedName("naturalHeight")
+        @JsonProperty("naturalHeight")
         val naturalHeight: Int? = null,
 
         /** Alt text attribute */
-        @SerializedName("alt")
+        @JsonProperty("alt")
         val alt: String? = null,
 
         /** Whether this is a data URI (data:image/...) */
-        @SerializedName("isDataUri")
+        @JsonProperty("isDataUri")
         val isDataUri: Boolean = false,
 
         /** Whether this is an SVG image */
-        @SerializedName("isSvg")
+        @JsonProperty("isSvg")
         val isSvg: Boolean = false,
     )
 
@@ -127,9 +126,8 @@ open class ImageDetector(
         return try {
             val json = result.toString()
             if (json.isBlank() || json == "[]") return emptyList()
-            val type = object : TypeToken<List<ImageSource>>() {}.type
             @Suppress("UNCHECKED_CAST")
-            gson.fromJson<List<ImageSource>>(json, type).distinctBy { it.resolvedUrl ?: it.srcUrl ?: "" }
+            pulsarObjectMapper().readValue<List<ImageSource>>(json).distinctBy { it.resolvedUrl ?: it.srcUrl ?: "" }
         } catch (e: Exception) {
             logger.debug("Failed to parse image detection result: {}", e.message)
             emptyList()

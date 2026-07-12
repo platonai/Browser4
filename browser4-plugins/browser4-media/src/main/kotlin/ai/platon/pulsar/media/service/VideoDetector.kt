@@ -17,9 +17,9 @@ package ai.platon.pulsar.media.service
 
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.core.api.WebDriver
-import com.google.gson.Gson
-import com.google.gson.annotations.SerializedName
-import com.google.gson.reflect.TypeToken
+import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
+import com.fasterxml.jackson.annotation.JsonProperty
+import com.fasterxml.jackson.module.kotlin.readValue
 
 /**
  * Detects video elements and media source URLs on a web page via CDP JavaScript evaluation.
@@ -29,54 +29,53 @@ import com.google.gson.reflect.TypeToken
  */
 open class VideoDetector {
     private val logger = getLogger(VideoDetector::class)
-    private val gson = Gson()
 
     /**
      * A detected video source on a web page.
      */
     data class VideoSource(
         /** HTML tag name: "video", "source", "a", "iframe" */
-        @SerializedName("tagName")
+        @JsonProperty("tagName")
         val tagName: String = "",
 
         /** Raw src attribute value */
-        @SerializedName("srcUrl")
+        @JsonProperty("srcUrl")
         val srcUrl: String? = null,
 
         /** Resolved absolute URL (currentSrc for <video>, src for others) */
-        @SerializedName("resolvedUrl")
+        @JsonProperty("resolvedUrl")
         val resolvedUrl: String? = null,
 
         /** MIME type if available from type attribute */
-        @SerializedName("type")
+        @JsonProperty("type")
         val type: String? = null,
 
         /** Display width in pixels (0 if unknown) */
-        @SerializedName("width")
+        @JsonProperty("width")
         val width: Int? = null,
 
         /** Display height in pixels (0 if unknown) */
-        @SerializedName("height")
+        @JsonProperty("height")
         val height: Int? = null,
 
         /** Whether the video element has the controls attribute */
-        @SerializedName("hasControls")
+        @JsonProperty("hasControls")
         val hasControls: Boolean = false,
 
         /** Poster image URL if set */
-        @SerializedName("posterUrl")
+        @JsonProperty("posterUrl")
         val posterUrl: String? = null,
 
         /** Whether this is an HLS (m3u8) stream */
-        @SerializedName("isHls")
+        @JsonProperty("isHls")
         val isHls: Boolean = false,
 
         /** Whether this is a DASH (mpd) stream */
-        @SerializedName("isDash")
+        @JsonProperty("isDash")
         val isDash: Boolean = false,
 
         /** Whether this is embedded in an iframe (e.g., YouTube, Vimeo) */
-        @SerializedName("isIframe")
+        @JsonProperty("isIframe")
         val isIframe: Boolean = false,
     )
 
@@ -101,9 +100,8 @@ open class VideoDetector {
         return try {
             val json = result.toString()
             if (json.isBlank() || json == "[]") return emptyList()
-            val type = object : TypeToken<List<VideoSource>>() {}.type
             @Suppress("UNCHECKED_CAST")
-            gson.fromJson<List<VideoSource>>(json, type).distinctBy { it.resolvedUrl ?: it.srcUrl }
+            pulsarObjectMapper().readValue<List<VideoSource>>(json).distinctBy { it.resolvedUrl ?: it.srcUrl }
         } catch (e: Exception) {
             logger.debug("Failed to parse video detection result: {}", e.message)
             emptyList()
