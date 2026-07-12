@@ -1,7 +1,7 @@
 package ai.platon.pulsar.skeleton.event.impl
 
-import ai.platon.pulsar.browser.rpa.BrowseRPA
-import ai.platon.pulsar.browser.rpa.DefaultBrowseRPA
+import ai.platon.browser4.api.rpa.BrowseRPA
+import ai.platon.browser4.api.rpa.DefaultBrowseRPA
 import ai.platon.pulsar.common.ResourceLoader
 import ai.platon.pulsar.common.config.CapabilityTypes
 import ai.platon.pulsar.common.config.ImmutableConfig

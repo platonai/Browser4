@@ -1,6 +1,6 @@
 package ai.platon.pulsar.browser.privacy
 
-import ai.platon.pulsar.browser.BrowserProfile
+import ai.platon.browser4.api.BrowserProfile
 import ai.platon.pulsar.common.AppContext
 import ai.platon.pulsar.common.browser.fingerprint.Fingerprint
 import ai.platon.pulsar.common.config.CapabilityTypes.PRIVACY_CONTEXT_CLOSE_LAZY

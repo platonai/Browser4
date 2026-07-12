@@ -1,7 +1,7 @@
 package ai.platon.pulsar.skeleton.workflow.fetch.driver
 
 import ai.platon.pulsar.WebDriverTestBase
-import ai.platon.pulsar.browser.AbstractWebDriver
+import ai.platon.browser4.api.AbstractWebDriver
 import ai.platon.pulsar.common.AppFiles
 import ai.platon.pulsar.common.AppPaths
 import ai.platon.pulsar.common.emoji.PopularEmoji

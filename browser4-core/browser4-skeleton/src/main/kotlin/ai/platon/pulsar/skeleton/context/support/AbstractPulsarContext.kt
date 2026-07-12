@@ -1,6 +1,6 @@
 package ai.platon.pulsar.skeleton.context.support
 
-import ai.platon.pulsar.browser.BrowserManager
+import ai.platon.browser4.api.BrowserManager
 import ai.platon.pulsar.common.*
 import ai.platon.pulsar.common.config.AppConstants
 import ai.platon.pulsar.common.config.ImmutableConfig

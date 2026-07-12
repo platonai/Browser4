@@ -1,6 +1,6 @@
 package ai.platon.pulsar
 
-import ai.platon.pulsar.browser.BrowserId
+import ai.platon.browser4.api.BrowserId
 import ai.platon.pulsar.core.api.Browser
 import ai.platon.pulsar.core.api.BrowserManager
 import ai.platon.pulsar.core.api.WebDriver

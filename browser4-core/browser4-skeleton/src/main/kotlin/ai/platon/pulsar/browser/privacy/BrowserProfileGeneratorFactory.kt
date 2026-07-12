@@ -1,6 +1,6 @@
 package ai.platon.pulsar.browser.privacy
 
-import ai.platon.pulsar.browser.common.BrowserSettings
+import ai.platon.browser4.api.model.BrowserSettings
 import ai.platon.pulsar.common.browser.BrowserProfileMode
 import ai.platon.pulsar.common.config.CapabilityTypes
 import ai.platon.pulsar.common.config.ImmutableConfig

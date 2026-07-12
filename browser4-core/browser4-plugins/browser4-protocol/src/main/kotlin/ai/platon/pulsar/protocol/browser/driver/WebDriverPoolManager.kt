@@ -1,11 +1,11 @@
 package ai.platon.pulsar.protocol.browser.driver
 
-import ai.platon.pulsar.browser.AbstractWebDriver
-import ai.platon.pulsar.browser.BrowserId
-import ai.platon.pulsar.browser.common.BrowserLaunchException
-import ai.platon.pulsar.browser.common.BrowserUnavailableException
-import ai.platon.pulsar.browser.common.WebDriverException
-import ai.platon.pulsar.browser.manage.BasicBrowserManager
+import ai.platon.browser4.api.AbstractWebDriver
+import ai.platon.browser4.api.BrowserId
+import ai.platon.browser4.api.common.BrowserLaunchException
+import ai.platon.browser4.api.common.BrowserUnavailableException
+import ai.platon.browser4.api.common.WebDriverException
+import ai.platon.browser4.api.manage.BasicBrowserManager
 import ai.platon.pulsar.common.*
 import ai.platon.pulsar.common.concurrent.PreemptChannelSupport
 import ai.platon.pulsar.common.config.AppConstants.DEFAULT_BROWSER_MAX_OPEN_TABS

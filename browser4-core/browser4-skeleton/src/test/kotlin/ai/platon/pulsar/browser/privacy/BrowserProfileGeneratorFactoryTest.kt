@@ -1,6 +1,6 @@
 package ai.platon.pulsar.browser.privacy
 
-import ai.platon.pulsar.browser.privacy.BrowserProfileGeneratorFactory.Companion.BROWSER_CONTEXT_MODE_TO_AGENTS
+import ai.platon.browser4.api.privacy.BrowserProfileGeneratorFactory.Companion.BROWSER_CONTEXT_MODE_TO_AGENTS
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.skeleton.PulsarSettings
 import org.junit.jupiter.api.Assertions

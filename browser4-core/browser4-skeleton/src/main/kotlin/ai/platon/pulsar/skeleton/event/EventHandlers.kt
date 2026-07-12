@@ -2,7 +2,7 @@
 
 package ai.platon.pulsar.skeleton.event
 
-import ai.platon.pulsar.browser.privacy.PrivacyContext
+import ai.platon.browser4.api.privacy.PrivacyContext
 import ai.platon.pulsar.common.lang.*
 import ai.platon.pulsar.common.urls.UrlAware
 import ai.platon.pulsar.core.api.WebDriver

@@ -15,9 +15,9 @@
  */
 package ai.platon.pulsar.browser.privacy
 
-import ai.platon.pulsar.browser.BrowserProfile
-import ai.platon.pulsar.browser.ProfileId
-import ai.platon.pulsar.browser.WebDriver
+import ai.platon.browser4.api.BrowserProfile
+import ai.platon.browser4.api.ProfileId
+import ai.platon.browser4.api.WebDriver
 import ai.platon.pulsar.common.AppPaths
 import ai.platon.pulsar.common.browser.BrowserFiles
 import ai.platon.pulsar.common.browser.BrowserType

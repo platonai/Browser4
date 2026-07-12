@@ -1,7 +1,7 @@
 package ai.platon.pulsar.heavy.browser
 
 import ai.platon.browser4.chrome.manage.PulsarBrowserFactory
-import ai.platon.pulsar.browser.Browser
+import ai.platon.browser4.api.Browser
 import ai.platon.pulsar.common.config.CapabilityTypes.MIN_SEQUENTIAL_PRIVACY_AGENT_NUMBER
 import ai.platon.pulsar.common.config.ImmutableConfig
 import org.junit.jupiter.api.AfterEach

@@ -1,9 +1,9 @@
 package ai.platon.browser4.boot.autoconfigure
 
 import ai.platon.pulsar.agentic.context.AgenticContext
-import ai.platon.pulsar.browser.common.BrowserSettings
-import ai.platon.pulsar.browser.manage.BasicBrowserManager
-import ai.platon.pulsar.browser.privacy.PrivacyContextMonitor
+import ai.platon.browser4.api.model.BrowserSettings
+import ai.platon.browser4.api.manage.BasicBrowserManager
+import ai.platon.browser4.api.privacy.PrivacyContextMonitor
 import ai.platon.pulsar.common.config.MutableConfig
 import ai.platon.pulsar.common.proxy.ProxyLoader
 import ai.platon.pulsar.common.proxy.ProxyLoaderFactory

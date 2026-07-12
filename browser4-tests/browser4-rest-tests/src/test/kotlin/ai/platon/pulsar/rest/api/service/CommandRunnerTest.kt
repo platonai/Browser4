@@ -4,7 +4,7 @@ import ai.platon.browser4.boot.autoconfigure.Browser4AutoConfiguration
 import ai.platon.browser4.boot.autoconfigure.test.PulsarTestContextInitializer
 import ai.platon.browser4.common.B4Constants.DEFAULT_SESSION_ID
 import ai.platon.pulsar.agent.tool.UserCommandExecutor
-import ai.platon.pulsar.browser.common.BrowserSettings
+import ai.platon.browser4.api.model.BrowserSettings
 import ai.platon.pulsar.common.browser.BrowserProfileMode
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.common.printlnPro

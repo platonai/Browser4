@@ -1,10 +1,10 @@
 package ai.platon.pulsar.protocol.browser.context
 
 import ai.platon.pulsar.protocol.browser.DefaultWebDriverPoolManager
-import ai.platon.pulsar.browser.BrowserProfile
-import ai.platon.pulsar.browser.common.BrowserSettings
-import ai.platon.pulsar.browser.common.UserAgent
-import ai.platon.pulsar.browser.privacy.PrivacyContext
+import ai.platon.browser4.api.BrowserProfile
+import ai.platon.browser4.api.model.BrowserSettings
+import ai.platon.browser4.api.common.UserAgent
+import ai.platon.browser4.api.privacy.PrivacyContext
 import ai.platon.pulsar.common.browser.BrowserType
 import ai.platon.pulsar.common.browser.fingerprint.Fingerprint
 import ai.platon.pulsar.common.config.ImmutableConfig

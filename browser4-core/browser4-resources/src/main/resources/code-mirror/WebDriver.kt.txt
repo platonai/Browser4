@@ -1,12 +1,12 @@
 package ai.platon.pulsar.browser
 
 import ai.platon.browser4.chrome.dom.model.AriaSnapshotOptions
-import ai.platon.pulsar.browser.common.JsEvaluation
-import ai.platon.pulsar.browser.common.NavigateEntry
-import ai.platon.pulsar.browser.common.NavigateHistory
-import ai.platon.pulsar.browser.common.WebDriverException
-import ai.platon.pulsar.browser.impl.NetworkResourceResponse
-import ai.platon.pulsar.browser.impl.NodeRef
+import ai.platon.browser4.api.common.JsEvaluation
+import ai.platon.browser4.api.model.NavigateEntry
+import ai.platon.browser4.api.common.NavigateHistory
+import ai.platon.browser4.api.common.WebDriverException
+import ai.platon.browser4.api.impl.NetworkResourceResponse
+import ai.platon.browser4.api.impl.NodeRef
 import ai.platon.pulsar.chrome.dom.model.BrowserUseState
 import ai.platon.pulsar.chrome.dom.model.NanoDOMTree
 import ai.platon.pulsar.chrome.dom.model.PageTarget

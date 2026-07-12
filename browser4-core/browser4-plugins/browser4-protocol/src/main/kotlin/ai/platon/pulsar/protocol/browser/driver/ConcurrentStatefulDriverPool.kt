@@ -1,6 +1,6 @@
 package ai.platon.pulsar.protocol.browser.driver
 
-import ai.platon.pulsar.browser.AbstractWebDriver
+import ai.platon.browser4.api.AbstractWebDriver
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.common.warnInterruptible
 import ai.platon.pulsar.core.api.BrowserManager

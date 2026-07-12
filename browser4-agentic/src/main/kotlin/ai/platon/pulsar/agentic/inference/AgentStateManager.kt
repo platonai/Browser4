@@ -6,7 +6,7 @@ import ai.platon.pulsar.agentic.ObserveOptions
 import ai.platon.pulsar.agentic.agents.BasicBrowserAgent
 import ai.platon.pulsar.agentic.inference.detail.PageStateTracker
 import ai.platon.pulsar.agentic.model.*
-import ai.platon.pulsar.browser.AbstractWebDriver
+import ai.platon.browser4.api.AbstractWebDriver
 import ai.platon.pulsar.chrome.dom.model.BrowserUseState
 import ai.platon.pulsar.chrome.dom.model.SnapshotOptions
 import ai.platon.pulsar.chrome.dom.model.TabState

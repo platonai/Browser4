@@ -15,8 +15,8 @@
  */
 package ai.platon.pulsar.protocol.browser.emulator.context
 
-import ai.platon.pulsar.browser.BrowserProfile
-import ai.platon.pulsar.browser.privacy.PrivacyContext
+import ai.platon.browser4.api.BrowserProfile
+import ai.platon.browser4.api.privacy.PrivacyContext
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.common.proxy.ProxyException

@@ -1,6 +1,6 @@
 package ai.platon.pulsar.browser
 
-import ai.platon.pulsar.browser.manage.BrowserFactory
+import ai.platon.browser4.api.manage.BrowserFactory
 import ai.platon.pulsar.core.api.WebDriver
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking

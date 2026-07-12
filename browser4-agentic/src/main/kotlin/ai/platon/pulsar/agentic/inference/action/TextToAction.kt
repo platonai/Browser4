@@ -8,8 +8,8 @@ import ai.platon.pulsar.agentic.model.AgentState
 import ai.platon.pulsar.agentic.model.ObserveElement
 import ai.platon.pulsar.agentic.model.ToolCall
 import ai.platon.pulsar.agentic.tools.specs.ToolCallSpecificationRenderer
-import ai.platon.pulsar.browser.AbstractWebDriver
-import ai.platon.pulsar.browser.common.Locator
+import ai.platon.browser4.api.AbstractWebDriver
+import ai.platon.browser4.api.common.Locator
 import ai.platon.pulsar.chrome.dom.model.MergedDOMTreeNode
 import ai.platon.pulsar.chrome.dom.model.SnapshotOptions
 import ai.platon.pulsar.common.AppPaths
