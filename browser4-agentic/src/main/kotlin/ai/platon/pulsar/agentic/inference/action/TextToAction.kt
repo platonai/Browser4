@@ -9,9 +9,9 @@ import ai.platon.pulsar.agentic.model.ObserveElement
 import ai.platon.pulsar.agentic.model.ToolCall
 import ai.platon.pulsar.agentic.tools.specs.ToolCallSpecificationRenderer
 import ai.platon.browser4.api.AbstractWebDriver
-import ai.platon.browser4.api.common.Locator
-import ai.platon.pulsar.chrome.dom.model.MergedDOMTreeNode
-import ai.platon.pulsar.chrome.dom.model.SnapshotOptions
+import ai.platon.browser4.api.model.Locator
+import ai.platon.browser4.api.model.MergedDOMTreeNode
+import ai.platon.browser4.api.model.SnapshotOptions
 import ai.platon.pulsar.common.AppPaths
 import ai.platon.pulsar.common.Strings
 import ai.platon.pulsar.common.ai.llm.PromptTemplate

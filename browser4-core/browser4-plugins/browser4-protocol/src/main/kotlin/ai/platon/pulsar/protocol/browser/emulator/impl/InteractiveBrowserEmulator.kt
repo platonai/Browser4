@@ -15,10 +15,10 @@
  */
 package ai.platon.pulsar.protocol.browser.emulator.impl
 
-import ai.platon.browser4.chrome.PulsarWebDriver
 import ai.platon.browser4.api.AbstractWebDriver
 import ai.platon.browser4.api.DomSettlePolicy
-import ai.platon.browser4.api.common.*
+import ai.platon.browser4.api.model.*
+import ai.platon.browser4.chrome.PulsarWebDriver
 import ai.platon.pulsar.common.*
 import ai.platon.pulsar.common.config.AppConstants
 import ai.platon.pulsar.common.config.AppConstants.VAR_CAPTURE

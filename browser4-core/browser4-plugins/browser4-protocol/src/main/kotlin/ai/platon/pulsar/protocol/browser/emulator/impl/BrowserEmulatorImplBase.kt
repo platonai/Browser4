@@ -17,7 +17,7 @@ package ai.platon.pulsar.protocol.browser.emulator.impl
 
 import ai.platon.browser4.api.AbstractWebDriver
 import ai.platon.browser4.api.model.BrowserSettings
-import ai.platon.browser4.api.common.WebDriverCancellationException
+import ai.platon.browser4.api.model.WebDriverCancellationException
 import ai.platon.pulsar.common.*
 import ai.platon.pulsar.common.config.CapabilityTypes.FETCH_MAX_CONTENT_LENGTH
 import ai.platon.pulsar.common.config.CapabilityTypes.FETCH_PAGE_AUTO_EXPORT_LIMIT

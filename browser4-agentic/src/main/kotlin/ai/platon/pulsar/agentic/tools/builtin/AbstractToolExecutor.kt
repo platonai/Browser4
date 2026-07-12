@@ -4,7 +4,7 @@ import ai.platon.pulsar.agentic.model.DirectValue
 import ai.platon.pulsar.agentic.model.TcEvaluate
 import ai.platon.pulsar.agentic.model.ToolCall
 import ai.platon.pulsar.agentic.model.ToolSpec
-import ai.platon.browser4.api.common.JsEvaluation
+import ai.platon.browser4.api.model.JsEvaluation
 import ai.platon.pulsar.common.brief
 import ai.platon.pulsar.common.getLogger
 import kotlin.reflect.KClass

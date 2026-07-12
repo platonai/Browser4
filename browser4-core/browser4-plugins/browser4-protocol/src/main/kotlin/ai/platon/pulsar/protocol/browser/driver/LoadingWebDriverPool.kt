@@ -2,9 +2,9 @@ package ai.platon.pulsar.protocol.browser.driver
 
 import ai.platon.browser4.api.AbstractWebDriver
 import ai.platon.browser4.api.BrowserId
-import ai.platon.browser4.api.common.BrowserLaunchException
-import ai.platon.browser4.api.common.WebDriverCancellationException
-import ai.platon.browser4.api.common.WebDriverException
+import ai.platon.browser4.api.model.BrowserLaunchException
+import ai.platon.browser4.api.model.WebDriverCancellationException
+import ai.platon.browser4.api.model.WebDriverException
 import ai.platon.pulsar.common.AppContext
 import ai.platon.pulsar.common.brief
 import ai.platon.pulsar.common.config.AppConstants.DEFAULT_BROWSER_MAX_OPEN_TABS
