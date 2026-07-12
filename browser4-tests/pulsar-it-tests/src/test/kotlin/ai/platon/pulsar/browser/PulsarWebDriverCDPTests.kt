@@ -4,7 +4,7 @@ import ai.platon.browser4.chrome.PulsarWebDriver
 import ai.platon.browser4.chrome.handler.RemoteChromeProtocol
 import ai.platon.pulsar.WebDriverTestBase
 import ai.platon.pulsar.common.printlnPro
-import ai.platon.pulsar.core.api.WebDriver
+import ai.platon.pulsar.browser.WebDriver
 import ch.qos.logback.classic.Level
 import ch.qos.logback.classic.Logger
 import kotlinx.coroutines.runBlocking

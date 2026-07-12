@@ -1,19 +1,19 @@
 package ai.platon.pulsar.protocol.browser.driver
 
-import ai.platon.browser4.api.AbstractWebDriver
-import ai.platon.browser4.api.BrowserId
-import ai.platon.browser4.api.manage.BasicBrowserManager
-import ai.platon.browser4.api.model.BrowserLaunchException
-import ai.platon.browser4.api.model.BrowserUnavailableException
-import ai.platon.browser4.api.model.WebDriverException
+import ai.platon.pulsar.browser.AbstractWebDriver
+import ai.platon.pulsar.browser.BrowserId
+import ai.platon.pulsar.browser.manage.BasicBrowserManager
+import ai.platon.pulsar.browser.common.BrowserLaunchException
+import ai.platon.pulsar.browser.common.BrowserUnavailableException
+import ai.platon.pulsar.browser.common.WebDriverException
 import ai.platon.pulsar.common.*
 import ai.platon.pulsar.common.concurrent.PreemptChannelSupport
 import ai.platon.pulsar.common.config.AppConstants.DEFAULT_BROWSER_MAX_OPEN_TABS
 import ai.platon.pulsar.common.config.CapabilityTypes.BROWSER_MAX_OPEN_TABS
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.common.config.Parameterized
-import ai.platon.pulsar.core.api.BrowserManager
-import ai.platon.pulsar.core.api.WebDriver
+import ai.platon.pulsar.browser.BrowserManager
+import ai.platon.pulsar.browser.WebDriver
 import ai.platon.pulsar.protocol.browser.emulator.WebDriverPoolException
 import ai.platon.pulsar.protocol.browser.emulator.WebDriverPoolExhaustedException
 import ai.platon.pulsar.skeleton.common.metrics.MetricsSystem

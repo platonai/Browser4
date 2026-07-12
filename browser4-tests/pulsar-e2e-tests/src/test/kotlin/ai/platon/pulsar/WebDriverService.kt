@@ -1,9 +1,9 @@
 package ai.platon.pulsar
 
-import ai.platon.browser4.api.BrowserId
-import ai.platon.pulsar.core.api.Browser
-import ai.platon.pulsar.core.api.BrowserManager
-import ai.platon.pulsar.core.api.WebDriver
+import ai.platon.pulsar.browser.BrowserId
+import ai.platon.pulsar.browser.Browser
+import ai.platon.pulsar.browser.BrowserManager
+import ai.platon.pulsar.browser.WebDriver
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import org.apache.commons.lang3.StringUtils

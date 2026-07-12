@@ -1,6 +1,6 @@
 package ai.platon.pulsar.agentic.model
 
-import ai.platon.browser4.api.model.MergedDOMTreeNode
+import ai.platon.pulsar.chrome.dom.model.MergedDOMTreeNode
 import ai.platon.pulsar.agentic.ActResult
 import ai.platon.pulsar.agentic.ObserveResult
 import ai.platon.pulsar.agentic.common.AgentPaths

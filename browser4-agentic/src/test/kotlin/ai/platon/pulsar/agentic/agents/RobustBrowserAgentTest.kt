@@ -2,7 +2,7 @@ package ai.platon.pulsar.agentic.agents
 
 import ai.platon.pulsar.agentic.AgenticSession
 import ai.platon.pulsar.agentic.model.*
-import ai.platon.browser4.api.model.BrowserUseState
+import ai.platon.pulsar.chrome.dom.model.BrowserUseState
 import io.mockk.mockk
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.DisplayName

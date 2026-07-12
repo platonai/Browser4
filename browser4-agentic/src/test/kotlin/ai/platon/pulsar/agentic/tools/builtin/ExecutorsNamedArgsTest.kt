@@ -3,9 +3,9 @@ package ai.platon.pulsar.agentic.tools.builtin
 import ai.platon.pulsar.agentic.PerceptiveAgent
 import ai.platon.pulsar.agentic.common.AgentFileSystem
 import ai.platon.pulsar.agentic.model.ToolCall
-import ai.platon.browser4.api.AbstractBrowser
-import ai.platon.browser4.api.AbstractWebDriver
-import ai.platon.pulsar.core.api.WebDriver
+import ai.platon.pulsar.browser.AbstractBrowser
+import ai.platon.pulsar.browser.AbstractWebDriver
+import ai.platon.pulsar.browser.WebDriver
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every

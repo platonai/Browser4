@@ -1,6 +1,6 @@
 package ai.platon.pulsar.agentic.inference.detail
 
-import ai.platon.browser4.api.model.BrowserUseState
+import ai.platon.pulsar.chrome.dom.model.BrowserUseState
 import ai.platon.browser4.common.B4ResourceLoader
 import ai.platon.pulsar.agentic.AgenticSession
 import ai.platon.pulsar.agentic.agents.AgentConfig

@@ -2,7 +2,7 @@ package ai.platon.pulsar.agentic.inference.history
 
 import ai.platon.pulsar.agentic.model.AgentHistory
 import ai.platon.pulsar.agentic.model.AgentState
-import ai.platon.browser4.api.model.BrowserUseState
+import ai.platon.pulsar.chrome.dom.model.BrowserUseState
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 

@@ -1,6 +1,6 @@
 package ai.platon.pulsar.heavy
 
-import ai.platon.browser4.api.AbstractWebDriver
+import ai.platon.pulsar.browser.AbstractWebDriver
 import ai.platon.pulsar.common.AppPaths
 import ai.platon.pulsar.common.collect.UrlFeeder
 import ai.platon.pulsar.common.printlnPro

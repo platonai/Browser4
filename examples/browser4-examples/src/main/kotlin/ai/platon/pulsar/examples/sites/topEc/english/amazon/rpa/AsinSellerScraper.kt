@@ -8,7 +8,7 @@ import ai.platon.pulsar.common.sql.SQLTemplate
 import ai.platon.pulsar.common.urls.Hyperlink
 import ai.platon.pulsar.common.urls.URLUtils
 import ai.platon.pulsar.common.warnInterruptible
-import ai.platon.pulsar.core.api.WebDriver
+import ai.platon.pulsar.browser.WebDriver
 import ai.platon.pulsar.dom.FeaturedDocument
 import ai.platon.pulsar.examples.sites.topEc.english.amazon.AmazonUrls
 import ai.platon.pulsar.persist.WebPage

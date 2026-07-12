@@ -1,7 +1,7 @@
 package ai.platon.pulsar.agentic.inference
 
-import ai.platon.browser4.api.AbstractWebDriver
-import ai.platon.browser4.api.snapshot.SnapshotService
+import ai.platon.pulsar.browser.AbstractWebDriver
+import ai.platon.pulsar.chrome.dom.SnapshotService
 import ai.platon.pulsar.agentic.agents.BasicBrowserAgent
 import ai.platon.pulsar.agentic.event.AgentEventBus
 import ai.platon.pulsar.agentic.event.AgenticEvents

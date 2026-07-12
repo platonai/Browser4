@@ -1,12 +1,12 @@
 package ai.platon.pulsar.browser.rpa
 
-import ai.platon.browser4.api.AbstractWebDriver
-import ai.platon.browser4.api.model.NavigateEntry
+import ai.platon.pulsar.browser.AbstractWebDriver
+import ai.platon.pulsar.browser.common.NavigateEntry
 import ai.platon.pulsar.common.AppContext
 import ai.platon.pulsar.common.CheckState
 import ai.platon.pulsar.common.Runtimes
 import ai.platon.pulsar.common.getLogger
-import ai.platon.pulsar.core.api.WebDriver
+import ai.platon.pulsar.browser.WebDriver
 import ai.platon.pulsar.persist.WebPage
 import kotlinx.coroutines.delay
 import java.time.Duration

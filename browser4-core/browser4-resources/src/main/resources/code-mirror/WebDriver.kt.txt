@@ -1,16 +1,16 @@
 package ai.platon.pulsar.browser
 
 import ai.platon.browser4.chrome.dom.model.AriaSnapshotOptions
-import ai.platon.browser4.api.model.JsEvaluation
-import ai.platon.browser4.api.model.NavigateEntry
-import ai.platon.browser4.api.model.NavigateHistory
-import ai.platon.browser4.api.model.WebDriverException
-import ai.platon.browser4.api.impl.NetworkResourceResponse
-import ai.platon.browser4.api.impl.NodeRef
-import ai.platon.browser4.api.model.BrowserUseState
-import ai.platon.browser4.api.model.NanoDOMTree
-import ai.platon.browser4.api.model.PageTarget
-import ai.platon.browser4.api.model.SnapshotOptions
+import ai.platon.pulsar.browser.common.JsEvaluation
+import ai.platon.pulsar.browser.common.NavigateEntry
+import ai.platon.pulsar.browser.common.NavigateHistory
+import ai.platon.pulsar.browser.common.WebDriverException
+import ai.platon.pulsar.browser.impl.NetworkResourceResponse
+import ai.platon.pulsar.browser.impl.NodeRef
+import ai.platon.pulsar.chrome.dom.model.BrowserUseState
+import ai.platon.pulsar.chrome.dom.model.NanoDOMTree
+import ai.platon.pulsar.chrome.dom.model.PageTarget
+import ai.platon.pulsar.chrome.dom.model.SnapshotOptions
 import ai.platon.pulsar.common.CheckState
 import ai.platon.pulsar.common.ai.llm.MCP
 import ai.platon.pulsar.common.browser.BrowserType
@@ -1877,6 +1877,17 @@ interface WebDriver : Closeable {
     suspend fun evaluateValueDetail(expression: String): JsEvaluation?
 
     /**
+     * Returns detailed value evaluation metadata with optional async await support.
+     *
+     * @param expression The JavaScript expression to evaluate.
+     * @param awaitPromise Whether to wait for the evaluated expression's Promise to resolve.
+     * @return A [JsEvaluation] object containing the result value and metadata.
+     * */
+    @Throws(WebDriverException::class)
+    @MCP
+    suspend fun evaluateValueDetail(expression: String, awaitPromise: Boolean): JsEvaluation?
+
+    /**
      * Executes JavaScript for the element located by [selector] and returns the result as a JSON-serializable value. @mcp
      *
      * @param selector The selector of the element, multiple formats supported.
@@ -1897,6 +1908,38 @@ interface WebDriver : Closeable {
     @Throws(WebDriverException::class)
     @MCP
     suspend fun evaluateValueDetail(selector: String, functionDeclaration: String): JsEvaluation?
+
+    /**
+     * Sends an arbitrary Chrome DevTools Protocol (CDP) command and returns the result. @mcp
+     *
+     * This method provides direct access to the underlying CDP connection, allowing
+     * advanced browser interactions that are not covered by the standard WebDriver API.
+     *
+     * The `method` must be a full CDP method name, such as:
+     * - `"Page.captureScreenshot"`
+     * - `"Runtime.evaluate"`
+     * - `"DOM.getDocument"`
+     * - `"Network.getCookies"`
+     *
+     * The `params` is an optional map of parameters to pass to the CDP command.
+     * The return value is the deserialized CDP response (Map, List, String, Number, Boolean, or null).
+     *
+     * Example:
+     * ```kotlin
+     * // Screenshot the page as JPEG
+     * val result = driver.executeCdpCommand("Page.captureScreenshot", mapOf("format" to "jpeg", "quality" to 80))
+     *
+     * // Get all cookies
+     * val cookies = driver.executeCdpCommand("Network.getCookies")
+     * ```
+     *
+     * @param method The full CDP method name (e.g. "Page.captureScreenshot").
+     * @param params Optional parameters for the CDP command.
+     * @return The deserialized result (Map for objects, List for arrays, or primitive), or null.
+     */
+    @Throws(WebDriverException::class)
+    @MCP
+    suspend fun executeCdpCommand(method: String, params: Map<String, Any?>? = null): Any?
 
     /**
      * Generates a unique CSS selector path for the element located by [selector]. @mcp

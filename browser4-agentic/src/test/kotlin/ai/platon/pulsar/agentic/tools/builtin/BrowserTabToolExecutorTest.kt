@@ -1,8 +1,8 @@
 package ai.platon.pulsar.agentic.tools.builtin
 
 import ai.platon.pulsar.agentic.model.ToolCall
-import ai.platon.browser4.api.model.JsEvaluation
-import ai.platon.pulsar.core.api.WebDriver
+import ai.platon.pulsar.browser.common.JsEvaluation
+import ai.platon.pulsar.browser.WebDriver
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue

@@ -1,7 +1,7 @@
 package ai.platon.pulsar.agentic.tools.builtin
 
 import ai.platon.pulsar.agentic.model.ToolCall
-import ai.platon.browser4.api.AbstractWebDriver
+import ai.platon.pulsar.browser.AbstractWebDriver
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.mockk

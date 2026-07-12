@@ -1,6 +1,6 @@
 package ai.platon.pulsar.protocol.browser.impl
 
-import ai.platon.browser4.api.manage.BasicBrowserManager
+import ai.platon.pulsar.browser.manage.BasicBrowserManager
 import ai.platon.pulsar.common.AppContext
 import ai.platon.pulsar.common.concurrent.GracefulScheduledExecutor
 import java.time.Duration

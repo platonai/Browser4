@@ -4,7 +4,7 @@ package ai.platon.browser4.chrome.dom.model
  * Options for filtering the ARIA snapshot output (YAML accessibility tree).
  *
  * These options govern the rendering/formatting phase only —
- * they do not affect CDP-level data collection (see [ai.platon.browser4.api.model.SnapshotOptions] for that).
+ * they do not affect CDP-level data collection (see [ai.platon.pulsar.chrome.dom.model.SnapshotOptions] for that).
  */
 data class AriaSnapshotOptions(
     /** Only include interactive elements (buttons, links, inputs, etc.). */

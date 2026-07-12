@@ -15,9 +15,15 @@
  */
 package ai.platon.pulsar.protocol.browser.emulator.impl
 
-import ai.platon.browser4.api.AbstractWebDriver
-import ai.platon.browser4.api.DomSettlePolicy
-import ai.platon.browser4.api.model.*
+import ai.platon.pulsar.browser.AbstractWebDriver
+import ai.platon.pulsar.browser.DomSettlePolicy
+import ai.platon.pulsar.browser.common.BrowserSettings
+import ai.platon.pulsar.browser.common.IllegalWebDriverStateException
+import ai.platon.pulsar.browser.common.NavigateEntry
+import ai.platon.pulsar.browser.common.NetworkResourceHelper
+import ai.platon.pulsar.browser.common.WebDriverCancellationException
+import ai.platon.pulsar.browser.common.WebDriverException
+import ai.platon.pulsar.chrome.dom.model.*
 import ai.platon.browser4.chrome.PulsarWebDriver
 import ai.platon.pulsar.common.*
 import ai.platon.pulsar.common.config.AppConstants
@@ -25,7 +31,7 @@ import ai.platon.pulsar.common.config.AppConstants.VAR_CAPTURE
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.common.event.AbstractEventEmitter
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
-import ai.platon.pulsar.core.api.WebDriver
+import ai.platon.pulsar.browser.WebDriver
 import ai.platon.pulsar.persist.AbstractWebPage
 import ai.platon.pulsar.persist.ProtocolStatus
 import ai.platon.pulsar.persist.RetryScope

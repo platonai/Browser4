@@ -5,7 +5,7 @@ package ai.platon.pulsar.skeleton.event
 import ai.platon.pulsar.browser.privacy.PrivacyContext
 import ai.platon.pulsar.common.lang.*
 import ai.platon.pulsar.common.urls.UrlAware
-import ai.platon.pulsar.core.api.WebDriver
+import ai.platon.pulsar.browser.WebDriver
 import ai.platon.pulsar.core.api.WebPage
 import ai.platon.pulsar.dom.FeaturedDocument
 import ai.platon.pulsar.persist.PageDatum

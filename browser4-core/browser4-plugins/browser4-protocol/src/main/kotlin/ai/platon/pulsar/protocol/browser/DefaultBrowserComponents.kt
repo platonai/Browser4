@@ -15,12 +15,12 @@
  */
 package ai.platon.pulsar.protocol.browser
 
-import ai.platon.browser4.api.manage.BasicBrowserManager
+import ai.platon.pulsar.browser.manage.BasicBrowserManager
 import ai.platon.pulsar.browser.privacy.PrivacyManager
 import ai.platon.pulsar.common.ObjectCache
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.common.getLogger
-import ai.platon.pulsar.core.api.BrowserManager
+import ai.platon.pulsar.browser.BrowserManager
 import ai.platon.pulsar.protocol.browser.driver.WebDriverPoolManager
 import ai.platon.pulsar.protocol.browser.emulator.context.BrowserPrivacyManager
 import ai.platon.pulsar.protocol.browser.emulator.context.MultiPrivacyContextManager

@@ -15,7 +15,7 @@
  */
 package ai.platon.pulsar.protocol.browser.emulator.context
 
-import ai.platon.browser4.api.BrowserProfile
+import ai.platon.pulsar.browser.BrowserProfile
 import ai.platon.browser4.chrome.ChromeDestroyer
 import ai.platon.pulsar.browser.privacy.AbstractPrivacyContext
 import ai.platon.pulsar.browser.privacy.PrivacyContext
@@ -29,7 +29,7 @@ import ai.platon.pulsar.common.emoji.PopularEmoji
 import ai.platon.pulsar.common.logging.ThrottlingLogger
 import ai.platon.pulsar.common.proxy.ProxyPoolManager
 import ai.platon.pulsar.common.proxy.ProxyVendorException
-import ai.platon.pulsar.core.api.WebDriver
+import ai.platon.pulsar.browser.WebDriver
 import ai.platon.pulsar.persist.AbstractWebPage
 import ai.platon.pulsar.persist.RetryScope
 import ai.platon.pulsar.persist.WebPage

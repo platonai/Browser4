@@ -18,7 +18,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import org.slf4j.LoggerFactory
 import ai.platon.browser4.chrome.PulsarBrowser
-import ai.platon.browser4.api.model.BrowserSettings
+import ai.platon.pulsar.browser.common.BrowserSettings
 import java.io.Closeable
 import java.net.URI
 import java.util.concurrent.ConcurrentHashMap

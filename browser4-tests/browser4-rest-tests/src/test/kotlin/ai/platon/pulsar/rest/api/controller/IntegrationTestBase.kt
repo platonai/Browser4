@@ -3,7 +3,7 @@ package ai.platon.pulsar.rest.api.controller
 import ai.platon.browser4.boot.autoconfigure.Browser4AutoConfiguration
 import ai.platon.pulsar.agentic.AgenticSession
 import ai.platon.pulsar.agentic.GenericAgenticSession
-import ai.platon.browser4.api.model.BrowserSettings
+import ai.platon.pulsar.browser.common.BrowserSettings
 import ai.platon.pulsar.common.browser.BrowserProfileMode
 import ai.platon.pulsar.common.config.ImmutableConfig
 import org.springframework.beans.factory.annotation.Autowired

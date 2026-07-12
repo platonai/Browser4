@@ -1,6 +1,6 @@
 package ai.platon.pulsar.skeleton.context.support
 
-import ai.platon.browser4.api.BrowserManager
+import ai.platon.pulsar.browser.BrowserManager
 import org.springframework.context.support.GenericApplicationContext
 
 open class GenericPulsarContext(
