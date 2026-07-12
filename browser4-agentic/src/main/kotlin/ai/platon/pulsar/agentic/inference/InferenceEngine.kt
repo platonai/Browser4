@@ -9,7 +9,7 @@ import ai.platon.pulsar.agentic.model.AgentState
 import ai.platon.pulsar.agentic.model.ExecutionContext
 import ai.platon.pulsar.agentic.model.ExtractionSchema
 import ai.platon.browser4.api.AbstractWebDriver
-import ai.platon.pulsar.chrome.dom.SnapshotService
+import ai.platon.browser4.api.snapshot.SnapshotService
 import ai.platon.pulsar.common.AppPaths
 import ai.platon.pulsar.common.DateTimes
 import ai.platon.pulsar.common.MultiSinkMessageWriter

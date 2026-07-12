@@ -1,6 +1,7 @@
 package ai.platon.pulsar.agentic.inference
 
-import ai.platon.browser4.chrome.dom.DOMSerializer
+import ai.platon.browser4.api.model.DOMSerializer
+import ai.platon.browser4.api.model.TabState
 import ai.platon.pulsar.agentic.inference.action.OBSERVE_RESPONSE_COMPLETE_SCHEMA
 import ai.platon.pulsar.agentic.inference.action.OBSERVE_RESPONSE_ELEMENT_SCHEMA
 import ai.platon.pulsar.agentic.inference.history.DefaultHistoryRenderStrategy
@@ -11,12 +12,12 @@ import ai.platon.pulsar.agentic.model.ExecutionContext
 import ai.platon.pulsar.agentic.prompts.buildMainSystemPromptV1
 import ai.platon.pulsar.agentic.prompts.buildToolUseSections
 import ai.platon.pulsar.agentic.tools.specs.ToolSpecification
-import ai.platon.pulsar.chrome.dom.model.TabState
 import ai.platon.pulsar.common.KStrings
 import ai.platon.pulsar.common.Strings
 import ai.platon.pulsar.common.ai.llm.PromptTemplate
 import ai.platon.pulsar.common.brief
 import ai.platon.pulsar.common.serialize.json.Pson
+import kotlin.collections.isNotEmpty
 
 /**
  * Description:

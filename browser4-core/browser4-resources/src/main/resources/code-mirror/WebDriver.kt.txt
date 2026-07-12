@@ -7,10 +7,10 @@ import ai.platon.browser4.api.model.NavigateHistory
 import ai.platon.browser4.api.model.WebDriverException
 import ai.platon.browser4.api.impl.NetworkResourceResponse
 import ai.platon.browser4.api.impl.NodeRef
-import ai.platon.pulsar.chrome.dom.model.BrowserUseState
-import ai.platon.pulsar.chrome.dom.model.NanoDOMTree
-import ai.platon.pulsar.chrome.dom.model.PageTarget
-import ai.platon.pulsar.chrome.dom.model.SnapshotOptions
+import ai.platon.browser4.api.model.BrowserUseState
+import ai.platon.browser4.api.model.NanoDOMTree
+import ai.platon.browser4.api.model.PageTarget
+import ai.platon.browser4.api.model.SnapshotOptions
 import ai.platon.pulsar.common.CheckState
 import ai.platon.pulsar.common.ai.llm.MCP
 import ai.platon.pulsar.common.browser.BrowserType

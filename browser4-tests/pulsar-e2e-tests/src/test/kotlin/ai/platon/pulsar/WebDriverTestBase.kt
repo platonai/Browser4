@@ -6,9 +6,9 @@ import ai.platon.browser4.chrome.dom.util.DomDebug
 import ai.platon.browser4.api.BrowserId
 import ai.platon.browser4.api.model.BrowserSettings
 import ai.platon.browser4.api.detail.SimpleScriptConfuser
-import ai.platon.pulsar.chrome.dom.model.MergedDOMTreeNode
-import ai.platon.pulsar.chrome.dom.model.PageTarget
-import ai.platon.pulsar.chrome.dom.model.SnapshotOptions
+import ai.platon.browser4.api.model.MergedDOMTreeNode
+import ai.platon.browser4.api.model.PageTarget
+import ai.platon.browser4.api.model.SnapshotOptions
 import ai.platon.pulsar.common.printlnPro
 import ai.platon.pulsar.core.api.Browser
 import ai.platon.pulsar.core.api.WebDriver
