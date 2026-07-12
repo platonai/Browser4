@@ -12,8 +12,8 @@ import ai.platon.pulsar.common.config.AppConstants.DEFAULT_BROWSER_MAX_OPEN_TABS
 import ai.platon.pulsar.common.config.CapabilityTypes.BROWSER_MAX_OPEN_TABS
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.common.config.Parameterized
-import ai.platon.pulsar.core.api.BrowserManager
-import ai.platon.pulsar.core.api.WebDriver
+import ai.platon.pulsar.browser.BrowserManager
+import ai.platon.pulsar.browser.WebDriver
 import ai.platon.pulsar.protocol.browser.emulator.WebDriverPoolException
 import ai.platon.pulsar.protocol.browser.emulator.WebDriverPoolExhaustedException
 import ai.platon.pulsar.skeleton.common.metrics.MetricsSystem

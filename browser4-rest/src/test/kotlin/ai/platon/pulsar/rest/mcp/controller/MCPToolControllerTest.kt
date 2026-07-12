@@ -794,14 +794,15 @@ class MCPToolControllerTest {
         """.trimIndent()
 
         val document = ai.platon.pulsar.dom.FeaturedDocument(org.jsoup.Jsoup.parse(html))
-        val selector = autoDiscoverRepeatingSelector(document)
+        val candidates = autoDiscoverRepeatingSelector(document)
+        val selector = candidates.firstOrNull()?.selector
 
         // With 5 repeating .item elements, it should discover a selector
-        // (may be null on edge cases, but with 5 identical siblings it should find something)
+        // (may be empty list on edge cases, but with 5 identical siblings it should find something)
         val discovered = selector != null
         // Not strictly required — discovery may not always succeed — but with this input it should
         if (!discovered) {
-            println("autoDiscoverRepeatingSelector returned null for 5 identical siblings")
+            println("autoDiscoverRepeatingSelector returned no candidates for 5 identical siblings")
         }
     }
 

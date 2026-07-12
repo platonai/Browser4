@@ -25,7 +25,7 @@ import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.common.config.Parameterized
 import ai.platon.pulsar.common.event.AbstractEventEmitter
 import ai.platon.pulsar.common.urls.URLUtils
-import ai.platon.pulsar.core.api.WebDriver
+import ai.platon.pulsar.browser.WebDriver
 import ai.platon.pulsar.persist.PageDatum
 import ai.platon.pulsar.persist.ProtocolStatus
 import ai.platon.pulsar.persist.WebPage

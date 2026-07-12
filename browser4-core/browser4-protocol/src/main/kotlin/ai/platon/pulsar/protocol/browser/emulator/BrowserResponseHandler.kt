@@ -17,7 +17,7 @@ package ai.platon.pulsar.protocol.browser.emulator
 
 import ai.platon.pulsar.common.HtmlIntegrity
 import ai.platon.pulsar.common.event.EventEmitter
-import ai.platon.pulsar.core.api.WebDriver
+import ai.platon.pulsar.browser.WebDriver
 import ai.platon.pulsar.persist.ProtocolStatus
 import ai.platon.pulsar.persist.WebPage
 import ai.platon.pulsar.protocol.browser.emulator.util.ChainedHtmlIntegrityChecker

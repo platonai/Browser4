@@ -5,6 +5,9 @@ import ai.platon.browser4.api.model.MergedDOMTreeNode
 import ai.platon.browser4.api.model.SnapshotNodeEx
 import ai.platon.browser4.chrome.dom.util.ScrollUtils
 import org.junit.jupiter.api.Assertions.*
+import ai.platon.pulsar.chrome.dom.model.MergedDOMTreeNode
+import ai.platon.pulsar.chrome.dom.model.SnapshotNodeEx
+import ai.platon.pulsar.chrome.dom.model.DOMRect
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
 

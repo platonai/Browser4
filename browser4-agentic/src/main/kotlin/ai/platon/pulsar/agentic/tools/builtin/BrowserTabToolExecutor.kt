@@ -586,16 +586,24 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
             "type" -> {
                 when {
                     args.containsKey("selector") && args.containsKey("text") -> {
-                        validateArgs(args, allowed("selector", "text"), setOf("selector", "text"), functionName)
+                        validateArgs(args, allowed("selector", "text", "submit"), setOf("selector", "text"), functionName)
                         driver.type(
                             paramString(args, "text", functionName)!!,
                             paramString(args, "selector", functionName)!!
                         )
+                        if (args["submit"] == true) {
+                            driver.press("Enter")
+                        }
+                        Unit
                     }
 
                     args.containsKey("text") -> {
-                        validateArgs(args, allowed("text"), setOf("text"), functionName)
+                        validateArgs(args, allowed("text", "submit"), setOf("text"), functionName)
                         driver.type(paramString(args, "text", functionName)!!)
+                        if (args["submit"] == true) {
+                            driver.press("Enter")
+                        }
+                        Unit
                     }
 
                     else -> throw IllegalArgumentException("type requires 'text' and optionally 'selector'")
@@ -603,10 +611,14 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
             }
 
             "fill" -> {
-                validateArgs(args, allowed("selector", "text"), setOf("selector", "text"), functionName); driver.fill(
+                validateArgs(args, allowed("selector", "text", "submit"), setOf("selector", "text"), functionName); driver.fill(
                     paramString(args, "selector", functionName)!!,
                     paramString(args, "text", functionName)!!
                 )
+                if (args["submit"] == true) {
+                    driver.press("Enter")
+                }
+                Unit
             }
 
             "click" -> {
@@ -1213,11 +1225,23 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
             "eval", "evaluateValue" -> {
                 val normalizedArgs = normalizeEvaluateValueArgs(args)
                 val awaitPromise = (normalizedArgs["awaitPromise"] as? Boolean) ?: false
+
+                // --wait-selector: wait for an element before evaluating.
+                // Useful for pages that render content asynchronously (React, SPA)
+                // where document.querySelectorAll may return empty if called too early.
+                val waitSelector = normalizedArgs["waitSelector"] as? String
+                if (!waitSelector.isNullOrBlank()) {
+                    val waitTimeout = (normalizedArgs["waitTimeout"] as? String)?.toLongOrNull()
+                        ?: (normalizedArgs["waitTimeout"] as? Number)?.toLong()
+                        ?: 30_000L
+                    driver.waitForSelector(waitSelector, waitTimeout)
+                }
+
                 when {
                     normalizedArgs.containsKey("selector") && normalizedArgs.containsKey("functionDeclaration") -> {
                         validateArgs(
                             normalizedArgs,
-                            allowed("selector", "functionDeclaration", "awaitPromise"),
+                            allowed("selector", "functionDeclaration", "awaitPromise", "waitSelector", "waitTimeout"),
                             setOf("selector", "functionDeclaration"),
                             functionName
                         )
@@ -1228,7 +1252,7 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
                     }
 
                     normalizedArgs.containsKey("expression") -> {
-                        validateArgs(normalizedArgs, allowed("expression", "awaitPromise"), setOf("expression"), functionName)
+                        validateArgs(normalizedArgs, allowed("expression", "awaitPromise", "waitSelector", "waitTimeout"), setOf("expression"), functionName)
                         if (awaitPromise) {
                             driver.evaluateValueDetail(paramString(normalizedArgs, "expression", functionName)!!, awaitPromise = true)
                         } else {
@@ -1430,6 +1454,14 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
             "consoleClear" -> {
                 validateArgs(args, emptySet(), emptySet(), functionName)
                 driver.evaluateValueDetail("window.__b4_console = []; 'Console cleared'")
+            }
+
+            "executeCdpCommand" -> {
+                validateArgs(args, allowed("method", "params"), setOf("method"), functionName)
+                val method = paramString(args, "method", functionName)!!
+                @Suppress("UNCHECKED_CAST")
+                val params = args["params"] as? Map<String, Any?>
+                driver.executeCdpCommand(method, params)
             }
 
             "help" -> help()

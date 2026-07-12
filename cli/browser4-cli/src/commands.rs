@@ -24,6 +24,7 @@ pub enum Category {
     Snapshot,
     Skill,
     Act,
+    Skills,
 }
 
 impl Category {
@@ -46,6 +47,7 @@ impl Category {
             Category::Snapshot => "snapshot",
             Category::Skill => "skill",
             Category::Act => "act",
+            Category::Skills => "skills",
         }
     }
 }
@@ -442,6 +444,86 @@ pub fn all_commands() -> Vec<CommandDef> {
                 }
                 if let Some(dry) = get_bool(args, "dry-run") {
                     params["dry_run"] = json!(dry);
+                }
+                params
+            },
+        },
+        // ---- Skills (bundled skill files) ----
+        CommandDef {
+            name: "skills",
+            description: "List bundled skill names (AI agent instructions for browser4-cli)",
+            category: Category::Skills,
+            hidden: false,
+            batch_supported: false,
+            args: &[],
+            options: &[],
+            tool_name_fn: |_| String::new(),
+            tool_params_fn: |_| json!({}),
+        },
+        CommandDef {
+            name: "skills-list",
+            description: "List available bundled skills",
+            category: Category::Skills,
+            hidden: true,
+            batch_supported: false,
+            args: &[],
+            options: &[],
+            tool_name_fn: |_| String::new(),
+            tool_params_fn: |_| json!({}),
+        },
+        CommandDef {
+            name: "skills-get",
+            description: "Output a skill's full content",
+            category: Category::Skills,
+            hidden: true,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "name", description: "Skill name to retrieve (e.g. browser4-cli)", optional: true },
+            ],
+            options: &[
+                OptionDef {
+                    name: "full",
+                    description: "Include references and extra documentation",
+                    is_bool: true,
+                    short: None,
+                },
+                OptionDef {
+                    name: "all",
+                    description: "Output every bundled skill",
+                    is_bool: true,
+                    short: None,
+                },
+            ],
+            tool_name_fn: |_| String::new(),
+            tool_params_fn: |args| {
+                let mut params = json!({});
+                if let Some(name) = get_opt_str(args, "name") {
+                    params["name"] = json!(name);
+                }
+                if let Some(full) = get_bool(args, "full") {
+                    params["full"] = json!(full);
+                }
+                if let Some(all) = get_bool(args, "all") {
+                    params["all"] = json!(all);
+                }
+                params
+            },
+        },
+        CommandDef {
+            name: "skills-path",
+            description: "Print the skill directory path",
+            category: Category::Skills,
+            hidden: true,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "name", description: "Skill name (if given, prints path to that skill's directory)", optional: true },
+            ],
+            options: &[],
+            tool_name_fn: |_| String::new(),
+            tool_params_fn: |args| {
+                let mut params = json!({});
+                if let Some(name) = get_opt_str(args, "name") {
+                    params["name"] = json!(name);
                 }
                 params
             },
@@ -1094,7 +1176,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "snapshot",
-            description: "Capture page snapshot to obtain element refs. Use -v N for viewport pagination, -i for interactive, --auto-diff for change detection. Run `snapshot --help` for all flags.",
+            description: "Capture page snapshot to obtain element refs. Use -v N to capture a specific screen-height chunk of the page (viewport pagination), -i for interactive, --auto-diff for change detection. Run `snapshot --help` for all flags.",
             category: Category::Core,
             hidden: false,
             batch_supported: true,
@@ -1111,7 +1193,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "selector", description: "Scope snapshot to a CSS selector", is_bool: false, short: Some("s") },
                 OptionDef { name: "raw", description: "Strip page info and return only snapshot content (alias for --stdout)", is_bool: true, short: None },
                 OptionDef { name: "stdout", description: "Print snapshot content to stdout instead of saving to file", is_bool: true, short: None },
-                OptionDef { name: "viewport", description: "Capture only specified viewports: single index (3), comma list (0,2,4), range (1-3), or mixed (0,2-4,7)", is_bool: false, short: Some("v") },
+                OptionDef { name: "viewport", description: "Capture specific screen-height page chunks (viewports). Each chunk = one screen height (~viewport height px). Formats: single index (3), comma list (0,2,4), range (1-3), or mixed (0,2-4,7). Example: -v 1-3 captures the 2nd through 4th screen-heights.", is_bool: false, short: Some("v") },
                 OptionDef { name: "auto-diff", description: "Diff against the previous snapshot — show only what changed since the last capture", is_bool: true, short: None },
                 OptionDef { name: "page", short: None, is_bool: false, description: "Page number for paginated snapshot output (1-based, default: 1)" },
                 OptionDef { name: "page-size", short: None, is_bool: false, description: "Lines per page for snapshot output (default: 2000)" },
@@ -1165,6 +1247,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "files-with-matches", short: Some("l"), is_bool: true, description: "Print only whether matches exist" },
                 OptionDef { name: "fixed-strings", short: Some("F"), is_bool: true, description: "Treat pattern as a literal string, not regex" },
                 OptionDef { name: "word-regexp", short: Some("w"), is_bool: true, description: "Match only whole words" },
+                OptionDef { name: "extended-regexp", short: Some("E"), is_bool: true, description: "Extended regex (ERE) — already the default. Accepted for compatibility with grep -E." },
                 OptionDef { name: "selector", short: None, is_bool: false, description: "CSS selector to scope the search to" },
                 OptionDef { name: "page", short: None, is_bool: false, description: "Page number (1-based, default: 1)" },
                 OptionDef { name: "page-size", short: None, is_bool: false, description: "Lines per page (default: 2000)" },
@@ -1183,7 +1266,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "eval",
-            description: "Evaluate JavaScript expression on page or element. Use --await for async code (fetch, Promises). Objects and arrays are serialized as JSON; use --json to JSON-wrap scalar results.",
+            description: "Evaluate JavaScript expression on page or element. Prefer --file or --stdin on Windows to avoid shell quoting issues. Use --await for async code (fetch, Promises). Use --wait-selector for pages that render content asynchronously (React/SPA). Objects and arrays are serialized as JSON; use --json to JSON-wrap scalar results.",
             category: Category::Core,
             hidden: false,
             batch_supported: true,
@@ -1193,11 +1276,13 @@ pub fn all_commands() -> Vec<CommandDef> {
             ],
             options: &[
                 OptionDef { name: "ref", description: "CSS selector or snapshot ref to scope evaluation (equivalent to positional [ref])", is_bool: false, short: None },
-                OptionDef { name: "file", description: "Read JavaScript expression from a file instead of the command line", is_bool: false, short: None },
+                OptionDef { name: "file", description: "Read JavaScript expression from a file instead of the command line (RECOMMENDED on Windows to avoid shell quoting)", is_bool: false, short: None },
                 OptionDef { name: "stdin", description: "Read JavaScript expression from stdin (useful for piping multi-line scripts without shell quoting)", is_bool: true, short: None },
                 OptionDef { name: "base64", description: "Decode the expression argument as base64 before execution (avoids shell quoting issues on Windows)", is_bool: true, short: None },
                 OptionDef { name: "json", description: "Serialize the result as JSON (quotes strings, wraps scalars)", is_bool: true, short: None },
                 OptionDef { name: "await", description: "Wait for the evaluated expression's Promise to resolve before returning the result", is_bool: true, short: None },
+                OptionDef { name: "wait-selector", description: "Wait for a CSS selector to appear in the DOM before evaluating (use for async-rendered content like React/SPA pages)", is_bool: false, short: None },
+                OptionDef { name: "wait-timeout", description: "Max time in ms to wait for --wait-selector (default: 30000)", is_bool: false, short: None },
             ],
             tool_name_fn: |_| "browser_evaluate".to_string(),
             tool_params_fn: |args| {
@@ -1211,6 +1296,8 @@ pub fn all_commands() -> Vec<CommandDef> {
                 if get_bool(args, "base64").unwrap_or(false) { p["base64"] = json!(true); }
                 if get_bool(args, "json").unwrap_or(false) { p["json"] = json!(true); }
                 if get_bool(args, "await").unwrap_or(false) { p["awaitPromise"] = json!(true); }
+                if let Some(sel) = get_opt_str(args, "wait-selector") { p["waitSelector"] = json!(sel); }
+                if let Some(t) = get_opt_str(args, "wait-timeout") { p["waitTimeout"] = json!(t); }
                 p
             },
         },
@@ -1241,6 +1328,29 @@ pub fn all_commands() -> Vec<CommandDef> {
                     if let Some(l) = get_opt_str(args, "min-level") { p["level"] = json!(l); }
                     p
                 }
+            },
+        },
+        CommandDef {
+            name: "cdp",
+            description: "Send an arbitrary Chrome DevTools Protocol (CDP) command and print the JSON result. For advanced browser interactions not covered by standard WebDriver commands. CDP method names use dot notation (e.g. \"Page.captureScreenshot\", \"Runtime.evaluate\", \"DOM.getDocument\"). Optional params can be passed as a JSON object via --json.",
+            category: Category::DevTools,
+            hidden: false,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "method", description: "CDP method name, e.g. \"Page.captureScreenshot\", \"Runtime.evaluate\"", optional: false },
+            ],
+            options: &[
+                OptionDef { name: "json", description: "Params as a JSON object string, e.g. '{\"format\": \"jpeg\"}'", is_bool: false, short: None },
+                OptionDef { name: "file", description: "Read params from a JSON file instead of --json", is_bool: false, short: None },
+                OptionDef { name: "stdin", description: "Read params as JSON from stdin", is_bool: true, short: None },
+            ],
+            tool_name_fn: |_| "execute_cdp_command".to_string(),
+            tool_params_fn: |args| {
+                let mut p = json!({ "method": get_str(args, "method").unwrap_or_default() });
+                if let Some(js) = get_opt_str(args, "json") { p["json"] = json!(js); }
+                if let Some(f) = get_opt_str(args, "file") { p["file"] = json!(f); }
+                if get_bool(args, "stdin").unwrap_or(false) { p["stdin"] = json!(true); }
+                p
             },
         },
         CommandDef {
@@ -1832,12 +1942,18 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "doctor",
-            description: "Run system diagnostics: build info, logs, and metrics",
+            description: "Run system diagnostics: build info, logs, and metrics. Also auto-cleans stale daemon files. Use --fix for destructive repairs.",
             category: Category::Browsers,
             hidden: false,
             batch_supported: false,
             args: &[],
             options: &[
+                OptionDef {
+                    name: "fix",
+                    short: None,
+                    is_bool: true,
+                    description: "Run destructive repairs: reinstall Chrome, purge old state, clean temp files",
+                },
                 OptionDef {
                     name: "server",
                     description: "Server URL to check (defaults to saved or http://127.0.0.1:8182)",
@@ -1872,6 +1988,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             tool_name_fn: |_| String::new(),
             tool_params_fn: |args| {
                 let mut params = json!({});
+                if let Some(true) = get_bool(args, "fix") { params["fix"] = json!(true); }
                 if let Some(server) = get_opt_str(args, "server") {
                     params["server"] = json!(server);
                 }
@@ -1886,6 +2003,55 @@ pub fn all_commands() -> Vec<CommandDef> {
                 }
                 if let Some(metric_filter) = get_opt_str(args, "metric-filter") {
                     params["metric_filter"] = json!(metric_filter);
+                }
+                params
+            },
+        },
+        // ---- doctor-log ----
+        CommandDef {
+            name: "doctor-log",
+            description: "List, view, or search log files. Use 'doctor log' for list, 'doctor log <name>' to view, 'doctor log <name> --tail' for recent lines, 'doctor log <name> grep <pattern>' to search.",
+            category: Category::Browsers,
+            hidden: false,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "name", description: "Log file name without .log extension (e.g. 'pulsar', 'pulsar.m'). Use 'list' or omit to show available log files.", optional: true },
+            ],
+            options: &[
+                OptionDef { name: "tail", short: None, is_bool: true, description: "Show only the last lines of the log file (default: last 200 lines, overridable with --lines)" },
+                OptionDef { name: "lines", short: None, is_bool: false, description: "Number of log lines to show (default: 50000 for full view, 200 for --tail)" },
+                OptionDef { name: "grep", short: None, is_bool: false, description: "Search pattern for grep mode. Use 'doctor log <name> grep <pattern>' syntax for compatibility with snapshot grep / htmlsnapshot grep." },
+                // grep options (compatible with snapshot grep / htmlsnapshot grep)
+                OptionDef { name: "ignore-case", short: Some("i"), is_bool: true, description: "Case-insensitive matching (grep mode)" },
+                OptionDef { name: "regexp", short: Some("e"), is_bool: false, description: "Additional regex pattern — repeatable (grep mode)" },
+                OptionDef { name: "no-line-number", short: None, is_bool: true, description: "Suppress line numbers in output (grep mode)" },
+                OptionDef { name: "after-context", short: Some("A"), is_bool: false, description: "Show N lines after each match (grep mode)" },
+                OptionDef { name: "before-context", short: Some("B"), is_bool: false, description: "Show N lines before each match (grep mode)" },
+                OptionDef { name: "context", short: Some("C"), is_bool: false, description: "Show N lines before and after each match (grep mode)" },
+                OptionDef { name: "invert-match", short: Some("v"), is_bool: true, description: "Select non-matching lines (grep mode)" },
+                OptionDef { name: "count", short: Some("c"), is_bool: true, description: "Print only the count of matching lines (grep mode)" },
+                OptionDef { name: "files-with-matches", short: Some("l"), is_bool: true, description: "Print only whether matches exist (grep mode)" },
+                OptionDef { name: "fixed-strings", short: Some("F"), is_bool: true, description: "Treat pattern as a literal string, not regex (grep mode)" },
+                OptionDef { name: "word-regexp", short: Some("w"), is_bool: true, description: "Match only whole words (grep mode)" },
+                OptionDef { name: "extended-regexp", short: Some("E"), is_bool: true, description: "Extended regex (ERE) — already the default. Accepted for compatibility with grep -E." },
+            ],
+            tool_name_fn: |_| String::new(),
+            tool_params_fn: |args| {
+                let mut params = json!({});
+                if let Some(name) = get_opt_str(args, "name") { params["name"] = json!(name); }
+                if let Some(true) = get_bool(args, "tail") { params["tail"] = json!(true); }
+                if let Some(lines) = get_opt_str(args, "lines") { params["lines"] = json!(lines); }
+                if let Some(grep) = get_opt_str(args, "grep") { params["grep"] = json!(grep); }
+                // Pass through grep-related options
+                for grep_key in &[
+                    "ignore-case", "regexp", "no-line-number",
+                    "after-context", "before-context", "context",
+                    "invert-match", "count", "files-with-matches",
+                    "fixed-strings", "word-regexp", "extended-regexp",
+                ] {
+                    if let Some(val) = args.get(*grep_key) {
+                        params[grep_key] = val.clone();
+                    }
                 }
                 params
             },
@@ -2506,6 +2672,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             options: &[
                 OptionDef { name: "raw", description: "Print summary content directly to stdout (alias for --stdout)", is_bool: true, short: None },
                 OptionDef { name: "stdout", description: "Print summary content directly to stdout", is_bool: true, short: None },
+                OptionDef { name: "verbose", short: Some("v"), description: "Show internal scoring details and score legend", is_bool: true },
             ],
             tool_name_fn: |_| "html_snapshot_summary".to_string(),
             tool_params_fn: |args| {
@@ -2536,6 +2703,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "files-with-matches", short: Some("l"), is_bool: true, description: "Print only whether matches exist" },
                 OptionDef { name: "fixed-strings", short: Some("F"), is_bool: true, description: "Treat pattern as a literal string, not regex" },
                 OptionDef { name: "word-regexp", short: Some("w"), is_bool: true, description: "Match only whole words" },
+                OptionDef { name: "extended-regexp", short: Some("E"), is_bool: true, description: "Extended regex (ERE) — already the default. Accepted for compatibility with grep -E." },
                 OptionDef { name: "selector", short: None, is_bool: false, description: "CSS selector to scope the search to (querySelector semantics: first match only). Use --selector-all to search across all matching elements." },
                 OptionDef { name: "selector-all", short: None, is_bool: false, description: "CSS selector to scope the search to all matching elements (querySelectorAll semantics). Each element's inner HTML is searched independently, and results are annotated with the element index." },
                 OptionDef { name: "page", short: None, is_bool: false, description: "Page number (1-based, default: 1)" },
@@ -3577,8 +3745,9 @@ mod tests {
         assert_eq!(cmd.category, Category::Browsers);
         assert!(!cmd.batch_supported);
         assert_eq!(cmd.args.len(), 0);
-        assert_eq!(cmd.options.len(), 5);
+        assert_eq!(cmd.options.len(), 6);
         let option_names: Vec<&str> = cmd.options.iter().map(|o| o.name).collect();
+        assert!(option_names.contains(&"fix"));
         assert!(option_names.contains(&"server"));
         assert!(option_names.contains(&"file"));
         assert!(option_names.contains(&"lines"));

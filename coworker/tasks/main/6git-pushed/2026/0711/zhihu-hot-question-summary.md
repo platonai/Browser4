@@ -30,8 +30,6 @@
 | 10 | 长沙公职人员彭某占车位事件影响那么恶劣... | [链接](https://www.zhihu.com/question/2058783264488289171) |
 ```
 
----
-
 ### Execution Context
 
 **Key Commands:**
@@ -62,11 +60,15 @@
 
 ---
 
----
-
 ## Issues Found (7 issues)
+> **Review complete:** 4 approved, 3 deferred/rejected
 
 ### Issue 1: Snapshot viewport pagination (`-v N`) stays at viewport 0
+
+**Severity:** High
+**Category:** Reliability
+
+#### Overview
 
 **Severity:** High
 **Category:** Reliability
@@ -103,17 +105,22 @@ The viewport pagination flag is either not being passed to the backend correctly
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
-- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
-- [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
-- [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [x] **ACCEPT**
+- [ ] **ACCEPT with improvements**
+- [ ] **DEFER**
+- [ ] **WONTFIX**
+- [ ] **REJECT**
+- [ ] **DUPLICATE**
 - **Notes:**
-
 
 ---
 
 ### Issue 2: `eval` with `document.querySelectorAll` returns empty while `htmlsnapshot` CSS selector works
+
+**Severity:** Medium
+**Category:** Reliability
+
+#### Overview
 
 **Severity:** Medium
 **Category:** Reliability
@@ -154,65 +161,22 @@ Uncertain. Possible causes: (a) the `eval` command may not have proper access to
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
-- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
-- [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
-- [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **ACCEPT**
+- [x] **ACCEPT with improvements**
+- [ ] **DEFER**
+- [ ] **WONTFIX**
+- [ ] **REJECT**
+- [ ] **DUPLICATE**
 - **Notes:**
-
-
----
-
-### Issue 3: `goto` silently reconnects to pre-existing session from prior runs
-
-**Severity:** Low
-**Category:** UX
-
-#### Reproduction
-
-```bash
-# A session was left open from a previous evaluation
-goto "https://www.zhihu.com/topic/19552134/hot"
-# Output: "Reconnected to existing session on https://baike.baidu.com/item/..."
-```
-
-#### Expected Behavior
-
-`goto` should navigate to the requested URL with a clean state, or at least warn prominently when reusing a session that was browsing a completely different website.
-
-#### Actual Behavior
-
-The output line "Reconnected to existing session on <old-url>" is easy to miss. The old session's cookies/localStorage carry over, which could affect the new site's behavior. In this case, the previous session was browsing Baidu Baike (百度百科), then navigated to Zhihu — the session state from a completely unrelated site was carried over.
-
-#### Root Cause Analysis
-
-`goto` auto-reconnects to an existing session when one is available. This is a documented feature (for convenience), but the carry-over of state between unrelated sites in the same session is surprising from a user perspective.
-
-#### Code Pointer
-
-`CLI session management in `cli/browser4-cli/src/`.`
-
-#### AI Suggested Improvement
-
-- Make the "Reconnected" message more prominent (e.g., colored warning on stderr)
-- Add a `--fresh` flag to `goto` that discards existing session and starts fresh
-- Consider auto-detecting domain changes and warning when navigating to a different domain in a reused session
-- Document session lifecycle and state persistence more explicitly in SKILL.md
-
-#### Human Review
-
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
-- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
-- [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
-- [ ] **REJECT** — issue invalid, not a problem, or already addressed
-- **Notes:**
-
 
 ---
 
 ### Issue 4: `htmlsnapshot` metadata table (`a.css-2ietpx`) uses auto-generated CSS module class names
+
+**Severity:** Low
+**Category:** UX / Documentation
+
+#### Overview
 
 **Severity:** Low
 **Category:** UX / Documentation
@@ -248,17 +212,22 @@ CSS Modules generate unique hashed class names at build time. The `htmlsnapshot`
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
-- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
-- [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
-- [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [x] **ACCEPT**
+- [ ] **ACCEPT with improvements**
+- [ ] **DEFER**
+- [ ] **WONTFIX**
+- [ ] **REJECT**
+- [ ] **DUPLICATE**
 - **Notes:**
-
 
 ---
 
 ### Issue 5: Documentation about `snapshot -v` viewport pagination is unclear
+
+**Severity:** Medium
+**Category:** Documentation
+
+#### Overview
 
 **Severity:** Medium
 **Category:** Documentation
@@ -296,13 +265,26 @@ The term "viewport" is used as a technical term without a user-facing definition
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
-- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
-- [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
-- [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [x] **ACCEPT**
+- [ ] **ACCEPT with improvements**
+- [ ] **DEFER**
+- [ ] **WONTFIX**
+- [ ] **REJECT**
+- [ ] **DUPLICATE**
 - **Notes:**
 
+---
+
+### Issue 3: `goto` silently reconnects to pre-existing session from prior runs
+
+**Severity:** Low
+**Category:** UX
+
+#### Review Result
+
+**Decision:** DUPLICATE
+
+**Summary:** - Make the "Reconnected" message more prominent (e.g., colored warning on stderr)
 
 ---
 
@@ -311,45 +293,11 @@ The term "viewport" is used as a technical term without a user-facing definition
 **Severity:** Low
 **Category:** UX
 
-#### Reproduction
+#### Review Result
 
-```bash
-htmlsnapshot get all text "a.css-2ietpx"
-# Returns: ["新题 2026年7月9日，福建晋江...", "新题 长十乙的...", ...]
-# The "新题" prefix is a UI label embedded in the link text, not part of the question title
-```
+**Decision:** WONTFIX
 
-#### Expected Behavior
-
-Ideally, there would be a way to extract clean text without CSS pseudo-elements or sibling labels. Or the tool could provide post-processing hints.
-
-#### Actual Behavior
-
-The extracted text includes UI label prefixes ("新题") that are visually distinct on the page but part of the same DOM text node. Users must manually strip these in post-processing.
-
-#### Root Cause Analysis
-
-Zhihu renders "新题" as a `<span>` inside the `<a>` tag alongside the question text. The `get all text` command concatenates all text nodes within the matched element. This is correct DOM behavior, but the data quality is reduced.
-
-#### Code Pointer
-
-`N/A — this is expected behavior from CSS `textContent` semantics.`
-
-#### AI Suggested Improvement
-
-- Consider adding a `--text-content` vs `--inner-text` flag to control text extraction behavior
-- Document this behavior in the `htmlsnapshot` reference
-- Add an `htmlsnapshot get all own-text` variant that only returns direct text nodes (excluding child element text)
-
-#### Human Review
-
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
-- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
-- [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
-- [ ] **REJECT** — issue invalid, not a problem, or already addressed
-- **Notes:**
-
+**Summary:** - Consider adding a `--text-content` vs `--inner-text` flag to control text extraction behavior
 
 ---
 
@@ -358,15 +306,9 @@ Zhihu renders "新题" as a `<span>` inside the `<a>` tag alongside the question
 **Severity:** Medium
 **Category:** Documentation
 
-#### Human Review
+#### Review Result
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
-- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
-- [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
-- [ ] **REJECT** — issue invalid, not a problem, or already addressed
-- **Notes:** Previously reported in browser4-cli-evaluation.md Issue #1.
-
+**Decision:** DUPLICATE
 
 ---
 
@@ -435,3 +377,4 @@ htmlsnapshot get all text "a.css-2ietpx"
 
 (No reproduction steps recorded — see full.md for surrounding context)
 
+#auto-approve

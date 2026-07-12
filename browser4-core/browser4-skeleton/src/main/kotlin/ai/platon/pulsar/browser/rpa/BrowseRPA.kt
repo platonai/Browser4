@@ -6,7 +6,7 @@ import ai.platon.pulsar.common.AppContext
 import ai.platon.pulsar.common.CheckState
 import ai.platon.pulsar.common.Runtimes
 import ai.platon.pulsar.common.getLogger
-import ai.platon.pulsar.core.api.WebDriver
+import ai.platon.pulsar.browser.WebDriver
 import ai.platon.pulsar.persist.WebPage
 import kotlinx.coroutines.delay
 import java.time.Duration

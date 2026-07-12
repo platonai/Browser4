@@ -921,6 +921,14 @@ class DirectChromeProtocol(
         onEvent("Console", "messageAdded", MessageAdded::class.java, handler)
 
     // ---------------------------------------------------------------------------
+    // Raw CDP command
+    // ---------------------------------------------------------------------------
+
+    override suspend fun executeCdpCommand(method: String, params: Map<String, Any?>?): Any? {
+        return remoteDevTools.invoke(method, params, Any::class)
+    }
+
+    // ---------------------------------------------------------------------------
     // Lifecycle
     // ---------------------------------------------------------------------------
 

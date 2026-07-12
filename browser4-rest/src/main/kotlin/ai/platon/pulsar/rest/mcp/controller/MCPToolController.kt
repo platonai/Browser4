@@ -522,6 +522,444 @@ class MCPToolController(
         }
     }
 
+    private suspend fun restoreBatchMousePosition(sessionId: String, position: BatchMousePosition) {
+        executeAgentToolText(
+            "browser_mouse_move_xy",
+            mapOf(MCPConstants.KEY_SESSION_ID to sessionId, "x" to position.x, "y" to position.y),
+        )
+    }
+
+    private suspend fun executeAgentToolText(toolName: String, args: Map<String, Any?>): String {
+        val sessionId = requireSessionId(args)
+        val managed = sessionManager.getSession(sessionId)
+            ?: throw IllegalArgumentException("${MCPConstants.ERROR_SESSION_NOT_FOUND}$sessionId")
+
+        val agent = managed.agenticSession.companionAgent as? BasicBrowserAgent
+            ?: throw IllegalStateException("Session agent does not support tools")
+
+        return executeAgentToolText(agent, toolName, args)
+    }
+
+    private suspend fun executeAgentToolText(
+        agent: BasicBrowserAgent,
+        toolName: String,
+        args: Map<String, Any?>,
+    ): String {
+        val normalizedRequest = normalizeFrontendToolCall(toolName, args)
+        val normalizedTool = normalizedRequest.tool
+        val normalizedArgs = normalizeToolArguments(normalizedTool, normalizedRequest.arguments)
+        val toolCall = resolveMcpToolCall(normalizedTool, normalizedArgs, agent)
+            ?: throw IllegalArgumentException("Unknown tool: $toolName")
+
+        val result = agent.agentToolManager.execute(toolCall)
+
+        val evaluate = result.evaluate
+        evaluate.exception?.let { exception ->
+            val errorMsg = buildString {
+                append("$toolName failed: ${exception.message}")
+                val causeMsg = exception.cause?.message
+                if (causeMsg != null && causeMsg != exception.message) {
+                    append(" ($causeMsg)")
+                }
+            }
+            throw IllegalArgumentException(errorMsg)
+        }
+        // Distinguish JS null (className == "null") from JS undefined (className == "undefined")
+        // and Kotlin Unit (no meaningful return value).
+        // All three arrive as evaluate.value == null, but only JS null should produce visible output.
+        return evaluate.value?.toString() ?: when (evaluate.className) {
+            "null" -> "null"
+            "undefined" -> "undefined"
+            else -> ""
+        }
+    }
+
+    private fun Any?.toAnyMap(): Map<String, Any?>? {
+        if (this !is Map<*, *>) {
+            return null
+        }
+        return this.entries.associate { (key, value) -> key.toString() to value }
+    }
+
+    private fun Any?.toBatchMousePosition(): BatchMousePosition? {
+        val map = this.toAnyMap() ?: return null
+        val x = (map["x"] as? Number)?.toDouble() ?: return null
+        val y = (map["y"] as? Number)?.toDouble() ?: return null
+        return BatchMousePosition(x, y)
+    }
+
+    // =========================================================================
+    // HTML snapshot handlers
+    // =========================================================================
+
+    private suspend fun handleHtmlSnapshotCapture(
+        request: MCPToolCallRequest
+    ): ResponseEntity<MCPToolCallResponse> {
+        val sessionId = requireSessionId(request)
+        val managed = sessionManager.getSession(sessionId)
+            ?: return ResponseEntity.ok(errorResponse("${MCPConstants.ERROR_SESSION_NOT_FOUND}$sessionId"))
+
+        return try {
+            val metadata = managed.withLock {
+                val pulsarSession = managed.agenticSession
+                val page = pulsarSession.capture(managed.driver)
+                val document = pulsarSession.parse(page, noCache = true)
+                val title = document.title
+
+                // Count images and links
+                val imageCount = document.select("img").size
+                val linkCount = document.select("a").size
+
+                // Extract non-trivial interactive elements and assign importance weights
+                val interactiveSelector = "a[href], button, input:not([type=hidden]), select, textarea, " +
+                        "details, summary, " +
+                        "[role=button], [role=link], [role=checkbox], [role=radio], " +
+                        "[role=tab], [role=menuitem], [role=switch], [role=combobox], " +
+                        "[role=searchbox], [role=textbox], [role=slider], [role=spinbutton], " +
+                        "[role=option], [role=treeitem], " +
+                        "[tabindex]:not([tabindex=\"-1\"]), [contenteditable=true], " +
+                        "[onclick], [onkeydown], [onsubmit]"
+                val maxInteractive = 100
+                val allInteractive =
+                    document.select(interactiveSelector).take(maxInteractive * 2) // over-fetch to allow exclusions
+                val weighted = computeInteractiveWeights(allInteractive).take(maxInteractive)
+                val interactiveElements = weighted.map { (el, weight, tier) ->
+                    val obj = pulsarObjectMapper().createObjectNode()
+                    // Section 8 element reference: "#closestId tag#id.class1.class2"
+                    obj.put("ref", buildElementRef(el))
+                    // Bounding box: "x,y,w,h" from vi attr
+                    val box = el.attr("vi")
+                    if (box.isNotBlank()) obj.put("box", box)
+                    // Text: full descendant text truncated to ≤5 words / ≤5 CJK chars
+                    // (ownText is often empty — e.g. <a><em>$</em><span>140</span></a>)
+                    val ownText = truncateText(el.text().trim())
+                    if (ownText.isNotBlank()) obj.put("text", ownText)
+                    // Weight and tier
+                    obj.put("weight", weight)
+                    obj.put("tier", tier)
+                    // Semantic group: nearest semantic ancestor or "Page"
+                    obj.put("semanticGroup", findSemanticGroup(el))
+                    obj
+                }
+
+                // Run visual geometry link group detection on the captured document
+                val linkGroups = PageSummaryIndexService.detectLinkGroups(document)
+
+                val json = pulsarObjectMapper().createObjectNode().apply {
+                    put(
+                        "url",
+                        page.url
+                    ) // normalized url and can be served as the key to retrieve the page from database
+                    put("href", page.href) // the href from an anchor, or the user-typed url
+                    put("sizeBytes", page.contentLength.toString())
+                    put("capturedAt", page.prevFetchTime.toString())
+                    put("contentType", page.contentType) // should be html/text
+                    put("title", title)
+                    put("imageCount", imageCount)
+                    put("linkCount", linkCount)
+                    putArray("interactiveElements").addAll(interactiveElements)
+                    if (linkGroups.isNotEmpty()) {
+                        set<ArrayNode>("linkGroups", linkGroupsToJson(linkGroups))
+                    }
+                }
+                json.toString()
+            }
+            ResponseEntity.ok(textResponse(metadata))
+        } catch (e: Exception) {
+            logger.error("html_snapshot_capture failed | {}", e.message, e)
+            val errorMsg = if (e.message?.contains("Nil url") == true) {
+                "htmlsnapshot failed: ${e.message}. The session URL is not available — " +
+                    "the page may have redirected or the browser tab state is stale. " +
+                    "Try 'goto <url>' to re-establish the session, then run htmlsnapshot again."
+            } else {
+                "html_snapshot_capture failed: ${e.message}"
+            }
+            ResponseEntity.ok(errorResponse(errorMsg))
+        }
+    }
+
+    private suspend fun handleHtmlSnapshotScrape(
+        request: MCPToolCallRequest
+    ): ResponseEntity<MCPToolCallResponse> {
+        val sessionId = requireSessionId(request)
+        val args = request.arguments ?: emptyMap()
+        val field = args["field"]?.toString() ?: ""
+        val selector = args["selector"]?.toString()?.ifEmpty { ":root" } ?: ":root"
+        val attrName = args["attrName"]?.toString()
+
+        // Validate field
+        if (field !in setOf("text", "html", "attr")) {
+            return ResponseEntity.ok(errorResponse("Unknown field '$field'. Use text, html, or attr."))
+        }
+
+        // Validate attr field requires an attribute name
+        if (field == "attr" && attrName.isNullOrBlank()) {
+            return ResponseEntity.ok(errorResponse("The 'attr' field requires an attribute name."))
+        }
+
+        // Reject element references
+        if (isElementReference(selector)) {
+            return ResponseEntity.ok(
+                errorResponse(
+                    "Element references ('$selector') are not supported in htmlsnapshot get. Use a CSS selector instead."
+                )
+            )
+        }
+
+        val managed = sessionManager.getSession(sessionId)
+            ?: return ResponseEntity.ok(errorResponse("${MCPConstants.ERROR_SESSION_NOT_FOUND}$sessionId"))
+
+        return try {
+            val result = managed.withLock {
+                val pulsarSession = managed.agenticSession
+                // Use current URL to match the key used when pages are stored via htmlsnapshot capture.
+                // driver.currentUrl() reflects the actual page after navigations/redirects, whereas
+                // driver.userTypedUrl() stays at the originally-typed URL and misses search-results pages.
+                val url = pulsarSession.normalize(driver.currentUrl())
+                // Retrieve from database if exists, otherwise, capture a new html snapshot
+                val page = pulsarSession.getOrNull(url.urlString) ?: pulsarSession.capture(managed.driver)
+                // Parse the HTML to a DOM, the document can be cached
+                val document = pulsarSession.parse(page)
+
+                when (field) {
+                    "text" -> document.selectFirstOrNull(selector)?.text() ?: ""
+                    "html" -> document.selectFirstOrNull(selector)?.html() ?: ""
+                    "attr" -> document.selectFirstOrNull(selector)?.attr(attrName!!) ?: ""
+                    else -> ""
+                }
+            }
+
+            ResponseEntity.ok(textResponse(result))
+        } catch (e: Exception) {
+            logger.error("html_snapshot_scrape failed | {}", e.message, e)
+            ResponseEntity.ok(
+                errorResponse(
+                    "htmlsnapshot get failed: ${e.message}. " +
+                    "Make sure you're on a valid page (use `goto <url>` first). " +
+                    "If the problem persists, run `htmlsnapshot` first to explicitly capture the page, then try `htmlsnapshot get` again."
+                )
+            )
+
+    /**
+     * Like [handleHtmlSnapshotScrape] but returns ALL matching elements (querySelectorAll
+     * semantics) instead of only the first.  Supports [offset] and [limit] for pagination.
+     */
+    private suspend fun handleHtmlSnapshotScrapeAll(
+        request: MCPToolCallRequest
+    ): ResponseEntity<MCPToolCallResponse> {
+        val sessionId = requireSessionId(request)
+        val args = request.arguments ?: emptyMap()
+        val field = args["field"]?.toString() ?: ""
+        val selector = args["selector"]?.toString()?.ifEmpty { ":root" } ?: ":root"
+        val attrName = args["attrName"]?.toString()
+        val offset = (args["offset"] as? Number)?.toInt() ?: 0
+        val limit = (args["limit"] as? Number)?.toInt() ?: -1
+
+        // Validate field
+        if (field !in setOf("text", "html", "attr")) {
+            return ResponseEntity.ok(errorResponse("Unknown field '$field'. Use text, html, or attr."))
+        }
+
+        // Validate attr field requires an attribute name
+        if (field == "attr" && attrName.isNullOrBlank()) {
+            return ResponseEntity.ok(errorResponse("The 'attr' field requires an attribute name."))
+        }
+
+        // Reject element references
+        if (isElementReference(selector)) {
+            return ResponseEntity.ok(
+                errorResponse(
+                    "Element references ('$selector') are not supported in htmlsnapshot get. Use a CSS selector instead."
+                )
+            )
+        }
+
+        val managed = sessionManager.getSession(sessionId)
+            ?: return ResponseEntity.ok(errorResponse("${MCPConstants.ERROR_SESSION_NOT_FOUND}$sessionId"))
+
+        return try {
+            val results = managed.withLock {
+                val pulsarSession = managed.agenticSession
+                val url = pulsarSession.normalize(managed.driver.currentUrl())
+                val page = pulsarSession.getOrNull(url.urlString) ?: pulsarSession.capture(managed.driver)
+                val document = pulsarSession.parse(page)
+
+                val elements = document.select(selector)
+                val paginated = if (offset > 0) elements.drop(offset) else elements
+                val limited = if (limit > 0) paginated.take(limit) else paginated
+
+                val resultValues = limited.map { element ->
+                    when (field) {
+                        "text" -> element.text()
+                        "html" -> element.html()
+                        "attr" -> element.attr(attrName!!)  // null when attribute is absent
+                        else -> ""
+                    }
+                }
+
+                // Warn when elements lack the requested attribute (null = absent, "" = present but empty)
+                if (field == "attr") {
+                    val missingCount = resultValues.count { it == null }
+                    val presentCount = resultValues.size - missingCount
+                    if (missingCount > 0) {
+                        logger.debug(
+                            "html_snapshot_scrape_all: {} of {} matched elements lack attribute '{}' (null values inserted)",
+                            missingCount, resultValues.size, attrName
+                        )
+                    }
+                    if (presentCount == 0 && resultValues.isNotEmpty()) {
+                        return ResponseEntity.ok(
+                            errorResponse(
+                                "0 of ${resultValues.size} matched elements have attribute '$attrName'. " +
+                                    "Use 'htmlsnapshot get text' or 'htmlsnapshot get html' to extract content instead."
+                            )
+                        )
+                    }
+                }
+
+                resultValues
+            }
+
+            @Suppress("UNCHECKED_CAST")
+            val resultList = results as List<Any?>
+            val json = pulsarObjectMapper().writeValueAsString(resultList)
+            val (paginatedJson, pagination) = paginateIfRequested(json, args)
+            ResponseEntity.ok(textResponse(paginatedJson, pagination))
+        } catch (e: Exception) {
+            logger.error("html_snapshot_scrape_all failed | {}", e.message, e)
+            ResponseEntity.ok(
+                errorResponse(
+                    "htmlsnapshot get all failed: ${e.message}. " +
+                    "Make sure you're on a valid page (use `goto <url>` first). " +
+                    "If the problem persists, run `htmlsnapshot` first to explicitly capture the page, then try `htmlsnapshot get all` again."
+                )
+            )
+        }
+    }
+
+    private suspend fun handleHtmlSnapshotQuery(
+        request: MCPToolCallRequest
+    ): ResponseEntity<MCPToolCallResponse> {
+        val scrapeService = this.scrapeService
+            ?: return ResponseEntity.ok(errorResponse("ScrapeService is not available"))
+
+        val args = request.arguments ?: emptyMap()
+        val sql = args["sql"]?.toString() ?: return ResponseEntity.ok(errorResponse("Missing 'sql'"))
+
+        // Resolve URL: use explicit URL if provided, otherwise fall back to the current session's page URL
+        val url = args["url"]?.toString()?.takeIf { it.isNotBlank() }
+            ?: run {
+                val sessionId = requireSessionId(request)
+                val managed = sessionManager.getSession(sessionId)
+                    ?: return ResponseEntity.ok(errorResponse("${MCPConstants.ERROR_SESSION_NOT_FOUND}$sessionId"))
+                val pulsarSession = managed.agenticSession
+                pulsarSession.normalize(managed.driver.currentUrl()).urlString
+            }
+
+        // Reject queries that use '.' as a literal URL in DOM_LOAD_AND_SELECT / load_and_select.
+        // The '.' is not a valid URL — use the unquoted @url placeholder instead:
+        //   FROM load_and_select(@url, ':root')           ← correct
+        //   FROM load_and_select('.', ':root')            ← incorrect
+        val dotUrlPattern = Regex(
+            """(?:DOM_)?LOAD_AND_SELECT\s*\(\s*['"]\.['"]""",
+            RegexOption.IGNORE_CASE
+        )
+        if (dotUrlPattern.containsMatchIn(sql)) {
+            return ResponseEntity.ok(
+                errorResponse(
+                    "Invalid URL '.' in DOM_LOAD_AND_SELECT. " +
+                            "Use the unquoted @url placeholder to reference the current page URL. " +
+                            "Example: FROM load_and_select(@url, ':root') — not FROM load_and_select('.', ':root'). " +
+                            "See: https://docs.browser4.ai/x-sql for details."
+                )
+            )
+        }
+
+        // SQLTemplate.createSQL(url) replaces the @url placeholder with a properly
+        // escaped URL value. @url must appear UNQUOTED in the SQL — the template
+        // engine handles quoting internally. The correct form is:
+        //   FROM load_and_select(@url, ':root')
+        // NOT:
+        //   FROM load_and_select('@url', ':root')
+        val processedSql = SQLTemplate(sql).createSQL(url)
+
+        return try {
+            val response = scrapeService.executeQuery(ScrapeRequest(processedSql))
+            val mapper = pulsarObjectMapper().copy()
+                .setSerializationInclusion(JsonInclude.Include.ALWAYS)
+            val json = mapper.writeValueAsString(response)
+            ResponseEntity.ok(textResponse(json))
+        } catch (e: Exception) {
+            logger.error("html_snapshot_query failed | processedSql=[{}] | {}", processedSql.take(500), e.message, e)
+            val errorDetail = mapOf(
+                "error" to (e.message ?: "Unknown error"),
+                "sqlError" to (e.message ?: ""),
+                "resolvedSql" to processedSql.take(1000),
+                "timeout" to (e is java.util.concurrent.TimeoutException),
+            )
+            ResponseEntity.ok(
+                MCPToolCallResponse(
+                    content = listOf(MCPContent("text", pulsarObjectMapper().writeValueAsString(errorDetail))),
+                    isError = true,
+                )
+            )
+        }
+    }
+
+    private suspend fun handleHtmlSnapshotExport(
+        request: MCPToolCallRequest
+    ): ResponseEntity<MCPToolCallResponse> {
+        val sessionId = requireSessionId(request)
+        val managed = sessionManager.getSession(sessionId)
+            ?: return ResponseEntity.ok(errorResponse("${MCPConstants.ERROR_SESSION_NOT_FOUND}$sessionId"))
+
+        return try {
+            val html = managed.withLock {
+                val pulsarSession = managed.agenticSession
+                val url = pulsarSession.normalize(managed.driver.currentUrl())
+                // Use getOrNull + capture fallback to get browser-captured HTML
+                val page = pulsarSession.getOrNull(url.urlString) ?: pulsarSession.capture(managed.driver)
+                val document = pulsarSession.parse(page)
+                // good, the exported HTML is pretty formatted, so grep works on it
+                document.outerHtml
+            }
+            val args = request.arguments ?: emptyMap()
+            val (paginatedHtml, pagination) = paginateIfRequested(html, args)
+            ResponseEntity.ok(textResponse(paginatedHtml, pagination))
+        } catch (e: Exception) {
+            logger.error("html_snapshot_export failed | {}", e.message, e)
+            ResponseEntity.ok(errorResponse("html_snapshot_export failed: ${e.message}"))
+        }
+    }
+
+    private suspend fun handleHtmlSnapshotSummary(
+        request: MCPToolCallRequest
+    ): ResponseEntity<MCPToolCallResponse> {
+        val sessionId = requireSessionId(request)
+        val managed = sessionManager.getSession(sessionId)
+            ?: return ResponseEntity.ok(errorResponse("${MCPConstants.ERROR_SESSION_NOT_FOUND}$sessionId"))
+
+        return try {
+            val summary = managed.withLock {
+                val pulsarSession = managed.agenticSession
+                val url = pulsarSession.normalize(managed.driver.currentUrl())
+                // Use getOrNull + capture fallback to get browser-captured HTML
+                // (which has vi attributes), rather than load() which may reload
+                // from the web without vi attributes.
+                val page = pulsarSession.getOrNull(url.urlString) ?: pulsarSession.capture(managed.driver)
+                val document = pulsarSession.parse(page)
+                val title = document.title
+                val pageUrl = url.urlString
+
+                PageSummaryIndexService.generate(document, pageUrl, title)
+            }
+            ResponseEntity.ok(textResponse(summary))
+        } catch (e: Exception) {
+            logger.error("html_snapshot_summary failed | {}", e.message, e)
+            ResponseEntity.ok(errorResponse("html_snapshot_summary failed: ${e.message}"))
+        }
+    }
+
     /**
      * Dispatch a tool call to the session's [AgentToolManager].
      *
@@ -810,3 +1248,964 @@ class MCPToolController(
     }
 }
 
+// =========================================================================
+// html_snapshot_inspect — core algorithm (extracted for testability)
+// =========================================================================
+
+/**
+ * Run the visual geometry first link group detection algorithm
+ * ([PageSummaryIndexService.detectLinkGroups]) and extract the best
+ * repeating-pattern selector.
+ *
+ * The visual algorithm clusters elements by bounding-box geometry
+ * (width → height → x-position → y-spacing regularity), then walks
+ * up the DOM to find the container. It is language-independent,
+ * class-name-independent, and tolerant of varying internal DOM structure.
+ *
+ * @return Pair(bestItemSelector, linkGroups) where bestItemSelector is
+ *   the itemSelector of the highest-scoring link group, or null if none
+ *   found.
+ */
+/**
+ * A single candidate selector discovered by [autoDiscoverRepeatingSelector],
+ * ranked by its structural score. Returned as a list so the CLI can show
+ * alternatives when the top pick isn't what the user wants (e.g. `li`
+ * nav items on a news portal).
+ */
+data class DiscoveredSelector(
+    val selector: String,
+    val matchCount: Int,
+    val score: Double,
+    val sampleText: String,
+)
+
+private fun runVisualDetection(
+    document: FeaturedDocument
+): Pair<String?, List<PageSummaryIndexService.SummaryLinkGroup>> {
+    val linkGroups = PageSummaryIndexService.detectLinkGroups(document)
+    val bestSelector = linkGroups.maxByOrNull { it.score }?.itemSelector
+    return Pair(bestSelector, linkGroups)
+}
+
+/**
+ * Auto-discovers the best CSS selector for repeating content patterns on a page.
+ *
+ * Used as a fallback when the user-specified selector (e.g. default `:root`)
+ * matches ≤1 element — making cross-match comparison impossible.
+ *
+ * Algorithm: walks the DOM, groups each parent's direct children by CSS
+ * signature (tag + up to 2 classes), then scores each group by:
+ *   size × class-boost(2.0x) × text-diversity(graduated) ×
+ *   structural-richness(graduated) × image-presence(1.4x) ×
+ *   child-tag-diversity(graduated) × short-text-penalty(0.6x) ×
+ *   bare-div-penalty(0.5x)
+ *
+ * Product cards (images, diverse children, long varied text) score much higher
+ * than navigation items (no images, shallow, short uniform text).
+ *
+ * @return a CSS selector string (e.g. ".product-card", "li"), or null if no
+ *   suitable repeating pattern found (single article pages, etc.)
+ */
+internal fun autoDiscoverRepeatingSelector(document: FeaturedDocument, topN: Int = 5): List<DiscoveredSelector> {
+    val structuralTags = setOf("html", "head", "body", "script", "style", "meta", "link", "noscript")
+    val structuralBare = setOf("div", "span")
+
+    val allCandidates = mutableListOf<DiscoveredSelector>()
+
+    for (parent in document.select("*")) {
+        val parentTag = parent.tagName().lowercase()
+        if (parentTag in structuralTags && parentTag != "body") continue
+
+        val children = parent.children()
+        if (children.size < 2) continue
+
+        // Group direct children by CSS signature: "tag.class1.class2" or bare "tag"
+        val groups = mutableMapOf<String, MutableList<org.jsoup.nodes.Element>>()
+        for (child in children) {
+            val tag = child.tagName().lowercase()
+            if (tag in structuralTags) continue
+            val cls = child.className().trim()
+            val sig = if (cls.isNotBlank()) {
+                val classes = cls.split("\\s+".toRegex()).take(2).joinToString(".") { it }
+                "$tag.$classes"
+            } else {
+                tag
+            }
+            groups.getOrPut(sig) { mutableListOf() }.add(child)
+        }
+
+        for ((sig, members) in groups) {
+            if (members.size < 2) continue
+
+            val hasClasses = sig.contains(".")
+            // Use text() (all descendant text) rather than ownText() so compound
+            // elements like product cards show content variance across matches.
+            val distinctText = members.map { it.text().trim() }.filter { it.isNotBlank() }.distinct().size
+            val avgDesc = members.map { it.select("*").size.toDouble() }.average()
+            val isStructuralDiv = !hasClasses && sig in structuralBare
+
+            var score = members.size.toDouble()
+            // Class-based selectors are far more reusable than bare tags
+            if (hasClasses) score *= 2.0
+
+            // Graduated text diversity: product cards have distinct titles/prices;
+            // navigation shortcuts are nearly uniform.
+            score *= when {
+                distinctText >= 5 -> 1.8
+                distinctText >= 3 -> 1.4
+                distinctText >= 2 -> 1.2
+                else -> 1.0
+            }
+
+            // Graduated structural richness: product cards contain many nested
+            // elements (img, h2, span, a); nav items are shallow.
+            score *= when {
+                avgDesc >= 15 -> 2.0
+                avgDesc >= 8  -> 1.6
+                avgDesc >= 3  -> 1.2
+                else -> 1.0
+            }
+
+            // Image presence: product cards almost always contain <img> tags;
+            // navigation shortcuts never do.
+            val membersWithImages = members.count { it.select("img").isNotEmpty() }
+            val imageRatio = membersWithImages.toDouble() / members.size
+            if (imageRatio >= 0.5) score *= 1.4
+
+            // Child tag-type diversity: diverse direct children (img, h2, span,
+            // a, button) signal a content card rather than a simple nav item.
+            val distinctChildTags = members.flatMap { member ->
+                member.children().map { it.tagName().lowercase() }
+            }.distinct().size
+            score *= when {
+                distinctChildTags >= 6 -> 1.5
+                distinctChildTags >= 4 -> 1.3
+                distinctChildTags >= 2 -> 1.1
+                else -> 1.0
+            }
+
+            // Short-text penalty: navigation items have very brief labels
+            // ("Home", "Next"); product cards have rich descriptive text.
+            val avgTextLength = members.map { it.text().trim().length.toDouble() }.average()
+            if (imageRatio < 0.3 && avgTextLength < 20.0) score *= 0.6
+
+            // Text-length bonus: content elements (headlines, descriptions)
+            // have significantly longer text than navigation shortcuts.
+            // News headlines: 20-100+ chars; nav items: 2-8 chars.
+            // This bonus counteracts the sheer-number advantage of nav <li>
+            // elements on sites like people.com.cn (302 nav items vs 15 news).
+            score *= when {
+                avgTextLength >= 50 -> 2.5
+                avgTextLength >= 30 -> 1.8
+                avgTextLength >= 20 -> 1.4
+                else -> 1.0
+            }
+
+            if (isStructuralDiv) score *= 0.5
+
+            // Chrome penalty: patterns inside nav/header/footer/aside containers
+            // (or elements with ARIA navigation roles) are page chrome, not
+            // primary content. This prevents nav shortcuts from outscoring
+            // product cards when they appear more frequently on the page.
+            val chromeAncestorTags = setOf("nav", "header", "footer", "aside")
+            val chromeAncestorRoles = setOf("navigation", "banner", "contentinfo", "complementary")
+            var isChrome = false
+            for (member in members.take(3)) {
+                var anc: org.jsoup.nodes.Element? = member.parent()
+                while (anc != null) {
+                    if (anc.tagName().lowercase() in chromeAncestorTags) {
+                        isChrome = true; break
+                    }
+                    val role = anc.attr("role").lowercase()
+                    if (role in chromeAncestorRoles) {
+                        isChrome = true; break
+                    }
+                    anc = anc.parent()
+                }
+                if (isChrome) break
+            }
+            if (isChrome) score *= 0.3
+
+            // Viewport position weighting: elements near the top of the page
+            // are more likely to be primary content. Navigation tends to sit
+            // in a narrow band at the very top; product cards span the
+            // main content area below.
+            val yPositions = members.mapNotNull { member ->
+                val vi = member.attr("vi").trim()
+                if (vi.isNotBlank()) {
+                    val parts = vi.split("\\s+".toRegex())
+                    if (parts.size >= 2) parts[1].toDoubleOrNull() else null
+                } else null
+            }.take(5)
+            if (yPositions.isNotEmpty()) {
+                val avgY = yPositions.average()
+                when {
+                    // Prime content band (100–800px): title, price, key details
+                    avgY in 100.0..800.0 -> score *= 1.3
+                    // Deep page / footer region (> 2500px): likely related items
+                    avgY > 2500.0 -> score *= 0.7
+                    // Very top (< 100px): likely site header / nav bar
+                    avgY in 0.0..100.0 -> score *= 0.8
+                }
+            }
+
+            // Content-area bonus: if the parent is a semantic content container
+            // (<main>, <article>, role="main"), it's more likely to hold
+            // meaningful content than a generic <div> wrapper.
+            val parentTagLc = parent.tagName().lowercase()
+            val parentRole = parent.attr("role").lowercase()
+            if (parentTagLc in setOf("main", "article") || parentRole == "main") {
+                score *= 1.5
+            }
+
+            // Build usable CSS selector: use class if present, otherwise bare tag
+            val usableSelector = if (hasClasses) ".${sig.substringAfter(".")}" else sig
+            val sampleTexts = members.map { it.text().trim() }.filter { it.isNotBlank() }.take(3)
+            allCandidates.add(
+                DiscoveredSelector(
+                    selector = usableSelector,
+                    matchCount = members.size,
+                    score = score,
+                    sampleText = sampleTexts.joinToString(" | ")
+                )
+            )
+        }
+    }
+
+    return allCandidates
+        .sortedByDescending { it.score }
+        .take(topN)
+}
+
+/**
+ * Analyse a [document] and produce selector suggestions for recurring patterns.
+ *
+ * Pure function: takes a parsed document + parameters, returns a JSON result
+ * string. Callable from tests without session/browser infrastructure.
+ */
+internal fun inspectDocument(
+    document: FeaturedDocument,
+    selector: String,
+    maxMatches: Int,
+    maxDepth: Int,
+): String {
+    // ── Visual geometry first detection ──────────────────────────────────
+    // Always run visual detection early — it informs both auto-discovery
+    // (when the user hasn't specified a selector) and speculative suggestions
+    // (when the user's selector could be improved).
+    val (visualBestSelector, visualLinkGroups) = runVisualDetection(document)
+
+    // Auto-discovery: when the selector matches ≤1 element (e.g. default
+    // :root), find the best repeating content pattern.
+    // Prefer the visual geometry algorithm (language-independent,
+    // class-name-independent, structure-tolerant). Fall back to the
+    // structural-signature approach only when visual detection finds nothing.
+    var effectiveSelector = selector
+    var autoDiscovered = false
+    var autoDiscoveredCandidates: List<DiscoveredSelector> = emptyList()
+    var speculativeSuggestion: String? = null
+    var speculativeMatchCount: Int? = null
+    val initialMatchCount = document.select(selector).size
+    if (initialMatchCount <= 1) {
+        // If the user specified a container selector (matches exactly 1 element),
+        // scope the discovery to descendants of that container rather than searching
+        // the entire page. Only fall back to page-level discovery when the container
+        // has no repeating children.
+        val containerElement = if (initialMatchCount == 1 && selector != ":root") {
+            document.selectFirst(selector)
+        } else null
+
+        if (containerElement != null) {
+            // Try to discover repeating patterns within the container.
+            // Build a minimal JSoup document from the container's inner HTML so the
+            // discovery algorithm only sees the container's descendants.
+            val innerHtml = containerElement.html()
+            if (innerHtml.isNotBlank()) {
+                val subDoc = FeaturedDocument(org.jsoup.Jsoup.parse(innerHtml))
+                val candidates = autoDiscoverRepeatingSelector(subDoc)
+                val discovered = candidates.firstOrNull()
+                if (discovered != null) {
+                    // Prefix the discovered selector with the container selector
+                    effectiveSelector = "$selector ${discovered.selector}"
+                    autoDiscovered = true
+                }
+            }
+        }
+
+        // If container-scoped discovery didn't find anything (or there's no container),
+        // fall back to page-level discovery
+        if (!autoDiscovered) {
+            if (visualBestSelector != null) {
+                effectiveSelector = visualBestSelector
+                autoDiscovered = true
+            } else {
+                // Fallback: structural-signature discovery
+                val candidates = autoDiscoverRepeatingSelector(document)
+                val discovered = candidates.firstOrNull()
+                if (discovered != null) {
+                    effectiveSelector = discovered.selector
+                    autoDiscovered = true
+                }
+                // Collect remaining candidates for the user to explore
+                autoDiscoveredCandidates = candidates.drop(1)
+            }
+        }
+    } else if (visualBestSelector != null && visualBestSelector != selector) {
+        // Mode B (speculative): user's selector already matches ≥2, but visual
+        // detection found a potentially better repeating pattern. Surface as a
+        // suggestion without overriding the user's choice.
+        speculativeSuggestion = visualBestSelector
+        speculativeMatchCount = document.select(visualBestSelector).size
+    }
+
+    val matches = document.select(effectiveSelector).take(maxMatches)
+    val matchCount = document.select(effectiveSelector).size
+
+    // Pre-compute element weights for all interactive elements in the document.
+    // Used to boost selector candidates that target high-importance elements.
+    val interactiveSelector = "a[href], button, input:not([type=hidden]), select, textarea, " +
+            "details, summary, " +
+            "[role=button], [role=link], [role=checkbox], [role=radio], " +
+            "[role=tab], [role=menuitem], [role=switch], [role=combobox], " +
+            "[role=searchbox], [role=textbox], [role=slider], [role=spinbutton], " +
+            "[role=option], [role=treeitem], " +
+            "[tabindex]:not([tabindex=\"-1\"]), [contenteditable=true], " +
+            "[onclick], [onkeydown], [onsubmit]"
+    val elementWeightMap: Map<org.jsoup.nodes.Element, Int> = try {
+        val allInteractive = document.select(interactiveSelector)
+        computeInteractiveWeights(allInteractive).associate { (el, weight, _) -> el to weight }
+    } catch (e: Exception) {
+        emptyMap()
+    }
+
+    if (matches.isEmpty()) {
+        return pulsarObjectMapper().createObjectNode().apply {
+            put("matchCount", 0)
+            put("selector", effectiveSelector)
+            if (autoDiscovered) {
+                put("autoDiscovered", true)
+                put("originalSelector", selector)
+            }
+            if (autoDiscoveredCandidates.isNotEmpty()) {
+                set<ArrayNode>("autoDiscoveredCandidates", candidatesToJson(autoDiscoveredCandidates))
+            }
+            if (speculativeSuggestion != null) {
+                put("speculativeSuggestion", speculativeSuggestion)
+                speculativeMatchCount?.let { put("speculativeMatchCount", it) }
+            }
+            putArray("suggestions")
+            if (visualLinkGroups.isNotEmpty()) {
+                set<ArrayNode>("linkGroups", linkGroupsToJson(visualLinkGroups))
+            }
+        }.toString()
+    }
+
+    // Build sample structures for the first 3 matches (Section 8 format)
+    val samples = pulsarObjectMapper().createArrayNode()
+    for (m in matches.take(3)) {
+        val sample = pulsarObjectMapper().createObjectNode()
+        // Section 8 element reference: "#closestId tag#id.class1.class2"
+        sample.put("ref", buildElementRef(m))
+        // Bounding box from vi attr
+        val mBox = m.attr("vi")
+        if (mBox.isNotBlank()) sample.put("box", mBox)
+        // Text: full descendant text ≤5 words / ≤5 CJK chars
+        // (ownText is often empty — e.g. <a><em>$</em><span>140</span></a>)
+        val ownText = truncateText(m.text().trim())
+        if (ownText.isNotBlank()) sample.put("text", ownText)
+
+        // Direct children (also in Section 8 format)
+        val children = pulsarObjectMapper().createArrayNode()
+        for (child in m.children().take(20)) {
+            val childEl = child as? org.jsoup.nodes.Element ?: continue
+            val cObj = pulsarObjectMapper().createObjectNode()
+            cObj.put("ref", buildElementRef(childEl))
+            val cBox = childEl.attr("vi")
+            if (cBox.isNotBlank()) cObj.put("box", cBox)
+            val cText = truncateText(childEl.text().trim())
+            if (cText.isNotBlank()) cObj.put("text", cText)
+            children.add(cObj)
+        }
+        sample.set<ArrayNode>("children", children)
+        samples.add(sample)
+    }
+
+    // Find recurring descendant selectors across matches
+    data class SelectorCandidate(
+        val selector: String,
+        val tag: String,
+        val selectorType: String, // "id", "class", "attr", "bare", "power"
+    )
+
+    // Track count + per-match text samples + max element weight for value previews
+    class CandidateStats(
+        var count: Int = 0,
+        val textValues: MutableMap<Int, String> = mutableMapOf(), // matchIndex -> text
+        var maxWeight: Int = 0, // highest weight among elements matching this candidate
+    )
+
+    val candidateStats = mutableMapOf<SelectorCandidate, CandidateStats>()
+
+    // Attribute names worth surfacing as selectors (ordered by priority)
+    val priorityAttrs = listOf("data-testid", "aria-label", "role", "itemprop")
+    val dataAttrPattern = Regex("^data-.+")
+    val structuralTags = setOf("html", "head", "body", "script", "style", "meta", "link", "noscript")
+
+    for ((matchIndex, match) in matches.withIndex()) {
+        val seen = mutableSetOf<SelectorCandidate>()
+        for (desc in match.select("*")) {
+            val depth = desc.parents().indexOfFirst { it === match } + 1
+            if (depth < 0 || depth > maxDepth) continue
+            val descTag = desc.tagName().lowercase()
+            if (descTag in structuralTags) continue
+
+            val descClass = desc.className()
+            val descId = desc.id()
+            val descText = desc.ownText().trim().take(80)
+
+            // Build selector candidates: class/id first, then attribute, then bare tag
+            val candidates = mutableListOf<Pair<String, String>>() // selector to type
+
+            // 1. Class-based selector (primary)
+            if (descClass.isNotBlank()) {
+                val classes = descClass.split("\\s+".toRegex()).take(2).joinToString(".") { it }
+                val sel = if (descId.isNotBlank()) "${descTag}.$classes#${descId}"
+                else "${descTag}.$classes"
+                candidates.add(sel to "class")
+            } else if (descId.isNotBlank()) {
+                candidates.add("${descTag}#${descId}" to "id")
+            }
+
+            // 2. Bare tag (fallback — lowest priority, always included)
+            candidates.add(descTag to "bare")
+
+            // 3. Attribute-based selectors from priority attrs
+            for (attr in priorityAttrs) {
+                val value = desc.attr(attr).trim()
+                if (value.isNotBlank() && value.length <= 40) {
+                    candidates.add("[$attr=\"$value\"]" to "attr")
+                }
+            }
+            // 3b. Generic data-* attributes (lower priority than named ones)
+            for (attr in desc.attributes()) {
+                val key = attr.key
+                if (key in priorityAttrs) continue // already handled above
+                if (dataAttrPattern.matches(key)) {
+                    val value = attr.value.trim()
+                    if (value.isNotBlank() && value.length <= 40) {
+                        candidates.add("[$key=\"$value\"]" to "attr")
+                    }
+                }
+            }
+
+            // 4. PowerCSS :expr() selectors from visual features (vi attribute)
+            val vi = desc.attr("vi").trim()
+            if (vi.isNotBlank()) {
+                val viParts = vi.split("\\s+".toRegex())
+                if (viParts.size >= 4) {
+                    val viWidth = viParts[2].toDoubleOrNull()?.toInt() ?: 0
+                    val viHeight = viParts[3].toDoubleOrNull()?.toInt() ?: 0
+
+                    // Large elements are likely meaningful content blocks
+                    if (viWidth >= 200) {
+                        val w = (viWidth / 100) * 100 // round down to nearest 100
+                        candidates.add("${descTag}:expr(width>${w})" to "power")
+                        if (viHeight >= 100) {
+                            val h = (viHeight / 100) * 100
+                            candidates.add("${descTag}:expr(width>${w} && height>${h})" to "power")
+                        }
+                    }
+
+                    // Image containers: elements that contain <img> descendants
+                    val imgCount = desc.select("img").size
+                    if (imgCount > 0) {
+                        candidates.add("${descTag}:expr(img>0)" to "power")
+                        if (viWidth >= 200) {
+                            val w = (viWidth / 100) * 100
+                            candidates.add("${descTag}:expr(width>${w} && img>0)" to "power")
+                        }
+                    }
+
+                    // Link containers: elements that contain <a> descendants
+                    val aCount = desc.select("a").size
+                    if (aCount > 0) {
+                        candidates.add("${descTag}:expr(a>0)" to "power")
+                    }
+                }
+            }
+
+            for ((sel, type) in candidates) {
+                val candidate = SelectorCandidate(sel, descTag, type)
+                if (seen.add(candidate)) {
+                    val stats = candidateStats.getOrPut(candidate) { CandidateStats() }
+                    stats.count++
+                    if (descText.isNotBlank()) {
+                        stats.textValues[matchIndex] = descText
+                    }
+                    // Track the highest element weight for this candidate
+                    val elemWeight = elementWeightMap[desc] ?: 0
+                    if (elemWeight > stats.maxWeight) {
+                        stats.maxWeight = elemWeight
+                    }
+                }
+            }
+        }
+    }
+
+    // Filter to selectors appearing in >= 50% of matches (min 2 matches)
+    val threshold = maxOf(2, (matches.size * 0.5).toInt())
+    val filtered = candidateStats.entries.filter { it.value.count >= threshold }
+
+    // ---- Quality scoring ----
+
+    val semanticTags =
+        setOf("h1", "h2", "h3", "h4", "h5", "h6", "a", "img", "button", "input", "select", "textarea", "label")
+
+    fun distinctTextCount(stats: CandidateStats): Int =
+        stats.textValues.values.filter { it.isNotBlank() }.distinct().size
+
+    fun qualityScore(candidate: SelectorCandidate, stats: CandidateStats): Double {
+        val n = stats.count.toDouble()
+        // Specificity: class/id/attr selectors are more useful than bare tags
+        val specificityPerMatch = when (candidate.selectorType) {
+            "id" -> 0.7
+            "class" -> 0.4
+            "power" -> 0.35  // visual features: almost as stable as classes
+            "attr" -> 0.2
+            "bare" -> if (candidate.tag in setOf("div", "span")) -0.3 else -0.1
+            else -> 0.0
+        }
+        // Distinctiveness: text that varies across matches signals unique data
+        val distinctBoost = if (distinctTextCount(stats) >= 2) 0.3 else 0.0
+        // Semantic tags (headings, links, form controls) carry more meaning
+        val semanticBoost = if (candidate.tag in semanticTags) 0.2 else 0.0
+        // Weight boost: candidates matching high-importance elements (buttons, primary controls,
+        // prominent link groups) are more valuable. Normalize to 0..1 range (Tier 1 >= 1M).
+        val weightBoost = if (stats.maxWeight > 0) {
+            (stats.maxWeight / 1_000_000.0).coerceIn(0.0, 1.0) * 0.4
+        } else 0.0
+        return n + (specificityPerMatch * n) + (distinctBoost * n) + (semanticBoost * n) + (weightBoost * n)
+    }
+
+    // Sort by quality score descending, take top 40
+    val ranked = filtered
+        .sortedByDescending { (c, s) -> qualityScore(c, s) }
+        .take(40)
+
+    // Percentile-based quality tier (high = top quartile)
+    val scores = ranked.map { (c, s) -> qualityScore(c, s) }
+    val p75 = if (scores.isNotEmpty()) {
+        val idx = (scores.size * 0.25).toInt().coerceIn(0, scores.size - 1)
+        scores.sortedDescending()[idx]
+    } else 0.0
+
+    fun qualityTier(score: Double): String = when {
+        score >= p75 -> "high"
+        score >= p75 * 0.5 -> "medium"
+        else -> "low"
+    }
+
+    // Build suggestions array
+    val suggestions = pulsarObjectMapper().createArrayNode()
+    for ((candidate, stats) in ranked) {
+        val score = qualityScore(candidate, stats)
+        val sug = pulsarObjectMapper().createObjectNode()
+        sug.put("selector", candidate.selector)
+        sug.put("tag", candidate.tag)
+        // textPreview: first non-blank text (backward compat)
+        val firstText = stats.textValues.values.firstOrNull { it.isNotBlank() }
+        if (firstText != null) sug.put("textPreview", firstText)
+        // textSamples: up to 3 distinct values across matches
+        val distinctTexts = stats.textValues.values.filter { it.isNotBlank() }.distinct().take(3)
+        if (distinctTexts.isNotEmpty()) {
+            val samplesArr = pulsarObjectMapper().createArrayNode()
+            distinctTexts.forEach { samplesArr.add(it) }
+            sug.set<ArrayNode>("textSamples", samplesArr)
+        }
+        sug.put("matchCount", stats.count)
+        sug.put("coverage", "%.0f%%".format(stats.count * 100.0 / matches.size))
+        sug.put("quality", qualityTier(score))
+        suggestions.add(sug)
+    }
+
+    // Reuse visual link groups detected early (visual geometry first algorithm)
+    return pulsarObjectMapper().createObjectNode().apply {
+        put("matchCount", matchCount)
+        put("selector", effectiveSelector)
+        put("analyzed", matches.size)
+        if (autoDiscovered) {
+            put("autoDiscovered", true)
+            put("originalSelector", selector)
+        }
+        if (autoDiscoveredCandidates.isNotEmpty()) {
+            set<ArrayNode>("autoDiscoveredCandidates", candidatesToJson(autoDiscoveredCandidates))
+        }
+        if (speculativeSuggestion != null) {
+            put("speculativeSuggestion", speculativeSuggestion)
+            speculativeMatchCount?.let { put("speculativeMatchCount", it) }
+        }
+        set<ArrayNode>("samples", samples)
+        set<ArrayNode>("suggestions", suggestions)
+        if (visualLinkGroups.isNotEmpty()) {
+            set<ArrayNode>("linkGroups", linkGroupsToJson(visualLinkGroups))
+        }
+    }.toString()
+}
+
+// =========================================================================
+// Element serialization utilities (Section 8 format)
+// =========================================================================
+
+/** Semantic ancestor tags used for grouping interactive elements. */
+private val SEMANTIC_TAGS = setOf("nav", "form", "header", "main", "footer", "aside", "section", "article")
+
+/** ARIA roles that indicate a semantic container. */
+private val SEMANTIC_ROLES = setOf(
+    "navigation", "search", "form", "banner", "contentinfo", "complementary",
+    "main", "region", "article"
+)
+
+/**
+ * Build the compact element reference format defined in Section 8:
+ * `#closestId tag#id.class1.class2`
+ *
+ * - `#closestId`: id of the nearest ancestor that has an id attribute
+ *   (empty string if none within 6 levels)
+ * - `tag`: the element's own tag name
+ * - `#id`: the element's own id (omitted if none)
+ * - `.class1.class2`: up to 2 CSS classes (omitted if none)
+ */
+internal fun buildElementRef(el: org.jsoup.nodes.Element): String {
+    val closestId = findClosestId(el)
+    val idPart = if (closestId.isNotEmpty()) "#$closestId " else ""
+    val ownId = el.id().takeIf { it.isNotBlank() }?.let { "#$it" } ?: ""
+    val classPart = formatClassList(el)
+    return "$idPart${el.tagName().lowercase()}$ownId$classPart"
+}
+
+/** Find the id of the nearest ancestor element (up to [maxLevels] levels up). */
+internal fun findClosestId(el: org.jsoup.nodes.Element, maxLevels: Int = 6): String {
+    var current: org.jsoup.nodes.Element? = el.parent()
+    var level = 0
+    while (current != null && level < maxLevels) {
+        val id = current.id()
+        if (id.isNotBlank()) return id
+        current = current.parent()
+        level++
+    }
+    return ""
+}
+
+/** Format up to 2 CSS classes as `.class1.class2`, or empty string if none. */
+internal fun formatClassList(el: org.jsoup.nodes.Element): String {
+    val cls = el.className().trim()
+    if (cls.isBlank()) return ""
+    val classes = cls.split("\\s+".toRegex()).take(2)
+    return classes.joinToString("") { ".$it" }
+}
+
+/**
+ * Truncate text to fit the Section 8 compact format:
+ * ≤5 words for space-separated (Latin) languages, ≤5 characters for CJK.
+ */
+internal fun truncateText(text: String, maxWords: Int = 5): String {
+    val trimmed = text.trim()
+    if (trimmed.isEmpty()) return ""
+    // If any CJK character is present, use character-based truncation
+    if (trimmed.any { isCJK(it) }) {
+        return trimmed.take(maxWords)
+    }
+    // Otherwise, word-based truncation
+    val words = trimmed.split("\\s+".toRegex())
+    return words.take(maxWords).joinToString(" ")
+}
+
+/** Check if a character is in a CJK (Chinese/Japanese/Korean) Unicode range. */
+internal fun isCJK(c: Char): Boolean {
+    val cp = c.code
+    return cp in 0x4E00..0x9FFF   // CJK Unified Ideographs
+        || cp in 0x3400..0x4DBF   // CJK Unified Ideographs Extension A
+        || cp in 0xF900..0xFAFF   // CJK Compatibility Ideographs
+        || cp in 0x3040..0x309F   // Hiragana
+        || cp in 0x30A0..0x30FF   // Katakana
+        || cp in 0xAC00..0xD7AF   // Hangul Syllables
+        || cp in 0x2E80..0x2EFF   // CJK Radicals Supplement
+        || cp in 0x3000..0x303F   // CJK Symbols and Punctuation
+        || cp in 0xFF00..0xFFEF   // Halfwidth and Fullwidth Forms
+}
+
+/**
+ * Find the nearest semantic ancestor for grouping.
+ * Returns the tag name of the closest ancestor in [SEMANTIC_TAGS],
+ * the ARIA role if the ancestor has a [SEMANTIC_ROLES] role,
+ * or "Page" if no semantic ancestor is found within reasonable depth.
+ */
+internal fun findSemanticGroup(el: org.jsoup.nodes.Element): String {
+    var current: org.jsoup.nodes.Element? = el.parent()
+    var depth = 0
+    while (current != null && depth < 10) {
+        val tag = current.tagName().lowercase()
+        if (tag in SEMANTIC_TAGS) return tag
+        val role = current.attr("role").lowercase().trim()
+        if (role in SEMANTIC_ROLES) return role
+        // Also check for id-based grouping: common container patterns
+        val id = current.id().lowercase().trim()
+        if (id.isNotBlank() && (id.contains("nav") || id.contains("menu") ||
+                id.contains("header") || id.contains("footer") ||
+                id.contains("sidebar") || id.contains("content") ||
+                id.contains("search") || id.contains("form"))
+        ) {
+            return id
+        }
+        current = current.parent()
+        depth++
+    }
+    return "Page"
+}
+
+// =========================================================================
+// Interactive Element Weighting
+// =========================================================================
+
+/**
+ * Computes importance weights for interactive elements using a two-tier system.
+ *
+ * Tier 1 — Primary interactive controls (buttons, inputs, form controls, interactive ARIA roles).
+ * Weight = 1_000_000 + area, ensuring they always rank above links.
+ *
+ * Tier 2 — Links (anchor elements with href). Links are grouped by x-coordinate (tolerance ε=10px),
+ * then by area (20% relative tolerance). Each group's score = sum of member areas.
+ * Links inherit their group's score as weight.
+ *
+ * Excluded: hidden (_h attr), aria-hidden, disabled, type=hidden, zero-area, pointer-events:none.
+ *
+ * @param elements Jsoup Elements to weight
+ * @return sorted list of (element, weight, tier) ordered by weight descending
+ */
+internal fun computeInteractiveWeights(
+    elements: List<org.jsoup.nodes.Element>
+): List<Triple<org.jsoup.nodes.Element, Int, String>> {
+    if (elements.isEmpty()) return emptyList()
+
+    data class BoxInfo(
+        val el: org.jsoup.nodes.Element,
+        val x: Double, val y: Double, val w: Double, val h: Double,
+        val area: Double, val tag: String, val role: String?
+    )
+
+    val infos = mutableListOf<BoxInfo>()
+
+    for (el in elements) {
+        // ---- exclusion ----
+        if (el.attr("_h") == "1") continue
+        if (el.attr("aria-hidden") == "true") continue
+        if (el.hasAttr("disabled") || el.attr("aria-disabled") == "true") continue
+        if (el.attr("type").lowercase() == "hidden") continue
+
+        val style = el.attr("style")
+        if ("pointer-events: none" in style.replace(" ", "") ||
+            "pointer-events:none" in style.replace(" ", "")
+        ) continue
+
+        // ---- parse vi rect ----
+        val vi = el.attr("vi")
+        if (vi.isBlank()) continue
+        val parts = vi.split("\\s+".toRegex())
+        if (parts.size < 4) continue
+        val x = parts[0].toDoubleOrNull() ?: continue
+        val y = parts[1].toDoubleOrNull() ?: continue
+        val w = parts[2].toDoubleOrNull() ?: continue
+        val h = parts[3].toDoubleOrNull() ?: continue
+        if (w <= 0 || h <= 0) continue
+
+        val area = w * h
+        val tag = el.tagName().lowercase()
+        val role = el.attr("role").takeIf { it.isNotBlank() }?.lowercase()
+
+        infos.add(BoxInfo(el, x, y, w, h, area, tag, role))
+    }
+
+    // ---- classify ----
+    val tier1Tags = setOf("button", "input", "select", "textarea", "details", "summary")
+    val tier1Roles = setOf(
+        "button", "checkbox", "radio", "switch", "tab", "menuitem",
+        "combobox", "searchbox", "textbox", "slider", "spinbutton", "option", "treeitem",
+        "link", "menuitemcheckbox", "menuitemradio"
+    )
+
+    val tier1 = mutableListOf<Pair<BoxInfo, Int>>() // (info, weight)
+    val links = mutableListOf<BoxInfo>()
+
+    for (info in infos) {
+        val isTier1 = info.tag in tier1Tags ||
+                info.role in tier1Roles ||
+                info.el.hasAttr("contenteditable") ||
+                info.el.attr("contenteditable") == "true" ||
+                info.el.hasAttr("onclick") ||
+                info.el.hasAttr("onkeydown") ||
+                info.el.hasAttr("onsubmit") ||
+                (info.el.hasAttr("tabindex") && info.el.attr("tabindex") != "-1")
+
+        if (isTier1) {
+            tier1.add(info to (1_000_000 + info.area.toInt()))
+        } else if (info.tag == "a" && info.el.hasAttr("href")) {
+            links.add(info)
+        }
+    }
+
+    // ---- Tier 2: link grouping ----
+    val epsilon = 10.0        // x-coordinate tolerance (px)
+    val areaTolerance = 0.2   // 20% relative area tolerance
+
+    // Group by x-coordinate
+    val xGroups = mutableListOf<MutableList<BoxInfo>>()
+    for (link in links) {
+        var found = false
+        for (group in xGroups) {
+            if (Math.abs(link.x - group.first().x) <= epsilon) {
+                group.add(link)
+                found = true
+                break
+            }
+        }
+        if (!found) {
+            xGroups.add(mutableListOf(link))
+        }
+    }
+
+    // Within each x-group, further group by area similarity
+    val linkWeights = mutableMapOf<org.jsoup.nodes.Element, Int>()
+    for (xGroup in xGroups) {
+        xGroup.sortBy { it.area }
+
+        val areaGroups = mutableListOf<MutableList<BoxInfo>>()
+        for (link in xGroup) {
+            var found = false
+            for (group in areaGroups) {
+                val refArea = group.first().area
+                if (refArea > 0 && Math.abs(link.area - refArea) / refArea <= areaTolerance) {
+                    group.add(link)
+                    found = true
+                    break
+                }
+            }
+            if (!found) {
+                areaGroups.add(mutableListOf(link))
+            }
+        }
+
+        // Score each area-group and assign to all members
+        for (areaGroup in areaGroups) {
+            val score = areaGroup.sumOf { it.area }.toInt()
+            for (link in areaGroup) {
+                linkWeights[link.el] = score
+            }
+        }
+    }
+
+    // ---- build sorted result ----
+    val result = mutableListOf<Triple<org.jsoup.nodes.Element, Int, String>>()
+
+    // Tier 1: sort by weight descending
+    tier1.sortedByDescending { it.second }.forEach { (info, weight) ->
+        result.add(Triple(info.el, weight, "primary"))
+    }
+
+    // Tier 2: sort by weight descending (links in high-scoring groups first)
+    links
+        .filter { it.el in linkWeights }
+        .sortedByDescending { linkWeights[it.el]!! }
+        .forEach { link ->
+            result.add(Triple(link.el, linkWeights[link.el]!!, "link"))
+        }
+
+    return result
+}
+
+// =========================================================================
+// Link group serialization
+// =========================================================================
+
+/**
+ * Serialize detected link groups to a Jackson [ArrayNode] for inclusion in
+ * capture and inspect command outputs.
+ *
+ * Uses the same structure as the YAML output from [PageSummaryIndexService.generate]
+ * so consumers get a consistent representation regardless of output format.
+ */
+internal fun linkGroupsToJson(
+    linkGroups: List<PageSummaryIndexService.SummaryLinkGroup>,
+): ArrayNode {
+    val mapper = pulsarObjectMapper()
+    val array = mapper.createArrayNode()
+    for (lg in linkGroups) {
+        val obj = mapper.createObjectNode().apply {
+            val containerLabel = lg.containerTag + lg.containerSelector
+            put("container", containerLabel)
+            if (lg.containerSelector.isNotEmpty() && lg.containerSelector != lg.containerTag) {
+                put("selector", lg.containerSelector)
+            }
+            put("itemTag", lg.itemTag)
+            put("itemSelector", lg.itemSelector)
+            put("count", lg.count)
+            put("columnCount", lg.columnCount)
+            put("viewportWidth", lg.viewportWidth)
+            put("viewportHeight", lg.viewportHeight)
+            put("allHaveLinks", lg.allHaveLinks)
+            put("anyHaveImages", lg.anyHaveImages)
+            put("avgCardWidth", lg.avgCardWidth)
+            put("avgCardHeight", lg.avgCardHeight)
+            put("distinctTextCount", lg.distinctTextCount)
+            put("avgDescendants", lg.avgDescendants)
+            if (lg.samples.isNotEmpty()) {
+                val samplesArr = mapper.createArrayNode()
+                for (sample in lg.samples) {
+                    val sampleObj = mapper.createObjectNode().apply {
+                        put("box", sample.box)
+                        if (sample.links.isNotEmpty()) {
+                            val linksArr = mapper.createArrayNode()
+                            for (link in sample.links) {
+                                val linkObj = mapper.createObjectNode().apply {
+                                    put("text", link.text)
+                                    put("href", link.href)
+                                    put("box", link.box)
+                                }
+                                linksArr.add(linkObj)
+                            }
+                            set<ArrayNode>("links", linksArr)
+                        }
+                        put("hasImage", sample.hasImage)
+                    }
+                    samplesArr.add(sampleObj)
+                }
+                set<ArrayNode>("samples", samplesArr)
+            }
+            put("score", lg.score)
+        }
+        array.add(obj)
+    }
+    return array
+}
+
+/**
+ * Serialize auto-discovered selector candidates into a JSON array.
+ * Each entry contains the selector, match count, score, and sample text
+ * so the CLI can display alternatives when the top pick isn't ideal
+ * (e.g. `li` nav items on a news portal — the user can pick a better one).
+ */
+internal fun candidatesToJson(
+    candidates: List<DiscoveredSelector>,
+): ArrayNode {
+    val mapper = pulsarObjectMapper()
+    val array = mapper.createArrayNode()
+    for (c in candidates) {
+        val obj = mapper.createObjectNode().apply {
+            put("selector", c.selector)
+            put("matchCount", c.matchCount)
+            put("score", c.score)
+            put("sampleText", c.sampleText)
+        }
+        array.add(obj)
+    }
+    return array
+}

@@ -25,12 +25,14 @@ pub fn public_command_name(name: &str) -> &str {
         "htmlsnapshot-grep" => "htmlsnapshot grep",
         "htmlsnapshot-inspect" => "htmlsnapshot inspect",
         "snapshot-grep" => "snapshot grep",
+        "doctor-log" => "doctor log",
         _ => name,
     }
 }
 
 /// Categories in display order with their titles.
-const CATEGORIES: &[(&str, &str)] = &[
+/// Public so that `print_help` in main.rs can look up titles for category-filtered help.
+pub const CATEGORY_TITLES: &[(&str, &str)] = &[
     ("core", "Core"),
     ("navigation", "Navigation"),
     ("keyboard", "Keyboard"),
@@ -45,7 +47,53 @@ const CATEGORIES: &[(&str, &str)] = &[
     ("swarm", "Swarm"),
     ("install", "Install"),
     ("browsers", "Browser sessions"),
+    ("skills", "Skills"),
 ];
+
+/// Short aliases for category-based help filtering.
+/// e.g. `browser4-cli --help nav` shows Navigation commands.
+const CATEGORY_ALIASES: &[(&str, &str)] = &[
+    ("nav", "navigation"),
+    ("kb", "keyboard"),
+    ("input", "keyboard"),
+    ("extract", "snapshot"),
+    ("extraction", "snapshot"),
+    ("data", "snapshot"),
+    ("session", "browsers"),
+    ("sessions", "browsers"),
+    ("cap", "export"),
+    ("capture", "export"),
+    ("ss", "snapshot"),
+    ("state", "storage"),
+    ("skill", "skills"),
+];
+
+/// Resolve a category alias to its canonical category name, or return the
+/// input unchanged if it's already a canonical name or not recognized.
+pub fn resolve_category_alias(alias: &str) -> Option<&'static str> {
+    let lower = alias.to_lowercase();
+    // Check aliases first
+    for (a, canonical) in CATEGORY_ALIASES {
+        if *a == lower.as_str() {
+            return Some(canonical);
+        }
+    }
+    // Check if it's already a canonical name
+    for (canonical, _title) in CATEGORY_TITLES {
+        if *canonical == lower.as_str() {
+            return Some(canonical);
+        }
+    }
+    None
+}
+
+/// Return all non-hidden commands belonging to a category.
+pub fn commands_in_category(category_name: &str) -> Vec<CommandDef> {
+    let cmds = all_commands();
+    cmds.into_iter()
+        .filter(|c| !c.hidden && c.category.as_str() == category_name)
+        .collect()
+}
 
 /// Generate global help text listing all available commands by category.
 pub fn generate_help() -> String {
@@ -55,8 +103,23 @@ pub fn generate_help() -> String {
         "Usage: browser4-cli -s <session> <command> [args] [options]".to_string(),
     ];
 
+    // Common workflows — show the 5 most common patterns
+    lines.push("\nCommon workflows:".to_string());
+    lines.push("  Navigate & inspect:".to_string());
+    lines.push("    goto <url>  →  snapshot -v 0  →  click <ref>  →  snapshot -v 0    # -v 0 = top-of-page chunk".to_string());
+    lines.push("  Extract data:".to_string());
+    lines.push("    htmlsnapshot get text \"<css>\"           # single field".to_string());
+    lines.push("    htmlsnapshot query --sql @query.sql       # structured extraction".to_string());
+    lines.push("  Form interaction:".to_string());
+    lines.push("    fill <ref> \"<text>\" --submit              # fill + press Enter".to_string());
+    lines.push("  Run JavaScript:".to_string());
+    lines.push("    eval --file script.js                     # read JS from file (no quoting issues)".to_string());
+    lines.push("  Bulk crawl:".to_string());
+    lines.push("    crawl <url> --out-link-selector \"...\" --depth 1 --sql @query.sql".to_string());
+    lines.push("\nFilter help by category:  --help nav | --help extract | --help session | --help kb".to_string());
+
     let mut first_category = true;
-    for (cat_name, cat_title) in CATEGORIES {
+    for (cat_name, cat_title) in CATEGORY_TITLES {
         let cat_cmds: Vec<&CommandDef> = cmds
             .iter()
             .filter(|c| !c.hidden && c.category.as_str() == *cat_name)
@@ -75,7 +138,11 @@ pub fn generate_help() -> String {
     }
 
     lines.push("\nGlobal options:".to_string());
-    lines.push(format_with_gap("  --help [command]", "print help", 30));
+    lines.push(format_with_gap(
+        "  --help [cmd|category]",
+        "print help (try: nav, extract, session, kb)",
+        30,
+    ));
     lines.push(format_with_gap("  --version", "print version", 30));
     lines.push(format_with_gap(
         "  --json",
@@ -195,15 +262,19 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
     if cmd.name == "eval" {
         lines.push("Notes:".to_string());
         lines.push(
-            "  - Use --file to read the JavaScript expression from a file, or --base64 to pass"
+            "  - Prefer --file or --stdin for complex expressions — they avoid shell quoting"
                 .to_string(),
         );
         lines.push(
-            "    a base64-encoded expression — both approaches avoid shell quoting issues."
+            "    issues on Windows (multiple layers of Bash → cargo → CLI → JS escaping)."
                 .to_string(),
         );
         lines.push(
-            "  - Use --stdin to pipe JavaScript from stdin (e.g. `echo ... | browser4-cli eval --stdin`)."
+            "  - Use --base64 for short inline expressions that contain quotes."
+                .to_string(),
+        );
+        lines.push(
+            "  - Use --await for async JavaScript (fetch, Promises)."
                 .to_string(),
         );
         lines.push(
@@ -224,14 +295,20 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         );
         lines.push(String::new());
         lines.push("Examples:".to_string());
-        lines.push("  browser4-cli eval \"document.title\"".to_string());
-        lines.push(
-            "  browser4-cli eval \"element => element.textContent\" \"#click-target\"".to_string(),
-        );
-        lines.push("  browser4-cli eval \"element => element.textContent\" e5".to_string());
+        lines.push("  # Primary (recommended): read JavaScript from a file — no shell quoting needed".to_string());
         lines.push("  browser4-cli eval --file script.js".to_string());
         lines.push("  browser4-cli eval --file script.js e5".to_string());
+        lines.push(
+            "  # Pipe from stdin — ideal for heredocs and one-liners with complex quoting:".to_string(),
+        );
+        lines.push("  browser4-cli eval --stdin << 'EOF'".to_string());
+        lines.push("  document.querySelector('a[href*=\"jobs\"]')?.textContent".to_string());
+        lines.push("  EOF".to_string());
+        lines.push("  echo 'document.title' | browser4-cli eval --stdin".to_string());
+        lines.push("  # Base64 (inline, avoids quoting):".to_string());
         lines.push("  browser4-cli eval --base64 ZG9jdW1lbnQudGl0bGU=".to_string());
+        lines.push("  # Inline (simple expressions only — avoid on Windows with complex JS):".to_string());
+        lines.push("  browser4-cli eval \"document.title\"".to_string());
         lines.push("  browser4-cli eval --json \"document.title\"".to_string());
     }
 
@@ -1093,6 +1170,14 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(
+            "  - Uses Rust regex syntax (bare `|` for alternation, not `\\|`). Use `-F` for literal matching."
+                .to_string(),
+        );
+        lines.push(
+            "    The `-E` (extended regex) flag is accepted for grep compatibility but is a no-op: Rust regex is always ERE-like."
+                .to_string(),
+        );
+        lines.push(
             "  - snapshot grep supports the same grep options as htmlsnapshot grep: -e (repeatable), -i, -A, -B, -C, -v, -c, -l, -F, -w, --no-line-number, --selector, --selector-all, --page N, --page-size N, and --all."
                 .to_string(),
         );
@@ -1100,6 +1185,11 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
             "  - Output is paginated by default (2000 lines per page). Use --page N for subsequent pages, --page-size N to change the page size, or --all to show all content."
                 .to_string(),
         );
+        lines.push(String::new());
+        lines.push("Viewports (page chunks):".to_string());
+        lines.push("  A viewport is one screen-height chunk of the page (~viewport height px).".to_string());
+        lines.push("  Long pages are split into multiple viewports. -v N captures chunk N (0-indexed).".to_string());
+        lines.push("  The snapshot filters the accessibility tree by Y-range — the page is not scrolled.".to_string());
         lines.push(String::new());
         lines.push("Examples:".to_string());
         lines.push("  # Read the page viewport by viewport (start from the top)".to_string());
@@ -1434,12 +1524,12 @@ mod tests {
         assert!(help.contains("browser4-cli eval [expression] [ref]"));
         assert!(help.contains("Evaluate JavaScript expression on page or element"));
         assert!(help.contains("browser4-cli eval \"document.title\""));
-        assert!(help.contains("browser4-cli eval \"element => element.textContent\" e5"));
+        assert!(help.contains("browser4-cli eval --file script.js e5"));
         assert!(help.contains("--file"));
         assert!(help.contains("Read JavaScript expression from a file"));
         assert!(help.contains("browser4-cli eval --file script.js"));
         assert!(help.contains("--base64"));
-        assert!(help.contains("base64-encoded expression"));
+        assert!(help.contains("Use --base64 for short inline expressions"));
         assert!(help.contains("browser4-cli eval --base64 ZG9jdW1lbnQudGl0bGU="));
         assert!(help.contains("Objects and arrays are serialized as valid JSON"));
         assert!(help.contains("--json to JSON-wrap"));

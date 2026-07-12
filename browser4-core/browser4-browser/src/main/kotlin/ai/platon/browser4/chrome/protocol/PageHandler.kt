@@ -1,5 +1,6 @@
 package ai.platon.browser4.chrome.protocol
 
+import ai.platon.pulsar.chrome.dom.model.*
 import ai.platon.browser4.chrome.IsolatedWorldManager
 import ai.platon.browser4.chrome.dom.CDPSnapshotService
 import ai.platon.browser4.chrome.dom.model.AriaSnapshotOptions
@@ -78,7 +79,7 @@ class PageHandler constructor(
         val options = AriaSnapshotOptions()
         val result = ariaSnapshot(options)
         lastBrowserUseState?.let { state ->
-            return buildViewportHeader(state) + result + buildViewportFooter(state, options)
+            return buildViewportHeader(state, options) + result + buildViewportFooter(state, options)
         }
         return result
     }
@@ -106,10 +107,13 @@ class PageHandler constructor(
             serializableTree.toNanoTreeInRange(startY, endY)
         }
 
+        // Build options with the viewport spec so header/footer show the correct viewport
+        val viewportSpec = sortedIndices.joinToString(",")
+        val renderOptions = AriaSnapshotOptions(viewports = viewportSpec)
+
         // Join snapshots from disjoint viewport ranges using YAML document separator
-        val defaultOptions = AriaSnapshotOptions()
-        val snapContent = nanoTrees.joinToString("\n---\n") { NanoAriaSnapshotRenderer.render(it, defaultOptions) }
-        return buildViewportHeader(buState) + snapContent + buildViewportFooter(buState, defaultOptions)
+        val snapContent = nanoTrees.joinToString("\n---\n") { NanoAriaSnapshotRenderer.render(it, renderOptions) }
+        return buildViewportHeader(buState, renderOptions) + snapContent + buildViewportFooter(buState, renderOptions)
     }
 
     /**
@@ -155,7 +159,7 @@ class PageHandler constructor(
             buState.domState.renderedAriaSnapshot(resolvedOptions)
         }
 
-        return buildViewportHeader(buState) + snapContent + buildViewportFooter(buState, resolvedOptions)
+        return buildViewportHeader(buState, resolvedOptions) + snapContent + buildViewportFooter(buState, resolvedOptions)
     }
 
     /**
@@ -183,12 +187,17 @@ class PageHandler constructor(
     /**
      * Build a YAML comment header with viewport state metadata.
      * Helps AI agents understand the current viewport position and page dimensions.
+     * When [options.viewports] is set, the header shows the requested viewport(s)
+     * rather than the scroll position (the page is not actually scrolled — the
+     * snapshot is filtered by Y-range from the full accessibility tree).
      */
-    private fun buildViewportHeader(buState: BrowserUseState): String {
+    private fun buildViewportHeader(buState: BrowserUseState, options: AriaSnapshotOptions): String {
         val s = buState.browserState.scrollState
+        // When viewports are specified, show the requested viewport, not the scroll position
+        val effectiveViewport = options.viewports ?: s.processingViewport.toString()
         return buildString {
             appendLine("# Viewport State")
-            appendLine("# - processingViewport: ${s.processingViewport}")
+            appendLine("# - processingViewport: $effectiveViewport")
             appendLine("# - viewportHeight: ${s.viewportHeight}px")
             appendLine("# - viewportsTotal: ${s.viewportsTotal}")
             appendLine("# - hiddenTopHeight: ${s.hiddenTopHeight}px")
@@ -201,15 +210,28 @@ class PageHandler constructor(
      * Build a YAML comment footer with viewport navigation guidance.
      * When the page spans multiple viewports, suggests reading the page viewport by
      * viewport — just like a human scrolls through a long page.
+     * When [options.viewports] is set, the footer uses the requested viewport(s)
+     * rather than the scroll position for its navigation hints.
      */
     private fun buildViewportFooter(buState: BrowserUseState, options: AriaSnapshotOptions): String {
         val s = buState.browserState.scrollState
         if (s.viewportsTotal <= 1) return ""
 
-        val currentViewport = s.processingViewport
+        // When viewports are specified, use the first requested viewport index as
+        // the "current" viewport for navigation hints. Otherwise use the scroll position.
+        val currentViewport: Int = options.viewports?.let { spec ->
+            ViewportSpec.parse(spec)?.firstOrNull()
+        } ?: s.processingViewport
+
+        val viewportLabel = if (options.viewports != null) {
+            "You are viewing viewport(s) ${options.viewports}"
+        } else {
+            "You are currently viewing viewport $currentViewport"
+        }
+
         return buildString {
             appendLine("# ---")
-            appendLine("# This page has ${s.viewportsTotal} viewports (page chunks split by viewport height). You are currently viewing viewport $currentViewport.")
+            appendLine("# This page has ${s.viewportsTotal} viewports (page chunks split by viewport height). $viewportLabel.")
             appendLine("# To read the page viewport by viewport (like a human scrolling):")
             if (currentViewport > 0) {
                 appendLine("#   snapshot -v 0          # view the top of the page")
@@ -243,7 +265,7 @@ class PageHandler constructor(
 
         // `attributes`: n1, v1, n2, v2, n3, v3, ...
         if (!isActive) return null
-        val attributes = browserProtocol.getAttributes(node.nodeId) ?: return null
+        val attributes = browserProtocol.getAttributes(node.nodeId)
         val nameIndex = attributes.indexOf(attrName)
         if (nameIndex < 0) {
             return null

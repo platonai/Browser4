@@ -8,7 +8,7 @@ import ai.platon.pulsar.agentic.tools.BasicToolCallExecutor
 import ai.platon.pulsar.agentic.tools.builtin.BrowserTabToolExecutor
 import ai.platon.pulsar.agentic.tools.builtin.BrowserToolExecutor
 import ai.platon.pulsar.common.config.ImmutableConfig
-import ai.platon.pulsar.core.api.WebDriver
+import ai.platon.pulsar.browser.WebDriver
 
 internal class SessionActExecutor(
     val session: AgenticSession,

@@ -5,6 +5,7 @@ import ai.platon.browser4.api.model.NodeType
 import ai.platon.browser4.api.model.CSSSelectorUtils
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.DisplayName
+import ai.platon.browser4.chrome.dom.util.CSSSelectorUtils
 import org.junit.jupiter.api.Test
 
 class CSSSelectorUtilsTest {

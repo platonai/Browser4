@@ -1512,6 +1512,25 @@
   "cli" : "browser4-cli tab evaluateValueDetail --expression=<String>, default="
 }, {
   "domain" : "tab",
+  "method" : "evaluateValueDetail",
+  "arguments" : [ {
+    "name" : "expression",
+    "type" : "String",
+    "expression" : "expression: String = ",
+    "cliOptions" : "--expression=<String>, default="
+  }, {
+    "name" : "awaitPromise",
+    "type" : "Boolean",
+    "expression" : "awaitPromise: Boolean = ",
+    "cliOptions" : "--awaitPromise=<Boolean>, default="
+  } ],
+  "returnType" : "JsEvaluation?",
+  "description" : "Returns detailed value evaluation metadata with optional async await support.",
+  "help" : "Returns detailed value evaluation metadata with optional async await support.",
+  "expression" : "tab.evaluateValueDetail(Arg(name=expression, type=String, defaultValue=), Arg(name=awaitPromise, type=Boolean, defaultValue=))",
+  "cli" : "browser4-cli tab evaluateValueDetail --expression=<String>, default= --awaitPromise=<Boolean>, default="
+}, {
+  "domain" : "tab",
   "method" : "evaluateValue",
   "arguments" : [ {
     "name" : "selector",
@@ -1548,6 +1567,26 @@
   "help" : "Returns detailed value evaluation metadata for the element located by [selector].",
   "expression" : "tab.evaluateValueDetail(Arg(name=selector, type=String, defaultValue=), Arg(name=functionDeclaration, type=String, defaultValue=))",
   "cli" : "browser4-cli tab evaluateValueDetail --selector=<String>, default= --functionDeclaration=<String>, default="
+}, {
+  "domain" : "tab",
+  "method" : "executeCdpCommand",
+  "arguments" : [ {
+    "name" : "method",
+    "type" : "String",
+    "expression" : "method: String = ",
+    "cliOptions" : "--method=<String>, default="
+  }, {
+    "name" : "params",
+    "type" : "Map<String, Any?>?",
+    "defaultValue" : "null",
+    "expression" : "params: Map<String, Any?>? = null",
+    "cliOptions" : "--params=<Map<String, Any?>?>, default=null"
+  } ],
+  "returnType" : "Any?",
+  "description" : "Sends an arbitrary Chrome DevTools Protocol (CDP) command and returns the result.",
+  "help" : "Sends an arbitrary Chrome DevTools Protocol (CDP) command and returns the result.\n\nThis method provides direct access to the underlying CDP connection, allowing advanced browser interactions that are not covered by the standard WebDriver API.\n\nThe `method` must be a full CDP method name, such as: - `\"Page.captureScreenshot\"` - `\"Runtime.evaluate\"` - `\"DOM.getDocument\"` - `\"Network.getCookies\"`\n\nThe `params` is an optional map of parameters to pass to the CDP command. The return value is the deserialized CDP response (Map, List, String, Number, Boolean, or null).\n\nExample: ```kotlin // Screenshot the page as JPEG val result = driver.executeCdpCommand(\"Page.captureScreenshot\", mapOf(\"format\" to \"jpeg\", \"quality\" to 80))\n\n// Get all cookies val cookies = driver.executeCdpCommand(\"Network.getCookies\") ```",
+  "expression" : "tab.executeCdpCommand(Arg(name=method, type=String, defaultValue=), Arg(name=params, type=Map<String, Any?>?, defaultValue=null))",
+  "cli" : "browser4-cli tab executeCdpCommand --method=<String>, default= --params=<Map<String, Any?>?>, default=null"
 }, {
   "domain" : "tab",
   "method" : "generateLocator",

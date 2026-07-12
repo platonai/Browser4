@@ -3426,6 +3426,7 @@ fn excluded_commands(include_batch_command: bool) -> HashSet<&'static str> {
         // New commands pending e2e test scenarios.
         "agent-list",
         "attach",
+        "cdp",
         "crawl",
         "crawl-list",
         "crawl-status",
@@ -3447,6 +3448,7 @@ fn excluded_commands(include_batch_command: bool) -> HashSet<&'static str> {
         "generate-locator",
         "loop",
         "doctor",
+        "doctor-log",
         // Act translates natural language to commands; requires an MCP/LLM backend.
         "act",
         // Uninstall requires npm/cargo on $PATH; not exercised in e2e.
@@ -3458,6 +3460,12 @@ fn excluded_commands(include_batch_command: bool) -> HashSet<&'static str> {
         "skill-install",
         "skill-uninstall",
         "skill-reload",
+        // Skills commands are local-only (no server interaction); exercised via
+        // unit tests and manual CLI verification.
+        "skills",
+        "skills-list",
+        "skills-get",
+        "skills-path",
     ]
     .into();
 

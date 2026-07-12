@@ -1895,6 +1895,19 @@ function renderReview() {
   // Float panel visibility is managed by renderSingleIssue / renderAllIssues
   document.getElementById('btn-mode-toggle').textContent = isSingle ? '📋 View All' : '🔍 One-by-One';
 
+  // Show/hide toolbar buttons based on whether the file has issues.
+  // Centralized here so both renderSingleIssue and renderAllIssues get
+  // consistent visibility — previously only renderAllIssues set these,
+  // so the buttons could stay hidden when switching to single mode after
+  // viewing a zero-issue file in all mode.
+  var showToolbar = state.parsed.issues.length > 0;
+  var btnMarkDone = document.getElementById('btn-mark-done');
+  if (btnMarkDone) { btnMarkDone.style.display = showToolbar ? '' : 'none'; }
+  var btnAiReviewAll = document.getElementById('btn-ai-review-all');
+  if (btnAiReviewAll) { btnAiReviewAll.style.display = showToolbar ? '' : 'none'; }
+  var btnModeToggle = document.getElementById('btn-mode-toggle');
+  if (btnModeToggle) { btnModeToggle.style.display = showToolbar ? '' : 'none'; }
+
   // Clamp issue index
   if (state.currentIssueIndex >= state.parsed.issues.length) {
     state.currentIssueIndex = Math.max(0, state.parsed.issues.length - 1);
@@ -1927,21 +1940,7 @@ function renderAllIssues() {
     html += '<p style="font-size:0.8rem;margin-top:8px;">This file should be <strong>discarded</strong> — it has no actionable issues.</p>';
     html += '<p style="font-size:0.75rem;color:var(--text-muted);">Use the <strong>🗑 Discard</strong> button or press <kbd>Shift+D</kbd> to move it to review/done/discard.</p>';
     html += '</div>';
-    // Hide mark-done button for zero-issue files
-    var markDoneBtn = document.getElementById('btn-mark-done');
-    if (markDoneBtn) { markDoneBtn.style.display = 'none'; }
-    var aiReviewAllBtn = document.getElementById('btn-ai-review-all');
-    if (aiReviewAllBtn) { aiReviewAllBtn.style.display = 'none'; }
-    var modeToggleBtn = document.getElementById('btn-mode-toggle');
-    if (modeToggleBtn) { modeToggleBtn.style.display = 'none'; }
   } else {
-    // Show buttons in case they were hidden
-    var markDoneBtn2 = document.getElementById('btn-mark-done');
-    if (markDoneBtn2) { markDoneBtn2.style.display = ''; }
-    var aiReviewAllBtn2 = document.getElementById('btn-ai-review-all');
-    if (aiReviewAllBtn2) { aiReviewAllBtn2.style.display = ''; }
-    var modeToggleBtn2 = document.getElementById('btn-mode-toggle');
-    if (modeToggleBtn2) { modeToggleBtn2.style.display = ''; }
     for (var i = 0; i < state.parsed.issues.length; i++) {
       html += renderIssueCard(state.parsed.issues[i], i);
     }

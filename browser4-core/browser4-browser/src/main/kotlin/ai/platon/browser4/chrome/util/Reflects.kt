@@ -285,7 +285,7 @@ object ProxyClasses {
     /**
      * Example parameters:
      *
-     * class: ai.platon.pulsar.driver.chrome.impl.ChromeDevToolsImpl
+     * class: ai.platon.browser4.chrome.protocol.transport.ChromeDevToolsImpl
      * paramTypes:
      *   - interface ai.platon.pulsar.driver.chrome.Transport,
      *   - interface ai.platon.pulsar.driver.chrome.Transport,
@@ -313,7 +313,7 @@ args:
     /**
      * Example Parameters:
      *
-     * proxy: ai.platon.pulsar.driver.chrome.impl.ChromeDevToolsImpl_$$_jvst2b9_0@421a4ee1
+     * proxy: ai.platon.browser4.chrome.protocol.transport.ChromeDevToolsImpl_$$_jvst2b9_0@421a4ee1
      * method:
      *   - public abstract ai.platon.pulsar.cdt.protocol.commands.Page ai.platon.pulsar.cdt.protocol.ChromeDevTools.getPage()
      * methodArgs:

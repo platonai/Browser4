@@ -26,7 +26,7 @@ import ai.platon.pulsar.common.proxy.ProxyException
 import ai.platon.pulsar.common.proxy.ProxyParserFactory
 import ai.platon.pulsar.common.proxy.ProxyPoolManager
 import ai.platon.pulsar.common.proxy.ProxyVendorException
-import ai.platon.pulsar.core.api.WebDriver
+import ai.platon.pulsar.browser.WebDriver
 import ai.platon.pulsar.persist.AbstractWebPage
 import ai.platon.pulsar.protocol.browser.driver.WebDriverPoolManager
 import ai.platon.pulsar.skeleton.CoreMetrics
@@ -34,7 +34,6 @@ import ai.platon.pulsar.skeleton.common.options.LoadOptions
 import ai.platon.pulsar.skeleton.common.proxy.UniversalProxyParser
 import ai.platon.pulsar.skeleton.workflow.fetch.FetchResult
 import ai.platon.pulsar.skeleton.workflow.fetch.FetchTask
-
 
 open class BrowserPrivacyContext(
     val proxyPoolManager: ProxyPoolManager? = null,

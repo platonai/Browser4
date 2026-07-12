@@ -9,7 +9,7 @@ import ai.platon.pulsar.common.config.VolatileConfig
 import ai.platon.pulsar.common.urls.PlainUrl
 import ai.platon.pulsar.common.urls.URLUtils
 import ai.platon.pulsar.common.urls.UrlAware
-import ai.platon.pulsar.core.api.WebDriver
+import ai.platon.pulsar.browser.WebDriver
 import ai.platon.pulsar.core.api.WebPage
 import ai.platon.pulsar.dom.FeaturedDocument
 import ai.platon.pulsar.dom.select.firstTextOrNull

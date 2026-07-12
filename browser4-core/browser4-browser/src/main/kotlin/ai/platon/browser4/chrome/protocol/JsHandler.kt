@@ -26,7 +26,7 @@ class JsHandler(
      *
      * @param script JavaScript expression to evaluate
      * @return Detailed evaluation result including remote object and exception details, or null if evaluation fails
-     * @throws ai.platon.pulsar.driver.chrome.util.ChromeDriverException if the script fails to execute
+     * @throws ai.platon.browser4.chrome.util.ChromeDriverException if the script fails to execute
      * */
     @Throws(ChromeDriverException::class)
     suspend fun evaluateDetail(script: String): Evaluate? {

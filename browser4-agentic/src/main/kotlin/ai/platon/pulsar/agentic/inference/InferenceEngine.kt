@@ -4,6 +4,7 @@ import ai.platon.pulsar.agentic.agents.BasicBrowserAgent
 import ai.platon.pulsar.agentic.inference.action.ContextToAction
 import ai.platon.pulsar.agentic.model.ActionDescription
 import ai.platon.pulsar.agentic.model.ExecutionContext
+import ai.platon.pulsar.agentic.model.ExtractionSchema
 import ai.platon.browser4.api.AbstractWebDriver
 import ai.platon.browser4.api.snapshot.SnapshotService
 import ai.platon.pulsar.common.AppPaths

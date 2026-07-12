@@ -134,6 +134,12 @@ const TIPS_EVAL: &[Tip] = &[
     Tip {
         text: "Use `eval` with a `[ref]` argument to scope JS execution to a specific element: `eval \"this.textContent\" e5`",
     },
+    Tip {
+        text: "Use `eval --wait-selector <css>` to wait for async-rendered content (React/SPA) before querying the DOM",
+    },
+    Tip {
+        text: "If `eval` returns empty while `htmlsnapshot` finds elements, the page likely loads content asynchronously — use `--wait-selector` or run `wait --selector <css>` first",
+    },
 ];
 
 const TIPS_AI_EXTRACTION: &[Tip] = &[

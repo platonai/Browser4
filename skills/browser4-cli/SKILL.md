@@ -36,6 +36,11 @@ browser4-cli snapshot -v 0 --auto-diff  # verify what changed
 browser4-cli htmlsnapshot get text "<css-selector>" --all
 ```
 
+For quick inline viewing without opening a file, add `--stdout`:
+```bash
+browser4-cli snapshot -v 0 --stdout   # print snapshot to stdout instead of file
+```
+
 ## 2. Key Concepts
 
 ### Element Refs
@@ -245,3 +250,54 @@ browser4-cli install
 ## Development
 
 See [development.md](references/development.md) — prerequisites, building from source, and `cargo run` patterns.
+
+## Troubleshooting: Shell Quoting on Windows
+
+When running `browser4-cli` under Git Bash (or any POSIX shell on Windows), inline expressions pass through **four layers of quote interpretation**: Bash → `cargo run` → CLI argument parser → browser's JS engine. Each layer strips or reinterprets quotes, making correct escaping nearly impossible for complex JavaScript or X-SQL.
+
+### The Problem
+
+```
+# This FAILS on Windows because double quotes inside double quotes get mangled:
+eval "JSON.stringify({searchVal: document.querySelector('input[placeholder*=\"Search\"]')?.value})"
+```
+
+**Why it fails:** Bash sees `\"` and strips one layer of escaping. Then the remaining quotes interact with `cargo run` argument parsing. Single quotes, double quotes, backticks, and `$` signs all interact in unpredictable ways.
+
+### The Solution: Never Inline Complex JS/SQL on Windows
+
+| Instead of | Use | Example |
+|---|---|---|
+| `eval "complex JS"` | `eval --file` | `eval --file script.js` |
+| | `eval --stdin` | `echo 'document.title' \| browser4-cli eval --stdin` |
+| | `eval --base64` | `eval --base64 ZG9jdW1lbnQudGl0bGU=` |
+| `htmlsnapshot query --sql "..."` | `--sql @file` | `--sql @query.sql` |
+| | `--sql-stdin` | `--sql-stdin < query.sql` |
+| | `--sql-base64` | `--sql-base64 <base64>` |
+| `htmlsnapshot inspect --selector "..."` | `@file` | `htmlsnapshot inspect @selectors.txt` |
+| | `--stdin` | `echo 'a[href]' \| htmlsnapshot inspect --stdin` |
+
+### eval: Recommended Workflow on Windows
+
+```bash
+# 1. Write your JavaScript to a file (any text editor)
+echo "document.querySelector('input.search-filter-input').value" > get-value.js
+
+# 2. Evaluate it via --file — no quoting issues
+browser4-cli eval --file get-value.js
+
+# Or use heredoc for inline scripts (Bash only):
+browser4-cli eval --stdin << 'EOF'
+document.querySelector('input[placeholder*="Search"]')?.value
+EOF
+
+# Or pipe from echo:
+echo 'JSON.stringify(document.querySelectorAll("a.job-link"))' | browser4-cli eval --stdin --json
+```
+
+### Why This Works
+
+- **`--file`** — File content is read directly; the shell never interprets it.
+- **`--stdin`** — Stdin content is passed as raw bytes; no shell interpolation.
+- **`--base64`** — Base64 strings contain only alphanumeric characters and `+/=` — safe in any shell.
+- **`@file`** — The `@` prefix tells the CLI to read from a file instead of interpreting as a CSS selector / SQL.

@@ -44,19 +44,19 @@ class NavigateHistory {
 
     val size get() = history.size
 
-    fun contains(url: String) = history.any { it.url == url }
+    fun contains(url: String) = history.any { it.userTypedUrl == url }
 
-    fun contains(urlRegex: Regex) = history.any { it.url.contains(urlRegex) }
+    fun contains(urlRegex: Regex) = history.any { it.userTypedUrl.contains(urlRegex) }
 
-    fun firstOrNull(url: String) = history.firstOrNull { it.url == url }
+    fun firstOrNull(url: String) = history.firstOrNull { it.userTypedUrl == url }
 
-    fun firstOrNull(urlRegex: Regex) = history.firstOrNull { it.url.matches(urlRegex) }
+    fun firstOrNull(urlRegex: Regex) = history.firstOrNull { it.userTypedUrl.matches(urlRegex) }
 
-    fun lastOrNull(url: String) = history.lastOrNull { it.url == url }
+    fun lastOrNull(url: String) = history.lastOrNull { it.userTypedUrl == url }
 
-    fun lastOrNull(urlRegex: Regex) = history.lastOrNull { it.url.matches(urlRegex) }
+    fun lastOrNull(urlRegex: Regex) = history.lastOrNull { it.userTypedUrl.matches(urlRegex) }
 
-    fun findAll(urlRegex: Regex) = history.filter { it.url.matches(urlRegex) }
+    fun findAll(urlRegex: Regex) = history.filter { it.userTypedUrl.matches(urlRegex) }
 
     fun add(entry: NavigateEntry) {
         _history.add(entry)

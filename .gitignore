@@ -147,3 +147,5 @@ bin/maintenance/state/*.lock
 
 # WorkBuddy project data (not source, do not commit)
 .workbuddy/
+# Prevent runtime artifacts from being committed
+**/--help/
