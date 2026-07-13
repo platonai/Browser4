@@ -1344,9 +1344,11 @@ $excludedModules = @(
     'jdk.attach',
     'jdk.jdi',
     'jdk.jfr',
-    'jdk.management',
     'jdk.zipfs'
 )
+# NOTE: jdk.management is intentionally NOT excluded. It is required by
+# AppSystemInfo (com.sun.management.OperatingSystemMXBean) and by Spring Boot
+# Actuator's system metrics. Excluding it causes NoClassDefFoundError at runtime.
 $modules = @(
     ($jdepsOutput -split ',') + $recommendedModules |
         ForEach-Object { $_.Trim() } |

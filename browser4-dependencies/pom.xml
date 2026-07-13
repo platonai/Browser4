@@ -299,12 +299,6 @@
             </dependency>
 
             <!--  Logging, Tracking, Metrics  -->
-            <!--  System monitor  -->
-            <dependency>
-                <groupId>com.github.oshi</groupId>
-                <artifactId>oshi-core</artifactId>
-                <version>${oshi-core.version}</version>
-            </dependency>
             <dependency>
                 <groupId>io.dropwizard.metrics</groupId>
                 <artifactId>metrics-core</artifactId>
@@ -463,8 +457,6 @@
         <poi-ooxml.version>5.4.0</poi-ooxml.version>
         <poi.version>5.4.0</poi.version>
 
-        <oshi-core.version>6.6.6</oshi-core.version>
-
         <xercesImpl.version>2.12.2</xercesImpl.version>
         <trove4j-core.version>3.3.1</trove4j-core.version>
         <trove4j.version>3.3.1</trove4j.version>
@@ -512,7 +504,6 @@
         <perf4j.version>0.9.16</perf4j.version>
 
         <!--  metrics analyze  -->
-        <oshi.version>6.4.13</oshi.version>
         <!-- Dropwizard Metrics is an older, robust library, best for JVM-specific monitoring,
         but it lacks the dimensional (tagged) metrics and cloud-native integrations found in Micrometer. -->
         <metrics.version>4.2.12</metrics.version>

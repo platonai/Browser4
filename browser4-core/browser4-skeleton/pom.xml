@@ -155,11 +155,6 @@
             <artifactId>jcommander</artifactId>
         </dependency>
 
-        <!-- Required by system metrics -->
-        <dependency>
-            <groupId>com.github.oshi</groupId>
-            <artifactId>oshi-core</artifactId>
-        </dependency>
         <!-- Metrics system -->
         <dependency>
             <groupId>io.dropwizard.metrics</groupId>

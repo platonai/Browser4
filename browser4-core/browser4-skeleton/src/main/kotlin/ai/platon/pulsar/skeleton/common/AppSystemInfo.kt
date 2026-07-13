@@ -4,24 +4,40 @@ import ai.platon.pulsar.common.*
 import ai.platon.pulsar.common.config.AppConstants
 import ai.platon.pulsar.common.measure.ByteUnit
 import ai.platon.pulsar.common.measure.ByteUnitConverter
-import oshi.SystemInfo
-import oshi.hardware.CentralProcessor
+import com.sun.management.OperatingSystemMXBean
 import java.io.IOException
+import java.lang.management.ManagementFactory
 import java.nio.file.Files
 import java.time.Duration
 import java.time.Instant
 
 /**
- * Application specific system information
+ * Application specific system information.
+ *
+ * System metrics (CPU load, physical memory) are read from the JDK built-in
+ * [com.sun.management.OperatingSystemMXBean], which requires the `jdk.management`
+ * module to be present on the runtime image. When that module is unavailable
+ * (e.g. a stripped JRE), every metric degrades gracefully to `null` / `0.0` /
+ * `false` instead of throwing.
  * */
 class AppSystemInfo {
     companion object {
         private val logger = getLogger(AppSystemInfo::class)
 
-        private var prevCPUTicks = LongArray(CentralProcessor.TickType.entries.size)
+        /**
+         * The platform [OperatingSystemMXBean] exposed by the `com.sun.management`
+         * package, or `null` when the `jdk.management` module is not on the
+         * runtime image. All metric accessors null-check this bean.
+         * */
+        private val osBean: OperatingSystemMXBean? by lazy {
+            runCatching {
+                ManagementFactory.getOperatingSystemMXBean() as? OperatingSystemMXBean
+            }.onFailure { logger.warn("System metrics bean unavailable: {}", it.stringify()) }
+                .getOrNull()
+        }
 
-        private var isOSHIChecked = false
-        private var isOSHIAvailable = false
+        private var isMetricsChecked = false
+        private var isMetricsAvailable = false
 
         var CRITICAL_CPU_THRESHOLD = System.getProperty("critical.cpu.threshold") ?.toDoubleOrNull() ?: 0.85
         var CRITICAL_MEMORY_THRESHOLD_MIB = System.getProperty("critical.memory.threshold.MiB")?.toDouble() ?: 0.0
@@ -29,25 +45,18 @@ class AppSystemInfo {
         val startTime: Instant = Instant.now()
         val elapsedTime: Duration get() = Duration.between(startTime, Instant.now())
 
-        val systemInfo: SystemInfo? by lazy {
-            when {
-                !AppContext.isActive -> null
-                isOSHIAvailable() -> SystemInfo()
-                else -> null
-            }
-        }
-
         /**
-         * OSHI cached the value, so it's fast and safe to be called frequently.
-         *
-         * for example, on Windows,
-         * WindowsGlobalMemory.availTotalSize is defined as:
-         * memoize(WindowsGlobalMemory::readPerfInfo, defaultExpiration());
+         * Total physical memory in bytes, or `null` if unavailable.
          * */
-        val memoryInfo get() = systemInfo?.hardware?.memory
+        val totalPhysicalMemory: Long? get() = osBean?.totalMemorySize?.takeIf { it > 0 }
 
         /**
-         * System cpu load in [0, 1]
+         * Free physical memory in bytes, or `null` if unavailable.
+         * */
+        val physicalFreeMemory: Long? get() = osBean?.freeMemorySize?.takeIf { it >= 0 }
+
+        /**
+         * System cpu load in [0, 1]. Returns `0.0` when unavailable.
          * */
         val systemCpuLoad get() = computeSystemCpuLoad()
 
@@ -77,11 +86,16 @@ class AppSystemInfo {
          * 2. Lack of RAM forcing the server to use swap memory
          * 3. A high number of I/O traffic
          *
+         * Note: the JDK exposes only the 1-minute average via
+         * [OperatingSystemMXBean.getSystemLoadAverage]; the returned array
+         * therefore contains a single element, or `null` when unavailable.
+         *
          * @see [Load average: What is it, and what's the best load average for your Linux servers?](https://www.site24x7.com/blog/load-average-what-is-it-and-whats-the-best-load-average-for-your-linux-servers)
          * */
         val systemLoadAverage: DoubleArray? get() {
-            val si = systemInfo ?: return null
-            return si.hardware.processor.getSystemLoadAverage(3)
+            val bean = osBean ?: return null
+            val oneMin = bean.systemLoadAverage
+            return if (oneMin < 0) null else doubleArrayOf(oneMin)
         }
 
         /**
@@ -97,11 +111,12 @@ class AppSystemInfo {
          * Available memory is the amount of memory which is available for allocation to a new process or to existing
          * processes.
          * */
-        val availableMemory: Long? get() = memoryInfo?.available
+        val availableMemory: Long? get() = physicalFreeMemory
 
         val usedMemory: Long? get() {
-            val mi = memoryInfo ?: return null
-            return mi.total - mi.available
+            val bean = osBean ?: return null
+            val used = bean.totalMemorySize - bean.freeMemorySize
+            return used.takeIf { it >= 0 }
         }
 
         val totalMemory get() = Runtime.getRuntime().totalMemory()
@@ -143,25 +158,29 @@ class AppSystemInfo {
         val isSystemOverCriticalLoad get() = isCriticalMemory || isCriticalCPULoad || isCriticalDiskSpace
 
         /**
+         * Checks whether the system metrics backend ([OperatingSystemMXBean] from the
+         * `jdk.management` module) is available.
          *
+         * The method name is retained for backward compatibility; it no longer
+         * refers to the OSHI library.
          * */
         @Synchronized
         fun isOSHIAvailable(): Boolean {
-            if (isOSHIChecked) {
-                return isOSHIAvailable
+            if (isMetricsChecked) {
+                return isMetricsAvailable
             }
 
-            isOSHIAvailable = try {
+            isMetricsAvailable = try {
                 report()
-                true
+                osBean != null
             } catch (e: Throwable) {
-                handleOSHINotAvailable()
+                handleMetricsNotAvailable()
                 false
             }
 
-            isOSHIChecked = true
+            isMetricsChecked = true
 
-            return isOSHIAvailable
+            return isMetricsAvailable
         }
 
         fun report() {
@@ -169,27 +188,37 @@ class AppSystemInfo {
                 return
             }
 
-            val si = SystemInfo()
+            val bean = osBean
+            if (bean == null) {
+                logger.info(
+                    "Operating system: {} {} ({})",
+                    System.getProperty("os.name"), System.getProperty("os.version"), System.getProperty("os.arch")
+                )
+                logger.info("System metrics bean (jdk.management) is unavailable")
+                return
+            }
 
-            val versionInfo = si.operatingSystem.versionInfo
-            logger.info("Operation system: {}", versionInfo)
-
-            val processor = si.hardware.processor
-            logger.info("Processor: {}", processor)
-
-            // Failed on Windows:
-            // si.hardware.memory throws exception since jna used by kotlin is too old,
-            // but we can not specify the version
-            val memory = si.hardware.memory
-            logger.info("Memory: {}", memory)
+            logger.info(
+                "Operating system: {} {} ({})",
+                System.getProperty("os.name"), System.getProperty("os.version"), System.getProperty("os.arch")
+            )
+            logger.info("Available processors: {}", bean.availableProcessors)
+            logger.info("Total physical memory: {}", Strings.compactFormat(bean.totalMemorySize))
+            logger.info("Free physical memory: {}", Strings.compactFormat(bean.freeMemorySize))
         }
 
+        /**
+         * Total bytes received across all network interfaces.
+         *
+         * Network interface byte counters are no longer tracked after the OSHI
+         * dependency was removed; there is no portable JDK equivalent. Returns
+         * `-1` to signal "unavailable", which callers already handle.
+         * */
         fun networkIFsReceivedBytes(): Long {
-            val si = systemInfo ?: return -1
-            return si.hardware.networkIFs.sumOf { it.bytesRecv.toInt() }.toLong().coerceAtLeast(0)
+            return -1
         }
 
-        private fun handleOSHINotAvailable() {
+        private fun handleMetricsNotAvailable() {
             val path = AppPaths.TMP_DIR.resolve("system.properties")
             try {
                 val text = System.getProperties().entries.joinToString("\n") { "" + it.key + "=" + it.value}
@@ -199,7 +228,7 @@ class AppSystemInfo {
                 logger.warn(e.stringify())
             }
 
-            val message = "OSHI is disabled"
+            val message = "System metrics are disabled (jdk.management unavailable)"
             logger.warn(message)
         }
 
@@ -226,17 +255,10 @@ class AppSystemInfo {
         }
 
         private fun computeSystemCpuLoad(): Double {
-            val processor = systemInfo?.hardware?.processor ?: return 0.0
-
-            synchronized(prevCPUTicks) {
-                // Returns the "recent cpu usage" for the whole system by counting ticks
-                val cpuLoad = processor.getSystemCpuLoadBetweenTicks(prevCPUTicks)
-                // Get System-wide CPU Load tick counters. Returns an array with seven elements
-                // representing milliseconds spent in User (0), Nice (1), System (2), Idle (3), IOwait (4),
-                // Hardware interrupts (IRQ) (5), Software interrupts/DPC (SoftIRQ) (6), or Steal (7) states.
-                prevCPUTicks = processor.systemCpuLoadTicks
-                return cpuLoad
-            }
+            val bean = osBean ?: return 0.0
+            val load = bean.cpuLoad
+            // getCpuLoad() returns -1 when unavailable or before the first reading.
+            return if (load < 0) 0.0 else load.coerceIn(0.0, 1.0)
         }
     }
 }

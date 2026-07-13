@@ -2,64 +2,64 @@ package ai.platon.pulsar.skeleton.workflow.common
 
 import ai.platon.pulsar.common.printlnPro
 import ai.platon.pulsar.skeleton.common.AppSystemInfo
-import kotlin.test.*
-import oshi.SystemInfo
-import oshi.hardware.CentralProcessor.TickType
+import com.sun.management.OperatingSystemMXBean
+import java.lang.management.ManagementFactory
 import java.time.Instant
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import kotlin.math.cos
 import kotlin.math.sin
 import kotlin.random.Random
+import kotlin.test.*
 
 class TestAppSystemInfo {
     var sum = 0.0
-    var prevTicks = LongArray(TickType.entries.size)
+
+    private val osBean: OperatingSystemMXBean?
+        get() = ManagementFactory.getOperatingSystemMXBean() as? OperatingSystemMXBean
 
     @Test
     fun testOSHIAvailable() {
-        val si = SystemInfo()
+        val bean = osBean
+        if (bean == null) {
+            printlnPro("System metrics bean (jdk.management) is unavailable")
+            return
+        }
 
         runCatching {
-            val versionInfo = si.operatingSystem.versionInfo
-            printlnPro("Operation system: $versionInfo")
+            printlnPro("Operation system: ${System.getProperty("os.name")} ${System.getProperty("os.version")}")
         }.onFailure { printlnPro(it.message) }
 
         runCatching {
-            val processor = si.hardware.processor
-            printlnPro("Processor: $processor")
+            printlnPro("Available processors: ${bean.availableProcessors}")
         }.onFailure { printlnPro(it.message) }
 
         runCatching {
-            val memory = si.hardware.memory
-            printlnPro("Memory: $memory")
+            printlnPro("Total physical memory: ${bean.totalMemorySize}")
         }.onFailure { printlnPro(it.message) }
     }
 
     @Test
     fun testOSVersionInfo() {
-        val systemInfo = AppSystemInfo.systemInfo ?: return
-
-        val versionInfo = systemInfo.operatingSystem.versionInfo
-        printlnPro(versionInfo)
+        printlnPro("${System.getProperty("os.name")} ${System.getProperty("os.version")} (${System.getProperty("os.arch")})")
     }
 
     @Test
     fun testSystemCpuLoad() {
         val systemCpuLoad = AppSystemInfo.systemCpuLoad
-        assert(systemCpuLoad > 0)
+        assert(systemCpuLoad >= 0)
     }
 
     @Test
     fun testCPULoad() {
-        val systemInfo = AppSystemInfo.systemInfo ?: return
+        val bean = osBean ?: return
 
         Executors.newScheduledThreadPool(1).scheduleAtFixedRate({
             printlnPro()
             measureCPU()
         }, 2, 2, TimeUnit.SECONDS)
 
-        val nThreads = systemInfo.hardware.processor.logicalProcessorCount - 2
+        val nThreads = (bean.availableProcessors - 2).coerceAtLeast(1)
         val executor = Executors.newFixedThreadPool(nThreads)
         repeat(nThreads) {
             executor.submit { compute() }
@@ -79,16 +79,12 @@ class TestAppSystemInfo {
     }
 
     fun measureCPU() {
-        val systemInfo = AppSystemInfo.systemInfo ?: return
+        val bean = osBean ?: return
 
-        val processor = systemInfo.hardware.processor
-
-        val cpuLoad = processor.getSystemCpuLoadBetweenTicks(prevTicks) * 100
-        prevTicks = processor.systemCpuLoadTicks
+        val cpuLoad = bean.cpuLoad * 100
         printlnPro(String.format("cpuLoad: %.2f%%", cpuLoad))
 
-        val systemLoadAverage = processor.getSystemLoadAverage(3).joinToString()
-        printlnPro("Sys: $systemLoadAverage")
+        val systemLoadAverage = bean.systemLoadAverage
+        printlnPro("Sys load average (1m): $systemLoadAverage")
     }
 }
-

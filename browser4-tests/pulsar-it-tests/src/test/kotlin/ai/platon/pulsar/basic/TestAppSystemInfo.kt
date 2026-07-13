@@ -2,35 +2,40 @@ package ai.platon.pulsar.basic
 
 import ai.platon.pulsar.common.printlnPro
 import ai.platon.pulsar.common.brief
+import com.sun.management.OperatingSystemMXBean
+import java.lang.management.ManagementFactory
 import kotlin.test.*
-import oshi.SystemInfo
 
 /**
-    ISSUE: OSHI failed on Windows in module browser4-tests and productions,
-    VERSION: pulsar-1.10.12
-    CAUSE: jna relevant packages are overridden by kotlin-compiler-${version}.jar:com.sun.jna.Memory,
-    which has no close() method.
+ * System metrics availability smoke test.
+ *
+ * Previously verified that the OSHI library was loadable; OSHI has been
+ * removed in favor of the JDK built-in [OperatingSystemMXBean] from the
+ * `jdk.management` module.
  * */
 class TestAppSystemInfo {
 
+    private val osBean: OperatingSystemMXBean?
+        get() = ManagementFactory.getOperatingSystemMXBean() as? OperatingSystemMXBean
+
     @Test
     fun testOSHIAvailable() {
-        val si = SystemInfo()
+        val bean = osBean
+        if (bean == null) {
+            printlnPro("System metrics bean (jdk.management) is unavailable")
+            return
+        }
 
         runCatching {
-            val versionInfo = si.operatingSystem.versionInfo
-            printlnPro("Operation system: $versionInfo")
+            printlnPro("Operation system: ${System.getProperty("os.name")} ${System.getProperty("os.version")}")
         }.onFailure { printlnPro(it.brief()) }
 
         runCatching {
-            val processor = si.hardware.processor
-            printlnPro("Processor: $processor")
+            printlnPro("Available processors: ${bean.availableProcessors}")
         }.onFailure { printlnPro(it.brief()) }
 
         runCatching {
-            val memory = si.hardware.memory
-            printlnPro("Memory: $memory")
+            printlnPro("Total physical memory: ${bean.totalMemorySize}")
         }.onFailure { printlnPro(it.brief()) }
     }
 }
-
