@@ -255,32 +255,35 @@ function Invoke-MavenBuild {
     # Persist to build log
     Add-Content -Path $BuildLogFile -Value "[$ts] $cmdLine"
 
-    # Capture output to detect currently-building module for --resume tracking
-    $currentModule = ""
-    $currentArtifactId = ""
-    $mvnOutput = & $MvnwScript @BuildArgs 2>&1
-    $exitCode = $LASTEXITCODE
-
-    # Stream output to console, while tracking "Building ..." lines
-    # and extracting the artifactId from "@ artifactId ---" plugin lines.
+    # Stream output to console in real-time, while tracking
+    # "Building ..." lines and extracting the artifactId from
+    # "@ artifactId ---" plugin lines for --resume support.
     # Maven -rf requires the artifactId, but "Building" lines show the
     # display <name> — which can differ (e.g. "Browser4" vs "browser4").
-    foreach ($line in $mvnOutput) {
-      Write-Host $line
-      if ($line -match '^\s*\[INFO\]\s+Building\s+(\S+)\s+') {
-        $currentModule = $Matches[1]
-        $currentArtifactId = ""
+    $currentModule = ""
+    $currentArtifactId = ""
+
+    & $MvnwScript @BuildArgs 2>&1 | ForEach-Object {
+      Write-Host $_
+      if ($_ -match '^\s*\[INFO\]\s+Building\s+(\S+)\s+') {
+        $script:currentModule = $Matches[1]
+        $script:currentArtifactId = ""
         # Always write the display name first (fallback); artifactId
         # will overwrite it once we see a plugin-execution line.
-        Write-TrackedFile -Path $LastFailedModuleFile -Content $currentModule
+        Write-TrackedFile -Path $LastFailedModuleFile -Content $script:currentModule
       }
-      elseif ($line -match '@\s+(\S+)\s+---') {
-        $currentArtifactId = $Matches[1]
-        if ($currentArtifactId) {
-          Write-TrackedFile -Path $LastFailedModuleFile -Content $currentArtifactId
+      elseif ($_ -match '@\s+(\S+)\s+---') {
+        $script:currentArtifactId = $Matches[1]
+        if ($script:currentArtifactId) {
+          Write-TrackedFile -Path $LastFailedModuleFile -Content $script:currentArtifactId
         }
       }
     }
+    $exitCode = $LASTEXITCODE
+    # Sync script-scoped variables (written inside ForEach-Object block)
+    # back to function scope for the error-handling code below.
+    $currentModule = $script:currentModule
+    $currentArtifactId = $script:currentArtifactId
 
     if ($exitCode -ne 0) {
       $errMsg = "Maven command failed in $Directory (exit code $exitCode)"
