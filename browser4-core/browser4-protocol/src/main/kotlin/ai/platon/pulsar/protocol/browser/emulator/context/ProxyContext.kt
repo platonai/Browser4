@@ -254,7 +254,8 @@ open class ProxyContext(
                 refresh()
                 numSuccessPages.incrementAndGet()
                 lastTarget = task.url
-                servedDomains.add(task.domain)
+                servedDomains.putIfAbsent(task.domain, AtomicInteger())
+                servedDomains[task.domain]?.incrementAndGet()
             } else {
                 numFailedPages.incrementAndGet()
             }

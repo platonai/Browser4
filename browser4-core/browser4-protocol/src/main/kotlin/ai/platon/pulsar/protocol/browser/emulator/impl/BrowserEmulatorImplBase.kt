@@ -348,7 +348,7 @@ abstract class BrowserEmulatorImplBase(
         val readableLength = Strings.compactFormat(pageSource.length)
 
         if (proxyEntry != null) {
-            val count = proxyEntry.servedDomains.count(domain)
+            val count = proxyEntry.servedDomains[domain]?.get() ?: 0
             logger.warn(
                 "{}. Page is {}({}) with {} in {}({}) | file://{}",
                 task.page.id,

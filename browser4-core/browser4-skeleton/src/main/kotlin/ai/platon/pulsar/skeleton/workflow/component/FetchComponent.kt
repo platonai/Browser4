@@ -99,7 +99,7 @@ open class FetchComponent(
         }
         page.isFetched = true
 
-        page.headers.putAll(output.headers.asMultimap())
+        page.headers.putAll(output.headers.asMultimap().map { it.key to it.value.joinToString(",") }.toMap())
         updateFetchedPage(page, pageDatum, protocolStatus)
         return page
     }

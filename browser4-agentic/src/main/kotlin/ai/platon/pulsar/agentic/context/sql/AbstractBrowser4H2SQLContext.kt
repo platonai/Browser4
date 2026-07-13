@@ -4,7 +4,7 @@ import ai.platon.pulsar.agentic.AgenticQLSession
 import ai.platon.pulsar.agentic.BasicAgenticSession
 import ai.platon.pulsar.ql.SQLSession
 import ai.platon.pulsar.ql.SessionConfig
-import ai.platon.pulsar.ql.SessionDelegate
+import ai.platon.pulsar.ql.session.SessionDelegate
 import ai.platon.pulsar.ql.h2.H2MemoryDb
 import ai.platon.pulsar.ql.h2.H2SessionDelegate
 import ai.platon.pulsar.skeleton.session.BasicPulsarSession

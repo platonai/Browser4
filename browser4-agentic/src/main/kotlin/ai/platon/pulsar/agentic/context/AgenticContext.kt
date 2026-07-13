@@ -8,8 +8,8 @@ import ai.platon.pulsar.common.config.CapabilityTypes
 import ai.platon.pulsar.common.config.MutableConfig
 import ai.platon.browser4.protocol.browser.DefaultBrowserManager
 import ai.platon.pulsar.ql.SQLSession
-import ai.platon.pulsar.ql.SessionDelegate
 import ai.platon.pulsar.ql.context.SQLContext
+import ai.platon.pulsar.ql.session.SessionDelegate
 import ai.platon.pulsar.skeleton.PulsarSettings
 import ai.platon.pulsar.skeleton.context.support.TrivialContextDefaults
 import ai.platon.pulsar.skeleton.session.BasicPulsarSession

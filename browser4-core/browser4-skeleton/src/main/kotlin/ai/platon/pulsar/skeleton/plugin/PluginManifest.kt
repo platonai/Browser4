@@ -13,11 +13,11 @@ import java.util.jar.JarFile
 data class PluginManifest(
     val name: String,
     val version: String,
-    @JsonProperty("description")
+    @field:JsonProperty("description")
     val description: String = "",
-    @JsonProperty("dependsOn")
+    @field:JsonProperty("dependsOn")
     val dependsOn: List<String> = emptyList(),
-    @JsonProperty("autoConfigurationClasses")
+    @field:JsonProperty("autoConfigurationClasses")
     val autoConfigurationClasses: List<String> = emptyList(),
 ) {
     companion object {
