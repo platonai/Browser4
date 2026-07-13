@@ -457,19 +457,74 @@ class CDPSnapshotService(
     }
 
     fun buildOptimizedDOMTreeNode(root: MergedDOMTreeNode): OptimizedDOMTreeNode {
-        fun optimize(node: MergedDOMTreeNode): OptimizedDOMTreeNode {
-            val optimizedChildren = node.children.map { optimize(it) }
+        fun optimize(node: MergedDOMTreeNode): OptimizedDOMTreeNode? {
+            return when (node.nodeType) {
+                NodeType.DOCUMENT_NODE -> {
+                    // Unwrap document node: return the first non-null optimized child
+                    node.children.firstNotNullOfOrNull { optimize(it) }
+                        ?: node.shadowRoots.firstNotNullOfOrNull { optimize(it) }
+                }
 
-            return OptimizedDOMTreeNode(
-                originalNode = node,
-                children = optimizedChildren,
-                shouldDisplay = node.nodeType == NodeType.ELEMENT_NODE ||
-                        node.nodeType == NodeType.TEXT_NODE,
-                interactiveIndex = node.interactiveIndex
-            )
+                NodeType.DOCUMENT_FRAGMENT_NODE -> {
+                    val children = (node.children + node.shadowRoots).mapNotNull { optimize(it) }
+                    OptimizedDOMTreeNode(
+                        originalNode = node,
+                        children = children,
+                        shouldDisplay = true,
+                        isShadowHost = false,
+                        interactiveIndex = node.interactiveIndex
+                    )
+                }
+
+                NodeType.ELEMENT_NODE -> {
+                    val tag = node.nodeName.lowercase()
+                    val isFrame = tag == "iframe" || tag == "frame"
+
+                    // For iframe/frame elements, traverse contentDocument to include nested frame content
+                    val contentDocChildren = if (isFrame) {
+                        node.contentDocument?.let { doc ->
+                            // Unwrap document node if present, then optimize its children
+                            if (doc.nodeType == NodeType.DOCUMENT_NODE) {
+                                doc.children.mapNotNull { optimize(it) } +
+                                        doc.shadowRoots.mapNotNull { optimize(it) }
+                            } else {
+                                listOfNotNull(optimize(doc))
+                            }
+                        } ?: emptyList()
+                    } else {
+                        emptyList()
+                    }
+
+                    // Regular children + shadow roots + content document children
+                    val optimizedChildren = node.children.mapNotNull { optimize(it) } +
+                            node.shadowRoots.mapNotNull { optimize(it) } +
+                            contentDocChildren
+
+                    val hasShadowContent = node.shadowRoots.isNotEmpty()
+
+                    OptimizedDOMTreeNode(
+                        originalNode = node,
+                        children = optimizedChildren,
+                        shouldDisplay = true,
+                        isShadowHost = hasShadowContent,
+                        interactiveIndex = node.interactiveIndex
+                    )
+                }
+
+                NodeType.TEXT_NODE -> {
+                    OptimizedDOMTreeNode(
+                        originalNode = node,
+                        children = emptyList(),
+                        shouldDisplay = true,
+                        interactiveIndex = node.interactiveIndex
+                    )
+                }
+
+                else -> null
+            }
         }
 
-        return optimize(root)
+        return optimize(root) ?: OptimizedDOMTreeNode(MergedDOMTreeNode())
     }
 
     fun buildDOMState(root: OptimizedDOMTreeNode, includeAttributes: List<String> = emptyList()): DOMState {
