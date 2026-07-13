@@ -5,7 +5,7 @@ package ai.platon.pulsar.examples.sites.spa.wemix
 import ai.platon.pulsar.common.AppPaths
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.common.stringify
-import ai.platon.pulsar.browser.WebDriver
+import ai.platon.pulsar.core.api.WebDriver
 import ai.platon.pulsar.persist.WebPage
 import ai.platon.pulsar.skeleton.context.PulsarContexts
 import ai.platon.pulsar.skeleton.event.WebPageWebDriverEventHandler
