@@ -7,7 +7,7 @@
 
     <requiredProperties>
         <requiredProperty key="browser4-version">
-            <defaultValue>4.12.0-rc.1</defaultValue>
+            <defaultValue>4.12.0-rc.1-SNAPSHOT</defaultValue>
         </requiredProperty>
         <requiredProperty key="pluginName">
             <defaultValue>My Browser4 Plugin</defaultValue>
