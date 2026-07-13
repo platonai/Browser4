@@ -10,7 +10,7 @@ on:
       - 'browser4-apps/browser4-bundle/pom.xml'
       - 'cli/browser4-cli/src/**'
       - 'cli/browser4-cli/Cargo.toml'
-      - '.github/workflows/test-smoke-cross-platform.yml'
+      - '.github/workflows/cross-platform-smoke.yml'
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true

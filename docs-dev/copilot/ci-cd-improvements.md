@@ -10,7 +10,7 @@
 | `nightly.yml` | cron `0 0 * * *` / dispatch | 全量 Slow + Integration（排除 E2E） |
 | `release.yml` | push `v*.*.*[-rc/-alpha/-beta/-dry_run]` / dispatch | JAR + Docker + 7 CLI 二进制 + 3 运行时 bundle + npm + GH Release |
 | `release-cli.yml` | push `v*.*.*-cli*` / dispatch | CLI 独立发布路径（npm + 最新 Release 附件） |
-| `test-smoke-cross-platform.yml` | path 变更 / dispatch | 跨平台运行时 bundle 冒烟测试 |
+| `cross-platform-smoke.yml` | path 变更 / dispatch | 跨平台运行时 bundle 冒烟测试 |
 | `test-runtime-bundle.yml` | push `v*.*.*-rb*` / dispatch | 单平台 bundle 构建验证 |
 | `maintenance.yml` | cron `0 6 * * *` / dispatch | 每日维护检查编排（状态文件回写） |
 | `sync-to-oss.yml` | release published / dispatch | 资产同步到阿里云 OSS + latest 软链 |
