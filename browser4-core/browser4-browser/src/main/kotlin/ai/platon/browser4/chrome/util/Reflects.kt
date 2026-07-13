@@ -285,15 +285,15 @@ object ProxyClasses {
     /**
      * Example parameters:
      *
-     * class: ai.platon.browser4.chrome.protocol.transport.ChromeDevToolsImpl
+     * class: ai.platon.pulsar.driver.chrome.impl.ChromeDevToolsImpl
      * paramTypes:
      *   - interface ai.platon.pulsar.driver.chrome.Transport,
      *   - interface ai.platon.pulsar.driver.chrome.Transport,
-     *   - class ai.platon.browser4.api.model.DevToolsConfig
+     *   - class ai.platon.pulsar.api.model.DevToolsConfig
      * args:
      *   - ws://localhost:4644/devtools/browser/fefcf5b0-eb7f-4158-8a07-d5be61024292,
      *   - ws://localhost:4644/devtools/page/8A485D7DE2D7E9A0971C47686A81B645,
-     *   - ai.platon.browser4.api.model.DevToolsConfig@257cc1fc
+     *   - ai.platon.pulsar.api.model.DevToolsConfig@257cc1fc
      * */
     private fun <T> debugParameters(clazz: Class<T>, paramTypes: Array<Class<*>>, args: Array<Any>? = null) {
 
@@ -313,7 +313,7 @@ args:
     /**
      * Example Parameters:
      *
-     * proxy: ai.platon.browser4.chrome.protocol.transport.ChromeDevToolsImpl_$$_jvst2b9_0@421a4ee1
+     * proxy: ai.platon.pulsar.driver.chrome.impl.ChromeDevToolsImpl_$$_jvst2b9_0@421a4ee1
      * method:
      *   - public abstract ai.platon.pulsar.cdt.protocol.commands.Page ai.platon.pulsar.cdt.protocol.ChromeDevTools.getPage()
      * methodArgs:
