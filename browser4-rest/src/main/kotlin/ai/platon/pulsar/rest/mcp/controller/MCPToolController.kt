@@ -591,17 +591,17 @@ class MCPToolController(
         }
 
         val selectorLiteral = pulsarObjectMapper().writeValueAsString(selector)
-        val focusExpression = """
+        val focusExpression = $$"""
             (() => {
                 try {
-                    const el = document.querySelector($selectorLiteral);
+                    const el = document.querySelector($$selectorLiteral);
                     if (!el) return 'missing';
                     if (typeof el.focus === 'function') {
                         el.focus();
                     }
                     return document.activeElement === el ? 'focused' : 'unfocused';
                 } catch (error) {
-                    return `invalid:$${error}`;
+                    return `invalid:${error}`;
                 }
             })()
         """.trimIndent()
