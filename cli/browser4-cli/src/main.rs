@@ -42,7 +42,7 @@ use serde_json::{json, Value};
 
 use args::{
     build_command_args, build_short_option_map, parse_batch_args, parse_batch_json_commands,
-    parse_command_string, parse_global_flags, parse_raw_args,
+    parse_command_string, parse_global_flags, parse_raw_args, GlobalFlags,
 };
 use commands::{commands_map, is_element_reference};
 use daemon::{
@@ -9741,6 +9741,151 @@ async fn handle_plugin_remove(
     Ok(())
 }
 
+/// Handle a dynamic plugin command (plugin-<name>) that has no hardcoded
+/// CommandDef.  Discovers the matching MCP tool from the server's /mcp/tools
+/// endpoint and executes it generically.
+async fn handle_dynamic_plugin_command(
+    client: &Client,
+    base_url: &str,
+    domain: &str,
+    global: &GlobalFlags,
+) -> Result<(), CliError> {
+    // Discover available plugin tools from the server
+    let tools_url = format!("{}/mcp/tools", base_url.trim_end_matches('/'));
+    let tools_response = client
+        .get(&tools_url)
+        .send()
+        .await
+        .map_err(|e| CliError(
+            ExitCode::Server,
+            format!("Failed to fetch plugin tool list: {}", e),
+        ))?;
+
+    let tools_body = tools_response
+        .text()
+        .await
+        .map_err(|e| CliError(
+            ExitCode::Server,
+            format!("Failed to read plugin tool list: {}", e),
+        ))?;
+
+    let tools_json: Value = serde_json::from_str(&tools_body)
+        .map_err(|e| CliError(
+            ExitCode::Server,
+            format!("Failed to parse plugin tool list: {}", e),
+        ))?;
+
+    let tools: Vec<&str> = tools_json
+        .get("tools")
+        .and_then(|v| v.as_array())
+        .map(|arr| arr.iter().filter_map(|t| t.as_str()).collect())
+        .unwrap_or_default();
+
+    // If domain is empty (bare `plugin` command), list all available plugin tools
+    if domain.is_empty() {
+        let available = list_available_plugin_tools(&tools);
+        if available.is_empty() {
+            cli_println!("No plugin tools available.");
+        } else {
+            cli_println!("Available plugin commands:\n{}", available);
+        }
+        return Ok(());
+    }
+
+    // Find tools matching the domain prefix (e.g. "pptx_*")
+    let prefix = format!("{}_", domain);
+    let matching: Vec<&&str> = tools.iter().filter(|t| t.starts_with(&prefix)).collect();
+
+    if matching.is_empty() {
+        let available = list_available_plugin_tools(&tools);
+        let hint = if available.is_empty() {
+            "  (no plugin tools available)".to_string()
+        } else {
+            format!("Available plugin commands:\n{}", available)
+        };
+        return Err(CliError(
+            ExitCode::Usage,
+            format!(
+                "No plugin tools found for '{}'.\n{}",
+                domain, hint,
+            ),
+        ));
+    }
+
+    // Use the first matching tool
+    let tool_name = matching[0].to_string();
+
+    // Parse remaining args generically: pass through all --key value pairs
+    let raw_parsed = parse_raw_args(&global.args, None, None);
+    let mut tool_params = serde_json::Map::new();
+    for (key, value) in &raw_parsed {
+        if key != "_" {
+            tool_params.insert(key.clone(), value.clone());
+        }
+    }
+
+    // Determine session name
+    let session_name = global.session_name.as_deref();
+
+    // Execute the tool
+    let result = with_session(
+        client,
+        base_url,
+        session_name,
+        false,
+        |session_id| {
+            let client = client.clone();
+            let base_url = base_url.to_string();
+            let tool_name = tool_name.clone();
+            let mut params = Value::Object(tool_params.clone());
+            params["sessionId"] = json!(session_id);
+            async move { call_tool(&client, &base_url, &tool_name, params).await }
+        },
+    )
+    .await
+    .map_err(|e| CliError(ExitCode::General, e))?;
+
+    cli_println!("{}", result);
+    Ok(())
+}
+
+/// Build a human-readable list of available plugin tool domains from the
+/// server's tool list (filtering out built-in tools).
+fn list_available_plugin_tools(tools: &[&str]) -> String {
+    let builtin_prefixes = [
+        "browser_", "open_", "close_", "attach_", "delete_",
+        "command_", "crawl_", "swarm_", "skill_",
+        "html_snapshot_", "check_session_",
+        "wait_for_", "bounding_box_", "select_first_",
+        "page_", "switch_tab", "tab_",
+        "keydown", "keyup", "mousemove", "mousedown", "mouseup", "mousewheel",
+        "delay", "scroll_by", "execute_cdp",
+        "clear_browser_cookies", "delete_cookies",
+        "generate_locator",
+    ];
+
+    let plugin_tools: Vec<String> = tools
+        .iter()
+        .filter(|t| !builtin_prefixes.iter().any(|p| t.starts_with(p)))
+        .map(|t| {
+            // Extract domain from tool name: "pptx_generate" → "pptx"
+            t.split('_').next().unwrap_or(t).to_string()
+        })
+        .collect::<std::collections::BTreeSet<_>>() // deduplicate and sort
+        .into_iter()
+        .collect();
+
+    if plugin_tools.is_empty() {
+        String::new()
+    } else {
+        plugin_tools
+            .iter()
+            .map(|d| format!("  plugin {}", d))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+}
+
 /// Returns true when npm's output indicates browser4-cli was not installed
 /// via npm, as opposed to a genuine uninstall failure.
 fn npm_not_installed_message(msg: &str) -> bool {
@@ -11179,6 +11324,7 @@ fn rewrite_prefixed_command(args: &[String]) -> Option<Vec<String>> {
         "htmlsnapshot" => format!("htmlsnapshot-{}", sub),
         "snapshot" => format!("snapshot-{}", sub),
         "skills" => format!("skills-{}", sub),
+        "plugin" => format!("plugin-{}", sub),
         _ => return None,
     };
     let mut rewritten = vec![rewritten_command];
@@ -11229,6 +11375,7 @@ fn preferred_prefixed_group_form(command: &str) -> Option<&'static str> {
     match command {
         "agent" => Some("agent <subcommand>"),
         "swarm" => Some("swarm <subcommand>"),
+        "plugin" => Some("plugin <subcommand>"),
         "co" => Some("swarm <subcommand>"),
         // `skills` is a valid standalone command (lists skills) as well as a
         // prefix for subcommands (skills list → skills-list), so it is
@@ -12318,6 +12465,25 @@ async fn run(
     let cmd_def = match cmd_map.get(command) {
         Some(def) => def,
         None => {
+            // Dynamic plugin commands: plugin-<name> where <name> is not a
+            // known built-in (plugin-list, plugin-info, etc.).
+            // Also handles bare `plugin` (no subcommand) — lists available tools.
+            const BUILTIN_PLUGIN_COMMANDS: &[&str] = &[
+                "plugin-list", "plugin-info", "plugin-install", "plugin-remove",
+            ];
+            let is_dynamic_plugin = command.starts_with("plugin-") && !BUILTIN_PLUGIN_COMMANDS.contains(&command);
+            let is_bare_plugin = command == "plugin";
+            if is_dynamic_plugin || is_bare_plugin {
+                let domain = if is_dynamic_plugin {
+                    &command["plugin-".len()..]
+                } else {
+                    "" // bare "plugin" — list all
+                };
+                ensure_server_running(&base_url).await?;
+                let client = make_client();
+                return handle_dynamic_plugin_command(&client, &base_url, domain, global).await;
+            }
+
             let suggestions = suggest_similar_commands(command, 3, 5);
             if suggestions.is_empty() {
                 eprintln!("Unknown command: '{}'", command);

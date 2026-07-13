@@ -6,6 +6,7 @@ import ai.platon.pulsar.agentic.model.ToolCall
 import ai.platon.pulsar.agentic.model.ToolSpec
 import ai.platon.pulsar.agentic.tools.CustomToolRegistry
 import ai.platon.pulsar.agentic.tools.builtin.ToolExecutor
+import ai.platon.pulsar.core.api.WebDriver
 import ai.platon.pulsar.rest.session.PulsarSessionManager
 import ai.platon.pulsar.common.brief
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
@@ -488,15 +489,39 @@ class MCPToolController(
         executor: ToolExecutor,
         request: MCPToolCallRequest,
     ): ResponseEntity<MCPToolCallResponse> {
-        // Derive method name from tool name: "crawl_submit" → "submit"
+        // Derive method name from tool name: "pptx_generate" → "generate"
         val method = if (toolName.startsWith("${domain}_")) {
             toolName.substring(domain.length + 1)
         } else {
             toolName
         }
 
+        // Resolve the receiver: for executors that require a WebDriver (e.g., pptx),
+        // extract the session ID and get the session's driver.
+        val receiver: Any = if (executor.receiverClass == WebDriver::class) {
+            val sessionId = args["sessionId"]?.toString()
+                ?: request.arguments?.get("sessionId")?.toString()
+            if (sessionId != null) {
+                val managed = sessionManager.getSession(sessionId)
+                if (managed != null) {
+                    try {
+                        managed.driver
+                    } catch (e: Exception) {
+                        logger.warn("Failed to get driver for session {}: {}", sessionId, e.message)
+                        Any()
+                    }
+                } else {
+                    Any()
+                }
+            } else {
+                Any()
+            }
+        } else {
+            Any()
+        }
+
         return try {
-            val result = executor.callFunctionOn(ToolCall(domain, method, args.toMutableMap()))
+            val result = executor.callFunctionOn(ToolCall(domain, method, args.toMutableMap()), receiver)
             val evaluate = result
             val exception = evaluate.exception
             if (exception != null) {
