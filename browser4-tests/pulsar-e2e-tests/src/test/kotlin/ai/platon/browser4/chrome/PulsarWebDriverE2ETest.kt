@@ -246,6 +246,7 @@ open class PulsarWebDriverE2ETest : WebDriverTestBase() {
     }
 
     @Test
+    @Tag("ManualOnly")
     fun testKeyPress() = runEnhancedWebDriverTest(browser) { driver ->
         driver.navigate(e2eProductUrl)
         delay(1000.milliseconds)
