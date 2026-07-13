@@ -26,6 +26,10 @@ pub fn public_command_name(name: &str) -> &str {
         "htmlsnapshot-inspect" => "htmlsnapshot inspect",
         "snapshot-grep" => "snapshot grep",
         "doctor-log" => "doctor log",
+        "plugin-list" => "plugin list",
+        "plugin-info" => "plugin info",
+        "plugin-install" => "plugin install",
+        "plugin-remove" => "plugin remove",
         _ => name,
     }
 }
@@ -48,6 +52,7 @@ pub const CATEGORY_TITLES: &[(&str, &str)] = &[
     ("install", "Install"),
     ("browsers", "Browser sessions"),
     ("skills", "Skills"),
+    ("plugins", "Plugins"),
 ];
 
 /// Short aliases for category-based help filtering.
@@ -66,6 +71,7 @@ const CATEGORY_ALIASES: &[(&str, &str)] = &[
     ("ss", "snapshot"),
     ("state", "storage"),
     ("skill", "skills"),
+    ("plugin", "plugins"),
 ];
 
 /// Resolve a category alias to its canonical category name, or return the

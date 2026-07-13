@@ -382,6 +382,10 @@ fn no_snapshot_commands() -> HashSet<&'static str> {
         "skills-list",
         "skills-get",
         "skills-path",
+        "plugin-list",
+        "plugin-info",
+        "plugin-install",
+        "plugin-remove",
     ]
     .into()
 }
@@ -9563,6 +9567,180 @@ fn handle_skills_path(tool_params: &Value) -> Result<(), String> {
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// plugin command handlers
+// ---------------------------------------------------------------------------
+
+async fn handle_plugin_list(client: &reqwest::Client, base_url: &str) -> Result<(), String> {
+    let response = http::list_plugins(client, base_url).await?;
+    // Pretty-print the JSON array of PluginInfo objects
+    let parsed: serde_json::Value = serde_json::from_str(&response)
+        .map_err(|e| format!("Failed to parse plugin list response: {}", e))?;
+
+    if let Some(plugins) = parsed.as_array() {
+        if plugins.is_empty() {
+            cli_println!("No plugins installed.");
+            json_field("plugins", json!([]));
+            return Ok(());
+        }
+        cli_println!("Installed plugins ({}):", plugins.len());
+        for plugin in plugins {
+            let name = plugin.get("fileName").and_then(|v| v.as_str()).unwrap_or("?");
+            let status = if plugin.get("loaded").and_then(|v| v.as_bool()).unwrap_or(false) {
+                "loaded"
+            } else {
+                "inactive (restart required)"
+            };
+            let manifest = plugin.get("manifest");
+            let version = manifest.and_then(|m| m.get("version")).and_then(|v| v.as_str()).unwrap_or("-");
+            let desc = manifest.and_then(|m| m.get("description")).and_then(|v| v.as_str()).unwrap_or("");
+            cli_println!("  {:<36} v{:<12} {}  {}", name, version, status, desc);
+        }
+    } else {
+        cli_println!("{}", response);
+    }
+    json_field("plugins", parsed);
+    Ok(())
+}
+
+async fn handle_plugin_info(
+    client: &reqwest::Client,
+    base_url: &str,
+    tool_params: &serde_json::Value,
+) -> Result<(), String> {
+    let name = tool_params
+        .get("name")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "Plugin name is required".to_string())?;
+
+    let response = http::get_plugin(client, base_url, name).await?;
+    let parsed: serde_json::Value = serde_json::from_str(&response)
+        .map_err(|e| format!("Failed to parse plugin info response: {}", e))?;
+
+    let file_name = parsed.get("fileName").and_then(|v| v.as_str()).unwrap_or("?");
+    let file_size = parsed.get("fileSize").and_then(|v| v.as_u64()).unwrap_or(0);
+    let loaded = parsed.get("loaded").and_then(|v| v.as_bool()).unwrap_or(false);
+    let path = parsed.get("path").and_then(|v| v.as_str()).unwrap_or("?");
+
+    cli_println!("Plugin: {}", file_name);
+    cli_println!("  Path:      {}", path);
+    cli_println!("  Size:      {} bytes", file_size);
+    cli_println!("  Status:    {}", if loaded { "loaded" } else { "inactive (restart required)" });
+
+    if let Some(manifest) = parsed.get("manifest") {
+        if let Some(m_name) = manifest.get("name").and_then(|v| v.as_str()) {
+            cli_println!("  Manifest:  {} v{}", m_name, manifest.get("version").and_then(|v| v.as_str()).unwrap_or("-"));
+        }
+        if let Some(desc) = manifest.get("description").and_then(|v| v.as_str()) {
+            if !desc.is_empty() {
+                cli_println!("  Desc:      {}", desc);
+            }
+        }
+        if let Some(deps) = manifest.get("dependsOn").and_then(|v| v.as_array()) {
+            if !deps.is_empty() {
+                let dep_strs: Vec<&str> = deps.iter().filter_map(|d| d.as_str()).collect();
+                cli_println!("  Depends:   {}", dep_strs.join(", "));
+            }
+        }
+        if let Some(classes) = manifest.get("autoConfigurationClasses").and_then(|v| v.as_array()) {
+            if !classes.is_empty() {
+                cli_println!("  AutoConfig: {} class(es)", classes.len());
+                for cls in classes.iter().filter_map(|c| c.as_str()) {
+                    cli_println!("    - {}", cls);
+                }
+            }
+        }
+    }
+
+    json_field("plugin", parsed);
+    Ok(())
+}
+
+async fn handle_plugin_install(
+    client: &reqwest::Client,
+    base_url: &str,
+    tool_params: &serde_json::Value,
+) -> Result<(), String> {
+    let file_path = tool_params
+        .get("file")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "Plugin JAR file path is required".to_string())?;
+
+    let replace = tool_params
+        .get("replace")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    if !std::path::Path::new(file_path).exists() {
+        return Err(format!("Plugin file not found: {}", file_path));
+    }
+
+    let response = http::install_plugin(client, base_url, file_path, replace).await?;
+    let parsed: serde_json::Value = serde_json::from_str(&response)
+        .map_err(|e| format!("Failed to parse plugin install response: {}", e))?;
+
+    let name = parsed.get("fileName").and_then(|v| v.as_str()).unwrap_or("?");
+    let manifest_name = parsed
+        .get("manifest")
+        .and_then(|m| m.get("name"))
+        .and_then(|v| v.as_str())
+        .unwrap_or(name);
+
+    cli_println!("✓ Plugin installed: {} ({})", manifest_name, name);
+    cli_println!("  Restart the application to activate.");
+
+    json_field("plugin", parsed);
+    Ok(())
+}
+
+async fn handle_plugin_remove(
+    client: &reqwest::Client,
+    base_url: &str,
+    tool_params: &serde_json::Value,
+) -> Result<(), String> {
+    let name = tool_params
+        .get("name")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "Plugin name is required".to_string())?;
+
+    let skip_confirm = tool_params
+        .get("yes")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    if !skip_confirm {
+        // Confirm removal when not in quiet/json mode
+        let is_interactive = !json_active() && !quiet_active();
+        if is_interactive {
+            eprintln!("Remove plugin '{}'? [y/N]: ", name);
+            let mut input = String::new();
+            std::io::stdin()
+                .read_line(&mut input)
+                .map_err(|e| format!("Failed to read input: {}", e))?;
+            if !input.trim().eq_ignore_ascii_case("y") && !input.trim().eq_ignore_ascii_case("yes") {
+                cli_println!("Plugin removal cancelled.");
+                return Ok(());
+            }
+        }
+    }
+
+    let response = http::remove_plugin(client, base_url, name).await?;
+    let parsed: serde_json::Value = serde_json::from_str(&response)
+        .map_err(|e| format!("Failed to parse plugin remove response: {}", e))?;
+
+    let removed_name = parsed.get("fileName").and_then(|v| v.as_str()).unwrap_or(name);
+    cli_println!("✓ Plugin removed: {}", removed_name);
+    if parsed.get("loaded").and_then(|v| v.as_bool()).unwrap_or(false) {
+        cli_println!("  Beans will be cleaned up on next restart.");
+    }
+
+    json_field("plugin", parsed);
+    Ok(())
+}
+
 /// Returns true when npm's output indicates browser4-cli was not installed
 /// via npm, as opposed to a genuine uninstall failure.
 fn npm_not_installed_message(msg: &str) -> bool {
@@ -12276,6 +12454,18 @@ async fn run(
         }
         "skills-path" => {
             handle_skills_path(&tool_params)?;
+        }
+        "plugin-list" => {
+            handle_plugin_list(&client, &base_url).await?;
+        }
+        "plugin-info" => {
+            handle_plugin_info(&client, &base_url, &tool_params).await?;
+        }
+        "plugin-install" => {
+            handle_plugin_install(&client, &base_url, &tool_params).await?;
+        }
+        "plugin-remove" => {
+            handle_plugin_remove(&client, &base_url, &tool_params).await?;
         }
         "uninstall" => {
             handle_uninstall(&tool_params).await?;

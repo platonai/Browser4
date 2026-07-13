@@ -25,6 +25,7 @@ pub enum Category {
     Skill,
     Act,
     Skills,
+    Plugins,
 }
 
 impl Category {
@@ -48,6 +49,7 @@ impl Category {
             Category::Skill => "skill",
             Category::Act => "act",
             Category::Skills => "skills",
+            Category::Plugins => "plugins",
         }
     }
 }
@@ -2801,6 +2803,71 @@ pub fn all_commands() -> Vec<CommandDef> {
                 json!({ "id": id })
             },
         },
+        // ---- Plugins ----
+        CommandDef {
+            name: "plugin-list",
+            description: "List all installed Browser4 plugins in the server's plugins directory",
+            category: Category::Plugins,
+            hidden: false,
+            batch_supported: false,
+            args: &[],
+            options: &[],
+            tool_name_fn: |_| String::new(),
+            tool_params_fn: |_| json!({}),
+        },
+        CommandDef {
+            name: "plugin-info",
+            description: "Show details for a single installed plugin (manifest name or JAR file name)",
+            category: Category::Plugins,
+            hidden: false,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "name", description: "Plugin name (manifest name or JAR file name)", optional: false },
+            ],
+            options: &[],
+            tool_name_fn: |_| String::new(),
+            tool_params_fn: |args| {
+                json!({ "name": get_str(args, "name").unwrap_or_default() })
+            },
+        },
+        CommandDef {
+            name: "plugin-install",
+            description: "Install a Browser4 plugin from a local JAR file (requires server restart to activate)",
+            category: Category::Plugins,
+            hidden: false,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "file", description: "Path to the plugin JAR file", optional: false },
+            ],
+            options: &[
+                OptionDef { name: "replace", description: "Overwrite an existing plugin with the same name", is_bool: true, short: None },
+            ],
+            tool_name_fn: |_| String::new(),
+            tool_params_fn: |args| {
+                let mut p = json!({ "file": get_str(args, "file").unwrap_or_default() });
+                if let Some(r) = get_bool(args, "replace") { p["replace"] = json!(r); }
+                p
+            },
+        },
+        CommandDef {
+            name: "plugin-remove",
+            description: "Remove a Browser4 plugin by name (beans remain in context until next restart)",
+            category: Category::Plugins,
+            hidden: false,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "name", description: "Plugin name (manifest name or JAR file name)", optional: false },
+            ],
+            options: &[
+                OptionDef { name: "yes", description: "Skip confirmation prompt", is_bool: true, short: Some("y") },
+            ],
+            tool_name_fn: |_| String::new(),
+            tool_params_fn: |args| {
+                let mut p = json!({ "name": get_str(args, "name").unwrap_or_default() });
+                if let Some(y) = get_bool(args, "yes") { p["yes"] = json!(y); }
+                p
+            },
+        },
         CommandDef {
             name: "htmlsnapshot-inspect",
             description: "Inspect: read the stored HTML snapshot and discover CSS selectors for recurring patterns (product cards, prices, titles). Use `htmlsnapshot` first to capture the page into storage.",
@@ -2944,6 +3011,10 @@ mod tests {
             "skill-install",
             "skill-uninstall",
             "skill-reload",
+            "plugin-list",
+            "plugin-info",
+            "plugin-install",
+            "plugin-remove",
             "act",
         ] {
             assert!(map.contains_key(*expected), "Missing command: {}", expected);

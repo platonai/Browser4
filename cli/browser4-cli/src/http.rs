@@ -586,6 +586,59 @@ async fn send_rest_request(
     Ok(response_text)
 }
 
+// ---------------------------------------------------------------------------
+// Plugin REST API helpers
+// ---------------------------------------------------------------------------
+
+/// List all installed plugins via `GET /api/plugins`.
+pub async fn list_plugins(client: &Client, base_url: &str) -> Result<String, String> {
+    let url = build_endpoint_url(base_url, "/api/plugins");
+    send_rest_request(client.get(url)).await
+}
+
+/// Get a single plugin by name via `GET /api/plugins/{name}`.
+pub async fn get_plugin(client: &Client, base_url: &str, name: &str) -> Result<String, String> {
+    let url = build_endpoint_url(base_url, &format!("/api/plugins/{}", name));
+    send_rest_request(client.get(url)).await
+}
+
+/// Install a plugin JAR via `POST /api/plugins/install` (multipart upload).
+pub async fn install_plugin(
+    client: &Client,
+    base_url: &str,
+    file_path: &str,
+    replace: bool,
+) -> Result<String, String> {
+    let url = build_endpoint_url(base_url, "/api/plugins/install");
+    let file_bytes = std::fs::read(file_path)
+        .map_err(|e| format!("Failed to read plugin file '{}': {}", file_path, e))?;
+    let file_name = std::path::Path::new(file_path)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("plugin.jar");
+
+    let part = reqwest::multipart::Part::bytes(file_bytes)
+        .file_name(file_name.to_string())
+        .mime_str("application/java-archive")
+        .map_err(|e| format!("Failed to set MIME type: {}", e))?;
+
+    let form = reqwest::multipart::Form::new()
+        .part("file", part)
+        .text("replace", replace.to_string());
+
+    send_rest_request(client.post(url).multipart(form)).await
+}
+
+/// Remove a plugin by name via `DELETE /api/plugins/{name}`.
+pub async fn remove_plugin(
+    client: &Client,
+    base_url: &str,
+    name: &str,
+) -> Result<String, String> {
+    let url = build_endpoint_url(base_url, &format!("/api/plugins/{}", name));
+    send_rest_request(client.delete(url)).await
+}
+
 /// Submit a crawl task via the MCP `crawl_submit` tool.
 pub async fn submit_crawl(
     client: &Client,

@@ -21,7 +21,7 @@ path = "tests/e2e/mod.rs"
 harness = false
 
 [dependencies]
-reqwest = { version = "0.13.2", default-features = false, features = ["blocking", "json", "rustls"] }
+reqwest = { version = "0.13.2", default-features = false, features = ["blocking", "json", "rustls", "multipart"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1.13.1", features = ["macros", "rt", "rt-multi-thread", "signal", "time"] }
