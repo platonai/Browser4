@@ -234,6 +234,7 @@ class MCPToolController(
                 "delete_session_data" -> handleDeleteSessionData(request)
                 "attach_browser" -> handleAttachBrowser(request)
                 "check_session_ready" -> handleCheckSessionReady(request)
+                "command_batch" -> handleCommandBatch(request)
                 // All other tools → dynamic dispatch through CustomToolRegistry or AgentToolManager
                 else -> dispatchToToolExecutor(request)
             }
@@ -431,6 +432,208 @@ class MCPToolController(
         }
         return ResponseEntity.ok(
             textResponse("""{"ready":$ready,"healthy":$healthy}""")
+        )
+    }
+
+    // =========================================================================
+    // Batch command handler
+    // =========================================================================
+
+    private suspend fun handleCommandBatch(request: MCPToolCallRequest): ResponseEntity<MCPToolCallResponse> {
+        val args = request.arguments ?: emptyMap()
+        val stepMaps = (args["steps"] as? List<*>)?.mapIndexed { index, step ->
+            val stepMap = step.toAnyMap()
+                ?: throw IllegalArgumentException("Batch step at index $index must be an object.")
+            index to stepMap
+        } ?: throw IllegalArgumentException("command_batch requires a 'steps' array.")
+
+        val bail = args["bail"].toBooleanValue() ?: false
+        val currentSessionId = args["sessionId"]?.toString()?.takeIf { it.isNotBlank() }
+        val results = mutableListOf<BatchExecutionResult>()
+        var stoppedOnError = false
+
+        for ((index, step) in stepMaps) {
+            val startedAt = System.nanoTime()
+            val result = try {
+                executeBatchStep(index, step, currentSessionId)
+            } catch (e: Exception) {
+                BatchExecutionResult(index = index, ok = false, error = e.message ?: "Unknown batch execution error")
+            }
+            val durationMillis = (System.nanoTime() - startedAt) / 1_000_000
+
+            results += result.copy(durationMillis = durationMillis)
+            if (!result.ok && bail) {
+                stoppedOnError = true
+                break
+            }
+        }
+
+        val body = BatchExecutionResponse(
+            sessionId = currentSessionId,
+            failureCount = results.count { !it.ok },
+            stoppedOnError = stoppedOnError,
+            results = results,
+        )
+        return ResponseEntity.ok(textResponse(pulsarObjectMapper().writeValueAsString(body)))
+    }
+
+    private suspend fun executeBatchStep(
+        index: Int,
+        step: Map<String, Any?>,
+        currentSessionId: String?,
+    ): BatchExecutionResult {
+        val op = step[MCPConstants.KEY_OP]?.toString()
+            ?: throw IllegalArgumentException(MCPConstants.ERROR_MISSING_OP)
+
+        when (op) {
+            MCPConstants.OP_OPEN, MCPConstants.OP_CLOSE -> {
+                throw IllegalArgumentException(String.format(MCPConstants.ERROR_BATCH_NON_DOM_OP, op))
+            }
+        }
+
+        return when (op) {
+            MCPConstants.OP_TOOL -> handleBatchTool(index, step, currentSessionId)
+            MCPConstants.OP_SNAPSHOT -> handleBatchSnapshot(index, step, currentSessionId)
+            MCPConstants.OP_SCREENSHOT -> handleBatchScreenshot(index, step, currentSessionId)
+            MCPConstants.OP_PDF -> handleBatchPdf(index, step, currentSessionId)
+            else -> throw IllegalArgumentException("${MCPConstants.ERROR_UNSUPPORTED_OP}$op")
+        }
+    }
+
+    private suspend fun handleBatchTool(
+        index: Int,
+        step: Map<String, Any?>,
+        currentSessionId: String?
+    ): BatchExecutionResult {
+        val sessionId = requireSessionId(currentSessionId)
+
+        step[MCPConstants.KEY_PRE_FOCUS_SELECTOR]?.toString()?.takeIf { it.isNotBlank() }?.let {
+            restoreBatchFocus(sessionId, it)
+        }
+        step[MCPConstants.KEY_PRE_MOUSE_POSITION].toBatchMousePosition()?.let {
+            restoreBatchMousePosition(sessionId, it)
+        }
+
+        val tool = step[MCPConstants.KEY_TOOL]?.toString()
+            ?: throw IllegalArgumentException(MCPConstants.ERROR_MISSING_TOOL)
+        val arguments =
+            step[MCPConstants.KEY_ARGUMENTS].toAnyMap().orEmpty() + (MCPConstants.KEY_SESSION_ID to sessionId)
+
+        logger.info("Calling batch tool step: $index $tool ${arguments.entries.joinToString(" ") { "--${it.key}=${it.value}" }}")
+
+        val text = executeAgentToolText(tool, arguments)
+
+        return BatchExecutionResult(index = index, ok = true, text = text.ifBlank { null })
+    }
+
+    private suspend fun handleBatchSnapshot(
+        index: Int,
+        step: Map<String, Any?>,
+        currentSessionId: String?
+    ): BatchExecutionResult {
+        val sessionId = requireSessionId(currentSessionId)
+        val tool = step[MCPConstants.KEY_TOOL]?.toString()
+            ?: throw IllegalArgumentException(MCPConstants.ERROR_MISSING_TOOL)
+        val arguments =
+            step[MCPConstants.KEY_ARGUMENTS].toAnyMap().orEmpty() + (MCPConstants.KEY_SESSION_ID to sessionId)
+
+        val pageUrl = executeAgentToolText(MCPConstants.TOOL_PAGE_URL, mapOf(MCPConstants.KEY_SESSION_ID to sessionId))
+        val pageTitle =
+            executeAgentToolText(MCPConstants.TOOL_PAGE_TITLE, mapOf(MCPConstants.KEY_SESSION_ID to sessionId))
+        val snapshot = executeAgentToolText(tool, arguments)
+
+        return BatchExecutionResult(
+            index = index,
+            ok = true,
+            pageUrl = pageUrl,
+            pageTitle = pageTitle,
+            snapshot = snapshot,
+        )
+    }
+
+    private suspend fun handleBatchScreenshot(
+        index: Int,
+        step: Map<String, Any?>,
+        currentSessionId: String?
+    ): BatchExecutionResult {
+        val sessionId = requireSessionId(currentSessionId)
+        val tool = step[MCPConstants.KEY_TOOL]?.toString()
+            ?: throw IllegalArgumentException(MCPConstants.ERROR_MISSING_TOOL)
+        val arguments =
+            step[MCPConstants.KEY_ARGUMENTS].toAnyMap().orEmpty() + (MCPConstants.KEY_SESSION_ID to sessionId)
+        val screenshot = executeAgentToolText(tool, arguments)
+
+        return BatchExecutionResult(index = index, ok = true, screenshot = screenshot)
+    }
+
+    private suspend fun handleBatchPdf(
+        index: Int,
+        step: Map<String, Any?>,
+        currentSessionId: String?
+    ): BatchExecutionResult {
+        val sessionId = requireSessionId(currentSessionId)
+        val tool = step[MCPConstants.KEY_TOOL]?.toString()
+            ?: throw IllegalArgumentException(MCPConstants.ERROR_MISSING_TOOL)
+        val arguments =
+            step[MCPConstants.KEY_ARGUMENTS].toAnyMap().orEmpty() + (MCPConstants.KEY_SESSION_ID to sessionId)
+        val pdf = executeAgentToolText(tool, arguments)
+
+        return BatchExecutionResult(index = index, ok = true, pdf = pdf)
+    }
+
+    // =========================================================================
+    // Batch focus / mouse position restoration
+    // =========================================================================
+
+    private suspend fun restoreBatchFocus(sessionId: String, selector: String) {
+        if (selector.startsWith("backend:")) {
+            return
+        }
+
+        val selectorLiteral = pulsarObjectMapper().writeValueAsString(selector)
+        val focusExpression = """
+            (() => {
+                try {
+                    const el = document.querySelector($selectorLiteral);
+                    if (!el) return 'missing';
+                    if (typeof el.focus === 'function') {
+                        el.focus();
+                    }
+                    return document.activeElement === el ? 'focused' : 'unfocused';
+                } catch (error) {
+                    return `invalid:$${error}`;
+                }
+            })()
+        """.trimIndent()
+
+        when (val result = executeAgentToolText(
+            MCPConstants.TOOL_BROWSER_EVALUATE,
+            mapOf(MCPConstants.KEY_SESSION_ID to sessionId, "expression" to focusExpression),
+        ).trim()) {
+            "focused" -> return
+            "missing" -> throw IllegalArgumentException(
+                "Saved active selector '$selector' no longer exists on the page."
+            )
+            "unfocused" -> throw IllegalArgumentException(
+                "Failed to focus saved active selector '$selector' before keyboard command."
+            )
+            else -> {
+                if (result.startsWith("invalid:")) {
+                    throw IllegalArgumentException(
+                        "Saved active selector '$selector' is not a valid query selector: $result"
+                    )
+                }
+                throw IllegalArgumentException(
+                    "Unexpected focus result for saved active selector '$selector': $result"
+                )
+            }
+        }
+    }
+
+    private suspend fun restoreBatchMousePosition(sessionId: String, position: BatchMousePosition) {
+        executeAgentToolText(
+            "browser_mouse_move_xy",
+            mapOf(MCPConstants.KEY_SESSION_ID to sessionId, "x" to position.x, "y" to position.y),
         )
     }
 
