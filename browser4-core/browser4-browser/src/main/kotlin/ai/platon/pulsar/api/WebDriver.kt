@@ -1,3 +1,5 @@
+package ai.platon.pulsar.api
+
 /**
  * Copyright (c) Vincent Zhang, ivincent.zhang@gmail.com, Platon.AI.
  *
@@ -13,8 +15,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package ai.platon.pulsar.browser
-
 /**
  * Compatibility shim for the WebDriver interface that was moved to
  * [ai.platon.browser4.api.WebDriver].

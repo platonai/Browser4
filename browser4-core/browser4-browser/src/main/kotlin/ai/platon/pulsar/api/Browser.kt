@@ -13,16 +13,16 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package ai.platon.pulsar.browser
+package ai.platon.pulsar.api
 
 /**
  * Compatibility shim for the Browser interface that was moved to
  * [ai.platon.browser4.api.Browser].
  *
  * The [ai.platon.pulsar.ql.context.SQLContext] interface provided by
- * `pulsar-ql` (published before the package migration) still references
- * this type in its synthetic accessor methods. This interface exists so
- * that those class-file references resolve at runtime without a
+ * `pulsar-ql` 4.9.5 (published before the package migration) still references
+ * this type in its synthetic accessor methods. This interface exists so that
+ * those class-file references resolve at runtime without a
  * [NoClassDefFoundError].
  *
  * All new code should use [ai.platon.browser4.api.Browser] directly.
