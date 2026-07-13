@@ -2,8 +2,6 @@ package ai.platon.browser4.chrome.util
 
 import ai.platon.pulsar.common.alwaysTrue
 import ai.platon.pulsar.common.getLogger
-import javassist.util.proxy.MethodHandler
-import javassist.util.proxy.ProxyFactory
 import kotlinx.coroutines.*
 import java.lang.reflect.*
 import kotlin.coroutines.Continuation
@@ -167,69 +165,6 @@ object ProxyClasses {
     private val logger = getLogger(this)
 
     private val isDebugEnabled get() = logger.isDebugEnabled
-
-    /**
-     * Creates a proxy class to a given abstract clazz supplied with invocation handler for
-     * un-implemented/abstract methods
-     *
-     * @param clazz Proxy to class
-     * @param paramTypes Ctor param types
-     * @param args Constructor args
-     * @param invocationHandler Invocation handler
-     * @param <T> Class type
-     * @return Proxy instance <T>
-     */
-    @Throws(Exception::class)
-    fun <T> createProxyFromAbstract(
-        clazz: Class<T>, paramTypes: Array<Class<*>>, args: Array<Any>? = null, invocationHandler: SuspendAwareHandler
-    ): T {
-        try {
-            val factory = ProxyFactory()
-            factory.superclass = clazz
-            factory.setFilter { Modifier.isAbstract(it.modifiers) }
-
-            val methodHandler = MethodHandler { o, method, _, objects ->
-                if (method.name == "navigate") {
-                    println("Navigating ...")
-                    println(method.returnType.javaClass)
-                }
-
-                // Example:
-                // InvocationHandler:
-                //   - a wrapper of CachedDevToolsInvocationHandlerProxies
-                // Typical proxy:
-                //   - jdk.proxy1.$Proxy24
-                // Typical methods:
-                //   - public abstract void ai.platon.pulsar.cdt.protocol.commands.Page.enable()
-                //   - public abstract com...page.Navigate com...Page.navigate(java.lang.String)
-                // TODO: blocking here
-                invocationHandler.invoke(o, method, objects)
-            }
-
-            val proxy = factory.create(paramTypes, args, methodHandler)
-
-            @Suppress("UNCHECKED_CAST")
-            return proxy as T
-        } catch (e: Exception) {
-            throw RuntimeException("Failed creating proxy from abstract class | ${clazz.name}", e)
-        }
-    }
-
-    /**
-     * Pure Kotlin interface-proxy version that supports suspend functions via Continuation bridge.
-     * Note: This expects [clazz] to be an interface. [paramTypes] and [args] are ignored.
-     */
-    @Throws(Exception::class)
-    fun <T> createCoroutineSupportedProxyFromAbstract(
-        clazz: Class<T>, paramTypes: Array<Class<*>>, args: Array<Any>? = null,
-        invocationHandler: SuspendAwareHandler
-    ): T {
-        if (isDebugEnabled) {
-            debugParameters(clazz, paramTypes, args)
-        }
-
-        return createProxyFromAbstract(clazz, paramTypes, args, invocationHandler)
-    }
 
     /**
      * Creates a proxy class to a given interface clazz supplied with invocation handler.

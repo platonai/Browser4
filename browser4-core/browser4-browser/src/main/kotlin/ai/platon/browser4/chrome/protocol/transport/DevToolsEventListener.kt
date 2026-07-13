@@ -5,8 +5,6 @@ import ai.platon.browser4.chrome.RemoteDevTools
 import ai.platon.browser4.chrome.Transport
 import ai.platon.browser4.chrome.util.ChromeIOException
 import ai.platon.browser4.chrome.util.ChromeServiceException
-import ai.platon.browser4.chrome.util.ProxyClasses
-import ai.platon.browser4.chrome.util.SuspendAwareHandler
 import ai.platon.cdt.kt.protocol.support.types.EventHandler
 import ai.platon.cdt.kt.protocol.support.types.EventListener
 import ai.platon.browser4.api.model.BrowserTab
@@ -163,27 +161,9 @@ internal class ChromeImpl(
             ?: throw ChromeIOException("Invalid web socket url to page")
         val pageTransport = KtorTransport.create(URI.create(debuggerUrl))
 
-        val invocationHandler = CachedDevToolsInvocationHandlerProxies(this)
-
-        val devTools: RemoteDevTools =
-            createRemoteDevToolsProxy(browserTransport, pageTransport, config, invocationHandler)
-
-        invocationHandler.commandHandler.devTools = devTools
-
-        return devTools
-    }
-
-    private fun createRemoteDevToolsProxy(
-        browserTransport: Transport, pageTransport: Transport, config: DevToolsConfig,
-        invocationHandler: SuspendAwareHandler
-    ): RemoteDevTools {
-        // Create a class that inherits from ChromeDevToolsImpl and construct an object
-        return ProxyClasses.createCoroutineSupportedProxyFromAbstract(
-            ChromeDevToolsImpl::class.java,
-            arrayOf(Transport::class.java, Transport::class.java, DevToolsConfig::class.java),
-            arrayOf(browserTransport, pageTransport, config),
-            invocationHandler
-        )
+        // Directly instantiate the now-concrete ChromeDevToolsImpl — the domainCache and
+        // circular commandHandler.devTools reference are set up in its init block.
+        return ChromeDevToolsImpl(browserTransport, pageTransport, config)
     }
 
     /**

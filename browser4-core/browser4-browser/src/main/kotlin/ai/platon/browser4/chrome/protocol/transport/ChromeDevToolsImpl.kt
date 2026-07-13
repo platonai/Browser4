@@ -3,6 +3,7 @@ package ai.platon.browser4.chrome.protocol.transport
 import ai.platon.browser4.chrome.RemoteDevTools
 import ai.platon.browser4.chrome.Transport
 import ai.platon.browser4.chrome.util.*
+import ai.platon.cdt.kt.protocol.commands.*
 import ai.platon.cdt.kt.protocol.support.types.EventHandler
 import ai.platon.cdt.kt.protocol.support.types.EventListener
 import ai.platon.browser4.api.model.DevToolsConfig
@@ -10,8 +11,9 @@ import ai.platon.browser4.api.model.MethodInvocation
 import ai.platon.pulsar.common.config.AppConstants
 import ai.platon.pulsar.common.readable
 import ai.platon.pulsar.common.warnForClose
-import ai.platon.browser4.chrome.util.ProxyClasses
-import ai.platon.browser4.chrome.util.SuspendAwareHandler
+import ai.platon.browser4.chrome.util.ChromeIOException
+import ai.platon.browser4.chrome.util.ChromeRPCException
+import ai.platon.browser4.chrome.util.ChromeRPCTimeoutException
 import com.codahale.metrics.Gauge
 import com.codahale.metrics.SharedMetricRegistries
 import com.fasterxml.jackson.databind.JsonNode
@@ -20,7 +22,6 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeoutOrNull
 import org.slf4j.LoggerFactory
 import java.io.IOException
-import java.lang.reflect.Method
 import java.time.Duration
 import java.time.Instant
 import java.util.concurrent.ConcurrentHashMap
@@ -30,27 +31,22 @@ import kotlin.reflect.KClass
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 
-internal class CachedDevToolsInvocationHandlerProxies(impl: Any) : SuspendAwareHandler(impl) {
+/**
+ * Caches Java dynamic proxies for CDP domain command interfaces (e.g., Page, DOM, Network).
+ * Replaces the javassist-based [CachedDevToolsInvocationHandlerProxies] which relied on
+ * abstract-class proxy generation — this version uses only standard [java.lang.reflect.Proxy].
+ */
+internal class DomainProxyCache(impl: Any) {
     val commandHandler: DevToolsInvocationHandler = DevToolsInvocationHandler(impl)
-    val commands: MutableMap<Method, Any> = ConcurrentHashMap()
+    private val proxies: MutableMap<Class<*>, Any> = ConcurrentHashMap()
 
-    init {
-        // println("CommandHandler hashCode: " + commandHandler.hashCode())
-    }
-
-    // Typical proxy:
-    //   - jdk.proxy1.$Proxy24
-    // Typical methods:
-    //   - public abstract void com.github.kklisura.cdt.protocol.commands.Page.enable()
-    //   - public abstract com...page.Navigate com...Page.navigate(java.lang.String)
-    override fun invoke(proxy: Any, method: Method, args: Array<out Any>?): Any? {
-        return commands.computeIfAbsent(method) {
-            ProxyClasses.createProxy(method.returnType, commandHandler)
-        }
-    }
+    @Suppress("UNCHECKED_CAST")
+    fun <T> getOrCreate(type: Class<T>): T = proxies.computeIfAbsent(type) {
+        ProxyClasses.createProxy(type, commandHandler) as Any
+    } as T
 }
 
-internal abstract class ChromeDevToolsImpl(
+internal class ChromeDevToolsImpl(
     private val browserTransport: Transport,
     private val pageTransport: Transport,
     private val config: DevToolsConfig
@@ -82,10 +78,64 @@ internal abstract class ChromeDevToolsImpl(
 
     private val dispatcher = EventDispatcher()
 
+    /** Caches Java dynamic proxies for CDP domain command interfaces. */
+    val domainCache = DomainProxyCache(this)
+
     init {
         browserTransport.addMessageHandler(dispatcher)
         pageTransport.addMessageHandler(dispatcher)
+        // Circular reference: allow command handler to call back into devTools.invoke()
+        domainCache.commandHandler.devTools = this
     }
+
+    // ── ChromeDevTools domain properties ──────────────────────────────────────
+
+    override val accessibility: Accessibility get() = domainCache.getOrCreate(Accessibility::class.java)
+    override val animation: Animation get() = domainCache.getOrCreate(Animation::class.java)
+    override val applicationCache: ApplicationCache get() = domainCache.getOrCreate(ApplicationCache::class.java)
+    override val audits: Audits get() = domainCache.getOrCreate(Audits::class.java)
+    override val backgroundService: BackgroundService get() = domainCache.getOrCreate(BackgroundService::class.java)
+    override val browser: Browser get() = domainCache.getOrCreate(Browser::class.java)
+    override val css: CSS get() = domainCache.getOrCreate(CSS::class.java)
+    override val cacheStorage: CacheStorage get() = domainCache.getOrCreate(CacheStorage::class.java)
+    override val cast: Cast get() = domainCache.getOrCreate(Cast::class.java)
+    override val console: Console get() = domainCache.getOrCreate(Console::class.java)
+    override val dom: DOM get() = domainCache.getOrCreate(DOM::class.java)
+    override val domDebugger: DOMDebugger get() = domainCache.getOrCreate(DOMDebugger::class.java)
+    override val domSnapshot: DOMSnapshot get() = domainCache.getOrCreate(DOMSnapshot::class.java)
+    override val domStorage: DOMStorage get() = domainCache.getOrCreate(DOMStorage::class.java)
+    override val database: Database get() = domainCache.getOrCreate(Database::class.java)
+    override val debugger: Debugger get() = domainCache.getOrCreate(Debugger::class.java)
+    override val deviceOrientation: DeviceOrientation get() = domainCache.getOrCreate(DeviceOrientation::class.java)
+    override val emulation: Emulation get() = domainCache.getOrCreate(Emulation::class.java)
+    override val headlessExperimental: HeadlessExperimental get() = domainCache.getOrCreate(HeadlessExperimental::class.java)
+    override val io: IO get() = domainCache.getOrCreate(IO::class.java)
+    override val indexedDb: IndexedDB get() = domainCache.getOrCreate(IndexedDB::class.java)
+    override val input: Input get() = domainCache.getOrCreate(Input::class.java)
+    override val inspector: Inspector get() = domainCache.getOrCreate(Inspector::class.java)
+    override val layerTree: LayerTree get() = domainCache.getOrCreate(LayerTree::class.java)
+    override val log: Log get() = domainCache.getOrCreate(Log::class.java)
+    override val memory: Memory get() = domainCache.getOrCreate(Memory::class.java)
+    override val network: Network get() = domainCache.getOrCreate(Network::class.java)
+    override val overlay: Overlay get() = domainCache.getOrCreate(Overlay::class.java)
+    override val page: Page get() = domainCache.getOrCreate(Page::class.java)
+    override val performance: Performance get() = domainCache.getOrCreate(Performance::class.java)
+    override val performanceTimeline: PerformanceTimeline get() = domainCache.getOrCreate(PerformanceTimeline::class.java)
+    override val security: Security get() = domainCache.getOrCreate(Security::class.java)
+    override val serviceWorker: ServiceWorker get() = domainCache.getOrCreate(ServiceWorker::class.java)
+    override val storage: Storage get() = domainCache.getOrCreate(Storage::class.java)
+    override val systemInfo: SystemInfo get() = domainCache.getOrCreate(SystemInfo::class.java)
+    override val target: ai.platon.cdt.kt.protocol.commands.Target get() = domainCache.getOrCreate(ai.platon.cdt.kt.protocol.commands.Target::class.java)
+    override val tethering: Tethering get() = domainCache.getOrCreate(Tethering::class.java)
+    override val tracing: Tracing get() = domainCache.getOrCreate(Tracing::class.java)
+    override val fetch: Fetch get() = domainCache.getOrCreate(Fetch::class.java)
+    override val webAudio: WebAudio get() = domainCache.getOrCreate(WebAudio::class.java)
+    override val webAuthn: WebAuthn get() = domainCache.getOrCreate(WebAuthn::class.java)
+    override val media: Media get() = domainCache.getOrCreate(Media::class.java)
+    override val heapProfiler: HeapProfiler get() = domainCache.getOrCreate(HeapProfiler::class.java)
+    override val profiler: Profiler get() = domainCache.getOrCreate(Profiler::class.java)
+    override val runtime: Runtime get() = domainCache.getOrCreate(Runtime::class.java)
+    override val schema: Schema get() = domainCache.getOrCreate(Schema::class.java)
 
     @Throws(ChromeIOException::class, ChromeRPCException::class)
     override suspend operator fun <T : Any> invoke(

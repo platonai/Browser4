@@ -358,12 +358,6 @@
             </dependency>
 
             <dependency>
-                <groupId>org.javassist</groupId>
-                <artifactId>javassist</artifactId>
-                <version>${javassist.version}</version>
-            </dependency>
-
-            <dependency>
                 <groupId>com.google.code.crawler-commons</groupId>
                 <artifactId>crawler-commons</artifactId>
                 <version>${crawler-commons.version}</version>
@@ -539,10 +533,7 @@
         <!-- managed by spring-boot-dependencies -->
         <!--        <mockito.version>5.12.0</mockito.version>-->
         <mockito-kotlin.version>5.4.0</mockito-kotlin.version>
-        <javassist.version>3.31.0-GA</javassist.version>
         <crawler-commons.version>0.5</crawler-commons.version>
-        <!-- MockK is a powerful and flexible mocking library designed specifically for Kotlin. -->
-
         <junit5.version>5.12.1</junit5.version>
         <mockk.version>1.14.6</mockk.version>
         <springmockk.version>4.0.2</springmockk.version>
