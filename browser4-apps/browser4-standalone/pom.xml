@@ -198,27 +198,6 @@
         </profile>
     </profiles>
 
-    <dependencyManagement>
-        <dependencies>
-            <!-- spring-boot-dependencies FIRST -->
-            <dependency>
-                <groupId>org.springframework.boot</groupId>
-                <artifactId>spring-boot-dependencies</artifactId>
-                <version>${spring-boot.version}</version>
-                <type>pom</type>
-                <scope>import</scope>
-            </dependency>
-            <!-- pulsar-bom SECOND -->
-            <dependency>
-                <groupId>ai.platon.pulsar</groupId>
-                <artifactId>pulsar-bom</artifactId>
-                <version>${browser4-base.version}</version>
-                <type>pom</type>
-                <scope>import</scope>
-            </dependency>
-        </dependencies>
-    </dependencyManagement>
-
     <dependencies>
         <!-- Internal dependencies -->
         <dependency>
