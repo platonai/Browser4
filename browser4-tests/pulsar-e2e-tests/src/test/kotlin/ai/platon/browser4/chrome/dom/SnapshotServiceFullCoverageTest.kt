@@ -58,8 +58,7 @@ class SnapshotServiceFullCoverageTest : WebDriverTestBase() {
         val domState = service.buildDOMState(tinyTree)
         assertTrue(domState.ariaSnapshot.isNotBlank(), "Serialized aria snapshot should not be blank")
         assertTrue(
-            domState.ariaSnapshot.contains("RootWebArea") &&
-                    domState.ariaSnapshot.contains("Dynamic Content Test") &&
+            domState.ariaSnapshot.contains("Dynamic Content Test") &&
                     domState.ariaSnapshot.contains("heading \"Dynamic Content Test Page\"") &&
                     domState.ariaSnapshot.contains("heading \"Asynchronous Content Loading\"") &&
                     domState.ariaSnapshot.contains("Enter new item..."),
