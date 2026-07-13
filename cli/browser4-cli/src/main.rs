@@ -14212,6 +14212,7 @@ mod tests {
             batch_supported: false,
             args: &[commands::ArgDef { name: "x", description: "", optional: true }],
             options: &[],
+            e2e_coverage: commands::E2eCoverage::Excluded,
             tool_name_fn: |_| "test".to_string(),
             tool_params_fn: |_| json!({}),
         };
@@ -14229,6 +14230,7 @@ mod tests {
             batch_supported: false,
             args: &[commands::ArgDef { name: "url", description: "", optional: false }],
             options: &[],
+            e2e_coverage: commands::E2eCoverage::Excluded,
             tool_name_fn: |_| "test".to_string(),
             tool_params_fn: |_| json!({}),
         };
@@ -14248,6 +14250,7 @@ mod tests {
             batch_supported: false,
             args: &[commands::ArgDef { name: "url", description: "", optional: false }],
             options: &[],
+            e2e_coverage: commands::E2eCoverage::Excluded,
             tool_name_fn: |_| "test".to_string(),
             tool_params_fn: |_| json!({}),
         };
@@ -14266,6 +14269,7 @@ mod tests {
             batch_supported: false,
             args: &[commands::ArgDef { name: "url", description: "", optional: false }],
             options: &[],
+            e2e_coverage: commands::E2eCoverage::Excluded,
             tool_name_fn: |_| "test".to_string(),
             tool_params_fn: |_| json!({}),
         };

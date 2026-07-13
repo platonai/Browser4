@@ -4,10 +4,10 @@
 //!
 //! The scenarios run sequentially in a custom `harness = false` test target so
 //! they can reuse the proven ordering without libtest starting multiple
-//! Browser4 backends concurrently. A dedicated coverage check verifies that the
-//! union of all tested commands plus the explicitly-excluded set equals the
-//! full command list from [`browser4_cli::commands::all_commands`], and the
-//! custom runner prints per-test timings to make slow cases easy to spot.
+//! Browser4 backends concurrently. A dedicated coverage check cross-references
+//! the `e2e_coverage` field on each `CommandDef` against the tested-commands
+//! list, and the custom runner prints per-test timings to make slow cases easy
+//! to spot.
 //!
 //! # Running
 //!
@@ -47,7 +47,7 @@
 //!   the Docker bridge gateway IP such as `172.17.0.1`). Defaults to `127.0.0.1`.
 
 use base64::Engine as _;
-use browser4_cli::commands::all_commands;
+use browser4_cli::commands::{all_commands, E2eCoverage};
 use browser4_cli::managed_processes::stop_browser4_server_forcibly;
 use chrono::Local;
 use std::collections::{BTreeSet, HashSet};
@@ -3409,76 +3409,19 @@ fn run_final_cleanup() -> Result<Vec<TimedStep>, String> {
 // ---------------------------------------------------------------------------
 // Command-coverage helpers
 // ---------------------------------------------------------------------------
-
-/// Commands that require an LLM/agent backend, destructive global cleanup, or
-/// multi-browser contexts and therefore cannot be exercised in the browser-
-/// backed e2e suite. Each entry has a brief justification.
-///
-/// This set is validated by [`test_e2e_command_coverage`]: if a new command is
-/// added to `commands.rs` without appearing here *or* in the tested set, the
-/// build will fail.
-fn excluded_commands(include_batch_command: bool) -> HashSet<&'static str> {
-    let mut commands: HashSet<&'static str> = [
-        // Not yet exercised by e2e scenarios; mock handler exists.
-        "swarm-query",
-        "swarm-list",
-        "swarm-close",
-        // New commands pending e2e test scenarios.
-        "agent-list",
-        "attach",
-        "cdp",
-        "crawl",
-        "crawl-list",
-        "crawl-status",
-        "crawl-result",
-        "crawl-cancel",
-        "crawl-clear",
-        "scroll",
-        "wait",
-        "get",
-        "htmlsnapshot",
-        "htmlsnapshot-capture",
-        "htmlsnapshot-get",
-        "htmlsnapshot-get-all",
-        "htmlsnapshot-query",
-        "htmlsnapshot-export",
-        "htmlsnapshot-summary",
-        "htmlsnapshot-grep",
-        "htmlsnapshot-inspect",
-        "generate-locator",
-        "loop",
-        "doctor",
-        "doctor-log",
-        // Act translates natural language to commands; requires an MCP/LLM backend.
-        "act",
-        // Uninstall requires npm/cargo on $PATH; not exercised in e2e.
-        "uninstall",
-        // Skill management commands — require skills directory setup on the
-        // server side; not yet exercised in e2e.
-        "skill-list",
-        "skill-info",
-        "skill-install",
-        "skill-uninstall",
-        "skill-reload",
-        // Skills commands are local-only (no server interaction); exercised via
-        // unit tests and manual CLI verification.
-        "skills",
-        "skills-list",
-        "skills-get",
-        "skills-path",
-    ]
-    .into();
-
-    if !include_batch_command {
-        commands.insert("batch");
-    }
-
-    commands
-}
+//
+// Exclusion status is now encoded directly in each CommandDef via the
+// `e2e_coverage: E2eCoverage::Excluded` field in `commands.rs`.  The compiler
+// guarantees every command declares its status, so there is no separate
+// excluded list to maintain here.
 
 /// The set of commands that the e2e scenario functions exercise via
 /// [`run_command`] / [`run_command_expecting_failure`].  This must be kept in
 /// sync with what the test functions actually call.
+///
+/// Commands marked `E2eCoverage::Tested` in `commands.rs` must appear here;
+/// commands marked `E2eCoverage::Excluded` must not (except `batch`, which
+/// is conditionally promoted when `--enable-batch-scenario` is active).
 fn tested_commands(include_batch_command: bool) -> HashSet<&'static str> {
     let mut commands: HashSet<&'static str> = [
         // test_session_lifecycle
@@ -3587,49 +3530,75 @@ fn tested_commands(include_batch_command: bool) -> HashSet<&'static str> {
 // Coverage assertion — runs without a server
 // ---------------------------------------------------------------------------
 
-/// Verify that `tested_commands() ∪ excluded_commands()` equals the full
-/// command list from [`browser4_cli::commands::all_commands`].
+/// Verify that every command defined in `all_commands()` has a consistent
+/// e2e coverage status.
 ///
-/// This check does **not** require a running server. It is a test-time
-/// guard: if a command is added to `commands.rs` without being placed into
-/// either [`tested_commands`] or [`excluded_commands`], this test fails.
+/// Commands carry their exclusion status in the `e2e_coverage` field of
+/// [`CommandDef`].  This function cross-references those fields with
+/// [`tested_commands`] to catch mismatches:
+///
+/// - A command marked `E2eCoverage::Tested` must have a corresponding entry
+///   in `tested_commands()` (otherwise the scenario is missing).
+/// - A command marked `E2eCoverage::Excluded` must *not* appear in
+///   `tested_commands()` (otherwise the field is stale).
+/// - Every name in `tested_commands()` must resolve to a command whose field
+///   is `Tested` (or `batch`, which is promoted at runtime).
+///
+/// This check does **not** require a running server.
 fn verify_e2e_command_coverage(include_batch_command: bool) {
-    let all: HashSet<&str> = all_commands().iter().map(|c| c.name).collect();
-
+    let commands = all_commands();
     let tested = tested_commands(include_batch_command);
-    let excluded = excluded_commands(include_batch_command);
 
-    // 1. No command should appear in both sets.
-    let overlap: Vec<&&str> = tested.intersection(&excluded).collect();
-    assert!(
-        overlap.is_empty(),
-        "Commands appear in BOTH tested and excluded sets: {overlap:?}"
-    );
-
-    // 2. Every command from commands.rs must be in one of the two sets.
-    let accounted: HashSet<&str> = tested.union(&excluded).copied().collect();
-    let mut missing: Vec<&str> = all
+    // 1. Every Tested command must appear in tested_commands().
+    let mut untested: Vec<&str> = commands
         .iter()
-        .copied()
-        .filter(|cmd| !accounted.contains(cmd))
+        .filter(|c| {
+            let effective = if c.name == "batch" && include_batch_command {
+                E2eCoverage::Tested
+            } else {
+                c.e2e_coverage
+            };
+            effective == E2eCoverage::Tested && !tested.contains(c.name)
+        })
+        .map(|c| c.name)
         .collect();
-    missing.sort();
+    untested.sort();
     assert!(
-        missing.is_empty(),
-        "Commands defined in commands.rs are not accounted for in e2e tests \
-         (add them to `tested_commands` or `excluded_commands`): {missing:?}"
+        untested.is_empty(),
+        "Commands marked E2eCoverage::Tested but missing from tested_commands(): \
+         {untested:?}. Add a scenario and include the command in tested_commands()."
     );
 
-    // 3. No stale entries: every name in the two sets must exist in commands.rs.
-    let mut stale: Vec<&str> = accounted
+    // 2. Every Excluded command (except batch) must NOT appear in tested_commands().
+    let mut overincluded: Vec<&str> = commands
+        .iter()
+        .filter(|c| {
+            c.e2e_coverage == E2eCoverage::Excluded
+                && c.name != "batch"
+                && tested.contains(c.name)
+        })
+        .map(|c| c.name)
+        .collect();
+    overincluded.sort();
+    assert!(
+        overincluded.is_empty(),
+        "Commands marked E2eCoverage::Excluded but present in tested_commands(): \
+         {overincluded:?}. Either write an e2e test and change the status to \
+         Tested, or remove it from tested_commands()."
+    );
+
+    // 3. No stale entries: every name in tested_commands() must exist.
+    let all_names: HashSet<&str> = commands.iter().map(|c| c.name).collect();
+    let mut stale: Vec<&str> = tested
         .iter()
         .copied()
-        .filter(|cmd| !all.contains(cmd))
+        .filter(|name| !all_names.contains(name))
         .collect();
     stale.sort();
     assert!(
         stale.is_empty(),
-        "Stale command names in e2e test sets that no longer exist in commands.rs: {stale:?}"
+        "Stale command names in tested_commands() that no longer exist in \
+         commands.rs: {stale:?}"
     );
 }
 

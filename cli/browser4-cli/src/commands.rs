@@ -54,6 +54,15 @@ impl Category {
     }
 }
 
+/// Indicates whether a CLI command has end-to-end test coverage.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum E2eCoverage {
+    /// Command has one or more e2e test scenarios exercising it.
+    Tested,
+    /// Command is deliberately excluded from e2e testing.
+    Excluded,
+}
+
 /// Describes a single positional argument for a command.
 #[derive(Debug, Clone)]
 pub struct ArgDef {
@@ -87,6 +96,9 @@ pub struct CommandDef {
     pub args: &'static [ArgDef],
     /// Named option definitions.
     pub options: &'static [OptionDef],
+    /// Whether this command has end-to-end test coverage.
+    #[allow(dead_code)]
+    pub e2e_coverage: E2eCoverage,
     /// Function that resolves the MCP tool name given parsed args+options.
     pub tool_name_fn: fn(&HashMap<String, Value>) -> String,
     /// Function that builds the JSON parameters for the MCP call.
@@ -299,6 +311,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "profile-mode", description: "Browser profile mode (temporary, sequential, default)", is_bool: false, short: None },
                 OptionDef { name: "interact-level", description: "Interaction level for the new session (for example FASTEST, FAST, DEFAULT)", is_bool: false, short: None },
             ],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |args| {
                 if args.get("url").and_then(|v| v.as_str()).map(|u| !u.is_empty()).unwrap_or(false) {
                     "browser_navigate".to_string()
@@ -354,6 +367,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                     short: None,
                 },
             ],
+            e2e_coverage: E2eCoverage::Excluded,
             tool_name_fn: |_| "attach_browser".to_string(),
             tool_params_fn: |args| {
                 let mut params = json!({});
@@ -381,6 +395,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: false,
             args: &[],
             options: &[],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| String::new(),
             tool_params_fn: |_| json!({}),
         },
@@ -405,6 +420,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                     short: None,
                 },
             ],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| String::new(),
             tool_params_fn: |args| {
                 let mut params = json!({});
@@ -438,6 +454,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                     short: None,
                 },
             ],
+            e2e_coverage: E2eCoverage::Excluded,
             tool_name_fn: |_| String::new(),
             tool_params_fn: |args| {
                 let mut params = json!({});
@@ -459,6 +476,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: false,
             args: &[],
             options: &[],
+            e2e_coverage: E2eCoverage::Excluded,
             tool_name_fn: |_| String::new(),
             tool_params_fn: |_| json!({}),
         },
@@ -470,6 +488,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: false,
             args: &[],
             options: &[],
+            e2e_coverage: E2eCoverage::Excluded,
             tool_name_fn: |_| String::new(),
             tool_params_fn: |_| json!({}),
         },
@@ -496,6 +515,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                     short: None,
                 },
             ],
+            e2e_coverage: E2eCoverage::Excluded,
             tool_name_fn: |_| String::new(),
             tool_params_fn: |args| {
                 let mut params = json!({});
@@ -521,6 +541,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 ArgDef { name: "name", description: "Skill name (if given, prints path to that skill's directory)", optional: true },
             ],
             options: &[],
+            e2e_coverage: E2eCoverage::Excluded,
             tool_name_fn: |_| String::new(),
             tool_params_fn: |args| {
                 let mut params = json!({});
@@ -555,6 +576,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                     short: None,
                 },
             ],
+            e2e_coverage: E2eCoverage::Excluded,
             tool_name_fn: |_| String::new(),
             tool_params_fn: |_| json!({}),
         },
@@ -680,6 +702,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                     short: None,
                 },
             ],
+            e2e_coverage: E2eCoverage::Excluded,
             tool_name_fn: |_| String::new(),
             tool_params_fn: |args| {
                 json!({ "task": get_str(args, "task").unwrap_or_default() })
@@ -693,6 +716,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: true,
             args: &[ArgDef { name: "url", description: "The URL to navigate to", optional: false }],
             options: &[],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_navigate".to_string(),
             tool_params_fn: |args| {
                 let url = get_str(args, "url").unwrap_or_default();
@@ -707,6 +731,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: true,
             args: &[],
             options: &[],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_navigate_back".to_string(),
             tool_params_fn: |_| json!({}),
         },
@@ -718,6 +743,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: true,
             args: &[],
             options: &[],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_navigate_forward".to_string(),
             tool_params_fn: |_| json!({}),
         },
@@ -729,6 +755,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: true,
             args: &[],
             options: &[],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_reload".to_string(),
             tool_params_fn: |_| json!({}),
         },
@@ -748,6 +775,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "follow", description: "After pressing, detect and follow navigation to new tabs", is_bool: true, short: None },
                 OptionDef { name: "no-snapshot", description: "Skip the automatic post-command accessibility tree snapshot", is_bool: true, short: None },
             ],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_press_key".to_string(),
             tool_params_fn: |args| {
                 let (key, reference) = resolve_key_and_ref(args);
@@ -774,6 +802,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "focus", description: "Click the target element to focus it before typing, ensuring the element is in an interactive state", is_bool: true, short: None },
                 OptionDef { name: "no-snapshot", description: "Skip the automatic post-command accessibility tree snapshot", is_bool: true, short: None },
             ],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_press_sequentially".to_string(),
             tool_params_fn: |args| {
                 let (text, reference) = resolve_text_and_ref(args);
@@ -795,6 +824,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: true,
             args: &[ArgDef { name: "key", description: "Name of the key to press", optional: false }],
             options: &[],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_keydown".to_string(),
             tool_params_fn: |args| json!({ "key": get_str(args, "key").unwrap_or_default() }),
         },
@@ -806,6 +836,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: true,
             args: &[ArgDef { name: "key", description: "Name of the key to press", optional: false }],
             options: &[],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_keyup".to_string(),
             tool_params_fn: |args| json!({ "key": get_str(args, "key").unwrap_or_default() }),
         },
@@ -821,6 +852,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 ArgDef { name: "y", description: "Y coordinate", optional: false },
             ],
             options: &[],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_mouse_move_xy".to_string(),
             tool_params_fn: |args| {
                 json!({
@@ -837,6 +869,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: true,
             args: &[ArgDef { name: "button", description: "Button to press, defaults to left", optional: true }],
             options: &[],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_mouse_down".to_string(),
             tool_params_fn: |args| {
                 let mut p = json!({});
@@ -852,6 +885,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: true,
             args: &[ArgDef { name: "button", description: "Button to press, defaults to left", optional: true }],
             options: &[],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_mouse_up".to_string(),
             tool_params_fn: |args| {
                 let mut p = json!({});
@@ -870,6 +904,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 ArgDef { name: "dy", description: "Vertical scroll delta (deltaY)", optional: false },
             ],
             options: &[],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_mouse_wheel".to_string(),
             tool_params_fn: |args| {
                 json!({
@@ -889,6 +924,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 ArgDef { name: "pixels", description: "Number of pixels to scroll", optional: false },
             ],
             options: &[],
+            e2e_coverage: E2eCoverage::Excluded,
             tool_name_fn: |args| {
                 let direction = get_str(args, "direction").unwrap_or_default().to_ascii_lowercase();
                 match direction.as_str() {
@@ -926,6 +962,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "follow", description: "After clicking, detect and follow navigation to new tabs", is_bool: true, short: None },
                 OptionDef { name: "no-snapshot", description: "Skip the automatic post-command accessibility tree snapshot", is_bool: true, short: None },
             ],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_click".to_string(),
             tool_params_fn: |args| {
                 let mut p = json!({ "ref": get_str(args, "ref").unwrap_or_default() });
@@ -949,6 +986,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "follow", description: "After clicking, detect and follow navigation to new tabs", is_bool: true, short: None },
                 OptionDef { name: "no-snapshot", description: "Skip the automatic post-command accessibility tree snapshot", is_bool: true, short: None },
             ],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_click".to_string(),
             tool_params_fn: |args| {
                 let mut p = json!({
@@ -973,6 +1011,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             options: &[
                 OptionDef { name: "no-snapshot", description: "Skip the automatic post-command accessibility tree snapshot", is_bool: true, short: None },
             ],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_drag".to_string(),
             tool_params_fn: |args| {
                 json!({
@@ -996,6 +1035,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "verify", description: "Verify text was correctly typed after completion", is_bool: true, short: None },
                 OptionDef { name: "no-snapshot", description: "Skip the automatic post-command accessibility tree snapshot", is_bool: true, short: None },
             ],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_type".to_string(),
             tool_params_fn: |args| {
                 let mut p = json!({
@@ -1018,6 +1058,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             options: &[
                 OptionDef { name: "no-snapshot", description: "Skip the automatic post-command accessibility tree snapshot", is_bool: true, short: None },
             ],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_hover".to_string(),
             tool_params_fn: |args| json!({ "ref": get_str(args, "ref").unwrap_or_default() }),
         },
@@ -1035,6 +1076,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "verify", description: "Verify the correct option was selected by reading the element value", is_bool: true, short: None },
                 OptionDef { name: "no-snapshot", description: "Skip the automatic post-command accessibility tree snapshot", is_bool: true, short: None },
             ],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_select_option".to_string(),
             tool_params_fn: |args| {
                 let value = get_str(args, "val").unwrap_or_default();
@@ -1052,6 +1094,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 ArgDef { name: "file", description: "The absolute paths to the files to upload", optional: false },
             ],
             options: &[],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_file_upload".to_string(),
             tool_params_fn: |args| {
                 let file = get_str(args, "file").unwrap_or_default();
@@ -1068,6 +1111,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             options: &[
                 OptionDef { name: "no-snapshot", description: "Skip the automatic post-command accessibility tree snapshot", is_bool: true, short: None },
             ],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_check".to_string(),
             tool_params_fn: |args| json!({ "ref": get_str(args, "ref").unwrap_or_default() }),
         },
@@ -1081,6 +1125,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             options: &[
                 OptionDef { name: "no-snapshot", description: "Skip the automatic post-command accessibility tree snapshot", is_bool: true, short: None },
             ],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_uncheck".to_string(),
             tool_params_fn: |args| json!({ "ref": get_str(args, "ref").unwrap_or_default() }),
         },
@@ -1100,6 +1145,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "fn", description: "Wait until this JavaScript expression returns true", is_bool: false, short: None },
                 OptionDef { name: "timeout", description: "Maximum time to wait in milliseconds (default: 30000)", is_bool: false, short: None },
             ],
+            e2e_coverage: E2eCoverage::Excluded,
             tool_name_fn: |args| {
                 if get_opt_str(args, "text").is_some() || get_opt_str(args, "fn").is_some() || get_opt_str(args, "load").is_some() {
                     "wait_for_function".to_string()
@@ -1149,6 +1195,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 ArgDef { name: "name", description: "Property or attribute name (required for property and attr modes)", optional: true },
             ],
             options: &[],
+            e2e_coverage: E2eCoverage::Excluded,
             tool_name_fn: |args| {
                 let mode = get_str(args, "mode").unwrap_or_default().to_ascii_lowercase();
                 match mode.as_str() {
@@ -1201,6 +1248,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "page-size", short: None, is_bool: false, description: "Lines per page for snapshot output (default: 2000)" },
                 OptionDef { name: "all", short: None, is_bool: true, description: "Show all output, disabling pagination" },
             ],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_snapshot".to_string(),
             tool_params_fn: |args| {
                 let mut p = json!({});
@@ -1255,6 +1303,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "page-size", short: None, is_bool: false, description: "Lines per page (default: 2000)" },
                 OptionDef { name: "all", short: None, is_bool: true, description: "Show all output, disabling pagination" },
             ],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_snapshot".to_string(),
             tool_params_fn: |args| {
                 let mut p = json!({});
@@ -1286,6 +1335,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "wait-selector", description: "Wait for a CSS selector to appear in the DOM before evaluating (use for async-rendered content like React/SPA pages)", is_bool: false, short: None },
                 OptionDef { name: "wait-timeout", description: "Max time in ms to wait for --wait-selector (default: 30000)", is_bool: false, short: None },
             ],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_evaluate".to_string(),
             tool_params_fn: |args| {
                 let mut p = json!({ "expression": get_str(args, "expression").unwrap_or_default() });
@@ -1315,6 +1365,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             options: &[
                 OptionDef { name: "clear", description: "Whether to clear the console list", is_bool: true, short: None },
             ],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |args| {
                 if get_bool(args, "clear").unwrap_or(false) {
                     "browser_console_clear".to_string()
@@ -1346,6 +1397,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "file", description: "Read params from a JSON file instead of --json", is_bool: false, short: None },
                 OptionDef { name: "stdin", description: "Read params as JSON from stdin", is_bool: true, short: None },
             ],
+            e2e_coverage: E2eCoverage::Excluded,
             tool_name_fn: |_| "execute_cdp_command".to_string(),
             tool_params_fn: |args| {
                 let mut p = json!({ "method": get_str(args, "method").unwrap_or_default() });
@@ -1363,6 +1415,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: true,
             args: &[ArgDef { name: "prompt", description: "The text of the prompt in case of a prompt dialog", optional: true }],
             options: &[],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_handle_dialog".to_string(),
             tool_params_fn: |args| {
                 let mut p = json!({ "accept": true });
@@ -1378,6 +1431,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: true,
             args: &[],
             options: &[],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_handle_dialog".to_string(),
             tool_params_fn: |_| json!({ "accept": false }),
         },
@@ -1392,6 +1446,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 ArgDef { name: "h", description: "Height of the browser window", optional: false },
             ],
             options: &[],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_resize".to_string(),
             tool_params_fn: |args| {
                 json!({
@@ -1408,6 +1463,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: false,
             args: &[],
             options: &[],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| String::new(),
             tool_params_fn: |_| json!({}),
         },
@@ -1424,6 +1480,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 optional: true,
             }],
             options: &[],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_save_storage_state".to_string(),
             tool_params_fn: |args| {
                 let mut p = json!({});
@@ -1445,6 +1502,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 optional: false,
             }],
             options: &[],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_load_storage_state".to_string(),
             tool_params_fn: |args| {
                 json!({
@@ -1463,6 +1521,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "domain", description: "Only include cookies with the exact domain", is_bool: false, short: None },
                 OptionDef { name: "path", description: "Only include cookies with the exact path", is_bool: false, short: None },
             ],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_save_storage_state".to_string(),
             tool_params_fn: |args| {
                 let mut p = json!({});
@@ -1487,6 +1546,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 optional: false,
             }],
             options: &[],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_save_storage_state".to_string(),
             tool_params_fn: |args| {
                 json!({
@@ -1512,6 +1572,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "secure", description: "Mark the cookie as Secure", is_bool: true, short: None },
                 OptionDef { name: "sameSite", description: "Cookie SameSite policy (Strict, Lax, None)", is_bool: false, short: None },
             ],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_load_storage_state".to_string(),
             tool_params_fn: |args| {
                 let mut p = json!({
@@ -1554,6 +1615,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "domain", description: "Cookie domain override", is_bool: false, short: None },
                 OptionDef { name: "path", description: "Cookie path override", is_bool: false, short: None },
             ],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "delete_cookies".to_string(),
             tool_params_fn: |args| {
                 let mut p = json!({
@@ -1576,6 +1638,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: false,
             args: &[],
             options: &[],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "clear_browser_cookies".to_string(),
             tool_params_fn: |_| json!({}),
         },
@@ -1587,6 +1650,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: false,
             args: &[],
             options: &[],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_evaluate".to_string(),
             tool_params_fn: |_| json!({}),
         },
@@ -1602,6 +1666,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 optional: false,
             }],
             options: &[],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_evaluate".to_string(),
             tool_params_fn: |args| {
                 json!({
@@ -1620,6 +1685,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 ArgDef { name: "value", description: "Value to store", optional: false },
             ],
             options: &[],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_evaluate".to_string(),
             tool_params_fn: |args| {
                 json!({
@@ -1640,6 +1706,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 optional: false,
             }],
             options: &[],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_evaluate".to_string(),
             tool_params_fn: |args| {
                 json!({
@@ -1655,6 +1722,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: false,
             args: &[],
             options: &[],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_evaluate".to_string(),
             tool_params_fn: |_| json!({}),
         },
@@ -1666,6 +1734,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: false,
             args: &[],
             options: &[],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_evaluate".to_string(),
             tool_params_fn: |_| json!({}),
         },
@@ -1681,6 +1750,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 optional: false,
             }],
             options: &[],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_evaluate".to_string(),
             tool_params_fn: |args| {
                 json!({
@@ -1699,6 +1769,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 ArgDef { name: "value", description: "Value to store", optional: false },
             ],
             options: &[],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_evaluate".to_string(),
             tool_params_fn: |args| {
                 json!({
@@ -1719,6 +1790,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 optional: false,
             }],
             options: &[],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_evaluate".to_string(),
             tool_params_fn: |args| {
                 json!({
@@ -1734,6 +1806,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: false,
             args: &[],
             options: &[],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_evaluate".to_string(),
             tool_params_fn: |_| json!({}),
         },
@@ -1750,6 +1823,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "full-page", description: "When true, takes a screenshot of the full scrollable page", is_bool: true, short: None },
                 OptionDef { name: "viewport", description: "Capture a specific viewport by index (0 = top). Same semantics as snapshot -v.", is_bool: false, short: Some("v") },
             ],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_take_screenshot".to_string(),
             tool_params_fn: |args| {
                 let mut p = json!({});
@@ -1772,6 +1846,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             options: &[
                 OptionDef { name: "filename", description: "File name or path to save the PDF to. Bare filenames are saved to the snapshot directory; paths (containing / or \\) are resolved relative to the current directory.", is_bool: false, short: None },
             ],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_pdf_save".to_string(),
             tool_params_fn: |args| {
                 let mut p = json!({});
@@ -1788,6 +1863,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: true,
             args: &[],
             options: &[],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_tabs".to_string(),
             tool_params_fn: |_| json!({ "action": "list" }),
         },
@@ -1799,6 +1875,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: true,
             args: &[ArgDef { name: "url", description: "The URL to navigate to in the new tab", optional: true }],
             options: &[],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_tabs".to_string(),
             tool_params_fn: |args| {
                 let mut p = json!({ "action": "new" });
@@ -1814,6 +1891,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: true,
             args: &[ArgDef { name: "index", description: "Zero-based tab index from tab-list output. If omitted, current tab is closed.", optional: true }],
             options: &[],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_tabs".to_string(),
             tool_params_fn: |args| {
                 let mut p = json!({ "action": "close" });
@@ -1829,6 +1907,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: true,
             args: &[ArgDef { name: "index", description: "Zero-based tab index", optional: false }],
             options: &[],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_tabs".to_string(),
             tool_params_fn: |args| {
                 json!({
@@ -1848,6 +1927,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             options: &[
                 OptionDef { name: "all", description: "List all browser sessions across all workspaces", is_bool: true, short: None },
             ],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| String::new(),
             tool_params_fn: |_| json!({}),
         },
@@ -1859,6 +1939,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: false,
             args: &[],
             options: &[],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| String::new(),
             tool_params_fn: |_| json!({}),
         },
@@ -1870,6 +1951,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: false,
             args: &[],
             options: &[],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| String::new(),
             tool_params_fn: |_| json!({}),
         },
@@ -1895,6 +1977,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                     short: None,
                 },
             ],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| String::new(),
             tool_params_fn: |args| {
                 let mut params = json!({});
@@ -1915,6 +1998,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: false,
             args: &[],
             options: &[],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| String::new(),
             tool_params_fn: |_| json!({}),
         },
@@ -1933,6 +2017,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                     short: None,
                 },
             ],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| String::new(),
             tool_params_fn: |args| {
                 let mut params = json!({});
@@ -1987,6 +2072,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                     short: None,
                 },
             ],
+            e2e_coverage: E2eCoverage::Excluded,
             tool_name_fn: |_| String::new(),
             tool_params_fn: |args| {
                 let mut params = json!({});
@@ -2037,6 +2123,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "word-regexp", short: Some("w"), is_bool: true, description: "Match only whole words (grep mode)" },
                 OptionDef { name: "extended-regexp", short: Some("E"), is_bool: true, description: "Extended regex (ERE) — already the default. Accepted for compatibility with grep -E." },
             ],
+            e2e_coverage: E2eCoverage::Excluded,
             tool_name_fn: |_| String::new(),
             tool_params_fn: |args| {
                 let mut params = json!({});
@@ -2072,6 +2159,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "raw", description: "Print extracted content directly to stdout (alias for --stdout)", is_bool: true, short: None },
                 OptionDef { name: "stdout", description: "Print extracted content directly to stdout", is_bool: true, short: None },
             ],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "agent_extract".to_string(),
             tool_params_fn: |args| {
                 let mut p = json!({ "instruction": get_str(args, "instruction").unwrap_or_default() });
@@ -2095,6 +2183,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "raw", description: "Print summary directly to stdout (alias for --stdout)", is_bool: true, short: None },
                 OptionDef { name: "stdout", description: "Print summary directly to stdout", is_bool: true, short: None },
             ],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "agent_summarize".to_string(),
             tool_params_fn: |args| {
                 let mut p = json!({});
@@ -2114,6 +2203,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: false,
             args: &[ArgDef { name: "task", description: "Natural language task for the agent to execute", optional: false }],
             options: &[],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "command_run".to_string(),
             tool_params_fn: |args| {
                 json!({ "task": get_str(args, "task").unwrap_or_default() })
@@ -2127,6 +2217,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: false,
             args: &[ArgDef { name: "id", description: "Task ID returned by agent run", optional: false }],
             options: &[],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "command_status".to_string(),
             tool_params_fn: |args| {
                 json!({ "id": get_str(args, "id").unwrap_or_default() })
@@ -2140,6 +2231,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: false,
             args: &[ArgDef { name: "id", description: "Task ID returned by agent run", optional: false }],
             options: &[],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "command_result".to_string(),
             tool_params_fn: |args| {
                 json!({ "id": get_str(args, "id").unwrap_or_default() })
@@ -2153,6 +2245,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: false,
             args: &[],
             options: &[],
+            e2e_coverage: E2eCoverage::Excluded,
             tool_name_fn: |_| String::new(),
             tool_params_fn: |_| json!({}),
         },
@@ -2170,6 +2263,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "max-browser-contexts", description: "Number of isolated browser environments (default: 2)", is_bool: false, short: None },
                 OptionDef { name: "display-mode", description: "Display mode: GUI, HEADLESS, SUPERVISED", is_bool: false, short: None },
             ],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "open_session".to_string(),
             tool_params_fn: |args| {
                 let mut p = json!({});
@@ -2201,6 +2295,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "store-content", description: "Persist page content to storage", is_bool: true, short: None },
                 OptionDef { name: "wait", description: "Block until all submitted jobs complete", is_bool: true, short: None },
             ],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "swarm_submit".to_string(),
             tool_params_fn: |args| {
                 let mut p = json!({});
@@ -2233,6 +2328,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "refresh", description: "Force a fresh fetch, ignoring cache", is_bool: true, short: None },
                 OptionDef { name: "wait", description: "Block until all submitted jobs complete", is_bool: true, short: None },
             ],
+            e2e_coverage: E2eCoverage::Excluded,
             tool_name_fn: |_| "swarm_query".to_string(),
             tool_params_fn: |args| {
                 let mut p = json!({});
@@ -2258,6 +2354,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: false,
             args: &[ArgDef { name: "id", description: "Task ID returned by swarm submit", optional: false }],
             options: &[],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "swarm_status".to_string(),
             tool_params_fn: |args| {
                 json!({ "id": get_str(args, "id").unwrap_or_default() })
@@ -2271,6 +2368,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: false,
             args: &[ArgDef { name: "id", description: "Task ID returned by swarm submit", optional: false }],
             options: &[],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "swarm_result".to_string(),
             tool_params_fn: |args| {
                 json!({ "id": get_str(args, "id").unwrap_or_default() })
@@ -2286,6 +2384,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             options: &[
                 OptionDef { name: "clear", description: "Remove all tracked swarm tasks from the list", is_bool: true, short: None },
             ],
+            e2e_coverage: E2eCoverage::Excluded,
             tool_name_fn: |_| String::new(),
             tool_params_fn: |args| {
                 let mut p = json!({});
@@ -2301,6 +2400,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: false,
             args: &[],
             options: &[],
+            e2e_coverage: E2eCoverage::Excluded,
             tool_name_fn: |_| String::new(),
             tool_params_fn: |_| json!({}),
         },
@@ -2339,6 +2439,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "readonly", description: "Non-destructive mode (no page modifications)", is_bool: true, short: None },
                 OptionDef { name: "background", description: "Submit crawl and return immediately; use 'crawl list' to track progress", is_bool: true, short: Some("bg") },
             ],
+            e2e_coverage: E2eCoverage::Excluded,
             tool_name_fn: |_| "crawl_submit".to_string(),
             tool_params_fn: |args| {
                 let mut p = json!({});
@@ -2436,6 +2537,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 ArgDef { name: "id", description: "Task ID", optional: false },
             ],
             options: &[],
+            e2e_coverage: E2eCoverage::Excluded,
             tool_name_fn: |_| String::new(),
             tool_params_fn: |args| {
                 let mut p = json!({});
@@ -2453,6 +2555,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 ArgDef { name: "id", description: "Task ID", optional: false },
             ],
             options: &[],
+            e2e_coverage: E2eCoverage::Excluded,
             tool_name_fn: |_| String::new(),
             tool_params_fn: |args| {
                 let mut p = json!({});
@@ -2470,6 +2573,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 ArgDef { name: "id", description: "Task ID", optional: false },
             ],
             options: &[],
+            e2e_coverage: E2eCoverage::Excluded,
             tool_name_fn: |_| String::new(),
             tool_params_fn: |args| {
                 let mut p = json!({});
@@ -2485,6 +2589,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: false,
             args: &[],
             options: &[],
+            e2e_coverage: E2eCoverage::Excluded,
             tool_name_fn: |_| String::new(),
             tool_params_fn: |_| json!({}),
         },
@@ -2496,6 +2601,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: false,
             args: &[],
             options: &[],
+            e2e_coverage: E2eCoverage::Excluded,
             tool_name_fn: |_| String::new(),
             tool_params_fn: |_| json!({}),
         },
@@ -2508,6 +2614,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: true,
             args: &[],
             options: &[],
+            e2e_coverage: E2eCoverage::Excluded,
             tool_name_fn: |_| "html_snapshot_capture".to_string(),
             tool_params_fn: |_| json!({}),
         },
@@ -2519,6 +2626,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: true,
             args: &[],
             options: &[],
+            e2e_coverage: E2eCoverage::Excluded,
             tool_name_fn: |_| "html_snapshot_capture".to_string(),
             tool_params_fn: |_| json!({}),
         },
@@ -2538,6 +2646,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "page-size", short: None, is_bool: false, description: "Lines per page (default: 2000)" },
                 OptionDef { name: "all", short: None, is_bool: true, description: "Show all output, disabling pagination" },
             ],
+            e2e_coverage: E2eCoverage::Excluded,
             tool_name_fn: |_| "html_snapshot_scrape".to_string(),
             tool_params_fn: |args| {
                 let field = get_str(args, "field").unwrap_or_default();
@@ -2565,6 +2674,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "page-size", short: None, is_bool: false, description: "Lines per page (default: 2000)" },
                 OptionDef { name: "all", short: None, is_bool: true, description: "Show all output, disabling pagination" },
             ],
+            e2e_coverage: E2eCoverage::Excluded,
             tool_name_fn: |_| "html_snapshot_scrape_all".to_string(),
             tool_params_fn: |args| {
                 let field = get_str(args, "field").unwrap_or_default();
@@ -2627,6 +2737,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                     short: None,
                 },
             ],
+            e2e_coverage: E2eCoverage::Excluded,
             tool_name_fn: |_| "html_snapshot_query".to_string(),
             tool_params_fn: |args| {
                 let sql = get_opt_str(args, "sql").unwrap_or_default();
@@ -2657,6 +2768,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                     short: None,
                 },
             ],
+            e2e_coverage: E2eCoverage::Excluded,
             tool_name_fn: |_| "html_snapshot_export".to_string(),
             tool_params_fn: |args| {
                 let mut p = json!({});
@@ -2676,6 +2788,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "stdout", description: "Print summary content directly to stdout", is_bool: true, short: None },
                 OptionDef { name: "verbose", short: Some("v"), description: "Show internal scoring details and score legend", is_bool: true },
             ],
+            e2e_coverage: E2eCoverage::Excluded,
             tool_name_fn: |_| "html_snapshot_summary".to_string(),
             tool_params_fn: |args| {
                 let mut p = json!({});
@@ -2713,6 +2826,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "all", short: None, is_bool: true, description: "Show all output, disabling pagination" },
                 OptionDef { name: "raw-html", short: None, is_bool: true, description: "Search the raw HTML including <script> and <style> content. By default, script/style tags are stripped to avoid false positives from JavaScript code." },
             ],
+            e2e_coverage: E2eCoverage::Excluded,
             tool_name_fn: |_| "html_snapshot_export".to_string(),
             tool_params_fn: |args| {
                 let mut p = json!({});
@@ -2733,6 +2847,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: false,
             args: &[],
             options: &[],
+            e2e_coverage: E2eCoverage::Excluded,
             tool_name_fn: |_| "skill_list".to_string(),
             tool_params_fn: |_| json!({}),
         },
@@ -2744,6 +2859,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: false,
             args: &[ArgDef { name: "id", description: "Skill identifier", optional: false }],
             options: &[],
+            e2e_coverage: E2eCoverage::Excluded,
             tool_name_fn: |_| "skill_info".to_string(),
             tool_params_fn: |args| {
                 let id = get_str(args, "id").unwrap_or_default();
@@ -2765,6 +2881,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                     short: None,
                 },
             ],
+            e2e_coverage: E2eCoverage::Excluded,
             tool_name_fn: |_| "skill_install".to_string(),
             tool_params_fn: |args| {
                 let path = get_str(args, "path").unwrap_or_default();
@@ -2783,6 +2900,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: false,
             args: &[ArgDef { name: "id", description: "Skill identifier", optional: false }],
             options: &[],
+            e2e_coverage: E2eCoverage::Excluded,
             tool_name_fn: |_| "skill_uninstall".to_string(),
             tool_params_fn: |args| {
                 let id = get_str(args, "id").unwrap_or_default();
@@ -2797,6 +2915,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: false,
             args: &[ArgDef { name: "id", description: "Skill identifier", optional: false }],
             options: &[],
+            e2e_coverage: E2eCoverage::Excluded,
             tool_name_fn: |_| "skill_reload".to_string(),
             tool_params_fn: |args| {
                 let id = get_str(args, "id").unwrap_or_default();
@@ -2812,6 +2931,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: false,
             args: &[],
             options: &[],
+            e2e_coverage: E2eCoverage::Excluded,
             tool_name_fn: |_| String::new(),
             tool_params_fn: |_| json!({}),
         },
@@ -2825,6 +2945,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 ArgDef { name: "name", description: "Plugin name (manifest name or JAR file name)", optional: false },
             ],
             options: &[],
+            e2e_coverage: E2eCoverage::Excluded,
             tool_name_fn: |_| String::new(),
             tool_params_fn: |args| {
                 json!({ "name": get_str(args, "name").unwrap_or_default() })
@@ -2842,6 +2963,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             options: &[
                 OptionDef { name: "replace", description: "Overwrite an existing plugin with the same name", is_bool: true, short: None },
             ],
+            e2e_coverage: E2eCoverage::Excluded,
             tool_name_fn: |_| String::new(),
             tool_params_fn: |args| {
                 let mut p = json!({ "file": get_str(args, "file").unwrap_or_default() });
@@ -2861,6 +2983,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             options: &[
                 OptionDef { name: "yes", description: "Skip confirmation prompt", is_bool: true, short: Some("y") },
             ],
+            e2e_coverage: E2eCoverage::Excluded,
             tool_name_fn: |_| String::new(),
             tool_params_fn: |args| {
                 let mut p = json!({ "name": get_str(args, "name").unwrap_or_default() });
@@ -2883,6 +3006,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "stdin", description: "Read the CSS selector from stdin instead of an inline argument (avoids shell quoting issues on Windows)", is_bool: true, short: None },
                 OptionDef { name: "selector-base64", description: "Base64-encoded CSS selector (avoids shell quoting issues on Windows)", is_bool: false, short: None },
             ],
+            e2e_coverage: E2eCoverage::Excluded,
             tool_name_fn: |_| "html_snapshot_inspect".to_string(),
             tool_params_fn: |args| {
                 let mut p = json!({});
@@ -2907,6 +3031,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: false,
             args: &[ArgDef { name: "ref", description: "Element reference (e5, backend:15) or CSS selector", optional: false }],
             options: &[],
+            e2e_coverage: E2eCoverage::Excluded,
             tool_name_fn: |_| "browser_generate_locator".to_string(),
             tool_params_fn: |args| {
                 let r = get_str(args, "ref").unwrap_or_default();
@@ -2926,6 +3051,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 optional: false,
             }],
             options: &[],
+            e2e_coverage: E2eCoverage::Excluded,
             tool_name_fn: |_| String::new(),
             tool_params_fn: |args| {
                 json!({ "description": get_str(args, "description").unwrap_or_default() })
@@ -5316,5 +5442,30 @@ mod tests {
                 cmd.category.as_str()
             );
         }
+    }
+
+    #[test]
+    fn test_all_commands_have_e2e_coverage() {
+        // Every command must explicitly declare its e2e status.
+        // The compiler enforces this (no Default impl), but this test
+        // guards against future refactors that might add a Default or
+        // new variants.
+        let cmds = all_commands();
+        assert!(!cmds.is_empty(), "all_commands() returned no commands");
+        let mut tested_count = 0usize;
+        let mut excluded_count = 0usize;
+        for cmd in &cmds {
+            match cmd.e2e_coverage {
+                E2eCoverage::Tested => tested_count += 1,
+                E2eCoverage::Excluded => excluded_count += 1,
+            }
+        }
+        assert!(tested_count > 0, "Expected some commands to be e2e tested");
+        assert!(excluded_count > 0, "Expected some commands to be e2e excluded");
+        assert_eq!(
+            tested_count + excluded_count,
+            cmds.len(),
+            "Every command must have an explicit e2e coverage status"
+        );
     }
 }
