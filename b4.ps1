@@ -2,6 +2,7 @@
 
 param(
     [switch]$Rebuild,
+    [Parameter(ValueFromRemainingArguments = $true)]
     [string[]]$ScriptArgs
 )
 
