@@ -1,6 +1,5 @@
 package ai.platon.browser4.api.snapshot
 
-import ai.platon.browser4.chrome.dom.model.AriaSnapshotOptions
 import java.util.*
 
 internal object AriaSnapshotFormatting {

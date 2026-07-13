@@ -133,15 +133,15 @@ class SkillInstallerTest {
             name: test-skill
             description: A test skill
             ---
-            
+
             # Test Skill
-            
+
             ## Installation
-            
+
             1. Download the package
             2. Extract to your skills directory
             3. Run the setup script
-            
+
             ## Parameters
         """.trimIndent()
 
@@ -158,13 +158,13 @@ class SkillInstallerTest {
     fun testParseInstallStepsExtractsBulletedSteps() {
         val content = """
             # Test Skill
-            
+
             ## Setup
-            
+
             - Install Python 3.8+
             - Run pip install browser4-sdk
             * Configure API key in settings
-            
+
             ## Usage
         """.trimIndent()
 
@@ -181,11 +181,11 @@ class SkillInstallerTest {
     fun testParseInstallStepsReturnsEmptyForNoInstallSection() {
         val content = """
             # Test Skill
-            
+
             ## Description
-            
+
             A test skill description.
-            
+
             ## Parameters
         """.trimIndent()
 
@@ -198,12 +198,12 @@ class SkillInstallerTest {
     fun testParseInstallStepsHandlesGettingStartedSection() {
         val content = """
             # Test Skill
-            
+
             ## Getting Started
-            
+
             1. Clone the repository
             2. Install dependencies
-            
+
             ## Next Steps
         """.trimIndent()
 
@@ -223,7 +223,7 @@ class SkillInstallerTest {
         val doc = installer.readDocumentation("web-scraping")
 
         assertNotNull(doc)
-        assertTrue(doc!!.contains("Web Scraping"))
+        assertTrue(doc.contains("Web Scraping"))
     }
 
     @Test
@@ -296,21 +296,21 @@ class SkillInstallerTest {
             name: test-loader-skill
             description: A test skill with install steps
             ---
-            
+
             # Test Loader Skill
-            
+
             ## Description
-            
+
             A skill for testing install step parsing.
-            
+
             ## Installation
-            
+
             1. Download the binary
             2. Add to PATH
             3. Verify with `test-loader-skill --version`
-            
+
             ## Parameters
-            
+
             None
         """.trimIndent())
 
@@ -319,7 +319,7 @@ class SkillInstallerTest {
 
         val def = definitions.find { it.skillId == "test-loader-skill" }
         assertNotNull(def, "Definition should be loaded")
-        assertEquals(3, def!!.installSteps.size)
+        assertEquals(3, def.installSteps.size)
         assertEquals("Download the binary", def.installSteps[0])
         assertEquals("Add to PATH", def.installSteps[1])
         assertEquals("Verify with `test-loader-skill --version`", def.installSteps[2])

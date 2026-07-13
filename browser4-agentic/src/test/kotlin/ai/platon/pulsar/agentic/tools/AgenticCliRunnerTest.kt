@@ -703,7 +703,7 @@ class AgenticCliRunnerTest {
             assertTrue(result.success)
             assertNotNull(result.toolCall)
             assertEquals("tab", result.toolCall!!.domain)
-            assertEquals("ariaSnapshot", result.toolCall!!.method)
+            assertEquals("ariaSnapshot", result.toolCall.method)
         }
 
         @Test
@@ -730,7 +730,7 @@ class AgenticCliRunnerTest {
             assertTrue(result.success)
             assertNotNull(result.toolCall)
             assertEquals("browser", result.toolCall!!.domain)
-            assertEquals("listTabs", result.toolCall!!.method)
+            assertEquals("listTabs", result.toolCall.method)
         }
 
         @Test
@@ -757,7 +757,7 @@ class AgenticCliRunnerTest {
             assertTrue(result.success)
             assertNotNull(result.toolCall)
             assertEquals("tab", result.toolCall!!.domain)
-            assertEquals("goBack", result.toolCall!!.method)
+            assertEquals("goBack", result.toolCall.method)
         }
 
         @Test

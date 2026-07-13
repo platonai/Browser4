@@ -86,7 +86,7 @@ class EventBusObservabilityTest {
 
         val events = capturedEvents[eventType]
         assertNotNull(events, "Events should be captured")
-        assertTrue(events!!.isNotEmpty(), "At least one event should be captured")
+        assertTrue(events.isNotEmpty(), "At least one event should be captured")
         assertEquals("test action", events[0]["action"])
         assertEquals("test-uuid", events[0]["uuid"])
     }
