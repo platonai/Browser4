@@ -1,15 +1,21 @@
 ---
 name: run-tests
 title: "Run Tests — Execute Browser4 test suites via bin/test.ps1"
-description: "Discovers and runs Browser4 test suites (unit, integration, E2E, CLI, PowerShell, real-world scenarios). Use when asked to run, check, or verify tests."
+description: "Discovers and runs Browser4 test suites (unit, integration, E2E, CLI, PowerShell, real-world scenarios, production acceptance). Use when asked to run, check, or verify tests."
 allowed-tools: Bash(pwsh:*), Bash(./bin/test.ps1:*)
 ---
 
 # Run Tests
 
-Invokes `bin/test.ps1`, the unified test orchestrator for the Browser4 monorepo.
-Supports Maven tests, Rust CLI tests, PowerShell `*.tests.ps1` files, real-world
-scenario agent evaluations, and mock-server launch.
+Two test entrypoints:
+
+- **`bin/test.ps1`** — unified test orchestrator for the Browser4 monorepo.
+  Supports Maven tests, Rust CLI tests, PowerShell `*.tests.ps1` files, real-world
+  scenario agent evaluations, and mock-server launch.
+
+- **`bin/test-production.ps1`** — acceptance test for the latest production
+  release of browser4-cli. Downloads, installs, exercises, uninstalls, and
+  re-installs the global CLI from the public OSS distribution channel.
 
 ## When to Use
 
@@ -23,6 +29,8 @@ scenario agent evaluations, and mock-server launch.
 - "check what tests would run" (-DryRun / -Show)
 - "resume failed tests"
 - "launch mock server"
+- "run production acceptance test"
+- "acceptance test the latest release"
 
 ## How It Works
 
@@ -158,3 +166,63 @@ ls -t .test-sessions/*/test-session.json | head -1 | xargs cat
 The session records the last status, log paths, per-file results (for `ps`),
 system environment, and a rolling 5-entry history per test type.
 Pass `-NoSession` to skip persistence, or `-SessionPath <path>` to write to a custom location.
+
+## Production Acceptance Test
+
+`bin/test-production.ps1` simulates a real end user's journey with the
+published browser4-cli release. It is designed to be run in CI or locally
+before tagging a release.
+
+### Safe default
+
+Running with no arguments shows help (safe default):
+
+```bash
+./bin/test-production.ps1
+```
+
+### Options
+
+| Flag | Description |
+|------|-------------|
+| `-WorkingDir <path>` | Working directory for temporary artifacts (default: random subdir under system temp) |
+| `-Stress` | Enable the multi-scenario stress suite (opt-in) |
+| `-MultiScenariosIterations <n>` | Iterations for the multi-scenario suite (default: 1, only with `-Stress`) |
+| `-RemoveWorkingDir` | Delete the working directory on exit (default: preserved for review) |
+
+### What it tests
+
+1. Creates an isolated working directory (default: system temp + random suffix)
+2. Cleans any pre-existing global browser4-cli installation
+3. Installs the latest CLI via the remote bootstrap script (unmodified)
+4. Verifies the CLI is on PATH after install (fails if the install script is broken)
+5. Smoke-tests: `--help`, `--version`, `config --help`, `agent-run --help`, invalid command
+6. Cold-starts the browser server (`open`), verifies health endpoint responds
+7. Measures warm-start latency vs cold-start (cycle 2)
+8. Shuts down the server (`close-all`, `kill-all`), verifies it's unreachable
+9. Uninstalls and verifies runtime data is removed
+10. Repeats the install cycle to verify idempotency
+11. (With `-Stress`) Runs `multi-scenarios.ps1` against the global CLI
+
+### Key principle
+
+The script acts like a real end user — it does **not** patch install scripts,
+create missing symlinks, or manually clean up after uninstall. If any of those
+are needed, the test **fails** because a real user would hit the same broken
+behavior.
+
+### Examples
+
+```bash
+# Show help (no arguments = safe default)
+./bin/test-production.ps1
+
+# Run the full acceptance test
+./bin/test-production.ps1 -Stress
+
+# Production CI: stress test with multiple iterations, clean up afterward
+./bin/test-production.ps1 -Stress -MultiScenariosIterations 3 -RemoveWorkingDir
+
+# Use a specific working directory
+./bin/test-production.ps1 -WorkingDir /tmp/my-acceptance-test
+```
