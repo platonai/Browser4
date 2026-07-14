@@ -196,6 +196,81 @@ jobs:
 
           echo "📜 CLI installer scripts synced to OSS"
 
+      - name: Generate SHA256 checksums
+        run: |
+          set -euo pipefail
+
+          cd release-assets
+
+          # Generate standard SHA256SUMS + individual .sha256 per file
+          for f in *; do
+            [[ -f "$f" ]] || continue
+            hash=$(sha256sum "$f" | awk '{print $1}')
+            # Individual .sha256 file (just the hash)
+            echo "$hash" > "${f}.sha256"
+            # Standard SHA256SUMS entry
+            echo "${hash}  ${f}" >> SHA256SUMS
+          done
+
+          echo "Generated SHA256SUMS:"
+          cat SHA256SUMS
+
+          echo ""
+          echo "Individual .sha256 files:"
+          ls -1 *.sha256
+
+          # Also emit a JSON map for the metadata step
+          jq -Rn '
+            [inputs | capture("^(?<hash>[0-9a-f]{64})\\s+[* ]?(?<name>.+)$")]
+            | from_entries
+          ' SHA256SUMS > sha256.json
+
+          echo ""
+          echo "sha256.json:"
+          cat sha256.json
+
+      - name: Upload checksum files to OSS
+        env:
+          OSS_ENDPOINT: oss-cn-beijing.aliyuncs.com
+          OSS_REGION: cn-beijing
+          OSS_BUCKET: browser4
+          OSS_ACCESS_KEY_ID: ${{ secrets.OSS_ACCESS_KEY_ID }}
+          OSS_ACCESS_KEY_SECRET: ${{ secrets.OSS_ACCESS_KEY_SECRET }}
+        run: |
+          set -euo pipefail
+          TAG_NAME="${{ steps.resolve.outputs.tag_name }}"
+
+          uploaded=0
+          failed=0
+
+          for checksum_file in release-assets/*.sha256 release-assets/SHA256SUMS; do
+            [[ -f "$checksum_file" ]] || continue
+            name=$(basename "$checksum_file")
+            oss_path="oss://${OSS_BUCKET}/releases/download/${TAG_NAME}/${name}"
+
+            echo "Uploading: ${name} → ${oss_path}"
+            if ./ossutil cp "$checksum_file" "$oss_path" \
+              -e "$OSS_ENDPOINT" \
+              --region "$OSS_REGION" \
+              --acl public-read \
+              --retry-times 3; then
+              ((uploaded++)) || true
+            else
+              echo "::error::Failed to upload ${name}"
+              ((failed++)) || true
+            fi
+          done
+
+          echo ""
+          echo "Checksum upload: ${uploaded} succeeded, ${failed} failed"
+
+          if [[ $failed -gt 0 ]]; then
+            echo "::error::${failed} checksum file(s) failed to upload"
+            exit 1
+          fi
+
+          echo "🔐 All ${uploaded} checksum files published to OSS"
+
       - name: Create latest symlinks
         env:
           OSS_ENDPOINT: oss-cn-beijing.aliyuncs.com
@@ -258,9 +333,9 @@ jobs:
           RELEASE_URL="${{ steps.resolve.outputs.release_url }}"
           PUBLISHED_AT="${{ github.event.release.published_at || '' }}"
 
-          # Build the asset list (public, non-sensitive fields only).
+          # Build the asset list with sizes and SHA256 hashes.
           ASSETS_JSON="[]"
-          if [ -d release-assets ]; then
+          if [ -d release-assets ] && [ -f release-assets/sha256.json ]; then
             ASSETS_JSON=$(
               ls -l release-assets/ 2>/dev/null \
                 | tail -n +2 \
@@ -268,6 +343,13 @@ jobs:
                 | sed 's/,$//'
             )
             ASSETS_JSON="[${ASSETS_JSON}]"
+            # Merge sha256 hashes into the asset list (skip SHA256SUMS and sha256.json themselves)
+            ASSETS_JSON=$(echo "$ASSETS_JSON" | jq --slurpfile hashes release-assets/sha256.json '
+              map(
+                . + if $hashes[0][.name] then {sha256: $hashes[0][.name]} else {} end
+                | select(.name != "SHA256SUMS" and .name != "sha256.json" and (.name | endswith(".sha256") | not))
+              )
+            ')
           fi
 
           # Generate latest-release.json with public metadata only (no tokens, no secrets).
@@ -316,5 +398,8 @@ jobs:
             echo "- **CLI installer scripts** (latest alias):"
             echo "  - \`https://browser4.oss-cn-beijing.aliyuncs.com/releases/download/latest/install-browser4-cli.ps1\`"
             echo "  - \`https://browser4.oss-cn-beijing.aliyuncs.com/releases/download/latest/install-browser4-cli.sh\`"
+            echo "- **SHA256 checksums**:"
+            echo "  - \`https://browser4.oss-cn-beijing.aliyuncs.com/releases/download/${{ steps.resolve.outputs.tag_name }}/SHA256SUMS\`"
+            echo "  - \`https://browser4.oss-cn-beijing.aliyuncs.com/releases/download/latest/SHA256SUMS\`"
             echo "- **Status**: ${{ job.status }}"
           } >> "$GITHUB_STEP_SUMMARY"
