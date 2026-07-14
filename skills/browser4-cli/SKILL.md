@@ -99,6 +99,7 @@ The `list` command displays a "Next open" column showing what happens when `goto
 | `state-save`, `state-load`, `cookie-*`, `*-storage-*` | Browser storage management | Auth state reuse, cookie manipulation | [storage-state.md](references/storage-state.md) |
 | `attach` | Connect to existing Chrome/Edge via CDP | Debug live browser, reuse auth | [attach.md](references/attach.md) |
 | `screenshot`, `scroll`, `wait`, `resize`, `tab-*` | Visual capture & viewport control | Screenshots, tab management | — |
+| `skills`, `skills get`, `skills path` | Bundled skill file management | Fetch current AI agent instructions | — |
 
 ## 4. Decision Trees
 
@@ -249,6 +250,20 @@ browser4-cli install
 irm https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.ps1 | iex
 browser4-cli install
 ```
+
+## Keeping Instructions Current
+
+The CLI binary bundles its own skill files at compile time. To fetch the instructions
+that match the **installed** CLI version (rather than relying on potentially stale
+cached copies), use:
+
+```bash
+browser4-cli skills get browser4-cli        # SKILL.md only
+browser4-cli skills get browser4-cli --full # Include all references
+browser4-cli skills                         # List all bundled skills
+```
+
+This ensures you always operate against the exact semantics of the installed binary.
 
 ## Development
 
