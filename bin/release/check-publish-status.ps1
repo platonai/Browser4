@@ -20,7 +20,7 @@
       - [XX] Local version is BEHIND the latest release — something is wrong.
 
     Also shows browser4-cli versions for reference (no judgment):
-      - Reads the CLI version from cli/VERSION-CLI
+      - Reads the CLI version from the repo-root VERSION file
       - Shows the latest vX.Y.Z-cli tag on GitHub (if any)
       - Shows the published version on npm (browser4-cli package)
 
@@ -37,7 +37,7 @@
 
 .PARAMETER CliVersion
     The CLI version to check.
-    If omitted, reads the version from cli/VERSION-CLI.
+    If omitted, reads the version from the repo-root VERSION file.
 
 .PARAMETER SkipCli
     Skip the browser4-cli release status check.
@@ -556,11 +556,15 @@ if (-not $SkipCli) {
 
     # Resolve CLI version
     if (-not $CliVersion) {
-        $cliVersionFile = Join-Path $repoRoot "cli/VERSION-CLI"
+        $cliVersionFile = Join-Path $repoRoot "VERSION"
         if (Test-Path $cliVersionFile) {
             $CliVersion = (Get-Content $cliVersionFile -TotalCount 1).Trim()
+            # Strip -SNAPSHOT suffix for CLI version comparison (Maven convention)
+            if ($CliVersion -match '^(.+)-SNAPSHOT$') {
+                $CliVersion = $matches[1]
+            }
         } else {
-            Write-Host "  [!] cli/VERSION-CLI not found. Skipping CLI check." -ForegroundColor Yellow
+            Write-Host "  [!] VERSION file not found. Skipping CLI check." -ForegroundColor Yellow
             $SkipCli = $true
         }
     }

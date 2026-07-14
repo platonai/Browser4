@@ -82,23 +82,23 @@ Tests the full lifecycle: install → smoke-test → uninstall → re-install �
 ### `version.mjs`
 
 Unified version maintenance tool — single entry point for all version operations.
-Browser4 has two independent version tracks.
+Browser4 uses a single VERSION file as the source of truth across all modules.
 
-**Backend version** (source: `VERSION` file → pom.xml, READMEs):
-- `node bin/version.mjs show`: Print backend version.
+**Version queries** (source: `VERSION` file):
+- `node bin/version.mjs show`: Print project version.
 - `node bin/version.mjs show -v`: Print version + git hash, branch, date.
+
+**Version changes:**
 - `node bin/version.mjs release`: Strip `-SNAPSHOT` for release deployment.
 - `node bin/version.mjs bump <part>`: Bump version (major/minor/patch) with precheck.
-- `node bin/version.mjs auto`: Bump backend to next patch; bump CLI if cli/ changed. Shows release info, change summary, and asks for confirmation.
+- `node bin/version.mjs auto`: Bump to next patch if changes detected. Shows release info, change summary, and asks for confirmation.
 - `node bin/version.mjs auto --dry-run`: Preview the bump plan without applying.
-- `node bin/version.mjs auto --commit`: Apply the bump and commit+push.
+- `node bin/version.mjs auto --commit`: Apply and commit+push.
 
-**CLI version** (source: `cli/VERSION-CLI` → package.json, Cargo.toml):
+**CLI version** (source: `VERSION` → package.json, Cargo.toml):
 - `node bin/version.mjs cli show`: Print CLI version.
 - `node bin/version.mjs cli sync`: Sync to dependent files.
 - `node bin/version.mjs cli sync --check`: Check-only mode (CI lint).
-- `node bin/version.mjs cli auto`: Bump CLI to next patch if changes detected in cli/.
-- `node bin/version.mjs cli auto --dry-run`: Preview the CLI bump plan.
 
 **Cross-cutting:**
 - `node bin/version.mjs check`: Full consistency check across all version files.

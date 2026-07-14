@@ -20,26 +20,24 @@ PowerShell scripts require `pwsh` unless noted otherwise.
 point for all version operations — replaces the previous mix of bash, PowerShell,
 and Node.js scripts.
 
-Browser4 has two independent version tracks:
+Browser4 uses a single VERSION file across all modules:
 
 ```
-# Backend version (VERSION file → pom.xml, READMEs)
-node bin/version.mjs show              # Print backend version
+# Version queries (VERSION file)
+node bin/version.mjs show              # Print project version
 node bin/version.mjs show -v           # Print version + git hash, branch, date
 node bin/version.mjs release           # Strip -SNAPSHOT for release deployment
 node bin/version.mjs bump <part>       # Bump major/minor/patch
 node bin/version.mjs bump <part> --dry-run    # Show what would change
 node bin/version.mjs bump <part> --skip-precheck  # Skip publish-status check
-node bin/version.mjs auto              # Auto-bump backend + CLI if changed
+node bin/version.mjs auto              # Auto-bump if changes detected
 node bin/version.mjs auto --dry-run    # Preview bump plan with release info
 node bin/version.mjs auto --commit     # Apply bump and commit+push
 
-# CLI version (cli/VERSION-CLI → package.json, Cargo.toml)
-node bin/version.mjs cli show          # Print CLI version
+# CLI file sync (VERSION → package.json, Cargo.toml)
+node bin/version.mjs cli show          # Print CLI version (VERSION minus -SNAPSHOT)
 node bin/version.mjs cli sync          # Sync to dependent files
 node bin/version.mjs cli sync --check  # Check-only mode (CI lint)
-node bin/version.mjs cli auto          # Auto-bump CLI if cli/ changed
-node bin/version.mjs cli auto --dry-run  # Preview CLI bump
 
 # Cross-cutting
 node bin/version.mjs check             # Full version consistency check
@@ -75,7 +73,7 @@ fully published.
 
 - Compares the local version against the latest GitHub release.
 - Shows status: `[OK]` already published, `[GO]` ready to publish (next in sequence), `[XX]` behind latest release.
-- Also reports `browser4-cli` versions from `cli/VERSION-CLI`, latest `-cli` tag on GitHub, and npm (`browser4-cli` package).
+- Also reports `browser4-cli` versions from `VERSION`, latest `-cli` tag on GitHub, and npm (`browser4-cli` package).
 - Provides detailed release info: publish date, author, release URL, asset list.
 - Exits 0 if published or naturally next; non-zero otherwise.
 
