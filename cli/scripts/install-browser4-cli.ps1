@@ -48,6 +48,10 @@
   By default the script looks for the platform binary in its own directory
   before downloading -- use this to force a fresh download.
 
+.PARAMETER Force
+  Force reinstallation even if the binary is already installed at the target path.
+  Overrides -SkipIfInstalled and bypasses locked-file workarounds.
+
 .PARAMETER Locate
   Print detection results (OS, architecture, script location, China locale)
   and exit without installing. Useful for diagnostics.
@@ -91,13 +95,14 @@
 param(
     [string]$Version = "",
     [string]$InstallDir = "",
-    [ValidateSet("", "github", "oss")]
+    [ValidateSet("github", "oss")]
     [string]$Source = "",
     [bool]$AddToPath = $true,
     [switch]$Silent,
     [switch]$DryRun,
     [switch]$SkipIfInstalled,
     [switch]$SkipLocal,
+    [switch]$Force,
     [switch]$Locate
 )
 
@@ -635,8 +640,9 @@ function Main {
         Write-Step "Skipping local binary check (-SkipLocal)"
     }
 
-    # Skip download only when --skip-if-installed is set and binary already exists
-    if ((Test-Path $binaryPath) -and (-not $Version) -and $SkipIfInstalled -and (-not $useLocalBinary)) {
+    # Skip download only when --skip-if-installed is set and binary already exists,
+    # unless --force overrides it.
+    if ((Test-Path $binaryPath) -and (-not $Version) -and $SkipIfInstalled -and (-not $Force) -and (-not $useLocalBinary)) {
         Write-Check "Binary already installed: $binaryPath"
     } elseif ($useLocalBinary) {
         # Copy local binary to install dir
