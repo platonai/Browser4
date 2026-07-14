@@ -171,6 +171,39 @@ class MCPToolController(
                     && trimmed.substring(1).all { it.isDigit() })
                     || trimmed.startsWith("backend:")
         }
+
+        /**
+         * Build the JavaScript expression that restores focus to a selector
+         * during batch execution.  Returns a self-invoking function that:
+         *
+         * 1. Queries the selector in the page
+         * 2. Calls `.focus()` on the element if found
+         * 3. Returns 'focused', 'missing', or 'invalid:<error>'
+         *
+         * The [selector] value is JSON-escaped via [pulsarObjectMapper] so
+         * that special characters (quotes, backslashes) don't break the JS
+         * string literal.
+         */
+        internal fun buildBatchFocusExpression(selector: String): String {
+            if (selector.startsWith("backend:")) {
+                return "''"
+            }
+            val selectorLiteral = pulsarObjectMapper().writeValueAsString(selector)
+            return """
+                (() => {
+                    try {
+                        const el = document.querySelector($selectorLiteral);
+                        if (!el) return 'missing';
+                        if (typeof el.focus === 'function') {
+                            el.focus();
+                        }
+                        return document.activeElement === el ? 'focused' : 'unfocused';
+                    } catch (error) {
+                        return `invalid:${'$'}{error}`;
+                    }
+                })()
+            """.trimIndent()
+        }
     }
 
     private val logger = LoggerFactory.getLogger(MCPToolController::class.java)
@@ -662,21 +695,7 @@ class MCPToolController(
             return
         }
 
-        val selectorLiteral = pulsarObjectMapper().writeValueAsString(selector)
-        val focusExpression = $$"""
-            (() => {
-                try {
-                    const el = document.querySelector($$selectorLiteral);
-                    if (!el) return 'missing';
-                    if (typeof el.focus === 'function') {
-                        el.focus();
-                    }
-                    return document.activeElement === el ? 'focused' : 'unfocused';
-                } catch (error) {
-                    return `invalid:${error}`;
-                }
-            })()
-        """.trimIndent()
+        val focusExpression = buildBatchFocusExpression(selector)
 
         when (val result = executeAgentToolText(
             MCPConstants.TOOL_BROWSER_EVALUATE,

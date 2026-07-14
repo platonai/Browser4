@@ -632,6 +632,11 @@ pub(super) fn test_status_installed_runtime(ctx: &mut E2ECtx) {
         .canonicalize()
         .unwrap_or_else(|_| ctx.runtime_dir.clone());
 
+    // Override BROWSER4_RUNTIME_DIR with the canonicalised path so that the
+    // child CLI process resolves to the same directory where we created the
+    // fake runtime files.
+    ctx.set_env("BROWSER4_RUNTIME_DIR", &runtime_dir.to_string_lossy());
+
     // Write a runtime install metadata file using the new versioned layout.
     let tag = "v4.10.0";
     let versions_dir = runtime_dir.join("runtime");

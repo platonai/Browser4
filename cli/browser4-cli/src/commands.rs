@@ -4972,4 +4972,129 @@ mod tests {
             "document.querySelector('.loaded') !== null"
         );
     }
+
+    // =========================================================================
+    // fill command tests
+    // =========================================================================
+
+    #[test]
+    fn test_fill_params_use_ref_and_text_order() {
+        let map = commands_map();
+        let cmd = map.get("fill").unwrap();
+        let mut args = HashMap::new();
+        args.insert("ref".to_string(), json!("#my-input"));
+        args.insert("text".to_string(), json!("hello world"));
+
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["ref"], "#my-input");
+        assert_eq!(params["text"], "hello world");
+    }
+
+    #[test]
+    fn test_fill_tool_name_is_browser_type() {
+        let map = commands_map();
+        let cmd = map.get("fill").unwrap();
+        let tool_name = (cmd.tool_name_fn)(&HashMap::new());
+        assert_eq!(tool_name, "browser_type");
+    }
+
+    #[test]
+    fn test_fill_params_with_submit_option() {
+        let map = commands_map();
+        let cmd = map.get("fill").unwrap();
+        let mut args = HashMap::new();
+        args.insert("ref".to_string(), json!("#search"));
+        args.insert("text".to_string(), json!("query"));
+        args.insert("submit".to_string(), json!(true));
+
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["ref"], "#search");
+        assert_eq!(params["text"], "query");
+        assert_eq!(params["submit"], json!(true));
+    }
+
+    #[test]
+    fn test_fill_params_without_submit_omits_flag() {
+        let map = commands_map();
+        let cmd = map.get("fill").unwrap();
+        let mut args = HashMap::new();
+        args.insert("ref".to_string(), json!("#search"));
+        args.insert("text".to_string(), json!("query"));
+
+        let params = (cmd.tool_params_fn)(&args);
+        assert!(params.get("submit").is_none());
+    }
+
+    #[test]
+    fn test_fill_batch_supported() {
+        let map = commands_map();
+        let cmd = map.get("fill").unwrap();
+        assert!(cmd.batch_supported);
+    }
+
+    #[test]
+    fn test_fill_tool_params_preserve_ref_and_text_for_batch() {
+        let map = commands_map();
+        let cmd = map.get("fill").unwrap();
+        let mut args = HashMap::new();
+        args.insert("ref".to_string(), json!("#my-input"));
+        args.insert("text".to_string(), json!("batch fill text"));
+
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["ref"], "#my-input");
+        assert_eq!(params["text"], "batch fill text");
+    }
+
+    // =========================================================================
+    // mousewheel command tests
+    // =========================================================================
+
+    #[test]
+    fn test_mousewheel_tool_name_is_browser_mouse_wheel() {
+        let map = commands_map();
+        let cmd = map.get("mousewheel").unwrap();
+        let tool_name = (cmd.tool_name_fn)(&HashMap::new());
+        assert_eq!(tool_name, "browser_mouse_wheel");
+    }
+
+    #[test]
+    fn test_mousewheel_params_produce_delta_x_and_delta_y() {
+        let map = commands_map();
+        let cmd = map.get("mousewheel").unwrap();
+        let mut args = HashMap::new();
+        args.insert("dx".to_string(), json!(100));
+        args.insert("dy".to_string(), json!(200));
+
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["deltaX"], json!(100));
+        assert_eq!(params["deltaY"], json!(200));
+    }
+
+    #[test]
+    fn test_mousewheel_defaults_missing_deltas_to_zero() {
+        let map = commands_map();
+        let cmd = map.get("mousewheel").unwrap();
+        let params = (cmd.tool_params_fn)(&HashMap::new());
+        assert_eq!(params["deltaX"], json!(0));
+        assert_eq!(params["deltaY"], json!(0));
+    }
+
+    #[test]
+    fn test_mousewheel_batch_supported() {
+        let map = commands_map();
+        let cmd = map.get("mousewheel").unwrap();
+        assert!(cmd.batch_supported);
+    }
+
+    // =========================================================================
+    // type command tests
+    // =========================================================================
+
+    #[test]
+    fn test_type_tool_name_is_browser_press_sequentially() {
+        let map = commands_map();
+        let cmd = map.get("type").unwrap();
+        let tool_name = (cmd.tool_name_fn)(&HashMap::new());
+        assert_eq!(tool_name, "browser_press_sequentially");
+    }
 }
