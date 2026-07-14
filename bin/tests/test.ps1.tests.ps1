@@ -201,7 +201,7 @@ Write-Host ''
 Write-Host "━━━ Write-Rule ━━━" -ForegroundColor Cyan
 
 $output = Write-Rule *>&1 | Out-String
-Assert-Returns -Label 'Write-Rule: default width = 46' -Actual $output.Length -Expected 48  # 46 '=' + CRLF
+Assert-Returns -Label 'Write-Rule: default width = 46' -Actual $output.Length -Expected (46 + [Environment]::NewLine.Length)  # 46 '=' + newline
 
 $output = Write-Rule -Width 10 *>&1 | Out-String
 Assert-Returns -Label 'Write-Rule: custom width 10' -Actual $output.Trim().Length -Expected 10

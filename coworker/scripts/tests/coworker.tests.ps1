@@ -973,7 +973,7 @@ Describe 'Memory context integration' {
 
     It 'builds generator script path relative to PSScriptRoot' {
         $PSScriptRoot = 'D:\repo\coworker\scripts'
-        $expected = Join-Path $PSScriptRoot 'workers\coworker-memory-generator.ps1'
+        $expected = [System.IO.Path]::Combine($PSScriptRoot, 'workers\coworker-memory-generator.ps1')
         $expected | Should -BeExactly 'D:\repo\coworker\scripts\workers\coworker-memory-generator.ps1'
     }
 
@@ -1002,17 +1002,17 @@ Describe 'Memory context integration' {
 Describe 'Task log file naming' {
 
     It 'constructs task log path correctly' {
-        $taskLogPath = Join-Path 'D:\repo\coworker\tasks\300logs\2026\06\19' '223539-fix-login-bug.task.log'
+        $taskLogPath = [System.IO.Path]::Combine('D:\repo\coworker\tasks\300logs\2026\06\19', '223539-fix-login-bug.task.log')
         $taskLogPath | Should -BeExactly 'D:\repo\coworker\tasks\300logs\2026\06\19\223539-fix-login-bug.task.log'
     }
 
     It 'constructs agent log path correctly' {
-        $agentLogPath = Join-Path 'D:\repo\coworker\tasks\300logs\2026\06\19' '223539-fix-login-bug.agent.log'
+        $agentLogPath = [System.IO.Path]::Combine('D:\repo\coworker\tasks\300logs\2026\06\19', '223539-fix-login-bug.agent.log')
         $agentLogPath | Should -BeExactly 'D:\repo\coworker\tasks\300logs\2026\06\19\223539-fix-login-bug.agent.log'
     }
 
     It 'handles base names with dots' {
-        $taskLogPath = Join-Path 'D:\repo\logs\2026\06\19' '120000-v1.2.3-fix.task.log'
+        $taskLogPath = [System.IO.Path]::Combine('D:\repo\logs\2026\06\19', '120000-v1.2.3-fix.task.log')
         $taskLogPath | Should -BeExactly 'D:\repo\logs\2026\06\19\120000-v1.2.3-fix.task.log'
     }
 

@@ -355,7 +355,7 @@ Assert-Match "Contains Browser4" $root "Browser4"
 
 $resolved = Resolve-MaintenancePath "bin\maintenance\README.md"
 Assert-True "Resolve is absolute" ([System.IO.Path]::IsPathRooted($resolved))
-Assert-Match "Resolve contains path" $resolved "bin\\maintenance"
+Assert-Match "Resolve contains path" $resolved "bin[/\\]maintenance"
 Assert-Equal "Absolute passthrough" (Resolve-MaintenancePath "C:\absolute\file.txt") "C:\absolute\file.txt"
 
 # ═══════════════════════════════════════════════════════════════════

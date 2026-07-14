@@ -94,9 +94,9 @@ function Get-CleanPrompt {
     param($TaskLogPath)
     $content = Get-Content $TaskLogPath -Raw
     if ($content -match "(?s)Prompt:(.*?)\*\*\* MEMORY UPDATE INSTRUCTIONS \*\*\*") {
-        return $Matches[1].Trim()
+        return ($Matches[1].Trim() -replace "`r`n", "`n")
     } elseif ($content -match "(?s)Prompt:(.*)") {
-        return $Matches[1].Trim()
+        return ($Matches[1].Trim() -replace "`r`n", "`n")
     }
     return ""
 }
@@ -239,7 +239,7 @@ These instructions should not be included.
 "@ | Set-Content -Path $taskFile -Encoding UTF8
 
         $result = Get-CleanPrompt -TaskLogPath $taskFile
-        $expected = "This is the extracted prompt content.$([Environment]::NewLine)It spans multiple lines."
+        $expected = "This is the extracted prompt content.`nIt spans multiple lines."
         $result | Should -BeExactly $expected
     }
 
@@ -252,7 +252,7 @@ It still spans multiple lines.
 "@ | Set-Content -Path $taskFile -Encoding UTF8
 
         $result = Get-CleanPrompt -TaskLogPath $taskFile
-        $expected = "This is a simple prompt without memory markers.$([Environment]::NewLine)It still spans multiple lines."
+        $expected = "This is a simple prompt without memory markers.`nIt still spans multiple lines."
         $result | Should -BeExactly $expected
     }
 
@@ -301,7 +301,7 @@ Some trailing content
 "@ | Set-Content -Path $taskFile -Encoding UTF8
 
         $result = Get-CleanPrompt -TaskLogPath $taskFile
-        $expected = "content with surrounding spaces$([Environment]::NewLine)$([Environment]::NewLine)Some trailing content"
+        $expected = "content with surrounding spaces`n`nSome trailing content"
         $result | Should -BeExactly $expected
     }
 }

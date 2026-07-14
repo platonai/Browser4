@@ -30,7 +30,7 @@ function RunScript([string]$scriptArgs, [ref]$exitCode) {
     $tmpErr = [System.IO.Path]::GetTempFileName()
     $cmd = "& '$installScript' $scriptArgs 2>'$tmpErr'"
     $psi = New-Object System.Diagnostics.ProcessStartInfo
-    $psi.FileName = "powershell.exe"
+    $psi.FileName = if ($IsWindows -or ($env:OS -eq 'Windows_NT')) { "powershell.exe" } else { "pwsh" }
     $psi.Arguments = "-NoProfile -ExecutionPolicy Bypass -Command `"$cmd`""
     $psi.RedirectStandardOutput = $true
     $psi.UseShellExecute = $false
