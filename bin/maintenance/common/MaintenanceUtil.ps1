@@ -1,4 +1,4 @@
-# ═══════════════════════════════════════════════════════════════════
+﻿# ═══════════════════════════════════════════════════════════════════
 # CROSS-PLATFORM: This script must run on Linux, macOS, and Windows.
 # - Use $IsWindows / $IsLinux / $IsMacOS for platform detection.
 # - Use "($IsWindows -or $env:OS -eq 'Windows_NT')" for PS 5.1 compat.

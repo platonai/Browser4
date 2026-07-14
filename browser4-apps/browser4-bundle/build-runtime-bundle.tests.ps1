@@ -1,4 +1,4 @@
-#!/usr/bin/env pwsh
+﻿#!/usr/bin/env pwsh
 <#
 .SYNOPSIS
     Unit tests for pure functions in build-runtime-bundle.ps1.
@@ -571,7 +571,7 @@ if (-not $isWin) {
         -Actual (Convert-ToExtendedLengthPath '/usr/lib/jvm/jdk-21') `
         -Expected '/usr/lib/jvm/jdk-21'
     Assert-Equal -Label 'CTEL: null passthrough on Linux' `
-        -Actual (Convert-ToExtendedLengthPath $null) -Expected $null
+        -Actual (Convert-ToExtendedLengthPath $null) -Expected ''
 }
 
 Write-Host ''
