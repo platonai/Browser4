@@ -16507,4 +16507,142 @@ mod tests {
         assert!(!is_timeout_error_message("element not found"));
         assert!(!is_timeout_error_message(""));
     }
+
+    // -----------------------------------------------------------------------
+    // Batch compilation — fill command
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn compile_batch_request_fill_uses_browser_type_tool_step() {
+        let commands = vec![BatchCommandSpec {
+            display: "fill #fill-target 'batch fill'".to_string(),
+            tokens: vec![
+                "fill".to_string(),
+                "#fill-target".to_string(),
+                "batch fill".to_string(),
+            ],
+        }];
+
+        let compiled =
+            compile_batch_request(&commands, false, "http://127.0.0.1:8182", None).unwrap();
+
+        assert_eq!(compiled.steps.len(), 1);
+        assert_eq!(compiled.steps[0]["op"], json!("tool"));
+        assert_eq!(compiled.steps[0]["tool"], json!("browser_type"));
+        assert_eq!(
+            compiled.steps[0]["arguments"]["ref"],
+            json!("#fill-target")
+        );
+        assert_eq!(
+            compiled.steps[0]["arguments"]["text"],
+            json!("batch fill")
+        );
+    }
+
+    #[test]
+    fn compile_batch_request_fill_with_single_word_text() {
+        let commands = vec![BatchCommandSpec {
+            display: "fill #email alice@example.com".to_string(),
+            tokens: vec![
+                "fill".to_string(),
+                "#email".to_string(),
+                "alice@example.com".to_string(),
+            ],
+        }];
+
+        let compiled =
+            compile_batch_request(&commands, false, "http://127.0.0.1:8182", None).unwrap();
+
+        assert_eq!(compiled.steps.len(), 1);
+        assert_eq!(compiled.steps[0]["tool"], json!("browser_type"));
+        assert_eq!(compiled.steps[0]["arguments"]["ref"], json!("#email"));
+        assert_eq!(
+            compiled.steps[0]["arguments"]["text"],
+            json!("alice@example.com")
+        );
+    }
+
+    #[test]
+    fn compile_batch_request_fill_does_not_add_pre_focus_selector() {
+        // preFocusSelector is only set for keydown / keyup steps — fill
+        // should NOT include it.
+        let commands = vec![BatchCommandSpec {
+            display: "fill #my-input 'some text'".to_string(),
+            tokens: vec![
+                "fill".to_string(),
+                "#my-input".to_string(),
+                "some text".to_string(),
+            ],
+        }];
+
+        let compiled =
+            compile_batch_request(&commands, false, "http://127.0.0.1:8182", None).unwrap();
+
+        assert_eq!(compiled.steps.len(), 1);
+        assert!(
+            compiled.steps[0]
+                .get("preFocusSelector")
+                .map_or(true, |v| v.is_null()),
+            "fill step should NOT have preFocusSelector"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Batch compilation — type command
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn compile_batch_request_type_uses_browser_press_sequentially_tool() {
+        let commands = vec![BatchCommandSpec {
+            display: "type 'hello' #type-target".to_string(),
+            tokens: vec![
+                "type".to_string(),
+                "hello".to_string(),
+                "#type-target".to_string(),
+            ],
+        }];
+
+        let compiled =
+            compile_batch_request(&commands, false, "http://127.0.0.1:8182", None).unwrap();
+
+        assert_eq!(compiled.steps.len(), 1);
+        assert_eq!(compiled.steps[0]["op"], json!("tool"));
+        assert_eq!(
+            compiled.steps[0]["tool"],
+            json!("browser_press_sequentially")
+        );
+        assert_eq!(compiled.steps[0]["arguments"]["ref"], json!("#type-target"));
+        assert_eq!(compiled.steps[0]["arguments"]["text"], json!("hello"));
+    }
+
+    // -----------------------------------------------------------------------
+    // Batch compilation — mousewheel command
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn compile_batch_request_mousewheel_uses_browser_mouse_wheel_tool() {
+        let commands = vec![BatchCommandSpec {
+            display: "mousewheel 0 160".to_string(),
+            tokens: vec![
+                "mousewheel".to_string(),
+                "0".to_string(),
+                "160".to_string(),
+            ],
+        }];
+
+        let compiled =
+            compile_batch_request(&commands, false, "http://127.0.0.1:8182", None).unwrap();
+
+        assert_eq!(compiled.steps.len(), 1);
+        assert_eq!(compiled.steps[0]["op"], json!("tool"));
+        assert_eq!(
+            compiled.steps[0]["tool"],
+            json!("browser_mouse_wheel")
+        );
+        // build_command_args parses positional strings as i64/f64 when
+        // possible, so "0" → 0 and "160" → 160 before get_number_value
+        // reads them.  The tool_params_fn maps dx → deltaX, dy → deltaY.
+        assert_eq!(compiled.steps[0]["arguments"]["deltaX"], json!(0));
+        assert_eq!(compiled.steps[0]["arguments"]["deltaY"], json!(160));
+    }
 }

@@ -575,16 +575,16 @@ open class PulsarWebDriver constructor(
     override suspend fun mouseWheel(deltaX: Double, deltaY: Double) {
         val m = mouse ?: throw IllegalWebDriverStateException("Mouse not available", driver = this)
         rpc.invokeOnPage("mouseWheel") {
-            // Primary: JS window.scrollBy() — reliable, bypasses the CDP
-            // Input.dispatchMouseEvent wheel race condition (crbug.com/444929150).
+            // Primary: CDP mouse wheel — dispatches trusted wheel DOM events that
+            // page listeners can observe (required for interactive fixtures).
+            // Fallback: JS window.scrollBy() when CDP fails (bypasses the
+            // Input.dispatchMouseEvent wheel race condition crbug.com/444929150).
             try {
-                js.evaluate("window.scrollBy($deltaX, $deltaY)")
-            } catch (_: Exception) {
-                // Fallback: CDP mouse wheel with a distance-proportional timeout
-                // so large scrolls don't trigger false-positive timeouts.
                 withTimeout(wheelTimeout(deltaX, deltaY)) {
                     m.wheel(deltaX, deltaY)
                 }
+            } catch (_: Exception) {
+                js.evaluate("window.scrollBy($deltaX, $deltaY)")
             }
         }
     }
@@ -596,16 +596,17 @@ open class PulsarWebDriver constructor(
                 gap("mouseWheel")
                 val point = emulator.getInteractPoint(node, "center", useRandomOffset = true)
                     ?: return@invokeOnElement
-                // Primary: JS scroll — reliable, bypasses CDP wheel race (crbug.com/444929150).
-                // Fallback: CDP with distance-proportional timeout for fixed containers.
+                // Primary: CDP mouse wheel — dispatches trusted wheel DOM events.
+                // Fallback: JS element.scrollBy() when CDP fails (bypasses the
+                // Input.dispatchMouseEvent wheel race condition crbug.com/444929150).
                 try {
-                    js.evaluate("document.querySelector('${selector.replace("'", "\\'")}').scrollBy($deltaX, $deltaY)")
-                } catch (_: Exception) {
                     val m = mouse ?: return@invokeOnElement
                     withTimeout(wheelTimeout(deltaX, deltaY)) {
                         m.moveTo(point, steps = 1)
                         m.wheel(deltaX, deltaY)
                     }
+                } catch (_: Exception) {
+                    js.evaluate("document.querySelector('${selector.replace("'", "\\'")}').scrollBy($deltaX, $deltaY)")
                 }
             }
         } catch (e: ChromeDriverException) {
@@ -807,6 +808,16 @@ open class PulsarWebDriver constructor(
         rpc.invokeOnElement(selector, "type") {
             val node = page.focusOnSelector(selector) ?: return@invokeOnElement
             emulator.click(node, 1, position = "right")
+            // Ensure the cursor is at the end of any existing text so that
+            // typed characters append rather than prepend.
+            try {
+                js.evaluate(
+                    "document.querySelector('${selector.replace("'", "\\'")}')" +
+                    ".setSelectionRange(99999, 99999)"
+                )
+            } catch (_: Exception) {
+                // Non-text elements don't support setSelectionRange — ignore.
+            }
             keyboard?.type(text, randomDelayMillis("type"))
             gap("type")
         }
@@ -821,8 +832,20 @@ open class PulsarWebDriver constructor(
 
             emulator.click(node, 1, "right")
 
-            // For fill, there is no delay between key presses, just like paste
-            keyboard?.type(text, 0)
+            // Ensure cursor is at the end of any remaining text after clear
+            try {
+                js.evaluate(
+                    "document.querySelector('${selector.replace("'", "\\'")}')" +
+                    ".setSelectionRange(99999, 99999)"
+                )
+            } catch (_: Exception) {
+                // Non-text elements don't support setSelectionRange — ignore.
+            }
+
+            // Small delay between key presses so each Input.insertText CDP
+            // round-trip completes before the next one starts, preventing
+            // races that can drop input events on the page.
+            keyboard?.type(text, 10)
 
             gap("fill")
         }
@@ -901,6 +924,18 @@ open class PulsarWebDriver constructor(
         rpc.invokeOnElement(selector, "press") {
             val node = page.focusOnSelector(selector) ?: return@invokeOnElement
             emulator.click(node, 1, position = "right")
+            // Ensure the cursor is at the end of any existing text so that the
+            // pressed key appends rather than prepends.  CDP focus + click may
+            // leave the cursor at position 0 on some platforms.
+            try {
+                js.evaluate(
+                    "document.querySelector('${selector.replace("'", "\\'")}')" +
+                    ".setSelectionRange(99999, 99999)"
+                )
+            } catch (_: Exception) {
+                // Non-text elements (buttons, divs) don't support setSelectionRange.
+                // Silently ignore — the press will still work for non-text targets.
+            }
             keyboard?.press(key, randomDelayMillis("press"))
             // CDP-dispatched Enter may not trigger implicit form submission (HTML spec §4.10.2.2).
             // Explicitly submit the nearest form as a safety net. See trySubmitFormOnEnter().

@@ -5468,4 +5468,151 @@ mod tests {
             "Every command must have an explicit e2e coverage status"
         );
     }
+
+    // =========================================================================
+    // fill command tests
+    // =========================================================================
+
+    #[test]
+    fn test_fill_params_use_ref_and_text_order() {
+        let map = commands_map();
+        let cmd = map.get("fill").unwrap();
+        let mut args = HashMap::new();
+        args.insert("ref".to_string(), json!("#my-input"));
+        args.insert("text".to_string(), json!("hello world"));
+
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["ref"], "#my-input");
+        assert_eq!(params["text"], "hello world");
+    }
+
+    #[test]
+    fn test_fill_tool_name_is_browser_type() {
+        let map = commands_map();
+        let cmd = map.get("fill").unwrap();
+        let tool_name = (cmd.tool_name_fn)(&HashMap::new());
+        assert_eq!(tool_name, "browser_type");
+    }
+
+    #[test]
+    fn test_fill_params_with_submit_option() {
+        let map = commands_map();
+        let cmd = map.get("fill").unwrap();
+        let mut args = HashMap::new();
+        args.insert("ref".to_string(), json!("#search"));
+        args.insert("text".to_string(), json!("query"));
+        args.insert("submit".to_string(), json!(true));
+
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["ref"], "#search");
+        assert_eq!(params["text"], "query");
+        assert_eq!(params["submit"], json!(true));
+    }
+
+    #[test]
+    fn test_fill_params_without_submit_omits_flag() {
+        let map = commands_map();
+        let cmd = map.get("fill").unwrap();
+        let mut args = HashMap::new();
+        args.insert("ref".to_string(), json!("#search"));
+        args.insert("text".to_string(), json!("query"));
+
+        let params = (cmd.tool_params_fn)(&args);
+        assert!(params.get("submit").is_none());
+    }
+
+    #[test]
+    fn test_fill_batch_supported() {
+        let map = commands_map();
+        let cmd = map.get("fill").unwrap();
+        assert!(cmd.batch_supported);
+    }
+
+    // =========================================================================
+    // mousewheel command tests
+    // =========================================================================
+
+    #[test]
+    fn test_mousewheel_tool_name_is_browser_mouse_wheel() {
+        let map = commands_map();
+        let cmd = map.get("mousewheel").unwrap();
+        let tool_name = (cmd.tool_name_fn)(&HashMap::new());
+        assert_eq!(tool_name, "browser_mouse_wheel");
+    }
+
+    #[test]
+    fn test_mousewheel_params_produce_delta_x_and_delta_y() {
+        let map = commands_map();
+        let cmd = map.get("mousewheel").unwrap();
+        let mut args = HashMap::new();
+        args.insert("dx".to_string(), json!(100));
+        args.insert("dy".to_string(), json!(200));
+
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["deltaX"], json!(100));
+        assert_eq!(params["deltaY"], json!(200));
+    }
+
+    #[test]
+    fn test_mousewheel_defaults_missing_deltas_to_zero() {
+        let map = commands_map();
+        let cmd = map.get("mousewheel").unwrap();
+        let params = (cmd.tool_params_fn)(&HashMap::new());
+        assert_eq!(params["deltaX"], json!(0));
+        assert_eq!(params["deltaY"], json!(0));
+    }
+
+    #[test]
+    fn test_mousewheel_batch_supported() {
+        let map = commands_map();
+        let cmd = map.get("mousewheel").unwrap();
+        assert!(cmd.batch_supported);
+    }
+
+    // =========================================================================
+    // fill command — batch step building (tool name, args normalisation)
+    // =========================================================================
+
+    #[test]
+    fn test_fill_tool_params_preserve_ref_and_text_for_batch() {
+        // The fill command's tool_params_fn produces a JSON object that the batch
+        // compiler normalises via normalize_batch_step_args.  Verify that the raw
+        // output contains "ref" (not "selector") so the batch step carries the
+        // correct argument names through to the backend's DefaultArgumentNormalizer
+        // which converts ref → selector.
+        let map = commands_map();
+        let cmd = map.get("fill").unwrap();
+        let mut args = HashMap::new();
+        args.insert("ref".to_string(), json!("#my-input"));
+        args.insert("text".to_string(), json!("batch fill text"));
+
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["ref"], "#my-input", "fill tool_params must keep 'ref' key for batch normalisation");
+        assert_eq!(params["text"], "batch fill text");
+    }
+
+    // =========================================================================
+    // type command — tool name and params
+    // =========================================================================
+
+    #[test]
+    fn test_type_tool_name_is_browser_press_sequentially() {
+        let map = commands_map();
+        let cmd = map.get("type").unwrap();
+        let tool_name = (cmd.tool_name_fn)(&HashMap::new());
+        assert_eq!(tool_name, "browser_press_sequentially");
+    }
+
+    #[test]
+    fn test_type_focus_option_is_present() {
+        let map = commands_map();
+        let cmd = map.get("type").unwrap();
+        // The --focus option tells the server to click the target element to
+        // focus it before typing, ensuring the element is interactive.  It was
+        // added alongside the press/fill cursor-positioning fixes.
+        assert!(
+            cmd.options.iter().any(|opt| opt.name == "focus"),
+            "type command should support --focus option"
+        );
+    }
 }

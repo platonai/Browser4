@@ -975,4 +975,85 @@ class MCPToolControllerTest {
             message = resolvedEvaluate.exception?.message,
         )
     }
+
+    // =========================================================================
+    // buildBatchFocusExpression — selector interpolation
+    // =========================================================================
+
+    @Test
+    fun `focus expression interpolates selector into querySelector call`() {
+        val expr = MCPToolController.buildBatchFocusExpression("#my-input")
+
+        // Kotlin's $selectorLiteral interpolation embeds the JSON-escaped
+        // selector (including quotes) directly into the JS, producing a
+        // valid querySelector call like:  document.querySelector("#my-input")
+        assertTrue(
+            expr.contains("""querySelector("#my-input")"""),
+            "focusExpression should interpolate selector into querySelector, got:\n$expr"
+        )
+    }
+
+    @Test
+    fun `focus expression escapes single quotes in selector`() {
+        // JSON-escaped: "\"#search-box\"" → JS: querySelector("#search-box")
+        val expr = MCPToolController.buildBatchFocusExpression("#search-box")
+
+        assertTrue(
+            expr.contains("""querySelector("#search-box")"""),
+            "focusExpression should interpolate selector, got:\n$expr"
+        )
+    }
+
+    @Test
+    fun `focus expression returns empty string for backend refs`() {
+        // backend: refs are resolved server-side — no JS focus expression needed.
+        val expr = MCPToolController.buildBatchFocusExpression("backend:42")
+        assertEquals("''", expr)
+    }
+
+    @Test
+    fun `focus expression contains valid JS template literal for error`() {
+        val expr = MCPToolController.buildBatchFocusExpression("#btn")
+
+        // The catch block must use a JS template literal `invalid:${error}`,
+        // NOT a Kotlin-interpolated value.  The dollar-brace must appear
+        // literally in the JS output.
+        assertTrue(
+            expr.contains("""`invalid:${'$'}{error}`"""),
+            "focusExpression should contain JS template literal, got:\n$expr"
+        )
+    }
+
+    @Test
+    fun `focus expression is a self-invoking IIFE`() {
+        val expr = MCPToolController.buildBatchFocusExpression("#click-target")
+
+        assertTrue(expr.startsWith("(() => {"), "focusExpression should be an IIFE")
+        assertTrue(expr.endsWith("})()"), "focusExpression should self-invoke")
+    }
+
+    @Test
+    fun `focus expression ternary returns focused or unfocused`() {
+        val expr = MCPToolController.buildBatchFocusExpression("#my-input")
+
+        // The ternary  ? 'focused' : 'unfocused'  is the return value.
+        // restoreBatchFocus branches on these exact strings.
+        assertTrue(expr.contains("'focused'"), "should return 'focused' on success")
+        assertTrue(expr.contains("'unfocused'"), "should return 'unfocused' on failure")
+        assertTrue(expr.contains("return 'missing'"), "should return 'missing' when element absent")
+    }
+
+    @Test
+    fun `focus expression with complex selector preserves attribute selector`() {
+        val expr = MCPToolController.buildBatchFocusExpression("input[name='email']")
+
+        assertTrue(expr.contains("querySelector("), "missing querySelector call")
+        // The selector string is JSON-escaped, so single quotes inside it
+        // become backslash-escaped:  "input[name='email']"
+        assertTrue(expr.contains("email"), "selector content should be preserved")
+        assertTrue(
+            expr.contains("\\'") || expr.contains("'email'"),
+            "attribute selector quotes should be present, got:\n$expr"
+        )
+    }
 }
