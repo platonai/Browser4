@@ -1,0 +1,26 @@
+name: PowerShell Tests
+
+on:
+  push:
+    paths:
+      - '**/*.ps1'
+  pull_request:
+    paths:
+      - '**/*.ps1'
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Run PowerShell tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Run PowerShell tests
+        shell: pwsh
+        run: ./bin/test.ps1 ps
