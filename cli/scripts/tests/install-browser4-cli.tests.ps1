@@ -1,3 +1,16 @@
+#!/usr/bin/env pwsh
+
+# ═══════════════════════════════════════════════════════════════════
+# CROSS-PLATFORM: This script must run on Linux, macOS, and Windows.
+# - Use $IsWindows / $IsLinux / $IsMacOS for platform detection.
+# - Use "($IsWindows -or $env:OS -eq 'Windows_NT')" for PS 5.1 compat.
+# - Avoid Windows-only env vars ($env:TEMP) — use $env:TMPDIR fallback.
+# - Guard "chcp" and other Windows-only commands behind platform checks.
+# - Paths: use Join-Path / Split-Path; never bake \ or / as literal.
+# - [System.IO.Path]::IsPathRooted is platform-aware — C:\foo is NOT
+#   rooted on Linux; test with platform-appropriate absolute paths.
+# ═══════════════════════════════════════════════════════════════════
+
 <#
 .SYNOPSIS
   Tests for install-browser4-cli.ps1
