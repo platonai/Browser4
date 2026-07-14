@@ -30,7 +30,9 @@ scenario agent evaluations, and mock-server launch.
 PowerShell, RWS, server) and runs each in sequence.  The script must be invoked
 from the repository root (it `Set-Location`s there automatically).
 
-Test results are persisted to `target/test-trace.json` (see `bin/common/test-trace.psm1`).
+Test results are persisted per invocation to `.test-sessions/<session-id>/test-session.json`
+(see `bin/common/test-session.psm1`).  Pass `-NoSession` to skip persistence or `-SessionPath`
+to write to a custom location.
 
 ## Usage
 
@@ -44,6 +46,8 @@ Test results are persisted to `target/test-trace.json` (see `bin/common/test-tra
 |------|-------------|
 | `-DryRun` | Compile only (test-compile), do not run tests |
 | `-Show` | Print the final command, do not execute anything |
+| `-NoSession` | Skip persisting test results to `.test-sessions/` |
+| `-SessionPath <path>` | Custom path for the test-session JSON file |
 
 ### Test Types
 
@@ -56,11 +60,11 @@ Test results are persisted to `target/test-trace.json` (see `bin/common/test-tra
 | `skills` | Maven | Skills-focused agentic tests (browser4-agentic) |
 | `mcp` | Maven | MCP-focused agentic tests (browser4-agentic) |
 | `main` | Maven | All Browser4 main tests: fast + it + e2e + rest |
-| `cli` | CLI | Rust Browser4 CLI tests (`cargo test --test e2e`) |
+| `cli` | CLI | Rust Browser4 CLI tests (`cargo test --test e2e`). Alias: `browser4-cli` |
 | `ps` | PowerShell | All `*.tests.ps1` files in the project |
 | `resume` | Maven | Resume from the last failed module (`-rf`) |
 | `mock-site` | Server | Launch MockSiteBoot (aliases: `server`, `mocksite`) |
-| `rws` | RWS | Real-world scenario agent evaluations |
+| `rws` | RWS | Real-world scenario agent evaluations. Bare `rws` shows help; pass `--scenarios` or `--task` to run. |
 
 ### RWS Flags (accepted after `rws`)
 
@@ -108,6 +112,12 @@ Test results are persisted to `target/test-trace.json` (see `bin/common/test-tra
 # Run fast tests and PS tests together
 ./bin/test.ps1 fast ps
 
+# Run fast tests without persisting session
+./bin/test.ps1 -NoSession fast
+
+# Write session to a custom path
+./bin/test.ps1 -SessionPath out/session.json ps
+
 # Preview what tests would be run
 ./bin/test.ps1 -Show main
 
@@ -136,13 +146,15 @@ Test results are persisted to `target/test-trace.json` (see `bin/common/test-tra
 ./bin/test.ps1 rws --scenarios --timeout 30
 ```
 
-## Test Trace
+## Test Session
 
-After each run, results are persisted to `target/test-trace.json`.  To inspect:
+After each invocation, results are persisted to `.test-sessions/<session-id>/test-session.json`.
+To inspect the latest session:
 
 ```bash
-cat target/test-trace.json
+ls -t .test-sessions/*/test-session.json | head -1 | xargs cat
 ```
 
-The trace records the last status, log paths, per-file results (for `ps`),
+The session records the last status, log paths, per-file results (for `ps`),
 system environment, and a rolling 5-entry history per test type.
+Pass `-NoSession` to skip persistence, or `-SessionPath <path>` to write to a custom location.
