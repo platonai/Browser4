@@ -670,12 +670,19 @@ function Invoke-PowerShellTests([string[]]$additionalArgs) {
             Write-Host "    ❌ FAIL (exit $exitCode, $elapsed)" -ForegroundColor Red
             [void]$failed.Add(@{ Path = $relativePath; ExitCode = $exitCode })
             # ── Extract failure details from captured output ──────────────
+            # Match assertion-failure lines (indented "FAIL  Label …") and the
+            # test file's own summary ("=== FAILURE DETAILS ===") but exclude
+            # log lines like "[ERROR] [docker …]" or "[ERROR] [fix-links.py …]".
             $failLines = @($rawOutput | Where-Object {
-                $_ -is [string] -and $_ -match '\b(FAIL|ERROR)\b'
+                $_ -is [string] -and (
+                    $_ -match '^\s+FAIL\s+\S' -or
+                    $_ -match '=== FAILURE DETAILS ===' -or
+                    $_ -match '^\s+❌\s'
+                )
             })
             if ($failLines.Count -gt 0) {
                 Write-Host "    ── Failure details ──" -ForegroundColor DarkYellow
-                $maxShow = 25
+                $maxShow = 30
                 $failLines | Select-Object -First $maxShow | ForEach-Object {
                     Write-Host "      $_" -ForegroundColor DarkYellow
                 }
@@ -683,8 +690,8 @@ function Invoke-PowerShellTests([string[]]$additionalArgs) {
                     Write-Host "      ... and $($failLines.Count - $maxShow) more failure line(s)" -ForegroundColor DarkGray
                 }
             } else {
-                # No explicit FAIL/ERROR lines found — show tail of output for diagnosis
-                $tail = @($rawOutput | Select-Object -Last 10)
+                # No explicit assertion-failure lines found — show tail of output
+                $tail = @($rawOutput | Where-Object { $_ -is [string] } | Select-Object -Last 15)
                 if ($tail.Count -gt 0) {
                     Write-Host "    ── Last output lines (no FAIL markers found) ──" -ForegroundColor DarkYellow
                     $tail | ForEach-Object { Write-Host "      $_" -ForegroundColor DarkGray }

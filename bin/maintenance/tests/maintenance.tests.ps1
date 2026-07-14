@@ -30,8 +30,11 @@ function Assert-Equal {
         $script:Failures++
         Write-Host "    FAIL  $Label — expected '$Expected', got '$Actual'" -ForegroundColor Red
         if ($Description) { Write-Host "          $Description" -ForegroundColor Gray }
+        $caller = (Get-PSCallStack)[1]
+        $callerLoc = if ($caller -and $caller.Location) { $caller.Location } else { "?" }
         [void]$script:FailureDetails.Add([PSCustomObject]@{
-            Label = $Label; Expected = "$Expected"; Actual = "$Actual"; Description = $Description
+            Label = $Label; Expected = "$Expected"; Actual = "$Actual"
+            Description = $Description; Location = $callerLoc
         })
     }
 }
@@ -45,8 +48,11 @@ function Assert-True {
         $script:Failures++
         Write-Host "    FAIL  $Label — expected true" -ForegroundColor Red
         if ($Description) { Write-Host "          $Description" -ForegroundColor Gray }
+        $caller = (Get-PSCallStack)[1]
+        $callerLoc = if ($caller -and $caller.Location) { $caller.Location } else { "?" }
         [void]$script:FailureDetails.Add([PSCustomObject]@{
-            Label = $Label; Expected = 'true'; Actual = "$Condition"; Description = $Description
+            Label = $Label; Expected = 'true'; Actual = "$Condition"
+            Description = $Description; Location = $callerLoc
         })
     }
 }
@@ -323,11 +329,9 @@ Write-Host "`n=== Test-Platform ===" -ForegroundColor Cyan
 
 $p = Test-Platform
 Assert-True "Valid platform" (@("windows", "linux", "macos", "unknown") -contains $p)
-Assert-True "Test-IsWindows returns bool" ((Test-IsWindows -eq $true) -or (Test-IsWindows -eq $false))
-$linuxResult = & { Test-IsLinux }
-Assert-True "Test-IsLinux returns bool" (($linuxResult -eq $true) -or ($linuxResult -eq $false))
-$macResult = & { Test-IsMacOS }
-Assert-True "Test-IsMacOS returns bool" (($macResult -eq $true) -or ($macResult -eq $false))
+Assert-True "Test-IsWindows returns bool" ((Test-IsWindows) -is [bool])
+Assert-True "Test-IsLinux returns bool"   ((Test-IsLinux)   -is [bool])
+Assert-True "Test-IsMacOS returns bool"   ((Test-IsMacOS)   -is [bool])
 
 # ═══════════════════════════════════════════════════════════════════
 # PART 7: Get-MaintenanceThreshold
@@ -363,7 +367,8 @@ Assert-Match "Contains Browser4" $root "Browser4"
 $resolved = Resolve-MaintenancePath "bin\maintenance\README.md"
 Assert-True "Resolve is absolute" ([System.IO.Path]::IsPathRooted($resolved))
 Assert-Match "Resolve contains path" $resolved "bin[/\\]maintenance"
-Assert-Equal "Absolute passthrough" (Resolve-MaintenancePath "C:\absolute\file.txt") "C:\absolute\file.txt"
+$absPath = if (Test-IsWindows) { "C:\absolute\file.txt" } else { "/absolute/file.txt" }
+Assert-Equal "Absolute passthrough" (Resolve-MaintenancePath $absPath) $absPath
 
 # ═══════════════════════════════════════════════════════════════════
 # PART 9: Invoke-MaintenanceStep
@@ -1017,8 +1022,14 @@ if ($script:FailureDetails.Count -gt 0) {
         Write-Host "     Expected: $($_.Expected)" -ForegroundColor DarkYellow
         Write-Host "     Actual:   $($_.Actual)" -ForegroundColor DarkYellow
         if ($_.Description) { Write-Host "     Note:     $($_.Description)" -ForegroundColor DarkGray }
+        if ($_.Location)    { Write-Host "     At:       $($_.Location)" -ForegroundColor DarkGray }
         Write-Host ""
     }
+    # ── Environment context for cross-platform diagnosis ──────────────
+    Write-Host "Environment:" -ForegroundColor DarkGray
+    Write-Host "  Platform: $(Test-Platform)" -ForegroundColor DarkGray
+    try { Write-Host "  pwsh:     $($PSVersionTable.PSVersion)" -ForegroundColor DarkGray } catch { }
+    Write-Host ""
 }
 
 # ═══════════════════════════════════════════════════════════════════
