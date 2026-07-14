@@ -1,4 +1,14 @@
+---
+name: coworker-skills
+title: "Coworker Skills — Decision-tree router for the Coworker skill family"
+description: "Routes to the correct Coworker skill (run-tests, maintenance, organize-task-files, task-token-usage, coworker). Use when unsure which coworker skill to invoke, or when you need an overview of available task-pipeline and quality tools."
+---
+
 # Coworker Skills — Decision Tree
+
+> **Project-level only.** These skills reference `./bin/`, `./coworker/scripts/`,
+> and other Browser4 repo paths. They only work when the current working directory
+> is the Browser4 repository root. Do not install them as user-level (global) skills.
 
 Which skill should you invoke? Start at the top and follow the branch that
 matches what you want to do.

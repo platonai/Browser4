@@ -1,3 +1,10 @@
+---
+name: coworker
+title: "Coworker — File-queue task pipeline system reference"
+description: "Reference for the Coworker file-queue automation system: task lifecycle, directory state machine, PowerShell workers, scheduler configuration, and operational conventions. Use when you need to understand how Coworker works or debug its behavior."
+allowed-tools: Bash(pwsh:*), Bash(./coworker/scripts/*)
+---
+
 # Coworker
 
 This repository contains a **file-queue automation system** called **Coworker**. The active implementation is the PowerShell worker in `coworker/scripts/coworker.ps1`: it watches task files, renames them, runs GitHub Copilot against the repository, logs the run, and routes the task through review/approval/push folders. (`coworker/README.md:1-40`, `coworker/scripts/coworker.ps1:50-80`, `coworker/scripts/coworker.ps1:413-717`)
