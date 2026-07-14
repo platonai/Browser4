@@ -1,0 +1,37 @@
+name: PowerShell Tests
+
+# Run bin/test.ps1 ps whenever a .ps1 file is changed.
+# Fast, self-contained — no Java/Maven/Docker dependency needed.
+
+on:
+  push:
+    paths:
+      - '**.ps1'
+      - '**.psm1'
+      - '**.psd1'
+  pull_request:
+    paths:
+      - '**.ps1'
+      - '**.psm1'
+      - '**.psd1'
+
+permissions:
+  contents: read
+
+# Cancel superseded runs on the same ref to save CI minutes.
+concurrency:
+  group: ps1-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ps1-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Run PowerShell tests
+        shell: pwsh
+        run: ./bin/test.ps1 ps
