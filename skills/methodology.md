@@ -1,12 +1,12 @@
 ---
 title: "SKILL Document Methodology"
-description: "Governing principles, three-tier document model, section templates, and style conventions for all SKILL documents in the skills/browser4-cli/ directory."
+description: "Governing principles, three-tier document model, section templates, and style conventions for all SKILL documents under the skills/ directory."
 tier: decision
 ---
 
 # SKILL Document Methodology
 
-These principles and conventions govern all documents in the `skills/browser4-cli/` directory. Every document must conform.
+These principles and conventions govern all documents under the `skills/` directory. Every document must conform.
 
 ## Six Principles
 
@@ -29,9 +29,9 @@ Every document is classified into one of three tiers, signaled by `tier:` in its
 
 | Tier | Purpose | Target Length | Example |
 |------|---------|---------------|---------|
-| **decision** | Comparison tables, decision trees, trade-off analysis. Answers "which approach should I use?" | 100-300 lines | SKILL.md, htmlsnapshot-scenarios.md |
-| **procedure** | End-to-end workflows. Answers "I want to do X, show me the steps." | 100-500 lines | Scenario files, attach.md, crawl.md, loop.md, swarm.md, agent.md |
-| **catalog** | Exhaustive reference listings. Answers "what are all the options for Y?" Only consulted on demand. | Any length | x-sql-*.md, load-options-guide.md, htmlsnapshot.md, power-dom.md |
+| **decision** | Comparison tables, decision trees, trade-off analysis. Answers "which approach should I use?" | 100-300 lines | SKILL.md, scenario comparison docs |
+| **procedure** | End-to-end workflows. Answers "I want to do X, show me the steps." | 100-500 lines | Operation walkthroughs, how-to guides |
+| **catalog** | Exhaustive reference listings. Answers "what are all the options for Y?" Only consulted on demand. | Any length | API references, flag listings, function catalogs |
 
 **Critical rule:** A decision document never contains a complete flag listing. A procedure document never contains an exhaustive function catalog. A catalog never contains a decision tree.
 
@@ -69,7 +69,7 @@ Every document of the same tier follows an identical section template:
 
 ### Principle 5: Warning Centralization
 
-Critical warnings that apply broadly live in SKILL.md section 5 (Critical Warnings). Reference files link back to that section rather than repeating the warning text.
+Critical warnings that apply broadly live in the top-level SKILL.md. Reference files link back to that section rather than repeating the warning text.
 
 **File-local warnings** (specific to one command or function) may stay in their file but follow a consistent format.
 
@@ -89,8 +89,8 @@ An agent should be able to answer **80% of questions** with SKILL.md + **1 refer
 
 **Mechanisms:**
 - Decision documents include the top 3 copy-paste patterns directly — no hop to a procedure doc for the common case
-- Each reference file is self-contained for its topic (includes the minimal X-SQL snippet needed, rather than saying "see x-sql.md")
-- The SKILL.md reference map is organized by **user task** ("I want to extract data"), not by document name
+- Each reference file is self-contained for its topic (includes the minimal snippet needed, rather than saying "see the full reference")
+- The SKILL.md reference map is organized by **user task** ("I want to do X"), not by document name
 
 ## Document Frontmatter
 
