@@ -195,11 +195,9 @@ browser4-cli htmlsnapshot get attr ".product-image" src
 cat > query.sql << 'SQLEOF'
 SELECT
     DOM_FIRST_TEXT(DOM, '.title') AS title,
-    DOM_FIRST_FLOAT(DOM, '.price', 0.0) AS price,
-    DOM_FIRST_HREF(DOM, 'a') AS url
-FROM DOM_LOAD_AND_SELECT(@url, '.product-card', 1, 48)
-WHERE DOM_IS_NOT_NIL(DOM)
-ORDER BY DOM_FIRST_FLOAT(DOM, '.price', 999999.0) ASC
+    DOM_FIRST_TEXT(DOM, '.price') AS price,
+    DOM_FIRST_ATTR(DOM, 'a[href]', 'href') AS url
+FROM DOM_LOAD_AND_SELECT(@url, '.product-card')
 SQLEOF
 
 browser4-cli htmlsnapshot query "https://example.com/products" --sql @query.sql
