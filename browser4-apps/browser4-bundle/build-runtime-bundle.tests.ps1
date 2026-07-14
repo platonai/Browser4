@@ -206,6 +206,19 @@ function Get-FunctionDefinitionsFromScript {
 $functionText = Get-FunctionDefinitionsFromScript -ScriptPath $SourceScript
 Invoke-Expression $functionText
 
+# Initialize _runtimeInfoAvailable so platform-detection functions
+# don't fall back to Windows-only assumptions on Linux/macOS.
+# (Mirrors the initialization block in build-runtime-bundle.ps1 lines 149-157.)
+$script:_runtimeInfoAvailable = $false
+try {
+    Add-Type -AssemblyName System.Runtime.InteropServices.RuntimeInformation -ErrorAction Stop
+} catch {}
+try {
+    $null = [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform(
+        [System.Runtime.InteropServices.OSPlatform]::Windows)
+    $script:_runtimeInfoAvailable = $true
+} catch {}
+
 # ═══════════════════════════════════════════════════════════════════
 # Set up shared test variables
 # ═══════════════════════════════════════════════════════════════════

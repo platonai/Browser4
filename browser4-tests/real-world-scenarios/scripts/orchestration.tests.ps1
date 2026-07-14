@@ -217,7 +217,7 @@ Write-Host ''
 Write-Host '--- ConvertFrom-UseCaseFile ---' -ForegroundColor Yellow
 
 # Create a temporary use-case file
-$tempDir = Join-Path $env:TEMP "orchestration-tests-$pid"
+$tempDir = Join-Path ([System.IO.Path]::GetTempPath()) "orchestration-tests-$pid"
 New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
 
 $sampleUseCase = @"
@@ -359,7 +359,7 @@ Write-Host ''
 Write-Host '--- State JSON round-trip ---' -ForegroundColor Yellow
 
 # Use a temporary state directory so we don't interfere with real state
-$tempStateDir = Join-Path $env:TEMP "orchestration-test-state-$pid"
+$tempStateDir = Join-Path ([System.IO.Path]::GetTempPath()) "orchestration-test-state-$pid"
 $tempStateFile = Join-Path $tempStateDir 'state.json'
 
 # Override the state path functions for this test

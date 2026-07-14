@@ -256,10 +256,14 @@ Assert-Returns -Label 'ICAR success: exit code 0' -Actual $exitCode -Expected 0
 
 Write-Host "━━━ Invoke-CommandAndReport: failure ━━━" -ForegroundColor Cyan
 
-$exitCode = Invoke-CommandAndReport -ScriptBlock { cmd /c exit 42 } -Label 'failure test' -NoExit
+# Use a cross-platform command that exits with a non-zero code.
+# cmd.exe is Windows-only; on Unix, sh -c 'exit N' achieves the same.
+$exitCmd = if ($IsWindows -or ($env:OS -eq 'Windows_NT')) { { cmd /c exit 42 } } else { { sh -c 'exit 42' } }
+$exitCode = Invoke-CommandAndReport -ScriptBlock $exitCmd -Label 'failure test' -NoExit
 Assert-Returns -Label 'ICAR failure: exit code 42' -Actual $exitCode -Expected 42
 
-$exitCode = Invoke-CommandAndReport -ScriptBlock { cmd /c exit 1 } -Label 'failure test 2' -NoExit
+$exitCmd1 = if ($IsWindows -or ($env:OS -eq 'Windows_NT')) { { cmd /c exit 1 } } else { { sh -c 'exit 1' } }
+$exitCode = Invoke-CommandAndReport -ScriptBlock $exitCmd1 -Label 'failure test 2' -NoExit
 Assert-Returns -Label 'ICAR failure: exit code 1' -Actual $exitCode -Expected 1
 
 Write-Host "━━━ Invoke-CommandAndReport: PreExecPath ━━━" -ForegroundColor Cyan
@@ -271,7 +275,7 @@ try {
     $exitCode = Invoke-CommandAndReport -ScriptBlock {
         $currentDir = Get-Location
         if ($currentDir.Path -ne $tempDir) {
-            cmd /c exit 99
+            if ($IsWindows -or ($env:OS -eq 'Windows_NT')) { cmd /c exit 99 } else { sh -c 'exit 99' }
         }
     } -Label 'pushd test' -PreExecPath $tempDir -NoExit
     $currentLocation = Get-Location
