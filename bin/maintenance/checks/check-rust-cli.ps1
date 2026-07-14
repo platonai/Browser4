@@ -10,9 +10,6 @@ B4 — Rust CLI check: runs cargo test and cargo clippy.
 Runs cargo test (unit tests only, no e2e) and cargo clippy with
 -D warnings to ensure the Rust CLI compiles cleanly and passes tests.
 
-.PARAMETER ClippyArgs
-Additional args for cargo clippy. Default: "-- -D warnings"
-
 .PARAMETER ManifestPath
 Path to Cargo.toml. Default: cli/browser4-cli/Cargo.toml
 
@@ -21,7 +18,6 @@ Standard maintenance result object.
 #>
 
 param(
-    [string]$ClippyArgs = "-- -D warnings",
     [string]$ManifestPath = "cli\browser4-cli\Cargo.toml"
 )
 
@@ -65,7 +61,7 @@ $clippyResult = Invoke-MaintenanceStep `
     -WorkingDirectory $cliDir `
     -TimeoutSeconds 300 `
     -ScriptBlock {
-        cargo clippy --all-targets $ClippyArgs 2>&1
+        cargo clippy --all-targets -- -D warnings 2>&1
         $LASTEXITCODE
     }
 

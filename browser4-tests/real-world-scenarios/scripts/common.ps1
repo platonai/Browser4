@@ -7,7 +7,7 @@ Shared helpers for browser4-cli agent-scenario test scripts.
 Dot-source this module to reuse the shared usability-evaluation prompt and the
 standard agent invocation.  The prompt adapts to the environment automatically:
 
-  - Dev (default):  `cargo run -- help`  + local `skills/browser4-cli/SKILL.md`.
+  - Dev (default):  `./b4.ps1 help`  + local `skills/browser4-cli/SKILL.md`.
   - Production:      `browser4-cli help` + `https://browser4.io/SKILL.md`.
 
 Set `$browser4cliMode = 'production'` BEFORE dot-sourcing this module to switch
@@ -144,12 +144,12 @@ if ($browser4cliMode -eq 'production') {
     $skillPath      = 'https://browser4.io/SKILL.md'
     $cliInvocation  = 'browser4-cli'
 } else {
-    # Dev mode: use cargo run so the agent tests the locally-built CLI and
+    # Dev mode: use ./b4.ps1 so the agent tests the locally-built CLI and
     # the daemon auto-starts the locally-built backend JAR.  The repo root
     # is the CWD when the agent runs.
-    $helpCmd        = "cd `"$RepoRootPath`" && cd cli/browser4-cli && cargo run -- help"
+    $helpCmd        = "./b4.ps1 help"
     $skillPath      = 'skills/browser4-cli/SKILL.md'
-    $cliInvocation  = "cd `"$RepoRootPath`" && cd cli/browser4-cli && cargo run --"
+    $cliInvocation  = "./b4.ps1"
 }
 
 # ── Shared evaluation prompt ────────────────────────────────────────────────
@@ -162,9 +162,9 @@ You are evaluating the usability, discoverability, and reliability of browser4-c
 
 Before performing any browser interaction:
 
-0. Verify your working directory is the repository root: `$RepoRootPath`. If `pwd` is anything other than this directory, navigate there immediately with `cd "$RepoRootPath"`. The `$cliInvocation` pattern already starts every command from the repo root — use it consistently for all browser4-cli commands and you never need to think about your current working directory.
-1. Run `$helpCmd`.
-2. Read `$skillPath` completely.
+0. Verify your working directory is the repository root: `$($RepoRootPath)`. If `pwd` is anything other than this directory, navigate there immediately with `cd "$RepoRootPath"`. All browser4-cli commands use `$($cliInvocation)` which works from the repo root — stay in this directory for all commands.
+1. Run `$($helpCmd)`.
+2. Read `$($skillPath)` completely.
 3. Learn the available commands, workflows, and conventions directly from the documentation.
 4. Do not assume any prior knowledge of browser4-cli.
 
@@ -173,19 +173,19 @@ Before performing any browser interaction:
 $(if ($browser4cliMode -eq 'production') {
 "Production mode: browser4-cli connects to a separately-managed backend server. Ensure the **latest runtime bundle release** is deployed and running before starting the task. The CLI does not auto-start a server in production mode — if no server is reachable, commands will fail with a connection error."
 } else {
-"Dev mode: the CLI daemon **auto-starts the locally-built backend JAR** from the repository. No manual server setup is needed — the first \`cargo run\` command will start the daemon and backend automatically. The backend runs from the local source tree, matching the code currently checked out. Do NOT download or install a separate runtime bundle — that would test a stale release instead of the local changes.`n`nIf the daemon or backend fails to start automatically: (a) check for port conflicts on the default port, (b) verify a Java runtime is available, (c) retry the command once. If it still fails after one retry, record the error as a **Reliability** issue with the full error output and continue with any commands that do not require a running browser."
+"Dev mode: the CLI daemon **auto-starts the locally-built backend JAR** from the repository. No manual server setup is needed — the first \`./b4.ps1\` command will start the daemon and backend automatically. The backend runs from the local source tree, matching the code currently checked out. Do NOT download or install a separate runtime bundle — that would test a stale release instead of the local changes.`n`nIf the daemon or backend fails to start automatically: (a) check for port conflicts on the default port, (b) verify a Java runtime is available, (c) retry the command once. If it still fails after one retry, record the error as a **Reliability** issue with the full error output and continue with any commands that do not require a running browser."
 })
 
 ## Command Invocation
 
 Every browser4-cli command in this session MUST be invoked as:
 
-`$cliInvocation <command>`
+`$($cliInvocation) <command>`
 
 For example:
-  `$cliInvocation goto "https://example.com"`
-  `$cliInvocation snapshot -i`
-  `$cliInvocation click e5`
+  `$($cliInvocation) goto "https://example.com"`
+  `$($cliInvocation) snapshot -i`
+  `$($cliInvocation) click e5`
 
 Do NOT use a plain `browser4-cli` command unless the invocation above fails after a genuine attempt.  Using the wrong invocation will test a stale installed binary instead of the local source code, invalidating the evaluation.
 
@@ -955,9 +955,9 @@ function Write-IssuesToReadyQueue {
             $consBody += "3. Ensure the backend server is running.`n"
             $consBody += "4. All commands: ``browser4-cli <command>```n`n"
         } else {
-            $consBody += "2. Build the CLI: ``cd cli/browser4-cli && cargo build```n"
+            $consBody += "2. The CLI is invoked via ``./b4.ps1`` which auto-builds from source when needed.`n"
             $consBody += "3. The backend server starts automatically in dev mode.`n"
-            $consBody += "4. All commands from repo root: ``cd cli/browser4-cli && cargo run -- <command>```n`n"
+            $consBody += "4. All commands from repo root: ``./b4.ps1 <command>```n`n"
         }
 
         $consBody += "### Per-Issue Reproduction Steps`n`n"
@@ -1384,7 +1384,7 @@ function Assert-Browser4CliLatest {
         warning with upgrade instructions and returns a non-zero exit code so
         the caller can abort.
 
-        In dev mode, simply reports the expected version (cargo run always
+        In dev mode, simply reports the expected version (./b4.ps1 always
         builds from the latest source).
     .PARAMETER Silent
         Suppress informational messages.  Warnings are still emitted.
@@ -1413,10 +1413,10 @@ function Assert-Browser4CliLatest {
         return 0
     }
 
-    # ── Dev mode: cargo run always builds from the latest source ──────────
+    # ── Dev mode: ./b4.ps1 always builds from the latest source ──────────
     if ($browser4cliMode -ne 'production') {
         if (-not $Silent) {
-            Write-Host "Dev mode: cargo run builds browser4-cli from source (expected v$expectedVersion)." -ForegroundColor DarkGray
+            Write-Host "Dev mode: ./b4.ps1 builds browser4-cli from source (expected v$expectedVersion)." -ForegroundColor DarkGray
         }
         return 0
     }

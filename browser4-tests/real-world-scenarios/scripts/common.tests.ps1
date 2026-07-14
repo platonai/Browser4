@@ -123,14 +123,14 @@ Write-Host '━━━ Mode Detection: Dev (default) ━━━' -ForegroundColor 
     . "$PSScriptRoot/common.ps1"
 
     Write-TestGroup '$helpCmd in dev mode'
-    Assert-Equal 'is exactly "`cd cli/browser4-cli && cargo run -- help`"' `
-        '`cd cli/browser4-cli && cargo run -- help`' $helpCmd
-    Assert-Contains 'contains cargo run' $helpCmd 'cargo run'
+    Assert-Equal 'is exactly "./b4.ps1 help"' `
+        './b4.ps1 help' $helpCmd
+    Assert-Contains 'contains b4.ps1' $helpCmd 'b4.ps1'
     Assert-Contains 'contains help subcommand' $helpCmd 'help'
 
     Write-TestGroup '$skillPath in dev mode'
-    Assert-Equal 'is exactly "`skills/browser4-cli/SKILL.md`" (with backticks)' `
-        '`skills/browser4-cli/SKILL.md`' $skillPath
+    Assert-Equal 'is exactly "skills/browser4-cli/SKILL.md"' `
+        'skills/browser4-cli/SKILL.md' $skillPath
     Assert-Contains 'contains SKILL.md' $skillPath 'SKILL.md'
     Assert-Contains 'contains skills/' $skillPath 'skills/'
 }
@@ -147,8 +147,8 @@ Write-Host '━━━ Mode Detection: Production ━━━' -ForegroundColor Yel
     . "$PSScriptRoot/common.ps1"
 
     Write-TestGroup '$helpCmd in production mode'
-    Assert-Equal 'is exactly "`browser4-cli help`" (with backticks)' `
-        '`browser4-cli help`' $helpCmd
+    Assert-Equal 'is exactly "browser4-cli help"' `
+        'browser4-cli help' $helpCmd
     Assert-Contains 'contains browser4-cli' $helpCmd 'browser4-cli'
     Assert-Contains 'contains help subcommand' $helpCmd 'help'
 
@@ -173,9 +173,9 @@ Write-Host '━━━ Mode Detection: Edge Cases ━━━' -ForegroundColor Yel
 
     Write-TestGroup 'unrecognized mode falls back to dev'
     Assert-Equal '$helpCmd falls back to dev value' `
-        '`cd cli/browser4-cli && cargo run -- help`' $helpCmd
+        './b4.ps1 help' $helpCmd
     Assert-Equal '$skillPath falls back to dev value' `
-        '`skills/browser4-cli/SKILL.md`' $skillPath
+        'skills/browser4-cli/SKILL.md' $skillPath
 }
 
 & {
@@ -185,7 +185,7 @@ Write-Host '━━━ Mode Detection: Edge Cases ━━━' -ForegroundColor Yel
 
     Write-TestGroup 'case insensitivity (PowerShell -eq default)'
     Assert-Equal "'Production' (capital P) matches 'production' (case-insensitive -eq)" `
-        '`browser4-cli help`' $helpCmd
+        'browser4-cli help' $helpCmd
     Assert-Equal '$skillPath is production URL' `
         'https://browser4.io/SKILL.md' $skillPath
 }
@@ -197,7 +197,7 @@ Write-Host '━━━ Mode Detection: Edge Cases ━━━' -ForegroundColor Yel
 
     Write-TestGroup 'null mode falls back to dev'
     Assert-Equal '$helpCmd resolves to dev default' `
-        '`cd cli/browser4-cli && cargo run -- help`' $helpCmd
+        './b4.ps1 help' $helpCmd
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -253,7 +253,7 @@ Write-Host '━━━ $generalPrompt (Dev Mode) ━━━' -ForegroundColor Yell
     }
 
     Write-TestGroup 'mode-specific values (dev)'
-    Assert-Contains 'contains cargo run -- help' $generalPrompt 'cargo run -- help'
+    Assert-Contains 'contains ./b4.ps1 help' $generalPrompt './b4.ps1 help'
     Assert-Contains 'contains skills/browser4-cli/SKILL.md' $generalPrompt 'skills/browser4-cli/SKILL.md'
     Assert-NotContains 'should NOT contain browser4-cli help' $generalPrompt 'browser4-cli help'
     Assert-NotContains 'should NOT contain browser4.io' $generalPrompt 'browser4.io'
@@ -278,7 +278,7 @@ Write-Host '━━━ $generalPrompt (Production Mode) ━━━' -ForegroundCol
     Write-TestGroup 'mode-specific values (production)'
     Assert-Contains 'contains browser4-cli help' $generalPrompt 'browser4-cli help'
     Assert-Contains 'contains browser4.io' $generalPrompt 'browser4.io'
-    Assert-NotContains 'should NOT contain cargo run -- help' $generalPrompt 'cargo run -- help'
+    Assert-NotContains 'should NOT contain ./b4.ps1 help' $generalPrompt './b4.ps1 help'
     Assert-NotContains 'should NOT contain skills/browser4-cli/SKILL.md' $generalPrompt 'skills/browser4-cli/SKILL.md'
 }
 

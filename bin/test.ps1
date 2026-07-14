@@ -156,6 +156,7 @@ function Print-Usage {
     Write-Host "  rest        Run REST module tests"
     Write-Host "  skills      Run skills-focused agentic tests"
     Write-Host "  mcp         Run MCP-focused agentic tests"
+    Write-Host "  ps          Run all PowerShell *.tests.ps1 files in the project"
     Write-Host "  rws         Show this help (requires --scenarios or --task)"
     Write-Host "              With --scenarios: run all scenario tasks via run-tests.ps1"
     Write-Host "              With --task <file>: run a single task via run-task.ps1"
@@ -183,6 +184,8 @@ function Print-Usage {
     Write-Host "  test.ps1 mock-site -Dmock.site.port=18080"
     Write-Host "  test.ps1 skills                     # Run skills-focused agentic tests"
     Write-Host "  test.ps1 mcp                        # Run MCP-focused agentic tests"
+    Write-Host "  test.ps1 ps                         # Run all PowerShell *.tests.ps1 files"
+    Write-Host "  test.ps1 ps -Quiet                  # Run PowerShell tests with -Quiet flag"
     Write-Host "  test.ps1 resume                     # Resume from the last failed module"
     Write-Host "  test.ps1 rws                        # Show RWS help (requires --scenarios or --task)"
     Write-Host "  test.ps1 rws --scenarios            # Run all agent-scenario tasks"
@@ -197,7 +200,7 @@ function Print-Usage {
 }
 
 function Exit-UnknownTestType([string]$testType) {
-    Write-Error "Unknown test type '$testType'. Valid test types: fast, it, e2e, cli, browser4-cli, main, mock-site, server, rest, skills, mcp, rws, resume."
+    Write-Error "Unknown test type '$testType'. Valid test types: fast, it, e2e, cli, browser4-cli, main, mock-site, server, rest, skills, mcp, ps, rws, resume."
     exit 1
 }
 
@@ -491,6 +494,89 @@ function Invoke-RealWorldScenarioTests([string[]]$additionalArgs) {
     } -Label $modeLabel -PreExecPath $repoRoot
 }
 
+function Invoke-PowerShellTests([string[]]$additionalArgs) {
+    <#
+    .SYNOPSIS
+        Discover and run all *.tests.ps1 files in the repository.
+
+    .DESCRIPTION
+        Recursively searches the repo root for *.tests.ps1 files, excluding
+        node_modules, target, .git, and .claude directories.  Each file is
+        executed with `pwsh -NoProfile -ExecutionPolicy Bypass -File`.
+
+        In DryRun/Show mode, lists the discovered files without executing.
+        Additional arguments are forwarded to every test script (e.g. -Quiet).
+    #>
+    Write-CommandBanner -Label 'Discovering PowerShell tests...'
+
+    $testFiles = @(Get-ChildItem -Path $repoRoot -Recurse -Filter '*.tests.ps1' -File |
+        Where-Object {
+            $_.FullName -notmatch '[\\/](node_modules|target|\.git|\.claude)[\\/]'
+        } |
+        Sort-Object FullName)
+
+    if ($testFiles.Count -eq 0) {
+        Write-Host 'No *.tests.ps1 files found.'
+        return
+    }
+
+    # ── Show / DryRun ────────────────────────────────────────────────────────
+    if ($script:Show -or $script:DryRun) {
+        $label = if ($script:Show) { '[SHOW] Would execute' } else { '[DRY RUN] Would execute' }
+        Write-Host "Found $($testFiles.Count) PowerShell test file(s):"
+        foreach ($file in $testFiles) {
+            $relativePath = $file.FullName.Substring($repoRoot.Length + 1)
+            Write-Host "  - $relativePath"
+        }
+        return
+    }
+
+    Write-CommandBanner -Label "Running $($testFiles.Count) PowerShell test file(s)..."
+
+    $failed = [System.Collections.ArrayList]::new()
+    $passed = 0
+
+    foreach ($file in $testFiles) {
+        $relativePath = $file.FullName.Substring($repoRoot.Length + 1)
+        Write-Host ''
+        Write-Host "  ▶ $relativePath" -ForegroundColor Cyan
+
+        $sw = [System.Diagnostics.Stopwatch]::StartNew()
+        $exitCode = 0
+        & pwsh -NoProfile -ExecutionPolicy Bypass -File $file.FullName @additionalArgs
+        $exitCode = $LASTEXITCODE
+        $sw.Stop()
+
+        $elapsed = "$([Math]::Floor($sw.Elapsed.TotalSeconds))s"
+        if ($exitCode -eq 0) {
+            Write-Host "    ✅ PASS ($elapsed)" -ForegroundColor Green
+            $passed++
+        }
+        else {
+            Write-Host "    ❌ FAIL (exit $exitCode, $elapsed)" -ForegroundColor Red
+            [void]$failed.Add(@{ Path = $relativePath; ExitCode = $exitCode })
+        }
+    }
+
+    $total = $passed + $failed.Count
+    Write-Host ''
+    Write-Rule
+    if ($failed.Count -eq 0) {
+        Write-Host "✅ PowerShell tests: $passed passed, 0 failed ($total total)" -ForegroundColor Green
+    }
+    else {
+        Write-Host "❌ PowerShell tests: $passed passed, $($failed.Count) failed ($total total)" -ForegroundColor Red
+        Write-Host ''
+        Write-Host 'Failed files:' -ForegroundColor Red
+        foreach ($f in $failed) {
+            Write-Host "  ❌ $($f.Path) (exit $($f.ExitCode))" -ForegroundColor Red
+        }
+        Write-Rule
+        exit 1
+    }
+    Write-Rule
+}
+
 # Read the parent POM's <modules> section to get the reactor build order.
 function Get-ReactorModuleOrder {
     $parentPom = Join-Path $repoRoot 'pom.xml'
@@ -627,6 +713,7 @@ $testTypeMap = @{
     'mocksite'      = 'server'
     'mocksiteboot'  = 'server'
     'rws'           = 'rws'
+    'ps'            = 'ps'
     'resume'        = 'resume'
 }
 
@@ -704,6 +791,7 @@ if ($testTypes -contains 'resume') {
 $mavenTests  = @($testTypes | Where-Object { $testTypeMap[$_] -in 'maven', 'maven-expand' })
 $cliTests    = @($testTypes | Where-Object { $testTypeMap[$_] -eq 'cli' })
 $rwsTests    = @($testTypes | Where-Object { $testTypeMap[$_] -eq 'rws' })
+$psTests     = @($testTypes | Where-Object { $testTypeMap[$_] -eq 'ps' })
 $launchTargets = @($testTypes | Where-Object { $testTypeMap[$_] -eq 'server' })
 
 # Expand 'main' into its constituent test types (only for maven bucket)
@@ -719,10 +807,11 @@ $mavenTests = $expandedMaven | Select-Object -Unique
 
 $cliTests = $cliTests | Select-Object -Unique
 $rwsTests = $rwsTests | Select-Object -Unique
+$psTests  = $psTests | Select-Object -Unique
 $launchTargets = $launchTargets | Select-Object -Unique
 
 # Validate: server must be run by itself
-if ($launchTargets.Count -gt 0 -and (($mavenTests.Count -gt 0) -or ($cliTests.Count -gt 0) -or ($rwsTests.Count -gt 0) -or ($launchTargets.Count -gt 1))) {
+if ($launchTargets.Count -gt 0 -and (($mavenTests.Count -gt 0) -or ($cliTests.Count -gt 0) -or ($rwsTests.Count -gt 0) -or ($psTests.Count -gt 0) -or ($launchTargets.Count -gt 1))) {
     Write-Error "mock-site (or server) must be run by itself. Pass any Maven properties after it, for example: test.ps1 mock-site -Dmock.site.port=18080"
     exit 1
 }
@@ -739,6 +828,10 @@ if ($cliTests.Count -gt 0) {
 
 if ($rwsTests.Count -gt 0) {
     Invoke-RealWorldScenarioTests -additionalArgs $additionalArgs
+}
+
+if ($psTests.Count -gt 0) {
+    Invoke-PowerShellTests -additionalArgs $additionalArgs
 }
 
 if ($launchTargets.Count -gt 0) {

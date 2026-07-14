@@ -8,7 +8,7 @@ C1 — Internal documentation link validation.
 
 .DESCRIPTION
 Validates all internal .md cross-reference links in documentation files.
-Uses bin/quality/fix-links.py under the hood with --check-only mode.
+Uses bin/quality/fix-links.py under the hood for link validation.
 Detects:
   - Broken internal links (file does not exist)
   - Broken anchor links (section header missing)
@@ -115,7 +115,7 @@ else {
         -WorkingDirectory $repoRoot `
         -TimeoutSeconds 300 `
         -ScriptBlock {
-            python bin/quality/fix-links.py --check-only 2>&1
+            python bin/quality/fix-links.py 2>&1
             $LASTEXITCODE
         }
 
