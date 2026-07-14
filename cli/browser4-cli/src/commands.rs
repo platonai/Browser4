@@ -174,15 +174,6 @@ pub fn is_element_reference(value: &str) -> bool {
 /// that does not already have a known prefix (`css:`, `backend:`, `xpath:`, `text=`).
 /// These selectors need a `css:` prefix so the backend can distinguish them from
 /// backend node references.
-pub fn is_bare_css_selector(value: &str) -> bool {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        return false;
-    }
-    (trimmed.starts_with('#') || trimmed.starts_with('.') || trimmed.starts_with('[') || trimmed.starts_with("//"))
-        && !is_element_reference(trimmed)
-}
-
 fn resolve_key_and_ref(map: &HashMap<String, Value>) -> (String, Option<String>) {
     let positionals = raw_positionals(map);
     match positionals.as_slice() {
