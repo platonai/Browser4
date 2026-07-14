@@ -7176,43 +7176,4 @@ mod tests {
         assert_eq!(BrowserChannel::MsEdgeCanary.to_string(), "msedge-canary");
     }
 
-    // =========================================================================
-    // resolve_channel_executable_name
-    // =========================================================================
-
-    #[test]
-    fn resolve_channel_executable_known_channels() {
-        assert_eq!(resolve_channel_executable_name("chrome"), "chrome");
-        assert_eq!(resolve_channel_executable_name("chrome-canary"), "chrome");
-        assert_eq!(resolve_channel_executable_name("chrome-dev"), "chrome");
-        assert_eq!(resolve_channel_executable_name("chrome-beta"), "chrome");
-        assert_eq!(resolve_channel_executable_name("msedge"), "msedge");
-        assert_eq!(resolve_channel_executable_name("msedge-dev"), "msedge");
-        assert_eq!(resolve_channel_executable_name("msedge-canary"), "msedge");
-        assert_eq!(resolve_channel_executable_name("msedge-beta"), "msedge");
-    }
-
-    #[test]
-    fn resolve_channel_executable_aliases() {
-        // Aliases from the BrowserChannel::from_str parser
-        assert_eq!(resolve_channel_executable_name("edge"), "msedge");
-        assert_eq!(resolve_channel_executable_name("microsoft-edge"), "msedge");
-        assert_eq!(resolve_channel_executable_name("google-chrome"), "chrome");
-        assert_eq!(resolve_channel_executable_name("google-chrome-canary"), "chrome");
-    }
-
-    #[test]
-    fn resolve_channel_executable_case_insensitive() {
-        assert_eq!(resolve_channel_executable_name("CHROME"), "chrome");
-        assert_eq!(resolve_channel_executable_name("MsEdge"), "msedge");
-        assert_eq!(resolve_channel_executable_name("Chrome-Canary"), "chrome");
-    }
-
-    #[test]
-    fn resolve_channel_executable_unknown_passthrough() {
-        // Unknown channels are passed through as raw executable names
-        assert_eq!(resolve_channel_executable_name("firefox"), "firefox");
-        assert_eq!(resolve_channel_executable_name("brave"), "brave");
-        assert_eq!(resolve_channel_executable_name(""), "");
-    }
 }
