@@ -156,6 +156,19 @@ The backend server starts automatically in dev mode. Build the CLI with `cargo b
 | `htmlsnapshot grep [OPTIONS] <pattern>` | Search snapshot HTML with regex patterns and grep-style output |
 | `generate-locator <ref>` | Generate a unique CSS selector path for an element |
 
+### Skills
+
+| Command | Description |
+|---|---|
+| `skills` | List all bundled skill names with file counts |
+| `skills list` | Same as `skills` — list all bundled skill names |
+| `skills get <name>` | Output a skill's SKILL.md content |
+| `skills get <name> --full` | Include all reference files and extra documentation |
+| `skills get --all` | Output every bundled skill concatenated |
+| `skills path [name]` | Print the skills directory path (or path to a specific skill) |
+
+Skills are AI agent instruction files bundled into the CLI binary at compile time. The bundled content always matches the installed CLI version. Set `BROWSER4_SKILLS_DIR` to override the skills directory path. Skill files are unpacked to the versioned installation directory during `browser4-cli install`.
+
 ### Install / Admin
 
 | Command | Description |

@@ -1232,6 +1232,76 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("  browser4-cli snapshot grep error --page 2 --page-size 200".to_string());
     }
 
+    if cmd.name == "skills" {
+        lines.push("Subcommands:".to_string());
+        lines.push(format_with_gap(
+            "  skills",
+            "List all bundled skill names with file counts",
+            50,
+        ));
+        lines.push(format_with_gap(
+            "  skills list",
+            "Same as `skills` — list all bundled skill names",
+            50,
+        ));
+        lines.push(format_with_gap(
+            "  skills get <name>",
+            "Output a skill's SKILL.md content",
+            50,
+        ));
+        lines.push(format_with_gap(
+            "  skills get <name> --full",
+            "Include all reference files and extra documentation",
+            50,
+        ));
+        lines.push(format_with_gap(
+            "  skills get --all",
+            "Output every bundled skill concatenated",
+            50,
+        ));
+        lines.push(format_with_gap(
+            "  skills path [name]",
+            "Print the skills directory path (or path to a specific skill)",
+            50,
+        ));
+        lines.push(String::new());
+        lines.push("Notes:".to_string());
+        lines.push(
+            "  - Skills are AI agent instruction files bundled into the browser4-cli binary at compile time."
+                .to_string(),
+        );
+        lines.push(
+            "  - The bundled content always matches the installed CLI version — use `skills get`"
+                .to_string(),
+        );
+        lines.push(
+            "    to retrieve current instructions rather than relying on cached copies."
+                .to_string(),
+        );
+        lines.push(
+            "  - Set BROWSER4_SKILLS_DIR to override the skills directory path."
+                .to_string(),
+        );
+        lines.push(
+            "  - Skill files are unpacked to the versioned installation directory during"
+                .to_string(),
+        );
+        lines.push(
+            "    `browser4-cli install`."
+                .to_string(),
+        );
+        lines.push(String::new());
+        lines.push("Examples:".to_string());
+        lines.push("  browser4-cli skills".to_string());
+        lines.push("  browser4-cli skills list".to_string());
+        lines.push("  browser4-cli skills get browser4-cli".to_string());
+        lines.push("  browser4-cli skills get browser4-cli --full".to_string());
+        lines.push("  browser4-cli skills get --all".to_string());
+        lines.push("  browser4-cli skills path".to_string());
+        lines.push("  browser4-cli skills path browser4-cli".to_string());
+        lines.push("  BROWSER4_SKILLS_DIR=/custom/path browser4-cli skills path".to_string());
+    }
+
     if cmd.name == "generate-locator" {
         lines.push("Notes:".to_string());
         lines.push(
@@ -1905,6 +1975,32 @@ mod tests {
         assert!(help.contains("survive page reloads"));
         assert!(help.contains("browser4-cli generate-locator e5"));
         assert!(help.contains("browser4-cli generate-locator backend:15"));
+    }
+
+    #[test]
+    fn test_generate_command_help_skills() {
+        let cmds = all_commands();
+        let cmd = cmds.iter().find(|c| c.name == "skills").unwrap();
+        let help = generate_command_help(cmd);
+        assert!(help.contains("browser4-cli skills"));
+        assert!(help.contains("List bundled skill names"));
+        // Subcommands
+        assert!(help.contains("Subcommands:"));
+        assert!(help.contains("skills list"));
+        assert!(help.contains("skills get <name>"));
+        assert!(help.contains("skills get <name> --full"));
+        assert!(help.contains("skills get --all"));
+        assert!(help.contains("skills path [name]"));
+        // Notes
+        assert!(help.contains("BROWSER4_SKILLS_DIR"));
+        assert!(help.contains("bundled into the browser4-cli binary"));
+        // Examples
+        assert!(help.contains("browser4-cli skills get browser4-cli"));
+        assert!(help.contains("browser4-cli skills get browser4-cli --full"));
+        assert!(help.contains("browser4-cli skills get --all"));
+        assert!(help.contains("browser4-cli skills path"));
+        assert!(help.contains("browser4-cli skills path browser4-cli"));
+        assert!(help.contains("BROWSER4_SKILLS_DIR=/custom/path"));
     }
 
     #[test]
