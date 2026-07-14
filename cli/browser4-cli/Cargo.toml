@@ -1,6 +1,6 @@
 [package]
 name = "browser4-cli"
-version = "0.1.32"
+version = "0.1.33"
 edition = "2021"
 autotests = false
 description = "Browser4 CLI — control a Browser4 server from the command line"
