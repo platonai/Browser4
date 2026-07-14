@@ -1,12 +1,12 @@
 # ═══════════════════════════════════════════════════════════════════
-# test-trace.psm1 — cross-run persistable test-result trace
+# test-session.psm1 — cross-run persistable test-session state
 # ═══════════════════════════════════════════════════════════════════
 <#
 .SYNOPSIS
-    Persistable cross-run trace of every test type executed in the repository.
+    Persistable cross-run record of every test session executed in the repository.
 
 .DESCRIPTION
-    Maintains a single JSON file (target/test-trace.json) that records the
+    Maintains a single JSON file (target/test-session.json) that records the
     last result, log paths, aggregate pass/fail counts, and rolling history
     for each test type.  System environment is captured once and reused.
 
@@ -22,7 +22,7 @@
       - "maven:mcp"         — MCP-focused agentic tests
       - "maven:<test-name>" — arbitrary test-utils session name
 
-    Callers import this module and call Update-TestTraceResult at the end of
+    Callers import this module and call Update-TestSessionResult at the end of
     each test run.  The dependency is soft — if the module is absent, tests
     still run normally.
 #>
@@ -35,32 +35,40 @@ $script:MaxHistory = 5
 $script:SchemaVersion = 1
 
 # ═══════════════════════════════════════════════════════════════════
-# Public: resolve the trace file path
+# Public: resolve the session file path
 # ═══════════════════════════════════════════════════════════════════
 <#
 .SYNOPSIS
-    Return the canonical path to the trace JSON file.
+    Return the canonical path to the session JSON file.
 
 .DESCRIPTION
     Resolves from the provided $RepoRoot, defaulting to git rev-parse when
-    omitted.  The file lives at <repo-root>/target/test-trace.json.
+    omitted.  The file lives at <repo-root>/target/test-session.json.
 
 .PARAMETER RepoRoot
     Absolute path to the repository root.
 #>
-function Get-TestTracePath {
+function Get-TestSessionPath {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]
-        [string]$RepoRoot
+        [string]$RepoRoot,
+
+        [string]$SessionPath = ''
     )
-    return Join-Path $RepoRoot 'target' 'test-trace.json'
+    if ($SessionPath) {
+        if ([System.IO.Path]::IsPathRooted($SessionPath)) {
+            return $SessionPath
+        }
+        return Join-Path $RepoRoot $SessionPath
+    }
+    return Join-Path $RepoRoot 'target' 'test-session.json'
 }
 
 # ═══════════════════════════════════════════════════════════════════
 # Internal: build an empty skeleton
 # ═══════════════════════════════════════════════════════════════════
-function New-TraceSkeleton {
+function New-SessionSkeleton {
     param([string]$RepoRoot)
 
     # Resolve git metadata best-effort
@@ -94,19 +102,21 @@ function New-TraceSkeleton {
 }
 
 # ═══════════════════════════════════════════════════════════════════
-# Public: read the trace file (or return an empty skeleton)
+# Public: read the session file (or return an empty skeleton)
 # ═══════════════════════════════════════════════════════════════════
-function Read-TestTrace {
+function Read-TestSession {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]
-        [string]$RepoRoot
+        [string]$RepoRoot,
+
+        [string]$SessionPath = ''
     )
 
-    $path = Get-TestTracePath -RepoRoot $RepoRoot
+    $path = Get-TestSessionPath -RepoRoot $RepoRoot -SessionPath $SessionPath
 
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
-        return New-TraceSkeleton -RepoRoot $RepoRoot
+        return New-SessionSkeleton -RepoRoot $RepoRoot
     }
 
     try {
@@ -131,25 +141,27 @@ function Read-TestTrace {
 
         return $obj
     } catch {
-        Write-Warning "test-trace: Could not parse $path — starting fresh. Error: $($_.Exception.Message)"
-        return New-TraceSkeleton -RepoRoot $RepoRoot
+        Write-Warning "test-session: Could not parse $path — starting fresh. Error: $($_.Exception.Message)"
+        return New-SessionSkeleton -RepoRoot $RepoRoot
     }
 }
 
 # ═══════════════════════════════════════════════════════════════════
-# Public: write the trace object back to disk
+# Public: write the session object back to disk
 # ═══════════════════════════════════════════════════════════════════
-function Write-TestTrace {
+function Write-TestSession {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]
         [string]$RepoRoot,
 
         [Parameter(Mandatory = $true)]
-        $Trace
+        $Session,
+
+        [string]$SessionPath = ''
     )
 
-    $path = Get-TestTracePath -RepoRoot $RepoRoot
+    $path = Get-TestSessionPath -RepoRoot $RepoRoot -SessionPath $SessionPath
     $dir  = Split-Path -Parent $path
 
     if (-not (Test-Path -LiteralPath $dir -PathType Container)) {
@@ -157,16 +169,16 @@ function Write-TestTrace {
     }
 
     # Trim history per test type
-    foreach ($key in $Trace.tests.Keys) {
-        $entry = $Trace.tests[$key]
+    foreach ($key in $Session.tests.Keys) {
+        $entry = $Session.tests[$key]
         if ($entry.history -and $entry.history.Count -gt $script:MaxHistory) {
             $entry.history = @($entry.history | Select-Object -Last $script:MaxHistory)
         }
     }
 
-    $Trace.generatedAt = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+    $Session.generatedAt = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
 
-    $json = $Trace | ConvertTo-Json -Depth 6 -Compress
+    $json = $Session | ConvertTo-Json -Depth 6 -Compress
     $json | Set-Content -LiteralPath $path -Encoding UTF8
 }
 
@@ -175,7 +187,7 @@ function Write-TestTrace {
 # ═══════════════════════════════════════════════════════════════════
 <#
 .SYNOPSIS
-    Capture OS, pwsh, Java, and Rust versions into the trace.
+    Capture OS, pwsh, Java, and Rust versions into the session.
     Skips silently if the system block already has a capturedAt timestamp.
 
 .PARAMETER RepoRoot
@@ -184,18 +196,20 @@ function Write-TestTrace {
 .PARAMETER Force
     Re-capture even if already captured.
 #>
-function Update-TestTraceSystem {
+function Update-TestSessionSystem {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]
         [string]$RepoRoot,
 
-        [switch]$Force
+        [switch]$Force,
+
+        [string]$SessionPath = ''
     )
 
-    $trace = Read-TestTrace -RepoRoot $RepoRoot
+    $session = Read-TestSession -RepoRoot $RepoRoot -SessionPath $SessionPath
 
-    if (-not $Force -and $trace.system.capturedAt) {
+    if (-not $Force -and $session.system.capturedAt) {
         return
     }
 
@@ -245,7 +259,7 @@ function Update-TestTraceSystem {
         }
     } catch { }
 
-    $trace.system = [PSCustomObject]@{
+    $session.system = [PSCustomObject]@{
         os          = $os
         osVersion   = $osVersion
         pwshVersion = $pwshVersion
@@ -254,7 +268,7 @@ function Update-TestTraceSystem {
         capturedAt  = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
     }
 
-    Write-TestTrace -RepoRoot $RepoRoot -Trace $trace
+    Write-TestSession -RepoRoot $RepoRoot -Session $session -SessionPath $SessionPath
 }
 
 # ═══════════════════════════════════════════════════════════════════
@@ -262,7 +276,7 @@ function Update-TestTraceSystem {
 # ═══════════════════════════════════════════════════════════════════
 <#
 .SYNOPSIS
-    Record the outcome of a test type run in the persistent trace.
+    Record the outcome of a test type run in the persistent session.
 
 .PARAMETER RepoRoot
     Repository root path.
@@ -292,7 +306,7 @@ function Update-TestTraceSystem {
       exitCode   — (optional) per-file exit code
       durationSec — per-file duration
 #>
-function Update-TestTraceResult {
+function Update-TestSessionResult {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]
@@ -315,13 +329,15 @@ function Update-TestTraceResult {
 
         [string]$FailureReport = '',
 
-        [object[]]$PerFileResults = @()
+        [object[]]$PerFileResults = @(),
+
+        [string]$SessionPath = ''
     )
 
-    $trace = Read-TestTrace -RepoRoot $RepoRoot
+    $session = Read-TestSession -RepoRoot $RepoRoot -SessionPath $SessionPath
 
     $now = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
-    $existing = $trace.tests[$TestKey]
+    $existing = $session.tests[$TestKey]
 
     # Build the current result entry
     $result = [PSCustomObject]@{
@@ -380,17 +396,17 @@ function Update-TestTraceResult {
         $result | Add-Member -NotePropertyName 'history' -NotePropertyValue @($historyEntry)
     }
 
-    $trace.tests[$TestKey] = $result
-    Write-TestTrace -RepoRoot $RepoRoot -Trace $trace
+    $session.tests[$TestKey] = $result
+    Write-TestSession -RepoRoot $RepoRoot -Session $session -SessionPath $SessionPath
 }
 
 # ═══════════════════════════════════════════════════════════════════
 # Exports
 # ═══════════════════════════════════════════════════════════════════
 Export-ModuleMember -Function @(
-    'Get-TestTracePath',
-    'Read-TestTrace',
-    'Write-TestTrace',
-    'Update-TestTraceSystem',
-    'Update-TestTraceResult'
+    'Get-TestSessionPath',
+    'Read-TestSession',
+    'Write-TestSession',
+    'Update-TestSessionSystem',
+    'Update-TestSessionResult'
 )

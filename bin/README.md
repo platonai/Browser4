@@ -164,7 +164,7 @@ Shared PowerShell utility modules imported by other scripts.
 
 - **`Util.ps1`**: Common utilities including `Fix-Encoding-UTF8` — sets the console code page and output encoding to UTF-8 to prevent mojibake in Windows PowerShell.
 - **`agent-utils.psm1`**: AI agent utilities — resolve and invoke AI assistants (`claude`, `copilot`, etc.) on PATH. Provides `Get-AiAnalyzer`, `Test-AiAvailable`, and `Invoke-AiAnalysis` for AI-powered log analysis in test runners.
-- **`test-trace.psm1`**: Cross-run persistable test-result trace module. Maintains a single JSON trace file (`target/test-trace.json`) recording the last result, log paths, aggregate pass/fail counts, and rolling history for each test type. Imported by test runners; soft dependency — tests still run if the module is absent.
+- **`test-session.psm1`**: Cross-run persistable test-session state module. Maintains a single JSON session file (`target/test-session.json`) recording the last result, log paths, aggregate pass/fail counts, and rolling history for each test type. Imported by test runners; soft dependency — tests still run if the module is absent.
 
 ### `git/`
 

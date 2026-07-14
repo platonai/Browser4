@@ -8,15 +8,20 @@
 # - Guard "chcp" and other Windows-only commands behind platform checks.
 # ═══════════════════════════════════════════════════════════════════
 
+[CmdletBinding(PositionalBinding = $false)]
 param(
     [switch]$DryRun,
     [switch]$Show,
+    [switch]$NoSession,
+    [string]$SessionPath = '',
     [Parameter(ValueFromRemainingArguments = $true)]
     [string[]]$ScriptArgs
 )
 
 $script:DryRun = $DryRun
 $script:Show = $Show
+$script:NoSession = $NoSession
+$script:SessionPath = $SessionPath
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repoRoot = (git rev-parse --show-toplevel 2>$null)
@@ -140,11 +145,14 @@ function Invoke-CommandAndReport {
 
 function Print-Usage {
     param([int]$ExitCode = 1)
-    Write-Host "Usage: test.ps1 [-DryRun] [-Show] [test-types...] [additional-args...]"
+    Write-Host "Usage: test.ps1 [-DryRun] [-Show] [-NoSession] [-SessionPath <path>] [test-types...] [additional-args...]"
     Write-Host ""
     Write-Host "Options:"
-    Write-Host "  -DryRun     Compile only (test-compile), do not run tests"
-    Write-Host "  -Show       Print the final Maven command, do not execute anything"
+    Write-Host "  -DryRun      Compile only (test-compile), do not run tests"
+    Write-Host "  -Show        Print the final command, do not execute anything"
+    Write-Host "  -NoSession     Skip persisting test results to target/test-session.json"
+    Write-Host "  -SessionPath   Custom path for the test-session JSON file"
+    Write-Host "               (default: <repo-root>/target/test-session.json)"
     Write-Host ""
     Write-Host "Test Types:"
     Write-Host "  fast        Run fast unit tests only"
@@ -175,6 +183,8 @@ function Print-Usage {
     Write-Host ""
     Write-Host "Examples:"
     Write-Host "  test.ps1 fast                       # Run fast unit tests"
+    Write-Host "  test.ps1 -NoSession fast              # Run fast tests without persisting session"
+    Write-Host "  test.ps1 -SessionPath out/session.json ps  # Write session to a custom path"
     Write-Host "  test.ps1 -DryRun fast               # Show the Maven command for fast tests"
     Write-Host "  test.ps1 -DryRun it -pl browser4-core  # Show the Maven command with extra args"
     Write-Host "  test.ps1 it                         # Run integration tests"
@@ -263,7 +273,24 @@ function Invoke-MavenTests([string[]]$testTypes, [string[]]$additionalMvnArgs) {
         Write-CommandBanner -Label '[DRY RUN] Executing:' -Subtitle "  $mvnwScript $($mvnTestArgs -join ' ')"
     }
 
-    Invoke-CommandAndReport -ScriptBlock { & $mvnwScript @mvnTestArgs } -Label "Maven tests: $($testTypes -join ', ')"
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    $exitCode = Invoke-CommandAndReport -ScriptBlock { & $mvnwScript @mvnTestArgs } `
+        -Label "Maven tests: $($testTypes -join ', ')" -NoExit
+    $sw.Stop()
+
+    # ── Persist session ──────────────────────────────────────────────────
+    if ($script:SessionAvailable) {
+        Update-TestSessionSystem -RepoRoot $repoRoot -SessionPath $script:SessionPath
+        $status = if ($exitCode -eq 0) { 'pass' } else { 'fail' }
+        $dur = [math]::Round($sw.Elapsed.TotalSeconds, 1)
+        foreach ($type in $testTypes) {
+            Update-TestSessionResult -RepoRoot $repoRoot -TestKey "maven:$type" `
+                -Status $status -ExitCode $exitCode -DurationSec $dur `
+                -SessionPath $script:SessionPath
+        }
+    }
+
+    if ($exitCode -ne 0) { exit $exitCode }
 }
 
 function Invoke-Browser4CliTests([string[]]$additionalArgs) {
@@ -304,7 +331,22 @@ function Invoke-Browser4CliTests([string[]]$additionalArgs) {
         Write-CommandBanner -Label '[DRY RUN] Executing in browser4-cli:' -Subtitle "  cargo $($cargoArgs -join ' ')"
     }
 
-    Invoke-CommandAndReport -ScriptBlock { & cargo @cargoArgs } -Label 'Browser4 CLI tests' -PreExecPath $browser4CliDir
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    $exitCode = Invoke-CommandAndReport -ScriptBlock { & cargo @cargoArgs } `
+        -Label 'Browser4 CLI tests' -PreExecPath $browser4CliDir -NoExit
+    $sw.Stop()
+
+    # ── Persist session ──────────────────────────────────────────────────
+    if ($script:SessionAvailable) {
+        Update-TestSessionSystem -RepoRoot $repoRoot -SessionPath $script:SessionPath
+        $status = if ($exitCode -eq 0) { 'pass' } else { 'fail' }
+        $dur = [math]::Round($sw.Elapsed.TotalSeconds, 1)
+        Update-TestSessionResult -RepoRoot $repoRoot -TestKey 'cli' `
+            -Status $status -ExitCode $exitCode -DurationSec $dur `
+            -SessionPath $script:SessionPath
+    }
+
+    if ($exitCode -ne 0) { exit $exitCode }
 }
 
 function Invoke-MockSiteBoot([string[]]$additionalArgs) {
@@ -488,10 +530,25 @@ function Invoke-RealWorldScenarioTests([string[]]$additionalArgs) {
     }
 
     # ── Execute ──────────────────────────────────────────────────────────────
-    Invoke-CommandAndReport -ScriptBlock {
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    $exitCode = Invoke-CommandAndReport -ScriptBlock {
         if ($setProduction) { $env:BROWSER4CLI_MODE = 'production' }
         & pwsh @pwshArgs
-    } -Label $modeLabel -PreExecPath $repoRoot
+    } -Label $modeLabel -PreExecPath $repoRoot -NoExit
+    $sw.Stop()
+
+    # ── Persist session ──────────────────────────────────────────────────
+    if ($script:SessionAvailable) {
+        Update-TestSessionSystem -RepoRoot $repoRoot -SessionPath $script:SessionPath
+        $status = if ($exitCode -eq 0) { 'pass' } else { 'fail' }
+        $dur = [math]::Round($sw.Elapsed.TotalSeconds, 1)
+        $sessionKey = if ($mode -eq 'scenarios') { 'rws:scenarios' } else { 'rws:task' }
+        Update-TestSessionResult -RepoRoot $repoRoot -TestKey $sessionKey `
+            -Status $status -ExitCode $exitCode -DurationSec $dur `
+            -SessionPath $script:SessionPath
+    }
+
+    if ($exitCode -ne 0) { exit $exitCode }
 }
 
 function Invoke-PowerShellTests([string[]]$additionalArgs) {
@@ -537,14 +594,6 @@ function Invoke-PowerShellTests([string[]]$additionalArgs) {
     }
 
     Write-CommandBanner -Label "Running $($testFiles.Count) PowerShell test file(s)..."
-
-    # ── Load test-trace module (soft dependency) ────────────────────────
-    $traceAvailable = $false
-    $traceModulePath = Join-Path $scriptDir 'common' 'test-trace.psm1'
-    if (Test-Path $traceModulePath) {
-        Import-Module $traceModulePath -Force -ErrorAction SilentlyContinue
-        $traceAvailable = $true
-    }
 
     $failed = [System.Collections.ArrayList]::new()
     $passed = 0
@@ -604,12 +653,13 @@ function Invoke-PowerShellTests([string[]]$additionalArgs) {
     }
     Write-Rule
 
-    # ── Persist trace ──────────────────────────────────────────────────
-    if ($traceAvailable) {
-        Update-TestTraceSystem -RepoRoot $repoRoot
-        Update-TestTraceResult -RepoRoot $repoRoot -TestKey 'ps' `
+    # ── Persist session ──────────────────────────────────────────────────
+    if ($script:SessionAvailable) {
+        Update-TestSessionSystem -RepoRoot $repoRoot -SessionPath $script:SessionPath
+        Update-TestSessionResult -RepoRoot $repoRoot -TestKey 'ps' `
             -Status $overallStatus -ExitCode $overallExit -DurationSec $totalSec `
-            -PerFileResults $perFileResults.ToArray()
+            -PerFileResults $perFileResults.ToArray() `
+            -SessionPath $script:SessionPath
     }
 
     if ($failed.Count -gt 0) { exit 1 }
@@ -788,6 +838,22 @@ foreach ($arg in $ScriptArgs) {
         continue
     }
 
+    if ($arg -eq '--no-session') {
+        $script:NoSession = $true
+        continue
+    }
+
+    if ($arg -eq '--session-path') {
+        $script:_NextIsSessionPath = $true
+        continue
+    }
+
+    if ($script:_NextIsSessionPath) {
+        $script:SessionPath = $arg
+        $script:_NextIsSessionPath = $false
+        continue
+    }
+
     # Known test type (only in test-type mode)
     if ($parsingTestTypes -and $testTypeMap.ContainsKey($arg)) {
         $testTypes += $arg
@@ -809,6 +875,19 @@ foreach ($arg in $ScriptArgs) {
 # Default to 'fast' when no test type was given and no flags consumed everything
 if ($testTypes.Count -eq 0) {
     $testTypes += 'fast'
+}
+
+# ═══════════════════════════════════════════════════════════════════
+# Load test-session module (soft dependency, skipped when -NoSession)
+# ═══════════════════════════════════════════════════════════════════
+$script:SessionAvailable = $false
+$script:_NextIsSessionPath = $false
+if (-not $script:NoSession) {
+    $sessionModulePath = Join-Path $scriptDir 'common' 'test-session.psm1'
+    if (Test-Path $sessionModulePath) {
+        Import-Module $sessionModulePath -Force -ErrorAction SilentlyContinue
+        $script:SessionAvailable = $true
+    }
 }
 
 # ═══════════════════════════════════════════════════════════════════
