@@ -640,9 +640,13 @@ function Invoke-PowerShellTests([string[]]$additionalArgs) {
             $exitCode = $LASTEXITCODE
         }
         else {
-            # Plain PowerShell test — run directly
-            & pwsh -NoProfile -ExecutionPolicy Bypass -File $file.FullName @additionalArgs
+            # Plain PowerShell test — run directly, capture output for diagnostics
+            $rawOutput = & pwsh -NoProfile -ExecutionPolicy Bypass -File $file.FullName @additionalArgs *>&1
             $exitCode = $LASTEXITCODE
+            # Replay captured output so the console still shows test progress
+            if ($rawOutput) {
+                $rawOutput | ForEach-Object { Write-Host $_ }
+            }
         }
 
         $sw.Stop()
@@ -665,6 +669,27 @@ function Invoke-PowerShellTests([string[]]$additionalArgs) {
         else {
             Write-Host "    ❌ FAIL (exit $exitCode, $elapsed)" -ForegroundColor Red
             [void]$failed.Add(@{ Path = $relativePath; ExitCode = $exitCode })
+            # ── Extract failure details from captured output ──────────────
+            $failLines = @($rawOutput | Where-Object {
+                $_ -is [string] -and $_ -match '\b(FAIL|ERROR)\b'
+            })
+            if ($failLines.Count -gt 0) {
+                Write-Host "    ── Failure details ──" -ForegroundColor DarkYellow
+                $maxShow = 25
+                $failLines | Select-Object -First $maxShow | ForEach-Object {
+                    Write-Host "      $_" -ForegroundColor DarkYellow
+                }
+                if ($failLines.Count -gt $maxShow) {
+                    Write-Host "      ... and $($failLines.Count - $maxShow) more failure line(s)" -ForegroundColor DarkGray
+                }
+            } else {
+                # No explicit FAIL/ERROR lines found — show tail of output for diagnosis
+                $tail = @($rawOutput | Select-Object -Last 10)
+                if ($tail.Count -gt 0) {
+                    Write-Host "    ── Last output lines (no FAIL markers found) ──" -ForegroundColor DarkYellow
+                    $tail | ForEach-Object { Write-Host "      $_" -ForegroundColor DarkGray }
+                }
+            }
         }
     }
 
@@ -682,7 +707,7 @@ function Invoke-PowerShellTests([string[]]$additionalArgs) {
     else {
         Write-Host "❌ PowerShell tests: $passed passed, $($failed.Count) failed ($total total)" -ForegroundColor Red
         Write-Host ''
-        Write-Host 'Failed files:' -ForegroundColor Red
+        Write-Host 'Failed files (see failure details above):' -ForegroundColor Red
         foreach ($f in $failed) {
             Write-Host "  ❌ $($f.Path) (exit $($f.ExitCode))" -ForegroundColor Red
         }

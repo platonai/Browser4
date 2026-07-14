@@ -13,6 +13,7 @@ param([switch]$Quiet)
 $ErrorActionPreference = 'Continue'
 $script:Failures = 0
 $script:Passed   = 0
+$script:FailureDetails = [System.Collections.ArrayList]::new()
 
 # ═══════════════════════════════════════════════════════════════════
 # Assertion helpers
@@ -29,6 +30,9 @@ function Assert-Equal {
         $script:Failures++
         Write-Host "    FAIL  $Label — expected '$Expected', got '$Actual'" -ForegroundColor Red
         if ($Description) { Write-Host "          $Description" -ForegroundColor Gray }
+        [void]$script:FailureDetails.Add([PSCustomObject]@{
+            Label = $Label; Expected = "$Expected"; Actual = "$Actual"; Description = $Description
+        })
     }
 }
 
@@ -41,6 +45,9 @@ function Assert-True {
         $script:Failures++
         Write-Host "    FAIL  $Label — expected true" -ForegroundColor Red
         if ($Description) { Write-Host "          $Description" -ForegroundColor Gray }
+        [void]$script:FailureDetails.Add([PSCustomObject]@{
+            Label = $Label; Expected = 'true'; Actual = "$Condition"; Description = $Description
+        })
     }
 }
 
@@ -997,11 +1004,28 @@ if ($parseFailures.Count -gt 0) {
 Assert-True "More than 30 scripts" ($psFiles.Count -gt 30)
 
 # ═══════════════════════════════════════════════════════════════════
+# Failure summary (printed before final report for diagnosis)
+# ═══════════════════════════════════════════════════════════════════
+
+if ($script:FailureDetails.Count -gt 0) {
+    Write-Host ""
+    Write-Host "=== FAILURE DETAILS ===" -ForegroundColor Red
+    Write-Host "$($script:FailureDetails.Count) assertion(s) failed:" -ForegroundColor Red
+    Write-Host ""
+    $script:FailureDetails | ForEach-Object {
+        Write-Host "  ❌ $($_.Label)" -ForegroundColor Red
+        Write-Host "     Expected: $($_.Expected)" -ForegroundColor DarkYellow
+        Write-Host "     Actual:   $($_.Actual)" -ForegroundColor DarkYellow
+        if ($_.Description) { Write-Host "     Note:     $($_.Description)" -ForegroundColor DarkGray }
+        Write-Host ""
+    }
+}
+
+# ═══════════════════════════════════════════════════════════════════
 # Final report
 # ═══════════════════════════════════════════════════════════════════
 
 $total = $script:Passed + $script:Failures
-Write-Host ""
 Write-Host "========================================"
 Write-Host "  Tests: $total total, $($script:Passed) passed, $($script:Failures) failed"
 Write-Host "========================================"
