@@ -424,7 +424,35 @@ $testTypeMap = @{
     'mocksite'      = 'server'
     'mocksiteboot'  = 'server'
     'rws'           = 'rws'
+    'ps'            = 'ps'
     'resume'        = 'resume'
+}
+
+# ── Anti-drift: verify this copy matches the live $testTypeMap in test.ps1 ──
+$srcText = Get-Content $TestPs1Path -Raw
+$mapMatch = [regex]::Match($srcText, '\$testTypeMap\s*=\s*@\{([^}]+)\}')
+if ($mapMatch.Success) {
+    $liveMapText = '@{' + $mapMatch.Groups[1].Value + '}'
+    $liveMap = Invoke-Expression $liveMapText
+    $liveKeys = $liveMap.Keys | Sort-Object
+    $copyKeys = $testTypeMap.Keys | Sort-Object
+    $missingInCopy = $liveKeys | Where-Object { $_ -notin $copyKeys }
+    $extraInCopy   = $copyKeys | Where-Object { $_ -notin $liveKeys }
+    Assert-Returns -Label 'Map drift: no keys missing from test copy' -Actual $missingInCopy.Count -Expected 0
+    if ($missingInCopy.Count -gt 0) {
+        Write-Host "      MISSING from test copy: $($missingInCopy -join ', ')" -ForegroundColor Yellow
+    }
+    Assert-Returns -Label 'Map drift: no extra keys in test copy' -Actual $extraInCopy.Count -Expected 0
+    if ($extraInCopy.Count -gt 0) {
+        Write-Host "      EXTRA in test copy: $($extraInCopy -join ', ')" -ForegroundColor Yellow
+    }
+    foreach ($key in $liveKeys) {
+        if ($testTypeMap.ContainsKey($key)) {
+            Assert-Returns -Label "Map drift: '$key' value matches" -Actual $testTypeMap[$key] -Expected $liveMap[$key]
+        }
+    }
+} else {
+    Write-Host "    ⚠ Could not extract live `$testTypeMap from test.ps1 — skipping drift check." -ForegroundColor Yellow
 }
 
 Assert-Returns -Label 'Map: fast → maven' -Actual $testTypeMap['fast'] -Expected 'maven'
@@ -453,8 +481,9 @@ function Test-Dispatch {
     $mavenT  = @($InputTypes | Where-Object { $testTypeMap[$_] -in 'maven', 'maven-expand' })
     $cliT    = @($InputTypes | Where-Object { $testTypeMap[$_] -eq 'cli' })
     $rwsT    = @($InputTypes | Where-Object { $testTypeMap[$_] -eq 'rws' })
+    $psT     = @($InputTypes | Where-Object { $testTypeMap[$_] -eq 'ps' })
     $serverT = @($InputTypes | Where-Object { $testTypeMap[$_] -eq 'server' })
-    return [PSCustomObject]@{ Maven = $mavenT; Cli = $cliT; Rws = $rwsT; Server = $serverT }
+    return [PSCustomObject]@{ Maven = $mavenT; Cli = $cliT; Rws = $rwsT; Ps = $psT; Server = $serverT }
 }
 
 # Single type
@@ -479,6 +508,11 @@ Assert-Returns -Label 'Dispatch skills+mcp: both maven' -Actual $d.Maven.Count -
 
 $d = Test-Dispatch 'main'
 Assert-Returns -Label 'Dispatch main: in maven bucket' -Actual ($d.Maven -join ',') -Expected 'main'
+
+$d = Test-Dispatch 'ps'
+Assert-Returns -Label 'Dispatch ps: ps bucket' -Actual ($d.Ps -join ',') -Expected 'ps'
+Assert-Returns -Label 'Dispatch ps: no maven' -Actual $d.Maven.Count -Expected 0
+Assert-Returns -Label 'Dispatch ps: no cli' -Actual $d.Cli.Count -Expected 0
 
 Write-Host "━━━ Test type map: main expansion ━━━" -ForegroundColor Cyan
 
@@ -535,7 +569,7 @@ $expectedTypes = @(
     'fast', 'it', 'e2e', 'rest', 'skills', 'mcp', 'main',
     'cli', 'browser4-cli',
     'server', 'mock-site', 'mocksite', 'mocksiteboot',
-    'rws', 'resume'
+    'rws', 'ps', 'resume'
 )
 
 foreach ($type in $expectedTypes) {
@@ -552,7 +586,7 @@ Assert-Returns -Label 'Map: no extra keys beyond expected' -Actual $extraKeys.Co
 
 # Verify all categories are covered
 $categories = $testTypeMap.Values | Select-Object -Unique | Sort-Object
-$expectedCategories = @('cli', 'maven', 'maven-expand', 'resume', 'rws', 'server')
+$expectedCategories = @('cli', 'maven', 'maven-expand', 'ps', 'resume', 'rws', 'server')
 $missingCategories = $expectedCategories | Where-Object { $_ -notin $categories }
 $extraCategories = $categories | Where-Object { $_ -notin $expectedCategories }
 Assert-Returns -Label 'Map: all categories covered' -Actual $missingCategories.Count -Expected 0
@@ -579,6 +613,37 @@ Assert-ContainsString -Label 'Arg parse: -DryRun foobar errors' -Haystack $outpu
 # ── resume with another type ──
 $output = pwsh -NoProfile -Command "& '$testPs1Abs' resume fast *>&1" *>&1 | Out-String
 Assert-ContainsString -Label 'Arg parse: resume+fast errors' -Haystack $output -Needle 'resume'
+
+# ═══════════════════════════════════════════════════════════════════
+# TESTS: Session flags (-NoSession, -SessionPath)
+# ═══════════════════════════════════════════════════════════════════
+Write-Host "━━━ Session flags: -NoSession ━━━" -ForegroundColor Cyan
+
+# -NoSession (PowerShell switch) should be accepted without error
+$output = pwsh -NoProfile -Command "& '$testPs1Abs' -NoSession -Show fast *>&1" *>&1 | Out-String
+Assert-ContainsString -Label 'Session: -NoSession -Show fast runs' -Haystack $output -Needle '[SHOW] Would execute'
+
+# --no-session (long form in ScriptArgs) should be accepted
+$output = pwsh -NoProfile -Command "& '$testPs1Abs' --no-session -Show fast *>&1" *>&1 | Out-String
+Assert-ContainsString -Label 'Session: --no-session -Show fast runs' -Haystack $output -Needle '[SHOW] Would execute'
+
+Write-Host "━━━ Session flags: -SessionPath ━━━" -ForegroundColor Cyan
+
+# -SessionPath with a custom path should be accepted
+$output = pwsh -NoProfile -Command "& '$testPs1Abs' -SessionPath out/test.json -Show fast *>&1" *>&1 | Out-String
+Assert-ContainsString -Label 'Session: -SessionPath accepted' -Haystack $output -Needle '[SHOW] Would execute'
+
+# --session-path (long form) should be accepted
+$output = pwsh -NoProfile -Command "& '$testPs1Abs' --session-path out/test.json -Show fast *>&1" *>&1 | Out-String
+Assert-ContainsString -Label 'Session: --session-path accepted' -Haystack $output -Needle '[SHOW] Would execute'
+
+Write-Host "━━━ Session flags: -NoSession skips persistence ━━━" -ForegroundColor Cyan
+
+# With -NoSession, the session module should not be loaded (no "Persist session" output)
+$output = pwsh -NoProfile -Command "& '$testPs1Abs' -NoSession -Show ps *>&1" *>&1 | Out-String
+# The -Show output should NOT mention the session module being loaded
+$hasSessionRef = $output -match 'test-session'
+Assert-Returns -Label 'Session: -NoSession suppresses module load' -Actual $hasSessionRef -Expected $false
 
 # ═══════════════════════════════════════════════════════════════════
 # Summary
