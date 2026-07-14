@@ -237,8 +237,7 @@ Organized by task — follow the link that matches what you're trying to do:
 
 ## Installation
 
-Requires Node.js.
-
+**Cross-platform (Node.js):**
 ```bash
 npm install -g browser4-cli
 browser4-cli install
@@ -247,6 +246,12 @@ browser4-cli install
 **Windows (PowerShell):**
 ```powershell
 irm https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.ps1 | iex
+browser4-cli install
+```
+
+**Linux / macOS (bash):**
+```bash
+curl -fsSL https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.sh | bash
 browser4-cli install
 ```
 
