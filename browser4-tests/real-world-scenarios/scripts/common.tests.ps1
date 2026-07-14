@@ -316,15 +316,23 @@ Write-Host ''
 Write-Host '━━━ Invoke-Agent: Argument Forwarding ━━━' -ForegroundColor Yellow
 
 & {
-    # Mock 'claude' to capture the arguments it receives.
+    # Mock the native-command boundary to capture the arguments Invoke-Agent forwards.
     $script:CapturedArgs = $null
-
-    function global:claude {
-        $script:CapturedArgs = $args
-    }
 
     Remove-Variable -Name 'browser4cliMode' -Scope Local -ErrorAction SilentlyContinue
     . "$PSScriptRoot/common.ps1"
+
+    function Start-NativeCommand {
+        param(
+            [string]$FilePath,
+            [string[]]$ArgumentList,
+            [string]$CaptureFile,
+            [int]$TimeoutSeconds
+        )
+
+        $script:CapturedArgs = $ArgumentList
+        return 0
+    }
 
     Write-TestGroup 'base arguments (without -Silent)'
     Invoke-Agent -Prompt 'test prompt'
@@ -346,7 +354,7 @@ Write-Host '━━━ Invoke-Agent: Argument Forwarding ━━━' -ForegroundCo
     Assert-True 'prompt follows -p flag' ($script:CapturedArgs[-2] -eq 'silent test')
 
     # Clean up the mock so it does not leak.
-    Remove-Item function:claude -ErrorAction SilentlyContinue
+    Remove-Item function:Start-NativeCommand -ErrorAction SilentlyContinue
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════

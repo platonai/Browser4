@@ -149,7 +149,7 @@ Describe 'Write-LogMessage' {
         Write-LogMessage -Message 'Timestamp test' -Level 'INFO' -ScriptLogPath $logFile
 
         $content = Get-Content -Path $logFile -Raw -Encoding UTF8
-        $content | Should -Match '\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\]'
+        $content | Should -Match '\[\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}\]'
     }
 
     It 'appends to an existing log file instead of overwriting' {
@@ -226,7 +226,7 @@ Describe 'Write-LogVerbose' {
         Write-LogVerbose -Message 'Verbose test' -ScriptLogPath $logFile
 
         $content = Get-Content -Path $logFile -Raw -Encoding UTF8
-        $content | Should -Match '\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\] \[DEBUG\]'
+        $content | Should -Match '\[\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}\] \[DEBUG\]'
     }
 
     It 'appends to existing log file' {

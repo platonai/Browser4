@@ -83,6 +83,50 @@ function ConvertTo-WindowsCommandLineArgument {
     return $builder.ToString()
 }
 
+function Read-TaskFile {
+    <#
+    .SYNOPSIS
+        Parse a task markdown file into a scenario name and body.
+    .DESCRIPTION
+        Reads a task file, extracts its first level-one heading as the scenario
+        name, and returns the remaining non-empty content as the task body.
+    .PARAMETER Path
+        Path to the task markdown file.
+    .OUTPUTS
+        PSCustomObject with Name and Body string properties.
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path
+    )
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        throw "Task file not found: $Path"
+    }
+
+    $rawContent = Get-Content -LiteralPath $Path -Raw -Encoding UTF8
+    if ([string]::IsNullOrWhiteSpace($rawContent)) {
+        throw "Task file is empty: $Path"
+    }
+
+    $name = ''
+    $body = $rawContent
+    if ($rawContent -match '(?m)^\s*#\s+(.+?)\s*$') {
+        $name = $Matches[1].Trim()
+        $body = $rawContent -replace '(?m)^\s*#\s+.+?\s*\r?\n[\s\r\n]*', ''
+    }
+
+    $body = $body.TrimStart()
+    if ([string]::IsNullOrWhiteSpace($body)) {
+        throw "No task body found after heading in: $Path"
+    }
+
+    return [PSCustomObject]@{
+        Name = $name
+        Body = $body
+    }
+}
+
 # ── Compiled output handler (C#) ──────────────────────────────────────────────
 # DataReceived events fire on .NET threadpool threads.  PowerShell scriptblocks
 # cast to delegates require a Runspace on the executing thread, which threadpool
@@ -386,6 +430,7 @@ function ConvertFrom-IssuesSection {
         'Actual'                       = 'Actual'
         'Root Cause'                   = 'RootCause'
         'Code Pointer'                 = 'CodePointer'
+        'Review'                       = 'Review'
         'Human Review'                 = 'Review'
         'Human Review (TOP PRIORITY)'  = 'Review'
         'Suggested Improvement'        = 'Suggestion'
