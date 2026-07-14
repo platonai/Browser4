@@ -538,8 +538,18 @@ function Invoke-PowerShellTests([string[]]$additionalArgs) {
 
     Write-CommandBanner -Label "Running $($testFiles.Count) PowerShell test file(s)..."
 
+    # ── Load test-trace module (soft dependency) ────────────────────────
+    $traceAvailable = $false
+    $traceModulePath = Join-Path $scriptDir 'common' 'test-trace.psm1'
+    if (Test-Path $traceModulePath) {
+        Import-Module $traceModulePath -Force -ErrorAction SilentlyContinue
+        $traceAvailable = $true
+    }
+
     $failed = [System.Collections.ArrayList]::new()
     $passed = 0
+    $perFileResults = [System.Collections.ArrayList]::new()
+    $swTotal = [System.Diagnostics.Stopwatch]::StartNew()
 
     foreach ($file in $testFiles) {
         $relativePath = $file.FullName.Substring($repoRoot.Length + 1)
@@ -552,7 +562,17 @@ function Invoke-PowerShellTests([string[]]$additionalArgs) {
         $exitCode = $LASTEXITCODE
         $sw.Stop()
 
-        $elapsed = "$([Math]::Floor($sw.Elapsed.TotalSeconds))s"
+        $fileSec = [math]::Round($sw.Elapsed.TotalSeconds, 1)
+        $elapsed = "$($fileSec)s"
+        $fileStatus = if ($exitCode -eq 0) { 'pass' } else { 'fail' }
+
+        [void]$perFileResults.Add(@{
+            path        = $relativePath
+            status      = $fileStatus
+            exitCode    = $exitCode
+            durationSec = $fileSec
+        })
+
         if ($exitCode -eq 0) {
             Write-Host "    ✅ PASS ($elapsed)" -ForegroundColor Green
             $passed++
@@ -563,7 +583,12 @@ function Invoke-PowerShellTests([string[]]$additionalArgs) {
         }
     }
 
+    $swTotal.Stop()
     $total = $passed + $failed.Count
+    $totalSec = [math]::Round($swTotal.Elapsed.TotalSeconds, 1)
+    $overallStatus = if ($failed.Count -eq 0) { 'pass' } else { 'fail' }
+    $overallExit   = if ($failed.Count -gt 0) { 1 } else { 0 }
+
     Write-Host ''
     Write-Rule
     if ($failed.Count -eq 0) {
@@ -576,10 +601,18 @@ function Invoke-PowerShellTests([string[]]$additionalArgs) {
         foreach ($f in $failed) {
             Write-Host "  ❌ $($f.Path) (exit $($f.ExitCode))" -ForegroundColor Red
         }
-        Write-Rule
-        exit 1
     }
     Write-Rule
+
+    # ── Persist trace ──────────────────────────────────────────────────
+    if ($traceAvailable) {
+        Update-TestTraceSystem -RepoRoot $repoRoot
+        Update-TestTraceResult -RepoRoot $repoRoot -TestKey 'ps' `
+            -Status $overallStatus -ExitCode $overallExit -DurationSec $totalSec `
+            -PerFileResults $perFileResults.ToArray()
+    }
+
+    if ($failed.Count -gt 0) { exit 1 }
 }
 
 # Read the parent POM's <modules> section to get the reactor build order.

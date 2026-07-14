@@ -979,7 +979,30 @@ function Finish-TestSession {
     Write-Host '══════════════════════════════════════════════════════════' -ForegroundColor Cyan
     Write-Host ''
 
-    return $(if ($failed -eq 0) { 0 } else { 1 })
+    # ── Persist to cross-run trace (soft dependency) ──────────────────
+    $exitCode = $(if ($failed -eq 0) { 0 } else { 1 })
+    try {
+        $repoRoot = (git -C $PSScriptRoot rev-parse --show-toplevel 2>$null)
+        if ($repoRoot) {
+            $traceModule = Join-Path $repoRoot 'bin' 'common' 'test-trace.psm1'
+            if (Test-Path $traceModule) {
+                Import-Module $traceModule -Force -ErrorAction SilentlyContinue
+                $testKey = "maven:$($script:TestName)"
+                $durationSec = [math]::Round((Get-Date).Subtract($script:TestStartTime).TotalSeconds, 1)
+                $failureReportPath = Join-Path $script:LogDir 'failures.json'
+                $failureReportParam = if (Test-Path $failureReportPath) { $failureReportPath } else { '' }
+                Update-TestTraceSystem -RepoRoot $repoRoot
+                Update-TestTraceResult -RepoRoot $repoRoot -TestKey $testKey `
+                    -Status $(if ($exitCode -eq 0) { 'pass' } else { 'fail' }) `
+                    -ExitCode $exitCode -DurationSec $durationSec `
+                    -LogDir $script:LogDir -FailureReport $failureReportParam
+            }
+        }
+    } catch {
+        # Trace is best-effort; failures must not affect the test outcome.
+    }
+
+    return $exitCode
 }
 
 # ============================================================================
