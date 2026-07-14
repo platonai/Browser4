@@ -86,7 +86,7 @@ Valid categories: `generic`, `browser4`, `real-world`, `mock-site`, `all` (defau
 
 ## Available tasks
 
-25 task files covering all browser4-cli commands documented in the SKILL reference.
+30 task files covering all browser4-cli commands documented in the SKILL reference plus the 5 built-in Browser4 plugins.
 
 ### Real-World — Generic (`tasks/real-world/generic/`)
 
@@ -120,6 +120,18 @@ htmlsnapshot, attach, named sessions, auto-diff).
 | `crawl-link-discovery.md` | books.toscrape.com | Crawl with link discovery, seed files, format/output options |
 | `loop-monitoring.md` | httpbin.org | Loop in plain-text/shell/subcommand modes, named loops, pause/resume/stop |
 | `attach-remote-debug.md` | Chrome/Edge CDP | Attach to running Chrome/Edge via CDP, capture state |
+
+### Real-World — Plugin Scenarios (`tasks/real-world/browser4/plugin-*.md`)
+
+5 scenarios exercising each of the 5 built-in Browser4 plugins against real websites.
+
+| Task file | Target | Plugin | Scenario |
+|-----------|--------|--------|----------|
+| `plugin-image-detection-download.md` | Wikipedia | browser4-images | Detect flag images, download single images, bulk download all |
+| `plugin-markdown-conversion.md` | Wikipedia, httpbin | browser4-markdown | Convert pages to Markdown, discover links, crawl, fetch via HTTP |
+| `plugin-media-video-detection.md` | W3Schools | browser4-media | Detect HTML5 video elements, download video, probe metadata |
+| `plugin-pptx-generation.md` | Wikipedia, httpbin | browser4-pptx | Generate PowerPoint from rich/dense/simple pages, verify structure |
+| `plugin-captcha-detection.md` | Google, hCaptcha, Cloudflare | browser4-captcha | Detect reCAPTCHA v2, hCaptcha, Turnstile; false-positive check |
 
 ### Mock Site (`tasks/mock-site/`)
 
