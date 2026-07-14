@@ -79,7 +79,7 @@ browser4-cli htmlsnapshot get text "#main-content"
 browser4-cli htmlsnapshot query --sql @query.sql
 browser4-cli htmlsnapshot grep -i "error"
 
-# AI-powered extraction and summarization (requires LLM key — see LLM Configuration above)
+# AI-powered extraction and summarization (requires LLM key — see LLM Configuration below)
 browser4-cli extract "product name, price, and rating as JSON"
 browser4-cli summarize "key points in 3 bullets"
 
@@ -598,6 +598,29 @@ browser4-cli htmlsnapshot inspect                        # auto-discover repeati
 browser4-cli htmlsnapshot inspect ".product_pod"         # inspect a specific container
 browser4-cli htmlsnapshot inspect ".s-result-item" --depth 6 --max 20
 ```
+
+---
+
+### LLM Configuration
+
+AI-powered commands (`agent`, `extract`, `summarize`) and X-SQL `llm_*` functions
+require an LLM API key. Configure one provider via environment variables:
+
+| Provider | Environment Variables |
+|---|---|
+| DeepSeek | `DEEPSEEK_API_KEY` |
+| OpenRouter | `OPENROUTER_API_KEY`, `OPENROUTER_MODEL_NAME`, `OPENROUTER_BASE_URL` |
+| Volcengine (ByteDance) | `VOLCENGINE_API_KEY`, `VOLCENGINE_MODEL_NAME`, `VOLCENGINE_BASE_URL` |
+| OpenAI-compatible | `OPENAI_API_KEY`, `OPENAI_MODEL_NAME`, `OPENAI_BASE_URL` |
+| Aliyun Qwen (DashScope) | `OPENAI_API_KEY`, `OPENAI_MODEL_NAME`, `OPENAI_BASE_URL` |
+
+Example:
+
+```bash
+export DEEPSEEK_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxx
+```
+
+If no valid LLM key is configured, AI commands fail fast with a clear error at startup.
 
 ---
 

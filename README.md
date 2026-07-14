@@ -497,17 +497,34 @@ curl -L -o PulsarRPAPro.jar https://github.com/platonai/PulsarRPAPro/releases/do
 
 ---
 
-## 📦 Modules Overview
+## 🏗️ Architecture
 
 ```
-cli                     CLI in Rust that supports SKILLS
-browser4-core           Core engine: sessions, scheduling, DOM, browser control
-browser4-agentic        Agent implementation, MCP, and skill registration
-browser4-rest           Spring Boot REST layer & command endpoints
-browser4-standalone     Agent & crawler orchestration with product packaging
-examples                Runnable examples and demos
-browser4-tests          E2E & heavy integration & scenario tests
+browser4-cli (Rust) ──MCP over HTTP──▶ browser4-rest (Kotlin/Spring) ──▶ PulsarWebDriver (Kotlin/CDP)
 ```
+
+- **CLI** (`cli/browser4-cli`) — native Rust binary, talks to the backend via MCP tool calls
+- **Backend** (`browser4-rest`) — Spring Boot server, dispatches MCP tools to browser drivers
+- **Browser driver** (`browser4-core/browser4-browser`) — wraps Chrome DevTools Protocol
+- **Agent tools** (`browser4-agentic`) — maps MCP tool names to browser automation methods
+
+## 📦 Modules Overview
+
+| Module | Description |
+|---|---|
+| `cli/browser4-cli` | Rust CLI — fast, native binary for browser automation |
+| `skills/browser4-cli` | AI agent skill definitions (SKILL.md) |
+| `browser4-core` | Core engine: sessions, scheduling, DOM, browser control |
+| `browser4-dependencies` | BOM and dependency version alignment |
+| `browser4-tools` | Operational tools and launch helpers |
+| `browser4-agentic` | AI agents, MCP integration, skill registration |
+| `browser4-agent-tools` | High-level agent tools: scraping, crawling, stateful page interaction |
+| `browser4-rest` | Spring Boot REST layer & command endpoints |
+| `browser4-apps/browser4-standalone` | Product packaging — unified launcher (`target/Browser4.jar`) |
+| `examples/browser4-examples` | Runnable examples and demos |
+| `browser4-tests` | E2E, integration, and scenario test suites |
+| `cdp-protocol` | Chrome DevTools Protocol JSON definitions |
+| `coworker/` | File-queue automation for task-driven AI workflows |
 
 ---
 
