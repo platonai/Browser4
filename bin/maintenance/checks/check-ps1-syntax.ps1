@@ -71,8 +71,8 @@ foreach ($file in $psFiles) {
 Set-MaintenanceResultSummary -Result $result
 
 # ── Summary line ──
-$passed  = ($result.Results | Where-Object { $_.Status -eq "passed" }).Count
-$failed  = ($result.Results | Where-Object { $_.Status -eq "failed" }).Count
+$passed  = @($result.Results | Where-Object { $_.Status -eq "passed" }).Count
+$failed  = @($result.Results | Where-Object { $_.Status -eq "failed" }).Count
 Write-Host "PS1 Syntax: $passed passed, $failed failed - $($result.Results.Count) total scripts"
 
 $result

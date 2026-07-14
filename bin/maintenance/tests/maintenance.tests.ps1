@@ -161,19 +161,21 @@ function Invoke-MaintenanceStep {
           [Parameter(Mandatory = $true)][scriptblock]$ScriptBlock,
           [int]$TimeoutSeconds = 3600, [string]$WorkingDirectory = $null)
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    $stdout = ""; $stderr = ""; $exitCode = 0
     try {
         if ($WorkingDirectory) { Push-Location $WorkingDirectory }
-        $job = Start-Job -ScriptBlock $ScriptBlock
-        $completed = Wait-Job $job -Timeout $TimeoutSeconds
-        if (-not $completed) {
-            Stop-Job $job; $stdout = "TIMEOUT"; $stderr = "TIMEOUT"; $exitCode = 124
-        } else {
-            $o = Receive-Job $job 2>$null; $stdout = $o -join "`n"
-            $errs = $job.ChildJobs[0].Error
-            $stderr = if ($errs) { ($errs | ForEach-Object { "$_" }) -join "`n" } else { "" }
-            $exitCode = $job.ChildJobs[0].ExitCode
+        # Direct execution — captures $LASTEXITCODE from external commands in-process
+        $errCollector = New-Object System.Collections.ArrayList
+        $rawOutput = & $ScriptBlock 2>&1 | ForEach-Object {
+            if ($_ -is [System.Management.Automation.ErrorRecord]) {
+                [void]$errCollector.Add($_.Exception.Message)
+            } else {
+                $_
+            }
         }
-        Remove-Job $job -Force -ErrorAction SilentlyContinue
+        $stdout = if ($rawOutput) { ($rawOutput | Out-String) } else { "" }
+        $stderr = if ($errCollector.Count -gt 0) { ($errCollector -join "`n") } else { "" }
+        $exitCode = $LASTEXITCODE
     } catch {
         $stdout = ""; $stderr = $_.Exception.Message; $exitCode = 1
     } finally {
@@ -642,8 +644,8 @@ Assert-True "Parameter table" ("| Parameter | Type | Required | Default | Descri
 Assert-True "Error section" ("## Error Handling" -match "error handling")
 
 # Code block + output
-$cb = [char]96 + [char]96 + [char]96  # triple backtick
-$exampleContent = "${cb}kotlin`nval r = skill.execute(p)`n${cb}`nReturns SkillResult."
+$cb3 = [char]96 + [char]96 + [char]96  # triple backtick
+$exampleContent = "${cb3}kotlin`nval r = skill.execute(p)`n${cb3}`nReturns SkillResult."
 Assert-True "Has code block" ($exampleContent -match $cb3)
 $hasOutput = ($exampleContent.ToLower() -match "return|result|output")
 Assert-True "Has output signal" $hasOutput
@@ -830,6 +832,8 @@ Assert-True "G1 valid status" (("passed","failed","skipped","error") -contains $
 $dfPath = Join-Path $repoRoot "Dockerfile"
 if (Test-Path $dfPath) {
     Assert-True "Dockerfile has FROM" ((Get-Content $dfPath -Raw) -match "FROM")
+} else {
+    Write-Host "    SKIP  Dockerfile not found at repo root" -ForegroundColor Yellow
 }
 
 # ═══════════════════════════════════════════════════════════════════
@@ -979,7 +983,7 @@ if ($parseFailures.Count -gt 0) {
     foreach ($pf in $parseFailures) {
         Write-Host "          $pf" -ForegroundColor Red
     }
-    $script:Failures++
+    $script:Failures += $parseFailures.Count
 } else {
     Assert-True "All scripts parse" ($parseFailures.Count -eq 0)
 }

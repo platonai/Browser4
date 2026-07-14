@@ -528,6 +528,11 @@ function Invoke-PowerShellTests([string[]]$additionalArgs) {
             $relativePath = $file.FullName.Substring($repoRoot.Length + 1)
             Write-Host "  - $relativePath"
         }
+        if ($additionalArgs.Count -gt 0) {
+            Write-Host ''
+            $pwshCmd = "pwsh -NoProfile -ExecutionPolicy Bypass -File <file> $($additionalArgs -join ' ')"
+            Write-Host "  Common args: $pwshCmd"
+        }
         return
     }
 
