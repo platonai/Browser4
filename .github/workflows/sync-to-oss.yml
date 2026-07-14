@@ -148,6 +148,9 @@ jobs:
               continue
             fi
 
+            # Compute sha256 once for both checksum uploads below
+            script_hash=$(sha256sum "$src" | awk '{print $1}')
+
             # 1) Upload to convenience URL (unversioned — always latest)
             dest_latest="${OSS_SCRIPTS_PREFIX}/${script}"
             echo "Uploading: ${script} → ${dest_latest}"
@@ -162,6 +165,21 @@ jobs:
               echo "::error::Failed to upload ${script} to scripts/"
               ((failed++)) || true
               continue
+            fi
+
+            # 1b) Upload .sha256 for the convenience URL
+            echo "$script_hash" > "/tmp/${script}.sha256"
+            dest_sha="${OSS_SCRIPTS_PREFIX}/${script}.sha256"
+            echo "Uploading: ${script}.sha256 → ${dest_sha}"
+            if ./ossutil cp "/tmp/${script}.sha256" "$dest_sha" \
+              -e "$OSS_ENDPOINT" \
+              --region "$OSS_REGION" \
+              --acl public-read \
+              --retry-times 3 \
+              --force; then
+              echo "  https://${OSS_BUCKET}.${OSS_ENDPOINT}/scripts/${script}.sha256"
+            else
+              echo "::warning::Failed to upload ${script}.sha256 to scripts/"
             fi
 
             # 2) Upload to versioned release path
