@@ -543,6 +543,30 @@ pub fn all_commands() -> Vec<CommandDef> {
             },
         },
         CommandDef {
+            name: "skills-unpack",
+            description: "Unpack bundled skill files to a directory",
+            category: Category::Skills,
+            hidden: true,
+            batch_supported: false,
+            args: &[
+                ArgDef {
+                    name: "dest",
+                    description: "Destination directory (defaults to the skills directory)",
+                    optional: true,
+                },
+            ],
+            options: &[],
+            e2e_coverage: E2eCoverage::Excluded,
+            tool_name_fn: |_| String::new(),
+            tool_params_fn: |args| {
+                let mut params = json!({});
+                if let Some(dest) = get_opt_str(args, "dest") {
+                    params["dest"] = json!(dest);
+                }
+                params
+            },
+        },
+        CommandDef {
             name: "batch",
             description: "Execute multiple commands in one invocation",
             category: Category::Core,
@@ -5433,6 +5457,28 @@ mod tests {
                 cmd.category.as_str()
             );
         }
+    }
+
+    #[test]
+    fn test_skills_unpack_tool_name_and_params() {
+        let cmds = commands_map();
+        let cmd = cmds.get("skills-unpack").unwrap();
+        let args = HashMap::new();
+        assert_eq!((cmd.tool_name_fn)(&args), "");
+        assert_eq!((cmd.tool_params_fn)(&args), json!({}));
+        assert_eq!(cmd.category.as_str(), "skills");
+        assert!(cmd.hidden);
+        assert!(!cmd.batch_supported);
+    }
+
+    #[test]
+    fn test_skills_unpack_with_dest() {
+        let cmds = commands_map();
+        let cmd = cmds.get("skills-unpack").unwrap();
+        let mut args = HashMap::new();
+        args.insert("dest".to_string(), json!("/custom/skills"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["dest"], "/custom/skills");
     }
 
     #[test]

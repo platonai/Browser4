@@ -382,6 +382,7 @@ fn no_snapshot_commands() -> HashSet<&'static str> {
         "skills-list",
         "skills-get",
         "skills-path",
+        "skills-unpack",
         "plugin-list",
         "plugin-info",
         "plugin-install",
@@ -9567,6 +9568,26 @@ fn handle_skills_path(tool_params: &Value) -> Result<(), String> {
     Ok(())
 }
 
+fn handle_skills_unpack(tool_params: &Value) -> Result<(), String> {
+    let dest = tool_params
+        .get("dest")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty());
+
+    let dest_dir = match dest {
+        Some(d) => PathBuf::from(d),
+        None => skills::get_skills_dir(),
+    };
+
+    match skills::unpack_skills_to(&dest_dir) {
+        Ok(n) => {
+            cli_println!("Unpacked {} skill files to {}", n, dest_dir.display());
+            Ok(())
+        }
+        Err(e) => Err(format!("Failed to unpack skill files: {e}")),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // plugin command handlers
 // ---------------------------------------------------------------------------
@@ -11179,6 +11200,7 @@ fn should_ensure_server_running(command: &str) -> bool {
         && command != "skills-list"
         && command != "skills-get"
         && command != "skills-path"
+        && command != "skills-unpack"
         && command != "loop"
 }
 
@@ -11366,6 +11388,7 @@ fn preferred_spaced_command_form(command: &str) -> Option<&'static str> {
         "skills-list" => Some("skills list"),
         "skills-get" => Some("skills get"),
         "skills-path" => Some("skills path"),
+        "skills-unpack" => Some("skills unpack"),
         "doctor-log" => Some("doctor log"),
         _ => None,
     }
@@ -12620,6 +12643,9 @@ async fn run(
         }
         "skills-path" => {
             handle_skills_path(&tool_params)?;
+        }
+        "skills-unpack" => {
+            handle_skills_unpack(&tool_params)?;
         }
         "plugin-list" => {
             handle_plugin_list(&client, &base_url).await?;

@@ -1264,6 +1264,11 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
             "Print the skills directory path (or path to a specific skill)",
             50,
         ));
+        lines.push(format_with_gap(
+            "  skills unpack [dest]",
+            "Unpack bundled skill files to a directory",
+            50,
+        ));
         lines.push(String::new());
         lines.push("Notes:".to_string());
         lines.push(
@@ -1299,6 +1304,8 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("  browser4-cli skills get --all".to_string());
         lines.push("  browser4-cli skills path".to_string());
         lines.push("  browser4-cli skills path browser4-cli".to_string());
+        lines.push("  browser4-cli skills unpack".to_string());
+        lines.push("  browser4-cli skills unpack /custom/path".to_string());
         lines.push("  BROWSER4_SKILLS_DIR=/custom/path browser4-cli skills path".to_string());
     }
 
@@ -1995,6 +2002,7 @@ mod tests {
         assert!(help.contains("skills get <name> --full"));
         assert!(help.contains("skills get --all"));
         assert!(help.contains("skills path [name]"));
+        assert!(help.contains("skills unpack [dest]"));
         // Notes
         assert!(help.contains("BROWSER4_SKILLS_DIR"));
         assert!(help.contains("bundled into the browser4-cli binary"));
@@ -2004,6 +2012,8 @@ mod tests {
         assert!(help.contains("browser4-cli skills get --all"));
         assert!(help.contains("browser4-cli skills path"));
         assert!(help.contains("browser4-cli skills path browser4-cli"));
+        assert!(help.contains("browser4-cli skills unpack"));
+        assert!(help.contains("browser4-cli skills unpack /custom/path"));
         assert!(help.contains("BROWSER4_SKILLS_DIR=/custom/path"));
     }
 
