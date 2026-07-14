@@ -317,10 +317,10 @@ Describe 'Ensure-DraftPlaceholders' {
         $null = Ensure-DraftPlaceholders -DraftDirectory $draftDir
 
         $file = Get-Item (Join-Path $draftDir '3.md')
-        # Set-Content with empty value writes a CRLF (2 bytes on Windows).
-        # The actual coworker.ps1 uses Set-Content -Value '' which produces 2 bytes on Windows.
-        # Accept 0 (Unix) or 2 (Windows CRLF).
-        ($file.Length -eq 0 -or $file.Length -eq 2) | Should -BeTrue
+        # Set-Content with empty value appends a trailing newline:
+        # Windows (CRLF) = 2 bytes, Linux/macOS (LF) = 1 byte.
+        # Accept 0 (if -NoNewline is used in the future) or 1 (Unix LF) or 2 (Windows CRLF).
+        ($file.Length -eq 0 -or $file.Length -eq 1 -or $file.Length -eq 2) | Should -BeTrue
     }
 
     It 'handles a mix of existing and missing placeholders' {
@@ -659,7 +659,7 @@ Describe 'Move-TaskFromWorking' {
                 [string]$Extension,
                 [string]$Message
             )
-            $targetSubDir = Join-Path $TargetDir "$CurrentYear\$CurrentDate"
+            $targetSubDir = Join-Path (Join-Path $TargetDir $CurrentYear) $CurrentDate
             if (!(Test-Path $targetSubDir)) { New-Item -ItemType Directory -Path $targetSubDir -Force | Out-Null }
             $targetInfo = Resolve-UniquePath -Directory $targetSubDir -BaseName $BaseName -Extension $Extension
             if (Test-Path $WorkingPath) {
@@ -703,7 +703,7 @@ Describe 'Move-TaskFromWorking' {
     It 'returns Success=$false and a warning when the file does not exist' {
         $targetDir = Join-Path $script:TestRoot 'finished'
         New-Item -ItemType Directory -Path $targetDir -Force | Out-Null
-        $nonexistentPath = Join-Path $script:TestRoot 'working\ghost-task.md'
+        $nonexistentPath = Join-Path (Join-Path $script:TestRoot 'working') 'ghost-task.md'
 
         $result = Move-TaskFromWorking `
             -WorkingPath $nonexistentPath -TargetDir $targetDir `
@@ -730,15 +730,15 @@ Describe 'Move-TaskFromWorking' {
             -CurrentYear '2026' -CurrentDate '0619' `
             -BaseName 'task' -Extension '.md' -Message 'Task moved to finished'
 
-        $result.Path | Should -Match ([regex]::Escape('\2026\0619\task.md'))
-        Test-Path (Join-Path $targetDir '2026\0619\task.md') | Should -BeTrue
+        $result.Path | Should -Match '[\\/]2026[\\/]0619[\\/]task\.md$'
+        Test-Path (Join-Path (Join-Path (Join-Path $targetDir '2026') '0619') 'task.md') | Should -BeTrue
     }
 
     It 'handles filename collisions in the target directory' {
         $workingDir = Join-Path $script:TestRoot 'working'
         $targetDir  = Join-Path $script:TestRoot 'finished'
         New-Item -ItemType Directory -Path $workingDir -Force | Out-Null
-        $targetSubDir = Join-Path $targetDir '2026\0620'
+        $targetSubDir = Join-Path (Join-Path $targetDir '2026') '0620'
         New-Item -ItemType Directory -Path $targetSubDir -Force | Out-Null
         '' | Set-Content -Path (Join-Path $targetSubDir 'collision.md') -Encoding UTF8
 
@@ -757,7 +757,7 @@ Describe 'Move-TaskFromWorking' {
     It 'does not throw when the working file is missing (regression test for the fix)' {
         $targetDir = Join-Path $script:TestRoot 'finished'
         New-Item -ItemType Directory -Path $targetDir -Force | Out-Null
-        $missingPath = Join-Path $script:TestRoot 'working\nonexistent.md'
+        $missingPath = Join-Path (Join-Path $script:TestRoot 'working') 'nonexistent.md'
 
         $result = $null
         $threw = $false
@@ -892,8 +892,8 @@ Describe 'Date-based directory construction' {
     }
 
     It 'constructs a valid date subdirectory path' {
-        $subDir = Join-Path 'D:\repo\coworker\tasks\main\3done' '2026\0619'
-        $subDir | Should -BeExactly 'D:\repo\coworker\tasks\main\3done\2026\0619'
+        $subDir = [System.IO.Path]::Combine('D:\repo\coworker\tasks\main\3done', '2026\0619')
+        $subDir | Should -Match 'D:[\\/]repo[\\/]coworker[\\/]tasks[\\/]main[\\/]3done[\\/]2026[\\/]0619$'
     }
 }
 
@@ -974,7 +974,7 @@ Describe 'Memory context integration' {
     It 'builds generator script path relative to PSScriptRoot' {
         $PSScriptRoot = 'D:\repo\coworker\scripts'
         $expected = [System.IO.Path]::Combine($PSScriptRoot, 'workers\coworker-memory-generator.ps1')
-        $expected | Should -BeExactly 'D:\repo\coworker\scripts\workers\coworker-memory-generator.ps1'
+        $expected | Should -Match 'D:[\\/]repo[\\/]coworker[\\/]scripts[\\/]workers[\\/]coworker-memory-generator\.ps1$'
     }
 
     It 'memory context and instructions are empty strings on failure' {
@@ -1003,17 +1003,17 @@ Describe 'Task log file naming' {
 
     It 'constructs task log path correctly' {
         $taskLogPath = [System.IO.Path]::Combine('D:\repo\coworker\tasks\300logs\2026\06\19', '223539-fix-login-bug.task.log')
-        $taskLogPath | Should -BeExactly 'D:\repo\coworker\tasks\300logs\2026\06\19\223539-fix-login-bug.task.log'
+        $taskLogPath | Should -Match 'D:[\\/]repo[\\/]coworker[\\/]tasks[\\/]300logs[\\/]2026[\\/]06[\\/]19[\\/]223539-fix-login-bug\.task\.log$'
     }
 
     It 'constructs agent log path correctly' {
         $agentLogPath = [System.IO.Path]::Combine('D:\repo\coworker\tasks\300logs\2026\06\19', '223539-fix-login-bug.agent.log')
-        $agentLogPath | Should -BeExactly 'D:\repo\coworker\tasks\300logs\2026\06\19\223539-fix-login-bug.agent.log'
+        $agentLogPath | Should -Match 'D:[\\/]repo[\\/]coworker[\\/]tasks[\\/]300logs[\\/]2026[\\/]06[\\/]19[\\/]223539-fix-login-bug\.agent\.log$'
     }
 
     It 'handles base names with dots' {
         $taskLogPath = [System.IO.Path]::Combine('D:\repo\logs\2026\06\19', '120000-v1.2.3-fix.task.log')
-        $taskLogPath | Should -BeExactly 'D:\repo\logs\2026\06\19\120000-v1.2.3-fix.task.log'
+        $taskLogPath | Should -Match 'D:[\\/]repo[\\/]logs[\\/]2026[\\/]06[\\/]19[\\/]120000-v1\.2\.3-fix\.task\.log$'
     }
 
     It 'temporary stdout and stderr paths are derived from agent log path' {
