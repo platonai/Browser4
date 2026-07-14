@@ -20,24 +20,26 @@ $ErrorActionPreference = 'Stop'
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Test fixture management
+# Global scope: Pester 5+ isolates BeforeEach/AfterEach from script-scoped
+# functions, so we use global: scope to make fixtures visible everywhere.
 # ═══════════════════════════════════════════════════════════════════════════════
 
 $script:TestRoot = $null
 
-function Initialize-TestFixture {
+function global:Initialize-TestFixture {
     $script:TestRoot = Join-Path ([System.IO.Path]::GetTempPath()) "DMG_Tests_$(Get-Random -Minimum 1000 -Maximum 9999)"
     New-Item -ItemType Directory -Path $script:TestRoot -Force | Out-Null
     $script:LogDir = Join-Path $script:TestRoot '300logs\2026\06\16'
     New-Item -ItemType Directory -Path $script:LogDir -Force | Out-Null
 }
 
-function Remove-TestFixture {
+function global:Remove-TestFixture {
     if ($script:TestRoot -and (Test-Path $script:TestRoot)) {
         Remove-Item -Path $script:TestRoot -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
 
-function New-TaskLogFile {
+function global:New-TaskLogFile {
     param(
         [string]$Directory,
         [string]$BaseName,
@@ -60,7 +62,7 @@ More execution details...
     return $taskLogPath
 }
 
-function New-AgentLogFile {
+function global:New-AgentLogFile {
     param(
         [string]$Directory,
         [string]$BaseName,
@@ -90,7 +92,7 @@ function New-AgentLogFile {
 # ═══════════════════════════════════════════════════════════════════════════════
 
 # From original daily memory generator lines 47-56
-function Get-CleanPrompt {
+function global:Get-CleanPrompt {
     param($TaskLogPath)
     $content = Get-Content $TaskLogPath -Raw
     if ($content -match "(?s)Prompt:(.*?)\*\*\* MEMORY UPDATE INSTRUCTIONS \*\*\*") {
@@ -102,7 +104,7 @@ function Get-CleanPrompt {
 }
 
 # From daily memory generator lines 71-151
-function Get-DailyTaskLogs {
+function global:Get-DailyTaskLogs {
     param(
         [string]$LogDirectory,
         [scriptblock]$LogCallback = $null
@@ -183,7 +185,7 @@ function Get-DailyTaskLogs {
 }
 
 # From daily memory generator lines 155-181
-function Split-LogsIntoBatches {
+function global:Split-LogsIntoBatches {
     param(
         [string]$LogContent,
         [int]$BatchSize = 15000

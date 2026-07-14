@@ -317,10 +317,12 @@ Describe 'Ensure-DraftPlaceholders' {
         $null = Ensure-DraftPlaceholders -DraftDirectory $draftDir
 
         $file = Get-Item (Join-Path $draftDir '3.md')
-        # Set-Content with empty value appends a trailing newline:
-        # Windows (CRLF) = 2 bytes, Linux/macOS (LF) = 1 byte.
-        # Accept 0 (if -NoNewline is used in the future) or 1 (Unix LF) or 2 (Windows CRLF).
-        ($file.Length -eq 0 -or $file.Length -eq 1 -or $file.Length -eq 2) | Should -BeTrue
+        # Set-Content -Value '' encodes as BOM + platform newline.
+        # Exact byte count varies: PS 5.1 UTF-8 BOM (3) + CRLF (2) = 5,
+        # PS Core utf8NoBOM + LF = 1, etc.
+        # Verify the file has no user content (whitespace-only after decoding).
+        $content = Get-Content -Path $file.FullName -Raw -Encoding UTF8
+        [string]::IsNullOrWhiteSpace($content) | Should -BeTrue
     }
 
     It 'handles a mix of existing and missing placeholders' {

@@ -583,17 +583,20 @@ function Invoke-PowerShellTests([string[]]$additionalArgs) {
         Write-Host "Found $($testFiles.Count) PowerShell test file(s):"
         foreach ($file in $testFiles) {
             $relativePath = $file.FullName.Substring($repoRoot.Length + 1)
-            Write-Host "  - $relativePath"
-        }
-        if ($additionalArgs.Count -gt 0) {
-            Write-Host ''
-            $pwshCmd = "pwsh -NoProfile -ExecutionPolicy Bypass -File <file> $($additionalArgs -join ' ')"
-            Write-Host "  Common args: $pwshCmd"
+            $usesPester = Select-String -Path $file.FullName -Pattern '\b(Describe|Context)\s+[''"'']' -Quiet -ErrorAction SilentlyContinue
+            $runner = if ($usesPester) { 'Invoke-Pester' } else { 'pwsh -File' }
+            Write-Host "  - $relativePath [$runner]"
         }
         return
     }
 
     Write-CommandBanner -Label "Running $($testFiles.Count) PowerShell test file(s)..."
+
+    $pesterAvailable = $null
+    try {
+        $pesterAvailable = Get-Module -ListAvailable -Name Pester -ErrorAction SilentlyContinue |
+            Where-Object Version -ge '5.0' | Select-Object -First 1
+    } catch { }
 
     $failed = [System.Collections.ArrayList]::new()
     $passed = 0
@@ -605,10 +608,43 @@ function Invoke-PowerShellTests([string[]]$additionalArgs) {
         Write-Host ''
         Write-Host "  ▶ $relativePath" -ForegroundColor Cyan
 
+        # Detect if this file uses Pester (contains Describe/Context blocks)
+        $usesPester = Select-String -Path $file.FullName -Pattern '\b(Describe|Context)\s+[''"'']' -Quiet -ErrorAction SilentlyContinue
+
         $sw = [System.Diagnostics.Stopwatch]::StartNew()
         $exitCode = 0
-        & pwsh -NoProfile -ExecutionPolicy Bypass -File $file.FullName @additionalArgs
-        $exitCode = $LASTEXITCODE
+
+        if ($usesPester) {
+            # This is a Pester test — run via Invoke-Pester
+            if (-not $pesterAvailable) {
+                Write-Host "    ⚠ SKIP: Pester 5+ not found. Install with: Install-Module -Name Pester -Force -Scope CurrentUser -SkipPublisherCheck" -ForegroundColor Yellow
+                [void]$perFileResults.Add(@{
+                    path        = $relativePath
+                    status      = 'skip'
+                    exitCode    = -1
+                    durationSec = 0
+                })
+                continue
+            }
+
+            $pesterArgs = @('-NoProfile', '-Command')
+            $pesterCmd = "Import-Module Pester -Force; `$result = Invoke-Pester -Path '$($file.FullName)' -PassThru -ErrorAction SilentlyContinue"
+            if ($additionalArgs -contains '-Quiet') {
+                $pesterCmd += " -Show None"
+                # Remove -Quiet from additional args since Pester uses -Show instead
+            }
+            $pesterCmd += "; if (`$result.FailedCount -gt 0) { exit `$result.FailedCount } else { exit 0 }"
+            $pesterArgs += $pesterCmd
+
+            & pwsh @pesterArgs
+            $exitCode = $LASTEXITCODE
+        }
+        else {
+            # Plain PowerShell test — run directly
+            & pwsh -NoProfile -ExecutionPolicy Bypass -File $file.FullName @additionalArgs
+            $exitCode = $LASTEXITCODE
+        }
+
         $sw.Stop()
 
         $fileSec = [math]::Round($sw.Elapsed.TotalSeconds, 1)
