@@ -34,7 +34,7 @@ node bin/version.mjs auto              # Auto-bump backend + CLI if changed
 node bin/version.mjs auto --dry-run    # Preview bump plan with release info
 node bin/version.mjs auto --commit     # Apply bump and commit+push
 
-# CLI version (cli/VERSION-CLI → package.json, Cargo.toml)
+# CLI version (VERSION → package.json, Cargo.toml)
 node bin/version.mjs cli show          # Print CLI version
 node bin/version.mjs cli sync          # Sync to dependent files
 node bin/version.mjs cli sync --check  # Check-only mode (CI lint)
@@ -75,7 +75,7 @@ fully published.
 
 - Compares the local version against the latest GitHub release.
 - Shows status: `[OK]` already published, `[GO]` ready to publish (next in sequence), `[XX]` behind latest release.
-- Also reports `browser4-cli` versions from `cli/VERSION-CLI`, latest `-cli` tag on GitHub, and npm (`browser4-cli` package).
+- Also reports `browser4-cli` versions from `VERSION`, latest `-cli` tag on GitHub, and npm (`browser4-cli` package).
 - Provides detailed release info: publish date, author, release URL, asset list.
 - Exits 0 if published or naturally next; non-zero otherwise.
 

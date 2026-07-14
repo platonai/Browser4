@@ -3,31 +3,31 @@
 /**
  * Unified version maintenance script for Browser4.
  *
- * Browser4 has TWO independent version tracks:
- *   1. Backend (Maven) — VERSION file          → pom.xml, READMEs
- *   2. CLI (npm/Cargo)  — cli/VERSION-CLI file → package.json, Cargo.toml
+ * Browser4 uses a SINGLE version number across all modules.  The repo-root
+ * VERSION file is the sole source of truth — the CLI (Cargo.toml, package.json)
+ * and the backend Maven project (pom.xml) all derive their version from it.
  *
  * Usage:
- *   # Backend version (VERSION file)
- *   node bin/version.mjs show              Print backend version
- *   node bin/version.mjs show -v           Print backend version + git metadata
+ *   # Version queries
+ *   node bin/version.mjs show              Print project version
+ *   node bin/version.mjs show -v           Print version + git metadata
+ *
+ *   # Version changes
  *   node bin/version.mjs release           Strip -SNAPSHOT for release
  *   node bin/version.mjs bump <part>       Bump major/minor/patch, update pom.xml, commit
  *   node bin/version.mjs bump <part> --dry-run     Show what would change
  *   node bin/version.mjs bump <part> --skip-precheck  Skip publish-status check
- *   node bin/version.mjs auto              Bump backend to next patch; bump CLI if changes detected
+ *   node bin/version.mjs auto              Bump to next patch if changes detected
  *   node bin/version.mjs auto --dry-run    Show what would change without applying
  *   node bin/version.mjs auto --commit     Apply and commit+push
  *
- *   # CLI version (cli/VERSION-CLI file)
- *   node bin/version.mjs cli show          Print CLI version
- *   node bin/version.mjs cli sync          Sync VERSION-CLI → package.json, Cargo.toml
+ *   # CLI file sync (VERSION → package.json, Cargo.toml, Cargo.lock)
+ *   node bin/version.mjs cli show          Print CLI version (VERSION minus -SNAPSHOT)
+ *   node bin/version.mjs cli sync          Sync VERSION to CLI-dependent files
  *   node bin/version.mjs cli sync --check  Check-only mode (CI, exit 1 if mismatch)
- *   node bin/version.mjs cli auto          Bump CLI to next patch if changes detected in cli/
- *   node bin/version.mjs cli auto --dry-run  Show what would change
  *
  *   # Cross-cutting
- *   node bin/version.mjs check             Full version consistency check (both systems)
+ *   node bin/version.mjs check             Full version consistency check
  */
 
 import { execSync } from "child_process";
@@ -90,17 +90,9 @@ function readBackendVersion() {
 }
 
 function readCliVersion() {
-  const path = join(REPO_ROOT, "cli", "VERSION-CLI");
-  if (!existsSync(path)) {
-    console.error("ERROR: cli/VERSION-CLI not found at", path);
-    process.exit(1);
-  }
-  const v = readFileSync(path, "utf-8").trim();
-  if (!v) {
-    console.error("ERROR: cli/VERSION-CLI is empty.");
-    process.exit(1);
-  }
-  return v;
+  // The CLI shares the unified project version from the repo-root VERSION file.
+  // The -SNAPSHOT suffix is stripped for npm/Cargo semver compatibility.
+  return stripSnapshot(readBackendVersion());
 }
 
 function getLatestNpmVersion(packageName) {
@@ -164,7 +156,7 @@ function bumpSemverPart(version, part) {
  *
  * "Since last release" means: all changes on the current branch vs the base
  * branch (origin/main or origin/master), PLUS any uncommitted work (staged
- * or unstaged).  VERSION-CLI itself is excluded to avoid circular bumps.
+ * or unstaged).
  */
 function hasCliChanges() {
   try {
@@ -200,8 +192,7 @@ function hasCliChanges() {
 
     const allChanges = parts
       .flatMap((s) => s.split("\n"))
-      .filter(Boolean)
-      .filter((f) => f !== "cli/VERSION-CLI");
+      .filter(Boolean);
 
     return allChanges.length > 0;
   } catch {
@@ -279,12 +270,10 @@ function cmdShow(args) {
 
 function cmdCli(args) {
   if (args.length === 0 || args[0] === "-h" || args[0] === "--help") {
-    console.log("CLI version commands (source: cli/VERSION-CLI):");
-    console.log("  cli show          Print CLI version");
-    console.log("  cli sync          Sync VERSION-CLI → package.json, Cargo.toml, Cargo.lock");
+    console.log("CLI version commands (source: repo-root VERSION):");
+    console.log("  cli show          Print CLI version (VERSION minus -SNAPSHOT)");
+    console.log("  cli sync          Sync VERSION → package.json, Cargo.toml, Cargo.lock");
     console.log("  cli sync --check  Check-only mode (exit 1 if anything is out of sync)");
-    console.log("  cli auto          Bump CLI to next patch if changes detected in cli/");
-    console.log("  cli auto --dry-run  Show what would change without applying");
     process.exit(0);
   }
 
@@ -298,63 +287,11 @@ function cmdCli(args) {
     case "sync":
       cmdCliSync(rest);
       break;
-    case "auto":
-      cmdCliAuto(rest);
-      break;
     default:
       console.error(`Unknown CLI command: cli ${sub}`);
-      console.error("Available: cli show, cli sync, cli auto");
+      console.error("Available: cli show, cli sync");
       process.exit(1);
   }
-}
-
-// ---------------------------------------------------------------------------
-// Subcommand: cli auto
-// ---------------------------------------------------------------------------
-
-function cmdCliAuto(args) {
-  const dryRun = args.includes("--dry-run");
-
-  // Read local version
-  const localCli = stripSnapshot(readCliVersion());
-  if (!parseSemver(localCli)) {
-    console.error(`ERROR: CLI version '${localCli}' does not match X.Y.Z format.`);
-    process.exit(1);
-  }
-
-  // Determine the base version from the last npm release
-  const publishedNpm = getLatestNpmVersion("browser4-cli");
-  const baseCli = publishedNpm || localCli;
-
-  if (!hasCliChanges()) {
-    console.log("CLI: no changes detected in cli/, nothing to bump.");
-    return;
-  }
-
-  const nextCli = bumpSemverPart(baseCli, "patch");
-  if (nextCli === localCli) {
-    console.log(`CLI: already at next patch after ${baseCli} (${localCli}), nothing to bump.`);
-    return;
-  }
-
-  console.log(`CLI auto-bump: ${localCli} -> ${nextCli} (changes detected in cli/)`);
-
-  if (dryRun) {
-    console.log("");
-    console.log("========== DRY-RUN MODE ==========");
-    console.log("No changes will be made.");
-    console.log("");
-    console.log("Would perform:");
-    console.log(`  1. Update cli/VERSION-CLI: '${localCli}' -> '${nextCli}'`);
-    console.log("  2. Sync cli/package.json and cli/browser4-cli/Cargo.toml");
-    console.log("==================================");
-    return;
-  }
-
-  // Apply
-  writeFileSync(join(REPO_ROOT, "cli", "VERSION-CLI"), nextCli + "\n");
-  cmdCliSync([]);
-  console.log(`\nCLI auto-bump complete: ${localCli} -> ${nextCli}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -365,10 +302,9 @@ function cmdCliSync(args) {
   const checkOnly = args.includes("--check");
   const pkgName = "browser4-cli";
 
-  // 1. Read the CLI version
-  const versionRaw = readCliVersion();
-  const version = stripSnapshot(versionRaw);
-  if (checkOnly) console.log(`cli/VERSION-CLI: ${version}`);
+  // 1. Read the unified version (CLI = VERSION minus -SNAPSHOT)
+  const version = readCliVersion();
+  if (checkOnly) console.log(`VERSION (CLI): ${version}`);
 
   // 2. Compare against latest published npm version
   const publishedVersion = getLatestNpmVersion(pkgName);
@@ -441,7 +377,7 @@ function cmdCliSync(args) {
     if (process.exitCode === 1) {
       console.error("\nVersion mismatch detected! Run 'node bin/version.mjs cli sync' to fix.");
     } else {
-      console.log(`\nAll versions in sync with cli/VERSION-CLI: ${version}`);
+      console.log(`\nAll versions in sync with VERSION: ${version}`);
     }
   } else {
     console.log(`\nVersion sync complete: ${pkgName}@${version}`);
@@ -518,8 +454,8 @@ function cmdRelease() {
     }
   }
 
-  // Also sync CLI version metadata
-  console.log("Syncing CLI version metadata...");
+  // Sync CLI files (Cargo.toml, package.json) to the release version
+  console.log("Syncing CLI files to release version...");
   cmdCliSync([]);
 
   console.log(`\nRelease version conversion complete: ${version}`);
@@ -802,47 +738,31 @@ async function cmdAuto(args) {
   // PHASE 1 — Gather information
   // ================================================================
 
-  // Local versions
+  // Local version (unified — CLI and backend share the same version)
   const snapshotVersion = readBackendVersion();
-  const localBackend = stripSnapshot(snapshotVersion);
-  if (!parseSemver(localBackend)) {
-    console.error(`ERROR: Backend version '${localBackend}' does not match X.Y.Z format.`);
+  const localVersion = stripSnapshot(snapshotVersion);
+  if (!parseSemver(localVersion)) {
+    console.error(`ERROR: Version '${localVersion}' does not match X.Y.Z format.`);
     process.exit(1);
   }
 
-  const cliVersionPath = join(REPO_ROOT, "cli", "VERSION-CLI");
-  const localCli = existsSync(cliVersionPath) ? stripSnapshot(readCliVersion()) : "";
+  // CLI version is the same, just without -SNAPSHOT
+  const localCli = localVersion;
 
   // Release info (query BEFORE computing next versions)
   const lastReleaseTag = getLatestReleaseTag();
   const publishedNpm = getLatestNpmVersion("browser4-cli");
 
-  // Parse last-release versions (strip leading "v" and any prerelease suffix
+  // Parse last-release version (strip leading "v" and any prerelease suffix
   // like "-ci.1" from the git tag, e.g. "v4.11.11-ci.1" → "4.11.11")
   const lastReleaseBackend = lastReleaseTag
     ? lastReleaseTag.replace(/^v/, "").replace(/-.*$/, "")
-    : localBackend;
-  const lastReleaseCli = publishedNpm || localCli;
+    : localVersion;
 
-  // ---- Compute next versions from last RELEASE (not local) ----
+  // ---- Compute next version from last RELEASE (not local) ----
   const nextBackend = bumpSemverPart(lastReleaseBackend, "patch");
   const nextSnapshot = `${nextBackend}-SNAPSHOT`;
-  const backendChanged = nextBackend !== localBackend;
-
-  // CLI: only bump if cli/ has changes AND next > local
-  let cliBumped = false;
-  let cliOldVersion = localCli;
-  let cliNewVersion = localCli;
-  if (localCli && hasCliChanges()) {
-    const parsedCli = parseSemver(localCli);
-    if (parsedCli) {
-      const nextCli = bumpSemverPart(lastReleaseCli, "patch");
-      if (nextCli !== localCli) {
-        cliNewVersion = nextCli;
-        cliBumped = true;
-      }
-    }
-  }
+  const backendChanged = nextBackend !== localVersion;
 
   // Changes summary (commits + files since last tag, or vs base branch)
   const sinceRef = lastReleaseTag || getBaseBranch() || "HEAD~10";
@@ -871,27 +791,20 @@ async function cmdAuto(args) {
   // --- Last Release ---
   console.log("┌─ Last Release");
   if (lastReleaseTag) {
-    console.log(`│  GitHub:  ${lastReleaseTag}  (backend=${lastReleaseBackend})`);
+    console.log(`│  GitHub:  ${lastReleaseTag}  (version=${lastReleaseBackend})`);
   } else {
     console.log(`│  GitHub:  (no release found)`);
   }
   console.log(`│  npm:     ${publishedNpm ? `browser4-cli@${publishedNpm}` : "(not published yet)"}`);
-  console.log(`│  Local:   backend=${snapshotVersion}  cli=${localCli || "N/A"}`);
+  console.log(`│  Local:   ${snapshotVersion}  (CLI: ${localCli})`);
   console.log("");
 
-  // --- Proposed Bumps ---
-  console.log("┌─ Proposed Version Bumps (next patch after last release)");
+  // --- Proposed Bump ---
+  console.log("┌─ Proposed Version Bump (next patch after last release)");
   if (backendChanged) {
-    console.log(`│  Backend: ${snapshotVersion}  →  ${nextSnapshot}`);
+    console.log(`│  Unified: ${snapshotVersion}  →  ${nextSnapshot}`);
   } else {
-    console.log(`│  Backend: ${snapshotVersion}  (already at next after ${lastReleaseTag || "last release"})`);
-  }
-  if (cliBumped) {
-    console.log(`│  CLI:     ${cliOldVersion}  →  ${cliNewVersion}`);
-  } else if (localCli) {
-    console.log(`│  CLI:     ${localCli}  (no changes or already at next)`);
-  } else {
-    console.log(`│  CLI:     (VERSION-CLI not found)`);
+    console.log(`│  Unified: ${snapshotVersion}  (already at next after ${lastReleaseTag || "last release"})`);
   }
   console.log("");
 
@@ -921,8 +834,8 @@ async function cmdAuto(args) {
   }
 
   // If nothing to bump, exit cleanly
-  if (!backendChanged && !cliBumped) {
-    console.log("Nothing to bump — versions are already up to date.");
+  if (!backendChanged) {
+    console.log("Nothing to bump — version is already up to date.");
     return;
   }
 
@@ -934,70 +847,56 @@ async function cmdAuto(args) {
   }
   console.log("");
 
-  // ---- Apply backend bump ----
-  if (backendChanged) {
-    writeFileSync(join(REPO_ROOT, "VERSION"), nextSnapshot + "\n");
+  // ---- Apply bump ----
+  writeFileSync(join(REPO_ROOT, "VERSION"), nextSnapshot + "\n");
 
-    // Run Maven versions:set
-    const isWindows = process.platform === "win32";
-    const mvnCmd = isWindows ? join(REPO_ROOT, "mvnw.cmd") : join(REPO_ROOT, "mvnw");
-    const mvnArgs = [
-      "versions:set",
-      `-DnewVersion=${nextSnapshot}`,
-      "-DprocessAllModules",
-      "-DgenerateBackupPoms=false",
-    ];
-    try {
-      if (isWindows) {
-        execSync(`cmd /c "${mvnCmd}" ${mvnArgs.join(" ")}`, {
-          cwd: REPO_ROOT,
-          stdio: "inherit",
-        });
-      } else {
-        execSync(`"${mvnCmd}" ${mvnArgs.join(" ")}`, {
-          cwd: REPO_ROOT,
-          stdio: "inherit",
-        });
-      }
-    } catch {
-      console.error("Maven versions:set failed. Reverting VERSION file.");
-      writeFileSync(join(REPO_ROOT, "VERSION"), snapshotVersion + "\n");
-      process.exit(1);
+  // Run Maven versions:set
+  const isWindows = process.platform === "win32";
+  const mvnCmd = isWindows ? join(REPO_ROOT, "mvnw.cmd") : join(REPO_ROOT, "mvnw");
+  const mvnArgs = [
+    "versions:set",
+    `-DnewVersion=${nextSnapshot}`,
+    "-DprocessAllModules",
+    "-DgenerateBackupPoms=false",
+  ];
+  try {
+    if (isWindows) {
+      execSync(`cmd /c "${mvnCmd}" ${mvnArgs.join(" ")}`, {
+        cwd: REPO_ROOT,
+        stdio: "inherit",
+      });
+    } else {
+      execSync(`"${mvnCmd}" ${mvnArgs.join(" ")}`, {
+        cwd: REPO_ROOT,
+        stdio: "inherit",
+      });
     }
-
-    // Update root pom.xml <tag>
-    const pomXmlPath = join(REPO_ROOT, "pom.xml");
-    if (existsSync(pomXmlPath)) {
-      let pomContent = readFileSync(pomXmlPath, "utf-8");
-      pomContent = pomContent.replace(
-        new RegExp(`<tag>v${localBackend.replace(/\./g, "\\.")}</tag>`),
-        `<tag>v${nextBackend}</tag>`
-      );
-      writeFileSync(pomXmlPath, pomContent);
-    }
+  } catch {
+    console.error("Maven versions:set failed. Reverting VERSION file.");
+    writeFileSync(join(REPO_ROOT, "VERSION"), snapshotVersion + "\n");
+    process.exit(1);
   }
 
-  // ---- Apply CLI bump ----
-  if (cliBumped) {
-    writeFileSync(join(REPO_ROOT, "cli", "VERSION-CLI"), cliNewVersion + "\n");
-    // Sync VERSION-CLI changes into package.json, Cargo.toml, Cargo.lock
-    cmdCliSync([]);
+  // Update root pom.xml <tag>
+  const pomXmlPath = join(REPO_ROOT, "pom.xml");
+  if (existsSync(pomXmlPath)) {
+    let pomContent = readFileSync(pomXmlPath, "utf-8");
+    pomContent = pomContent.replace(
+      new RegExp(`<tag>v${localVersion.replace(/\./g, "\\.")}</tag>`),
+      `<tag>v${nextBackend}</tag>`
+    );
+    writeFileSync(pomXmlPath, pomContent);
   }
+
+  // Sync CLI files (Cargo.toml, package.json) to the new unified version
+  cmdCliSync([]);
 
   // ---- Summary ----
-  const bumped = [];
-  if (backendChanged) bumped.push(`Backend: ${snapshotVersion} -> ${nextSnapshot}`);
-  if (cliBumped) bumped.push(`CLI: ${cliOldVersion} -> ${cliNewVersion}`);
-  if (bumped.length) {
-    console.log(`\nAuto-bump complete: ${bumped.join(", ")}`);
-  }
+  console.log(`\nAuto-bump complete: ${snapshotVersion} -> ${nextSnapshot}`);
 
   // ---- Commit (optional) ----
-  if (commit && bumped.length) {
-    const parts = [];
-    if (backendChanged) parts.push(`Backend: ${nextSnapshot}`);
-    if (cliBumped) parts.push(`CLI: ${cliNewVersion}`);
-    const msg = `Auto-bump versions\n\n${parts.join("\n")}`;
+  if (commit) {
+    const msg = `Auto-bump version to ${nextSnapshot}`;
     try {
       execSync("git add .", { cwd: REPO_ROOT, stdio: "inherit" });
       execSync(`git commit -m "${msg}"`, { cwd: REPO_ROOT, stdio: "inherit" });
@@ -1066,17 +965,18 @@ function cmdCheck() {
     checkItem("SNAPSHOT consistency", "passed", versionIsSnapshot ? "SNAPSHOT" : "RELEASE");
   }
 
-  // 4. CLI: Cargo.toml version
+  // 4. CLI: Cargo.toml and package.json must match VERSION (minus -SNAPSHOT)
+  const expectedCliVersion = stripSnapshot(versionFileVersion);
   const cargoPath = join(REPO_ROOT, "cli", "browser4-cli", "Cargo.toml");
   if (existsSync(cargoPath)) {
     const cargoContent = readFileSync(cargoPath, "utf-8");
     const cargoMatch = cargoContent.match(/\[package\][\s\S]*?version\s*=\s*"([^"]+)"/);
     if (cargoMatch) {
       const cargoVersion = cargoMatch[1];
-      if (cargoVersion.match(/^\d+\.\d+\.\d+/)) {
-        checkItem("cli/Cargo.toml", "passed", `${cargoVersion} (independent CLI version)`);
+      if (cargoVersion === expectedCliVersion) {
+        checkItem("cli/Cargo.toml", "passed", `${cargoVersion} (matches VERSION)`);
       } else {
-        checkItem("cli/Cargo.toml", "failed", `${cargoVersion} (not valid semver)`);
+        checkItem("cli/Cargo.toml", "failed", `${cargoVersion} (expected ${expectedCliVersion})`);
         allPassed = false;
       }
 
@@ -1084,10 +984,10 @@ function cmdCheck() {
       const packageJsonPath = join(REPO_ROOT, "cli", "package.json");
       if (existsSync(packageJsonPath)) {
         const pj = JSON.parse(readFileSync(packageJsonPath, "utf-8"));
-        if (pj.version === cargoVersion) {
-          checkItem("cli/package.json", "passed", `${pj.version} (matches Cargo.toml)`);
+        if (pj.version === expectedCliVersion) {
+          checkItem("cli/package.json", "passed", `${pj.version} (matches VERSION)`);
         } else {
-          checkItem("cli/package.json", "failed", `${pj.version} (expected ${cargoVersion})`);
+          checkItem("cli/package.json", "failed", `${pj.version} (expected ${expectedCliVersion})`);
           allPassed = false;
         }
       }
@@ -1115,25 +1015,25 @@ function cmdCheck() {
 function printUsage() {
   console.log("Usage: node bin/version.mjs <command> [options]");
   console.log("");
-  console.log("Browser4 has two independent version tracks:");
+  console.log("Browser4 uses a single unified version (VERSION file) across all modules.");
   console.log("");
-  console.log("  Backend version (source: VERSION file → pom.xml, READMEs)");
-  console.log("    show              Print backend version");
-  console.log("    show -v           Print backend version + git hash, branch, date");
+  console.log("  Version queries");
+  console.log("    show              Print project version");
+  console.log("    show -v           Print version + git hash, branch, date");
+  console.log("");
+  console.log("  Version changes");
   console.log("    release           Strip -SNAPSHOT for release deployment");
   console.log("    bump <part>       Bump major/minor/patch, update pom.xml, commit");
   console.log("    bump <part> --dry-run    Show what would change without applying");
   console.log("    bump <part> --skip-precheck  Skip publish-status verification");
-  console.log("    auto              Bump backend to next patch; bump CLI if cli/ changed");
+  console.log("    auto              Bump to next patch if changes detected");
   console.log("    auto --dry-run    Show what would change without applying");
   console.log("    auto --commit     Apply changes and commit+push");
   console.log("");
-  console.log("  CLI version (source: cli/VERSION-CLI → package.json, Cargo.toml)");
-  console.log("    cli show          Print CLI version");
-  console.log("    cli sync          Sync VERSION-CLI to dependent files");
+  console.log("  CLI file sync (VERSION → package.json, Cargo.toml)");
+  console.log("    cli show          Print CLI version (VERSION minus -SNAPSHOT)");
+  console.log("    cli sync          Sync VERSION to CLI-dependent files");
   console.log("    cli sync --check  Check-only mode (exit 1 if out of sync)");
-  console.log("    cli auto          Bump CLI to next patch if changes detected in cli/");
-  console.log("    cli auto --dry-run  Show what would change");
   console.log("");
   console.log("  Cross-cutting");
   console.log("    check             Check version consistency across all files");

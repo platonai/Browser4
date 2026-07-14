@@ -123,7 +123,7 @@ Browser4 has two independent version tracks.
 - `node bin/version.mjs auto --dry-run`: Preview the bump plan without applying.
 - `node bin/version.mjs auto --commit`: Apply the bump and commit+push.
 
-**CLI version** (source: `cli/VERSION-CLI` → package.json, Cargo.toml):
+**CLI version** (source: `VERSION` → package.json, Cargo.toml):
 - `node bin/version.mjs cli show`: Print CLI version.
 - `node bin/version.mjs cli sync`: Sync to dependent files.
 - `node bin/version.mjs cli sync --check`: Check-only mode (CI lint).

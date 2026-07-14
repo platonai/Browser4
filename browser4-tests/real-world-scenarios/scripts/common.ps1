@@ -1421,7 +1421,7 @@ function Assert-Browser4CliLatest {
     .SYNOPSIS
         Checks that the installed browser4-cli is at the expected version.
     .DESCRIPTION
-        Reads the expected version from cli/VERSION-CLI in the repo root and
+        Reads the expected version from the repo-root VERSION file and
         compares it against the installed binary.
 
         In production mode, runs `browser4-cli --version` to get the installed
@@ -1441,11 +1441,11 @@ function Assert-Browser4CliLatest {
         [switch] $Silent
     )
 
-    # Read the expected version from cli/VERSION-CLI (the canonical source).
-    $versionCliPath = Join-Path $script:RepoRoot 'cli\VERSION-CLI'
+    # Read the expected version from the repo-root VERSION (the canonical source).
+    $versionCliPath = Join-Path $script:RepoRoot 'VERSION'
     if (-not (Test-Path -LiteralPath $versionCliPath -PathType Leaf)) {
         if (-not $Silent) {
-            Write-Host "WARNING: VERSION-CLI not found at $versionCliPath -- cannot verify CLI version." -ForegroundColor Yellow
+            Write-Host "WARNING: VERSION not found at $versionCliPath -- cannot verify CLI version." -ForegroundColor Yellow
         }
         return 0
     }
@@ -1453,7 +1453,7 @@ function Assert-Browser4CliLatest {
     $expectedVersion = (Get-Content -LiteralPath $versionCliPath -TotalCount 1).Trim()
     if (-not $expectedVersion) {
         if (-not $Silent) {
-            Write-Host "WARNING: VERSION-CLI is empty -- cannot verify CLI version." -ForegroundColor Yellow
+            Write-Host "WARNING: VERSION is empty -- cannot verify CLI version." -ForegroundColor Yellow
         }
         return 0
     }

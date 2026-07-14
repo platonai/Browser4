@@ -19,7 +19,7 @@ Two modes:
     directly without creating a tag.
 
 .PARAMETER Version
-CLI version to release (default: from cli/VERSION-CLI).
+CLI version to release (default: from repo-root VERSION).
 
 .PARAMETER DryRun
 Tag as v{version}-cli_dry_run.N. Auto-increments the dry_run counter.
@@ -41,7 +41,7 @@ Skip confirmation prompts.
 
 .EXAMPLE
 .\bin\release\trigger-cli-release-action.ps1
-Tag mode with the current version from cli/VERSION-CLI.
+Tag mode with the current version from the repo-root VERSION file.
 
 .EXAMPLE
 .\bin\release\trigger-cli-release-action.ps1 -DryRun
@@ -78,19 +78,23 @@ if (-not $repoRoot) {
 }
 Set-Location $repoRoot
 
-$versionCliFile = Join-Path $repoRoot "cli/VERSION-CLI"
-if (-not (Test-Path $versionCliFile)) {
-    Write-Error "Could not find cli/VERSION-CLI at $versionCliFile"
+$versionFile = Join-Path $repoRoot "VERSION"
+if (-not (Test-Path $versionFile)) {
+    Write-Error "Could not find VERSION at $versionFile"
     exit 1
 }
 
 # ──────────────────────────────────────────────
-# Resolve version (cli/VERSION-CLI is the single source of truth)
+# Resolve version (repo-root VERSION is the single source of truth)
 # ──────────────────────────────────────────────
 if ([string]::IsNullOrWhiteSpace($Version)) {
-    $Version = (Get-Content $versionCliFile -Raw).Trim()
+    $Version = (Get-Content $versionFile -Raw).Trim()
+    # Strip -SNAPSHOT suffix for CLI release (Maven convention)
+    if ($Version -match '^(.+)-SNAPSHOT$') {
+        $Version = $matches[1]
+    }
     if ([string]::IsNullOrWhiteSpace($Version)) {
-        Write-Error "cli/VERSION-CLI is empty"
+        Write-Error "VERSION file is empty"
         exit 1
     }
 }
@@ -132,7 +136,7 @@ if ($npmVersion -and $npmVersion -match '^\d+\.\d+\.\d+') {
         if ($localVer -lt $npmVer) {
             Write-Error @"
 Local version ($Version) is LOWER than the published npm version ($npmVersion).
-Bump cli/VERSION-CLI to a version higher than $npmVersion before releasing.
+Bump VERSION to a version higher than $npmVersion before releasing.
 "@
             exit 1
         } elseif ($localVer -eq $npmVer) {
@@ -159,7 +163,7 @@ Bump cli/VERSION-CLI to a version higher than $npmVersion before releasing.
 # Sync version to dependent files (package.json, Cargo.toml, Cargo.lock)
 # ──────────────────────────────────────────────
 Write-Host ""
-Write-Host "Syncing version from cli/VERSION-CLI to all dependent files ..." -ForegroundColor Cyan
+Write-Host "Syncing version from VERSION to all dependent files ..." -ForegroundColor Cyan
 $syncScript = Join-Path $repoRoot "bin/version.mjs"
 if (Test-Path $syncScript) {
     node $syncScript cli sync
