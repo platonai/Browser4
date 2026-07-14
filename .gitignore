@@ -121,6 +121,7 @@ application-private.properties
 
 /bin/test-results/
 /test-results/
+/.test-sessions/
 /release_notes.md
 /node_modules/
 /**/node_modules/**

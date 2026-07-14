@@ -6,9 +6,10 @@
     Persistable cross-run record of every test session executed in the repository.
 
 .DESCRIPTION
-    Maintains a single JSON file (target/test-session.json) that records the
-    last result, log paths, aggregate pass/fail counts, and rolling history
-    for each test type.  System environment is captured once and reused.
+    Maintains one JSON file per test invocation under
+    .test-sessions/<timestamp>/test-session.json. Each file records the last
+    result, log paths, aggregate pass/fail counts, and rolling history for
+    each test type. System environment is captured once and reused.
 
     Test types are keyed by category:
       - "ps"                — all PowerShell *.tests.ps1 files (bin/test.ps1 ps)
@@ -33,6 +34,7 @@
 
 $script:MaxHistory = 5
 $script:SchemaVersion = 1
+$script:DefaultSessionIds = @{}
 
 # ═══════════════════════════════════════════════════════════════════
 # Public: resolve the session file path
@@ -42,8 +44,9 @@ $script:SchemaVersion = 1
     Return the canonical path to the session JSON file.
 
 .DESCRIPTION
-    Resolves from the provided $RepoRoot, defaulting to git rev-parse when
-    omitted.  The file lives at <repo-root>/target/test-session.json.
+    Resolves from the provided $RepoRoot. When SessionPath is omitted, each
+    PowerShell process creates one timestamp-based session ID.
+    The file lives at <repo-root>/.test-sessions/<session-id>/test-session.json.
 
 .PARAMETER RepoRoot
     Absolute path to the repository root.
@@ -62,7 +65,14 @@ function Get-TestSessionPath {
         }
         return Join-Path $RepoRoot $SessionPath
     }
-    return Join-Path $RepoRoot 'target' 'test-session.json'
+    $repoRootKey = [System.IO.Path]::GetFullPath($RepoRoot)
+    if (-not $script:DefaultSessionIds.ContainsKey($repoRootKey)) {
+        $script:DefaultSessionIds[$repoRootKey] = (Get-Date).ToUniversalTime().ToString('yyyyMMddTHHmmssfffffffZ')
+    }
+
+    $sessionRoot = Join-Path $repoRootKey '.test-sessions'
+    $sessionRoot = Join-Path $sessionRoot $script:DefaultSessionIds[$repoRootKey]
+    return Join-Path $sessionRoot 'test-session.json'
 }
 
 # ═══════════════════════════════════════════════════════════════════
