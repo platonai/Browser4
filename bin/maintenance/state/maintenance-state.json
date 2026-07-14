@@ -3,22 +3,190 @@
   "createdAt": "2026-06-20T00:00:00+08:00",
   "machine": "init",
   "Tasks": {
-    "check-fast-tests": {
+    "check-coverage": {
       "runCount": 1,
+      "lastDurationMs": 43,
+      "lastRun": "2026-07-14T16:03:34+08:00",
       "lastExitCode": 0,
-      "lastDurationMs": 0,
-      "lastMachine": "ALTAIR",
+      "lastResult": "skipped",
+      "lastMachine": "ALTAIR"
+    },
+    "check-dependency-vulns": {
+      "runCount": 1,
+      "lastDurationMs": 25598,
+      "lastRun": "2026-07-14T16:04:00+08:00",
+      "lastExitCode": 0,
+      "lastResult": "failed",
+      "lastMachine": "ALTAIR"
+    },
+    "check-skill-structure": {
+      "runCount": 1,
+      "lastDurationMs": 135,
+      "lastRun": "2026-07-14T16:03:34+08:00",
+      "lastExitCode": 0,
+      "lastResult": "failed",
+      "lastMachine": "ALTAIR"
+    },
+    "check-dockerfile": {
+      "runCount": 2,
+      "lastDurationMs": 35,
+      "lastRun": "2026-07-14T17:03:33+08:00",
+      "lastExitCode": 0,
+      "lastResult": "skipped",
+      "lastMachine": "ALTAIR"
+    },
+    "check-doc-links-internal": {
+      "runCount": 2,
+      "lastDurationMs": 371,
+      "lastRun": "2026-07-14T17:03:32+08:00",
+      "lastExitCode": 0,
+      "lastResult": "failed",
+      "lastMachine": "ALTAIR"
+    },
+    "check-cargo-audit": {
+      "runCount": 1,
+      "lastDurationMs": 39,
+      "lastRun": "2026-07-14T16:04:01+08:00",
+      "lastExitCode": 0,
+      "lastResult": "skipped",
+      "lastMachine": "ALTAIR"
+    },
+    "check-rust-cli": {
+      "runCount": 2,
+      "lastDurationMs": 59,
+      "lastRun": "2026-07-14T17:03:32+08:00",
+      "lastExitCode": 0,
       "lastResult": "passed",
-      "lastRun": "2026-06-30T15:39:39+08:00"
+      "lastMachine": "ALTAIR"
+    },
+    "check-deprecated-apis": {
+      "runCount": 1,
+      "lastDurationMs": 76,
+      "lastRun": "2026-07-14T16:04:01+08:00",
+      "lastExitCode": 0,
+      "lastResult": "passed",
+      "lastMachine": "ALTAIR"
+    },
+    "check-skill-frontmatter": {
+      "runCount": 2,
+      "lastDurationMs": 136,
+      "lastRun": "2026-07-14T17:03:33+08:00",
+      "lastExitCode": 0,
+      "lastResult": "failed",
+      "lastMachine": "ALTAIR"
+    },
+    "check-doc-links-external": {
+      "runCount": 1,
+      "lastDurationMs": 44,
+      "lastRun": "2026-07-14T16:04:01+08:00",
+      "lastExitCode": 0,
+      "lastResult": "skipped",
+      "lastMachine": "ALTAIR"
+    },
+    "check-fast-tests": {
+      "runCount": 8,
+      "lastDurationMs": 669,
+      "lastRun": "2026-07-14T17:03:55+08:00",
+      "lastExitCode": 0,
+      "lastResult": "failed",
+      "lastMachine": "ALTAIR"
+    },
+    "check-license-compliance": {
+      "runCount": 1,
+      "lastDurationMs": 877,
+      "lastRun": "2026-07-14T16:04:45+08:00",
+      "lastExitCode": 0,
+      "lastResult": "passed",
+      "lastMachine": "ALTAIR"
+    },
+    "check-version-consistency": {
+      "runCount": 2,
+      "lastDurationMs": 129,
+      "lastRun": "2026-07-14T17:03:33+08:00",
+      "lastExitCode": 0,
+      "lastResult": "passed",
+      "lastMachine": "ALTAIR"
+    },
+    "check-maven-deps": {
+      "runCount": 1,
+      "lastDurationMs": 0,
+      "lastRun": "2026-07-14T16:04:01+08:00",
+      "lastExitCode": 0,
+      "lastResult": "error",
+      "lastMachine": "ALTAIR"
     },
     "check-compilation": {
-      "runCount": 1,
+      "runCount": 14,
+      "lastDurationMs": 899,
+      "lastRun": "2026-07-14T17:03:54+08:00",
       "lastExitCode": 0,
-      "lastDurationMs": 0,
-      "lastMachine": "ALTAIR",
+      "lastResult": "failed",
+      "lastMachine": "ALTAIR"
+    },
+    "check-bilingual-readme": {
+      "runCount": 1,
+      "lastDurationMs": 54,
+      "lastRun": "2026-07-14T16:04:01+08:00",
+      "lastExitCode": 0,
+      "lastResult": "failed",
+      "lastMachine": "ALTAIR"
+    },
+    "check-skill-ai-quality": {
+      "runCount": 1,
+      "lastDurationMs": 363,
+      "lastRun": "2026-07-14T16:04:44+08:00",
+      "lastExitCode": 0,
+      "lastResult": "failed",
+      "lastMachine": "ALTAIR"
+    },
+    "clean-build-artifacts": {
+      "runCount": 1,
+      "lastDurationMs": 204,
+      "lastRun": "2026-07-14T16:04:46+08:00",
+      "lastExitCode": 0,
+      "lastResult": "skipped",
+      "lastMachine": "ALTAIR"
+    },
+    "check-dead-code": {
+      "runCount": 1,
+      "lastDurationMs": 43291,
+      "lastRun": "2026-07-14T16:04:44+08:00",
+      "lastExitCode": 0,
+      "lastResult": "failed",
+      "lastMachine": "ALTAIR"
+    },
+    "check-ps1-syntax": {
+      "runCount": 2,
+      "lastDurationMs": 238,
+      "lastRun": "2026-07-14T17:03:33+08:00",
+      "lastExitCode": 0,
       "lastResult": "passed",
-      "lastRun": "2026-06-30T15:39:36+08:00"
+      "lastMachine": "ALTAIR"
+    },
+    "check-log-sizes": {
+      "runCount": 1,
+      "lastDurationMs": 37,
+      "lastRun": "2026-07-14T16:04:01+08:00",
+      "lastExitCode": 0,
+      "lastResult": "skipped",
+      "lastMachine": "ALTAIR"
+    },
+    "check-test-tags": {
+      "runCount": 1,
+      "lastDurationMs": 459,
+      "lastRun": "2026-07-14T16:03:34+08:00",
+      "lastExitCode": 0,
+      "lastResult": "failed",
+      "lastMachine": "ALTAIR"
+    },
+    "clean-temp-files": {
+      "runCount": 1,
+      "lastDurationMs": 64,
+      "lastRun": "2026-07-14T16:04:46+08:00",
+      "lastExitCode": 0,
+      "lastResult": "passed",
+      "lastMachine": "ALTAIR"
     }
   },
-  "updatedAt": "2026-06-30T15:39:39+08:00"
+  "updatedAt": "2026-07-14T17:03:55+08:00"
 }
