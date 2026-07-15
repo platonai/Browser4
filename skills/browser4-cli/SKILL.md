@@ -49,10 +49,10 @@ After commands that modify browser state, browser4-cli saves an **accessibility-
 
 ```yaml
 - generic [ref=e7]:
-  - link "News" [ref=e191]:
-    - /url: https://example.com/news
-  - textbox "Search query" [ref=e35]
-  - button "Search" [ref=e25]
+    - link "News" [ref=e191]:
+        - /url: https://example.com/news
+    - textbox "Search query" [ref=e35]
+    - button "Search" [ref=e25]
 ```
 
 Each interactive element has a **ref** (`e5`, `e12`) — the element's Chrome DevTools Protocol backend node ID, prefixed with `e` (so `e12345` refers to backend node 12345). Use them to target elements in `click`, `fill`, `type`, `get attr`, etc.
@@ -98,8 +98,21 @@ The `list` command displays a "Next open" column showing what happens when `goto
 | `loop` | Repeated task execution with persistence | Monitoring, scheduled checks | [loop.md](references/loop.md) |
 | `state-save`, `state-load`, `cookie-*`, `*-storage-*` | Browser storage management | Auth state reuse, cookie manipulation | [storage-state.md](references/storage-state.md) |
 | `attach` | Connect to existing Chrome/Edge via CDP | Debug live browser, reuse auth | [attach.md](references/attach.md) |
+| `skills` | List, retrieve, and locate bundled skill files | Refresh AI agent instructions, find skill paths | — |
 | `screenshot`, `scroll`, `wait`, `resize`, `tab-*` | Visual capture & viewport control | Screenshots, tab management | — |
-| `skills`, `skills get`, `skills path` | Bundled skill file management | Fetch current AI agent instructions | — |
+
+### Refreshing This Skill
+
+The `skills` command retrieves bundled skill content that always matches the installed CLI version. Use it to get current instructions rather than relying on cached copies:
+
+```bash
+browser4-cli skills                    # List all bundled skills
+browser4-cli skills get browser4-cli   # Print this SKILL.md
+browser4-cli skills get browser4-cli --full  # Include all reference files
+browser4-cli skills path               # Print skills directory path
+```
+
+Set `BROWSER4_SKILLS_DIR` to override the skills directory location. Skill files are unpacked automatically during `browser4-cli install`.
 
 ## 4. Decision Trees
 
@@ -196,12 +209,49 @@ cat > query.sql << 'SQLEOF'
 SELECT
     DOM_FIRST_TEXT(DOM, '.title') AS title,
     DOM_FIRST_TEXT(DOM, '.price') AS price,
-    DOM_FIRST_ATTR(DOM, 'a[href]', 'href') AS url
+    DOM_FIRST_ATTR(DOM, 'a[href]', 'href') AS url,
+    DOM_FIRST_ATTR(DOM, 'img:expr(width > 250 && height > 250)', 'src') AS img
 FROM DOM_LOAD_AND_SELECT(@url, '.product-card')
 SQLEOF
 
 browser4-cli htmlsnapshot query "https://example.com/products" --sql @query.sql
 ```
+
+### PowerCSS
+
+Modern web pages change their HTML structure frequently, but their **visual layout** stays stable. PowerCSS extends standard CSS selectors with a `:expr()` pseudo-selector that queries elements by their **computed numerical features** — size, position, and content density. This makes selectors resilient to markup changes.
+
+#### Numerical Features
+
+Browser4 computes these features for every DOM node:
+
+| Feature | Description |
+|---------|-------------|
+| `top` | Top Y-coordinate of the element (pixels) |
+| `left` | Left X-coordinate of the element (pixels) |
+| `width` | Width of the element (pixels) |
+| `height` | Height of the element (pixels) |
+| `char` | Number of characters inside the node |
+| `txt_nd` | Number of descendant text nodes |
+| `img` | Number of descendant `<img>` elements |
+| `a` | Number of descendant `<a>` elements |
+| `sibling` | Number of sibling nodes |
+| `child` | Number of child nodes |
+| `dep` | Node depth in the document tree |
+| `seq` | Node sequence in document order |
+| `txt_dns` | Text node density |
+
+These are usable in any CSS selector via `:expr(...)`, in X-SQL `DOM_*` functions, and in `htmlsnapshot get` / `htmlsnapshot query` commands.
+
+---
+
+#### `:expr()` Pseudo-Selector
+
+```
+element:expr(expression)
+```
+
+Operators in expressions include `+`, `-`, `*`, `/`, `^`, `%`, `==`, `!=`, `<`, `>`, `<=`, `>=`, `&&`, `||`. Use parentheses for grouping.
 
 ## 7. Reference Map
 
@@ -236,8 +286,7 @@ Organized by task — follow the link that matches what you're trying to do:
 
 ## Installation
 
-Requires Node.js.
-
+**Cross-platform (Node.js):**
 ```bash
 npm install -g browser4-cli
 browser4-cli install
@@ -249,19 +298,11 @@ irm https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.ps
 browser4-cli install
 ```
 
-## Keeping Instructions Current
-
-The CLI binary bundles its own skill files at compile time. To fetch the instructions
-that match the **installed** CLI version (rather than relying on potentially stale
-cached copies), use:
-
+**Linux / macOS (bash):**
 ```bash
-browser4-cli skills get browser4-cli        # SKILL.md only
-browser4-cli skills get browser4-cli --full # Include all references
-browser4-cli skills                         # List all bundled skills
+curl -fsSL https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.sh | bash
+browser4-cli install
 ```
-
-This ensures you always operate against the exact semantics of the installed binary.
 
 ## Development
 
