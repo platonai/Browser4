@@ -15,7 +15,7 @@
     <parent>
         <groupId>ai.platon.pulsar</groupId>
         <artifactId>browser4-pdk</artifactId>
-        <version>4.12.0-rc.1-SNAPSHOT</version>
+        <version>4.12.0-rc.2-SNAPSHOT</version>
         <relativePath>../../browser4-pdk/pom.xml</relativePath>
     </parent>
 

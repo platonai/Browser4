@@ -31,7 +31,7 @@
     <parent>
         <groupId>ai.platon.pulsar</groupId>
         <artifactId>browser4-pdk</artifactId>
-        <version>4.12.0-rc.1-SNAPSHOT</version>
+        <version>4.12.0-rc.2-SNAPSHOT</version>
         <relativePath>../pom.xml</relativePath>
     </parent>
 
@@ -111,7 +111,7 @@
                 <configuration>
                     <archive>
                         <manifestEntries>
-                            <Browser4-Plugin-Version>4.12.0-rc.1-SNAPSHOT</Browser4-Plugin-Version>
+                            <Browser4-Plugin-Version>4.12.0-rc.2-SNAPSHOT</Browser4-Plugin-Version>
                             <Created-By>Browser4 Plugin SDK</Created-By>
                         </manifestEntries>
                     </archive>

@@ -209,12 +209,49 @@ cat > query.sql << 'SQLEOF'
 SELECT
     DOM_FIRST_TEXT(DOM, '.title') AS title,
     DOM_FIRST_TEXT(DOM, '.price') AS price,
-    DOM_FIRST_ATTR(DOM, 'a[href]', 'href') AS url
+    DOM_FIRST_ATTR(DOM, 'a[href]', 'href') AS url,
+    DOM_FIRST_ATTR(DOM, 'img:expr(width > 250 && height > 250)', 'src') AS img
 FROM DOM_LOAD_AND_SELECT(@url, '.product-card')
 SQLEOF
 
 browser4-cli htmlsnapshot query "https://example.com/products" --sql @query.sql
 ```
+
+### PowerCSS
+
+Modern web pages change their HTML structure frequently, but their **visual layout** stays stable. PowerCSS extends standard CSS selectors with a `:expr()` pseudo-selector that queries elements by their **computed numerical features** — size, position, and content density. This makes selectors resilient to markup changes.
+
+#### Numerical Features
+
+Browser4 computes these features for every DOM node:
+
+| Feature | Description |
+|---------|-------------|
+| `top` | Top Y-coordinate of the element (pixels) |
+| `left` | Left X-coordinate of the element (pixels) |
+| `width` | Width of the element (pixels) |
+| `height` | Height of the element (pixels) |
+| `char` | Number of characters inside the node |
+| `txt_nd` | Number of descendant text nodes |
+| `img` | Number of descendant `<img>` elements |
+| `a` | Number of descendant `<a>` elements |
+| `sibling` | Number of sibling nodes |
+| `child` | Number of child nodes |
+| `dep` | Node depth in the document tree |
+| `seq` | Node sequence in document order |
+| `txt_dns` | Text node density |
+
+These are usable in any CSS selector via `:expr(...)`, in X-SQL `DOM_*` functions, and in `htmlsnapshot get` / `htmlsnapshot query` commands.
+
+---
+
+#### `:expr()` Pseudo-Selector
+
+```
+element:expr(expression)
+```
+
+Operators in expressions include `+`, `-`, `*`, `/`, `^`, `%`, `==`, `!=`, `<`, `>`, `<=`, `>=`, `&&`, `||`. Use parentheses for grouping.
 
 ## 7. Reference Map
 
