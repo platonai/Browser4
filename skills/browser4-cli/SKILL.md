@@ -83,23 +83,23 @@ The `list` command displays a "Next open" column showing what happens when `goto
 
 ## 3. Command Map
 
-| Command family | Purpose | When to use | Full reference |
-|---------------|---------|-------------|----------------|
-| `goto`, `open`, `close`, `reload` | Navigation & session management | Every session starts here | — |
-| `snapshot` | Capture accessibility tree with refs | Before/after interactions | [htmlsnapshot.md](references/htmlsnapshot.md) |
-| `snapshot grep` | Search snapshot content with regex | Find elements by text or pattern | — |
-| `click`, `fill`, `type`, `press`, `select`, `check`, `drag` | Page interaction | Form filling, button clicks, navigation | — |
-| `htmlsnapshot get`, `get all` | Extract text/html/attr via CSS selectors | Single-field data extraction | [htmlsnapshot.md](references/htmlsnapshot.md) |
-| `htmlsnapshot query` | X-SQL queries for structured extraction | Multi-field, filtered, sorted data | [x-sql.md](references/x-sql.md) |
-| `eval` | Execute JavaScript in the page | Live DOM access, complex transforms | — |
-| `extract`, `summarize`, `agent run` | AI-powered extraction | Natural language extraction (needs LLM key) | [agent.md](references/agent.md) |
-| `crawl` | Recursive crawling + bulk extraction | Multi-page traversal, seed-file processing | [crawl.md](references/crawl.md) |
-| `swarm` | Parallel scraping across browser contexts | High-throughput extraction | [swarm.md](references/swarm.md) |
-| `loop` | Repeated task execution with persistence | Monitoring, scheduled checks | [loop.md](references/loop.md) |
+| Command family | Purpose | When to use | Full reference                                  |
+|---------------|---------|-------------|-------------------------------------------------|
+| `goto`, `open`, `close`, `reload` | Navigation & session management | Every session starts here | —                                               |
+| `snapshot` | Capture accessibility tree with refs | Before/after interactions | [snapshot.md](references/snapshot.md)           |
+| `snapshot grep` | Search snapshot content with regex | Find elements by text or pattern | —                                               |
+| `click`, `fill`, `type`, `press`, `select`, `check`, `drag` | Page interaction | Form filling, button clicks, navigation | —                                               |
+| `htmlsnapshot get`, `get all` | Extract text/html/attr via CSS selectors | Single-field data extraction | [htmlsnapshot.md](references/htmlsnapshot.md)   |
+| `htmlsnapshot query` | X-SQL queries for structured extraction | Multi-field, filtered, sorted data | [x-sql.md](references/x-sql.md)                 |
+| `eval` | Execute JavaScript in the page | Live DOM access, complex transforms | —                                               |
+| `extract`, `summarize`, `agent run` | AI-powered extraction | Natural language extraction (needs LLM key) | [agent.md](references/agent.md)                 |
+| `crawl` | Recursive crawling + bulk extraction | Multi-page traversal, seed-file processing | [crawl.md](references/crawl.md)                 |
+| `swarm` | Parallel scraping across browser contexts | High-throughput extraction | [swarm.md](references/swarm.md)                 |
+| `loop` | Repeated task execution with persistence | Monitoring, scheduled checks | [loop.md](references/loop.md)                   |
 | `state-save`, `state-load`, `cookie-*`, `*-storage-*` | Browser storage management | Auth state reuse, cookie manipulation | [storage-state.md](references/storage-state.md) |
-| `attach` | Connect to existing Chrome/Edge via CDP | Debug live browser, reuse auth | [attach.md](references/attach.md) |
-| `skills` | List, retrieve, and locate bundled skill files | Refresh AI agent instructions, find skill paths | — |
-| `screenshot`, `scroll`, `wait`, `resize`, `tab-*` | Visual capture & viewport control | Screenshots, tab management | — |
+| `attach` | Connect to existing Chrome/Edge via CDP | Debug live browser, reuse auth | [attach.md](references/attach.md)               |
+| `skills` | List, retrieve, and locate bundled skill files | Refresh AI agent instructions, find skill paths | —                                               |
+| `screenshot`, `scroll`, `wait`, `resize`, `tab-*` | Visual capture & viewport control | Screenshots, tab management | —                                               |
 
 ### Refreshing This Skill
 
@@ -241,7 +241,8 @@ Browser4 computes these features for every DOM node:
 | `seq` | Node sequence in document order |
 | `txt_dns` | Text node density |
 
-These are usable in any CSS selector via `:expr(...)`, in X-SQL `DOM_*` functions, and in `htmlsnapshot get` / `htmlsnapshot query` commands.
+These are usable in any CSS selector via `:expr(...)`, in X-SQL `DOM_*` functions, and in `htmlsnapshot get` / `htmlsnapshot query` commands to query static HTML,
+not supported by `snapshot` / `eval` which works with live DOM.
 
 ---
 
@@ -256,6 +257,9 @@ Operators in expressions include `+`, `-`, `*`, `/`, `^`, `%`, `==`, `!=`, `<`, 
 ## 7. Reference Map
 
 Organized by task — follow the link that matches what you're trying to do:
+
+**Capture and observe pages:**
+[snapshot.md](references/snapshot.md) — accessibility-tree capture, viewport pagination, `--auto-diff`, `snapshot grep`
 
 **Extract data from pages:**
 [htmlsnapshot.md](references/htmlsnapshot.md) — `get`, `get all`, `query`, `grep`, `summary`, `inspect`, `export`
