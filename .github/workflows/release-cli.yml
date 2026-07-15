@@ -455,8 +455,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          CLI_VERSION=$(node -p "require('./package.json').version")
+          TAG_FLAG=""
+          if [[ "$CLI_VERSION" == *"-"* ]]; then
+            TAG_FLAG="--tag next"
+          fi
           for attempt in 1 2 3; do
-            if npm publish --provenance; then
+            if npm publish --provenance $TAG_FLAG; then
               echo "publish_outcome=success" >> "$GITHUB_OUTPUT"
               exit 0
             fi

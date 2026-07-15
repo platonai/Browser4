@@ -6,7 +6,6 @@
   "files": [
     "bin",
     "scripts",
-    "skill-data",
     "skills"
   ],
   "bin": {
