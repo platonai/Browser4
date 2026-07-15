@@ -12508,10 +12508,10 @@ async fn run(
             }
 
             let suggestions = suggest_similar_commands(command, 3, 5);
-            if suggestions.is_empty() {
-                eprintln!("Unknown command: '{}'", command);
+            let msg = if suggestions.is_empty() {
+                format!("Unknown command: '{}'", command)
             } else {
-                eprintln!(
+                format!(
                     "Unknown command: '{}'. Did you mean: {}?",
                     command,
                     suggestions
@@ -12519,10 +12519,10 @@ async fn run(
                         .map(|s| format!("'{}'", s))
                         .collect::<Vec<_>>()
                         .join(", ")
-                );
-            }
+                )
+            };
             print_help(None);
-            return Ok(());
+            return Err(CliError(ExitCode::Usage, msg));
         }
     };
 

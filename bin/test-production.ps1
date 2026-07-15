@@ -711,7 +711,9 @@ $GitHubApiLatest = "https://api.github.com/repos/$GitHubRepo/releases/latest"
 $GitHubApiTag    = if ($Version) { "https://api.github.com/repos/$GitHubRepo/releases/tags/$Version" } else { '' }
 $NpmPackage     = 'browser4-cli'
 $NpmRegistry    = "https://registry.npmjs.org/$NpmPackage/latest"
-$NpmVersionUrl  = if ($Version) { "https://registry.npmjs.org/$NpmPackage/$Version" } else { '' }
+# npm versions do not use the "v" prefix (GitHub tags do).
+$NpmVersion     = if ($Version) { $Version -replace '^v', '' } else { '' }
+$NpmVersionUrl  = if ($NpmVersion) { "https://registry.npmjs.org/$NpmPackage/$NpmVersion" } else { '' }
 $OssBaseUrl     = 'https://browser4.oss-cn-beijing.aliyuncs.com'
 $OssReleases    = "$OssBaseUrl/releases"
 # mirrors.json lives under the runtime data dir.  For the release status
