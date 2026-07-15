@@ -33,12 +33,14 @@ jobs:
             TAG_NAME="${{ github.event.release.tag_name }}"
             RELEASE_URL="${{ github.event.release.html_url }}"
             ASSETS_COUNT="${{ github.event.release.assets_count || 0 }}"
+            IS_PRERELEASE="${{ github.event.release.prerelease }}"
           elif [[ -n "${{ inputs.tag_name || '' }}" ]]; then
             TAG_NAME="${{ inputs.tag_name }}"
-            # Validate the tag exists and fetch release info
-            RELEASE_JSON=$(gh release view "$TAG_NAME" --repo "${{ github.repository }}" --json name,url,assets --jq '.')
+            # Validate the tag exists and fetch release info (include isPrerelease)
+            RELEASE_JSON=$(gh release view "$TAG_NAME" --repo "${{ github.repository }}" --json name,url,assets,isPrerelease --jq '.')
             RELEASE_URL=$(echo "$RELEASE_JSON" | jq -r '.url')
             ASSETS_COUNT=$(echo "$RELEASE_JSON" | jq '.assets | length')
+            IS_PRERELEASE=$(echo "$RELEASE_JSON" | jq -r '.isPrerelease // false')
           else
             echo "::error::No release tag available"
             exit 1
@@ -47,7 +49,8 @@ jobs:
           echo "tag_name=${TAG_NAME}" >> "$GITHUB_OUTPUT"
           echo "release_url=${RELEASE_URL}" >> "$GITHUB_OUTPUT"
           echo "assets_count=${ASSETS_COUNT}" >> "$GITHUB_OUTPUT"
-          echo "Resolved release: ${TAG_NAME} (${ASSETS_COUNT} assets)"
+          echo "is_prerelease=${IS_PRERELEASE}" >> "$GITHUB_OUTPUT"
+          echo "Resolved release: ${TAG_NAME} (${ASSETS_COUNT} assets, prerelease=${IS_PRERELEASE})"
 
       - name: Checkout repository
         uses: actions/checkout@v5
@@ -131,6 +134,7 @@ jobs:
         run: |
           set -euo pipefail
           TAG_NAME="${{ steps.resolve.outputs.tag_name }}"
+          IS_PRERELEASE="${{ steps.resolve.outputs.is_prerelease }}"
 
           SCRIPTS_DIR="cli/scripts"
           OSS_SCRIPTS_PREFIX="oss://${OSS_BUCKET}/scripts"
@@ -151,38 +155,7 @@ jobs:
             # Compute sha256 once for both checksum uploads below
             script_hash=$(sha256sum "$src" | awk '{print $1}')
 
-            # 1) Upload to convenience URL (unversioned — always latest)
-            dest_latest="${OSS_SCRIPTS_PREFIX}/${script}"
-            echo "Uploading: ${script} → ${dest_latest}"
-            if ./ossutil cp "$src" "$dest_latest" \
-              -e "$OSS_ENDPOINT" \
-              --region "$OSS_REGION" \
-              --acl public-read \
-              --retry-times 3 \
-              --force; then
-              echo "  https://${OSS_BUCKET}.${OSS_ENDPOINT}/scripts/${script}"
-            else
-              echo "::error::Failed to upload ${script} to scripts/"
-              ((failed++)) || true
-              continue
-            fi
-
-            # 1b) Upload .sha256 for the convenience URL
-            echo "$script_hash" > "/tmp/${script}.sha256"
-            dest_sha="${OSS_SCRIPTS_PREFIX}/${script}.sha256"
-            echo "Uploading: ${script}.sha256 → ${dest_sha}"
-            if ./ossutil cp "/tmp/${script}.sha256" "$dest_sha" \
-              -e "$OSS_ENDPOINT" \
-              --region "$OSS_REGION" \
-              --acl public-read \
-              --retry-times 3 \
-              --force; then
-              echo "  https://${OSS_BUCKET}.${OSS_ENDPOINT}/scripts/${script}.sha256"
-            else
-              echo "::warning::Failed to upload ${script}.sha256 to scripts/"
-            fi
-
-            # 2) Upload to versioned release path
+            # 1) Upload to versioned release path (always — even for prereleases)
             dest_versioned="${OSS_VERSIONED_PREFIX}/${script}"
             echo "Uploading: ${script} → ${dest_versioned}"
             if ./ossutil cp "$src" "$dest_versioned" \
@@ -195,6 +168,40 @@ jobs:
               echo "::error::Failed to upload ${script} to versioned path"
               ((failed++)) || true
               continue
+            fi
+
+            # 2) Upload to convenience URL + .sha256 (only for stable releases)
+            if [[ "$IS_PRERELEASE" != "true" ]]; then
+              dest_latest="${OSS_SCRIPTS_PREFIX}/${script}"
+              echo "Uploading: ${script} → ${dest_latest} (stable — updating latest)"
+              if ./ossutil cp "$src" "$dest_latest" \
+                -e "$OSS_ENDPOINT" \
+                --region "$OSS_REGION" \
+                --acl public-read \
+                --retry-times 3 \
+                --force; then
+                echo "  https://${OSS_BUCKET}.${OSS_ENDPOINT}/scripts/${script}"
+              else
+                echo "::error::Failed to upload ${script} to scripts/"
+                ((failed++)) || true
+                continue
+              fi
+
+              echo "$script_hash" > "/tmp/${script}.sha256"
+              dest_sha="${OSS_SCRIPTS_PREFIX}/${script}.sha256"
+              echo "Uploading: ${script}.sha256 → ${dest_sha}"
+              if ./ossutil cp "/tmp/${script}.sha256" "$dest_sha" \
+                -e "$OSS_ENDPOINT" \
+                --region "$OSS_REGION" \
+                --acl public-read \
+                --retry-times 3 \
+                --force; then
+                echo "  https://${OSS_BUCKET}.${OSS_ENDPOINT}/scripts/${script}.sha256"
+              else
+                echo "::warning::Failed to upload ${script}.sha256 to scripts/"
+              fi
+            else
+              echo "Skipping scripts/ convenience upload — prereleases don't update latest"
             fi
 
             # 3) Copy into release-assets/ so the symlink step picks it up
@@ -290,6 +297,7 @@ jobs:
           echo "🔐 All ${uploaded} checksum files published to OSS"
 
       - name: Create latest symlinks
+        if: steps.resolve.outputs.is_prerelease != 'true'
         env:
           OSS_ENDPOINT: oss-cn-beijing.aliyuncs.com
           OSS_REGION: cn-beijing
@@ -307,8 +315,10 @@ jobs:
             [[ -f "$asset" ]] || continue
             asset_name=$(basename "$asset")
 
+            # Symlink following GitHub URL layout:
+            #   https://github.com/$GITHUB_REPO/releases/latest/download/$BinaryName
             # Symlink key and its target object key (relative to bucket root)
-            symlink_key="releases/download/latest/${asset_name}"
+            symlink_key="releases/latest/download/${asset_name}"
             target_key="releases/download/${TAG_NAME}/${asset_name}"
 
             echo "Creating symlink: ${symlink_key} → ${target_key}"
@@ -338,6 +348,7 @@ jobs:
           echo "🔗 All ${created} latest symlinks created"
 
       - name: Upload latest-release.json metadata
+        if: steps.resolve.outputs.is_prerelease != 'true'
         env:
           OSS_ENDPOINT: oss-cn-beijing.aliyuncs.com
           OSS_REGION: cn-beijing
@@ -398,26 +409,36 @@ jobs:
       - name: Sync Summary
         if: always()
         run: |
+          IS_PRERELEASE="${{ steps.resolve.outputs.is_prerelease }}"
+
           {
             echo "## ☁️ Aliyun OSS Sync"
             echo ""
             echo "- **Release**: ${{ steps.resolve.outputs.tag_name }}"
             echo "- **Release URL**: ${{ steps.resolve.outputs.release_url }}"
             echo "- **Assets**: ${{ steps.resolve.outputs.assets_count }}"
+            echo "- **Prerelease**: ${IS_PRERELEASE}"
             echo "- **OSS Bucket**: \`oss://browser4/releases/download/${{ steps.resolve.outputs.tag_name }}/\`"
-            echo "- **Latest symlink**: \`oss://browser4/releases/download/latest/\`"
-            echo "- **Release metadata**: \`https://browser4.oss-cn-beijing.aliyuncs.com/releases/latest-release.json\`"
-            echo "- **CLI installer scripts** (convenience — always latest):"
-            echo "  - \`https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.ps1\`"
-            echo "  - \`https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.sh\`"
+            if [[ "$IS_PRERELEASE" != "true" ]]; then
+              echo "- **Latest symlink**: \`oss://browser4/releases/latest/download/\` (GitHub-compatible layout)"
+              echo "- **Release metadata**: \`https://browser4.oss-cn-beijing.aliyuncs.com/releases/latest-release.json\`"
+              echo "- **CLI installer scripts** (convenience — always latest):"
+              echo "  - \`https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.ps1\`"
+              echo "  - \`https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.sh\`"
+              echo "- **CLI installer scripts** (latest alias):"
+              echo "  - \`https://browser4.oss-cn-beijing.aliyuncs.com/releases/latest/download/install-browser4-cli.ps1\`"
+              echo "  - \`https://browser4.oss-cn-beijing.aliyuncs.com/releases/latest/download/install-browser4-cli.sh\`"
+              echo "- **SHA256 checksums** (latest):"
+              echo "  - \`https://browser4.oss-cn-beijing.aliyuncs.com/releases/latest/download/SHA256SUMS\`"
+            else
+              echo "- **Latest symlinks**: ⏭️ Skipped (prerelease — \`latest\` only tracks stable releases)"
+              echo "- **Release metadata**: ⏭️ Skipped (prerelease)"
+              echo "- **CLI convenience scripts**: ⏭️ Skipped (prerelease)"
+            fi
             echo "- **CLI installer scripts** (versioned):"
             echo "  - \`https://browser4.oss-cn-beijing.aliyuncs.com/releases/download/${{ steps.resolve.outputs.tag_name }}/install-browser4-cli.ps1\`"
             echo "  - \`https://browser4.oss-cn-beijing.aliyuncs.com/releases/download/${{ steps.resolve.outputs.tag_name }}/install-browser4-cli.sh\`"
-            echo "- **CLI installer scripts** (latest alias):"
-            echo "  - \`https://browser4.oss-cn-beijing.aliyuncs.com/releases/download/latest/install-browser4-cli.ps1\`"
-            echo "  - \`https://browser4.oss-cn-beijing.aliyuncs.com/releases/download/latest/install-browser4-cli.sh\`"
-            echo "- **SHA256 checksums**:"
+            echo "- **SHA256 checksums** (versioned):"
             echo "  - \`https://browser4.oss-cn-beijing.aliyuncs.com/releases/download/${{ steps.resolve.outputs.tag_name }}/SHA256SUMS\`"
-            echo "  - \`https://browser4.oss-cn-beijing.aliyuncs.com/releases/download/latest/SHA256SUMS\`"
             echo "- **Status**: ${{ job.status }}"
           } >> "$GITHUB_STEP_SUMMARY"
