@@ -10,8 +10,8 @@
     "skills"
   ],
   "bin": {
-    "browser4-cli": "./bin/browser4-cli.js",
-    "browser4": "./bin/browser4-cli.js"
+    "browser4-cli": "bin/browser4-cli.js",
+    "browser4": "bin/browser4-cli.js"
   },
   "scripts": {
     "version:sync": "node ../bin/version.mjs cli sync",
