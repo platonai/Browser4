@@ -9,11 +9,14 @@
 # ═══════════════════════════════════════════════════════════════════
 <#
 .SYNOPSIS
-    Acceptance test for the latest production release of browser4-cli.
+    Acceptance test for a production (or prerelease) release of browser4-cli.
 
 .DESCRIPTION
     Downloads, installs, exercises, uninstalls, and re-installs the global
     browser4-cli from the public OSS distribution channel.
+
+    By default tests the latest stable release.  Use -Version to test a
+    specific version (including prereleases like v4.12.0-rc.1).
 
     The stress suite (multi-scenarios.ps1) is opt-in via -Stress.
 
@@ -22,7 +25,7 @@
 
       1. Create a random working directory under ${system_temp_dir}/.browser4-acceptance.
       2. Clean any pre-existing global installation.
-      3. Install the latest browser4-cli via the remote bootstrap script (as-is, no patching).
+      3. Install browser4-cli via the remote bootstrap script (as-is, no patching).
       4. Verify the CLI is on PATH after install (no manual fixups — fails if install script is broken).
       5. Smoke-test the CLI (--help, --version, config --help, agent-run --help, invalid command).
       6. Cold-start the browser server (browser4-cli open), verify server responds to health checks.
@@ -56,6 +59,21 @@
 .PARAMETER RemoveWorkingDir
     Delete the working directory on exit (default: keep it for review).
 
+.PARAMETER Version
+    Specific release version tag to test (e.g. "v4.12.0-rc.1" or "v4.11.0").
+    When set, the install scripts are invoked with this version instead of
+    downloading the latest stable release.  The release status report also
+    queries the specific tag endpoint (GitHub /releases/tags/:tag, npm
+    package version, OSS /download/:tag) rather than — or in addition to —
+    the /latest endpoints.
+
+    Supports prerelease tags like "v4.12.0-rc.1".  The GitHub API
+    /releases/latest endpoint excludes prereleases, but /releases/tags/*
+    returns them, so the report uses the tag-specific endpoint when a
+    version is given.
+
+    Default: empty (use latest stable release).
+
 .PARAMETER Help
     Show this help message.
 
@@ -68,11 +86,16 @@
 
 .EXAMPLE
     .\test-production.ps1 -Stress -MultiScenariosIterations 3 -RemoveWorkingDir
+
+.EXAMPLE
+    .\test-production.ps1 -Version v4.12.0-rc.1 -Stress
+    (test a prerelease candidate)
 #>
 
 [CmdletBinding()]
 param(
     [string] $WorkingDir = '',
+    [string] $Version = '',
     [switch] $Stress,
     [int] $MultiScenariosIterations = 1,
     [switch] $RemoveWorkingDir,
@@ -468,7 +491,12 @@ function Invoke-InstallFromRemoteScript {
 
             # Run the script AS-IS.  No variable-name patches, no workarounds.
             # If the published script is broken, the test MUST fail.
-            & $installScript
+            if ($Version) {
+                Write-Info "Installing specific version: $Version"
+                & $installScript -Version $Version
+            } else {
+                & $installScript
+            }
             $exitCode = $LASTEXITCODE
         } else {
             Write-Info "URL: $InstallShUrl"
@@ -476,7 +504,12 @@ function Invoke-InstallFromRemoteScript {
             Invoke-WebRequest -Uri $InstallShUrl -OutFile $installScript -UseBasicParsing -ErrorAction Stop
             Write-Info "Downloaded install script to $installScript"
 
-            bash $installScript
+            if ($Version) {
+                Write-Info "Installing specific version: $Version"
+                bash $installScript --version $Version
+            } else {
+                bash $installScript
+            }
             $exitCode = $LASTEXITCODE
         }
 
@@ -559,6 +592,7 @@ Write-StepHeader 'STEP 0 — Setup'
 Write-Info "WorkingDir      : $WorkingDir"
 Write-Info "Test state dir  : $Browser4Home  (BROWSER4_CLI_STATE_DIR)"
 Write-Info "Test runtime dir: $RuntimeDataDir  (BROWSER4_RUNTIME_DIR)"
+Write-Info "Target version  : $(if ($Version) { $Version } else { 'latest (stable)' })"
 Write-Info "User home (RO)  : $UserBrowser4Home"
 Write-Info "ServerHealth    : $ServerHealthUrl"
 Write-Info "Server opts     : $env:BROWSER4_SERVER_OPTS"
@@ -663,13 +697,21 @@ if ($existingCli) {
 # ═══════════════════════════════════════════════════════════════
 # STEP 2 — Report: latest release status across all channels
 # ═══════════════════════════════════════════════════════════════
-Write-StepHeader 'STEP 2 — Report: latest release status'
+if ($Version) {
+    Write-StepHeader "STEP 2 — Report: release status for $Version"
+} else {
+    Write-StepHeader 'STEP 2 — Report: latest release status'
+}
 
 $GitHubRepo     = 'platonai/Browser4'
 $GitHubReleases = "https://github.com/$GitHubRepo/releases"
 $GitHubApiLatest = "https://api.github.com/repos/$GitHubRepo/releases/latest"
+# When a specific version is requested, also query the tag endpoint.
+# /releases/latest excludes prereleases — /releases/tags/* includes them.
+$GitHubApiTag    = if ($Version) { "https://api.github.com/repos/$GitHubRepo/releases/tags/$Version" } else { '' }
 $NpmPackage     = 'browser4-cli'
 $NpmRegistry    = "https://registry.npmjs.org/$NpmPackage/latest"
+$NpmVersionUrl  = if ($Version) { "https://registry.npmjs.org/$NpmPackage/$Version" } else { '' }
 $OssBaseUrl     = 'https://browser4.oss-cn-beijing.aliyuncs.com'
 $OssReleases    = "$OssBaseUrl/releases"
 # mirrors.json lives under the runtime data dir.  For the release status
@@ -680,20 +722,36 @@ $MirrorsConfig  = Join-Path $UserBrowser4Home 'runtime\mirrors.json'
 # ── Build the report table ──────────────────────────
 $reportRows = @()
 
-# 1. GitHub Releases
+# 1. GitHub Releases — query /latest AND /tags/:version when a specific
+#    version is requested (so we see prerelease status, assets, etc.)
 Write-Info 'Querying GitHub Releases API …'
 try {
     $ghHeaders = @{ 'User-Agent' = 'browser4-test-production/1.0' }
     if ($env:GITHUB_TOKEN) {
         $ghHeaders['Authorization'] = "Bearer $env:GITHUB_TOKEN"
     }
-    $ghResponse = Invoke-WebRequest -Uri $GitHubApiLatest -Headers $ghHeaders -UseBasicParsing -TimeoutSec 15 -ErrorAction Stop
+
+    # Primary query: /latest (stable) or /tags/:version (specific, incl. prereleases)
+    $ghQueryUrl = if ($Version) { $GitHubApiTag } else { $GitHubApiLatest }
+    $ghResponse = Invoke-WebRequest -Uri $ghQueryUrl -Headers $ghHeaders -UseBasicParsing -TimeoutSec 15 -ErrorAction Stop
     $ghData = $ghResponse.Content | ConvertFrom-Json
     $ghTag = $ghData.tag_name
     $ghPublished = $ghData.published_at
+    $ghPrerelease = if ($ghData.prerelease) { ' (PRERELEASE)' } else { '' }
     $ghAssets = ($ghData.assets | ForEach-Object { $_.name }) -join ', '
     $ghStatus = 'OK'
-    $ghDetail = "tag=$ghTag  published=$ghPublished  assets=$($ghData.assets.Count)"
+    $ghDetail = "tag=$ghTag$ghPrerelease  published=$ghPublished  assets=$($ghData.assets.Count)"
+
+    # When testing a prerelease, also check /latest for context
+    if ($Version -and $ghData.prerelease) {
+        try {
+            $ghLatestResponse = Invoke-WebRequest -Uri $GitHubApiLatest -Headers $ghHeaders -UseBasicParsing -TimeoutSec 15 -ErrorAction Stop
+            $ghLatestData = $ghLatestResponse.Content | ConvertFrom-Json
+            $ghDetail += "  |  latest stable: $($ghLatestData.tag_name)"
+        } catch {
+            $ghDetail += '  |  latest stable: (unreachable)'
+        }
+    }
 } catch {
     $ghTag = '-'
     $ghStatus = "ERROR: $($_.Exception.Message)"
@@ -711,11 +769,20 @@ $reportRows += [PSCustomObject]@{
 # 2. npm Releases
 Write-Info 'Querying npm registry …'
 try {
-    $npmResponse = Invoke-WebRequest -Uri $NpmRegistry -UseBasicParsing -TimeoutSec 15 -ErrorAction Stop
+    $npmQueryUrl = if ($Version) { $NpmVersionUrl } else { $NpmRegistry }
+    $npmResponse = Invoke-WebRequest -Uri $npmQueryUrl -UseBasicParsing -TimeoutSec 15 -ErrorAction Stop
     $npmData = $npmResponse.Content | ConvertFrom-Json
     $npmVersion = $npmData.version
     $npmStatus = 'OK'
     $npmDetail = "version=$npmVersion"
+    if ($Version) {
+        # If querying a specific version, also check the dist-tag (latest vs this version)
+        try {
+            $npmLatestResponse = Invoke-WebRequest -Uri $NpmRegistry -UseBasicParsing -TimeoutSec 15 -ErrorAction Stop
+            $npmLatestData = $npmLatestResponse.Content | ConvertFrom-Json
+            $npmDetail += "  |  latest: $($npmLatestData.version)"
+        } catch { }
+    }
 } catch {
     $npmVersion = '-'
     $npmStatus = "ERROR: $($_.Exception.Message)"
@@ -742,15 +809,22 @@ try {
     $ossOk1 = ($ossInstallResp.StatusCode -eq 200)
     $ossDetail += "install-script: HTTP $($ossInstallResp.StatusCode)"
 
-    # Check 2: a release asset via the latest redirect
-    $ossLatestUrl = "$OssReleases/download/latest/browser4-cli-win32-x64.exe"
+    # Check 2: a release asset (version-specific when -Version is set,
+    #           otherwise use the /latest redirect)
+    if ($Version) {
+        $ossAssetUrl = "$OssReleases/download/$Version/browser4-cli-win32-x64.exe"
+        $ossAssetLabel = "version-asset ($Version)"
+    } else {
+        $ossAssetUrl = "$OssReleases/download/latest/browser4-cli-win32-x64.exe"
+        $ossAssetLabel = 'latest-asset'
+    }
     try {
-        $ossLatestResp = Invoke-WebRequest -Uri $ossLatestUrl -Method Head -UseBasicParsing -TimeoutSec 10 -ErrorAction Stop
+        $ossLatestResp = Invoke-WebRequest -Uri $ossAssetUrl -Method Head -UseBasicParsing -TimeoutSec 10 -ErrorAction Stop
         $ossOk2 = ($ossLatestResp.StatusCode -eq 200 -or $ossLatestResp.StatusCode -eq 302)
-        $ossDetail += "  latest-asset: HTTP $($ossLatestResp.StatusCode)"
+        $ossDetail += "  $ossAssetLabel`: HTTP $($ossLatestResp.StatusCode)"
     } catch {
         $ossOk2 = $false
-        $ossDetail += "  latest-asset: unreachable"
+        $ossDetail += "  $ossAssetLabel`: unreachable"
     }
 
     $ossOk = $ossOk1 -and $ossOk2
