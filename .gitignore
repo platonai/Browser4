@@ -149,3 +149,4 @@ bin/maintenance/state/*.lock
 /.junie/
 /.workbuddy/
 /.claude/
+.build-state
