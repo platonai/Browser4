@@ -522,14 +522,18 @@ open class InteractiveBrowserEmulator(
         val page = task.page
         require(driver is AbstractWebDriver)
 
+        // Store capture meta links on the JS side so serializeAnnotatedHTML()
+        // can inject them into <head> during pageSource() serialization later.
+        // This avoids DOM mutation — the <link> elements appear only in the
+        // serialized output, not in the live page.
         if (result.state.isContinue) {
-            updateMetaInfos(page, driver)
+            updateCaptureMetaLinks(page, driver)
         }
 
-        // With the scrolling operation finished, the page is stable and unlikely to experience significant updates.
-        // Therefore, we can now proceed to calculate the document’s features.
-        // TODO: driver.pageSource() might be huge so there might be a performance issue
-        task.originalContentLength = driver.pageSource()?.length ?: 0
+        // Fast content-length estimation using native outerHTML.
+        // Returns only an integer, avoiding the overhead of transferring
+        // the full HTML string over the wire for a simple length check.
+        task.originalContentLength = getOriginalContentLength(driver)
 
         // Compute document features so that vi (visual-information) attributes are
         // injected into the DOM.  These attributes contain bounding-box data
@@ -589,15 +593,19 @@ open class InteractiveBrowserEmulator(
 //        }
 
         if (result.state.isContinue) {
-            updateMetaInfos(page, driver)
-            // TODO: check if state.isContinue is necessary
+            // Store capture meta links on the JS side so serializeAnnotatedHTML()
+            // can inject them into <head> during pageSource() serialization later.
+            // This avoids DOM mutation — the <link> elements appear only in the
+            // serialized output, not in the live page.
+            updateCaptureMetaLinks(page, driver)
+
             emit1(EmulateEvents.documentSteady, page, driver)
         }
 
-        // With the scrolling operation finished, the page is stable and unlikely to experience significant updates.
-        // Therefore, we can now proceed to calculate the document’s features.
-        // TODO: driver.pageSource() might be huge so there might be a performance issue
-        task.navigateTask.originalContentLength = driver.pageSource()?.length ?: 0
+        // Fast content-length estimation using native outerHTML.
+        // Returns only an integer, avoiding the overhead of transferring
+        // the full HTML string over the wire for a simple length check.
+        task.navigateTask.originalContentLength = getOriginalContentLength(driver)
         if (result.state.isContinue) {
             emit1(EmulateEvents.willComputeFeature, page, driver)
 
@@ -773,24 +781,34 @@ open class InteractiveBrowserEmulator(
         }
     }
 
-    private suspend fun updateMetaInfos(page: WebPage, driver: WebDriver) {
-        // the node is created by injected javascript
-        val urls = mutableMapOf(AppConstants.PULSAR_DOCUMENT_NORMALIZED_URI to page.url)
-        urls.forEach { (rel, href) ->
-            val js = """
-                (() => {
-                    const link = document.createElement('link');
-                    link.rel = '$rel';
-                    link.href = '$href';
-                    document.head.appendChild(link);
-                })()
-            """.trimIndent().replace("\n", ";")
+    /**
+     * Fast content-length estimation using native outerHTML.
+     * Returns only a number (not the full HTML), avoiding the wire-transfer
+     * overhead of a full annotated-HTML serialization round-trip.
+     * Speed takes priority over accuracy.
+     */
+    private suspend fun getOriginalContentLength(driver: WebDriver): Int {
+        val expression = "__pulsar_utils__.getOriginalContentLength()"
+        return (driver.evaluate(expression) as? Number)?.toInt() ?: 0
+    }
 
-            val result = driver.evaluateDetail(js)
-            if (result?.exception != null) {
-                logger.warn("Failed to update meta info | $rel: $href | ${result.exception}")
-            }
-        }
+    /**
+     * Store capture meta links on the JS side so that serializeAnnotatedHTML()
+     * can inject them as <link> elements into <head> during serialization.
+     * This avoids DOM mutation — the links appear only in the serialized output.
+     */
+    private suspend fun updateCaptureMetaLinks(page: WebPage, driver: WebDriver) {
+        val urls = mapOf(AppConstants.PULSAR_DOCUMENT_NORMALIZED_URI to page.url)
+        val linksJson = pulsarObjectMapper().writeValueAsString(urls)
+        driver.evaluate("__pulsar_utils__._captureMetaLinks = $linksJson")
+    }
+
+    @Deprecated(
+        message = "Use updateCaptureMetaLinks instead (no DOM mutation)",
+        replaceWith = ReplaceWith("updateCaptureMetaLinks(page, driver)")
+    )
+    private suspend fun updateMetaInfos(page: WebPage, driver: WebDriver) {
+        updateCaptureMetaLinks(page, driver)
     }
 
     protected open suspend fun waitForElementUntilNonBlank(

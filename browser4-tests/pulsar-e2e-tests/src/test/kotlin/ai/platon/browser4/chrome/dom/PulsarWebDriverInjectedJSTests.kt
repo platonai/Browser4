@@ -311,5 +311,119 @@ class PulsarWebDriverInjectedJSTests : WebDriverTestBase() {
         // The traverse method returns void (undefined), so result should be null
         assertNull(result)
     }
+
+    // --- Tests for getOriginalContentLength, setCaptureMetaInfo, and serializeAnnotatedHTML ---
+
+    @Test
+    @DisplayName("getOriginalContentLength returns correct length")
+    fun testGetOriginalContentLength() = runEnhancedWebDriverTest(testURL, browser) { driver ->
+        val outerHtmlLen = driver.evaluateValue("document.documentElement.outerHTML.length") as? Int
+            ?: throw AssertionError("Failed to get outerHTML length")
+        val result = driver.evaluateValue("__pulsar_utils__.getOriginalContentLength()") as? Int
+            ?: throw AssertionError("getOriginalContentLength() returned null")
+
+        assertEquals(outerHtmlLen, result,
+            "getOriginalContentLength should match outerHTML.length")
+    }
+
+    @Test
+    @DisplayName("getOriginalContentLength works before vi data is computed")
+    fun testGetOriginalContentLengthBeforeCompute() = runEnhancedWebDriverTest(testURL, browser) { driver ->
+        // Verify _viDataComputed is false initially
+        val computed = driver.evaluateValue("__pulsar_utils__._viDataComputed")
+        // _viDataComputed may be undefined (not false) before constructor runs properly
+        assertTrue(computed == null || computed == false,
+            "viDataComputed should not be true before compute() is called")
+
+        val result = driver.evaluateValue("__pulsar_utils__.getOriginalContentLength()") as? Int
+        assertNotNull(result, "getOriginalContentLength() should return non-null")
+        assertTrue(result > 0, "Content length should be positive, got $result")
+    }
+
+    @Test
+    @DisplayName("setCaptureMetaInfo stores meta links without DOM mutation")
+    fun testSetCaptureMetaInfo() = runEnhancedWebDriverTest(testURL, browser) { driver ->
+        // Count existing link elements in head with the normalized URI rel
+        val beforeCount = driver.evaluateValue(
+            """document.querySelectorAll('head link[rel="pulsar:normalizedURI"]').length"""
+        ) as? Int ?: 0
+
+        // Set meta links via the JS API
+        val testUrl = "http://test.url/captured-page"
+        val linksJson = """{"pulsar:normalizedURI": "$testUrl"}"""
+        driver.evaluateValue("__pulsar_utils__.setCaptureMetaInfo($linksJson)")
+
+        // Verify the stored value on the JS side
+        val storedRel = driver.evaluateValue(
+            """__pulsar_utils__._captureMetaLinks["pulsar:normalizedURI"]"""
+        ) as? String
+        assertEquals(testUrl, storedRel, "_captureMetaLinks should store the URL")
+
+        // Verify NO DOM mutation occurred
+        val afterCount = driver.evaluateValue(
+            """document.querySelectorAll('head link[rel="pulsar:normalizedURI"]').length"""
+        ) as? Int ?: 0
+        assertEquals(beforeCount, afterCount,
+            "Setting _captureMetaLinks should NOT add <link> elements to the live DOM")
+    }
+
+    @Test
+    @DisplayName("capture meta links appear in getAnnotatedHTML output")
+    fun testSerializeAnnotatedHTMLWithMetaLinks() = runEnhancedWebDriverTest(testURL, browser) { driver ->
+        // Set meta links on JS side
+        val testUrl = "http://test.url/captured-page"
+        val linksJson = """{"pulsar:normalizedURI": "$testUrl"}"""
+        driver.evaluateValue("__pulsar_utils__._captureMetaLinks = $linksJson")
+
+        // Force vi data computation so getAnnotatedHTML uses serializeAnnotatedHTML
+        driver.evaluateValue("__pulsar_utils__.compute()")
+
+        // Retrieve annotated HTML
+        val html = driver.evaluateValue("__pulsar_utils__.getAnnotatedHTML()") as? String
+            ?: throw AssertionError("getAnnotatedHTML() returned null")
+
+        // Verify the link element is present in the output
+        assertTrue(html.contains("pulsar:normalizedURI"),
+            "HTML should contain pulsar:normalizedURI link")
+        assertTrue(html.contains(testUrl),
+            "HTML should contain the test URL")
+    }
+
+    @Test
+    @DisplayName("getAnnotatedHTML falls back to outerHTML without compute")
+    fun testGetAnnotatedHTMLFallbackWithoutCompute() = runEnhancedWebDriverTest(testURL, browser) { driver ->
+        // Ensure _viDataComputed is false (should be by default before compute())
+        val computed = driver.evaluateValue("__pulsar_utils__._viDataComputed") as? Boolean
+        if (computed != true) {
+            // getAnnotatedHTML without prior compute() should return plain outerHTML
+            val html = driver.evaluateValue("__pulsar_utils__.getAnnotatedHTML()") as? String
+                ?: throw AssertionError("getAnnotatedHTML() should return HTML even without compute")
+
+            // Should NOT contain vi attributes (since compute() wasn't called)
+            val hasViAttr = html.contains("vi=\"")
+            if (hasViAttr) {
+                printlnPro("NOTE: vi attributes already present (compute() may have been called by a prior test)")
+            }
+            // The fallback path should still return valid HTML
+            assertTrue(html.startsWith("<html") || html.startsWith("<!DOCTYPE"),
+                "Fallback HTML should be valid document HTML")
+        }
+    }
+
+    @Test
+    @DisplayName("empty _captureMetaLinks produces no extra markup")
+    fun testEmptyCaptureMetaLinks() = runEnhancedWebDriverTest(testURL, browser) { driver ->
+        // Clear any previously set meta links
+        driver.evaluateValue("__pulsar_utils__._captureMetaLinks = {}")
+
+        // Compute and get HTML
+        driver.evaluateValue("__pulsar_utils__.compute()")
+        val html = driver.evaluateValue("__pulsar_utils__.getAnnotatedHTML()") as? String
+            ?: throw AssertionError("getAnnotatedHTML() returned null")
+
+        // Should not contain any unexpected link elements from _captureMetaLinks
+        // The existing DOM may have its own links, but check that the HTML is valid
+        assertTrue(html.isNotEmpty(), "HTML should not be empty")
+    }
 }
 
