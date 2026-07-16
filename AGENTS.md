@@ -33,7 +33,7 @@ browser4-cli (Rust)  ──MCP over HTTP──▶  browser4-rest (Kotlin/Spring)
 
 - **crbug.com/444929150:** `Input.dispatchMouseEvent` type `mouseWheel` race condition in headless Chrome. Fix: dispatch to `{passive: false}` wheel listener.
 - **Cursor positioning:** `DOM.focus()` + `Input.dispatchMouseEvent` (click) may leave cursor at 0. Fix: `setSelectionRange(99999, 99999)` after focus+click.
-- **`Input.insertText` racing:** 0ms delay between chars drops `input` events. Fix: ≥10ms delay.
+- **`Input.insertText` racing:** 0ms delay between chars drops `input` events. Fix: use same inter-char delay as `type()` via `randomDelayMillis("type")` (90-240ms).
 
 ## Project Structure
 

@@ -842,10 +842,11 @@ open class PulsarWebDriver constructor(
                 // Non-text elements don't support setSelectionRange — ignore.
             }
 
-            // Small delay between key presses so each Input.insertText CDP
-            // round-trip completes before the next one starts, preventing
-            // races that can drop input events on the page.
-            keyboard?.type(text, 10)
+            // Use the same inter-character delay as type() (90-240ms) so each
+            // Input.insertText CDP round-trip completes before the next one starts.
+            // A hardcoded 10ms was insufficient in Docker headless Chrome, causing
+            // input events to be dropped.
+            keyboard?.type(text, randomDelayMillis("type"))
 
             gap("fill")
         }

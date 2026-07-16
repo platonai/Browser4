@@ -43,7 +43,7 @@ The CLI's `compile_batch_request()` builds step arrays with `op: "tool"` entries
 
 - **crbug.com/444929150:** `Input.dispatchMouseEvent` type `mouseWheel` has a race condition in headless Chrome. Fixed by dispatching to a `{passive: false}` wheel listener.
 - **Cursor positioning:** `DOM.focus()` + `Input.dispatchMouseEvent` (click) may leave the cursor at position 0. Fix: `setSelectionRange(99999, 99999)` after focus+click.
-- **`Input.insertText` racing:** Calling `insertText` with 0ms delay between characters can drop `input` events. Fix: add ≥10ms delay.
+- **`Input.insertText` racing:** Calling `insertText` with 0ms delay between characters can drop `input` events. Fix: use same inter-character delay as `type()` via `randomDelayMillis("type")` (90-240ms). Hardcoded 10ms was insufficient in Docker headless Chrome.
 
 ## Running tests
 
@@ -64,7 +64,7 @@ mvn test -pl browser4-rest -am -Dtest=MCPToolControllerTest
 
 | File | Change |
 |---|---|
-| `PulsarWebDriver.kt` | mouseWheel CDP-primary, press/type/fill cursor-to-end, fill 10ms delay |
+| `PulsarWebDriver.kt` | mouseWheel CDP-primary, press/type/fill cursor-to-end, fill uses same inter-char delay as type |
 | `MCPToolController.kt` | `buildBatchFocusExpression()` extracted, selector interpolation fixed |
 | `commands.rs` | 12 new unit tests (fill, mousewheel, type) |
 | `main.rs` | 6 new batch-compilation tests |
