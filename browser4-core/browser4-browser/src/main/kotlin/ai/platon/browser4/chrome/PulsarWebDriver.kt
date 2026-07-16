@@ -842,10 +842,29 @@ open class PulsarWebDriver constructor(
                 // Non-text elements don't support setSelectionRange — ignore.
             }
 
-            // Use the same inter-character delay as type() (90-240ms) so each
-            // Input.insertText CDP round-trip completes before the next one starts.
-            // A hardcoded 10ms was insufficient in Docker headless Chrome, causing
-            // input events to be dropped.
+            // Inter-character delay for Input.insertText CDP calls.
+            //
+            // Keyboard.type() dispatches each character via Input.insertText,
+            // which sends a CDP command to Chrome.  Chrome processes the command
+            // synchronously (the CDP response confirms the text was delivered),
+            // but the resulting DOM events (input, keypress) are dispatched
+            // asynchronously on the page's event loop.  If the next insertText
+            // arrives before the prior one's DOM events have fully propagated,
+            // Chrome may coalesce or drop input events — the page never sees
+            // the missing characters and syncState() is never called.
+            //
+            // This is especially acute in Docker headless Chrome where the
+            // event loop runs under constrained CPU/Memory, so DOM event
+            // processing is slower than on a developer workstation.
+            //
+            // A hardcoded 10ms was tried (commit d904be750) but proved
+            // insufficient in CI; a single-digit-ms gap is not enough headroom
+            // for Chrome's async event pipeline under load.
+            //
+            // Using randomDelayMillis("type") — the same 90-240ms bucket that
+            // type() uses (InteractSettings.DEFAULT_DELAY_POLICY) — gives each
+            // insertText → DOM-event cycle enough time to complete before the
+            // next character arrives, matching type()'s proven reliability.
             keyboard?.type(text, randomDelayMillis("type"))
 
             gap("fill")
