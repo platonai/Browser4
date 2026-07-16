@@ -282,7 +282,7 @@ function cmdCli(args) {
 
   switch (sub) {
     case "show":
-      console.log(stripSnapshot(readCliVersion()));
+      console.log(readCliVersion());
       break;
     case "sync":
       cmdCliSync(rest);
