@@ -197,11 +197,12 @@ browser4-cli snapshot grep -A 3 -B 1 "Checkout"   # show surrounding context lin
 ```bash
 browser4-cli goto "https://example.com/product/42"
 browser4-cli htmlsnapshot                           # capture static HTML snapshot
+browser4-cli inspect                                # discover CSS selectors for the desired data
 browser4-cli htmlsnapshot get text ".product-title"
 browser4-cli htmlsnapshot get attr ".product-image" src
 ```
 
-### Bulk Extraction (X-SQL — Correlated Fields)
+### Bulk Extraction (X-SQL — Correlated Fields, Inline Computing)
 
 ```bash
 # Write query to file (no shell escaping)
@@ -219,7 +220,9 @@ browser4-cli htmlsnapshot query "https://example.com/products" --sql @query.sql
 
 ### PowerCSS
 
-Modern web pages change their HTML structure frequently, but their **visual layout** stays stable. PowerCSS extends standard CSS selectors with a `:expr()` pseudo-selector that queries elements by their **computed numerical features** — size, position, and content density. This makes selectors resilient to markup changes.
+Modern web pages change their HTML structure frequently, but their **visual layout** stays stable. PowerCSS extends
+standard CSS selectors with a `:expr()` pseudo-selector that queries elements by their **computed numerical features** —
+size, position, and content density. This makes selectors resilient to markup changes.
 
 #### Numerical Features
 
@@ -238,11 +241,10 @@ Browser4 computes these features for every DOM node:
 | `sibling` | Number of sibling nodes |
 | `child` | Number of child nodes |
 | `dep` | Node depth in the document tree |
-| `seq` | Node sequence in document order |
 | `txt_dns` | Text node density |
 
-These are usable in any CSS selector via `:expr(...)`, in X-SQL `DOM_*` functions, and in `htmlsnapshot get` / `htmlsnapshot query` commands to query static HTML,
-not supported by `snapshot` / `eval` which works with live DOM.
+These are usable in any CSS selector via `:expr(...)`, in X-SQL `DOM_*` functions, and in `htmlsnapshot get` / `htmlsnapshot query`
+commands to query static HTML, not supported by `snapshot` / `eval` which work on live DOM.
 
 ---
 
