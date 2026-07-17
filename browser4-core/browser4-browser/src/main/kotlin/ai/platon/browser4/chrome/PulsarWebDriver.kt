@@ -805,39 +805,55 @@ open class PulsarWebDriver constructor(
      *
      * On Windows, CDP `Input.dispatchMouseEvent` (mousePressed/mouseReleased)
      * does not reliably trigger DOM click events in headless Chrome.  This
-     * method uses the element's native `click()` method — which fires a trusted
-     * `click` event and triggers default actions (navigation, form submission) —
-     * as the sole click mechanism.  The CDP prep work (scroll-into-view, focus,
-     * point calculation) runs beforehand via [EmulationHandler.click] with
-     * `dispatchCdpMouseEvents = false`.
+     * method produces the same event sequence as the CDP path —
+     * `mousedown` → `mouseup` → `click` (via [HTMLElement.click] for default
+     * actions) — as the sole click mechanism.  The CDP prep work
+     * (scroll-into-view, focus, point calculation) runs beforehand via
+     * [EmulationHandler.click] with `dispatchCdpMouseEvents = false`.
      *
-     * For double-click (count = 2), [HTMLElement.click] does not fire `dblclick`
-     * events per spec, so we dispatch a synthetic `dblclick` after the two clicks.
+     * [HTMLElement.click] does not fire `mousedown`/`mouseup` events, so
+     * those are dispatched separately to maintain parity with CDP trusted
+     * events.  For double-click (count = 2), [HTMLElement.click] also does
+     * not fire `dblclick` per spec, so we dispatch a synthetic `dblclick`
+     * after the two click sequences.
      *
      * @param node  The element to click.
      * @param count Number of consecutive clicks (1 = single, 2 = double).
      */
     private suspend fun dispatchDomClick(node: NodeRef, count: Int) {
+        val opts = """{bubbles: true, cancelable: true, view: window}"""
         withNodeObjectId(browserProtocol, node) { objectId ->
             when (count) {
                 1 -> {
                     browserProtocol.callFunctionOn(
-                        """function() { if (this instanceof HTMLElement) { this.click(); } }""",
+                        """function() {
+                             if (this instanceof HTMLElement) {
+                               var o = $opts;
+                               this.dispatchEvent(new MouseEvent('mousedown', o));
+                               this.dispatchEvent(new MouseEvent('mouseup', o));
+                               this.click();
+                             }
+                           }""",
                         objectId = objectId,
                         returnByValue = false,
                         userGesture = true,
                     )
                 }
                 2 -> {
-                    // HTMLElement.click() does not fire dblclick events (per spec).
-                    // Fire two clicks + a synthetic dblclick to match real browser
-                    // behavior: mousedown/mouseup/click ×2 then dblclick.
+                    // CDP double-click: mousedown→mouseup→click ×2, then dblclick.
+                    // HTMLElement.click() does not fire mousedown/mouseup or dblclick
+                    // (per spec), so we dispatch those explicitly.
                     browserProtocol.callFunctionOn(
                         """function() {
                              if (this instanceof HTMLElement) {
+                               var o = $opts;
+                               this.dispatchEvent(new MouseEvent('mousedown', o));
+                               this.dispatchEvent(new MouseEvent('mouseup', o));
                                this.click();
+                               this.dispatchEvent(new MouseEvent('mousedown', o));
+                               this.dispatchEvent(new MouseEvent('mouseup', o));
                                this.click();
-                               this.dispatchEvent(new MouseEvent('dblclick', {bubbles: true, cancelable: true, view: window}));
+                               this.dispatchEvent(new MouseEvent('dblclick', o));
                              }
                            }""",
                         objectId = objectId,
@@ -848,7 +864,14 @@ open class PulsarWebDriver constructor(
                 else -> {
                     repeat(count) {
                         browserProtocol.callFunctionOn(
-                            """function() { if (this instanceof HTMLElement) { this.click(); } }""",
+                            """function() {
+                                 if (this instanceof HTMLElement) {
+                                   var o = $opts;
+                                   this.dispatchEvent(new MouseEvent('mousedown', o));
+                                   this.dispatchEvent(new MouseEvent('mouseup', o));
+                                   this.click();
+                                 }
+                               }""",
                             objectId = objectId,
                             returnByValue = false,
                             userGesture = true,
