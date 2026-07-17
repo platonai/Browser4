@@ -801,37 +801,51 @@ open class PulsarWebDriver constructor(
     }
 
     /**
-     * Dispatch DOM click(s) on the given element.
+     * Dispatch DOM click(s) on the given element matching the W3C UI Events
+     * standard event sequence.
      *
-     * On Windows, CDP `Input.dispatchMouseEvent` (mousePressed/mouseReleased)
-     * does not reliably trigger DOM click events in headless Chrome.  This
-     * method produces the same event sequence as the CDP path —
-     * `mousedown` → `mouseup` → `click` (via [HTMLElement.click] for default
-     * actions) — as the sole click mechanism.  The CDP prep work
-     * (scroll-into-view, focus, point calculation) runs beforehand via
-     * [EmulationHandler.click] with `dispatchCdpMouseEvents = false`.
+     * On Windows, CDP `Input.dispatchMouseEvent` does not reliably trigger
+     * DOM click events in headless Chrome.  This method produces the full
+     * event sequence as the sole click mechanism:
      *
-     * [HTMLElement.click] does not fire `mousedown`/`mouseup` events, so
-     * those are dispatched separately to maintain parity with CDP trusted
-     * events.  For double-click (count = 2), [HTMLElement.click] also does
-     * not fire `dblclick` per spec, so we dispatch a synthetic `dblclick`
-     * after the two click sequences.
+     *   `pointerdown → mousedown → pointerup → mouseup → click`
+     *
+     * where `click` uses [HTMLElement.click] to trigger default actions
+     * (navigation, form submission).  For count = 2 the sequence repeats
+     * twice and ends with `dblclick`.
+     *
+     * [HTMLElement.click] per spec only fires `click` — it does not fire
+     * `pointerdown`, `pointerup`, `mousedown`, `mouseup`, or `dblclick`,
+     * so those are dispatched explicitly with correct property values
+     * (`buttons` = 1 during press, 0 on release; `detail` = click count).
+     * Coordinates are taken from the element's bounding rect center.
      *
      * @param node  The element to click.
      * @param count Number of consecutive clicks (1 = single, 2 = double).
      */
     private suspend fun dispatchDomClick(node: NodeRef, count: Int) {
-        val opts = """{bubbles: true, cancelable: true, view: window}"""
         withNodeObjectId(browserProtocol, node) { objectId ->
             when (count) {
                 1 -> {
                     browserProtocol.callFunctionOn(
                         """function() {
                              if (this instanceof HTMLElement) {
-                               var o = $opts;
-                               this.dispatchEvent(new MouseEvent('mousedown', o));
-                               this.dispatchEvent(new MouseEvent('mouseup', o));
-                               this.click();
+                               var r = this.getBoundingClientRect();
+                               var cx = r.left + r.width / 2;
+                               var cy = r.top + r.height / 2;
+                               var detail = 1;
+                               emitClick(this, cx, cy, detail);
+                             }
+                             function emitClick(el, cx, cy, d) {
+                               var ptr = new PointerEvent('pointerdown', {bubbles:true,cancelable:true,view:window,pointerId:1,pointerType:'mouse',isPrimary:true,clientX:cx,clientY:cy,buttons:1,button:0,detail:d});
+                               var md  = new MouseEvent('mousedown', {bubbles:true,cancelable:true,view:window,clientX:cx,clientY:cy,buttons:1,button:0,detail:d});
+                               el.dispatchEvent(ptr);
+                               el.dispatchEvent(md);
+                               ptr = new PointerEvent('pointerup', {bubbles:true,cancelable:true,view:window,pointerId:1,pointerType:'mouse',isPrimary:true,clientX:cx,clientY:cy,buttons:0,button:0,detail:d});
+                               var mu  = new MouseEvent('mouseup', {bubbles:true,cancelable:true,view:window,clientX:cx,clientY:cy,buttons:0,button:0,detail:d});
+                               el.dispatchEvent(ptr);
+                               el.dispatchEvent(mu);
+                               el.click();
                              }
                            }""",
                         objectId = objectId,
@@ -840,20 +854,26 @@ open class PulsarWebDriver constructor(
                     )
                 }
                 2 -> {
-                    // CDP double-click: mousedown→mouseup→click ×2, then dblclick.
-                    // HTMLElement.click() does not fire mousedown/mouseup or dblclick
-                    // (per spec), so we dispatch those explicitly.
                     browserProtocol.callFunctionOn(
                         """function() {
                              if (this instanceof HTMLElement) {
-                               var o = $opts;
-                               this.dispatchEvent(new MouseEvent('mousedown', o));
-                               this.dispatchEvent(new MouseEvent('mouseup', o));
-                               this.click();
-                               this.dispatchEvent(new MouseEvent('mousedown', o));
-                               this.dispatchEvent(new MouseEvent('mouseup', o));
-                               this.click();
-                               this.dispatchEvent(new MouseEvent('dblclick', o));
+                               var r = this.getBoundingClientRect();
+                               var cx = r.left + r.width / 2;
+                               var cy = r.top + r.height / 2;
+                               emitClick(this, cx, cy, 1);
+                               emitClick(this, cx, cy, 2);
+                               this.dispatchEvent(new MouseEvent('dblclick', {bubbles:true,cancelable:true,view:window,detail:2}));
+                             }
+                             function emitClick(el, cx, cy, d) {
+                               var ptr = new PointerEvent('pointerdown', {bubbles:true,cancelable:true,view:window,pointerId:1,pointerType:'mouse',isPrimary:true,clientX:cx,clientY:cy,buttons:1,button:0,detail:d});
+                               var md  = new MouseEvent('mousedown', {bubbles:true,cancelable:true,view:window,clientX:cx,clientY:cy,buttons:1,button:0,detail:d});
+                               el.dispatchEvent(ptr);
+                               el.dispatchEvent(md);
+                               ptr = new PointerEvent('pointerup', {bubbles:true,cancelable:true,view:window,pointerId:1,pointerType:'mouse',isPrimary:true,clientX:cx,clientY:cy,buttons:0,button:0,detail:d});
+                               var mu  = new MouseEvent('mouseup', {bubbles:true,cancelable:true,view:window,clientX:cx,clientY:cy,buttons:0,button:0,detail:d});
+                               el.dispatchEvent(ptr);
+                               el.dispatchEvent(mu);
+                               el.click();
                              }
                            }""",
                         objectId = objectId,
@@ -862,19 +882,28 @@ open class PulsarWebDriver constructor(
                     )
                 }
                 else -> {
-                    repeat(count) {
+                    repeat(count) { i ->
                         browserProtocol.callFunctionOn(
-                            """function() {
+                            """function(detail) {
                                  if (this instanceof HTMLElement) {
-                                   var o = $opts;
-                                   this.dispatchEvent(new MouseEvent('mousedown', o));
-                                   this.dispatchEvent(new MouseEvent('mouseup', o));
+                                   var r = this.getBoundingClientRect();
+                                   var cx = r.left + r.width / 2;
+                                   var cy = r.top + r.height / 2;
+                                   var ptr = new PointerEvent('pointerdown', {bubbles:true,cancelable:true,view:window,pointerId:1,pointerType:'mouse',isPrimary:true,clientX:cx,clientY:cy,buttons:1,button:0,detail:detail});
+                                   var md  = new MouseEvent('mousedown', {bubbles:true,cancelable:true,view:window,clientX:cx,clientY:cy,buttons:1,button:0,detail:detail});
+                                   this.dispatchEvent(ptr);
+                                   this.dispatchEvent(md);
+                                   ptr = new PointerEvent('pointerup', {bubbles:true,cancelable:true,view:window,pointerId:1,pointerType:'mouse',isPrimary:true,clientX:cx,clientY:cy,buttons:0,button:0,detail:detail});
+                                   var mu  = new MouseEvent('mouseup', {bubbles:true,cancelable:true,view:window,clientX:cx,clientY:cy,buttons:0,button:0,detail:detail});
+                                   this.dispatchEvent(ptr);
+                                   this.dispatchEvent(mu);
                                    this.click();
                                  }
                                }""",
                             objectId = objectId,
                             returnByValue = false,
                             userGesture = true,
+                            arguments = listOf(CallArgument(value = i + 1)),
                         )
                     }
                 }
