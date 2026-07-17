@@ -44,7 +44,7 @@ class DOMBoundsParityTest : WebDriverTestBase() {
     @Test
     @DisplayName("bounds are in CSS pixels independent of DPR (scaling applied)")
     fun boundsAreInCssPixelsIndependentOfDprScalingApplied() =
-        runEnhancedWebDriverTest(interactiveDynamicURL) { driver ->
+        runWebDriverTestAndCompute(interactiveDynamicURL) { driver ->
             assertIs<PulsarWebDriver>(driver)
 
             val service = CDPSnapshotService(driver.browserProtocol)
@@ -90,7 +90,7 @@ class DOMBoundsParityTest : WebDriverTestBase() {
     @Ignore("inner iframe features are postponed")
     @DisplayName("iframe offsets and scroll are reflected in absolutePosition and visibility true when within viewport")
     fun iframeOffsetsAndScrollAreReflectedInAbsolutePositionAndVisibilityTrueWhenWithinViewport() =
-        runEnhancedWebDriverTest(interactiveDynamicURL) { driver ->
+        runWebDriverTestAndCompute(interactiveDynamicURL) { driver ->
             assertIs<PulsarWebDriver>(driver)
 
             val service = CDPSnapshotService(driver.browserProtocol)
@@ -172,7 +172,7 @@ class DOMBoundsParityTest : WebDriverTestBase() {
     @Test
     @Ignore("inner iframe features are postponed")
     @DisplayName("iframe content outside viewport is not visible")
-    fun iframeContentOutsideViewportIsNotVisible() = runEnhancedWebDriverTest(interactiveDynamicURL) { driver ->
+    fun iframeContentOutsideViewportIsNotVisible() = runWebDriverTestAndCompute(interactiveDynamicURL) { driver ->
         assertIs<PulsarWebDriver>(driver)
 
         val service = CDPSnapshotService(driver.browserProtocol)

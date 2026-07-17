@@ -28,7 +28,7 @@ class PulsarWebDriverMockSiteJsTests : WebDriverTestBase() {
     }
 
     @Test
-    fun ensureInjectedJsVariablesAreNotSeen() = runEnhancedWebDriverTest(interactiveUrl, browser) { driver ->
+    fun ensureInjectedJsVariablesAreNotSeen() = runWebDriverTestAndCompute(interactiveUrl, browser) { driver ->
         val windowVariables = driver.evaluate("JSON.stringify(Object.keys(window))").toString()
         assertTrue { windowVariables.contains("document") }
         assertTrue { windowVariables.contains("setTimeout") }
@@ -70,7 +70,7 @@ class PulsarWebDriverMockSiteJsTests : WebDriverTestBase() {
     }
 
     @Test
-    fun whenOpenAHtmlPageThenScriptIsInjected() = runEnhancedWebDriverTest(interactiveUrl, browser) { driver ->
+    fun whenOpenAHtmlPageThenScriptIsInjected() = runWebDriverTestAndCompute(interactiveUrl, browser) { driver ->
         var detail = driver.evaluateDetail("typeof(window)")
         printlnPro(detail)
         // assertNotNull(detail?.value)
@@ -96,7 +96,7 @@ class PulsarWebDriverMockSiteJsTests : WebDriverTestBase() {
     }
 
     @Test
-    fun openAHtmlPageAndComputeMetadata() = runEnhancedWebDriverTest(interactiveUrl, browser) { driver ->
+    fun openAHtmlPageAndComputeMetadata() = runWebDriverTestAndCompute(interactiveUrl, browser) { driver ->
         driver.evaluate("__pulsar_utils__.scrollToMiddle()")
         var detail = driver.evaluateDetail("__pulsar_utils__.compute()")
         printlnPro(detail)
@@ -125,7 +125,7 @@ class PulsarWebDriverMockSiteJsTests : WebDriverTestBase() {
 
     @Test
     fun openAHtmlPageAndComputeScreenNumber() =
-        runEnhancedWebDriverTest(multiScreensInteractiveUrl, browser) { driver ->
+        runWebDriverTestAndCompute(multiScreensInteractiveUrl, browser) { driver ->
             driver.evaluate("__pulsar_utils__.scrollToTop()")
             var metadata = computeActiveDOMMetadata(driver)
             assertEquals(0f, metadata.screenNumber)
@@ -141,7 +141,7 @@ class PulsarWebDriverMockSiteJsTests : WebDriverTestBase() {
         }
 
     @Test
-    fun ensureNoInjectedDocumentVariablesAreSeen() = runEnhancedWebDriverTest(interactiveUrl, browser) { driver ->
+    fun ensureNoInjectedDocumentVariablesAreSeen() = runWebDriverTestAndCompute(interactiveUrl, browser) { driver ->
         val nodeVariables = driver.evaluate("JSON.stringify(Object.keys(document))").toString()
 //            assertTrue { nodeVariables.contains("querySelector") }
 //            assertTrue { nodeVariables.contains("textContent") }

@@ -21,7 +21,7 @@ class PulsarWebDriverMockSiteJsFullTests : WebDriverTestBase() {
     }
 
     @Test
-    fun openAHtmlPageAndComputeScreenNumber() = runEnhancedWebDriverTest(multiScreensInteractiveUrl, browser) { driver ->
+    fun openAHtmlPageAndComputeScreenNumber() = runWebDriverTestAndCompute(multiScreensInteractiveUrl, browser) { driver ->
         driver.evaluate("__pulsar_utils__.scrollToTop()")
         var metadata = computeActiveDOMMetadata(driver)
         assertEquals(0f, metadata.screenNumber)
@@ -37,12 +37,12 @@ class PulsarWebDriverMockSiteJsFullTests : WebDriverTestBase() {
     }
 
     @Test
-    fun openAHtmlPageAndUpdateStat() = runEnhancedWebDriverTest(multiScreensInteractiveUrl, browser) { driver ->
+    fun openAHtmlPageAndUpdateStat() = runWebDriverTestAndCompute(multiScreensInteractiveUrl, browser) { driver ->
         // Check if utils are available before proceeding
         val utilsExists = driver.evaluateValue("""typeof __pulsar_utils__ !== 'undefined'""")
         if (utilsExists != true) {
             printlnPro("WARNING: __pulsar_utils__ not available, skipping test")
-            return@runEnhancedWebDriverTest
+            return@runWebDriverTestAndCompute
         }
 
         driver.evaluate("__pulsar_utils__.scrollToBottom()")
@@ -53,7 +53,7 @@ class PulsarWebDriverMockSiteJsFullTests : WebDriverTestBase() {
         // If a JS exception occurred (e.g. utils not fully loaded), skip assertions
         if (evaluation.exception != null) {
             printlnPro("WARNING: JS exception occurred: ${evaluation.exception}, skipping test")
-            return@runEnhancedWebDriverTest
+            return@runWebDriverTestAndCompute
         }
 
         assertNotNull(evaluation.value)

@@ -50,8 +50,8 @@ class PulsarWebDriverCDPTests : WebDriverTestBase() {
 
     @Test
     @Ignore("Disabled temporarily")
-    fun whenNavigateAHtmlPageThenTheNavigateStateAreCorrect() = runEnhancedWebDriverTest(browser) { driver ->
-        openEnhanced(interactiveUrl, driver, 1)
+    fun whenNavigateAHtmlPageThenTheNavigateStateAreCorrect() = runWebDriverTestAndCompute(browser) { driver ->
+        openAndCompute(interactiveUrl, driver, 1)
 
         val navigateEntry = driver.navigateEntry
         assertTrue("Expect mainFrameReceived") { navigateEntry.mainFrameReceived }
@@ -69,7 +69,7 @@ class PulsarWebDriverCDPTests : WebDriverTestBase() {
 
     @Test
     @DisplayName("test evaluate 1+1")
-    fun testEvaluate1Plus1() = runEnhancedWebDriverTest(testURL, browser) { driver ->
+    fun testEvaluate1Plus1() = runWebDriverTestAndCompute(testURL, browser) { driver ->
         val code = """1+1"""
 
         val result = driver.evaluate(code)
@@ -103,7 +103,7 @@ class PulsarWebDriverCDPTests : WebDriverTestBase() {
                     printlnPro(e.message)
                 }
 
-                openEnhanced(url, driver)
+                openAndCompute(url, driver)
                 block(driver)
             }
         }

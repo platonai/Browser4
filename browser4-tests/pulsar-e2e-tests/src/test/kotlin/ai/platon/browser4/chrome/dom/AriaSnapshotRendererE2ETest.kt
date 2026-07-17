@@ -33,7 +33,7 @@ class AriaSnapshotRendererE2ETest : WebDriverTestBase() {
     @Test
     @DisplayName("Render Playwright-style aria snapshot output on a real server-hosted page")
     fun renderPlaywrightStyleAriaSnapshotOutputOnRealFixturePage() =
-        runEnhancedWebDriverTest(rendererFixtureURL) { driver ->
+        runWebDriverTestAndCompute(rendererFixtureURL) { driver ->
             assertIs<PulsarWebDriver>(driver)
             driver.waitForSelector("h1")
             driver.bringToFront()
@@ -63,7 +63,7 @@ class AriaSnapshotRendererE2ETest : WebDriverTestBase() {
 
     @Test
     @DisplayName("Render iframe nodes and nested frame content on a real frames page")
-    fun renderIframeNodesAndNestedFrameContentOnRealFramesPage() = runEnhancedWebDriverTest(nestedFramesURL) { driver ->
+    fun renderIframeNodesAndNestedFrameContentOnRealFramesPage() = runWebDriverTestAndCompute(nestedFramesURL) { driver ->
         assertIs<PulsarWebDriver>(driver)
         driver.waitForSelector("iframe")
         driver.bringToFront()

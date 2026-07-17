@@ -24,7 +24,7 @@ class PulsarWebDriverClickTests : WebDriverTestBase() {
 
     @Test
     @DisplayName("click with explicit count triggers calculator button")
-    fun testClickSingleCount() = runEnhancedWebDriverTest(multiScreensInteractiveUrl, browser) { driver ->
+    fun testClickSingleCount() = runWebDriverTestAndCompute(multiScreensInteractiveUrl, browser) { driver ->
         driver.waitForSelector("#calculatorSection")
 
         prepareCalculator(driver, "2", "3")
@@ -37,7 +37,7 @@ class PulsarWebDriverClickTests : WebDriverTestBase() {
 
     @Test
     @DisplayName("click uses default count when omitted")
-    fun testClickDefaultCount() = runEnhancedWebDriverTest(multiScreensInteractiveUrl, browser) { driver ->
+    fun testClickDefaultCount() = runWebDriverTestAndCompute(multiScreensInteractiveUrl, browser) { driver ->
         driver.waitForSelector("#toggleSection")
         assertMessageHidden(driver)
 
@@ -49,7 +49,7 @@ class PulsarWebDriverClickTests : WebDriverTestBase() {
 
     @Test
     @DisplayName("click count two toggles message twice")
-    fun testClickCountTwo() = runEnhancedWebDriverTest(multiScreensInteractiveUrl, browser) { driver ->
+    fun testClickCountTwo() = runWebDriverTestAndCompute(multiScreensInteractiveUrl, browser) { driver ->
         driver.waitForSelector("#toggleSection")
         assertMessageHidden(driver)
 
@@ -61,7 +61,7 @@ class PulsarWebDriverClickTests : WebDriverTestBase() {
 
     @Test
     @DisplayName("click count three toggles message three times")
-    fun testClickCountThree() = runEnhancedWebDriverTest(multiScreensInteractiveUrl, browser) { driver ->
+    fun testClickCountThree() = runWebDriverTestAndCompute(multiScreensInteractiveUrl, browser) { driver ->
         driver.waitForSelector("#toggleSection")
         assertMessageHidden(driver)
 
@@ -74,7 +74,7 @@ class PulsarWebDriverClickTests : WebDriverTestBase() {
     @Test
     @DisplayName("click sequential different elements on current screen")
     fun testClickSequentialDifferentElements() =
-        runEnhancedWebDriverTest(multiScreensInteractiveUrl, browser) { driver ->
+        runWebDriverTestAndCompute(multiScreensInteractiveUrl, browser) { driver ->
             driver.waitForSelector("#calculatorSection")
 
             driver.scrollTo("#calculatorSection")
@@ -98,7 +98,7 @@ class PulsarWebDriverClickTests : WebDriverTestBase() {
     @Test
     @DisplayName("click repeated on same element keeps calculator result stable")
     fun testClickRapidSequentialSameElement() =
-        runEnhancedWebDriverTest(multiScreensInteractiveUrl, browser) { driver ->
+        runWebDriverTestAndCompute(multiScreensInteractiveUrl, browser) { driver ->
             driver.waitForSelector("#calculatorSection")
 
             prepareCalculator(driver, "1.5", "2.5")
@@ -113,7 +113,7 @@ class PulsarWebDriverClickTests : WebDriverTestBase() {
 
     @Test
     @DisplayName("click can target out of view element by auto-scrolling")
-    fun testClickElementScrolledOutOfView() = runEnhancedWebDriverTest(multiScreensInteractiveUrl, browser) { driver ->
+    fun testClickElementScrolledOutOfView() = runWebDriverTestAndCompute(multiScreensInteractiveUrl, browser) { driver ->
         driver.waitForSelector("#contactSection")
         driver.scrollToBottom()
         assertMessageHidden(driver)
@@ -126,7 +126,7 @@ class PulsarWebDriverClickTests : WebDriverTestBase() {
 
     @Test
     @DisplayName("click remains functional after navigation")
-    fun testClickAfterNavigation() = runEnhancedWebDriverTest(multiScreensInteractiveUrl, browser) { driver ->
+    fun testClickAfterNavigation() = runWebDriverTestAndCompute(multiScreensInteractiveUrl, browser) { driver ->
         driver.waitForSelector("#calculatorSection")
 
         prepareCalculator(driver, "3", "4")
@@ -145,7 +145,7 @@ class PulsarWebDriverClickTests : WebDriverTestBase() {
 
     @Test
     @DisplayName("click with shift modifier still triggers button")
-    fun testClickWithShiftModifier() = runEnhancedWebDriverTest(multiScreensInteractiveUrl, browser) { driver ->
+    fun testClickWithShiftModifier() = runWebDriverTestAndCompute(multiScreensInteractiveUrl, browser) { driver ->
         driver.waitForSelector("#toggleSection")
         assertMessageHidden(driver)
 
@@ -157,7 +157,7 @@ class PulsarWebDriverClickTests : WebDriverTestBase() {
 
     @Test
     @DisplayName("click with control modifier still triggers button")
-    fun testClickWithControlModifier() = runEnhancedWebDriverTest(multiScreensInteractiveUrl, browser) { driver ->
+    fun testClickWithControlModifier() = runWebDriverTestAndCompute(multiScreensInteractiveUrl, browser) { driver ->
         driver.waitForSelector("#calculatorSection")
 
         prepareCalculator(driver, "4", "5")
@@ -170,7 +170,7 @@ class PulsarWebDriverClickTests : WebDriverTestBase() {
 
     @Test
     @DisplayName("click with alt modifier still triggers button")
-    fun testClickWithAltModifier() = runEnhancedWebDriverTest(multiScreensInteractiveUrl, browser) { driver ->
+    fun testClickWithAltModifier() = runWebDriverTestAndCompute(multiScreensInteractiveUrl, browser) { driver ->
         driver.waitForSelector("#toggleSection")
         assertMessageHidden(driver)
 
@@ -182,7 +182,7 @@ class PulsarWebDriverClickTests : WebDriverTestBase() {
 
     @Test
     @DisplayName("click on non-existent element is a no-op")
-    fun testClickNonExistentElement() = runEnhancedWebDriverTest(multiScreensInteractiveUrl, browser) { driver ->
+    fun testClickNonExistentElement() = runWebDriverTestAndCompute(multiScreensInteractiveUrl, browser) { driver ->
         driver.waitForSelector("#toggleSection")
         assertMessageHidden(driver)
 
@@ -198,7 +198,7 @@ class PulsarWebDriverClickTests : WebDriverTestBase() {
 
     @Test
     @DisplayName("click on disabled button does not execute onclick handler")
-    fun testClickDisabledButton() = runEnhancedWebDriverTest(multiScreensInteractiveUrl, browser) { driver ->
+    fun testClickDisabledButton() = runWebDriverTestAndCompute(multiScreensInteractiveUrl, browser) { driver ->
         driver.waitForSelector("#calculatorSection")
 
         prepareCalculator(driver, "10", "5")

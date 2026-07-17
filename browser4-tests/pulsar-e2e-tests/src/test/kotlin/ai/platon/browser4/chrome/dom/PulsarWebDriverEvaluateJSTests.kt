@@ -60,7 +60,7 @@ class PulsarWebDriverEvaluateJSTests : WebDriverTestBase() {
 
     @Test
     fun testEvaluateThatReturnsPrimitiveValues() =
-        runEnhancedWebDriverTest("$assetsBaseURL/dom.html", browser) { driver ->
+        runWebDriverTestAndCompute("$assetsBaseURL/dom.html", browser) { driver ->
             val code = """1+1"""
 
             val result = driver.evaluate(code)
@@ -70,7 +70,7 @@ class PulsarWebDriverEvaluateJSTests : WebDriverTestBase() {
         }
 
     @Test
-    fun testEvaluateThatReturnsObject() = runEnhancedWebDriverTest("$assetsBaseURL/dom.html", browser) { driver ->
+    fun testEvaluateThatReturnsObject() = runWebDriverTestAndCompute("$assetsBaseURL/dom.html", browser) { driver ->
         val code = """__pulsar_utils__.getConfig()"""
 
         val result = driver.evaluateDetail(code)
@@ -116,7 +116,7 @@ class PulsarWebDriverEvaluateJSTests : WebDriverTestBase() {
 
     @Test
     fun testEvaluateSingleLineExpressions() =
-        runEnhancedWebDriverTest("$assetsBaseURL/dom.html", browser) { driver ->
+        runWebDriverTestAndCompute("$assetsBaseURL/dom.html", browser) { driver ->
             val code = "(() => {\n  const a = 1;\n  const b = 2;\n  return a + b;\n})()"
 
             val result = driver.evaluate(code)
@@ -127,7 +127,7 @@ class PulsarWebDriverEvaluateJSTests : WebDriverTestBase() {
 
     @Test
     fun testEvaluateAndEvaluateDetailKeepGroupedExpressionsAsExpressions() =
-        runEnhancedWebDriverTest("$assetsBaseURL/dom.html", browser) { driver ->
+        runWebDriverTestAndCompute("$assetsBaseURL/dom.html", browser) { driver ->
             val code = "(1 + 2)"
 
             assertEquals(3, driver.evaluate(code))
@@ -136,7 +136,7 @@ class PulsarWebDriverEvaluateJSTests : WebDriverTestBase() {
 
     @Test
     fun testEvaluateAndEvaluateDetailKeepAsyncPrefixedCallsAsCalls() =
-        runEnhancedWebDriverTest("$assetsBaseURL/dom.html", browser) { driver ->
+        runWebDriverTestAndCompute("$assetsBaseURL/dom.html", browser) { driver ->
             val setup = """
                 (() => {
                     window.asyncOperation = () => 7;
@@ -152,7 +152,7 @@ class PulsarWebDriverEvaluateJSTests : WebDriverTestBase() {
 
     @Test
     fun testEvaluateAndEvaluateDetailNormalizeReturnedObjectLiterals() =
-        runEnhancedWebDriverTest("$assetsBaseURL/dom.html", browser) { driver ->
+        runWebDriverTestAndCompute("$assetsBaseURL/dom.html", browser) { driver ->
             val code = "return { answer: 42, nested: { ok: true } }"
 
             assertNull(driver.evaluate(code))
@@ -174,7 +174,7 @@ class PulsarWebDriverEvaluateJSTests : WebDriverTestBase() {
 
     @Test
     fun testEvaluateAndEvaluateDetailInvokeCallableRawInputs() =
-        runEnhancedWebDriverTest("$assetsBaseURL/dom.html", browser) { driver ->
+        runWebDriverTestAndCompute("$assetsBaseURL/dom.html", browser) { driver ->
             assertEquals(5, driver.evaluate("() => 5"))
             assertPrimitiveDetail(driver.evaluateDetail("() => 5"), 5)
 
@@ -187,7 +187,7 @@ class PulsarWebDriverEvaluateJSTests : WebDriverTestBase() {
 
     @Test
     fun testEvaluateMultiLineExpressions() =
-        runEnhancedWebDriverTest("$assetsBaseURL/dom.html", browser) { driver ->
+        runWebDriverTestAndCompute("$assetsBaseURL/dom.html", browser) { driver ->
             val code = """
 () => {
   const a = 10;
@@ -218,7 +218,7 @@ class PulsarWebDriverEvaluateJSTests : WebDriverTestBase() {
 
     @Test
     fun testEvaluateIifeImmediatelyInvokedFunctionExpression() =
-        runEnhancedWebDriverTest("$assetsBaseURL/dom.html", browser) { driver ->
+        runWebDriverTestAndCompute("$assetsBaseURL/dom.html", browser) { driver ->
             val code = """
 (() => {
   const a = 10;
@@ -250,7 +250,7 @@ class PulsarWebDriverEvaluateJSTests : WebDriverTestBase() {
 
     @Test
     fun testAlreadyInvokedIifeIsNotDoubleWrappedAndEvaluates() =
-        runEnhancedWebDriverTest("$assetsBaseURL/dom.html", browser) { driver ->
+        runWebDriverTestAndCompute("$assetsBaseURL/dom.html", browser) { driver ->
             val iife = "(() => { return 3 })()"
             val expression = JsUtils.toIIFE(iife)
             // should normalize with trailing semicolon
@@ -261,7 +261,7 @@ class PulsarWebDriverEvaluateJSTests : WebDriverTestBase() {
 
     @Test
     fun testArrowFunctionWithArgumentsViaIife() =
-        runEnhancedWebDriverTest("$assetsBaseURL/dom.html", browser) { driver ->
+        runWebDriverTestAndCompute("$assetsBaseURL/dom.html", browser) { driver ->
             val arrow = "x => x * 2"
             val expression = JsUtils.toIIFE(arrow, "5")
             val result = driver.evaluate(expression)
@@ -270,7 +270,7 @@ class PulsarWebDriverEvaluateJSTests : WebDriverTestBase() {
 
     @Test
     fun testObjectLiteralIifeReturnsObjectByValue() =
-        runEnhancedWebDriverTest("$assetsBaseURL/dom.html", browser) { driver ->
+        runWebDriverTestAndCompute("$assetsBaseURL/dom.html", browser) { driver ->
             val obj = "{ answer: 42, nested: { ok: true } }"
             val expression = JsUtils.toIIFE(obj)
             val detail = driver.evaluateValueDetail(expression)
@@ -288,7 +288,7 @@ class PulsarWebDriverEvaluateJSTests : WebDriverTestBase() {
 
     @Test
     fun testPlainFunctionIifePassthrough() =
-        runEnhancedWebDriverTest("$assetsBaseURL/dom.html", browser) { driver ->
+        runWebDriverTestAndCompute("$assetsBaseURL/dom.html", browser) { driver ->
             val funcIife = "(function(){ return 2 * 3 })()"
             val expression = JsUtils.toIIFE(funcIife)
             var result = driver.evaluate(expression)
@@ -300,7 +300,7 @@ class PulsarWebDriverEvaluateJSTests : WebDriverTestBase() {
 
     @Test
     fun testElementTargetedEvaluateSupportsArrowAndFunctionArgumentSyntax() =
-        runEnhancedWebDriverTest(interactiveUrl, browser) { driver ->
+        runWebDriverTestAndCompute(interactiveUrl, browser) { driver ->
             val selector = "#pageHeader h1"
             val expected = "Welcome to the Interactive Page"
 

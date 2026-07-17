@@ -38,7 +38,7 @@ class SnapshotServiceE2ETest : WebDriverTestBase() {
 
     @Test
     @DisplayName("Given interactive page When collecting all trees Then get DOM AX and Snapshot with timings")
-    fun testGetDomAxAndSnapshot() = runEnhancedWebDriverTest(testURL) { driver ->
+    fun testGetDomAxAndSnapshot() = runWebDriverTestAndCompute(testURL) { driver ->
         assertIs<PulsarWebDriver>(driver)
         driver.waitForSelector("h1")
         driver.bringToFront()
