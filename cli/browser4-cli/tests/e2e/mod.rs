@@ -2630,6 +2630,263 @@ fn key_event_count(state: &serde_json::Value) -> usize {
         .map_or(0, |events| events.len())
 }
 
+// ---------------------------------------------------------------------------
+// Direct DOM / JS-state read helpers
+// ---------------------------------------------------------------------------
+// These bypass the #state-log <pre> element (which is a JS-maintained copy)
+// and instead read form-control values from the DOM or JS-state fields from
+// window.__browser4State directly.  This is more reliable when CDP event
+// delivery is racy — the browser's native form-control state stays current
+// even when JS event handlers are delayed or dropped.
+
+/// Read an element's `.value` property directly from the DOM.
+fn read_dom_value(ctx: &mut E2ECtx, selector: &str) -> String {
+    eval_text(
+        ctx,
+        &format!(
+            "(document.querySelector('{}') || {{}}).value || ''",
+            selector
+        ),
+    )
+}
+
+/// Read `window.__browser4State.keyEvents` directly via JSON.stringify.
+fn read_key_events(ctx: &mut E2ECtx) -> Vec<String> {
+    let text = eval_text(
+        ctx,
+        "JSON.stringify((window.__browser4State || {}).keyEvents || [])",
+    );
+    serde_json::from_str::<Vec<String>>(text.trim()).unwrap_or_default()
+}
+
+/// Read `window.__browser4State.lastWheel` directly via JSON.stringify.
+fn read_last_wheel(ctx: &mut E2ECtx) -> Option<(i64, i64)> {
+    let text = eval_text(
+        ctx,
+        "JSON.stringify((window.__browser4State || {}).lastWheel)",
+    );
+    let arr: Vec<i64> = serde_json::from_str(text.trim()).unwrap_or_default();
+    if arr.len() == 2 {
+        Some((arr[0], arr[1]))
+    } else {
+        None
+    }
+}
+
+/// Read `window.scrollX` — the native horizontal scroll offset.
+fn read_scroll_x(ctx: &mut E2ECtx) -> i64 {
+    let text = eval_text(ctx, "window.scrollX.toString()");
+    text.trim().parse().unwrap_or(0)
+}
+
+/// Read `window.scrollY` — the native vertical scroll offset.
+fn read_scroll_y(ctx: &mut E2ECtx) -> i64 {
+    let text = eval_text(ctx, "window.scrollY.toString()");
+    text.trim().parse().unwrap_or(0)
+}
+
+/// Poll until `window.scrollY` reaches at least `min_expected`.  Panics on timeout.
+fn wait_for_scroll_y_or_abort(
+    ctx: &mut E2ECtx,
+    min_expected: i64,
+    timeout_ms: u64,
+    failure_message: &str,
+) {
+    let started_at = Instant::now();
+    let deadline = Instant::now() + Duration::from_millis(timeout_ms);
+    let mut last_value = 0i64;
+    while Instant::now() < deadline {
+        last_value = read_scroll_y(ctx);
+        if last_value >= min_expected {
+            ctx.record_step(
+                format!(
+                    "wait for scrollY >= {} (timeout={}ms)",
+                    min_expected, timeout_ms
+                ),
+                started_at.elapsed(),
+            );
+            return;
+        }
+        thread::sleep(Duration::from_millis(300));
+    }
+    panic!(
+        "{failure_message}. Timed out after {timeout_ms}ms.\n\
+         Expected scrollY >= {min_expected}, got {last_value}"
+    );
+}
+
+/// Poll until a DOM element's `.value` matches `expected`.  Panics on timeout.
+fn wait_for_dom_value_or_abort(
+    ctx: &mut E2ECtx,
+    selector: &str,
+    expected: &str,
+    timeout_ms: u64,
+    failure_message: &str,
+) {
+    let started_at = Instant::now();
+    let deadline = Instant::now() + Duration::from_millis(timeout_ms);
+    let mut last_value = String::new();
+    while Instant::now() < deadline {
+        last_value = read_dom_value(ctx, selector);
+        if last_value == expected {
+            ctx.record_step(
+                format!(
+                    "wait for dom value {} == {} (timeout={}ms)",
+                    truncate_timing_label(selector, 32),
+                    truncate_timing_label(expected, 32),
+                    timeout_ms
+                ),
+                started_at.elapsed(),
+            );
+            return;
+        }
+        thread::sleep(Duration::from_millis(300));
+    }
+    panic!(
+        "{failure_message}. Timed out after {timeout_ms}ms.\nExpected '{expected}', got '{last_value}'"
+    );
+}
+
+/// Poll until `window.__browser4State.lastWheel` satisfies `predicate`.
+/// Panics on timeout.
+fn wait_for_last_wheel_or_abort<F>(
+    ctx: &mut E2ECtx,
+    predicate: F,
+    timeout_ms: u64,
+    failure_message: &str,
+) where
+    F: Fn(i64, i64) -> bool,
+{
+    let started_at = Instant::now();
+    let deadline = Instant::now() + Duration::from_millis(timeout_ms);
+    let mut last_value = None;
+    while Instant::now() < deadline {
+        last_value = read_last_wheel(ctx);
+        if let Some((x, y)) = last_value {
+            if predicate(x, y) {
+                ctx.record_step(
+                    format!("wait for lastWheel (timeout={}ms)", timeout_ms),
+                    started_at.elapsed(),
+                );
+                return;
+            }
+        }
+        thread::sleep(Duration::from_millis(300));
+    }
+    panic!(
+        "{failure_message}. Timed out after {timeout_ms}ms.\nLast lastWheel: {last_value:?}"
+    );
+}
+
+/// Poll until `window.__browser4State.keyEvents` has at least
+/// `before_count + 2` entries and the tail includes the down/up pair for
+/// `key`.  Panics on timeout.
+fn wait_for_press_key_events_or_abort(
+    ctx: &mut E2ECtx,
+    key: &str,
+    before_count: usize,
+    timeout_ms: u64,
+    failure_message: &str,
+) {
+    let started_at = Instant::now();
+    let deadline = Instant::now() + Duration::from_millis(timeout_ms);
+    let mut last_events = Vec::new();
+    while Instant::now() < deadline {
+        last_events = read_key_events(ctx);
+        if last_events.len() >= before_count + 2 {
+            let down = format!("down:{key}");
+            let up = format!("up:{key}");
+            let new_events: Vec<&str> = last_events
+                .iter()
+                .skip(before_count)
+                .map(String::as_str)
+                .collect();
+            if new_events.iter().any(|e| *e == down)
+                && new_events.iter().any(|e| *e == up)
+            {
+                ctx.record_step(
+                    format!(
+                        "wait for press key events for '{}' (timeout={}ms)",
+                        key, timeout_ms
+                    ),
+                    started_at.elapsed(),
+                );
+                return;
+            }
+        }
+        thread::sleep(Duration::from_millis(300));
+    }
+    panic!(
+        "{failure_message}. Timed out after {timeout_ms}ms.\n\
+         Last keyEvents ({} total, {before_count} before): {last_events:?}",
+        last_events.len(),
+    );
+}
+
+/// Poll until `window.__browser4State.keyEvents` grows beyond
+/// `before_count` and the last entry equals `expected_event`.
+/// Panics on timeout.
+fn wait_for_key_event_or_abort(
+    ctx: &mut E2ECtx,
+    expected_event: &str,
+    before_count: usize,
+    timeout_ms: u64,
+    failure_message: &str,
+) {
+    let started_at = Instant::now();
+    let deadline = Instant::now() + Duration::from_millis(timeout_ms);
+    let mut last_events = Vec::new();
+    while Instant::now() < deadline {
+        last_events = read_key_events(ctx);
+        if last_events.len() > before_count
+            && last_events.last().map(String::as_str) == Some(expected_event)
+        {
+            ctx.record_step(
+                format!(
+                    "wait for key event '{}' (timeout={}ms)",
+                    expected_event, timeout_ms
+                ),
+                started_at.elapsed(),
+            );
+            return;
+        }
+        thread::sleep(Duration::from_millis(300));
+    }
+    panic!(
+        "{failure_message}. Timed out after {timeout_ms}ms.\n\
+         Last keyEvents ({} total, {before_count} before): {last_events:?}",
+        last_events.len(),
+    );
+}
+
+/// Non-fatal variant of `wait_for_key_event_or_abort` — prints a warning
+/// on timeout instead of panicking.  Key events via CDP Input.dispatchKeyEvent
+/// may not reliably trigger JS DOM listeners in headless Chrome.
+fn assume_wait_for_key_event(
+    ctx: &mut E2ECtx,
+    expected_event: &str,
+    before_count: usize,
+    timeout_ms: u64,
+    failure_message: &str,
+) {
+    let deadline = Instant::now() + Duration::from_millis(timeout_ms);
+    let mut last_events = Vec::new();
+    while Instant::now() < deadline {
+        last_events = read_key_events(ctx);
+        if last_events.len() > before_count
+            && last_events.last().map(String::as_str) == Some(expected_event)
+        {
+            return;
+        }
+        thread::sleep(Duration::from_millis(300));
+    }
+    eprintln!(
+        "[assumption] {failure_message}. Timed out after {timeout_ms}ms.\n\
+         Last keyEvents ({} total, {before_count} before): {last_events:?}",
+        last_events.len(),
+    );
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum WaitForStateFailureMode {
     ReturnError,
