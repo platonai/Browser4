@@ -63,11 +63,11 @@ class NavigateHistory {
     }
 
     fun removeAll(url: String) {
-        _history.removeAll { it.url == url }
+        _history.removeAll { it.userTypedUrl == url }
     }
 
     fun removeAll(urlRegex: Regex) {
-        _history.removeAll { it.url.matches(urlRegex) }
+        _history.removeAll { it.userTypedUrl.matches(urlRegex) }
     }
 
     fun clear() {

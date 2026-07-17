@@ -98,7 +98,7 @@ open class DefaultBrowseRPA: BrowseRPA {
             else -> PREV_PAGE_WILL_READY
         }
 
-        return CheckState(code, testNav?.url ?: "")
+        return CheckState(code, testNav?.userTypedUrl ?: "")
     }
 
     private fun mayWaitFor(currentEntry: NavigateEntry, testEntry: NavigateEntry): Boolean {
