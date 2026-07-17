@@ -1047,10 +1047,21 @@ class AgenticCliRunner(
             args["targetSelector"] = endRef
         }
 
-        // modifiers (list) → modifier (first element as string)
+        // modifiers (list or string) → modifier (single string)
         val modifiers = args.remove("modifiers")
-        if (!args.containsKey("modifier") && modifiers is List<*> && modifiers.isNotEmpty()) {
-            args["modifier"] = modifiers.first()?.toString()
+        if (!args.containsKey("modifier") && modifiers != null) {
+            when (modifiers) {
+                is List<*> -> {
+                    if (modifiers.isNotEmpty()) {
+                        args["modifier"] = modifiers.first()?.toString()
+                    }
+                }
+                is String -> {
+                    if (modifiers.isNotBlank()) {
+                        args["modifier"] = modifiers
+                    }
+                }
+            }
         }
     }
 

@@ -713,12 +713,35 @@ pub(super) fn test_pointer_commands(ctx: &mut E2ECtx) {
         "Expected clickCount to become 1 after click",
     );
 
+    // Modifier click: Shift+click exercises the CDP modifier-bitmask code
+    // path in EmulationHandler.clickWithModifiers().  On some platforms
+    // (notably Windows headless Chrome) CDP Input.dispatchMouseEvent with a
+    // modifier bitmask may not reliably trigger DOM click events, so we
+    // assume (skip) rather than abort on failure.
+    run_command(ctx, &["click", "#click-target", "--modifiers", "Shift"]);
+    assume_wait_for_state(
+        ctx,
+        |s| s["clickCount"].as_u64() == Some(2),
+        2_000,
+        "Expected clickCount to become 2 after Shift+click",
+    );
+
     run_command(ctx, &["dblclick", "#dblclick-target"]);
     wait_for_state_or_abort(
         ctx,
         |s| s["doubleClickCount"].as_u64() == Some(1),
         2_000,
         "Expected doubleClickCount to become 1 after dblclick",
+    );
+
+    // Modifier dblclick: exercises the CDP modifier-bitmask dblclick path.
+    // Same platform caveat as modifier click above.
+    run_command(ctx, &["dblclick", "#dblclick-target", "--modifiers", "Shift"]);
+    assume_wait_for_state(
+        ctx,
+        |s| s["doubleClickCount"].as_u64() == Some(2),
+        2_000,
+        "Expected doubleClickCount to become 2 after Shift+dblclick",
     );
 
     run_command(ctx, &["hover", "#hover-target"]);

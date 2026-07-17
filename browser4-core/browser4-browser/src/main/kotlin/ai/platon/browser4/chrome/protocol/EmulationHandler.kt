@@ -772,7 +772,12 @@ class EmulationHandler(
     private val isActive get() = bp != null
 
     suspend fun click(
-        node: NodeRef, count: Int, position: String = "center", modifier: String? = null, delayMillis: Long = 100
+        node: NodeRef,
+        count: Int,
+        position: String = "center",
+        modifier: String? = null,
+        delayMillis: Long = 100,
+        dispatchCdpMouseEvents: Boolean = true,
     ) {
         val point = getInteractPoint(node, position, useRandomOffset = true) ?: return
 
@@ -791,6 +796,15 @@ class EmulationHandler(
                     userGesture = true,
                 )
             }
+        }
+
+        // On Windows, CDP Input.dispatchMouseEvent does not reliably trigger
+        // DOM click events in headless Chrome.  When dispatchCdpMouseEvents is
+        // false (Windows-only), the caller will use a DOM click fallback instead.
+        // We still run the prep work above (point calculation + focus) so the
+        // element is ready for interaction.
+        if (!dispatchCdpMouseEvents) {
+            return
         }
 
         // Use CDP Input.dispatchMouseEvent (trusted, synchronous) instead of

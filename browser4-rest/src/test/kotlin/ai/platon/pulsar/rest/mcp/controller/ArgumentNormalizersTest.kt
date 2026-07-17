@@ -133,6 +133,18 @@ class ArgumentNormalizersTest {
             assertFalse(result.containsKey("modifier"))
             assertFalse(result.containsKey("modifiers"))
         }
+
+        @Test
+        @DisplayName("modifiers string becomes modifier string")
+        fun modifiersStringBecomesModifier() {
+            val args = mutableMapOf<String, Any?>(
+                "modifiers" to "Shift"
+            )
+            val result = normalizer.normalize("click", args)
+
+            assertEquals("Shift", result["modifier"], "string modifiers should become 'modifier'")
+            assertFalse(result.containsKey("modifiers"))
+        }
     }
 
     // =========================================================================

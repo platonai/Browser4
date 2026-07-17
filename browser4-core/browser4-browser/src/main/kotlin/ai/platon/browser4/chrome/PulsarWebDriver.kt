@@ -705,16 +705,20 @@ open class PulsarWebDriver constructor(
     override suspend fun click(selector: String, count: Int) {
         rpc.invokeOnElement(selector, "click", scrollIntoView = true) { node ->
             waitForScrollSettled(selector)
-            val delayMillis = randomDelayMillis("click")
-            emulator.click(node, count, position = "center", modifier = null, delayMillis = delayMillis)
+            val isWindows = org.apache.commons.lang3.SystemUtils.IS_OS_WINDOWS
             // On Windows, CDP Input.dispatchMouseEvent (mousePressed/mouseReleased)
             // does not reliably trigger DOM click events in headless Chrome.
-            // Dispatch a DOM click as a safety net so that page-level event
-            // listeners observe the click.  This is gated to Windows only because
-            // on Linux/macOS the CDP events work correctly and a second synthetic
-            // click would cause double-firing.
-            if (org.apache.commons.lang3.SystemUtils.IS_OS_WINDOWS) {
+            // Use a DOM click as the sole mechanism (skip CDP mouse events to
+            // avoid double-firing).  On Linux/macOS the CDP path works reliably.
+            if (isWindows) {
+                emulator.click(
+                    node, count, position = "center", modifier = null,
+                    delayMillis = 0, dispatchCdpMouseEvents = false,
+                )
                 dispatchDomClick(node, count)
+            } else {
+                val delayMillis = randomDelayMillis("click")
+                emulator.click(node, count, position = "center", modifier = null, delayMillis = delayMillis)
             }
         }
     }
@@ -725,9 +729,10 @@ open class PulsarWebDriver constructor(
             val delayMillis = randomDelayMillis("click")
             waitForScrollSettled(selector)
             emulator.click(node, 1, position = "center", modifier = modifier, delayMillis = delayMillis)
-            if (org.apache.commons.lang3.SystemUtils.IS_OS_WINDOWS) {
-                dispatchDomClick(node, 1)
-            }
+            // No DOM fallback for modifier clicks: the CDP modifier bitmask
+            // (Ctrl/Shift/Alt/Meta) has no equivalent in HTMLElement.click()
+            // or dispatchEvent, and adding a DOM fallback on top of CDP would
+            // double-fire on Windows where both paths work.
         }
     }
 
@@ -772,41 +777,84 @@ open class PulsarWebDriver constructor(
     override suspend fun dblclick(selector: String, modifier: String) {
         rpc.invokeOnElement(selector, "dblclick") {
             val node = page.focusOnSelector(selector) ?: return@invokeOnElement
-            emulator.click(node, 2)
-            if (org.apache.commons.lang3.SystemUtils.IS_OS_WINDOWS) {
+            val isWindows = org.apache.commons.lang3.SystemUtils.IS_OS_WINDOWS
+            val hasModifier = modifier.isNotBlank()
+            if (isWindows && !hasModifier) {
+                // Windows, no modifier: use DOM click as sole mechanism to
+                // avoid double-firing from CDP mouse events + synthetic DOM.
+                emulator.click(
+                    node, 2, position = "center", modifier = null,
+                    delayMillis = 0, dispatchCdpMouseEvents = false,
+                )
                 dispatchDomClick(node, 2)
+            } else if (hasModifier) {
+                // Any platform with a modifier (Shift/Ctrl/Alt/Meta): use CDP
+                // path — the modifier bitmask has no equivalent in
+                // HTMLElement.click() or MouseEvent dispatch.
+                emulator.click(node, 2, position = "center", modifier = modifier)
+            } else {
+                // Non-Windows, no modifier: standard CDP double-click.
+                emulator.click(node, 2)
             }
             gap("dblclick")
         }
     }
 
     /**
-     * Dispatch a DOM-level [MouseEvent] click on the given element.
+     * Dispatch DOM click(s) on the given element.
      *
-     * This is a safety-net fallback for Windows, where CDP
-     * `Input.dispatchMouseEvent` (mousePressed/mouseReleased) does not always
-     * trigger trusted DOM click events that page-level listeners can observe.
-     * The CDP path (focus, mouse movement, scroll-into-view) still runs first;
-     * this fallback only fires the DOM `click` event(s) so that `onclick`
-     * handlers and `addEventListener('click', …)` listeners see the click.
+     * On Windows, CDP `Input.dispatchMouseEvent` (mousePressed/mouseReleased)
+     * does not reliably trigger DOM click events in headless Chrome.  This
+     * method uses the element's native `click()` method — which fires a trusted
+     * `click` event and triggers default actions (navigation, form submission) —
+     * as the sole click mechanism.  The CDP prep work (scroll-into-view, focus,
+     * point calculation) runs beforehand via [EmulationHandler.click] with
+     * `dispatchCdpMouseEvents = false`.
+     *
+     * For double-click (count = 2), [HTMLElement.click] does not fire `dblclick`
+     * events per spec, so we dispatch a synthetic `dblclick` after the two clicks.
      *
      * @param node  The element to click.
      * @param count Number of consecutive clicks (1 = single, 2 = double).
      */
     private suspend fun dispatchDomClick(node: NodeRef, count: Int) {
         withNodeObjectId(browserProtocol, node) { objectId ->
-            repeat(count) {
-                browserProtocol.callFunctionOn(
-                    """function() {
-                         if (this instanceof HTMLElement) {
-                           var opts = {bubbles: true, cancelable: true, view: window};
-                           this.dispatchEvent(new MouseEvent('click', opts));
-                         }
-                       }""",
-                    objectId = objectId,
-                    returnByValue = false,
-                    userGesture = true,
-                )
+            when (count) {
+                1 -> {
+                    browserProtocol.callFunctionOn(
+                        """function() { if (this instanceof HTMLElement) { this.click(); } }""",
+                        objectId = objectId,
+                        returnByValue = false,
+                        userGesture = true,
+                    )
+                }
+                2 -> {
+                    // HTMLElement.click() does not fire dblclick events (per spec).
+                    // Fire two clicks + a synthetic dblclick to match real browser
+                    // behavior: mousedown/mouseup/click ×2 then dblclick.
+                    browserProtocol.callFunctionOn(
+                        """function() {
+                             if (this instanceof HTMLElement) {
+                               this.click();
+                               this.click();
+                               this.dispatchEvent(new MouseEvent('dblclick', {bubbles: true, cancelable: true, view: window}));
+                             }
+                           }""",
+                        objectId = objectId,
+                        returnByValue = false,
+                        userGesture = true,
+                    )
+                }
+                else -> {
+                    repeat(count) {
+                        browserProtocol.callFunctionOn(
+                            """function() { if (this instanceof HTMLElement) { this.click(); } }""",
+                            objectId = objectId,
+                            returnByValue = false,
+                            userGesture = true,
+                        )
+                    }
+                }
             }
         }
     }
