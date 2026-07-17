@@ -10,7 +10,7 @@ pub(super) type ScenarioFn = fn(&mut E2ECtx);
 
 /// Test granularity level.  The default `cargo test --test e2e` run only
 /// executes `Basic` scenarios so the suite finishes faster.  Pass
-/// `--level=EXTENDED` (or `--level=all`) to include longer-running /
+/// `--level=EXTENDED` (or `--level=ALL`) to include longer-running /
 /// edge-case tests.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub(super) enum ScenarioLevel {
@@ -24,7 +24,7 @@ impl ScenarioLevel {
             "BASIC" | "1" => Ok(ScenarioLevel::Basic),
             "EXTENDED" | "2" | "ALL" => Ok(ScenarioLevel::Extended),
             _ => Err(format!(
-                "Unknown level '{}'. Valid values: BASIC, EXTENDED (or 1, 2, all)",
+                "Unknown level '{}'. Valid values: BASIC, EXTENDED (or 1, 2, ALL)",
                 value
             )),
         }

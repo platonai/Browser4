@@ -86,7 +86,7 @@ Maven profile switches in root `pom.xml`: `-DrunITs=true`, `-DrunE2ETests=true`,
 cargo test --test e2e -- --help           # All options
 --scenario <pattern>                      # Glob filter
 --group <name>                            # Group filter (repeatable)
---level BASIC|EXTENDED|all                # Test depth
+--level BASIC|EXTENDED|ALL                # Test depth
 --fail-fast / --failed                    # Stop early / rerun failures
 --list / --list-groups                    # Discover without running
 --enable-install-scenario                 # Opt into install tests

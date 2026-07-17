@@ -4048,7 +4048,7 @@ fn parse_run_options() -> RunOptions {
         // --level / -L
         if let Some(value) = match_value_flag_start(&arg, "level", "-L") {
             let val = if value.is_empty() { args.next().unwrap_or_else(|| {
-                panic!("Missing value for --level. Use --level=<BASIC|EXTENDED|all> or --level <BASIC|EXTENDED|all>")
+                panic!("Missing value for --level. Use --level=<BASIC|EXTENDED|ALL> or --level <BASIC|EXTENDED|all>")
             })} else { value };
             max_level = scenarios::ScenarioLevel::from_arg(&val).unwrap_or_else(|error| {
                 panic!("{error}");
