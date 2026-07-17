@@ -707,7 +707,15 @@ open class PulsarWebDriver constructor(
             waitForScrollSettled(selector)
             val delayMillis = randomDelayMillis("click")
             emulator.click(node, count, position = "center", modifier = null, delayMillis = delayMillis)
-            // debugElementOnPoint(node)
+            // On Windows, CDP Input.dispatchMouseEvent (mousePressed/mouseReleased)
+            // does not reliably trigger DOM click events in headless Chrome.
+            // Dispatch a DOM click as a safety net so that page-level event
+            // listeners observe the click.  This is gated to Windows only because
+            // on Linux/macOS the CDP events work correctly and a second synthetic
+            // click would cause double-firing.
+            if (org.apache.commons.lang3.SystemUtils.IS_OS_WINDOWS) {
+                dispatchDomClick(node, count)
+            }
         }
     }
 
@@ -717,6 +725,9 @@ open class PulsarWebDriver constructor(
             val delayMillis = randomDelayMillis("click")
             waitForScrollSettled(selector)
             emulator.click(node, 1, position = "center", modifier = modifier, delayMillis = delayMillis)
+            if (org.apache.commons.lang3.SystemUtils.IS_OS_WINDOWS) {
+                dispatchDomClick(node, 1)
+            }
         }
     }
 
@@ -762,7 +773,41 @@ open class PulsarWebDriver constructor(
         rpc.invokeOnElement(selector, "dblclick") {
             val node = page.focusOnSelector(selector) ?: return@invokeOnElement
             emulator.click(node, 2)
+            if (org.apache.commons.lang3.SystemUtils.IS_OS_WINDOWS) {
+                dispatchDomClick(node, 2)
+            }
             gap("dblclick")
+        }
+    }
+
+    /**
+     * Dispatch a DOM-level [MouseEvent] click on the given element.
+     *
+     * This is a safety-net fallback for Windows, where CDP
+     * `Input.dispatchMouseEvent` (mousePressed/mouseReleased) does not always
+     * trigger trusted DOM click events that page-level listeners can observe.
+     * The CDP path (focus, mouse movement, scroll-into-view) still runs first;
+     * this fallback only fires the DOM `click` event(s) so that `onclick`
+     * handlers and `addEventListener('click', …)` listeners see the click.
+     *
+     * @param node  The element to click.
+     * @param count Number of consecutive clicks (1 = single, 2 = double).
+     */
+    private suspend fun dispatchDomClick(node: NodeRef, count: Int) {
+        withNodeObjectId(browserProtocol, node) { objectId ->
+            repeat(count) {
+                browserProtocol.callFunctionOn(
+                    """function() {
+                         if (this instanceof HTMLElement) {
+                           var opts = {bubbles: true, cancelable: true, view: window};
+                           this.dispatchEvent(new MouseEvent('click', opts));
+                         }
+                       }""",
+                    objectId = objectId,
+                    returnByValue = false,
+                    userGesture = true,
+                )
+            }
         }
     }
 
@@ -1473,7 +1518,7 @@ open class PulsarWebDriver constructor(
      * Navigate to the page and inject scripts.
      * */
     private suspend fun navigateInvaded(entry: NavigateEntry) {
-        val url = entry.url
+        val url = entry.userTypedUrl
 
         addScriptToEvaluateOnNewDocument()
 
@@ -1537,15 +1582,15 @@ open class PulsarWebDriver constructor(
     }
 
     private suspend fun onRequestWillBeSent(entry: NavigateEntry, event: RequestWillBeSent) {
-        if (!entry.url.startsWith("http")) {
+        if (!entry.userTypedUrl.startsWith("http")) {
             // This can happen for the following cases:
             // 1. non-http resources, for example, ftp, ws, etc.
             // 2. chrome's internal page, for example, about:blank, chrome://settings/, chrome://settings/system, etc.
             return
         }
 
-        if (!URLUtils.isStandard(entry.url)) {
-            logger.warn("Invalid url to sent to the browser | {}", entry.url)
+        if (!URLUtils.isStandard(entry.userTypedUrl)) {
+            logger.warn("Invalid url to sent to the browser | {}", entry.userTypedUrl)
             return
         }
 

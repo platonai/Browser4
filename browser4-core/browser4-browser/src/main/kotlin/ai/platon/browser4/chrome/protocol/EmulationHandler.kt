@@ -536,6 +536,19 @@ class Keyboard(private val bp: BrowserProtocol) {
                 pressShiftedPrintableChar(char, delayMillis)
                 return
             }
+            // CDP Input.dispatchKeyEvent does not reliably insert text into
+            // editable elements in headless Chrome (see commit 6a5ba71d7).
+            // Use insertText — the same mechanism Keyboard.type() relies on —
+            // for all single printable characters to guarantee the character
+            // appears.  The surrounding keyDown/keyUp still fire so that JS
+            // keyboard listeners observe the key press.
+            if (!Character.isISOControl(char)) {
+                down(keyString)
+                bp.insertText("$char")
+                delay(delayMillis.coerceAtLeast(60).milliseconds)
+                up(keyString)
+                return
+            }
         }
 
         val normalizedKeyString = normalizeKeyStringForPress(keyString)
@@ -586,24 +599,11 @@ class Keyboard(private val bp: BrowserProtocol) {
                 autoRepeat = autoRepeat,
                 commands = emptyList(),
             )
-            // Dispatch a CHAR event to ensure the character is actually inserted
-            // into editable elements.  On some platforms (notably Windows headless
-            // Chrome), a standalone KEY_DOWN event — even with text — may not
-            // reliably trigger text input.  The CHAR event directly generates
-            // beforeinput + input events, guaranteeing the character appears.
-            bp.dispatchKeyEvent(
-                type = DispatchKeyEventType.CHAR,
-                modifiers = toModifiersMask(pressedModifiers),
-                windowsVirtualKeyCode = baseVirtualKey.keyCodeWithoutLocation,
-                code = baseVirtualKey.code,
-                key = "$char",
-                text = "$char",
-                unmodifiedText = "$char",
-                location = baseVirtualKey.location,
-                isKeypad = baseVirtualKey.location == KEYPAD_LOCATION,
-                autoRepeat = false,
-                commands = emptyList(),
-            )
+            // CDP Input.dispatchKeyEvent with keyDown does not reliably insert
+            // text into editable elements in headless Chrome (see commit
+            // 6a5ba71d7).  Fall back to Input.insertText — the same mechanism
+            // Keyboard.type() uses — to guarantee the character appears.
+            bp.insertText("$char")
             delay(delayMillis.coerceAtLeast(60).milliseconds)
             bp.dispatchKeyEvent(
                 type = DispatchKeyEventType.KEY_UP,
