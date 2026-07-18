@@ -69,7 +69,7 @@ Create a plugin when you need to:
 mvn archetype:generate \
   -DarchetypeGroupId=ai.platon.pulsar \
   -DarchetypeArtifactId=browser4-plugin-archetype \
-  -DarchetypeVersion=4.12.0-rc.2-SNAPSHOT \
+  -DarchetypeVersion=4.12.0 \
   -DgroupId=com.example \
   -DartifactId=browser4-myfeature \
   -Dversion=1.0.0-SNAPSHOT \
