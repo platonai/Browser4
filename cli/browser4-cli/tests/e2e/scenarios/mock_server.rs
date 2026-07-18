@@ -652,7 +652,22 @@ pub(super) fn test_status_installed_runtime(ctx: &mut E2ECtx) {
     let runtime_bin = install_dir.join("runtime").join("bin");
     fs::create_dir_all(&runtime_bin).expect("create runtime bin dir");
     let java_name = if cfg!(windows) { "java.exe" } else { "java" };
-    fs::write(runtime_bin.join(java_name), "fake-java-binary").expect("write java");
+    let java_path = runtime_bin.join(java_name);
+    fs::write(&java_path, "fake-java-binary").expect("write java");
+
+    // On Unix, mark the fake java binary as executable so that
+    // install_dir_contains_runtime — which checks mode & 0o111 on the
+    // bundled JRE binary — does not reject it.  Without this the
+    // status command reports "not installed" on Linux CI.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&java_path)
+            .expect("read fake java metadata")
+            .permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&java_path, perms).expect("set fake java executable");
+    }
 
     // Also write the current.tag marker file so the CLI can find this install.
     fs::write(versions_dir.join("current.tag"), format!("{tag}\n")).expect("write current.tag");

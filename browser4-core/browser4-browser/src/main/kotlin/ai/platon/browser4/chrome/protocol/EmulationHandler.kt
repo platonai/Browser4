@@ -586,23 +586,23 @@ class Keyboard(private val bp: BrowserProtocol) {
         try {
             val autoRepeat = pressedKeys.contains(baseVirtualKey.code)
             pressedKeys.add(baseVirtualKey.code)
+            // Dispatch keyDown/up without text fields so that the browser does
+            // not auto-insert the character from the key event.  Text insertion
+            // is handled explicitly via Input.insertText below, which is the
+            // same mechanism Keyboard.type() uses.  Setting text/unmodifiedText
+            // on the keyDown event together with insertText causes double-insert
+            // in Docker headless Chrome (observed in CI, 2026-07-18).
             bp.dispatchKeyEvent(
                 type = DispatchKeyEventType.KEY_DOWN,
                 modifiers = toModifiersMask(pressedModifiers),
                 windowsVirtualKeyCode = baseVirtualKey.keyCodeWithoutLocation,
                 code = baseVirtualKey.code,
                 key = "$char",
-                text = "$char",
-                unmodifiedText = "$char",
                 location = baseVirtualKey.location,
                 isKeypad = baseVirtualKey.location == KEYPAD_LOCATION,
                 autoRepeat = autoRepeat,
                 commands = emptyList(),
             )
-            // CDP Input.dispatchKeyEvent with keyDown does not reliably insert
-            // text into editable elements in headless Chrome (see commit
-            // 6a5ba71d7).  Fall back to Input.insertText — the same mechanism
-            // Keyboard.type() uses — to guarantee the character appears.
             bp.insertText("$char")
             delay(delayMillis.coerceAtLeast(60).milliseconds)
             bp.dispatchKeyEvent(

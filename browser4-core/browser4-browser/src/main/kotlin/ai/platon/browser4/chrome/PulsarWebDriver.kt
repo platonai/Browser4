@@ -970,8 +970,15 @@ open class PulsarWebDriver constructor(
 
     @Throws(WebDriverException::class)
     override suspend fun fill(selector: String, text: String) {
-        rpc.invokeOnElement(selector, "fill", focus = true) { node ->
-            // TODO: check if the element is editable
+        // Match the pattern used by type(): resolve the element first, then
+        // explicitly focus inside the lambda with an early-return guard.
+        // Using focus=true on invokeOnElement causes focusOnSelector to run
+        // before the retry wrapper, so a transient focus failure drops the
+        // entire lambda — the fill silently does nothing.  With this pattern
+        // a focus failure is retried by invokeWithRetry, making fills more
+        // resilient in Docker headless Chrome where CDP focus can be flaky.
+        rpc.invokeOnElement(selector, "fill") {
+            val node = page.focusOnSelector(selector) ?: return@invokeOnElement
 
             clear(node)
 
