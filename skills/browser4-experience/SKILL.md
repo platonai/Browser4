@@ -25,20 +25,15 @@ After task  ──▶ experience_save ──▶ P4: Advisory only
 
 ### Copy-Paste Template
 
+The experience tools are **MCP tools** called by the agent during `browser4-cli agent run`. The agent should call them as part of its tool set:
+
 ```bash
-# Before starting a task — check what we know
-browser4-cli experience_query --url "https://amazon.com/dp/test" --intent "extract product details"
+# Before starting a task — the agent calls experience_query to check prior knowledge
+# After completing a task — the agent calls experience_save to persist what it learned
+browser4-cli agent run "Go to https://amazon.com/dp/test and extract product details"
 
-# After completing a task — save what we learned
-browser4-cli experience_save \
-  --url "https://amazon.com/dp/test" \
-  --task_type "extract_product_detail" \
-  --outcome "success" \
-  --trace '{"url":"...","steps":[...]}'
-
-# Inspect stored knowledge
-browser4-cli experience_list
-browser4-cli experience_list --filter "amazon"
+# To inspect stored knowledge, the agent calls experience_list
+browser4-cli agent run "List experience knowledge entries for amazon"
 ```
 
 ## 2. Decision Tree

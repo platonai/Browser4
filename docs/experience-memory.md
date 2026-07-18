@@ -8,22 +8,15 @@ tier: procedure
 
 ## Quick Start
 
+The experience tools (`experience_query`, `experience_save`, `experience_list`) are **MCP tools** called by the agent during `browser4-cli agent run` — they are not standalone CLI subcommands.
+
 ```bash
-# 1. Query existing knowledge before starting a task
-browser4-cli experience_query --url "https://amazon.com/dp/B0CXJ1NT4B" \
-  --intent "extract product details"
+# 1. Run the agent with a task — it calls experience_query before starting
+#    and experience_save after completion, automatically persisting knowledge
+browser4-cli agent run "Go to https://amazon.com/dp/B0CXJ1NT4B and extract product details"
 
-# 2. Complete the task with returned selectors/steps (if P1/P2)
-
-# 3. Save experience after task completion
-browser4-cli experience_save \
-  --url "https://amazon.com/dp/B0CXJ1NT4B" \
-  --task_type "extract_product_detail" \
-  --outcome "success" \
-  --trace '{"url":"https://amazon.com/dp/B0CXJ1NT4B","steps":[...],"task_type":"extract_product_detail"}'
-
-# 4. Inspect stored knowledge
-browser4-cli experience_list --filter "amazon"
+# 2. Inspect stored knowledge entries
+browser4-cli agent run "List experience knowledge entries for amazon"
 ```
 
 ## When to Use
@@ -31,7 +24,7 @@ browser4-cli experience_list --filter "amazon"
 Use `experience_query` **before every task** — it's a no-op on cold start (returns P5 with no penalty). Use `experience_save` **after every task** (success or failure) — knowledge compounds with each visit.
 
 When NOT to use:
-- Throwaway test sessions (use `experience_save --skip` or omit entirely)
+- Throwaway test sessions (skip the `experience_save` call or omit it entirely)
 - Tasks on sensitive/authenticated pages where selectors embed user data (the redaction layer in Phase 2+ will handle this automatically)
 
 ## How It Works
