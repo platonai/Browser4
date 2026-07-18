@@ -600,9 +600,16 @@ class AgenticCliRunner(
 
         /**
          * Legacy / explicit tool name → domain+method mappings.
+         * Also includes essential tools whose specs are normally auto-generated from
+         * @MCP-annotated WebDriver methods — the explicit entries ensure they resolve
+         * even when ToolSpecGenerator cannot read WebDriver.kt from the classpath.
          * Mirrors [ai.platon.pulsar.rest.mcp.controller.MCPToolController.resolveMcpToolCall].
          */
         private val LEGACY_TOOL_MAPPINGS: Map<String, ToolCall> = mapOf(
+            "navigate" to ToolCall("tab", "navigate", mutableMapOf()),
+            "reload" to ToolCall("tab", "reload", mutableMapOf()),
+            "go_back" to ToolCall("tab", "goBack", mutableMapOf()),
+            "go_forward" to ToolCall("tab", "goForward", mutableMapOf()),
             "page_title" to ToolCall("tab", "title", mutableMapOf()),
             "page_url" to ToolCall("tab", "currentUrl", mutableMapOf()),
             "switch_tab" to ToolCall("browser", "switchTab", mutableMapOf()),

@@ -902,8 +902,16 @@ class MCPToolController(
     private fun resolveMcpToolCall(toolName: String, args: Map<String, Any?>, agent: BasicBrowserAgent): ToolCall? {
         val args1 = args.toMutableMap()
 
-        // 1. Explicit mapping for legacy/special names
+        // 1. Explicit mapping for legacy/special names.
+        // Also includes essential tools whose specs are normally auto-generated from
+        // @MCP-annotated WebDriver methods — the explicit entries ensure they resolve
+        // even when ToolSpecGenerator cannot read WebDriver.kt from the classpath
+        // (e.g. running from a JAR in CI).
         when (toolName) {
+            "navigate" -> return ToolCall("tab", "navigate", args1)
+            "reload" -> return ToolCall("tab", "reload", args1)
+            "go_back" -> return ToolCall("tab", "goBack", args1)
+            "go_forward" -> return ToolCall("tab", "goForward", args1)
             "page_title" -> return ToolCall("tab", "title", args1)
             "page_url" -> return ToolCall("tab", "currentUrl", args1) // or just rely on pageUrl if it exists
             "switch_tab", "tab_select" -> return ToolCall("browser", "switchTab", args1)

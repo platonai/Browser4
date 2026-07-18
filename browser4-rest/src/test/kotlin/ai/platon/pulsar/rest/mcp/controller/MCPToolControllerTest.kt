@@ -475,7 +475,9 @@ class MCPToolControllerTest {
     @Test
     fun `test generic canonical commands`() = runBlocking {
         val commands = listOf(
-            Triple("go_back", "tab", "go_back"),
+            Triple("go_back", "tab", "goBack"),
+            Triple("go_forward", "tab", "goForward"),
+            Triple("navigate", "tab", "navigate"),
             Triple("reload", "tab", "reload"),
             Triple("press", "tab", "press"),
             Triple("hover", "tab", "hover"),
