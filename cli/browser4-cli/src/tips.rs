@@ -370,7 +370,8 @@ fn tips_for_command(command: &str) -> &'static [Tip] {
         "scroll" | "scroll-to" => TIPS_SCROLL,
         "wait" => TIPS_WAIT,
         "screenshot" | "pdf" => TIPS_SCREENSHOT,
-        "crawl" | "crawl-list" => TIPS_CRAWL,
+        "crawl" | "crawl-status" | "crawl-result" | "crawl-cancel" | "crawl-clear"
+        | "crawl-list" => TIPS_CRAWL,
         "swarm-create" | "swarm-submit" | "swarm-query" | "swarm-status" | "swarm-result"
         | "swarm-list" | "swarm-close" => TIPS_SWARM,
         "agent-run" | "agent-status" | "agent-result" | "agent-list" => TIPS_AGENT,
