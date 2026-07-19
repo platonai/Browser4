@@ -971,14 +971,17 @@ open class PulsarWebDriver constructor(
     @Throws(WebDriverException::class)
     override suspend fun fill(selector: String, text: String) {
         // Match the pattern used by type(): resolve the element first, then
-        // explicitly focus inside the lambda with an early-return guard.
-        // Using focus=true on invokeOnElement causes focusOnSelector to run
-        // before the retry wrapper, so a transient focus failure drops the
-        // entire lambda — the fill silently does nothing.  With this pattern
-        // a focus failure is retried by invokeWithRetry, making fills more
-        // resilient in Docker headless Chrome where CDP focus can be flaky.
-        rpc.invokeOnElement(selector, "fill") {
-            val node = page.focusOnSelector(selector) ?: return@invokeOnElement
+        // explicitly focus inside the lambda.  A fill that cannot run must
+        // never silently succeed (ok=true with nothing filled, observed in
+        // CI's Docker headless Chrome): unresolved/unfocusable elements throw
+        // here, making the failure visible and letting invokeWithRetry retry
+        // transient CDP focus failures.
+        val filled = rpc.invokeOnElement(selector, "fill") {
+            val node = page.focusOnSelector(selector)
+                ?: throw WebDriverException(
+                    "fill failed: element cannot be focused | selector: $selector",
+                    driver = this
+                )
 
             clear(node)
 
@@ -1020,6 +1023,95 @@ open class PulsarWebDriver constructor(
             keyboard?.type(text, randomDelayMillis("type"))
 
             gap("fill")
+
+            // Verify the text actually landed. Despite the delays above, fill()
+            // was still observed to silently no-op in CI's Docker headless Chrome
+            // (value stayed empty with ok=true) while type() worked — the exact
+            // mechanism (dropped insertText events / focus loss under CPU
+            // pressure) could not be reproduced outside that environment.
+            //
+            // Trigger only when the field can actually hold typed text and is
+            // still EMPTY after typing: that is precisely the observed failure
+            // mode, and it cannot false-positive on masked/transforming inputs
+            // (non-empty value), readOnly/disabled fields (input blocked by
+            // design), or contenteditable elements (no value property, where
+            // keyboard input works fine).
+            if (text.isNotEmpty() && isTextHoldingElement(node) && getLiveValueOrEmpty(node).isEmpty()) {
+                logger.warn(
+                    "fill: typed text did not land, falling back to JS value set | selector: {} | text: '{}'",
+                    selector, text
+                )
+                setValueViaJs(node, text)
+
+                if (getLiveValueOrEmpty(node).isEmpty()) {
+                    // Throw so invokeWithRetry retries instead of reporting a
+                    // phantom success (ok=true with nothing filled).
+                    throw WebDriverException(
+                        "fill failed: value is still empty after typing and JS fallback | selector: $selector",
+                        driver = this
+                    )
+                }
+            }
+
+            true
+        } ?: false
+
+        if (!filled) {
+            // The fill lambda never ran: either the element lookup inside
+            // invokeOnElement returned null, or the driver reported itself
+            // unhealthy.  Fail loudly instead of silently.
+            throw WebDriverException(
+                "fill failed: element not found or driver unavailable | selector: $selector",
+                driver = this
+            )
+        }
+    }
+
+    /**
+     * Whether the element can hold typed text: exposes a writable `value`
+     * property (input/textarea) and is neither readOnly nor disabled.
+     * Contenteditable and plain elements do not qualify, and [fill]'s
+     * verification must skip them: keyboard input works for them via
+     * Input.insertText, and an empty/blocked value is by design.
+     */
+    @Throws(WebDriverException::class)
+    private suspend fun isTextHoldingElement(node: NodeRef): Boolean {
+        return withNodeObjectId(browserProtocol, node) { objectId ->
+            browserProtocol.callFunctionOn(
+                """function() {
+                    return this
+                        && typeof this.value !== 'undefined'
+                        && !this.readOnly
+                        && !this.disabled;
+                }""",
+                objectId = objectId,
+                returnByValue = true
+            ).result.value as? Boolean ?: false
+        } ?: false
+    }
+
+    /**
+     * Last-resort value setter used by [fill] when trusted keyboard input does
+     * not land. Sets the value property directly and dispatches bubbling
+     * `input`/`change` events so page listeners (and framework two-way
+     * bindings) observe the change, mirroring the observable effect of
+     * `Input.insertText` (which also fires `input` but no key events).
+     */
+    @Throws(WebDriverException::class)
+    private suspend fun setValueViaJs(node: NodeRef, text: String) {
+        withNodeObjectId(browserProtocol, node) { objectId ->
+            browserProtocol.callFunctionOn(
+                """function(text) {
+                    if (typeof this.focus === 'function') { this.focus(); }
+                    this.value = text;
+                    this.dispatchEvent(new Event('input', { bubbles: true }));
+                    this.dispatchEvent(new Event('change', { bubbles: true }));
+                }""",
+                objectId = objectId,
+                returnByValue = false,
+                userGesture = true,
+                arguments = listOf(CallArgument(value = text)),
+            )
         }
     }
 

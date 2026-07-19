@@ -488,8 +488,12 @@ class EmulationHandlerTest {
             // "A" should expand to "Shift+a" via normalizeKeyStringForPress
             keyboard.press("A", delayMillis = 0)
 
-            // Should dispatch Shift down, a down, a up, Shift up (4 events)
-            verify(bp, atLeast(2)).dispatchKeyEvent(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any())
+            // Shift down, base-key down, base-key up, Shift up (4 key events).
+            // The key events intentionally carry null text fields — character
+            // insertion goes through Input.insertText (see pressShiftedPrintableChar),
+            // so nullable argument matchers are required here.
+            verify(bp, atLeast(4)).dispatchKeyEvent(any(), anyOrNull(), anyOrNull(), anyOrNull(), anyOrNull(), anyOrNull(), anyOrNull(), anyOrNull(), anyOrNull(), anyOrNull(), anyOrNull())
+            verify(bp).insertText("A")
         }
 
         @Test
@@ -498,7 +502,8 @@ class EmulationHandlerTest {
             // "!" should expand to "Shift+1"
             keyboard.press("!", delayMillis = 0)
 
-            verify(bp, atLeast(2)).dispatchKeyEvent(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any())
+            verify(bp, atLeast(4)).dispatchKeyEvent(any(), anyOrNull(), anyOrNull(), anyOrNull(), anyOrNull(), anyOrNull(), anyOrNull(), anyOrNull(), anyOrNull(), anyOrNull(), anyOrNull())
+            verify(bp).insertText("!")
         }
     }
 

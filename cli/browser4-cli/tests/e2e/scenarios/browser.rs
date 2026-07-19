@@ -1259,8 +1259,20 @@ pub(super) fn test_tab_commands(ctx: &mut E2ECtx) {
     );
 
     run_command(ctx, &["tab-close", &other_tab_index]);
-    let final_tabs = run_command(ctx, &["tab-list"]);
-    let final_tab_output = strip_snapshot_output(&final_tabs.stdout);
+    // The tab is closed asynchronously server-side (CDP Target.closeTarget +
+    // targetDestroyed event), so an immediate tab-list can still show the tab
+    // on a loaded CI runner.  Poll until it disappears instead of asserting
+    // on the first read.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(5_000);
+    let mut final_tab_output = String::new();
+    while std::time::Instant::now() < deadline {
+        let final_tabs = run_command(ctx, &["tab-list"]);
+        final_tab_output = strip_snapshot_output(&final_tabs.stdout);
+        if !final_tab_output.contains(&other_url) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(300));
+    }
     assert!(
         !final_tab_output.contains(&other_url),
         "Expected tab-close {other_tab_index} to remove '{other_url}' from tab-list:\n{final_tab_output}"
