@@ -15,7 +15,7 @@ class DOMInteractiveDynamicE2ETest : WebDriverTestBase() {
 
     @Test
     @DisplayName("test loading dynamic content")
-    fun testLoadingDynamicContent() = runEnhancedWebDriverTest(testURL) { driver ->
+    fun testLoadingDynamicContent() = runWebDriverTestAndCompute(testURL) { driver ->
         driver.waitForSelector("h1")
         val title = driver.selectFirstTextOrNull("h1")
         assertTrue(title?.contains("Dynamic Content Test Page") == true)
@@ -30,7 +30,7 @@ class DOMInteractiveDynamicE2ETest : WebDriverTestBase() {
 
     @Test
     @DisplayName("test interactions on dynamic content")
-    fun testExerciseAsyncLoading() = runEnhancedWebDriverTest(testURL) { driver ->
+    fun testExerciseAsyncLoading() = runWebDriverTestAndCompute(testURL) { driver ->
         // Basic smoke: title and hero content present
         driver.waitForSelector("h1")
         val title = driver.selectFirstTextOrNull("h1")
@@ -42,7 +42,7 @@ class DOMInteractiveDynamicE2ETest : WebDriverTestBase() {
 
     @Test
     @DisplayName("test interactions on dynamic content")
-    fun testExerciseDynamicList() = runEnhancedWebDriverTest(testURL) { driver ->
+    fun testExerciseDynamicList() = runWebDriverTestAndCompute(testURL) { driver ->
         // Basic smoke: title and hero content present
         driver.waitForSelector("h1")
 
@@ -102,7 +102,7 @@ class DOMInteractiveDynamicE2ETest : WebDriverTestBase() {
 
     @Test
     @DisplayName("test selector-targeted Enter press saves inline edit")
-    fun testSelectorPressEnterOnInlineEdit() = runEnhancedWebDriverTest(testURL) { driver ->
+    fun testSelectorPressEnterOnInlineEdit() = runWebDriverTestAndCompute(testURL) { driver ->
         driver.waitForSelector("#itemList [data-testid='tta-edit-1']")
 
         driver.bringToFront()
@@ -123,7 +123,7 @@ class DOMInteractiveDynamicE2ETest : WebDriverTestBase() {
 
     @Test
     @DisplayName("test exercise layz images on dynamic content")
-    fun testExerciseLazyImages() = runEnhancedWebDriverTest(testURL) { driver ->
+    fun testExerciseLazyImages() = runWebDriverTestAndCompute(testURL) { driver ->
         // Basic smoke: title and hero content present
         driver.waitForSelector("h1")
         val title = driver.selectFirstTextOrNull("h1")
@@ -160,7 +160,7 @@ class DOMInteractiveDynamicE2ETest : WebDriverTestBase() {
 
     @Test
     @DisplayName("test exercise virtual scrolling on dynamic content")
-    fun testExerciseVirtualScrolling() = runEnhancedWebDriverTest(testURL) { driver ->
+    fun testExerciseVirtualScrolling() = runWebDriverTestAndCompute(testURL) { driver ->
         // Basic smoke: title and hero content present
         driver.waitForSelector("h1")
         val title = driver.selectFirstTextOrNull("h1")
@@ -225,7 +225,7 @@ class DOMInteractiveDynamicE2ETest : WebDriverTestBase() {
 
     @Test
     @DisplayName("test exercise error handing on dynamic content")
-    fun testExerciseErrorHandling() = runEnhancedWebDriverTest(testURL) { driver ->
+    fun testExerciseErrorHandling() = runWebDriverTestAndCompute(testURL) { driver ->
         // Basic smoke: title and hero content present
         driver.waitForSelector("h1")
         val title = driver.selectFirstTextOrNull("h1")

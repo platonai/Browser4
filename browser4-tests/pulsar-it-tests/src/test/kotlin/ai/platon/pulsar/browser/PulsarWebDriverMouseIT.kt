@@ -1,4 +1,4 @@
-package ai.platon.browser4.api
+package ai.platon.pulsar.browser
 
 import ai.platon.browser4.chrome.PulsarWebDriver
 import ai.platon.pulsar.WebDriverTestBase
@@ -14,7 +14,7 @@ import kotlin.test.*
  * replaced the untrusted DOM event dispatch (dispatchDomClick).
  *
  * Test page: interactive-1.html — provides input fields, buttons, toggle, and
- * JavaScript instrumentation observable via [WebDriver.evaluate].
+ * JavaScript instrumentation observable via [ai.platon.browser4.api.WebDriver.evaluate].
  */
 class PulsarWebDriverMouseIT : WebDriverTestBase() {
 
@@ -30,7 +30,7 @@ class PulsarWebDriverMouseIT : WebDriverTestBase() {
 
         @Test
         @DisplayName("click triggers button onclick handler via CDP trusted events")
-        fun clickTriggersButtonHandler() = runEnhancedWebDriverTest(testPage, browser) { driver ->
+        fun clickTriggersButtonHandler() = runWebDriverTestAndCompute(testPage, browser) { driver ->
             // Set up operands via JS so the click is the only CDP action
             driver.evaluate("document.getElementById('num1').value = 4")
             driver.evaluate("document.getElementById('num2').value = 7")
@@ -45,7 +45,7 @@ class PulsarWebDriverMouseIT : WebDriverTestBase() {
 
         @Test
         @DisplayName("click on toggle button changes aria-expanded state")
-        fun clickTogglesAriaExpanded() = runEnhancedWebDriverTest(testPage, browser) { driver ->
+        fun clickTogglesAriaExpanded() = runWebDriverTestAndCompute(testPage, browser) { driver ->
             val expandedBefore = driver.evaluate(
                 "document.getElementById('toggleMessageButton').getAttribute('aria-expanded')", ""
             )
@@ -68,7 +68,7 @@ class PulsarWebDriverMouseIT : WebDriverTestBase() {
 
         @Test
         @DisplayName("click on non-existent selector does not throw")
-        fun clickNonExistentSelectorDoesNotThrow() = runEnhancedWebDriverTest(testPage, browser) { driver ->
+        fun clickNonExistentSelectorDoesNotThrow() = runWebDriverTestAndCompute(testPage, browser) { driver ->
             // Should not throw — silently handles missing element
             driver.click("#selector-that-does-not-exist")
         }
@@ -84,7 +84,7 @@ class PulsarWebDriverMouseIT : WebDriverTestBase() {
 
         @Test
         @DisplayName("type into input produces expected value character by character")
-        fun typeIntoInputProducesExpectedValue() = runEnhancedWebDriverTest(testPage, browser) { driver ->
+        fun typeIntoInputProducesExpectedValue() = runWebDriverTestAndCompute(testPage, browser) { driver ->
             val text = "Browser4 CDP"
 
             driver.type(text, "#name")
@@ -96,7 +96,7 @@ class PulsarWebDriverMouseIT : WebDriverTestBase() {
 
         @Test
         @DisplayName("type after click-right positions cursor at end — no race with deferred click")
-        fun typeAfterClickRightDoesNotCorruptText() = runEnhancedWebDriverTest(testPage, browser) { driver ->
+        fun typeAfterClickRightDoesNotCorruptText() = runWebDriverTestAndCompute(testPage, browser) { driver ->
             // Pre-fill some text so click-right positions cursor after it
             driver.fill("#name", "prefix_")
             driver.delay(100)
@@ -113,7 +113,7 @@ class PulsarWebDriverMouseIT : WebDriverTestBase() {
 
         @Test
         @DisplayName("type long text character-by-character produces complete text")
-        fun typeLongTextProducesCompleteText() = runEnhancedWebDriverTest(testPage, browser) { driver ->
+        fun typeLongTextProducesCompleteText() = runWebDriverTestAndCompute(testPage, browser) { driver ->
             val text = "The quick brown fox jumps over the lazy dog — 1234567890!@#$%"
             driver.fill("#name", "")
             driver.delay(100)
@@ -137,7 +137,7 @@ class PulsarWebDriverMouseIT : WebDriverTestBase() {
 
         @Test
         @DisplayName("fill clears existing value and sets new text")
-        fun fillClearsAndSetsNewText() = runEnhancedWebDriverTest(testPage, browser) { driver ->
+        fun fillClearsAndSetsNewText() = runWebDriverTestAndCompute(testPage, browser) { driver ->
             driver.evaluate("document.getElementById('name').value = 'old_value'")
             driver.delay(100)
 
@@ -150,7 +150,7 @@ class PulsarWebDriverMouseIT : WebDriverTestBase() {
 
         @Test
         @DisplayName("fill empty string clears the input")
-        fun fillEmptyClearsInput() = runEnhancedWebDriverTest(testPage, browser) { driver ->
+        fun fillEmptyClearsInput() = runWebDriverTestAndCompute(testPage, browser) { driver ->
             driver.evaluate("document.getElementById('name').value = 'some_text'")
             driver.delay(100)
 
@@ -172,7 +172,7 @@ class PulsarWebDriverMouseIT : WebDriverTestBase() {
 
         @Test
         @DisplayName("hover dispatches CDP mouseMoved events and reaches the element")
-        fun hoverReachesElement() = runEnhancedWebDriverTest(testPage, browser) { driver ->
+        fun hoverReachesElement() = runWebDriverTestAndCompute(testPage, browser) { driver ->
             // Move mouse away first, then hover over the toggle button
             driver.mouseMove(10.0, 10.0)
             driver.delay(200)
@@ -197,7 +197,7 @@ class PulsarWebDriverMouseIT : WebDriverTestBase() {
 
         @Test
         @DisplayName("hover on non-existent selector does not throw")
-        fun hoverNonExistentDoesNotThrow() = runEnhancedWebDriverTest(testPage, browser) { driver ->
+        fun hoverNonExistentDoesNotThrow() = runWebDriverTestAndCompute(testPage, browser) { driver ->
             driver.hover("#no-such-element-xyz")
         }
     }
@@ -212,7 +212,7 @@ class PulsarWebDriverMouseIT : WebDriverTestBase() {
 
         @Test
         @DisplayName("dblclick dispatches two CDP click sequences")
-        fun dblclickDispatchesCDPEvents() = runEnhancedWebDriverTest(testPage, browser) { driver ->
+        fun dblclickDispatchesCDPEvents() = runWebDriverTestAndCompute(testPage, browser) { driver ->
             // Set up initial state
             driver.evaluate("document.getElementById('num1').value = 10")
             driver.evaluate("document.getElementById('num2').value = 20")
@@ -240,7 +240,7 @@ class PulsarWebDriverMouseIT : WebDriverTestBase() {
 
         @Test
         @DisplayName("mouseMove updates current mouse position")
-        fun mouseMoveUpdatesPosition() = runEnhancedWebDriverTest(testPage, browser) { driver ->
+        fun mouseMoveUpdatesPosition() = runWebDriverTestAndCompute(testPage, browser) { driver ->
             // Move to known coordinates — verify no error
             driver.mouseMove(200.0, 300.0)
             driver.delay(100)
@@ -248,7 +248,7 @@ class PulsarWebDriverMouseIT : WebDriverTestBase() {
 
         @Test
         @DisplayName("mouseMove to element center via coordinates computed from bounding box")
-        fun mouseMoveToElementCenter() = runEnhancedWebDriverTest(testPage, browser) { driver ->
+        fun mouseMoveToElementCenter() = runWebDriverTestAndCompute(testPage, browser) { driver ->
             val rectJson = driver.evaluate(
                 "JSON.stringify(document.getElementById('addButton').getBoundingClientRect())",
                 "{}"
@@ -260,7 +260,7 @@ class PulsarWebDriverMouseIT : WebDriverTestBase() {
 
         @Test
         @DisplayName("consecutive mouseMove + click works correctly")
-        fun mouseMoveThenClick() = runEnhancedWebDriverTest(testPage, browser) { driver ->
+        fun mouseMoveThenClick() = runWebDriverTestAndCompute(testPage, browser) { driver ->
             driver.evaluate("document.getElementById('num1').value = 3")
             driver.evaluate("document.getElementById('num2').value = 5")
             driver.delay(200)
@@ -286,7 +286,7 @@ class PulsarWebDriverMouseIT : WebDriverTestBase() {
 
         @Test
         @DisplayName("scrollBy moves viewport by pixel delta")
-        fun scrollByMovesViewport() = runEnhancedWebDriverTest(testPage, browser) { driver ->
+        fun scrollByMovesViewport() = runWebDriverTestAndCompute(testPage, browser) { driver ->
             val before = driver.evaluate("window.scrollY", 0.0).toString().toDouble()
             driver.scrollBy(100.0, smooth = false)
             driver.delay(300)
@@ -298,7 +298,7 @@ class PulsarWebDriverMouseIT : WebDriverTestBase() {
 
         @Test
         @DisplayName("scrollToTop returns to origin")
-        fun scrollToTopReturnsToOrigin() = runEnhancedWebDriverTest(testPage, browser) { driver ->
+        fun scrollToTopReturnsToOrigin() = runWebDriverTestAndCompute(testPage, browser) { driver ->
             driver.scrollBy(200.0, smooth = false)
             driver.delay(200)
             driver.scrollToTop()
@@ -311,7 +311,7 @@ class PulsarWebDriverMouseIT : WebDriverTestBase() {
 
         @Test
         @DisplayName("mouseWheelDown dispatches CDP wheel events")
-        fun mouseWheelDownDispatchesWheelEvents() = runEnhancedWebDriverTest(testPage, browser) { driver ->
+        fun mouseWheelDownDispatchesWheelEvents() = runWebDriverTestAndCompute(testPage, browser) { driver ->
             driver.scrollToTop()
             driver.delay(200)
 
@@ -335,7 +335,7 @@ class PulsarWebDriverMouseIT : WebDriverTestBase() {
 
         @Test
         @DisplayName("press Enter key triggers form/implicit submission")
-        fun pressEnterKey() = runEnhancedWebDriverTest(testPage, browser) { driver ->
+        fun pressEnterKey() = runWebDriverTestAndCompute(testPage, browser) { driver ->
             // Type into input, then press Enter — verify no error
             driver.type("test_value", "#name")
             driver.delay(100)
@@ -349,7 +349,7 @@ class PulsarWebDriverMouseIT : WebDriverTestBase() {
 
         @Test
         @DisplayName("press Shift+A produces uppercase character")
-        fun pressShiftA() = runEnhancedWebDriverTest(testPage, browser) { driver ->
+        fun pressShiftA() = runWebDriverTestAndCompute(testPage, browser) { driver ->
             driver.fill("#name", "")
             driver.delay(100)
 
@@ -365,7 +365,7 @@ class PulsarWebDriverMouseIT : WebDriverTestBase() {
 
         @Test
         @DisplayName("press Backspace deletes character")
-        fun pressBackspaceDeletes() = runEnhancedWebDriverTest(testPage, browser) { driver ->
+        fun pressBackspaceDeletes() = runWebDriverTestAndCompute(testPage, browser) { driver ->
             driver.fill("#name", "hello")
             driver.delay(100)
 
@@ -391,7 +391,7 @@ class PulsarWebDriverMouseIT : WebDriverTestBase() {
 
         @Test
         @DisplayName("select option changes background color")
-        fun selectOptionChangesBackground() = runEnhancedWebDriverTest(testPage, browser) { driver ->
+        fun selectOptionChangesBackground() = runWebDriverTestAndCompute(testPage, browser) { driver ->
             driver.selectOption("#colorSelect", listOf("lightblue"))
             driver.delay(300)
 
@@ -405,7 +405,7 @@ class PulsarWebDriverMouseIT : WebDriverTestBase() {
 
         @Test
         @DisplayName("select option with multiple values picks last")
-        fun selectOptionMultipleValues() = runEnhancedWebDriverTest(testPage, browser) { driver ->
+        fun selectOptionMultipleValues() = runWebDriverTestAndCompute(testPage, browser) { driver ->
             driver.selectOption("#colorSelect", listOf("lightgreen"))
             driver.delay(300)
 
@@ -424,7 +424,7 @@ class PulsarWebDriverMouseIT : WebDriverTestBase() {
 
         @Test
         @DisplayName("focus makes element the active element")
-        fun focusMakesElementActive() = runEnhancedWebDriverTest(testPage, browser) { driver ->
+        fun focusMakesElementActive() = runWebDriverTestAndCompute(testPage, browser) { driver ->
             driver.focus("#name")
             driver.delay(200)
 
@@ -444,7 +444,7 @@ class PulsarWebDriverMouseIT : WebDriverTestBase() {
 
         @Test
         @DisplayName("fill + click + verify — full form interaction via CDP")
-        fun fillClickVerifyFullFormInteraction() = runEnhancedWebDriverTest(testPage, browser) { driver ->
+        fun fillClickVerifyFullFormInteraction() = runWebDriverTestAndCompute(testPage, browser) { driver ->
             // Fill number inputs
             driver.evaluate("document.getElementById('num1').value = 42")
             driver.evaluate("document.getElementById('num2').value = 58")
@@ -462,7 +462,7 @@ class PulsarWebDriverMouseIT : WebDriverTestBase() {
 
         @Test
         @DisplayName("type + type with click-right between — no cursor reset race")
-        fun typeInterleavedWithClickRightNoRace() = runEnhancedWebDriverTest(testPage, browser) { driver ->
+        fun typeInterleavedWithClickRightNoRace() = runWebDriverTestAndCompute(testPage, browser) { driver ->
             // This is the exact scenario that dispatchDomClick used to break:
             // 1. Type "hello " into input
             // 2. Click-right triggers emulator.click() with CDP trusted events (was DOM setTimeout race)
@@ -484,7 +484,7 @@ class PulsarWebDriverMouseIT : WebDriverTestBase() {
 
         @Test
         @DisplayName("scroll + hover + click — full spatial interaction sequence")
-        fun scrollHoverClickSpatialSequence() = runEnhancedWebDriverTest(testPage, browser) { driver ->
+        fun scrollHoverClickSpatialSequence() = runWebDriverTestAndCompute(testPage, browser) { driver ->
             driver.evaluate("document.getElementById('num1').value = 7")
             driver.evaluate("document.getElementById('num2').value = 3")
             driver.delay(200)
@@ -508,7 +508,7 @@ class PulsarWebDriverMouseIT : WebDriverTestBase() {
 
         @Test
         @DisplayName("rapid consecutive clicks do not cause state corruption")
-        fun rapidConsecutiveClicks() = runEnhancedWebDriverTest(testPage, browser) { driver ->
+        fun rapidConsecutiveClicks() = runWebDriverTestAndCompute(testPage, browser) { driver ->
             // Reset counter in page
             driver.evaluate("window.clickCounter = 0")
             driver.evaluate(
@@ -534,7 +534,7 @@ class PulsarWebDriverMouseIT : WebDriverTestBase() {
 
         @Test
         @DisplayName("type accented and special Unicode characters via CDP insertText")
-        fun typeAccentedAndUnicode() = runEnhancedWebDriverTest(testPage, browser) { driver ->
+        fun typeAccentedAndUnicode() = runWebDriverTestAndCompute(testPage, browser) { driver ->
             // Use accented Latin + common symbols — these work with CDP Input.insertText.
             // Emoji (🌍) and CJK (こんにちは) are known to cause issues with CDP insertText on some Chrome versions.
             val text = "Café résumé — naïve @#$% 123"
@@ -564,7 +564,7 @@ class PulsarWebDriverMouseIT : WebDriverTestBase() {
         fun clickProducesMouseDownUpEvents() = runBlocking {
             browser.newDriver().use { driver ->
                 assertIs<PulsarWebDriver>(driver)
-                openEnhanced(testPage, driver)
+                openAndCompute(testPage, driver)
 
                 // Instrument page with mousedown/mouseup counters
                 driver.evaluate(
@@ -597,7 +597,7 @@ class PulsarWebDriverMouseIT : WebDriverTestBase() {
         fun doubleClickProducesCorrectEventSequence() = runBlocking {
             browser.newDriver().use { driver ->
                 assertIs<PulsarWebDriver>(driver)
-                openEnhanced(testPage, driver)
+                openAndCompute(testPage, driver)
 
                 driver.evaluate(
                     """
@@ -621,7 +621,7 @@ class PulsarWebDriverMouseIT : WebDriverTestBase() {
         fun typePostsInsertTextCalls() = runBlocking {
             browser.newDriver().use { driver ->
                 assertIs<PulsarWebDriver>(driver)
-                openEnhanced(testPage, driver)
+                openAndCompute(testPage, driver)
 
                 driver.evaluate(
                     """

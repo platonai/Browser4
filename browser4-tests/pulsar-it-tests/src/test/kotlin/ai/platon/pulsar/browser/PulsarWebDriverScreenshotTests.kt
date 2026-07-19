@@ -1,4 +1,4 @@
-package ai.platon.browser4.api
+package ai.platon.pulsar.browser
 
 import ai.platon.pulsar.WebDriverTestBase
 import ai.platon.pulsar.common.AppFiles
@@ -17,7 +17,7 @@ class PulsarWebDriverScreenshotTests : WebDriverTestBase() {
     private val screenshotDir = AppPaths.TEST_DIR.resolve("screenshot")
 
     @Test
-    fun testCaptureScreenshot() = runEnhancedWebDriverTest(interactiveUrl, browser) { driver ->
+    fun testCaptureScreenshot() = runWebDriverTestAndCompute(interactiveUrl, browser) { driver ->
         driver.waitForSelector("#userInformation")
         assertTrue { driver.exists("#userInformation") }
         val pageSource = driver.pageSource()

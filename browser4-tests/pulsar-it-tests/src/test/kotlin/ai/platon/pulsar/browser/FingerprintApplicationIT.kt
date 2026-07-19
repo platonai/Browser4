@@ -1,4 +1,4 @@
-package ai.platon.browser4.api
+package ai.platon.pulsar.browser
 
 import ai.platon.pulsar.WebDriverTestBase
 import org.junit.jupiter.api.Assertions.*

@@ -24,8 +24,8 @@
 
     <logger name="ai.platon.pulsar.skeleton.ai.agent" level="DEBUG"/>
 
-    <logger name="org.apache.gora.mongodb.store" level="INFO"/>
-    <logger name="org.apache.gora" level="INFO"/>
+    <logger name="ai.platon.gora.mongodb.store" level="INFO"/>
+    <logger name="ai.platon.gora" level="INFO"/>
 
     <logger name="dev.langchain4j.http.client.log" level="WARN" />
 

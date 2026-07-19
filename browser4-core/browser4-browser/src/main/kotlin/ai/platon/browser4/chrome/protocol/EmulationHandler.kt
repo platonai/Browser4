@@ -536,6 +536,19 @@ class Keyboard(private val bp: BrowserProtocol) {
                 pressShiftedPrintableChar(char, delayMillis)
                 return
             }
+            // CDP Input.dispatchKeyEvent does not reliably insert text into
+            // editable elements in headless Chrome (see commit 6a5ba71d7).
+            // Use insertText — the same mechanism Keyboard.type() relies on —
+            // for all single printable characters to guarantee the character
+            // appears.  The surrounding keyDown/keyUp still fire so that JS
+            // keyboard listeners observe the key press.
+            if (!Character.isISOControl(char)) {
+                down(keyString)
+                bp.insertText("$char")
+                delay(delayMillis.coerceAtLeast(60).milliseconds)
+                up(keyString)
+                return
+            }
         }
 
         val normalizedKeyString = normalizeKeyStringForPress(keyString)
@@ -573,19 +586,24 @@ class Keyboard(private val bp: BrowserProtocol) {
         try {
             val autoRepeat = pressedKeys.contains(baseVirtualKey.code)
             pressedKeys.add(baseVirtualKey.code)
+            // Dispatch keyDown/up without text fields so that the browser does
+            // not auto-insert the character from the key event.  Text insertion
+            // is handled explicitly via Input.insertText below, which is the
+            // same mechanism Keyboard.type() uses.  Setting text/unmodifiedText
+            // on the keyDown event together with insertText causes double-insert
+            // in Docker headless Chrome (observed in CI, 2026-07-18).
             bp.dispatchKeyEvent(
                 type = DispatchKeyEventType.KEY_DOWN,
                 modifiers = toModifiersMask(pressedModifiers),
                 windowsVirtualKeyCode = baseVirtualKey.keyCodeWithoutLocation,
                 code = baseVirtualKey.code,
                 key = "$char",
-                text = "$char",
-                unmodifiedText = "$char",
                 location = baseVirtualKey.location,
                 isKeypad = baseVirtualKey.location == KEYPAD_LOCATION,
                 autoRepeat = autoRepeat,
                 commands = emptyList(),
             )
+            bp.insertText("$char")
             delay(delayMillis.coerceAtLeast(60).milliseconds)
             bp.dispatchKeyEvent(
                 type = DispatchKeyEventType.KEY_UP,
@@ -754,7 +772,12 @@ class EmulationHandler(
     private val isActive get() = bp != null
 
     suspend fun click(
-        node: NodeRef, count: Int, position: String = "center", modifier: String? = null, delayMillis: Long = 100
+        node: NodeRef,
+        count: Int,
+        position: String = "center",
+        modifier: String? = null,
+        delayMillis: Long = 100,
+        dispatchCdpMouseEvents: Boolean = true,
     ) {
         val point = getInteractPoint(node, position, useRandomOffset = true) ?: return
 
@@ -773,6 +796,15 @@ class EmulationHandler(
                     userGesture = true,
                 )
             }
+        }
+
+        // On Windows, CDP Input.dispatchMouseEvent does not reliably trigger
+        // DOM click events in headless Chrome.  When dispatchCdpMouseEvents is
+        // false (Windows-only), the caller will use a DOM click fallback instead.
+        // We still run the prep work above (point calculation + focus) so the
+        // element is ready for interaction.
+        if (!dispatchCdpMouseEvents) {
+            return
         }
 
         // Use CDP Input.dispatchMouseEvent (trusted, synchronous) instead of

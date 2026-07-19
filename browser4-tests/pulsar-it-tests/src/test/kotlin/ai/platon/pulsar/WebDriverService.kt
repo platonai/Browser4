@@ -55,11 +55,11 @@ open class WebDriverService(
         }
     }
 
-    fun runEnhancedWebDriverTest(url: String, block: suspend (driver: WebDriver) -> Unit) {
+    fun runWebDriverTestAndCompute(url: String, block: suspend (driver: WebDriver) -> Unit) {
         runBlocking {
             browserFactory.launchRandomTempBrowser().use {
                 it.newDriver().use { driver ->
-                    openEnhanced(url, driver)
+                    openAndCompute(url, driver)
 
                     val pageSource = driver.pageSource()
                     val display = StringUtils.abbreviateMiddle(pageSource, "...", 100)
@@ -74,10 +74,10 @@ open class WebDriverService(
         }
     }
 
-    fun runEnhancedWebDriverTest(url: String, browser: Browser, block: suspend (driver: WebDriver) -> Unit) {
+    fun runWebDriverTestAndCompute(url: String, browser: Browser, block: suspend (driver: WebDriver) -> Unit) {
         runBlocking {
             browser.newDriver().use { driver ->
-                openEnhanced(url, driver)
+                openAndCompute(url, driver)
 
                 val pageSource = driver.pageSource()
                 val display = StringUtils.abbreviateMiddle(pageSource, "...", 100)
@@ -91,7 +91,7 @@ open class WebDriverService(
         }
     }
 
-    fun runEnhancedWebDriverTest(browser: Browser, block: suspend (driver: WebDriver) -> Unit) {
+    fun runWebDriverTestAndCompute(browser: Browser, block: suspend (driver: WebDriver) -> Unit) {
         runBlocking {
             browser.newDriver().use { block(it) }
         }
@@ -114,7 +114,7 @@ open class WebDriverService(
         driver.scrollToTop()
     }
 
-    open suspend fun openEnhanced(url: String, driver: WebDriver, scrollCount: Int = 3) {
+    open suspend fun openAndCompute(url: String, driver: WebDriver, scrollCount: Int = 3) {
         driver.navigate(url)
         driver.waitForNavigation()
         driver.waitForSelector("body")
@@ -145,7 +145,7 @@ open class FastWebDriverService(
     browserFactory: BrowserFactory,
     requiredPageSize: Int = 1
 ) : WebDriverService(browserFactory, requiredPageSize) {
-    override suspend fun openEnhanced(url: String, driver: WebDriver, scrollCount: Int) {
+    override suspend fun openAndCompute(url: String, driver: WebDriver, scrollCount: Int) {
         driver.navigate(url)
 
         driver.waitForNavigation()

@@ -316,15 +316,15 @@ function Invoke-Browser4CliTests([string[]]$additionalArgs) {
     }
 
     if ($script:Show) {
-        $cargoArgs = @('test', '--test', 'e2e', '--', '--nocapture') + $additionalArgs
+        $cargoArgs = @('test', '--test', 'e2e', '--color', 'always', '--', '--nocapture') + $additionalArgs
         Write-CommandBanner -Label '[SHOW] Would execute in browser4-cli:' -Subtitle "  cargo $($cargoArgs -join ' ')"
         return
     }
 
     if ($script:DryRun) {
-        $cargoArgs = @('test', '--test', 'e2e', '--no-run') + $additionalArgs
+        $cargoArgs = @('test', '--test', 'e2e', '--color', 'always', '--no-run') + $additionalArgs
     } else {
-        $cargoArgs = @('test', '--test', 'e2e', '--', '--nocapture') + $additionalArgs
+        $cargoArgs = @('test', '--test', 'e2e', '--color', 'always', '--', '--nocapture') + $additionalArgs
     }
 
     if ($script:DryRun) {
@@ -332,9 +332,27 @@ function Invoke-Browser4CliTests([string[]]$additionalArgs) {
     }
 
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
-    $exitCode = Invoke-CommandAndReport -ScriptBlock { & cargo @cargoArgs } `
-        -Label 'Browser4 CLI tests' -PreExecPath $browser4CliDir -NoExit
+    Push-Location $browser4CliDir
+    try {
+        Write-Host ''
+        Write-Host '── Rust test output (println! etc.) ──' -ForegroundColor DarkCyan
+        $global:LASTEXITCODE = 0
+        & cargo @cargoArgs
+        $exitCode = $LASTEXITCODE
+        Write-Host '── End Rust output ──' -ForegroundColor DarkCyan
+    } catch {
+        Write-Error "Failed to execute Browser4 CLI tests: $_"
+        exit 1
+    } finally {
+        Pop-Location
+    }
     $sw.Stop()
+
+    if ($exitCode -ne 0) {
+        Write-CommandBanner -Label "Browser4 CLI tests failed with exit code $exitCode" -Icon '❌'
+    } else {
+        Write-CommandBanner -Label 'Browser4 CLI tests completed successfully' -Icon '✅'
+    }
 
     # ── Persist session ──────────────────────────────────────────────────
     if ($script:SessionAvailable) {

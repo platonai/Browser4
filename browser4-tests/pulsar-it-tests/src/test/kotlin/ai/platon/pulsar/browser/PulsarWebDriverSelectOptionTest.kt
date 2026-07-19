@@ -1,4 +1,4 @@
-package ai.platon.browser4.api
+package ai.platon.pulsar.browser
 
 import ai.platon.pulsar.FastWebDriverService
 import ai.platon.pulsar.WebDriverTestBase
@@ -10,7 +10,7 @@ class PulsarWebDriverSelectOptionTest : WebDriverTestBase() {
     override val webDriverService get() = FastWebDriverService(browserFactory)
 
     @Test
-    fun testSelectOption() = runEnhancedWebDriverTest("about:blank", browser) { driver ->
+    fun testSelectOption() = runWebDriverTestAndCompute("about:blank", browser) { driver ->
         val html = """
             <select id="colors">
                 <option value="red">Red</option>

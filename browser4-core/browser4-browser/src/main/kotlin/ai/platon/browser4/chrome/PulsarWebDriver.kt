@@ -705,9 +705,21 @@ open class PulsarWebDriver constructor(
     override suspend fun click(selector: String, count: Int) {
         rpc.invokeOnElement(selector, "click", scrollIntoView = true) { node ->
             waitForScrollSettled(selector)
-            val delayMillis = randomDelayMillis("click")
-            emulator.click(node, count, position = "center", modifier = null, delayMillis = delayMillis)
-            // debugElementOnPoint(node)
+            val isWindows = org.apache.commons.lang3.SystemUtils.IS_OS_WINDOWS
+            // On Windows, CDP Input.dispatchMouseEvent (mousePressed/mouseReleased)
+            // does not reliably trigger DOM click events in headless Chrome.
+            // Use a DOM click as the sole mechanism (skip CDP mouse events to
+            // avoid double-firing).  On Linux/macOS the CDP path works reliably.
+            if (isWindows) {
+                emulator.click(
+                    node, count, position = "center", modifier = null,
+                    delayMillis = 0, dispatchCdpMouseEvents = false,
+                )
+                dispatchDomClick(node, count)
+            } else {
+                val delayMillis = randomDelayMillis("click")
+                emulator.click(node, count, position = "center", modifier = null, delayMillis = delayMillis)
+            }
         }
     }
 
@@ -717,6 +729,10 @@ open class PulsarWebDriver constructor(
             val delayMillis = randomDelayMillis("click")
             waitForScrollSettled(selector)
             emulator.click(node, 1, position = "center", modifier = modifier, delayMillis = delayMillis)
+            // No DOM fallback for modifier clicks: the CDP modifier bitmask
+            // (Ctrl/Shift/Alt/Meta) has no equivalent in HTMLElement.click()
+            // or dispatchEvent, and adding a DOM fallback on top of CDP would
+            // double-fire on Windows where both paths work.
         }
     }
 
@@ -761,8 +777,137 @@ open class PulsarWebDriver constructor(
     override suspend fun dblclick(selector: String, modifier: String) {
         rpc.invokeOnElement(selector, "dblclick") {
             val node = page.focusOnSelector(selector) ?: return@invokeOnElement
-            emulator.click(node, 2)
+            val isWindows = org.apache.commons.lang3.SystemUtils.IS_OS_WINDOWS
+            val hasModifier = modifier.isNotBlank()
+            if (isWindows && !hasModifier) {
+                // Windows, no modifier: use DOM click as sole mechanism to
+                // avoid double-firing from CDP mouse events + synthetic DOM.
+                emulator.click(
+                    node, 2, position = "center", modifier = null,
+                    delayMillis = 0, dispatchCdpMouseEvents = false,
+                )
+                dispatchDomClick(node, 2)
+            } else if (hasModifier) {
+                // Any platform with a modifier (Shift/Ctrl/Alt/Meta): use CDP
+                // path — the modifier bitmask has no equivalent in
+                // HTMLElement.click() or MouseEvent dispatch.
+                emulator.click(node, 2, position = "center", modifier = modifier)
+            } else {
+                // Non-Windows, no modifier: standard CDP double-click.
+                emulator.click(node, 2)
+            }
             gap("dblclick")
+        }
+    }
+
+    /**
+     * Dispatch DOM click(s) on the given element matching the W3C UI Events
+     * standard event sequence.
+     *
+     * On Windows, CDP `Input.dispatchMouseEvent` does not reliably trigger
+     * DOM click events in headless Chrome.  This method produces the full
+     * event sequence as the sole click mechanism:
+     *
+     *   `pointerdown → mousedown → pointerup → mouseup → click`
+     *
+     * where `click` uses [HTMLElement.click] to trigger default actions
+     * (navigation, form submission).  For count = 2 the sequence repeats
+     * twice and ends with `dblclick`.
+     *
+     * [HTMLElement.click] per spec only fires `click` — it does not fire
+     * `pointerdown`, `pointerup`, `mousedown`, `mouseup`, or `dblclick`,
+     * so those are dispatched explicitly with correct property values
+     * (`buttons` = 1 during press, 0 on release; `detail` = click count).
+     * Coordinates are taken from the element's bounding rect center.
+     *
+     * @param node  The element to click.
+     * @param count Number of consecutive clicks (1 = single, 2 = double).
+     */
+    private suspend fun dispatchDomClick(node: NodeRef, count: Int) {
+        withNodeObjectId(browserProtocol, node) { objectId ->
+            when (count) {
+                1 -> {
+                    browserProtocol.callFunctionOn(
+                        """function() {
+                             if (this instanceof HTMLElement) {
+                               var r = this.getBoundingClientRect();
+                               var cx = r.left + r.width / 2;
+                               var cy = r.top + r.height / 2;
+                               var detail = 1;
+                               emitClick(this, cx, cy, detail);
+                             }
+                             function emitClick(el, cx, cy, d) {
+                               var ptr = new PointerEvent('pointerdown', {bubbles:true,cancelable:true,view:window,pointerId:1,pointerType:'mouse',isPrimary:true,clientX:cx,clientY:cy,buttons:1,button:0,detail:d});
+                               var md  = new MouseEvent('mousedown', {bubbles:true,cancelable:true,view:window,clientX:cx,clientY:cy,buttons:1,button:0,detail:d});
+                               el.dispatchEvent(ptr);
+                               el.dispatchEvent(md);
+                               ptr = new PointerEvent('pointerup', {bubbles:true,cancelable:true,view:window,pointerId:1,pointerType:'mouse',isPrimary:true,clientX:cx,clientY:cy,buttons:0,button:0,detail:d});
+                               var mu  = new MouseEvent('mouseup', {bubbles:true,cancelable:true,view:window,clientX:cx,clientY:cy,buttons:0,button:0,detail:d});
+                               el.dispatchEvent(ptr);
+                               el.dispatchEvent(mu);
+                               el.click();
+                             }
+                           }""",
+                        objectId = objectId,
+                        returnByValue = false,
+                        userGesture = true,
+                    )
+                }
+                2 -> {
+                    browserProtocol.callFunctionOn(
+                        """function() {
+                             if (this instanceof HTMLElement) {
+                               var r = this.getBoundingClientRect();
+                               var cx = r.left + r.width / 2;
+                               var cy = r.top + r.height / 2;
+                               emitClick(this, cx, cy, 1);
+                               emitClick(this, cx, cy, 2);
+                               this.dispatchEvent(new MouseEvent('dblclick', {bubbles:true,cancelable:true,view:window,detail:2}));
+                             }
+                             function emitClick(el, cx, cy, d) {
+                               var ptr = new PointerEvent('pointerdown', {bubbles:true,cancelable:true,view:window,pointerId:1,pointerType:'mouse',isPrimary:true,clientX:cx,clientY:cy,buttons:1,button:0,detail:d});
+                               var md  = new MouseEvent('mousedown', {bubbles:true,cancelable:true,view:window,clientX:cx,clientY:cy,buttons:1,button:0,detail:d});
+                               el.dispatchEvent(ptr);
+                               el.dispatchEvent(md);
+                               ptr = new PointerEvent('pointerup', {bubbles:true,cancelable:true,view:window,pointerId:1,pointerType:'mouse',isPrimary:true,clientX:cx,clientY:cy,buttons:0,button:0,detail:d});
+                               var mu  = new MouseEvent('mouseup', {bubbles:true,cancelable:true,view:window,clientX:cx,clientY:cy,buttons:0,button:0,detail:d});
+                               el.dispatchEvent(ptr);
+                               el.dispatchEvent(mu);
+                               el.click();
+                             }
+                           }""",
+                        objectId = objectId,
+                        returnByValue = false,
+                        userGesture = true,
+                    )
+                }
+                else -> {
+                    repeat(count) { i ->
+                        browserProtocol.callFunctionOn(
+                            """function(detail) {
+                                 if (this instanceof HTMLElement) {
+                                   var r = this.getBoundingClientRect();
+                                   var cx = r.left + r.width / 2;
+                                   var cy = r.top + r.height / 2;
+                                   var ptr = new PointerEvent('pointerdown', {bubbles:true,cancelable:true,view:window,pointerId:1,pointerType:'mouse',isPrimary:true,clientX:cx,clientY:cy,buttons:1,button:0,detail:detail});
+                                   var md  = new MouseEvent('mousedown', {bubbles:true,cancelable:true,view:window,clientX:cx,clientY:cy,buttons:1,button:0,detail:detail});
+                                   this.dispatchEvent(ptr);
+                                   this.dispatchEvent(md);
+                                   ptr = new PointerEvent('pointerup', {bubbles:true,cancelable:true,view:window,pointerId:1,pointerType:'mouse',isPrimary:true,clientX:cx,clientY:cy,buttons:0,button:0,detail:detail});
+                                   var mu  = new MouseEvent('mouseup', {bubbles:true,cancelable:true,view:window,clientX:cx,clientY:cy,buttons:0,button:0,detail:detail});
+                                   this.dispatchEvent(ptr);
+                                   this.dispatchEvent(mu);
+                                   this.click();
+                                 }
+                               }""",
+                            objectId = objectId,
+                            returnByValue = false,
+                            userGesture = true,
+                            arguments = listOf(CallArgument(value = i + 1)),
+                        )
+                    }
+                }
+            }
         }
     }
 
@@ -825,8 +970,18 @@ open class PulsarWebDriver constructor(
 
     @Throws(WebDriverException::class)
     override suspend fun fill(selector: String, text: String) {
-        rpc.invokeOnElement(selector, "fill", focus = true) { node ->
-            // TODO: check if the element is editable
+        // Match the pattern used by type(): resolve the element first, then
+        // explicitly focus inside the lambda.  A fill that cannot run must
+        // never silently succeed (ok=true with nothing filled, observed in
+        // CI's Docker headless Chrome): unresolved/unfocusable elements throw
+        // here, making the failure visible and letting invokeWithRetry retry
+        // transient CDP focus failures.
+        val filled = rpc.invokeOnElement(selector, "fill") {
+            val node = page.focusOnSelector(selector)
+                ?: throw WebDriverException(
+                    "fill failed: element cannot be focused | selector: $selector",
+                    driver = this
+                )
 
             clear(node)
 
@@ -868,6 +1023,95 @@ open class PulsarWebDriver constructor(
             keyboard?.type(text, randomDelayMillis("type"))
 
             gap("fill")
+
+            // Verify the text actually landed. Despite the delays above, fill()
+            // was still observed to silently no-op in CI's Docker headless Chrome
+            // (value stayed empty with ok=true) while type() worked — the exact
+            // mechanism (dropped insertText events / focus loss under CPU
+            // pressure) could not be reproduced outside that environment.
+            //
+            // Trigger only when the field can actually hold typed text and is
+            // still EMPTY after typing: that is precisely the observed failure
+            // mode, and it cannot false-positive on masked/transforming inputs
+            // (non-empty value), readOnly/disabled fields (input blocked by
+            // design), or contenteditable elements (no value property, where
+            // keyboard input works fine).
+            if (text.isNotEmpty() && isTextHoldingElement(node) && getLiveValueOrEmpty(node).isEmpty()) {
+                logger.warn(
+                    "fill: typed text did not land, falling back to JS value set | selector: {} | text: '{}'",
+                    selector, text
+                )
+                setValueViaJs(node, text)
+
+                if (getLiveValueOrEmpty(node).isEmpty()) {
+                    // Throw so invokeWithRetry retries instead of reporting a
+                    // phantom success (ok=true with nothing filled).
+                    throw WebDriverException(
+                        "fill failed: value is still empty after typing and JS fallback | selector: $selector",
+                        driver = this
+                    )
+                }
+            }
+
+            true
+        } ?: false
+
+        if (!filled) {
+            // The fill lambda never ran: either the element lookup inside
+            // invokeOnElement returned null, or the driver reported itself
+            // unhealthy.  Fail loudly instead of silently.
+            throw WebDriverException(
+                "fill failed: element not found or driver unavailable | selector: $selector",
+                driver = this
+            )
+        }
+    }
+
+    /**
+     * Whether the element can hold typed text: exposes a writable `value`
+     * property (input/textarea) and is neither readOnly nor disabled.
+     * Contenteditable and plain elements do not qualify, and [fill]'s
+     * verification must skip them: keyboard input works for them via
+     * Input.insertText, and an empty/blocked value is by design.
+     */
+    @Throws(WebDriverException::class)
+    private suspend fun isTextHoldingElement(node: NodeRef): Boolean {
+        return withNodeObjectId(browserProtocol, node) { objectId ->
+            browserProtocol.callFunctionOn(
+                """function() {
+                    return this
+                        && typeof this.value !== 'undefined'
+                        && !this.readOnly
+                        && !this.disabled;
+                }""",
+                objectId = objectId,
+                returnByValue = true
+            ).result.value as? Boolean ?: false
+        } ?: false
+    }
+
+    /**
+     * Last-resort value setter used by [fill] when trusted keyboard input does
+     * not land. Sets the value property directly and dispatches bubbling
+     * `input`/`change` events so page listeners (and framework two-way
+     * bindings) observe the change, mirroring the observable effect of
+     * `Input.insertText` (which also fires `input` but no key events).
+     */
+    @Throws(WebDriverException::class)
+    private suspend fun setValueViaJs(node: NodeRef, text: String) {
+        withNodeObjectId(browserProtocol, node) { objectId ->
+            browserProtocol.callFunctionOn(
+                """function(text) {
+                    if (typeof this.focus === 'function') { this.focus(); }
+                    this.value = text;
+                    this.dispatchEvent(new Event('input', { bubbles: true }));
+                    this.dispatchEvent(new Event('change', { bubbles: true }));
+                }""",
+                objectId = objectId,
+                returnByValue = false,
+                userGesture = true,
+                arguments = listOf(CallArgument(value = text)),
+            )
         }
     }
 
@@ -1473,7 +1717,7 @@ open class PulsarWebDriver constructor(
      * Navigate to the page and inject scripts.
      * */
     private suspend fun navigateInvaded(entry: NavigateEntry) {
-        val url = entry.url
+        val url = entry.userTypedUrl
 
         addScriptToEvaluateOnNewDocument()
 
@@ -1537,15 +1781,15 @@ open class PulsarWebDriver constructor(
     }
 
     private suspend fun onRequestWillBeSent(entry: NavigateEntry, event: RequestWillBeSent) {
-        if (!entry.url.startsWith("http")) {
+        if (!entry.userTypedUrl.startsWith("http")) {
             // This can happen for the following cases:
             // 1. non-http resources, for example, ftp, ws, etc.
             // 2. chrome's internal page, for example, about:blank, chrome://settings/, chrome://settings/system, etc.
             return
         }
 
-        if (!URLUtils.isStandard(entry.url)) {
-            logger.warn("Invalid url to sent to the browser | {}", entry.url)
+        if (!URLUtils.isStandard(entry.userTypedUrl)) {
+            logger.warn("Invalid url to sent to the browser | {}", entry.userTypedUrl)
             return
         }
 

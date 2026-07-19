@@ -302,7 +302,7 @@ abstract class AbstractWebDriver(
     }
 
     override suspend fun currentUrl(): String {
-        return evaluate("document.URL", navigateEntry.url)
+        return evaluate("document.URL", navigateEntry.userTypedUrl)
     }
 
     @Throws(WebDriverException::class)

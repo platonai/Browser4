@@ -15,6 +15,10 @@ pub fn public_command_name(name: &str) -> &str {
         "swarm-result" => "swarm result",
         "swarm-list" => "swarm list",
         "swarm-close" => "swarm close",
+        "crawl-status" => "crawl status",
+        "crawl-result" => "crawl result",
+        "crawl-cancel" => "crawl cancel",
+        "crawl-clear" => "crawl clear",
         "crawl-list" => "crawl list",
         "htmlsnapshot-capture" => "htmlsnapshot capture",
         "htmlsnapshot-get" => "htmlsnapshot get",
@@ -855,6 +859,41 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push(String::new());
         lines.push("Examples:".to_string());
         lines.push("  browser4-cli swarm close".to_string());
+    }
+
+    if cmd.name == "crawl-status" {
+        lines.push("Notes:".to_string());
+        lines.push("  - Accepts the task ID returned by `crawl`.".to_string());
+        lines.push(String::new());
+        lines.push("Examples:".to_string());
+        lines.push("  browser4-cli crawl status <task-id>".to_string());
+    }
+
+    if cmd.name == "crawl-result" {
+        lines.push("Notes:".to_string());
+        lines.push("  - Accepts the task ID returned by `crawl`.".to_string());
+        lines.push("  - Only returns results for completed tasks.".to_string());
+        lines.push(String::new());
+        lines.push("Examples:".to_string());
+        lines.push("  browser4-cli crawl result <task-id>".to_string());
+    }
+
+    if cmd.name == "crawl-cancel" {
+        lines.push("Notes:".to_string());
+        lines.push("  - Accepts the task ID returned by `crawl`.".to_string());
+        lines.push("  - Only cancels tasks that are still running or queued.".to_string());
+        lines.push(String::new());
+        lines.push("Examples:".to_string());
+        lines.push("  browser4-cli crawl cancel <task-id>".to_string());
+    }
+
+    if cmd.name == "crawl-clear" {
+        lines.push("Notes:".to_string());
+        lines.push("  - Removes all completed, failed, or cancelled crawl tasks from the task store.".to_string());
+        lines.push("  - Running tasks are not affected.".to_string());
+        lines.push(String::new());
+        lines.push("Examples:".to_string());
+        lines.push("  browser4-cli crawl clear".to_string());
     }
 
     if cmd.name == "crawl-list" {

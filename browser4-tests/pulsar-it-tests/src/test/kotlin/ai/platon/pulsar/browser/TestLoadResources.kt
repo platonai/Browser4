@@ -1,4 +1,4 @@
-package ai.platon.browser4.api
+package ai.platon.pulsar.browser
 
 import ai.platon.pulsar.WebDriverTestBase
 import ai.platon.pulsar.common.Strings
@@ -48,7 +48,7 @@ class TestLoadResources: WebDriverTestBase() {
 
     @Ignore("This test is not stable")
     @Test
-    fun testLoadResource2() = runEnhancedWebDriverTest(browser) { driver ->
+    fun testLoadResource2() = runWebDriverTestAndCompute(browser) { driver ->
         val resourceUrl = robotsUrl
         val referrer = URLUtils.getOrigin(resourceUrl)
         driver.navigate(referrer)
@@ -73,7 +73,7 @@ class TestLoadResources: WebDriverTestBase() {
     }
 
     @Test
-    fun testJsoupLoadResource() = runEnhancedWebDriverTest { driver ->
+    fun testJsoupLoadResource() = runWebDriverTestAndCompute { driver ->
 //        val resourceUrl = "https://www.amazon.com/robots.txt"
         val resourceUrl = robotsUrl
 

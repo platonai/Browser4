@@ -15,12 +15,12 @@ on:
       level:
         description: 'Max scenario level'
         required: false
-        default: 'All'
+        default: 'ALL'
         type: choice
         options:
-          - Basic
+          - BASIC
           - EXTENDED
-          - All
+          - ALL
       enable_batch_scenario:
         description: 'Include batch-command scenarios'
         required: false

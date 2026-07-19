@@ -23,7 +23,7 @@ class PulsarWebDriverCheckTests : WebDriverTestBase() {
 
     @Test
     @DisplayName("check and uncheck work without pulsar utils")
-    fun testCheckAndUncheckWithoutPulsarUtils() = runEnhancedWebDriverTest(checkboxUrl, browser) { driver ->
+    fun testCheckAndUncheckWithoutPulsarUtils() = runWebDriverTestAndCompute(checkboxUrl, browser) { driver ->
         driver.waitForSelector("#agree")
         removePulsarUtils(driver)
 

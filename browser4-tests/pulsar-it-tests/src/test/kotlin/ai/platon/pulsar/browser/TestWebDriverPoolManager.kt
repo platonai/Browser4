@@ -1,8 +1,10 @@
-package ai.platon.browser4.api
+package ai.platon.pulsar.browser
 
+import ai.platon.browser4.api.AbstractWebDriver
+import ai.platon.browser4.api.BrowserId
+import ai.platon.browser4.api.WebDriver
 import ai.platon.browser4.protocol.browser.DefaultWebDriverPoolManager
 import ai.platon.pulsar.common.config.ImmutableConfig
-import ai.platon.browser4.api.WebDriver
 import ai.platon.pulsar.skeleton.common.AppSystemInfo
 import org.junit.jupiter.api.DisplayName
 import org.slf4j.LoggerFactory

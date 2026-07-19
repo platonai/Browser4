@@ -29,7 +29,7 @@ class OptimizedDOMTreeTest : WebDriverTestBase() {
     @Test
     @DisplayName("OptimizedDOMTreeBuilder invariants on interactive-dynamic page")
     fun optimizedDOMTreeBuilderInvariantsOnInteractiveDynamicPage() =
-        runEnhancedWebDriverTest(interactiveDynamicURL) { driver ->
+        runWebDriverTestAndCompute(interactiveDynamicURL) { driver ->
             assertIs<PulsarWebDriver>(driver)
 
             val service = CDPSnapshotService(driver.browserProtocol)
@@ -115,7 +115,7 @@ class OptimizedDOMTreeTest : WebDriverTestBase() {
 
     @Test
     @DisplayName("isNew flag respects previous backend node ids")
-    fun isNewFlagRespectsPreviousBackendNodeIds() = runEnhancedWebDriverTest(interactiveDynamicURL) { driver ->
+    fun isNewFlagRespectsPreviousBackendNodeIds() = runWebDriverTestAndCompute(interactiveDynamicURL) { driver ->
         assertIs<PulsarWebDriver>(driver)
 
         val service = CDPSnapshotService(driver.browserProtocol)
@@ -165,7 +165,7 @@ class OptimizedDOMTreeTest : WebDriverTestBase() {
     @Test
     @DisplayName("optimizeTree prunes invisible wrapper with pruned children on real page")
     fun optimizetreePrunesInvisibleWrapperWithPrunedChildrenOnRealPage() =
-        runEnhancedWebDriverTest(interactiveDynamicURL) { driver ->
+        runWebDriverTestAndCompute(interactiveDynamicURL) { driver ->
             assertIs<PulsarWebDriver>(driver)
 
             val service = CDPSnapshotService(driver.browserProtocol)

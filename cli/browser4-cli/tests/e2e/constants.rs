@@ -56,7 +56,7 @@ Scenario selection:
   --failed                          Rerun scenarios that failed in the previous run
   --group=<name>, -g                Run only scenarios in the specified group
                                     (repeatable; e.g. --group=open --group=eval)
-  --level=<BASIC|EXTENDED|all>, -L  Max scenario level (default: BASIC)
+  --level=<BASIC|EXTENDED|ALL>, -L  Max scenario level (default: BASIC)
 
 Scenario inclusion (disabled by default):
   --enable-batch-scenario, -b       Include batch-command scenarios

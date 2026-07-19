@@ -60,27 +60,27 @@ open class WebDriverTestBase : MockSiteAccess() {
     /**
      * Run webdriver test with the default browser.
      * */
-    protected fun runEnhancedWebDriverTest(
+    protected fun runWebDriverTestAndCompute(
         url: String, block: suspend (driver: WebDriver) -> Unit
-    ) = webDriverService.runEnhancedWebDriverTest(url, browser, block)
+    ) = webDriverService.runWebDriverTestAndCompute(url, browser, block)
 
     /**
      * Run webdriver test with the default browser.
      * */
-    protected fun runEnhancedWebDriverTest(block: suspend (driver: WebDriver) -> Unit) =
-        webDriverService.runEnhancedWebDriverTest(browser, block)
+    protected fun runWebDriverTestAndCompute(block: suspend (driver: WebDriver) -> Unit) =
+        webDriverService.runWebDriverTestAndCompute(browser, block)
 
     /**
      * Run webdriver test with a specified browser.
      * */
-    protected fun runEnhancedWebDriverTest(url: String, browser: Browser, block: suspend (driver: WebDriver) -> Unit) =
-        webDriverService.runEnhancedWebDriverTest(url, browser, block)
+    protected fun runWebDriverTestAndCompute(url: String, browser: Browser, block: suspend (driver: WebDriver) -> Unit) =
+        webDriverService.runWebDriverTestAndCompute(url, browser, block)
 
     /**
      * Run webdriver test with a specified browser.
      * */
-    protected fun runEnhancedWebDriverTest(browser: Browser, block: suspend (driver: WebDriver) -> Unit) =
-        webDriverService.runEnhancedWebDriverTest(browser, block)
+    protected fun runWebDriverTestAndCompute(browser: Browser, block: suspend (driver: WebDriver) -> Unit) =
+        webDriverService.runWebDriverTestAndCompute(browser, block)
 
     /**
      * Run webdriver test with a newly created browser with the given browser profile.
@@ -94,8 +94,8 @@ open class WebDriverTestBase : MockSiteAccess() {
     protected fun runWebDriverTest(url: String, browser: Browser, block: suspend (driver: WebDriver) -> Unit) =
         webDriverService.runWebDriverTest(url, browser, block)
 
-    protected suspend fun openEnhanced(url: String, driver: WebDriver, scrollCount: Int = 3) =
-        webDriverService.openEnhanced(url, driver, scrollCount)
+    protected suspend fun openAndCompute(url: String, driver: WebDriver, scrollCount: Int = 3) =
+        webDriverService.openAndCompute(url, driver, scrollCount)
 
     protected suspend fun open(url: String, driver: WebDriver, scrollCount: Int = 1) =
         webDriverService.open(url, driver, scrollCount)

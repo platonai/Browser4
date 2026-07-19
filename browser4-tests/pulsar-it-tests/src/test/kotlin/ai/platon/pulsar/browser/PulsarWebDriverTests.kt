@@ -1,4 +1,4 @@
-package ai.platon.browser4.api
+package ai.platon.pulsar.browser
 
 import ai.platon.pulsar.FastWebDriverService
 import ai.platon.pulsar.WebDriverTestBase
@@ -18,7 +18,7 @@ class PulsarWebDriverTests : WebDriverTestBase() {
 
     @Test
     @DisplayName("test fill form with JavaScript")
-    fun testFillFormWithJavascript() = runEnhancedWebDriverTest(simpleDomURL, browser) { driver ->
+    fun testFillFormWithJavascript() = runWebDriverTestAndCompute(simpleDomURL, browser) { driver ->
         val selector = "input[id=input]"
 
         driver.fill(selector, text)
@@ -33,7 +33,7 @@ class PulsarWebDriverTests : WebDriverTestBase() {
 
     @Test
     @DisplayName("test fill")
-    fun testFill() = runEnhancedWebDriverTest(simpleDomURL, browser) { driver ->
+    fun testFill() = runWebDriverTestAndCompute(simpleDomURL, browser) { driver ->
         val selector = "input[id=input]"
 
         driver.fill(selector, text)
@@ -44,7 +44,7 @@ class PulsarWebDriverTests : WebDriverTestBase() {
 
     @Test
     @DisplayName("test scrollBy")
-    fun testScrollBy() = runEnhancedWebDriverTest(multiScreensInteractiveUrl, browser) { driver ->
+    fun testScrollBy() = runWebDriverTestAndCompute(multiScreensInteractiveUrl, browser) { driver ->
         val scrollY = driver.scrollBy(200.0, smooth = true)
 
         assertEquals(200.0, scrollY, 1.0)
@@ -53,7 +53,7 @@ class PulsarWebDriverTests : WebDriverTestBase() {
 
     @Test
     @DisplayName("test hover")
-    fun testHover() = runEnhancedWebDriverTest(interactiveUrl2, browser) { driver ->
+    fun testHover() = runWebDriverTestAndCompute(interactiveUrl2, browser) { driver ->
         // First scroll to ensure the element is in view and page is in a stable state
         driver.scrollToTop()
         driver.delay(300)
@@ -89,7 +89,7 @@ class PulsarWebDriverTests : WebDriverTestBase() {
     @Test
     @DisplayName("test selectFirstPropertyValueOrNull")
     fun testSelectFirstPropertyValueOrNull() =
-        runEnhancedWebDriverTest(simpleDomURL, browser) { driver ->
+        runWebDriverTestAndCompute(simpleDomURL, browser) { driver ->
             val selector = "input[id=input]"
 
             driver.fill(selector, text)
@@ -101,7 +101,7 @@ class PulsarWebDriverTests : WebDriverTestBase() {
 
     @Test
     @DisplayName("test selectPropertyValueAll")
-    fun testSelectPropertyValueAll() = runEnhancedWebDriverTest(simpleDomURL, browser) { driver ->
+    fun testSelectPropertyValueAll() = runWebDriverTestAndCompute(simpleDomURL, browser) { driver ->
         val selector = "input:not([type=hidden])"
 
         val propValues = driver.selectPropertyValueAll(selector, "tagName")
@@ -111,7 +111,7 @@ class PulsarWebDriverTests : WebDriverTestBase() {
 
     @Test
     @DisplayName("test setProperty")
-    fun testSetProperty() = runEnhancedWebDriverTest(simpleDomURL, browser) { driver ->
+    fun testSetProperty() = runWebDriverTestAndCompute(simpleDomURL, browser) { driver ->
         val selector = "input"
         val propName = "value"
 
@@ -123,7 +123,7 @@ class PulsarWebDriverTests : WebDriverTestBase() {
 
     @Test
     @DisplayName("test setPropertyAll")
-    fun testSetPropertyAll() = runEnhancedWebDriverTest(simpleDomURL, browser) { driver ->
+    fun testSetPropertyAll() = runWebDriverTestAndCompute(simpleDomURL, browser) { driver ->
         val selector = "input:not([type=hidden])"
         val propName = "value"
 
@@ -136,7 +136,7 @@ class PulsarWebDriverTests : WebDriverTestBase() {
 
     @Test
     @DisplayName("test deleteCookies")
-    fun testDeleteCookies() = runEnhancedWebDriverTest("$assetsPBaseURL/cookie.html", browser) { driver ->
+    fun testDeleteCookies() = runWebDriverTestAndCompute("$assetsPBaseURL/cookie.html", browser) { driver ->
         var cookies = driver.getCookies()
 
         printlnPro(cookies.toString())
@@ -157,7 +157,7 @@ class PulsarWebDriverTests : WebDriverTestBase() {
 
     @Test
     @DisplayName("test clearBrowserCookies")
-    fun testClearBrowserCookies() = runEnhancedWebDriverTest("$assetsPBaseURL/cookie.html", browser) { driver ->
+    fun testClearBrowserCookies() = runWebDriverTestAndCompute("$assetsPBaseURL/cookie.html", browser) { driver ->
         var cookies = driver.getCookies()
 
         printlnPro(cookies.toString())
@@ -177,7 +177,7 @@ class PulsarWebDriverTests : WebDriverTestBase() {
 
     @Test
     @DisplayName("test scrollToBottom")
-    fun testScrolltoBottom() = runEnhancedWebDriverTest(multiScreensInteractiveUrl, browser) { driver ->
+    fun testScrolltoBottom() = runWebDriverTestAndCompute(multiScreensInteractiveUrl, browser) { driver ->
         val bottomY = driver.scrollToBottom()
         val viewportHeight = (driver.evaluate("window.innerHeight", 0.0) as? Number)?.toDouble() ?: 0.0
         val totalHeight = (driver.evaluate(
@@ -192,7 +192,7 @@ class PulsarWebDriverTests : WebDriverTestBase() {
 
     @Test
     @DisplayName("test scrollToTop")
-    fun testScrolltotop() = runEnhancedWebDriverTest(multiScreensInteractiveUrl, browser) { driver ->
+    fun testScrolltotop() = runWebDriverTestAndCompute(multiScreensInteractiveUrl, browser) { driver ->
         // First go to bottom to ensure movement
         driver.scrollToBottom()
         val topY = driver.scrollToTop()
@@ -203,7 +203,7 @@ class PulsarWebDriverTests : WebDriverTestBase() {
 
     @Test
     @DisplayName("test scrollToMiddle")
-    fun testScrolltomiddle() = runEnhancedWebDriverTest(multiScreensInteractiveUrl, browser) { driver ->
+    fun testScrolltomiddle() = runWebDriverTestAndCompute(multiScreensInteractiveUrl, browser) { driver ->
         val ratio = 0.5
         val middleY = driver.scrollToMiddle(ratio)
         val viewportHeight = (driver.evaluate("window.innerHeight", 0.0) as? Number)?.toDouble() ?: 0.0
@@ -220,7 +220,7 @@ class PulsarWebDriverTests : WebDriverTestBase() {
 
     @Test
     @DisplayName("test pageSource returns HTML with vi attributes after compute")
-    fun testPageSourceReturnsViAttributes() = runEnhancedWebDriverTest(interactiveUrl, browser) { driver ->
+    fun testPageSourceReturnsViAttributes() = runWebDriverTestAndCompute(interactiveUrl, browser) { driver ->
         val pageSource = driver.pageSource() ?: ""
 
         // Verify vi attributes exist in the captured HTML
@@ -242,7 +242,7 @@ class PulsarWebDriverTests : WebDriverTestBase() {
 
     @Test
     @DisplayName("test outerHTML returns HTML with vi attributes after compute")
-    fun testOuterHTMLReturnsViAttributes() = runEnhancedWebDriverTest(interactiveUrl, browser) { driver ->
+    fun testOuterHTMLReturnsViAttributes() = runWebDriverTestAndCompute(interactiveUrl, browser) { driver ->
         val html = driver.outerHTML() ?: ""
 
         // outerHTML(":root") should include vi attributes just like pageSource
@@ -257,7 +257,7 @@ class PulsarWebDriverTests : WebDriverTestBase() {
 
     @Test
     @DisplayName("test outerHTML with selector returns annotated subtree")
-    fun testOuterHTMLSelectorReturnsViAttributes() = runEnhancedWebDriverTest(interactiveUrl, browser) { driver ->
+    fun testOuterHTMLSelectorReturnsViAttributes() = runWebDriverTestAndCompute(interactiveUrl, browser) { driver ->
         val html = driver.outerHTML("body") ?: ""
 
         // The body subtree should contain vi attributes
@@ -273,7 +273,7 @@ class PulsarWebDriverTests : WebDriverTestBase() {
 
     @Test
     @DisplayName("test vi attributes are NOT in the live DOM after compute")
-    fun testViAttributesNotInLiveDOM() = runEnhancedWebDriverTest(interactiveUrl, browser) { driver ->
+    fun testViAttributesNotInLiveDOM() = runWebDriverTestAndCompute(interactiveUrl, browser) { driver ->
         // After compute(), the live DOM must NOT have vi attributes.
         // This is the core of the feature: visual info is stored in a WeakMap,
         // not written as DOM attributes.
