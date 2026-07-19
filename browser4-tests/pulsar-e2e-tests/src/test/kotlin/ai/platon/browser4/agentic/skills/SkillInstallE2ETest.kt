@@ -1,6 +1,6 @@
 @file:Suppress("UNCHECKED_CAST")
 
-package ai.platon.pulsar.agentic.skills
+package ai.platon.browser4.agentic.skills
 
 import ai.platon.pulsar.agentic.context.AgenticContexts
 import ai.platon.pulsar.agentic.event.AgentEventBus

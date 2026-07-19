@@ -1,8 +1,9 @@
-package ai.platon.browser4.chrome.dom
+package ai.platon.pulsar.chrome.dom
 
 import ai.platon.browser4.chrome.PulsarWebDriver
 import ai.platon.pulsar.WebDriverTestBase
 import ai.platon.browser4.api.model.*
+import ai.platon.browser4.chrome.dom.CDPSnapshotService
 import ai.platon.pulsar.common.AppPaths
 import ai.platon.pulsar.common.serialize.json.Pson
 import ai.platon.pulsar.common.serialize.json.prettyPulsarObjectMapper

@@ -1,4 +1,4 @@
-package ai.platon.browser4.chrome.dom
+package ai.platon.pulsar.chrome.dom
 
 import ai.platon.browser4.chrome.util.ChromeDriverException
 import ai.platon.pulsar.FastWebDriverService
