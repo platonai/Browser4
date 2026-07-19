@@ -21,6 +21,11 @@
  *   node bin/version.mjs auto --dry-run    Show what would change without applying
  *   node bin/version.mjs auto --commit     Apply and commit+push
  *
+ *   # Full sync (VERSION → pom.xml, Cargo.toml, package.json, Cargo.lock, <tag>)
+ *   node bin/version.mjs sync              Sync VERSION to all dependent files
+ *   node bin/version.mjs sync --check      Check-only mode (CI, exit 1 if mismatch)
+ *   node bin/version.mjs sync --dry-run    Show what would change without applying
+ *
  *   # CLI file sync (VERSION → package.json, Cargo.toml, Cargo.lock)
  *   node bin/version.mjs cli show          Print CLI version (VERSION minus -SNAPSHOT)
  *   node bin/version.mjs cli sync          Sync VERSION to CLI-dependent files
@@ -417,6 +422,153 @@ function updateCargoLock(cargoDir, oldVersion, newVersion) {
     } catch (e2) {
       console.error(`  Warning: Could not update Cargo.lock directly: ${e2.message}`);
     }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Subcommand: sync (sync VERSION → all project files)
+// ---------------------------------------------------------------------------
+
+function cmdSync(args) {
+  const checkOnly = args.includes("--check");
+  const dryRun = args.includes("--dry-run");
+
+  if (checkOnly && dryRun) {
+    console.error("ERROR: --check and --dry-run are mutually exclusive");
+    process.exit(1);
+  }
+
+  const version = readBackendVersion();
+  const cliVersion = stripSnapshot(version);
+
+  if (checkOnly) {
+    console.log(`VERSION: ${version}`);
+  } else if (dryRun) {
+    console.log(`VERSION: ${version}`);
+    console.log("========== DRY-RUN MODE ==========");
+    console.log("No changes will be made.\n");
+  }
+
+  // ── 1. Maven pom.xml files ──────────────────────────────────────────
+  if (!checkOnly) {
+    if (!dryRun) {
+      const isWindows = process.platform === "win32";
+      const mvnCmd = isWindows ? join(REPO_ROOT, "mvnw.cmd") : join(REPO_ROOT, "mvnw");
+      const mvnArgs = [
+        "versions:set",
+        `-DnewVersion=${version}`,
+        "-DprocessAllModules",
+        "-DgenerateBackupPoms=false",
+      ];
+      try {
+        if (isWindows) {
+          execSync(`cmd /c "${mvnCmd}" ${mvnArgs.join(" ")}`, {
+            cwd: REPO_ROOT,
+            stdio: "inherit",
+          });
+        } else {
+          execSync(`"${mvnCmd}" ${mvnArgs.join(" ")}`, {
+            cwd: REPO_ROOT,
+            stdio: "inherit",
+          });
+        }
+        console.log("  Synced all pom.xml files to " + version);
+      } catch (e) {
+        console.error("ERROR: Maven versions:set failed:", e.message);
+        process.exit(1);
+      }
+    } else {
+      console.log("  [DRY-RUN] mvnw versions:set -DnewVersion=" + version + " -DprocessAllModules -DgenerateBackupPoms=false");
+    }
+  } else {
+    // --check: verify root pom.xml version matches VERSION
+    checkPomVersionConsistency(version);
+  }
+
+  // ── 2. Root pom.xml <tag> ───────────────────────────────────────────
+  const pomXmlPath = join(REPO_ROOT, "pom.xml");
+  const expectedTag = `v${cliVersion}`;
+  if (existsSync(pomXmlPath)) {
+    let pomContent = readFileSync(pomXmlPath, "utf-8");
+    const tagMatch = pomContent.match(/<tag>([^<]*)<\/tag>/);
+    if (tagMatch) {
+      const currentTag = tagMatch[1];
+      if (currentTag !== expectedTag) {
+        if (checkOnly) {
+          checkItem("pom.xml <tag>", "failed", `${currentTag} (expected ${expectedTag})`);
+          process.exitCode = 1;
+        } else if (!dryRun) {
+          pomContent = pomContent.replace(
+            new RegExp(`<tag>${escapeRegex(currentTag)}</tag>`),
+            `<tag>${expectedTag}</tag>`
+          );
+          writeFileSync(pomXmlPath, pomContent);
+          console.log(`  Updated pom.xml <tag>: ${currentTag} -> ${expectedTag}`);
+        } else {
+          console.log(`  [DRY-RUN] pom.xml <tag>: ${currentTag} -> ${expectedTag}`);
+        }
+      } else {
+        if (checkOnly) {
+          checkItem("pom.xml <tag>", "passed", currentTag);
+        } else if (!dryRun) {
+          console.log(`  pom.xml <tag> already up to date (${currentTag})`);
+        }
+      }
+    } else if (checkOnly) {
+      checkItem("pom.xml <tag>", "error", "Cannot find <tag> in pom.xml");
+      process.exitCode = 1;
+    }
+  }
+
+  // ── 3. CLI files (package.json, Cargo.toml, Cargo.lock) ────────────
+  if (!dryRun) {
+    cmdCliSync(checkOnly ? ["--check"] : []);
+  } else {
+    console.log("  [DRY-RUN] Would sync CLI files (package.json, Cargo.toml, Cargo.lock)");
+  }
+
+  // ── Report ──────────────────────────────────────────────────────────
+  if (checkOnly) {
+    if (process.exitCode === 1) {
+      console.error("\nVersion mismatch detected! Run 'node bin/version.mjs sync' to fix.");
+    } else {
+      console.log(`\nAll versions in sync with VERSION: ${version}`);
+    }
+  } else if (dryRun) {
+    console.log("\n========== END DRY-RUN ==========");
+    console.log("No changes were made.");
+  } else {
+    console.log(`\nFull sync complete. All files match VERSION: ${version}`);
+  }
+}
+
+/** Escape special regex characters in a string. */
+function escapeRegex(str) {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** Check that root pom.xml <version> matches the expected version. */
+function checkPomVersionConsistency(expectedVersion) {
+  const pomPath = join(REPO_ROOT, "pom.xml");
+  if (!existsSync(pomPath)) {
+    checkItem("pom.xml", "error", "File not found");
+    process.exitCode = 1;
+    return;
+  }
+  let pomContent = readFileSync(pomPath, "utf-8");
+  const pomWithoutParent = pomContent.replace(/<parent>[\s\S]*?<\/parent>/m, "");
+  const pomVersionMatch = pomWithoutParent.match(/<version>([^<]+)<\/version>/);
+  if (pomVersionMatch) {
+    const pomVersion = pomVersionMatch[1];
+    if (pomVersion === expectedVersion) {
+      checkItem("pom.xml", "passed", pomVersion);
+    } else {
+      checkItem("pom.xml", "failed", `${pomVersion} (expected ${expectedVersion})`);
+      process.exitCode = 1;
+    }
+  } else {
+    checkItem("pom.xml", "error", "Cannot parse <version>");
+    process.exitCode = 1;
   }
 }
 
@@ -1030,6 +1182,11 @@ function printUsage() {
   console.log("    auto --dry-run    Show what would change without applying");
   console.log("    auto --commit     Apply changes and commit+push");
   console.log("");
+  console.log("  Full sync (VERSION → pom.xml, Cargo.toml, package.json, Cargo.lock, <tag>)");
+  console.log("    sync              Sync VERSION to all dependent files");
+  console.log("    sync --check      Check-only mode (exit 1 if out of sync)");
+  console.log("    sync --dry-run    Show what would change without applying");
+  console.log("");
   console.log("  CLI file sync (VERSION → package.json, Cargo.toml)");
   console.log("    cli show          Print CLI version (VERSION minus -SNAPSHOT)");
   console.log("    cli sync          Sync VERSION to CLI-dependent files");
@@ -1060,6 +1217,9 @@ switch (command) {
     break;
   case "release":
     cmdRelease();
+    break;
+  case "sync":
+    cmdSync(rest);
     break;
   case "bump":
     await cmdBump(rest);
