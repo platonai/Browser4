@@ -78,7 +78,7 @@
      with a single click in the IDE right after opening the project. -->
     <modules>
         <module>browser4-dependencies</module>
-        <module>browser4-tests/browser4-tests-common</module>
+        <module>browser4-tests/pulsar-tests-common</module>
         <module>browser4-core</module>
         <module>browser4-plugins</module>
         <module>browser4-agent-tools</module>
@@ -527,12 +527,12 @@
 
             <dependency>
                 <groupId>ai.platon.pulsar</groupId>
-                <artifactId>browser4-tests-common</artifactId>
+                <artifactId>pulsar-tests-common</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
                 <groupId>ai.platon.pulsar</groupId>
-                <artifactId>browser4-tests-common</artifactId>
+                <artifactId>pulsar-tests-common</artifactId>
                 <classifier>tests</classifier>
                 <scope>test</scope>
                 <version>${project.version}</version>

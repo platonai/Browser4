@@ -53,7 +53,7 @@
         </dependency>
         <dependency>
             <groupId>ai.platon.pulsar</groupId>
-            <artifactId>browser4-tests-common</artifactId>
+            <artifactId>pulsar-tests-common</artifactId>
         </dependency>
         <!-- Jackson module for Kotlin support -->
         <dependency>

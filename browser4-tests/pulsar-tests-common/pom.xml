@@ -18,7 +18,7 @@
         <relativePath>../../pom.xml</relativePath>
     </parent>
 
-    <artifactId>browser4-tests-common</artifactId>
+    <artifactId>pulsar-tests-common</artifactId>
     <name>Browser4 Tests Common</name>
 
     <build>

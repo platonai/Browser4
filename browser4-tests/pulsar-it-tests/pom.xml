@@ -72,7 +72,7 @@
 
         <dependency>
             <groupId>ai.platon.pulsar</groupId>
-            <artifactId>browser4-tests-common</artifactId>
+            <artifactId>pulsar-tests-common</artifactId>
             <scope>test</scope>
         </dependency>
         <!--
