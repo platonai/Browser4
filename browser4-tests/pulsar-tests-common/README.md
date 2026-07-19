@@ -1,4 +1,4 @@
-# browser4-tests-common Mock Site Utilities
+# pulsar-tests-common Mock Site Utilities
 
 This module provides reusable test/demo infrastructure for Browser4 / Pulsar examples.
 
@@ -153,7 +153,7 @@ All assets are served automatically by Spring Boot under `/assets/` when `MockSi
 | Symptom | Cause | Fix |
 |---------|-------|-----|
 | Port already in use | Another service uses 8080 | Start with `-Dmock.site.port=0` or choose a free port |
-| Auto-start fails in example | Spring context exception | Check logs; ensure dependency `browser4-tests-common` is on classpath |
+| Auto-start fails in example | Spring context exception | Check logs; ensure dependency `pulsar-tests-common` is on classpath |
 | Demo page 404 | Wrong URL or port | Print `MockSiteLauncher.baseUrl()` and rebuild URL |
 | Health probe fails | Actuator not enabled | Use `-Dmock.site.healthPath=/` as a fallback |
 | Probe always times out | Wrong host/port | Verify URL host:port, increase timeout |

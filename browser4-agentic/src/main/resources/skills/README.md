@@ -263,12 +263,12 @@ Write tests for your skills:
 fun testMySkill() = runBlocking {
     val skill = MyCustomSkill()
     val context = SkillContext(sessionId = "test")
-    
+
     val result = skill.execute(
         context,
         mapOf("param1" to "value1")
     )
-    
+
     assertTrue(result.success)
     assertNotNull(result.data)
 }
@@ -278,4 +278,4 @@ fun testMySkill() = runBlocking {
 
 - [Project Documentation](../../../../../docs/)
 - Skill source implementations in `src/main/kotlin/ai/platon/pulsar/agentic/skills/`
-- Test resources in `browser4-tests/browser4-tests-common/src/main/resources/static/`
+- Test resources in `browser4-tests/pulsar-tests-common/src/main/resources/static/`

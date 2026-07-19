@@ -346,7 +346,7 @@ The MockSite HTML generator wraps attribute values in `&quot;` entities, which d
 
 #### Code Pointer
 
-``browser4-tests/browser4-tests-common/src/main/resources/` — MockSite HTML generation templates`
+``browser4-tests/pulsar-tests-common/src/main/resources/` — MockSite HTML generation templates`
 
 #### AI Suggested Improvement
 

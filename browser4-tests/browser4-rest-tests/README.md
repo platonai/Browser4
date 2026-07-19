@@ -1,10 +1,10 @@
 # Browser4 REST Tests
 
-This module provides REST API integration and E2E tests for Browser4 / Pulsar, plus a standalone launcher for the mock site defined in `browser4-tests-common`.
+This module provides REST API integration and E2E tests for Browser4 / Pulsar, plus a standalone launcher for the mock site defined in `pulsar-tests-common`.
 
 ## MockSiteBoot (standalone main)
 
-Command-line launcher with a `main()` entry point that starts the mock site served from `browser4-tests-common`. The mock site serves static deterministic pages under `browser4-tests-common`'s `src/main/resources/static/`, including the key demo page:
+Command-line launcher with a `main()` entry point that starts the mock site served from `pulsar-tests-common`. The mock site serves static deterministic pages under `pulsar-tests-common`'s `src/main/resources/static/`, including the key demo page:
 
 ```
 http://localhost:18080/generated/interactive-1.html

@@ -36,7 +36,7 @@ The CLI's `compile_batch_request()` builds step arrays with `op: "tool"` entries
 - `scenarios/browser.rs` — tests against the real Browser4 backend
 - `scenarios/batch.rs` — batch-command tests against the real backend
 - `scenarios/mock_server.rs` — tests against `MockBrowser4Server` (no real backend needed)
-- Real-backend tests use HTML fixtures from `browser4-tests/browser4-tests-common/src/main/resources/static/b4/`
+- Real-backend tests use HTML fixtures from `browser4-tests/pulsar-tests-common/src/main/resources/static/b4/`
 - State verification: `wait_for_state_or_abort()` polls `read_interactive_state()` which evals `state-log.textContent`
 
 ## Known CDP pitfalls

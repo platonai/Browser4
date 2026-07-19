@@ -110,12 +110,12 @@
         <!-- Only for demo server starter -->
         <dependency>
             <groupId>ai.platon.pulsar</groupId>
-            <artifactId>browser4-tests-common</artifactId>
+            <artifactId>pulsar-tests-common</artifactId>
             <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>ai.platon.pulsar</groupId>
-            <artifactId>browser4-tests-common</artifactId>
+            <artifactId>pulsar-tests-common</artifactId>
         </dependency>
     </dependencies>
 

@@ -18,7 +18,7 @@ The use-case file format:
   2. Second step.
 
 .EXAMPLE
-./run-use-case.ps1 -TaskFile "../browser4-tests-common/src/main/resources/e2e/scenarios/happy_path/use-cases/01-ecommerce-product-comparison.txt"
+./run-use-case.ps1 -TaskFile "../pulsar-tests-common/src/main/resources/e2e/scenarios/happy_path/use-cases/01-ecommerce-product-comparison.txt"
 
     Run the ecommerce comparison use case in dev mode.
 

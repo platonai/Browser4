@@ -263,7 +263,7 @@ Output footer includes: `💡 Tip: Run snapshot -v 0 to see interactive element 
 
 **Root Cause:** The MockSite HTML generator wraps attribute values in `&quot;` entities, which decode to literal `"` characters in the DOM. This affects `href`, `src`, and `data-*` attributes on product cards.
 
-**Code Pointer:** `browser4-tests/browser4-tests-common/src/main/resources/` — MockSite HTML generation templates
+**Code Pointer:** `browser4-tests/pulsar-tests-common/src/main/resources/` — MockSite HTML generation templates
 
 **AI Suggested Improvement:**
 - Fix the MockSite HTML generation to not wrap class names, IDs, hrefs, and srcs in quote entities

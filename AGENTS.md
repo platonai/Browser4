@@ -50,7 +50,7 @@ browser4-cli (Rust)  ──MCP over HTTP──▶  browser4-rest (Kotlin/Spring)
 | `browser4-apps/browser4-standalone` | Product packaging, unified launcher (`target/Browser4.jar`) |
 | `examples/browser4-examples` | Runnable examples |
 | `browser4-tests` | E2E, integration, scenario tests |
-| `browser4-tests/browser4-tests-common` | Shared test base classes and utilities |
+| `browser4-tests/pulsar-tests-common` | Shared test base classes and utilities |
 | `cdp-protocol` | Chrome DevTools Protocol JSON definitions |
 | `coworker/` | File-queue automation for task-driven AI workflows |
 
@@ -103,7 +103,7 @@ cargo test --test e2e -- --help           # All options
 | Integration | `browser4-tests/pulsar-it-tests/` |
 | E2E | `browser4-tests/pulsar-e2e-tests/` |
 | REST integration/E2E | `browser4-tests/browser4-rest-tests/` |
-| Shared utilities | `browser4-tests/browser4-tests-common/` |
+| Shared utilities | `browser4-tests/pulsar-tests-common/` |
 | Rust E2E | `cli/browser4-cli/tests/e2e/` |
 
 ## Code Style

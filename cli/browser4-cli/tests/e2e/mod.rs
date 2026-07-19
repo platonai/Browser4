@@ -168,7 +168,7 @@ fn fixture_path(base: &str, file_name: &str) -> PathBuf {
         .join("..")
         .join("..")
         .join("browser4-tests")
-        .join("browser4-tests-common")
+        .join("pulsar-tests-common")
         .join("src")
         .join("main")
         .join("resources")

@@ -28,7 +28,7 @@ All pages (home, category/list, product) must be rendered server-side from a **s
 ## Data Source
 Single JSON file (example path):
 ```
-/browser4-tests-common/src/main/resources/static/generated/mock-amazon/data/products.json
+/pulsar-tests-common/src/main/resources/static/generated/mock-amazon/data/products.json
 ```
 Load once at application start; keep immutable in memory.
 
@@ -79,7 +79,7 @@ Load once at application start; keep immutable in memory.
 ## Page Templates
 
 The primary `EcommerceController` + `HtmlRenderer` uses these templates under
-`/browser4-tests-common/src/main/resources/static/generated/mock-amazon/`:
+`/pulsar-tests-common/src/main/resources/static/generated/mock-amazon/`:
 - Home: `ec-home.html`
 - Category: `ec-category.html`
 - Product: `ec-product.html`

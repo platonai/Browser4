@@ -3,24 +3,24 @@
 [INFO] Loaded 23236 auto-discovered prefixes for remote repository repo (prefixes-repo-288c21a1ed5973ad5770cd4e29fc60d8b063d895.txt)
 [INFO] Loaded 74 auto-discovered prefixes for remote repository apache.snapshots (prefixes-apache.snapshots-c1d4c55f9308e5ac18a4069bed41dca64d85c515.txt)
 [INFO] Loaded 23236 auto-discovered prefixes for remote repository repo (prefixes-repo-0ac8f358eb30d7fb5531be42457eff13fd04961f.txt)
-[WARNING] 
+[WARNING]
 [WARNING] 803 problems were encountered while building the effective model for 'ai.platon.pulsar:browser4-dependencies:pom:4.12.0-rc.1-SNAPSHOT' (use -e to see details)
-[WARNING] 
+[WARNING]
 [WARNING] 1 problem was encountered while building the effective model for 'ai.platon.pulsar:browser4-captcha:jar:4.12.0-rc.1-SNAPSHOT' (use -e to see details)
-[WARNING] 
+[WARNING]
 [WARNING] 803 problems were encountered while building the effective model for 'ai.platon.pulsar:browser4-pdk-bom:pom:4.12.0-rc.1-SNAPSHOT' (use -e to see details)
-[WARNING] 
+[WARNING]
 [WARNING] 1 problem was encountered while building the effective model for 'ai.platon.pulsar:browser4:pom:4.12.0-rc.1-SNAPSHOT' (use -e to see details)
-[WARNING] 
+[WARNING]
 [WARNING] Total model problems reported: 1608
-[WARNING] 
+[WARNING]
 [WARNING] It is highly recommended to fix these problems because they threaten the stability of your build.
-[WARNING] 
+[WARNING]
 [WARNING] For this reason, future Maven versions might no longer support building such malformed projects.
-[WARNING] 
+[WARNING]
 [INFO] Kotlin smart defaults are enabled for browser4
 [INFO] Kotlin smart defaults are enabled for browser4-common
-[INFO] Kotlin smart defaults are enabled for browser4-tests-common
+[INFO] Kotlin smart defaults are enabled for pulsar-tests-common
 [INFO] Kotlin smart defaults are enabled for browser4-resources
 [INFO] Kotlin smart defaults are enabled for browser4-browser
 [INFO] Kotlin smart defaults are enabled for browser4-skeleton
@@ -44,7 +44,7 @@
 [INFO] Kotlin smart defaults are enabled for browser4-rest
 [INFO] ------------------------------------------------------------------------
 [INFO] Reactor Build Order:
-[INFO] 
+[INFO]
 [INFO] Browser4 Dependencies                                              [pom]
 [INFO] Browser4                                                           [pom]
 [INFO] Browser4 Common                                                    [jar]
@@ -69,22 +69,22 @@
 [INFO] Browser4 Plugin Archetype                              [maven-archetype]
 [INFO] Browser4 PDK Test Plugin                                           [jar]
 [INFO] Browser4 Rest                                                      [jar]
-[INFO] 
+[INFO]
 [INFO] ---------------< ai.platon.pulsar:browser4-dependencies >---------------
 [INFO] Building Browser4 Dependencies 4.12.0-rc.1-SNAPSHOT               [1/24]
 [INFO]   from browser4-dependencies\pom.xml
 [INFO] --------------------------------[ pom ]---------------------------------
-[INFO] 
+[INFO]
 [INFO] --- dependency:3.11.0:tree (default-cli) @ browser4-dependencies ---
 [INFO] ai.platon.pulsar:browser4-dependencies:pom:4.12.0-rc.1-SNAPSHOT
 [INFO] Copying ai.platon.pulsar:browser4-dependencies:pom:4.12.0-rc.1-SNAPSHOT to project local repository
 [INFO] Copying ai.platon.pulsar:browser4-dependencies:pom:consumer:4.12.0-rc.1-SNAPSHOT to project local repository
-[INFO] 
+[INFO]
 [INFO] ---------------------< ai.platon.pulsar:browser4 >----------------------
 [INFO] Building Browser4 4.12.0-rc.1-SNAPSHOT                            [2/24]
 [INFO]   from pom.xml
 [INFO] --------------------------------[ pom ]---------------------------------
-[INFO] 
+[INFO]
 [INFO] --- dependency:3.9.0:tree (default-cli) @ browser4 ---
 [INFO] ai.platon.pulsar:browser4:pom:4.12.0-rc.1-SNAPSHOT
 [INFO] +- org.jetbrains.kotlin:kotlin-stdlib:jar:2.2.21:compile
@@ -104,12 +104,12 @@
 [INFO]    \- org.junit.platform:junit-platform-launcher:jar:6.0.3:test
 [INFO] Copying ai.platon.pulsar:browser4:pom:4.12.0-rc.1-SNAPSHOT to project local repository
 [INFO] Copying ai.platon.pulsar:browser4:pom:consumer:4.12.0-rc.1-SNAPSHOT to project local repository
-[INFO] 
+[INFO]
 [INFO] ------------------< ai.platon.pulsar:browser4-common >------------------
 [INFO] Building Browser4 Common 4.12.0-rc.1-SNAPSHOT                     [3/24]
 [INFO]   from browser4-core\browser4-common\pom.xml
 [INFO] --------------------------------[ jar ]---------------------------------
-[INFO] 
+[INFO]
 [INFO] --- dependency:3.9.0:tree (default-cli) @ browser4-common ---
 [INFO] ai.platon.pulsar:browser4-common:jar:4.12.0-rc.1-SNAPSHOT
 [INFO] +- org.springframework:spring-core:jar:7.0.7:compile
@@ -145,14 +145,14 @@
 [INFO] \- org.jetbrains.kotlin:kotlin-test-junit5:jar:2.2.21:test
 [INFO]    +- org.jetbrains.kotlin:kotlin-test:jar:2.2.21:test
 [INFO]    \- org.junit.platform:junit-platform-launcher:jar:6.0.3:test
-[INFO] 
-[INFO] ---------------< ai.platon.pulsar:browser4-tests-common >---------------
+[INFO]
+[INFO] ---------------< ai.platon.pulsar:pulsar-tests-common >---------------
 [INFO] Building Browser4 Tests Common 4.12.0-rc.1-SNAPSHOT               [4/24]
-[INFO]   from browser4-tests\browser4-tests-common\pom.xml
+[INFO]   from browser4-tests\pulsar-tests-common\pom.xml
 [INFO] --------------------------------[ jar ]---------------------------------
-[INFO] 
-[INFO] --- dependency:3.9.0:tree (default-cli) @ browser4-tests-common ---
-[INFO] ai.platon.pulsar:browser4-tests-common:jar:4.12.0-rc.1-SNAPSHOT
+[INFO]
+[INFO] --- dependency:3.9.0:tree (default-cli) @ pulsar-tests-common ---
+[INFO] ai.platon.pulsar:pulsar-tests-common:jar:4.12.0-rc.1-SNAPSHOT
 [INFO] +- ai.platon.pulsar:browser4-common:jar:4.12.0-rc.1-SNAPSHOT:compile
 [INFO] |  +- org.springframework:spring-core:jar:7.0.7:compile
 [INFO] |  |  +- commons-logging:commons-logging:jar:1.3.2:compile
@@ -286,12 +286,12 @@
 [INFO]    +- org.junit.jupiter:junit-jupiter-engine:jar:6.0.3:test
 [INFO]    |  \- org.junit.platform:junit-platform-engine:jar:6.0.3:test
 [INFO]    \- org.junit.platform:junit-platform-launcher:jar:6.0.3:test
-[INFO] 
+[INFO]
 [INFO] ----------------< ai.platon.pulsar:browser4-resources >-----------------
 [INFO] Building Browser4 Resources 4.12.0-rc.1-SNAPSHOT                  [5/24]
 [INFO]   from browser4-core\browser4-resources\pom.xml
 [INFO] --------------------------------[ jar ]---------------------------------
-[INFO] 
+[INFO]
 [INFO] --- dependency:3.9.0:tree (default-cli) @ browser4-resources ---
 [INFO] ai.platon.pulsar:browser4-resources:jar:4.12.0-rc.1-SNAPSHOT
 [INFO] +- org.jetbrains.kotlin:kotlin-stdlib:jar:2.2.21:compile
@@ -309,12 +309,12 @@
 [INFO]    +- org.junit.jupiter:junit-jupiter-engine:jar:6.0.3:test
 [INFO]    |  \- org.junit.platform:junit-platform-engine:jar:6.0.3:test
 [INFO]    \- org.junit.platform:junit-platform-launcher:jar:6.0.3:test
-[INFO] 
+[INFO]
 [INFO] -----------------< ai.platon.pulsar:browser4-browser >------------------
 [INFO] Building Browser4 Browser 4.12.0-rc.1-SNAPSHOT                    [6/24]
 [INFO]   from browser4-core\browser4-browser\pom.xml
 [INFO] --------------------------------[ jar ]---------------------------------
-[INFO] 
+[INFO]
 [INFO] --- dependency:3.9.0:tree (default-cli) @ browser4-browser ---
 [INFO] ai.platon.pulsar:browser4-browser:jar:4.12.0-rc.1-SNAPSHOT
 [INFO] +- ai.platon.pulsar:browser4-common:jar:4.12.0-rc.1-SNAPSHOT:compile
@@ -406,12 +406,12 @@
 [INFO] \- org.jetbrains.kotlin:kotlin-test-junit5:jar:2.2.21:test
 [INFO]    +- org.jetbrains.kotlin:kotlin-test:jar:2.2.21:test
 [INFO]    \- org.junit.platform:junit-platform-launcher:jar:6.0.3:test
-[INFO] 
+[INFO]
 [INFO] -----------------< ai.platon.pulsar:browser4-skeleton >-----------------
 [INFO] Building Browser4 Skeleton 4.12.0-rc.1-SNAPSHOT                   [7/24]
 [INFO]   from browser4-core\browser4-skeleton\pom.xml
 [INFO] --------------------------------[ jar ]---------------------------------
-[INFO] 
+[INFO]
 [INFO] --- dependency:3.9.0:tree (default-cli) @ browser4-skeleton ---
 [INFO] ai.platon.pulsar:browser4-skeleton:jar:4.12.0-rc.1-SNAPSHOT
 [INFO] +- ai.platon.pulsar:browser4-common:jar:4.12.0-rc.1-SNAPSHOT:compile
@@ -555,7 +555,7 @@
 [INFO] |  |     \- org.hamcrest:hamcrest:jar:3.0:test
 [INFO] |  \- org.junit.jupiter:junit-jupiter:jar:6.0.3:test
 [INFO] |     \- org.junit.jupiter:junit-jupiter-params:jar:6.0.3:test
-[INFO] +- ai.platon.pulsar:browser4-tests-common:jar:4.12.0-rc.1-SNAPSHOT:test
+[INFO] +- ai.platon.pulsar:pulsar-tests-common:jar:4.12.0-rc.1-SNAPSHOT:test
 [INFO] |  +- org.jetbrains.kotlinx:kotlinx-serialization-json:jar:1.9.0:test
 [INFO] |  |  \- org.jetbrains.kotlinx:kotlinx-serialization-json-jvm:jar:1.9.0:test
 [INFO] |  +- org.springframework.boot:spring-boot-starter-web:jar:4.0.6:test
@@ -601,12 +601,12 @@
 [INFO] \- org.jetbrains.kotlin:kotlin-test-junit5:jar:2.2.21:test
 [INFO]    +- org.jetbrains.kotlin:kotlin-test:jar:2.2.21:test
 [INFO]    \- org.junit.platform:junit-platform-launcher:jar:6.0.3:test
-[INFO] 
+[INFO]
 [INFO] -------------------< ai.platon.pulsar:browser4-core >-------------------
 [INFO] Building Browser4 Core 4.12.0-rc.1-SNAPSHOT                       [8/24]
 [INFO]   from browser4-core\pom.xml
 [INFO] --------------------------------[ pom ]---------------------------------
-[INFO] 
+[INFO]
 [INFO] --- dependency:3.9.0:tree (default-cli) @ browser4-core ---
 [INFO] ai.platon.pulsar:browser4-core:pom:4.12.0-rc.1-SNAPSHOT
 [INFO] +- org.jetbrains.kotlin:kotlin-stdlib:jar:2.2.21:compile
@@ -626,12 +626,12 @@
 [INFO]    \- org.junit.platform:junit-platform-launcher:jar:6.0.3:test
 [INFO] Copying ai.platon.pulsar:browser4-core:pom:4.12.0-rc.1-SNAPSHOT to project local repository
 [INFO] Copying ai.platon.pulsar:browser4-core:pom:consumer:4.12.0-rc.1-SNAPSHOT to project local repository
-[INFO] 
+[INFO]
 [INFO] -----------------< ai.platon.pulsar:browser4-protocol >-----------------
 [INFO] Building Browser4 Protocol 4.12.0-rc.1-SNAPSHOT                   [9/24]
 [INFO]   from browser4-core\browser4-protocol\pom.xml
 [INFO] --------------------------------[ jar ]---------------------------------
-[INFO] 
+[INFO]
 [INFO] --- dependency:3.9.0:tree (default-cli) @ browser4-protocol ---
 [INFO] ai.platon.pulsar:browser4-protocol:jar:4.12.0-rc.1-SNAPSHOT
 [INFO] +- ai.platon.pulsar:browser4-browser:jar:4.12.0-rc.1-SNAPSHOT:compile
@@ -765,12 +765,12 @@
 [INFO] \- org.jetbrains.kotlin:kotlin-test-junit5:jar:2.2.21:test
 [INFO]    +- org.jetbrains.kotlin:kotlin-test:jar:2.2.21:test
 [INFO]    \- org.junit.platform:junit-platform-launcher:jar:6.0.3:test
-[INFO] 
+[INFO]
 [INFO] ------------------< ai.platon.pulsar:browser4-parse >-------------------
 [INFO] Building Browser4 Parse 4.12.0-rc.1-SNAPSHOT                     [10/24]
 [INFO]   from browser4-core\browser4-parse\pom.xml
 [INFO] --------------------------------[ jar ]---------------------------------
-[INFO] 
+[INFO]
 [INFO] --- dependency:3.9.0:tree (default-cli) @ browser4-parse ---
 [INFO] ai.platon.pulsar:browser4-parse:jar:4.12.0-rc.1-SNAPSHOT
 [INFO] +- ai.platon.pulsar:browser4-resources:jar:4.12.0-rc.1-SNAPSHOT:compile
@@ -905,12 +905,12 @@
 [INFO]    +- org.junit.jupiter:junit-jupiter-engine:jar:6.0.3:test
 [INFO]    |  \- org.junit.platform:junit-platform-engine:jar:6.0.3:test
 [INFO]    \- org.junit.platform:junit-platform-launcher:jar:6.0.3:test
-[INFO] 
+[INFO]
 [INFO] -----------------< ai.platon.pulsar:browser4-agentic >------------------
 [INFO] Building Browser4 Agentic 4.12.0-rc.1-SNAPSHOT                   [11/24]
 [INFO]   from browser4-agentic\pom.xml
 [INFO] --------------------------------[ jar ]---------------------------------
-[INFO] 
+[INFO]
 [INFO] --- dependency:3.9.0:tree (default-cli) @ browser4-agentic ---
 [INFO] ai.platon.pulsar:browser4-agentic:jar:4.12.0-rc.1-SNAPSHOT
 [INFO] +- ai.platon.pulsar:browser4-common:jar:4.12.0-rc.1-SNAPSHOT:compile
@@ -1100,24 +1100,24 @@
 [INFO]    +- org.junit.jupiter:junit-jupiter-engine:jar:6.0.3:test
 [INFO]    |  \- org.junit.platform:junit-platform-engine:jar:6.0.3:test
 [INFO]    \- org.junit.platform:junit-platform-launcher:jar:6.0.3:test
-[INFO] 
+[INFO]
 [INFO] -------------------< ai.platon.pulsar:browser4-pdk >--------------------
 [INFO] Building Browser4 Plugin Development Kit 4.12.0-rc.1-SNAPSHOT    [12/24]
 [INFO]   from browser4-pdk\pom.xml
 [INFO] --------------------------------[ pom ]---------------------------------
-[INFO] 
+[INFO]
 [INFO] --- dependency:3.9.0:tree (default-cli) @ browser4-pdk ---
 [INFO] ai.platon.pulsar:browser4-pdk:pom:4.12.0-rc.1-SNAPSHOT
 [INFO] \- org.jetbrains.kotlin:kotlin-stdlib:jar:2.3.21:compile
 [INFO]    \- org.jetbrains:annotations:jar:13.0:compile
 [INFO] Copying ai.platon.pulsar:browser4-pdk:pom:4.12.0-rc.1-SNAPSHOT to project local repository
 [INFO] Copying ai.platon.pulsar:browser4-pdk:pom:consumer:4.12.0-rc.1-SNAPSHOT to project local repository
-[INFO] 
+[INFO]
 [INFO] -----------------< ai.platon.pulsar:browser4-captcha >------------------
 [INFO] Building Browser4 Captcha 4.12.0-rc.1-SNAPSHOT                   [13/24]
 [INFO]   from browser4-plugins\browser4-captcha\pom.xml
 [INFO] --------------------------------[ jar ]---------------------------------
-[INFO] 
+[INFO]
 [INFO] --- dependency:3.9.0:tree (default-cli) @ browser4-captcha ---
 [INFO] ai.platon.pulsar:browser4-captcha:jar:4.12.0-rc.1-SNAPSHOT
 [INFO] +- ai.platon.pulsar:browser4-skeleton:jar:4.12.0-rc.1-SNAPSHOT:provided
@@ -1267,12 +1267,12 @@
 [INFO] |  \- org.junit.platform:junit-platform-launcher:jar:6.0.3:test
 [INFO] \- org.springframework.boot:spring-boot-test:jar:4.0.6:test
 [INFO]    \- org.springframework:spring-test:jar:7.0.7:test
-[INFO] 
+[INFO]
 [INFO] ------------------< ai.platon.pulsar:browser4-media >-------------------
 [INFO] Building Browser4 Media 4.12.0-rc.1-SNAPSHOT                     [14/24]
 [INFO]   from browser4-plugins\browser4-media\pom.xml
 [INFO] --------------------------------[ jar ]---------------------------------
-[INFO] 
+[INFO]
 [INFO] --- dependency:3.9.0:tree (default-cli) @ browser4-media ---
 [INFO] ai.platon.pulsar:browser4-media:jar:4.12.0-rc.1-SNAPSHOT
 [INFO] +- ai.platon.pulsar:browser4-skeleton:jar:4.12.0-rc.1-SNAPSHOT:provided
@@ -1422,12 +1422,12 @@
 [INFO] |  \- org.junit.platform:junit-platform-launcher:jar:6.0.3:test
 [INFO] \- org.springframework.boot:spring-boot-test:jar:4.0.6:test
 [INFO]    \- org.springframework:spring-test:jar:7.0.7:test
-[INFO] 
+[INFO]
 [INFO] ------------------< ai.platon.pulsar:browser4-images >------------------
 [INFO] Building Browser4 Images 4.12.0-rc.1-SNAPSHOT                    [15/24]
 [INFO]   from browser4-plugins\browser4-images\pom.xml
 [INFO] --------------------------------[ jar ]---------------------------------
-[INFO] 
+[INFO]
 [INFO] --- dependency:3.9.0:tree (default-cli) @ browser4-images ---
 [INFO] ai.platon.pulsar:browser4-images:jar:4.12.0-rc.1-SNAPSHOT
 [INFO] +- ai.platon.pulsar:browser4-skeleton:jar:4.12.0-rc.1-SNAPSHOT:provided
@@ -1577,12 +1577,12 @@
 [INFO] |  \- org.junit.platform:junit-platform-launcher:jar:6.0.3:test
 [INFO] \- org.springframework.boot:spring-boot-test:jar:4.0.6:test
 [INFO]    \- org.springframework:spring-test:jar:7.0.7:test
-[INFO] 
+[INFO]
 [INFO] -------------------< ai.platon.pulsar:browser4-pptx >-------------------
 [INFO] Building Browser4 PPTX 4.12.0-rc.1-SNAPSHOT                      [16/24]
 [INFO]   from browser4-plugins\browser4-pptx\pom.xml
 [INFO] --------------------------------[ jar ]---------------------------------
-[INFO] 
+[INFO]
 [INFO] --- dependency:3.9.0:tree (default-cli) @ browser4-pptx ---
 [INFO] ai.platon.pulsar:browser4-pptx:jar:4.12.0-rc.1-SNAPSHOT
 [INFO] +- ai.platon.pulsar:browser4-skeleton:jar:4.12.0-rc.1-SNAPSHOT:provided
@@ -1740,12 +1740,12 @@
 [INFO] |  \- org.junit.platform:junit-platform-launcher:jar:6.0.3:test
 [INFO] \- org.springframework.boot:spring-boot-test:jar:4.0.6:test
 [INFO]    \- org.springframework:spring-test:jar:7.0.7:test
-[INFO] 
+[INFO]
 [INFO] -----------------< ai.platon.pulsar:browser4-markdown >-----------------
 [INFO] Building Browser4 Markdown 4.12.0-rc.1-SNAPSHOT                  [17/24]
 [INFO]   from browser4-plugins\browser4-markdown\pom.xml
 [INFO] --------------------------------[ jar ]---------------------------------
-[INFO] 
+[INFO]
 [INFO] --- dependency:3.9.0:tree (default-cli) @ browser4-markdown ---
 [INFO] ai.platon.pulsar:browser4-markdown:jar:4.12.0-rc.1-SNAPSHOT
 [INFO] +- ai.platon.pulsar:browser4-skeleton:jar:4.12.0-rc.1-SNAPSHOT:provided
@@ -1901,12 +1901,12 @@
 [INFO] |  \- org.junit.platform:junit-platform-launcher:jar:6.0.3:test
 [INFO] \- org.springframework.boot:spring-boot-test:jar:4.0.6:test
 [INFO]    \- org.springframework:spring-test:jar:7.0.7:test
-[INFO] 
+[INFO]
 [INFO] -----------------< ai.platon.pulsar:browser4-plugins >------------------
 [INFO] Building Browser4 Plugins 4.12.0-rc.1-SNAPSHOT                   [18/24]
 [INFO]   from browser4-plugins\pom.xml
 [INFO] --------------------------------[ pom ]---------------------------------
-[INFO] 
+[INFO]
 [INFO] --- dependency:3.9.0:tree (default-cli) @ browser4-plugins ---
 [INFO] ai.platon.pulsar:browser4-plugins:pom:4.12.0-rc.1-SNAPSHOT
 [INFO] +- org.jetbrains.kotlin:kotlin-stdlib:jar:2.2.21:compile
@@ -1926,12 +1926,12 @@
 [INFO]    \- org.junit.platform:junit-platform-launcher:jar:6.0.3:test
 [INFO] Copying ai.platon.pulsar:browser4-plugins:pom:4.12.0-rc.1-SNAPSHOT to project local repository
 [INFO] Copying ai.platon.pulsar:browser4-plugins:pom:consumer:4.12.0-rc.1-SNAPSHOT to project local repository
-[INFO] 
+[INFO]
 [INFO] ---------------< ai.platon.pulsar:browser4-agent-tools >----------------
 [INFO] Building Browser4 Agent Tools 4.12.0-rc.1-SNAPSHOT               [19/24]
 [INFO]   from browser4-agent-tools\pom.xml
 [INFO] --------------------------------[ jar ]---------------------------------
-[INFO] 
+[INFO]
 [INFO] --- dependency:3.9.0:tree (default-cli) @ browser4-agent-tools ---
 [INFO] ai.platon.pulsar:browser4-agent-tools:jar:4.12.0-rc.1-SNAPSHOT
 [INFO] +- ai.platon.pulsar:browser4-skeleton:jar:4.12.0-rc.1-SNAPSHOT:compile
@@ -2082,12 +2082,12 @@
 [INFO]    +- org.junit.jupiter:junit-jupiter-engine:jar:6.0.3:test
 [INFO]    |  \- org.junit.platform:junit-platform-engine:jar:6.0.3:test
 [INFO]    \- org.junit.platform:junit-platform-launcher:jar:6.0.3:test
-[INFO] 
+[INFO]
 [INFO] -------------------< ai.platon.pulsar:browser4-boot >-------------------
 [INFO] Building Browser4 Boot 4.12.0-rc.1-SNAPSHOT                      [20/24]
 [INFO]   from browser4-boot\pom.xml
 [INFO] --------------------------------[ jar ]---------------------------------
-[INFO] 
+[INFO]
 [INFO] --- dependency:3.9.0:tree (default-cli) @ browser4-boot ---
 [INFO] ai.platon.pulsar:browser4-boot:jar:4.12.0-rc.1-SNAPSHOT
 [INFO] +- ai.platon.pulsar:pulsar-persist:jar:4.9.5:compile
@@ -2251,32 +2251,32 @@
 [INFO]    +- org.junit.jupiter:junit-jupiter-engine:jar:6.0.3:test
 [INFO]    |  \- org.junit.platform:junit-platform-engine:jar:6.0.3:test
 [INFO]    \- org.junit.platform:junit-platform-launcher:jar:6.0.3:test
-[INFO] 
+[INFO]
 [INFO] -----------------< ai.platon.pulsar:browser4-pdk-bom >------------------
 [INFO] Building Browser4 PDK BOM 4.12.0-rc.1-SNAPSHOT                   [21/24]
 [INFO]   from browser4-pdk\browser4-pdk-bom\pom.xml
 [INFO] --------------------------------[ pom ]---------------------------------
-[INFO] 
+[INFO]
 [INFO] --- dependency:3.11.0:tree (default-cli) @ browser4-pdk-bom ---
 [INFO] ai.platon.pulsar:browser4-pdk-bom:pom:4.12.0-rc.1-SNAPSHOT
 [INFO] Copying ai.platon.pulsar:browser4-pdk-bom:pom:4.12.0-rc.1-SNAPSHOT to project local repository
 [INFO] Copying ai.platon.pulsar:browser4-pdk-bom:pom:consumer:4.12.0-rc.1-SNAPSHOT to project local repository
-[INFO] 
+[INFO]
 [INFO] -------------< ai.platon.pulsar:browser4-plugin-archetype >-------------
 [INFO] Building Browser4 Plugin Archetype 4.12.0-rc.1-SNAPSHOT          [22/24]
 [INFO]   from browser4-pdk\browser4-plugin-archetype\pom.xml
 [INFO] --------------------------[ maven-archetype ]---------------------------
-[INFO] 
+[INFO]
 [INFO] --- dependency:3.9.0:tree (default-cli) @ browser4-plugin-archetype ---
 [INFO] ai.platon.pulsar:browser4-plugin-archetype:maven-archetype:4.12.0-rc.1-SNAPSHOT
 [INFO] \- org.jetbrains.kotlin:kotlin-stdlib:jar:2.3.21:compile
 [INFO]    \- org.jetbrains:annotations:jar:13.0:compile
-[INFO] 
+[INFO]
 [INFO] -------------< ai.platon.pulsar:browser4-pdk-test-plugin >--------------
 [INFO] Building Browser4 PDK Test Plugin 4.12.0-rc.1-SNAPSHOT           [23/24]
 [INFO]   from browser4-pdk\browser4-pdk-test-plugin\pom.xml
 [INFO] --------------------------------[ jar ]---------------------------------
-[INFO] 
+[INFO]
 [INFO] --- dependency:3.9.0:tree (default-cli) @ browser4-pdk-test-plugin ---
 [INFO] ai.platon.pulsar:browser4-pdk-test-plugin:jar:4.12.0-rc.1-SNAPSHOT
 [INFO] +- ai.platon.pulsar:browser4-skeleton:jar:4.12.0-rc.1-SNAPSHOT:provided
@@ -2452,13 +2452,13 @@
 [INFO]    |  \- com.vaadin.external.google:android-json:jar:0.0.20131108.vaadin1:test
 [INFO]    +- org.springframework:spring-test:jar:7.0.7:test
 [INFO]    \- org.xmlunit:xmlunit-core:jar:2.10.4:test
-[INFO] 
+[INFO]
 [INFO] -------------------< ai.platon.pulsar:browser4-rest >-------------------
 [INFO] Building Browser4 Rest 4.12.0-rc.1-SNAPSHOT                      [24/24]
 [INFO]   from browser4-rest\pom.xml
 [INFO] --------------------------------[ jar ]---------------------------------
 [INFO] Loaded 50 auto-discovered prefixes for remote repository ow2-snapshot (prefixes-ow2-snapshot-40669f8efefaadb4c1705a2585cefc8851f735ac.txt)
-[INFO] 
+[INFO]
 [INFO] --- dependency:3.9.0:tree (default-cli) @ browser4-rest ---
 [INFO] ai.platon.pulsar:browser4-rest:jar:4.12.0-rc.1-SNAPSHOT
 [INFO] +- ai.platon.pulsar:browser4-browser:jar:4.12.0-rc.1-SNAPSHOT:compile
@@ -2702,7 +2702,7 @@
 [INFO] |        \- org.latencyutils:LatencyUtils:jar:2.0.3:runtime
 [INFO] +- com.fasterxml.jackson.module:jackson-module-kotlin:jar:2.21.2:compile
 [INFO] |  \- com.fasterxml.jackson.core:jackson-annotations:jar:2.21:compile
-[INFO] +- ai.platon.pulsar:browser4-tests-common:jar:4.12.0-rc.1-SNAPSHOT:test
+[INFO] +- ai.platon.pulsar:pulsar-tests-common:jar:4.12.0-rc.1-SNAPSHOT:test
 [INFO] |  \- org.jetbrains.kotlinx:kotlinx-serialization-json:jar:1.9.0:test
 [INFO] +- org.springframework.boot:spring-boot-test:jar:4.0.6:test
 [INFO] |  \- org.springframework:spring-test:jar:7.0.7:test
@@ -2745,7 +2745,7 @@
 [INFO]    \- org.junit.platform:junit-platform-launcher:jar:6.0.3:test
 [INFO] ------------------------------------------------------------------------
 [INFO] Reactor Summary for Browser4 4.12.0-rc.1-SNAPSHOT:
-[INFO] 
+[INFO]
 [INFO] Browser4 Dependencies .............................. SUCCESS [  0.477 s]
 [INFO] Browser4 ........................................... SUCCESS [  0.297 s]
 [INFO] Browser4 Common .................................... SUCCESS [  0.065 s]

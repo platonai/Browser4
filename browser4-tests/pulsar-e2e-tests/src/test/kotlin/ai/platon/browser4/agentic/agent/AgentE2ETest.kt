@@ -28,7 +28,7 @@ import java.util.jar.JarFile
  * End-to-end test for Browser4 Agent using test cases from the use-cases directory.
  *
  * This test validates the complete agent workflow by:
- * 1. Reading a test case from browser4-tests-common/src/main/resources/e2e/scenarios/happy_path/use-cases
+ * 1. Reading a test case from pulsar-tests-common/src/main/resources/e2e/scenarios/happy_path/use-cases
  * 2. Running the test case against an AgenticSession using agent.run()
  * 3. Adding event handlers to log progress
  * 4. Verifying the answer is as expected
