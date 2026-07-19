@@ -22,7 +22,7 @@
     <logger name="ai.platon.pulsar.browser" level="INFO"/>
     <logger name="ai.platon.browser4.driver.chrome.impl" level="INFO"/>
 
-    <logger name="org.apache.gora.mongodb.store" level="INFO"/>
-    <logger name="org.apache.gora" level="INFO"/>
+    <logger name="ai.platon.gora.mongodb.store" level="INFO"/>
+    <logger name="ai.platon.gora" level="INFO"/>
 
 </configuration>

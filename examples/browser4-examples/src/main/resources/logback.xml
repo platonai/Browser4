@@ -47,7 +47,7 @@
     <logger name="org.springframework.orm.jpa" level="INFO"/>
     <logger name="org.springframework.transaction" level="INFO"/>
 
-    <logger name="org.apache.gora" level="ERROR"/>
+    <logger name="ai.platon.gora" level="ERROR"/>
 
     <logger name="dev.langchain4j.http.client.log" level="WARN" />
 
