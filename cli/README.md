@@ -382,17 +382,21 @@ instructions that always match the installed CLI version.
 | `skills list` | List available bundled skills with file counts. |
 | `skills get <name>` | Output a skill's SKILL.md content. `--full` includes references and templates. `--all` outputs every skill. |
 | `skills path [name]` | Print the skills directory path. With a name, prints the path to that skill's subdirectory. |
+| `skills unpack [dest]` | Unpack bundled skill files to a directory (defaults to the skills directory). |
 
 Skill files are unpacked to the versioned installation directory during `browser4-cli install`.
+Use `skills unpack` to refresh or relocate skill files without reinstalling.
 Set `BROWSER4_SKILLS_DIR` to override the skills directory path.
 
 ```bash
-browser4-cli skills                        # List bundled skills
-browser4-cli skills get browser4-cli       # Get the CLI skill's main content
+browser4-cli skills                         # List bundled skills
+browser4-cli skills get browser4-cli        # Get the CLI skill's main content
 browser4-cli skills get browser4-cli --full # Include references and templates
-browser4-cli skills get --all              # Output every skill
-browser4-cli skills path                   # Print skills root directory
-browser4-cli skills path browser4-cli      # Print path to a specific skill
+browser4-cli skills get --all               # Output every skill
+browser4-cli skills path                    # Print skills root directory
+browser4-cli skills path browser4-cli       # Print path to a specific skill
+browser4-cli skills unpack                  # Unpack to default skills directory
+browser4-cli skills unpack /custom/path     # Unpack to a custom directory
 ```
 
 ### Other

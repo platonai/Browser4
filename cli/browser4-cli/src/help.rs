@@ -1311,19 +1311,39 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push(String::new());
         lines.push("Notes:".to_string());
         lines.push(
-            "  - Skills are AI agent instruction files bundled into the browser4-cli binary at compile time."
+            "  - Skills are AI agent instruction files bundled into the browser4-cli binary"
                 .to_string(),
         );
         lines.push(
-            "  - The bundled content always matches the installed CLI version — use `skills get`"
+            "    at compile time."
                 .to_string(),
         );
         lines.push(
-            "    to retrieve current instructions rather than relying on cached copies."
+            "  - `skills` (or `skills list`) lists all bundled skill names with file counts."
                 .to_string(),
         );
         lines.push(
-            "  - Set BROWSER4_SKILLS_DIR to override the skills directory path."
+            "  - `skills get <name>` outputs a skill's SKILL.md. Use --full to include all"
+                .to_string(),
+        );
+        lines.push(
+            "    reference files and templates, or --all to output every skill concatenated."
+                .to_string(),
+        );
+        lines.push(
+            "  - `skills path [name]` prints the skills directory (or a specific skill's path)."
+                .to_string(),
+        );
+        lines.push(
+            "  - `skills unpack [dest]` writes bundled skill files to disk."
+                .to_string(),
+        );
+        lines.push(
+            "  - AI agents use these commands to fetch current instructions that always match"
+                .to_string(),
+        );
+        lines.push(
+            "    the installed CLI version, rather than relying on cached copies."
                 .to_string(),
         );
         lines.push(
@@ -1331,7 +1351,11 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(
-            "    `browser4-cli install`."
+            "    `browser4-cli install`. Use `skills path` to locate them on disk."
+                .to_string(),
+        );
+        lines.push(
+            "  - Set BROWSER4_SKILLS_DIR to override the skills directory path."
                 .to_string(),
         );
         lines.push(String::new());
@@ -1459,81 +1483,6 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("  browser4-cli loop --stop --name my-loop".to_string());
     }
 
-    if cmd.name == "skills" {
-        lines.push("Subcommands:".to_string());
-        lines.push(format_with_gap(
-            "  skills list",
-            "List all bundled skill names and file counts",
-            30,
-        ));
-        lines.push(format_with_gap(
-            "  skills get <name> [--full]",
-            "Output a skill's SKILL.md content (with --full, includes references and templates)",
-            30,
-        ));
-        lines.push(format_with_gap(
-            "  skills get --all",
-            "Output every bundled skill concatenated",
-            30,
-        ));
-        lines.push(format_with_gap(
-            "  skills path [name]",
-            "Print the skills directory path (or path to a specific skill's directory)",
-            30,
-        ));
-        lines.push(String::new());
-        lines.push("Notes:".to_string());
-        lines.push(
-            "  - Skill files are embedded in the browser4-cli binary at compile time."
-                .to_string(),
-        );
-        lines.push(
-            "  - Running `skills` (or `skills list`) lists all bundled skill names."
-                .to_string(),
-        );
-        lines.push(
-            "  - `skills get <name>` returns the SKILL.md content for a skill."
-                .to_string(),
-        );
-        lines.push(
-            "  - `skills get <name> --full` includes all bundled reference files and templates."
-                .to_string(),
-        );
-        lines.push(
-            "  - `skills get --all` outputs every skill concatenated together."
-                .to_string(),
-        );
-        lines.push(
-            "  - AI agents use these commands to fetch current instructions that always match"
-                .to_string(),
-        );
-        lines.push(
-            "    the installed CLI version, rather than relying on cached copies."
-                .to_string(),
-        );
-        lines.push(
-            "  - Skill files are unpacked to the versioned installation directory during"
-                .to_string(),
-        );
-        lines.push(
-            "    `browser4-cli install`. Use `skills path` to locate them on disk."
-                .to_string(),
-        );
-        lines.push(
-            "  - Set BROWSER4_SKILLS_DIR to override the skills directory path."
-                .to_string(),
-        );
-        lines.push(String::new());
-        lines.push("Examples:".to_string());
-        lines.push("  browser4-cli skills".to_string());
-        lines.push("  browser4-cli skills list".to_string());
-        lines.push("  browser4-cli skills get browser4-cli".to_string());
-        lines.push("  browser4-cli skills get browser4-cli --full".to_string());
-        lines.push("  browser4-cli skills get --all".to_string());
-        lines.push("  browser4-cli skills path".to_string());
-        lines.push("  browser4-cli skills path browser4-cli".to_string());
-    }
-
     if cmd.name == "skills-get" {
         lines.push("Notes:".to_string());
         lines.push(
@@ -1589,6 +1538,42 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("Examples:".to_string());
         lines.push("  browser4-cli skills path".to_string());
         lines.push("  browser4-cli skills path browser4-cli".to_string());
+    }
+
+    if cmd.name == "skills-unpack" {
+        lines.push("Notes:".to_string());
+        lines.push(
+            "  - Writes all bundled skill files from the binary to the destination directory."
+                .to_string(),
+        );
+        lines.push(
+            "  - Without a dest argument, unpacks to the default skills directory,"
+                .to_string(),
+        );
+        lines.push(
+            "    which honours BROWSER4_SKILLS_DIR as an override."
+                .to_string(),
+        );
+        lines.push(
+            "  - The destination directory is created if it does not exist."
+                .to_string(),
+        );
+        lines.push(
+            "  - Existing files are overwritten."
+                .to_string(),
+        );
+        lines.push(
+            "  - `browser4-cli install` runs unpack automatically — use `skills unpack`"
+                .to_string(),
+        );
+        lines.push(
+            "    only when you need to refresh or relocate skill files."
+                .to_string(),
+        );
+        lines.push(String::new());
+        lines.push("Examples:".to_string());
+        lines.push("  browser4-cli skills unpack".to_string());
+        lines.push("  browser4-cli skills unpack /custom/path".to_string());
     }
 
     lines.join("\n")

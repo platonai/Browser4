@@ -106,13 +106,14 @@ The `list` command displays a "Next open" column showing what happens when `goto
 The `skills` command retrieves bundled skill content that always matches the installed CLI version. Use it to get current instructions rather than relying on cached copies:
 
 ```bash
-browser4-cli skills                    # List all bundled skills
-browser4-cli skills get browser4-cli   # Print this SKILL.md
-browser4-cli skills get browser4-cli --full  # Include all reference files
-browser4-cli skills path               # Print skills directory path
+browser4-cli skills                         # List all bundled skills
+browser4-cli skills get browser4-cli        # Print this SKILL.md
+browser4-cli skills get browser4-cli --full # Include all reference files
+browser4-cli skills path                    # Print skills directory path
+browser4-cli skills unpack                  # Unpack bundled skill files to disk
 ```
 
-Set `BROWSER4_SKILLS_DIR` to override the skills directory location. Skill files are unpacked automatically during `browser4-cli install`.
+Set `BROWSER4_SKILLS_DIR` to override the skills directory location. Skill files are unpacked automatically during `browser4-cli install`. Use `skills unpack` to refresh or relocate skill files without reinstalling.
 
 ## 4. Decision Trees
 
