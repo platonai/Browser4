@@ -3511,7 +3511,11 @@ fn open_resized_interactive_page(ctx: &mut E2ECtx) {
     let vw: u64 = eval_text(ctx, "window.innerWidth.toString()")
         .parse()
         .unwrap_or(0);
-    assert!(vw >= 1000, "Expected viewport width >= 1000, got {vw}");
+    let vh: u64 = eval_text(ctx, "window.innerHeight.toString()")
+        .parse()
+        .unwrap_or(0);
+    assert_eq!(vw, 1280, "Expected viewport width 1280, got {vw}");
+    assert_eq!(vh, 900, "Expected viewport height 900, got {vh}");
 }
 
 fn start_mock_swarm_session(ctx: &mut E2ECtx) -> MockBrowser4Server {
@@ -3775,6 +3779,16 @@ fn tested_commands(include_batch_command: bool) -> HashSet<&'static str> {
         "tab-close",
         // eval is exercised directly by dedicated scenarios and shared helpers
         "eval",
+        // test_htmlsnapshot_*
+        "htmlsnapshot",
+        "htmlsnapshot-capture",
+        "htmlsnapshot-get",
+        "htmlsnapshot-get-all",
+        "htmlsnapshot-query",
+        "htmlsnapshot-export",
+        "htmlsnapshot-summary",
+        "htmlsnapshot-grep",
+        "htmlsnapshot-inspect",
     ]
     .into();
 

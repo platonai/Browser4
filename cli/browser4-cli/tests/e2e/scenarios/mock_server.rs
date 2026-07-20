@@ -3103,6 +3103,68 @@ pub(super) fn test_snapshot_viewport_range(ctx: &mut E2ECtx) {
 }
 
 // ---------------------------------------------------------------------------
+// snapshot-grep -- flag coverage (-i, -v, -F, -w)
+// ---------------------------------------------------------------------------
+
+pub(super) fn test_snapshot_grep_flags(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let mock_server = MockBrowser4Server::start();
+    ctx.browser4_base_url = mock_server.base_url();
+
+    run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG, "https://example.com"]);
+
+    // --ignore-case (-i): case-insensitive match
+    let result = run_command(ctx, &["snapshot-grep", "-i", "MOCK"]);
+    assert_eq!(result.exit_code, 0,
+        "expected snapshot-grep -i to succeed:\n{}", result.stderr);
+    assert!(result.stdout.contains("mock snapshot"),
+        "Expected -i MOCK to match 'mock snapshot':\n{}", result.stdout);
+
+    // --invert-match (-v): lines NOT matching pattern
+    let result = run_command(ctx, &["snapshot-grep", "-v", "nonexistent-pattern-xyz"]);
+    assert_eq!(result.exit_code, 0,
+        "expected snapshot-grep -v to succeed:\n{}", result.stderr);
+    assert!(result.stdout.contains("mock snapshot"),
+        "Expected -v to print non-matching line:\n{}", result.stdout);
+
+    // --fixed-strings (-F): literal string match (not regex)
+    let result = run_command(ctx, &["snapshot-grep", "-F", "mock snap"]);
+    assert_eq!(result.exit_code, 0,
+        "expected snapshot-grep -F to succeed:\n{}", result.stderr);
+    assert!(result.stdout.contains("mock snapshot"),
+        "Expected -F 'mock snap' to match:\n{}", result.stdout);
+
+    // -F with regex special chars should treat them literally (no match)
+    let result = run_command(ctx, &["snapshot-grep", "-F", "mock*shot"]);
+    assert_eq!(result.exit_code, 0,
+        "expected snapshot-grep -F with special chars to succeed:\n{}", result.stderr);
+    assert!(!result.stdout.contains("mock snapshot"),
+        "Expected -F 'mock*shot' NOT to match 'mock snapshot' (literal):\n{}", result.stdout);
+
+    // --word-regexp (-w): whole-word match
+    let result = run_command(ctx, &["snapshot-grep", "-w", "mock"]);
+    assert_eq!(result.exit_code, 0,
+        "expected snapshot-grep -w to succeed:\n{}", result.stderr);
+    assert!(result.stdout.contains("mock snapshot"),
+        "Expected -w mock to match whole word:\n{}", result.stdout);
+
+    // --word-regexp (-w): partial word should NOT match
+    let result = run_command(ctx, &["snapshot-grep", "-w", "moc"]);
+    assert_eq!(result.exit_code, 0,
+        "expected snapshot-grep -w (no match) to succeed:\n{}", result.stderr);
+    assert!(!result.stdout.contains("mock snapshot"),
+        "Expected -w moc NOT to match 'mock' (partial word):\n{}", result.stdout);
+
+    // Combined flags: -i -v (invert case-insensitive match)
+    let result = run_command(ctx, &["snapshot-grep", "-i", "-v", "MOCK"]);
+    assert_eq!(result.exit_code, 0,
+        "expected snapshot-grep -i -v to succeed:\n{}", result.stderr);
+    assert!(!result.stdout.contains("mock snapshot"),
+        "Expected -i -v MOCK to exclude matching line:\n{}", result.stdout);
+}
+
+// ---------------------------------------------------------------------------
 // htmlsnapshot
 // ---------------------------------------------------------------------------
 
@@ -3536,4 +3598,42 @@ pub(super) fn test_htmlsnapshot_error_propagation(ctx: &mut E2ECtx) {
         result.exit_code, 0,
         "expected htmlsnapshot to fail when backend returns error"
     );
+}
+
+// ---------------------------------------------------------------------------
+// upload -- backend error propagation
+// ---------------------------------------------------------------------------
+
+/// Upload with backend failure should propagate the error to the user.
+pub(super) fn test_upload_error_backend_failure(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let mock_server = MockBrowser4Server::start();
+    ctx.browser4_base_url = mock_server.base_url();
+
+    run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG, "https://example.com"]);
+
+    mock_server.queue_tool_failure(
+        "browser_file_upload",
+        None,
+        None,
+        "simulated upload failure",
+    );
+
+    // Create a temporary file for the upload command
+    let tmp_path = ctx.workspace_dir.join("_e2e_upload_test.txt");
+    std::fs::write(&tmp_path, "test content").expect("write temp file");
+
+    let result = run_command_expecting_failure(
+        ctx,
+        &["upload", &tmp_path.to_string_lossy(), "#file-input"],
+        "simulated upload failure",
+    );
+    assert_ne!(
+        result.exit_code, 0,
+        "expected upload to fail when backend returns error:\n{}",
+        result.stderr
+    );
+
+    let _ = std::fs::remove_file(&tmp_path);
 }

@@ -2629,7 +2629,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: true,
             args: &[],
             options: &[],
-            e2e_coverage: E2eCoverage::Excluded,
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "html_snapshot_capture".to_string(),
             tool_params_fn: |_| json!({}),
         },
@@ -2641,7 +2641,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: true,
             args: &[],
             options: &[],
-            e2e_coverage: E2eCoverage::Excluded,
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "html_snapshot_capture".to_string(),
             tool_params_fn: |_| json!({}),
         },
@@ -2661,7 +2661,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "page-size", short: None, is_bool: false, description: "Lines per page (default: 2000)" },
                 OptionDef { name: "all", short: None, is_bool: true, description: "Show all output, disabling pagination" },
             ],
-            e2e_coverage: E2eCoverage::Excluded,
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "html_snapshot_scrape".to_string(),
             tool_params_fn: |args| {
                 let field = get_str(args, "field").unwrap_or_default();
@@ -2689,7 +2689,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "page-size", short: None, is_bool: false, description: "Lines per page (default: 2000)" },
                 OptionDef { name: "all", short: None, is_bool: true, description: "Show all output, disabling pagination" },
             ],
-            e2e_coverage: E2eCoverage::Excluded,
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "html_snapshot_scrape_all".to_string(),
             tool_params_fn: |args| {
                 let field = get_str(args, "field").unwrap_or_default();
@@ -2752,7 +2752,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                     short: None,
                 },
             ],
-            e2e_coverage: E2eCoverage::Excluded,
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "html_snapshot_query".to_string(),
             tool_params_fn: |args| {
                 let sql = get_opt_str(args, "sql").unwrap_or_default();
@@ -2783,7 +2783,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                     short: None,
                 },
             ],
-            e2e_coverage: E2eCoverage::Excluded,
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "html_snapshot_export".to_string(),
             tool_params_fn: |args| {
                 let mut p = json!({});
@@ -2803,7 +2803,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "stdout", description: "Print summary content directly to stdout", is_bool: true, short: None },
                 OptionDef { name: "verbose", short: Some("v"), description: "Show internal scoring details and score legend", is_bool: true },
             ],
-            e2e_coverage: E2eCoverage::Excluded,
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "html_snapshot_summary".to_string(),
             tool_params_fn: |args| {
                 let mut p = json!({});
@@ -2841,7 +2841,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "all", short: None, is_bool: true, description: "Show all output, disabling pagination" },
                 OptionDef { name: "raw-html", short: None, is_bool: true, description: "Search the raw HTML including <script> and <style> content. By default, script/style tags are stripped to avoid false positives from JavaScript code." },
             ],
-            e2e_coverage: E2eCoverage::Excluded,
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "html_snapshot_export".to_string(),
             tool_params_fn: |args| {
                 let mut p = json!({});
@@ -3021,7 +3021,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "stdin", description: "Read the CSS selector from stdin instead of an inline argument (avoids shell quoting issues on Windows)", is_bool: true, short: None },
                 OptionDef { name: "selector-base64", description: "Base64-encoded CSS selector (avoids shell quoting issues on Windows)", is_bool: false, short: None },
             ],
-            e2e_coverage: E2eCoverage::Excluded,
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "html_snapshot_inspect".to_string(),
             tool_params_fn: |args| {
                 let mut p = json!({});
