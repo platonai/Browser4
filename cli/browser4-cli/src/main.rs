@@ -1009,6 +1009,79 @@ fn resolve_cdp_endpoint(raw: &str) -> Result<String, String> {
     resolve_channel_to_endpoint(raw)
 }
 
+/// Build the final params payload for an `execute_cdp_command` MCP call.
+///
+/// Validates that `method` is non-empty and that `params_json` (if provided) is
+/// valid JSON representing a JSON object.  Returns the final tool params to
+/// send to the server.
+fn build_cdp_tool_params(method: &str, params_json: Option<&str>) -> Result<Value, CliError> {
+    if method.is_empty() {
+        return Err(CliError(
+            ExitCode::Usage,
+            "A CDP method name is required (e.g. 'cdp Page.captureScreenshot'). Use 'cdp --help' for details."
+                .to_string(),
+        ));
+    }
+
+    let mut final_params = json!({ "method": method });
+
+    if let Some(ps) = params_json {
+        if !ps.is_empty() {
+            let parsed_json: Value = serde_json::from_str(ps).map_err(|e| {
+                CliError(
+                    ExitCode::Usage,
+                    format!(
+                        "Invalid JSON for CDP params: {}\nParams must be a valid JSON object, e.g. '{{\"format\": \"jpeg\"}}'",
+                        e
+                    ),
+                )
+            })?;
+            if let Value::Object(map) = parsed_json {
+                final_params["params"] = json!(map);
+            } else {
+                return Err(CliError(
+                    ExitCode::Usage,
+                    "CDP params must be a JSON object, e.g. '{\"format\": \"jpeg\"}'".to_string(),
+                ));
+            }
+        }
+    }
+
+    Ok(final_params)
+}
+
+/// Read CDP params from a file (supports both absolute and CWD-relative paths).
+///
+/// Returns `Ok(None)` when the file content trims to an empty string.
+fn resolve_cdp_params_file(file_path: &str) -> Result<Option<String>, CliError> {
+    let path = std::path::Path::new(file_path);
+    if path.is_absolute() {
+        let content = std::fs::read_to_string(path)
+            .map(|s| s.trim().to_string())
+            .map_err(|e| {
+                CliError(
+                    ExitCode::General,
+                    format!("Failed to read params file '{}': {}", file_path, e),
+                )
+            })?;
+        if content.is_empty() { Ok(None) } else { Ok(Some(content)) }
+    } else {
+        let cwd = std::env::current_dir().map_err(|e| {
+            CliError(ExitCode::General, format!("Cannot determine current directory: {}", e))
+        })?;
+        let cwd_path = cwd.join(path);
+        let content = std::fs::read_to_string(&cwd_path)
+            .map(|s| s.trim().to_string())
+            .map_err(|e| {
+                CliError(
+                    ExitCode::General,
+                    format!("Failed to read params file '{}': {}", cwd_path.display(), e),
+                )
+            })?;
+        if content.is_empty() { Ok(None) } else { Ok(Some(content)) }
+    }
+}
+
 async fn handle_attach(
     client: &Client,
     base_url: &str,
@@ -10756,6 +10829,29 @@ async fn handle_status(client: &Client, base_url: &str) -> Result<(), String> {
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// Version comparison helpers (used by `handle_doctor` and `handle_status`)
+// ---------------------------------------------------------------------------
+
+/// Strip version display noise so two versions can be compared.
+/// "v4.11.22" → "4.11.22", "4.12.0-rc.3-SNAPSHOT" → "4.12.0-rc.3"
+fn normalize_version(v: &str) -> &str {
+    v.trim_start_matches('v').trim_end_matches("-SNAPSHOT")
+}
+
+/// Extract the MAJOR.MINOR numeric pair from a version string.
+/// Returns `None` when the string cannot be parsed as a dotted version.
+/// "v4.11.22" → Some((4, 11))
+/// "4.12.0-rc.3-SNAPSHOT" → Some((4, 12))
+fn parse_major_minor(v: &str) -> Option<(u64, u64)> {
+    let v = normalize_version(v);
+    let mut parts = v.splitn(3, '.');
+    let major: u64 = parts.next()?.parse().ok()?;
+    // The minor segment may carry a pre-release suffix (e.g. "0-rc.3").
+    let minor: u64 = parts.next()?.split('-').next()?.parse().ok()?;
+    Some((major, minor))
+}
+
 async fn handle_doctor(client: &Client, base_url: &str, args: &HashMap<String, Value>) -> Result<(), String> {
     cli_println!("Browser4 Doctor");
     cli_println!("================");
@@ -10779,7 +10875,8 @@ async fn handle_doctor(client: &Client, base_url: &str, args: &HashMap<String, V
     cli_println!("  CLI version: {}", VERSION);
     json_field("cli_version", json!(VERSION));
 
-    if let Some(metadata) = daemon::read_installed_browser4_runtime_metadata() {
+    let runtime_metadata = daemon::read_installed_browser4_runtime_metadata();
+    if let Some(ref metadata) = runtime_metadata {
         cli_println!("  Installed runtime: {}", metadata.tag);
         cli_println!("  Installed at: {}", metadata.installed_at);
         json_field("installed_runtime", json!({
@@ -10788,6 +10885,31 @@ async fn handle_doctor(client: &Client, base_url: &str, args: &HashMap<String, V
             "download_url": &metadata.download_url,
             "installed_at": &metadata.installed_at,
         }));
+
+        // Version compatibility: CLI vs installed runtime
+        if let (Some(cli_mm), Some(rt_mm)) =
+            (parse_major_minor(VERSION), parse_major_minor(&metadata.tag))
+        {
+            match cli_mm.cmp(&rt_mm) {
+                std::cmp::Ordering::Greater => {
+                    cli_println!(
+                        "  ⚠  Runtime ({}) is older than CLI ({}) — run 'browser4-cli install' to update.",
+                        metadata.tag,
+                        VERSION
+                    );
+                }
+                std::cmp::Ordering::Less => {
+                    cli_println!(
+                        "  ⚠  CLI ({}) is older than runtime ({}) — consider rebuilding or updating the CLI.",
+                        VERSION,
+                        metadata.tag
+                    );
+                }
+                std::cmp::Ordering::Equal => {
+                    cli_println!("  ✓ CLI and runtime versions match.");
+                }
+            }
+        }
     } else {
         cli_println!("  Installed runtime: not installed (run 'browser4-cli install')");
         json_field("installed_runtime", json!(null));
@@ -10803,12 +10925,64 @@ async fn handle_doctor(client: &Client, base_url: &str, args: &HashMap<String, V
                 for (key, value) in obj {
                     cli_println!("  {}: {}", key, value);
                 }
+                // Annotate the backend version after the raw fields.
+                if let Some(ver) = obj.get("version").and_then(|v| v.as_str()) {
+                    if ver.contains("-SNAPSHOT") {
+                        cli_println!("  ⚠  Backend is a development snapshot — it may be unstable.");
+                    } else if ver.contains("-rc.") {
+                        cli_println!("  ℹ  Backend is a release candidate — suitable for testing, not production.");
+                    }
+                    // Compare backend version against installed runtime tag.
+                    if let Some(ref metadata) = runtime_metadata {
+                        if normalize_version(ver) != normalize_version(&metadata.tag) {
+                            cli_println!(
+                                "  ⚠  Backend version ({}) doesn't match installed runtime ({}) — the installation may be partially updated. Run 'browser4-cli install' to repair.",
+                                ver,
+                                metadata.tag
+                            );
+                        }
+                    }
+                }
             }
             json_field("backend_build", build_info);
         }
         Err(e) => {
             cli_println!("  (server not running or unreachable: {})", e);
             json_field("backend_build", json!(null));
+        }
+    }
+
+    // ---- LLM Status (conditional) ----
+    cli_println!("");
+    cli_println!("-- LLM Status --");
+    let llm_url = format!("{base_url}/api/doctor/llm-status");
+    match get_json(client, &llm_url).await {
+        Ok(llm_info) => {
+            let configured = llm_info
+                .get("configured")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            if configured {
+                cli_println!("  ✓ LLM is configured.");
+                if let Some(vars) = llm_info.get("foundEnvVars").and_then(|v| v.as_array()) {
+                    if !vars.is_empty() {
+                        let names: Vec<&str> = vars.iter().filter_map(|v| v.as_str()).collect();
+                        cli_println!("  Configured keys: {}", names.join(", "));
+                    }
+                }
+            } else if let Some(message) = llm_info.get("message").and_then(|v| v.as_str()) {
+                for line in message.lines() {
+                    cli_println!("  {}", line);
+                }
+            } else {
+                cli_println!("  LLM is not configured.");
+                cli_println!("  It is highly recommended to set OPENROUTER_API_KEY or other LLM keys to enable LLM features.");
+            }
+            json_field("llm_status", llm_info);
+        }
+        Err(e) => {
+            cli_println!("  (server not running or unreachable: {})", e);
+            json_field("llm_status", json!(null));
         }
     }
 
@@ -13437,93 +13611,39 @@ async fn run(
                 .map(String::from)
                 .unwrap_or_default();
 
-            if method.is_empty() {
-                return Err(CliError(
-                    ExitCode::Usage,
-                    "A CDP method name is required (e.g. 'cdp Page.captureScreenshot'). Use 'cdp --help' for details."
-                        .to_string(),
-                ));
-            }
-
             // Resolve params from --json, --file, or --stdin
-            let params_str = {
+            let params_json: Option<String> = {
                 let use_stdin = tool_params
                     .get("stdin")
                     .and_then(|v| v.as_bool())
                     .unwrap_or(false);
-
-                let from_json = tool_params
-                    .get("json")
-                    .and_then(|v| v.as_str())
-                    .map(str::trim)
-                    .filter(|s| !s.is_empty());
-
-                let from_file = tool_params
-                    .get("file")
-                    .and_then(|v| v.as_str())
-                    .map(str::trim)
-                    .filter(|s| !s.is_empty());
 
                 if use_stdin {
                     let mut input = String::new();
                     std::io::stdin()
                         .read_to_string(&mut input)
                         .map_err(|e| CliError(ExitCode::General, format!("Failed to read stdin: {}", e)))?;
-                    Some(input.trim().to_string())
-                } else if let Some(path) = from_file {
-                    let file_path = std::path::Path::new(path);
-                    if file_path.is_absolute() {
-                        std::fs::read_to_string(file_path)
-                            .map(|s| s.trim().to_string())
-                            .map_err(|e| {
-                                CliError(
-                                    ExitCode::General,
-                                    format!("Failed to read params file '{}': {}", path, e),
-                                )
-                            })?
-                            .into()
-                    } else {
-                        let cwd = std::env::current_dir().map_err(|e| {
-                            CliError(ExitCode::General, format!("Cannot determine current directory: {}", e))
-                        })?;
-                        let cwd_path = cwd.join(file_path);
-                        std::fs::read_to_string(&cwd_path)
-                            .map(|s| s.trim().to_string())
-                            .map_err(|e| {
-                                CliError(
-                                    ExitCode::General,
-                                    format!("Failed to read params file '{}': {}", cwd_path.display(), e),
-                                )
-                            })?
-                            .into()
-                    }
-                } else if let Some(js) = from_json {
-                    Some(js.to_string())
+                    let trimmed = input.trim().to_string();
+                    if trimmed.is_empty() { None } else { Some(trimmed) }
+                } else if let Some(path) = tool_params
+                    .get("file")
+                    .and_then(|v| v.as_str())
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                {
+                    resolve_cdp_params_file(path)?
                 } else {
-                    None
+                    tool_params
+                        .get("json")
+                        .and_then(|v| v.as_str())
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                        .map(String::from)
                 }
             };
 
-            // Parse the params as JSON if provided
-            let mut final_params = json!({ "method": method });
-            if let Some(ref ps) = params_str {
-                if !ps.is_empty() {
-                    let parsed_json: Value = serde_json::from_str(ps).map_err(|e| {
-                        CliError(
-                            ExitCode::Usage,
-                            format!("Invalid JSON for CDP params: {}\nParams must be a valid JSON object, e.g. '{{\"format\": \"jpeg\"}}'", e),
-                        )
-                    })?;
-                    if let Value::Object(map) = parsed_json {
-                        final_params["params"] = json!(map);
-                    } else {
-                        return Err(CliError(
-                            ExitCode::Usage,
-                            "CDP params must be a JSON object, e.g. '{\"format\": \"jpeg\"}'".to_string(),
-                        ));
-                    }
-                }
-            }
+            let final_params =
+                build_cdp_tool_params(&method, params_json.as_deref())?;
 
             handle_tool_command(
                 &client,
@@ -13768,6 +13888,153 @@ mod tests {
     #[test]
     fn resolve_cdp_endpoint_invalid_port() {
         assert!(resolve_cdp_endpoint("99999").is_err());
+    }
+
+    // -----------------------------------------------------------------------
+    // build_cdp_tool_params tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn build_cdp_tool_params_empty_method_error() {
+        let result = build_cdp_tool_params("", None);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.0, ExitCode::Usage);
+        assert!(err.1.contains("CDP method name is required"));
+    }
+
+    #[test]
+    fn build_cdp_tool_params_method_without_params() {
+        let result = build_cdp_tool_params("Page.captureScreenshot", None).unwrap();
+        assert_eq!(result["method"], json!("Page.captureScreenshot"));
+        assert!(result.get("params").is_none());
+    }
+
+    #[test]
+    fn build_cdp_tool_params_with_valid_json_object() {
+        let params_json = r#"{"format": "jpeg", "quality": 80}"#;
+        let result = build_cdp_tool_params("Page.captureScreenshot", Some(params_json)).unwrap();
+        assert_eq!(result["method"], json!("Page.captureScreenshot"));
+        assert_eq!(
+            result["params"],
+            json!({"format": "jpeg", "quality": 80})
+        );
+    }
+
+    #[test]
+    fn build_cdp_tool_params_with_invalid_json_error() {
+        let result = build_cdp_tool_params("Page.captureScreenshot", Some("not json{{{"));
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.0, ExitCode::Usage);
+        assert!(err.1.contains("Invalid JSON for CDP params"));
+    }
+
+    #[test]
+    fn build_cdp_tool_params_with_json_array_error() {
+        let result = build_cdp_tool_params("Page.captureScreenshot", Some(r#"["a", "b"]"#));
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.0, ExitCode::Usage);
+        assert!(err.1.contains("must be a JSON object"));
+    }
+
+    #[test]
+    fn build_cdp_tool_params_with_json_string_error() {
+        let result = build_cdp_tool_params("Page.captureScreenshot", Some(r#""just a string""#));
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.0, ExitCode::Usage);
+        assert!(err.1.contains("must be a JSON object"));
+    }
+
+    #[test]
+    fn build_cdp_tool_params_with_json_number_error() {
+        let result = build_cdp_tool_params("Page.captureScreenshot", Some("42"));
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.0, ExitCode::Usage);
+        assert!(err.1.contains("must be a JSON object"));
+    }
+
+    #[test]
+    fn build_cdp_tool_params_with_empty_params_string() {
+        let result = build_cdp_tool_params("Runtime.evaluate", Some("")).unwrap();
+        assert_eq!(result["method"], json!("Runtime.evaluate"));
+        // Empty string is treated as no params
+        assert!(result.get("params").is_none());
+    }
+
+    #[test]
+    fn build_cdp_tool_params_whitespace_only_method_is_empty() {
+        // Whitespace-only method strings still count as non-empty (validation
+        // only checks `is_empty`). The backend will reject the CDP method.
+        let result = build_cdp_tool_params("  ", None).unwrap();
+        assert_eq!(result["method"], json!("  "));
+    }
+
+    // -----------------------------------------------------------------------
+    // resolve_cdp_params_file tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn resolve_cdp_params_file_absolute_path_reads_file() {
+        let dir = test_temp_dir();
+        let file_path = dir.path().join("cdp-params.json");
+        std::fs::write(&file_path, r#"{"format": "jpeg"}"#).unwrap();
+
+        let result = resolve_cdp_params_file(file_path.to_str().unwrap());
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), Some(r#"{"format": "jpeg"}"#.to_string()));
+    }
+
+    #[test]
+    fn resolve_cdp_params_file_relative_path_resolves_via_cwd() {
+        let _lock = CWD_MUTEX.lock().unwrap();
+        let dir = test_temp_dir();
+        let prev = std::env::current_dir().unwrap();
+        std::env::set_current_dir(dir.path()).unwrap();
+
+        std::fs::write("cdp-params.json", r#"{"quality": 80}"#).unwrap();
+
+        let result = resolve_cdp_params_file("cdp-params.json");
+        std::env::set_current_dir(&prev).unwrap();
+
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), Some(r#"{"quality": 80}"#.to_string()));
+    }
+
+    #[test]
+    fn resolve_cdp_params_file_not_found_returns_error() {
+        let dir = test_temp_dir();
+        let file_path = dir.path().join("does-not-exist.json");
+        let result = resolve_cdp_params_file(file_path.to_str().unwrap());
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.0, ExitCode::General);
+        assert!(err.1.contains("Failed to read params file"));
+    }
+
+    #[test]
+    fn resolve_cdp_params_file_empty_content_returns_none() {
+        let dir = test_temp_dir();
+        let file_path = dir.path().join("empty.json");
+        std::fs::write(&file_path, "").unwrap();
+
+        let result = resolve_cdp_params_file(file_path.to_str().unwrap());
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), None);
+    }
+
+    #[test]
+    fn resolve_cdp_params_file_whitespace_only_content_returns_none() {
+        let dir = test_temp_dir();
+        let file_path = dir.path().join("whitespace.json");
+        std::fs::write(&file_path, "   \n  \t  ").unwrap();
+
+        let result = resolve_cdp_params_file(file_path.to_str().unwrap());
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), None);
     }
 
     #[test]

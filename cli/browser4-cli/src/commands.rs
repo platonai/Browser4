@@ -5364,6 +5364,100 @@ mod tests {
         assert!(has_extension, "attach command should have --extension option");
     }
 
+    // ---- CDP command tests ----
+
+    #[test]
+    fn test_cdp_tool_name_fn() {
+        let cmds = commands_map();
+        let cmd = cmds.get("cdp").unwrap();
+        let args = HashMap::new();
+        assert_eq!((cmd.tool_name_fn)(&args), "execute_cdp_command");
+    }
+
+    #[test]
+    fn test_cdp_tool_params_fn_method_only() {
+        let cmds = commands_map();
+        let cmd = cmds.get("cdp").unwrap();
+        let mut args = HashMap::new();
+        args.insert("method".to_string(), json!("Page.captureScreenshot"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["method"], json!("Page.captureScreenshot"));
+        assert!(params.get("json").is_none());
+        assert!(params.get("file").is_none());
+        // stdin not set, so key is absent (not false)
+        assert!(params.get("stdin").is_none());
+    }
+
+    #[test]
+    fn test_cdp_tool_params_fn_with_json() {
+        let cmds = commands_map();
+        let cmd = cmds.get("cdp").unwrap();
+        let mut args = HashMap::new();
+        args.insert("method".to_string(), json!("Runtime.evaluate"));
+        args.insert("json".to_string(), json!("{\"expression\": \"1+1\"}"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["method"], json!("Runtime.evaluate"));
+        assert_eq!(params["json"], json!("{\"expression\": \"1+1\"}"));
+        assert!(params.get("file").is_none());
+        assert!(params.get("stdin").is_none());
+    }
+
+    #[test]
+    fn test_cdp_tool_params_fn_with_file() {
+        let cmds = commands_map();
+        let cmd = cmds.get("cdp").unwrap();
+        let mut args = HashMap::new();
+        args.insert("method".to_string(), json!("Page.captureScreenshot"));
+        args.insert("file".to_string(), json!("params.json"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["method"], json!("Page.captureScreenshot"));
+        assert_eq!(params["file"], json!("params.json"));
+        assert!(params.get("json").is_none());
+        assert!(params.get("stdin").is_none());
+    }
+
+    #[test]
+    fn test_cdp_tool_params_fn_with_stdin() {
+        let cmds = commands_map();
+        let cmd = cmds.get("cdp").unwrap();
+        let mut args = HashMap::new();
+        args.insert("method".to_string(), json!("DOM.getDocument"));
+        args.insert("stdin".to_string(), json!(true));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["method"], json!("DOM.getDocument"));
+        assert_eq!(params["stdin"], json!(true));
+        assert!(params.get("json").is_none());
+        assert!(params.get("file").is_none());
+    }
+
+    #[test]
+    fn test_cdp_tool_params_fn_all_options() {
+        let cmds = commands_map();
+        let cmd = cmds.get("cdp").unwrap();
+        let mut args = HashMap::new();
+        args.insert("method".to_string(), json!("Page.navigate"));
+        args.insert("json".to_string(), json!("{\"url\": \"about:blank\"}"));
+        args.insert("file".to_string(), json!("cdp-params.json"));
+        args.insert("stdin".to_string(), json!(true));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["method"], json!("Page.navigate"));
+        assert_eq!(params["json"], json!("{\"url\": \"about:blank\"}"));
+        assert_eq!(params["file"], json!("cdp-params.json"));
+        assert_eq!(params["stdin"], json!(true));
+    }
+
+    #[test]
+    fn test_cdp_tool_params_fn_empty_method() {
+        let cmds = commands_map();
+        let cmd = cmds.get("cdp").unwrap();
+        let mut args = HashMap::new();
+        args.insert("method".to_string(), json!(""));
+        let params = (cmd.tool_params_fn)(&args);
+        // Empty method is passed through; validation happens in main.rs
+        assert_eq!(params["method"], json!(""));
+        assert!(params.get("stdin").is_none());
+    }
+
     // ---- Skill management command tests ----
 
     #[test]
