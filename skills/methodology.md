@@ -29,7 +29,7 @@ Every document is classified into one of three tiers, signaled by `tier:` in its
 
 | Tier | Purpose | Target Length | Example |
 |------|---------|---------------|---------|
-| **decision** | Comparison tables, decision trees, trade-off analysis. Answers "which approach should I use?" | 100-300 lines | SKILL.md, scenario comparison docs |
+| **decision** | Comparison tables, decision trees, trade-off analysis. Answers "which approach should I use?" | 100-300 lines (SKILL.md: ~200-250) | SKILL.md, scenario comparison docs |
 | **procedure** | End-to-end workflows. Answers "I want to do X, show me the steps." | 100-500 lines | Operation walkthroughs, how-to guides |
 | **catalog** | Exhaustive reference listings. Answers "what are all the options for Y?" Only consulted on demand. | Any length | API references, flag listings, function catalogs |
 
@@ -40,16 +40,17 @@ Every document is classified into one of three tiers, signaled by `tier:` in its
 Every document of the same tier follows an identical section template:
 
 **Decision template:**
-```
+```text
 # Title
 ## Quick Comparison        — table: approach vs approach on key dimensions
 ## Decision Tree           — ASCII tree or numbered flow
 ## When to Use Each        — 1 paragraph per approach
 ## Quick Patterns          — minimal copy-paste for the top 3 paths
+## Reference Map           — "I want to do X" → reference file
 ```
 
 **Procedure template:**
-```
+```text
 # Title
 ## Quick Start             — copy-paste command block (the 80% case)
 ## When to Use             — vs alternatives (link to decision doc, don't repeat)
@@ -60,7 +61,7 @@ Every document of the same tier follows an identical section template:
 ```
 
 **Catalog template:**
-```
+```text
 # Title
 ## Overview                — 1 paragraph: what this covers, when to read it
 ## Quick Index             — table: function/option name | returns/type | one-line description
@@ -69,7 +70,7 @@ Every document of the same tier follows an identical section template:
 
 ### Principle 5: Warning Centralization
 
-Critical warnings that apply broadly live in the top-level SKILL.md. Reference files link back to that section rather than repeating the warning text.
+Critical warnings that apply broadly live in the skill's own SKILL.md. Reference files link back to that section rather than repeating the warning text.
 
 **File-local warnings** (specific to one command or function) may stay in their file but follow a consistent format.
 
