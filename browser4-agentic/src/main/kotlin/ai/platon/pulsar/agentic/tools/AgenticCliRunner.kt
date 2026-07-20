@@ -815,6 +815,14 @@ class AgenticCliRunner(
                 params
             },
 
+            // ---- WebDB ----
+            "webdb-export" to FixedCommandResolver("webdb_export") { args ->
+                val params = mutableMapOf<String, Any?>()
+                args["urls"]?.let { params["urls"] = it }
+                args["output-dir"]?.let { params["outputDir"] = it }
+                params
+            },
+
             // ---- Agent tasks (command domain) ----
             "agent-run" to FixedCommandResolver("command_run") { args ->
                 mapOf("command" to (args["task"]?.toString() ?: ""))
@@ -869,6 +877,7 @@ class AgenticCliRunner(
             "dialog-dismiss" to CommandDef(emptyList()),
             "extract" to CommandDef(listOf("instruction")),
             "summarize" to CommandDef(listOf("instruction")),
+            "webdb-export" to CommandDef(listOf("urls", "output-dir")),
             "agent-run" to CommandDef(listOf("task")),
             "agent-status" to CommandDef(listOf("id")),
             "agent-result" to CommandDef(listOf("id")),

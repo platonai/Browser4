@@ -1827,6 +1827,35 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         // ---- Export ----
         CommandDef {
+            name: "webdb-export",
+            description: "Export pages from the web database to a local directory",
+            category: Category::Storage,
+            hidden: false,
+            batch_supported: false,
+            args: &[
+                ArgDef {
+                    name: "urls",
+                    description: "Comma-separated URLs to export, or \"*\" for all pages in the database",
+                    optional: false,
+                },
+                ArgDef {
+                    name: "output-dir",
+                    description: "Directory to save the exported page content",
+                    optional: false,
+                },
+            ],
+            options: &[],
+            e2e_coverage: E2eCoverage::Tested,
+            tool_name_fn: |_| "webdb_export".to_string(),
+            tool_params_fn: |args| {
+                let mut p = json!({});
+                if let Some(urls) = get_str(args, "urls") { p["urls"] = json!(urls); }
+                if let Some(dir) = get_str(args, "output-dir") { p["outputDir"] = json!(dir); }
+                p
+            },
+        },
+        // ---- Export ----
+        CommandDef {
             name: "screenshot",
             description: "Screenshot of the current page or element",
             category: Category::Export,
@@ -3132,6 +3161,7 @@ mod tests {
             "sessionstorage-set",
             "sessionstorage-delete",
             "sessionstorage-clear",
+            "webdb-export",
             "snapshot",
             "screenshot",
             "extract",
@@ -5818,5 +5848,39 @@ mod tests {
             cmd.options.iter().any(|opt| opt.name == "focus"),
             "type command should support --focus option"
         );
+    }
+
+    // =========================================================================
+    // webdb-export command — tool name and params
+    // =========================================================================
+
+    #[test]
+    fn test_webdb_export_tool_name_is_webdb_export() {
+        let map = commands_map();
+        let cmd = map.get("webdb-export").unwrap();
+        let tool_name = (cmd.tool_name_fn)(&HashMap::new());
+        assert_eq!(tool_name, "webdb_export");
+    }
+
+    #[test]
+    fn test_webdb_export_params_maps_urls_and_output_dir() {
+        let map = commands_map();
+        let cmd = map.get("webdb-export").unwrap();
+        let mut args = HashMap::new();
+        args.insert("urls".to_string(), json!("http://a.com,http://b.com"));
+        args.insert("output-dir".to_string(), json!("/tmp/export"));
+
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["urls"], "http://a.com,http://b.com");
+        assert_eq!(params["outputDir"], "/tmp/export");
+    }
+
+    #[test]
+    fn test_webdb_export_has_two_positional_args() {
+        let map = commands_map();
+        let cmd = map.get("webdb-export").unwrap();
+        assert_eq!(cmd.args.len(), 2);
+        assert_eq!(cmd.args[0].name, "urls");
+        assert_eq!(cmd.args[1].name, "output-dir");
     }
 }

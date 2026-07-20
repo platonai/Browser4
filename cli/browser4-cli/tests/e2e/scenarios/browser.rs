@@ -1051,6 +1051,14 @@ pub(super) fn test_form_controls_and_exports(ctx: &mut E2ECtx) {
         console_result.stderr
     );
 
+    // Verify the webdb-export command is recognised by the backend
+    let webdb_result = run_command(ctx, &["webdb", "export", "http://test.local", "/tmp/out"]);
+    assert!(
+        !webdb_result.stderr.contains("Unknown tool: webdb_export"),
+        "webdb-export command should be recognised by the backend:\n{}",
+        webdb_result.stderr
+    );
+
     let snapshot_result = run_command(ctx, &["snapshot", "--filename=interactive.yml"]);
     assert!(
         snapshot_result.stdout.contains("[Snapshot]("),

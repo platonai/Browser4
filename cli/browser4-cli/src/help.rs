@@ -29,6 +29,7 @@ pub fn public_command_name(name: &str) -> &str {
         "htmlsnapshot-grep" => "htmlsnapshot grep",
         "htmlsnapshot-inspect" => "htmlsnapshot inspect",
         "snapshot-grep" => "snapshot grep",
+        "webdb-export" => "webdb export",
         "doctor-log" => "doctor log",
         "plugin-list" => "plugin list",
         "plugin-info" => "plugin info",
@@ -460,6 +461,33 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("  browser4-cli extract \"all contact info\" --schema '{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\"},\"email\":{\"type\":\"string\"}}}'".to_string());
         lines.push("  browser4-cli extract \"article titles and dates\" --stdout".to_string());
         lines.push("  browser4-cli extract \"page metadata\" --filename meta.json".to_string());
+    }
+
+    if cmd.name == "summarize" {
+        lines.push("Notes:".to_string());
+        lines.push(
+            "  - Uses AI to generate a natural-language summary of the current page content."
+                .to_string(),
+        );
+        lines.push(
+            "  - An optional instruction tells the model what to focus on, e.g. 'summarize the product reviews' or 'give me the key takeaways'."
+                .to_string(),
+        );
+        lines.push(
+            "  - --selector limits summarization to a specific CSS selector (e.g. '#main-content', '.article-body')."
+                .to_string(),
+        );
+        lines.push(
+            "  - Output is saved to a timestamped file by default. Use --stdout (or --raw) to print to stdout instead, or --filename to specify a custom path."
+                .to_string(),
+        );
+        lines.push(String::new());
+        lines.push("Examples:".to_string());
+        lines.push("  browser4-cli summarize".to_string());
+        lines.push("  browser4-cli summarize \"key takeaways from this article\"".to_string());
+        lines.push("  browser4-cli summarize \"summarize the product reviews\" --selector \"#reviews\"".to_string());
+        lines.push("  browser4-cli summarize --stdout".to_string());
+        lines.push("  browser4-cli summarize --filename summary.txt".to_string());
     }
 
     if cmd.name == "agent-run" {

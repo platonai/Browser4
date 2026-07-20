@@ -11497,6 +11497,16 @@ fn rewrite_prefixed_command(args: &[String]) -> Option<Vec<String>> {
         }
         return None;
     }
+    // "webdb" works standalone (webdb) AND as a prefix (webdb export).
+    if prefix == "webdb" {
+        let known_subs = ["export"];
+        if known_subs.contains(&sub.as_str()) {
+            let mut rewritten = vec![format!("webdb-{}", sub)];
+            rewritten.extend(args[2..].iter().cloned());
+            return Some(rewritten);
+        }
+        return None;
+    }
     // "doctor" works standalone (doctor) AND as a prefix (doctor log).
     if prefix == "doctor" {
         let known_subs = ["log"];
@@ -16703,6 +16713,21 @@ mod tests {
         ]);
 
         assert!(result.is_none(), "crawl <url> should not be rewritten");
+    }
+
+    #[test]
+    fn rewrite_prefixed_command_supports_webdb_export() {
+        let rewritten = rewrite_prefixed_command(&[
+            "webdb".to_string(),
+            "export".to_string(),
+            "http://a.com,http://b.com".to_string(),
+            "/tmp/out".to_string(),
+        ])
+        .unwrap();
+
+        assert_eq!(rewritten[0], "webdb-export");
+        assert_eq!(rewritten[1], "http://a.com,http://b.com");
+        assert_eq!(rewritten[2], "/tmp/out");
     }
 
     #[test]
