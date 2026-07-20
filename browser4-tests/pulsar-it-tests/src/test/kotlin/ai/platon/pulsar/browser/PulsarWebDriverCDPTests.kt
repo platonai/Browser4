@@ -88,6 +88,53 @@ class PulsarWebDriverCDPTests : WebDriverTestBase() {
         assertEquals(2, result)
     }
 
+    // ── executeCdpCommand tests ───────────────────────────────────────
+
+    @Test
+    @DisplayName("executeCdpCommand Runtime.evaluate 1+1")
+    fun testExecuteCdpCommandRuntimeEvaluate() =
+        runWebDriverTestAndCompute(testURL, browser) { driver ->
+            val result = driver.executeCdpCommand(
+                "Runtime.evaluate",
+                mapOf("expression" to "1 + 1")
+            )
+            assertIs<Map<*, *>>(result)
+            val resultObj = result["result"] as Map<*, *>
+            assertEquals("number", resultObj["type"])
+            assertEquals(2, (resultObj["value"] as Number).toInt())
+        }
+
+    @Test
+    @DisplayName("executeCdpCommand DOM.getDocument")
+    fun testExecuteCdpCommandGetDocument() =
+        runWebDriverTestAndCompute(testURL, browser) { driver ->
+            val result = driver.executeCdpCommand("DOM.getDocument")
+            assertIs<Map<*, *>>(result)
+            assertNotNull(result["root"], "DOM.getDocument should return a root node")
+        }
+
+    @Test
+    @DisplayName("executeCdpCommand Page.getNavigationHistory")
+    fun testExecuteCdpCommandPageGetNavigationHistory() =
+        runWebDriverTestAndCompute(testURL, browser) { driver ->
+            val result = driver.executeCdpCommand("Page.getNavigationHistory")
+            assertIs<Map<*, *>>(result)
+            assertIs<List<*>>(result["entries"])
+            assertTrue((result["currentIndex"] as Number).toInt() >= 0)
+        }
+
+    @Test
+    @DisplayName("executeCdpCommand with invalid method throws")
+    fun testExecuteCdpCommandInvalidMethodThrows() =
+        runWebDriverTestAndCompute(testURL, browser) { driver ->
+            try {
+                driver.executeCdpCommand("NonExistent.Method")
+                fail("Expected WebDriverException for invalid CDP method")
+            } catch (e: ai.platon.browser4.api.WebDriverException) {
+                // expected — CDP rejects unknown methods
+            }
+        }
+
     private fun runWebDriverDOMEventTest(url: String, browser: Browser, block: suspend (WebDriver) -> Unit) {
         runBlocking {
             browser.newDriver().use { driver ->

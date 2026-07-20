@@ -455,6 +455,16 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         level: ScenarioLevel::Extended,
     },
     ScenarioDef {
+        name: "test_e2e_mock_cdp_command",
+        short_name: "test_mock_cdp_command",
+        requires_browser4: false,
+        restart_browser4: false,
+        test_count: 1,
+        test_fn: mock_server::test_cdp_command,
+        group: Some("devtools"),
+        level: ScenarioLevel::Basic,
+    },
+    ScenarioDef {
         name: "test_e2e_mock_eval_standalone_batch",
         short_name: "test_mock_eval_standalone_batch",
         requires_browser4: false,

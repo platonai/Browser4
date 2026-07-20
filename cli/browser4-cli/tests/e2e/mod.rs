@@ -994,6 +994,19 @@ fn serve_mock_browser4_request(mut stream: TcpStream, state: Arc<Mutex<MockBrows
                 "html_snapshot_inspect" => {
                     r#"{"selector":".product","matchCount":5,"analyzed":5,"autoDiscovered":false,"suggestedSelectors":[{"selector":".product h2","count":5,"score":100,"type":"text"}]}"#.to_string()
                 }
+                "execute_cdp_command" => {
+                    let method = arguments
+                        .get("method")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default();
+                    let params = arguments.get("params");
+                    let params_str = params
+                        .map(|p| format!(r#","params":{}"#, serde_json::to_string(p).unwrap_or_default()))
+                        .unwrap_or_default();
+                    format!(
+                        r#"{{"method":"{method}"{params_str},"result":"mock-cdp-result"}}"#,
+                    )
+                }
                 other => mock_browser_tool_text(other, &arguments),
             };
 
@@ -3779,6 +3792,8 @@ fn tested_commands(include_batch_command: bool) -> HashSet<&'static str> {
         "tab-close",
         // eval is exercised directly by dedicated scenarios and shared helpers
         "eval",
+        // test_cdp_command
+        "cdp",
         // test_htmlsnapshot_*
         "htmlsnapshot",
         "htmlsnapshot-capture",

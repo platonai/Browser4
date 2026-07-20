@@ -1412,7 +1412,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "file", description: "Read params from a JSON file instead of --json", is_bool: false, short: None },
                 OptionDef { name: "stdin", description: "Read params as JSON from stdin", is_bool: true, short: None },
             ],
-            e2e_coverage: E2eCoverage::Excluded,
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "execute_cdp_command".to_string(),
             tool_params_fn: |args| {
                 let mut p = json!({ "method": get_str(args, "method").unwrap_or_default() });

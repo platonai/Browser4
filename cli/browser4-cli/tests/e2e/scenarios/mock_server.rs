@@ -1610,6 +1610,78 @@ pub(super) fn test_eval_command(ctx: &mut E2ECtx) {
     assert_eq!(eval_calls[1].arguments["ref"], "backend:5");
 }
 
+pub(super) fn test_cdp_command(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let mock_server = MockBrowser4Server::start();
+    ctx.browser4_base_url = mock_server.base_url();
+
+    // Open a session first
+    let open_result = run_open_command(ctx);
+    assert!(
+        open_result.stdout.contains("Session opened: swarm-session-1"),
+        "Expected mocked session open output in:\n{}",
+        open_result.stdout
+    );
+
+    // Test 1: CDP command with method only (no params)
+    let result = run_command(ctx, &["cdp", "Page.captureScreenshot"]);
+    assert!(
+        result.stdout.contains("mock-cdp-result"),
+        "cdp output should contain mock-cdp-result, got:\n{}",
+        result.stdout
+    );
+
+    // Test 2: CDP command with --json params
+    let result_json = run_command(
+        ctx,
+        &[
+            "cdp",
+            "Runtime.evaluate",
+            "--json",
+            r#"{"expression":"1+1"}"#,
+        ],
+    );
+    assert!(
+        result_json.stdout.contains(r#""expression":"1+1""#),
+        "cdp --json output should include the expression param, got:\n{}",
+        result_json.stdout
+    );
+
+    // Test 3: CDP command without method should fail.
+    // The CLI argument parser catches the missing required <method> arg
+    // before the CDP handler runs, so the error mentions the arg, not the
+    // handler's error message.
+    let bad_result =
+        run_command_expecting_failure(ctx, &["cdp"], "Missing required argument");
+    assert_ne!(bad_result.exit_code, 0);
+
+    // Verify the mock server recorded the execute_cdp_command tool calls
+    let tool_calls = mock_server.snapshot().tool_calls;
+    let cdp_calls: Vec<_> = tool_calls
+        .iter()
+        .filter(|call| call.tool == "execute_cdp_command")
+        .collect();
+    assert!(
+        cdp_calls.len() >= 2,
+        "expected at least 2 execute_cdp_command calls, got {}",
+        cdp_calls.len()
+    );
+
+    // First call: method-only
+    assert_eq!(cdp_calls[0].arguments["method"], "Page.captureScreenshot");
+    assert_eq!(cdp_calls[0].arguments["sessionId"], "swarm-session-1");
+
+    // Second call: with JSON params (parsed by CLI into `params` key)
+    assert_eq!(cdp_calls[1].arguments["method"], "Runtime.evaluate");
+    let params_val = &cdp_calls[1].arguments["params"];
+    assert!(
+        params_val["expression"].as_str().unwrap_or("") == "1+1",
+        "expected expression=1+1 in params, got: {}",
+        params_val
+    );
+}
+
 pub(super) fn test_eval_css_selector_passthrough(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
 
