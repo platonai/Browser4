@@ -3101,3 +3101,439 @@ pub(super) fn test_snapshot_viewport_range(ctx: &mut E2ECtx) {
         snap_call.arguments
     );
 }
+
+// ---------------------------------------------------------------------------
+// htmlsnapshot
+// ---------------------------------------------------------------------------
+
+/// `htmlsnapshot` (bare) sends `html_snapshot_capture`.
+pub(super) fn test_htmlsnapshot_capture(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let mock_server = MockBrowser4Server::start();
+    ctx.browser4_base_url = mock_server.base_url();
+
+    run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG, "https://example.com"]);
+
+    let result = run_command(ctx, &["htmlsnapshot"]);
+    assert_eq!(
+        result.exit_code, 0,
+        "expected htmlsnapshot to succeed:\n{}",
+        result.stderr
+    );
+    // The bare `htmlsnapshot` command should output snapshot metadata.
+    assert!(
+        result.stdout.contains("Mock Page"),
+        "expected snapshot metadata in output:\n{}",
+        result.stdout
+    );
+
+    let tool_calls = mock_server.snapshot().tool_calls;
+    let capture_call = tool_calls
+        .iter()
+        .find(|call| call.tool == "html_snapshot_capture")
+        .expect("expected html_snapshot_capture tool call");
+    assert!(
+        capture_call.arguments.get("sessionId").is_some(),
+        "expected sessionId in html_snapshot_capture arguments, got: {:?}",
+        capture_call.arguments
+    );
+}
+
+/// `htmlsnapshot capture` (explicit form) also sends `html_snapshot_capture`.
+pub(super) fn test_htmlsnapshot_capture_explicit(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let mock_server = MockBrowser4Server::start();
+    ctx.browser4_base_url = mock_server.base_url();
+
+    run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG, "https://example.com"]);
+
+    let result = run_command(ctx, &["htmlsnapshot", "capture"]);
+    assert_eq!(
+        result.exit_code, 0,
+        "expected htmlsnapshot capture to succeed:\n{}",
+        result.stderr
+    );
+
+    let tool_calls = mock_server.snapshot().tool_calls;
+    let capture_call = tool_calls
+        .iter()
+        .find(|call| call.tool == "html_snapshot_capture")
+        .expect("expected html_snapshot_capture tool call from htmlsnapshot capture command");
+    assert!(
+        capture_call.arguments.get("sessionId").is_some(),
+        "expected sessionId in html_snapshot_capture arguments, got: {:?}",
+        capture_call.arguments
+    );
+}
+
+/// `htmlsnapshot get text h2` sends `html_snapshot_scrape` with field and selector.
+pub(super) fn test_htmlsnapshot_get_text(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let mock_server = MockBrowser4Server::start();
+    ctx.browser4_base_url = mock_server.base_url();
+
+    run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG, "https://example.com"]);
+
+    let result = run_command(ctx, &["htmlsnapshot", "get", "text", "h2"]);
+    assert_eq!(
+        result.exit_code, 0,
+        "expected htmlsnapshot get text h2 to succeed:\n{}",
+        result.stderr
+    );
+
+    let tool_calls = mock_server.snapshot().tool_calls;
+    let scrape_call = tool_calls
+        .iter()
+        .find(|call| call.tool == "html_snapshot_scrape")
+        .expect("expected html_snapshot_scrape tool call");
+    assert_eq!(
+        scrape_call.arguments.get("field").and_then(|v| v.as_str()),
+        Some("text"),
+        "expected field=text in html_snapshot_scrape arguments, got: {:?}",
+        scrape_call.arguments
+    );
+    assert_eq!(
+        scrape_call.arguments.get("selector").and_then(|v| v.as_str()),
+        Some("h2"),
+        "expected selector=h2 in html_snapshot_scrape arguments, got: {:?}",
+        scrape_call.arguments
+    );
+}
+
+/// `htmlsnapshot get text` without a selector defaults to `:root`.
+pub(super) fn test_htmlsnapshot_get_text_default_selector(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let mock_server = MockBrowser4Server::start();
+    ctx.browser4_base_url = mock_server.base_url();
+
+    run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG, "https://example.com"]);
+
+    let result = run_command(ctx, &["htmlsnapshot", "get", "text"]);
+    assert_eq!(
+        result.exit_code, 0,
+        "expected htmlsnapshot get text (no selector) to succeed:\n{}",
+        result.stderr
+    );
+
+    let tool_calls = mock_server.snapshot().tool_calls;
+    let scrape_call = tool_calls
+        .iter()
+        .find(|call| call.tool == "html_snapshot_scrape")
+        .expect("expected html_snapshot_scrape tool call");
+    assert_eq!(
+        scrape_call.arguments.get("field").and_then(|v| v.as_str()),
+        Some("text"),
+        "expected field=text, got: {:?}",
+        scrape_call.arguments
+    );
+    // When no selector is provided, it defaults to ":root"
+    assert_eq!(
+        scrape_call.arguments.get("selector").and_then(|v| v.as_str()),
+        Some(":root"),
+        "expected selector to default to :root, got: {:?}",
+        scrape_call.arguments
+    );
+}
+
+/// `htmlsnapshot get attr h1 class` sends `html_snapshot_scrape` with field=attr and attrName.
+pub(super) fn test_htmlsnapshot_get_attr(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let mock_server = MockBrowser4Server::start();
+    ctx.browser4_base_url = mock_server.base_url();
+
+    run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG, "https://example.com"]);
+
+    let result = run_command(ctx, &["htmlsnapshot", "get", "attr", "h1", "class"]);
+    assert_eq!(
+        result.exit_code, 0,
+        "expected htmlsnapshot get attr h1 class to succeed:\n{}",
+        result.stderr
+    );
+
+    let tool_calls = mock_server.snapshot().tool_calls;
+    let scrape_call = tool_calls
+        .iter()
+        .find(|call| call.tool == "html_snapshot_scrape")
+        .expect("expected html_snapshot_scrape tool call");
+    assert_eq!(
+        scrape_call.arguments.get("field").and_then(|v| v.as_str()),
+        Some("attr"),
+        "expected field=attr, got: {:?}",
+        scrape_call.arguments
+    );
+    assert_eq!(
+        scrape_call.arguments.get("attrName").and_then(|v| v.as_str()),
+        Some("class"),
+        "expected attrName=class, got: {:?}",
+        scrape_call.arguments
+    );
+}
+
+/// `htmlsnapshot get all text .product` sends `html_snapshot_scrape_all`.
+pub(super) fn test_htmlsnapshot_get_all(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let mock_server = MockBrowser4Server::start();
+    ctx.browser4_base_url = mock_server.base_url();
+
+    run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG, "https://example.com"]);
+
+    let result = run_command(ctx, &["htmlsnapshot", "get", "all", "text", ".product"]);
+    assert_eq!(
+        result.exit_code, 0,
+        "expected htmlsnapshot get all to succeed:\n{}",
+        result.stderr
+    );
+
+    let tool_calls = mock_server.snapshot().tool_calls;
+    let scrape_all_call = tool_calls
+        .iter()
+        .find(|call| call.tool == "html_snapshot_scrape_all")
+        .expect("expected html_snapshot_scrape_all tool call");
+    assert_eq!(
+        scrape_all_call.arguments.get("field").and_then(|v| v.as_str()),
+        Some("text"),
+        "expected field=text, got: {:?}",
+        scrape_all_call.arguments
+    );
+    assert_eq!(
+        scrape_all_call.arguments.get("selector").and_then(|v| v.as_str()),
+        Some(".product"),
+        "expected selector=.product, got: {:?}",
+        scrape_all_call.arguments
+    );
+}
+
+/// `htmlsnapshot get all text .product --offset 2 --limit 5` passes them through.
+pub(super) fn test_htmlsnapshot_get_all_offset_limit(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let mock_server = MockBrowser4Server::start();
+    ctx.browser4_base_url = mock_server.base_url();
+
+    run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG, "https://example.com"]);
+
+    let result = run_command(
+        ctx,
+        &[
+            "htmlsnapshot", "get", "all", "text", ".product",
+            "--offset", "2",
+            "--limit", "5",
+        ],
+    );
+    assert_eq!(
+        result.exit_code, 0,
+        "expected htmlsnapshot get all with offset/limit to succeed:\n{}",
+        result.stderr
+    );
+
+    let tool_calls = mock_server.snapshot().tool_calls;
+    let scrape_all_call = tool_calls
+        .iter()
+        .find(|call| call.tool == "html_snapshot_scrape_all")
+        .expect("expected html_snapshot_scrape_all tool call");
+    assert_eq!(
+        scrape_all_call.arguments.get("offset").and_then(|v| v.as_i64()),
+        Some(2),
+        "expected offset=2, got: {:?}",
+        scrape_all_call.arguments
+    );
+    assert_eq!(
+        scrape_all_call.arguments.get("limit").and_then(|v| v.as_i64()),
+        Some(5),
+        "expected limit=5, got: {:?}",
+        scrape_all_call.arguments
+    );
+}
+
+/// `htmlsnapshot query --sql <query>` sends `html_snapshot_query`.
+pub(super) fn test_htmlsnapshot_query(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let mock_server = MockBrowser4Server::start();
+    ctx.browser4_base_url = mock_server.base_url();
+
+    run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG, "https://example.com"]);
+
+    let result = run_command(
+        ctx,
+        &["htmlsnapshot", "query", "--sql", "SELECT h1 FROM page"],
+    );
+    assert_eq!(
+        result.exit_code, 0,
+        "expected htmlsnapshot query to succeed:\n{}",
+        result.stderr
+    );
+
+    let tool_calls = mock_server.snapshot().tool_calls;
+    let query_call = tool_calls
+        .iter()
+        .find(|call| call.tool == "html_snapshot_query")
+        .expect("expected html_snapshot_query tool call");
+    assert_eq!(
+        query_call.arguments.get("sql").and_then(|v| v.as_str()),
+        Some("SELECT h1 FROM page"),
+        "expected sql='SELECT h1 FROM page', got: {:?}",
+        query_call.arguments
+    );
+}
+
+/// `htmlsnapshot export` sends `html_snapshot_export`.
+pub(super) fn test_htmlsnapshot_export(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let mock_server = MockBrowser4Server::start();
+    ctx.browser4_base_url = mock_server.base_url();
+
+    run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG, "https://example.com"]);
+
+    let result = run_command(ctx, &["htmlsnapshot", "export"]);
+    assert_eq!(
+        result.exit_code, 0,
+        "expected htmlsnapshot export to succeed:\n{}",
+        result.stderr
+    );
+
+    let tool_calls = mock_server.snapshot().tool_calls;
+    let export_call = tool_calls
+        .iter()
+        .find(|call| call.tool == "html_snapshot_export")
+        .expect("expected html_snapshot_export tool call");
+    assert!(
+        export_call.arguments.get("sessionId").is_some(),
+        "expected sessionId in html_snapshot_export arguments, got: {:?}",
+        export_call.arguments
+    );
+}
+
+/// `htmlsnapshot summary` sends `html_snapshot_summary`.
+pub(super) fn test_htmlsnapshot_summary(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let mock_server = MockBrowser4Server::start();
+    ctx.browser4_base_url = mock_server.base_url();
+
+    run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG, "https://example.com"]);
+
+    let result = run_command(ctx, &["htmlsnapshot", "summary"]);
+    assert_eq!(
+        result.exit_code, 0,
+        "expected htmlsnapshot summary to succeed:\n{}",
+        result.stderr
+    );
+
+    let tool_calls = mock_server.snapshot().tool_calls;
+    let summary_call = tool_calls
+        .iter()
+        .find(|call| call.tool == "html_snapshot_summary")
+        .expect("expected html_snapshot_summary tool call");
+    assert!(
+        summary_call.arguments.get("sessionId").is_some(),
+        "expected sessionId in html_snapshot_summary arguments, got: {:?}",
+        summary_call.arguments
+    );
+}
+
+/// `htmlsnapshot inspect` sends `html_snapshot_inspect`.
+pub(super) fn test_htmlsnapshot_inspect(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let mock_server = MockBrowser4Server::start();
+    ctx.browser4_base_url = mock_server.base_url();
+
+    run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG, "https://example.com"]);
+
+    let result = run_command(ctx, &["htmlsnapshot", "inspect"]);
+    assert_eq!(
+        result.exit_code, 0,
+        "expected htmlsnapshot inspect to succeed:\n{}",
+        result.stderr
+    );
+
+    let tool_calls = mock_server.snapshot().tool_calls;
+    let inspect_call = tool_calls
+        .iter()
+        .find(|call| call.tool == "html_snapshot_inspect")
+        .expect("expected html_snapshot_inspect tool call");
+    assert!(
+        inspect_call.arguments.get("sessionId").is_some(),
+        "expected sessionId in html_snapshot_inspect arguments, got: {:?}",
+        inspect_call.arguments
+    );
+}
+
+/// `htmlsnapshot inspect .product --max 5 --depth 3` passes all arguments.
+pub(super) fn test_htmlsnapshot_inspect_with_options(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let mock_server = MockBrowser4Server::start();
+    ctx.browser4_base_url = mock_server.base_url();
+
+    run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG, "https://example.com"]);
+
+    let result = run_command(
+        ctx,
+        &["htmlsnapshot", "inspect", ".product", "--max", "5", "--depth", "3"],
+    );
+    assert_eq!(
+        result.exit_code, 0,
+        "expected htmlsnapshot inspect with options to succeed:\n{}",
+        result.stderr
+    );
+
+    let tool_calls = mock_server.snapshot().tool_calls;
+    let inspect_call = tool_calls
+        .iter()
+        .find(|call| call.tool == "html_snapshot_inspect")
+        .expect("expected html_snapshot_inspect tool call");
+    assert_eq!(
+        inspect_call.arguments.get("selector").and_then(|v| v.as_str()),
+        Some(".product"),
+        "expected selector=.product, got: {:?}",
+        inspect_call.arguments
+    );
+    assert_eq!(
+        inspect_call.arguments.get("max").and_then(|v| v.as_i64()),
+        Some(5),
+        "expected max=5, got: {:?}",
+        inspect_call.arguments
+    );
+    assert_eq!(
+        inspect_call.arguments.get("depth").and_then(|v| v.as_i64()),
+        Some(3),
+        "expected depth=3, got: {:?}",
+        inspect_call.arguments
+    );
+}
+
+/// When the server returns an error for html_snapshot_capture, the CLI propagates it.
+pub(super) fn test_htmlsnapshot_error_propagation(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let mock_server = MockBrowser4Server::start();
+    ctx.browser4_base_url = mock_server.base_url();
+
+    run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG, "https://example.com"]);
+
+    mock_server.queue_tool_failure(
+        "html_snapshot_capture",
+        None,       // matches any session
+        None,       // matches any url
+        "simulated backend failure for html_snapshot_capture",
+    );
+
+    let result = run_command_expecting_failure(
+        ctx,
+        &["htmlsnapshot"],
+        "simulated backend failure",
+    );
+    assert_ne!(
+        result.exit_code, 0,
+        "expected htmlsnapshot to fail when backend returns error"
+    );
+}

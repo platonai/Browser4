@@ -988,6 +988,12 @@ fn serve_mock_browser4_request(mut stream: TcpStream, state: Arc<Mutex<MockBrows
                     r#"{"items":[{"title":"Mock Product","price":"$19.99"}]}"#.to_string()
                 }
                 "agent_summarize" => "Mock summary for #page-marker".to_string(),
+                "html_snapshot_capture" => {
+                    r#"{"url":"https://mock.browser4.local","title":"Mock Page","sizeBytes":"12345","capturedAt":"2026-07-20T00:00:00Z","contentType":"text/html","imageCount":3,"linkCount":10}"#.to_string()
+                }
+                "html_snapshot_inspect" => {
+                    r#"{"selector":".product","matchCount":5,"analyzed":5,"autoDiscovered":false,"suggestedSelectors":[{"selector":".product h2","count":5,"score":100,"type":"text"}]}"#.to_string()
+                }
                 other => mock_browser_tool_text(other, &arguments),
             };
 

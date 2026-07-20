@@ -689,11 +689,31 @@ class MCPToolController(
     /**
      * Extract the domain from an MCP tool name.
      *
-     * Domain is the prefix before the first `_` for names following the
-     * `domain_method` convention (e.g. `crawl_submit` → `crawl`).
-     * For names without `_`, the entire name is the domain.
+     * Tool names follow the `domain_method` convention (e.g. `crawl_submit` →
+     * `crawl`).  Compound domains that themselves contain underscores (e.g.
+     * `html_snapshot_capture` → domain `html_snapshot`, method `capture`) are
+     * resolved by checking the tool name prefix against every domain registered
+     * in [CustomToolRegistry].
+     *
+     * When no registered domain matches, falls back to splitting on the first
+     * `_` for backward compatibility with legacy names like `go_back` (domain
+     * `go`, method `back`).  For names without `_`, the entire name is the
+     * domain.
      */
-    private fun extractDomain(toolName: String): String {
+    internal fun extractDomain(toolName: String): String {
+        // 1) Check registered CustomToolRegistry domains first — these may
+        //    contain underscores (e.g. "html_snapshot").  Pick the longest
+        //    matching prefix so "html_snapshot" beats "html" when both are
+        //    hypothetically registered.
+        val knownDomains = CustomToolRegistry.instance.getAllDomains()
+        val matchingDomain = knownDomains
+            .filter { toolName.startsWith("${it}_") || toolName == it }
+            .maxByOrNull { it.length }
+        if (matchingDomain != null) {
+            return matchingDomain
+        }
+
+        // 2) Fall back to legacy first-underscore splitting.
         val underscoreIndex = toolName.indexOf('_')
         return if (underscoreIndex > 0) toolName.substring(0, underscoreIndex) else toolName
     }
@@ -1011,7 +1031,7 @@ class MCPToolController(
      * Convert domain+method to snake_case MCP tool name.
      * Must match logic in Browser4MCPServer.
      */
-    private fun toMcpToolName(domain: String, method: String): String {
+    internal fun toMcpToolName(domain: String, method: String): String {
         val snake = method.replace(Regex("([A-Z])")) { "_${it.groupValues[1].lowercase()}" }
         return when (domain) {
             "tab", "system" -> snake

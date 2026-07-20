@@ -5,6 +5,9 @@ import ai.platon.pulsar.agentic.AgenticSession
 import ai.platon.pulsar.agentic.agents.BasicBrowserAgent
 import ai.platon.pulsar.agentic.model.*
 import ai.platon.pulsar.agentic.tools.AgentToolManager
+import ai.platon.pulsar.agentic.tools.CustomToolRegistry
+import ai.platon.pulsar.agentic.tools.builtin.AbstractToolExecutor
+import ai.platon.pulsar.agentic.tools.builtin.ToolExecutor
 import ai.platon.pulsar.agentic.tools.advanced.agent.StatefulAgentRunner
 import ai.platon.pulsar.rest.session.ManagedSession
 import ai.platon.pulsar.rest.session.PulsarSessionManager
@@ -15,6 +18,7 @@ import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import jakarta.servlet.http.HttpServletResponse
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
+import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -62,6 +66,14 @@ class MCPToolControllerTest {
         `when`(managedSession.agenticSession).thenReturn(agenticSession)
         `when`(agenticSession.companionAgent).thenReturn(basicBrowserAgent)
         `when`(basicBrowserAgent.agentToolManager).thenReturn(agentToolManager)
+    }
+
+    @AfterEach
+    fun tearDown() {
+        // Clean up any test executors leaked into the singleton registry.
+        CustomToolRegistry.instance.getAllDomains().forEach {
+            CustomToolRegistry.instance.unregister(it)
+        }
     }
 
     private fun capture(captor: ArgumentCaptor<ToolCall>): ToolCall {
@@ -1057,5 +1069,226 @@ class MCPToolControllerTest {
             expr.contains("\\'") || expr.contains("'email'"),
             "attribute selector quotes should be present, got:\n$expr"
         )
+    }
+
+    // =========================================================================
+    // extractDomain — compound domain support
+    // =========================================================================
+
+    /** A minimal tool executor stub used solely for registering test domains. */
+    private class StubToolExecutor(override val domain: String) : AbstractToolExecutor() {
+        override val receiverClass: kotlin.reflect.KClass<*> = Any::class
+        override suspend fun callFunctionOn(
+            domain: String, functionName: String, args: Map<String, Any?>, receiver: Any
+        ): Any? = "stub"
+    }
+
+    @Test
+    fun `extractDomain resolves compound domain from CustomToolRegistry`() {
+        val executor = StubToolExecutor("html_snapshot")
+        CustomToolRegistry.instance.register(executor)
+        try {
+            assertEquals("html_snapshot", controller.extractDomain("html_snapshot_capture"))
+            assertEquals("html_snapshot", controller.extractDomain("html_snapshot_scrape"))
+            assertEquals("html_snapshot", controller.extractDomain("html_snapshot_inspect"))
+            assertEquals("html_snapshot", controller.extractDomain("html_snapshot_query"))
+            assertEquals("html_snapshot", controller.extractDomain("html_snapshot_export"))
+            assertEquals("html_snapshot", controller.extractDomain("html_snapshot_summary"))
+            assertEquals("html_snapshot", controller.extractDomain("html_snapshot_scrape_all"))
+        } finally {
+            CustomToolRegistry.instance.unregister("html_snapshot")
+        }
+    }
+
+    @Test
+    fun `extractDomain falls back to first underscore for unregistered domains`() {
+        // "go_back" has no registered executor — should split on first '_'
+        assertEquals("go", controller.extractDomain("go_back"))
+        // "crawl_submit" — split on first '_' when "crawl" is not registered
+        // (note: in a production context "crawl" may be registered; this
+        //  test runs with a clean registry so it exercises the fallback)
+        assertEquals("crawl", controller.extractDomain("crawl_submit"))
+    }
+
+    @Test
+    fun `extractDomain returns full name when no underscore present`() {
+        assertEquals("navigate", controller.extractDomain("navigate"))
+        assertEquals("screenshot", controller.extractDomain("screenshot"))
+        assertEquals("reload", controller.extractDomain("reload"))
+        // Note: "open_session" contains an underscore, so it falls through
+        // to the legacy split and returns "open" — that's tested elsewhere.
+    }
+
+    @Test
+    fun `extractDomain returns exact match when tool name equals registered domain`() {
+        val executor = StubToolExecutor("html_snapshot")
+        CustomToolRegistry.instance.register(executor)
+        try {
+            // Tool name is exactly the domain (no method suffix)
+            assertEquals("html_snapshot", controller.extractDomain("html_snapshot"))
+        } finally {
+            CustomToolRegistry.instance.unregister("html_snapshot")
+        }
+    }
+
+    @Test
+    fun `extractDomain picks longest matching registered domain`() {
+        // Register both "swarm" and "html_snapshot".  "html_snapshot_submit"
+        // should match "html_snapshot" (15 chars), not "html" (not registered)
+        // or "swarm" (doesn't match).
+        val htmlSnapshot = StubToolExecutor("html_snapshot")
+        val swarm = StubToolExecutor("swarm")
+        CustomToolRegistry.instance.register(htmlSnapshot)
+        CustomToolRegistry.instance.register(swarm)
+        try {
+            assertEquals("html_snapshot", controller.extractDomain("html_snapshot_submit"))
+            assertEquals("swarm", controller.extractDomain("swarm_submit"))
+            // "swarm_status" → must match "swarm", not fall through and return "swarm"
+            assertEquals("swarm", controller.extractDomain("swarm_status"))
+        } finally {
+            CustomToolRegistry.instance.unregister("html_snapshot")
+            CustomToolRegistry.instance.unregister("swarm")
+        }
+    }
+
+    @Test
+    fun `extractDomain legacy name still works when unrelated domain registered`() {
+        // When "html_snapshot" is registered, a legacy name like "go_back"
+        // should NOT match it and should fall back to first-underscore split.
+        val executor = StubToolExecutor("html_snapshot")
+        CustomToolRegistry.instance.register(executor)
+        try {
+            assertEquals("go", controller.extractDomain("go_back"))
+            assertEquals("tab", controller.extractDomain("tab_select"))
+            // "page_title" should not match "html_snapshot"
+            assertEquals("page", controller.extractDomain("page_title"))
+        } finally {
+            CustomToolRegistry.instance.unregister("html_snapshot")
+        }
+    }
+
+    // =========================================================================
+    // dispatchToToolExecutor → CustomToolRegistry integration
+    // =========================================================================
+
+    @Test
+    fun `dispatch to CustomToolRegistry for compound domain tool with session`() = runBlocking {
+        val executor = StubToolExecutor("html_snapshot")
+        CustomToolRegistry.instance.register(executor)
+        try {
+            val request = MCPToolCallRequest(
+                tool = "html_snapshot_capture",
+                arguments = mapOf("sessionId" to sessionId)
+            )
+
+            val result = controller.callTool(request, response)
+
+            assertEquals(HttpStatus.OK, result.statusCode)
+            // Should NOT be an "Unknown tool" error
+            assertFalse(
+                result.body!!.isError,
+                "Expected success but got error: ${result.body!!.content.firstOrNull()?.text}"
+            )
+            // The stub executor returns "stub" as a string
+            assertEquals("stub", result.body!!.content[0].text)
+        } finally {
+            CustomToolRegistry.instance.unregister("html_snapshot")
+        }
+    }
+
+    @Test
+    fun `dispatch returns error when CustomToolRegistry executor fails`() = runBlocking {
+        val executor = object : AbstractToolExecutor() {
+            override val domain: String = "html_snapshot"
+            override val receiverClass: kotlin.reflect.KClass<*> = Any::class
+            override suspend fun callFunctionOn(
+                domain: String, functionName: String, args: Map<String, Any?>, receiver: Any
+            ): Any? {
+                throw IllegalArgumentException("simulated executor failure")
+            }
+        }
+        CustomToolRegistry.instance.register(executor)
+        try {
+            val request = MCPToolCallRequest(
+                tool = "html_snapshot_capture",
+                arguments = mapOf("sessionId" to sessionId)
+            )
+
+            val result = controller.callTool(request, response)
+
+            assertEquals(HttpStatus.OK, result.statusCode)
+            assertTrue(result.body!!.isError, "Expected error for failing executor")
+            val errorText = result.body!!.content[0].text
+            assertTrue(
+                errorText.contains("html_snapshot_capture failed:"),
+                "Expected tool prefix in error, got: $errorText"
+            )
+            assertTrue(
+                errorText.contains("simulated executor failure"),
+                "Expected error cause in message, got: $errorText"
+            )
+        } finally {
+            CustomToolRegistry.instance.unregister("html_snapshot")
+        }
+    }
+
+    // =========================================================================
+    // toMcpToolName ↔ extractDomain round-trip
+    // =========================================================================
+
+    @Test
+    fun `toMcpToolName round-trips through extractDomain for compound domains`() {
+        // Register all compound-domain executors so extractDomain can resolve them.
+        val htmlSnapshot = StubToolExecutor("html_snapshot")
+        val swarm = StubToolExecutor("swarm")
+        val crawl = StubToolExecutor("crawl")
+        CustomToolRegistry.instance.register(htmlSnapshot)
+        CustomToolRegistry.instance.register(swarm)
+        CustomToolRegistry.instance.register(crawl)
+        try {
+            // For each known domain with compound names, verify the round-trip.
+            val testCases = listOf(
+                // domain         method          expected toolName
+                Triple("html_snapshot", "capture",    "html_snapshot_capture"),
+                Triple("html_snapshot", "scrape",     "html_snapshot_scrape"),
+                Triple("html_snapshot", "scrapeAll",  "html_snapshot_scrape_all"),
+                Triple("html_snapshot", "query",      "html_snapshot_query"),
+                Triple("html_snapshot", "export",     "html_snapshot_export"),
+                Triple("html_snapshot", "summary",    "html_snapshot_summary"),
+                Triple("html_snapshot", "inspect",    "html_snapshot_inspect"),
+                Triple("swarm",          "submit",     "swarm_submit"),
+                Triple("swarm",          "status",     "swarm_status"),
+                Triple("crawl",          "submit",     "crawl_submit"),
+                Triple("crawl",          "status",     "crawl_status"),
+            )
+            for ((domain, method, expectedToolName) in testCases) {
+                val toolName = controller.toMcpToolName(domain, method)
+                assertEquals(expectedToolName, toolName, "toMcpToolName mismatch for $domain.$method")
+                val extracted = controller.extractDomain(toolName)
+                assertEquals(domain, extracted, "extractDomain round-trip failed: $toolName → $extracted, expected $domain")
+            }
+        } finally {
+            CustomToolRegistry.instance.unregister("html_snapshot")
+            CustomToolRegistry.instance.unregister("swarm")
+            CustomToolRegistry.instance.unregister("crawl")
+        }
+    }
+
+    @Test
+    fun `toMcpToolName round-trips through extractDomain for simple domains`() {
+        // Simple domains (no underscore) should still round-trip correctly
+        // with the fallback split-on-first-underscore behavior.
+        val testCases = listOf(
+            // domain     method        expected toolName
+            Triple("pptx", "generate", "pptx_generate"),
+            Triple("pptx", "convert",  "pptx_convert"),
+            Triple("media", "detect",  "media_detect"),
+        )
+        for ((domain, method, expectedToolName) in testCases) {
+            val toolName = controller.toMcpToolName(domain, method)
+            assertEquals(expectedToolName, toolName, "toMcpToolName mismatch for $domain.$method")
+            val extracted = controller.extractDomain(toolName)
+            assertEquals(domain, extracted, "extractDomain round-trip failed: $toolName → $extracted, expected $domain")
+        }
     }
 }

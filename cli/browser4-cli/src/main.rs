@@ -9889,8 +9889,16 @@ fn list_available_plugin_tools(tools: &[&str]) -> String {
         .iter()
         .filter(|t| !builtin_prefixes.iter().any(|p| t.starts_with(p)))
         .map(|t| {
-            // Extract domain from tool name: "pptx_generate" → "pptx"
-            t.split('_').next().unwrap_or(t).to_string()
+            // Extract domain from tool name.
+            // Uses rsplitn (split from the right, limit 2) so compound
+            // domains like "my_plugin_generate" resolve to "my_plugin"
+            // instead of just "my".  All current plugin methods are
+            // single words (generate, detect, convert, solve), so the
+            // last underscore reliably separates domain from method.
+            t.rsplitn(2, '_')
+                .nth(1)
+                .unwrap_or(t)
+                .to_string()
         })
         .collect::<std::collections::BTreeSet<_>>() // deduplicate and sort
         .into_iter()
