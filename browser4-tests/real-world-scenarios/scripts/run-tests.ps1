@@ -117,14 +117,9 @@ if ($Discovered.Count -eq 0) {
 
 # ── Category filter ──────────────────────────────────────────────────────────
 if ($Category -ne 'all') {
-    $categoryPathMap = @{
-        'generic'    = '\real-world\generic\'
-        'browser4'   = '\real-world\browser4\'
-        'real-world' = '\real-world\'
-        'mock-site'  = '\mock-site\'
+    $script:DiscoveredFiles = $DiscoveredFiles | Where-Object {
+        Test-TaskCategory -FilePath $_.FullName -Category $Category
     }
-    $segment = $categoryPathMap[$Category]
-    $script:DiscoveredFiles = $DiscoveredFiles | Where-Object { $_.FullName.Contains($segment) }
     $script:Discovered = $DiscoveredFiles | ForEach-Object { $_.Name }
     $script:TaskPathMap = @{}
     $DiscoveredFiles | ForEach-Object { $TaskPathMap[$_.Name] = $_.FullName }
@@ -137,17 +132,7 @@ if ($Category -ne 'all') {
 
 # Resolve which tasks to run — accept names with or without .md extension
 if ($Tasks -and $Tasks.Count -gt 0) {
-    $script:Selected = foreach ($name in $Tasks) {
-        $base = [System.IO.Path]::GetFileNameWithoutExtension($name)
-        $mdName = "$base.md"
-        if ($mdName -in $Discovered) {
-            $mdName
-        } elseif ($name -in $Discovered) {
-            $name
-        } else {
-            Write-Host "WARNING: '$name' not found among discovered tasks, skipping." -ForegroundColor Yellow
-        }
-    }
+    $script:Selected = Resolve-TaskNames -Requested $Tasks -Discovered $Discovered
 
     if ($Selected.Count -eq 0) {
         Write-Host 'No matching tasks to run.' -ForegroundColor Yellow

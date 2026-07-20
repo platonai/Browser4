@@ -50,34 +50,30 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-# ── Resolve task file path ────────────────────────────────────────────────────
-# Try the caller's CWD first (backward-compatible), then fall back to the
-# real-world-scenarios/ directory next to this script.
-$cwdPath = Join-Path (Get-Location).Path $TaskFile
-if (Test-Path -LiteralPath $cwdPath -PathType Leaf) {
-    $resolvedPath = $cwdPath
-} else {
-    $scenariosDir = Join-Path $PSScriptRoot '..'
-    $resolvedPath = Join-Path $scenariosDir $TaskFile
-}
-
-if (-not (Test-Path -LiteralPath $resolvedPath -PathType Leaf)) {
-    Write-Host "ERROR: Task file not found: $resolvedPath" -ForegroundColor Red
-    Write-Host "  Tried CWD:  $cwdPath" -ForegroundColor DarkGray
-    Write-Host "  Tried scenarios/: $resolvedPath" -ForegroundColor DarkGray
-    exit 1
-}
-
 # ── Set mode before loading common.ps1 ────────────────────────────────────────
 # Guard against overwriting pre-set values from run-task-production.ps1.
+# Must be set before dot-sourcing common.ps1 so $generalPrompt picks it up.
 if ($Production -and -not $browser4cliMode -and -not $env:BROWSER4CLI_MODE) {
     $browser4cliMode = 'production'
 }
 
 # ── Dot-source the shared helpers ─────────────────────────────────────────────
-# common.ps1 defines Read-TaskFile, $generalPrompt, Invoke-Agent,
-# Assert-Browser4CliLatest, and $script:RepoRoot.
+# common.ps1 defines Read-TaskFile, Resolve-TaskFilePath, $generalPrompt,
+# Invoke-Agent, Assert-Browser4CliLatest, and $script:RepoRoot.
 . "$PSScriptRoot/common.ps1"
+
+# ── Resolve task file path ────────────────────────────────────────────────────
+# Uses the three-tier lookup from Resolve-TaskFilePath:
+#   1. As-given (handles absolute paths passed by run-tests.ps1)
+#   2. Relative to CWD (backward-compatible for manual invocation)
+#   3. Relative to scenarios/ dir (parent of this scripts/ directory)
+$resolvedPath = Resolve-TaskFilePath -TaskFile $TaskFile -ScriptsDir $PSScriptRoot
+
+if (-not $resolvedPath) {
+    Write-Host "ERROR: Task file not found: $TaskFile" -ForegroundColor Red
+    Write-Host "  Tried as-given, CWD, and scenarios/ directory." -ForegroundColor DarkGray
+    exit 1
+}
 
 try {
     # ── Parse the task file ───────────────────────────────────────────────────

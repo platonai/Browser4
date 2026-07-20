@@ -944,6 +944,193 @@ Write-Host '━━━ Read-TaskFile ━━━' -ForegroundColor Yellow
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# Test group 16: Resolve-TaskFilePath
+# ═══════════════════════════════════════════════════════════════════════════════
+
+Write-Host ''
+Write-Host '━━━ Resolve-TaskFilePath ━━━' -ForegroundColor Yellow
+
+& {
+    Remove-Variable -Name 'browser4cliMode' -Scope Local -ErrorAction SilentlyContinue
+    . "$PSScriptRoot/common.ps1"
+
+    # Model the production layout: scripts/ and tasks/ are siblings.
+    $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) "b4cli-resolve-$pid"
+    $scriptsDir = Join-Path $tempRoot 'scripts'
+    $tasksDir = Join-Path $tempRoot 'tasks'
+    New-Item -ItemType Directory -Path $scriptsDir -Force | Out-Null
+    New-Item -ItemType Directory -Path $tasksDir -Force | Out-Null
+
+    $testFileName = 'resolve-test.md'
+    $taskFileRelPath = "tasks/$testFileName"  # relative path used in production
+    $taskFileAbsPath = Join-Path $tasksDir $testFileName
+    [System.IO.File]::WriteAllText($taskFileAbsPath, '# test' + "`n`nBody.", (New-Object System.Text.UTF8Encoding($false)))
+
+    $spacedFileName = 'task with spaces.md'
+    $spacedFileAbsPath = Join-Path $tasksDir $spacedFileName
+    [System.IO.File]::WriteAllText($spacedFileAbsPath, '# spaced' + "`n`nBody.", (New-Object System.Text.UTF8Encoding($false)))
+
+    try {
+        Write-TestGroup 'As-given: absolute path to existing file'
+        $result = Resolve-TaskFilePath -TaskFile $taskFileAbsPath -ScriptsDir $scriptsDir
+        Assert-NotNullOrEmpty 'Returns a path' $result
+        Assert-Equal 'Resolved path matches original' $taskFileAbsPath $result
+
+        Write-TestGroup 'As-given: absolute path to non-existent file'
+        $nonexistent = Join-Path $tasksDir 'does-not-exist.md'
+        $result = Resolve-TaskFilePath -TaskFile $nonexistent -ScriptsDir $scriptsDir
+        Assert-True 'Returns $null for non-existent absolute path' ($null -eq $result)
+
+        Write-TestGroup 'As-given: path with spaces resolves via -LiteralPath'
+        $result = Resolve-TaskFilePath -TaskFile $spacedFileAbsPath -ScriptsDir $scriptsDir
+        Assert-Equal 'File with spaces resolves' $spacedFileAbsPath $result
+
+        Write-TestGroup 'CWD-relative: file in current directory'
+        $origCwd = Get-Location
+        try {
+            Set-Location $tasksDir
+            $result = Resolve-TaskFilePath -TaskFile $testFileName -ScriptsDir $scriptsDir
+            Assert-NotNullOrEmpty 'Returns a path for CWD-relative file' $result
+        } finally {
+            Set-Location $origCwd
+        }
+
+        Write-TestGroup 'CWD-relative: file NOT in CWD falls through to scenarios'
+        $otherDir = Join-Path $tempRoot 'other'
+        New-Item -ItemType Directory -Path $otherDir -Force | Out-Null
+
+        $origCwd = Get-Location
+        try {
+            # CWD does NOT contain the file, but scriptsDir/../$TaskFile does
+            Set-Location $otherDir
+            $result = Resolve-TaskFilePath -TaskFile $taskFileRelPath -ScriptsDir $scriptsDir
+            # CWD check: $otherDir/tasks/resolve-test.md → doesn't exist
+            # Scenarios check: $scriptsDir/../tasks/resolve-test.md → exists
+            Assert-NotNullOrEmpty 'Falls back to scenarios dir when not in CWD' $result
+        } finally {
+            Set-Location $origCwd
+        }
+
+        Write-TestGroup 'Scenarios-relative: resolves via ScriptsDir/../$TaskFile'
+        $result = Resolve-TaskFilePath -TaskFile $taskFileRelPath -ScriptsDir $scriptsDir
+        Assert-NotNullOrEmpty 'Returns a path via scenarios fallback' $result
+
+        Write-TestGroup 'All three locations fail → $null'
+        $result = Resolve-TaskFilePath -TaskFile 'completely-bogus-file.md' -ScriptsDir $scriptsDir
+        Assert-True 'Returns $null when file not found anywhere' ($null -eq $result)
+    }
+    finally {
+        Remove-Item -Path $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Test group 17: Resolve-TaskNames
+# ═══════════════════════════════════════════════════════════════════════════════
+
+Write-Host ''
+Write-Host '━━━ Resolve-TaskNames ━━━' -ForegroundColor Yellow
+
+& {
+    Remove-Variable -Name 'browser4cliMode' -Scope Local -ErrorAction SilentlyContinue
+    . "$PSScriptRoot/common.ps1"
+
+    $discovered = @('amazon.md', 'hacker-news.md', 'search-summary.md', 'form-filling.md')
+
+    Write-TestGroup 'Name without .md extension matches discovered name'
+    $result = @(Resolve-TaskNames -Requested @('amazon') -Discovered $discovered)
+    Assert-Equal 'Matches amazon → amazon.md' 1 $result.Count
+    Assert-Equal 'Result is amazon.md' 'amazon.md' $result[0]
+
+    Write-TestGroup 'Name with .md extension matches exactly'
+    $result = @(Resolve-TaskNames -Requested @('amazon.md') -Discovered $discovered)
+    Assert-Equal 'Matches amazon.md → amazon.md' 1 $result.Count
+    Assert-Equal 'Result is amazon.md' 'amazon.md' $result[0]
+
+    Write-TestGroup 'Multiple names (mix of with and without .md)'
+    $result = @(Resolve-TaskNames -Requested @('amazon', 'hacker-news.md') -Discovered $discovered)
+    Assert-Equal 'Two names matched' 2 $result.Count
+    Assert-Equal 'First is amazon.md' 'amazon.md' $result[0]
+    Assert-Equal 'Second is hacker-news.md' 'hacker-news.md' $result[1]
+
+    Write-TestGroup 'Non-existent name returns empty'
+    $result = @(Resolve-TaskNames -Requested @('nonexistent') -Discovered $discovered)
+    Assert-Equal 'No matches → empty array' 0 $result.Count
+
+    Write-TestGroup 'Mixed existent and non-existent names'
+    $result = @(Resolve-TaskNames -Requested @('amazon', 'bogus', 'form-filling') -Discovered $discovered)
+    Assert-Equal 'Only 2 of 3 matched' 2 $result.Count
+    Assert-Equal 'First match is amazon.md' 'amazon.md' $result[0]
+    Assert-Equal 'Second match is form-filling.md' 'form-filling.md' $result[1]
+
+    Write-TestGroup 'Name without .md that happens to be a substring does NOT match'
+    $result = @(Resolve-TaskNames -Requested @('amaz', 'hacker') -Discovered $discovered)
+    Assert-Equal 'No substring matches' 0 $result.Count
+
+    Write-TestGroup 'Empty discovered list (guarded by caller, but function handles it)'
+    # Passing an empty array to [string[]] is a PowerShell parameter-binding error.
+    # In production this case is guarded: run-tests.ps1 exits early when $Discovered.Count -eq 0.
+    # Test with a single dummy entry that won't match instead.
+    $result = @(Resolve-TaskNames -Requested @('amazon') -Discovered @('unrelated.md'))
+    Assert-Equal 'No match in unrelated discovered' 0 $result.Count
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Test group 18: Test-TaskCategory
+# ═══════════════════════════════════════════════════════════════════════════════
+
+Write-Host ''
+Write-Host '━━━ Test-TaskCategory ━━━' -ForegroundColor Yellow
+
+& {
+    Remove-Variable -Name 'browser4cliMode' -Scope Local -ErrorAction SilentlyContinue
+    . "$PSScriptRoot/common.ps1"
+
+    # Build platform-appropriate paths for testing
+    $sep = [System.IO.Path]::DirectorySeparatorChar
+
+    Write-TestGroup 'generic category matches real-world/generic/ path'
+    $path = "D:${sep}repo${sep}tasks${sep}real-world${sep}generic${sep}amazon.md"
+    Assert-True 'generic → matches' (Test-TaskCategory -FilePath $path -Category 'generic')
+
+    Write-TestGroup 'generic category rejects real-world/browser4/ path'
+    $path = "D:${sep}repo${sep}tasks${sep}real-world${sep}browser4${sep}tab.md"
+    Assert-True 'generic → rejects browser4' (-not (Test-TaskCategory -FilePath $path -Category 'generic'))
+
+    Write-TestGroup 'generic category rejects mock-site/ path'
+    $path = "D:${sep}repo${sep}tasks${sep}mock-site${sep}form.md"
+    Assert-True 'generic → rejects mock-site' (-not (Test-TaskCategory -FilePath $path -Category 'generic'))
+
+    Write-TestGroup 'browser4 category matches real-world/browser4/ path'
+    $path = "D:${sep}repo${sep}tasks${sep}real-world${sep}browser4${sep}tab.md"
+    Assert-True 'browser4 → matches' (Test-TaskCategory -FilePath $path -Category 'browser4')
+
+    Write-TestGroup 'real-world umbrella matches generic sub-path'
+    $path = "D:${sep}repo${sep}tasks${sep}real-world${sep}generic${sep}amazon.md"
+    Assert-True 'real-world → matches generic' (Test-TaskCategory -FilePath $path -Category 'real-world')
+
+    Write-TestGroup 'real-world umbrella matches browser4 sub-path'
+    $path = "D:${sep}repo${sep}tasks${sep}real-world${sep}browser4${sep}tab.md"
+    Assert-True 'real-world → matches browser4' (Test-TaskCategory -FilePath $path -Category 'real-world')
+
+    Write-TestGroup 'real-world umbrella rejects mock-site/ path'
+    $path = "D:${sep}repo${sep}tasks${sep}mock-site${sep}form.md"
+    Assert-True 'real-world → rejects mock-site' (-not (Test-TaskCategory -FilePath $path -Category 'real-world'))
+
+    Write-TestGroup 'mock-site category matches mock-site/ path'
+    $path = "D:${sep}repo${sep}tasks${sep}mock-site${sep}form.md"
+    Assert-True 'mock-site → matches' (Test-TaskCategory -FilePath $path -Category 'mock-site')
+
+    Write-TestGroup 'mock-site category rejects real-world/ path'
+    $path = "D:${sep}repo${sep}tasks${sep}real-world${sep}generic${sep}amazon.md"
+    Assert-True 'mock-site → rejects real-world' (-not (Test-TaskCategory -FilePath $path -Category 'mock-site'))
+
+    Write-TestGroup 'Forward-slash paths also work (platform normalization)'
+    $path = "D:/repo/tasks/real-world/generic/amazon.md"
+    Assert-True 'Forward-slash path matches generic' (Test-TaskCategory -FilePath $path -Category 'generic')
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # Summary
 # ═══════════════════════════════════════════════════════════════════════════════
 

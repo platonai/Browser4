@@ -83,6 +83,144 @@ function ConvertTo-WindowsCommandLineArgument {
     return $builder.ToString()
 }
 
+# ── Task file path resolution ─────────────────────────────────────────────────
+# Resolves a task file path using a three-tier strategy:
+#   1. As-given (handles absolute paths and already-correct relative paths)
+#   2. Relative to the caller's CWD
+#   3. Relative to the scenarios directory (parent of $ScriptsDir)
+# Returns the resolved absolute path, or $null if none of the locations match.
+
+function Resolve-TaskFilePath {
+    <#
+    .SYNOPSIS
+        Resolve a task file path using a three-tier lookup strategy.
+    .DESCRIPTION
+        Checks the path as-given first (handles absolute paths and paths that
+        already exist relative to the current shell). Falls back to the caller's
+        CWD, then to the scenarios directory (parent of ScriptsDir). Returns
+        the resolved absolute path, or $null if the file is not found.
+    .PARAMETER TaskFile
+        Path to the task file (relative or absolute).
+    .PARAMETER ScriptsDir
+        Path to the scripts directory (typically $PSScriptRoot from the caller).
+    .OUTPUTS
+        String (resolved absolute path) or $null.
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$TaskFile,
+        [Parameter(Mandatory = $true)]
+        [string]$ScriptsDir
+    )
+
+    # 1) Try as-given (handles absolute paths, or already-correct relative paths)
+    if (Test-Path -LiteralPath $TaskFile -PathType Leaf) {
+        return (Resolve-Path -LiteralPath $TaskFile).Path
+    }
+
+    # 2) Try relative to caller's CWD
+    $cwdPath = Join-Path (Get-Location).Path $TaskFile
+    if (Test-Path -LiteralPath $cwdPath -PathType Leaf) {
+        return (Resolve-Path -LiteralPath $cwdPath).Path
+    }
+
+    # 3) Try relative to scenarios directory (parent of ScriptsDir)
+    $scenariosDir = Join-Path $ScriptsDir '..'
+    $scenariosPath = Join-Path $scenariosDir $TaskFile
+    if (Test-Path -LiteralPath $scenariosPath -PathType Leaf) {
+        return (Resolve-Path -LiteralPath $scenariosPath).Path
+    }
+
+    return $null
+}
+
+# ── Task name matching ───────────────────────────────────────────────────────
+# Resolves a list of user-requested task names against a list of discovered
+# task file names. Accepts names with or without the .md extension.
+# Returns only the matched names; warns for any name that cannot be resolved.
+
+function Resolve-TaskNames {
+    <#
+    .SYNOPSIS
+        Match user-requested task names against discovered task file names.
+    .DESCRIPTION
+        Each requested name is matched against the discovered list. Names
+        without the .md extension are automatically appended with .md for
+        matching. Unmatched names produce a warning and are excluded from
+        the result.
+    .PARAMETER Requested
+        Array of task names from the user (with or without .md extension).
+    .PARAMETER Discovered
+        Array of discovered task file names (always with .md extension).
+    .OUTPUTS
+        String array of matched discovered file names.
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string[]]$Requested,
+        [Parameter(Mandatory = $true)]
+        [string[]]$Discovered
+    )
+
+    $selected = foreach ($name in $Requested) {
+        $base = [System.IO.Path]::GetFileNameWithoutExtension($name)
+        $mdName = "$base.md"
+        if ($mdName -in $Discovered) {
+            $mdName
+        } elseif ($name -in $Discovered) {
+            $name
+        } else {
+            Write-Host "WARNING: '$name' not found among discovered tasks, skipping." -ForegroundColor Yellow
+        }
+    }
+
+    # .Where({$_}) is the array-method form — always returns a collection,
+    # even for single-element results.  This prevents PowerShell from
+    # unwrapping a single string return into a scalar.
+    return @($selected).Where({ $_ })
+}
+
+# ── Task category matching ───────────────────────────────────────────────────
+# Checks whether a discovered task file path belongs to the given category.
+# Category paths use platform-appropriate directory separators.
+
+function Test-TaskCategory {
+    <#
+    .SYNOPSIS
+        Test whether a task file path belongs to a given category.
+    .DESCRIPTION
+        Uses a path-to-segment lookup to determine if a file path matches a
+        category. Categories are: generic, browser4, real-world, mock-site.
+    .PARAMETER FilePath
+        The full path of the task file.
+    .PARAMETER Category
+        The category to test against (generic, browser4, real-world, mock-site).
+    .OUTPUTS
+        Boolean. $true if the file belongs to the category.
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$FilePath,
+        [Parameter(Mandatory = $true)]
+        [ValidateSet('generic', 'browser4', 'real-world', 'mock-site')]
+        [string]$Category
+    )
+
+    # Normalize separators to the platform directory separator for reliable
+    # substring matching regardless of whether the path uses \ or /.
+    $sep = [System.IO.Path]::DirectorySeparatorChar
+    $normalized = $FilePath -replace '[/\\]', $sep
+
+    $segmentMap = @{
+        'generic'    = "${sep}real-world${sep}generic${sep}"
+        'browser4'   = "${sep}real-world${sep}browser4${sep}"
+        'real-world' = "${sep}real-world${sep}"
+        'mock-site'  = "${sep}mock-site${sep}"
+    }
+
+    return $normalized.Contains($segmentMap[$Category])
+}
+
 function Read-TaskFile {
     <#
     .SYNOPSIS
