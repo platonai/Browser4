@@ -384,7 +384,10 @@ $RuntimeDataDir = if ($env:BROWSER4_RUNTIME_DIR) { $env:BROWSER4_RUNTIME_DIR }
                   else { Join-Path $env:APPDATA 'browser4' }
 
 # Ensure the CLI binary uses the same runtime directory we are checking.
-if (-not $env:BROWSER4_RUNTIME_DIR) {
+# Track whether we set it so we can clean it up on exit and avoid
+# leaking test-sandbox paths into the calling shell.
+$_stressSetBrowser4RuntimeDir = -not $env:BROWSER4_RUNTIME_DIR
+if ($_stressSetBrowser4RuntimeDir) {
     $env:BROWSER4_RUNTIME_DIR = $RuntimeDataDir
 }
 
@@ -1044,5 +1047,11 @@ if ($global:TestFailed -gt 0) {
 # if any CLI commands failed.
 $cliCode = Finish-TestSession -ExtraCopilotPrompt "Browser4 CLI install stress test. Iterations: $Iterations. Seed: $Seed. Tag: $Tag."
 if ($exitCode -eq 0 -and $cliCode -ne 0) { $exitCode = $cliCode }
+
+# Restore env var if we set it — prevents test-sandbox paths from
+# leaking into the calling shell.
+if ($_stressSetBrowser4RuntimeDir) {
+    Remove-Item Env:\BROWSER4_RUNTIME_DIR -ErrorAction SilentlyContinue
+}
 
 exit $exitCode

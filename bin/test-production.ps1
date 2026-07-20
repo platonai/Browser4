@@ -198,6 +198,13 @@ $UserBrowser4Home = if ($OSWin) { Join-Path $env:USERPROFILE '.browser4' } else 
 $Browser4Home  = Join-Path $WorkingDir 'state'       # BROWSER4_CLI_STATE_DIR
 $RuntimeDataDir = Join-Path $WorkingDir 'runtime'    # BROWSER4_RUNTIME_DIR
 
+# Save original env-var values so we can restore them on exit.
+# Process-level env vars set in a script persist after the script exits
+# and would leak into the calling shell if not restored.
+$_prevBrowser4CliStateDir = [System.Environment]::GetEnvironmentVariable('BROWSER4_CLI_STATE_DIR')
+$_prevBrowser4RuntimeDir  = [System.Environment]::GetEnvironmentVariable('BROWSER4_RUNTIME_DIR')
+$_prevBrowser4ServerOpts  = [System.Environment]::GetEnvironmentVariable('BROWSER4_SERVER_OPTS')
+
 # Export environment variables so the CLI binary uses the test sandbox.
 # - BROWSER4_CLI_STATE_DIR  → state directory (cli-state.json, sessions/)
 # - BROWSER4_RUNTIME_DIR    → runtime bundle & download cache
@@ -1512,6 +1519,25 @@ if (-not $Stress) {
     # Clean up temp install scripts
     Remove-Item (Join-Path $TempDir 'install-browser4-cli.ps1') -Force -ErrorAction SilentlyContinue
     Remove-Item (Join-Path $TempDir 'install-browser4-cli.sh') -Force -ErrorAction SilentlyContinue
+
+    # Restore original env-var values so the test sandbox doesn't leak
+    # into the calling shell session.
+    Write-Info 'Restoring original environment variables …'
+    if ($_prevBrowser4CliStateDir) {
+        $env:BROWSER4_CLI_STATE_DIR = $_prevBrowser4CliStateDir
+    } else {
+        Remove-Item Env:\BROWSER4_CLI_STATE_DIR -ErrorAction SilentlyContinue
+    }
+    if ($_prevBrowser4RuntimeDir) {
+        $env:BROWSER4_RUNTIME_DIR = $_prevBrowser4RuntimeDir
+    } else {
+        Remove-Item Env:\BROWSER4_RUNTIME_DIR -ErrorAction SilentlyContinue
+    }
+    if ($_prevBrowser4ServerOpts) {
+        $env:BROWSER4_SERVER_OPTS = $_prevBrowser4ServerOpts
+    } else {
+        Remove-Item Env:\BROWSER4_SERVER_OPTS -ErrorAction SilentlyContinue
+    }
 }
 
 # ═══════════════════════════════════════════════════════════════
