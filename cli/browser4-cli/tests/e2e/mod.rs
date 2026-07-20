@@ -601,6 +601,9 @@ struct MockBrowser4State {
     health_status: Option<(u16, String, String)>, // (status_code, content_type, body)
     close_session_calls: Vec<String>,
     close_all_sessions_calls: Vec<serde_json::Value>,
+    crawl_submissions: Vec<serde_json::Value>,
+    crawl_cancel_calls: Vec<String>,
+    crawl_clear_calls: u32,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -792,7 +795,7 @@ fn serve_mock_browser4_request(mut stream: TcpStream, state: Arc<Mutex<MockBrows
             &mut stream,
             "200 OK",
             "application/json",
-            r#"["open_session","list_sessions","browser_navigate","agent_extract","agent_summarize"]"#,
+            r#"["open_session","list_sessions","browser_navigate","agent_extract","agent_summarize","crawl_submit"]"#,
         ),
         ("POST", "/mcp/call-tool") => {
             let payload: serde_json::Value =
@@ -988,6 +991,14 @@ fn serve_mock_browser4_request(mut stream: TcpStream, state: Arc<Mutex<MockBrows
                     r#"{"items":[{"title":"Mock Product","price":"$19.99"}]}"#.to_string()
                 }
                 "agent_summarize" => "Mock summary for #page-marker".to_string(),
+                "crawl_submit" => {
+                    state
+                        .lock()
+                        .expect("mock Browser4 state mutex poisoned")
+                        .crawl_submissions
+                        .push(arguments.clone());
+                    r#""crawl-job-42""#.to_string()
+                }
                 "html_snapshot_capture" => {
                     r#"{"url":"https://mock.browser4.local","title":"Mock Page","sizeBytes":"12345","capturedAt":"2026-07-20T00:00:00Z","contentType":"text/html","imageCount":3,"linkCount":10}"#.to_string()
                 }
@@ -1181,6 +1192,90 @@ fn serve_mock_browser4_request(mut stream: TcpStream, state: Arc<Mutex<MockBrows
                     }
                 ],
                 "status": "OK",
+            })
+            .to_string();
+            write_http_response(&mut stream, "200 OK", "application/json", &response);
+        }
+        // ---- crawl REST endpoints ----
+        _ if method == "POST" && route.starts_with("/api/crawl/") && route.ends_with("/cancel") => {
+            let task_id = route
+                .strip_prefix("/api/crawl/")
+                .and_then(|rest| rest.strip_suffix("/cancel"))
+                .unwrap_or_default()
+                .to_string();
+            state
+                .lock()
+                .expect("mock Browser4 state mutex poisoned")
+                .crawl_cancel_calls
+                .push(task_id.clone());
+            write_http_response(
+                &mut stream,
+                "200 OK",
+                "text/plain; charset=utf-8",
+                &format!("Task {} cancelled.", task_id),
+            );
+        }
+        _ if method == "POST" && route == "/api/crawl/clear" => {
+            state
+                .lock()
+                .expect("mock Browser4 state mutex poisoned")
+                .crawl_clear_calls += 1;
+            write_http_response(
+                &mut stream,
+                "200 OK",
+                "text/plain; charset=utf-8",
+                "Cleared 2 terminal crawl tasks.",
+            );
+        }
+        _ if method == "GET" && route.starts_with("/api/crawl/") && route.ends_with("/status") => {
+            let task_id = route
+                .strip_prefix("/api/crawl/")
+                .and_then(|rest| rest.strip_suffix("/status"))
+                .unwrap_or_default()
+                .to_string();
+            state
+                .lock()
+                .expect("mock Browser4 state mutex poisoned")
+                .status_queries
+                .push(task_id.clone());
+            let response = serde_json::json!({
+                "id": task_id,
+                "statusCode": 102,
+                "pageStatusCode": 102,
+                "isDone": false,
+                "pagesFound": 0,
+                "status": "Processing",
+                "error": null,
+            })
+            .to_string();
+            write_http_response(&mut stream, "200 OK", "application/json", &response);
+        }
+        _ if method == "GET" && route.starts_with("/api/crawl/") && route.ends_with("/result") => {
+            let task_id = route
+                .strip_prefix("/api/crawl/")
+                .and_then(|rest| rest.strip_suffix("/result"))
+                .unwrap_or_default()
+                .to_string();
+            state
+                .lock()
+                .expect("mock Browser4 state mutex poisoned")
+                .result_queries
+                .push(task_id.clone());
+            let response = serde_json::json!({
+                "id": task_id,
+                "statusCode": 200,
+                "pageStatusCode": 200,
+                "isDone": true,
+                "status": "OK",
+                "pagesFound": 1,
+                "pages": [
+                    {
+                        "url": "https://mock.browser4.local/result/page",
+                        "title": "Mock Crawled Page",
+                        "depth": 0,
+                    }
+                ],
+                "error": null,
             })
             .to_string();
             write_http_response(&mut stream, "200 OK", "application/json", &response);
@@ -2586,6 +2681,49 @@ fn wait_for_swarm_result_with_error(
     Err(last_payload)
 }
 
+/// Like [`wait_for_swarm_result`] but polls `crawl result <task-id>`.
+fn wait_for_crawl_result(
+    ctx: &mut E2ECtx,
+    task_id: &str,
+    timeout_ms: u64,
+) -> Result<serde_json::Value, String> {
+    let started_at = Instant::now();
+    let deadline = Instant::now() + Duration::from_millis(timeout_ms);
+    let mut last_payload = String::new();
+
+    while Instant::now() < deadline {
+        let result = run_checked_cli_process(ctx, &["crawl", "result", task_id]);
+        let payload = strip_snapshot_output(&result.stdout);
+        last_payload = payload.clone();
+        let parsed = parse_json_output(&result.stdout, "crawl result");
+        // Crawl is done when status is "OK" / "SC_OK" or has terminal error
+        let status = parsed["status"].as_str().unwrap_or("");
+        let is_done = matches!(status, "OK" | "SC_OK");
+        let has_terminal = matches!(
+            status,
+            "SC_REQUEST_TIMEOUT" | "SC_INTERNAL_SERVER_ERROR"
+        );
+        let has_error_status = parsed["statusCode"]
+            .as_i64()
+            .map(|s| !(200..400).contains(&s))
+            .unwrap_or(false);
+        if parsed["id"].as_str() == Some(task_id) && (is_done || has_terminal || has_error_status)
+        {
+            ctx.record_step(
+                format!(
+                    "wait for crawl result {task_id} done (timeout={}ms)",
+                    timeout_ms
+                ),
+                started_at.elapsed(),
+            );
+            return Ok(parsed);
+        }
+        thread::sleep(Duration::from_millis(500));
+    }
+
+    Err(last_payload)
+}
+
 // ---------------------------------------------------------------------------
 // State helpers
 // ---------------------------------------------------------------------------
@@ -3582,6 +3720,23 @@ fn assert_swarm_session_call(mock_server: &MockBrowser4Server) {
         open_session_call.arguments["capabilities"]["displayMode"],
         "HEADLESS"
     );
+}
+
+fn start_mock_crawl_session(ctx: &mut E2ECtx) -> MockBrowser4Server {
+    let started_at = Instant::now();
+    let mock_server = MockBrowser4Server::start();
+    ctx.record_step("mock Browser4 server start (crawl)", started_at.elapsed());
+    ctx.browser4_base_url = mock_server.base_url();
+
+    // Write a minimal state file so the CLI can read and write session state.
+    let state = serde_json::json!({
+        "sessionId": "crawl-session-1",
+        "baseUrl": mock_server.base_url(),
+    });
+    fs::write(state_file_path(&ctx.state_dir, None), state.to_string())
+        .expect("write state fixture for crawl");
+
+    mock_server
 }
 
 fn cleanup_browser4_sessions_with_ctx(ctx: &E2ECtx) -> Result<Vec<TimedStep>, String> {

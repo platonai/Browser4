@@ -2411,6 +2411,286 @@ pub(super) fn test_swarm_command_help_and_validation(ctx: &mut E2ECtx) {
 }
 
 // ---------------------------------------------------------------------------
+// crawl tests
+// ---------------------------------------------------------------------------
+
+pub(super) fn test_crawl_submission_commands(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    let mock_server = start_mock_crawl_session(ctx);
+
+    let seed_file = ctx.workspace_dir.join("crawl-seeds.txt");
+    fs::write(
+        &seed_file,
+        b"# seed urls\nhttps://example.com/crawl-seed-1\n\nhttps://example.com/crawl-seed-2\n",
+    )
+    .expect("write seed file failed");
+    let seed_file_arg = format!("--seed-file={}", seed_file.to_string_lossy());
+
+    let crawl_submit_result = run_command(
+        ctx,
+        &[
+            "crawl",
+            "https://example.com/crawl-direct",
+            &seed_file_arg,
+            "--background",
+            "--depth=2",
+            "--refresh",
+            "--parse",
+            "--store-content",
+        ],
+    );
+    assert!(
+        crawl_submit_result
+            .stdout
+            .contains("Crawl task submitted: crawl-job-42"),
+        "Expected crawl task submission output in:\n{}",
+        crawl_submit_result.stdout
+    );
+    assert!(
+        crawl_submit_result.stdout.contains("URLs: 3"),
+        "Expected 3 URLs (1 direct + 2 seed) in:\n{}",
+        crawl_submit_result.stdout
+    );
+
+    let crawl_status_result = run_command(ctx, &["crawl", "status", "crawl-job-42"]);
+    let crawl_status_payload = strip_snapshot_output(&crawl_status_result.stdout);
+    assert!(
+        crawl_status_payload.contains("crawl-job-42"),
+        "Expected crawl status payload to contain the task id in:\n{}",
+        crawl_status_result.stdout
+    );
+
+    let crawl_result_result = run_command(ctx, &["crawl", "result", "crawl-job-42"]);
+    let crawl_result_payload = strip_snapshot_output(&crawl_result_result.stdout);
+    assert!(
+        crawl_result_payload.contains("crawl-job-42"),
+        "Expected crawl result payload to contain the task id in:\n{}",
+        crawl_result_result.stdout
+    );
+    assert!(
+        crawl_result_payload.contains(r#""status": "OK""#)
+            || crawl_result_payload.contains(r#""status":"OK""#),
+        "Expected crawl result payload to have status OK in:\n{}",
+        crawl_result_result.stdout
+    );
+
+    let snapshot = mock_server.snapshot();
+    assert!(
+        snapshot
+            .tool_calls
+            .iter()
+            .any(|call| call.tool == "crawl_submit"),
+        "Expected crawl_submit MCP call, got tool_calls: {:?}",
+        snapshot.tool_calls
+    );
+    assert!(
+        snapshot
+            .tool_calls
+            .iter()
+            .all(|call| call.tool != "command_run"
+                && call.tool != "command_status"
+                && call.tool != "command_result"),
+        "Expected crawl commands to avoid MCP command_* calls: {:?}",
+        snapshot.tool_calls
+    );
+    assert_eq!(
+        snapshot.crawl_submissions.len(),
+        1,
+        "Expected one crawl submission, got {:?}",
+        snapshot.crawl_submissions
+    );
+    assert_eq!(snapshot.status_queries, vec!["crawl-job-42".to_string()]);
+    assert_eq!(snapshot.result_queries, vec!["crawl-job-42".to_string()]);
+}
+
+pub(super) fn test_crawl_lifecycle_commands(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    let mock_server = start_mock_crawl_session(ctx);
+
+    // Submit a crawl to get a task ID tracked
+    let _submit = run_command(
+        ctx,
+        &[
+            "crawl",
+            "https://example.com/crawl-lifecycle",
+            "--background",
+        ],
+    );
+
+    // Cancel the task
+    let cancel_result = run_command(ctx, &["crawl", "cancel", "crawl-job-42"]);
+    assert!(
+        cancel_result.stdout.contains("cancelled"),
+        "Expected cancel confirmation in:\n{}",
+        cancel_result.stdout
+    );
+
+    let snapshot = mock_server.snapshot();
+    assert_eq!(
+        snapshot.crawl_cancel_calls,
+        vec!["crawl-job-42".to_string()]
+    );
+
+    // Clear terminal tasks
+    let clear_result = run_command(ctx, &["crawl", "clear"]);
+    assert!(
+        clear_result.stdout.contains("Cleared") || clear_result.stdout.contains("terminal"),
+        "Expected clear confirmation in:\n{}",
+        clear_result.stdout
+    );
+
+    let snapshot2 = mock_server.snapshot();
+    assert!(
+        snapshot2.crawl_clear_calls > 0,
+        "Expected at least one crawl clear call"
+    );
+}
+
+pub(super) fn test_crawl_command_help_and_validation(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    // help crawl
+    let crawl_help = run_command(ctx, &["help", "crawl"]);
+    assert!(
+        crawl_help.stdout.contains("browser4-cli crawl"),
+        "Expected crawl usage in:\n{}",
+        crawl_help.stdout
+    );
+    assert!(
+        crawl_help.stdout.contains("--depth"),
+        "Expected --depth option in:\n{}",
+        crawl_help.stdout
+    );
+    assert!(
+        crawl_help.stdout.contains("--seed-file"),
+        "Expected --seed-file option in:\n{}",
+        crawl_help.stdout
+    );
+    assert!(
+        crawl_help.stdout.contains("--background"),
+        "Expected --background option in:\n{}",
+        crawl_help.stdout
+    );
+    assert!(
+        crawl_help.stdout.contains("--sql"),
+        "Expected --sql option in:\n{}",
+        crawl_help.stdout
+    );
+
+    // help crawl-status
+    let crawl_status_help = run_command(ctx, &["help", "crawl", "status"]);
+    assert!(
+        crawl_status_help
+            .stdout
+            .contains("browser4-cli crawl status"),
+        "Expected crawl-status usage in:\n{}",
+        crawl_status_help.stdout
+    );
+
+    // help crawl-result
+    let crawl_result_help = run_command(ctx, &["help", "crawl", "result"]);
+    assert!(
+        crawl_result_help
+            .stdout
+            .contains("browser4-cli crawl result"),
+        "Expected crawl-result usage in:\n{}",
+        crawl_result_help.stdout
+    );
+
+    // help crawl-cancel
+    let crawl_cancel_help = run_command(ctx, &["help", "crawl", "cancel"]);
+    assert!(
+        crawl_cancel_help
+            .stdout
+            .contains("browser4-cli crawl cancel"),
+        "Expected crawl-cancel usage in:\n{}",
+        crawl_cancel_help.stdout
+    );
+
+    // help crawl-clear
+    let crawl_clear_help = run_command(ctx, &["help", "crawl", "clear"]);
+    assert!(
+        crawl_clear_help
+            .stdout
+            .contains("browser4-cli crawl clear"),
+        "Expected crawl-clear usage in:\n{}",
+        crawl_clear_help.stdout
+    );
+
+    // help crawl-list
+    let crawl_list_help = run_command(ctx, &["help", "crawl", "list"]);
+    assert!(
+        crawl_list_help
+            .stdout
+            .contains("browser4-cli crawl list"),
+        "Expected crawl-list usage in:\n{}",
+        crawl_list_help.stdout
+    );
+
+    // Validation: crawl with no URL and no --seed-file
+    let mock_server = MockBrowser4Server::start();
+    ctx.browser4_base_url = mock_server.base_url();
+
+    let submit_failure = run_command_expecting_failure(
+        ctx,
+        &["crawl"],
+        "No URLs provided. Specify a URL argument or --seed-file.",
+    );
+    let submit_failure_output = format!("{}\n{}", submit_failure.stdout, submit_failure.stderr);
+    assert!(
+        submit_failure_output.contains("No URLs provided"),
+        "Expected crawl validation error in:\n{}",
+        submit_failure_output
+    );
+}
+
+pub(super) fn test_crawl_with_seed_file(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    let mock_server = start_mock_crawl_session(ctx);
+
+    let seed_file = ctx.workspace_dir.join("crawl-seeds-only.txt");
+    fs::write(
+        &seed_file,
+        b"# seed urls only\nhttps://example.com/seed-page-1\n\nhttps://example.com/seed-page-2\n",
+    )
+    .expect("write seed file failed");
+    let seed_file_arg = format!("--seed-file={}", seed_file.to_string_lossy());
+
+    let result = run_command(
+        ctx,
+        &[
+            "crawl",
+            &seed_file_arg,
+            "--background",
+            "--depth=0",
+        ],
+    );
+    assert!(
+        result.stdout.contains("Crawl task submitted: crawl-job-42"),
+        "Expected crawl task submission from seed file in:\n{}",
+        result.stdout
+    );
+    assert!(
+        result.stdout.contains("URLs: 2"),
+        "Expected 2 URLs from seed file in:\n{}",
+        result.stdout
+    );
+
+    let snapshot = mock_server.snapshot();
+    assert_eq!(
+        snapshot.crawl_submissions.len(),
+        1,
+        "Expected one crawl submission from seed file, got {:?}",
+        snapshot.crawl_submissions
+    );
+    let submission = &snapshot.crawl_submissions[0];
+    let urls = submission["urls"].as_array().unwrap();
+    assert_eq!(urls.len(), 2, "Expected 2 URLs in submission, got {:?}", urls);
+    assert_eq!(urls[0].as_str().unwrap(), "https://example.com/seed-page-1");
+    assert_eq!(urls[1].as_str().unwrap(), "https://example.com/seed-page-2");
+}
+
+// ---------------------------------------------------------------------------
 // install / upgrade (mock download server)
 // ---------------------------------------------------------------------------
 

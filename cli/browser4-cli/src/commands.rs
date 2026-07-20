@@ -2454,7 +2454,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "readonly", description: "Non-destructive mode (no page modifications)", is_bool: true, short: None },
                 OptionDef { name: "background", description: "Submit crawl and return immediately; use 'crawl list' to track progress", is_bool: true, short: Some("bg") },
             ],
-            e2e_coverage: E2eCoverage::Excluded,
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "crawl_submit".to_string(),
             tool_params_fn: |args| {
                 let mut p = json!({});
@@ -2552,7 +2552,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 ArgDef { name: "id", description: "Task ID", optional: false },
             ],
             options: &[],
-            e2e_coverage: E2eCoverage::Excluded,
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| String::new(),
             tool_params_fn: |args| {
                 let mut p = json!({});
@@ -2570,7 +2570,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 ArgDef { name: "id", description: "Task ID", optional: false },
             ],
             options: &[],
-            e2e_coverage: E2eCoverage::Excluded,
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| String::new(),
             tool_params_fn: |args| {
                 let mut p = json!({});
@@ -2588,7 +2588,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 ArgDef { name: "id", description: "Task ID", optional: false },
             ],
             options: &[],
-            e2e_coverage: E2eCoverage::Excluded,
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| String::new(),
             tool_params_fn: |args| {
                 let mut p = json!({});
@@ -2604,7 +2604,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: false,
             args: &[],
             options: &[],
-            e2e_coverage: E2eCoverage::Excluded,
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| String::new(),
             tool_params_fn: |_| json!({}),
         },
@@ -2616,7 +2616,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: false,
             args: &[],
             options: &[],
-            e2e_coverage: E2eCoverage::Excluded,
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| String::new(),
             tool_params_fn: |_| json!({}),
         },
@@ -5151,6 +5151,79 @@ mod tests {
         assert!(args_str.contains("-refresh"));
         assert!(args_str.contains("-parse"));
         assert!(args_str.contains("-expires 2h"));
+    }
+
+    // ---- crawl subcommand tests ----
+
+    #[test]
+    fn test_crawl_status_command_exists() {
+        let map = commands_map();
+        let cmd = map.get("crawl-status").expect("crawl-status command should exist");
+        assert!(!cmd.hidden);
+        assert_eq!(cmd.args.len(), 1);
+        assert_eq!(cmd.args[0].name, "id");
+        assert!(!cmd.args[0].optional);
+        assert_eq!(cmd.category, Category::Swarm);
+    }
+
+    #[test]
+    fn test_crawl_result_command_exists() {
+        let map = commands_map();
+        let cmd = map.get("crawl-result").expect("crawl-result command should exist");
+        assert!(!cmd.hidden);
+        assert_eq!(cmd.args.len(), 1);
+        assert_eq!(cmd.args[0].name, "id");
+        assert!(!cmd.args[0].optional);
+        assert_eq!(cmd.category, Category::Swarm);
+    }
+
+    #[test]
+    fn test_crawl_cancel_command_exists() {
+        let map = commands_map();
+        let cmd = map.get("crawl-cancel").expect("crawl-cancel command should exist");
+        assert!(!cmd.hidden);
+        assert_eq!(cmd.args.len(), 1);
+        assert_eq!(cmd.args[0].name, "id");
+        assert!(!cmd.args[0].optional);
+        assert_eq!(cmd.category, Category::Swarm);
+    }
+
+    #[test]
+    fn test_crawl_clear_command_exists() {
+        let map = commands_map();
+        let cmd = map.get("crawl-clear").expect("crawl-clear command should exist");
+        assert!(!cmd.hidden);
+        assert!(cmd.args.is_empty());
+        assert_eq!(cmd.category, Category::Swarm);
+    }
+
+    #[test]
+    fn test_crawl_list_command_exists() {
+        let map = commands_map();
+        let cmd = map.get("crawl-list").expect("crawl-list command should exist");
+        assert!(!cmd.hidden);
+        assert!(cmd.args.is_empty());
+        assert_eq!(cmd.category, Category::Swarm);
+    }
+
+    #[test]
+    fn test_crawl_status_params() {
+        let map = commands_map();
+        let cmd = map.get("crawl-status").unwrap();
+        let mut args = HashMap::new();
+        args.insert("id".to_string(), json!("task-123"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["id"].as_str().unwrap(), "task-123");
+    }
+
+    #[test]
+    fn test_crawl_result_params() {
+        let map = commands_map();
+        let cmd = map.get("crawl-result").unwrap();
+        let mut args = HashMap::new();
+        args.insert("id".to_string(), json!("task-456"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["id"].as_str().unwrap(), "task-456");
     }
 
     // -------------------------------------------------------------------
