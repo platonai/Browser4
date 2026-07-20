@@ -6,7 +6,7 @@ Run an agent-scenario use case defined in a .txt file.
 .DESCRIPTION
 Reads a use-case description from a .txt file (comment-based metadata +
 numbered task steps), combines it with the shared usability-evaluation
-prompt (common.ps1), and invokes the Claude Code agent.
+prompt (common.ps1), and invokes the configured agent CLI (claude or kimi).
 
 The use-case file format:
   # Use Case N: Title

@@ -5,7 +5,8 @@ Run an agent-scenario task defined in a markdown file.
 
 .DESCRIPTION
 Reads a task description from a .md file, combines it with the shared
-usability-evaluation prompt (common.ps1), and invokes the Claude Code agent.
+usability-evaluation prompt (common.ps1), and invokes the configured agent CLI
+(claude or kimi).
 
 The first "# Heading" in the markdown file becomes the scenario name; the
 remaining body becomes the task-specific prompt.

@@ -1514,18 +1514,42 @@ function Assert-Browser4CliLatest {
 
 # ── Agent invocation ────────────────────────────────────────────────────────
 
+function Get-ScenarioAgent {
+    <#
+    .SYNOPSIS
+        Resolve which agent CLI (claude or kimi) scenario scripts should invoke.
+    .DESCRIPTION
+        Callers may force a backend by setting $script:scenarioAgentCli = 'kimi'
+        (or 'claude') after dot-sourcing this module.  Otherwise auto-detects
+        with priority claude > kimi.  Falls back to 'claude' when neither is on
+        PATH so the invocation fails with a clear command-not-found error.
+    #>
+    if ($script:scenarioAgentCli) { return $script:scenarioAgentCli }
+    if (Get-Command claude -ErrorAction SilentlyContinue) { return 'claude' }
+    if (Get-Command kimi -ErrorAction SilentlyContinue) { return 'kimi' }
+    return 'claude'
+}
+
 function Invoke-Agent {
     <#
     .SYNOPSIS
-        Invoke Claude Code agent to run a scenario and evaluate browser4-cli usability.
+        Invoke the configured agent CLI (claude or kimi) to run a scenario and
+        evaluate browser4-cli usability.
     .DESCRIPTION
-        Runs claude with the given prompt. When -ScenarioName is provided, captures
-        output and writes evaluation results to the issues draft ready queue.
-        When -ScenarioName is omitted, preserves the original behavior (direct call,
-        real-time output, no capture).
+        Runs the agent CLI resolved by Get-ScenarioAgent with the given prompt.
+        When -ScenarioName is provided, captures output and writes evaluation
+        results to the issues draft ready queue.  When -ScenarioName is omitted,
+        preserves the original behavior (direct call, real-time output, no capture).
 
         In capture mode, output is simultaneously streamed to the console (so the
         user can watch the agent work) and saved to a temp file for post-processing.
+
+        Backend differences:
+          - claude: invoked with --dangerously-skip-permissions; -Silent appends
+            --silent to the CLI arguments.
+          - kimi:   -p mode auto-approves tool calls, so no permission flags are
+            passed; kimi has no --silent flag, so -Silent only suppresses this
+            script's own status messages.
     .PARAMETER Prompt
         The full prompt including the general evaluation instructions and
         task-specific instructions.
@@ -1536,7 +1560,7 @@ function Invoke-Agent {
         Optional explicit path to save the raw agent output. Auto-generated from
         ScenarioName and timestamp when omitted.
     .PARAMETER Silent
-        Suppress status messages (passed through to claude --silent).
+        Suppress status messages (for claude, also passed through as --silent).
     .PARAMETER TimeoutSeconds
         Maximum seconds to wait for the agent to complete.  0 (default) means
         no timeout.  On timeout the process is killed and exit code 124 is
@@ -1555,19 +1579,27 @@ function Invoke-Agent {
         [int]$TimeoutSeconds = 0
     )
 
+    $agent = Get-ScenarioAgent
+
     # ── Status header ────────────────────────────────────────────────────────
     if (-not $Silent) {
         $promptLen = $Prompt.Length
         $promptLines = ($Prompt -split "`n").Count
-        Write-Host "Invoking Claude Code agent (prompt: $promptLen chars, $promptLines lines)" -ForegroundColor Cyan
+        Write-Host "Invoking $agent agent (prompt: $promptLen chars, $promptLines lines)" -ForegroundColor Cyan
         if ($ScenarioName) {
             Write-Host "  Scenario: $ScenarioName" -ForegroundColor DarkGray
         }
     }
 
-    # ── Build claude arguments ──────────────────────────────────────────────
-    $claudeArgs = @('--dangerously-skip-permissions', '-p', $Prompt)
-    if ($Silent) { $claudeArgs += '--silent' }
+    # ── Build agent arguments ───────────────────────────────────────────────
+    # kimi -p auto-approves tool calls (no skip-permissions flag exists/needed);
+    # claude needs --dangerously-skip-permissions for unattended runs.
+    $agentArgs = @()
+    if ($agent -eq 'claude') {
+        $agentArgs += '--dangerously-skip-permissions'
+    }
+    $agentArgs += @('-p', $Prompt)
+    if ($Silent -and $agent -eq 'claude') { $agentArgs += '--silent' }
 
     # ── Resolve capture file path ──────────────────────────────────────────
     # Write directly to the final output path (not a temp file) so partial
@@ -1595,10 +1627,10 @@ function Invoke-Agent {
         Write-Host "  Output: $captureFile" -ForegroundColor DarkGray
     }
 
-    # ── Invoke claude via Start-NativeCommand ───────────────────────────────
+    # ── Invoke the agent CLI via Start-NativeCommand ────────────────────────
     $startParams = @{
-        FilePath     = 'claude'
-        ArgumentList = $claudeArgs
+        FilePath     = $agent
+        ArgumentList = $agentArgs
     }
     if ($captureFile) {
         $startParams['CaptureFile'] = $captureFile

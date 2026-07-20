@@ -78,7 +78,7 @@ to write to a custom location.
 
 | Flag | Description |
 |------|-------------|
-| `--scenarios [names...]` | Run agent-scenario tasks (requires claude) |
+| `--scenarios [names...]` | Run agent-scenario tasks (requires claude or kimi) |
 | `--task <file>` | Run a single task file |
 | `--production` | Use installed browser4-cli instead of cargo run |
 | `--fail-fast` | Stop after the first failing scenario |

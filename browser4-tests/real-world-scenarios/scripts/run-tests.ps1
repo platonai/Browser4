@@ -51,7 +51,7 @@ what would run, or name one or more tasks to run a subset.
     Stop after the first failing task.
 
 .NOTES
-Each task invokes claude (Claude Code), requires an active LLM subscription,
+Each task invokes an agent CLI (claude or kimi), requires an active LLM subscription,
 and may take several minutes.  Run them selectively during development.
 #>
 
@@ -230,13 +230,14 @@ function Format-Duration {
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Pre-flight: check that claude and run-task.ps1 are available
+# Pre-flight: check that an agent CLI (claude or kimi) and run-task.ps1 are available
 # ═══════════════════════════════════════════════════════════════════════════════
 
-$claudeAvailable = $null -ne (Get-Command claude -ErrorAction SilentlyContinue)
-if (-not $claudeAvailable) {
-    Write-Host 'WARNING: claude CLI not found on PATH.' -ForegroundColor Yellow
-    Write-Host 'Each task invokes claude.  Without it, every task will fail.'
+$scenarioAgentAvailable = $null -ne (Get-Command claude -ErrorAction SilentlyContinue) -or
+    $null -ne (Get-Command kimi -ErrorAction SilentlyContinue)
+if (-not $scenarioAgentAvailable) {
+    Write-Host 'WARNING: no agent CLI (claude or kimi) found on PATH.' -ForegroundColor Yellow
+    Write-Host 'Each task invokes an agent CLI.  Without one, every task will fail.'
     Write-Host ''
 }
 
@@ -266,7 +267,7 @@ foreach ($name in $Selected) {
 
     try {
         # Run the task via run-task.ps1.
-        # Working directory is the repo root so claude finds the project.
+        # Working directory is the repo root so the agent CLI finds the project.
         Push-Location $RepoRoot
         try {
             if ($Production) {

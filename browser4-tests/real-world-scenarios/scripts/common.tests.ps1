@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env pwsh
+#!/usr/bin/env pwsh
 
 # ═══════════════════════════════════════════════════════════════════
 # CROSS-PLATFORM: This script must run on Linux, macOS, and Windows.
@@ -347,6 +347,9 @@ Write-Host '━━━ Invoke-Agent: Argument Forwarding ━━━' -ForegroundCo
     }
 
     Write-TestGroup 'base arguments (without -Silent)'
+    # Force the claude backend so assertions are deterministic regardless of
+    # which agent CLIs are installed on the machine running the tests.
+    $script:scenarioAgentCli = 'claude'
     Invoke-Agent -Prompt 'test prompt'
     Assert-True 'claude was invoked' ($null -ne $script:CapturedArgs)
     Assert-Contains 'has --dangerously-skip-permissions' ($script:CapturedArgs -join ' ') `
@@ -365,7 +368,24 @@ Write-Host '━━━ Invoke-Agent: Argument Forwarding ━━━' -ForegroundCo
     # --silent is appended after the prompt, so prompt is at [-2]
     Assert-True 'prompt follows -p flag' ($script:CapturedArgs[-2] -eq 'silent test')
 
-    # Clean up the mock so it does not leak.
+    Write-TestGroup 'kimi backend'
+    $script:scenarioAgentCli = 'kimi'
+    $script:CapturedArgs = $null
+    Invoke-Agent -Prompt 'kimi test'
+    Assert-True 'kimi was invoked' ($null -ne $script:CapturedArgs)
+    Assert-NotContains 'kimi: no --dangerously-skip-permissions' ($script:CapturedArgs -join ' ') `
+        '--dangerously-skip-permissions'
+    Assert-Contains 'kimi: has -p flag' ($script:CapturedArgs -join ' ') '-p'
+    Assert-True 'kimi: prompt value is the last argument' ($script:CapturedArgs[-1] -eq 'kimi test')
+
+    Write-TestGroup 'kimi backend with -Silent flag'
+    $script:CapturedArgs = $null
+    Invoke-Agent -Prompt 'kimi silent' -Silent
+    Assert-NotContains 'kimi: --silent is never passed' ($script:CapturedArgs -join ' ') '--silent'
+    Assert-True 'kimi: prompt value is the last argument' ($script:CapturedArgs[-1] -eq 'kimi silent')
+
+    # Clean up the mock and the forced backend so they do not leak.
+    Remove-Variable -Name 'scenarioAgentCli' -Scope Script -ErrorAction SilentlyContinue
     Remove-Item function:Start-NativeCommand -ErrorAction SilentlyContinue
 }
 

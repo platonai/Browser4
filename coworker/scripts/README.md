@@ -20,7 +20,7 @@ scripts/
 │   ├── Locks.ps1                       # Script-level file mutex
 │   └── Watchers.ps1                    # FileSystemWatcher wrappers & file filters
 ├── workers/                            # Individual task worker scripts
-│   ├── agent.ps1                       # Agent process launcher (copilot or claude backend)
+│   ├── agent.ps1                       # Agent process launcher (claude, kimi, or copilot backend)
 │   ├── agent-reliability.ps1           # Agent wrapper with timeout, retry, structured output
 │   ├── workflow.ps1                    # Task pipeline utilities (naming, placeholders, etc.)
 │   ├── task-logger.ps1                 # Console & file logging for task execution
@@ -57,7 +57,7 @@ scripts/
 The central config file. Contains:
 
 - **`Paths`** — Workspace root, coworker root, tasks root, target repository, and log directory. Supports `~` expansion for cross-user portability.
-- **`COPILOT`** / **`CLAUDE`** — Backend selection. Define one (or both) as a PowerShell array `@('executable', 'arg1', 'arg2', ...)`. The presence of `CLAUDE` switches the backend from copilot to claude.
+- **`COPILOT`** / **`CLAUDE`** / **`KIMI`** — Backend selection. Define one (or more) as a PowerShell array `@('executable', 'arg1', 'arg2', ...)`. Priority when several are defined: `CLAUDE` > `KIMI` > `COPILOT` (default: `@('gh', 'copilot')`). `Get-AgentBackend` in `config.ps1` is the single resolver used by all worker scripts.
 - **`Scheduler`** — Default working directory for scheduled tasks.
 
 ### `config.ps1` — Configuration Loader
@@ -166,7 +166,7 @@ File system watcher wrappers and file validation predicates:
 
 | Script | Role |
 |--------|------|
-| `agent.ps1` | Low-level agent process launcher. Detects backend (`claude` or `copilot`), builds command lines, resolves `.cmd` wrappers on Windows, handles large-prompt stdin piping, and starts processes with output redirection. |
+| `agent.ps1` | Low-level agent process launcher. Detects backend (`claude`, `kimi`, or `copilot`), builds command lines, resolves `.cmd` wrappers on Windows, handles large-prompt stdin piping, and starts processes with output redirection. |
 | `agent-reliability.ps1` | Production wrapper: `Invoke-AgentWithRetry` with per-invocation timeout, exponential backoff retry (10s/30s/90s), and structured output extraction via `<OUTPUT>...</OUTPUT>` delimiters. All worker scripts should use this instead of calling `Invoke-Agent` directly. |
 | `workflow.ps1` | Task pipeline utilities: `Ensure-DraftPlaceholders` (1.md–5.md in 0draft), `Resolve-UniquePath`, `Get-TaskBaseName` (AI-driven kebab-case naming), `New-AgentPromptArguments` / `Format-AgentPromptCommand`. |
 | `task-logger.ps1` | `Write-ConsoleLine` (color-aware, handles redirected output), `Write-LogMessage` (INFO/WARN/ERROR with timestamps), `Write-LogVerbose` (DEBUG-level, file-only). |
@@ -237,7 +237,7 @@ Individual workers may also have inline `.tests.ps1` files (e.g., `coworker-dail
 
 ## Backend Selection
 
-The agent backend is configured in `config.psd1`. The presence of a `CLAUDE` key selects the Claude backend; otherwise `COPILOT` (default: `@('gh', 'copilot')`) is used.
+The agent backend is configured in `config.psd1`. When several keys are defined, priority is `CLAUDE` > `KIMI` > `COPILOT` (default: `@('gh', 'copilot')`).
 
 ```powershell
 # config.psd1 — Claude backend example
@@ -246,9 +246,16 @@ CLAUDE = @(
     '--dangerously-skip-permissions'
     '--verbose'
 )
+
+# config.psd1 — Kimi backend example. kimi -p runs non-interactively with
+# auto permission, so no permission flags are needed; do NOT add
+# --yolo/--auto (they conflict with -p).
+KIMI = @(
+    'kimi'
+)
 ```
 
-When the Claude backend is active, copilot-specific flags (`--allow-all-tools`, `--allow-all-paths`) are automatically filtered from the argument list.
+When the Claude or Kimi backend is active, copilot-specific flags (`--allow-all-tools`, `--allow-all-paths`) are automatically filtered from the argument list.
 
 ## Running Tasks Directly
 
@@ -275,7 +282,7 @@ Invoke-AgentWithRetry -Prompt "Summarize the README" -CaptureOutput -TimeoutSeco
 
 1. **Script-level mutexes** — Every script that should not run concurrently uses `New-CoworkerScriptLock -SkipIfHeld` with file-based locks under `tasks/.locks/`. Stale locks (dead PIDs) are automatically cleaned.
 
-2. **Backend agnosticism** — Worker scripts use `Invoke-AgentWithRetry` which delegates to `agent.ps1`. The backend (copilot or claude) is resolved from config at invocation time.
+2. **Backend agnosticism** — Worker scripts use `Invoke-AgentWithRetry` which delegates to `agent.ps1`. The backend (claude, kimi, or copilot) is resolved from config at invocation time.
 
 3. **Orphan recovery** — Long-running workers (`refine-drafts.ps1`, `refine-github-issues.ps1`) detect files stuck in the working directory (older than 30 minutes) and either return them to ready for retry or dead-letter them after max retries.
 

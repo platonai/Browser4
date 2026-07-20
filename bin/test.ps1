@@ -170,7 +170,7 @@ function Print-Usage {
     Write-Host "              With --task <file>: run a single task via run-task.ps1"
     Write-Host ""
     Write-Host "  RWS flags (accepted after 'rws'):"
-    Write-Host "    --scenarios [names...]  Run agent-scenario tasks (requires claude)"
+    Write-Host "    --scenarios [names...]  Run agent-scenario tasks (requires claude or kimi)"
     Write-Host "    --task <file>           Run a single task file directly"
     Write-Host "    --production            Use installed browser4-cli instead of cargo run"
     Write-Host "    --fail-fast             Stop after the first failing scenario"
