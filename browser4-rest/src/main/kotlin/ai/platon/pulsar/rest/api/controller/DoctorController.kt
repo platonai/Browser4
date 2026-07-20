@@ -116,6 +116,47 @@ class DoctorController(
         )
     }
 
+    @GetMapping("llm-status")
+    fun llmStatus(): ResponseEntity<Map<String, Any?>> {
+        val envKeyNames = listOf(
+            "OPENROUTER_API_KEY",
+            "DEEPSEEK_API_KEY",
+            "VOLCENGINE_API_KEY",
+            "OPENAI_API_KEY",
+            "LLM_API_KEY",
+        )
+        val propertyKeyNames = listOf(
+            "llm.api.key",
+            "openrouter.api.key",
+            "volcengine.api.key",
+            "deepseek.api.key",
+            "openai.api.key",
+        )
+
+        val foundEnvVars = envKeyNames.filter { System.getenv(it) != null }
+        val foundProperties = propertyKeyNames.filter { System.getProperty(it) != null }
+
+        val configured = foundEnvVars.isNotEmpty() || foundProperties.isNotEmpty()
+
+        val message = if (configured) {
+            null
+        } else {
+            "LLM is not configured, you can only use non-LLM commands. " +
+                "X-SQL is still available. " +
+                "It is highly recommended to set OPENROUTER_API_KEY or other LLM keys to enable LLM features."
+        }
+
+        return ResponseEntity.ok(
+            mapOf(
+                "configured" to configured,
+                "foundEnvVars" to foundEnvVars,
+                "foundProperties" to foundProperties,
+                "keyPrefixes" to listOf("OPENROUTER", "DEEPSEEK", "VOLCENGINE", "OPENAI"),
+                "message" to message,
+            )
+        )
+    }
+
     @GetMapping("metrics")
     fun metrics(
         @RequestParam(defaultValue = "") filter: String
