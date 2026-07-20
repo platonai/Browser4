@@ -30,6 +30,7 @@ pub fn public_command_name(name: &str) -> &str {
         "htmlsnapshot-inspect" => "htmlsnapshot inspect",
         "snapshot-grep" => "snapshot grep",
         "webdb-export" => "webdb export",
+        "webdb-normalize" => "webdb normalize",
         "doctor-log" => "doctor log",
         "plugin-list" => "plugin list",
         "plugin-info" => "plugin info",

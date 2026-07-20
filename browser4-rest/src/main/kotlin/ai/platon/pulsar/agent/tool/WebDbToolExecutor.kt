@@ -37,6 +37,17 @@ class WebDbToolExecutor(
             description = "Export pages from the web database to a local directory. " +
                 "Provide a comma-separated list of URLs."
         )
+        toolSpec["normalize"] = ToolSpec(
+            domain = domain,
+            method = "normalize",
+            arguments = listOf(
+                ToolSpec.Arg("sessionId", "String", null),
+                ToolSpec.Arg("url", "String", null),
+            ),
+            returnType = "String",
+            description = "Normalize a URL for use as a web database key. " +
+                "Resolves redirects, normalizes paths, and validates the URL."
+        )
     }
 
     override suspend fun callFunctionOn(
@@ -47,6 +58,7 @@ class WebDbToolExecutor(
     ): Any? {
         return when (functionName) {
             "export" -> export(args)
+            "normalize" -> normalize(args)
             else -> throw IllegalArgumentException("Unsupported method '$functionName' for domain '$domain'")
         }
     }
@@ -86,6 +98,25 @@ class WebDbToolExecutor(
                 "results" to results,
             )
             pulsarObjectMapper().writeValueAsString(result)
+        }
+    }
+
+    // =========================================================================
+    // Normalize
+    // =========================================================================
+
+    private suspend fun normalize(args: Map<String, Any?>): String {
+        val sessionId = requireSessionId(args)
+        val url = paramString(args, "url", "normalize", required = false)?.takeIf { it.isNotBlank() }
+            ?: throw IllegalArgumentException("Missing required parameter 'url' for webdb normalize")
+
+        val managed = sessionManager.getSession(sessionId)
+            ?: throw IllegalArgumentException("Session not found: $sessionId")
+
+        return managed.withLock {
+            val session = managed.agenticSession
+            val normUrl = session.normalize(url)
+            normUrl.urlString
         }
     }
 

@@ -11499,7 +11499,7 @@ fn rewrite_prefixed_command(args: &[String]) -> Option<Vec<String>> {
     }
     // "webdb" works standalone (webdb) AND as a prefix (webdb export).
     if prefix == "webdb" {
-        let known_subs = ["export"];
+        let known_subs = ["export", "normalize"];
         if known_subs.contains(&sub.as_str()) {
             let mut rewritten = vec![format!("webdb-{}", sub)];
             rewritten.extend(args[2..].iter().cloned());
@@ -16728,6 +16728,19 @@ mod tests {
         assert_eq!(rewritten[0], "webdb-export");
         assert_eq!(rewritten[1], "http://a.com,http://b.com");
         assert_eq!(rewritten[2], "/tmp/out");
+    }
+
+    #[test]
+    fn rewrite_prefixed_command_supports_webdb_normalize() {
+        let rewritten = rewrite_prefixed_command(&[
+            "webdb".to_string(),
+            "normalize".to_string(),
+            "http://example.com".to_string(),
+        ])
+        .unwrap();
+
+        assert_eq!(rewritten[0], "webdb-normalize");
+        assert_eq!(rewritten[1], "http://example.com");
     }
 
     #[test]

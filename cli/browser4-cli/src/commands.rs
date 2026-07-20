@@ -1854,6 +1854,29 @@ pub fn all_commands() -> Vec<CommandDef> {
                 p
             },
         },
+        // ---- Normalize ----
+        CommandDef {
+            name: "webdb-normalize",
+            description: "Normalize a URL for use as a web database key",
+            category: Category::Storage,
+            hidden: false,
+            batch_supported: false,
+            args: &[
+                ArgDef {
+                    name: "url",
+                    description: "URL to normalize",
+                    optional: false,
+                },
+            ],
+            options: &[],
+            e2e_coverage: E2eCoverage::Tested,
+            tool_name_fn: |_| "webdb_normalize".to_string(),
+            tool_params_fn: |args| {
+                let mut p = json!({});
+                if let Some(url) = get_str(args, "url") { p["url"] = json!(url); }
+                p
+            },
+        },
         // ---- Export ----
         CommandDef {
             name: "screenshot",
@@ -3162,6 +3185,7 @@ mod tests {
             "sessionstorage-delete",
             "sessionstorage-clear",
             "webdb-export",
+            "webdb-normalize",
             "snapshot",
             "screenshot",
             "extract",
@@ -5882,5 +5906,36 @@ mod tests {
         assert_eq!(cmd.args.len(), 2);
         assert_eq!(cmd.args[0].name, "urls");
         assert_eq!(cmd.args[1].name, "output-dir");
+    }
+
+    // =========================================================================
+    // webdb-normalize command — tool name and params
+    // =========================================================================
+
+    #[test]
+    fn test_webdb_normalize_tool_name_is_webdb_normalize() {
+        let map = commands_map();
+        let cmd = map.get("webdb-normalize").unwrap();
+        let tool_name = (cmd.tool_name_fn)(&HashMap::new());
+        assert_eq!(tool_name, "webdb_normalize");
+    }
+
+    #[test]
+    fn test_webdb_normalize_params_maps_url() {
+        let map = commands_map();
+        let cmd = map.get("webdb-normalize").unwrap();
+        let mut args = HashMap::new();
+        args.insert("url".to_string(), json!("http://example.com"));
+
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["url"], "http://example.com");
+    }
+
+    #[test]
+    fn test_webdb_normalize_has_one_positional_arg() {
+        let map = commands_map();
+        let cmd = map.get("webdb-normalize").unwrap();
+        assert_eq!(cmd.args.len(), 1);
+        assert_eq!(cmd.args[0].name, "url");
     }
 }
