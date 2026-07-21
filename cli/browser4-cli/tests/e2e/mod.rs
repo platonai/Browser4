@@ -3959,6 +3959,16 @@ fn tested_commands(include_batch_command: bool) -> HashSet<&'static str> {
         "htmlsnapshot-summary",
         "htmlsnapshot-grep",
         "htmlsnapshot-inspect",
+        // crawl commands
+        "crawl",
+        "crawl-cancel",
+        "crawl-clear",
+        "crawl-list",
+        "crawl-result",
+        "crawl-status",
+        // webdb commands
+        "webdb-export",
+        "webdb-normalize",
     ]
     .into();
 

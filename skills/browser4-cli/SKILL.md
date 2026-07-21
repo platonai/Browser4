@@ -98,7 +98,9 @@ The `list` command displays a "Next open" column showing what happens when `goto
 | `loop` | Repeated task execution with persistence | Monitoring, scheduled checks | [loop.md](references/loop.md) |
 | `state-save`, `state-load`, `cookie-*`, `*-storage-*` | Browser storage management | Auth state reuse, cookie manipulation | [storage-state.md](references/storage-state.md) |
 | `attach` | Connect to existing Chrome/Edge via CDP | Debug live browser, reuse auth | [attach.md](references/attach.md) |
-| `skills` | List, retrieve, and locate bundled skill files | Refresh AI agent instructions, find skill paths | — |
+| `webdb export`, `webdb normalize` | Export cached pages, normalize URLs to database keys | Post-crawl content extraction, URL key lookup | [webdb.md](references/webdb.md) |
+| `skills`, `skills get`, `skills path`, `skills unpack` | Bundled AI agent skill files | Refresh agent instructions, unpack skill files | [skills.md](references/skills.md) |
+| `skill-list`, `skill-info`, `skill-install`, `skill-uninstall`, `skill-reload` | Backend skill management | Install/manage server-side skills | [skills.md](references/skills.md) |
 | `screenshot`, `scroll`, `wait`, `resize`, `tab-*` | Visual capture & viewport control | Screenshots, tab management | — |
 
 ### Refreshing This Skill
@@ -270,7 +272,11 @@ Organized by task — follow the link that matches what you're trying to do:
 
 **Manage browser state:**
 [storage-state.md](references/storage-state.md) — cookies, localStorage, sessionStorage, state save/load
+[webdb.md](references/webdb.md) — export cached pages, normalize URLs for database lookups
 [attach.md](references/attach.md) — connect to existing Chrome/Edge via CDP
+
+**Manage skills and agent instructions:**
+[skills.md](references/skills.md) — bundled skill files, backend skill management
 
 **AI-powered extraction:**
 [agent.md](references/agent.md) — `extract`, `summarize`, `agent run|status|result`, LLM provider config
