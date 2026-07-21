@@ -7632,6 +7632,86 @@ async fn handle_crawl_clear(
     Ok(())
 }
 
+/// Resolve @file references and --args-stdin in crawl args.
+/// Returns None if both raw_args and stdin are empty; otherwise
+/// returns the joined resolved args string.
+fn resolve_crawl_args_fallible(
+    raw_args: &str,
+    args_stdin_content: Option<&str>,
+) -> Result<Option<String>, String> {
+    if raw_args.is_empty() && args_stdin_content.is_none() {
+        return Ok(None);
+    }
+    let mut parts: Vec<String> = Vec::new();
+    for part in raw_args.split_whitespace() {
+        if let Some(file_path) = part.strip_prefix('@') {
+            let content = std::fs::read_to_string(file_path)
+                .map_err(|e| format!("Failed to read args file '{}': {}", file_path, e))?;
+            parts.push(content.trim().to_string());
+        } else {
+            parts.push(part.to_string());
+        }
+    }
+    if let Some(stdin_content) = args_stdin_content {
+        parts.push(stdin_content.to_string());
+    }
+    Ok(Some(parts.join(" ")))
+}
+
+/// Build the server-bound params for a crawl submission by stripping
+/// CLI-only keys and injecting resolved values (urls, sql, args).
+fn build_crawl_server_params(
+    tool_params: &Value,
+    urls: &[String],
+    resolved_sql: Option<&str>,
+    resolved_args: Option<&str>,
+) -> Value {
+    let mut server_params = tool_params.clone();
+    if let Value::Object(ref mut m) = server_params {
+        m.remove("seedFile");
+        m.remove("sqlStdin");
+        m.remove("sqlBase64");
+        m.remove("argsStdin");
+        m.remove("format");
+        m.remove("output");
+        // Insert resolved urls array
+        let url_array: Vec<Value> = urls.iter().map(|u| json!(u)).collect();
+        m.insert("urls".to_string(), json!(url_array));
+        // Insert resolved sql
+        if let Some(sql) = resolved_sql {
+            m.insert("sql".to_string(), json!(sql));
+        }
+        // Override args with resolved value (handles @file and stdin)
+        if let Some(args) = resolved_args {
+            m.insert("args".to_string(), json!(args));
+        } else {
+            // Ensure args is always present (Kotlin non-null)
+            m.entry("args".to_string()).or_insert(json!(""));
+        }
+        // Ensure url is set to the first URL for backward compat
+        let url = tool_params
+            .get("url")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        if url.is_empty() {
+            m.insert("url".to_string(), json!(urls[0]));
+        }
+    }
+    server_params
+}
+
+/// Validate the --format value. Returns Ok(()) for valid formats,
+/// Err with a message for invalid ones.
+fn validate_crawl_format(format: &str) -> Result<(), String> {
+    match format {
+        "json" | "csv" | "table" => Ok(()),
+        other => Err(format!(
+            "Invalid --format '{}'. Expected: json, csv, or table",
+            other
+        )),
+    }
+}
+
 async fn handle_crawl(
     client: &Client,
     base_url: &str,
@@ -7720,37 +7800,13 @@ async fn handle_crawl(
         None
     };
 
-    // If any --args value starts with '@', treat it as a file path and read its content.
-    // Resolve after the initial tool_params_fn assembly, before sending to server.
-    let resolved_args: Option<String> = {
-        let raw_args = tool_params
-            .get("args")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-
-        if raw_args.is_empty() && args_stdin_content.is_none() {
-            None
-        } else {
-            let mut parts: Vec<String> = Vec::new();
-            // Split existing args by whitespace and resolve any @file entries
-            for part in raw_args.split_whitespace() {
-                if part.starts_with('@') {
-                    let file_path = &part[1..];
-                    let content = std::fs::read_to_string(file_path)
-                        .map_err(|e| format!("Failed to read args file '{}': {}", file_path, e))?;
-                    parts.push(content.trim().to_string());
-                } else {
-                    parts.push(part.to_string());
-                }
-            }
-            // Append stdin content if provided
-            if let Some(ref stdin_content) = args_stdin_content {
-                parts.push(stdin_content.clone());
-            }
-            Some(parts.join(" "))
-        }
-    };
+    let raw_args = tool_params
+        .get("args")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let resolved_args =
+        resolve_crawl_args_fallible(&raw_args, args_stdin_content.as_deref())?;
 
     // ---- Resolve output options ----
     let format = tool_params
@@ -7759,42 +7815,19 @@ async fn handle_crawl(
         .unwrap_or("table")
         .to_ascii_lowercase();
 
-    match format.as_str() {
-        "json" | "csv" | "table" => {}
-        _ => return Err(format!("Invalid --format '{}'. Expected: json, csv, or table", format)),
-    }
+    validate_crawl_format(&format)?;
 
     let output_file = tool_params
         .get("output")
         .and_then(|v| v.as_str());
 
     // ---- Build server-bound params (strip CLI-only keys) ----
-    let mut server_params = tool_params.clone();
-    if let Value::Object(ref mut m) = server_params {
-        m.remove("seedFile");
-        m.remove("sqlStdin");
-        m.remove("sqlBase64");
-        m.remove("argsStdin");
-        m.remove("format");
-        m.remove("output");
-        // Insert resolved urls array and resolved sql
-        let url_array: Vec<Value> = urls.iter().map(|u| json!(u)).collect();
-        m.insert("urls".to_string(), json!(url_array));
-        if let Some(ref sql) = resolved_sql {
-            m.insert("sql".to_string(), json!(sql));
-        }
-        // Override args with resolved value (handles @file and stdin)
-        if let Some(ref args) = resolved_args {
-            m.insert("args".to_string(), json!(args));
-        } else {
-            // Ensure args is always present (Issue 2 fix: prevent Kotlin null)
-            m.entry("args".to_string()).or_insert(json!(""));
-        }
-        // Ensure url is set to the first URL for backward compat
-        if url.is_empty() {
-            m.insert("url".to_string(), json!(urls[0]));
-        }
-    }
+    let server_params = build_crawl_server_params(
+        tool_params,
+        &urls,
+        resolved_sql.as_deref(),
+        resolved_args.as_deref(),
+    );
 
     let primary_url = &urls[0];
     let task_id = submit_crawl(client, base_url, &server_params).await?;
@@ -13889,6 +13922,35 @@ mod tests {
             .unwrap()
     }
 
+    /// Guard that restores an env var to its previous value on drop.
+    struct EnvGuard {
+        key: &'static str,
+        prev: Option<String>,
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            unsafe {
+                match &self.prev {
+                    Some(val) => std::env::set_var(self.key, val),
+                    None => std::env::remove_var(self.key),
+                }
+            }
+        }
+    }
+
+    fn set_env(key: &'static str, val: &str) -> EnvGuard {
+        let prev = std::env::var(key).ok();
+        unsafe { std::env::set_var(key, val); }
+        EnvGuard { key, prev }
+    }
+
+    fn clear_env(key: &'static str) -> EnvGuard {
+        let prev = std::env::var(key).ok();
+        unsafe { std::env::remove_var(key); }
+        EnvGuard { key, prev }
+    }
+
     // -----------------------------------------------------------------------
     // resolve_cdp_endpoint tests
     // -----------------------------------------------------------------------
@@ -17042,5 +17104,475 @@ mod tests {
         // reads them.  The tool_params_fn maps dx → deltaX, dy → deltaY.
         assert_eq!(compiled.steps[0]["arguments"]["deltaX"], json!(0));
         assert_eq!(compiled.steps[0]["arguments"]["deltaY"], json!(160));
+    }
+
+    // -------------------------------------------------------------------
+    // format_csv tests
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn format_csv_empty_rows_returns_empty() {
+        let rows: Vec<Value> = vec![];
+        assert_eq!(format_csv(&rows), "");
+    }
+
+    #[test]
+    fn format_csv_single_row_single_column() {
+        let rows = vec![json!({"title": "Hello"})];
+        let csv = format_csv(&rows);
+        assert!(csv.starts_with("title\n"), "expected header, got: {csv}");
+        assert!(csv.contains("Hello"), "expected value, got: {csv}");
+    }
+
+    #[test]
+    fn format_csv_multiple_rows_multiple_columns() {
+        let rows = vec![
+            json!({"url": "https://a.com", "title": "Page A"}),
+            json!({"url": "https://b.com", "title": "Page B"}),
+        ];
+        let csv = format_csv(&rows);
+        let lines: Vec<&str> = csv.trim().lines().collect();
+        assert_eq!(lines.len(), 3, "expected header + 2 data rows, got:\n{csv}");
+        // serde_json uses BTreeMap ordering → alphabetical keys: "title", "url"
+        assert_eq!(lines[0], "title,url");
+        assert!(lines[1].contains("https://a.com"));
+        assert!(lines[1].contains("Page A"));
+        assert!(lines[2].contains("https://b.com"));
+        assert!(lines[2].contains("Page B"));
+    }
+
+    #[test]
+    fn format_csv_columns_ordered_by_first_appearance() {
+        // serde_json uses BTreeMap ordering within each object (sorted keys).
+        // Columns appear in the order they are first encountered across rows.
+        let rows = vec![
+            json!({"url": "https://c.com", "depth": "2"}),
+            json!({"title": "Page C", "url": "https://c.com"}),
+        ];
+        let csv = format_csv(&rows);
+        let header = csv.lines().next().unwrap();
+        let cols: Vec<&str> = header.split(',').collect();
+        // BTreeMap order: Row 0 has "depth" then "url" (d < u).
+        // Row 1 adds "title" (new), "url" already seen.
+        // Result: depth, url, title
+        assert_eq!(cols.len(), 3, "expected 3 columns, got: {cols:?}");
+        assert_eq!(cols[0], "depth");
+        assert_eq!(cols[1], "url");
+        assert_eq!(cols[2], "title");
+    }
+
+    #[test]
+    fn format_csv_escapes_comma_in_value() {
+        let rows = vec![json!({"desc": "hello, world"})];
+        let csv = format_csv(&rows);
+        assert!(csv.contains("\"hello, world\""), "comma should be quoted, got: {csv}");
+    }
+
+    #[test]
+    fn format_csv_escapes_double_quote_in_value() {
+        let rows = vec![json!({"desc": "he said \"wow\""})];
+        let csv = format_csv(&rows);
+        // Double-quotes are escaped as "" inside a quoted field
+        assert!(csv.contains("\"he said \"\"wow\"\"\""), "quotes should be doubled, got: {csv}");
+    }
+
+    #[test]
+    fn format_csv_escapes_newline_in_value() {
+        let rows = vec![json!({"desc": "line1\nline2"})];
+        let csv = format_csv(&rows);
+        assert!(csv.contains("\"line1\nline2\""), "newline should be quoted, got: {csv}");
+    }
+
+    #[test]
+    fn format_csv_null_value_becomes_empty() {
+        let rows = vec![json!({"col": null})];
+        let csv = format_csv(&rows);
+        assert!(csv.contains("col\n\n") || csv.contains("col\n\r\n"), "null should be empty, got: {csv}");
+    }
+
+    #[test]
+    fn format_csv_bool_and_number_values() {
+        let rows = vec![json!({"flag": true, "count": 42})];
+        let csv = format_csv(&rows);
+        let lines: Vec<&str> = csv.trim().lines().collect();
+        assert_eq!(lines.len(), 2);
+        // booleans and numbers are stringified
+        assert!(lines[1].contains("true"));
+        assert!(lines[1].contains("42"));
+    }
+
+    #[test]
+    fn format_csv_missing_column_in_row_becomes_empty() {
+        let rows = vec![
+            json!({"a": "1", "b": "2"}),
+            json!({"a": "3"}), // missing "b"
+        ];
+        let csv = format_csv(&rows);
+        let lines: Vec<&str> = csv.trim().lines().collect();
+        assert_eq!(lines.len(), 3);
+        // Second data row should have empty for "b" column
+        let second_row_cols: Vec<&str> = lines[2].split(',').collect();
+        assert_eq!(second_row_cols.len(), 2);
+        assert_eq!(second_row_cols[0], "3");
+        assert_eq!(second_row_cols[1], ""); // missing column -> empty
+    }
+
+    #[test]
+    fn format_csv_all_rows_non_object_returns_empty() {
+        let rows = vec![json!("not an object"), json!(123)];
+        let csv = format_csv(&rows);
+        assert_eq!(csv, "");
+    }
+
+    // -------------------------------------------------------------------
+    // format_table tests
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn format_table_empty_rows_returns_no_data() {
+        let rows: Vec<Value> = vec![];
+        assert_eq!(format_table(&rows), "No data.");
+    }
+
+    #[test]
+    fn format_table_all_non_object_rows_returns_no_data() {
+        let rows = vec![json!("string"), json!(42)];
+        assert_eq!(format_table(&rows), "No data.");
+    }
+
+    #[test]
+    fn format_table_single_row_single_column() {
+        let rows = vec![json!({"Name": "Alice"})];
+        let table = format_table(&rows);
+        assert!(table.contains("Name"), "expected header, got: {table}");
+        assert!(table.contains("Alice"), "expected value, got: {table}");
+        assert!(!table.contains("No data"), "should not say no data");
+    }
+
+    #[test]
+    fn format_table_multiple_rows_and_columns() {
+        let rows = vec![
+            json!({"url": "https://a.com", "title": "Alpha"}),
+            json!({"url": "https://b.com", "title": "Beta"}),
+            json!({"url": "https://longer-url.example.com", "title": "A Very Long Title Indeed"}),
+        ];
+        let table = format_table(&rows);
+        // Should contain all values
+        assert!(table.contains("https://a.com"));
+        assert!(table.contains("Alpha"));
+        assert!(table.contains("https://b.com"));
+        assert!(table.contains("Beta"));
+        assert!(table.contains("https://longer-url.example.com"));
+        assert!(table.contains("A Very Long Title Indeed"));
+    }
+
+    #[test]
+    fn format_table_columns_ordered_by_first_appearance() {
+        let rows = vec![
+            json!({"z": "last", "a": "first"}),
+            json!({"m": "middle", "a": "first2"}),
+        ];
+        let table = format_table(&rows);
+        // "z" appears first in row 0, "a" second, "m" first in row 1
+        let header_line = table.lines().next().unwrap();
+        assert!(header_line.contains("z"), "z should appear before a, got: {header_line}");
+    }
+
+    #[test]
+    fn format_table_column_alignment_respects_widths() {
+        let rows = vec![
+            json!({"short": "x", "loooooong": "y"}),
+            json!({"short": "much longer value here", "loooooong": "tiny"}),
+        ];
+        let table = format_table(&rows);
+        // The "short" column should be wide enough for "much longer value here"
+        let header_line = table.lines().next().unwrap();
+        // Header "short" is 5 chars; value "much longer value here" is 24 chars
+        assert!(
+            header_line.contains("short") && header_line.contains("loooooong"),
+            "expected both headers, got: {header_line}"
+        );
+    }
+
+    #[test]
+    fn format_table_null_value_renders_empty() {
+        let rows = vec![json!({"col": null})];
+        let table = format_table(&rows);
+        assert!(table.contains("col"), "expected header, got: {table}");
+        // The value should be empty space (width matched to header "col" = 3)
+        assert!(!table.contains("null"), "null should not appear as text");
+    }
+
+    #[test]
+    fn format_table_bool_and_number_values() {
+        let rows = vec![json!({"active": true, "score": 99})];
+        let table = format_table(&rows);
+        assert!(table.contains("true"), "expected bool true, got: {table}");
+        assert!(table.contains("99"), "expected number 99, got: {table}");
+    }
+
+    #[test]
+    fn format_table_separator_line_present() {
+        let rows = vec![json!({"col1": "a", "col2": "b"})];
+        let table = format_table(&rows);
+        // Separator line uses "-+-" between columns
+        assert!(table.contains("-+-"), "expected separator with -+-, got: {table}");
+    }
+
+    // -------------------------------------------------------------------
+    // validate_crawl_format tests
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn validate_crawl_format_accepts_json() {
+        assert!(validate_crawl_format("json").is_ok());
+    }
+
+    #[test]
+    fn validate_crawl_format_accepts_csv() {
+        assert!(validate_crawl_format("csv").is_ok());
+    }
+
+    #[test]
+    fn validate_crawl_format_accepts_table() {
+        assert!(validate_crawl_format("table").is_ok());
+    }
+
+    #[test]
+    fn validate_crawl_format_rejects_invalid() {
+        let err = validate_crawl_format("xml").unwrap_err();
+        assert!(err.contains("xml"), "error should name the invalid format, got: {err}");
+        assert!(err.contains("json, csv, or table"), "error should list valid formats, got: {err}");
+    }
+
+    #[test]
+    fn validate_crawl_format_rejects_empty() {
+        let err = validate_crawl_format("").unwrap_err();
+        assert!(err.contains("Invalid"), "empty format should error, got: {err}");
+    }
+
+    // -------------------------------------------------------------------
+    // build_crawl_server_params tests
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn build_crawl_server_params_strips_cli_only_keys() {
+        let tool_params = json!({
+            "url": "https://example.com",
+            "depth": 2,
+            "seedFile": "urls.txt",
+            "sqlStdin": true,
+            "sqlBase64": "abc123",
+            "argsStdin": true,
+            "format": "csv",
+            "output": "out.csv",
+            "refresh": true,
+            "background": true,
+        });
+        let urls = vec!["https://example.com".to_string()];
+        let result = build_crawl_server_params(&tool_params, &urls, None, None);
+        assert!(result["seedFile"].is_null() || result.get("seedFile").is_none());
+        assert!(result["sqlStdin"].is_null() || result.get("sqlStdin").is_none());
+        assert!(result["sqlBase64"].is_null() || result.get("sqlBase64").is_none());
+        assert!(result["argsStdin"].is_null() || result.get("argsStdin").is_none());
+        assert!(result["format"].is_null() || result.get("format").is_none());
+        assert!(result["output"].is_null() || result.get("output").is_none());
+        // Non-CLI keys are preserved
+        assert_eq!(result["depth"], json!(2));
+        assert_eq!(result["refresh"], json!(true));
+    }
+
+    #[test]
+    fn build_crawl_server_params_injects_urls_array() {
+        let tool_params = json!({"url": "https://a.com"});
+        let urls = vec![
+            "https://a.com".to_string(),
+            "https://b.com".to_string(),
+        ];
+        let result = build_crawl_server_params(&tool_params, &urls, None, None);
+        let url_array = result["urls"].as_array().unwrap();
+        assert_eq!(url_array.len(), 2);
+        assert_eq!(url_array[0], json!("https://a.com"));
+        assert_eq!(url_array[1], json!("https://b.com"));
+    }
+
+    #[test]
+    fn build_crawl_server_params_injects_resolved_sql() {
+        let tool_params = json!({"url": "https://example.com"});
+        let urls = vec!["https://example.com".to_string()];
+        let sql = "SELECT dom_first_text(dom, 'h1') FROM load_and_select(@url, ':root')";
+        let result = build_crawl_server_params(&tool_params, &urls, Some(sql), None);
+        assert_eq!(result["sql"], json!(sql));
+    }
+
+    #[test]
+    fn build_crawl_server_params_no_sql_when_none() {
+        let tool_params = json!({"url": "https://example.com"});
+        let urls = vec!["https://example.com".to_string()];
+        let result = build_crawl_server_params(&tool_params, &urls, None, None);
+        assert!(result["sql"].is_null() || result.get("sql").is_none());
+    }
+
+    #[test]
+    fn build_crawl_server_params_injects_resolved_args() {
+        let tool_params = json!({"url": "https://example.com", "args": "-refresh -interactLevel FAST"});
+        let urls = vec!["https://example.com".to_string()];
+        let result =
+            build_crawl_server_params(&tool_params, &urls, None, Some("-refresh -interactLevel FAST"));
+        assert_eq!(result["args"], json!("-refresh -interactLevel FAST"));
+    }
+
+    #[test]
+    fn build_crawl_server_params_args_always_present() {
+        // Even when no args are provided, the "args" key must be present
+        // (non-null Kotlin field).
+        let tool_params = json!({"url": "https://example.com"});
+        let urls = vec!["https://example.com".to_string()];
+        let result = build_crawl_server_params(&tool_params, &urls, None, None);
+        assert_eq!(result["args"], json!(""));
+    }
+
+    #[test]
+    fn build_crawl_server_params_first_url_as_url_when_empty() {
+        // When "url" is not set (seed-file only), url is set to first element of urls
+        let tool_params = json!({});
+        let urls = vec![
+            "https://seed-page-1.com".to_string(),
+            "https://seed-page-2.com".to_string(),
+        ];
+        let result = build_crawl_server_params(&tool_params, &urls, None, None);
+        assert_eq!(result["url"], json!("https://seed-page-1.com"));
+    }
+
+    #[test]
+    fn build_crawl_server_params_preserves_original_url_when_present() {
+        let tool_params = json!({"url": "https://direct-url.com"});
+        let urls = vec![
+            "https://direct-url.com".to_string(),
+            "https://seed-url.com".to_string(),
+        ];
+        let result = build_crawl_server_params(&tool_params, &urls, None, None);
+        assert_eq!(result["url"], json!("https://direct-url.com"));
+    }
+
+    #[test]
+    fn build_crawl_server_params_preserves_background_flag() {
+        let tool_params = json!({"url": "https://example.com", "background": true});
+        let urls = vec!["https://example.com".to_string()];
+        let result = build_crawl_server_params(&tool_params, &urls, None, None);
+        assert_eq!(result["background"], json!(true));
+    }
+
+    // -------------------------------------------------------------------
+    // resolve_crawl_args_fallible tests
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn resolve_crawl_args_empty_returns_none() {
+        let result = resolve_crawl_args_fallible("", None).unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn resolve_crawl_args_passthrough_no_at_sign() {
+        let result = resolve_crawl_args_fallible("-refresh -parse", None).unwrap();
+        assert_eq!(result.unwrap(), "-refresh -parse");
+    }
+
+    #[test]
+    fn resolve_crawl_args_at_file_resolves_content() {
+        let tmp = test_temp_dir();
+        let args_file = tmp.path().join("loadopts.txt");
+        std::fs::write(&args_file, "-nMaxRetry 5 -lazyFlush").unwrap();
+        let args_str = format!("@{}", args_file.to_string_lossy());
+
+        let result = resolve_crawl_args_fallible(&args_str, None).unwrap();
+        assert_eq!(result.unwrap(), "-nMaxRetry 5 -lazyFlush");
+    }
+
+    #[test]
+    fn resolve_crawl_args_mixed_at_file_and_literal() {
+        let tmp = test_temp_dir();
+        let args_file = tmp.path().join("extra.txt");
+        std::fs::write(&args_file, "-lazyFlush").unwrap();
+        let args_str = format!("-refresh @{} -parse", args_file.to_string_lossy());
+
+        let result = resolve_crawl_args_fallible(&args_str, None).unwrap();
+        assert_eq!(result.unwrap(), "-refresh -lazyFlush -parse");
+    }
+
+    #[test]
+    fn resolve_crawl_args_stdin_content_appended() {
+        let result =
+            resolve_crawl_args_fallible("-refresh", Some("-fromStdin")).unwrap();
+        assert_eq!(result.unwrap(), "-refresh -fromStdin");
+    }
+
+    #[test]
+    fn resolve_crawl_args_stdin_only() {
+        let result = resolve_crawl_args_fallible("", Some("-stdin args here")).unwrap();
+        assert_eq!(result.unwrap(), "-stdin args here");
+    }
+
+    #[test]
+    fn resolve_crawl_args_missing_file_errors() {
+        let tmp = test_temp_dir();
+        let missing = tmp.path().join("nonexistent.txt");
+        let args_str = format!("@{}", missing.to_string_lossy());
+
+        let result = resolve_crawl_args_fallible(&args_str, None);
+        assert!(result.is_err(), "missing @file should error");
+        let err = result.unwrap_err();
+        assert!(
+            err.contains("nonexistent.txt"),
+            "error should name the file, got: {err}"
+        );
+    }
+
+    #[test]
+    fn resolve_crawl_args_multiple_at_files() {
+        let tmp = test_temp_dir();
+        let file1 = tmp.path().join("opts1.txt");
+        let file2 = tmp.path().join("opts2.txt");
+        std::fs::write(&file1, "-refresh").unwrap();
+        std::fs::write(&file2, "-parse -readonly").unwrap();
+        let args_str = format!("@{} @{}", file1.to_string_lossy(), file2.to_string_lossy());
+
+        let result = resolve_crawl_args_fallible(&args_str, None).unwrap();
+        assert_eq!(result.unwrap(), "-refresh -parse -readonly");
+    }
+
+    // -------------------------------------------------------------------
+    // crawl_request_timeout tests
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn crawl_request_timeout_default_is_10_minutes() {
+        let _guard = clear_env("BROWSER4_CLI_CRAWL_TIMEOUT_SECS");
+        // Default when env var is unset
+        let timeout = crawl_request_timeout();
+        assert_eq!(timeout, std::time::Duration::from_secs(600));
+    }
+
+    #[test]
+    fn crawl_request_timeout_env_var_overrides_default() {
+        let _guard = set_env("BROWSER4_CLI_CRAWL_TIMEOUT_SECS", "30");
+        let timeout = crawl_request_timeout();
+        assert_eq!(timeout, std::time::Duration::from_secs(30));
+    }
+
+    #[test]
+    fn crawl_request_timeout_env_var_120_seconds() {
+        let _guard = set_env("BROWSER4_CLI_CRAWL_TIMEOUT_SECS", "120");
+        let timeout = crawl_request_timeout();
+        assert_eq!(timeout, std::time::Duration::from_secs(120));
+    }
+
+    #[test]
+    fn crawl_request_timeout_env_var_invalid_falls_back_to_default() {
+        let _guard = set_env("BROWSER4_CLI_CRAWL_TIMEOUT_SECS", "not-a-number");
+        let timeout = crawl_request_timeout();
+        // Falls back to 600 when parse fails
+        assert_eq!(timeout, std::time::Duration::from_secs(600));
     }
 }

@@ -1234,4 +1234,61 @@ mod tests {
             "Expected URL diagnostics, got: {error}"
         );
     }
+
+    // -------------------------------------------------------------------
+    // build_endpoint_url tests (used by crawl REST endpoints)
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn build_endpoint_url_no_trailing_slash() {
+        let url = build_endpoint_url("http://localhost:8182", "/api/crawl/task-1/status");
+        assert_eq!(url, "http://localhost:8182/api/crawl/task-1/status");
+    }
+
+    #[test]
+    fn build_endpoint_url_with_trailing_slash() {
+        let url = build_endpoint_url("http://localhost:8182/", "/api/crawl/task-1/result");
+        assert_eq!(url, "http://localhost:8182/api/crawl/task-1/result");
+    }
+
+    #[test]
+    fn build_endpoint_url_multiple_slashes() {
+        let url = build_endpoint_url("http://localhost:8182///", "/api/crawl/clear");
+        assert_eq!(url, "http://localhost:8182/api/crawl/clear");
+    }
+
+    // -------------------------------------------------------------------
+    // format_http_error tests
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn format_http_error_with_body() {
+        let status = reqwest::StatusCode::INTERNAL_SERVER_ERROR;
+        let msg = format_http_error(status, "something broke");
+        assert!(msg.contains("500"), "should contain status code");
+        assert!(msg.contains("something broke"), "should contain message");
+    }
+
+    #[test]
+    fn format_http_error_empty_body() {
+        let status = reqwest::StatusCode::NOT_FOUND;
+        let msg = format_http_error(status, "");
+        assert!(msg.contains("404"), "should contain status code");
+        assert!(msg.contains("empty response body"), "should mention empty body");
+    }
+
+    // -------------------------------------------------------------------
+    // crawl timeout constants
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn crawl_request_timeout_uses_correct_env_var_name() {
+        // Verify the constant is exactly what the docs tell users
+        assert_eq!(CRAWL_REQUEST_TIMEOUT_ENV, "BROWSER4_CLI_CRAWL_TIMEOUT_SECS");
+    }
+
+    #[test]
+    fn crawl_request_timeout_default_10_minutes() {
+        assert_eq!(CRAWL_REQUEST_TIMEOUT_SECS, 600);
+    }
 }

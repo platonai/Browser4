@@ -898,4 +898,143 @@ mod tests {
         assert!(!state_file(tmp.path(), Some("named")).exists());
         assert!(tmp.path().join("sessions").join("notes.txt").exists());
     }
+
+    // -------------------------------------------------------------------
+    // Async task tracking tests (crawl, agent, swarm)
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn test_read_async_tasks_empty_when_no_file() {
+        let tmp = test_temp_dir();
+        let list = read_async_tasks(Some(tmp.path()));
+        assert!(list.tasks.is_empty());
+    }
+
+    #[test]
+    fn test_track_async_task_adds_entry() {
+        let tmp = test_temp_dir();
+        track_async_task("crawl-job-1", "crawl", "https://example.com", Some(tmp.path()))
+            .unwrap();
+
+        let list = read_async_tasks(Some(tmp.path()));
+        assert_eq!(list.tasks.len(), 1);
+        assert_eq!(list.tasks[0].task_id, "crawl-job-1");
+        assert_eq!(list.tasks[0].command, "crawl");
+        assert_eq!(list.tasks[0].description, "https://example.com");
+        assert!(!list.tasks[0].submitted_at.is_empty());
+        assert!(list.tasks[0].last_status.is_empty());
+    }
+
+    #[test]
+    fn test_track_multiple_async_tasks() {
+        let tmp = test_temp_dir();
+        track_async_task("task-1", "crawl", "https://a.com", Some(tmp.path())).unwrap();
+        track_async_task("task-2", "crawl", "https://b.com", Some(tmp.path())).unwrap();
+
+        let list = read_async_tasks(Some(tmp.path()));
+        assert_eq!(list.tasks.len(), 2);
+        assert_eq!(list.tasks[0].task_id, "task-1");
+        assert_eq!(list.tasks[1].task_id, "task-2");
+    }
+
+    #[test]
+    fn test_update_async_task_status() {
+        let tmp = test_temp_dir();
+        track_async_task("task-1", "crawl", "https://a.com", Some(tmp.path())).unwrap();
+
+        update_async_task_status("task-1", "OK (3 pages)", Some(tmp.path())).unwrap();
+
+        let list = read_async_tasks(Some(tmp.path()));
+        assert_eq!(list.tasks[0].last_status, "OK (3 pages)");
+    }
+
+    #[test]
+    fn test_update_async_task_status_non_existent_is_no_op() {
+        let tmp = test_temp_dir();
+        // Should not panic or create entries for missing task IDs
+        let result = update_async_task_status("nonexistent", "done", Some(tmp.path()));
+        assert!(result.is_ok());
+        let list = read_async_tasks(Some(tmp.path()));
+        assert!(list.tasks.is_empty());
+    }
+
+    #[test]
+    fn test_prune_async_tasks_removes_completed() {
+        let tmp = test_temp_dir();
+        track_async_task("t1", "crawl", "url1", Some(tmp.path())).unwrap();
+        track_async_task("t2", "crawl", "url2", Some(tmp.path())).unwrap();
+        track_async_task("t3", "crawl", "url3", Some(tmp.path())).unwrap();
+
+        // Mark t1 and t3 as completed
+        update_async_task_status("t1", "done", Some(tmp.path())).unwrap();
+        update_async_task_status("t3", "SC_OK (5 pages)", Some(tmp.path())).unwrap();
+
+        let removed = prune_async_tasks(Some(tmp.path())).unwrap();
+        assert_eq!(removed, 2, "should remove t1 and t3");
+
+        let list = read_async_tasks(Some(tmp.path()));
+        assert_eq!(list.tasks.len(), 1);
+        assert_eq!(list.tasks[0].task_id, "t2");
+    }
+
+    #[test]
+    fn test_prune_async_tasks_removes_error_tasks() {
+        let tmp = test_temp_dir();
+        track_async_task("t1", "crawl", "url1", Some(tmp.path())).unwrap();
+        track_async_task("t2", "crawl", "url2", Some(tmp.path())).unwrap();
+
+        update_async_task_status("t1", "error: timeout after 600s", Some(tmp.path())).unwrap();
+
+        let removed = prune_async_tasks(Some(tmp.path())).unwrap();
+        assert_eq!(removed, 1);
+
+        let list = read_async_tasks(Some(tmp.path()));
+        assert_eq!(list.tasks.len(), 1);
+        assert_eq!(list.tasks[0].task_id, "t2");
+    }
+
+    #[test]
+    fn test_prune_async_tasks_no_change_when_all_pending() {
+        let tmp = test_temp_dir();
+        track_async_task("t1", "crawl", "url1", Some(tmp.path())).unwrap();
+        track_async_task("t2", "swarm", "url2", Some(tmp.path())).unwrap();
+
+        let removed = prune_async_tasks(Some(tmp.path())).unwrap();
+        assert_eq!(removed, 0);
+
+        let list = read_async_tasks(Some(tmp.path()));
+        assert_eq!(list.tasks.len(), 2);
+    }
+
+    #[test]
+    fn test_prune_async_tasks_empty_list_returns_zero() {
+        let tmp = test_temp_dir();
+        let removed = prune_async_tasks(Some(tmp.path())).unwrap();
+        assert_eq!(removed, 0);
+    }
+
+    #[test]
+    fn test_format_async_task_list_empty() {
+        let list = AsyncTaskList { tasks: vec![] };
+        let output = format_async_task_list(&list);
+        assert!(output.contains("No tracked async tasks"));
+    }
+
+    #[test]
+    fn test_format_async_task_list_with_entries() {
+        let list = AsyncTaskList {
+            tasks: vec![AsyncTaskEntry {
+                task_id: "crawl-job-1".to_string(),
+                command: "crawl".to_string(),
+                description: "https://example.com".to_string(),
+                submitted_at: "2026-01-01T00:00:00+00:00".to_string(),
+                last_status: "running".to_string(),
+            }],
+        };
+        let output = format_async_task_list(&list);
+        assert!(output.contains("1 tracked task"));
+        assert!(output.contains("crawl-job-1"));
+        assert!(output.contains("crawl"));
+        assert!(output.contains("https://example.com"));
+    }
 }
