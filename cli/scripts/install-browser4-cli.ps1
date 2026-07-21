@@ -432,34 +432,53 @@ function New-Symlinks {
         New-PlatformLink -LinkPath $linkPath -TargetName $BinaryName -DisplayName $linkName
     }
 
-    # 2) Only if no conflict: b4 -> browser4-cli-<platform>
+    # 2) b4 -> browser4-cli-<platform> (only if b4 is our tool or doesn't exist)
     $shortName = "b4$ext"
     $shortPath = Join-Path $InstallDir $shortName
 
-    # Check if b4 is already on PATH (conflict with another tool)
-    $existingCmd = Get-Command b4 -ErrorAction SilentlyContinue
-    if ($existingCmd) {
-        Write-WarnMsg "Skipping short link '$shortName': 'b4' already found on PATH ($($existingCmd.Source))"
-        return
-    }
+    $b4Exists = $false
+    $b4IsOurs = $false
 
-    # Check if b4 already exists in the install directory
+    # Check in install dir first --anything here is ours
     if (Test-Path $shortPath) {
-        Write-WarnMsg "Skipping short link '$shortName': already exists in $InstallDir"
-        return
+        $b4Exists = $true
+        $b4IsOurs = $true
     }
 
-    # Also check b4.cmd if on Windows (wrapper fallback)
-    if ($script:OSWin) {
+    # Also check b4.cmd wrapper on Windows
+    if ($script:OSWin -and -not $b4Exists) {
         $shortCmdPath = Join-Path $InstallDir "b4.cmd"
         if (Test-Path $shortCmdPath) {
-            Write-WarnMsg "Skipping short link '$shortName': 'b4.cmd' already exists in $InstallDir"
-            return
+            $b4Exists = $true
+            $b4IsOurs = $true
         }
     }
 
+    # Check if b4 is on PATH from somewhere else
+    if (-not $b4Exists) {
+        $existingCmd = Get-Command b4 -ErrorAction SilentlyContinue
+        if ($existingCmd) {
+            $b4Exists = $true
+            # Check if it's ours by running --version
+            try {
+                $b4Version = & b4 --version 2>&1
+                if ($b4Version -match "browser4-cli") {
+                    $b4IsOurs = $true
+                }
+            } catch {
+                # Can't determine --leave it alone
+            }
+        }
+    }
+
+    if ($b4Exists -and -not $b4IsOurs) {
+        Write-WarnMsg "Skipping short link '$shortName': 'b4' is not browser4-cli"
+        return
+    }
+
     if ($DryRun) {
-        Write-Step "[DRY-RUN] Would create link: $shortName -> $BinaryName"
+        $action = if ($b4Exists) { "Would update link" } else { "Would create link" }
+        Write-Step "[DRY-RUN] $action`: $shortName -> $BinaryName"
     } else {
         New-PlatformLink -LinkPath $shortPath -TargetName $BinaryName -DisplayName $shortName
     }

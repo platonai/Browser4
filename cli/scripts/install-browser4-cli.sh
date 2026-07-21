@@ -497,25 +497,48 @@ create_symlinks() {
     ok "Created symlink: ${link_name} -> ${binary_name}"
   fi
 
-  # 2) Only if no conflict: b4 -> browser4-cli-<platform>
+  # 2) b4 -> browser4-cli-<platform> (only if b4 is our tool or doesn't exist)
   local short_name="b4${ext}"
   local short_path="${install_dir}/${short_name}"
 
-  if command -v b4 >/dev/null 2>&1; then
-    warn "Skipping short link '${short_name}': 'b4' already found on PATH"
-    return
+  local b4_exists=false
+  local b4_is_ours=false
+
+  # Check in install dir first — anything here is ours
+  if [[ -e "$short_path" ]] || [[ -L "$short_path" ]]; then
+    b4_exists=true
+    b4_is_ours=true
   fi
 
-  if [[ -e "$short_path" ]] || [[ -L "$short_path" ]]; then
-    warn "Skipping short link '${short_name}': already exists in ${install_dir}"
+  # Check if b4 is on PATH from somewhere else
+  if [[ "$b4_exists" != true ]]; then
+    if command -v b4 >/dev/null 2>&1; then
+      b4_exists=true
+      # Check if it's ours by running --version
+      if b4 --version 2>&1 | grep -qi "browser4-cli"; then
+        b4_is_ours=true
+      fi
+    fi
+  fi
+
+  if [[ "$b4_exists" == true ]] && [[ "$b4_is_ours" != true ]]; then
+    warn "Skipping short link '${short_name}': 'b4' is not browser4-cli"
     return
   fi
 
   if [[ "$DRY_RUN" == true ]]; then
-    step "[DRY-RUN] Would create symlink: ${short_name} -> ${binary_name}"
+    if [[ "$b4_exists" == true ]]; then
+      step "[DRY-RUN] Would update symlink: ${short_name} -> ${binary_name}"
+    else
+      step "[DRY-RUN] Would create symlink: ${short_name} -> ${binary_name}"
+    fi
   else
     ln -sf "$binary_name" "$short_path"
-    ok "Created symlink: ${short_name} -> ${binary_name}"
+    if [[ "$b4_exists" == true ]]; then
+      ok "Updated symlink: ${short_name} -> ${binary_name}"
+    else
+      ok "Created symlink: ${short_name} -> ${binary_name}"
+    fi
   fi
 }
 

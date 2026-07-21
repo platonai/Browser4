@@ -2760,13 +2760,13 @@ pub async fn install_browser4_runtime(
         RuntimeInstallLock::acquire(Duration::from_secs(INSTALL_LOCK_TIMEOUT_SECS))?;
 
     // Check available disk space before downloading.  We need at least
-    // ~500 MB free (200 MB download + 200 MB extraction + headroom).
+    // ~2 GB free (200 MB download + 200 MB extraction + headroom).
     // This is a best-effort check — the actual free space may change
     // between the check and the download.
     {
         let check_path = runtime_versions_dir();
         if let Ok(available) = fs_disk_space_available(&check_path) {
-            const MIN_FREE_BYTES: u64 = 500 * 1024 * 1024; // 500 MB
+            const MIN_FREE_BYTES: u64 = 2 * 1024 * 1024 * 1024; // 2 GB
             if available < MIN_FREE_BYTES {
                 return Err(format!(
                     "Insufficient disk space at {}: only {:.1} MB available, \
