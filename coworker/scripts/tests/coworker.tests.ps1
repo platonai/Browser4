@@ -66,27 +66,14 @@ function global:New-TempFile {
 Describe 'Write-LogMessage' {
 
     BeforeAll {
-        # Inline replicas for isolated testing
+        # Inline replicas for isolated testing.
+        # Write-ConsoleLine is silenced during tests — the tests assert on what
+        # Write-LogMessage writes to the log file, not on console output.
+        # Without this, every log-level test echoes fake WARN/ERROR lines that
+        # look like real failures in the Pester output.
         function Write-ConsoleLine {
             param([Parameter(Mandatory=$true)][string]$Message, [System.ConsoleColor]$ForegroundColor, [switch]$ErrorStream)
-            try {
-                $canUseHost = [Environment]::UserInteractive -and $null -ne $Host -and $null -ne $Host.UI -and $null -ne $Host.UI.RawUI
-            } catch { $canUseHost = $false }
-            if ($canUseHost) {
-                if ($PSBoundParameters.ContainsKey('ForegroundColor')) { Write-Host $Message -ForegroundColor $ForegroundColor }
-                else { Write-Host $Message }
-                return
-            }
-            $isRedirected = if ($ErrorStream) { [Console]::IsErrorRedirected } else { [Console]::IsOutputRedirected }
-            if ($isRedirected) {
-                $bytes = [System.Text.Encoding]::UTF8.GetBytes($Message + [Environment]::NewLine)
-                $stream = if ($ErrorStream) { [Console]::OpenStandardError() } else { [Console]::OpenStandardOutput() }
-                $stream.Write($bytes, 0, $bytes.Length)
-                $stream.Flush()
-                return
-            }
-            if ($PSBoundParameters.ContainsKey('ForegroundColor')) { Write-Host $Message -ForegroundColor $ForegroundColor }
-            else { Write-Host $Message }
+            # intentionally silent during tests
         }
 
         function Write-LogMessage {
@@ -918,26 +905,12 @@ Describe 'Date-based directory construction' {
 Describe 'Write-ConsoleLine' {
 
     BeforeAll {
+        # Silenced during tests — these tests only verify the function doesn't
+        # throw, not what it writes. The real implementation's console output
+        # (Write-Host, stdout, stderr) pollutes the Pester result display.
         function Write-ConsoleLine {
             param([Parameter(Mandatory=$true)][string]$Message, [System.ConsoleColor]$ForegroundColor, [switch]$ErrorStream)
-            try {
-                $canUseHost = [Environment]::UserInteractive -and $null -ne $Host -and $null -ne $Host.UI -and $null -ne $Host.UI.RawUI
-            } catch { $canUseHost = $false }
-            if ($canUseHost) {
-                if ($PSBoundParameters.ContainsKey('ForegroundColor')) { Write-Host $Message -ForegroundColor $ForegroundColor }
-                else { Write-Host $Message }
-                return
-            }
-            $isRedirected = if ($ErrorStream) { [Console]::IsErrorRedirected } else { [Console]::IsOutputRedirected }
-            if ($isRedirected) {
-                $bytes = [System.Text.Encoding]::UTF8.GetBytes($Message + [Environment]::NewLine)
-                $stream = if ($ErrorStream) { [Console]::OpenStandardError() } else { [Console]::OpenStandardOutput() }
-                $stream.Write($bytes, 0, $bytes.Length)
-                $stream.Flush()
-                return
-            }
-            if ($PSBoundParameters.ContainsKey('ForegroundColor')) { Write-Host $Message -ForegroundColor $ForegroundColor }
-            else { Write-Host $Message }
+            # intentionally silent during tests
         }
     }
 
