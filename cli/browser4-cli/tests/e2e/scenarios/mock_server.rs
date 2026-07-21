@@ -2201,9 +2201,9 @@ pub(super) fn test_swarm_submission_commands(ctx: &mut E2ECtx) {
     assert_eq!(
         snapshot.plain_commands,
         vec![
-            "https://example.com/direct -deadline 2026-03-30T00:00:00Z -expires 1d -refresh -parse -storeContent".to_string(),
-            "https://example.com/seed-1 -deadline 2026-03-30T00:00:00Z -expires 1d -refresh -parse -storeContent".to_string(),
-            "https://example.com/seed-2 -deadline 2026-03-30T00:00:00Z -expires 1d -refresh -parse -storeContent".to_string(),
+            "https://example.com/direct -deadline 2026-03-30T00:00:00Z -expires 1d -refresh -parse".to_string(),
+            "https://example.com/seed-1 -deadline 2026-03-30T00:00:00Z -expires 1d -refresh -parse".to_string(),
+            "https://example.com/seed-2 -deadline 2026-03-30T00:00:00Z -expires 1d -refresh -parse".to_string(),
         ]
     );
     assert!(

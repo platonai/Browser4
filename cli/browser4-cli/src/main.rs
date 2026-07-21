@@ -7098,13 +7098,6 @@ async fn handle_swarm_submit(
     {
         load_opts.push("-parse".to_string());
     }
-    if tool_params
-        .get("storeContent")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false)
-    {
-        load_opts.push("-storeContent".to_string());
-    }
     let opts_str = load_opts.join(" ");
 
     // Submit each URL through the appropriate REST API.
