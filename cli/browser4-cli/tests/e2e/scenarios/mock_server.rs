@@ -2689,6 +2689,223 @@ pub(super) fn test_crawl_with_seed_file(ctx: &mut E2ECtx) {
 }
 
 // ---------------------------------------------------------------------------
+// crawl — foreground (non-background) polling path
+// ---------------------------------------------------------------------------
+
+pub(super) fn test_crawl_foreground(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    let mock_server = start_mock_crawl_session(ctx);
+
+    // Submit a crawl WITHOUT --background — exercises the foreground
+    // polling loop. The mock server's /api/crawl/{id}/result always
+    // returns status=OK immediately, so the CLI should complete on
+    // the first poll.
+    let result = run_command(
+        ctx,
+        &[
+            "crawl",
+            "https://example.com/foreground-test",
+            "--depth=0",
+            "--refresh",
+        ],
+    );
+
+    let stdout = &result.stdout;
+    assert!(
+        stdout.contains("Crawl task submitted: crawl-job-42"),
+        "Expected submission confirmation in:\n{}",
+        stdout
+    );
+    assert!(
+        stdout.contains("Crawl completed. 1 pages found.")
+            || stdout.contains("Crawl completed. 1 pages found"),
+        "Expected foreground completion message in:\n{}",
+        stdout
+    );
+    assert!(
+        stdout.contains("Mock Crawled Page"),
+        "Expected crawled page title in output:\n{}",
+        stdout
+    );
+    // Foreground path should NOT print the background tip
+    assert!(
+        !stdout.contains("Running in background"),
+        "Foreground crawl should not mention background mode:\n{}",
+        stdout
+    );
+
+    let snapshot = mock_server.snapshot();
+    assert!(
+        snapshot
+            .tool_calls
+            .iter()
+            .any(|call| call.tool == "crawl_submit"),
+        "Expected crawl_submit MCP call"
+    );
+    // result_queries should have been called (the polling loop)
+    assert!(
+        !snapshot.result_queries.is_empty(),
+        "Expected result queries from foreground polling"
+    );
+}
+
+pub(super) fn test_crawl_foreground_with_sql(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    let _mock_server = start_mock_crawl_session(ctx);
+
+    // Foreground crawl with --sql to exercise the extracted-data formatting path
+    let result = run_command(
+        ctx,
+        &[
+            "crawl",
+            "https://example.com/sql-test",
+            "--depth=0",
+            "--sql",
+            "SELECT dom_first_text(dom, 'h1') FROM load_and_select(@url, ':root')",
+        ],
+    );
+
+    let stdout = &result.stdout;
+    assert!(
+        stdout.contains("Crawl task submitted: crawl-job-42"),
+        "Expected submission in:\n{}",
+        stdout
+    );
+    assert!(
+        stdout.contains("X-SQL extraction: enabled"),
+        "Expected X-SQL indicator in:\n{}",
+        stdout
+    );
+    // The mock server result page doesn't have extracted data, so we should
+    // see either "No extracted data" or a completion message
+    assert!(
+        stdout.contains("No extracted data")
+            || stdout.contains("Crawl completed"),
+        "Expected completion or no-data message in:\n{}",
+        stdout
+    );
+}
+
+pub(super) fn test_crawl_with_sql_and_csv_format(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    let _mock_server = start_mock_crawl_session(ctx);
+
+    let result = run_command(
+        ctx,
+        &[
+            "crawl",
+            "https://example.com/csv-test",
+            "--depth=0",
+            "--sql",
+            "SELECT dom_first_text(dom, 'h1') FROM load_and_select(@url, ':root')",
+            "--format",
+            "csv",
+        ],
+    );
+
+    let stdout = &result.stdout;
+    assert!(
+        stdout.contains("No extracted data") || stdout.contains("Crawl completed"),
+        "Expected output in:\n{}",
+        stdout
+    );
+}
+
+pub(super) fn test_crawl_with_output_file(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    let _mock_server = start_mock_crawl_session(ctx);
+
+    let output_path = ctx.workspace_dir.join("crawl-output.txt");
+    let output_arg = format!("--output={}", output_path.to_string_lossy());
+
+    let result = run_command(
+        ctx,
+        &[
+            "crawl",
+            "https://example.com/file-output-test",
+            "--depth=0",
+            &output_arg,
+        ],
+    );
+
+    let stdout = &result.stdout;
+    assert!(
+        stdout.contains("Results written to") || stdout.contains("Crawl completed"),
+        "Expected file-written confirmation in:\n{}",
+        stdout
+    );
+
+    // Verify the output file was actually written
+    let file_content = fs::read_to_string(&output_path).unwrap_or_default();
+    assert!(
+        !file_content.is_empty(),
+        "Expected output file to be non-empty, but {} is empty or missing",
+        output_path.display()
+    );
+    assert!(
+        file_content.contains("Mock Crawled Page") || file_content.contains("pages found"),
+        "Expected page info in output file, got:\n{}",
+        file_content
+    );
+}
+
+// ---------------------------------------------------------------------------
+// crawl — subcommand validation (missing task ID errors)
+// ---------------------------------------------------------------------------
+
+pub(super) fn test_crawl_status_missing_id(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    let _mock_server = start_mock_crawl_session(ctx);
+
+    // The CLI argument parser catches the missing required <id> argument
+    // before the handler runs, so the error is "Missing required argument".
+    let result = run_command_expecting_failure(
+        ctx,
+        &["crawl", "status"],
+        "Missing required argument",
+    );
+    assert!(
+        result.stdout.contains("Missing required argument")
+            || result.stderr.contains("Missing required argument"),
+        "Expected 'Missing required argument' in output:\nstdout: {}\nstderr: {}",
+        result.stdout,
+        result.stderr
+    );
+}
+
+pub(super) fn test_crawl_result_missing_id(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    let _mock_server = start_mock_crawl_session(ctx);
+
+    let result = run_command_expecting_failure(
+        ctx,
+        &["crawl", "result"],
+        "Missing required argument",
+    );
+    assert!(
+        result.stdout.contains("Missing required argument")
+            || result.stderr.contains("Missing required argument"),
+        "Expected 'Missing required argument' in output"
+    );
+}
+
+pub(super) fn test_crawl_cancel_missing_id(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    let _mock_server = start_mock_crawl_session(ctx);
+
+    let result = run_command_expecting_failure(
+        ctx,
+        &["crawl", "cancel"],
+        "Missing required argument",
+    );
+    assert!(
+        result.stdout.contains("Missing required argument")
+            || result.stderr.contains("Missing required argument"),
+        "Expected 'Missing required argument' in output"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // install / upgrade (mock download server)
 // ---------------------------------------------------------------------------
 
