@@ -133,9 +133,10 @@ class WebDbToolExecutor(
      * Export a single page from webdb to the target directory.
      */
     private suspend fun exportPage(session: PulsarSession, url: String, targetDir: Path): String {
-        val page = session.getOrNull(url)
-            ?: throw IllegalArgumentException("Page not found in webdb: $url")
-        val filename = sanitizeFilename(url)
+        val normalizedUrl = session.normalize(url).urlString
+        val page = session.getOrNull(normalizedUrl)
+            ?: throw IllegalArgumentException("Page not found in webdb: $url (normalized: $normalizedUrl)")
+        val filename = sanitizeFilename(normalizedUrl)
         val path = targetDir.resolve(filename)
         return session.exportTo(page, path).toString()
     }
