@@ -2,7 +2,7 @@
 name: scent-miner
 title: "Scent-Miner — Mine structured data from HTML dumps via WebMiner"
 description: "Exports pages from Browser4's webdb, then runs scent-miner (from platonai/web-miner) to extract structured data and generate HTML/Excel output views. Use when asked to mine, scrape, or extract structured data from web pages stored in the web database."
-allowed-tools: Bash(./bin/scent-miner/*), Bash(browser4-cli:*)
+allowed-tools: Bash(./skills/scent-miner/scripts/*), Bash(browser4-cli:*)
 tier: decision
 ---
 
@@ -31,13 +31,13 @@ HTML dump to extract structured data and generate output views.
 1. **browser4-cli** — installed and available on PATH (`browser4-cli --version`)
 2. **Java 17+** — the driver scripts auto-resolve Java (see Java resolution below)
 3. **scent-miner.jar** — downloaded automatically from GitHub releases on first
-   run, or placed manually at `bin/scent-miner/scent-miner.jar`
+   run, or placed manually at `skills/scent-miner/scripts/scent-miner.jar`
 4. **Browser4 backend** — running with a session that has the target pages
    loaded in its web database
 
 ### Java resolution order
 
-The driver scripts (`bin/scent-miner/run-scent-miner.ps1` / `.sh`) resolve
+The driver scripts (`skills/scent-miner/scripts/run-scent-miner.ps1` / `.sh`) resolve
 Java automatically:
 
 1. `$JAVA_HOME/bin/java` — if `JAVA_HOME` is set
@@ -91,29 +91,29 @@ jar download automatically.
 **PowerShell:**
 
 ```powershell
-.\bin\scent-miner\run-scent-miner.ps1 -InputDir <output-dir>
+.\skills\scent-miner\scripts\run-scent-miner.ps1 -InputDir <output-dir>
 ```
 
 **Bash:**
 
 ```bash
-./bin/scent-miner/run-scent-miner.sh --input <output-dir>
+./skills/scent-miner/scripts/run-scent-miner.sh --input <output-dir>
 ```
 
 **With options:**
 
 ```powershell
 # Limit to 50 pages for a quick test
-.\bin\scent-miner\run-scent-miner.ps1 -InputDir /tmp/webdb-dump -Limit 50
+.\skills\scent-miner\scripts\run-scent-miner.ps1 -InputDir /tmp/webdb-dump -Limit 50
 
 # Focus on a specific content area with a CSS selector
-.\bin\scent-miner\run-scent-miner.ps1 -InputDir /tmp/webdb-dump -ComponentSelector "#mainContent"
+.\skills\scent-miner\scripts\run-scent-miner.ps1 -InputDir /tmp/webdb-dump -ComponentSelector "#mainContent"
 
 # Stricter extraction (validate samples instead of trusting them)
-.\bin\scent-miner\run-scent-miner.ps1 -InputDir /tmp/webdb-dump -NoTrustSamples
+.\skills\scent-miner\scripts\run-scent-miner.ps1 -InputDir /tmp/webdb-dump -NoTrustSamples
 
 # Higher size threshold to skip small stub pages
-.\bin\scent-miner\run-scent-miner.ps1 -InputDir /tmp/webdb-dump -RequireSize 1000000
+.\skills\scent-miner\scripts\run-scent-miner.ps1 -InputDir /tmp/webdb-dump -RequireSize 1000000
 ```
 
 Bash equivalents use `--input`, `--limit`, `--component-selector`,
@@ -177,16 +177,16 @@ Open `index.html` in a browser to browse the extracted data, or load the
 
 The driver scripts automatically download `scent-miner.jar` from
 [GitHub Releases](https://github.com/platonai/web-miner/releases) on first run.
-The jar is cached at `bin/scent-miner/scent-miner.jar`.
+The jar is cached at `skills/scent-miner/scripts/scent-miner.jar`.
 
 To use a specific version, pass `--version <ver>` (bash) or
 `-ScentMinerVersion <ver>` (PowerShell).
 
 If GitHub is unreachable, download the jar manually and place it at
-`bin/scent-miner/scent-miner.jar`, or pass an explicit path:
+`skills/scent-miner/scripts/scent-miner.jar`, or pass an explicit path:
 
 ```powershell
-.\bin\scent-miner\run-scent-miner.ps1 -InputDir /tmp/dump -ScentMinerJar C:\tools\scent-miner.jar
+.\skills\scent-miner\scripts\run-scent-miner.ps1 -InputDir /tmp/dump -ScentMinerJar C:\tools\scent-miner.jar
 ```
 
 ## Troubleshooting
@@ -216,4 +216,4 @@ Alternatively, build the Browser4 runtime bundle which includes a bundled JRE:
 GitHub may be unreachable. Download manually:
 1. Visit https://github.com/platonai/web-miner/releases
 2. Download `scent-miner.jar` from the latest release
-3. Place it at `bin/scent-miner/scent-miner.jar`
+3. Place it at `skills/scent-miner/scripts/scent-miner.jar`

@@ -42,9 +42,9 @@
     Additional arguments passed through to scent-miner.
 
 .EXAMPLE
-    .\bin\scent-miner\run-scent-miner.ps1 -InputDir /data/pages
-    .\bin\scent-miner\run-scent-miner.ps1 -InputDir /data/pages -ComponentSelector "#mainContent"
-    .\bin\scent-miner\run-scent-miner.ps1 -InputDir /data/pages -Limit 50
+    .\skills\scent-miner\scripts\run-scent-miner.ps1 -InputDir /data/pages
+    .\skills\scent-miner\scripts\run-scent-miner.ps1 -InputDir /data/pages -ComponentSelector "#mainContent"
+    .\skills\scent-miner\scripts\run-scent-miner.ps1 -InputDir /data/pages -Limit 50
 
 .NOTES
     Scent-miner is part of platonai/web-miner: https://github.com/platonai/web-miner
@@ -77,10 +77,10 @@ param(
 $ErrorActionPreference = "Stop"
 
 # =============================================================================
-# Resolve repository root (3 levels up from bin/scent-miner/)
+# Resolve repository root (3 levels up from skills/scent-miner/scripts/)
 # =============================================================================
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$RepoRoot = Resolve-Path "$ScriptDir\..\.."
+$RepoRoot = Resolve-Path "$ScriptDir\..\..\.."
 
 # =============================================================================
 # Default paths
@@ -89,7 +89,7 @@ if (-not $OutputDir) {
     $OutputDir = "$InputDir-views"
 }
 
-$DefaultJarDir = Join-Path $RepoRoot "bin\scent-miner"
+$DefaultJarDir = Join-Path $RepoRoot "skills\scent-miner\scripts"
 $DefaultJarPath = Join-Path $DefaultJarDir "scent-miner.jar"
 
 if (-not $ScentMinerJar) {

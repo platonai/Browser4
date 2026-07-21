@@ -11,9 +11,9 @@
 #   3. Browser4 runtime bundle JRE
 #
 # Usage:
-#   ./bin/scent-miner/run-scent-miner.sh --input /data/pages
-#   ./bin/scent-miner/run-scent-miner.sh --input /data/pages --component-selector "#main"
-#   ./bin/scent-miner/run-scent-miner.sh --input /data/pages --limit 50
+#   ./skills/scent-miner/scripts/run-scent-miner.sh --input /data/pages
+#   ./skills/scent-miner/scripts/run-scent-miner.sh --input /data/pages --component-selector "#main"
+#   ./skills/scent-miner/scripts/run-scent-miner.sh --input /data/pages --limit 50
 #
 # Scent-miner is part of platonai/web-miner: https://github.com/platonai/web-miner
 # =============================================================================
@@ -21,10 +21,10 @@
 set -euo pipefail
 
 # -----------------------------------------------------------------------------
-# Resolve repository root (3 levels up from bin/scent-miner/)
+# Resolve repository root (3 levels up from skills/scent-miner/scripts/)
 # -----------------------------------------------------------------------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 
 # -----------------------------------------------------------------------------
 # Defaults
@@ -98,7 +98,7 @@ if [[ -z "$OUTPUT_DIR" ]]; then
 fi
 
 if [[ -z "$SCENT_MINER_JAR" ]]; then
-    SCENT_MINER_JAR="$REPO_ROOT/bin/scent-miner/scent-miner.jar"
+    SCENT_MINER_JAR="$REPO_ROOT/skills/scent-miner/scripts/scent-miner.jar"
 fi
 
 # -----------------------------------------------------------------------------
