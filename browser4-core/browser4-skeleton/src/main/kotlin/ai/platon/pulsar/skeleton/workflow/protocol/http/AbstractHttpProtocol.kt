@@ -14,7 +14,6 @@ import ai.platon.pulsar.skeleton.workflow.protocol.Protocol
 import ai.platon.pulsar.skeleton.workflow.protocol.ProtocolOutput
 import ai.platon.pulsar.skeleton.workflow.protocol.Response
 import crawlercommons.robots.BaseRobotRules
-import org.slf4j.LoggerFactory
 import java.net.URI
 import java.time.Duration
 import java.time.Instant
