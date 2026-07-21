@@ -89,20 +89,6 @@ abstract class AbstractHttpProtocol : Protocol {
         return ProtocolOutput(pageDatum, headers, finalProtocolStatus)
     }
 
-    private fun getFailedResponse(lastThrowable: Throwable?): ProtocolOutput {
-        val code = when (lastThrowable) {
-            is ConnectException -> ProtocolStatusCodes.REQUEST_TIMEOUT
-            is SocketTimeoutException -> ProtocolStatusCodes.REQUEST_TIMEOUT
-            is UnknownHostException -> ProtocolStatusCodes.UNKNOWN_HOST
-            else -> ProtocolStatusCodes.EXCEPTION
-        }
-        val protocolStatus = ProtocolStatus.failed(
-            code,
-            "exception", lastThrowable
-        )
-        return ProtocolOutput(null, MultiMetadata(), protocolStatus)
-    }
-
     private fun setResponseTime(startTime: Instant, page: WebPage, response: Response) {
         val pageFetchMode = page.fetchMode
         val elapsedTime = if (pageFetchMode == FetchMode.BROWSER) {
@@ -133,9 +119,5 @@ abstract class AbstractHttpProtocol : Protocol {
 
     override fun toString(): String {
         return javaClass.simpleName
-    }
-
-    companion object {
-        private const val MAX_REY_GUARD = 10
     }
 }
