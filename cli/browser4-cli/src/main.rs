@@ -7712,6 +7712,78 @@ fn validate_crawl_format(format: &str) -> Result<(), String> {
     }
 }
 
+/// Resolve the URL list for a crawl: combines the direct URL argument with
+/// URLs from the seed file (if any). Returns an error when no URLs are
+/// provided. Lines starting with `#` and blank lines are ignored in seed
+/// file content.
+fn resolve_crawl_urls(url: &str, seed_file_content: Option<&str>) -> Result<Vec<String>, String> {
+    let mut urls: Vec<String> = Vec::new();
+    if !url.is_empty() {
+        urls.push(url.to_string());
+    }
+    if let Some(content) = seed_file_content {
+        for line in content.lines() {
+            let line = line.trim();
+            if !line.is_empty() && !line.starts_with('#') {
+                urls.push(line.to_string());
+            }
+        }
+    }
+    if urls.is_empty() {
+        return Err("No URLs provided. Specify a URL argument or --seed-file.".to_string());
+    }
+    Ok(urls)
+}
+
+/// Parse the crawl poll response and classify its status.
+#[derive(Debug, PartialEq)]
+enum CrawlPollStatus {
+    /// Crawl completed successfully.
+    Done { pages_found: i64 },
+    /// Crawl failed with a terminal error.
+    Error { message: String },
+    /// Crawl is still in progress.
+    Running { pages_found: i64 },
+}
+
+fn parse_crawl_poll_response(parsed: &Value) -> CrawlPollStatus {
+    let status = parsed["status"].as_str().unwrap_or("");
+    let pages_found = parsed["pagesFound"].as_i64().unwrap_or(0);
+    let error = parsed["error"].as_str();
+
+    match status {
+        "OK" | "SC_OK" => CrawlPollStatus::Done { pages_found },
+        "SC_REQUEST_TIMEOUT" | "SC_INTERNAL_SERVER_ERROR" => {
+            CrawlPollStatus::Error {
+                message: error.unwrap_or("Unknown crawl error").to_string(),
+            }
+        }
+        _ => CrawlPollStatus::Running { pages_found },
+    }
+}
+
+/// Write crawl output string to either a file or return it for stdout display.
+/// Returns the written content when no output file is specified (caller prints),
+/// or a confirmation message when written to a file.
+#[derive(Debug)]
+enum CrawlOutput {
+    Stdout(String),
+    FileWritten { path: String, summary: String },
+}
+
+fn write_crawl_output(content: &str, output_file: Option<&str>, summary: &str) -> Result<CrawlOutput, String> {
+    if let Some(file_path) = output_file {
+        std::fs::write(file_path, content)
+            .map_err(|e| format!("Failed to write output file '{}': {}", file_path, e))?;
+        Ok(CrawlOutput::FileWritten {
+            path: file_path.to_string(),
+            summary: summary.to_string(),
+        })
+    } else {
+        Ok(CrawlOutput::Stdout(content.to_string()))
+    }
+}
+
 async fn handle_crawl(
     client: &Client,
     base_url: &str,
@@ -7728,23 +7800,16 @@ async fn handle_crawl(
         .get("seedFile")
         .and_then(|v| v.as_str());
 
-    let mut urls: Vec<String> = Vec::new();
-    if !url.is_empty() {
-        urls.push(url.to_string());
-    }
-    if let Some(file_path) = seed_file {
-        let content = std::fs::read_to_string(file_path)
-            .map_err(|e| format!("Failed to read seed file '{}': {}", file_path, e))?;
-        for line in content.lines() {
-            let line = line.trim();
-            if !line.is_empty() && !line.starts_with('#') {
-                urls.push(line.to_string());
-            }
+    let seed_content: Option<String> = match seed_file {
+        Some(file_path) => {
+            let content = std::fs::read_to_string(file_path)
+                .map_err(|e| format!("Failed to read seed file '{}': {}", file_path, e))?;
+            Some(content)
         }
-    }
-    if urls.is_empty() {
-        return Err("No URLs provided. Specify a URL argument or --seed-file.".to_string());
-    }
+        None => None,
+    };
+
+    let urls = resolve_crawl_urls(url, seed_content.as_deref())?;
 
     // ---- Resolve X-SQL query ----
     let use_sql_stdin = tool_params
@@ -7939,12 +8004,15 @@ async fn handle_crawl(
                         }
                     };
 
-                    if let Some(ref file_path) = output_file {
-                        std::fs::write(file_path, &extracted_output)
-                            .map_err(|e| format!("Failed to write output file '{}': {}", file_path, e))?;
-                        cli_println!("Results written to {}", file_path);
-                    } else {
-                        cli_println!("\n{}", extracted_output);
+                    let summary = format!("Results written");
+                    let output = write_crawl_output(&extracted_output, output_file, &summary)?;
+                    match output {
+                        CrawlOutput::FileWritten { path, .. } => {
+                            cli_println!("Results written to {}", path);
+                        }
+                        CrawlOutput::Stdout(content) => {
+                            cli_println!("\n{}", content);
+                        }
                     }
 
                     json_field("extracted", json!(all_extracted));
@@ -7974,13 +8042,15 @@ async fn handle_crawl(
                         }
                     }
                     let page_output = page_lines.join("\n");
-
-                    if let Some(ref file_path) = output_file {
-                        std::fs::write(file_path, &page_output)
-                            .map_err(|e| format!("Failed to write output file '{}': {}", file_path, e))?;
-                        cli_println!("\nCrawl completed. {} pages found. Results written to {}", page_count, file_path);
-                    } else {
-                        cli_println!("\n{}", page_output);
+                    let page_summary = format!("Crawl completed. {} pages found.", page_count);
+                    let output = write_crawl_output(&page_output, output_file, &page_summary)?;
+                    match output {
+                        CrawlOutput::FileWritten { path, .. } => {
+                            cli_println!("\nCrawl completed. {} pages found. Results written to {}", page_count, path);
+                        }
+                        CrawlOutput::Stdout(content) => {
+                            cli_println!("\n{}", content);
+                        }
                     }
                 }
 
@@ -17574,5 +17644,266 @@ mod tests {
         let timeout = crawl_request_timeout();
         // Falls back to 600 when parse fails
         assert_eq!(timeout, std::time::Duration::from_secs(600));
+    }
+
+    // -------------------------------------------------------------------
+    // resolve_crawl_urls tests
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn resolve_crawl_urls_direct_url_only() {
+        let urls = resolve_crawl_urls("https://example.com", None).unwrap();
+        assert_eq!(urls, vec!["https://example.com"]);
+    }
+
+    #[test]
+    fn resolve_crawl_urls_seed_file_only() {
+        let seed = "https://seed1.com\nhttps://seed2.com\n";
+        let urls = resolve_crawl_urls("", Some(seed)).unwrap();
+        assert_eq!(urls, vec!["https://seed1.com", "https://seed2.com"]);
+    }
+
+    #[test]
+    fn resolve_crawl_urls_direct_plus_seed_file() {
+        let seed = "https://seed1.com\n";
+        let urls = resolve_crawl_urls("https://direct.com", Some(seed)).unwrap();
+        assert_eq!(urls, vec!["https://direct.com", "https://seed1.com"]);
+    }
+
+    #[test]
+    fn resolve_crawl_urls_ignores_comments_and_blanks() {
+        let seed = "# this is a comment\n\nhttps://valid.com\n\n# another comment\nhttps://valid2.com\n\n";
+        let urls = resolve_crawl_urls("", Some(seed)).unwrap();
+        assert_eq!(urls, vec!["https://valid.com", "https://valid2.com"]);
+    }
+
+    #[test]
+    fn resolve_crawl_urls_trims_whitespace_in_lines() {
+        let seed = "  https://a.com  \n  https://b.com  ";
+        let urls = resolve_crawl_urls("", Some(seed)).unwrap();
+        assert_eq!(urls, vec!["https://a.com", "https://b.com"]);
+    }
+
+    #[test]
+    fn resolve_crawl_urls_direct_url_trims_self() {
+        // Direct URLs are used as-is (no trimming by this function —
+        // trimming happens at the caller level from tool_params).
+        // Just verify the function doesn't add extra trimming.
+        let urls = resolve_crawl_urls("https://with-spaces.com/page%20one", None).unwrap();
+        assert_eq!(urls, vec!["https://with-spaces.com/page%20one"]);
+    }
+
+    #[test]
+    fn resolve_crawl_urls_empty_direct_and_none_seed_errors() {
+        let result = resolve_crawl_urls("", None);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.contains("No URLs provided"), "got: {err}");
+    }
+
+    #[test]
+    fn resolve_crawl_urls_empty_seed_file_still_errors_when_no_direct_url() {
+        let result = resolve_crawl_urls("", Some(""));
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.contains("No URLs provided"), "got: {err}");
+    }
+
+    #[test]
+    fn resolve_crawl_urls_seed_with_only_comments_errors() {
+        let result = resolve_crawl_urls("", Some("# just a comment\n# another"));
+        assert!(result.is_err());
+    }
+
+    // -------------------------------------------------------------------
+    // parse_crawl_poll_response tests
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn parse_crawl_poll_response_ok() {
+        let response = json!({"status": "OK", "pagesFound": 5});
+        assert_eq!(
+            parse_crawl_poll_response(&response),
+            CrawlPollStatus::Done { pages_found: 5 }
+        );
+    }
+
+    #[test]
+    fn parse_crawl_poll_response_sc_ok() {
+        let response = json!({"status": "SC_OK", "pagesFound": 10});
+        assert_eq!(
+            parse_crawl_poll_response(&response),
+            CrawlPollStatus::Done { pages_found: 10 }
+        );
+    }
+
+    #[test]
+    fn parse_crawl_poll_response_timeout() {
+        let response = json!({"status": "SC_REQUEST_TIMEOUT", "error": "timed out"});
+        assert_eq!(
+            parse_crawl_poll_response(&response),
+            CrawlPollStatus::Error { message: "timed out".to_string() }
+        );
+    }
+
+    #[test]
+    fn parse_crawl_poll_response_internal_error() {
+        let response = json!({"status": "SC_INTERNAL_SERVER_ERROR", "error": "boom"});
+        assert_eq!(
+            parse_crawl_poll_response(&response),
+            CrawlPollStatus::Error { message: "boom".to_string() }
+        );
+    }
+
+    #[test]
+    fn parse_crawl_poll_response_error_without_message() {
+        let response = json!({"status": "SC_REQUEST_TIMEOUT"});
+        assert_eq!(
+            parse_crawl_poll_response(&response),
+            CrawlPollStatus::Error { message: "Unknown crawl error".to_string() }
+        );
+    }
+
+    #[test]
+    fn parse_crawl_poll_response_still_running() {
+        let response = json!({"status": "RUNNING", "pagesFound": 3});
+        assert_eq!(
+            parse_crawl_poll_response(&response),
+            CrawlPollStatus::Running { pages_found: 3 }
+        );
+    }
+
+    #[test]
+    fn parse_crawl_poll_response_unknown_status_treated_as_running() {
+        let response = json!({"status": "QUEUED", "pagesFound": 0});
+        assert_eq!(
+            parse_crawl_poll_response(&response),
+            CrawlPollStatus::Running { pages_found: 0 }
+        );
+    }
+
+    #[test]
+    fn parse_crawl_poll_response_empty_status_treated_as_running() {
+        let response = json!({});
+        assert_eq!(
+            parse_crawl_poll_response(&response),
+            CrawlPollStatus::Running { pages_found: 0 }
+        );
+    }
+
+    #[test]
+    fn parse_crawl_poll_response_zero_pages_done() {
+        let response = json!({"status": "OK", "pagesFound": 0});
+        assert_eq!(
+            parse_crawl_poll_response(&response),
+            CrawlPollStatus::Done { pages_found: 0 }
+        );
+    }
+
+    // -------------------------------------------------------------------
+    // write_crawl_output tests
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn write_crawl_output_stdout_returns_content() {
+        let result = write_crawl_output("hello world", None, "summary").unwrap();
+        match result {
+            CrawlOutput::Stdout(content) => assert_eq!(content, "hello world"),
+            _ => panic!("expected Stdout, got FileWritten"),
+        }
+    }
+
+    #[test]
+    fn write_crawl_output_file_writes_and_returns_path() {
+        let tmp = test_temp_dir();
+        let file_path = tmp.path().join("results.csv");
+        let path_str = file_path.to_string_lossy().to_string();
+
+        let result = write_crawl_output("col1,col2\n1,2", Some(&path_str), "2 rows").unwrap();
+        match result {
+            CrawlOutput::FileWritten { path, summary } => {
+                assert_eq!(path, path_str);
+                assert_eq!(summary, "2 rows");
+            }
+            _ => panic!("expected FileWritten"),
+        }
+
+        let file_content = std::fs::read_to_string(&file_path).unwrap();
+        assert_eq!(file_content, "col1,col2\n1,2");
+    }
+
+    #[test]
+    fn write_crawl_output_file_error_on_invalid_path() {
+        let result = write_crawl_output("data", Some("Z:/nonexistent/path/results.txt"), "summary");
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.contains("Failed to write output file"), "got: {err}");
+    }
+
+    // -------------------------------------------------------------------
+    // crawl list task filtering (unit-level)
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn crawl_list_filter_includes_only_crawl_tasks() {
+        // Simulates the filtering logic in handle_crawl_list without HTTP.
+        let tasks = vec![
+            state::AsyncTaskEntry {
+                task_id: "c1".to_string(),
+                command: "crawl".to_string(),
+                description: "https://a.com".to_string(),
+                submitted_at: "t1".to_string(),
+                last_status: "running".to_string(),
+            },
+            state::AsyncTaskEntry {
+                task_id: "a1".to_string(),
+                command: "agent".to_string(),
+                description: "task".to_string(),
+                submitted_at: "t2".to_string(),
+                last_status: "done".to_string(),
+            },
+            state::AsyncTaskEntry {
+                task_id: "s1".to_string(),
+                command: "swarm".to_string(),
+                description: "url".to_string(),
+                submitted_at: "t3".to_string(),
+                last_status: "done".to_string(),
+            },
+            state::AsyncTaskEntry {
+                task_id: "c2".to_string(),
+                command: "crawl".to_string(),
+                description: "https://b.com".to_string(),
+                submitted_at: "t4".to_string(),
+                last_status: "pending".to_string(),
+            },
+        ];
+
+        let filtered: Vec<_> = tasks
+            .iter()
+            .filter(|t| t.command == "crawl")
+            .cloned()
+            .collect();
+
+        assert_eq!(filtered.len(), 2);
+        assert_eq!(filtered[0].task_id, "c1");
+        assert_eq!(filtered[1].task_id, "c2");
+    }
+
+    #[test]
+    fn crawl_list_empty_when_no_crawl_tasks() {
+        let tasks = vec![state::AsyncTaskEntry {
+            task_id: "a1".to_string(),
+            command: "agent".to_string(),
+            description: "task".to_string(),
+            submitted_at: "t1".to_string(),
+            last_status: "done".to_string(),
+        }];
+
+        let filtered: Vec<_> = tasks
+            .iter()
+            .filter(|t| t.command == "crawl")
+            .collect();
+
+        assert!(filtered.is_empty());
     }
 }
