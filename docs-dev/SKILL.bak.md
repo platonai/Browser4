@@ -329,8 +329,7 @@ browser4-cli swarm submit https://example.com/direct \
   --deadline=2026-03-30T00:00:00Z \
   --expires=1d \
   --refresh \
-  --parse \
-  --store-content
+  --parse
 
 # 3) poll and fetch the result
 browser4-cli swarm status scrape-task-4
@@ -383,8 +382,7 @@ Notes:
 - `swarm query` accepts `--sql` (required), plus a URL, `--seed-file`, or both.
 - Seed files are plain text, one URL per line. Empty lines and lines beginning
   with `#` are ignored.
-- Load-option style flags (`--deadline`, `--expires`, `--refresh`, `--parse`,
-  `--store-content`) work with both `swarm submit` and `swarm query`.
+- Load-option style flags (`--deadline`, `--expires`, `--refresh`, `--parse`) work with both `swarm submit` and `swarm query`.
 - Capture the job ID printed by `swarm submit` or `swarm query`, then use
   `swarm status` and `swarm result` to follow the async job via
   `SwarmController.getStatus(id)` and `SwarmController.getResult(id)`.

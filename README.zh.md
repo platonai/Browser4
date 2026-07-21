@@ -306,7 +306,7 @@ summarize [instruction]   使用 AI 总结页面内容。--selector, --filename,
 swarm create          创建 swarm 抓取会话
                       --profile-mode, --max-open-tabs, --max-browser-contexts, --display-mode
 swarm submit [url]    将 URL 或 X-SQL 载荷提交为抓取任务
-                      --seed-file, --sql, --deadline, --expires, --refresh, --parse, --store-content
+                      --seed-file, --sql, --deadline, --expires, --refresh, --parse
 swarm query <url>     提交 X-SQL 查询，从已加载的网页中提取数据
                       --sql, --seed-file, --deadline, --expires, --refresh
 swarm status <id>     查看抓取任务的状态
@@ -324,7 +324,7 @@ crawl [url]     从某个 URL 或种子文件开始爬取网站，可选 X-SQL �
                 --format json|csv|table（默认：table）、--output (-o) file
                 --depth (-d，默认 1；0 = 不发现链接）、--out-link-selector (-ol)、
                 --out-link-pattern (-olp)、--top-links (-tl)、--args (-a)、
-                --refresh、--parse、--expires、--store-content、--priority (-p)、
+                --refresh、--parse、--expires、--priority (-p)、
                 --page-load-timeout、--ignore-url-query、--no-norm、--readonly
 ```
 
@@ -415,7 +415,7 @@ browser4-cli agent run "Search amazon for mechanical keyboards, compare the top 
 
 # 使用 swarm 进行并行抓取
 browser4-cli swarm create --max-open-tabs 12 --display-mode HEADLESS
-browser4-cli swarm submit --seed-file ./urls.txt --refresh --store-content
+browser4-cli swarm submit --seed-file ./urls.txt --refresh
 browser4-cli swarm result scrape-task-1
 
 # 批量执行多个命令

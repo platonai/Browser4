@@ -58,7 +58,7 @@ The session persists until `browser4-cli swarm close` or `close`.
 ### 2. Submit Scrape Jobs
 
 ```bash
-browser4-cli swarm submit <url> [--seed-file ./urls.txt] [--deadline ISO] [--expires 1d] [--refresh] [--parse] [--store-content] [--wait]
+browser4-cli swarm submit <url> [--seed-file ./urls.txt] [--deadline ISO] [--expires 1d] [--refresh] [--parse] [--wait]
 ```
 
 | Argument/Option | Description |
@@ -69,7 +69,6 @@ browser4-cli swarm submit <url> [--seed-file ./urls.txt] [--deadline ISO] [--exp
 | `--expires` | Cache expiration (e.g. `1d`, `1h`, `30m`) |
 | `--refresh` | Force fresh fetch, ignore cache |
 | `--parse` | Parse page immediately after fetching (required for later X-SQL queries) |
-| `--store-content` | Persist page content to backend storage |
 | `--wait` | Block until all submitted jobs complete (polls every 2s, 5-minute timeout) |
 
 > **Tip:** Use `--wait` to avoid manual polling for short-lived jobs. The CLI prints a progress summary when all jobs complete.

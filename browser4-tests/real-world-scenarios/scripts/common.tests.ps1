@@ -32,6 +32,19 @@ This prevents test state from leaking between test groups.
 
 $ErrorActionPreference = 'Stop'
 
+# Trap any terminating error so the failure details are visible in CI/test-runner
+# output.  Without this, an unhandled error silently kills the script with exit
+# code 1 and the runner only sees "(exit 1)" with no clue about what happened.
+trap {
+    Write-Host ''
+    Write-Host '══════════════════════════════════════════════════' -ForegroundColor Red
+    Write-Host "FATAL ERROR in common.tests.ps1" -ForegroundColor Red
+    Write-Host "  $_" -ForegroundColor Red
+    Write-Host "  $($_.InvocationInfo.PositionMessage.Trim())" -ForegroundColor Red
+    Write-Host "══════════════════════════════════════════════════" -ForegroundColor Red
+    exit 1
+}
+
 $script:TestsPassed  = 0
 $script:TestsFailed  = 0
 $script:TestsSkipped = 0
@@ -131,7 +144,7 @@ Write-Host '━━━ Mode Detection: Dev (default) ━━━' -ForegroundColor 
 
 & {
     # In dev mode, $browser4cliMode is not set.
-    Remove-Variable -Name 'browser4cliMode' -Scope Local -ErrorAction SilentlyContinue
+    $browser4cliMode = 'dev'
     . "$PSScriptRoot/common.ps1"
 
     Write-TestGroup '$helpCmd in dev mode'
@@ -203,7 +216,9 @@ Write-Host '━━━ Mode Detection: Edge Cases ━━━' -ForegroundColor Yel
 }
 
 & {
-    # Null or empty mode should fall back to dev.
+    # Null/empty should fall back to dev when no env var overrides it.
+    # Clear the env var so BROWSER4CLI_MODE does not mask the null check.
+    $env:BROWSER4CLI_MODE = $null
     $browser4cliMode = $null
     . "$PSScriptRoot/common.ps1"
 
@@ -220,7 +235,7 @@ Write-Host ''
 Write-Host '━━━ $generalPrompt (Dev Mode) ━━━' -ForegroundColor Yellow
 
 & {
-    Remove-Variable -Name 'browser4cliMode' -Scope Local -ErrorAction SilentlyContinue
+    $browser4cliMode = 'dev'
     . "$PSScriptRoot/common.ps1"
 
     Write-TestGroup 'existence and structure'
@@ -302,7 +317,7 @@ Write-Host ''
 Write-Host '━━━ Invoke-Agent: Signature ━━━' -ForegroundColor Yellow
 
 & {
-    Remove-Variable -Name 'browser4cliMode' -Scope Local -ErrorAction SilentlyContinue
+    $browser4cliMode = 'dev'
     . "$PSScriptRoot/common.ps1"
 
     Write-TestGroup 'function existence'
@@ -329,10 +344,20 @@ Write-Host '━━━ Invoke-Agent: Argument Forwarding ━━━' -ForegroundCo
 
 & {
     # Mock the native-command boundary to capture the arguments Invoke-Agent forwards.
+    # We mock BOTH Get-ScenarioAgent and Start-NativeCommand so the test never
+    # accidentally invokes a real agent CLI.  Relying on $script:scenarioAgentCli
+    # alone is fragile — if scope resolution fails, Get-ScenarioAgent falls
+    # through to Get-Command and may launch the real claude/kimi binary.
     $script:CapturedArgs = $null
 
-    Remove-Variable -Name 'browser4cliMode' -Scope Local -ErrorAction SilentlyContinue
+    $browser4cliMode = 'dev'
     . "$PSScriptRoot/common.ps1"
+
+    # Local variable controls the simulated backend.  Using a lexical variable
+    # (not $script:) avoids scope-resolution differences across PS versions.
+    $testAgentCli = 'claude'
+
+    function Get-ScenarioAgent { return $testAgentCli }
 
     function Start-NativeCommand {
         param(
@@ -347,9 +372,6 @@ Write-Host '━━━ Invoke-Agent: Argument Forwarding ━━━' -ForegroundCo
     }
 
     Write-TestGroup 'base arguments (without -Silent)'
-    # Force the claude backend so assertions are deterministic regardless of
-    # which agent CLIs are installed on the machine running the tests.
-    $script:scenarioAgentCli = 'claude'
     Invoke-Agent -Prompt 'test prompt'
     Assert-True 'claude was invoked' ($null -ne $script:CapturedArgs)
     Assert-Contains 'has --dangerously-skip-permissions' ($script:CapturedArgs -join ' ') `
@@ -369,7 +391,7 @@ Write-Host '━━━ Invoke-Agent: Argument Forwarding ━━━' -ForegroundCo
     Assert-True 'prompt follows -p flag' ($script:CapturedArgs[-2] -eq 'silent test')
 
     Write-TestGroup 'kimi backend'
-    $script:scenarioAgentCli = 'kimi'
+    $testAgentCli = 'kimi'
     $script:CapturedArgs = $null
     Invoke-Agent -Prompt 'kimi test'
     Assert-True 'kimi was invoked' ($null -ne $script:CapturedArgs)
@@ -384,9 +406,9 @@ Write-Host '━━━ Invoke-Agent: Argument Forwarding ━━━' -ForegroundCo
     Assert-NotContains 'kimi: --silent is never passed' ($script:CapturedArgs -join ' ') '--silent'
     Assert-True 'kimi: prompt value is the last argument' ($script:CapturedArgs[-1] -eq 'kimi silent')
 
-    # Clean up the mock and the forced backend so they do not leak.
-    Remove-Variable -Name 'scenarioAgentCli' -Scope Script -ErrorAction SilentlyContinue
+    # Clean up the mocks so they do not leak.
     Remove-Item function:Start-NativeCommand -ErrorAction SilentlyContinue
+    Remove-Item function:Get-ScenarioAgent -ErrorAction SilentlyContinue
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -397,7 +419,7 @@ Write-Host ''
 Write-Host '━━━ Invoke-Agent: Error Handling ━━━' -ForegroundColor Yellow
 
 & {
-    Remove-Variable -Name 'browser4cliMode' -Scope Local -ErrorAction SilentlyContinue
+    $browser4cliMode = 'dev'
     . "$PSScriptRoot/common.ps1"
 
     Write-TestGroup 'omitting -Prompt is a parameter binding error'
@@ -420,7 +442,7 @@ Write-Host '━━━ $ErrorActionPreference Side-Effect ━━━' -ForegroundC
     $originalEAP = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'  # change before dot-sourcing
 
-    Remove-Variable -Name 'browser4cliMode' -Scope Local -ErrorAction SilentlyContinue
+    $browser4cliMode = 'dev'
     . "$PSScriptRoot/common.ps1"
 
     Write-TestGroup 'sets ErrorActionPreference to Stop'
@@ -438,7 +460,7 @@ Write-Host ''
 Write-Host '━━━ Path Resolution ━━━' -ForegroundColor Yellow
 
 & {
-    Remove-Variable -Name 'browser4cliMode' -Scope Local -ErrorAction SilentlyContinue
+    $browser4cliMode = 'dev'
     . "$PSScriptRoot/common.ps1"
 
     Write-TestGroup '$script:IssuesReadyDir is an absolute path'
@@ -462,7 +484,7 @@ Write-Host ''
 Write-Host '━━━ Invoke-Agent New Parameters ━━━' -ForegroundColor Yellow
 
 & {
-    Remove-Variable -Name 'browser4cliMode' -Scope Local -ErrorAction SilentlyContinue
+    $browser4cliMode = 'dev'
     . "$PSScriptRoot/common.ps1"
 
     $funcInfo = Get-Command Invoke-Agent -ErrorAction SilentlyContinue
@@ -496,7 +518,7 @@ Write-Host ''
 Write-Host '━━━ ConvertFrom-IssuesSection ━━━' -ForegroundColor Yellow
 
 & {
-    Remove-Variable -Name 'browser4cliMode' -Scope Local -ErrorAction SilentlyContinue
+    $browser4cliMode = 'dev'
     . "$PSScriptRoot/common.ps1"
 
     Write-TestGroup 'Returns empty array for non-matching input'
@@ -724,7 +746,7 @@ Write-Host ''
 Write-Host '━━━ Write-IssuesToReadyQueue ━━━' -ForegroundColor Yellow
 
 & {
-    Remove-Variable -Name 'browser4cliMode' -Scope Local -ErrorAction SilentlyContinue
+    $browser4cliMode = 'dev'
     . "$PSScriptRoot/common.ps1"
 
     # Use a temp directory to avoid polluting the real ready queue
@@ -823,7 +845,7 @@ Write-Host ''
 Write-Host '━━━ Invoke-Agent Backward Compatibility ━━━' -ForegroundColor Yellow
 
 & {
-    Remove-Variable -Name 'browser4cliMode' -Scope Local -ErrorAction SilentlyContinue
+    $browser4cliMode = 'dev'
     . "$PSScriptRoot/common.ps1"
 
     Write-TestGroup 'Legacy path: with no ScenarioName and no OutputFile, function exists'
@@ -862,7 +884,7 @@ Write-Host ''
 Write-Host '━━━ Read-TaskFile ━━━' -ForegroundColor Yellow
 
 & {
-    Remove-Variable -Name 'browser4cliMode' -Scope Local -ErrorAction SilentlyContinue
+    $browser4cliMode = 'dev'
     . "$PSScriptRoot/common.ps1"
 
     # Use a temp directory to avoid polluting the real tasks/ directory
@@ -951,7 +973,7 @@ Write-Host ''
 Write-Host '━━━ Resolve-TaskFilePath ━━━' -ForegroundColor Yellow
 
 & {
-    Remove-Variable -Name 'browser4cliMode' -Scope Local -ErrorAction SilentlyContinue
+    $browser4cliMode = 'dev'
     . "$PSScriptRoot/common.ps1"
 
     # Model the production layout: scripts/ and tasks/ are siblings.
@@ -1032,7 +1054,7 @@ Write-Host ''
 Write-Host '━━━ Resolve-TaskNames ━━━' -ForegroundColor Yellow
 
 & {
-    Remove-Variable -Name 'browser4cliMode' -Scope Local -ErrorAction SilentlyContinue
+    $browser4cliMode = 'dev'
     . "$PSScriptRoot/common.ps1"
 
     $discovered = @('amazon.md', 'hacker-news.md', 'search-summary.md', 'form-filling.md')
@@ -1083,7 +1105,7 @@ Write-Host ''
 Write-Host '━━━ Test-TaskCategory ━━━' -ForegroundColor Yellow
 
 & {
-    Remove-Variable -Name 'browser4cliMode' -Scope Local -ErrorAction SilentlyContinue
+    $browser4cliMode = 'dev'
     . "$PSScriptRoot/common.ps1"
 
     # Build platform-appropriate paths for testing

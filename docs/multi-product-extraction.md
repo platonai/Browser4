@@ -113,7 +113,7 @@ re-fetching is expensive.
 ```bash
 # Phase 1 — fetch and parse all detail pages
 browser4-cli swarm create --display-mode HEADLESS
-browser4-cli swarm submit --seed-file urls.txt --parse --store-content --refresh
+browser4-cli swarm submit --seed-file urls.txt --parse --refresh
 
 # Phase 2 — run X-SQL extraction against the cached pages
 # (can iterate on this without re-fetching)
@@ -124,7 +124,7 @@ browser4-cli swarm result scrape-task-2
 | Pros | Cons |
 |---|---|
 | Decoupled fetch/extract — iterate on query without re-fetching | Two steps instead of one |
-| `--store-content` persists pages for re-querying | Overkill for <20 URLs |
+| Pages are persisted for re-querying by default | Overkill for <20 URLs |
 | Avoids rate-limiting during query development | |
 
 **Best for:** 100+ URLs on rate-limited sites, or when iterating on selectors.

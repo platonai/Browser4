@@ -2148,7 +2148,6 @@ pub(super) fn test_swarm_submission_commands(ctx: &mut E2ECtx) {
             "--expires=1d",
             "--refresh",
             "--parse",
-            "--store-content",
         ],
     );
     assert!(
@@ -2436,7 +2435,6 @@ pub(super) fn test_crawl_submission_commands(ctx: &mut E2ECtx) {
             "--depth=2",
             "--refresh",
             "--parse",
-            "--store-content",
         ],
     );
     assert!(

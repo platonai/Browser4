@@ -772,7 +772,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push(String::new());
         lines.push("Examples:".to_string());
         lines.push(
-            "  browser4-cli swarm submit https://example.com/direct --seed-file ./swarm-seeds.txt --deadline 2026-03-30T00:00:00Z --expires 1d --refresh --store-content"
+            "  browser4-cli swarm submit https://example.com/direct --seed-file ./swarm-seeds.txt --deadline 2026-03-30T00:00:00Z --expires 1d --refresh"
                 .to_string(),
         );
         lines.push(String::new());
@@ -982,7 +982,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(
-            "  - Boolean flags --refresh, --parse, --store-content, --ignore-url-query, --no-norm, --readonly control fetch behavior."
+            "  - Boolean flags --refresh, --parse, --ignore-url-query, --no-norm, --readonly control fetch behavior."
                 .to_string(),
         );
         lines.push(
@@ -997,7 +997,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("Examples:".to_string());
         lines.push("  browser4-cli crawl https://example.com".to_string());
         lines.push("  browser4-cli crawl https://example.com -d 2 -ol \"a.product\" -olp \"/product/\"".to_string());
-        lines.push("  browser4-cli crawl https://example.com --depth 3 --refresh --store-content".to_string());
+        lines.push("  browser4-cli crawl https://example.com --depth 3 --refresh".to_string());
         lines.push("  browser4-cli crawl --seed-file urls.txt --depth 0 --refresh".to_string());
         lines.push("  browser4-cli crawl --seed-file urls.txt --sql @extract.sql --format csv -o results.csv".to_string());
         lines.push("  browser4-cli crawl --seed-file urls.txt --sql-stdin --format table < query.sql".to_string());
@@ -2120,7 +2120,7 @@ mod tests {
         assert!(help.contains("--priority"));
         // Examples
         assert!(help.contains("browser4-cli crawl https://example.com"));
-        assert!(help.contains("--depth 3 --refresh --store-content"));
+        assert!(help.contains("--depth 3 --refresh"));
         assert!(help.contains("--seed-file urls.txt --depth 0"));
         assert!(help.contains("--sql @extract.sql --format csv -o results.csv"));
         assert!(help.contains("--sql-stdin --format table"));

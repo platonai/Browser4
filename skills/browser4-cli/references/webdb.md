@@ -102,7 +102,7 @@ Returns the normalized URL string.  Normalization includes:
 ### Export all pages after a crawl
 
 ```bash
-browser4-cli crawl --seed-file urls.txt --depth 0 --store-content
+browser4-cli crawl --seed-file urls.txt --depth 0
 browser4-cli webdb-export "*" ./crawl-output
 ```
 
@@ -138,7 +138,7 @@ echo "Exported $succeeded pages ($failed failed)"
 | `Missing required parameter 'urls'` | No URLs argument provided | Pass comma-separated URLs or `"*"` |
 | `Missing required parameter 'outputDir'` | No output directory provided | Pass an output directory path |
 | `Session not found` | No active browser session | Run `goto <any-url>` or `open` first |
-| `Page not found in webdb` | URL was never fetched or cache expired | Run `goto <url>` with `--store-content` first, or use `--refresh` on the crawl |
+| `Page not found in webdb` | URL was never fetched or cache expired | Run `goto <url>` first, or use `--refresh` on the crawl |
 | `No URLs provided` | Empty URL list or `*` matched nothing | Verify pages were cached (check crawl output) |
 
 ## How it compares to other export mechanisms

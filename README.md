@@ -303,7 +303,7 @@ Orchestrate parallel scraping across multiple browser contexts. The `co` prefix 
 swarm create          Create a swarm scrape session
                       --profile-mode, --max-open-tabs, --max-browser-contexts, --display-mode
 swarm submit [url]    Submit URLs or X-SQL payloads as scrape jobs
-                      --seed-file, --sql, --deadline, --expires, --refresh, --parse, --store-content
+                      --seed-file, --sql, --deadline, --expires, --refresh, --parse
 swarm query <url>     Submit an X-SQL query to extract data from a loaded webpage
                       --sql, --seed-file, --deadline, --expires, --refresh
 swarm status <id>     Check the status of a scrape job
@@ -321,7 +321,7 @@ crawl [url]     Crawl a website from a URL or seed file, with optional X-SQL ext
                 --format json|csv|table (default: table), --output (-o) file
                 --depth (-d, default 1; 0 = no link discovery), --out-link-selector (-ol),
                 --out-link-pattern (-olp), --top-links (-tl), --args (-a),
-                --refresh, --parse, --expires, --store-content, --priority (-p),
+                --refresh, --parse, --expires, --priority (-p),
                 --page-load-timeout, --ignore-url-query, --no-norm, --readonly
 ```
 
@@ -412,7 +412,7 @@ browser4-cli agent run "Search amazon for mechanical keyboards, compare the top 
 
 # Parallel scraping with swarm
 browser4-cli swarm create --max-open-tabs 12 --display-mode HEADLESS
-browser4-cli swarm submit --seed-file ./urls.txt --refresh --store-content
+browser4-cli swarm submit --seed-file ./urls.txt --refresh
 browser4-cli swarm result scrape-task-1
 
 # Batch multiple commands

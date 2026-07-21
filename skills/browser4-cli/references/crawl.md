@@ -118,7 +118,6 @@ browser4-cli crawl --seed-file urls.txt --depth 0 --sql "
 | `--refresh` | | bool | Force fresh fetch (ignore cache) |
 | `--parse` | | bool | Parse pages after fetch |
 | `--expires` | | string | Cache TTL: `1d`, `1h`, `30m`, etc. |
-| `--store-content` | | bool | Persist page content to storage |
 | `--priority` | `-p` | int | Queue priority (lower = higher priority) |
 | `--page-load-timeout` | | string | Max wait for each page load |
 | `--ignore-url-query` | | bool | Strip query params from URLs |

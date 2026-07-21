@@ -11,7 +11,6 @@ Before running this scenario, ensure MockSite is running on localhost:18080 (`./
    - `--refresh` to force fresh fetches
    - `--parse` to enable parsing
    - `--expires 1h` to set cache duration
-   - `--store-content` to persist the fetched HTML
    - `--priority` set to a high value (low number) for urgent processing
    - `--page-load-timeout 30s` for a reasonable timeout
 4. Run the same crawl but with `--background` for asynchronous execution. Note the task ID.

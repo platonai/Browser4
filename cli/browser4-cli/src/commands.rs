@@ -2359,7 +2359,6 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "expires", description: "Cache expiration duration (e.g. 1d, 1h)", is_bool: false, short: None },
                 OptionDef { name: "refresh", description: "Force a fresh fetch, ignoring cache", is_bool: true, short: None },
                 OptionDef { name: "parse", description: "Parse page immediately after fetching", is_bool: true, short: None },
-                OptionDef { name: "store-content", description: "Persist page content to storage", is_bool: true, short: None },
                 OptionDef { name: "wait", description: "Block until all submitted jobs complete", is_bool: true, short: None },
             ],
             e2e_coverage: E2eCoverage::Tested,
@@ -2373,7 +2372,6 @@ pub fn all_commands() -> Vec<CommandDef> {
                 if let Some(v) = get_opt_str(args, "expires") { p["expires"] = json!(v); }
                 if let Some(b) = get_bool(args, "refresh") { p["refresh"] = json!(b); }
                 if let Some(b) = get_bool(args, "parse") { p["parse"] = json!(b); }
-                if let Some(b) = get_bool(args, "store-content") { p["storeContent"] = json!(b); }
                 if let Some(b) = get_bool(args, "wait") { p["wait"] = json!(b); }
                 p
             },
@@ -2498,7 +2496,6 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "refresh", description: "Force a fresh fetch, ignoring cache", is_bool: true, short: None },
                 OptionDef { name: "parse", description: "Parse each page immediately after fetching", is_bool: true, short: None },
                 OptionDef { name: "expires", description: "Cache expiration duration (e.g. 1d, 1h, 30m)", is_bool: false, short: None },
-                OptionDef { name: "store-content", description: "Persist page content to storage", is_bool: true, short: None },
                 OptionDef { name: "priority", description: "Queue priority (lower = higher priority)", is_bool: false, short: Some("p") },
                 OptionDef { name: "page-load-timeout", description: "Maximum time to wait for page load", is_bool: false, short: None },
                 OptionDef { name: "ignore-url-query", description: "Remove query parameters from URLs during normalization", is_bool: true, short: None },
@@ -2559,9 +2556,6 @@ pub fn all_commands() -> Vec<CommandDef> {
                 }
                 if let Some(true) = get_bool(args, "parse") {
                     load_opts.push("-parse".to_string());
-                }
-                if let Some(true) = get_bool(args, "store-content") {
-                    load_opts.push("-storeContent".to_string());
                 }
                 if let Some(true) = get_bool(args, "ignore-url-query") {
                     load_opts.push("-ignoreUrlQuery".to_string());
@@ -3680,12 +3674,10 @@ mod tests {
         args.insert("url".to_string(), json!("https://example.com"));
         args.insert("refresh".to_string(), json!(true));
         args.insert("parse".to_string(), json!(true));
-        args.insert("store-content".to_string(), json!(true));
         args.insert("expires".to_string(), json!("1d"));
         let params = (cmd.tool_params_fn)(&args);
         assert_eq!(params["refresh"], true);
         assert_eq!(params["parse"], true);
-        assert_eq!(params["storeContent"], true);
         assert_eq!(params["expires"], "1d");
     }
 
@@ -5068,14 +5060,12 @@ mod tests {
         args.insert("url".to_string(), json!("https://example.com"));
         args.insert("refresh".to_string(), json!(true));
         args.insert("parse".to_string(), json!(true));
-        args.insert("store-content".to_string(), json!(true));
         args.insert("ignore-url-query".to_string(), json!(true));
         args.insert("readonly".to_string(), json!(true));
         let params = (cmd.tool_params_fn)(&args);
         let args_str = params["args"].as_str().unwrap_or("");
         assert!(args_str.contains("-refresh"));
         assert!(args_str.contains("-parse"));
-        assert!(args_str.contains("-storeContent"));
         assert!(args_str.contains("-ignoreUrlQuery"));
         assert!(args_str.contains("-readonly"));
     }

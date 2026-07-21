@@ -88,7 +88,7 @@ browser4-cli agent run "Search amazon for mechanical keyboards, compare the top 
 
 # Parallel scraping with swarm
 browser4-cli swarm create --max-open-tabs 12 --display-mode HEADLESS
-browser4-cli swarm submit --seed-file ./urls.txt --refresh --store-content
+browser4-cli swarm submit --seed-file ./urls.txt --refresh
 browser4-cli swarm result scrape-task-1
 
 # Batch multiple commands
@@ -739,13 +739,12 @@ line; `#` comments and blank lines ignored), or both.
 | `--expires <duration>` | Cache expiration (e.g. `1d`, `1h`) |
 | `--refresh` | Force fresh fetch, ignore cache |
 | `--parse` | Parse page immediately after fetching |
-| `--store-content` | Persist page content to storage |
 
 ```bash
 # Submit URLs from a file
 browser4-cli swarm submit --seed-file ./urls.txt \
   --deadline 2026-03-30T00:00:00Z \
-  --expires 1d --refresh --store-content
+  --expires 1d --refresh
 
 # Submit with inline X-SQL
 browser4-cli swarm submit "https://www.amazon.com/dp/B08PP5MSVB" --sql "
@@ -804,7 +803,6 @@ browser4-cli crawl <url> [options]
 | `-a`, `--args` | — | Additional LoadOptions passthrough (e.g. `-a "-nMaxRetry 5"`) |
 | `--refresh` | — | Force fresh fetch |
 | `--parse` | — | Parse pages immediately after fetching |
-| `--store-content` | — | Persist page content |
 | `--expires` | — | Cache expiration (e.g. `1d`, `1h`, `30m`) |
 | `-p`, `--priority` | — | Queue priority (lower = higher) |
 | `--ignore-url-query` | — | Strip query params during URL normalization |
@@ -825,7 +823,7 @@ browser4-cli crawl "https://shop.example.com" \
   --top-links 10
 
 # Deep crawl with refresh and content storage
-browser4-cli crawl "https://example.com" --depth 3 --refresh --store-content
+browser4-cli crawl "https://example.com" --depth 3 --refresh
 
 # Background crawl — submit and return immediately
 browser4-cli crawl "https://example.com" -ol "a[href]" --background

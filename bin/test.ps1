@@ -610,6 +610,14 @@ function Invoke-PowerShellTests([string[]]$additionalArgs) {
 
     Write-CommandBanner -Label "Running $($testFiles.Count) PowerShell test file(s)..."
 
+    # ── Ensure UTF-8 encoding when capturing child pwsh output ────────────
+    # Child test processes output Unicode (emoji, box-drawing chars) via
+    # Write-Host.  On Windows the default console encoding is the system
+    # OEM code page, which cannot decode UTF-8 bytes and produces garbled
+    # text like "馃Ч" instead of "🧹".  Align with what the children write.
+    $originalOutputEncoding = [Console]::OutputEncoding
+    [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+
     $pesterAvailable = $null
     try {
         $pesterAvailable = Get-Module -ListAvailable -Name Pester -ErrorAction SilentlyContinue |
@@ -708,11 +716,32 @@ function Invoke-PowerShellTests([string[]]$additionalArgs) {
                     Write-Host "      ... and $($failLines.Count - $maxShow) more failure line(s)" -ForegroundColor DarkGray
                 }
             } else {
-                # No explicit assertion-failure lines found — show tail of output
-                $tail = @($rawOutput | Where-Object { $_ -is [string] } | Select-Object -Last 15)
-                if ($tail.Count -gt 0) {
-                    Write-Host "    ── Last output lines (no FAIL markers found) ──" -ForegroundColor DarkYellow
-                    $tail | ForEach-Object { Write-Host "      $_" -ForegroundColor DarkGray }
+                # No explicit assertion-failure lines found.  Look for PowerShell
+                # terminating-error markers (trap output, exception messages,
+                # position pointers) before falling back to the output tail.
+                $errorLines = @($rawOutput | Where-Object {
+                    $_ -is [string] -and (
+                        $_ -match 'FATAL ERROR' -or
+                        $_ -match '^\s*At\s+\S+:\d+\s+char:\d+' -or
+                        $_ -match 'Exception\s*:' -or
+                        $_ -match '^\s*\+\s+CategoryInfo' -or
+                        $_ -match 'FullyQualifiedErrorId'
+                    )
+                })
+                if ($errorLines.Count -gt 0) {
+                    Write-Host "    ── Error details ──" -ForegroundColor DarkYellow
+                    $errorLines | ForEach-Object {
+                        Write-Host "      $_" -ForegroundColor DarkYellow
+                    }
+                } else {
+                    # No structured error found — show last 50 lines of output
+                    # (upped from 15: long test files like common.tests.ps1 need
+                    # more context to surface the cause of a non-zero exit).
+                    $tail = @($rawOutput | Where-Object { $_ -is [string] } | Select-Object -Last 50)
+                    if ($tail.Count -gt 0) {
+                        Write-Host "    ── Last output lines (no FAIL/error markers found) ──" -ForegroundColor DarkYellow
+                        $tail | ForEach-Object { Write-Host "      $_" -ForegroundColor DarkGray }
+                    }
                 }
             }
         }
@@ -747,6 +776,9 @@ function Invoke-PowerShellTests([string[]]$additionalArgs) {
             -PerFileResults $perFileResults.ToArray() `
             -SessionPath $script:SessionPath
     }
+
+    # Restore the console encoding we saved before running child processes.
+    [Console]::OutputEncoding = $originalOutputEncoding
 
     if ($failed.Count -gt 0) { exit 1 }
 }
