@@ -1291,4 +1291,130 @@ mod tests {
     fn crawl_request_timeout_default_10_minutes() {
         assert_eq!(CRAWL_REQUEST_TIMEOUT_SECS, 600);
     }
+
+    // -------------------------------------------------------------------
+    // swarm REST endpoint tests
+    // -------------------------------------------------------------------
+
+    /// Spawn a TCP server that doubles as a lightweight swarm REST mock.
+    /// Returns the base URL to use.
+    fn spawn_swarm_mock_server(expected_path: &'static str, response_body: &'static str) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind swarm mock server");
+        let addr = listener.local_addr().expect("read swarm mock server addr");
+
+        thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept swarm test connection");
+            stream
+                .set_read_timeout(Some(std::time::Duration::from_secs(2)))
+                .ok();
+
+            let mut buffer = [0_u8; 8192];
+            let n = stream.read(&mut buffer).unwrap_or(0);
+            let request = String::from_utf8_lossy(&buffer[..n]);
+
+            // Only respond if the request targets the expected path
+            if request.contains(expected_path) {
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    response_body.len(),
+                    response_body
+                );
+                let _ = stream.write_all(response.as_bytes());
+                let _ = stream.flush();
+            } else {
+                // Return 404 for unexpected paths
+                let body = r#"{"error":"not found"}"#;
+                let response = format!(
+                    "HTTP/1.1 404 Not Found\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = stream.write_all(response.as_bytes());
+                let _ = stream.flush();
+            }
+        });
+
+        format!("http://{}", addr)
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn test_submit_swarm_payload_returns_task_id() {
+        let base_url = spawn_swarm_mock_server("/api/swarm/submit", r#""swarm-task-42""#);
+        let client = make_client();
+
+        let result = submit_swarm_payload(&client, &base_url, "https://example.com -parse")
+            .await
+            .expect("submit_swarm_payload should succeed");
+
+        assert_eq!(result, r#""swarm-task-42""#);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn test_submit_swarm_query_returns_task_id() {
+        let base_url = spawn_swarm_mock_server("/api/swarm/query", r#""swarm-task-99""#);
+        let client = make_client();
+
+        let result = submit_swarm_query(
+            &client,
+            &base_url,
+            json!({"url": "https://example.com", "args": "-parse", "query": "SELECT 1"}),
+        )
+        .await
+        .expect("submit_swarm_query should succeed");
+
+        assert_eq!(result, r#""swarm-task-99""#);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn test_get_swarm_status_returns_status_json() {
+        let status_json = r#"{"id":"swarm-task-1","statusCode":102,"isDone":false,"status":"Processing"}"#;
+        let base_url = spawn_swarm_mock_server("/api/swarm/swarm-task-1/status", status_json);
+        let client = make_client();
+
+        let result = get_swarm_status(&client, &base_url, "swarm-task-1")
+            .await
+            .expect("get_swarm_status should succeed");
+
+        let parsed: Value = serde_json::from_str(&result).expect("should be valid JSON");
+        assert_eq!(parsed["id"], "swarm-task-1");
+        assert_eq!(parsed["isDone"], false);
+        assert_eq!(parsed["status"], "Processing");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn test_get_swarm_result_returns_result_json() {
+        let result_json = r#"{"id":"swarm-task-7","statusCode":200,"isDone":true,"resultSet":[{"url":"https://example.com"}],"status":"OK"}"#;
+        let base_url = spawn_swarm_mock_server("/api/swarm/swarm-task-7/result", result_json);
+        let client = make_client();
+
+        let result = get_swarm_result(&client, &base_url, "swarm-task-7")
+            .await
+            .expect("get_swarm_result should succeed");
+
+        let parsed: Value = serde_json::from_str(&result).expect("should be valid JSON");
+        assert_eq!(parsed["id"], "swarm-task-7");
+        assert_eq!(parsed["isDone"], true);
+        assert!(
+            parsed["resultSet"].as_array().is_some_and(|a| a.len() == 1),
+            "expected resultSet with 1 entry, got: {:?}",
+            parsed["resultSet"]
+        );
+    }
+
+    #[test]
+    fn test_swarm_endpoint_url_construction() {
+        // Verify that build_endpoint_url handles the swarm API paths correctly
+        assert_eq!(
+            build_endpoint_url("http://127.0.0.1:8080", "/api/swarm/submit"),
+            "http://127.0.0.1:8080/api/swarm/submit"
+        );
+        assert_eq!(
+            build_endpoint_url("http://127.0.0.1:8080/", "/api/swarm/swarm-task-1/status"),
+            "http://127.0.0.1:8080/api/swarm/swarm-task-1/status"
+        );
+        assert_eq!(
+            build_endpoint_url("http://127.0.0.1:8080", "/api/swarm/swarm-task-1/result"),
+            "http://127.0.0.1:8080/api/swarm/swarm-task-1/result"
+        );
+    }
 }

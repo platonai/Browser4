@@ -2409,6 +2409,165 @@ pub(super) fn test_swarm_command_help_and_validation(ctx: &mut E2ECtx) {
     );
 }
 
+pub(super) fn test_swarm_status_validation_missing_id(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    let mock_server = MockBrowser4Server::start();
+    ctx.browser4_base_url = mock_server.base_url();
+
+    // The arg parser catches missing required positional args before the
+    // handler runs — verify the CLI rejects `swarm status` with no ID.
+    let failure = run_command_expecting_failure(
+        ctx,
+        &["swarm", "status"],
+        "Missing required argument",
+    );
+    let output = format!("{}\n{}", failure.stdout, failure.stderr);
+    assert!(
+        output.contains("Missing required argument"),
+        "Expected swarm-status arg-parser validation error in:\n{}",
+        output
+    );
+    // Verify no HTTP requests were made to the mock
+    let snapshot = mock_server.snapshot();
+    assert!(
+        snapshot.status_queries.is_empty(),
+        "Expected no status queries for missing-ID validation, got {:?}",
+        snapshot.status_queries
+    );
+}
+
+pub(super) fn test_swarm_result_validation_missing_id(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    let mock_server = MockBrowser4Server::start();
+    ctx.browser4_base_url = mock_server.base_url();
+
+    // The arg parser catches missing required positional args before the
+    // handler runs — verify the CLI rejects `swarm result` with no ID.
+    let failure = run_command_expecting_failure(
+        ctx,
+        &["swarm", "result"],
+        "Missing required argument",
+    );
+    let output = format!("{}\n{}", failure.stdout, failure.stderr);
+    assert!(
+        output.contains("Missing required argument"),
+        "Expected swarm-result arg-parser validation error in:\n{}",
+        output
+    );
+    // Verify no HTTP requests were made to the mock
+    let snapshot = mock_server.snapshot();
+    assert!(
+        snapshot.result_queries.is_empty(),
+        "Expected no result queries for missing-ID validation, got {:?}",
+        snapshot.result_queries
+    );
+}
+
+pub(super) fn test_swarm_query_validation_errors(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    // Validation 1: Missing URL — the arg parser catches this since <url>
+    // is a required positional argument (optional: false).
+    let failure = run_command_expecting_failure(
+        ctx,
+        &["swarm", "query", "--sql=SELECT 1"],
+        "Missing required argument",
+    );
+    let output = format!("{}\n{}", failure.stdout, failure.stderr);
+    assert!(
+        output.contains("Missing required argument"),
+        "Expected swarm-query missing-URL arg-parser validation in:\n{}",
+        output
+    );
+
+    // Validation 2: Missing --sql requires a mock server to establish
+    // a swarm session before the handler validates the SQL requirement.
+    let mock_server = start_mock_swarm_session(ctx);
+    assert_swarm_session_call(&mock_server);
+
+    let failure = run_command_expecting_failure(
+        ctx,
+        &["swarm", "query", "https://example.com"],
+        "--sql is required",
+    );
+    let output = format!("{}\n{}", failure.stdout, failure.stderr);
+    assert!(
+        output.contains("--sql is required"),
+        "Expected swarm-query missing-SQL validation in:\n{}",
+        output
+    );
+
+    // Verify no HTTP requests were made for the validation (it should
+    // fail before reaching the REST layer).
+    let snapshot = mock_server.snapshot();
+    assert!(
+        snapshot.swarm_queries.is_empty(),
+        "Expected no swarm query submissions for SQL validation, got {:?}",
+        snapshot.swarm_queries
+    );
+}
+
+pub(super) fn test_swarm_list_and_clear(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    let mock_server = start_mock_swarm_session(ctx);
+    assert_swarm_session_call(&mock_server);
+
+    // Submit a task so there's something to list
+    run_command(
+        ctx,
+        &["swarm", "submit", "https://example.com/list-test"],
+    );
+
+    // List should show the submitted task
+    let list_result = run_command(ctx, &["swarm", "list"]);
+    assert!(
+        list_result.stdout.contains("swarm"),
+        "Expected swarm list to contain 'swarm' in:\n{}",
+        list_result.stdout
+    );
+
+    // Clear the tracked swarm tasks
+    let clear_result = run_command(ctx, &["swarm", "list", "--clear"]);
+    let clear_output = strip_snapshot_output(&clear_result.stdout);
+    assert!(
+        clear_output.contains("Cleared"),
+        "Expected clear confirmation in:\n{}",
+        clear_result.stdout
+    );
+
+    // After clearing, list should show no swarm tasks
+    let list_after = run_command(ctx, &["swarm", "list"]);
+    let list_after_output = strip_snapshot_output(&list_after.stdout);
+    assert!(
+        list_after_output.contains("No tracked async tasks")
+            || !list_after_output.contains("swarm-task-"),
+        "Expected empty swarm list after clear in:\n{}",
+        list_after.stdout
+    );
+}
+
+pub(super) fn test_swarm_close_session(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    let mock_server = start_mock_swarm_session(ctx);
+    assert_swarm_session_call(&mock_server);
+
+    let close_result = run_command(ctx, &["swarm", "close"]);
+    let close_output = strip_snapshot_output(&close_result.stdout);
+    assert!(
+        close_output.contains("Session closed") || close_output.contains("SWARM"),
+        "Expected session-close confirmation in:\n{}",
+        close_result.stdout
+    );
+
+    let snapshot = mock_server.snapshot();
+    assert_eq!(
+        snapshot.close_session_calls,
+        vec!["SWARM".to_string()],
+        "Expected close_session call with SWARM session ID, got {:?}",
+        snapshot.close_session_calls
+    );
+}
+
 // ---------------------------------------------------------------------------
 // crawl tests
 // ---------------------------------------------------------------------------

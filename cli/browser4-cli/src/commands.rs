@@ -3702,6 +3702,105 @@ mod tests {
     }
 
     #[test]
+    fn test_swarm_query_tool_name_and_params() {
+        let map = commands_map();
+        let cmd = map.get("swarm-query").unwrap();
+        let mut args = HashMap::new();
+        args.insert("url".to_string(), json!("https://example.com"));
+        args.insert("sql".to_string(), json!("SELECT * FROM page"));
+        args.insert("deadline".to_string(), json!("2026-02-24T23:59:59Z"));
+        args.insert("expires".to_string(), json!("1d"));
+        args.insert("refresh".to_string(), json!(true));
+        assert_eq!((cmd.tool_name_fn)(&args), "swarm_query");
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["url"], "https://example.com");
+        assert_eq!(params["sql"], "SELECT * FROM page");
+        assert_eq!(params["deadline"], "2026-02-24T23:59:59Z");
+        assert_eq!(params["expires"], "1d");
+        assert_eq!(params["refresh"], true);
+    }
+
+    #[test]
+    fn test_swarm_query_with_sql_stdin_and_base64() {
+        let map = commands_map();
+        let cmd = map.get("swarm-query").unwrap();
+        let mut args = HashMap::new();
+        args.insert("url".to_string(), json!("https://example.com"));
+        args.insert("sql-stdin".to_string(), json!(true));
+        args.insert("sql-base64".to_string(), json!("U0VMRUNUICogRlJPTSBwYWdl"));
+        args.insert("seed-file".to_string(), json!("urls.txt"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["url"], "https://example.com");
+        assert_eq!(params["sqlStdin"], true);
+        assert_eq!(params["sqlBase64"], "U0VMRUNUICogRlJPTSBwYWdl");
+        assert_eq!(params["seedFile"], "urls.txt");
+    }
+
+    #[test]
+    fn test_swarm_query_sql_base64_bool_true() {
+        let map = commands_map();
+        let cmd = map.get("swarm-query").unwrap();
+        let mut args = HashMap::new();
+        args.insert("url".to_string(), json!("https://example.com"));
+        args.insert("sql-base64".to_string(), json!(true));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["sqlBase64"], true);
+    }
+
+    #[test]
+    fn test_swarm_query_with_wait_flag() {
+        let map = commands_map();
+        let cmd = map.get("swarm-query").unwrap();
+        let mut args = HashMap::new();
+        args.insert("url".to_string(), json!("https://example.com"));
+        args.insert("sql".to_string(), json!("SELECT * FROM page"));
+        args.insert("wait".to_string(), json!(true));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["wait"], true);
+    }
+
+    #[test]
+    fn test_swarm_list_tool_name_and_clear_flag() {
+        let map = commands_map();
+        let cmd = map.get("swarm-list").unwrap();
+        let args: HashMap<String, Value> = HashMap::new();
+        assert_eq!((cmd.tool_name_fn)(&args), ""); // handled locally, no MCP tool
+        // With --clear flag
+        let mut args = HashMap::new();
+        args.insert("clear".to_string(), json!(true));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["clear"], true);
+    }
+
+    #[test]
+    fn test_swarm_list_params_default_empty() {
+        let map = commands_map();
+        let cmd = map.get("swarm-list").unwrap();
+        let args: HashMap<String, Value> = HashMap::new();
+        let params = (cmd.tool_params_fn)(&args);
+        assert!(params.as_object().unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_swarm_close_tool_name_and_category() {
+        let map = commands_map();
+        let cmd = map.get("swarm-close").unwrap();
+        let args: HashMap<String, Value> = HashMap::new();
+        assert_eq!((cmd.tool_name_fn)(&args), ""); // delegates to handle_close
+        assert_eq!(cmd.category, Category::Swarm);
+        assert!(!cmd.hidden, "swarm-close should not be hidden");
+    }
+
+    #[test]
+    fn test_swarm_close_params_empty() {
+        let map = commands_map();
+        let cmd = map.get("swarm-close").unwrap();
+        let args: HashMap<String, Value> = HashMap::new();
+        let params = (cmd.tool_params_fn)(&args);
+        assert!(params.as_object().unwrap().is_empty());
+    }
+
+    #[test]
     fn test_resize_params_preserve_integer_numbers() {
         let map = commands_map();
         let cmd = map.get("resize").unwrap();

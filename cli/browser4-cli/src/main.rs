@@ -17906,4 +17906,83 @@ mod tests {
 
         assert!(filtered.is_empty());
     }
+
+    // -----------------------------------------------------------------------
+    // swarm_wait_for_jobs tests
+    // -----------------------------------------------------------------------
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn swarm_wait_for_jobs_empty_list_returns_immediately() {
+        let client = crate::http::make_client();
+        let base_url = "http://127.0.0.1:1"; // unused since list is empty
+        let task_ids: Vec<String> = vec![];
+
+        let result = swarm_wait_for_jobs(&client, base_url, &task_ids).await;
+
+        assert!(
+            result.is_ok(),
+            "swarm_wait_for_jobs with empty list should return Ok immediately"
+        );
+    }
+
+    /// Spawn a TCP server that responds to a single `/api/swarm/{id}/status` GET
+    /// request with `isDone: true`, then shuts down.
+    fn spawn_swarm_status_done_server(task_id: &'static str) -> String {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        use std::thread;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind swarm status test server");
+        let addr = listener.local_addr().expect("read swarm status test server addr");
+
+        // This server always responds with isDone: true to the first status
+        // request it receives, regardless of the task ID in the path.
+        thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept swarm status test connection");
+            stream
+                .set_read_timeout(Some(std::time::Duration::from_secs(2)))
+                .ok();
+
+            let mut buffer = [0_u8; 8192];
+            let _ = stream.read(&mut buffer);
+
+            let body = format!(
+                r#"{{"id":"{}","statusCode":200,"isDone":true,"status":"OK"}}"#,
+                task_id
+            );
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            let _ = stream.write_all(response.as_bytes());
+            let _ = stream.flush();
+        });
+
+        format!("http://{}", addr)
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn swarm_wait_for_jobs_single_task_completes_when_done() {
+        let client = crate::http::make_client();
+        let base_url = spawn_swarm_status_done_server("swarm-task-1");
+        let task_ids = vec!["swarm-task-1".to_string()];
+
+        let result = swarm_wait_for_jobs(&client, &base_url, &task_ids).await;
+
+        assert!(
+            result.is_ok(),
+            "swarm_wait_for_jobs should complete when status returns isDone: true"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn swarm_wait_for_jobs_handles_empty_task_id_list_gracefully() {
+        // Regression: empty task list should not panic.
+        let client = crate::http::make_client();
+        let base_url = "http://127.0.0.1:1"; // unused
+
+        let result = swarm_wait_for_jobs(&client, base_url, &[]).await;
+        assert!(result.is_ok());
+    }
 }
