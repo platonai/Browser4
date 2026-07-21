@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Crawl Test Hub</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 2rem; }
+    h1 { color: #333; }
+    .products { margin: 1rem 0; }
+    .product { display: block; padding: .5rem; margin: .25rem 0; border: 1px solid #ddd; }
+    .categories { margin: 1rem 0; padding: 1rem; background: #f5f5f5; }
+    .category-link { color: #06c; }
+    footer { margin-top: 2rem; font-size: .8rem; color: #666; }
+  </style>
+</head>
+<body>
+  <h1 id="pageTitle">Crawl Test Hub</h1>
+  <p>This page contains <strong>product links</strong> (class="product") and <strong>category links</strong> (class="category-link") for testing crawl link discovery with CSS selectors and URL patterns.</p>
+
+  <section class="products" id="product-list">
+    <h2>Featured Products</h2>
+    <a class="product" id="prod-1" href="product/1.html">
+      <span class="product-title">Widget Alpha</span>
+      <span class="product-price">$10.00</span>
+    </a>
+    <a class="product" id="prod-2" href="product/2.html">
+      <span class="product-title">Widget Beta</span>
+      <span class="product-price">$20.00</span>
+    </a>
+    <a class="product" id="prod-3" href="product/3.html">
+      <span class="product-title">Widget Gamma</span>
+      <span class="product-price">$30.00</span>
+    </a>
+  </section>
+
+  <section class="categories">
+    <h2>Categories</h2>
+    <a class="category-link" id="cat-electronics" href="category/electronics.html">Electronics Category</a>
+  </section>
+
+  <footer>Crawl Test Hub — Mock Site</footer>
+</body>
+</html>

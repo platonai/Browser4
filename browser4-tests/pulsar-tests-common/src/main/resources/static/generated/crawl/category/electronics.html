@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Electronics — Category</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 2rem; }
+    h1 { color: #333; }
+    .product { display: block; padding: .5rem; margin: .25rem 0; border: 1px solid #ddd; }
+    footer { margin-top: 2rem; font-size: .8rem; color: #666; }
+  </style>
+</head>
+<body>
+  <nav><a href="../index.html">← Back to Hub</a></nav>
+  <main>
+    <h1 id="categoryTitle">Electronics</h1>
+    <p>This category page is linked via a <strong>category-link</strong> class — NOT a product class. When crawling with <code>-ol "a.product"</code>, links on this page will be discovered, but this page itself should not be followed when the starting page filters by <code>a.product</code>.</p>
+
+    <section class="products">
+      <h2>Products in Electronics</h2>
+      <a class="product" href="../product/1.html">Widget Alpha — $10.00</a>
+      <a class="product" href="../product/2.html">Widget Beta — $20.00</a>
+    </section>
+  </main>
+  <footer>Electronics Category — Mock Site</footer>
+</body>
+</html>
