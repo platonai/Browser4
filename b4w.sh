@@ -5,4 +5,4 @@
 echo "It is strongly recommended to launch `pwsh` and run the .ps1commands directly within the `pwsh` terminal."
 
 # Call bin/build/build.ps1 with all passed arguments
-pwsh ./b4.ps1 "$@"
+pwsh ./b4w.ps1 "$@"

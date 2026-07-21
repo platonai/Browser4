@@ -135,9 +135,9 @@ Write-Host '━━━ Mode Detection: Dev (default) ━━━' -ForegroundColor 
     . "$PSScriptRoot/common.ps1"
 
     Write-TestGroup '$helpCmd in dev mode'
-    Assert-Equal 'is exactly "./b4.ps1 help"' `
-        './b4.ps1 help' $helpCmd
-    Assert-Contains 'contains b4.ps1' $helpCmd 'b4.ps1'
+    Assert-Equal 'is exactly "./b4w.ps1 help"' `
+        './b4w.ps1 help' $helpCmd
+    Assert-Contains 'contains b4w.ps1' $helpCmd 'b4w.ps1'
     Assert-Contains 'contains help subcommand' $helpCmd 'help'
 
     Write-TestGroup '$skillPath in dev mode'
@@ -185,7 +185,7 @@ Write-Host '━━━ Mode Detection: Edge Cases ━━━' -ForegroundColor Yel
 
     Write-TestGroup 'unrecognized mode falls back to dev'
     Assert-Equal '$helpCmd falls back to dev value' `
-        './b4.ps1 help' $helpCmd
+        './b4w.ps1 help' $helpCmd
     Assert-Equal '$skillPath falls back to dev value' `
         'skills/browser4-cli/SKILL.md' $skillPath
 }
@@ -209,7 +209,7 @@ Write-Host '━━━ Mode Detection: Edge Cases ━━━' -ForegroundColor Yel
 
     Write-TestGroup 'null mode falls back to dev'
     Assert-Equal '$helpCmd resolves to dev default' `
-        './b4.ps1 help' $helpCmd
+        './b4w.ps1 help' $helpCmd
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -265,7 +265,7 @@ Write-Host '━━━ $generalPrompt (Dev Mode) ━━━' -ForegroundColor Yell
     }
 
     Write-TestGroup 'mode-specific values (dev)'
-    Assert-Contains 'contains ./b4.ps1 help' $generalPrompt './b4.ps1 help'
+    Assert-Contains 'contains ./b4w.ps1 help' $generalPrompt './b4w.ps1 help'
     Assert-Contains 'contains skills/browser4-cli/SKILL.md' $generalPrompt 'skills/browser4-cli/SKILL.md'
     Assert-NotContains 'should NOT contain browser4-cli help' $generalPrompt 'browser4-cli help'
     Assert-NotContains 'should NOT contain browser4.io' $generalPrompt 'browser4.io'
@@ -290,7 +290,7 @@ Write-Host '━━━ $generalPrompt (Production Mode) ━━━' -ForegroundCol
     Write-TestGroup 'mode-specific values (production)'
     Assert-Contains 'contains browser4-cli help' $generalPrompt 'browser4-cli help'
     Assert-Contains 'contains browser4.io' $generalPrompt 'browser4.io'
-    Assert-NotContains 'should NOT contain ./b4.ps1 help' $generalPrompt './b4.ps1 help'
+    Assert-NotContains 'should NOT contain ./b4w.ps1 help' $generalPrompt './b4w.ps1 help'
     Assert-NotContains 'should NOT contain skills/browser4-cli/SKILL.md' $generalPrompt 'skills/browser4-cli/SKILL.md'
 }
 

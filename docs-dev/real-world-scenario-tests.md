@@ -86,7 +86,7 @@ The heading becomes the scenario name; the body is the task prompt.
 
 Every task is prefixed with `$generalPrompt` (~450 lines of instructions) that tells the agent to:
 
-1. **Prepare**: run `./b4.ps1 help`, read `SKILL.md`
+1. **Prepare**: run `./b4w.ps1 help`, read `SKILL.md`
 2. **Evaluate across 7 dimensions**: Installation & Setup, Discoverability, Documentation, CLI Experience, Task Execution, Reliability, UX
 3. **Produce structured output**:
    - **A. Task Result** — the requested outcome
@@ -109,7 +109,7 @@ After the agent completes, `Write-IssuesToReadyQueue` parses the output:
 
 | | Dev (default) | Production |
 |---|---|---|
-| CLI invocation | `./b4.ps1` | `browser4-cli` |
+| CLI invocation | `./b4w.ps1` | `browser4-cli` |
 | SKILL.md source | `skills/browser4-cli/SKILL.md` (local) | `https://browser4.io/SKILL.md` |
 | Backend | Auto-started from local JAR | Separately managed server |
 | What it tests | Current local source | Installed release |
@@ -197,7 +197,7 @@ Structured `.txt` files with difficulty levels:
 # List all discovered tasks
 ./browser4-tests/real-world-scenarios/scripts/run-tests.ps1 -List
 
-# Run a single task (dev mode — uses ./b4.ps1)
+# Run a single task (dev mode — uses ./b4w.ps1)
 ./browser4-tests/real-world-scenarios/scripts/run-task.ps1 -TaskFile tasks/real-world/generic/search-summary.md
 
 # Run a category
