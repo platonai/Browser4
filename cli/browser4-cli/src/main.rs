@@ -10107,19 +10107,62 @@ fn format_uninstall_output(
 /// process exits.  On Windows the running executable is locked, so we
 /// schedule a deferred deletion via a detached PowerShell script.
 fn attempt_self_removal(exe_path: &std::path::Path) -> bool {
+    // Companion link names that the install scripts create alongside the binary.
+    // We clean these up too so stale symlinks / hardlinks / .cmd wrappers don't
+    // linger after uninstall.
+    #[cfg(windows)]
+    const COMPANION_NAMES: &[&str] = &[
+        "b4.exe",
+        "b4.cmd",
+        "browser4-cli.exe",
+        "browser4-cli.cmd",
+    ];
+    #[cfg(not(windows))]
+    const COMPANION_NAMES: &[&str] = &["b4", "browser4-cli"];
+
     #[cfg(windows)]
     {
         let exe_str = exe_path.display().to_string();
+        // PowerShell single-quoted strings: only ' is special — escape it
+        // by doubling.  Everything else ($, `, etc.) is literal inside '…'.
+        let escaped = exe_str.replace('\'', "''");
 
-        // Use a PowerShell one-liner spawned through cmd.exe with
-        // CREATE_NO_WINDOW so no console window flashes on screen.
-        // The script sleeps briefly to let this process exit, then
-        // deletes the binary and itself.
+        // Build companion-removal lines.  Each companion is removed
+        // unconditionally (best-effort) after the main binary is gone.
+        let mut companion_lines = String::new();
+        let exe_dir = exe_path
+            .parent()
+            .map(|p| p.display().to_string())
+            .unwrap_or_default();
+        let escaped_dir = exe_dir.replace('\'', "''");
+        for name in COMPANION_NAMES {
+            companion_lines.push_str(&format!(
+                "$c = Join-Path '{escaped_dir}' '{name}'\n\
+                 if ((Test-Path -LiteralPath $c) -and ($c -ne $target)) {{\n\
+                     Remove-Item -Force -LiteralPath $c -ErrorAction SilentlyContinue\n\
+                 }}\n"
+            ));
+        }
+
+        // Retry loop (up to 30 s, 500 ms intervals) for the main binary so
+        // the script is resilient to the parent process taking a moment to
+        // flush stdout / release the file handle.  Companion links are
+        // cleaned up afterwards; then the script removes itself.
         let ps_script = format!(
-            "Start-Sleep -Milliseconds 1500; \
-             Remove-Item -Force -LiteralPath '{}' -ErrorAction SilentlyContinue; \
-             Remove-Item -Force -LiteralPath $MyInvocation.MyCommand.Path -ErrorAction SilentlyContinue",
-            exe_str.replace('\'', "''")
+            "$target = '{escaped}'\n\
+             if (Test-Path -LiteralPath $target) {{\n\
+                 $deadline = (Get-Date).AddSeconds(30)\n\
+                 while ((Get-Date) -lt $deadline) {{\n\
+                     try {{\n\
+                         Remove-Item -Force -LiteralPath $target -ErrorAction Stop\n\
+                         break\n\
+                     }} catch {{\n\
+                         Start-Sleep -Milliseconds 500\n\
+                     }}\n\
+                 }}\n\
+             }}\n\
+             {companion_lines}\
+             Remove-Item -Force -LiteralPath $MyInvocation.MyCommand.Path -ErrorAction SilentlyContinue\n"
         );
 
         let tmp_dir = std::env::temp_dir();
@@ -10145,7 +10188,7 @@ fn attempt_self_removal(exe_path: &std::path::Path) -> bool {
             .spawn()
         {
             Ok(_) => {
-                cli_println!("  Binary scheduled for removal after exit.");
+                cli_println!("  Binary and companion links scheduled for removal after exit.");
                 true
             }
             Err(e) => {
@@ -10157,16 +10200,32 @@ fn attempt_self_removal(exe_path: &std::path::Path) -> bool {
 
     #[cfg(not(windows))]
     {
+        let mut removed = false;
         match std::fs::remove_file(exe_path) {
             Ok(()) => {
                 cli_println!("  Binary removed.");
-                true
+                removed = true;
             }
             Err(e) => {
                 cli_println!("  Warning: Could not remove binary: {e}");
-                false
             }
         }
+
+        // Clean up companion symlinks (b4, browser4-cli) from the same
+        // directory.  These are best-effort — silently skip if missing.
+        let dir = exe_path.parent().unwrap_or(std::path::Path::new("."));
+        for name in COMPANION_NAMES {
+            let companion = dir.join(name);
+            if companion != exe_path {
+                match std::fs::remove_file(&companion) {
+                    Ok(()) => cli_println!("  Removed companion link: {}", name),
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(e) => cli_println!("  Warning: Could not remove {}: {e}", name),
+                }
+            }
+        }
+
+        removed
     }
 }
 
