@@ -547,13 +547,115 @@ function Invoke-RealWorldScenarioTests([string[]]$additionalArgs) {
         return
     }
 
-    # ── Execute ──────────────────────────────────────────────────────────────
+    # ── Execute with real-time agent output monitoring ────────────────────
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
-    $exitCode = Invoke-CommandAndReport -ScriptBlock {
+
+    # Clean up stale marker from previous runs
+    $markerFile = Join-Path $repoRoot 'target' '.current-capture-path'
+    Remove-Item -LiteralPath $markerFile -ErrorAction SilentlyContinue
+
+    try {
+        if ($repoRoot) { Push-Location $repoRoot }
+        $global:LASTEXITCODE = 0
+
         if ($setProduction) { $env:BROWSER4CLI_MODE = 'production' }
-        & pwsh @pwshArgs
-    } -Label $modeLabel -PreExecPath $repoRoot -NoExit
+
+        # ── Start child pwsh process ──────────────────────────────────────
+        $proc = Start-Process -FilePath 'pwsh' -ArgumentList $pwshArgs `
+            -NoNewWindow -PassThru
+
+        # ── Monitor capture file in real-time ─────────────────────────────
+        $capturePath = $null
+        $lastSize = 0
+        $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+        $markerTimeoutSec = 120
+        $monitorStart = Get-Date
+        $shownHeader = $false
+
+        while (-not $proc.HasExited) {
+            # Check for marker file (written by run-task.ps1 before agent starts)
+            if (-not $capturePath -and (Test-Path -LiteralPath $markerFile)) {
+                try {
+                    $capturePath = (Get-Content -LiteralPath $markerFile -TotalCount 1).Trim()
+                    if ($capturePath) {
+                        Write-Host ''
+                        Write-Rule
+                        Write-Host "Agent output (live): $capturePath" -ForegroundColor DarkCyan
+                        Write-Rule
+                        $shownHeader = $true
+                    }
+                } catch { }
+            }
+
+            # Display new content from the capture file
+            if ($capturePath -and (Test-Path -LiteralPath $capturePath)) {
+                try {
+                    $currentSize = (Get-Item -LiteralPath $capturePath).Length
+                    if ($currentSize -gt $lastSize) {
+                        $content = [System.IO.File]::ReadAllText($capturePath, $utf8NoBom)
+                        if ($content.Length -gt $lastSize) {
+                            $newContent = $content.Substring($lastSize)
+                            Write-Host $newContent -NoNewline
+                            $lastSize = $content.Length
+                        }
+                    }
+                } catch { }
+            }
+
+            # Timeout waiting for marker
+            if (-not $capturePath -and ((Get-Date) - $monitorStart).TotalSeconds -gt $markerTimeoutSec) {
+                Write-Host 'WARNING: Timed out waiting for agent output marker.' -ForegroundColor Yellow
+                break
+            }
+
+            $proc.Refresh()
+            Start-Sleep -Seconds 2
+        }
+
+        # ── Final drain of any remaining output ───────────────────────────
+        if ($capturePath -and (Test-Path -LiteralPath $capturePath)) {
+            try {
+                $content = [System.IO.File]::ReadAllText($capturePath, $utf8NoBom)
+                if ($content.Length -gt $lastSize) {
+                    $newContent = $content.Substring($lastSize)
+                    Write-Host $newContent -NoNewline
+                }
+            } catch { }
+        }
+
+        if ($shownHeader) {
+            Write-Rule
+            Write-Host 'End of agent output' -ForegroundColor DarkGray
+            Write-Rule
+            Write-Host ''
+        }
+
+        $proc.WaitForExit()
+        $global:LASTEXITCODE = $proc.ExitCode
+        $proc.Dispose()
+
+    } catch {
+        Write-Error "Failed to execute $modeLabel`: $_"
+        exit 1
+    } finally {
+        if ($repoRoot) { Pop-Location }
+    }
+
+    $exitCode = $LASTEXITCODE
     $sw.Stop()
+
+    # ── Report exit status ────────────────────────────────────────────────
+    if ($exitCode -ne 0) {
+        Write-CommandBanner -Label "$modeLabel failed with exit code $exitCode" -Icon '❌'
+        if ($exitCode -eq 124) {
+            Write-Host '  Task timed out.' -ForegroundColor Yellow
+        }
+    } else {
+        Write-CommandBanner -Label "$modeLabel completed successfully" -Icon '✅'
+    }
+
+    # ── Clean up marker ────────────────────────────────────────────────────
+    Remove-Item -LiteralPath $markerFile -ErrorAction SilentlyContinue
 
     # ── Persist session ──────────────────────────────────────────────────
     if ($script:SessionAvailable) {

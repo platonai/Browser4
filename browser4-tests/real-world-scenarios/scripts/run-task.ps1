@@ -115,6 +115,12 @@ try {
     $safeName = if ($scenarioName) { $scenarioName -replace '[\\/:*?"<>|]', '_' } else { 'unknown' }
     $rawOutputFile = Join-Path $targetDir "$timestamp-$safeName.raw.md"
 
+    # Write capture file path to a marker so parent processes can
+    # discover and display the agent output after the run completes.
+    $markerFile = Join-Path $targetDir '.current-capture-path'
+    $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+    [System.IO.File]::WriteAllText($markerFile, $rawOutputFile, $utf8NoBom)
+
     $invokeParams = @{
         Prompt       = $prompt
         ScenarioName = $scenarioName

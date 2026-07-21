@@ -1178,6 +1178,10 @@ Write-Host '━━━ run-task.ps1 Timeout Parameter ━━━' -ForegroundColor
     Write-TestGroup 'Has timeout forwarding logic to Invoke-Agent'
     $hasForwarding = $scriptContent -match '\$invokeParams\[''TimeoutSeconds''\]\s*=\s*\$TimeoutMinutes\s*\*\s*60'
     Assert-True 'Forwards TimeoutMinutes * 60 as TimeoutSeconds' $hasForwarding
+
+    Write-TestGroup 'Writes capture file path to marker for parent monitoring'
+    $hasMarker = $scriptContent -match '\.current-capture-path'
+    Assert-True 'Writes .current-capture-path marker file' $hasMarker
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
