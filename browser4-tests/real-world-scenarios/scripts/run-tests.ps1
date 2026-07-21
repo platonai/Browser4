@@ -84,7 +84,11 @@ param(
     # Maximum minutes to wait for each individual task.
     # 0 (default) means no timeout.  On timeout the task process is killed
     # and the task is marked as TIMEOUT (exit code 124).
-    [int] $TimeoutMinutes = 0
+    [int] $TimeoutMinutes = 0,
+
+    # Override the agent CLI to use (claude, kimi, or opencode).
+    # When empty, auto-detects. Forwarded to run-task.ps1.
+    [string] $Agent = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -215,13 +219,27 @@ function Format-Duration {
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Pre-flight: check that an agent CLI (claude or kimi) and run-task.ps1 are available
+# Pre-flight: check that an agent CLI (claude, kimi, or opencode) and run-task.ps1 are available
 # ═══════════════════════════════════════════════════════════════════════════════
 
-$scenarioAgentAvailable = $null -ne (Get-Command claude -ErrorAction SilentlyContinue) -or
-    $null -ne (Get-Command kimi -ErrorAction SilentlyContinue)
-if (-not $scenarioAgentAvailable) {
-    Write-Host 'WARNING: no agent CLI (claude or kimi) found on PATH.' -ForegroundColor Yellow
+$knownAgents = @('claude', 'kimi', 'opencode')
+$agentAvailable = $false
+if ($Agent) {
+    $agentAvailable = $null -ne (Get-Command $Agent -ErrorAction SilentlyContinue)
+    if (-not $agentAvailable) {
+        Write-Host "ERROR: Specified agent '$Agent' not found on PATH." -ForegroundColor Red
+        exit 1
+    }
+} else {
+    foreach ($a in $knownAgents) {
+        if ($null -ne (Get-Command $a -ErrorAction SilentlyContinue)) {
+            $agentAvailable = $true
+            break
+        }
+    }
+}
+if (-not $agentAvailable) {
+    Write-Host 'WARNING: no agent CLI (claude, kimi, or opencode) found on PATH.' -ForegroundColor Yellow
     Write-Host 'Each task invokes an agent CLI.  Without one, every task will fail.'
     Write-Host ''
 }
@@ -271,6 +289,9 @@ foreach ($name in $Selected) {
             }
             if ($TimeoutMinutes -gt 0) {
                 $pwshArgs += '-TimeoutMinutes', $TimeoutMinutes
+            }
+            if ($Agent) {
+                $pwshArgs += '-Agent', $Agent
             }
             & pwsh @pwshArgs
             $exitCode = $LASTEXITCODE

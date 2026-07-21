@@ -178,6 +178,7 @@ function Print-Usage {
     Write-Host "    --silent                Suppress agent output"
     Write-Host "    --skip-version-check    Skip browser4-cli version check"
     Write-Host "    --timeout <minutes>     Kill each scenario task after N minutes (default: no timeout)"
+    Write-Host "    --agent <name>          Use a specific agent CLI (claude, kimi, or opencode)"
     Write-Host "  resume      Resume from the last failed module (-rf)"
     Write-Host "  main    Run all Browser4 main tests (fast, rest, it, e2e)"
     Write-Host ""
@@ -472,6 +473,11 @@ function Invoke-RealWorldScenarioTests([string[]]$additionalArgs) {
             $passThroughArgs += '-TimeoutMinutes', $timeoutVal
             $i += 2
         }
+        elseif ($arg -eq '--agent' -and ($i + 1) -lt $additionalArgs.Count) {
+            $agentVal = $additionalArgs[$i + 1]
+            $passThroughArgs += '-Agent', $agentVal
+            $i += 2
+        }
         else {
             $passThroughArgs += $arg
             $i++
@@ -493,6 +499,7 @@ function Invoke-RealWorldScenarioTests([string[]]$additionalArgs) {
         Write-Host '  --list                  List discovered scenarios, don''t run'
         Write-Host '  --silent                Suppress agent output'
         Write-Host '  --skip-version-check    Skip browser4-cli version check'
+        Write-Host '  --agent <name>          Use a specific agent CLI (claude, kimi, opencode)'
         Write-Host ''
         Write-Host 'Examples:'
         Write-Host '  test.ps1 rws --scenarios                   # Run all agent-scenario tasks'

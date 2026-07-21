@@ -406,9 +406,65 @@ Write-Host '━━━ Invoke-Agent: Argument Forwarding ━━━' -ForegroundCo
     Assert-NotContains 'kimi: --silent is never passed' ($script:CapturedArgs -join ' ') '--silent'
     Assert-True 'kimi: prompt value is the last argument' ($script:CapturedArgs[-1] -eq 'kimi silent')
 
+    Write-TestGroup 'opencode backend'
+    $testAgentCli = 'opencode'
+    $script:CapturedArgs = $null
+    Invoke-Agent -Prompt 'opencode test'
+    Assert-True 'opencode was invoked' ($null -ne $script:CapturedArgs)
+    Assert-NotContains 'opencode: no --dangerously-skip-permissions' ($script:CapturedArgs -join ' ') `
+        '--dangerously-skip-permissions'
+    Assert-Equal 'opencode: first arg is run' 'run' $script:CapturedArgs[0]
+    Assert-True 'opencode: prompt value is the last argument' ($script:CapturedArgs[-1] -eq 'opencode test')
+
+    Write-TestGroup 'opencode backend with -Silent flag'
+    $script:CapturedArgs = $null
+    Invoke-Agent -Prompt 'opencode silent' -Silent
+    Assert-NotContains 'opencode: --silent is never passed' ($script:CapturedArgs -join ' ') '--silent'
+    Assert-Equal 'opencode silent: first arg is run' 'run' $script:CapturedArgs[0]
+    Assert-True 'opencode silent: prompt value is the last argument' ($script:CapturedArgs[-1] -eq 'opencode silent')
+
     # Clean up the mocks so they do not leak.
     Remove-Item function:Start-NativeCommand -ErrorAction SilentlyContinue
     Remove-Item function:Get-ScenarioAgent -ErrorAction SilentlyContinue
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Test group 7b: Get-ScenarioAgent — opencode detection
+# ═══════════════════════════════════════════════════════════════════════════════
+
+Write-Host ''
+Write-Host '━━━ Get-ScenarioAgent: opencode Detection ━━━' -ForegroundColor Yellow
+
+& {
+    $browser4cliMode = 'dev'
+    . "$PSScriptRoot/common.ps1"
+
+    Write-TestGroup 'Get-ScenarioAgent function exists'
+    Assert-True 'Function is defined' ($null -ne (Get-Command Get-ScenarioAgent -ErrorAction SilentlyContinue))
+
+    Write-TestGroup 'Overridden via $script:scenarioAgentCli returns opencode'
+    $script:scenarioAgentCli = 'opencode'
+    $resolved = Get-ScenarioAgent
+    Assert-Equal 'Returns opencode when overridden' 'opencode' $resolved
+
+    Write-TestGroup 'Overridden via $script:scenarioAgentCli returns kimi'
+    $script:scenarioAgentCli = 'kimi'
+    $resolved = Get-ScenarioAgent
+    Assert-Equal 'Returns kimi when overridden' 'kimi' $resolved
+
+    Write-TestGroup 'Overridden via $script:scenarioAgentCli returns claude'
+    $script:scenarioAgentCli = 'claude'
+    $resolved = Get-ScenarioAgent
+    Assert-Equal 'Returns claude when overridden' 'claude' $resolved
+
+    # Reset override
+    $script:scenarioAgentCli = $null
+
+    # Static analysis: verify opencode is in the auto-detection list
+    $commonPath = Join-Path $PSScriptRoot 'common.ps1'
+    $commonContent = Get-Content -LiteralPath $commonPath -Raw -Encoding UTF8
+    Assert-True 'Auto-detection includes opencode' `
+        ($commonContent -match 'Get-Command opencode.*return.*opencode')
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════

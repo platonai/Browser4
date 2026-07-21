@@ -1655,16 +1655,19 @@ function Assert-Browser4CliLatest {
 function Get-ScenarioAgent {
     <#
     .SYNOPSIS
-        Resolve which agent CLI (claude or kimi) scenario scripts should invoke.
+        Resolve which agent CLI (claude, kimi, or opencode) scenario scripts
+        should invoke.
     .DESCRIPTION
         Callers may force a backend by setting $script:scenarioAgentCli = 'kimi'
-        (or 'claude') after dot-sourcing this module.  Otherwise auto-detects
-        with priority claude > kimi.  Falls back to 'claude' when neither is on
-        PATH so the invocation fails with a clear command-not-found error.
+        (or 'claude', 'opencode') after dot-sourcing this module.  Otherwise
+        auto-detects with priority claude > kimi > opencode.  Falls back to
+        'claude' when none are on PATH so the invocation fails with a clear
+        command-not-found error.
     #>
     if ($script:scenarioAgentCli) { return $script:scenarioAgentCli }
     if (Get-Command claude -ErrorAction SilentlyContinue) { return 'claude' }
     if (Get-Command kimi -ErrorAction SilentlyContinue) { return 'kimi' }
+    if (Get-Command opencode -ErrorAction SilentlyContinue) { return 'opencode' }
     return 'claude'
 }
 
@@ -1730,14 +1733,28 @@ function Invoke-Agent {
     }
 
     # ── Build agent arguments ───────────────────────────────────────────────
-    # kimi -p auto-approves tool calls (no skip-permissions flag exists/needed);
-    # claude needs --dangerously-skip-permissions for unattended runs.
+    # Each agent CLI has a different invocation pattern:
+    #   claude:   claude --dangerously-skip-permissions -p <prompt> [--silent]
+    #   kimi:     kimi -p <prompt>           (no --silent flag exists)
+    #   opencode: opencode run <prompt>      (no --silent flag exists)
     $agentArgs = @()
-    if ($agent -eq 'claude') {
-        $agentArgs += '--dangerously-skip-permissions'
+    switch ($agent) {
+        'claude' {
+            $agentArgs += '--dangerously-skip-permissions'
+            $agentArgs += @('-p', $Prompt)
+            if ($Silent) { $agentArgs += '--silent' }
+        }
+        'kimi' {
+            $agentArgs += @('-p', $Prompt)
+        }
+        'opencode' {
+            $agentArgs += @('run', $Prompt)
+        }
+        default {
+            # Unknown agent — assume -p mode (claude-compatible)
+            $agentArgs += @('-p', $Prompt)
+        }
     }
-    $agentArgs += @('-p', $Prompt)
-    if ($Silent -and $agent -eq 'claude') { $agentArgs += '--silent' }
 
     # ── Resolve capture file path ──────────────────────────────────────────
     # Write directly to the final output path (not a temp file) so partial

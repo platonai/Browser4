@@ -50,7 +50,12 @@ param(
     # Maximum minutes to wait for the agent to complete.
     # 0 (default) means no timeout.  On timeout the process is killed and
     # exit code 124 is returned (matching the Unix `timeout` convention).
-    [int] $TimeoutMinutes = 0
+    [int] $TimeoutMinutes = 0,
+
+    # Override the agent CLI to use (claude, kimi, or opencode).
+    # When empty, auto-detects with priority claude > kimi > opencode.
+    [ValidateSet('', 'claude', 'kimi', 'opencode')]
+    [string] $Agent = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -66,6 +71,13 @@ if ($Production -and -not $browser4cliMode -and -not $env:BROWSER4CLI_MODE) {
 # common.ps1 defines Read-TaskFile, Resolve-TaskFilePath, $generalPrompt,
 # Invoke-Agent, Assert-Browser4CliLatest, and $script:RepoRoot.
 . "$PSScriptRoot/common.ps1"
+
+# ── Agent override ────────────────────────────────────────────────────────────
+# Must be set after dot-sourcing so $script:scenarioAgentCli targets the
+# same script scope that Get-ScenarioAgent reads from.
+if ($Agent) {
+    $script:scenarioAgentCli = $Agent
+}
 
 # ── Resolve task file path ────────────────────────────────────────────────────
 # Uses the three-tier lookup from Resolve-TaskFilePath:
