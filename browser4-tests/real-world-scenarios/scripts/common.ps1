@@ -305,7 +305,7 @@ public class NativeCommandOutputHandler
 # Repo root is 3 levels up from scripts/ (scripts -> tests -> browser4-tests -> repo root)
 $script:RepoRoot = (Resolve-Path "$PSScriptRoot/../../..").Path
 $script:IssuesReadyDir = [System.IO.Path]::GetFullPath(
-    (Join-Path $script:RepoRoot 'coworker\tasks\issues\draft')
+    (Join-Path $script:RepoRoot 'coworker' 'tasks' 'issues' 'draft')
 )
 
 # Local alias for string interpolation in the here-string below.  Forward

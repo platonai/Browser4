@@ -45,7 +45,12 @@ param(
     [switch] $SkipVersionCheck,
 
     # Run in production mode (browser4-cli instead of cargo run).
-    [switch] $Production
+    [switch] $Production,
+
+    # Maximum minutes to wait for the agent to complete.
+    # 0 (default) means no timeout.  On timeout the process is killed and
+    # exit code 124 is returned (matching the Unix `timeout` convention).
+    [int] $TimeoutMinutes = 0
 )
 
 $ErrorActionPreference = 'Stop'
@@ -117,6 +122,9 @@ try {
     }
     if ($Silent) {
         $invokeParams['Silent'] = $true
+    }
+    if ($TimeoutMinutes -gt 0) {
+        $invokeParams['TimeoutSeconds'] = $TimeoutMinutes * 60
     }
 
     Invoke-Agent @invokeParams

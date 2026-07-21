@@ -1153,6 +1153,76 @@ Write-Host '━━━ Test-TaskCategory ━━━' -ForegroundColor Yellow
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# Test group 19: run-task.ps1 timeout parameter and forwarding
+# ═══════════════════════════════════════════════════════════════════════════════
+
+Write-Host ''
+Write-Host '━━━ run-task.ps1 Timeout Parameter ━━━' -ForegroundColor Yellow
+
+& {
+    $browser4cliMode = 'dev'
+    . "$PSScriptRoot/common.ps1"
+
+    $taskRunnerPath = Join-Path $PSScriptRoot 'run-task.ps1'
+
+    Write-TestGroup 'run-task.ps1 exists'
+    Assert-True 'Script file exists' (Test-Path -LiteralPath $taskRunnerPath -PathType Leaf)
+
+    # Parse the script to verify the $TimeoutMinutes parameter exists.
+    $scriptContent = Get-Content -LiteralPath $taskRunnerPath -Raw -Encoding UTF8
+
+    Write-TestGroup 'Has $TimeoutMinutes parameter in param block'
+    $hasTimeoutParam = $scriptContent -match '\[\s*int\s*\]\s*\$TimeoutMinutes\s*=\s*0'
+    Assert-True 'Script declares [int] $TimeoutMinutes = 0' $hasTimeoutParam
+
+    Write-TestGroup 'Has timeout forwarding logic to Invoke-Agent'
+    $hasForwarding = $scriptContent -match '\$invokeParams\[''TimeoutSeconds''\]\s*=\s*\$TimeoutMinutes\s*\*\s*60'
+    Assert-True 'Forwards TimeoutMinutes * 60 as TimeoutSeconds' $hasForwarding
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Test group 20: timeout conversion logic (minutes → seconds)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+Write-Host ''
+Write-Host '━━━ Timeout Conversion Logic ━━━' -ForegroundColor Yellow
+
+& {
+    Write-TestGroup 'TimeoutMinutes=0 → no TimeoutSeconds key'
+    $TimeoutMinutes = 0
+    $invokeParams = @{ Prompt = 'test' }
+    if ($TimeoutMinutes -gt 0) {
+        $invokeParams['TimeoutSeconds'] = $TimeoutMinutes * 60
+    }
+    Assert-True 'No TimeoutSeconds when TimeoutMinutes is 0' `
+        (-not $invokeParams.ContainsKey('TimeoutSeconds'))
+
+    Write-TestGroup 'TimeoutMinutes=5 → TimeoutSeconds=300'
+    $TimeoutMinutes = 5
+    $invokeParams = @{ Prompt = 'test' }
+    if ($TimeoutMinutes -gt 0) {
+        $invokeParams['TimeoutSeconds'] = $TimeoutMinutes * 60
+    }
+    Assert-Equal 'TimeoutSeconds is 300 (5 * 60)' 300 $invokeParams['TimeoutSeconds']
+
+    Write-TestGroup 'TimeoutMinutes=30 → TimeoutSeconds=1800'
+    $TimeoutMinutes = 30
+    $invokeParams = @{ Prompt = 'test' }
+    if ($TimeoutMinutes -gt 0) {
+        $invokeParams['TimeoutSeconds'] = $TimeoutMinutes * 60
+    }
+    Assert-Equal 'TimeoutSeconds is 1800 (30 * 60)' 1800 $invokeParams['TimeoutSeconds']
+
+    Write-TestGroup 'TimeoutMinutes=1 → TimeoutSeconds=60'
+    $TimeoutMinutes = 1
+    $invokeParams = @{ Prompt = 'test' }
+    if ($TimeoutMinutes -gt 0) {
+        $invokeParams['TimeoutSeconds'] = $TimeoutMinutes * 60
+    }
+    Assert-Equal 'TimeoutSeconds is 60 (1 * 60)' 60 $invokeParams['TimeoutSeconds']
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # Summary
 # ═══════════════════════════════════════════════════════════════════════════════
 
