@@ -679,7 +679,15 @@ class MCPToolController(
         val domain = extractDomain(toolName)
         val customExecutor = CustomToolRegistry.instance.get(domain)
         if (customExecutor != null) {
-            return dispatchToCustomExecutor(toolName, domain, args, customExecutor, request)
+            // Restore sessionId stripped by normalizeToolArguments — custom executors
+            // (e.g. webdb_export) may need it.
+            val sessionId = normalizedRequest.arguments["sessionId"]
+            val execArgs = if (sessionId != null) {
+                args.toMutableMap().also { it["sessionId"] = sessionId }
+            } else {
+                args
+            }
+            return dispatchToCustomExecutor(toolName, domain, execArgs, customExecutor, request)
         }
 
         // Fall back to per-session agent tool dispatch
