@@ -7,6 +7,7 @@ import ai.platon.pulsar.skeleton.common.options.LoadOptions
 import ai.platon.pulsar.skeleton.event.ServerSideEventHandlers
 import com.fasterxml.jackson.annotation.JsonCreator
 import com.fasterxml.jackson.annotation.JsonIgnore
+import com.fasterxml.jackson.annotation.JsonInclude
 import com.fasterxml.jackson.annotation.JsonProperty
 import java.time.Instant
 import java.util.*
@@ -40,17 +41,33 @@ data class ScrapeResponse(
     var statusCode: Int = ResourceStatus.SC_CREATED,
     var pageStatusCode: Int = ProtocolStatusCodes.SC_CREATED,
     var pageContentBytes: Int = 0,
+
+    @field:JsonInclude(JsonInclude.Include.ALWAYS)
     var isDone: Boolean = false,
+
     var resultSet: List<Map<String, Any?>>? = null,
 
     var event: String = "",
 ) {
     val status: String get() = ResourceStatus.getStatusText(statusCode)
+
+    /** Set when the task is first created (submitted). */
+    var createdTime: Instant? = Instant.now()
+
+    /** Set when a worker first picks up the task (first PROCESSING transition). */
+    var startedTime: Instant? = null
+
+    /** Set on every status change. */
     var lastModifiedTime: Instant? = null
+
+    /** Set when the task reaches a terminal state (done or failed). */
     var finishTime: Instant? = null
 
     companion object {
-        fun notFound(id: String) = ScrapeResponse(id, ResourceStatus.SC_NOT_FOUND, ResourceStatus.SC_NOT_FOUND)
+        fun notFound(id: String) = ScrapeResponse(
+            id, ResourceStatus.SC_NOT_FOUND, ResourceStatus.SC_NOT_FOUND
+        ).apply { createdTime = null }
+
         fun failed(id: String, statusCode: Int, pageStatusCode: Int) =
             ScrapeResponse(id, statusCode = statusCode, pageStatusCode = pageStatusCode)
 
@@ -64,17 +81,26 @@ data class ScrapeResponse(
 }
 
 fun ScrapeResponse.refresh(isDone: Boolean = false) {
-    lastModifiedTime = Instant.now()
+    val now = Instant.now()
+    lastModifiedTime = now
     this.isDone = isDone
+    // Record the first time a worker touches this task.
+    if (startedTime == null) {
+        startedTime = now
+    }
 }
 
 fun ScrapeResponse.refresh(statusCode: Int) = refresh(statusCode, this.pageStatusCode, false)
 
 fun ScrapeResponse.refresh(statusCode: Int, pageStatusCode: Int, isDone: Boolean) {
-    lastModifiedTime = Instant.now()
+    val now = Instant.now()
+    lastModifiedTime = now
     this.statusCode = statusCode
     this.pageStatusCode = pageStatusCode
     this.isDone = isDone
+    if (startedTime == null) {
+        startedTime = now
+    }
 }
 
 fun ScrapeResponse.failed(statusCode: Int): ScrapeResponse {

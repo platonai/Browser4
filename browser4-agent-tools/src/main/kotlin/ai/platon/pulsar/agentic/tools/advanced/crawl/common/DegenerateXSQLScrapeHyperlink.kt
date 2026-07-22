@@ -34,6 +34,10 @@ open class DegenerateXSQLScrapeHyperlink(
             logger.warn("Unexpected exception", t)
             throw t
         } finally {
+            val now = java.time.Instant.now()
+            if (response.startedTime == null) {
+                response.startedTime = now
+            }
             response.isDone = true
             super.complete(page)
         }

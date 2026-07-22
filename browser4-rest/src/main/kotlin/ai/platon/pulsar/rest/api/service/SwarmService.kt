@@ -5,15 +5,21 @@ import ai.platon.pulsar.agentic.tools.advanced.crawl.QueryRequest
 import ai.platon.pulsar.agentic.tools.advanced.crawl.ScrapeRequest
 import ai.platon.pulsar.agentic.tools.advanced.crawl.ScrapeResponse
 import ai.platon.pulsar.agentic.tools.advanced.crawl.common.ScrapeHyperlink
+import ai.platon.pulsar.agentic.tools.advanced.crawl.common.ScrapeAPIUtils
 import ai.platon.pulsar.rest.session.PulsarSessionManager
 import ai.platon.pulsar.common.ResourceStatus
+import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import ai.platon.pulsar.persist.metadata.ProtocolStatusCodes
 import ai.platon.pulsar.rest.api.entities.ScrapeStatusRequest
 import com.github.benmanes.caffeine.cache.Cache
 import com.github.benmanes.caffeine.cache.Caffeine
+import jakarta.annotation.PostConstruct
 import org.apache.commons.collections4.MultiMapUtils
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Service
+import java.nio.file.Files
+import java.nio.file.Path
+import java.nio.file.StandardOpenOption
 
 @Service
 class SwarmService(
@@ -38,6 +44,7 @@ class SwarmService(
      *   Window TinyLFU policy.
      * - NOT_FOUND lookups are never cached — only real task responses go in.
      * - Evicted entries are removed from [responseStatusIndex] by the removal listener.
+     * - Persisted to a JSONL file so task statuses survive restarts.
      * */
     val responseCache: Cache<String, ScrapeResponse> = Caffeine.newBuilder()
         .maximumSize(100_000)
@@ -53,6 +60,60 @@ class SwarmService(
         .recordStats()
         .build()
 
+    /** JSONL file for persisting swarm task responses across restarts. */
+    internal var persistenceFile: Path = Path.of(
+        System.getProperty("browser4.data.dir", System.getProperty("user.home")),
+        ".browser4", "data", "swarm"
+    ).resolve("swarm-tasks.jsonl")
+
+    private val objectMapper = pulsarObjectMapper()
+
+    @PostConstruct
+    fun restoreFromDisk() {
+        if (!Files.exists(persistenceFile)) {
+            logger.info("No swarm persistence file found at {}", persistenceFile)
+            return
+        }
+
+        var restored = 0
+        try {
+            Files.newBufferedReader(persistenceFile).use { reader ->
+                reader.lines().forEach { line ->
+                    if (line.isBlank()) return@forEach
+                    try {
+                        val response = objectMapper.readValue(line, ScrapeResponse::class.java)
+                        response.id?.let { id ->
+                            responseCache.put(id, response)
+                            responseStatusIndex[response.statusCode].add(id)
+                            restored++
+                        }
+                    } catch (e: Exception) {
+                        logger.warn("Skipping corrupt swarm task line: {}", e.message)
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            logger.error("Failed to restore swarm tasks from {}", persistenceFile, e)
+        }
+
+        logger.info("Restored {} swarm task(s) from {}", restored, persistenceFile)
+    }
+
+    /** Append a response to the persistence file. */
+    private fun persist(response: ScrapeResponse) {
+        try {
+            Files.createDirectories(persistenceFile.parent)
+            val line = objectMapper.writeValueAsString(response)
+            Files.writeString(
+                persistenceFile,
+                line + "\n",
+                StandardOpenOption.CREATE, StandardOpenOption.APPEND
+            )
+        } catch (e: Exception) {
+            logger.warn("Failed to persist swarm task {}: {}", response.id, e.message)
+        }
+    }
+
     /**
      * Submit a scraping task
      * */
@@ -60,6 +121,7 @@ class SwarmService(
         val hyperlink = createScrapeHyperlink(request)
         responseCache.put(hyperlink.uuid, hyperlink.response)
         hyperlink.response.id = hyperlink.uuid
+        persist(hyperlink.response)
         val s = session
         require(s is GenericAgenticSession) {
             "Expected GenericAgenticSession but got ${s::class.simpleName} (uuid=${s.uuid})"
@@ -118,6 +180,7 @@ class SwarmService(
         return ScrapeHyperlinkFactory.create(request, session) { link ->
             responseCache.put(link.uuid, link.response)
             responseStatusIndex[link.response.statusCode].add(link.uuid)
+            persist(link.response)
         }
     }
 }

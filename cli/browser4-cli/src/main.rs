@@ -7499,14 +7499,13 @@ async fn handle_swarm_list(
         // Query backend for live status of each tracked swarm task.
         // This fixes the "always pending" display and enables prune_async_tasks
         // to clean up completed tasks.
-        let now = chrono::Utc::now().to_rfc3339();
         for entry in list.tasks.iter_mut().filter(|t| {
             t.command == "swarm-submit" || t.command == "swarm-query"
         }) {
-                let was_already_completed = entry.last_status == "completed";
                 match get_swarm_status(client, base_url, &entry.task_id).await {
                 Ok(result) => {
                     if let Ok(parsed) = serde_json::from_str::<Value>(&result) {
+                        // isDone is now always present in the JSON (backend fix).
                         let is_done = parsed
                             .get("isDone")
                             .and_then(|v| v.as_bool())
@@ -7525,10 +7524,6 @@ async fn handle_swarm_list(
                         // for 201), but users expect task-lifecycle labels.
                         if is_done || status_code == 200 {
                             entry.last_status = "completed".to_string();
-                            // Record the first time we observe the task as completed.
-                            if !was_already_completed {
-                                entry.completed_at = Some(now.clone());
-                            }
                         } else if !status_text.is_empty() {
                             entry.last_status = friendly_swarm_status(status_code, status_text);
                         } else if status_code > 0 {
@@ -7536,6 +7531,31 @@ async fn handle_swarm_list(
                         }
                         // If we couldn't determine status, leave last_status as-is
                         // (empty → shown as "pending").
+
+                        // Use backend timestamps when available (added in backend v4.12+).
+                        // Prefer finishTime for completion; fall back to local clock.
+                        if let Some(ts) = parsed
+                            .get("finishTime")
+                            .and_then(|v| v.as_str())
+                            .filter(|s| !s.is_empty())
+                        {
+                            entry.completed_at = Some(ts.to_string());
+                        } else if is_done || status_code == 200 {
+                            // Backend doesn't have finishTime yet — use local time.
+                            if entry.completed_at.is_none() {
+                                entry.completed_at =
+                                    Some(chrono::Utc::now().to_rfc3339());
+                            }
+                        }
+                        if let Some(ts) = parsed
+                            .get("startedTime")
+                            .and_then(|v| v.as_str())
+                            .filter(|s| !s.is_empty())
+                        {
+                            // Override local submitted_at with backend's startedTime
+                            // for more accurate start display.
+                            entry.submitted_at = ts.to_string();
+                        }
                     }
                 }
                 Err(_) => {
