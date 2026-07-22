@@ -429,7 +429,7 @@ function New-Symlinks {
     if ($DryRun) {
         Write-Step "[DRY-RUN] Would create link: $linkName -> $BinaryName"
     } else {
-        New-PlatformLink -LinkPath $linkPath -TargetName $BinaryName -DisplayName $linkName
+        $null = New-PlatformLink -LinkPath $linkPath -TargetName $BinaryName -DisplayName $linkName
     }
 
     # 2) b4 -> browser4-cli-<platform> (only if b4 is our tool or doesn't exist)
@@ -454,7 +454,10 @@ function New-Symlinks {
         }
     }
 
-    # Check if b4 is on PATH from somewhere else
+    # Check if b4 is on PATH from somewhere else.
+    # Try Get-Command first; fall back to scanning PATH directories manually
+    # because Get-Command may miss extensionless executables on Linux/macOS
+    # or may cache stale results in some PowerShell versions.
     if (-not $b4Exists) {
         $existingCmd = Get-Command b4 -ErrorAction SilentlyContinue
         if ($existingCmd) {
@@ -471,6 +474,46 @@ function New-Symlinks {
         }
     }
 
+    # Fallback: scan PATH manually when Get-Command didn't find anything.
+    # On Linux/macOS, PowerShell's Get-Command may miss scripts that are
+    # executable but not in its command cache, especially in CI containers.
+    if (-not $b4Exists) {
+        $separator = [System.IO.Path]::PathSeparator
+        $pathDirs = @($env:Path -split $separator | Where-Object { $_ })
+        foreach ($dir in $pathDirs) {
+            $candidatePath = Join-Path $dir $shortName
+            if (Test-Path $candidatePath -PathType Leaf) {
+                $b4Exists = $true
+                try {
+                    $b4Version = & $candidatePath --version 2>&1
+                    if ($b4Version -match "browser4-cli") {
+                        $b4IsOurs = $true
+                    }
+                } catch {
+                    # Can't determine --leave it alone
+                }
+                break
+            }
+            # On Windows, also check for b4.cmd / b4.bat wrappers
+            if ($script:OSWin) {
+                foreach ($pext in @('.cmd', '.bat')) {
+                    $candidateWin = Join-Path $dir "b4$pext"
+                    if (Test-Path $candidateWin -PathType Leaf) {
+                        $b4Exists = $true
+                        try {
+                            $b4Version = & $candidateWin --version 2>&1
+                            if ($b4Version -match "browser4-cli") {
+                                $b4IsOurs = $true
+                            }
+                        } catch { }
+                        break
+                    }
+                }
+                if ($b4Exists) { break }
+            }
+        }
+    }
+
     if ($b4Exists -and -not $b4IsOurs) {
         Write-WarnMsg "Skipping short link '$shortName': 'b4' is not browser4-cli"
         return
@@ -480,7 +523,7 @@ function New-Symlinks {
         $action = if ($b4Exists) { "Would update link" } else { "Would create link" }
         Write-Step "[DRY-RUN] $action`: $shortName -> $BinaryName"
     } else {
-        New-PlatformLink -LinkPath $shortPath -TargetName $BinaryName -DisplayName $shortName
+        $null = New-PlatformLink -LinkPath $shortPath -TargetName $BinaryName -DisplayName $shortName
     }
 }
 
