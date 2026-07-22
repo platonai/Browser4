@@ -3927,30 +3927,6 @@ fn build_jar_launch_spec(runtime: &InstalledBrowser4Runtime, port: u16) -> Serve
     args.extend(program_args);
     args.push(format!("--server.port={port}"));
 
-    // Point Spring Boot at the user's private config directory so LLM keys
-    // (deepseek.api.key, openrouter.api.key, etc.) are picked up from
-    // ~/.browser4/config/conf-enabled/application-private.properties.
-    // The trailing separator is required by Spring Boot to recognize the
-    // path as a directory rather than a file with an unknown extension.
-    let private_config_path = resolve_default_state_dir()
-        .join("config")
-        .join("conf-enabled");
-    // Spring Boot requires the directory to exist, otherwise the application
-    // fails to start with "Config data location '...' does not exist".
-    // Create it (and its parents) now so that empty config dirs (e.g. in E2E
-    // tests with temp state dirs) don't crash the backend.
-    let _ = std::fs::create_dir_all(&private_config_path);
-    let mut private_config_dir = private_config_path.display().to_string();
-    // Spring Boot accepts forward slash as directory separator on all
-    // platforms — no need for OS-specific branching.
-    if !private_config_dir.ends_with('/') && !private_config_dir.ends_with('\\') {
-        private_config_dir.push('/');
-    }
-    args.push(format!(
-        "--spring.config.additional-location=file:{}",
-        private_config_dir
-    ));
-
     ServerLaunchSpec {
         kind: ServerLaunchKind::Jar,
         program,
