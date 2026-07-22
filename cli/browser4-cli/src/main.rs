@@ -8035,6 +8035,7 @@ fn resolve_crawl_urls(url: &str, seed_file_content: Option<&str>) -> Result<Vec<
 }
 
 /// Parse the crawl poll response and classify its status.
+#[cfg(test)]
 #[derive(Debug, PartialEq)]
 enum CrawlPollStatus {
     /// Crawl completed successfully.
@@ -8045,6 +8046,7 @@ enum CrawlPollStatus {
     Running { pages_found: i64 },
 }
 
+#[cfg(test)]
 fn parse_crawl_poll_response(parsed: &Value) -> CrawlPollStatus {
     let status = parsed["status"].as_str().unwrap_or("");
     let pages_found = parsed["pagesFound"].as_i64().unwrap_or(0);
@@ -8306,8 +8308,8 @@ async fn handle_crawl(
                     let summary = format!("Results written");
                     let output = write_crawl_output(&extracted_output, output_file, &summary)?;
                     match output {
-                        CrawlOutput::FileWritten { path, .. } => {
-                            cli_println!("Results written to {}", path);
+                        CrawlOutput::FileWritten { path, summary } => {
+                            cli_println!("{} to {}", summary, path);
                         }
                         CrawlOutput::Stdout(content) => {
                             cli_println!("\n{}", content);
@@ -8344,8 +8346,8 @@ async fn handle_crawl(
                     let page_summary = format!("Crawl completed. {} pages found.", page_count);
                     let output = write_crawl_output(&page_output, output_file, &page_summary)?;
                     match output {
-                        CrawlOutput::FileWritten { path, .. } => {
-                            cli_println!("\nCrawl completed. {} pages found. Results written to {}", page_count, path);
+                        CrawlOutput::FileWritten { path, summary } => {
+                            cli_println!("\n{}. Results written to {}", summary, path);
                         }
                         CrawlOutput::Stdout(content) => {
                             cli_println!("\n{}", content);
