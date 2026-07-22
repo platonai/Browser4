@@ -16,7 +16,7 @@ import java.io.Closeable
 import java.nio.file.Path
 import java.util.concurrent.TimeUnit
 
-class StatefulAgentRunner(
+open class StatefulAgentRunner(
     val session: AgenticSession
 ) : Closeable {
     private val logger = getLogger(StatefulAgentRunner::class)
