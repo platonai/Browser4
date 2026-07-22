@@ -600,6 +600,9 @@ pub struct AsyncTaskEntry {
     /// Last known status (empty until first poll).
     #[serde(rename = "lastStatus", skip_serializing_if = "String::is_empty", default)]
     pub last_status: String,
+    /// ISO-8601 timestamp when the task was first observed as completed (None until done).
+    #[serde(rename = "completedAt", skip_serializing_if = "Option::is_none", default)]
+    pub completed_at: Option<String>,
 }
 
 /// Persisted list of tracked async tasks.
@@ -652,6 +655,7 @@ pub fn track_async_task(
         description: description.to_string(),
         submitted_at: chrono::Utc::now().to_rfc3339(),
         last_status: String::new(),
+        completed_at: None,
     });
     write_async_tasks(&list, state_dir)
 }
@@ -690,35 +694,69 @@ pub fn update_async_task_status(
 }
 
 /// Format a list of tracked async tasks for CLI display.
-pub fn format_async_task_list(list: &AsyncTaskList) -> String {
+///
+/// Tasks are sorted by `submitted_at` descending (latest first).
+/// When `limit` is Some, only that many entries are shown (after offset),
+/// and a hint is appended if more entries exist.
+pub fn format_async_task_list(
+    list: &AsyncTaskList,
+    limit: Option<usize>,
+    offset: Option<usize>,
+) -> String {
     if list.tasks.is_empty() {
         return "No tracked async tasks.".to_string();
     }
 
+    let total = list.tasks.len();
+
+    // Sort by submitted_at descending (latest first)
+    let mut sorted: Vec<&AsyncTaskEntry> = list.tasks.iter().collect();
+    sorted.sort_by(|a, b| b.submitted_at.cmp(&a.submitted_at));
+
+    let offset = offset.unwrap_or(0);
+    let limit = limit.unwrap_or(usize::MAX);
+    let page: Vec<&&AsyncTaskEntry> = sorted.iter().skip(offset).take(limit).collect();
+
     let mut out = Vec::new();
-    out.push(format!("{} tracked task(s):\n", list.tasks.len()));
+    let showing = if limit < total || offset > 0 {
+        let end = (offset + page.len()).min(total);
+        out.push(format!(
+            "{} tracked task(s) (showing {}-{}):\n",
+            total,
+            offset + 1,
+            end
+        ));
+        true
+    } else {
+        out.push(format!("{} tracked task(s):\n", total));
+        false
+    };
 
-    // Column widths
-    let id_w = list.tasks.iter().map(|t| t.task_id.len()).max().unwrap_or(8).max(8);
-    let cmd_w = list.tasks.iter().map(|t| t.command.len()).max().unwrap_or(7).max(7);
-    let desc_w = 40;
+    // Column widths (capped for readability)
+    let id_w = page.iter().map(|t| t.task_id.len()).max().unwrap_or(8).max(8).min(12);
+    let cmd_w = page.iter().map(|t| t.command.len()).max().unwrap_or(7).max(7);
+    let desc_w = page.iter().map(|t| t.description.len()).max().unwrap_or(11).min(40);
+    let desc_w = desc_w.max(11);
+    let time_w = 19; // "2026-07-22 15:04:05"
 
     out.push(format!(
-        "  {:<id_w$}  {:<cmd_w$}  {:<desc_w$}  {}",
-        "TASK ID", "COMMAND", "DESCRIPTION", "STATUS",
+        "  {:<id_w$}  {:<cmd_w$}  {:<desc_w$}  {:<time_w$}  {:<time_w$}  {}",
+        "TASK ID", "COMMAND", "DESCRIPTION", "STARTED", "FINISHED", "STATUS",
         id_w = id_w,
         cmd_w = cmd_w,
         desc_w = desc_w,
+        time_w = time_w,
     ));
     out.push(format!(
-        "  {:-<id_w$}  {:-<cmd_w$}  {:-<desc_w$}  {}",
-        "", "", "", "------",
+        "  {:-<id_w$}  {:-<cmd_w$}  {:-<desc_w$}  {:-<time_w$}  {:-<time_w$}  {}",
+        "", "", "", "", "", "------",
         id_w = id_w,
         cmd_w = cmd_w,
         desc_w = desc_w,
+        time_w = time_w,
     ));
 
-    for entry in &list.tasks {
+    for entry in &page {
         let desc = if entry.description.len() > desc_w {
             format!("{}…", &entry.description[..desc_w - 1])
         } else {
@@ -729,18 +767,47 @@ pub fn format_async_task_list(list: &AsyncTaskList) -> String {
         } else {
             entry.last_status.clone()
         };
+        let started = format_timestamp_display(&entry.submitted_at);
+        let finished = entry
+            .completed_at
+            .as_ref()
+            .map(|s| format_timestamp_display(s))
+            .unwrap_or_else(|| "-".to_string());
         out.push(format!(
-            "  {:<id_w$}  {:<cmd_w$}  {:<desc_w$}  {}",
+            "  {:<id_w$}  {:<cmd_w$}  {:<desc_w$}  {:<time_w$}  {:<time_w$}  {}",
             entry.task_id,
             entry.command,
             desc,
+            started,
+            finished,
             status,
             id_w = id_w,
             cmd_w = cmd_w,
             desc_w = desc_w,
+            time_w = time_w,
         ));
     }
+
+    if showing {
+        let remaining = total.saturating_sub(offset + page.len());
+        if remaining > 0 {
+            out.push(format!(
+                "\n  ... {} more task(s). Use --offset {} to see the next page.",
+                remaining,
+                offset + page.len()
+            ));
+        }
+    }
+
     out.join("\n")
+}
+
+/// Format an ISO-8601 timestamp for display as "YYYY-MM-DD HH:MM:SS".
+fn format_timestamp_display(iso: &str) -> String {
+    chrono::DateTime::parse_from_rfc3339(iso)
+        .or_else(|_| chrono::DateTime::parse_from_rfc3339(&format!("{}Z", iso)))
+        .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
+        .unwrap_or_else(|_| iso.chars().take(19).collect())
 }
 
 /// Convert a CLI element ref into the selector format expected by Browser4.
@@ -1016,7 +1083,7 @@ mod tests {
     #[test]
     fn test_format_async_task_list_empty() {
         let list = AsyncTaskList { tasks: vec![] };
-        let output = format_async_task_list(&list);
+        let output = format_async_task_list(&list, None, None);
         assert!(output.contains("No tracked async tasks"));
     }
 
@@ -1029,12 +1096,179 @@ mod tests {
                 description: "https://example.com".to_string(),
                 submitted_at: "2026-01-01T00:00:00+00:00".to_string(),
                 last_status: "running".to_string(),
+                completed_at: None,
             }],
         };
-        let output = format_async_task_list(&list);
+        let output = format_async_task_list(&list, None, None);
         assert!(output.contains("1 tracked task"));
         assert!(output.contains("crawl-job-1"));
-        assert!(output.contains("crawl"));
         assert!(output.contains("https://example.com"));
+        assert!(output.contains("STARTED"));
+        assert!(output.contains("FINISHED"));
+    }
+
+    #[test]
+    fn test_format_async_task_list_sorts_by_started_desc() {
+        // Latest submission should come first
+        let list = AsyncTaskList {
+            tasks: vec![
+                AsyncTaskEntry {
+                    task_id: "old".to_string(),
+                    command: "swarm-submit".to_string(),
+                    description: "older".to_string(),
+                    submitted_at: "2026-01-01T00:00:00+00:00".to_string(),
+                    last_status: "completed".to_string(),
+                    completed_at: Some("2026-01-01T00:01:00+00:00".to_string()),
+                },
+                AsyncTaskEntry {
+                    task_id: "new".to_string(),
+                    command: "swarm-query".to_string(),
+                    description: "newer".to_string(),
+                    submitted_at: "2026-07-22T15:00:00+00:00".to_string(),
+                    last_status: "pending".to_string(),
+                    completed_at: None,
+                },
+            ],
+        };
+        let output = format_async_task_list(&list, None, None);
+        // "new" must appear before "old" in the output
+        let new_pos = output.find("new").unwrap();
+        let old_pos = output.find("old").unwrap();
+        assert!(new_pos < old_pos, "latest task should appear first, but 'new' at {new_pos} is after 'old' at {old_pos}");
+    }
+
+    #[test]
+    fn test_format_async_task_list_shows_finish_time_when_completed() {
+        let list = AsyncTaskList {
+            tasks: vec![AsyncTaskEntry {
+                task_id: "done-1".to_string(),
+                command: "swarm-submit".to_string(),
+                description: "https://a.com".to_string(),
+                submitted_at: "2026-07-22T14:00:00+00:00".to_string(),
+                last_status: "completed".to_string(),
+                completed_at: Some("2026-07-22T14:05:30+00:00".to_string()),
+            }],
+        };
+        let output = format_async_task_list(&list, None, None);
+        // Started column
+        assert!(output.contains("2026-07-22 14:00:00"));
+        // Finished column — should show the timestamp, not "-"
+        assert!(output.contains("2026-07-22 14:05:30"));
+    }
+
+    #[test]
+    fn test_format_async_task_list_shows_dash_for_unfinished() {
+        let list = AsyncTaskList {
+            tasks: vec![AsyncTaskEntry {
+                task_id: "pending-1".to_string(),
+                command: "swarm-query".to_string(),
+                description: "https://b.com".to_string(),
+                submitted_at: "2026-07-22T16:00:00+00:00".to_string(),
+                last_status: "queued".to_string(),
+                completed_at: None,
+            }],
+        };
+        let output = format_async_task_list(&list, None, None);
+        // Started should show the time
+        assert!(output.contains("2026-07-22 16:00:00"));
+        // Finished should show "-" for unfinished tasks
+        let needle = "2026-07-22 16:00:00";
+        let after_started = &output[output.find(needle).unwrap() + needle.len()..];
+        assert!(after_started.trim().starts_with("-") || after_started.contains("  -  "),
+                "unfinished task should show '-' in FINISHED column");
+    }
+
+    #[test]
+    fn test_format_async_task_list_limit() {
+        let mut tasks = Vec::new();
+        for i in 0..5 {
+            tasks.push(AsyncTaskEntry {
+                task_id: format!("task-{}", i),
+                command: "swarm-submit".to_string(),
+                description: format!("url-{}", i),
+                submitted_at: format!("2026-07-22T1{}:00:00+00:00", i),
+                last_status: "pending".to_string(),
+                completed_at: None,
+            });
+        }
+        let list = AsyncTaskList { tasks };
+        let output = format_async_task_list(&list, Some(3), None);
+        // Should show range hint
+        assert!(output.contains("showing 1-3"));
+        // Should show a "more" hint
+        assert!(output.contains("more task(s)"));
+        assert!(output.contains("--offset 3"));
+        // Should contain only 3 entries (not all 5)
+        assert!(output.contains("task-4")); // latest first: 4, 3, 2
+        assert!(output.contains("task-3"));
+        assert!(output.contains("task-2"));
+        assert!(!output.contains("task-1"));
+        assert!(!output.contains("task-0"));
+    }
+
+    #[test]
+    fn test_format_async_task_list_offset() {
+        let mut tasks = Vec::new();
+        for i in 0..5 {
+            tasks.push(AsyncTaskEntry {
+                task_id: format!("task-{}", i),
+                command: "swarm-submit".to_string(),
+                description: format!("url-{}", i),
+                submitted_at: format!("2026-07-22T1{}:00:00+00:00", i),
+                last_status: "pending".to_string(),
+                completed_at: None,
+            });
+        }
+        let list = AsyncTaskList { tasks };
+        let output = format_async_task_list(&list, Some(2), Some(2));
+        // Sorted desc: task-4, task-3, task-2, task-1, task-0
+        // Offset 2 skips task-4 and task-3
+        // Limit 2 shows task-2 and task-1
+        assert!(output.contains("showing 3-4"));
+        assert!(output.contains("task-2"));
+        assert!(output.contains("task-1"));
+        assert!(!output.contains("task-4"));
+        assert!(!output.contains("task-3"));
+        assert!(!output.contains("task-0"));
+        assert!(output.contains("more task(s)"));
+        assert!(output.contains("--offset 4"));
+    }
+
+    #[test]
+    fn test_format_async_task_list_no_pagination_hint_when_all_shown() {
+        let list = AsyncTaskList {
+            tasks: vec![AsyncTaskEntry {
+                task_id: "only".to_string(),
+                command: "swarm-submit".to_string(),
+                description: "url".to_string(),
+                submitted_at: "2026-07-22T12:00:00+00:00".to_string(),
+                last_status: "completed".to_string(),
+                completed_at: None,
+            }],
+        };
+        let output = format_async_task_list(&list, Some(10), None);
+        // Only 1 task, limit 10 — all shown, no pagination hint
+        assert!(!output.contains("showing"));
+        assert!(!output.contains("more task"));
+    }
+
+    #[test]
+    fn test_format_timestamp_display_handles_missing_tz() {
+        // Should handle ISO-8601 without timezone suffix gracefully
+        let output = format_async_task_list(
+            &AsyncTaskList {
+                tasks: vec![AsyncTaskEntry {
+                    task_id: "t1".to_string(),
+                    command: "swarm-submit".to_string(),
+                    description: "url".to_string(),
+                    submitted_at: "2026-07-22T12:00:00Z".to_string(),
+                    last_status: "pending".to_string(),
+                    completed_at: None,
+                }],
+            },
+            None,
+            None,
+        );
+        assert!(output.contains("2026-07-22 12:00:00"));
     }
 }

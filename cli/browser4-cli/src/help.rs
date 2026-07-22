@@ -876,10 +876,14 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
     if cmd.name == "swarm-list" {
         lines.push("Notes:".to_string());
         lines.push("  - Lists all tracked swarm tasks and their current status.".to_string());
+        lines.push("  - Tasks are ordered by submission time (latest first).".to_string());
+        lines.push("  - Use `--limit N` to show at most N tasks and `--offset N` to skip the first N.".to_string());
         lines.push("  - Use `--clear` to remove all tracked swarm tasks from the list.".to_string());
         lines.push(String::new());
         lines.push("Examples:".to_string());
         lines.push("  browser4-cli swarm list".to_string());
+        lines.push("  browser4-cli swarm list --limit 20".to_string());
+        lines.push("  browser4-cli swarm list --limit 20 --offset 20".to_string());
         lines.push("  browser4-cli swarm list --clear".to_string());
     }
 

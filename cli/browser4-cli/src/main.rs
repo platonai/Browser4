@@ -6947,7 +6947,7 @@ async fn handle_agent_list(client: &Client, base_url: &str) -> Result<(), String
 
     let filtered: Vec<_> = list.tasks.iter().filter(|t| t.command == "agent").cloned().collect();
     let display = state::AsyncTaskList { tasks: filtered };
-    cli_println!("{}", format_async_task_list(&display));
+    cli_println!("{}", format_async_task_list(&display, None, None));
     Ok(())
 }
 
@@ -7485,46 +7485,66 @@ async fn handle_swarm_list(
     let _ = prune_async_tasks(None);
     let mut list = read_async_tasks(None);
 
-    // Query backend for live status of each tracked swarm task.
-    // This fixes the "always pending" display and enables prune_async_tasks
-    // to clean up completed tasks.
-    for entry in list.tasks.iter_mut().filter(|t| {
-        t.command == "swarm-submit" || t.command == "swarm-query"
-    }) {
-        match get_swarm_status(client, base_url, &entry.task_id).await {
-            Ok(result) => {
-                if let Ok(parsed) = serde_json::from_str::<Value>(&result) {
-                    let is_done = parsed
-                        .get("isDone")
-                        .and_then(|v| v.as_bool())
-                        .unwrap_or(false);
-                    let status_code = parsed
-                        .get("statusCode")
-                        .and_then(|v| v.as_i64())
-                        .unwrap_or(0);
-                    let status_text = parsed
-                        .get("status")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("");
+    // Check backend connectivity before querying each task's status.
+    // If the backend is unreachable, skip live refresh to avoid hanging
+    // on each request's timeout (especially when many tasks are tracked).
+    let backend_reachable = client
+        .head(base_url.to_string())
+        .timeout(std::time::Duration::from_secs(3))
+        .send()
+        .await
+        .is_ok();
 
-                    // Map the backend status to a user-friendly label.
-                    // The raw `status` field reflects HTTP semantics (e.g. "Created"
-                    // for 201), but users expect task-lifecycle labels.
-                    if is_done || status_code == 200 {
-                        entry.last_status = "completed".to_string();
-                    } else if !status_text.is_empty() {
-                        entry.last_status = friendly_swarm_status(status_code, status_text);
-                    } else if status_code > 0 {
-                        entry.last_status = format!("status={}", status_code);
+    if backend_reachable {
+        // Query backend for live status of each tracked swarm task.
+        // This fixes the "always pending" display and enables prune_async_tasks
+        // to clean up completed tasks.
+        let now = chrono::Utc::now().to_rfc3339();
+        for entry in list.tasks.iter_mut().filter(|t| {
+            t.command == "swarm-submit" || t.command == "swarm-query"
+        }) {
+                let was_already_completed = entry.last_status == "completed";
+                match get_swarm_status(client, base_url, &entry.task_id).await {
+                Ok(result) => {
+                    if let Ok(parsed) = serde_json::from_str::<Value>(&result) {
+                        let is_done = parsed
+                            .get("isDone")
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false);
+                        let status_code = parsed
+                            .get("statusCode")
+                            .and_then(|v| v.as_i64())
+                            .unwrap_or(0);
+                        let status_text = parsed
+                            .get("status")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
+
+                        // Map the backend status to a user-friendly label.
+                        // The raw `status` field reflects HTTP semantics (e.g. "Created"
+                        // for 201), but users expect task-lifecycle labels.
+                        if is_done || status_code == 200 {
+                            entry.last_status = "completed".to_string();
+                            // Record the first time we observe the task as completed.
+                            if !was_already_completed {
+                                entry.completed_at = Some(now.clone());
+                            }
+                        } else if !status_text.is_empty() {
+                            entry.last_status = friendly_swarm_status(status_code, status_text);
+                        } else if status_code > 0 {
+                            entry.last_status = format!("status={}", status_code);
+                        }
+                        // If we couldn't determine status, leave last_status as-is
+                        // (empty → shown as "pending").
                     }
-                    // If we couldn't determine status, leave last_status as-is
-                    // (empty → shown as "pending").
+                }
+                Err(_) => {
+                    // Keep last_status as-is on transient errors.
                 }
             }
-            Err(_) => {
-                // Keep last_status as-is on transient errors.
-            }
         }
+    } else {
+        cli_println!("Note: Backend unreachable — showing cached statuses. Start the server for live status.");
     }
 
     // Persist updated statuses so prune_async_tasks works next time.
@@ -7562,8 +7582,16 @@ async fn handle_swarm_list(
         cli_println!("Status: {}", parts.join(", "));
     }
 
+    let limit = tool_params
+        .get("limit")
+        .and_then(|v| v.as_u64())
+        .map(|n| n as usize);
+    let offset = tool_params
+        .get("offset")
+        .and_then(|v| v.as_u64())
+        .map(|n| n as usize);
     let display = state::AsyncTaskList { tasks: filtered };
-    cli_println!("{}", format_async_task_list(&display));
+    cli_println!("{}", format_async_task_list(&display, limit, offset));
     Ok(())
 }
 
@@ -18039,6 +18067,7 @@ mod tests {
                 description: "https://a.com".to_string(),
                 submitted_at: "t1".to_string(),
                 last_status: "running".to_string(),
+                completed_at: None,
             },
             state::AsyncTaskEntry {
                 task_id: "a1".to_string(),
@@ -18046,6 +18075,7 @@ mod tests {
                 description: "task".to_string(),
                 submitted_at: "t2".to_string(),
                 last_status: "done".to_string(),
+                completed_at: None,
             },
             state::AsyncTaskEntry {
                 task_id: "s1".to_string(),
@@ -18053,6 +18083,7 @@ mod tests {
                 description: "url".to_string(),
                 submitted_at: "t3".to_string(),
                 last_status: "done".to_string(),
+                completed_at: None,
             },
             state::AsyncTaskEntry {
                 task_id: "c2".to_string(),
@@ -18060,6 +18091,7 @@ mod tests {
                 description: "https://b.com".to_string(),
                 submitted_at: "t4".to_string(),
                 last_status: "pending".to_string(),
+                completed_at: None,
             },
         ];
 
@@ -18082,6 +18114,7 @@ mod tests {
             description: "task".to_string(),
             submitted_at: "t1".to_string(),
             last_status: "done".to_string(),
+            completed_at: None,
         }];
 
         let filtered: Vec<_> = tasks

@@ -2448,12 +2448,16 @@ pub fn all_commands() -> Vec<CommandDef> {
             args: &[],
             options: &[
                 OptionDef { name: "clear", description: "Remove all tracked swarm tasks from the list", is_bool: true, short: None },
+                OptionDef { name: "limit", description: "Show at most N tasks (default: all)", is_bool: false, short: None },
+                OptionDef { name: "offset", description: "Skip the first N tasks (useful for pagination)", is_bool: false, short: None },
             ],
             e2e_coverage: E2eCoverage::Excluded,
             tool_name_fn: |_| String::new(),
             tool_params_fn: |args| {
                 let mut p = json!({});
                 if let Some(b) = get_bool(args, "clear") { p["clear"] = json!(b); }
+                if let Some(v) = get_str(args, "limit").and_then(|s| s.parse::<usize>().ok()) { p["limit"] = json!(v); }
+                if let Some(v) = get_str(args, "offset").and_then(|s| s.parse::<usize>().ok()) { p["offset"] = json!(v); }
                 p
             },
         },
@@ -3779,6 +3783,41 @@ mod tests {
         let args: HashMap<String, Value> = HashMap::new();
         let params = (cmd.tool_params_fn)(&args);
         assert!(params.as_object().unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_swarm_list_limit_and_offset_parsed_as_u64() {
+        let map = commands_map();
+        let cmd = map.get("swarm-list").unwrap();
+        let mut args = HashMap::new();
+        args.insert("limit".to_string(), json!("20"));
+        args.insert("offset".to_string(), json!("40"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["limit"], json!(20));
+        assert_eq!(params["offset"], json!(40));
+    }
+
+    #[test]
+    fn test_swarm_list_limit_and_offset_ignored_when_not_numbers() {
+        let map = commands_map();
+        let cmd = map.get("swarm-list").unwrap();
+        let mut args = HashMap::new();
+        args.insert("limit".to_string(), json!("abc"));
+        args.insert("offset".to_string(), json!("xyz"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert!(params.as_object().unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_swarm_list_clear_with_limit_only_clear_is_set() {
+        let map = commands_map();
+        let cmd = map.get("swarm-list").unwrap();
+        let mut args = HashMap::new();
+        args.insert("clear".to_string(), json!(true));
+        args.insert("limit".to_string(), json!("10"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["clear"], json!(true));
+        assert_eq!(params["limit"], json!(10));
     }
 
     #[test]

@@ -529,13 +529,22 @@ pub async fn submit_swarm_query(
 }
 
 /// Read swarm task status through `SwarmController.getStatus(id)`.
+///
+/// Uses a short timeout (5 s) so that a single unreachable task does not block
+/// the caller for the client-wide default of 30 s, which matters most in loops
+/// like `swarm list` that query many tasks sequentially.
 pub async fn get_swarm_status(
     client: &Client,
     base_url: &str,
     task_id: &str,
 ) -> Result<String, String> {
     let url = build_endpoint_url(base_url, &format!("/api/swarm/{task_id}/status"));
-    send_rest_request(client.get(url)).await
+    send_rest_request(
+        client
+            .get(url)
+            .timeout(std::time::Duration::from_secs(5)),
+    )
+    .await
 }
 
 /// Read swarm task result through `SwarmController.getResult(id)`.
