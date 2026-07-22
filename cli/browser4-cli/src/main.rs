@@ -35,7 +35,7 @@ use std::io::{IsTerminal, Read};
 use std::path::PathBuf;
 
 use base64::Engine;
-use chrono::Utc;
+use chrono::{Local, Utc};
 use reqwest::Client;
 use serde::{de::DeserializeOwned, Deserialize};
 use serde_json::{json, Value};
@@ -68,9 +68,9 @@ use managed_processes::{
 };
 use snapshot::{resolve_output_path, save_binary, save_snapshot, timestamped_filename};
 use state::{
-    clear_all_state, clear_state, format_async_task_list, prune_async_tasks,
-    read_async_tasks, read_state, resolve_default_state_dir, resolve_ref, track_async_task,
-    update_async_task_status,
+    clear_all_state, clear_state, format_async_task_list, format_timestamp_display,
+    prune_async_tasks, read_async_tasks, read_state, resolve_default_state_dir, resolve_ref,
+    track_async_task, update_async_task_status,
     write_async_tasks, write_state, CliState, MousePosition,
 };
 
@@ -8972,8 +8972,8 @@ async fn handle_loop(
                         cli_println!("   Timeout:    {}", format_duration(t));
                     }
                 }
-                cli_println!("   Started:    {}", ls.started_at);
-                cli_println!("   Updated:    {}", ls.updated_at);
+                cli_println!("   Started:    {}", format_timestamp_display(&ls.started_at));
+                cli_println!("   Updated:    {}", format_timestamp_display(&ls.updated_at));
                 cli_println!("   State file: {}", state_path.display());
                 json_field("loop_state", json!({
                     "name": loop_name.unwrap_or("default"),
@@ -9546,7 +9546,7 @@ async fn handle_loop(
         }
 
         let iter_start = std::time::Instant::now();
-        let timestamp = Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
+        let timestamp = Local::now().format("%Y-%m-%d %H:%M:%S%.3f").to_string();
 
         cli_println!(
             "\n--- Iteration {} [{}] ---",
@@ -11641,7 +11641,7 @@ async fn handle_doctor_log(
                             let modified_str = if modified_ms > 0 {
                                 let secs = modified_ms / 1000;
                                 let datetime = chrono::DateTime::from_timestamp(secs, 0)
-                                    .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
+                                    .map(|dt| dt.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M:%S").to_string())
                                     .unwrap_or_else(|| "unknown".to_string());
                                 datetime
                             } else {

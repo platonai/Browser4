@@ -718,42 +718,50 @@ pub fn format_async_task_list(
     let page: Vec<&&AsyncTaskEntry> = sorted.iter().skip(offset).take(limit).collect();
 
     let mut out = Vec::new();
-    let showing = if limit < total || offset > 0 {
-        let end = (offset + page.len()).min(total);
-        out.push(format!(
-            "{} tracked task(s) (showing {}-{}):\n",
-            total,
-            offset + 1,
-            end
-        ));
-        true
-    } else {
-        out.push(format!("{} tracked task(s):\n", total));
-        false
-    };
+    let showing = (offset + page.len()).min(total);
+    let from = if total > 0 { offset + 1 } else { 0 };
+    out.push(format!(
+        "{} tracked task(s) (showing {}-{}):\n",
+        total, from, showing
+    ));
+    let paginated = limit < total || offset > 0;
 
     // Column widths (capped for readability)
     let id_w = page.iter().map(|t| t.task_id.len()).max().unwrap_or(8).max(8).min(12);
     let cmd_w = page.iter().map(|t| t.command.len()).max().unwrap_or(7).max(7);
     let desc_w = page.iter().map(|t| t.description.len()).max().unwrap_or(11).min(40);
     let desc_w = desc_w.max(11);
+    let status_w = page
+        .iter()
+        .map(|t| {
+            if t.last_status.is_empty() {
+                7 // "pending"
+            } else {
+                t.last_status.len()
+            }
+        })
+        .max()
+        .unwrap_or(6)
+        .max(6);
     let time_w = 19; // "2026-07-22 15:04:05"
 
     out.push(format!(
-        "  {:<id_w$}  {:<cmd_w$}  {:<desc_w$}  {:<time_w$}  {:<time_w$}  {}",
+        "  {:<id_w$}  {:<cmd_w$}  {:<desc_w$}  {:<time_w$}  {:<time_w$}  {:<status_w$}",
         "TASK ID", "COMMAND", "DESCRIPTION", "STARTED", "FINISHED", "STATUS",
         id_w = id_w,
         cmd_w = cmd_w,
         desc_w = desc_w,
         time_w = time_w,
+        status_w = status_w,
     ));
     out.push(format!(
-        "  {:-<id_w$}  {:-<cmd_w$}  {:-<desc_w$}  {:-<time_w$}  {:-<time_w$}  {}",
-        "", "", "", "", "", "------",
+        "  {:-<id_w$}  {:-<cmd_w$}  {:-<desc_w$}  {:-<time_w$}  {:-<time_w$}  {:-<status_w$}",
+        "", "", "", "", "", "",
         id_w = id_w,
         cmd_w = cmd_w,
         desc_w = desc_w,
         time_w = time_w,
+        status_w = status_w,
     ));
 
     for entry in &page {
@@ -774,7 +782,7 @@ pub fn format_async_task_list(
             .map(|s| format_timestamp_display(s))
             .unwrap_or_else(|| "-".to_string());
         out.push(format!(
-            "  {:<id_w$}  {:<cmd_w$}  {:<desc_w$}  {:<time_w$}  {:<time_w$}  {}",
+            "  {:<id_w$}  {:<cmd_w$}  {:<desc_w$}  {:<time_w$}  {:<time_w$}  {:<status_w$}",
             entry.task_id,
             entry.command,
             desc,
@@ -785,28 +793,36 @@ pub fn format_async_task_list(
             cmd_w = cmd_w,
             desc_w = desc_w,
             time_w = time_w,
+            status_w = status_w,
         ));
     }
 
-    if showing {
-        let remaining = total.saturating_sub(offset + page.len());
+    if paginated {
+        let remaining = total.saturating_sub(showing);
         if remaining > 0 {
             out.push(format!(
                 "\n  ... {} more task(s). Use --offset {} to see the next page.",
                 remaining,
-                offset + page.len()
+                showing
             ));
         }
+    } else if total > 20 {
+        out.push(
+            "\n  Hint: Use --limit N to paginate large lists.".to_string(),
+        );
     }
 
     out.join("\n")
 }
 
-/// Format an ISO-8601 timestamp for display as "YYYY-MM-DD HH:MM:SS".
-fn format_timestamp_display(iso: &str) -> String {
+/// Format an ISO-8601 timestamp for display as local time "YYYY-MM-DD HH:MM:SS".
+///
+/// Timestamps are stored in UTC. They are converted to the system's local
+/// timezone for display.
+pub fn format_timestamp_display(iso: &str) -> String {
     chrono::DateTime::parse_from_rfc3339(iso)
         .or_else(|_| chrono::DateTime::parse_from_rfc3339(&format!("{}Z", iso)))
-        .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
+        .map(|dt| dt.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M:%S").to_string())
         .unwrap_or_else(|_| iso.chars().take(19).collect())
 }
 
@@ -1100,7 +1116,7 @@ mod tests {
             }],
         };
         let output = format_async_task_list(&list, None, None);
-        assert!(output.contains("1 tracked task"));
+        assert!(output.contains("1 tracked task(s) (showing 1-1)"));
         assert!(output.contains("crawl-job-1"));
         assert!(output.contains("https://example.com"));
         assert!(output.contains("STARTED"));
@@ -1137,6 +1153,13 @@ mod tests {
         assert!(new_pos < old_pos, "latest task should appear first, but 'new' at {new_pos} is after 'old' at {old_pos}");
     }
 
+    /// Helper: format a UTC RFC 3339 timestamp as it would appear in local time display.
+    fn local_display(utc_rfc3339: &str) -> String {
+        chrono::DateTime::parse_from_rfc3339(utc_rfc3339)
+            .map(|dt| dt.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M:%S").to_string())
+            .unwrap_or_else(|_| utc_rfc3339.chars().take(19).collect())
+    }
+
     #[test]
     fn test_format_async_task_list_shows_finish_time_when_completed() {
         let list = AsyncTaskList {
@@ -1150,10 +1173,12 @@ mod tests {
             }],
         };
         let output = format_async_task_list(&list, None, None);
-        // Started column
-        assert!(output.contains("2026-07-22 14:00:00"));
+        // Started column — should show local time
+        let expected_started = local_display("2026-07-22T14:00:00+00:00");
+        assert!(output.contains(&expected_started), "expected started time '{}' in output:\n{}", expected_started, output);
         // Finished column — should show the timestamp, not "-"
-        assert!(output.contains("2026-07-22 14:05:30"));
+        let expected_finished = local_display("2026-07-22T14:05:30+00:00");
+        assert!(output.contains(&expected_finished), "expected finished time '{}' in output:\n{}", expected_finished, output);
     }
 
     #[test]
@@ -1169,10 +1194,11 @@ mod tests {
             }],
         };
         let output = format_async_task_list(&list, None, None);
-        // Started should show the time
-        assert!(output.contains("2026-07-22 16:00:00"));
+        // Started should show local time
+        let expected_started = local_display("2026-07-22T16:00:00+00:00");
+        assert!(output.contains(&expected_started), "expected started time '{}' in output:\n{}", expected_started, output);
         // Finished should show "-" for unfinished tasks
-        let needle = "2026-07-22 16:00:00";
+        let needle = &expected_started;
         let after_started = &output[output.find(needle).unwrap() + needle.len()..];
         assert!(after_started.trim().starts_with("-") || after_started.contains("  -  "),
                 "unfinished task should show '-' in FINISHED column");
@@ -1247,14 +1273,33 @@ mod tests {
             }],
         };
         let output = format_async_task_list(&list, Some(10), None);
-        // Only 1 task, limit 10 — all shown, no pagination hint
-        assert!(!output.contains("showing"));
+        // Only 1 task, limit 10 — all shown, no "more" hint
+        assert!(output.contains("showing 1-1"));
         assert!(!output.contains("more task"));
     }
 
     #[test]
+    fn test_format_async_task_list_suggests_limit_for_large_lists() {
+        let mut tasks = Vec::new();
+        for i in 0..25 {
+            tasks.push(AsyncTaskEntry {
+                task_id: format!("task-{:02}", i),
+                command: "swarm-submit".to_string(),
+                description: format!("url-{}", i),
+                submitted_at: format!("2026-07-22T{:02}:00:00+00:00", i),
+                last_status: "pending".to_string(),
+                completed_at: None,
+            });
+        }
+        let list = AsyncTaskList { tasks };
+        let output = format_async_task_list(&list, None, None);
+        assert!(output.contains("showing 1-25"));
+        assert!(output.contains("Hint: Use --limit N to paginate"));
+    }
+
+    #[test]
     fn test_format_timestamp_display_handles_missing_tz() {
-        // Should handle ISO-8601 without timezone suffix gracefully
+        // Should handle ISO-8601 with just "Z" suffix, converting to local time
         let output = format_async_task_list(
             &AsyncTaskList {
                 tasks: vec![AsyncTaskEntry {
@@ -1269,6 +1314,7 @@ mod tests {
             None,
             None,
         );
-        assert!(output.contains("2026-07-22 12:00:00"));
+        let expected = local_display("2026-07-22T12:00:00Z");
+        assert!(output.contains(&expected), "expected local time '{}' in output:\n{}", expected, output);
     }
 }
