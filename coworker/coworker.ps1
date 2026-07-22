@@ -48,7 +48,7 @@ Commands:
             coworker add [-Path <path>] [-Name <str>] [-Rename] [-AutoApprove]
 
   list      Show tasks grouped by state
-            coworker list [-State <str>] [-Count <int>] [-Brief]
+            coworker list [-State <str>] [-Count <int>] [-Brief] [-NoPager]
 
   view      Display full task content
             coworker view [-Path <path>] [-Name <str>] [-Raw]
@@ -56,10 +56,10 @@ Commands:
   cancel    Move a task back to draft or remove it
             coworker cancel [-Path <path>] [-Remove] [-Force]
 
-  commit    Git commit workspace changes (no push)
-            coworker commit [-Message <str>] [-TaskRef <path>]
+  commit    Git commit workspace changes (no push, AI-generated message)
+            coworker commit [-Message <str>]
 
-  push      Commit and push to remote
+  push      Commit (AI-generated msg) and push to remote
             coworker push [-Message <str>] [-Force] [-NoPull]
 
 Run "coworker <command>" with no additional arguments to see
@@ -407,19 +407,97 @@ Created: $(Get-CoworkerTimestamp)
 
     # Open editor if requested
     if ($Edit) {
-        $editor = if ($env:EDITOR) { $env:EDITOR }
-                  elseif ($IsWindows -or $env:OS -eq 'Windows_NT') { 'notepad.exe' }
-                  else { 'nano' }
-
-        Write-ConsoleLine -Message "Opening editor: $editor" -ForegroundColor Cyan
+        $editorCmd = Find-BestEditor
+        Write-ConsoleLine -Message "Opening editor: $($editorCmd -join ' ')" -ForegroundColor Cyan
         try {
-            & $editor $filePath
+            & $editorCmd[0] @($editorCmd | Select-Object -Skip 1) $filePath
             Write-ConsoleLine -Message "Editor closed. Draft saved: $filePath" -ForegroundColor Green
         }
         catch {
-            Write-ConsoleLine -Message "Warning: Could not open editor ($editor). File saved anyway: $filePath" -ForegroundColor Yellow
+            Write-ConsoleLine -Message "Warning: Could not open editor. File saved anyway: $filePath" -ForegroundColor Yellow
         }
     }
+}
+
+<#
+.SYNOPSIS
+    Find the best available GUI editor on the system.
+    Returns an array: (executable, flag, ...) — ready to splat with &.
+    Includes a --wait flag when the editor supports it so the script
+    blocks until the user closes the file.
+#>
+function Find-BestEditor {
+    # Tier 1: Modern GUI editors with --wait support (VS Code family)
+    $tier1 = @(
+        @{ Exe = 'code';     WaitFlag = '--wait'; Desc = 'VS Code' }
+        @{ Exe = 'cursor';   WaitFlag = '--wait'; Desc = 'Cursor' }
+        @{ Exe = 'windsurf'; WaitFlag = '--wait'; Desc = 'Windsurf' }
+        @{ Exe = 'trae';     WaitFlag = '--wait'; Desc = 'Trae' }
+    )
+    foreach ($e in $tier1) {
+        if (Get-Command $e.Exe -ErrorAction SilentlyContinue) {
+            return @($e.Exe, $e.WaitFlag)
+        }
+    }
+
+    # Tier 2: JetBrains IDEs (--wait works for IntelliJ family)
+    $tier2 = @(
+        @{ Exe = 'idea';     WaitFlag = '--wait'; Desc = 'IntelliJ IDEA' }
+    )
+    foreach ($e in $tier2) {
+        if (Get-Command $e.Exe -ErrorAction SilentlyContinue) {
+            return @($e.Exe, $e.WaitFlag)
+        }
+    }
+
+    # Tier 3: Sublime Text
+    if (Get-Command 'subl' -ErrorAction SilentlyContinue) {
+        return @('subl', '--wait')
+    }
+
+    # Tier 4: Notepad++ (Windows)
+    if (Get-Command 'notepad++' -ErrorAction SilentlyContinue) {
+        return @('notepad++')
+    }
+
+    # Tier 5: GUI editors without --wait
+    $tier5 = @(
+        @{ Exe = 'gedit';   Desc = 'Gedit' }
+        @{ Exe = 'kate';    Desc = 'Kate' }
+        @{ Exe = 'gnome-text-editor'; Desc = 'GNOME Text Editor' }
+    )
+    foreach ($e in $tier5) {
+        if (Get-Command $e.Exe -ErrorAction SilentlyContinue) {
+            return @($e.Exe)
+        }
+    }
+
+    # Tier 6: macOS TextEdit
+    if ($IsMacOS) {
+        return @('open', '-a', 'TextEdit')
+    }
+
+    # Tier 7: $env:EDITOR (user preference)
+    if ($env:EDITOR) {
+        return @($env:EDITOR)
+    }
+
+    # Tier 8: Terminal editors (powerful fallbacks when no GUI available)
+    $tier8 = @(
+        @{ Exe = 'vim';  Desc = 'Vim' }
+        @{ Exe = 'vi';   Desc = 'Vi' }
+    )
+    foreach ($e in $tier8) {
+        if (Get-Command $e.Exe -ErrorAction SilentlyContinue) {
+            return @($e.Exe)
+        }
+    }
+
+    # Tier 9: Platform fallback
+    if ($IsWindows -or $env:OS -eq 'Windows_NT') {
+        return @('notepad.exe')
+    }
+    return @('nano')
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -722,7 +800,8 @@ function Invoke-List {
     param(
         [string]$State = 'all',
         [int]$Count = 0,
-        [switch]$Brief
+        [switch]$Brief,
+        [switch]$NoPager
     )
 
     $dirs = Get-TaskDirectories
@@ -749,6 +828,8 @@ function Invoke-List {
         $stateMap = [ordered]@{ $targetLabel = $stateMap[$targetLabel] }
     }
 
+    # Build output lines as (text, color) tuples
+    $outputLines = [System.Collections.Generic.List[object]]::new()
     $totalTasks = 0
 
     foreach ($label in $stateMap.Keys) {
@@ -775,19 +856,20 @@ function Invoke-List {
         if ($Count -gt 0) { $files = $files | Select-Object -First $Count }
 
         $totalTasks += $files.Count
+        $stateColor = Get-StateColor -DirPath $dir
 
         if ($Brief) {
-            Write-ConsoleLine -Message "[$label] $($files.Count) task(s)" -ForegroundColor (Get-StateColor -DirPath $dir)
+            $outputLines.Add([PSCustomObject]@{Text = "[$label] $($files.Count) task(s)"; Color = $stateColor })
             foreach ($f in $files) {
-                Write-ConsoleLine -Message "  $($f.Name)"
+                $outputLines.Add([PSCustomObject]@{Text = "  $($f.Name)"; Color = $null })
             }
             continue
         }
 
-        Write-ConsoleLine -Message "`n=== $label ($($files.Count) task(s)) ===" -ForegroundColor (Get-StateColor -DirPath $dir)
+        $outputLines.Add([PSCustomObject]@{Text = "`n=== $label ($($files.Count) task(s)) ==="; Color = $stateColor })
 
         if ($files.Count -eq 0) {
-            Write-ConsoleLine -Message "  (empty)" -ForegroundColor DarkGray
+            $outputLines.Add([PSCustomObject]@{Text = "  (empty)"; Color = 'DarkGray' })
             continue
         }
 
@@ -795,8 +877,8 @@ function Invoke-List {
         $nameHeader = 'File'.PadRight(45)
         $titleHeader = 'Title'.PadRight(50)
         $dateHeader = 'Modified'
-        Write-ConsoleLine -Message "  $nameHeader  $titleHeader  $dateHeader" -ForegroundColor DarkGray
-        Write-ConsoleLine -Message "  $('-'*45)  $('-'*50)  $('-'*19)" -ForegroundColor DarkGray
+        $outputLines.Add([PSCustomObject]@{Text = "  $nameHeader  $titleHeader  $dateHeader"; Color = 'DarkGray' })
+        $outputLines.Add([PSCustomObject]@{Text = "  $('-'*45)  $('-'*50)  $('-'*19)"; Color = 'DarkGray' })
 
         foreach ($f in $files) {
             $nameField = $f.Name
@@ -809,12 +891,66 @@ function Invoke-List {
 
             $dateField = $f.LastWriteTime.ToString('yyyy-MM-dd HH:mm')
 
-            Write-ConsoleLine -Message "  $nameField  $titleField  $dateField"
+            $outputLines.Add([PSCustomObject]@{Text = "  $nameField  $titleField  $dateField"; Color = $null })
         }
     }
 
     if (-not $Brief) {
-        Write-ConsoleLine -Message "`nTotal: $totalTasks task(s)" -ForegroundColor Cyan
+        $outputLines.Add([PSCustomObject]@{Text = "`nTotal: $totalTasks task(s)"; Color = 'Cyan' })
+    }
+
+    # Determine whether to paginate
+    $usePager = -not $NoPager
+    if ($usePager) {
+        # Only paginate when stdout is a terminal and output exceeds screen height
+        $isTerminal = $false
+        try { $isTerminal = [Console]::IsOutputRedirected -eq $false } catch { }
+        if (-not $isTerminal) { $usePager = $false }
+    }
+
+    if ($usePager) {
+        $pageHeight = 0
+        try { $pageHeight = [Math]::Max(($host.UI.RawUI.WindowSize.Height - 2), 5) } catch { }
+        if ($pageHeight -eq 0 -or $outputLines.Count -le $pageHeight) { $usePager = $false }
+    }
+
+    if ($usePager) {
+        # Paginated display with "press any key" prompt
+        $shown = 0
+        $total = $outputLines.Count
+        while ($shown -lt $total) {
+            $end = [Math]::Min($shown + $pageHeight, $total) - 1
+            for ($i = $shown; $i -le $end; $i++) {
+                $item = $outputLines[$i]
+                if ($item.Color) {
+                    Write-ConsoleLine -Message $item.Text -ForegroundColor $item.Color
+                } else {
+                    Write-ConsoleLine -Message $item.Text
+                }
+            }
+            $shown = $end + 1
+            if ($shown -lt $total) {
+                $remaining = $total - $shown
+                Write-Host ("`n-- More --  ({0} lines remaining — Enter/space to continue, q to quit) " -f $remaining) -ForegroundColor DarkGray -NoNewline
+                $key = $null
+                try { $key = [Console]::ReadKey($true) } catch { break }
+                if ($key.KeyChar -eq 'q') { Write-Host ""; break }
+                # Move cursor up and clear the prompt line
+                Write-Host "`r" -NoNewline
+                Write-Host (' ' * 80) -NoNewline
+                Write-Host "`r" -NoNewline
+            }
+        }
+    }
+    else {
+        # No pagination — emit all lines directly
+        foreach ($item in $outputLines) {
+            if ($item.Color) {
+                Write-ConsoleLine -Message $item.Text -ForegroundColor $item.Color
+            } else {
+                Write-ConsoleLine -Message $item.Text
+            }
+        }
     }
 }
 
@@ -971,8 +1107,7 @@ function Invoke-Cancel {
 
 function Invoke-Commit {
     param(
-        [string]$Message = '',
-        [string]$TaskRef = ''
+        [string]$Message = ''
     )
 
     $targetRepo = Get-TargetRepositoryRoot
@@ -987,57 +1122,7 @@ function Invoke-Commit {
     # Verify it's a git repo
     Push-Location $targetRepo
     try {
-        $isRepo = & git rev-parse --git-dir 2>&1
-        if ($LASTEXITCODE -ne 0) {
-            Write-ConsoleLine -Message "Error: Not a git repository: $targetRepo" -ForegroundColor Red
-            exit 1
-        }
-    }
-    finally { Pop-Location }
-
-    # Build commit message
-    $commitMsg = $Message
-    if (-not $commitMsg) {
-        if ($TaskRef) {
-            $taskName = ''
-            if (Test-Path -LiteralPath $TaskRef) {
-                $taskName = [System.IO.Path]::GetFileNameWithoutExtension($TaskRef)
-            }
-            else {
-                $found = Find-TaskFile -Name $TaskRef
-                if ($found.Count -gt 0) {
-                    $taskName = [System.IO.Path]::GetFileNameWithoutExtension($found[0])
-                }
-            }
-            $commitMsg = if ($taskName) { "fix(done): $taskName" } else { "fix(coworker): task update" }
-        }
-        else {
-            # Scan 3done for recent tasks
-            $dirs = Get-TaskDirectories
-            $recentTasks = @()
-            if (Test-Path $dirs.Done) {
-                $recentTasks = @(Get-ChildItem -Path $dirs.Done -Recurse -File -ErrorAction SilentlyContinue |
-                    Where-Object { -not (Test-CoworkerIgnoredFile -Item $_) } |
-                    Sort-Object LastWriteTime -Descending |
-                    Select-Object -First 3)
-            }
-            if ($recentTasks.Count -gt 0) {
-                $names = ($recentTasks | ForEach-Object { $_.BaseName }) -join ', '
-                if ($names.Length -gt 60) { $names = $names.Substring(0, 57) + '...' }
-                $commitMsg = "fix(done): $names"
-            }
-            else {
-                $commitMsg = "fix(coworker): task update"
-            }
-        }
-    }
-
-    Write-ConsoleLine -Message "Target repo: $targetRepo" -ForegroundColor DarkGray
-    Write-ConsoleLine -Message "Commit message: $commitMsg" -ForegroundColor Cyan
-
-    Push-Location $targetRepo
-    try {
-        # Stage all changes
+        # Stage all changes first
         & git add -A 2>&1 | Out-Null
 
         # Check if there's anything to commit
@@ -1047,12 +1132,102 @@ function Invoke-Commit {
             exit 0
         }
 
+        # Collect staged diff for the agent to analyze
+        $diffStat = & git diff --cached --stat 2>&1
+        $diffBody = & git diff --cached 2>&1
+
+        # Truncate diff if it's huge (agent has context limits)
+        $maxDiffChars = 8000
+        if ($diffBody.Length -gt $maxDiffChars) {
+            $diffBody = $diffBody.Substring(0, $maxDiffChars) + "`n... (diff truncated, $($diffBody.Length) total chars)"
+        }
+
+        # Build commit message via AI agent
+        if (-not $Message) {
+            $branch = & git rev-parse --abbrev-ref HEAD 2>&1
+            $commitPrompt = @"
+Generate a conventional commit message for the following staged changes.
+
+Branch: $branch
+Repository: $targetRepo
+
+The message must follow the Conventional Commits format:
+  <type>[optional scope]: <description>
+
+Types: feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert
+Breaking changes: append "!" after the type (e.g. "feat!:").
+
+Rules:
+- First line: "<type>: <imperative description>" (max 72 chars)
+- Leave a blank line after the first line
+- Optionally add a body paragraph explaining what and why (not how)
+- Do NOT wrap the message in code fences or quotes
+- Output ONLY the commit message, no conversational framing
+
+Staged changes summary:
+$diffStat
+
+Staged diff:
+$diffBody
+"@
+
+            Write-ConsoleLine -Message "Generating commit message via AI agent..." -ForegroundColor Cyan
+
+            $agentCommand = Get-AgentCommand -RepoRoot $targetRepo
+            try {
+                $msgStdOut = [System.IO.Path]::GetTempFileName()
+                $msgStdErr = [System.IO.Path]::GetTempFileName()
+
+                try {
+                    $msgProcess = Start-AgentProcess -Executable $agentCommand.Executable `
+                        -BaseArgs $agentCommand.BaseArgs `
+                        -Prompt $commitPrompt `
+                        -WorkingDirectory $targetRepo `
+                        -StdOutPath $msgStdOut `
+                        -StdErrPath $msgStdErr `
+                        -NoNewWindow `
+                        -Backend $agentCommand.Backend
+
+                    $msgTimeout = 120
+                    $msgCompleted = $msgProcess.WaitForExit($msgTimeout * 1000)
+                    if (-not $msgCompleted) {
+                        Stop-Process -Id $msgProcess.Id -Force -ErrorAction SilentlyContinue
+                        Write-ConsoleLine -Message "Warning: Commit message generation timed out. Using fallback." -ForegroundColor Yellow
+                        $Message = "fix(coworker): task update"
+                    }
+                    else {
+                        $Message = Get-Content -Path $msgStdOut -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
+                        # Strip any conversational framing or code fences
+                        $Message = $Message -replace '^```[a-z]*\s*\n', '' -replace '\n```\s*$', ''
+                        $Message = $Message.Trim()
+                        if (-not $Message) {
+                            $Message = "fix(coworker): task update"
+                            Write-ConsoleLine -Message "Warning: Agent returned empty message. Using fallback." -ForegroundColor Yellow
+                        }
+                    }
+                }
+                finally {
+                    Remove-Item $msgStdOut -ErrorAction SilentlyContinue
+                    Remove-Item $msgStdErr -ErrorAction SilentlyContinue
+                }
+            }
+            catch {
+                Write-ConsoleLine -Message "Warning: Agent invocation failed: $_. Using fallback." -ForegroundColor Yellow
+                $Message = "fix(coworker): task update"
+            }
+        }
+
+        Write-ConsoleLine -Message "Target repo: $targetRepo" -ForegroundColor DarkGray
+        Write-ConsoleLine -Message "Commit message:" -ForegroundColor Cyan
+        Write-ConsoleLine -Message "────────────────" -ForegroundColor DarkGray
+        Write-ConsoleLine -Message $Message -ForegroundColor White
+        Write-ConsoleLine -Message "────────────────" -ForegroundColor DarkGray
+
         # Commit
-        $output = & git commit -m $commitMsg 2>&1
+        $output = & git commit -m $Message 2>&1
         if ($LASTEXITCODE -eq 0) {
             Write-ConsoleLine -Message "Committed successfully." -ForegroundColor Green
             Write-Output $output
-            # Show the commit SHA
             $sha = & git rev-parse --short HEAD 2>&1
             Write-ConsoleLine -Message "Commit: $sha" -ForegroundColor Green
         }
@@ -1074,7 +1249,6 @@ function Invoke-Commit {
 function Invoke-Push {
     param(
         [string]$Message = '',
-        [string]$TaskRef = '',
         [switch]$Force,
         [switch]$NoPull
     )
@@ -1114,26 +1288,69 @@ function Invoke-Push {
         & git add -A 2>&1 | Out-Null
         & git diff --cached --quiet 2>&1 | Out-Null
         if ($LASTEXITCODE -ne 0) {
-            # There are staged changes — commit them
-            $commitMsg = $Message
-            if (-not $commitMsg) {
-                if ($TaskRef) {
-                    $taskName = ''
-                    if (Test-Path -LiteralPath $TaskRef) {
-                        $taskName = [System.IO.Path]::GetFileNameWithoutExtension($TaskRef)
-                    }
-                    $commitMsg = if ($taskName) { "fix(done): $taskName" } else { "fix(coworker): task update" }
+            # There are staged changes — generate commit message via agent
+            if (-not $Message) {
+                $diffStat = & git diff --cached --stat 2>&1
+                $diffBody = & git diff --cached 2>&1
+                $maxDiffChars = 8000
+                if ($diffBody.Length -gt $maxDiffChars) {
+                    $diffBody = $diffBody.Substring(0, $maxDiffChars) + "`n... (truncated)"
                 }
-                else {
-                    $commitMsg = "fix(coworker): task update"
+
+                $commitPrompt = @"
+Generate a conventional commit message for the following staged changes.
+
+Branch: $branch
+Repository: $targetRepo
+
+Rules:
+- First line: "<type>: <imperative description>" (max 72 chars)
+- Leave a blank line, optionally add a body paragraph
+- Output ONLY the commit message, no code fences or framing
+
+Staged changes summary:
+$diffStat
+
+Staged diff:
+$diffBody
+"@
+
+                Write-ConsoleLine -Message "Generating commit message via AI agent..." -ForegroundColor Cyan
+                $agentCommand = Get-AgentCommand -RepoRoot $targetRepo
+                try {
+                    $msgStdOut = [System.IO.Path]::GetTempFileName()
+                    $msgStdErr = [System.IO.Path]::GetTempFileName()
+                    try {
+                        $msgProcess = Start-AgentProcess -Executable $agentCommand.Executable `
+                            -BaseArgs $agentCommand.BaseArgs -Prompt $commitPrompt `
+                            -WorkingDirectory $targetRepo -StdOutPath $msgStdOut `
+                            -StdErrPath $msgStdErr -NoNewWindow -Backend $agentCommand.Backend
+                        if ($msgProcess.WaitForExit(120000)) {
+                            $Message = (Get-Content -Path $msgStdOut -Raw -Encoding UTF8 -ErrorAction SilentlyContinue) -replace '^```[a-z]*\s*\n', '' -replace '\n```\s*$', ''
+                            $Message = $Message.Trim()
+                        }
+                    }
+                    finally {
+                        Remove-Item $msgStdOut -ErrorAction SilentlyContinue
+                        Remove-Item $msgStdErr -ErrorAction SilentlyContinue
+                    }
+                }
+                catch { }
+                if (-not $Message) {
+                    $Message = "fix(coworker): task update"
+                    Write-ConsoleLine -Message "Warning: Could not generate message via agent. Using fallback." -ForegroundColor Yellow
                 }
             }
-            Write-ConsoleLine -Message "Committing: $commitMsg" -ForegroundColor Cyan
-            & git commit -m $commitMsg 2>&1 | Out-Null
+
+            Write-ConsoleLine -Message "Commit message:" -ForegroundColor Cyan
+            Write-ConsoleLine -Message $Message -ForegroundColor White
+            Write-ConsoleLine -Message "Committing..." -ForegroundColor Cyan
+            & git commit -m $Message 2>&1 | Out-Null
             if ($LASTEXITCODE -ne 0) {
                 Write-ConsoleLine -Message "Error: Commit failed." -ForegroundColor Red
                 exit 1
             }
+            Write-ConsoleLine -Message "Committed." -ForegroundColor Green
         }
         else {
             Write-ConsoleLine -Message "No changes to commit." -ForegroundColor DarkGray
@@ -1253,18 +1470,21 @@ Examples:
 Usage: coworker list [options]
 
 Show tasks across the Coworker state machine.
+Output is paginated automatically when it exceeds terminal height.
 
 Options:
   -State <str>  Filter by state: draft, ready, working, done, review,
                 approved, pushed, all (default)
   -Count <int>  Limit to N most recent tasks per state
   -Brief        Compact output (filenames only)
+  -NoPager      Disable pagination (print everything at once)
 
 Examples:
   coworker list
   coworker list -State ready
   coworker list -State done -Count 10
   coworker list -Brief
+  coworker list -NoPager
 '@
         }
         'view' {
@@ -1309,14 +1529,15 @@ Usage: coworker commit [options]
 Stage and commit all changes in the target repository.
 Does NOT push to remote.
 
+The commit message is generated by an AI agent that analyzes the
+staged diff and produces a conventional-commits message.
+
 Options:
-  -Message <str>   Commit message (auto-generated if not provided)
-  -TaskRef <path>  Reference a task file for auto-message generation
+  -Message <str>   Override the AI-generated commit message
 
 Examples:
-  coworker commit -Message "fix(auth): resolve token expiry"
-  coworker commit -TaskRef 3done/2026/0722/fix-auth.md
   coworker commit
+  coworker commit -Message "fix(auth): resolve token expiry"
 '@
         }
         'push' {
@@ -1324,11 +1545,10 @@ Examples:
 Usage: coworker push [options]
 
 Stage, commit, pull, and push all changes to the remote.
-Combines commit + pull --rebase + push in one operation.
+The commit message is AI-generated from the staged diff.
 
 Options:
-  -Message <str>   Commit message (auto-generated if not provided)
-  -TaskRef <path>  Reference a task file for commit message
+  -Message <str>   Override the AI-generated commit message
   -Force           Use --force-with-lease on push
   -NoPull          Skip git pull before pushing
 
@@ -1374,6 +1594,7 @@ function Parse-SubcommandArgs {
             '-Remove'        { $parsed['Remove'] = $true; break }
             '-Raw'           { $parsed['Raw'] = $true; break }
             '-Brief'         { $parsed['Brief'] = $true; break }
+            '-NoPager'       { $parsed['NoPager'] = $true; break }
             '-Long'          { $parsed['Long'] = $true; break }
             '-InPlace'       { $parsed['InPlace'] = $true; break }
             '-NoPull'        { $parsed['NoPull'] = $true; break }
@@ -1411,7 +1632,7 @@ if ($subArgs['Help']) {
 # Show command help if no meaningful args and it's a command that requires args
 $needsArgs = @('refine', 'add', 'view', 'cancel', 'commit', 'push')
 if ($Command -in $needsArgs) {
-    $hasArgs = ($subArgs['Path'] -or $subArgs['Name'] -or $subArgs['TaskRef'] -or
+    $hasArgs = ($subArgs['Path'] -or $subArgs['Name'] -or
                 $subArgs['Message'] -or $subArgs['Edit'])
     if ($Command -eq 'commit' -and -not $hasArgs) {
         # commit can run without args (auto-generates message)
@@ -1469,7 +1690,8 @@ try {
         'list' {
             Invoke-List -State (Get-Arg $subArgs 'State' 'all') `
                 -Count (Get-Arg $subArgs 'Count' 0) `
-                -Brief:(Get-SwitchArg $subArgs 'Brief')
+                -Brief:(Get-SwitchArg $subArgs 'Brief') `
+                -NoPager:(Get-SwitchArg $subArgs 'NoPager')
         }
         'view' {
             Invoke-View -Path (Get-Arg $subArgs 'Path') `
@@ -1483,12 +1705,10 @@ try {
                 -Force:(Get-SwitchArg $subArgs 'Force')
         }
         'commit' {
-            Invoke-Commit -Message (Get-Arg $subArgs 'Message') `
-                -TaskRef (Get-Arg $subArgs 'TaskRef')
+            Invoke-Commit -Message (Get-Arg $subArgs 'Message')
         }
         'push' {
             Invoke-Push -Message (Get-Arg $subArgs 'Message') `
-                -TaskRef (Get-Arg $subArgs 'TaskRef') `
                 -Force:(Get-SwitchArg $subArgs 'Force') `
                 -NoPull:(Get-SwitchArg $subArgs 'NoPull')
         }
