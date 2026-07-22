@@ -1,6 +1,6 @@
 {
   "name": "browser4-event-demos",
-  "version": "1.0.0",
+  "version": "4.12.0-SNAPSHOT",
   "description": "Demo plugins for all 28 events defined in PageEvents.kt — covers CrawlEventHandlers (2), LoadEventHandlers (9), and BrowseEventHandlers (17). Logs every event firing and demonstrates idiomatic usage patterns (URL filtering, resource blocking, RPA actions, data extraction, etc.).",
   "dependsOn": ["browser4-skeleton", "browser4-browser"],
   "autoConfigurationClasses": [

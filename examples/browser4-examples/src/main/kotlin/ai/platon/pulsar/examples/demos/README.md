@@ -1,7 +1,7 @@
 # Browser4 Event Demos — Plugin Documentation
 
 Demo plugins demonstrating all **28 event hooks** defined in
-[`PageEvents.kt`](../../../../../../../../browser4-core/browser4-skeleton/src/main/kotlin/ai/platon/pulsar/skeleton/event/PageEvents.kt).
+[`PageEvents.kt`](../../../../../../../../../../browser4-core/browser4-skeleton/src/main/kotlin/ai/platon/pulsar/skeleton/event/PageEvents.kt).
 Each demo logs when its event fires and performs an idiomatic action for that
 lifecycle stage.
 
@@ -103,14 +103,16 @@ onFeatureComputed → onDidInteract → onWillStopTab → onTabStopped → onFet
 Run any demo directly without PluginManager:
 
 ```kotlin
-// In IntelliJ or via Gradle:
-suspend fun main() = CrawlEventDemos.run()    // 2 events
-suspend fun main() = LoadEventDemos.run()      // 9 events
-suspend fun main() = BrowseEventDemos.run()    // 17 events
+// In IntelliJ or via Gradle — each class has a @JvmStatic companion main():
+CrawlEventDemos.main()    // 2 events
+LoadEventDemos.main()      // 9 events
+BrowseEventDemos.main()    // 17 events
 ```
 
-Internally each `run()` calls `session.open(url, eventHandlers)` with a local
-`DefaultPageEventHandlers` instance — fully self-contained, no Spring required.
+Each demo class has a `suspend fun run()` instance method and a `companion object`
+with `@JvmStatic suspend fun main()`. The `run()` method calls
+`session.open(url, eventHandlers)` with a local `DefaultPageEventHandlers` instance
+— fully self-contained, no Spring required.
 
 ### Option B — Install as a plugin (production)
 
@@ -119,7 +121,7 @@ Internally each `run()` calls `session.open(url, eventHandlers)` with a local
 ```bash
 # From the repo root
 mvn package -pl examples/browser4-examples -am -DskipTests
-# → examples/browser4-examples/target/browser4-examples-4.12.0-rc.1.jar
+# → examples/browser4-examples/target/browser4-examples-4.12.0-SNAPSHOT.jar
 ```
 
 The JAR contains:
@@ -133,16 +135,16 @@ The JAR contains:
 # Upload the plugin JAR
 curl -X POST http://localhost:8080/api/plugins/install \
   -H "Content-Type: multipart/form-data" \
-  -F "file=@examples/browser4-examples/target/browser4-examples-4.12.0-rc.1.jar"
+  -F "file=@examples/browser4-examples/target/browser4-examples-4.12.0-SNAPSHOT.jar"
 
 # Response (200 OK):
 # {
-#   "fileName": "browser4-examples-4.12.0-rc.1.jar",
+#   "fileName": "browser4-examples-4.12.0-SNAPSHOT.jar",
 #   "fileSize": 42000,
-#   "path": "/abs/path/to/plugins/browser4-examples-4.12.0-rc.1.jar",
+#   "path": "/abs/path/to/plugins/browser4-examples-4.12.0-SNAPSHOT.jar",
 #   "manifest": {
 #     "name": "browser4-event-demos",
-#     "version": "1.0.0",
+#     "version": "4.12.0-SNAPSHOT",
 #     "description": "Demo plugins for all 28 events...",
 #     "dependsOn": ["browser4-skeleton", "browser4-browser"],
 #     "autoConfigurationClasses": [
@@ -178,7 +180,7 @@ fire on every page load.
 ```bash
 # List installed plugins
 curl http://localhost:8080/api/plugins
-# → [{"fileName":"browser4-examples-4.12.0-rc.1.jar", "loaded":true, ...}]
+# → [{"fileName":"browser4-examples-4.12.0-SNAPSHOT.jar", "loaded":true, ...}]
 
 # Inspect one
 curl http://localhost:8080/api/plugins/browser4-event-demos
