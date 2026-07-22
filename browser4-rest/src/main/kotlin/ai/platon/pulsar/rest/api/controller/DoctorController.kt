@@ -6,6 +6,7 @@ import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.http.ResponseEntity
 import org.springframework.web.bind.annotation.*
+import kotlin.text.Charsets
 import java.io.File
 import java.io.RandomAccessFile
 
@@ -249,6 +250,10 @@ class DoctorController(
     /**
      * Efficiently read the last [numLines] lines from a file using RandomAccessFile.
      * Returns a pair of (lines, totalLineCount).
+     *
+     * Reads the raw bytes and decodes them as UTF-8, because
+     * [RandomAccessFile.readLine] uses the platform default charset which
+     * corrupts non-ASCII characters on Windows (e.g. GBK instead of UTF-8).
      */
     private fun tailLines(file: File, numLines: Int): Pair<List<String>, Int> {
         val buffer = ArrayDeque<String>(numLines)
@@ -267,21 +272,62 @@ class DoctorController(
 
             // Skip partial first line if not at the beginning
             if (startPos > 0) {
-                raf.readLine() // skip the partial line
+                skipPartialLine(raf)
             }
 
-            var line: String? = raf.readLine()
-            while (line != null) {
+            var rawLine: ByteArray? = readUtf8Line(raf)
+            while (rawLine != null) {
                 totalLines++
+                val line = String(rawLine, Charsets.UTF_8)
                 buffer.addLast(line)
                 if (buffer.size > numLines) {
                     buffer.removeFirst()
                 }
-                line = raf.readLine()
+                rawLine = readUtf8Line(raf)
             }
         }
 
         return Pair(buffer.toList(), totalLines)
+    }
+
+    /**
+     * Skip to the end of the current (possibly partial) line.
+     */
+    private fun skipPartialLine(raf: RandomAccessFile) {
+        var b = raf.read()
+        while (b != -1 && b.toByte() != '\n'.code.toByte()) {
+            b = raf.read()
+        }
+    }
+
+    /**
+     * Read a single line as raw UTF-8 bytes, handling CR, LF, and CR+LF.
+     * Returns null at EOF.
+     */
+    private fun readUtf8Line(raf: RandomAccessFile): ByteArray? {
+        val lineBytes = java.io.ByteArrayOutputStream()
+        var b = raf.read()
+        if (b == -1) return null
+
+        while (b != -1) {
+            val byte = b.toByte()
+            if (byte == '\n'.code.toByte()) {
+                // LF — end of line (handles LF and CR+LF)
+                break
+            }
+            if (byte == '\r'.code.toByte()) {
+                // CR — peek ahead for LF
+                val next = raf.read()
+                if (next != -1 && next.toByte() != '\n'.code.toByte()) {
+                    // Not CR+LF — seek back one byte
+                    raf.seek(raf.filePointer - 1)
+                }
+                break
+            }
+            lineBytes.write(b)
+            b = raf.read()
+        }
+        return lineBytes.toByteArray()
     }
 
     companion object {

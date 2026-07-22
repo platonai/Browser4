@@ -3893,6 +3893,13 @@ fn build_jar_launch_spec(runtime: &InstalledBrowser4Runtime, port: u16) -> Serve
         jvm_opts.push(format!("-Dchrome.path={}", path_str));
     }
 
+    // The Pulsar SDK's AppContext.APP_DATA_DIR defaults to $HOME/.pulsar.
+    // Since this is the Browser4 application, override to $HOME/.browser4
+    // so that LocalResourceProperties.load() finds config files in
+    // ~/.browser4/config/conf-enabled/ (e.g. application-private.properties
+    // with LLM API keys).
+    jvm_opts.push("-Dapp.name=browser4".to_string());
+
     // Limit JIT compilation to C1 (client) tier for faster startup.
     // Placed before BROWSER4_SERVER_OPTS so users can override with
     // -XX:TieredStopAtLevel=4 in the env var for peak throughput.
@@ -3919,6 +3926,19 @@ fn build_jar_launch_spec(runtime: &InstalledBrowser4Runtime, port: u16) -> Serve
     args.push(BROWSER4_MAIN_CLASS.to_string());
     args.extend(program_args);
     args.push(format!("--server.port={port}"));
+
+    // Point Spring Boot at the user's private config directory so LLM keys
+    // (deepseek.api.key, openrouter.api.key, etc.) are picked up from
+    // ~/.browser4/config/conf-enabled/application-private.properties.
+    // The directory may not exist on first run — Spring Boot silently skips
+    // missing additional-location entries since 2.4.
+    let private_config_dir = resolve_default_state_dir()
+        .join("config")
+        .join("conf-enabled");
+    args.push(format!(
+        "--spring.config.additional-location=file:{}",
+        private_config_dir.display()
+    ));
 
     ServerLaunchSpec {
         kind: ServerLaunchKind::Jar,
