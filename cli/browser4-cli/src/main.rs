@@ -6943,7 +6943,6 @@ async fn handle_agent_list(
         return Ok(());
     }
 
-    let _ = prune_async_tasks(None);
     let mut list = read_async_tasks(None);
 
     // Pre-flight check: skip live refresh if backend is unreachable.
@@ -7127,7 +7126,7 @@ async fn handle_swarm_submit(
     let query_raw = tool_params.get("sql").and_then(|v| v.as_str());
 
     if url.is_empty() && seed_file.is_none() {
-        return Err("Either a URL or --seed-file is required.".to_string());
+        return Err("A URL or --seed-file is required.".to_string());
     }
 
     // Read query from file if prefixed with @
@@ -7571,7 +7570,6 @@ async fn handle_swarm_list(
         return Ok(());
     }
 
-    let _ = prune_async_tasks(None);
     let mut list = read_async_tasks(None);
 
     // Check backend connectivity before querying each task's status.
@@ -7807,7 +7805,6 @@ async fn handle_crawl_list(
         return Ok(());
     }
 
-    let _ = prune_async_tasks(None);
     let mut list = read_async_tasks(None);
 
     // Pre-flight check: skip live refresh if backend is unreachable.
@@ -13254,6 +13251,22 @@ async fn run(
     // must be provided, so catch the missing-pattern case before server start.
     if command == "htmlsnapshot-grep" || command == "snapshot-grep" {
         parse_grep_options(&tool_params)?;
+    }
+
+    // Early validation for swarm commands — at least one of <url> or --seed-file
+    // must be provided, so catch the missing-source case before server start.
+    if command == "swarm-query" || command == "swarm-submit" {
+        let url = tool_params
+            .get("url")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let seed_file = tool_params.get("seedFile").and_then(|v| v.as_str());
+        if url.is_empty() && seed_file.is_none() {
+            return Err(CliError(
+                ExitCode::Usage,
+                "A URL or --seed-file is required.".to_string(),
+            ));
+        }
     }
 
     // Ensure the Browser4 server is running (for relevant commands).

@@ -2320,13 +2320,14 @@ pub(super) fn test_agent_list_prunes_terminal_tasks(ctx: &mut E2ECtx) {
         }),
     );
 
-    // First list call: shows both tasks (pruning happens BEFORE refresh, so
-    // terminal tasks are displayed this time but labeled properly)
+    // First list call: shows both tasks with standard lifecycle labels.
+    // Terminal tasks persist across multiple list calls — auto-pruning is
+    // deferred to explicit `agent list --clear`.
     let list1 = run_command(ctx, &["agent", "list"]);
     let output1 = strip_snapshot_output(&list1.stdout);
     assert!(
         output1.contains("agent-task-1") || output1.contains("agent-task-2"),
-        "First list should show tasks before they're pruned:\n{}",
+        "First list should show tasks:\n{}",
         output1
     );
     assert!(
@@ -2335,28 +2336,39 @@ pub(super) fn test_agent_list_prunes_terminal_tasks(ctx: &mut E2ECtx) {
         output1
     );
 
-    // Second list call: both tasks should now be pruned because their
-    // last_status was written as "completed" / "failed (...)" on the first call.
+    // Second list call: tasks still appear (they persist, not auto-pruned).
     let list2 = run_command(ctx, &["agent", "list"]);
     let output2 = strip_snapshot_output(&list2.stdout);
     assert!(
-        !output2.contains("agent-task-1") || output2.contains("No tracked async tasks"),
-        "Second list should prune completed tasks. Got:\n{}",
+        output2.contains("agent-task-1") || output2.contains("agent-task-2"),
+        "Second list should still show terminal tasks (persist):\n{}",
         output2
     );
+
+    // Explicit clear removes all tracked agent tasks.
+    let clear = run_command(ctx, &["agent", "list", "--clear"]);
+    let clear_out = strip_snapshot_output(&clear.stdout);
     assert!(
-        !output2.contains("agent-task-2") || output2.contains("No tracked async tasks"),
-        "Second list should prune failed tasks. Got:\n{}",
-        output2
+        clear_out.contains("Cleared"),
+        "Clear should confirm removal. Got:\n{}",
+        clear_out
+    );
+
+    // After clear, no tasks remain.
+    let list3 = run_command(ctx, &["agent", "list"]);
+    let output3 = strip_snapshot_output(&list3.stdout);
+    assert!(
+        output3.contains("No tracked async tasks"),
+        "After clear, should show no tasks. Got:\n{}",
+        output3
     );
 }
 
 /// Full lifecycle test: `agent run` → `agent list` → `agent status` →
 /// `agent result`, verifying correct labels and content at each stage.
 ///
-/// NOTE: `agent list` is checked before `agent status` because `agent status`
-/// syncs the terminal label into the local tracking file, which causes
-/// `prune_async_tasks` to remove it on the next `agent list` call.
+/// Terminal tasks persist across multiple `agent list` calls — auto-pruning
+/// is deferred to explicit `agent list --clear`.
 pub(super) fn test_agent_full_lifecycle_with_mock(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
     let started_at = Instant::now();
@@ -2763,11 +2775,11 @@ pub(super) fn test_swarm_command_help_and_validation(ctx: &mut E2ECtx) {
     let submit_failure = run_command_expecting_failure(
         ctx,
         &["swarm", "submit"],
-        "Either a URL or --seed-file is required.",
+        "A URL or --seed-file is required.",
     );
     let submit_failure_output = format!("{}\n{}", submit_failure.stdout, submit_failure.stderr);
     assert!(
-        submit_failure_output.contains("Either a URL or --seed-file is required."),
+        submit_failure_output.contains("A URL or --seed-file is required."),
         "Expected swarm-submit validation error in:\n{}",
         submit_failure_output
     );
@@ -2830,17 +2842,17 @@ pub(super) fn test_swarm_result_validation_missing_id(ctx: &mut E2ECtx) {
 pub(super) fn test_swarm_query_validation_errors(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
 
-    // Validation 1: Missing URL — the arg parser catches this since <url>
-    // is a required positional argument (optional: false).
+    // Validation 1: Missing URL and --seed-file — caught by early validation
+    // before server start (url is optional to allow --seed-file).
     let failure = run_command_expecting_failure(
         ctx,
         &["swarm", "query", "--sql=SELECT 1"],
-        "Missing required argument",
+        "A URL or --seed-file is required.",
     );
     let output = format!("{}\n{}", failure.stdout, failure.stderr);
     assert!(
-        output.contains("Missing required argument"),
-        "Expected swarm-query missing-URL arg-parser validation in:\n{}",
+        output.contains("A URL or --seed-file is required."),
+        "Expected swarm-query missing-URL validation in:\n{}",
         output
     );
 
