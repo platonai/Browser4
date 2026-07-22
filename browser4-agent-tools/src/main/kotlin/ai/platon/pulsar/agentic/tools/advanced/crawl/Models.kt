@@ -279,7 +279,14 @@ data class PageVisitStatus(
     var instructResults: MutableList<PGInstructResult> = mutableListOf()
 ) {
     val status: String get() = ResourceStatus.getStatusText(statusCode)
+
+    /** Set when a worker first picks up the task (first refresh away from CREATED). */
+    var startedTime: Instant? = null
+
+    /** Set on every status change. */
     var lastModifiedTime: Instant? = null
+
+    /** Set when the task reaches a terminal state (done or failed). */
     var finishTime: Instant? = null
 
     /**
@@ -320,16 +327,20 @@ fun PageVisitStatus.ensurePageVisitResult(): PageVisitResult {
 }
 
 fun PageVisitStatus.refresh(isDone: Boolean = false) {
-    lastModifiedTime = Instant.now()
+    val now = Instant.now()
+    lastModifiedTime = now
+    if (startedTime == null) { startedTime = now }
     processState = "done".takeIf { isDone } ?: "in_progress"
 }
 
 fun PageVisitStatus.refresh(statusCode: Int) = refresh(statusCode, this.pageStatusCode, false)
 
 fun PageVisitStatus.refresh(statusCode: Int, pageStatusCode: Int, isDone: Boolean) {
-    lastModifiedTime = Instant.now()
+    val now = Instant.now()
+    lastModifiedTime = now
     this.statusCode = statusCode
     this.pageStatusCode = pageStatusCode
+    if (startedTime == null) { startedTime = now }
     processState = "done".takeIf { isDone } ?: "in_progress"
 }
 
@@ -374,8 +385,10 @@ fun PageVisitStatus.addInstructResult(result: PGInstructResult) {
 }
 
 fun PageVisitStatus.done() {
+    val now = Instant.now()
+    if (startedTime == null) { startedTime = now }
     refresh(isDone = true)
-    finishTime = Instant.now()
+    finishTime = now
 }
 
 fun PageVisitStatus.refreshed(lastModifiedTime: Instant): Boolean {

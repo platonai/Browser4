@@ -526,9 +526,14 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
     if cmd.name == "agent-list" {
         lines.push("Notes:".to_string());
         lines.push("  - Lists all tracked agent tasks and their status.".to_string());
+        lines.push("  - Tasks are ordered by submission time (latest first).".to_string());
+        lines.push("  - Use `--limit N` to show at most N tasks and `--offset N` to skip the first N.".to_string());
+        lines.push("  - Use `--clear` to remove all tracked agent tasks from the list.".to_string());
         lines.push(String::new());
         lines.push("Examples:".to_string());
         lines.push("  browser4-cli agent list".to_string());
+        lines.push("  browser4-cli agent list --limit 20".to_string());
+        lines.push("  browser4-cli agent list --clear".to_string());
     }
 
     if cmd.name == "act" {
@@ -934,9 +939,14 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
     if cmd.name == "crawl-list" {
         lines.push("Notes:".to_string());
         lines.push("  - Lists all tracked crawl tasks and their current status.".to_string());
+        lines.push("  - Tasks are ordered by submission time (latest first).".to_string());
+        lines.push("  - Use `--limit N` to show at most N tasks and `--offset N` to skip the first N.".to_string());
+        lines.push("  - Use `--clear` to remove all tracked crawl tasks from the list.".to_string());
         lines.push(String::new());
         lines.push("Examples:".to_string());
         lines.push("  browser4-cli crawl list".to_string());
+        lines.push("  browser4-cli crawl list --limit 20".to_string());
+        lines.push("  browser4-cli crawl list --clear".to_string());
     }
 
     if cmd.name == "crawl" {
@@ -1860,6 +1870,32 @@ mod tests {
         assert!(help.contains("browser4-cli act \"scroll by 200px\""));
         assert!(help.contains("browser4-cli act \"go to https://example.com\""));
         assert!(help.contains("LLM provider"));
+    }
+
+    #[test]
+    fn test_generate_command_help_agent_list() {
+        let cmds = all_commands();
+        let cmd = cmds.iter().find(|c| c.name == "agent-list").unwrap();
+        let help = generate_command_help(cmd);
+        assert!(help.contains("browser4-cli agent list"));
+        assert!(help.contains("ordered by submission time"));
+        assert!(help.contains("--limit N"));
+        assert!(help.contains("--offset N"));
+        assert!(help.contains("--clear"));
+        assert!(!help.contains("browser4-cli agent-list"));
+    }
+
+    #[test]
+    fn test_generate_command_help_crawl_list() {
+        let cmds = all_commands();
+        let cmd = cmds.iter().find(|c| c.name == "crawl-list").unwrap();
+        let help = generate_command_help(cmd);
+        assert!(help.contains("browser4-cli crawl list"));
+        assert!(help.contains("ordered by submission time"));
+        assert!(help.contains("--limit N"));
+        assert!(help.contains("--offset N"));
+        assert!(help.contains("--clear"));
+        assert!(!help.contains("browser4-cli crawl-list"));
     }
 
     #[test]

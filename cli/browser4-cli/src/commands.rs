@@ -2311,12 +2311,21 @@ pub fn all_commands() -> Vec<CommandDef> {
             hidden: false,
             batch_supported: false,
             args: &[],
-            options: &[],
+            options: &[
+                OptionDef { name: "clear", description: "Remove all tracked agent tasks from the list", is_bool: true, short: None },
+                OptionDef { name: "limit", description: "Show at most N tasks (default: all)", is_bool: false, short: None },
+                OptionDef { name: "offset", description: "Skip the first N tasks (useful for pagination)", is_bool: false, short: None },
+            ],
             e2e_coverage: E2eCoverage::Excluded,
             tool_name_fn: |_| String::new(),
-            tool_params_fn: |_| json!({}),
+            tool_params_fn: |args| {
+                let mut p = json!({});
+                if let Some(b) = get_bool(args, "clear") { p["clear"] = json!(b); }
+                if let Some(v) = get_str(args, "limit").and_then(|s| s.parse::<usize>().ok()) { p["limit"] = json!(v); }
+                if let Some(v) = get_str(args, "offset").and_then(|s| s.parse::<usize>().ok()) { p["offset"] = json!(v); }
+                p
+            },
         },
-        // ---- Swarm ----
         CommandDef {
             name: "swarm-create",
             description: "Create a swarm scrape session with parallel browser contexts",
@@ -2665,10 +2674,20 @@ pub fn all_commands() -> Vec<CommandDef> {
             hidden: false,
             batch_supported: false,
             args: &[],
-            options: &[],
+            options: &[
+                OptionDef { name: "clear", description: "Remove all tracked crawl tasks from the list", is_bool: true, short: None },
+                OptionDef { name: "limit", description: "Show at most N tasks (default: all)", is_bool: false, short: None },
+                OptionDef { name: "offset", description: "Skip the first N tasks (useful for pagination)", is_bool: false, short: None },
+            ],
             e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| String::new(),
-            tool_params_fn: |_| json!({}),
+            tool_params_fn: |args| {
+                let mut p = json!({});
+                if let Some(b) = get_bool(args, "clear") { p["clear"] = json!(b); }
+                if let Some(v) = get_str(args, "limit").and_then(|s| s.parse::<usize>().ok()) { p["limit"] = json!(v); }
+                if let Some(v) = get_str(args, "offset").and_then(|s| s.parse::<usize>().ok()) { p["offset"] = json!(v); }
+                p
+            },
         },
         // ---- HtmlSnapshot ----
         CommandDef {
@@ -5386,6 +5405,50 @@ mod tests {
         assert!(!cmd.hidden);
         assert!(cmd.args.is_empty());
         assert_eq!(cmd.category, Category::Swarm);
+    }
+
+    #[test]
+    fn test_agent_list_limit_and_offset_parsed() {
+        let map = commands_map();
+        let cmd = map.get("agent-list").unwrap();
+        let mut args = HashMap::new();
+        args.insert("limit".to_string(), json!("5"));
+        args.insert("offset".to_string(), json!("10"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["limit"], json!(5));
+        assert_eq!(params["offset"], json!(10));
+    }
+
+    #[test]
+    fn test_agent_list_clear_flag() {
+        let map = commands_map();
+        let cmd = map.get("agent-list").unwrap();
+        let mut args = HashMap::new();
+        args.insert("clear".to_string(), json!(true));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["clear"], json!(true));
+    }
+
+    #[test]
+    fn test_crawl_list_limit_and_offset_parsed() {
+        let map = commands_map();
+        let cmd = map.get("crawl-list").unwrap();
+        let mut args = HashMap::new();
+        args.insert("limit".to_string(), json!("5"));
+        args.insert("offset".to_string(), json!("10"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["limit"], json!(5));
+        assert_eq!(params["offset"], json!(10));
+    }
+
+    #[test]
+    fn test_crawl_list_clear_flag() {
+        let map = commands_map();
+        let cmd = map.get("crawl-list").unwrap();
+        let mut args = HashMap::new();
+        args.insert("clear".to_string(), json!(true));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["clear"], json!(true));
     }
 
     #[test]

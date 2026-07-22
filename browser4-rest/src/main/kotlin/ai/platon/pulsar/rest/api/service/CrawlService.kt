@@ -2,7 +2,9 @@ package ai.platon.pulsar.rest.api.service
 
 import ai.platon.pulsar.agentic.context.AgenticContexts
 import ai.platon.pulsar.agentic.context.sql.AbstractBrowser4SQLContext
+import ai.platon.pulsar.agentic.tools.advanced.common.JsonlPersistence
 import ai.platon.pulsar.common.ResourceStatus
+import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import ai.platon.pulsar.common.sql.SQLTemplate
 import ai.platon.pulsar.dom.FeaturedDocument
 import ai.platon.pulsar.persist.WebPage
@@ -14,10 +16,12 @@ import ai.platon.pulsar.skeleton.session.PulsarSession
 import ai.platon.pulsar.skeleton.workflow.common.url.ParsableHyperlink
 import com.fasterxml.jackson.annotation.JsonCreator
 import com.fasterxml.jackson.annotation.JsonProperty
+import jakarta.annotation.PostConstruct
 import jakarta.annotation.PreDestroy
 import kotlinx.coroutines.*
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Service
+import java.nio.file.Path
 import java.sql.ResultSet
 import java.util.*
 import java.util.concurrent.ConcurrentHashMap
@@ -40,6 +44,10 @@ data class CrawlResponse(
     val diagnostic: String? = null,
     val createdAt: Long = System.currentTimeMillis(),
     val taskTTLMinutes: Int = 60,
+    /** Set when a worker first picks up the task (first non-CREATED status). */
+    var startedTime: java.time.Instant? = null,
+    /** Set when the task reaches a terminal state (OK, TIMEOUT, ERROR). */
+    var finishTime: java.time.Instant? = null,
 )
 
 data class CrawlPageResult(
@@ -61,6 +69,25 @@ class CrawlService(
 
     /** Active coroutine jobs: taskId -> Job (for cancellation) */
     private val jobStore = ConcurrentHashMap<String, Job>()
+
+    private val persistence = JsonlPersistence(
+        file = crawlPersistencePath(),
+        clazz = CrawlResponse::class,
+        objectMapper = pulsarObjectMapper()
+    )
+
+    @PostConstruct
+    fun restoreFromDisk() {
+        persistence.restore { entry ->
+            if (entry.taskId.isNotBlank()) {
+                taskStore[entry.taskId] = entry
+            }
+        }
+    }
+
+    private fun onStatusChanged(response: CrawlResponse) {
+        persistence.append(response)
+    }
 
     /** Dedicated dispatcher for crawl operations */
     private val crawlDispatcher = Dispatchers.IO.limitedParallelism(5)
@@ -99,6 +126,7 @@ class CrawlService(
             status = ResourceStatus.getStatusText(ResourceStatus.SC_CREATED)
         )
         taskStore[taskId] = response
+        onStatusChanged(response)
 
         // Compute effective seed URL list
         val seedUrls = if (!request.urls.isNullOrEmpty()) {
@@ -110,16 +138,23 @@ class CrawlService(
         }
 
         if (seedUrls.isEmpty()) {
-            taskStore[taskId] = CrawlResponse(
+            val errorResponse = CrawlResponse(
                 taskId = taskId,
                 status = ResourceStatus.getStatusText(ResourceStatus.SC_INTERNAL_SERVER_ERROR),
                 error = "No URLs provided"
             )
+            taskStore[taskId] = errorResponse
+            onStatusChanged(errorResponse)
             return taskId
         }
 
         val job = crawlScope.launch {
             try {
+                // Mark started when work begins
+                val existing = taskStore[taskId]
+                if (existing != null && existing.startedTime == null) {
+                    existing.startedTime = java.time.Instant.now()
+                }
                 val allPages = withContext(Dispatchers.IO) {
                     val results = mutableListOf<CrawlPageResult>()
                     for (seedUrl in seedUrls) {
@@ -133,35 +168,48 @@ class CrawlService(
                     }
                     results
                 }
-                // Preserve any diagnostic that the crawl method already wrote
-                // (e.g. outLinkSelector matched 0 elements)
                 val existingDiagnostic = taskStore[taskId]?.diagnostic
-                taskStore[taskId] = CrawlResponse(
+                val now = java.time.Instant.now()
+                val previous = taskStore[taskId]
+                val completed = CrawlResponse(
                     taskId = taskId,
                     status = ResourceStatus.getStatusText(ResourceStatus.SC_OK),
                     pagesFound = allPages.size,
                     pages = allPages,
-                    diagnostic = existingDiagnostic
+                    diagnostic = existingDiagnostic,
+                    startedTime = previous?.startedTime ?: now,
+                    finishTime = now
                 )
+                taskStore[taskId] = completed
+                onStatusChanged(completed)
                 logger.info("Crawl task {} completed: {} pages", taskId, allPages.size)
             } catch (e: CancellationException) {
-                // Only set error status if the depth methods haven't already saved
-                // partial results (which include the timeout status and collected pages)
                 val existing = taskStore[taskId]
+                val now = java.time.Instant.now()
                 if (existing == null || existing.status == ResourceStatus.getStatusText(ResourceStatus.SC_CREATED)) {
-                    taskStore[taskId] = CrawlResponse(
+                    val timeout = CrawlResponse(
                         taskId = taskId,
                         status = ResourceStatus.getStatusText(ResourceStatus.SC_REQUEST_TIMEOUT),
-                        error = "Crawl cancelled or timed out"
+                        error = "Crawl cancelled or timed out",
+                        startedTime = existing?.startedTime ?: now,
+                        finishTime = now
                     )
+                    taskStore[taskId] = timeout
+                    onStatusChanged(timeout)
                 }
                 logger.warn("Crawl task {} cancelled", taskId)
             } catch (e: Exception) {
-                taskStore[taskId] = CrawlResponse(
+                val existing = taskStore[taskId]
+                val now = java.time.Instant.now()
+                val failed = CrawlResponse(
                     taskId = taskId,
                     status = ResourceStatus.getStatusText(ResourceStatus.SC_INTERNAL_SERVER_ERROR),
-                    error = e.message ?: "Unknown error"
+                    error = e.message ?: "Unknown error",
+                    startedTime = existing?.startedTime ?: now,
+                    finishTime = now
                 )
+                taskStore[taskId] = failed
+                onStatusChanged(failed)
                 logger.error("Crawl task {} failed: {}", taskId, e.message, e)
             } finally {
                 jobStore.remove(taskId)
@@ -181,11 +229,17 @@ class CrawlService(
     fun cancel(taskId: String): Boolean {
         val job = jobStore.remove(taskId) ?: return false
         job.cancel()
-        taskStore[taskId] = CrawlResponse(
+        val now = java.time.Instant.now()
+        val previous = taskStore[taskId]
+        val cancelled = CrawlResponse(
             taskId = taskId,
             status = ResourceStatus.getStatusText(ResourceStatus.SC_REQUEST_TIMEOUT),
-            error = "Cancelled by user"
+            error = "Cancelled by user",
+            startedTime = previous?.startedTime ?: now,
+            finishTime = now
         )
+        taskStore[taskId] = cancelled
+        onStatusChanged(cancelled)
         logger.info("Crawl task {} cancelled by user", taskId)
         return true
     }
@@ -352,13 +406,18 @@ class CrawlService(
             logger.warn("Crawl {}: depth=1 timed out after collecting {} pages; saving partial results", taskId, results.size)
             // Save partial results BEFORE re-throwing — the outer launch catch
             // guards against overwriting already-saved partial results
-            taskStore[taskId] = CrawlResponse(
+            val previous = taskStore[taskId]
+            val timeout = CrawlResponse(
                 taskId = taskId,
                 status = ResourceStatus.getStatusText(ResourceStatus.SC_REQUEST_TIMEOUT),
                 pagesFound = results.size,
                 pages = results.toList(),
-                error = "Crawl timed out after collecting ${results.size} pages (partial results saved)"
+                error = "Crawl timed out after collecting ${results.size} pages (partial results saved)",
+                startedTime = previous?.startedTime ?: java.time.Instant.now(),
+                finishTime = java.time.Instant.now()
             )
+            taskStore[taskId] = timeout
+            onStatusChanged(timeout)
             throw e
         } finally {
             runCatching { session.close() }
@@ -462,15 +521,18 @@ class CrawlService(
             return results.toList()
         } catch (e: TimeoutCancellationException) {
             logger.warn("Crawl {}: depth>1 timed out after collecting {} pages; saving partial results", taskId, results.size)
-            // Save partial results BEFORE re-throwing — the outer launch catch
-            // guards against overwriting already-saved partial results
-            taskStore[taskId] = CrawlResponse(
+            val previous = taskStore[taskId]
+            val timeout = CrawlResponse(
                 taskId = taskId,
                 status = ResourceStatus.getStatusText(ResourceStatus.SC_REQUEST_TIMEOUT),
                 pagesFound = results.size,
                 pages = results.toList(),
-                error = "Crawl timed out after collecting ${results.size} pages (partial results saved)"
+                error = "Crawl timed out after collecting ${results.size} pages (partial results saved)",
+                startedTime = previous?.startedTime ?: java.time.Instant.now(),
+                finishTime = java.time.Instant.now()
             )
+            taskStore[taskId] = timeout
+            onStatusChanged(timeout)
             throw e
         } finally {
             runCatching { session.close() }
@@ -583,6 +645,13 @@ class CrawlService(
             .distinct()
             .take(normOptions.topLinks)
             .toList()
+    }
+
+    companion object {
+        fun crawlPersistencePath(): Path = Path.of(
+            System.getProperty("browser4.data.dir", System.getProperty("user.home")),
+            ".browser4", "data", "crawl", "crawl-tasks.jsonl"
+        )
     }
 
     private fun matchesPattern(url: String, pattern: String?): Boolean {

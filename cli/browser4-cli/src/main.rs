@@ -70,7 +70,7 @@ use snapshot::{resolve_output_path, save_binary, save_snapshot, timestamped_file
 use state::{
     clear_all_state, clear_state, format_async_task_list, format_timestamp_display,
     prune_async_tasks, read_async_tasks, read_state, resolve_default_state_dir, resolve_ref,
-    track_async_task, update_async_task_status,
+    summarize_async_tasks, track_async_task, update_async_task_status,
     write_async_tasks, write_state, CliState, MousePosition,
 };
 
@@ -6922,32 +6922,79 @@ async fn handle_agent_result(
     Ok(())
 }
 
-async fn handle_agent_list(client: &Client, base_url: &str) -> Result<(), String> {
+async fn handle_agent_list(
+    client: &Client,
+    base_url: &str,
+    tool_params: &Value,
+) -> Result<(), String> {
+    // Support --clear to remove all tracked agent tasks
+    if tool_params
+        .get("clear")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
+        let mut list = read_async_tasks(None);
+        let before = list.tasks.len();
+        list.tasks.retain(|t| t.command != "agent");
+        let removed = before - list.tasks.len();
+        write_async_tasks(&list, None).map_err(|e| e.to_string())?;
+        cli_println!("Cleared {} tracked agent task(s).", removed);
+        json_field("cleared", json!(removed));
+        return Ok(());
+    }
+
     let _ = prune_async_tasks(None);
     let mut list = read_async_tasks(None);
 
-    // Refresh status for agent tasks from the server so the display is consistent
-    // with `agent status`. Tasks that fail to query keep their cached last_status.
-    let mut updated = false;
-    for entry in &mut list.tasks {
-        if entry.command != "agent" {
-            continue;
-        }
-        if let Ok(status_json) = get_command_status(client, base_url, &entry.task_id).await {
-            if let Ok(parsed) = serde_json::from_str::<Value>(&status_json) {
-                entry.last_status = extract_readable_agent_status(&parsed);
-                updated = true;
+    // Pre-flight check: skip live refresh if backend is unreachable.
+    let backend_reachable = client
+        .head(base_url.to_string())
+        .timeout(std::time::Duration::from_secs(3))
+        .send()
+        .await
+        .is_ok();
+
+    if backend_reachable {
+        // Refresh status for agent tasks from the server so the display is consistent
+        // with `agent status`. Tasks that fail to query keep their cached last_status.
+        for entry in &mut list.tasks {
+            if entry.command != "agent" {
+                continue;
+            }
+            let was_already_completed =
+                entry.last_status == "completed" || entry.last_status == "done";
+            if let Ok(status_json) = get_command_status(client, base_url, &entry.task_id).await {
+                if let Ok(parsed) = serde_json::from_str::<Value>(&status_json) {
+                    let process_state = parsed.get("processState").and_then(|v| v.as_str()).unwrap_or("");
+                    let is_done = parsed.get("isDone").and_then(|v| v.as_bool()).unwrap_or(false);
+                    let status_code = parsed.get("statusCode").and_then(|v| v.as_str()).unwrap_or("");
+                    entry.last_status = friendly_agent_status(process_state, is_done, status_code);
+                    // Prefer backend finishTime; fall back to local clock.
+                    let now_completed = entry.last_status == "completed" || entry.last_status.starts_with("failed");
+                    if !was_already_completed && now_completed {
+                        if let Some(ts) = parsed.get("finishTime").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+                            entry.completed_at = Some(ts.to_string());
+                        } else {
+                            entry.completed_at = Some(chrono::Utc::now().to_rfc3339());
+                        }
+                    }
+                }
             }
         }
-    }
-
-    if updated {
         let _ = write_async_tasks(&list, None);
+    } else {
+        cli_println!("Note: Backend unreachable — showing cached statuses. Start the server for live status.");
     }
 
     let filtered: Vec<_> = list.tasks.iter().filter(|t| t.command == "agent").cloned().collect();
+    if !filtered.is_empty() {
+        cli_println!("{}", summarize_async_tasks(&filtered));
+    }
+
+    let limit = tool_params.get("limit").and_then(|v| v.as_u64()).map(|n| n as usize);
+    let offset = tool_params.get("offset").and_then(|v| v.as_u64()).map(|n| n as usize);
     let display = state::AsyncTaskList { tasks: filtered };
-    cli_println!("{}", format_async_task_list(&display, None, None));
+    cli_println!("{}", format_async_task_list(&display, limit, offset));
     Ok(())
 }
 
@@ -7366,6 +7413,38 @@ fn friendly_swarm_status(status_code: i64, status_text: &str) -> String {
     }
 }
 
+/// Map agent `processState` values to user-friendly lifecycle labels,
+/// using the same vocabulary as swarm: queued, processing, completed, failed.
+fn friendly_agent_status(process_state: &str, is_done: bool, status_code: &str) -> String {
+    if is_done || process_state == "done" {
+        if status_code == "SC_OK" || status_code == "200" || status_code.is_empty() {
+            "completed".to_string()
+        } else {
+            format!("failed ({})", status_code.to_lowercase())
+        }
+    } else if process_state == "created" {
+        "queued".to_string()
+    } else if process_state == "in_progress" {
+        "processing".to_string()
+    } else if process_state.is_empty() {
+        "queued".to_string() // no processState yet → just submitted
+    } else {
+        process_state.to_lowercase()
+    }
+}
+
+/// Map crawl status strings to the same lifecycle labels.
+fn friendly_crawl_status(status: &str) -> String {
+    match status {
+        "CREATED" => "queued".to_string(),
+        "OK" => "completed".to_string(),
+        "REQUEST_TIMEOUT" => "failed (timeout)".to_string(),
+        "INTERNAL_SERVER_ERROR" => "failed (error)".to_string(),
+        s if s.contains("NOT_FOUND") => "failed (not found)".to_string(),
+        other => other.to_lowercase(),
+    }
+}
+
 async fn handle_swarm_status(
     client: &Client,
     base_url: &str,
@@ -7577,29 +7656,8 @@ async fn handle_swarm_list(
         .cloned()
         .collect();
 
-    // Summarize task distribution by status
-    let mut queued = 0usize;
-    let mut completed = 0usize;
-    let mut failed = 0usize;
-    let mut other = 0usize;
-    for t in &filtered {
-        match t.last_status.as_str() {
-            "" => queued += 1,  // empty = pending
-            "completed" => completed += 1,
-            s if s.starts_with("failed") => failed += 1,
-            "queued" | "processing" => queued += 1,
-            _ => other += 1,
-        }
-    }
-    let total = filtered.len();
-    if total > 0 {
-        let mut parts = Vec::new();
-        parts.push(format!("{} total", total));
-        if completed > 0 { parts.push(format!("{} completed", completed)); }
-        if queued > 0 { parts.push(format!("{} queued/processing", queued)); }
-        if failed > 0 { parts.push(format!("{} failed", failed)); }
-        if other > 0 { parts.push(format!("{} other", other)); }
-        cli_println!("Status: {}", parts.join(", "));
+    if !filtered.is_empty() {
+        cli_println!("{}", summarize_async_tasks(&filtered));
     }
 
     let limit = tool_params
@@ -7721,41 +7779,72 @@ async fn swarm_wait_for_jobs(
 async fn handle_crawl_list(
     client: &Client,
     base_url: &str,
+    tool_params: &Value,
 ) -> Result<(), String> {
-    let _ = prune_async_tasks(None);
-    let list = read_async_tasks(None);
-    let filtered: Vec<_> = list.tasks.iter().filter(|t| t.command == "crawl").cloned().collect();
+    // Support --clear to remove all tracked crawl tasks
+    if tool_params
+        .get("clear")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
+        let mut list = read_async_tasks(None);
+        let before = list.tasks.len();
+        list.tasks.retain(|t| t.command != "crawl");
+        let removed = before - list.tasks.len();
+        write_async_tasks(&list, None).map_err(|e| e.to_string())?;
+        cli_println!("Cleared {} tracked crawl task(s).", removed);
+        json_field("cleared", json!(removed));
+        return Ok(());
+    }
 
+    let _ = prune_async_tasks(None);
+    let mut list = read_async_tasks(None);
+
+    // Pre-flight check: skip live refresh if backend is unreachable.
+    let backend_reachable = client
+        .head(base_url.to_string())
+        .timeout(std::time::Duration::from_secs(3))
+        .send()
+        .await
+        .is_ok();
+
+    if backend_reachable {
+        // Query backend for live status of each tracked crawl task.
+        for entry in list.tasks.iter_mut().filter(|t| t.command == "crawl") {
+            let was_already_completed =
+                entry.last_status == "completed" || entry.last_status == "done" || entry.last_status == "OK";
+            if let Ok(text) = get_crawl_result(client, base_url, &entry.task_id).await {
+                if let Ok(parsed) = serde_json::from_str::<Value>(&text) {
+                    if let Some(s) = parsed.get("status").and_then(|v| v.as_str()) {
+                        entry.last_status = friendly_crawl_status(s);
+                    }
+                    let now_completed = entry.last_status == "completed" || entry.last_status.starts_with("failed");
+                    if !was_already_completed && now_completed {
+                        if let Some(ts) = parsed.get("finishTime").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+                            entry.completed_at = Some(ts.to_string());
+                        } else {
+                            entry.completed_at = Some(chrono::Utc::now().to_rfc3339());
+                        }
+                    }
+                }
+            }
+        }
+        let _ = write_async_tasks(&list, None);
+    } else {
+        cli_println!("Note: Backend unreachable — showing cached statuses. Start the server for live status.");
+    }
+
+    let filtered: Vec<_> = list.tasks.iter().filter(|t| t.command == "crawl").cloned().collect();
     if filtered.is_empty() {
         cli_println!("No tracked crawl tasks. Start one with 'crawl <url>'.");
         return Ok(());
     }
+    cli_println!("{}", summarize_async_tasks(&filtered));
 
-    // Query backend for live status of each tracked task, merging
-    // backend state with local tracking for a unified view.
-    cli_println!("{:<38}  {:<12}  {:<12}  {}", "TASK ID", "CLI STATUS", "SERVER STATUS", "URL");
-    cli_println!("{}", "-".repeat(100));
-
-    for task in &filtered {
-        let server_status = match get_crawl_result(client, base_url, &task.task_id).await {
-            Ok(text) => {
-                serde_json::from_str::<Value>(&text)
-                    .ok()
-                    .and_then(|v| v["status"].as_str().map(String::from))
-                    .unwrap_or_else(|| "parse error".to_string())
-            }
-            Err(_) => "unreachable".to_string(),
-        };
-
-        cli_println!(
-            "{:<38}  {:<12}  {:<12}  {}",
-            task.task_id,
-            task.last_status,
-            server_status,
-            task.description
-        );
-    }
-
+    let limit = tool_params.get("limit").and_then(|v| v.as_u64()).map(|n| n as usize);
+    let offset = tool_params.get("offset").and_then(|v| v.as_u64()).map(|n| n as usize);
+    let display = state::AsyncTaskList { tasks: filtered };
+    cli_println!("{}", format_async_task_list(&display, limit, offset));
     cli_println!("\nTip: use 'crawl cancel <id>' to cancel a stuck task, 'crawl clear' to remove terminal tasks.");
     Ok(())
 }
@@ -13810,7 +13899,7 @@ async fn run(
             handle_agent_result(&client, &base_url, &tool_params).await?;
         }
         "agent-list" => {
-            handle_agent_list(&client, &base_url).await?;
+            handle_agent_list(&client, &base_url, &tool_params).await?;
         }
         // Swarm commands
         "swarm-create" => {
@@ -13862,7 +13951,7 @@ async fn run(
             handle_crawl_clear(&client, &base_url).await?;
         }
         "crawl-list" => {
-            handle_crawl_list(&client, &base_url).await?;
+            handle_crawl_list(&client, &base_url, &tool_params).await?;
         }
         "loop" => {
             handle_loop(&client, &base_url, global).await?;
@@ -18143,6 +18232,82 @@ mod tests {
             .collect();
 
         assert!(filtered.is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // extract_readable_agent_status tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn extract_agent_status_done_when_is_done_true() {
+        let status = json!({"processState": "done", "isDone": true, "statusCode": "SC_OK"});
+        assert_eq!(extract_readable_agent_status(&status), "done");
+    }
+
+    #[test]
+    fn extract_agent_status_done_when_process_state_done() {
+        let status = json!({"processState": "done", "isDone": false, "statusCode": "SC_OK"});
+        assert_eq!(extract_readable_agent_status(&status), "done");
+    }
+
+    #[test]
+    fn extract_agent_status_done_with_failure_code() {
+        let status = json!({"processState": "done", "isDone": true, "statusCode": "SC_EXPECTATION_FAILED"});
+        assert_eq!(extract_readable_agent_status(&status), "done (SC_EXPECTATION_FAILED)");
+    }
+
+    #[test]
+    fn extract_agent_status_in_progress() {
+        let status = json!({"processState": "in_progress", "isDone": false});
+        assert_eq!(extract_readable_agent_status(&status), "in_progress");
+    }
+
+    #[test]
+    fn extract_agent_status_falls_back_to_top_level_status() {
+        let status = json!({"status": "Running", "isDone": false});
+        assert_eq!(extract_readable_agent_status(&status), "Running");
+    }
+
+    #[test]
+    fn extract_agent_status_defaults_to_running() {
+        let status = json!({});
+        // No processState, no isDone, no status → falls back to "running"
+        assert_eq!(extract_readable_agent_status(&status), "running");
+    }
+
+    #[test]
+    fn agent_list_filter_includes_only_agent_tasks() {
+        let tasks = vec![
+            state::AsyncTaskEntry {
+                task_id: "a1".to_string(),
+                command: "agent".to_string(),
+                description: "extract".to_string(),
+                submitted_at: "t1".to_string(),
+                last_status: "done".to_string(),
+                completed_at: None,
+            },
+            state::AsyncTaskEntry {
+                task_id: "c1".to_string(),
+                command: "crawl".to_string(),
+                description: "https://a.com".to_string(),
+                submitted_at: "t2".to_string(),
+                last_status: "done".to_string(),
+                completed_at: None,
+            },
+            state::AsyncTaskEntry {
+                task_id: "a2".to_string(),
+                command: "agent".to_string(),
+                description: "summarize".to_string(),
+                submitted_at: "t3".to_string(),
+                last_status: "in_progress".to_string(),
+                completed_at: None,
+            },
+        ];
+
+        let filtered: Vec<_> = tasks.iter().filter(|t| t.command == "agent").collect();
+        assert_eq!(filtered.len(), 2);
+        assert_eq!(filtered[0].task_id, "a1");
+        assert_eq!(filtered[1].task_id, "a2");
     }
 
     // -----------------------------------------------------------------------

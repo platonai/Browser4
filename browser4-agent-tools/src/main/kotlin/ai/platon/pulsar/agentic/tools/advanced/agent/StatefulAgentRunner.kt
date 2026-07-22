@@ -3,14 +3,17 @@ package ai.platon.pulsar.agentic.tools.advanced.agent
 import ai.platon.pulsar.agentic.AgenticSession
 import ai.platon.pulsar.agentic.event.AgentEventBus
 import ai.platon.pulsar.agentic.event.detail.DefaultServerSideAgentEventHandlers
+import ai.platon.pulsar.agentic.tools.advanced.common.JsonlPersistence
 import ai.platon.pulsar.common.ResourceStatus
 import ai.platon.pulsar.common.getLogger
+import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import com.github.benmanes.caffeine.cache.Cache
 import com.github.benmanes.caffeine.cache.Caffeine
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.supervisorScope
 import java.io.Closeable
+import java.nio.file.Path
 import java.util.concurrent.TimeUnit
 
 class StatefulAgentRunner(
@@ -23,6 +26,7 @@ class StatefulAgentRunner(
      *
      * - Entries live at most 2 hours after last write.
      * - At most 10 000 entries; Window TinyLFU eviction beyond that.
+     * - Persisted to JSONL so task statuses survive restarts.
      * */
     private val statusCache: Cache<String, AgentTaskStatus> = Caffeine.newBuilder()
         .maximumSize(10_000)
@@ -30,12 +34,32 @@ class StatefulAgentRunner(
         .recordStats()
         .build()
 
+    private val persistence = JsonlPersistence(
+        file = agentPersistencePath(),
+        clazz = AgentTaskStatus::class,
+        objectMapper = pulsarObjectMapper()
+    )
+
+    init {
+        persistence.restore { entry ->
+            entry.id.let { id ->
+                statusCache.put(id, entry)
+                logger.debug("Restored agent task {}", id)
+            }
+        }
+    }
+
     fun create(): AgentTaskStatus {
         val status = AgentTaskStatus()
         statusCache.put(status.id, status)
+        persistence.append(status)
         status.emitEvent("StatefulAgentRunner.created")
         logger.debug("Created agent task status {} (session={})", status.id, session.uuid)
         return status
+    }
+
+    private fun onStatusChanged(status: AgentTaskStatus) {
+        persistence.append(status)
     }
 
     /**
@@ -107,6 +131,7 @@ class StatefulAgentRunner(
             status.message = e.message
         } finally {
             status.done()
+            onStatusChanged(status)
         }
     }
 
@@ -208,5 +233,12 @@ class StatefulAgentRunner(
     override fun close() {
         statusCache.invalidateAll()
         logger.info("StatefulAgentRunner closed (session={})", session.uuid)
+    }
+
+    companion object {
+        fun agentPersistencePath(): Path = Path.of(
+            System.getProperty("browser4.data.dir", System.getProperty("user.home")),
+            ".browser4", "data", "agent", "agent-tasks.jsonl"
+        )
     }
 }

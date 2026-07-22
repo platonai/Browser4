@@ -42,7 +42,14 @@ data class AgentTaskStatus(
     var instructResults: MutableList<PGInstructResult> = mutableListOf()
 ) {
     val status: String get() = ResourceStatus.getStatusText(statusCode)
+
+    /** Set when a worker first picks up the task (first refresh away from CREATED). */
+    var startedTime: Instant? = null
+
+    /** Set on every status change. */
     var lastModifiedTime: Instant? = null
+
+    /** Set when the task reaches a terminal state (done or failed). */
     var finishTime: Instant? = null
 
     val isDone: Boolean get() = processState == "done"
@@ -103,20 +110,23 @@ data class AgentTaskStatus(
 }
 
 fun AgentTaskStatus.refresh(isDone: Boolean = false) {
-    lastModifiedTime = Instant.now()
+    val now = Instant.now()
+    lastModifiedTime = now
+    if (startedTime == null) { startedTime = now }
     processState = "done".takeIf { isDone } ?: "in_progress"
 }
 
 fun AgentTaskStatus.refresh(statusCode: Int) = refresh(statusCode, false)
 
 fun AgentTaskStatus.refresh(statusCode: Int, isDone: Boolean) {
-    lastModifiedTime = Instant.now()
+    val now = Instant.now()
+    lastModifiedTime = now
     this.statusCode = statusCode
+    if (startedTime == null) { startedTime = now }
     processState = "done".takeIf { isDone } ?: "in_progress"
 }
 
 fun AgentTaskStatus.failed(statusCode: Int): AgentTaskStatus {
-    // do not change pageStatusCode
     refresh(statusCode, isDone = true)
     return this
 }
@@ -127,8 +137,10 @@ fun AgentTaskStatus.emitEvent(event: String) {
 }
 
 fun AgentTaskStatus.done() {
+    val now = Instant.now()
+    if (startedTime == null) { startedTime = now }
     refresh(isDone = true)
-    finishTime = Instant.now()
+    finishTime = now
 }
 
 fun AgentTaskStatus.refreshed(lastModifiedTime: Instant): Boolean {

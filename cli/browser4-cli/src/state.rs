@@ -815,6 +815,53 @@ pub fn format_async_task_list(
     out.join("\n")
 }
 
+/// Summarize the status distribution of a list of async tasks.
+///
+/// Uses the standard lifecycle labels (queued, processing, completed, failed)
+/// that are now shared across agent, crawl, and swarm.
+pub fn summarize_async_tasks(tasks: &[AsyncTaskEntry]) -> String {
+    let total = tasks.len();
+    if total == 0 {
+        return String::new();
+    }
+
+    let mut queued = 0usize;
+    let mut processing = 0usize;
+    let mut completed = 0usize;
+    let mut failed = 0usize;
+    let mut other = 0usize;
+
+    for t in tasks {
+        match t.last_status.as_str() {
+            "" => queued += 1, // empty = not yet checked
+            "queued" => queued += 1,
+            "processing" => processing += 1,
+            "completed" => completed += 1,
+            s if s.starts_with("failed") => failed += 1,
+            _ => other += 1,
+        }
+    }
+
+    let mut parts = Vec::new();
+    parts.push(format!("{} total", total));
+    if completed > 0 {
+        parts.push(format!("{} completed", completed));
+    }
+    if failed > 0 {
+        parts.push(format!("{} failed", failed));
+    }
+    if processing > 0 {
+        parts.push(format!("{} processing", processing));
+    }
+    if queued > 0 {
+        parts.push(format!("{} queued", queued));
+    }
+    if other > 0 {
+        parts.push(format!("{} other", other));
+    }
+    format!("Status: {}", parts.join(", "))
+}
+
 /// Format an ISO-8601 timestamp for display as local time "YYYY-MM-DD HH:MM:SS".
 ///
 /// Timestamps are stored in UTC. They are converted to the system's local
