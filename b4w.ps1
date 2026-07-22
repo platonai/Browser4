@@ -34,8 +34,28 @@ if (!$Rebuild -and (Test-Path $Exe)) {
     }
 }
 
+# Build a quoted argument list to prevent PowerShell from interpreting
+# dash-prefixed CLI flags (-v, -i, --sql, -Ex*, etc.) as its own
+# parameters.  Without this, PowerShell resolves -v to -Verbose (common
+# parameter), -i clashes with -InformationAction, and other flag-like
+# tokens can be consumed before reaching the CLI binary.
+# See also: b4w.sh for bash → pwsh passthrough handling.
+$SafeArgs = foreach ($a in $ScriptArgs) {
+    # Double-quote each argument and escape internal double quotes.
+    '"' + ($a -replace '"', '""') + '"'
+}
+$SafeArgsStr = $SafeArgs -join ' '
+
 if (Test-Path $Exe) {
-    & $Exe @ScriptArgs
+    if ($SafeArgs) {
+        Invoke-Expression "& `"$Exe`" $SafeArgsStr"
+    } else {
+        & $Exe
+    }
 } else {
-    cargo run --manifest-path $Manifest -- @ScriptArgs
+    if ($SafeArgs) {
+        Invoke-Expression "cargo run --manifest-path `"$Manifest`" -- $SafeArgsStr"
+    } else {
+        cargo run --manifest-path $Manifest
+    }
 }

@@ -4166,9 +4166,13 @@ async fn handle_html_snapshot_get(
             .and_then(|v| v.as_str())
             .unwrap_or("");
         if attr_name.is_empty() {
-            return Err(
-                "The 'attr' field requires an attribute name as the third argument.".to_string(),
-            );
+            return Err(format!(
+                "The 'attr' field requires an attribute name as the third argument.\n\
+                 \n\
+                 Usage:\n  htmlsnapshot get attr <css-selector> <attribute-name>\n  htmlsnapshot get all attr <css-selector> <attribute-name>\n\
+                 \n\
+                 Examples:\n  htmlsnapshot get attr \"img\" src       → src of first matching <img>\n  htmlsnapshot get all attr \"a\" href    → href of every matching <a>\n  htmlsnapshot get attr \"#price\" data-value  → data-value attribute"
+            ));
         }
     }
 
@@ -7026,6 +7030,29 @@ async fn handle_swarm_create(
     state.base_url = base_url.to_string();
     write_state(&state, None, session_name).map_err(|e| e.to_string())?;
 
+    // Check for stale swarm tasks from prior sessions and warn the user.
+    // Old completed tasks in the task store can block the worker pool
+    // from picking up new tasks, causing jobs to stay "Created" indefinitely.
+    let existing = read_async_tasks(None);
+    let swarm_tasks: Vec<_> = existing
+        .tasks
+        .iter()
+        .filter(|t| t.command == "swarm-submit" || t.command == "swarm-query")
+        .collect();
+    if !swarm_tasks.is_empty() {
+        cli_println!(
+            "Note: {} swarm task(s) from prior sessions are still tracked.",
+            swarm_tasks.len()
+        );
+        cli_println!(
+            "  If new jobs get stuck in \"Created\" status, run `swarm list --clear` to remove stale entries,"
+        );
+        cli_println!(
+            "  then recreate the swarm session before resubmitting."
+        );
+        json_field("stale_swarm_tasks", json!(swarm_tasks.len()));
+    }
+
     cli_println!("Swarm session created: {}", session_id);
     Ok(())
 }
@@ -7317,6 +7344,28 @@ async fn handle_swarm_query(
     Ok(())
 }
 
+/// Map backend swarm status codes to user-friendly lifecycle labels.
+/// The raw `status` field from the backend reflects HTTP status names
+/// (e.g. "Created" for 201, "OK" for 200), which can confuse users.
+/// This maps them to task-oriented labels.
+fn friendly_swarm_status(status_code: i64, status_text: &str) -> String {
+    match status_code {
+        201 => "queued".to_string(),    // SC_CREATED — task waiting for a worker
+        200 => "completed".to_string(), // SC_OK — task finished successfully
+        202 => "processing".to_string(), // SC_ACCEPTED — task is being processed
+        _ => {
+            // Use the raw status text for other codes, but lowercase it
+            // for a more task-oriented feel
+            let lower = status_text.to_lowercase();
+            if status_code >= 400 {
+                format!("failed ({})", lower)
+            } else {
+                lower
+            }
+        }
+    }
+}
+
 async fn handle_swarm_status(
     client: &Client,
     base_url: &str,
@@ -7351,10 +7400,19 @@ async fn handle_swarm_status(
         "isDone": effective_is_done,
         "statusCode": status_code,
         "status": parsed.get("status").unwrap_or(&json!(null)),
+        "lifecycleState": friendly_swarm_status(status_code, parsed.get("status").and_then(|v| v.as_str()).unwrap_or("")),
         "message": parsed.get("message").unwrap_or(&json!("")),
         "lastModifiedTime": parsed.get("lastModifiedTime").unwrap_or(&json!(null)),
     });
     cli_println!("{}", serde_json::to_string_pretty(&summary).unwrap_or_default());
+
+    // Give actionable guidance when the task hasn't started yet
+    if !effective_is_done && status_code == 201 {
+        cli_println!(
+            "Note: Task is queued (statusCode=201 Created).  A worker will pick it up shortly.  \
+             Use `swarm list` to see all tracked tasks, or add `--wait` to submit/query to block until completion."
+        );
+    }
     json_field("task_id", json!(id));
     json_field("raw", parsed);
     Ok(())
@@ -7379,13 +7437,24 @@ async fn handle_swarm_result(
         serde_json::from_str(&result).unwrap_or(Value::String(result.clone()));
 
     // Show result payload only: resultSet, pageContentBytes
+    let empty_array = json!([]);
+    let result_set = parsed.get("resultSet").unwrap_or(&empty_array);
+    let is_empty = result_set.as_array().map(|a| a.is_empty()).unwrap_or(true);
     let payload = json!({
         "id": parsed.get("id").and_then(|v| v.as_str()).unwrap_or(&id),
-        "resultSet": parsed.get("resultSet").unwrap_or(&json!([])),
+        "resultSet": result_set,
         "pageContentBytes": parsed.get("pageContentBytes").unwrap_or(&json!(null)),
         "error": parsed.get("error").unwrap_or(&json!(null)),
     });
     cli_println!("{}", serde_json::to_string_pretty(&payload).unwrap_or_default());
+
+    // Guide users when resultSet is empty — likely no X-SQL query was provided
+    if is_empty && !parsed.get("error").and_then(|v| v.as_str()).map(|s| !s.is_empty()).unwrap_or(false) {
+        cli_println!(
+            "Note: resultSet is empty.  If you used `swarm submit` without --sql, no data was extracted — only the page was fetched.\n\
+             Use `swarm query --sql @query.sql` for structured extraction, or check `swarm status <id>` for errors."
+        );
+    }
     json_field("task_id", json!(id));
     json_field("raw", parsed);
     Ok(())
@@ -7438,13 +7507,13 @@ async fn handle_swarm_list(
                         .and_then(|v| v.as_str())
                         .unwrap_or("");
 
-                    // Consider the task done if isDone is true OR if the status code
-                    // indicates completion (200 = SC_OK). This handles backends that
-                    // don't set isDone reliably.
+                    // Map the backend status to a user-friendly label.
+                    // The raw `status` field reflects HTTP semantics (e.g. "Created"
+                    // for 201), but users expect task-lifecycle labels.
                     if is_done || status_code == 200 {
                         entry.last_status = "completed".to_string();
-                    } else if status_code > 0 && !status_text.is_empty() {
-                        entry.last_status = status_text.to_string();
+                    } else if !status_text.is_empty() {
+                        entry.last_status = friendly_swarm_status(status_code, status_text);
                     } else if status_code > 0 {
                         entry.last_status = format!("status={}", status_code);
                     }
@@ -7467,6 +7536,32 @@ async fn handle_swarm_list(
         .filter(|t| t.command == "swarm-submit" || t.command == "swarm-query")
         .cloned()
         .collect();
+
+    // Summarize task distribution by status
+    let mut queued = 0usize;
+    let mut completed = 0usize;
+    let mut failed = 0usize;
+    let mut other = 0usize;
+    for t in &filtered {
+        match t.last_status.as_str() {
+            "" => queued += 1,  // empty = pending
+            "completed" => completed += 1,
+            s if s.starts_with("failed") => failed += 1,
+            "queued" | "processing" => queued += 1,
+            _ => other += 1,
+        }
+    }
+    let total = filtered.len();
+    if total > 0 {
+        let mut parts = Vec::new();
+        parts.push(format!("{} total", total));
+        if completed > 0 { parts.push(format!("{} completed", completed)); }
+        if queued > 0 { parts.push(format!("{} queued/processing", queued)); }
+        if failed > 0 { parts.push(format!("{} failed", failed)); }
+        if other > 0 { parts.push(format!("{} other", other)); }
+        cli_println!("Status: {}", parts.join(", "));
+    }
+
     let display = state::AsyncTaskList { tasks: filtered };
     cli_println!("{}", format_async_task_list(&display));
     Ok(())
@@ -11017,6 +11112,29 @@ async fn handle_status(client: &Client, base_url: &str) -> Result<(), String> {
         cli_println!("Installed at: {}", metadata.installed_at);
         json_field("installed_version", json!(&metadata.tag));
         json_field("installed_at", json!(&metadata.installed_at));
+
+        // Compare CLI version with the installed backend version.
+        // The installed tag may have a "v" prefix (e.g. "v4.11.22").
+        let installed_ver = metadata.tag.trim().trim_start_matches('v');
+        let cli_ver = VERSION.trim();
+        if installed_ver != cli_ver {
+            cli_println!(
+                "⚠  Version mismatch: CLI is {} but installed backend is {}.",
+                cli_ver, metadata.tag
+            );
+            cli_println!(
+                "   The CLI was built from local source while the backend runs from a pre-installed bundle."
+            );
+            cli_println!(
+                "   Test results may reflect the installed backend's behavior, not the current source tree."
+            );
+            cli_println!(
+                "   To use the locally-built backend, run: cd browser4-rest && mvn spring-boot:run"
+            );
+            json_field("version_mismatch", json!(true));
+        } else {
+            json_field("version_mismatch", json!(false));
+        }
     } else {
         cli_println!("Installed version: not installed (run 'browser4-cli install')");
         json_field("installed_version", json!(null));

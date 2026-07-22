@@ -78,6 +78,8 @@ const CATEGORY_ALIASES: &[(&str, &str)] = &[
     ("state", "storage"),
     ("skill", "skills"),
     ("plugin", "plugins"),
+    ("swarm", "swarm"),
+    ("crawl", "swarm"),
 ];
 
 /// Resolve a category alias to its canonical category name, or return the
@@ -128,7 +130,7 @@ pub fn generate_help() -> String {
     lines.push("    eval --file script.js                     # read JS from file (no quoting issues)".to_string());
     lines.push("  Bulk crawl:".to_string());
     lines.push("    crawl <url> --out-link-selector \"...\" --depth 1 --sql @query.sql".to_string());
-    lines.push("\nFilter help by category:  --help nav | --help extract | --help session | --help kb".to_string());
+    lines.push("\nFilter help by category:  --help nav | --help extract | --help session | --help kb | --help swarm | --help crawl".to_string());
 
     let mut first_category = true;
     for (cat_name, cat_title) in CATEGORY_TITLES {
@@ -1052,6 +1054,14 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         );
         lines.push(
             "  - The `get` subcommand supports three fields: `text` (inner text), `html` (inner HTML), and `attr` (attribute value)."
+                .to_string(),
+        );
+        lines.push(
+            "  - Argument order: `get <field:text|html|attr> <css-selector> [attribute-name]`.  When using `attr`, the third argument is the attribute name (e.g. `href`, `src`, `class`)."
+                .to_string(),
+        );
+        lines.push(
+            "  - Tip: `htmlsnapshot get attr \"div\" class` → extracts the class attribute from the first matching div.  Use `get all attr \"img\" src` for every image's src."
                 .to_string(),
         );
         lines.push(

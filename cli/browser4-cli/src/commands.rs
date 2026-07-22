@@ -2347,7 +2347,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "swarm-submit",
-            description: "Submit URL(s) or X-SQL payloads as scrape jobs",
+            description: "Submit URL(s) or X-SQL payloads as scrape jobs. Without --sql, each URL is fetched but no data is extracted — the resultSet will be empty. Use swarm query for structured extraction.",
             category: Category::Swarm,
             hidden: false,
             batch_supported: false,
