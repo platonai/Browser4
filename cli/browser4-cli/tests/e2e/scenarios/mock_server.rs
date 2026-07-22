@@ -2094,6 +2094,370 @@ pub(super) fn test_agent_run_missing_llm_key(ctx: &mut E2ECtx) {
     );
 }
 
+// ---------------------------------------------------------------------------
+// Agent status/result tracking — verifies the fixes for:
+//   1. Integer statusCode parsing (was: .as_str() on integer → empty string)
+//   2. Status labels use standard lifecycle vocabulary (completed/failed, not done)
+//   3. agent result returns content for failed tasks (not null)
+//   4. agent list shows tracked tasks and prunes terminal ones
+// ---------------------------------------------------------------------------
+
+/// Verify that `agent status` correctly handles integer `statusCode` values
+/// (the Kotlin backend serializes it as an integer, e.g. `417`, not a string).
+pub(super) fn test_agent_status_with_integer_status_code(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    let started_at = Instant::now();
+    let mock_server = MockBrowser4Server::start();
+    ctx.record_step("mock Browser4 server start", started_at.elapsed());
+    ctx.browser4_base_url = mock_server.base_url();
+
+    // Register a custom status response with integer statusCode and
+    // terminal processState — simulating a failed agent task.
+    mock_server.set_command_status_response(
+        "agent-task-1",
+        serde_json::json!({
+            "id": "agent-task-1",
+            "statusCode": 417,
+            "processState": "done",
+            "isDone": true,
+            "message": "Agent produced no results (no page content). The task may not have navigated to a valid page or the agent encountered an error.",
+            "agentHistory": {"states": []},
+        }),
+    );
+
+    // Submit the task
+    let run_result = run_command(ctx, &["agent", "run", "test integer statusCode"]);
+    assert!(
+        run_result.stdout.contains("Task submitted: agent-task-1"),
+        "Expected task submission in:\n{}",
+        run_result.stdout
+    );
+
+    // Phase 1: agent list BEFORE agent status — the live refresh from the
+    // mock server should produce the correct "failed (417)" label.  We check
+    // this first because agent status would sync the terminal label into
+    // the local tracking file, causing prune to remove it on the next list.
+    let list_result = run_command(ctx, &["agent", "list"]);
+    let list_output = strip_snapshot_output(&list_result.stdout);
+    assert!(
+        list_output.contains("failed (417)"),
+        "Expected 'failed (417)' label (integer statusCode parsed correctly) in list output:\n{}",
+        list_output
+    );
+    assert!(
+        !list_output.contains("\"done\""),
+        "Expected NO 'done' label in list output (should use standard vocabulary):\n{}",
+        list_output
+    );
+
+    // Phase 2: agent status should contain the integer statusCode in raw JSON
+    let status_result = run_command(ctx, &["agent", "status", "agent-task-1"]);
+    let status_output = strip_snapshot_output(&status_result.stdout);
+    assert!(
+        status_output.contains("\"statusCode\":417")
+            || status_output.contains("\"statusCode\": 417"),
+        "Expected integer statusCode 417 in status output:\n{}",
+        status_output
+    );
+
+    // Verify the mock recorded expected calls
+    let snapshot = mock_server.snapshot();
+    assert!(
+        snapshot.status_queries.iter().any(|q| q == "agent-task-1"),
+        "Expected status query for agent-task-1, got {:?}",
+        snapshot.status_queries
+    );
+}
+
+/// Verify that `agent result` returns actual content (not "null") for failed
+/// agent tasks.  Before the fix, `commandResult` was null for any task that
+/// didn't produce an agent summary.
+pub(super) fn test_agent_result_not_null_for_failed_task(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    let started_at = Instant::now();
+    let mock_server = MockBrowser4Server::start();
+    ctx.record_step("mock Browser4 server start", started_at.elapsed());
+    ctx.browser4_base_url = mock_server.base_url();
+
+    // A failed task with a message but no summary should still produce a
+    // commandResult (via the fallback chain: summary → message → failureReason).
+    mock_server.set_command_status_response(
+        "agent-task-1",
+        serde_json::json!({
+            "id": "agent-task-1",
+            "statusCode": 417,
+            "processState": "done",
+            "isDone": true,
+            "message": "Agent produced no results (no page content).",
+            "agentHistory": {"states": [
+                {"step": 1, "instruction": "test commandResult for failed task"}
+            ]},
+        }),
+    );
+
+    // Register a custom result response that simulates the backend's
+    // CommandResult JSON with a summary populated from the fallback chain
+    mock_server.set_command_result_response(
+        "agent-task-1",
+        r#"{"summary":"Agent produced no results (no page content)."}"#,
+    );
+
+    let _run_result = run_command(ctx, &["agent", "run", "test commandResult for failed task"]);
+
+    // agent result should return the CommandResult JSON, not "null"
+    let result_result = run_command(ctx, &["agent", "result", "agent-task-1"]);
+    let result_output = strip_snapshot_output(&result_result.stdout);
+    assert!(
+        !result_output.trim().is_empty(),
+        "Expected non-empty result, got empty output"
+    );
+    assert_ne!(
+        result_output.trim(),
+        "null",
+        "Expected agent result to NOT be 'null' — it should contain the CommandResult:\n{}",
+        result_output
+    );
+    assert!(
+        result_output.contains("summary"),
+        "Expected result to contain 'summary' field:\n{}",
+        result_output
+    );
+
+    // Verify mock recorded the result query
+    let snapshot = mock_server.snapshot();
+    assert_eq!(
+        snapshot.result_queries,
+        vec!["agent-task-1".to_string()]
+    );
+}
+
+/// Verify that `agent list` shows tracked tasks with correct lifecycle labels
+/// ("completed", "failed (code)", "queued", "processing") — never "done".
+pub(super) fn test_agent_list_lifecycle_labels(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    let started_at = Instant::now();
+    let mock_server = MockBrowser4Server::start();
+    ctx.record_step("mock Browser4 server start", started_at.elapsed());
+    ctx.browser4_base_url = mock_server.base_url();
+
+    // Run two tasks so we can check different labels
+    let _run1 = run_command(ctx, &["agent", "run", "first task"]);
+    let _run2 = run_command(ctx, &["agent", "run", "second task"]);
+
+    // Register custom statuses: one completed, one failed
+    mock_server.set_command_status_response(
+        "agent-task-1",
+        serde_json::json!({
+            "id": "agent-task-1",
+            "statusCode": 200,
+            "processState": "done",
+            "isDone": true,
+            "message": "Task completed successfully",
+        }),
+    );
+    mock_server.set_command_status_response(
+        "agent-task-2",
+        serde_json::json!({
+            "id": "agent-task-2",
+            "statusCode": 417,
+            "processState": "done",
+            "isDone": true,
+            "message": "Task failed",
+        }),
+    );
+
+    // agent list should show both tasks with correct lifecycle labels
+    let list_result = run_command(ctx, &["agent", "list"]);
+    let list_output = strip_snapshot_output(&list_result.stdout);
+    assert!(
+        list_output.contains("completed"),
+        "Expected 'completed' label for agent-task-1 in list output:\n{}",
+        list_output
+    );
+    assert!(
+        list_output.contains("failed (417)"),
+        "Expected 'failed (417)' label for agent-task-2 in list output:\n{}",
+        list_output
+    );
+    assert!(
+        !list_output.contains("\"done\""),
+        "Expected NO 'done' label in list output (all labels should use standard vocabulary):\n{}",
+        list_output
+    );
+}
+
+/// Verify that `agent list` prunes completed/failed tasks so they don't
+/// accumulate indefinitely.  After a terminal status is refreshed into the
+/// local tracking file, the next `agent list` call removes it.
+pub(super) fn test_agent_list_prunes_terminal_tasks(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    let started_at = Instant::now();
+    let mock_server = MockBrowser4Server::start();
+    ctx.record_step("mock Browser4 server start", started_at.elapsed());
+    ctx.browser4_base_url = mock_server.base_url();
+
+    // Submit two tasks
+    let _run1 = run_command(ctx, &["agent", "run", "prune test task 1"]);
+    let _run2 = run_command(ctx, &["agent", "run", "prune test task 2"]);
+
+    // Set both to terminal statuses
+    mock_server.set_command_status_response(
+        "agent-task-1",
+        serde_json::json!({
+            "id": "agent-task-1",
+            "statusCode": 200,
+            "processState": "done",
+            "isDone": true,
+        }),
+    );
+    mock_server.set_command_status_response(
+        "agent-task-2",
+        serde_json::json!({
+            "id": "agent-task-2",
+            "statusCode": 417,
+            "processState": "done",
+            "isDone": true,
+        }),
+    );
+
+    // First list call: shows both tasks (pruning happens BEFORE refresh, so
+    // terminal tasks are displayed this time but labeled properly)
+    let list1 = run_command(ctx, &["agent", "list"]);
+    let output1 = strip_snapshot_output(&list1.stdout);
+    assert!(
+        output1.contains("agent-task-1") || output1.contains("agent-task-2"),
+        "First list should show tasks before they're pruned:\n{}",
+        output1
+    );
+    assert!(
+        output1.contains("completed") || output1.contains("failed"),
+        "First list should use standard lifecycle labels:\n{}",
+        output1
+    );
+
+    // Second list call: both tasks should now be pruned because their
+    // last_status was written as "completed" / "failed (...)" on the first call.
+    let list2 = run_command(ctx, &["agent", "list"]);
+    let output2 = strip_snapshot_output(&list2.stdout);
+    assert!(
+        !output2.contains("agent-task-1") || output2.contains("No tracked async tasks"),
+        "Second list should prune completed tasks. Got:\n{}",
+        output2
+    );
+    assert!(
+        !output2.contains("agent-task-2") || output2.contains("No tracked async tasks"),
+        "Second list should prune failed tasks. Got:\n{}",
+        output2
+    );
+}
+
+/// Full lifecycle test: `agent run` → `agent list` → `agent status` →
+/// `agent result`, verifying correct labels and content at each stage.
+///
+/// NOTE: `agent list` is checked before `agent status` because `agent status`
+/// syncs the terminal label into the local tracking file, which causes
+/// `prune_async_tasks` to remove it on the next `agent list` call.
+pub(super) fn test_agent_full_lifecycle_with_mock(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    let started_at = Instant::now();
+    let mock_server = MockBrowser4Server::start();
+    ctx.record_step("mock Browser4 server start", started_at.elapsed());
+    ctx.browser4_base_url = mock_server.base_url();
+
+    // ---- Phase 1: agent run ----
+    let run_result = run_command(ctx, &["agent", "run", "describe the latest AI trends"]);
+    assert!(
+        run_result.stdout.contains("Task submitted:"),
+        "Expected 'Task submitted:' in:\n{}",
+        run_result.stdout
+    );
+    let task_id = extract_submitted_task_id(&run_result.stdout);
+    assert!(!task_id.is_empty(), "Expected a task ID from agent run");
+
+    // Register custom status and result responses BEFORE querying them
+    mock_server.set_command_status_response(
+        &task_id,
+        serde_json::json!({
+            "id": &task_id,
+            "statusCode": 200,
+            "processState": "done",
+            "isDone": true,
+            "message": "Successfully described latest AI trends",
+            "agentHistory": {"states": [
+                {"step": 1, "instruction": "describe the latest AI trends", "summary": "AI trends in 2026 include..."}
+            ]},
+        }),
+    );
+    mock_server.set_command_result_response(
+        &task_id,
+        r#"{"summary":"AI trends in 2026 include advances in reasoning models, multimodal agents, and on-device inference."}"#,
+    );
+
+    // ---- Phase 2: agent list (BEFORE agent status, so the task isn't pruned yet) ----
+    let list_result = run_command(ctx, &["agent", "list"]);
+    let list_output = strip_snapshot_output(&list_result.stdout);
+    assert!(
+        list_output.contains(&task_id),
+        "agent list should show the task:\n{}",
+        list_output
+    );
+    assert!(
+        list_output.contains("completed") || list_output.contains("1 total"),
+        "agent list should show the task with a status label:\n{}",
+        list_output
+    );
+    assert!(
+        !list_output.contains("\"done\""),
+        "agent list should NOT show old 'done' label:\n{}",
+        list_output
+    );
+
+    // ---- Phase 3: agent status ----
+    let status_result = run_command(ctx, &["agent", "status", &task_id]);
+    let status_output = strip_snapshot_output(&status_result.stdout);
+    assert!(
+        status_output.contains("\"statusCode\":200") || status_output.contains("\"statusCode\": 200"),
+        "Status should include integer statusCode 200:\n{}",
+        status_output
+    );
+    assert!(
+        status_output.contains(&task_id),
+        "Status should reference the task ID:\n{}",
+        status_output
+    );
+
+    // ---- Phase 4: agent result ----
+    let result_result = run_command(ctx, &["agent", "result", &task_id]);
+    let result_output = strip_snapshot_output(&result_result.stdout);
+    assert!(
+        !result_output.trim().is_empty() && result_output.trim() != "null",
+        "agent result should return content, not null/empty:\n{}",
+        result_output
+    );
+    assert!(
+        result_output.contains("summary"),
+        "Result should be a CommandResult JSON with 'summary' field:\n{}",
+        result_output
+    );
+
+    // ---- Verify mock server recorded all expected interactions ----
+    let snapshot = mock_server.snapshot();
+    assert_eq!(
+        snapshot.plain_commands,
+        vec!["describe the latest AI trends".to_string()]
+    );
+    assert!(
+        snapshot.status_queries.iter().any(|q| q == &task_id),
+        "Expected status queries for the task, got {:?}",
+        snapshot.status_queries
+    );
+    assert!(
+        snapshot.result_queries.iter().any(|q| q == &task_id),
+        "Expected result queries for the task, got {:?}",
+        snapshot.result_queries
+    );
+}
+
 pub(super) fn test_prefixed_flat_forms_are_rejected(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
 

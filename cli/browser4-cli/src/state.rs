@@ -667,10 +667,12 @@ pub fn prune_async_tasks(
     let mut list = read_async_tasks(state_dir);
     let before = list.tasks.len();
     list.tasks.retain(|entry| {
-        !entry.last_status.contains("done")
-            && !entry.last_status.contains("error")
-            && !entry.last_status.contains("SC_OK")
-            && !entry.last_status.contains("OK")
+        let s = entry.last_status.as_str();
+        if s.is_empty() {
+            return true; // keep — not yet polled
+        }
+        // Standard lifecycle labels from friendly_agent_status / friendly_crawl_status
+        s != "completed" && !s.starts_with("failed")
     });
     let removed = before - list.tasks.len();
     if removed > 0 {
@@ -1096,8 +1098,8 @@ mod tests {
         track_async_task("t3", "crawl", "url3", Some(tmp.path())).unwrap();
 
         // Mark t1 and t3 as completed
-        update_async_task_status("t1", "done", Some(tmp.path())).unwrap();
-        update_async_task_status("t3", "SC_OK (5 pages)", Some(tmp.path())).unwrap();
+        update_async_task_status("t1", "completed", Some(tmp.path())).unwrap();
+        update_async_task_status("t3", "completed", Some(tmp.path())).unwrap();
 
         let removed = prune_async_tasks(Some(tmp.path())).unwrap();
         assert_eq!(removed, 2, "should remove t1 and t3");
@@ -1113,7 +1115,7 @@ mod tests {
         track_async_task("t1", "crawl", "url1", Some(tmp.path())).unwrap();
         track_async_task("t2", "crawl", "url2", Some(tmp.path())).unwrap();
 
-        update_async_task_status("t1", "error: timeout after 600s", Some(tmp.path())).unwrap();
+        update_async_task_status("t1", "failed (timeout)", Some(tmp.path())).unwrap();
 
         let removed = prune_async_tasks(Some(tmp.path())).unwrap();
         assert_eq!(removed, 1);

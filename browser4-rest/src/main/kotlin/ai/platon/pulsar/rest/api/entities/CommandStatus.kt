@@ -189,12 +189,20 @@ fun AgentTaskStatus.toCommandStatus(): CommandStatus {
     // Transfer agent-specific data
     status.agentHistory = this.agentHistory?.toCommandAgentHistory()
     status.agentState = status.agentHistory?.lastOrNull()
-    if (this.agentHistory != null) {
-        val summary = this.agentHistory?.lastOrNull()?.summary ?: ""
-        if (summary.isNotBlank()) {
-            status.ensureCommandResult().summary = summary
-        }
+
+    // Populate commandResult from available sources so that callers
+    // (including `command_result`) always have at least a status message,
+    // even when the agent produced no summary.
+    val summary = this.agentHistory?.lastOrNull()?.summary
+        ?: this.message
+        ?: this.failureReason
+    if (!summary.isNullOrBlank()) {
+        status.ensureCommandResult().summary = summary
+    } else if (this.isDone && this.statusCode != ResourceStatus.SC_OK) {
+        status.ensureCommandResult().summary =
+            "Task finished with status: ${ResourceStatus.getStatusText(this.statusCode)}"
     }
+
     if (status.agentState == null) {
         status.agentState = createFallbackAgentState(status)
     }

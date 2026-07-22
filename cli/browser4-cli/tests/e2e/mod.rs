@@ -50,7 +50,7 @@ use base64::Engine as _;
 use browser4_cli::commands::{all_commands, E2eCoverage};
 use browser4_cli::managed_processes::stop_browser4_server_forcibly;
 use chrono::Local;
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -604,6 +604,12 @@ struct MockBrowser4State {
     crawl_submissions: Vec<serde_json::Value>,
     crawl_cancel_calls: Vec<String>,
     crawl_clear_calls: u32,
+    /// Custom command_status responses keyed by task ID. When set, these override
+    /// the default response for `command_status`.
+    custom_command_statuses: HashMap<String, serde_json::Value>,
+    /// Custom command_result responses keyed by task ID. When set, these override
+    /// the default response for `command_result`.
+    custom_command_results: HashMap<String, String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -744,6 +750,28 @@ impl MockBrowser4Server {
             .lock()
             .expect("mock Browser4 state mutex poisoned")
             .health_status = None;
+    }
+
+    /// Register a custom JSON response for `command_status` for a specific task ID.
+    /// When `command_status` is queried for this task, the custom response is returned
+    /// instead of the default `{"id": ..., "status": "RUNNING"}`.
+    fn set_command_status_response(&self, task_id: &str, response: serde_json::Value) {
+        self.state
+            .lock()
+            .expect("mock Browser4 state mutex poisoned")
+            .custom_command_statuses
+            .insert(task_id.to_string(), response);
+    }
+
+    /// Register a custom text response for `command_result` for a specific task ID.
+    /// When `command_result` is queried for this task, the custom response is returned
+    /// instead of the default `"result for {task_id}"`.
+    fn set_command_result_response(&self, task_id: &str, response: &str) {
+        self.state
+            .lock()
+            .expect("mock Browser4 state mutex poisoned")
+            .custom_command_results
+            .insert(task_id.to_string(), response.to_string());
     }
 
     /// Shut down the mock server's listener thread without dropping the recorded
@@ -950,12 +978,16 @@ fn serve_mock_browser4_request(mut stream: TcpStream, state: Arc<Mutex<MockBrows
                         .and_then(|v| v.as_str())
                         .unwrap_or_default()
                         .to_string();
-                    state
+                    let mut guard = state
                         .lock()
-                        .expect("mock Browser4 state mutex poisoned")
+                        .expect("mock Browser4 state mutex poisoned");
+                    guard
                         .status_queries
                         .push(task_id.clone());
-                    if task_id == "agent-task-missing-llm" {
+                    // Check for test-registered custom response first
+                    if let Some(custom) = guard.custom_command_statuses.get(&task_id) {
+                        custom.to_string()
+                    } else if task_id == "agent-task-missing-llm" {
                         serde_json::json!({
                             "id": task_id,
                             "status": "EXPECTATION_FAILED",
@@ -976,13 +1008,20 @@ fn serve_mock_browser4_request(mut stream: TcpStream, state: Arc<Mutex<MockBrows
                     let task_id = arguments
                         .get("id")
                         .and_then(|v| v.as_str())
-                        .unwrap_or_default();
-                    state
+                        .unwrap_or_default()
+                        .to_string();
+                    let mut guard = state
                         .lock()
-                        .expect("mock Browser4 state mutex poisoned")
+                        .expect("mock Browser4 state mutex poisoned");
+                    guard
                         .result_queries
-                        .push(task_id.to_string());
-                    format!("result for {task_id}")
+                        .push(task_id.clone());
+                    // Check for test-registered custom response first
+                    if let Some(custom) = guard.custom_command_results.get(&task_id) {
+                        custom.clone()
+                    } else {
+                        format!("result for {task_id}")
+                    }
                 }
                 "command_batch" => mock_command_batch_response(&arguments),
                 "close_session" => "Session closed.".to_string(),
@@ -3927,6 +3966,8 @@ fn tested_commands(include_batch_command: bool) -> HashSet<&'static str> {
         "agent-run",
         "agent-status",
         "agent-result",
+        // test_agent_list_*, test_agent_full_lifecycle_with_mock
+        "agent-list",
         // test_swarm_submission_commands
         "swarm-create",
         "swarm-submit",

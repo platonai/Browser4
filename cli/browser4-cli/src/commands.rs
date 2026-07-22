@@ -2316,7 +2316,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "limit", description: "Show at most N tasks (default: all)", is_bool: false, short: None },
                 OptionDef { name: "offset", description: "Skip the first N tasks (useful for pagination)", is_bool: false, short: None },
             ],
-            e2e_coverage: E2eCoverage::Excluded,
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| String::new(),
             tool_params_fn: |args| {
                 let mut p = json!({});

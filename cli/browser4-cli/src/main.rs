@@ -6967,8 +6967,8 @@ async fn handle_agent_list(
                 if let Ok(parsed) = serde_json::from_str::<Value>(&status_json) {
                     let process_state = parsed.get("processState").and_then(|v| v.as_str()).unwrap_or("");
                     let is_done = parsed.get("isDone").and_then(|v| v.as_bool()).unwrap_or(false);
-                    let status_code = parsed.get("statusCode").and_then(|v| v.as_str()).unwrap_or("");
-                    entry.last_status = friendly_agent_status(process_state, is_done, status_code);
+                    let status_code = parse_status_code_from_json(&parsed);
+                    entry.last_status = friendly_agent_status(process_state, is_done, &status_code);
                     // Prefer backend finishTime; fall back to local clock.
                     let now_completed = entry.last_status == "completed" || entry.last_status.starts_with("failed");
                     if !was_already_completed && now_completed {
@@ -6998,7 +6998,26 @@ async fn handle_agent_list(
     Ok(())
 }
 
+/// Parse `statusCode` from a JSON value, handling both integer and string forms.
+///
+/// The Kotlin backend serializes `statusCode` as an integer (e.g. `200`, `102`),
+/// but some test fixtures or older server versions may emit it as a string.
+fn parse_status_code_from_json(value: &Value) -> String {
+    value
+        .get("statusCode")
+        .and_then(|v| {
+            v.as_str()
+                .map(|s| s.to_string())
+                .or_else(|| v.as_i64().map(|i| i.to_string()))
+        })
+        .unwrap_or_default()
+}
+
 /// Extract a human-readable status string from the server's `command_status` JSON response.
+///
+/// Uses the same lifecycle vocabulary as [`friendly_agent_status`] so that status strings
+/// written into the local task-tracking file are consistent with the labels shown in
+/// `agent list`.
 fn extract_readable_agent_status(status: &Value) -> String {
     let process_state = status
         .get("processState")
@@ -7008,29 +7027,20 @@ fn extract_readable_agent_status(status: &Value) -> String {
         .get("isDone")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
+    let status_code = parse_status_code_from_json(status);
 
-    if is_done || process_state == "done" {
-        if let Some(status_code) = status.get("statusCode").and_then(|v| v.as_str()) {
-            if status_code == "SC_OK" || status_code == "200" {
-                return "done".to_string();
-            }
-            return format!("done ({})", status_code);
-        }
-        return "done".to_string();
-    }
-
-    if !process_state.is_empty() {
-        return process_state.to_string();
+    if !process_state.is_empty() || is_done {
+        return friendly_agent_status(process_state, is_done, &status_code);
     }
 
     // Fall back to top-level status field
     if let Some(s) = status.get("status").and_then(|v| v.as_str()) {
         if !s.is_empty() {
-            return s.to_string();
+            return s.to_lowercase();
         }
     }
 
-    "running".to_string()
+    "queued".to_string()
 }
 
 // ---------------------------------------------------------------------------
@@ -18243,37 +18253,37 @@ mod tests {
     #[test]
     fn extract_agent_status_done_when_is_done_true() {
         let status = json!({"processState": "done", "isDone": true, "statusCode": "SC_OK"});
-        assert_eq!(extract_readable_agent_status(&status), "done");
+        assert_eq!(extract_readable_agent_status(&status), "completed");
     }
 
     #[test]
     fn extract_agent_status_done_when_process_state_done() {
         let status = json!({"processState": "done", "isDone": false, "statusCode": "SC_OK"});
-        assert_eq!(extract_readable_agent_status(&status), "done");
+        assert_eq!(extract_readable_agent_status(&status), "completed");
     }
 
     #[test]
     fn extract_agent_status_done_with_failure_code() {
         let status = json!({"processState": "done", "isDone": true, "statusCode": "SC_EXPECTATION_FAILED"});
-        assert_eq!(extract_readable_agent_status(&status), "done (SC_EXPECTATION_FAILED)");
+        assert_eq!(extract_readable_agent_status(&status), "failed (sc_expectation_failed)");
     }
 
     #[test]
     fn extract_agent_status_in_progress() {
         let status = json!({"processState": "in_progress", "isDone": false});
-        assert_eq!(extract_readable_agent_status(&status), "in_progress");
+        assert_eq!(extract_readable_agent_status(&status), "processing");
     }
 
     #[test]
     fn extract_agent_status_falls_back_to_top_level_status() {
         let status = json!({"status": "Running", "isDone": false});
-        assert_eq!(extract_readable_agent_status(&status), "Running");
+        assert_eq!(extract_readable_agent_status(&status), "running");
     }
 
     #[test]
     fn extract_agent_status_defaults_to_running() {
         let status = json!({});
-        assert_eq!(extract_readable_agent_status(&status), "running");
+        assert_eq!(extract_readable_agent_status(&status), "queued");
     }
 
     // -----------------------------------------------------------------------
