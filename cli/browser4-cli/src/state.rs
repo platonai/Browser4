@@ -700,7 +700,7 @@ pub fn format_async_task_list(list: &AsyncTaskList) -> String {
 
     // Column widths
     let id_w = list.tasks.iter().map(|t| t.task_id.len()).max().unwrap_or(8).max(8);
-    let cmd_w = 8;
+    let cmd_w = list.tasks.iter().map(|t| t.command.len()).max().unwrap_or(7).max(7);
     let desc_w = 40;
 
     out.push(format!(

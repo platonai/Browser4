@@ -124,11 +124,11 @@ Example result output:
 ### 5. List Tracked Tasks
 
 ```bash
-browser4-cli swarm list           # list all tracked swarm tasks
+browser4-cli swarm list           # list all tracked swarm tasks with live backend status
 browser4-cli swarm list --clear   # remove all tracked swarm tasks
 ```
 
-> **Note:** Both `swarm submit` and `swarm query` tasks appear in `swarm list`. Use `--clear` to clean up stale entries between sessions.
+> **Note:** `swarm list` queries the backend for live status of each tracked task on every invocation. Tasks display `completed`, `pending`, or a status-code label. The COMMAND column distinguishes `swarm-submit` from `swarm-query`. Use `--clear` to clean up stale entries between sessions.
 
 ### 6. Close the Swarm Session
 
@@ -143,7 +143,7 @@ Also accessible via: `close`, `close-all`, or `kill-all`.
 | Symptom | Recovery |
 |----------|---------|
 | All subcommands exit non-zero | Check stderr for details |
-| Task not done yet | `swarm status` shows `isDone: false` — wait and retry, or use `--wait` on submission |
+| Task not done yet | `swarm status` shows `isDone: false` — wait and retry, or use `--wait` on submission. A `statusCode` of `200` also indicates completion even if `isDone` lags. |
 | Missing LLM/API key | Surfaces as task-level error in `swarm status` / `swarm result` |
 | Long-running tasks | Set `--deadline` to bound execution |
 | Swarm subcommands in batch mode | Not supported — use standalone commands |
@@ -158,3 +158,4 @@ Also accessible via: `close`, `close-all`, or `kill-all`.
 - Task IDs are UUIDs (e.g. `ca40ced0-2239-4209-9d81-34bcd50e50c1`). Save them or use `swarm list` to rediscover.
 - `swarm status` shows metadata only (isDone, statusCode, message). Use `swarm result` for the actual data payload (resultSet).
 - Both `swarm submit` and `swarm query` tasks are tracked and appear in `swarm list`.
+- **Windows Git Bash users:** Arguments with dashes (`--sql`, `--stdout`, `-v`) can be mangled by the bash→pwsh boundary. Quote them individually: `./b4w.ps1 "swarm" "query" "--sql" "@query.sql" "--seed-file" "./urls.txt"`. Or use `pwsh` directly and run commands inside PowerShell, or use the `b4w.sh` bash wrapper which handles the quoting automatically.

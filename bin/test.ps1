@@ -193,6 +193,7 @@ function Print-Usage {
     Write-Host "  test.ps1 cli                        # Run CLI tests (cargo test --test e2e -- --nocapture)"
     Write-Host "  test.ps1 cli --help                 # Run CLI tests with extra cargo test args"
     Write-Host "  test.ps1 mock-site -Dmock.site.port=18080"
+    Write-Host "  test.ps1 mock-site --force              # Auto-kill process on port 18080"
     Write-Host "  test.ps1 skills                     # Run skills-focused agentic tests"
     Write-Host "  test.ps1 mcp                        # Run MCP-focused agentic tests"
     Write-Host "  test.ps1 ps                         # Run all PowerShell *.tests.ps1 files"
@@ -387,8 +388,81 @@ function Invoke-MockSiteBoot([string[]]$additionalArgs) {
         if ($arg -like '-Dmock.site.*') {
             $mockSiteJvmArgs += $arg
         }
+        elseif ($arg -eq '--force') {
+            $script:_MockSiteForceKill = $true
+        }
         else {
             $passThroughArgs += $arg
+        }
+    }
+
+    # ── Pre-check port availability ──────────────────────────────────────
+    $mockSitePort = 18080
+    foreach ($jvmArg in $mockSiteJvmArgs) {
+        if ($jvmArg -match '^-Dmock\.site\.port[= ](\d+)$') {
+            $mockSitePort = [int]$Matches[1]
+            break
+        }
+    }
+
+    $portInUse = $false
+    $occupyingPid = $null
+
+    if ($IsWindows -or $env:OS -eq 'Windows_NT') {
+        $conn = Get-NetTCPConnection -LocalPort $mockSitePort -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($conn) {
+            $portInUse = $true
+            $occupyingPid = $conn.OwningProcess
+        }
+    } else {
+        # Linux/macOS: use ss (modern) or netstat (fallback)
+        $ss = Get-Command ss -ErrorAction SilentlyContinue
+        if ($ss) {
+            $line = & ss -tlnp "sport = :$mockSitePort" 2>$null | Select-Object -Last 1
+            if ($line -match 'pid=(\d+)') {
+                $portInUse = $true
+                $occupyingPid = $Matches[1]
+            }
+        } else {
+            $line = & netstat -tlnp 2>$null | Select-String ":$mockSitePort "
+            if ($line -match '(\d+)/') {
+                $portInUse = $true
+                $occupyingPid = $Matches[1]
+            }
+        }
+    }
+
+    if ($portInUse) {
+        $killHint = if ($IsWindows -or $env:OS -eq 'Windows_NT') {
+            "taskkill //PID $occupyingPid //F"
+        } else {
+            "kill $occupyingPid"
+        }
+
+        if ($script:_MockSiteForceKill) {
+            Write-Host "Port $mockSitePort is in use by PID $occupyingPid. --force specified, killing..." -ForegroundColor Yellow
+            if ($IsWindows -or $env:OS -eq 'Windows_NT') {
+                & taskkill //PID $occupyingPid //F 2>$null
+            } else {
+                & kill $occupyingPid 2>$null
+            }
+            Start-Sleep -Seconds 1
+            Write-Host "Process killed. Proceeding with launch." -ForegroundColor Green
+        } else {
+            Write-Error @"
+
+Port $mockSitePort is already in use by PID $occupyingPid.
+
+To free the port, kill the process:
+  $killHint
+
+Or re-run with --force to auto-kill:
+  test.ps1 mock-site --force
+
+To use a different port:
+  test.ps1 mock-site -Dmock.site.port=18081
+"@
+            exit 1
         }
     }
 

@@ -7140,7 +7140,7 @@ async fn handle_swarm_submit(
         }));
 
         // Persist each task for cross-session tracking
-        let _ = track_async_task(&task_id, "swarm", u, None);
+        let _ = track_async_task(&task_id, "swarm-submit", u, None);
     }
     json_field("submissions", json!(json_submissions));
 
@@ -7291,7 +7291,7 @@ async fn handle_swarm_query(
         }));
 
         // Persist each task for cross-session tracking (so they appear in swarm list)
-        let _ = track_async_task(&task_id, "swarm", u, None);
+        let _ = track_async_task(&task_id, "swarm-query", u, None);
     }
     json_field("submissions", json!(json_submissions));
 
@@ -7335,11 +7335,22 @@ async fn handle_swarm_status(
     let parsed: Value =
         serde_json::from_str(&result).unwrap_or(Value::String(result.clone()));
 
-    // Show metadata only: id, status, isDone, message, timestamps
+    // Show metadata only: id, status, isDone, message, timestamps.
+    // Note: the backend may omit isDone when it is false (Jackson NON_DEFAULT),
+    // so we resolve it explicitly: true if the JSON says true, false otherwise.
+    let is_done = parsed.get("isDone").and_then(|v| v.as_bool()).unwrap_or(false);
+    let status_code = parsed.get("statusCode").and_then(|v| v.as_i64()).unwrap_or(0);
+
+    // Heuristic: if the server didn't set isDone but statusCode indicates
+    // completion (200 = SC_OK), treat as done. This covers backends that
+    // infer isDone from a completion state.
+    let effective_is_done = is_done || status_code == 200;
+
     let summary = json!({
         "id": parsed.get("id").and_then(|v| v.as_str()).unwrap_or(&id),
-        "isDone": parsed.get("isDone").unwrap_or(&json!(null)),
-        "statusCode": parsed.get("statusCode").unwrap_or(&json!(null)),
+        "isDone": effective_is_done,
+        "statusCode": status_code,
+        "status": parsed.get("status").unwrap_or(&json!(null)),
         "message": parsed.get("message").unwrap_or(&json!("")),
         "lastModifiedTime": parsed.get("lastModifiedTime").unwrap_or(&json!(null)),
     });
@@ -7380,7 +7391,11 @@ async fn handle_swarm_result(
     Ok(())
 }
 
-async fn handle_swarm_list(tool_params: &Value) -> Result<(), String> {
+async fn handle_swarm_list(
+    client: &Client,
+    base_url: &str,
+    tool_params: &Value,
+) -> Result<(), String> {
     // Support --clear to remove all tracked swarm tasks
     if tool_params
         .get("clear")
@@ -7389,7 +7404,8 @@ async fn handle_swarm_list(tool_params: &Value) -> Result<(), String> {
     {
         let mut list = read_async_tasks(None);
         let before = list.tasks.len();
-        list.tasks.retain(|t| t.command != "swarm");
+        list.tasks
+            .retain(|t| t.command != "swarm-submit" && t.command != "swarm-query");
         let removed = before - list.tasks.len();
         write_async_tasks(&list, None).map_err(|e| e.to_string())?;
         cli_println!("Cleared {} tracked swarm task(s).", removed);
@@ -7398,8 +7414,59 @@ async fn handle_swarm_list(tool_params: &Value) -> Result<(), String> {
     }
 
     let _ = prune_async_tasks(None);
-    let list = read_async_tasks(None);
-    let filtered: Vec<_> = list.tasks.iter().filter(|t| t.command == "swarm").cloned().collect();
+    let mut list = read_async_tasks(None);
+
+    // Query backend for live status of each tracked swarm task.
+    // This fixes the "always pending" display and enables prune_async_tasks
+    // to clean up completed tasks.
+    for entry in list.tasks.iter_mut().filter(|t| {
+        t.command == "swarm-submit" || t.command == "swarm-query"
+    }) {
+        match get_swarm_status(client, base_url, &entry.task_id).await {
+            Ok(result) => {
+                if let Ok(parsed) = serde_json::from_str::<Value>(&result) {
+                    let is_done = parsed
+                        .get("isDone")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
+                    let status_code = parsed
+                        .get("statusCode")
+                        .and_then(|v| v.as_i64())
+                        .unwrap_or(0);
+                    let status_text = parsed
+                        .get("status")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+
+                    // Consider the task done if isDone is true OR if the status code
+                    // indicates completion (200 = SC_OK). This handles backends that
+                    // don't set isDone reliably.
+                    if is_done || status_code == 200 {
+                        entry.last_status = "completed".to_string();
+                    } else if status_code > 0 && !status_text.is_empty() {
+                        entry.last_status = status_text.to_string();
+                    } else if status_code > 0 {
+                        entry.last_status = format!("status={}", status_code);
+                    }
+                    // If we couldn't determine status, leave last_status as-is
+                    // (empty → shown as "pending").
+                }
+            }
+            Err(_) => {
+                // Keep last_status as-is on transient errors.
+            }
+        }
+    }
+
+    // Persist updated statuses so prune_async_tasks works next time.
+    let _ = write_async_tasks(&list, None);
+
+    let filtered: Vec<_> = list
+        .tasks
+        .iter()
+        .filter(|t| t.command == "swarm-submit" || t.command == "swarm-query")
+        .cloned()
+        .collect();
     let display = state::AsyncTaskList { tasks: filtered };
     cli_println!("{}", format_async_task_list(&display));
     Ok(())
@@ -7437,7 +7504,14 @@ async fn swarm_wait_for_jobs(
                         .get("isDone")
                         .and_then(|v| v.as_bool())
                         .unwrap_or(false);
-                    if is_done {
+                    // Also check statusCode: 200 = SC_OK means the task completed.
+                    // This handles backends that omit isDone when it is false
+                    // (Jackson NON_DEFAULT serialization).
+                    let status_code = parsed
+                        .get("statusCode")
+                        .and_then(|v| v.as_i64())
+                        .unwrap_or(0);
+                    if is_done || status_code == 200 {
                         completed[i] = true;
                     } else {
                         all_done = false;
@@ -13595,7 +13669,7 @@ async fn run(
             handle_swarm_result(&client, &base_url, &tool_params).await?;
         }
         "swarm-list" => {
-            handle_swarm_list(&tool_params).await?;
+            handle_swarm_list(&client, &base_url, &tool_params).await?;
         }
         "swarm-close" => {
             handle_close(&client, &base_url, global.session_name.as_deref()).await?;
