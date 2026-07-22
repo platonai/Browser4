@@ -7,22 +7,22 @@ allowed-tools: Bash(pwsh:*), Bash(./coworker/scripts/*)
 
 # Coworker
 
-This repository contains a **file-queue automation system** called **Coworker**. The active implementation is the PowerShell worker in `coworker/scripts/coworker.ps1`: it watches task files, renames them, runs GitHub Copilot against the repository, logs the run, and routes the task through review/approval/push folders. (`coworker/README.md:1-40`, `coworker/scripts/coworker.ps1:50-80`, `coworker/scripts/coworker.ps1:413-717`)
+This repository contains a **file-queue automation system** called **Coworker**. The active implementation is the PowerShell worker in `coworker/scripts/run-coworker.ps1`: it watches task files, renames them, runs GitHub Copilot against the repository, logs the run, and routes the task through review/approval/push folders. (`coworker/README.md:1-40`, `coworker/scripts/run-coworker.ps1:50-80`, `coworker/scripts/run-coworker.ps1:413-717`)
 
 ## What Coworker is for
 
 - Use Coworker when you want an agentic workflow driven by **task files in the repo**, not by chat alone.
-- A task can be a plain Markdown file or a structured file with `Title:`, `Description:`, and `Prompt:`. If the structured header is missing, the full file becomes the prompt. (`coworker/scripts/coworker.ps1:11-20`, `coworker/scripts/coworker.ps1:536-541`)
+- A task can be a plain Markdown file or a structured file with `Title:`, `Description:`, and `Prompt:`. If the structured header is missing, the full file becomes the prompt. (`coworker/scripts/run-coworker.ps1:11-20`, `coworker/scripts/run-coworker.ps1:536-541`)
 - The worker runs GitHub Copilot CLI with broad repo access to execute the task against the current repository. The helper command is configurable in `coworker/scripts/config.psd1`. (`coworker/scripts/workers/gh-copilot.ps1:37-65`, `coworker/scripts/config.psd1:1-12`)
-- Important: the **current/live workflow is file-based**. The folder-based “story.md / analysis / plan / design / impl.patch / e2e” pipeline described in `coworker/docs/architect/orchestrator.md` and `coworker/scripts/architect/orchestrator.ps1` exists as design/legacy material, but it is **not** the main coworker entrypoint used by `coworker.ps1`. (`coworker/docs/architect/orchestrator.md:1-38`, `coworker/scripts/architect/orchestrator.ps1:17-29`, `coworker/scripts/coworker.ps1:57-68`)
+- Important: the **current/live workflow is file-based**. The folder-based “story.md / analysis / plan / design / impl.patch / e2e” pipeline described in `coworker/docs/architect/orchestrator.md` and `coworker/scripts/architect/orchestrator.ps1` exists as design/legacy material, but it is **not** the main coworker entrypoint used by `coworker.ps1`. (`coworker/docs/architect/orchestrator.md:1-38`, `coworker/scripts/architect/orchestrator.ps1:17-29`, `coworker/scripts/run-coworker.ps1:57-68`)
 
 ## Main workflows and scripts
 
 ### 1. Main task execution
 
-- **Primary entrypoint:** `./coworker/scripts/coworker.ps1`
-- It ensures the task directories exist, optionally accepts a task file path, moves that file into `coworker/tasks/main/1ready`, generates a descriptive kebab-case filename, moves it to `2working`, runs Copilot, writes logs, then moves the task to `main/3complete` or `5approved`. (`coworker/scripts/coworker.ps1:22-35`, `coworker/scripts/coworker.ps1:82-95`, `coworker/scripts/coworker.ps1:417-500`, `coworker/scripts/coworker.ps1:551-713`)
-- The prompt given to Copilot explicitly says: **finish the task described in the file, but do not move that task file yourself**. The script handles routing after execution. (`coworker/scripts/coworker.ps1:531-545`)
+- **Primary entrypoint:** `./coworker/scripts/run-coworker.ps1`
+- It ensures the task directories exist, optionally accepts a task file path, moves that file into `coworker/tasks/main/1ready`, generates a descriptive kebab-case filename, moves it to `2working`, runs Copilot, writes logs, then moves the task to `main/3complete` or `5approved`. (`coworker/scripts/run-coworker.ps1:22-35`, `coworker/scripts/run-coworker.ps1:82-95`, `coworker/scripts/run-coworker.ps1:417-500`, `coworker/scripts/run-coworker.ps1:551-713`)
+- The prompt given to Copilot explicitly says: **finish the task described in the file, but do not move that task file yourself**. The script handles routing after execution. (`coworker/scripts/run-coworker.ps1:531-545`)
 
 ### 2. Queue processor / watchdog
 
@@ -72,12 +72,12 @@ This repository contains a **file-queue automation system** called **Coworker**.
 
 ### 7. Git sync / pushing approved work
 
-- When Coworker sees files in `5approved`, it first moves them into a date-based folder under `6git-pushed`, then invokes `coworker/scripts/workers/git-sync.ps1`. (`coworker/scripts/coworker.ps1:365-399`)
+- When Coworker sees files in `5approved`, it first moves them into a date-based folder under `6git-pushed`, then invokes `coworker/scripts/workers/git-sync.ps1`. (`coworker/scripts/run-coworker.ps1:365-399`)
 - `git-sync.ps1` does not contain custom git logic; it asks GitHub Copilot to **commit all changes in the repo, pull, push, and auto-resolve conflicts**. Treat this as powerful and potentially risky. (`coworker/scripts/workers/git-sync.ps1:16-29`)
 
 ### 8. Memory helpers
 
-- Before executing a task, `coworker.ps1` calls `coworker/scripts/workers/coworker-memory-generator.ps1 -Type init` and appends returned memory context/instructions to the task prompt. (`coworker/scripts/coworker.ps1:508-545`)
+- Before executing a task, `coworker.ps1` calls `coworker/scripts/workers/coworker-memory-generator.ps1 -Type init` and appends returned memory context/instructions to the task prompt. (`coworker/scripts/run-coworker.ps1:508-545`)
 - Daily/monthly/yearly/global memory summaries are generated from `coworker/tasks/300logs`. (`coworker/scripts/workers/coworker-memory-generator.ps1:15-22`, `coworker/scripts/workers/coworker-memory-generator.ps1:103-172`, `coworker/scripts/workers/coworker-memory-generator.ps1:174-347`, `coworker/scripts/workers/coworker-daily-memory-generator.ps1:49-56`, `coworker/scripts/workers/coworker-daily-memory-generator.ps1:169-233`)
 
 ## How tasks move through directories
@@ -86,14 +86,14 @@ This repository contains a **file-queue automation system** called **Coworker**.
 
 1. **Draft** in `coworker/tasks/main/0draft` (manual authoring area). (`coworker/README.md:16-28`, `coworker/tasks/main/0draft/README.md:1-37`)
 2. **Queue** by moving/copying the task file to `coworker/tasks/main/1ready`. (`coworker/README.md:30-40`)
-3. **Rename + start work**: Coworker generates a descriptive kebab-case name and moves the file to `coworker/tasks/main/2working`. (`coworker/scripts/coworker.ps1:417-500`, `coworker/scripts/workers/rename.ps1:30-60`, `coworker/scripts/workers/rename.ps1:153-178`)
-4. **Execute**: Copilot works against the repo; logs are written under `coworker/tasks/300logs/YYYY/MM/DD`. (`coworker/scripts/coworker.ps1:548-552`, `coworker/scripts/coworker.ps1:575-687`)
+3. **Rename + start work**: Coworker generates a descriptive kebab-case name and moves the file to `coworker/tasks/main/2working`. (`coworker/scripts/run-coworker.ps1:417-500`, `coworker/scripts/workers/rename.ps1:30-60`, `coworker/scripts/workers/rename.ps1:153-178`)
+4. **Execute**: Copilot works against the repo; logs are written under `coworker/tasks/300logs/YYYY/MM/DD`. (`coworker/scripts/run-coworker.ps1:548-552`, `coworker/scripts/run-coworker.ps1:575-687`)
 5. **Finish**:
    - normal tasks -> `coworker/tasks/main/3complete/YYYY/MMDD/...`
-   - tasks containing `#auto-approve` -> `coworker/tasks/main/5approved/YYYY/MMDD/...` (`coworker/scripts/coworker.ps1:696-713`, `coworker/README.md:48-55`)
+   - tasks containing `#auto-approve` -> `coworker/tasks/main/5approved/YYYY/MMDD/...` (`coworker/scripts/run-coworker.ps1:696-713`, `coworker/README.md:48-55`)
 6. **Approval / push**:
    - human review can happen in `main/3complete` and optionally `4review`
-   - moving a reviewed task to `5approved` causes the next run to move it into `6git-pushed/YYYY/MMDD/...` and invoke git sync. (`coworker/README.md:7-12`, `coworker/scripts/coworker.ps1:348-399`)
+   - moving a reviewed task to `5approved` causes the next run to move it into `6git-pushed/YYYY/MMDD/...` and invoke git sync. (`coworker/README.md:7-12`, `coworker/scripts/run-coworker.ps1:348-399`)
 7. **Failure path**: stuck/aborted tasks can end up in `coworker/tasks/main/3aborted`. (`coworker/scripts/process-coworker-queue.ps1:133-174`)
 
 ### Separate draft-refinement lifecycle
@@ -121,10 +121,10 @@ From repository root in PowerShell:
 .\coworker\scripts\process-coworker-queue.ps1 -Once
 
 # Run coworker directly now
-.\coworker\scripts\coworker.ps1
+.\coworker\scripts\run-coworker.ps1
 
 # Queue a specific task file directly
-.\coworker\scripts\coworker.ps1 .\path\to\task.md
+.\coworker\scripts\run-coworker.ps1 .\path\to\task.md
 
 # Process draft refinement once
 .\coworker\scripts\process-draft-refinement-queue.ps1 -Once
@@ -145,7 +145,7 @@ From repository root in PowerShell:
 .\coworker\scripts\workers\git-sync.ps1
 ```
 
-References: `coworker/README.md:34-40`, `coworker/README.md:85-90`, `coworker/README.md:121-152`, `coworker/scripts/coworker.ps1:22-35`, `coworker/scripts/process-task-source.ps1:3-16`.
+References: `coworker/README.md:34-40`, `coworker/README.md:85-90`, `coworker/README.md:121-152`, `coworker/scripts/run-coworker.ps1:22-35`, `coworker/scripts/process-task-source.ps1:3-16`.
 
 ## Important config files
 
@@ -157,13 +157,13 @@ References: `coworker/README.md:34-40`, `coworker/README.md:85-90`, `coworker/RE
 
 ## Conventions and safety notes
 
-- **Prefer the active file workflow.** For normal use, create a Markdown task file and queue it; do not start with the older `story.md` orchestrator structure unless you are intentionally working on that subsystem. (`coworker/scripts/coworker.ps1:57-68`, `coworker/docs/architect/orchestrator.md:9-30`)
-- **Numeric filenames are OK.** Coworker auto-creates `0draft/1.md`..`5.md` placeholders and can rename generic/numeric task files to descriptive kebab-case names. (`coworker/scripts/coworker.ps1:172-185`, `coworker/scripts/coworker.ps1:340`, `coworker/scripts/coworker.ps1:417-489`)
-- **Do not manually move files out of `2working` while a run is active.** The worker prompt and post-processing assume the script, not the agent, handles state transitions. (`coworker/scripts/coworker.ps1:531-545`, `coworker/scripts/coworker.ps1:693-713`)
-- **Use `#auto-approve` sparingly.** It bypasses manual review and sends the task straight to the approval/push path. (`coworker/README.md:48-55`, `coworker/scripts/coworker.ps1:696-713`)
-- **Review before `5approved`.** Approval eventually triggers a Copilot-driven git commit/pull/push over the whole repo. (`coworker/scripts/coworker.ps1:365-399`, `coworker/scripts/workers/git-sync.ps1:16-29`)
-- **Expect broad tool access.** The configured Copilot command already includes `--allow-all`, and many calls also add `--allow-all-tools` / `--allow-all-paths`. Coworker is meant to act on the repository, not just read it. (`coworker/scripts/config.psd1:1-12`, `coworker/scripts/coworker.ps1:575-585`, `coworker/scripts/workers/refine-drafts.ps1:108-118`)
-- **Check logs first when debugging.** Task logs and Copilot logs are written per day under `coworker/tasks/300logs/YYYY/MM/DD`. Scheduler child-process logs go under that same directory using `HHmmss-<taskname>.stdout.log` filenames. (`coworker/scripts/coworker.ps1:103-106`, `coworker/scripts/coworker.ps1:548-552`, `coworker/scripts/coworker-scheduler.config.psd1:7-8`, `coworker/scripts/coworker-scheduler.ps1:163-169`)
+- **Prefer the active file workflow.** For normal use, create a Markdown task file and queue it; do not start with the older `story.md` orchestrator structure unless you are intentionally working on that subsystem. (`coworker/scripts/run-coworker.ps1:57-68`, `coworker/docs/architect/orchestrator.md:9-30`)
+- **Numeric filenames are OK.** Coworker auto-creates `0draft/1.md`..`5.md` placeholders and can rename generic/numeric task files to descriptive kebab-case names. (`coworker/scripts/run-coworker.ps1:172-185`, `coworker/scripts/run-coworker.ps1:340`, `coworker/scripts/run-coworker.ps1:417-489`)
+- **Do not manually move files out of `2working` while a run is active.** The worker prompt and post-processing assume the script, not the agent, handles state transitions. (`coworker/scripts/run-coworker.ps1:531-545`, `coworker/scripts/run-coworker.ps1:693-713`)
+- **Use `#auto-approve` sparingly.** It bypasses manual review and sends the task straight to the approval/push path. (`coworker/README.md:48-55`, `coworker/scripts/run-coworker.ps1:696-713`)
+- **Review before `5approved`.** Approval eventually triggers a Copilot-driven git commit/pull/push over the whole repo. (`coworker/scripts/run-coworker.ps1:365-399`, `coworker/scripts/workers/git-sync.ps1:16-29`)
+- **Expect broad tool access.** The configured Copilot command already includes `--allow-all`, and many calls also add `--allow-all-tools` / `--allow-all-paths`. Coworker is meant to act on the repository, not just read it. (`coworker/scripts/config.psd1:1-12`, `coworker/scripts/run-coworker.ps1:575-585`, `coworker/scripts/workers/refine-drafts.ps1:108-118`)
+- **Check logs first when debugging.** Task logs and Copilot logs are written per day under `coworker/tasks/300logs/YYYY/MM/DD`. Scheduler child-process logs go under that same directory using `HHmmss-<taskname>.stdout.log` filenames. (`coworker/scripts/run-coworker.ps1:103-106`, `coworker/scripts/run-coworker.ps1:548-552`, `coworker/scripts/coworker-scheduler.config.psd1:7-8`, `coworker/scripts/coworker-scheduler.ps1:163-169`)
 - **GitHub CLI auth is required.** The docs explicitly require `gh` to be installed and authenticated. (`coworker/README.md:42-46`)
 
 ## Recommended mental model for agents

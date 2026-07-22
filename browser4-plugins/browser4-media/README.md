@@ -23,7 +23,7 @@ The plugin is a Maven dependency. Add it to your project:
 <dependency>
     <groupId>ai.platon.pulsar</groupId>
     <artifactId>browser4-media</artifactId>
-    <version>4.12.0-rc.1</version>
+    <version>4.12.0-SNAPSHOT</version>
 </dependency>
 ```
 
@@ -145,18 +145,32 @@ Returns: `ProcessResult`.
 
 ```
 browser4-media/
-├── config/
-│   ├── MediaConfig.kt              — Configuration properties (media.*)
-│   └── MediaAutoConfiguration.kt   — Spring Boot auto-configuration & bean wiring
-├── integration/
-│   └── MediaBrowseEventHandler.kt  — Hooks into onDocumentSteady for auto-detection
-├── service/
-│   ├── VideoDetector.kt            — DOM scanning via CDP JavaScript evaluation
-│   ├── MediaDownloader.kt          — HTTP download via OkHttp
-│   ├── FFmpegProcessManager.kt     — FFmpeg/ffprobe subprocess management
-│   └── MediaUtils.kt               — URL validation, MIME helpers, filename handling
-└── tools/
-    └── MediaToolExecutor.kt        — LLM agent tool definitions (media.*)
+├── pom.xml
+└── src/
+    ├── main/kotlin/ai/platon/pulsar/media/
+    │   ├── config/
+    │   │   ├── MediaConfig.kt              — Configuration properties (media.*)
+    │   │   └── MediaAutoConfiguration.kt   — Spring Boot auto-configuration & bean wiring
+    │   ├── integration/
+    │   │   └── MediaBrowseEventHandler.kt  — Hooks into onDocumentSteady for auto-detection
+    │   ├── service/
+    │   │   ├── VideoDetector.kt            — DOM scanning via CDP JavaScript evaluation
+    │   │   ├── MediaDownloader.kt          — HTTP download via OkHttp
+    │   │   ├── FFmpegProcessManager.kt     — FFmpeg/ffprobe subprocess management
+    │   │   └── MediaUtils.kt               — URL validation, MIME helpers, filename handling
+    │   └── tools/
+    │       └── MediaToolExecutor.kt        — LLM agent tool definitions (media.*)
+    ├── main/resources/META-INF/
+    │   ├── browser4-plugin.json            — Plugin manifest and metadata
+    │   └── spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports
+    └── test/kotlin/ai/platon/pulsar/media/
+        ├── config/MediaConfigTest.kt
+        ├── integration/MediaBrowseEventHandlerTest.kt
+        ├── service/
+        │   ├── FFmpegProcessManagerTest.kt
+        │   ├── MediaUtilsTest.kt
+        │   └── VideoDetectorTest.kt
+        └── tools/MediaToolExecutorTest.kt
 ```
 
 ### How it works

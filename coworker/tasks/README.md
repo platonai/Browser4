@@ -6,7 +6,7 @@ This document describes every task state, pipeline, and transition in the Cowork
 
 ## Pipeline 1: Main Task Execution
 
-The primary pipeline for agentic task execution via `coworker/scripts/coworker.ps1`.
+The primary pipeline for agentic task execution via `coworker/scripts/run-coworker.ps1`.
 
 ```
 ┌──────────────┐

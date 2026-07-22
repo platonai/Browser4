@@ -1364,4 +1364,85 @@ mod tests {
         let expected = local_display("2026-07-22T12:00:00Z");
         assert!(output.contains(&expected), "expected local time '{}' in output:\n{}", expected, output);
     }
+
+    // -----------------------------------------------------------------------
+    // summarize_async_tasks tests
+    // -----------------------------------------------------------------------
+
+    fn entry(command: &str, status: &str) -> AsyncTaskEntry {
+        AsyncTaskEntry {
+            task_id: format!("id-{}", command),
+            command: command.to_string(),
+            description: "test".to_string(),
+            submitted_at: "2026-07-22T00:00:00+00:00".to_string(),
+            last_status: status.to_string(),
+            completed_at: None,
+        }
+    }
+
+    #[test]
+    fn test_summarize_empty_returns_empty_string() {
+        let result = summarize_async_tasks(&[]);
+        assert_eq!(result, "");
+    }
+
+    #[test]
+    fn test_summarize_all_queued() {
+        let tasks = vec![entry("swarm-submit", ""), entry("swarm-query", "queued")];
+        let result = summarize_async_tasks(&tasks);
+        assert!(result.contains("2 total"));
+        assert!(result.contains("2 queued"));
+    }
+
+    #[test]
+    fn test_summarize_all_completed() {
+        let tasks = vec![entry("agent", "completed"), entry("crawl", "completed"), entry("swarm", "completed")];
+        let result = summarize_async_tasks(&tasks);
+        assert!(result.contains("3 total"));
+        assert!(result.contains("3 completed"));
+        assert!(!result.contains("queued"));
+        assert!(!result.contains("processing"));
+    }
+
+    #[test]
+    fn test_summarize_mixed_distribution() {
+        let tasks = vec![
+            entry("swarm-submit", "completed"),
+            entry("swarm-submit", "completed"),
+            entry("swarm-query", "completed"),
+            entry("swarm-query", "completed"),
+            entry("swarm-query", "failed (timeout)"),
+            entry("swarm-query", "failed (timeout)"),
+            entry("swarm-submit", "processing"),
+            entry("swarm-submit", "processing"),
+            entry("swarm-submit", "processing"),
+            entry("swarm-query", "queued"),
+        ];
+        let result = summarize_async_tasks(&tasks);
+        assert!(result.contains("10 total"));
+        assert!(result.contains("4 completed"));
+        assert!(result.contains("2 failed"));
+        assert!(result.contains("3 processing"));
+        assert!(result.contains("1 queued"));
+    }
+
+    #[test]
+    fn test_summarize_unknown_labels_grouped_as_other() {
+        let tasks = vec![entry("crawl", "CREATED"), entry("crawl", "OK")];
+        let result = summarize_async_tasks(&tasks);
+        assert!(result.contains("2 total"));
+        assert!(result.contains("2 other"));
+    }
+
+    #[test]
+    fn test_summarize_failed_prefix_variations() {
+        let tasks = vec![
+            entry("agent", "failed (timeout)"),
+            entry("agent", "failed (error)"),
+            entry("agent", "failed (not found)"),
+        ];
+        let result = summarize_async_tasks(&tasks);
+        assert!(result.contains("3 total"));
+        assert!(result.contains("3 failed"));
+    }
 }

@@ -34,13 +34,17 @@ class StatefulAgentRunner(
         .recordStats()
         .build()
 
-    private val persistence = JsonlPersistence(
+    internal val persistence = JsonlPersistence(
         file = agentPersistencePath(),
         clazz = AgentTaskStatus::class,
         objectMapper = pulsarObjectMapper()
     )
 
     init {
+        restoreFromDisk()
+    }
+
+    fun restoreFromDisk() {
         persistence.restore { entry ->
             entry.id.let { id ->
                 statusCache.put(id, entry)

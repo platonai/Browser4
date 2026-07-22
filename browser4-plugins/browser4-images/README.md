@@ -22,7 +22,7 @@ The plugin is a Maven dependency. Add it to your project:
 <dependency>
     <groupId>ai.platon.pulsar</groupId>
     <artifactId>browser4-images</artifactId>
-    <version>4.12.0-rc.1</version>
+    <version>4.12.0-SNAPSHOT</version>
 </dependency>
 ```
 
@@ -104,17 +104,29 @@ Returns: `BulkDownloadSummary`.
 
 ```
 browser4-images/
-├── config/
-│   ├── ImageConfig.kt              — Configuration properties (image.*)
-│   └── ImageAutoConfiguration.kt   — Spring Boot auto-configuration & bean wiring
-├── integration/
-│   └── ImageBrowseEventHandler.kt  — Hooks into onDocumentSteady for auto-detect/download
-├── service/
-│   ├── ImageDetector.kt            — DOM scanning via CDP JavaScript evaluation
-│   ├── ImageDownloader.kt          — HTTP download via OkHttp with concurrency control
-│   └── ImageUtils.kt               — URL validation, filename handling, MIME helpers
-└── tools/
-    └── ImageToolExecutor.kt        — LLM agent tool definitions (image.*)
+├── pom.xml
+└── src/
+    ├── main/kotlin/ai/platon/pulsar/images/
+    │   ├── ImagesPlugin.kt                 — Browser4Plugin lifecycle entry point
+    │   ├── config/
+    │   │   ├── ImageConfig.kt              — Configuration properties (image.*)
+    │   │   └── ImageAutoConfiguration.kt   — Spring Boot auto-configuration & bean wiring
+    │   ├── integration/
+    │   │   └── ImageBrowseEventHandler.kt  — Hooks into onDocumentSteady for auto-detect/download
+    │   ├── service/
+    │   │   ├── ImageDetector.kt            — DOM scanning via CDP JavaScript evaluation
+    │   │   ├── ImageDownloader.kt          — HTTP download via OkHttp with concurrency control
+    │   │   └── ImageUtils.kt               — URL validation, filename handling, MIME helpers
+    │   └── tools/
+    │       └── ImageToolExecutor.kt        — LLM agent tool definitions (image.*)
+    ├── main/resources/META-INF/
+    │   ├── browser4-plugin.json            — Plugin manifest and metadata
+    │   └── spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports
+    └── test/kotlin/ai/platon/pulsar/images/
+        ├── config/ImageConfigTest.kt
+        └── service/
+            ├── ImageDetectorTest.kt
+            └── ImageUtilsTest.kt
 ```
 
 ### How it works

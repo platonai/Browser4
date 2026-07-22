@@ -18271,8 +18271,124 @@ mod tests {
     #[test]
     fn extract_agent_status_defaults_to_running() {
         let status = json!({});
-        // No processState, no isDone, no status → falls back to "running"
         assert_eq!(extract_readable_agent_status(&status), "running");
+    }
+
+    // -----------------------------------------------------------------------
+    // friendly_swarm_status tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn friendly_swarm_status_201_is_queued() {
+        assert_eq!(friendly_swarm_status(201, "Created"), "queued");
+    }
+
+    #[test]
+    fn friendly_swarm_status_202_is_processing() {
+        assert_eq!(friendly_swarm_status(202, "Accepted"), "processing");
+    }
+
+    #[test]
+    fn friendly_swarm_status_200_is_completed() {
+        assert_eq!(friendly_swarm_status(200, "OK"), "completed");
+    }
+
+    #[test]
+    fn friendly_swarm_status_500_is_failed() {
+        let result = friendly_swarm_status(500, "Internal Server Error");
+        assert!(result.starts_with("failed"), "expected 'failed (...)', got '{result}'");
+        assert!(result.contains("internal server error"));
+    }
+
+    #[test]
+    fn friendly_swarm_status_unknown_code_is_lowered() {
+        assert_eq!(friendly_swarm_status(302, "Found"), "found");
+    }
+
+    // -----------------------------------------------------------------------
+    // friendly_agent_status tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn friendly_agent_status_created_is_queued() {
+        assert_eq!(friendly_agent_status("created", false, ""), "queued");
+    }
+
+    #[test]
+    fn friendly_agent_status_in_progress_is_processing() {
+        assert_eq!(friendly_agent_status("in_progress", false, ""), "processing");
+    }
+
+    #[test]
+    fn friendly_agent_status_done_with_sc_ok_is_completed() {
+        assert_eq!(friendly_agent_status("done", true, "SC_OK"), "completed");
+    }
+
+    #[test]
+    fn friendly_agent_status_done_with_200_is_completed() {
+        assert_eq!(friendly_agent_status("done", true, "200"), "completed");
+    }
+
+    #[test]
+    fn friendly_agent_status_done_empty_code_is_completed() {
+        assert_eq!(friendly_agent_status("done", true, ""), "completed");
+    }
+
+    #[test]
+    fn friendly_agent_status_done_with_failure_is_failed() {
+        let result = friendly_agent_status("done", true, "SC_EXPECTATION_FAILED");
+        assert_eq!(result, "failed (sc_expectation_failed)");
+    }
+
+    #[test]
+    fn friendly_agent_status_is_done_false_process_done_is_completed() {
+        // isDone flag may be absent; processState is the real indicator
+        assert_eq!(friendly_agent_status("done", false, "SC_OK"), "completed");
+        assert_eq!(friendly_agent_status("done", false, ""), "completed");
+    }
+
+    #[test]
+    fn friendly_agent_status_empty_process_state_is_queued() {
+        assert_eq!(friendly_agent_status("", false, ""), "queued");
+    }
+
+    #[test]
+    fn friendly_agent_status_unknown_is_lowered() {
+        assert_eq!(friendly_agent_status("Running", false, ""), "running");
+    }
+
+    // -----------------------------------------------------------------------
+    // friendly_crawl_status tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn friendly_crawl_status_created_is_queued() {
+        assert_eq!(friendly_crawl_status("CREATED"), "queued");
+    }
+
+    #[test]
+    fn friendly_crawl_status_ok_is_completed() {
+        assert_eq!(friendly_crawl_status("OK"), "completed");
+    }
+
+    #[test]
+    fn friendly_crawl_status_timeout_is_failed() {
+        assert_eq!(friendly_crawl_status("REQUEST_TIMEOUT"), "failed (timeout)");
+    }
+
+    #[test]
+    fn friendly_crawl_status_internal_error_is_failed() {
+        assert_eq!(friendly_crawl_status("INTERNAL_SERVER_ERROR"), "failed (error)");
+    }
+
+    #[test]
+    fn friendly_crawl_status_not_found_is_failed() {
+        assert_eq!(friendly_crawl_status("NOT_FOUND"), "failed (not found)");
+    }
+
+    #[test]
+    fn friendly_crawl_status_unknown_is_lowered() {
+        assert_eq!(friendly_crawl_status("PROCESSING"), "processing");
     }
 
     #[test]

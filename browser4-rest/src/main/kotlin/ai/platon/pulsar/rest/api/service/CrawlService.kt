@@ -70,7 +70,7 @@ class CrawlService(
     /** Active coroutine jobs: taskId -> Job (for cancellation) */
     private val jobStore = ConcurrentHashMap<String, Job>()
 
-    private val persistence = JsonlPersistence(
+    internal val persistence = JsonlPersistence(
         file = crawlPersistencePath(),
         clazz = CrawlResponse::class,
         objectMapper = pulsarObjectMapper()

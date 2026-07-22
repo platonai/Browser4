@@ -111,8 +111,8 @@ function Wait-ForCoworkerQueueSignal {
 $repoRoot = Get-WorkspaceRoot
 $workingDirectory = Get-SchedulerWorkingDirectory
 $powerShellExecutable = Get-CurrentPowerShellExecutable
-$scriptPath = Join-Path $PSScriptRoot 'coworker.ps1'
-$scriptName = 'coworker.ps1'
+$scriptPath = Join-Path $PSScriptRoot 'run-coworker.ps1'
+$scriptName = 'run-coworker.ps1'
 $wrapperName = 'process-coworker-queue.ps1'
 $watchPaths = @(
     (Join-Path $repoRoot 'coworker\tasks\main\1ready')
