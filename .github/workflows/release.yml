@@ -1452,6 +1452,66 @@ jobs:
             echo "::warning::Failed to trigger OSS sync workflow — it may need to be triggered manually."
           fi
 
+  sync-main-to-tag:
+    name: Sync main branch to release tag
+    needs: [prepare, publish-github-release]
+    if: |
+      always() &&
+      needs.prepare.outputs.dry_run != 'true' &&
+      needs.prepare.outputs.bundle_only != 'true' &&
+      needs.prepare.outputs.is_prerelease != 'true' &&
+      needs.publish-github-release.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Hard reset main to release tag
+        id: sync
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          TAG="${{ needs.prepare.outputs.tag }}"
+          echo "Resetting origin/main to tag: $TAG"
+
+          git fetch origin main
+          git checkout main
+          git reset --hard "refs/tags/$TAG"
+
+          if git push --force origin main 2>&1; then
+            echo "sync_status=success" >> "$GITHUB_OUTPUT"
+            echo "✅ origin/main has been reset to $TAG"
+          else
+            echo "sync_status=failed" >> "$GITHUB_OUTPUT"
+            echo "::warning::Could not force-push main to $TAG. Branch protection may have rejected the push, or the token may not have sufficient permissions. Release artifacts are unaffected — main was NOT updated."
+          fi
+
+      - name: Sync main summary
+        if: always()
+        shell: bash
+        run: |
+          STATUS="${{ steps.sync.outputs.sync_status }}"
+          if [ "$STATUS" = "success" ]; then
+            ICON="✅"
+            NOTE="main is now at ${{ needs.prepare.outputs.tag }}"
+          else
+            ICON="⚠️"
+            NOTE="Push rejected — release is unaffected, but main was NOT updated. This is expected if branch protection blocks the GITHUB_TOKEN."
+          fi
+          {
+            echo "## $ICON Sync main → ${{ needs.prepare.outputs.tag }}"
+            echo ""
+            echo "- **Tag**: ${{ needs.prepare.outputs.tag }}"
+            echo "- **Version**: ${{ needs.prepare.outputs.version }}"
+            echo "- **Result**: $NOTE"
+          } >> "$GITHUB_STEP_SUMMARY"
+
   cleanup-on-failure:
     name: Report failed release
     needs:
@@ -1462,6 +1522,7 @@ jobs:
       - smoke-test-runtime-bundle
       - publish-cli-npm
       - publish-github-release
+      - sync-main-to-tag
     if: failure()
     runs-on: ubuntu-latest
     permissions:
