@@ -71,6 +71,11 @@
             </exclusions>
         </dependency>
 
+        <dependency>
+            <groupId>dev.langchain4j</groupId>
+            <artifactId>langchain4j-open-ai</artifactId>
+        </dependency>
+
         <!-- MCP SDK for Browser4 MCP server support -->
         <dependency>
             <groupId>io.modelcontextprotocol</groupId>

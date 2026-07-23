@@ -57,6 +57,12 @@
             <artifactId>pulsar-ql-common</artifactId>
         </dependency>
 
+        <!-- langchain4j-open-ai is optional in browser4-skeleton; browser4-rest needs it for LLM agent inference -->
+        <dependency>
+            <groupId>dev.langchain4j</groupId>
+            <artifactId>langchain4j-open-ai</artifactId>
+        </dependency>
+
         <dependency>
             <groupId>ai.platon.pulsar</groupId>
             <artifactId>pulsar-ql</artifactId>

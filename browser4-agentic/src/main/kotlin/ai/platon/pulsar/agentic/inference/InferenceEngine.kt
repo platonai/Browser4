@@ -20,7 +20,8 @@ class InferenceEngine(
     private val agent: BasicBrowserAgent
 ) {
     private val session = agent.session
-    private val cta = ContextToAction(session.sessionConfig)
+    // Reuse the agent's ContextToAction so vision-support discovery is shared
+    private val cta = agent.cta
     private val inferenceLogger = InferenceLogger(agent.uuid, agent.startTime)
 
     val snapshotService: SnapshotService
