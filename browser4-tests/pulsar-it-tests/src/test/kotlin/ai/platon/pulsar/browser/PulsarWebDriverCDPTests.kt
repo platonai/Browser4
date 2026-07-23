@@ -3,7 +3,7 @@ package ai.platon.pulsar.browser
 import ai.platon.browser4.api.AbstractWebDriver
 import ai.platon.browser4.api.Browser
 import ai.platon.browser4.api.WebDriver
-import ai.platon.browser4.api.model.WebDriverException
+
 import ai.platon.browser4.chrome.PulsarWebDriver
 import ai.platon.browser4.chrome.protocol.DirectChromeProtocol
 import ai.platon.pulsar.WebDriverTestBase
@@ -130,8 +130,8 @@ class PulsarWebDriverCDPTests : WebDriverTestBase() {
         runWebDriverTestAndCompute(testURL, browser) { driver ->
             try {
                 driver.executeCdpCommand("NonExistent.Method")
-                fail("Expected WebDriverException for invalid CDP method")
-            } catch (e: WebDriverException) {
+                fail("Expected exception for invalid CDP method")
+            } catch (e: Exception) {
                 // expected — CDP rejects unknown methods
             }
         }

@@ -152,6 +152,17 @@ internal class ChromeDevToolsImpl(
                 "No response | $method | #${numInvokes.count}, (${config.readTimeout})"
             )
         }
+
+        // Surface CDP protocol errors as exceptions (matches invokeInternal behavior)
+        if (!rpcResult.isSuccess) {
+            handleFailedFurther(rpcResult.result).let { e ->
+                if (e.errorCode != -32000L) {
+                    logger.info("Protocol return error. errorCode={}, errorMessage={} | request={}", e.errorCode, e.errorMessage, message)
+                }
+                throw e
+            }
+        }
+
         val jsonNode = rpcResult.result ?: return null
 
         return dispatcher.deserialize(returnClass.java, jsonNode)
