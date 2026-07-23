@@ -993,7 +993,7 @@ fn serve_mock_browser4_request(mut stream: TcpStream, state: Arc<Mutex<MockBrows
                             "status": "EXPECTATION_FAILED",
                             "statusCode": 417,
                             "processState": "done",
-                            "message": "The LLM is not configured, see docs/config/llm/llm-config.md",
+                            "message": "The LLM is not configured. Set an API key environment variable such as DEEPSEEK_API_KEY, OPENROUTER_API_KEY, or OPENAI_API_KEY.",
                         })
                         .to_string()
                     } else {

@@ -6890,6 +6890,15 @@ fn format_missing_llm_error(raw_message: &str, command_name: &str) -> String {
         .trim()
         .to_string();
 
+    // Remove internal doc references that won't be present in an end-user's
+    // environment (e.g. "see docs/config/llm/llm-config.md").
+    let body = body
+        .replacen(", see docs/config/llm/llm-config.md", "", 1)
+        .replacen("; see docs/config/llm/llm-config.md", "", 1)
+        .replace("see docs/config/llm/llm-config.md", "")
+        .trim()
+        .to_string();
+
     format!(
         "❌ {command_name} requires an LLM API key\n\n{body}"
     )
@@ -15720,6 +15729,15 @@ mod tests {
         assert!(!is_missing_llm_configuration_message("Browser crashed before agent execution started"));
     }
 
+    #[test]
+    fn is_missing_llm_matches_legacy_docs_message() {
+        // Legacy message from older mock server — still detected, but
+        // format_missing_llm_error strips the internal doc reference.
+        assert!(is_missing_llm_configuration_message(
+            "The LLM is not configured, see docs/config/llm/llm-config.md"
+        ));
+    }
+
     // --- format_missing_llm_error ---
 
     #[test]
@@ -15749,6 +15767,22 @@ mod tests {
         let formatted = format_missing_llm_error(raw, "agent run");
         assert!(formatted.contains("❌ agent run requires an LLM API key"));
         assert!(formatted.contains("LLM API key is not configured"));
+    }
+
+    #[test]
+    fn format_missing_llm_error_strips_internal_doc_references() {
+        let raw = "The LLM is not configured, see docs/config/llm/llm-config.md";
+        let formatted = format_missing_llm_error(raw, "agent run");
+        assert!(formatted.contains("❌ agent run requires an LLM API key"));
+        assert!(formatted.contains("The LLM is not configured"));
+        assert!(!formatted.contains("docs/config/llm/llm-config.md"));
+    }
+
+    #[test]
+    fn format_missing_llm_error_strips_doc_ref_semicolon_variant() {
+        let raw = "The LLM is not configured; see docs/config/llm/llm-config.md";
+        let formatted = format_missing_llm_error(raw, "extract");
+        assert!(!formatted.contains("docs/config/llm"));
     }
 
     // -----------------------------------------------------------------------
