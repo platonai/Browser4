@@ -1,10 +1,10 @@
 package ai.platon.pulsar.rest.api.service
 
+import ai.platon.browser4.api.model.BrowserSettings
 import ai.platon.browser4.boot.autoconfigure.Browser4AutoConfiguration
 import ai.platon.browser4.boot.autoconfigure.test.PulsarTestContextInitializer
 import ai.platon.browser4.common.B4Constants.DEFAULT_SESSION_ID
 import ai.platon.pulsar.agent.tool.UserCommandExecutor
-import ai.platon.browser4.api.model.BrowserSettings
 import ai.platon.pulsar.common.browser.BrowserProfileMode
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.common.printlnPro
@@ -50,6 +50,7 @@ class CommandRunnerTest : MockEcServerTestBase() {
     @BeforeEach
     override fun setup() {
         super.setup() // Call parent setup to verify mock server is running
+
         Assumptions.assumeTrue(ChatModelFactory.isModelConfigured(conf))
         BrowserSettings.withBrowserContextMode(BrowserProfileMode.TEMPORARY)
     }

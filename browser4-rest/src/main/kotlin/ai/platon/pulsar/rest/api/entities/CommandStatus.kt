@@ -193,12 +193,18 @@ fun AgentTaskStatus.toCommandStatus(): CommandStatus {
     // Populate commandResult from available sources so that callers
     // (including `command_result`) always have at least a status message,
     // even when the agent produced no summary.
+    //
+    // When the task failed, prefer failureReason over message because
+    // message may only contain unhelpful event-flow concatenation
+    // (e.g. "StatefulAgentRunner.created,PerceptiveAgent.onWillRun,...").
+    val failed = this.isDone && this.statusCode != ResourceStatus.SC_OK
     val summary = this.agentHistory?.lastOrNull()?.summary
+        ?: if (failed) this.failureReason else null
         ?: this.message
         ?: this.failureReason
     if (!summary.isNullOrBlank()) {
         status.ensureCommandResult().summary = summary
-    } else if (this.isDone && this.statusCode != ResourceStatus.SC_OK) {
+    } else if (failed) {
         status.ensureCommandResult().summary =
             "Task finished with status: ${ResourceStatus.getStatusText(this.statusCode)}"
     }

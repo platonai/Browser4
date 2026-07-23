@@ -1,5 +1,6 @@
 package ai.platon.pulsar.apps
 
+import ai.platon.browser4.boot.autoconfigure.PulsarContextInitializer
 import ai.platon.browser4.boot.plugin.PluginClasspathEnhancer
 import ai.platon.pulsar.apps.native.Browser4NativeHints
 import ai.platon.pulsar.common.getLogger
@@ -91,6 +92,7 @@ fun runBrowser4StandaloneApplication(args: Array<String>) {
     }
     runApplication<Browser4StandaloneApplication>(*args) {
         setAdditionalProfiles("standalone", "private", "advanced")
+        addInitializers(PulsarContextInitializer())
         setLogStartupInfo(true)
     }
 }

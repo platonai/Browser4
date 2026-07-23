@@ -128,10 +128,15 @@ open class StatefulAgentRunner(
                 }
             }
         } catch (e: CancellationException) {
+            logger.warn("Agent task {} cancelled: {}", status.id, e.message)
+            status.failed(ResourceStatus.SC_EXPECTATION_FAILED)
+            status.failureReason = e.message ?: "Task cancelled"
+            status.message = e.message
             throw e
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             logger.error("Failed to execute agent command: {} (session={})", plainCommand, session.uuid, e)
             status.failed(ResourceStatus.SC_EXPECTATION_FAILED)
+            status.failureReason = "${e.javaClass.simpleName}: ${e.message}"
             status.message = e.message
         } finally {
             status.done()
