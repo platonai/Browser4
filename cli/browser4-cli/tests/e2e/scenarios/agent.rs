@@ -29,7 +29,7 @@ pub(super) fn test_agent_run_live_or_missing_llm_key(ctx: &mut E2ECtx) {
     } else {
         let combined = format!("{}\n{}", result.stdout, result.stderr);
         assert!(
-            combined.contains("Agent task requires an LLM key and cannot execute"),
+            combined.contains("requires an LLM API key"),
             "Expected missing-LLM message in:\n{combined}"
         );
         assert!(

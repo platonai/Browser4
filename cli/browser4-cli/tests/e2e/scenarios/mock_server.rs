@@ -2072,7 +2072,7 @@ pub(super) fn test_agent_run_missing_llm_key(ctx: &mut E2ECtx) {
     let failure = run_command_expecting_failure(
         ctx,
         &["agent", "run", "task missing llm key"],
-        "Agent task requires an LLM key and cannot execute",
+        "requires an LLM API key",
     );
     let combined = format!("{}\n{}", failure.stdout, failure.stderr);
     assert!(
