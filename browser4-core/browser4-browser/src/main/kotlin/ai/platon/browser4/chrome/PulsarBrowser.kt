@@ -140,6 +140,16 @@ class PulsarBrowser(
     @Throws(WebDriverException::class)
     override fun newDriver() = newDriver(ABOUT_BLANK_PAGE)
 
+    /**
+     * Creates a [PulsarWebDriver] for an existing [BrowserTab] without
+     * creating a new tab.  This is the low-level entry point that backs
+     * [newDriver] — useful when a tab already exists (e.g. from an
+     * extension-attached browser) and only the driver scaffolding is needed.
+     */
+    fun newDriverForTab(tab: BrowserTab): PulsarWebDriver {
+        return newDriverIfAbsent(tab, false)
+    }
+
     @Synchronized
     @Throws(WebDriverException::class)
     override fun newDriver(url: String): PulsarWebDriver {

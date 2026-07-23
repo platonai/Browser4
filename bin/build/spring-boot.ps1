@@ -72,17 +72,18 @@ function Start-Server {
         Write-Host "Starting Spring Boot in background (log: $LOG_FILE) …"
 
         if ($IsWindows) {
+            # Merge stdout+stderr via cmd.exe redirect to avoid pwsh
+            # limitation: RedirectStandardOutput and RedirectStandardError
+            # cannot be the same file.
             $proc = Start-Process -FilePath "cmd.exe" `
-                -ArgumentList @("/c", "cd /d `"$SERVER_HOME`" && ..\..\mvnw.cmd spring-boot:run -am") `
+                -ArgumentList @("/c", "cd /d `"$SERVER_HOME`" && ..\..\mvnw.cmd spring-boot:run -am 2>&1") `
                 -NoNewWindow -PassThru `
-                -RedirectStandardOutput $LOG_FILE `
-                -RedirectStandardError $LOG_FILE
+                -RedirectStandardOutput $LOG_FILE
         } else {
             $proc = Start-Process -FilePath "sh" `
-                -ArgumentList @("-c", "cd `"$SERVER_HOME`" && ../../mvnw spring-boot:run -am") `
+                -ArgumentList @("-c", "cd `"$SERVER_HOME`" && ../../mvnw spring-boot:run -am 2>&1") `
                 -NoNewWindow -PassThru `
-                -RedirectStandardOutput $LOG_FILE `
-                -RedirectStandardError $LOG_FILE
+                -RedirectStandardOutput $LOG_FILE
         }
 
         $proc.Id | Out-File -FilePath $PID_FILE -Encoding ASCII -NoNewline
@@ -139,29 +140,29 @@ function Start-Server {
 # ── stop ───────────────────────────────────────────────────────────
 
 function Stop-Server {
-    $pid = Get-RunningPid
-    if (-not $pid) {
+    $serverPid = Get-RunningPid
+    if (-not $serverPid) {
         Write-Host "Server is not running (no active PID file)."
         if (Test-Path $PID_FILE) { Remove-Item $PID_FILE -Force }
         return
     }
 
-    Write-Host "Stopping server (PID: $pid) …"
-    Stop-Process -Id $pid -Force -ErrorAction SilentlyContinue
+    Write-Host "Stopping server (PID: $serverPid) …"
+    Stop-Process -Id $serverPid -Force -ErrorAction SilentlyContinue
 
     # Wait up to 10 s for graceful exit
     $timeout = (Get-Date).AddSeconds(10)
     while ((Get-Date) -lt $timeout) {
-        $alive = Get-Process -Id $pid -ErrorAction SilentlyContinue
+        $alive = Get-Process -Id $serverPid -ErrorAction SilentlyContinue
         if (-not $alive) { break }
         Start-Sleep -Milliseconds 500
     }
 
     # Force-kill if still alive
-    $alive = Get-Process -Id $pid -ErrorAction SilentlyContinue
+    $alive = Get-Process -Id $serverPid -ErrorAction SilentlyContinue
     if ($alive) {
         Write-Host "Process did not exit gracefully — force-killing …"
-        Stop-Process -Id $pid -Force -ErrorAction SilentlyContinue
+        Stop-Process -Id $serverPid -Force -ErrorAction SilentlyContinue
         Start-Sleep -Seconds 1
     }
 

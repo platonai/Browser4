@@ -420,11 +420,33 @@ class MCPToolController(
     private fun handleAttachBrowser(request: MCPToolCallRequest): ResponseEntity<MCPToolCallResponse> {
         val args = request.arguments ?: emptyMap()
 
+        // Extension-attached sessions (Browser4 Chrome Extension relay)
+        val isExtension = args["extension"]?.let { ext ->
+            ext is Boolean && ext || ext.toString().let { it == "true" || it.isNotBlank() }
+        } ?: false
+
+        if (isExtension) {
+            val channel = (args["channel"] as? String)?.takeIf { it.isNotBlank() }
+            val info = sessionManager.createExtensionAttachedSession(
+                channel = channel,
+                capabilities = args.filterKeys {
+                    it != "extension" && it != "channel" && it != "sessionId"
+                }.mapValues { it.value?.toString() }
+            )
+            logger.info(
+                "MCP attach_browser: created extension session {} | wsEndpoint={} | channel={}",
+                info.sessionId, info.wsEndpoint, channel ?: "default"
+            )
+            return ResponseEntity.ok(
+                textResponse("""{"sessionId":"${info.sessionId}","wsEndpoint":"${info.wsEndpoint}"}""")
+            )
+        }
+
         val cdpEndpoint = (args["cdpEndpoint"] as? String)?.takeIf { it.isNotBlank() }
         val cdpPort = (args["cdpPort"] as? Number)?.toInt()
 
         require(cdpEndpoint != null || cdpPort != null) {
-            "attach_browser requires either 'cdpEndpoint' (URL) or 'cdpPort' (number)"
+            "attach_browser requires either 'cdpEndpoint' (URL), 'cdpPort' (number), or 'extension' (boolean)"
         }
 
         val session = sessionManager.createAttachedSession(

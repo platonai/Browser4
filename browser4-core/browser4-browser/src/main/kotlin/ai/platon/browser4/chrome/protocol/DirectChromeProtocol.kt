@@ -181,7 +181,14 @@ class DirectChromeProtocol(
     }
 
     override suspend fun isTargetAlive(): Boolean {
-        return runCatching { command("Target.getTargets") }.isSuccess
+        // Use Runtime.evaluate instead of Target.getTargets because
+        // Target.getTargets is a browser-level CDP command that does not work
+        // through per-tab debugger connections (e.g. chrome.debugger.attach
+        // via a Chrome Extension).  Runtime.evaluate is a tab-level command
+        // that works everywhere.
+        return runCatching {
+            command("Runtime.evaluate", mapOf("expression" to "1"))
+        }.isSuccess
     }
 
     override suspend fun isV8Alive(): Boolean {

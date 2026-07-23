@@ -144,7 +144,16 @@ class PulsarSessionManager(
             }
 
             if (healthy.isOK) {
-                healthy = s.boundDriver?.healthy() ?: CheckState()
+                // For extension-attached sessions, the driver's CDP target may
+                // not be "alive" until the first CDP command initializes the
+                // protocol (Page.enable, etc.).  As long as the driver exists
+                // and has left INIT state, the session is usable.
+                val isExtensionSession = extensionBrowsers.containsKey(session.sessionId)
+                if (isExtensionSession && driver != null && driver.readableState != "INIT") {
+                    // Driver is ready — skip the strict healthy() check.
+                } else {
+                    healthy = driver?.healthy() ?: CheckState()
+                }
                 if (!healthy.isOK && driver != null) {
                     logger.warn("Bound driver {} is unhealthy, state: {}", driver.id, driver.readableState)
                 }
@@ -169,6 +178,15 @@ class PulsarSessionManager(
         capabilities: Map<String, String?>,
         session: ManagedSession,
     ): ManagedSession {
+        // Extension-attached sessions use an external browser (Chrome with the
+        // Browser4 extension installed).  They must never be recreated by
+        // Browser4 — the extension owns the browser lifecycle.  Recreating would
+        // launch a new Chrome instance, severing the link to the user's existing
+        // browser and its extension state.
+        if (extensionBrowsers.containsKey(sessionId)) {
+            return markSessionActive(session)
+        }
+
         if (checkHealthyBlocking(session).isOK) {
             return markSessionActive(session)
         }
@@ -280,7 +298,10 @@ class PulsarSessionManager(
             }
         }
 
-        val normalizedCapabilities = normalizeCapabilities(capabilities = capabilities)
+        // Generate a unique session ID for each extension connection.
+        // Passing an explicit ID prevents the fallback to DEFAULT_SESSION_ID.
+        val explicitSessionId = java.util.UUID.randomUUID().toString()
+        val normalizedCapabilities = normalizeCapabilities(explicitSessionId, capabilities)
         val sessionId = normalizedCapabilities.getValue(SESSION_ID_CAPABILITY).toString()
 
         // Create the managed session (without a bound browser yet).
@@ -329,7 +350,50 @@ class PulsarSessionManager(
 
         // Bind the browser to the agentic session.
         managedSession.agenticSession.bindBrowser(browser)
+        managedSession.status = "active"
         extensionBrowsers[sessionId] = extChrome
+
+        // Create and bind a driver from the extension browser in a background
+        // thread.  We must NOT block the WebSocket handler thread — the
+        // extension.initialized event is delivered on the same Jetty thread that
+        // calls afterConnectionEstablished, so blocking here would deadlock event
+        // delivery.
+        val agenticSession = managedSession.agenticSession
+        Thread {
+            try {
+                val deadline = System.currentTimeMillis() + 15_000
+                var tabs = browser.listTabs()
+                while (tabs.isEmpty() && System.currentTimeMillis() < deadline) {
+                    Thread.sleep(200)
+                    tabs = browser.listTabs()
+                }
+                if (tabs.isNotEmpty()) {
+                    val driver = browser.newDriverForTab(tabs.first())
+                    driver.free()
+                    // Initialize CDP so the driver is operational.
+                    runBlocking { driver.browserProtocol.pageEnable() }
+                    agenticSession.bindDriver(driver)
+                    logger.info(
+                        "Created extension driver for session {} (tab: {})",
+                        sessionId, driver.chromeTab.url
+                    )
+                } else {
+                    logger.warn(
+                        "No tabs available for extension session {} after waiting",
+                        sessionId
+                    )
+                }
+            } catch (e: Exception) {
+                logger.error(
+                    "Failed to create extension driver for session {}: {}",
+                    sessionId, e.message, e
+                )
+            }
+        }.apply {
+            name = "extension-driver-binder-$sessionId"
+            isDaemon = true
+            start()
+        }
 
         logger.info(
             "Extension connected and bound to session {} | elapsed={}ms",

@@ -136,10 +136,27 @@ class ExtensionChromeService(
         val attachId = nextId()
         val attachFuture = registerRequest(attachId)
 
-        val attachMessage = buildCommand(attachId, "chrome.debugger.attach", listOf(mapOf("tabId" to tabIdInt)))
+        // chrome.debugger.attach requires TWO positional arguments:
+        //   (Debuggee target, string requiredVersion)
+        // The requiredVersion must be "1.3" to match CDP protocol version.
+        // Without it, Chrome throws "No matching signature."
+        // See Playwright's protocolHandlers.ts:70 for reference.
+        val attachMessage = buildCommand(
+            attachId, "chrome.debugger.attach",
+            listOf(mapOf("tabId" to tabIdInt), "1.3")
+        )
         send(attachMessage)
 
-        awaitAndCleanup(attachId, attachFuture, "chrome.debugger.attach")
+        val attachResponse = awaitAndCleanup(attachId, attachFuture, "chrome.debugger.attach")
+
+        // Check for errors in the extension's response. The
+        // chrome.debugger.attach API can fail silently — the extension may
+        // acknowledge the request without the debugger actually attaching.
+        val attachError = attachResponse.get("error")
+        if (attachError != null && !attachError.isNull) {
+            val errorMsg = attachError.get("message")?.asText() ?: attachError.toString()
+            throw ChromeServiceException("Failed to attach debugger to tab ${tab.id}: $errorMsg")
+        }
 
         val devTools = ExtensionDevToolsService(messageSender, tab, this)
         devToolsServices[tab.id] = devTools
