@@ -23,6 +23,8 @@ pub struct GlobalFlags {
     pub proxy_url: Option<String>,
     /// `--show-tip` / `-tip` — show relevant tips on stderr after commands
     pub show_tip: bool,
+    /// `--pretty` — pretty-print JSON output
+    pub pretty: bool,
     /// Remaining arguments (command + its args/options)
     pub args: Vec<String>,
 }
@@ -77,6 +79,8 @@ pub fn parse_global_flags(argv: &[String]) -> GlobalFlags {
             flags.quiet = true;
         } else if !seen_command && (arg == "--show-tip" || arg == "-tip") {
             flags.show_tip = true;
+        } else if !seen_command && arg == "--pretty" {
+            flags.pretty = true;
         } else if arg.starts_with("--server=") {
             flags.server_url = Some(arg["--server=".len()..].to_string());
         } else if arg == "--server" {
