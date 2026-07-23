@@ -122,6 +122,14 @@ jobs:
             echo "  - Failed Tests: ${{ steps.run-tests.outputs.failed_count }}"
             echo "  - Passed Tests: ${{ steps.run-tests.outputs.passed_count }}"
             echo "  - Skipped Tests: ${{ steps.run-tests.outputs.skipped_count }}"
+            FAILED_LIST="${{ steps.run-tests.outputs.failed_test_list }}"
+            if [ -n "$FAILED_LIST" ]; then
+              echo ""
+              echo "❌ Failed Tests:"
+              for test in $FAILED_LIST; do
+                echo "  - $test"
+              done
+            fi
             exit 1
           else
             echo "✅ All tests passed successfully"

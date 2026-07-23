@@ -101,6 +101,14 @@ jobs:
           if [ "${{ steps.run-tests.outputs.test_status }}" != "success" ]; then
             echo "❌ Tests failed with status: ${{ steps.run-tests.outputs.test_status }}"
             echo "📊 Total: ${{ steps.run-tests.outputs.test_count }} | Failed: ${{ steps.run-tests.outputs.failed_count }} | Passed: ${{ steps.run-tests.outputs.passed_count }}"
+            FAILED_LIST="${{ steps.run-tests.outputs.failed_test_list }}"
+            if [ -n "$FAILED_LIST" ]; then
+              echo ""
+              echo "❌ Failed Tests:"
+              for test in $FAILED_LIST; do
+                echo "  - $test"
+              done
+            fi
             exit 1
           else
             echo "✅ All fast unit tests passed (${{ steps.run-tests.outputs.passed_count }} passed)"
