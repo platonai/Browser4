@@ -32,6 +32,7 @@ pub fn public_command_name(name: &str) -> &str {
         "webdb-export" => "webdb export",
         "webdb-normalize" => "webdb normalize",
         "doctor-log" => "doctor log",
+        "doctor-metrics" => "doctor metrics",
         "plugin-list" => "plugin list",
         "plugin-info" => "plugin info",
         "plugin-install" => "plugin install",

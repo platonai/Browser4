@@ -355,6 +355,7 @@ fn no_snapshot_commands() -> HashSet<&'static str> {
         "upgrade",
         "doctor",
         "doctor-log",
+        "doctor-metrics",
         "help",
         "eval",
         "generate-locator",
@@ -963,6 +964,41 @@ async fn get_or_create_navigation_session(
     let reused_existing_session = reusable_session_id.is_some();
     let session_id = if let Some(existing_id) = reusable_session_id {
         existing_id
+    } else if state.is_attached {
+        // For attached sessions (CDP or extension), never fall through to
+        // create_session — that would launch a NEW browser instance instead
+        // of using the attached one.  Verify health directly and reuse the
+        // attached session, or report a clear error if it is gone.
+        if let Some(ref attached_id) = state.session_id {
+            let ready_params = json!({ "sessionId": attached_id });
+            let healthy = call_tool(client, base_url, "check_session_ready", ready_params)
+                .await
+                .ok()
+                .and_then(|r| serde_json::from_str::<Value>(&r).ok())
+                .map(|v| {
+                    let ready = v.get("ready").and_then(|r| r.as_bool()).unwrap_or(false);
+                    let h = v.get("healthy").and_then(|h| h.as_bool()).unwrap_or(false);
+                    ready && h
+                })
+                .unwrap_or(false);
+
+            if healthy {
+                attached_id.clone()
+            } else {
+                return Err(format!(
+                    "Attached session {} is no longer healthy. \
+                     The browser or extension may have disconnected.\n\
+                     Re-run `attach --extension` to reconnect, or \
+                     `close` / `close-all` to clear this session state.",
+                    attached_id
+                ));
+            }
+        } else {
+            return Err(
+                "Attached session state has no session ID — re-run `attach` to create one."
+                    .to_string(),
+            );
+        }
     } else {
         let capabilities = build_open_session_capabilities(tool_params);
         let new_id =
@@ -1212,16 +1248,31 @@ async fn handle_attach(
             .to_string();
 
         // Construct the extension connect page URL.
+        // If BROWSER4_EXTENSION_TOKEN is set, include it for automatic
+        // approval (bypasses the manual "Allow & select" dialog).
         let client_info = json!({"name": "browser4-cli"});
         let client_info_str = client_info.to_string();
         let client_encoded = urlencoding::encode(&client_info_str);
         let ws_encoded = urlencoding::encode(&ws_endpoint);
-        let connect_url = format!(
+        let mut connect_url = format!(
             "chrome-extension://{}/connect.html?mcpRelayUrl={}&client={}",
             BROWSER4_EXTENSION_ID,
             ws_encoded,
             client_encoded,
         );
+        let has_token = if let Ok(token) = std::env::var("BROWSER4_EXTENSION_TOKEN") {
+            let token = token.trim().to_string();
+            if !token.is_empty() {
+                connect_url.push_str("&token=");
+                connect_url.push_str(&urlencoding::encode(&token));
+                connect_url.push_str("&newTab=true");
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        };
 
         // Persist session state immediately so subsequent commands find the session.
         let mut state = read_state(None, session_name);
@@ -1245,6 +1296,9 @@ async fn handle_attach(
         );
 
         // Try to open the connect URL in the default browser.
+        if has_token {
+            cli_println!("Using BROWSER4_EXTENSION_TOKEN for automatic approval.");
+        }
         let opened = open_url_in_browser(&connect_url);
         if opened {
             cli_println!("Opened extension connect page in browser.");
@@ -1405,8 +1459,23 @@ async fn handle_attach(
 fn open_url_in_browser(url: &str) -> bool {
     #[cfg(target_os = "windows")]
     {
+        // Prefer launching Chrome directly — the chrome-extension:// protocol
+        // handler isn't reliably registered by Windows, but Chrome itself
+        // handles extension URLs when passed on the command line.
+        if let Some(chrome) = crate::daemon::find_chrome_executable() {
+            let result = std::process::Command::new(&chrome)
+                .arg(url)
+                .spawn();
+            if let Ok(mut child) = result {
+                // Detach — don't wait for Chrome to exit.
+                let _ = child.stdin.take();
+                return true;
+            }
+        }
+        // Fallback: cmd /c start (escapes & which is a cmd.exe separator).
+        let escaped = url.replace("&", "^&");
         std::process::Command::new("cmd")
-            .args(["/c", "start", "", url])
+            .args(["/c", "start", "", &escaped])
             .spawn()
             .is_ok()
     }
@@ -2585,18 +2654,53 @@ async fn find_reusable_persisted_session_id(
     let list_result = match call_tool(client, base_url, "list_sessions", json!({})).await {
         Ok(result) => result,
         Err(error) if is_backend_unreachable_error(&error) => {
-            invalidate_session(state, base_url, session_name);
+            // For attached sessions, don't invalidate on backend unreachable —
+            // the attached browser/extension may still be alive.
+            if !state.is_attached {
+                invalidate_session(state, base_url, session_name);
+            }
             return Ok(None);
         }
         Err(error) => return Err(error),
     };
 
     if session_is_active(&list_result, &session_id) {
-        Ok(Some(session_id))
-    } else {
-        invalidate_session(state, base_url, session_name);
-        Ok(None)
+        return Ok(Some(session_id));
     }
+
+    // For attached sessions (CDP or extension), the list_sessions status may
+    // not reflect actual health — verify directly via check_session_ready
+    // before giving up.
+    if state.is_attached {
+        let ready_params = json!({ "sessionId": &session_id });
+        if let Ok(ready_result) =
+            call_tool(client, base_url, "check_session_ready", ready_params).await
+        {
+            let ready_parsed = serde_json::from_str::<Value>(&ready_result).ok();
+            let ready = ready_parsed
+                .as_ref()
+                .and_then(|v| v.get("ready"))
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let healthy = ready_parsed
+                .as_ref()
+                .and_then(|v| v.get("healthy"))
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+
+            if ready && healthy {
+                return Ok(Some(session_id));
+            }
+        }
+
+        // Attached session health check failed, but we must NOT invalidate it
+        // and silently create a new browser session.  Let the caller decide
+        // how to handle the unhealthy attached session.
+        return Ok(None);
+    }
+
+    invalidate_session(state, base_url, session_name);
+    Ok(None)
 }
 
 fn parse_backend_session_records(result: &str) -> Vec<BackendSessionRecord> {
@@ -11632,6 +11736,7 @@ async fn handle_doctor(client: &Client, base_url: &str, args: &HashMap<String, V
     cli_println!("");
 
     let is_fix = args.get("fix").and_then(|v| v.as_bool()).unwrap_or(false);
+    let verbose = args.get("verbose").and_then(|v| v.as_bool()).unwrap_or(false);
 
     // ---- Auto-clean Stale Daemon Files ----
     cli_println!("-- Stale File Cleanup --");
@@ -11760,96 +11865,105 @@ async fn handle_doctor(client: &Client, base_url: &str, args: &HashMap<String, V
         }
     }
 
-    // ---- Backend Logs (conditional) ----
-    let log_file = args.get("file").and_then(|v| v.as_str()).unwrap_or("pulsar");
-    let log_lines: u32 = args.get("lines")
-        .and_then(|v| v.as_str())
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(50)
-        .min(500);
-    let log_filter = args.get("log_filter").and_then(|v| v.as_str()).unwrap_or("");
+    // ---- Backend Logs (conditional, shown only with --verbose) ----
+    if verbose {
+        let log_file = args.get("file").and_then(|v| v.as_str()).unwrap_or("pulsar");
+        let log_lines: u32 = args.get("lines")
+            .and_then(|v| v.as_str())
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(50)
+            .min(500);
+        let log_filter = args.get("log_filter").and_then(|v| v.as_str()).unwrap_or("");
 
-    cli_println!("");
-    if log_filter.is_empty() {
-        cli_println!("-- Backend Logs: {}.log (last {} lines) --", log_file, log_lines);
-    } else {
-        cli_println!("-- Backend Logs: {}.log (last {} lines, filter: \"{}\") --", log_file, log_lines, log_filter);
-    }
-    let log_url = format!("{base_url}/api/doctor/logs?file={}&lines={}&filter={}",
-        log_file, log_lines,
-        urlencoding::encode(log_filter));
-    match get_json(client, &log_url).await {
-        Ok(log_data) => {
-            if let Some(entries) = log_data.get("lines").and_then(|v| v.as_array()) {
-                for line in entries {
-                    if let Some(text) = line.as_str() {
-                        cli_println!("  {}", text);
-                    }
-                }
-                if entries.is_empty() {
-                    if log_filter.is_empty() {
-                        cli_println!("  (log file empty or not found)");
-                    } else {
-                        cli_println!("  (no log lines matched filter \"{}\")", log_filter);
-                    }
-                }
-            }
-            json_field("backend_logs", log_data);
+        cli_println!("");
+        if log_filter.is_empty() {
+            cli_println!("-- Backend Logs: {}.log (last {} lines) --", log_file, log_lines);
+        } else {
+            cli_println!("-- Backend Logs: {}.log (last {} lines, filter: \"{}\") --", log_file, log_lines, log_filter);
         }
-        Err(e) => {
-            cli_println!("  (server not running or log unavailable: {})", e);
-            json_field("backend_logs", json!(null));
+        let log_url = format!("{base_url}/api/doctor/logs?file={}&lines={}&filter={}",
+            log_file, log_lines,
+            urlencoding::encode(log_filter));
+        match get_json(client, &log_url).await {
+            Ok(log_data) => {
+                if let Some(entries) = log_data.get("lines").and_then(|v| v.as_array()) {
+                    for line in entries {
+                        if let Some(text) = line.as_str() {
+                            cli_println!("  {}", text);
+                        }
+                    }
+                    if entries.is_empty() {
+                        if log_filter.is_empty() {
+                            cli_println!("  (log file empty or not found)");
+                        } else {
+                            cli_println!("  (no log lines matched filter \"{}\")", log_filter);
+                        }
+                    }
+                }
+                json_field("backend_logs", log_data);
+            }
+            Err(e) => {
+                cli_println!("  (server not running or log unavailable: {})", e);
+                json_field("backend_logs", json!(null));
+            }
         }
     }
 
-    // ---- Backend Metrics (conditional) ----
-    let metric_filter = args.get("metric_filter").and_then(|v| v.as_str()).unwrap_or("");
+    // ---- Backend Metrics (conditional, shown only with --verbose) ----
+    if verbose {
+        let metric_filter = args.get("metric_filter").and_then(|v| v.as_str()).unwrap_or("");
 
-    cli_println!("");
-    if metric_filter.is_empty() {
-        cli_println!("-- Backend Metrics --");
-    } else {
-        cli_println!("-- Backend Metrics (filter: \"{}\") --", metric_filter);
-    }
-    let metrics_url = if metric_filter.is_empty() {
-        format!("{base_url}/api/doctor/metrics")
-    } else {
-        format!("{base_url}/api/doctor/metrics?filter={}", urlencoding::encode(metric_filter))
-    };
-    match get_json(client, &metrics_url).await {
-        Ok(metrics) => {
-            if let Some(gauges) = metrics.get("gauges").and_then(|v| v.as_object()) {
-                for (key, value) in gauges {
-                    if is_zero_value(value) {
-                        continue;
-                    }
-                    cli_println!("  {}: {}", key, value);
-                }
-            }
-            // Print meter summary counts
-            if let Some(meters) = metrics.get("meters").and_then(|v| v.as_object()) {
-                let mut shown_header = false;
-                for (key, val) in meters {
-                    if let Some(obj) = val.as_object() {
-                        let count = obj.get("count").and_then(|v| v.as_u64()).unwrap_or(0);
-                        let rate = obj.get("meanRate").and_then(|v| v.as_f64()).unwrap_or(0.0);
-                        if count == 0 && rate == 0.0 {
+        cli_println!("");
+        if metric_filter.is_empty() {
+            cli_println!("-- Backend Metrics --");
+        } else {
+            cli_println!("-- Backend Metrics (filter: \"{}\") --", metric_filter);
+        }
+        let metrics_url = if metric_filter.is_empty() {
+            format!("{base_url}/api/doctor/metrics")
+        } else {
+            format!("{base_url}/api/doctor/metrics?filter={}", urlencoding::encode(metric_filter))
+        };
+        match get_json(client, &metrics_url).await {
+            Ok(metrics) => {
+                if let Some(gauges) = metrics.get("gauges").and_then(|v| v.as_object()) {
+                    for (key, value) in gauges {
+                        if is_zero_value(value) {
                             continue;
                         }
-                        if !shown_header {
-                            cli_println!("  -- Meters --");
-                            shown_header = true;
-                        }
-                        cli_println!("  {}: {} count, {:.2}/s avg", key, count, rate);
+                        cli_println!("  {}: {}", key, value);
                     }
                 }
+                // Print meter summary counts
+                if let Some(meters) = metrics.get("meters").and_then(|v| v.as_object()) {
+                    let mut shown_header = false;
+                    for (key, val) in meters {
+                        if let Some(obj) = val.as_object() {
+                            let count = obj.get("count").and_then(|v| v.as_u64()).unwrap_or(0);
+                            let rate = obj.get("meanRate").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                            if count == 0 && rate == 0.0 {
+                                continue;
+                            }
+                            if !shown_header {
+                                cli_println!("  -- Meters --");
+                                shown_header = true;
+                            }
+                            cli_println!("  {}: {} count, {:.2}/s avg", key, count, rate);
+                        }
+                    }
+                }
+                json_field("backend_metrics", metrics);
             }
-            json_field("backend_metrics", metrics);
+            Err(e) => {
+                cli_println!("  (server not running or metrics unavailable: {})", e);
+                json_field("backend_metrics", json!(null));
+            }
         }
-        Err(e) => {
-            cli_println!("  (server not running or metrics unavailable: {})", e);
-            json_field("backend_metrics", json!(null));
-        }
+    }
+
+    if !verbose {
+        cli_println!("");
+        cli_println!("💡 Tip: Use 'doctor --verbose' to include logs and metrics inline, or use 'doctor log' / 'doctor metrics' subcommands for more control.");
     }
 
     // ---- Destructive Repairs (--fix) ----
@@ -12137,6 +12251,163 @@ async fn handle_doctor_log(
     Ok(())
 }
 
+/// Handle `doctor metrics` subcommand:
+/// - `doctor metrics` → overview: metric counts by type, then list non-zero metric names
+/// - `doctor metrics <filter>` → show metrics matching filter (server-side)
+/// - `doctor metrics grep <pattern>` → search metric names/values with grep syntax
+async fn handle_doctor_metrics(
+    client: &Client,
+    base_url: &str,
+    args: &HashMap<String, Value>,
+) -> Result<(), String> {
+    let filter_arg = args.get("filter").and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty() && *s != "list");
+    let grep_pattern = args.get("grep").and_then(|v| v.as_str()).map(String::from);
+
+    // Fetch all metrics from the backend
+    let metrics_url = format!("{base_url}/api/doctor/metrics");
+    let all_metrics: Value = match get_json(client, &metrics_url).await {
+        Ok(data) => data,
+        Err(e) => {
+            cli_println!("(server not running or metrics unavailable: {})", e);
+            json_field("metrics", json!(null));
+            return Ok(());
+        }
+    };
+
+    // Helper: collect all non-zero metrics as "type: name = value" lines
+    fn collect_metric_lines(metrics: &Value) -> Vec<String> {
+        let mut lines = Vec::new();
+        if let Some(gauges) = metrics.get("gauges").and_then(|v| v.as_object()) {
+            for (key, value) in gauges {
+                if is_zero_value(value) { continue; }
+                lines.push(format!("[gauge] {} = {}", key, value));
+            }
+        }
+        if let Some(counters) = metrics.get("counters").and_then(|v| v.as_object()) {
+            for (key, value) in counters {
+                if let Some(n) = value.as_u64() {
+                    if n == 0 { continue; }
+                    lines.push(format!("[counter] {} = {}", key, n));
+                }
+            }
+        }
+        if let Some(meters) = metrics.get("meters").and_then(|v| v.as_object()) {
+            for (key, val) in meters {
+                if let Some(obj) = val.as_object() {
+                    let count = obj.get("count").and_then(|v| v.as_u64()).unwrap_or(0);
+                    let rate = obj.get("meanRate").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                    if count == 0 && rate == 0.0 { continue; }
+                    lines.push(format!("[meter] {} = count:{}, rate:{:.2}/s", key, count, rate));
+                }
+            }
+        }
+        if let Some(histograms) = metrics.get("histograms").and_then(|v| v.as_object()) {
+            for (key, val) in histograms {
+                if let Some(obj) = val.as_object() {
+                    let count = obj.get("count").and_then(|v| v.as_u64()).unwrap_or(0);
+                    if count == 0 { continue; }
+                    let mean = obj.get("mean").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                    let p99 = obj.get("p99").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                    lines.push(format!("[histogram] {} = count:{}, mean:{:.2}, p99:{:.2}", key, count, mean, p99));
+                }
+            }
+        }
+        if let Some(timers) = metrics.get("timers").and_then(|v| v.as_object()) {
+            for (key, val) in timers {
+                if let Some(obj) = val.as_object() {
+                    let count = obj.get("count").and_then(|v| v.as_u64()).unwrap_or(0);
+                    if count == 0 { continue; }
+                    let mean = obj.get("mean").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                    let p99 = obj.get("p99").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                    lines.push(format!("[timer] {} = count:{}, mean:{:.2}, p99:{:.2}", key, count, mean, p99));
+                }
+            }
+        }
+        lines.sort();
+        lines
+    }
+
+    // Mode: grep — search metric lines using grep syntax
+    if let Some(pattern) = grep_pattern {
+        let lines = collect_metric_lines(&all_metrics);
+        let source = lines.join("\n");
+
+        let mut grep_params = args.clone();
+        grep_params.insert("pattern".to_string(), json!(pattern));
+        let grep_params_value: Value = json!(grep_params);
+        let grep_options = parse_grep_options(&grep_params_value)?;
+
+        let (page, page_size, show_all) = parse_page_opts(&grep_params_value);
+        cli_println!("--- doctor metrics grep \"{}\" ---", grep_options.pattern);
+        run_grep_on_source(&source, &grep_options, "metrics", page, page_size, show_all)?;
+        return Ok(());
+    }
+
+    // Mode: filtered view (positional arg used as server-side filter)
+    if let Some(filter) = filter_arg {
+        let filter_url = format!("{base_url}/api/doctor/metrics?filter={}", urlencoding::encode(filter));
+        let filtered: Value = match get_json(client, &filter_url).await {
+            Ok(data) => data,
+            Err(e) => {
+                cli_println!("(server not running or metrics unavailable: {})", e);
+                return Ok(());
+            }
+        };
+        cli_println!("--- doctor metrics filter \"{}\" ---", filter);
+        cli_println!("");
+        let lines = collect_metric_lines(&filtered);
+        if lines.is_empty() {
+            cli_println!("  (no metrics matched filter \"{}\")", filter);
+        } else {
+            for line in &lines {
+                cli_println!("{}", line);
+            }
+            cli_println!("");
+            cli_println!("  {} metric(s) matched. Use 'doctor metrics grep <pattern>' for advanced search.", lines.len());
+        }
+        json_field("metrics", filtered);
+        return Ok(());
+    }
+
+    // Mode: overview (no args)
+    let lines = collect_metric_lines(&all_metrics);
+    let total = lines.len();
+
+    // Count by type
+    let gauge_count = lines.iter().filter(|l| l.starts_with("[gauge]")).count();
+    let counter_count = lines.iter().filter(|l| l.starts_with("[counter]")).count();
+    let meter_count = lines.iter().filter(|l| l.starts_with("[meter]")).count();
+    let histogram_count = lines.iter().filter(|l| l.starts_with("[histogram]")).count();
+    let timer_count = lines.iter().filter(|l| l.starts_with("[timer]")).count();
+
+    cli_println!("Backend Metrics Overview");
+    cli_println!("=======================");
+    cli_println!("");
+    cli_println!("  {:>12}: {:>4}", "gauges", gauge_count);
+    cli_println!("  {:>12}: {:>4}", "counters", counter_count);
+    cli_println!("  {:>12}: {:>4}", "meters", meter_count);
+    cli_println!("  {:>12}: {:>4}", "histograms", histogram_count);
+    cli_println!("  {:>12}: {:>4}", "timers", timer_count);
+    cli_println!("  {:>12}  -----", "");
+    cli_println!("  {:>12}: {:>4}", "total", total);
+    cli_println!("");
+
+    if total > 0 {
+        cli_println!("Non-zero metrics:");
+        for line in &lines {
+            cli_println!("  {}", line);
+        }
+        cli_println!("");
+        cli_println!("  Use 'doctor metrics <filter>' to filter by name, 'doctor metrics grep <pattern>' to search with grep options.");
+    } else {
+        cli_println!("  (no non-zero metrics found)");
+    }
+
+    json_field("metrics", all_metrics);
+    Ok(())
+}
+
 fn should_ensure_server_running(command: &str) -> bool {
     command != "close"
         && command != "close-all"
@@ -12149,6 +12420,7 @@ fn should_ensure_server_running(command: &str) -> bool {
         && command != "status"
         && command != "doctor"
         && command != "doctor-log"
+        && command != "doctor-metrics"
         && command != "agent-list"
         && command != "crawl-list"
         && command != "swarm-list"
@@ -12283,16 +12555,19 @@ fn rewrite_prefixed_command(args: &[String]) -> Option<Vec<String>> {
     }
     // "doctor" works standalone (doctor) AND as a prefix (doctor log).
     if prefix == "doctor" {
-        let known_subs = ["log"];
+        let known_subs = ["log", "metrics"];
         if known_subs.contains(&sub.as_str()) {
             let rest: Vec<String> = args[2..].iter().cloned().collect();
             // Handle `doctor log <name> grep <pattern> [grep-options]`:
+            // and `doctor metrics grep <pattern> [grep-options]`:
             // rewrite so that "grep" and its pattern become --grep <pattern>,
-            // while the log name stays as the first positional arg.
-            // Example: doctor log pulsar grep ERROR -i
-            //      → doctor-log pulsar --grep ERROR -i
+            // while the log/metric name stays as the first positional arg.
+            // Examples: doctor log pulsar grep ERROR -i
+            //        → doctor-log pulsar --grep ERROR -i
+            //           doctor metrics grep cpu -i
+            //        → doctor-metrics --grep cpu -i
             if let Some(grep_pos) = rest.iter().position(|a| a == "grep") {
-                let mut rewritten = vec!["doctor-log".to_string()];
+                let mut rewritten = vec![format!("doctor-{}", sub)];
                 // Everything before "grep" (the log name)
                 rewritten.extend(rest[..grep_pos].iter().cloned());
                 // Replace "grep" with "--grep" and add the pattern
@@ -13666,6 +13941,9 @@ async fn run(
         }
         "doctor-log" => {
             handle_doctor_log(&client, &base_url, &parsed).await?;
+        }
+        "doctor-metrics" => {
+            handle_doctor_metrics(&client, &base_url, &parsed).await?;
         }
         "delete-data" => {
             handle_delete_data(&client, &base_url, global.session_name.as_deref()).await?;

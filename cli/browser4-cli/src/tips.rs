@@ -404,6 +404,8 @@ fn is_suppressed_command(command: &str) -> bool {
             | "uninstall"
             | "upgrade"
             | "doctor"
+            | "doctor-log"
+            | "doctor-metrics"
             | "stop"
             | "status"
             | "kill-all"

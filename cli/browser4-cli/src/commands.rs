@@ -2096,7 +2096,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "doctor",
-            description: "Run system diagnostics: build info, logs, and metrics. Also auto-cleans stale daemon files. Use --fix for destructive repairs.",
+            description: "Run system diagnostics: build info, LLM status, and auto-clean stale daemon files. Use --verbose to include logs and metrics, --fix for destructive repairs.",
             category: Category::Browsers,
             hidden: false,
             batch_supported: false,
@@ -2107,6 +2107,12 @@ pub fn all_commands() -> Vec<CommandDef> {
                     short: None,
                     is_bool: true,
                     description: "Run destructive repairs: reinstall Chrome, purge old state, clean temp files",
+                },
+                OptionDef {
+                    name: "verbose",
+                    short: Some("v"),
+                    is_bool: true,
+                    description: "Show backend logs and metrics inline (hidden by default — use 'doctor log' and 'doctor metrics' subcommands for more control)",
                 },
                 OptionDef {
                     name: "server",
@@ -2144,6 +2150,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             tool_params_fn: |args| {
                 let mut params = json!({});
                 if let Some(true) = get_bool(args, "fix") { params["fix"] = json!(true); }
+                if let Some(true) = get_bool(args, "verbose") { params["verbose"] = json!(true); }
                 if let Some(server) = get_opt_str(args, "server") {
                     params["server"] = json!(server);
                 }
@@ -2197,6 +2204,52 @@ pub fn all_commands() -> Vec<CommandDef> {
                 if let Some(name) = get_opt_str(args, "name") { params["name"] = json!(name); }
                 if let Some(true) = get_bool(args, "tail") { params["tail"] = json!(true); }
                 if let Some(lines) = get_opt_str(args, "lines") { params["lines"] = json!(lines); }
+                if let Some(grep) = get_opt_str(args, "grep") { params["grep"] = json!(grep); }
+                // Pass through grep-related options
+                for grep_key in &[
+                    "ignore-case", "regexp", "no-line-number",
+                    "after-context", "before-context", "context",
+                    "invert-match", "count", "files-with-matches",
+                    "fixed-strings", "word-regexp", "extended-regexp",
+                ] {
+                    if let Some(val) = args.get(*grep_key) {
+                        params[grep_key] = val.clone();
+                    }
+                }
+                params
+            },
+        },
+        // ---- doctor-metrics ----
+        CommandDef {
+            name: "doctor-metrics",
+            description: "List, view, or search backend metrics. Use 'doctor metrics' for overview, 'doctor metrics <filter>' to filter by name, 'doctor metrics grep <pattern>' to search.",
+            category: Category::Browsers,
+            hidden: false,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "filter", description: "Filter metric names by substring or regex (server-side). Omit to show overview, or use 'grep' keyword for client-side grep.", optional: true },
+            ],
+            options: &[
+                OptionDef { name: "grep", short: None, is_bool: false, description: "Search pattern for grep mode. Use 'doctor metrics grep <pattern>' syntax for compatibility with snapshot grep / htmlsnapshot grep." },
+                // grep options (compatible with snapshot grep / htmlsnapshot grep / doctor log)
+                OptionDef { name: "ignore-case", short: Some("i"), is_bool: true, description: "Case-insensitive matching (grep mode)" },
+                OptionDef { name: "regexp", short: Some("e"), is_bool: false, description: "Additional regex pattern — repeatable (grep mode)" },
+                OptionDef { name: "no-line-number", short: None, is_bool: true, description: "Suppress line numbers in output (grep mode)" },
+                OptionDef { name: "after-context", short: Some("A"), is_bool: false, description: "Show N lines after each match (grep mode)" },
+                OptionDef { name: "before-context", short: Some("B"), is_bool: false, description: "Show N lines before each match (grep mode)" },
+                OptionDef { name: "context", short: Some("C"), is_bool: false, description: "Show N lines before and after each match (grep mode)" },
+                OptionDef { name: "invert-match", short: Some("v"), is_bool: true, description: "Select non-matching lines (grep mode)" },
+                OptionDef { name: "count", short: Some("c"), is_bool: true, description: "Print only the count of matching lines (grep mode)" },
+                OptionDef { name: "files-with-matches", short: Some("l"), is_bool: true, description: "Print only whether matches exist (grep mode)" },
+                OptionDef { name: "fixed-strings", short: Some("F"), is_bool: true, description: "Treat pattern as a literal string, not regex (grep mode)" },
+                OptionDef { name: "word-regexp", short: Some("w"), is_bool: true, description: "Match only whole words (grep mode)" },
+                OptionDef { name: "extended-regexp", short: Some("E"), is_bool: true, description: "Extended regex (ERE) — already the default. Accepted for compatibility with grep -E." },
+            ],
+            e2e_coverage: E2eCoverage::Excluded,
+            tool_name_fn: |_| String::new(),
+            tool_params_fn: |args| {
+                let mut params = json!({});
+                if let Some(filter) = get_opt_str(args, "filter") { params["filter"] = json!(filter); }
                 if let Some(grep) = get_opt_str(args, "grep") { params["grep"] = json!(grep); }
                 // Pass through grep-related options
                 for grep_key in &[
@@ -4160,9 +4213,10 @@ mod tests {
         assert_eq!(cmd.category, Category::Browsers);
         assert!(!cmd.batch_supported);
         assert_eq!(cmd.args.len(), 0);
-        assert_eq!(cmd.options.len(), 6);
+        assert_eq!(cmd.options.len(), 7);
         let option_names: Vec<&str> = cmd.options.iter().map(|o| o.name).collect();
         assert!(option_names.contains(&"fix"));
+        assert!(option_names.contains(&"verbose"));
         assert!(option_names.contains(&"server"));
         assert!(option_names.contains(&"file"));
         assert!(option_names.contains(&"lines"));
