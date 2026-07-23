@@ -2470,6 +2470,170 @@ pub(super) fn test_agent_full_lifecycle_with_mock(ctx: &mut E2ECtx) {
     );
 }
 
+/// Full lifecycle test for `agent run "给出第100个素数"` that verifies:
+/// 1. Each `agent list` correctly tracks task history across the lifecycle
+/// 2. `agent result` contains the correct 100th prime number (541)
+///
+/// This test exercises the exact sequence from the user's workflow:
+///   agent list → agent run → agent list → agent status → agent list →
+///   agent result → agent list
+pub(super) fn test_agent_run_100th_prime(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    let started_at = Instant::now();
+    let mock_server = MockBrowser4Server::start();
+    ctx.record_step("mock Browser4 server start", started_at.elapsed());
+    ctx.browser4_base_url = mock_server.base_url();
+
+    // ---- Phase 1: Initial agent list (should be empty) ----
+    let list0 = run_command(ctx, &["agent", "list"]);
+    let output0 = strip_snapshot_output(&list0.stdout);
+    assert!(
+        output0.contains("No tracked async tasks"),
+        "Initial agent list should show no tracked tasks. Got:\n{}",
+        output0
+    );
+
+    // ---- Phase 2: agent run ----
+    let run_result = run_command(ctx, &["agent", "run", "给出第100个素数"]);
+    assert!(
+        run_result.stdout.contains("Task submitted:"),
+        "Expected 'Task submitted:' in agent run output:\n{}",
+        run_result.stdout
+    );
+    let task_id = extract_submitted_task_id(&run_result.stdout);
+    assert!(!task_id.is_empty(), "Expected a task ID from agent run");
+
+    // Register custom status and result responses that simulate a completed
+    // agent task whose answer is the 100th prime number (541).
+    mock_server.set_command_status_response(
+        &task_id,
+        serde_json::json!({
+            "id": &task_id,
+            "statusCode": 200,
+            "processState": "done",
+            "isDone": true,
+            "message": "Successfully computed the 100th prime number",
+            "agentHistory": {"states": [
+                {"step": 1, "instruction": "给出第100个素数", "summary": "第100个素数是541"}
+            ]},
+        }),
+    );
+    mock_server.set_command_result_response(
+        &task_id,
+        r#"{"summary":"第100个素数是541。"}"#,
+    );
+
+    // ---- Phase 3: agent list (task should appear with completed label) ----
+    let list1 = run_command(ctx, &["agent", "list"]);
+    let output1 = strip_snapshot_output(&list1.stdout);
+    assert!(
+        output1.contains(&task_id),
+        "agent list after run should show the task ID '{}'. Got:\n{}",
+        task_id,
+        output1
+    );
+    assert!(
+        output1.contains("completed"),
+        "agent list after run should show 'completed' label. Got:\n{}",
+        output1
+    );
+    assert!(
+        !output1.contains("\"done\""),
+        "agent list should NOT show deprecated 'done' label. Got:\n{}",
+        output1
+    );
+
+    // ---- Phase 4: agent status ----
+    let status_result = run_command(ctx, &["agent", "status", &task_id]);
+    let status_output = strip_snapshot_output(&status_result.stdout);
+    assert!(
+        status_output.contains(&task_id),
+        "agent status should reference the task ID '{}'. Got:\n{}",
+        task_id,
+        status_output
+    );
+    assert!(
+        status_output.contains("\"statusCode\":200")
+            || status_output.contains("\"statusCode\": 200"),
+        "agent status should include integer statusCode 200. Got:\n{}",
+        status_output
+    );
+
+    // ---- Phase 5: agent list after status (task still tracked) ----
+    let list2 = run_command(ctx, &["agent", "list"]);
+    let output2 = strip_snapshot_output(&list2.stdout);
+    assert!(
+        output2.contains(&task_id),
+        "agent list after status should still show the task '{}'. Got:\n{}",
+        task_id,
+        output2
+    );
+    assert!(
+        output2.contains("completed"),
+        "agent list after status should still show 'completed'. Got:\n{}",
+        output2
+    );
+
+    // ---- Phase 6: agent result (must contain the 100th prime: 541) ----
+    let result_result = run_command(ctx, &["agent", "result", &task_id]);
+    let result_output = strip_snapshot_output(&result_result.stdout);
+    assert!(
+        !result_output.trim().is_empty() && result_output.trim() != "null",
+        "agent result should return content, not null/empty. Got:\n{}",
+        result_output
+    );
+    assert!(
+        result_output.contains("summary"),
+        "agent result should be a CommandResult JSON with 'summary' field. Got:\n{}",
+        result_output
+    );
+    assert!(
+        result_output.contains("541"),
+        "agent result MUST contain the 100th prime number (541). Got:\n{}",
+        result_output
+    );
+
+    // ---- Phase 7: Final agent list (task still tracked after result) ----
+    let list3 = run_command(ctx, &["agent", "list"]);
+    let output3 = strip_snapshot_output(&list3.stdout);
+    assert!(
+        output3.contains(&task_id),
+        "Final agent list should still show the task '{}'. Got:\n{}",
+        task_id,
+        output3
+    );
+    assert!(
+        output3.contains("completed"),
+        "Final agent list should still show 'completed'. Got:\n{}",
+        output3
+    );
+
+    // ---- Verify mock server recorded all expected interactions ----
+    let snapshot = mock_server.snapshot();
+    assert_eq!(
+        snapshot.plain_commands,
+        vec!["给出第100个素数".to_string()]
+    );
+    assert!(
+        snapshot
+            .status_queries
+            .iter()
+            .any(|q| q == &task_id),
+        "Expected status queries for task '{}', got {:?}",
+        task_id,
+        snapshot.status_queries
+    );
+    assert!(
+        snapshot
+            .result_queries
+            .iter()
+            .any(|q| q == &task_id),
+        "Expected result queries for task '{}', got {:?}",
+        task_id,
+        snapshot.result_queries
+    );
+}
+
 pub(super) fn test_prefixed_flat_forms_are_rejected(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
 

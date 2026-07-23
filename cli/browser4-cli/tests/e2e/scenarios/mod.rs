@@ -585,6 +585,16 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         level: ScenarioLevel::Basic,
     },
     ScenarioDef {
+        name: "test_e2e_agent_run_100th_prime",
+        short_name: "test_agent_run_100th_prime",
+        requires_browser4: false,
+        restart_browser4: false,
+        test_count: 1,
+        test_fn: mock_server::test_agent_run_100th_prime,
+        group: Some("agent"),
+        level: ScenarioLevel::Basic,
+    },
+    ScenarioDef {
         name: "test_e2e_prefixed_flat_forms_are_rejected",
         short_name: "test_prefixed_flat_forms_are_rejected",
         requires_browser4: false,
