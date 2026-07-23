@@ -28,7 +28,7 @@ Every scenario script follows the same pattern:
 $ErrorActionPreference = "Stop"
 
 # ── Windows command-line argument escaping ────────────────────────────────────
-# Adapted from coworker/scripts/workers/agent.ps1.
+# Adapted from coworker/scripts/workers/agent-workflow.ps1.
 # Windows CreateProcess receives a single lpCommandLine string; the child parses
 # it via CommandLineToArgvW.  Backslashes preceding a double-quote must be
 # doubled, and trailing backslashes must be doubled, to prevent the quote from
@@ -1095,6 +1095,19 @@ function Write-IssuesToReadyQueue {
 
     # ── Issues section ──────────────────────────────────────────────────────
     if ($issues.Count -gt 0) {
+        # Sort issues by severity: Critical > High > Medium > Low.
+        # Unknown/empty severities sort last.
+        $severityRank = @{
+            'Critical' = 0
+            'High'     = 1
+            'Medium'   = 2
+            'Low'      = 3
+        }
+        $issues = @($issues | Sort-Object {
+            $sev = $_.Severity
+            if ($severityRank.ContainsKey($sev)) { $severityRank[$sev] } else { 4 }
+        })
+
         $consBody += "## Issues Found ($($issues.Count) issue$(if ($issues.Count -ne 1) { 's' }))`n`n"
         $issueIndex = 0
         foreach ($issue in $issues) {
