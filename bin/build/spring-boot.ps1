@@ -14,7 +14,10 @@ param(
     [string]$Command = "start",
 
     [Alias("b")]
-    [switch]$Background
+    [switch]$Background,
+
+    [ValidateRange(1, 65535)]
+    [int]$Port = 8182
 )
 
 $repoRoot = (git rev-parse --show-toplevel 2>$null)
@@ -83,7 +86,44 @@ function Start-Server {
         }
 
         $proc.Id | Out-File -FilePath $PID_FILE -Encoding ASCII -NoNewline
-        Write-Host "Server started (PID: $($proc.Id))"
+        Write-Host "Server launched (PID: $($proc.Id))"
+
+        # ── wait until the HTTP port is responding ──────────────
+        $healthUrl = "http://localhost:$Port"
+        $maxWaitSec = 120
+        $deadline = (Get-Date).AddSeconds($maxWaitSec)
+        $intervalSec = 3
+        $started = $false
+
+        Write-Host "Waiting for server to be ready on $healthUrl (timeout: ${maxWaitSec}s) …"
+
+        while ((Get-Date) -lt $deadline) {
+            # Check the background process is still alive
+            $alive = Get-Process -Id $proc.Id -ErrorAction SilentlyContinue
+            if (-not $alive) {
+                Write-Host "ERROR: Server process died during startup. Check log: $LOG_FILE"
+                Remove-Item $PID_FILE -Force -ErrorAction SilentlyContinue
+                Set-Location $repoRoot
+                exit 1
+            }
+
+            try {
+                $null = Invoke-WebRequest -Uri $healthUrl -TimeoutSec 3 -SkipHttpErrorCheck -ErrorAction Stop
+                $started = $true
+                break
+            } catch {
+                # Not ready yet — keep polling
+            }
+
+            Start-Sleep -Seconds $intervalSec
+        }
+
+        if ($started) {
+            Write-Host "Server is ready."
+        } else {
+            Write-Host "WARNING: Server did not respond on $healthUrl within ${maxWaitSec}s."
+            Write-Host "It may still be starting — check log: $LOG_FILE"
+        }
     } else {
         Write-Host "Starting Spring Boot (foreground) …"
         Set-Location $SERVER_HOME
