@@ -76,7 +76,7 @@ use state::{
 
 const VERSION: &str = env!("BROWSER4_CLI_VERSION");
 const TEST_TEMPORARY_PROFILE_ENV: &str = "BROWSER4_CLI_TEST_TEMPORARY_PROFILE";
-const AGENT_RUN_FAILURE_POLL_ATTEMPTS: usize = 5;
+const AGENT_RUN_FAILURE_POLL_ATTEMPTS: usize = 10;
 const AGENT_RUN_FAILURE_POLL_INTERVAL_MS: u64 = 250;
 const SWARM_SESSION_ID: &str = "SWARM";
 
@@ -3664,7 +3664,14 @@ async fn handle_extract(
             Ok(format!("{}\n{}\n{}", url, title, content))
         }
     })
-    .await?;
+    .await
+    .map_err(|e| {
+        if is_missing_llm_configuration_message(&e) {
+            format_missing_llm_error(&e, "extract")
+        } else {
+            e
+        }
+    })?;
 
     let parts: Vec<&str> = combined.splitn(3, '\n').collect();
     let (url, title, content) = match parts.as_slice() {
@@ -3808,7 +3815,14 @@ async fn handle_summarize(
             Ok(format!("{}\n{}\n{}", url, title, content))
         }
     })
-    .await?;
+    .await
+    .map_err(|e| {
+        if is_missing_llm_configuration_message(&e) {
+            format_missing_llm_error(&e, "summarize")
+        } else {
+            e
+        }
+    })?;
 
     let parts: Vec<&str> = combined.splitn(3, '\n').collect();
     let (url, title, content) = match parts.as_slice() {
@@ -6702,10 +6716,7 @@ async fn handle_agent_run(
     if let Some(message) =
         detect_missing_llm_error_for_submitted_agent_task(client, base_url, &task_id).await?
     {
-        return Err(format!(
-            "Agent task requires an LLM key and cannot execute: {}",
-            message
-        ));
+        return Err(format_missing_llm_error(&message, "agent run"));
     }
     cli_println!("Task submitted: {}", task_id);
     json_field("task_id", json!(&task_id));
@@ -6858,7 +6869,30 @@ fn is_missing_llm_configuration_message(message: &str) -> bool {
     let lower = message.to_ascii_lowercase();
     lower.contains("llm is not configured")
         || lower.contains("llm.api.key is not set")
+        || lower.contains("llm api key is not configured")
         || (lower.contains("llm") && lower.contains("api key") && lower.contains("not set"))
+        || (lower.contains("llm") && lower.contains("api key") && lower.contains("not configured"))
+}
+
+/// Produce a clean, actionable error message for LLM-not-configured failures.
+///
+/// The raw server message is wrapped with MCP tool names like
+/// `"agent_extract failed: LLM API key is not configured..."` — this strips that
+/// prefix and formats a consistent, user-facing error with a header and the
+/// server's actionable guidance.
+fn format_missing_llm_error(raw_message: &str, command_name: &str) -> String {
+    // Strip the MCP tool-name prefix, e.g. "agent_extract failed: " →
+    // just the server's message body.
+    let body = raw_message
+        .trim()
+        .replacen("agent_extract failed: ", "", 1)
+        .replacen("agent_summarize failed: ", "", 1)
+        .trim()
+        .to_string();
+
+    format!(
+        "❌ {command_name} requires an LLM API key\n\n{body}"
+    )
 }
 
 async fn handle_agent_status(
@@ -15652,6 +15686,69 @@ mod tests {
         .to_string();
 
         assert_eq!(extract_missing_llm_configuration_message(&status), None);
+    }
+
+    // --- is_missing_llm_configuration_message (pure string matching) ---
+
+    #[test]
+    fn is_missing_llm_matches_backend_exception_message() {
+        // The actual message from AgentToolExecutor.requireLLMConfigured()
+        let msg = "LLM API key is not configured. To use extract/summarize/agent commands, set one of:\n\
+                   - Environment variable: DEEPSEEK_API_KEY=sk-...";
+        assert!(is_missing_llm_configuration_message(msg));
+    }
+
+    #[test]
+    fn is_missing_llm_matches_mcp_wrapped_error() {
+        // The message after MCPToolController wraps it with the tool name
+        let msg = "agent_extract failed: LLM API key is not configured. To use extract/summarize/agent commands...";
+        assert!(is_missing_llm_configuration_message(msg));
+    }
+
+    #[test]
+    fn is_missing_llm_matches_llm_is_not_configured_legacy() {
+        assert!(is_missing_llm_configuration_message("The LLM is not configured, see docs/config/llm/llm-config.md"));
+    }
+
+    #[test]
+    fn is_missing_llm_matches_llm_api_key_not_set_legacy() {
+        assert!(is_missing_llm_configuration_message("llm.api.key is not set"));
+    }
+
+    #[test]
+    fn is_missing_llm_rejects_unrelated_message() {
+        assert!(!is_missing_llm_configuration_message("Browser crashed before agent execution started"));
+    }
+
+    // --- format_missing_llm_error ---
+
+    #[test]
+    fn format_missing_llm_error_strips_mcp_extract_prefix() {
+        let raw = "agent_extract failed: LLM API key is not configured. To use extract/summarize/agent commands, set one of:\n\
+                   - Environment variable: DEEPSEEK_API_KEY=sk-...";
+        let formatted = format_missing_llm_error(raw, "extract");
+        assert!(formatted.contains("❌ extract requires an LLM API key"));
+        assert!(!formatted.contains("agent_extract failed"));
+        assert!(formatted.contains("LLM API key is not configured"));
+        assert!(formatted.contains("DEEPSEEK_API_KEY"));
+    }
+
+    #[test]
+    fn format_missing_llm_error_strips_mcp_summarize_prefix() {
+        let raw = "agent_summarize failed: LLM API key is not configured. To use extract/summarize/agent commands, set one of:\n\
+                   - Environment variable: DEEPSEEK_API_KEY=sk-...";
+        let formatted = format_missing_llm_error(raw, "summarize");
+        assert!(formatted.contains("❌ summarize requires an LLM API key"));
+        assert!(!formatted.contains("agent_summarize failed"));
+    }
+
+    #[test]
+    fn format_missing_llm_error_handles_plain_message() {
+        // No MCP prefix — message is used as-is
+        let raw = "LLM API key is not configured. Please set an API key.";
+        let formatted = format_missing_llm_error(raw, "agent run");
+        assert!(formatted.contains("❌ agent run requires an LLM API key"));
+        assert!(formatted.contains("LLM API key is not configured"));
     }
 
     // -----------------------------------------------------------------------
