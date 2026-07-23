@@ -156,8 +156,12 @@ if ($NoWatch) {
     gh run watch $run.databaseId
 
     # After watch returns, get the final conclusion
-    $info = gh run view $run.databaseId --json status,conclusion,displayTitle 2>$null | ConvertFrom-Json
-    $finalConclusion = $info.conclusion
+    $finalConclusion = gh run view $run.databaseId --jq '.conclusion' 2>$null
+    if ($LASTEXITCODE -ne 0) {
+        # fallback for older gh without --jq
+        $info = gh run view $run.databaseId --json conclusion 2>$null | ConvertFrom-Json
+        $finalConclusion = $info.conclusion
+    }
 }
 
 # ── 4. Report ─────────────────────────────────────────────────────
