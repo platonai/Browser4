@@ -76,14 +76,18 @@ class Browser4Extension {
           sendResponse({ success: false, error: 'No tab context for connection' });
           return false;
         }
-        // Token-bypass (no specific pick) falls back to the connect page itself
-        // so `ConnectedTabGroup` always has a concrete tab to start from. Both
-        // sender.tab and UI-supplied tabs come from chrome.tabs.query / runtime
-        // message sender, where `id` is always defined.
-        const selectedTab = (message.tab ?? sender.tab) as chrome.tabs.Tab & { id: number };
-        this._connectTab(senderTabId, selectedTab, message.clientName).then(
-            () => sendResponse({ success: true }),
-            (error: any) => sendResponse({ success: false, error: error.message }));
+        // When no tab is explicitly selected (auto-connect via token or
+        // newTab parameter), create a fresh about:blank page instead of
+        // reusing the connect page. This gives `attach --extension` a
+        // clean browser context.
+        const selectedTabPromise: Promise<chrome.tabs.Tab> = message.tab
+            ? Promise.resolve(message.tab)
+            : chrome.tabs.create({ url: 'about:blank' });
+        selectedTabPromise.then(selectedTab => {
+          this._connectTab(senderTabId, selectedTab as chrome.tabs.Tab & { id: number }, message.clientName).then(
+              () => sendResponse({ success: true }),
+              (error: any) => sendResponse({ success: false, error: error.message }));
+        });
         return true; // Return true to indicate that the response will be sent asynchronously
       }
       case 'getConnectionStatus':

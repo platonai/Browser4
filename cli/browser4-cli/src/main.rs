@@ -1262,12 +1262,14 @@ async fn handle_attach(
             ws_encoded,
             client_encoded,
         );
+        // Always request a new blank tab for the session — the extension
+        // will create an about:blank page instead of showing the tab picker.
+        connect_url.push_str("&newTab=true");
         let has_token = if let Ok(token) = std::env::var("BROWSER4_EXTENSION_TOKEN") {
             let token = token.trim().to_string();
             if !token.is_empty() {
                 connect_url.push_str("&token=");
                 connect_url.push_str(&urlencoding::encode(&token));
-                connect_url.push_str("&newTab=true");
                 true
             } else {
                 false

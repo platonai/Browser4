@@ -91,11 +91,15 @@ const ConnectApp: React.FC = () => {
         return;
       }
 
-      // If this is a browser_navigate command, hide the tab list and show simple allow/reject
-      if (params.get('newTab') === 'true')
+      // When newTab is requested (e.g. `attach --extension`), auto-connect
+      // without showing the tab picker. A fresh about:blank page is created
+      // by the background script for the session.
+      if (params.get('newTab') === 'true') {
         setShowTabList(false);
-      else
+        await handleConnectToTab();
+      } else {
         await loadTabs();
+      }
     };
     void runAsync();
     // Ping the background every 20s so the MV3 service worker (which owns the
