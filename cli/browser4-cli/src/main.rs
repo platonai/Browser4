@@ -2101,7 +2101,7 @@ async fn handle_tab_select(
     session_name: Option<&str>,
 ) -> Result<(), String> {
     let index_val = tool_params.get("index").cloned();
-    let guid_val = tool_params.get("guid").cloned();
+    let guid_val = tool_params.get("tabId").cloned();
 
     let result = with_session(client, base_url, session_name, false, |session_id| {
         let client = client.clone();
@@ -2142,7 +2142,7 @@ async fn handle_tab_close(
     session_name: Option<&str>,
 ) -> Result<(), String> {
     let index_val = tool_params.get("index").cloned();
-    let guid_val = tool_params.get("guid").cloned();
+    let guid_val = tool_params.get("tabId").cloned();
 
     let result = with_session(client, base_url, session_name, false, |session_id| {
         let client = client.clone();
@@ -18398,6 +18398,155 @@ mod tests {
         // reads them.  The tool_params_fn maps dx → deltaX, dy → deltaY.
         assert_eq!(compiled.steps[0]["arguments"]["deltaX"], json!(0));
         assert_eq!(compiled.steps[0]["arguments"]["deltaY"], json!(160));
+    }
+
+    // -------------------------------------------------------------------
+    // compile_batch_request — tab commands
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn compile_batch_request_tab_list_uses_browser_tabs_tool() {
+        let commands = vec![BatchCommandSpec {
+            display: "tab-list".to_string(),
+            tokens: vec!["tab-list".to_string()],
+        }];
+
+        let compiled =
+            compile_batch_request(&commands, false, "http://127.0.0.1:8182", None).unwrap();
+
+        assert_eq!(compiled.steps.len(), 1);
+        assert_eq!(compiled.steps[0]["op"], json!("tool"));
+        assert_eq!(compiled.steps[0]["tool"], json!("browser_tabs"));
+        assert_eq!(compiled.steps[0]["arguments"]["action"], json!("list"));
+    }
+
+    #[test]
+    fn compile_batch_request_tab_new_uses_browser_tabs_tool() {
+        let commands = vec![BatchCommandSpec {
+            display: "tab-new https://example.com".to_string(),
+            tokens: vec![
+                "tab-new".to_string(),
+                "https://example.com".to_string(),
+            ],
+        }];
+
+        let compiled =
+            compile_batch_request(&commands, false, "http://127.0.0.1:8182", None).unwrap();
+
+        assert_eq!(compiled.steps.len(), 1);
+        assert_eq!(compiled.steps[0]["op"], json!("tool"));
+        assert_eq!(compiled.steps[0]["tool"], json!("browser_tabs"));
+        assert_eq!(compiled.steps[0]["arguments"]["action"], json!("new"));
+        assert_eq!(
+            compiled.steps[0]["arguments"]["url"],
+            json!("https://example.com")
+        );
+    }
+
+    #[test]
+    fn compile_batch_request_tab_select_by_index() {
+        let commands = vec![BatchCommandSpec {
+            display: "tab-select 2".to_string(),
+            tokens: vec!["tab-select".to_string(), "2".to_string()],
+        }];
+
+        let compiled =
+            compile_batch_request(&commands, false, "http://127.0.0.1:8182", None).unwrap();
+
+        assert_eq!(compiled.steps.len(), 1);
+        assert_eq!(compiled.steps[0]["op"], json!("tool"));
+        assert_eq!(compiled.steps[0]["tool"], json!("browser_tabs"));
+        assert_eq!(compiled.steps[0]["arguments"]["action"], json!("select"));
+        // build_command_args parses "2" as integer, tool_params_fn preserves it
+        assert_eq!(compiled.steps[0]["arguments"]["index"], json!(2));
+    }
+
+    #[test]
+    fn compile_batch_request_tab_select_by_guid() {
+        let commands = vec![BatchCommandSpec {
+            display: "tab-select --guid 1B46D74FB…".to_string(),
+            tokens: vec![
+                "tab-select".to_string(),
+                "--guid".to_string(),
+                "1B46D74FB…".to_string(),
+            ],
+        }];
+
+        let compiled =
+            compile_batch_request(&commands, false, "http://127.0.0.1:8182", None).unwrap();
+
+        assert_eq!(compiled.steps.len(), 1);
+        assert_eq!(compiled.steps[0]["op"], json!("tool"));
+        assert_eq!(compiled.steps[0]["tool"], json!("browser_tabs"));
+        assert_eq!(compiled.steps[0]["arguments"]["action"], json!("select"));
+        assert_eq!(
+            compiled.steps[0]["arguments"]["tabId"],
+            json!("1B46D74FB…")
+        );
+        // The original "guid" key must not leak into arguments
+        assert!(compiled.steps[0]["arguments"].get("guid").is_none());
+    }
+
+    #[test]
+    fn compile_batch_request_tab_close_no_args() {
+        let commands = vec![BatchCommandSpec {
+            display: "tab-close".to_string(),
+            tokens: vec!["tab-close".to_string()],
+        }];
+
+        let compiled =
+            compile_batch_request(&commands, false, "http://127.0.0.1:8182", None).unwrap();
+
+        assert_eq!(compiled.steps.len(), 1);
+        assert_eq!(compiled.steps[0]["op"], json!("tool"));
+        assert_eq!(compiled.steps[0]["tool"], json!("browser_tabs"));
+        assert_eq!(compiled.steps[0]["arguments"]["action"], json!("close"));
+        // No index or tabId when closing current tab
+        assert!(compiled.steps[0]["arguments"].get("index").is_none());
+        assert!(compiled.steps[0]["arguments"].get("tabId").is_none());
+    }
+
+    #[test]
+    fn compile_batch_request_tab_close_by_index() {
+        let commands = vec![BatchCommandSpec {
+            display: "tab-close 1".to_string(),
+            tokens: vec!["tab-close".to_string(), "1".to_string()],
+        }];
+
+        let compiled =
+            compile_batch_request(&commands, false, "http://127.0.0.1:8182", None).unwrap();
+
+        assert_eq!(compiled.steps.len(), 1);
+        assert_eq!(compiled.steps[0]["op"], json!("tool"));
+        assert_eq!(compiled.steps[0]["tool"], json!("browser_tabs"));
+        assert_eq!(compiled.steps[0]["arguments"]["action"], json!("close"));
+        assert_eq!(compiled.steps[0]["arguments"]["index"], json!(1));
+    }
+
+    #[test]
+    fn compile_batch_request_tab_close_by_guid() {
+        let commands = vec![BatchCommandSpec {
+            display: "tab-close --guid DEADBEEF…".to_string(),
+            tokens: vec![
+                "tab-close".to_string(),
+                "--guid".to_string(),
+                "DEADBEEF…".to_string(),
+            ],
+        }];
+
+        let compiled =
+            compile_batch_request(&commands, false, "http://127.0.0.1:8182", None).unwrap();
+
+        assert_eq!(compiled.steps.len(), 1);
+        assert_eq!(compiled.steps[0]["op"], json!("tool"));
+        assert_eq!(compiled.steps[0]["tool"], json!("browser_tabs"));
+        assert_eq!(compiled.steps[0]["arguments"]["action"], json!("close"));
+        assert_eq!(
+            compiled.steps[0]["arguments"]["tabId"],
+            json!("DEADBEEF…")
+        );
+        // The original "guid" key must not leak into arguments
+        assert!(compiled.steps[0]["arguments"].get("guid").is_none());
     }
 
     // -------------------------------------------------------------------

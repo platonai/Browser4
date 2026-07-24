@@ -4118,6 +4118,30 @@ mod tests {
     }
 
     #[test]
+    fn test_tab_select_guid_maps_to_tab_id() {
+        let map = commands_map();
+        let cmd = map.get("tab-select").unwrap();
+        let mut args = HashMap::new();
+        args.insert("guid".to_string(), json!("1B46D74FB…"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["action"], json!("select"));
+        assert_eq!(params["tabId"], json!("1B46D74FB…"));
+        assert!(params.get("guid").is_none());
+    }
+
+    #[test]
+    fn test_tab_close_guid_maps_to_tab_id() {
+        let map = commands_map();
+        let cmd = map.get("tab-close").unwrap();
+        let mut args = HashMap::new();
+        args.insert("guid".to_string(), json!("1B46D74FB…"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["action"], json!("close"));
+        assert_eq!(params["tabId"], json!("1B46D74FB…"));
+        assert!(params.get("guid").is_none());
+    }
+
+    #[test]
     fn test_swarm_commands_in_swarm_category() {
         let cmds = all_commands();
         let swarm_cmds: Vec<&str> = cmds

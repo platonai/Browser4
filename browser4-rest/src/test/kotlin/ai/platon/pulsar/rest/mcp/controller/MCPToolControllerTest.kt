@@ -467,6 +467,28 @@ class MCPToolControllerTest {
     }
 
     @Test
+    fun `test frontend tab select with tabId maps to browser switchTab`() = runBlocking {
+        val request = MCPToolCallRequest(
+            tool = "browser_tabs",
+            arguments = mapOf("sessionId" to sessionId, "action" to "select", "tabId" to "DEADBEEF000000000000000000000000")
+        )
+
+        `when`(agentToolManager.execute(any())).thenReturn(toolCallResult("ok"))
+
+        val result = controller.callTool(request, response)
+        assertEquals(HttpStatus.OK, result.statusCode)
+
+        val captor = ArgumentCaptor.forClass(ToolCall::class.java)
+        Mockito.verify(agentToolManager).execute(capture(captor))
+        val toolCall = captor.value
+
+        assertEquals("browser", toolCall.domain)
+        assertEquals("switchTab", toolCall.method)
+        assertEquals("DEADBEEF000000000000000000000000", toolCall.arguments["tabId"])
+        assertFalse(toolCall.arguments.containsKey("index"))
+    }
+
+    @Test
     fun `test snake case arguments normalize for drag`() = runBlocking {
         mockTool("tab", "drag")
 
@@ -658,6 +680,28 @@ class MCPToolControllerTest {
         assertEquals("closeTab", toolCall.method)
         assertEquals(1, toolCall.arguments["index"])
         assertFalse(toolCall.arguments.containsKey("tabId"))
+    }
+
+    @Test
+    fun `test frontend tab close with tabId maps to browser closeTab`() = runBlocking {
+        val request = MCPToolCallRequest(
+            tool = "browser_tabs",
+            arguments = mapOf("sessionId" to sessionId, "action" to "close", "tabId" to "DEADBEEF000000000000000000000000")
+        )
+
+        `when`(agentToolManager.execute(any())).thenReturn(toolCallResult("ok"))
+
+        val result = controller.callTool(request, response)
+        assertEquals(HttpStatus.OK, result.statusCode)
+
+        val captor = ArgumentCaptor.forClass(ToolCall::class.java)
+        Mockito.verify(agentToolManager).execute(capture(captor))
+        val toolCall = captor.value
+
+        assertEquals("browser", toolCall.domain)
+        assertEquals("closeTab", toolCall.method)
+        assertEquals("DEADBEEF000000000000000000000000", toolCall.arguments["tabId"])
+        assertFalse(toolCall.arguments.containsKey("index"))
     }
 
     @Test
