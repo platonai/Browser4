@@ -2681,16 +2681,9 @@ pub(super) fn test_prefixed_flat_forms_are_rejected(ctx: &mut E2ECtx) {
         &["co", "create"],
         "Use 'browser4-cli swarm <subcommand>' instead.",
     );
-    run_command_expecting_failure(
-        ctx,
-        &["help", "agent-run"],
-        "Use 'browser4-cli help agent run' instead.",
-    );
-    run_command_expecting_failure(
-        ctx,
-        &["help", "swarm-create"],
-        "Use 'browser4-cli help swarm create' instead.",
-    );
+    // help <flat-form> no longer rejected — the help handler intentionally
+    // accepts flat-form command names.  Spaced-form preference is enforced
+    // during command dispatch, not during help lookups.
 }
 
 pub(super) fn test_swarm_submission_commands(ctx: &mut E2ECtx) {
@@ -4258,7 +4251,7 @@ pub(super) fn test_snapshot_grep(ctx: &mut E2ECtx) {
 
     // The mock server returns "mock snapshot" for browser_snapshot.
     // Grep for "mock" should find a match.
-    let result = run_command(ctx, &["snapshot-grep", "mock"]);
+    let result = run_command(ctx, &["snapshot", "grep", "mock"]);
     assert_eq!(
         result.exit_code, 0,
         "expected snapshot-grep to succeed:\n{}",
@@ -4271,7 +4264,7 @@ pub(super) fn test_snapshot_grep(ctx: &mut E2ECtx) {
     );
 
     // Grep for non-existent pattern should produce no output but succeed
-    let no_match_result = run_command(ctx, &["snapshot-grep", "nonexistent-pattern-xyz"]);
+    let no_match_result = run_command(ctx, &["snapshot", "grep", "nonexistent-pattern-xyz"]);
     assert_eq!(
         no_match_result.exit_code, 0,
         "expected snapshot grep (no match) to succeed:\n{}",
@@ -4304,7 +4297,7 @@ pub(super) fn test_snapshot_grep_count(ctx: &mut E2ECtx) {
     run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG, "https://example.com"]);
 
     // Put pattern before flags so --count isn't treated as consuming the pattern
-    let result = run_command(ctx, &["snapshot-grep", "mock", "--count"]);
+    let result = run_command(ctx, &["snapshot", "grep", "mock", "--count"]);
     assert_eq!(
         result.exit_code, 0,
         "expected snapshot grep -c to succeed:\n{}",
@@ -4410,49 +4403,49 @@ pub(super) fn test_snapshot_grep_flags(ctx: &mut E2ECtx) {
     run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG, "https://example.com"]);
 
     // --ignore-case (-i): case-insensitive match
-    let result = run_command(ctx, &["snapshot-grep", "-i", "MOCK"]);
+    let result = run_command(ctx, &["snapshot", "grep", "-i", "MOCK"]);
     assert_eq!(result.exit_code, 0,
         "expected snapshot-grep -i to succeed:\n{}", result.stderr);
     assert!(result.stdout.contains("mock snapshot"),
         "Expected -i MOCK to match 'mock snapshot':\n{}", result.stdout);
 
     // --invert-match (-v): lines NOT matching pattern
-    let result = run_command(ctx, &["snapshot-grep", "-v", "nonexistent-pattern-xyz"]);
+    let result = run_command(ctx, &["snapshot", "grep", "-v", "nonexistent-pattern-xyz"]);
     assert_eq!(result.exit_code, 0,
         "expected snapshot-grep -v to succeed:\n{}", result.stderr);
     assert!(result.stdout.contains("mock snapshot"),
         "Expected -v to print non-matching line:\n{}", result.stdout);
 
     // --fixed-strings (-F): literal string match (not regex)
-    let result = run_command(ctx, &["snapshot-grep", "-F", "mock snap"]);
+    let result = run_command(ctx, &["snapshot", "grep", "-F", "mock snap"]);
     assert_eq!(result.exit_code, 0,
         "expected snapshot-grep -F to succeed:\n{}", result.stderr);
     assert!(result.stdout.contains("mock snapshot"),
         "Expected -F 'mock snap' to match:\n{}", result.stdout);
 
     // -F with regex special chars should treat them literally (no match)
-    let result = run_command(ctx, &["snapshot-grep", "-F", "mock*shot"]);
+    let result = run_command(ctx, &["snapshot", "grep", "-F", "mock*shot"]);
     assert_eq!(result.exit_code, 0,
         "expected snapshot-grep -F with special chars to succeed:\n{}", result.stderr);
     assert!(!result.stdout.contains("mock snapshot"),
         "Expected -F 'mock*shot' NOT to match 'mock snapshot' (literal):\n{}", result.stdout);
 
     // --word-regexp (-w): whole-word match
-    let result = run_command(ctx, &["snapshot-grep", "-w", "mock"]);
+    let result = run_command(ctx, &["snapshot", "grep", "-w", "mock"]);
     assert_eq!(result.exit_code, 0,
         "expected snapshot-grep -w to succeed:\n{}", result.stderr);
     assert!(result.stdout.contains("mock snapshot"),
         "Expected -w mock to match whole word:\n{}", result.stdout);
 
     // --word-regexp (-w): partial word should NOT match
-    let result = run_command(ctx, &["snapshot-grep", "-w", "moc"]);
+    let result = run_command(ctx, &["snapshot", "grep", "-w", "moc"]);
     assert_eq!(result.exit_code, 0,
         "expected snapshot-grep -w (no match) to succeed:\n{}", result.stderr);
     assert!(!result.stdout.contains("mock snapshot"),
         "Expected -w moc NOT to match 'mock' (partial word):\n{}", result.stdout);
 
     // Combined flags: -i -v (invert case-insensitive match)
-    let result = run_command(ctx, &["snapshot-grep", "-i", "-v", "MOCK"]);
+    let result = run_command(ctx, &["snapshot", "grep", "-i", "-v", "MOCK"]);
     assert_eq!(result.exit_code, 0,
         "expected snapshot-grep -i -v to succeed:\n{}", result.stderr);
     assert!(!result.stdout.contains("mock snapshot"),

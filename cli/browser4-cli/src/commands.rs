@@ -1975,7 +1975,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             category: Category::Tabs,
             hidden: false,
             batch_supported: true,
-            args: &[ArgDef { name: "index", description: "Zero-based tab index", optional: false }],
+            args: &[ArgDef { name: "index", description: "Zero-based tab index", optional: true }],
             options: &[
                 OptionDef { name: "guid", description: "Select by GUID instead of index (from tab-list output)", is_bool: false, short: None },
             ],
