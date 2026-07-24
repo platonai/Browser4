@@ -2,6 +2,9 @@
 
 use crate::commands::{all_commands, CommandDef};
 
+/// Maximum characters per line in help output.
+const MAX_LINE_WIDTH: usize = 120;
+
 pub fn public_command_name(name: &str) -> &str {
     match name {
         "agent-run" => "agent run",
@@ -221,7 +224,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         .trim()
         .to_string(),
         String::new(),
-        cmd.description.to_string(),
+        wrap_text(cmd.description, "", 0),
         String::new(),
     ];
 
@@ -345,10 +348,11 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         );
         lines.push(String::new());
         lines.push("Examples:".to_string());
-        lines.push(
-            "  browser4-cli htmlsnapshot query --sql \"SELECT dom_first_text(dom, 'h1') AS title FROM load_and_select(@url, ':root')\""
-                .to_string(),
-        );
+        lines.push(wrap_text(
+            "browser4-cli htmlsnapshot query --sql \"SELECT dom_first_text(dom, 'h1') AS title FROM load_and_select(@url, ':root')\"",
+            "  ",
+            2,
+        ));
         lines.push("  browser4-cli htmlsnapshot query --sql @query.sql".to_string());
         lines.push("  browser4-cli htmlsnapshot query --sql-stdin < query.sql".to_string());
         lines.push("  browser4-cli htmlsnapshot query --sql-base64 \"$(base64 -w0 query.sql)\"".to_string());
@@ -390,10 +394,11 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
             "  - --timeout sets the maximum wait time in milliseconds (default: 30000)."
                 .to_string(),
         );
-        lines.push(
-            "  - The target positional argument is interpreted as milliseconds when numeric, otherwise as a CSS selector or element ref."
-                .to_string(),
-        );
+        lines.push(wrap_text(
+            "The target positional argument is interpreted as milliseconds when numeric, otherwise as a CSS selector or element ref.",
+            "  - ",
+            4,
+        ));
         lines.push(String::new());
         lines.push("Examples:".to_string());
         lines.push("  browser4-cli wait e1".to_string());
@@ -455,14 +460,19 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
             "  - --schema accepts a JSON schema to constrain the extracted data structure."
                 .to_string(),
         );
-        lines.push(
-            "  - Output is saved to a timestamped file by default. Use --stdout (or --raw) to print to stdout instead, or --filename to specify a custom path."
-                .to_string(),
-        );
+        lines.push(wrap_text(
+            "Output is saved to a timestamped file by default. Use --stdout (or --raw) to print to stdout instead, or --filename to specify a custom path.",
+            "  - ",
+            4,
+        ));
         lines.push(String::new());
         lines.push("Examples:".to_string());
         lines.push("  browser4-cli extract \"product name, price, ratings\"".to_string());
-        lines.push("  browser4-cli extract \"all contact info\" --schema '{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\"},\"email\":{\"type\":\"string\"}}}'".to_string());
+        lines.push(wrap_text(
+            "browser4-cli extract \"all contact info\" --schema '{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\"},\"email\":{\"type\":\"string\"}}}'",
+            "  ",
+            2,
+        ));
         lines.push("  browser4-cli extract \"article titles and dates\" --stdout".to_string());
         lines.push("  browser4-cli extract \"page metadata\" --filename meta.json".to_string());
     }
@@ -473,18 +483,20 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
             "  - Uses AI to generate a natural-language summary of the current page content."
                 .to_string(),
         );
-        lines.push(
-            "  - An optional instruction tells the model what to focus on, e.g. 'summarize the product reviews' or 'give me the key takeaways'."
-                .to_string(),
-        );
+        lines.push(wrap_text(
+            "An optional instruction tells the model what to focus on, e.g. 'summarize the product reviews' or 'give me the key takeaways'.",
+            "  - ",
+            4,
+        ));
         lines.push(
             "  - --selector limits summarization to a specific CSS selector (e.g. '#main-content', '.article-body')."
                 .to_string(),
         );
-        lines.push(
-            "  - Output is saved to a timestamped file by default. Use --stdout (or --raw) to print to stdout instead, or --filename to specify a custom path."
-                .to_string(),
-        );
+        lines.push(wrap_text(
+            "Output is saved to a timestamped file by default. Use --stdout (or --raw) to print to stdout instead, or --filename to specify a custom path.",
+            "  - ",
+            4,
+        ));
         lines.push(String::new());
         lines.push("Examples:".to_string());
         lines.push("  browser4-cli summarize".to_string());
@@ -649,10 +661,11 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
 
     if cmd.name == "upgrade" {
         lines.push("Notes:".to_string());
-        lines.push(
-            "  - Like `install`, but also upgrades the browser4-cli binary itself, and skips the download when the requested version is already installed."
-                .to_string(),
-        );
+        lines.push(wrap_text(
+            "Like `install`, but also upgrades the browser4-cli binary itself, and skips the download when the requested version is already installed.",
+            "  - ",
+            4,
+        ));
         lines.push(
             "  - When the requested version is already installed, the download is skipped."
                 .to_string(),
@@ -703,10 +716,11 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
             "  - Status shows whether the backend currently reports the saved session as Active, Stale, or Unknown."
                 .to_string(),
         );
-        lines.push(
-            "  - Next open shows whether `browser4-cli open <url>` will Reuse the saved session or Refresh it (a new session is created only when a URL is provided)."
-                .to_string(),
-        );
+        lines.push(wrap_text(
+            "Next open shows whether `browser4-cli open <url>` will Reuse the saved session or Refresh it (a new session is created only when a URL is provided).",
+            "  - ",
+            4,
+        ));
         lines.push(String::new());
         lines.push("Examples:".to_string());
         lines.push("  browser4-cli list".to_string());
@@ -714,10 +728,11 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
 
     if cmd.name == "goto" {
         lines.push("Notes:".to_string());
-        lines.push(
-            "  - Reuses the current active session when possible and auto-opens a fresh one when the saved session is missing or stale."
-                .to_string(),
-        );
+        lines.push(wrap_text(
+            "Reuses the current active session when possible and auto-opens a fresh one when the saved session is missing or stale.",
+            "  - ",
+            4,
+        ));
         lines.push(
             "  - If the backend had been stopped, `goto` starts or reconnects through the current slot before navigating."
                 .to_string(),
@@ -749,10 +764,11 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
 
     if cmd.name == "swarm-submit" {
         lines.push("Notes:".to_string());
-        lines.push(
-            "  - Accepts a direct URL, a `--seed-file`, or both, and submits each entry as a scrape job through the scrape submit API."
-                .to_string(),
-        );
+        lines.push(wrap_text(
+            "Accepts a direct URL, a `--seed-file`, or both, and submits each entry as a scrape job through the scrape submit API.",
+            "  - ",
+            4,
+        ));
         lines.push(
             "  - Seed files are plain text with one URL per line; blank lines and lines beginning with `#` are ignored."
                 .to_string(),
@@ -825,10 +841,11 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
             "  - Seed files are plain text with one URL per line; blank lines and lines beginning with `#` are ignored."
                 .to_string(),
         );
-        lines.push(
-            "  - `--seed-file` takes a direct file path (no `@` prefix); only `--sql` uses `@` to disambiguate inline X-SQL from file paths."
-                .to_string(),
-        );
+        lines.push(wrap_text(
+            "`--seed-file` takes a direct file path (no `@` prefix); only `--sql` uses `@` to disambiguate inline X-SQL from file paths.",
+            "  - ",
+            4,
+        ));
         lines.push(
             "  - Pass `--wait` to block until all submitted jobs complete instead of returning immediately."
                 .to_string(),
@@ -1059,38 +1076,44 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         ));
         lines.push(String::new());
         lines.push("Notes:".to_string());
-        lines.push(
-            "  - The base `htmlsnapshot` command captures a static HTML snapshot, stores it in Browser4's page storage, and returns enriched metadata (URL, title, timestamps, image/link counts, interactive elements with tag/class/id/aria/bounding-box)."
-                .to_string(),
-        );
-        lines.push(
-            "  - After capturing, extract elements from the stored snapshot by CSS selector with `htmlsnapshot get <field> [selector]`."
-                .to_string(),
-        );
+        lines.push(wrap_text(
+            "The base `htmlsnapshot` command captures a static HTML snapshot, stores it in Browser4's page storage, and returns enriched metadata (URL, title, timestamps, image/link counts, interactive elements with tag/class/id/aria/bounding-box).",
+            "  - ",
+            4,
+        ));
+        lines.push(wrap_text(
+            "After capturing, extract elements from the stored snapshot by CSS selector with `htmlsnapshot get <field> [selector]`.",
+            "  - ",
+            4,
+        ));
         lines.push(
             "  - The `get` subcommand supports three fields: `text` (inner text), `html` (inner HTML), and `attr` (attribute value)."
                 .to_string(),
         );
-        lines.push(
-            "  - Argument order: `get <field:text|html|attr> <css-selector> [attribute-name]`.  When using `attr`, the third argument is the attribute name (e.g. `href`, `src`, `class`)."
-                .to_string(),
-        );
-        lines.push(
-            "  - Tip: `htmlsnapshot get attr \"div\" class` → extracts the class attribute from the first matching div.  Use `get all attr \"img\" src` for every image's src."
-                .to_string(),
-        );
-        lines.push(
-            "  - Each `get all` call runs independently against the whole document. To extract correlated fields (e.g. title + price + URL per product), use `htmlsnapshot query` with X-SQL's `DOM_LOAD_AND_SELECT` — it scopes each row to a parent container so fields stay aligned."
-                .to_string(),
-        );
+        lines.push(wrap_text(
+            "Argument order: `get <field:text|html|attr> <css-selector> [attribute-name]`.  When using `attr`, the third argument is the attribute name (e.g. `href`, `src`, `class`).",
+            "  - ",
+            4,
+        ));
+        lines.push(wrap_text(
+            "Tip: `htmlsnapshot get attr \"div\" class` → extracts the class attribute from the first matching div.  Use `get all attr \"img\" src` for every image's src.",
+            "  - ",
+            4,
+        ));
+        lines.push(wrap_text(
+            "Each `get all` call runs independently against the whole document. To extract correlated fields (e.g. title + price + URL per product), use `htmlsnapshot query` with X-SQL's `DOM_LOAD_AND_SELECT` — it scopes each row to a parent container so fields stay aligned.",
+            "  - ",
+            4,
+        ));
         lines.push(
             "  - Element references (`e5`, `backend:15`) are NOT supported by `htmlsnapshot get` — use CSS selectors only."
                 .to_string(),
         );
-        lines.push(
-            "  - X-SQL queries via `htmlsnapshot query --sql` use `@url` as a placeholder for the target page URL (unquoted — SQLTemplate handles escaping)."
-                .to_string(),
-        );
+        lines.push(wrap_text(
+            "X-SQL queries via `htmlsnapshot query --sql` use `@url` as a placeholder for the target page URL (unquoted — SQLTemplate handles escaping).",
+            "  - ",
+            4,
+        ));
         lines.push(
             "  - `htmlsnapshot query --sql` also supports reading from a file with `--sql @file.sql`."
                 .to_string(),
@@ -1103,30 +1126,35 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
             "  - Use `--sql-base64` to decode the `--sql` value (or stdin input) as base64 before execution."
                 .to_string(),
         );
-        lines.push(
-            "  - Use `--result-only` to extract and print only the `resultSet` array from the response JSON, omitting wrapper metadata."
-                .to_string(),
-        );
+        lines.push(wrap_text(
+            "Use `--result-only` to extract and print only the `resultSet` array from the response JSON, omitting wrapper metadata.",
+            "  - ",
+            4,
+        ));
         lines.push(
             "  - Export the full HTML snapshot from Browser4's page storage to a local file with `htmlsnapshot export --file <path>`."
                 .to_string(),
         );
-        lines.push(
-            "  - Generate a compressed page summary (WPSI) from the stored HTML snapshot with `htmlsnapshot summary`. The summary identifies page type, structure, key content nodes, repeated lists, tables, and stats — typically <1% of the original HTML size."
-                .to_string(),
-        );
-        lines.push(
-            "  - Search the HTML snapshot HTML with regex patterns using `htmlsnapshot grep <pattern>`. Supports standard grep flags: -e (repeatable), -i, -A, -B, -C, -v, -c, -l, -F, -w, --no-line-number. Use --selector to scope to the first matching CSS element (querySelector), or --selector-all to search across ALL matching elements (querySelectorAll) with element-index annotations. Uses Rust regex syntax where | is alternation (not \\|). Line numbers are shown by default (unlike GNU grep's -n opt-in)."
-                .to_string(),
-        );
-        lines.push(
-            "  - Analyze DOM structure and discover CSS selectors for recurring patterns with `htmlsnapshot inspect [selector]`. When the selector matches multiple elements (e.g. `.product-card`), it compares child structures across matches and suggests selectors ranked by recurrence. Use --max to control sample size and --depth to limit descendant traversal."
-                .to_string(),
-        );
-        lines.push(
-            "  - Output from `get html`, `get all html`, and `grep` is paginated by default (2000 lines per page). `get text` and `get all text` are not paginated by default (text extraction rarely exceeds practical limits). Use --page N for subsequent pages, --page-size N to change the page size, or --all to disable pagination and show all content. Pagination is automatically skipped in --json and --quiet modes."
-                .to_string(),
-        );
+        lines.push(wrap_text(
+            "Generate a compressed page summary (WPSI) from the stored HTML snapshot with `htmlsnapshot summary`. The summary identifies page type, structure, key content nodes, repeated lists, tables, and stats — typically <1% of the original HTML size.",
+            "  - ",
+            4,
+        ));
+        lines.push(wrap_text(
+            "Search the HTML snapshot HTML with regex patterns using `htmlsnapshot grep <pattern>`. Supports standard grep flags: -e (repeatable), -i, -A, -B, -C, -v, -c, -l, -F, -w, --no-line-number. Use --selector to scope to the first matching CSS element (querySelector), or --selector-all to search across ALL matching elements (querySelectorAll) with element-index annotations. Uses Rust regex syntax where | is alternation (not \\|). Line numbers are shown by default (unlike GNU grep's -n opt-in).",
+            "  - ",
+            4,
+        ));
+        lines.push(wrap_text(
+            "Analyze DOM structure and discover CSS selectors for recurring patterns with `htmlsnapshot inspect [selector]`. When the selector matches multiple elements (e.g. `.product-card`), it compares child structures across matches and suggests selectors ranked by recurrence. Use --max to control sample size and --depth to limit descendant traversal.",
+            "  - ",
+            4,
+        ));
+        lines.push(wrap_text(
+            "Output from `get html`, `get all html`, and `grep` is paginated by default (2000 lines per page). `get text` and `get all text` are not paginated by default (text extraction rarely exceeds practical limits). Use --page N for subsequent pages, --page-size N to change the page size, or --all to disable pagination and show all content. Pagination is automatically skipped in --json and --quiet modes.",
+            "  - ",
+            4,
+        ));
         lines.push(String::new());
         lines.push("Examples:".to_string());
         lines.push("  # Capture a HTML snapshot and display metadata".to_string());
@@ -1145,7 +1173,11 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("  browser4-cli htmlsnapshot get all text \"h2 a\"".to_string());
         lines.push(String::new());
         lines.push("  # Correlated multi-field extraction: title, price, and link per product".to_string());
-        lines.push("  browser4-cli htmlsnapshot query --sql \"SELECT dom_first_text(dom, '.title') AS title, dom_first_text(dom, '.price') AS price, dom_first_href(dom, 'a') AS link FROM load_and_select(@url, '.product')\"".to_string());
+        lines.push(wrap_text(
+            "browser4-cli htmlsnapshot query --sql \"SELECT dom_first_text(dom, '.title') AS title, dom_first_text(dom, '.price') AS price, dom_first_href(dom, 'a') AS link FROM load_and_select(@url, '.product')\"",
+            "  ",
+            2,
+        ));
         lines.push(String::new());
         lines.push("  # Get all matching elements with element-level pagination".to_string());
         lines.push("  browser4-cli htmlsnapshot get all text \".result\" --limit 5 --offset 10".to_string());
@@ -1160,10 +1192,11 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("  browser4-cli htmlsnapshot get html --all".to_string());
         lines.push(String::new());
         lines.push("  # Run an X-SQL query against the current page URL".to_string());
-        lines.push(
-            "  browser4-cli htmlsnapshot query --sql \"SELECT dom_first_text(dom, 'h1') AS title FROM load_and_select(@url, ':root')\""
-                .to_string(),
-        );
+        lines.push(wrap_text(
+            "browser4-cli htmlsnapshot query --sql \"SELECT dom_first_text(dom, 'h1') AS title FROM load_and_select(@url, ':root')\"",
+            "  ",
+            2,
+        ));
         lines.push(String::new());
         lines.push("  # Run an X-SQL query from a file".to_string());
         lines.push("  browser4-cli htmlsnapshot query --sql @query.sql".to_string());
@@ -1276,14 +1309,16 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
             "    The `-E` (extended regex) flag is accepted for grep compatibility but is a no-op: Rust regex is always ERE-like."
                 .to_string(),
         );
-        lines.push(
-            "  - snapshot grep supports the same grep options as htmlsnapshot grep: -e (repeatable), -i, -A, -B, -C, -v, -c, -l, -F, -w, --no-line-number, --selector, --selector-all, --page N, --page-size N, and --all."
-                .to_string(),
-        );
-        lines.push(
-            "  - Output is paginated by default (2000 lines per page). Use --page N for subsequent pages, --page-size N to change the page size, or --all to show all content."
-                .to_string(),
-        );
+        lines.push(wrap_text(
+            "snapshot grep supports the same grep options as htmlsnapshot grep: -e (repeatable), -i, -A, -B, -C, -v, -c, -l, -F, -w, --no-line-number, --selector, --selector-all, --page N, --page-size N, and --all.",
+            "  - ",
+            4,
+        ));
+        lines.push(wrap_text(
+            "Output is paginated by default (2000 lines per page). Use --page N for subsequent pages, --page-size N to change the page size, or --all to show all content.",
+            "  - ",
+            4,
+        ));
         lines.push(String::new());
         lines.push("Viewports (page chunks):".to_string());
         lines.push("  A viewport is one screen-height chunk of the page (~viewport height px).".to_string());
@@ -1668,13 +1703,124 @@ pub fn generate_help_entry(cmd: &CommandDef) -> String {
     format_with_gap(prefix, cmd.description, 30)
 }
 
+/// Word-wrap prose text so no output line exceeds `max_width`.
+///
+/// `first_line_prefix` is prepended to the first line only (e.g. `"  - "`).
+/// `indent` is the column at which continuation lines start.
+///
+/// Existing newlines in `text` are preserved as paragraph breaks. Splitting
+/// occurs at word boundaries only (spaces).
+fn wrap_text(text: &str, first_line_prefix: &str, indent: usize) -> String {
+    if text.is_empty() {
+        return first_line_prefix.to_string();
+    }
+    let prefix_len = first_line_prefix.len();
+    let first_avail = MAX_LINE_WIDTH.saturating_sub(prefix_len);
+    let cont_avail = MAX_LINE_WIDTH.saturating_sub(indent);
+    let cont_pad = " ".repeat(indent);
+
+    let mut output = String::new();
+    let mut para_idx = 0;
+
+    for paragraph in text.split('\n') {
+        if para_idx > 0 {
+            output.push('\n');
+        }
+        para_idx += 1;
+
+        let words: Vec<&str> = paragraph.split(' ').collect();
+        let mut para_lines: Vec<String> = Vec::new();
+        let mut current_line = String::new();
+
+        for word in words {
+            let is_first = para_lines.is_empty();
+            let limit = if is_first { first_avail } else { cont_avail };
+
+            if current_line.is_empty() {
+                current_line = word.to_string();
+            } else if current_line.len() + 1 + word.len() <= limit {
+                current_line.push(' ');
+                current_line.push_str(word);
+            } else {
+                para_lines.push(current_line);
+                current_line = word.to_string();
+            }
+        }
+
+        if !current_line.is_empty() || para_lines.is_empty() {
+            para_lines.push(current_line);
+        }
+
+        for (i, line) in para_lines.iter().enumerate() {
+            if i == 0 {
+                output.push_str(first_line_prefix);
+            } else {
+                output.push_str(&cont_pad);
+            }
+            output.push_str(line);
+            output.push('\n');
+        }
+    }
+
+    // Trim trailing newline
+    while output.ends_with('\n') {
+        output.pop();
+    }
+
+    output
+}
+
 fn format_with_gap(prefix: &str, text: &str, threshold: usize) -> String {
     let gap = if prefix.len() < threshold {
         threshold - prefix.len()
     } else {
-        1
+        2
     };
-    format!("{}{}{}", prefix, " ".repeat(gap), text)
+
+    // Fast path: everything fits on one line
+    let full_line = format!("{}{}{}", prefix, " ".repeat(gap), text);
+    if full_line.len() <= MAX_LINE_WIDTH {
+        return full_line;
+    }
+
+
+    // Word-wrap the description text with continuation indented to `threshold`
+    let prefix_total = prefix.len() + gap;
+    let first_avail = MAX_LINE_WIDTH.saturating_sub(prefix_total);
+    let cont_avail = MAX_LINE_WIDTH.saturating_sub(threshold);
+    let cont_indent = " ".repeat(threshold);
+
+    let words: Vec<&str> = text.split(' ').collect();
+    let mut lines: Vec<String> = Vec::new();
+    let mut current_line = String::new();
+
+    for word in words {
+        let is_first = lines.is_empty();
+        let limit = if is_first { first_avail } else { cont_avail };
+
+        if current_line.is_empty() {
+            current_line = word.to_string();
+        } else if current_line.len() + 1 + word.len() <= limit {
+            current_line.push(' ');
+            current_line.push_str(word);
+        } else {
+            lines.push(current_line);
+            current_line = word.to_string();
+        }
+    }
+    if !current_line.is_empty() || lines.is_empty() {
+        lines.push(current_line);
+    }
+
+    let mut result = String::new();
+    for (i, line) in lines.iter().enumerate() {
+        if i == 0 {
+            result.push_str(&format!("{}{}{}", prefix, " ".repeat(gap), line));
+        } else {
+            result.push_str(&format!("\n{}{}", cont_indent, line));
+        }
+    }
+    result
 }
 
 #[cfg(test)]
@@ -1987,17 +2133,22 @@ mod tests {
         // Subcommands listing
         assert!(help.contains("Subcommands:"));
         assert!(help.contains("htmlsnapshot get <field> [selector] [name] [--page N] [--page-size N] [--all]"));
-        assert!(help.contains("Extract elements from the HTML snapshot stored in Browser4's page storage (text, html, attr)"));
+        // Help text is wrapped — search for individual line fragments
+        assert!(help.contains("Extract elements from"));
+        assert!(help.contains("page storage (text, html, attr)"));
         assert!(help.contains("htmlsnapshot get all <field> [selector] [name] [--offset N] [--limit N] [--page N] [--page-size N] [--all]"));
-        assert!(help.contains("Extract ALL matching elements from the HTML snapshot (querySelectorAll semantics)"));
+        assert!(help.contains("ALL matching elements from the HTML snapshot"));
+        assert!(help.contains("querySelectorAll"));
         assert!(help.contains("htmlsnapshot query [url]"));
-        assert!(help.contains("Run X-SQL against the HTML snapshot stored in Browser4's page storage via the scrape API"));
+        assert!(help.contains("Run X-SQL against the HTML snapshot"));
+        assert!(help.contains("via the scrape API"));
         assert!(help.contains("htmlsnapshot export"));
         assert!(help.contains("Export snapshot HTML from Browser4's page storage to a local file"));
         assert!(help.contains("htmlsnapshot summary"));
-        assert!(help.contains("Summarize: read the stored HTML snapshot and produce a compressed Web Page Summary Index (WPSI)"));
+        assert!(help.contains("Summarize: read the stored HTML snapshot and produce a compressed Web"));
         // Notes
-        assert!(help.contains("static HTML snapshot, stores it in Browser4's page storage, and returns enriched metadata"));
+        assert!(help.contains("static HTML snapshot, stores it in Browser4's page storage, and returns"));
+        assert!(help.contains("enriched metadata"));
         assert!(help.contains("CSS selectors only"));
         assert!(help.contains("@url"));
         assert!(help.contains("SQLTemplate handles escaping"));
@@ -2027,14 +2178,16 @@ mod tests {
         assert!(help.contains("browser4-cli htmlsnapshot grep --selector main \"Submit\""));
         assert!(help.contains("browser4-cli htmlsnapshot grep --selector-all \".product_pod\" \"price_color\""));
         assert!(help.contains("htmlsnapshot inspect [selector] [--max N] [--depth D]"));
-        assert!(help.contains("Analyze DOM structure and suggest CSS selectors for recurring patterns"));
+        assert!(help.contains("Analyze DOM structure and suggest CSS selectors for recurring"));
         assert!(help.contains("browser4-cli htmlsnapshot inspect \".product_pod\""));
         // enriched metadata
         assert!(help.contains("image/link counts"));
-        assert!(help.contains("interactive elements with tag/class/id/aria/bounding-box"));
+        assert!(help.contains("interactive elements with"));
+        assert!(help.contains("tag/class/id/aria/bounding-box"));
         // pagination
-        assert!(help.contains("Output from `get html`, `get all html`, and `grep` is paginated by default (2000 lines per page)"));
-        assert!(help.contains("--page N for subsequent pages, --page-size N to change the page size, or --all to disable pagination"));
+        assert!(help.contains("Output from `get html`, `get all html`, and `grep` is paginated"));
+        assert!(help.contains("Use --page N for"));
+        assert!(help.contains("subsequent pages"));
         assert!(help.contains("browser4-cli htmlsnapshot get html \"body\" --page 2"));
         assert!(help.contains("browser4-cli htmlsnapshot get all text \"p\" --page-size 200"));
         assert!(help.contains("browser4-cli htmlsnapshot get html --all"));
@@ -2045,7 +2198,8 @@ mod tests {
         assert!(help.contains("use `htmlsnapshot query` with X-SQL's `DOM_LOAD_AND_SELECT`"));
         // correlated multi-field example
         assert!(help.contains("Correlated multi-field extraction: title, price, and link per product"));
-        assert!(help.contains("dom_first_text(dom, '.title') AS title, dom_first_text(dom, '.price') AS price, dom_first_href(dom, 'a') AS link"));
+        assert!(help.contains("dom_first_text(dom, '.title') AS title, dom_first_text(dom, '.price') AS"));
+        assert!(help.contains("price, dom_first_href"));
         assert!(help.contains("FROM load_and_select(@url, '.product')"));
     }
 
