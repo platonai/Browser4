@@ -21,6 +21,13 @@ import java.util.*
 class NetworkManager(
     private val rpc: RobustRPC,
     private val browserProtocol: BrowserProtocol,
+    /**
+     * Whether the underlying CDP transport is a per-tab connection (Chrome
+     * Extension relay / chrome.debugger.attach).  When true, browser-level
+     * CDP domains (Security, Target, Browser) are not available and must
+     * be skipped.
+     */
+    private val isExtensionTransport: Boolean = false,
 ) : AbstractEventEmitter<NetworkEvents>() {
     private val logger = getLogger(this)
     private val tracer get() = logger.takeIf { it.isTraceEnabled }
@@ -58,7 +65,11 @@ class NetworkManager(
     }
 
     suspend fun enable() {
-        if (ignoreHTTPSErrors) {
+        // Security domain is browser-level CDP — not available on per-tab
+        // connections (Chrome Extension relay / chrome.debugger.attach).
+        // Extension sessions rely on the browser's own launch flags
+        // (e.g. --ignore-certificate-errors) for certificate handling.
+        if (ignoreHTTPSErrors && !isExtensionTransport) {
             rpc.invokeSilently("setIgnoreCertificateErrors") {
                 browserProtocol.securityEnable()
                 browserProtocol.setIgnoreCertificateErrors(ignoreHTTPSErrors)

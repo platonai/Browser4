@@ -117,6 +117,19 @@ interface BrowserProtocol {
     suspend fun cssEnable(): Unit
     suspend fun fetchEnable(): Unit
     suspend fun fetchEnable(patterns: List<RequestPattern>, handleAuthRequests: Boolean): Unit
+    /**
+     * Enables the Security domain for the page.
+     *
+     * Sends [Security.enable] — a **browser-level** CDP command.
+     *
+     * **Extension sessions**: Not available.  Per-tab CDP connections
+     * (chrome.debugger.attach / Chrome Extension relay) do not support the
+     * Security domain.  Callers must skip this method when backed by an
+     * [ExtensionChromeService]; certificate handling is managed by the
+     * browser's own launch flags (e.g. `--ignore-certificate-errors`).
+     *
+     * @see setIgnoreCertificateErrors
+     */
     suspend fun securityEnable()
 
     suspend fun getFrameTree(): FrameTree
@@ -339,6 +352,19 @@ interface BrowserProtocol {
 
     fun onAuthRequired(handler: suspend (AuthRequired) -> Unit): EventListener
 
+    /**
+     * Configures whether certificate errors are ignored.
+     *
+     * Sends [Security.setIgnoreCertificateErrors] — a **browser-level** CDP
+     * command.  Requires the Security domain to be enabled first via
+     * [securityEnable].
+     *
+     * **Extension sessions**: Not available.  Per-tab CDP connections do not
+     * support the Security domain.  Callers must skip this method when backed
+     * by an [ExtensionChromeService].
+     *
+     * @see securityEnable
+     */
     suspend fun setIgnoreCertificateErrors(ignore: Boolean)
 
     fun onConsoleMessageAdded(handler: suspend (MessageAdded) -> Unit): EventListener

@@ -235,6 +235,8 @@ class DirectChromeProtocol(
         command("Fetch.enable", mapOf("patterns" to patterns, "handleAuthRequests" to handleAuthRequests))
     }
 
+    // Browser-level domain — not available on per-tab CDP (Extension sessions).
+    // Callers must skip this when backed by an ExtensionChromeService.
     override suspend fun securityEnable() = command("Security.enable")
 
     override suspend fun getFrameTree() = command<FrameTree>("Page.getFrameTree", returnProperty = "frameTree")!!
@@ -934,6 +936,11 @@ class DirectChromeProtocol(
 
     // ---------------------------------------------------------------------------
     // Security domain
+    //
+    // NOTE: Security is a browser-level CDP domain — NOT available on per-tab
+    // connections (Chrome Extension relay / chrome.debugger.attach).  Callers
+    // must skip these methods when backed by an ExtensionChromeService; see
+    // NetworkManager.enable() for the canonical guard.
     // ---------------------------------------------------------------------------
 
     override suspend fun setIgnoreCertificateErrors(ignore: Boolean) {

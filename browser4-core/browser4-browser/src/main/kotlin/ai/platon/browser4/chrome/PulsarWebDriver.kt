@@ -128,7 +128,7 @@ open class PulsarWebDriver constructor(
     private val emulator get() = EmulationHandler(browserProtocol, keyboard, mouse)
 
     private val rpc = RobustRPC(this)
-    private val networkManager by lazy { NetworkManager(rpc, browserProtocol) }
+    private val networkManager by lazy { NetworkManager(rpc, browserProtocol, browser.chrome is ExtensionChromeService) }
     private val messageWriter = MultiSinkMessageWriter()
 
     private val driverHelper get() = WebDriverHelper(this, rpc, page, browserProtocol)
