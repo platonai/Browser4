@@ -247,16 +247,19 @@ browser4-cli pdf --filename page.pdf
 
 | Command | Description |
 |---|---|
-| `tab-list` | List all tabs with their zero-based index. |
+| `tab-list` | List all tabs with their zero-based index and stable GUID. Use `--json` for full GUIDs. |
 | `tab-new [url]` | Open a new tab. |
-| `tab-close [index]` | Close a tab (current tab if no index). |
-| `tab-select <index>` | Switch to a tab by index. |
+| `tab-close [index]` | Close a tab (current tab if no index). Use `--guid <guid>` for GUID-based close. |
+| `tab-select <index>` | Switch to a tab by index. Use `--guid <guid>` for GUID-based select. |
 
 ```bash
 browser4-cli tab-list
+browser4-cli tab-list --json            # JSON output with full GUIDs
 browser4-cli tab-select 1
+browser4-cli tab-select --guid 1B46D74FB  # select by stable GUID
 browser4-cli tab-new https://example.com
 browser4-cli tab-close 1
+browser4-cli tab-close --guid 1B46D74FB  # close by stable GUID
 ```
 
 ### Element inspection

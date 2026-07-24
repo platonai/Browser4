@@ -118,14 +118,17 @@ browser4-cli screenshot --filename=page.png
 
 ```bash
 browser4-cli tab-list
+browser4-cli tab-list --json            # JSON output with full GUIDs
 browser4-cli tab-new
 browser4-cli tab-new https://example.com/page
 browser4-cli tab-close
 browser4-cli tab-close 2
+browser4-cli tab-close --guid 1B46D74FB  # close by stable GUID
 browser4-cli tab-select 0
+browser4-cli tab-select --guid 1B46D74FB  # select by stable GUID
 ```
 
-Use `browser4-cli tab-list` to obtain the current zero-based tab index before calling `tab-select` or `tab-close` with a specific target.
+Use `browser4-cli tab-list --json` to get full GUIDs. For stable tab targeting, prefer `--guid` over positional index — the GUID survives tab reordering.
 
 ### Storage
 
@@ -449,11 +452,13 @@ browser4-cli close
 ```bash
 browser4-cli open https://example.com
 browser4-cli tab-new https://example.com/other
-browser4-cli tab-list
+browser4-cli tab-list --json         # get full GUIDs for stable targeting
 browser4-cli tab-select 0
 browser4-cli snapshot
 browser4-cli close
 ```
+
+For scripts, use `tab-select --guid <guid>` / `tab-close --guid <guid>` with GUIDs from `tab-list --json` — GUIDs are stable across tab reordering.
 
 ## Specific tasks
 

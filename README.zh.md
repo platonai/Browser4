@@ -209,10 +209,10 @@ pdf                 将页面保存为 PDF。--filename
 #### 标签页
 
 ```
-tab-list            列出所有打开的标签页
+tab-list            列出所有打开的标签页。使用 --json 获取完整的 GUID
 tab-new [url]       创建新标签页，可选地导航到某个 URL
-tab-close [index]   按从零开始的索引关闭标签页（省略则关闭当前标签页）
-tab-select <index>  按从零开始的索引选择标签页
+tab-close [index]   按从零开始的索引关闭标签页（省略则关闭当前标签页）。使用 --guid 按 GUID 关闭
+tab-select <index>  按从零开始的索引选择标签页。使用 --guid 按 GUID 选择
 ```
 
 #### 对话框

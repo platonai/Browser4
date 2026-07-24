@@ -101,7 +101,7 @@ The `list` command displays a "Next open" column showing what happens when `goto
 | `webdb export`, `webdb normalize` | Export cached pages, normalize URLs to database keys | Post-crawl content extraction, URL key lookup | [webdb.md](references/webdb.md) |
 | `skills`, `skills get`, `skills path`, `skills unpack` | Bundled AI agent skill files | Refresh agent instructions, unpack skill files | [skills.md](references/skills.md) |
 | `skill-list`, `skill-info`, `skill-install`, `skill-uninstall`, `skill-reload` | Backend skill management | Install/manage server-side skills | [skills.md](references/skills.md) |
-| `screenshot`, `scroll`, `wait`, `resize`, `tab-*` | Visual capture & viewport control | Screenshots, tab management | — |
+| `screenshot`, `scroll`, `wait`, `resize`, `tab-*` | Visual capture & viewport control | Screenshots, tab management. `tab-select` / `tab-close` accept `--guid <guid>` for stable tab IDs; use `tab-list --json` to see full GUIDs. Re-snapshot after tab switches. | — |
 
 ### Refreshing This Skill
 

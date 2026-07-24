@@ -1971,11 +1971,7 @@ async fn handle_tab_list(
             url_w = url_w,
         );
         for tab in &tabs {
-            let guid_display = match &tab.guid {
-                Some(g) if g.len() > 10 => format!("{}…", &g[..9]),
-                Some(g) => g.clone(),
-                None => "-".to_string(),
-            };
+            let guid_display = tab.guid.as_deref().unwrap_or("-");
             let title = if tab.title.len() > 60 {
                 format!("{}…", &tab.title[..59])
             } else {

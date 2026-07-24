@@ -90,10 +90,10 @@ The backend server starts automatically in dev mode. Build the CLI with `cargo b
 
 | Command | Description |
 |---|---|
-| `tab-list` | List all tabs |
+| `tab-list` | List all tabs with index, GUID, title, and URL |
 | `tab-new [url]` | Create a new tab |
-| `tab-close [index]` | Close a browser tab |
-| `tab-select <index>` | Select a browser tab |
+| `tab-close [index]` | Close a browser tab. Use `--guid <guid>` for GUID-based close |
+| `tab-select <index>` | Select a browser tab. Use `--guid <guid>` for GUID-based select |
 
 ### Storage
 

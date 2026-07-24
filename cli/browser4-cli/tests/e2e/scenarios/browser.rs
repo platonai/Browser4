@@ -1274,7 +1274,7 @@ pub(super) fn test_tab_commands(ctx: &mut E2ECtx) {
     let form_url = ctx.form_url();
 
     // ── 1. Verify tab-list shows single tab with GUID column ──────────
-    let initial_tabs = run_command(ctx, &["tab-list"]);
+    let initial_tabs = run_command(ctx, &["tab-list", "--json"]);
     let tab_output = strip_snapshot_output(&initial_tabs.stdout);
     assert!(
         tab_output.contains(&interactive_url),
@@ -1288,7 +1288,7 @@ pub(super) fn test_tab_commands(ctx: &mut E2ECtx) {
 
     // ── 2. Create a second tab — verify both appear ──────────────────
     run_command(ctx, &["tab-new", &other_url]);
-    let two_tab_output = strip_snapshot_output(&run_command(ctx, &["tab-list"]).stdout);
+    let two_tab_output = strip_snapshot_output(&run_command(ctx, &["tab-list", "--json"]).stdout);
     assert!(
         two_tab_output.contains(&interactive_url),
         "Expected interactive URL still present after tab-new:\n{two_tab_output}"
@@ -1313,7 +1313,7 @@ pub(super) fn test_tab_commands(ctx: &mut E2ECtx) {
 
     // ── 4. Create a third tab — verify all three present ─────────────
     run_command(ctx, &["tab-new", &form_url]);
-    let three_tab_output = strip_snapshot_output(&run_command(ctx, &["tab-list"]).stdout);
+    let three_tab_output = strip_snapshot_output(&run_command(ctx, &["tab-list", "--json"]).stdout);
     assert!(
         three_tab_output.contains(&interactive_url),
         "Expected interactive URL in three-tab list"
@@ -1344,7 +1344,7 @@ pub(super) fn test_tab_commands(ctx: &mut E2ECtx) {
     let deadline = std::time::Instant::now() + std::time::Duration::from_millis(5_000);
     let mut after_close_output = String::new();
     while std::time::Instant::now() < deadline {
-        let check = run_command(ctx, &["tab-list"]);
+        let check = run_command(ctx, &["tab-list", "--json"]);
         after_close_output = strip_snapshot_output(&check.stdout);
         if !after_close_output.contains(&other_url) {
             break;
@@ -1373,7 +1373,7 @@ pub(super) fn test_tab_commands(ctx: &mut E2ECtx) {
     let deadline2 = std::time::Instant::now() + std::time::Duration::from_millis(5_000);
     let mut remaining_output = String::new();
     while std::time::Instant::now() < deadline2 {
-        let check = run_command(ctx, &["tab-list"]);
+        let check = run_command(ctx, &["tab-list", "--json"]);
         remaining_output = strip_snapshot_output(&check.stdout);
         if !remaining_output.contains(&form_url) {
             break;
