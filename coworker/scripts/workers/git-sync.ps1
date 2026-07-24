@@ -30,8 +30,6 @@ type(scope): concise summary in present tense, max ~72 chars
 - Brief bullet describing what changed and why (include file paths)
 - Another bullet for a separate logical change
 - Root cause if this is a bug fix
-
-Co-Authored-By: Claude <noreply@anthropic.com>
 ```
 
 ### Type
@@ -58,8 +56,6 @@ fix(test): move test log dir from target/ to .test/<timestamp>
 - Uses .test/yyyy-MM-dd-HHmmss per invocation so logs survive mvn clean
 - Added .test/ to .gitignore
 - All test types (maven, cli, rws) share the same timestamped log dir
-
-Co-Authored-By: Claude <noreply@anthropic.com>
 ```
 
 Good example 2:
@@ -71,14 +67,12 @@ fix(cli, docs): tab-list GUID truncation and missing --guid in docs
   displayed as first 9 chars + …, making them unusable with --guid.
 - DOCS: Add --guid and --json mentions consistently across all tab
   documentation (README.md, cli/README.md, skills/browser4-cli/SKILL.md)
-
-Co-Authored-By: Claude <noreply@anthropic.com>
 ```
 
 ## Step 3: Commit
 Stage all changes with `git add -A`, then commit using the message you wrote:
 ```
-git commit -m "type(scope): summary" -m "body line 1" -m "body line 2" -m "Co-Authored-By: Claude <noreply@anthropic.com>"
+git commit -m "type(scope): summary" -m "body line 1" -m "body line 2"
 ```
 
 ## Step 4: Pull and push
