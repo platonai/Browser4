@@ -289,7 +289,7 @@ function Invoke-MavenTests([string[]]$testTypes, [string[]]$additionalMvnArgs) {
         Update-TestSessionSystem -RepoRoot $repoRoot -SessionPath $script:SessionPath
         $status = if ($exitCode -eq 0) { 'pass' } else { 'fail' }
         $dur = [math]::Round($sw.Elapsed.TotalSeconds, 1)
-        $logDir = Join-Path $repoRoot 'target'
+        $logDir = $script:TestLogDir
         foreach ($type in $testTypes) {
             Update-TestSessionResult -RepoRoot $repoRoot -TestKey "maven:$type" `
                 -Status $status -ExitCode $exitCode -DurationSec $dur `
@@ -382,7 +382,7 @@ function Invoke-Browser4CliTests([string[]]$additionalArgs) {
 
         Update-TestSessionResult -RepoRoot $repoRoot -TestKey 'cli' `
             -Status $status -ExitCode $exitCode -DurationSec $dur `
-            -LogDir (Join-Path $repoRoot 'target') `
+            -LogDir $script:TestLogDir `
             -FailureReport $failureReport `
             -SessionPath $script:SessionPath
     }
@@ -767,7 +767,7 @@ function Invoke-RealWorldScenarioTests([string[]]$additionalArgs) {
         $sessionKey = if ($mode -eq 'scenarios') { 'rws:scenarios' } else { 'rws:task' }
         Update-TestSessionResult -RepoRoot $repoRoot -TestKey $sessionKey `
             -Status $status -ExitCode $exitCode -DurationSec $dur `
-            -LogDir (Join-Path $repoRoot 'target') `
+            -LogDir $script:TestLogDir `
             -SessionPath $script:SessionPath
     }
 
@@ -1452,6 +1452,12 @@ if (-not $script:NoSession) {
         $script:SessionAvailable = $true
     }
 }
+
+# Timestamped log directory for this test run. Lives in .test/ so it
+# survives `mvn clean` (unlike target/).  One directory per invocation.
+$script:TestLogDir = Join-Path $repoRoot '.test' (
+    (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd-HHmmss')
+)
 
 # ═══════════════════════════════════════════════════════════════════
 # Dispatch
