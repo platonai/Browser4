@@ -1282,6 +1282,8 @@ async fn handle_attach(
         state.active_selector = None;
         state.last_mouse_position = None;
         state.is_attached = true;
+        state.attach_type = Some("extension".to_string());
+        state.browser_channel = channel.clone();
         write_state(&state, None, session_name).map_err(|e| e.to_string())?;
 
         json_field("session_id", json!(&session_id));
@@ -1439,6 +1441,8 @@ async fn handle_attach(
     state.active_selector = None;
     state.last_mouse_position = None;
     state.is_attached = true;
+    state.attach_type = Some("cdp".to_string());
+    state.cdp_endpoint = Some(cdp_endpoint.clone());
     write_state(&state, None, session_name).map_err(|e| e.to_string())?;
 
     json_field("session_id", json!(&session_id));
@@ -2462,6 +2466,27 @@ fn log_shutdown_result(action: &str, result: &ShutdownResult) {
     }
 }
 
+/// Format a session's browser connection type for the `list` command table.
+fn connection_label(state: &CliState) -> String {
+    match state.attach_type.as_deref() {
+        Some("cdp") => {
+            if let Some(ref endpoint) = state.cdp_endpoint {
+                format!("CDP: {endpoint}")
+            } else {
+                "CDP".to_string()
+            }
+        }
+        Some("extension") => {
+            if let Some(ref channel) = state.browser_channel {
+                format!("Extension ({channel})")
+            } else {
+                "Extension".to_string()
+            }
+        }
+        _ => "Browser4".to_string(),
+    }
+}
+
 async fn handle_list(client: &Client, base_url: &str) -> Result<(), String> {
     let (backend_sessions, backend_note): (Option<Vec<BackendSessionRecord>>, Option<String>) =
         match call_tool(client, base_url, "list_sessions", json!({})).await {
@@ -2477,13 +2502,14 @@ async fn handle_list(client: &Client, base_url: &str) -> Result<(), String> {
         };
 
     cli_println!(
-        "{:<20} | {:<40} | {:<8} | {}",
+        "{:<20} | {:<40} | {:<8} | {:<30} | {}",
         "Name",
         "Session ID",
         "Status",
+        "Connection",
         "Next open"
     );
-    cli_println!("{:-<20}-+-{:-<40}-+-{:-<8}-+-{:-<9}", "", "", "", "");
+    cli_println!("{:-<20}-+-{:-<40}-+-{:-<8}-+-{:-<30}-+-{:-<9}", "", "", "", "", "");
 
     let mut json_sessions: Vec<serde_json::Value> = Vec::new();
     let backend_reachable = backend_sessions.is_some();
@@ -2498,23 +2524,26 @@ async fn handle_list(client: &Client, base_url: &str) -> Result<(), String> {
                     let name = path.file_stem().unwrap().to_string_lossy();
                     if let Ok(content) = std::fs::read_to_string(&path) {
                         if let Ok(state) = serde_json::from_str::<CliState>(&content) {
-                            if let Some(sid) = state.session_id {
+                            if let Some(ref sid) = state.session_id {
                                 let status = list_session_status(backend_sessions.as_deref(), &sid);
                                 let next_open = list_session_next_open_action(
                                     backend_sessions.as_deref(),
                                     &sid,
                                 );
+                                let conn = connection_label(&state);
                                 cli_println!(
-                                    "{:<20} | {:<40} | {:<8} | {}",
+                                    "{:<20} | {:<40} | {:<8} | {:<30} | {}",
                                     name,
                                     sid,
                                     status,
+                                    conn,
                                     next_open
                                 );
                                 json_sessions.push(json!({
                                     "name": name.to_string(),
                                     "session_id": sid,
                                     "status": status.to_lowercase(),
+                                    "connection": conn,
                                     "next_open": next_open.to_lowercase(),
                                 }));
                             }
@@ -2530,24 +2559,27 @@ async fn handle_list(client: &Client, base_url: &str) -> Result<(), String> {
     // auto-created by a previous run and never actually navigated; hide it to
     // avoid session clutter when all commands use `-s <name>`.
     let default_state = read_state(None, None);
-    if let Some(sid) = default_state.session_id {
+    if let Some(ref sid) = default_state.session_id {
         let backend_knows_session = backend_sessions.as_ref().map_or(true, |records| {
-            records.iter().any(|r| r.session_id == sid)
+            records.iter().any(|r| r.session_id == *sid)
         });
         if backend_knows_session {
             let status = list_session_status(backend_sessions.as_deref(), &sid);
             let next_open = list_session_next_open_action(backend_sessions.as_deref(), &sid);
+            let conn = connection_label(&default_state);
             cli_println!(
-                "{:<20} | {:<40} | {:<8} | {}",
+                "{:<20} | {:<40} | {:<8} | {:<30} | {}",
                 "(default)",
                 sid,
                 status,
+                conn,
                 next_open
             );
             json_sessions.push(json!({
                 "name": "(default)",
                 "session_id": sid,
                 "status": status.to_lowercase(),
+                "connection": conn,
                 "next_open": next_open.to_lowercase(),
             }));
         }
@@ -12626,11 +12658,19 @@ fn preferred_spaced_command_form(command: &str) -> Option<&'static str> {
         "htmlsnapshot-summary" => Some("htmlsnapshot summary"),
         "htmlsnapshot-grep" => Some("htmlsnapshot grep"),
         "htmlsnapshot-inspect" => Some("htmlsnapshot inspect"),
+        "doctor-log" => Some("doctor log"),
+        "doctor-metrics" => Some("doctor metrics"),
+        "plugin-list" => Some("plugin list"),
+        "plugin-info" => Some("plugin info"),
+        "plugin-install" => Some("plugin install"),
+        "plugin-remove" => Some("plugin remove"),
         "skills-list" => Some("skills list"),
         "skills-get" => Some("skills get"),
         "skills-path" => Some("skills path"),
         "skills-unpack" => Some("skills unpack"),
-        "doctor-log" => Some("doctor log"),
+        "snapshot-grep" => Some("snapshot grep"),
+        "webdb-export" => Some("webdb export"),
+        "webdb-normalize" => Some("webdb normalize"),
         _ => None,
     }
 }
@@ -13651,7 +13691,14 @@ async fn run(
             Some(rewritten[0].clone())
         } else {
             if let Some(target) = global.args.get(1) {
-                if let Some(preferred) = preferred_spaced_command_form(target) {
+                // Accept the target as-is when it is already a known command
+                // (e.g. "agent-run" is valid even though the preferred form is
+                // "agent run").  The spaced-form preference is enforced during
+                // command dispatch, not during help lookups.
+                let cmd_map = commands_map();
+                if cmd_map.contains_key(target.as_str()) {
+                    Some(target.clone())
+                } else if let Some(preferred) = preferred_spaced_command_form(target) {
                     return Err(CliError(
                         ExitCode::Usage,
                         format!(
@@ -13659,9 +13706,12 @@ async fn run(
                             target, preferred
                         ),
                     ));
+                } else {
+                    Some(target.clone())
                 }
+            } else {
+                None
             }
-            global.args.get(1).cloned()
         };
         print_help(sub.as_deref());
         return Ok(());

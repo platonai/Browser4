@@ -41,6 +41,19 @@ pub struct CliState {
     /// running after `close`.
     #[serde(rename = "isAttached", default, skip_serializing_if = "is_false")]
     pub is_attached: bool,
+    /// How this session connects to the browser: `"cdp"` for direct CDP
+    /// connections, `"extension"` for Browser4 Chrome Extension relay.
+    /// `None` (absent) for Browser4-launched sessions.
+    #[serde(rename = "attachType", skip_serializing_if = "Option::is_none")]
+    pub attach_type: Option<String>,
+    /// Resolved CDP HTTP endpoint URL for CDP-attached sessions, e.g.
+    /// `"http://localhost:9222"`.
+    #[serde(rename = "cdpEndpoint", skip_serializing_if = "Option::is_none")]
+    pub cdp_endpoint: Option<String>,
+    /// Browser channel name for extension-attached or channel-based CDP
+    /// sessions, e.g. `"chrome"`, `"msedge"`, `"chrome-canary"`.
+    #[serde(rename = "browserChannel", skip_serializing_if = "Option::is_none")]
+    pub browser_channel: Option<String>,
 }
 
 fn is_false(b: &bool) -> bool {
@@ -56,6 +69,9 @@ impl Default for CliState {
             session_name: None,
             last_mouse_position: None,
             is_attached: false,
+            attach_type: None,
+            cdp_endpoint: None,
+            browser_channel: None,
         }
     }
 }
@@ -933,6 +949,7 @@ mod tests {
             session_name: None,
             last_mouse_position: Some(MousePosition { x: 120.0, y: 240.0 }),
             is_attached: false,
+            ..Default::default()
         };
         write_state(&state, Some(tmp.path()), None).unwrap();
         let read = read_state(Some(tmp.path()), None);
@@ -972,6 +989,7 @@ mod tests {
             session_name: Some("auth".to_string()),
             last_mouse_position: Some(MousePosition { x: 10.0, y: 20.0 }),
             is_attached: false,
+            ..Default::default()
         };
         let state_public = CliState {
             session_id: Some("public456".to_string()),
@@ -980,6 +998,7 @@ mod tests {
             session_name: Some("public".to_string()),
             last_mouse_position: Some(MousePosition { x: 30.0, y: 40.0 }),
             is_attached: false,
+            ..Default::default()
         };
 
         write_state(&state_auth, Some(tmp.path()), Some("auth")).unwrap();
