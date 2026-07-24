@@ -382,10 +382,16 @@ class MCPToolController(
 
     private fun handleListSessions(): ResponseEntity<MCPToolCallResponse> {
         val sessions = sessionManager.getAllSessions().map { s ->
-            """{"sessionId":"${s.sessionId}","url":"${s.url ?: ""}","status":"${s.status}","""
-                .plus(""""createdAt":${s.createdAt},"lastAccessedAt":${s.lastAccessedAt}}""")
+            mapOf<String, Any>(
+                "sessionId" to s.sessionId,
+                "url" to (s.url ?: ""),
+                "status" to s.status,
+                "createdAt" to s.createdAt,
+                "lastAccessedAt" to s.lastAccessedAt,
+            )
         }
-        return ResponseEntity.ok(textResponse("[${sessions.joinToString(",")}]"))
+        val json = pulsarObjectMapper().writeValueAsString(sessions)
+        return ResponseEntity.ok(textResponse(json))
     }
 
     private fun handleCloseAllSessions(): ResponseEntity<MCPToolCallResponse> {

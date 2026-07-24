@@ -44,8 +44,66 @@ interface BrowserProtocol {
      */
     val remoteDevToolsOrNull: RemoteDevTools?
 
+    /**
+     * Answers: "Can I reach the browser process via CDP?"
+     *
+     * Sends [Browser.getVersion] — a tiny, fixed-size browser-level ping
+     * that does not touch any page or execution context.
+     *
+     * Concern: a successful response proves the browser process is alive,
+     * but tells you nothing about whether a specific tab/target is usable.
+     * A tab may have been closed or crashed independently of the browser.
+     */
     suspend fun isBrowserAlive(): Boolean
+
+    /**
+     * Answers: "Is the CDP transport responsive at the browser level?"
+     *
+     * Sends [Target.getTargets] — a browser-level command that enumerates
+     * all open targets (tabs, workers, iframes).  For a browser-level CDP
+     * connection (the normal case), this confirms the WebSocket is alive
+     * and the browser is processing commands.
+     *
+     * Concerns:
+     * - Browser-level command: does NOT work on per-tab CDP connections
+     *   (chrome.debugger.attach / Chrome Extension relay).  Code paths
+     *   that go through per-tab connections must use [isPageAlive]
+     *   instead.
+     * - Enumeration cost: the response includes every open target.  With
+     *   many tabs the payload can grow, though in practice it remains
+     *   metadata-sized and is negligible over a local WebSocket.
+     */
     suspend fun isTargetAlive(): Boolean
+
+    /**
+     * Answers: "Is the page-level CDP transport responsive?"
+     *
+     * Sends [Page.getFrameTree] — a page-level command that works on
+     * per-tab CDP connections (chrome.debugger.attach / Chrome Extension
+     * relay) where browser-level commands like [isTargetAlive]'s
+     * Target.getTargets are not available.
+     *
+     * Unlike [isV8Alive], this does NOT require a JavaScript execution
+     * context — it works on every page type including about:blank, image
+     * documents, and restricted internal pages.
+     */
+    suspend fun isPageAlive(): Boolean
+
+    /**
+     * Answers: "Can the page execute JavaScript?"
+     *
+     * Sends [Runtime.evaluate]("1+1") — a page-level command that requires
+     * a valid JavaScript execution context in the target page.
+     *
+     * Concerns:
+     * - Requires a live V8 context: fails during page navigation, when the
+     *   main thread is blocked by a synchronous dialog (alert/confirm/
+     *   prompt), or before Page.enable has initialised the runtime.
+     * - These transient failures look identical to a genuinely dead page,
+     *   so callers must tolerate false negatives or layer this behind
+     *   transport-level checks ([isBrowserAlive] / [isTargetAlive] /
+     *   [isPageAlive]) first.
+     */
     suspend fun isV8Alive(): Boolean
 
     /** Returns the main frame, suspending until the frame tree is available. */

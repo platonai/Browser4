@@ -8,6 +8,7 @@ import ai.platon.browser4.chrome.protocol.EmulationHandler
 import ai.platon.browser4.chrome.protocol.PageHandler
 import ai.platon.browser4.chrome.protocol.ScreenshotHandler
 import ai.platon.browser4.chrome.protocol.transport.ChromeImpl
+import ai.platon.browser4.chrome.protocol.transport.ExtensionChromeService
 import ai.platon.browser4.chrome.protocol.util.CheckableElementJs
 import ai.platon.browser4.chrome.protocol.util.withNodeObjectId
 import ai.platon.browser4.chrome.util.ChromeDriverException
@@ -179,10 +180,29 @@ open class PulsarWebDriver constructor(
             return state
         }
 
-        if (!browserProtocol.isTargetAlive()) {
-            return CheckState(
-                ResourceStatus.SC_SERVICE_UNAVAILABLE, "WebDriver service unavailable - the target page is not alive"
-            )
+        // Extension-attached drivers use chrome.debugger.sendCommand (per-tab CDP)
+        // through the Chrome Extension relay.  Browser-level commands like
+        // Target.getTargets are NOT available on per-tab connections — they fail
+        // even when the tab is perfectly healthy.  Use Page.getFrameTree instead:
+        // it is a page-level CDP command that works on every page type
+        // (about:blank, images, normal pages, etc.) without requiring a JavaScript
+        // execution context.
+        val isExtensionBacked = browser.chrome is ExtensionChromeService
+
+        if (isExtensionBacked) {
+            if (!browserProtocol.isPageAlive()) {
+                return CheckState(
+                    ResourceStatus.SC_SERVICE_UNAVAILABLE,
+                    "WebDriver service unavailable - the target page is not alive"
+                )
+            }
+        } else {
+            if (!browserProtocol.isTargetAlive()) {
+                return CheckState(
+                    ResourceStatus.SC_SERVICE_UNAVAILABLE,
+                    "WebDriver service unavailable - the target page is not alive"
+                )
+            }
         }
 
         return CheckState(0, "WebDriver is healthy")

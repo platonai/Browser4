@@ -177,59 +177,40 @@ class DirectChromeProtocol(
     //
     // Each method answers a different question:
     //   isBrowserAlive()  — Can I reach the browser process?
-    //   isTargetAlive()   — Is the CDP transport responsive?
+    //   isTargetAlive()   — Is the browser-level CDP transport responsive?
+    //   isPageAlive()     — Is the page-level CDP transport responsive?
     //   isV8Alive()       — Can the page execute JavaScript?
     //
-    // For browser-level CDP connections (the normal case) the first two
+    // For browser-level CDP connections (the normal case) the first three
     // effectively verify the same thing — the WebSocket is still working.
     // The layering matters for per-tab connections (chrome.debugger.attach
     // / Chrome Extension) where browser-level commands are not available.
+    // In those cases isPageAlive() provides the correct transport check
+    // without requiring a JavaScript execution context.
     // ---------------------------------------------------------------------------
 
-    /** Answers: "Is the browser process reachable via CDP?"
-     *
-     *  Sends `Browser.getVersion` — a tiny, fixed-size browser-level ping
-     *  that does not touch any page or execution context.
-     *
-     *  Concern: a successful response proves the browser process is alive,
-     *  but tells you nothing about whether a specific tab/target is usable.
-     *  A tab may have been closed or crashed independently of the browser. */
     override suspend fun isBrowserAlive(): Boolean {
         return runCatching { command("Browser.getVersion") }.isSuccess
     }
 
-    /** Answers: "Is the CDP transport responsive?"
-     *
-     *  Sends `Target.getTargets` — a browser-level command that enumerates
-     *  all open targets (tabs, workers, iframes).  For a browser-level CDP
-     *  connection (the normal case), this confirms the WebSocket is alive
-     *  and the browser is processing commands.
-     *
-     *  Concerns:
-     *  - Browser-level command: does not work on per-tab CDP connections
-     *    (chrome.debugger.attach / Chrome Extension).  Those code paths
-     *    must bypass this check (see checkHealthy in PulsarSessionManager).
-     *  - Enumeration cost: the response includes every open target.  With
-     *    many tabs the payload can grow, though in practice it remains
-     *    metadata-sized and is negligible over a local WebSocket. */
     override suspend fun isTargetAlive(): Boolean {
         return runCatching { command("Target.getTargets") }.isSuccess
     }
 
-    /** Answers: "Can the page execute JavaScript?"
+    /** Answers: "Is the page-level CDP transport responsive?"
      *
-     *  Sends `Runtime.evaluate("1+1")` — a page-level command that requires
-     *  a valid JavaScript execution context in the target page.
+     *  Sends `Page.getFrameTree` — a page-level command that works on
+     *  per-tab CDP connections (chrome.debugger.attach / Chrome Extension
+     *  relay) where browser-level commands are not available.
      *
-     *  Concerns:
-     *  - Requires a live V8 context: fails during page navigation, when the
-     *    main thread is blocked by a synchronous dialog (alert/confirm/
-     *    prompt), or before Page.enable has initialised the runtime.
-     *  - These transient failures look identical to a genuinely dead page,
-     *    so callers must tolerate false negatives or layer this behind
-     *    transport-level checks (isBrowserAlive / isTargetAlive) first.
-     *  - Currently unused in the codebase; kept as part of the health-check
-     *    API for callers that need to distinguish V8 health specifically. */
+     *  Unlike `isV8Alive`, this does NOT require a JavaScript execution
+     *  context — it works on every page type including about:blank, image
+     *  documents, and restricted internal pages.  This makes it the
+     *  preferred health check for per-tab connections. */
+    override suspend fun isPageAlive(): Boolean {
+        return runCatching { command("Page.getFrameTree") }.isSuccess
+    }
+
     override suspend fun isV8Alive(): Boolean {
         return runCatching {
             command("Runtime.evaluate", mapOf("expression" to "1+1"))
