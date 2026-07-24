@@ -935,15 +935,6 @@ pub fn resolve_ref(raw_ref: &str) -> String {
 // Table formatting utility
 // ---------------------------------------------------------------------------
 
-/// Column separator style for table rendering.
-#[derive(Clone, Copy)]
-pub enum TableSep {
-    /// `" | "` between columns, `-+-` junctions in the separator row.
-    Pipes,
-    /// `"  "` (two spaces) between columns, dashes only in the separator row.
-    Spaces,
-}
-
 /// A table renderer that auto-sizes columns from header and row content.
 ///
 /// # Example
@@ -959,7 +950,6 @@ pub enum TableSep {
 pub struct Table {
     headers: Vec<String>,
     rows: Vec<Vec<String>>,
-    separator: TableSep,
     min_widths: Vec<usize>,
     /// Per-column maximum widths; a value of `0` means no cap.
     max_widths: Vec<usize>,
@@ -974,17 +964,10 @@ impl Table {
         Self {
             headers: headers.iter().map(|h| h.to_string()).collect(),
             rows: Vec::new(),
-            separator: TableSep::Pipes,
             min_widths: vec![0; n],
             max_widths: vec![0; n],
             truncate: false,
         }
-    }
-
-    /// Set the column separator style (default: `Pipes`).
-    pub fn separator(mut self, sep: TableSep) -> Self {
-        self.separator = sep;
-        self
     }
 
     /// Set minimum column widths.
@@ -1086,10 +1069,7 @@ impl Table {
             return String::new();
         }
 
-        let (col_sep, dash_junction): (&str, &str) = match self.separator {
-            TableSep::Pipes => (" | ", "-+-"),
-            TableSep::Spaces => ("  ", "  "),
-        };
+        let (col_sep, dash_junction): (&str, &str) = (" | ", "-+-");
 
         let mut out = String::new();
 
