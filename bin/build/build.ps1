@@ -201,7 +201,7 @@ function Write-RustInfo {
 function Write-Help {
   @"
 
-Build script for Browser4 — Maven + optional Rust CLI frontend
+Build script for Browser4 — Maven + optional Rust CLI + Chrome Extension
 
 Usage:
   build.ps1 [flags]
@@ -220,6 +220,9 @@ Flags:
   --cli                         Build Rust CLI frontend only (skip Maven)
   -ac, --also-cli               Also build the Rust CLI frontend
                                 (run after Maven, if Maven is not skipped)
+  -ext, --extension             Build chrome extension only (skip Maven)
+  -ae, --also-extension         Also build the chrome extension
+                                (run after Maven, if Maven is not skipped)
   -clean, --clean               Run `mvn clean` before building
                                 (equivalent to mvn clean install ...)
   -h, --help                    Print this help message
@@ -231,6 +234,7 @@ Examples:
   .\bin\build\build.ps1 -main -test
   .\bin\build\build.ps1 --all-modules -ac
   .\bin\build\build.ps1 --cli
+  .\bin\build\build.ps1 --extension
   .\bin\build\build.ps1 -pl browser4-core,browser4-rest -X
   .\bin\build\build.ps1 --resume
 "@
@@ -306,6 +310,30 @@ function Invoke-MavenBuild {
   }
 }
 
+function Write-NodeInfo {
+  $lines = [System.Collections.ArrayList]::new()
+
+  [void]$lines.Add("")
+  [void]$lines.Add("==============================================")
+  [void]$lines.Add("  NODE.JS / NPM TOOLCHAIN")
+  [void]$lines.Add("==============================================")
+  [void]$lines.Add("")
+
+  $nodeCmd = Get-Command node -ErrorAction SilentlyContinue
+  if ($nodeCmd) {
+    [void]$lines.Add("[Node]      $(node --version 2>$null)")
+    [void]$lines.Add("[npm]       $(npm --version 2>$null)")
+    [void]$lines.Add("[node path] $($nodeCmd.Source)")
+  }
+  else {
+    [void]$lines.Add("[Node]      NOT INSTALLED — --extension builds will be skipped")
+  }
+  [void]$lines.Add("")
+
+  Write-Host ($lines -join "`n")
+  return $lines -join "`n"
+}
+
 function Invoke-CargoBuild {
   param(
     [string]$Directory,
@@ -331,6 +359,55 @@ function Invoke-CargoBuild {
     & cargo build --release --locked
     if ($LASTEXITCODE -ne 0) {
       throw "Cargo build failed in $Directory (exit code $LASTEXITCODE)"
+    }
+  }
+  finally {
+    Pop-Location
+  }
+}
+
+# ═══════════════════════════════════════════════════════
+# Chrome Extension build (Node.js / Vite)
+# ═══════════════════════════════════════════════════════
+function Invoke-ExtensionBuild {
+  param(
+    [string]$Directory,
+    [bool]$RunTests
+  )
+
+  $nodeCmd = Get-Command node -ErrorAction SilentlyContinue
+  if (-not $nodeCmd) {
+    throw "node is not installed or not in PATH — cannot build chrome extension"
+  }
+
+  $npmCmd = Get-Command npm -ErrorAction SilentlyContinue
+  if (-not $npmCmd) {
+    throw "npm is not installed or not in PATH — cannot build chrome extension"
+  }
+
+  Push-Location $Directory
+  try {
+    # Install dependencies if node_modules is missing
+    if (-not (Test-Path "node_modules")) {
+      Write-Host "[EXTENSION] npm install" -ForegroundColor Cyan
+      & npm install
+      if ($LASTEXITCODE -ne 0) {
+        throw "npm install failed in $Directory (exit code $LASTEXITCODE)"
+      }
+    }
+
+    if ($RunTests) {
+      Write-Host "[EXTENSION] npm test" -ForegroundColor Cyan
+      & npm test
+      if ($LASTEXITCODE -ne 0) {
+        throw "Extension tests failed in $Directory (exit code $LASTEXITCODE)"
+      }
+    }
+
+    Write-Host "[EXTENSION] npm run build" -ForegroundColor Cyan
+    & npm run build
+    if ($LASTEXITCODE -ne 0) {
+      throw "Extension build failed in $Directory (exit code $LASTEXITCODE)"
     }
   }
   finally {
@@ -496,6 +573,8 @@ $ResumeFromFailure = $false
 $DebugMode = $false
 $CliOnly = $false
 $AlsoCli = $false
+$ExtOnly = $false
+$AlsoExt = $false
 $RunClean = $false
 $Projects = $null
 $AdditionalMvnArgs = @()
@@ -526,6 +605,10 @@ while ($i -lt $args.Count) {
     '--cli'                 { $CliOnly = $true }
     '-ac'                   { $AlsoCli = $true }
     '--also-cli'            { $AlsoCli = $true }
+    '-ext'                  { $ExtOnly = $true }
+    '--extension'           { $ExtOnly = $true }
+    '-ae'                   { $AlsoExt = $true }
+    '--also-extension'      { $AlsoExt = $true }
     '-clean'                { $RunClean = $true }
     '--clean'               { $RunClean = $true }
     '-h'                    { $ShowHelp = $true }
@@ -562,8 +645,12 @@ if ($args.Count -eq 0) {
 # ═══════════════════════════════════════════════════════
 $sysInfo = Write-SystemInfo
 $rustInfo = ""
+$nodeInfo = ""
 if ($CliOnly -or $AlsoCli) {
   $rustInfo = Write-RustInfo
+}
+if ($ExtOnly -or $AlsoExt) {
+  $nodeInfo = Write-NodeInfo
 }
 
 # --- Init build-state directory ---
@@ -583,6 +670,7 @@ $sep
 # --- Write environment snapshot for AI diagnosis ---
 $envSnapshot = $sysInfo
 if ($rustInfo) { $envSnapshot += "`n$rustInfo" }
+if ($nodeInfo) { $envSnapshot += "`n$nodeInfo" }
 Write-TrackedFile -Path $BuildEnvFile -Content $envSnapshot
 
 # --- Write initial status ---
@@ -664,7 +752,7 @@ foreach ($TargetDir in $StaleTargets) {
 # Execute build
 # ═══════════════════════════════════════════════════════
 try {
-  if (-not $CliOnly) {
+  if (-not $CliOnly -and -not $ExtOnly) {
     $CurrentBuildSystem = "Maven"
     Invoke-MavenBuild -Directory $repoRoot -BuildArgs $MvnOptions.ToArray()
   }
@@ -672,6 +760,11 @@ try {
   if ($CliOnly -or $AlsoCli) {
     $CurrentBuildSystem = "Cargo"
     Invoke-CargoBuild -Directory (Join-Path $repoRoot 'cli\browser4-cli') -RunTests (-not $SkipTests)
+  }
+
+  if ($ExtOnly -or $AlsoExt) {
+    $CurrentBuildSystem = "Extension"
+    Invoke-ExtensionBuild -Directory (Join-Path $repoRoot 'chrome-extension') -RunTests (-not $SkipTests)
   }
 
   # --- Success ---

@@ -117,6 +117,7 @@
             <modules>
                 <module>browser4-tests</module>
                 <module>browser4-tests/browser4-rest-tests</module>
+                <module>browser4-tests/browser4-e2e-tests</module>
                 <module>browser4-tests/pulsar-it-tests</module>
                 <module>browser4-tests/pulsar-e2e-tests</module>
             </modules>
@@ -131,6 +132,7 @@
             <modules>
                 <module>browser4-tests</module>
                 <module>browser4-tests/browser4-rest-tests</module>
+                <module>browser4-tests/browser4-e2e-tests</module>
                 <module>browser4-tests/pulsar-it-tests</module>
                 <module>browser4-tests/pulsar-e2e-tests</module>
 
@@ -577,7 +579,7 @@
 
         <dokka.version>1.9.10</dokka.version>
 
-        <jacoco-maven-plugin.version>0.8.11</jacoco-maven-plugin.version>
+        <jacoco-maven-plugin.version>0.8.15</jacoco-maven-plugin.version>
         <central-publishing-maven-plugin.version>0.9.0</central-publishing-maven-plugin.version>
 
         <version.maven-assembly-plugin>3.8.0</version.maven-assembly-plugin>
