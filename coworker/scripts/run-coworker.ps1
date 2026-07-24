@@ -632,12 +632,20 @@ Agent Log: $agentLogPath
                     # Check whether there is anything staged to commit
                     & git diff --cached --quiet 2>&1 | Out-Null
                     if ($LASTEXITCODE -ne 0) {
-                        $commitMsg = "fix(done): $workingBaseName"
-                        & git commit -m $commitMsg 2>&1 | Out-Null
-                        if ($LASTEXITCODE -eq 0) {
-                            Write-LogMessage "Auto-committed changes for finished task: $workingBaseName" INFO
-                        } else {
-                            Write-LogMessage "Git commit failed for task: $workingBaseName" WARN
+                        # Build a multi-line commit message: subject + file list from --stat
+                        $stat = & git diff --cached --stat 2>&1
+                        $commitBody = "fix(done): $workingBaseName`n`n$stat"
+                        $tmpCommitMsgFile = [System.IO.Path]::GetTempFileName()
+                        try {
+                            Set-Content -Path $tmpCommitMsgFile -Value $commitBody -Encoding UTF8
+                            & git commit -F $tmpCommitMsgFile 2>&1 | Out-Null
+                            if ($LASTEXITCODE -eq 0) {
+                                Write-LogMessage "Auto-committed changes for finished task: $workingBaseName" INFO
+                            } else {
+                                Write-LogMessage "Git commit failed for task: $workingBaseName" WARN
+                            }
+                        } finally {
+                            Remove-Item $tmpCommitMsgFile -ErrorAction SilentlyContinue
                         }
                     } else {
                         Write-LogVerbose "No changes to commit for task: $workingBaseName"
