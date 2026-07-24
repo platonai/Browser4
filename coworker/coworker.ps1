@@ -20,6 +20,7 @@
 #   cancel   Move a task back to draft or remove it
 #   commit   Git commit workspace changes (no push)
 #   push     Commit and push to remote
+#   fix      Pick a task from 1ready/ and execute it once
 # ============================================================================
 
 param(
@@ -62,6 +63,9 @@ Commands:
 
   push      Commit (AI-generated msg) and push to remote
             coworker push [-Message <str>] [-Force] [-NoPull]
+
+  fix       Pick a task from 1ready/ and execute it once
+            coworker fix [-Path <path>] [-Name <str>] [-Latest]
 
 Run "coworker <command>" with no additional arguments to see
 command-specific help.
@@ -1400,6 +1404,90 @@ $diffBody
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# Subcommand: fix — Pick a task from 1ready/ and execute it once
+# ═══════════════════════════════════════════════════════════════════════════════
+
+function Invoke-Fix {
+    param(
+        [string]$Path = '',
+        [string]$Name = '',
+        [switch]$Latest
+    )
+
+    $dirs = Get-TaskDirectories
+    $readyDir = $dirs.Ready
+
+    # Resolve which task to execute
+    $taskFile = ''
+    if ($Path) {
+        if (-not (Test-Path -LiteralPath $Path)) {
+            Write-ConsoleLine -Message "Error: File not found: $Path" -ForegroundColor Red
+            exit 1
+        }
+        $taskFile = (Resolve-Path $Path).Path
+    }
+    elseif ($Name) {
+        $taskFile = Resolve-SingleTaskFile -Name $Name -State 'ready'
+        if (-not $taskFile) { exit 1 }
+    }
+    else {
+        # Pick a task from 1ready/ — oldest first (FIFO), or -Latest for newest
+        if (-not (Test-Path $readyDir)) {
+            Write-ConsoleLine -Message "No tasks in 1ready/." -ForegroundColor Yellow
+            exit 0
+        }
+        $tasks = @(Get-ChildItem -Path $readyDir -File -ErrorAction SilentlyContinue |
+            Where-Object { -not (Test-CoworkerIgnoredFile -Item $_) })
+
+        if ($tasks.Count -eq 0) {
+            Write-ConsoleLine -Message "No tasks in 1ready/." -ForegroundColor Yellow
+            exit 0
+        }
+
+        if ($Latest) {
+            $taskFile = ($tasks | Sort-Object LastWriteTime -Descending | Select-Object -First 1).FullName
+            Write-ConsoleLine -Message "Picked newest task: $(Split-Path -Leaf $taskFile)" -ForegroundColor DarkGray
+        }
+        else {
+            # Default: oldest first (FIFO)
+            $taskFile = ($tasks | Sort-Object LastWriteTime | Select-Object -First 1).FullName
+            Write-ConsoleLine -Message "Picked oldest task: $(Split-Path -Leaf $taskFile)" -ForegroundColor DarkGray
+        }
+    }
+
+    Write-ConsoleLine -Message "Fixing task: $taskFile" -ForegroundColor Cyan
+
+    # Locate run-coworker.ps1
+    $runCoworkerScript = Join-Path $PSScriptRoot 'scripts\run-coworker.ps1'
+    if (-not (Test-Path $runCoworkerScript)) {
+        Write-ConsoleLine -Message "Error: run-coworker.ps1 not found at $runCoworkerScript" -ForegroundColor Red
+        exit 1
+    }
+
+    # Launch run-coworker.ps1 with the task file, streaming output to the terminal
+    $powerShell = if ($IsWindows) {
+        if (Get-Command 'pwsh.exe' -ErrorAction SilentlyContinue) { 'pwsh.exe' }
+        else { 'powershell.exe' }
+    }
+    else {
+        'pwsh'
+    }
+
+    Write-ConsoleLine -Message "Starting Coworker task runner..." -ForegroundColor Cyan
+
+    $process = Start-Process -FilePath $powerShell `
+        -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $runCoworkerScript, '-TaskFile', $taskFile) `
+        -PassThru -NoNewWindow -Wait
+
+    if ($process.ExitCode -ne 0) {
+        Write-ConsoleLine -Message "Task runner exited with code $($process.ExitCode)." -ForegroundColor Yellow
+    }
+    else {
+        Write-ConsoleLine -Message "Task runner completed." -ForegroundColor Green
+    }
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # Subcommand-specific help
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -1581,6 +1669,28 @@ Examples:
   coworker push -Force
 '@
         }
+        'fix' {
+            @'
+Usage: coworker fix [options]
+
+Pick a task from 1ready/ and execute it once via the Coworker
+task runner (run-coworker.ps1). The task goes through the full
+pipeline: rename, execute, move to done, and auto-commit.
+
+Without options, picks the oldest task (FIFO) from 1ready/.
+
+Options:
+  -Path <path>   Execute a specific task file (can be outside 1ready/)
+  -Name <str>    Find and execute a task by name in 1ready/
+  -Latest        Pick the most recently modified task instead of oldest
+
+Examples:
+  coworker fix
+  coworker fix -Latest
+  coworker fix -Name my-task
+  coworker fix -Path 0draft/experimental-task.md
+'@
+        }
     }
 }
 
@@ -1741,6 +1851,11 @@ try {
             Invoke-Push -Message (Get-Arg $subArgs 'Message') `
                 -Force:(Get-SwitchArg $subArgs 'Force') `
                 -NoPull:(Get-SwitchArg $subArgs 'NoPull')
+        }
+        'fix' {
+            Invoke-Fix -Path (Get-Arg $subArgs 'Path') `
+                -Name (Get-Arg $subArgs 'Name') `
+                -Latest:(Get-SwitchArg $subArgs 'Latest')
         }
         default {
             Write-ConsoleLine -Message "Unknown command: $Command" -ForegroundColor Red
