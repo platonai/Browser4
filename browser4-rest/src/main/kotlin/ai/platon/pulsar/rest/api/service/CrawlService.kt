@@ -26,6 +26,7 @@ import org.springframework.stereotype.Service
 import java.nio.file.Path
 import java.sql.ResultSet
 import java.util.*
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 
 data class CrawlRequest @JsonCreator constructor(
@@ -387,7 +388,7 @@ class CrawlService(
                     status = ResourceStatus.getStatusText(ResourceStatus.SC_OK),
                     pagesFound = 0,
                     diagnostic = message
-                )
+                ))
                 return emptyList()
             }
 
