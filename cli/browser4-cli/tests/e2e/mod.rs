@@ -1722,9 +1722,11 @@ struct CliRunResult {
     exit_code: i32,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize)]
 struct TimedStep {
     name: String,
+    duration_secs: f64,
+    #[serde(skip)]
     duration: Duration,
 }
 
@@ -1732,14 +1734,17 @@ impl TimedStep {
     fn new(name: impl Into<String>, duration: Duration) -> Self {
         Self {
             name: name.into(),
+            duration_secs: duration.as_secs_f64(),
             duration,
         }
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize)]
 struct TimingReport {
     name: String,
+    duration_secs: f64,
+    #[serde(skip)]
     total: Duration,
     steps: Vec<TimedStep>,
 }
@@ -1748,13 +1753,14 @@ impl TimingReport {
     fn new(name: impl Into<String>, total: Duration, steps: Vec<TimedStep>) -> Self {
         Self {
             name: name.into(),
+            duration_secs: total.as_secs_f64(),
             total,
             steps,
         }
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize)]
 struct FailureDetail {
     phase: String,
     expected: String,
@@ -3345,6 +3351,74 @@ fn save_last_failed_scenarios(names: impl IntoIterator<Item = String>) {
     fs::write(&path, format!("{payload}\n")).unwrap_or_else(|error| {
         panic!(
             "failed to write failed scenarios to {}: {error}",
+            path.display()
+        )
+    });
+}
+
+fn test_report_file_path() -> PathBuf {
+    e2e_temp_root_dir().join("test-report.json")
+}
+
+fn save_test_report(
+    timings: &[TimingReport],
+    scenario_failures: &[(String, FailureDetail)],
+    failed_scenario_names: HashSet<String>,
+    passed: usize,
+    failed: usize,
+    filtered_out: usize,
+    total: usize,
+) {
+    let path = test_report_file_path();
+    let parent = path
+        .parent()
+        .expect("test-report path should always have a parent directory");
+    fs::create_dir_all(parent).unwrap_or_else(|error| {
+        panic!(
+            "failed to create test-report directory {}: {error}",
+            parent.display()
+        )
+    });
+
+    let scenarios: Vec<serde_json::Value> = timings
+        .iter()
+        .map(|t| {
+            serde_json::json!({
+                "name": t.name,
+                "result": if failed_scenario_names.contains(&t.name) { "fail" } else { "pass" },
+                "duration_secs": t.duration_secs,
+                "steps": t.steps,
+            })
+        })
+        .collect();
+
+    let failures: Vec<serde_json::Value> = scenario_failures
+        .iter()
+        .map(|(scenario_name, failure)| {
+            serde_json::json!({
+                "scenario": scenario_name,
+                "phase": failure.phase,
+                "expected": failure.expected,
+                "actual": failure.actual,
+                "message": failure.message,
+            })
+        })
+        .collect();
+
+    let report = serde_json::json!({
+        "passed": passed,
+        "failed": failed,
+        "filtered_out": filtered_out,
+        "total": total,
+        "scenarios": scenarios,
+        "failures": failures,
+    });
+
+    let payload = serde_json::to_string_pretty(&report)
+        .expect("failed to serialize test-report JSON");
+    fs::write(&path, format!("{payload}\n")).unwrap_or_else(|error| {
+        panic!(
+            "failed to write test report to {}: {error}",
             path.display()
         )
     });
@@ -5202,6 +5276,17 @@ fn main() {
             }
             let failed_scenario_count = failed_scenarios.len();
             let passed = total_tests.saturating_sub(failed_scenario_count);
+
+            save_test_report(
+                &timings,
+                &scenario_failures,
+                failed_scenarios.iter().cloned().collect::<HashSet<_>>(),
+                passed,
+                failed_scenario_count,
+                filtered_out,
+                total_tests,
+            );
+
             if failed_scenario_count == 0 {
                 println!(
                     "test result: ok. {} passed; 0 failed; 0 ignored; 0 measured; {} filtered out",

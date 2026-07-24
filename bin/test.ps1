@@ -361,8 +361,20 @@ function Invoke-Browser4CliTests([string[]]$additionalArgs) {
         Update-TestSessionSystem -RepoRoot $repoRoot -SessionPath $script:SessionPath
         $status = if ($exitCode -eq 0) { 'pass' } else { 'fail' }
         $dur = [math]::Round($sw.Elapsed.TotalSeconds, 1)
+
+        # Attach the structured Rust test report if cargo wrote one.
+        # The E2E harness writes test-report.json next to last-failed-scenarios.json
+        # in the e2e temp directory (%TEMP%/browser4/browser4-cli/e2e/).
+        $reportPath = if ($IsWindows -or $env:OS -eq 'Windows_NT') {
+            Join-Path $env:TEMP 'browser4' 'browser4-cli' 'e2e' 'test-report.json'
+        } else {
+            Join-Path ([System.IO.Path]::GetTempPath()) 'browser4' 'browser4-cli' 'e2e' 'test-report.json'
+        }
+        $failureReport = if (Test-Path -LiteralPath $reportPath) { $reportPath } else { '' }
+
         Update-TestSessionResult -RepoRoot $repoRoot -TestKey 'cli' `
             -Status $status -ExitCode $exitCode -DurationSec $dur `
+            -FailureReport $failureReport `
             -SessionPath $script:SessionPath
     }
 
