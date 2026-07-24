@@ -19,7 +19,7 @@
     </parent>
 
     <artifactId>pulsar-it-tests</artifactId>
-    <name>Browser4 IT Tests</name>
+    <name>Pulsar IT Tests</name>
 
     <build>
         <defaultGoal>verify</defaultGoal>

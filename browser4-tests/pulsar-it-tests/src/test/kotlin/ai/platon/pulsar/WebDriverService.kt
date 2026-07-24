@@ -97,13 +97,32 @@ open class WebDriverService(
         }
     }
 
+    /**
+     * Waits for __pulsar_utils__ to be available after navigation.
+     *
+     * After frame navigation, the isolated world context is cleared and recreated asynchronously.
+     * In fast-loading environments (e.g. CI headless mode), waitForNavigation may detect the
+     * URL change before the onFrameNavigated handler has finished recreating the isolated world
+     * and re-injecting the runtime. This helper retries with a short delay to bridge that gap.
+     */
+    suspend fun waitForPulsarUtils(driver: WebDriver, maxRetries: Int = 10, delayMs: Long = 100) {
+        repeat(maxRetries) { attempt ->
+            val result = driver.evaluateValue("typeof(__pulsar_utils__)")
+            if (result?.toString() == "function") return
+            if (attempt < maxRetries - 1) {
+                delay(delayMs.milliseconds)
+            }
+        }
+        val finalResult = driver.evaluateValue("typeof(__pulsar_utils__)")
+        assertEquals("function", finalResult?.toString(), "__pulsar_utils__ is not injected properly")
+    }
+
     open suspend fun open(url: String, driver: WebDriver, scrollCount: Int = 3) {
         driver.navigate(url)
 
         driver.waitForNavigation()
         driver.waitForSelector("body")
-        val result = driver.evaluateValue("typeof(__pulsar_utils__)")
-        assertEquals("function", result?.toString(), "__pulsar_utils__ is not injected properly")
+        waitForPulsarUtils(driver)
 
         driver.waitForNavigation()
         var n = scrollCount
@@ -118,9 +137,7 @@ open class WebDriverService(
         driver.navigate(url)
         driver.waitForNavigation()
         driver.waitForSelector("body")
-
-        val result = driver.evaluateValue("typeof(__pulsar_utils__)")
-        assertEquals("function", result?.toString(), "__pulsar_utils__ is not injected properly")
+        waitForPulsarUtils(driver)
 
         // make sure all metadata are available
         driver.evaluate("__pulsar_utils__.waitForReady()")
@@ -150,8 +167,7 @@ open class FastWebDriverService(
 
         driver.waitForNavigation()
         driver.waitForSelector("body")
-        val result = driver.evaluateValue("typeof(__pulsar_utils__)")
-        assertEquals("function", result?.toString(), "__pulsar_utils__ is not injected properly")
+        waitForPulsarUtils(driver)
 
         // make sure all metadata are available
         driver.evaluateDetail("__pulsar_utils__.waitForReady()")
