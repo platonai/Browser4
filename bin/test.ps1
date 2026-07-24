@@ -168,6 +168,8 @@ function Print-Usage {
     Write-Host "  rws         Show this help (requires --scenarios or --task)"
     Write-Host "              With --scenarios: run all scenario tasks via run-tests.ps1"
     Write-Host "              With --task <file>: run a single task via run-task.ps1"
+    Write-Host "  session     List or view persisted test sessions (list, view)"
+    Write-Host "              list --all | --count N   Paginate session listing (default: 15)"
     Write-Host ""
     Write-Host "  RWS flags (accepted after 'rws'):"
     Write-Host "    --scenarios [names...]  Run agent-scenario tasks (requires claude or kimi)"
@@ -207,12 +209,14 @@ function Print-Usage {
     Write-Host "  test.ps1 rws --scenarios --production  # Run scenarios against installed CLI"
     Write-Host "  test.ps1 rws --task tasks/real-world/generic/amazon.md   # Run a single task file directly"
     Write-Host "  test.ps1 main                       # Run all Browser4 main tests"
+    Write-Host "  test.ps1 session list               # List all past test sessions"
+    Write-Host "  test.ps1 session view 20260724T1917 # View a specific session (prefix match)"
     Write-Host '  test.ps1 it -pl browser4-core       # Pass additional Maven args through'
     exit $ExitCode
 }
 
 function Exit-UnknownTestType([string]$testType) {
-    Write-Error "Unknown test type '$testType'. Valid test types: fast, it, e2e, cli, browser4-cli, main, mock-site, server, rest, skills, mcp, ps, rws, resume."
+    Write-Error "Unknown test type '$testType'. Valid test types: fast, it, e2e, cli, browser4-cli, main, mock-site, server, rest, skills, mcp, ps, rws, resume, session."
     exit 1
 }
 
@@ -1093,6 +1097,243 @@ function Invoke-ResumeTests([string[]]$additionalArgs) {
     Invoke-CommandAndReport -ScriptBlock { & $mvnwScript @mvnTestArgs } -Label 'Resume tests'
 }
 
+function Invoke-SessionCommand([string[]]$additionalArgs) {
+    <#
+    .SYNOPSIS
+        List or view persisted test sessions from .test-sessions/.
+
+    .DESCRIPTION
+        Operates on the .test-sessions/ directory in the repo root.
+        Subcommands:
+          list              List all past test sessions in a summary table.
+          view <sessionId>  Pretty-print a single session's JSON.
+                            Supports prefix matching on the timestamp ID.
+
+        Without a subcommand, shows session-specific usage.
+    #>
+    $sessionsDir = Join-Path $repoRoot '.test-sessions'
+
+    $subcommand = if ($additionalArgs.Count -gt 0 -and -not $additionalArgs[0].StartsWith('-')) {
+        $additionalArgs[0]
+    } else { '' }
+
+    # Select-Object -Skip keeps result as array (avoids PowerShell if-statement unwrap)
+    $subArgs = @($additionalArgs | Select-Object -Skip 1)
+
+    # ── Help (no subcommand or unknown) ───────────────────────────────
+    if ($subcommand -eq '' -or $subcommand -notin @('list', 'view')) {
+        if ($subcommand -ne '' -and $subcommand -notin @('list', 'view')) {
+            Write-Error "Unknown session subcommand '$subcommand'. Valid subcommands: list, view"
+        }
+        Write-Host ''
+        Write-Host 'Usage: test.ps1 session <subcommand> [options]'
+        Write-Host ''
+        Write-Host 'Subcommands:'
+        Write-Host '  list              List past test sessions (default: last 15)'
+        Write-Host '                      --all        Show all sessions'
+        Write-Host '                      --count N    Show last N sessions'
+        Write-Host '  view <sessionId>  Show the full JSON for a session'
+        Write-Host ''
+        Write-Host 'Options:'
+        Write-Host '  -Show             Print the command, do not execute'
+        Write-Host '  -DryRun           Same as -Show for session commands'
+        Write-Host ''
+        Write-Host 'Examples:'
+        Write-Host '  test.ps1 session list'
+        Write-Host '  test.ps1 session view 20260724T1917'
+        Write-Host '  test.ps1 session view 20260724T1917366034791Z'
+        exit 0
+    }
+
+    # ── Guard: .test-sessions directory must exist ────────────────────
+    if (-not (Test-Path -LiteralPath $sessionsDir -PathType Container)) {
+        Write-Host 'No .test-sessions directory found. Run some tests first.' -ForegroundColor Yellow
+        exit 0
+    }
+
+    # ═══════════════════════════════════════════════════════════════════
+    # session list [--all] [--count N]
+    # ═══════════════════════════════════════════════════════════════════
+    if ($subcommand -eq 'list') {
+        if ($script:Show -or $script:DryRun) {
+            Write-Host "[$(if ($script:Show) { 'SHOW' } else { 'DRY RUN' })] Would list sessions in: $sessionsDir"
+            return
+        }
+
+        # ── Parse list-specific flags ──────────────────────────────────
+        $listAll = $false
+        $listCount = 0  # 0 = use default
+
+        $i = 0
+        while ($i -lt $subArgs.Count) {
+            $a = $subArgs[$i]
+            if ($a -eq '--all') {
+                $listAll = $true
+                $i++
+            } elseif ($a -in @('--count', '-Count', '-c') -and ($i + 1) -lt $subArgs.Count) {
+                $val = $subArgs[$i + 1]
+                if ($val -match '^\d+$' -and [int]$val -gt 0) {
+                    $listCount = [int]$val
+                    $i += 2
+                } else {
+                    Write-Error "session list --count requires a positive integer, got: $val"
+                    exit 1
+                }
+            } else {
+                Write-Error "Unknown session list flag: $a. Valid flags: --all, --count N"
+                exit 1
+            }
+        }
+
+        $sessionDirs = @(Get-ChildItem -Path $sessionsDir -Directory |
+            Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName 'test-session.json') -PathType Leaf } |
+            Sort-Object Name -Descending)
+
+        if ($sessionDirs.Count -eq 0) {
+            Write-Host 'No test sessions found in .test-sessions/.' -ForegroundColor Yellow
+            exit 0
+        }
+
+        # ── Paginate ───────────────────────────────────────────────────
+        $defaultLimit = 15
+        $limit = if ($listAll) { $sessionDirs.Count }
+                 elseif ($listCount -gt 0) { [math]::Min($listCount, $sessionDirs.Count) }
+                 else { [math]::Min($defaultLimit, $sessionDirs.Count) }
+
+        $shown = $sessionDirs | Select-Object -First $limit
+        $remaining = $sessionDirs.Count - $limit
+
+        # ── Heading ────────────────────────────────────────────────────
+        Write-Host ''
+        if ($listAll) {
+            Write-Host "Test sessions ($($sessionDirs.Count) total, newest first):" -ForegroundColor Cyan
+        } elseif ($remaining -gt 0) {
+            Write-Host "Test sessions (showing $limit of $($sessionDirs.Count), newest first):" -ForegroundColor Cyan
+        } else {
+            Write-Host "Test sessions ($($sessionDirs.Count) total, newest first):" -ForegroundColor Cyan
+        }
+        Write-Host ''
+
+        # ── Print rows ─────────────────────────────────────────────────
+        foreach ($dir in $shown) {
+            $sessionId = $dir.Name
+            $sessionPath = Join-Path $dir.FullName 'test-session.json'
+
+            try {
+                $json = Get-Content -LiteralPath $sessionPath -Raw -Encoding UTF8 -ErrorAction Stop
+                $obj = $json | ConvertFrom-Json -ErrorAction Stop
+            } catch {
+                Write-Host "  $(('▶' + ' ' + $sessionId).PadRight(46)) ⚠ unreadable" -ForegroundColor DarkYellow
+                continue
+            }
+
+            # Friendly timestamp from the directory name (yyyyMMddTHHmmssfffffffZ)
+            $friendlyDate = ''
+            try {
+                $ts = $sessionId -replace '^(\d{8})T(\d{2})(\d{2})(\d{2}).*$', '$1 $2:$3:$4'
+                $friendlyDate = "$ts UTC"
+            } catch { $friendlyDate = $sessionId }
+
+            # Branch / commit
+            $branch = if ($obj.repository -and $obj.repository.branch) { $obj.repository.branch } else { '?' }
+            $commit = if ($obj.repository -and $obj.repository.commit) { $obj.repository.commit } else { '?' }
+
+            # Test overview
+            $testSummaries = @()
+            if ($obj.tests) {
+                foreach ($prop in $obj.tests.PSObject.Properties) {
+                    $key = $prop.Name
+                    $val = $prop.Value
+                    if (-not $val) { continue }
+                    $status = if ($val.lastStatus -eq 'pass') { '✅' }
+                    elseif ($val.lastStatus -eq 'fail') { '❌' }
+                    else { '·' }
+                    $testSummaries += "$status$key"
+                }
+            }
+
+            $testLine = if ($testSummaries.Count -gt 0) { ($testSummaries -join '  ') } else { '(no test results)' }
+
+            # ── Print session row ──────────────────────────────────────
+            Write-Host "  ▶ $sessionId" -ForegroundColor White
+            Write-Host "    Date:   $friendlyDate"
+            Write-Host "    Branch: $branch  Commit: $commit"
+            Write-Host "    Tests:  $testLine"
+            Write-Host ''
+        }
+
+        # ── Footer ─────────────────────────────────────────────────────
+        if ($remaining -gt 0) {
+            Write-Host "  … $remaining more session(s). Use " -NoNewline
+            Write-Host '--all' -ForegroundColor Yellow -NoNewline
+            Write-Host ' to list all, or ' -NoNewline
+            Write-Host '--count N' -ForegroundColor Yellow -NoNewline
+            Write-Host ' to show N entries.' -NoNewline
+            Write-Host ''
+            Write-Host ''
+        }
+
+        exit 0
+    }
+
+    # ═══════════════════════════════════════════════════════════════════
+    # session view <sessionId>
+    # ═══════════════════════════════════════════════════════════════════
+    if ($subcommand -eq 'view') {
+        if ($subArgs.Count -eq 0) {
+            Write-Error "session view requires a <sessionId>. Use 'session list' to see available sessions."
+            exit 1
+        }
+
+        $sessionIdPattern = $subArgs[0]
+
+        if ($script:Show -or $script:DryRun) {
+            Write-Host "[$(if ($script:Show) { 'SHOW' } else { 'DRY RUN' })] Would view session: $sessionIdPattern"
+            return
+        }
+
+        # Find matching session directories (support prefix matching)
+        $matches = @(Get-ChildItem -Path $sessionsDir -Directory |
+            Where-Object {
+                $_.Name -like "$sessionIdPattern*" -and
+                (Test-Path -LiteralPath (Join-Path $_.FullName 'test-session.json') -PathType Leaf)
+            } |
+            Sort-Object Name)
+
+        if ($matches.Count -eq 0) {
+            Write-Error "No session found matching '$sessionIdPattern'. Use 'session list' to see available sessions."
+            exit 1
+        }
+
+        if ($matches.Count -gt 1) {
+            Write-Host "Multiple sessions match '$sessionIdPattern':" -ForegroundColor Yellow
+            foreach ($m in $matches) {
+                Write-Host "  $($m.Name)"
+            }
+            Write-Host ''
+            Write-Host 'Please provide a more specific session ID.' -ForegroundColor Yellow
+            exit 1
+        }
+
+        $sessionDir = $matches[0]
+        $sessionFile = Join-Path $sessionDir.FullName 'test-session.json'
+
+        try {
+            $json = Get-Content -LiteralPath $sessionFile -Raw -Encoding UTF8 -ErrorAction Stop
+            Write-Host ''
+            Write-Rule
+            Write-Host "Session: $($sessionDir.Name)" -ForegroundColor Cyan
+            Write-Rule
+            Write-Host ($json | ConvertFrom-Json | ConvertTo-Json -Depth 6)
+        } catch {
+            Write-Error "Failed to read session file: $_"
+            exit 1
+        }
+
+        exit 0
+    }
+}
+
 # ═══════════════════════════════════════════════════════════════════
 # Argument parsing
 # ═══════════════════════════════════════════════════════════════════
@@ -1116,6 +1357,7 @@ $testTypeMap = @{
     'rws'           = 'rws'
     'ps'            = 'ps'
     'resume'        = 'resume'
+    'session'       = 'session'
 }
 
 $testTypes = @()
@@ -1170,6 +1412,8 @@ foreach ($arg in $ScriptArgs) {
     # Known test type (only in test-type mode)
     if ($parsingTestTypes -and $testTypeMap.ContainsKey($arg)) {
         $testTypes += $arg
+        # Session and resume: subsequent tokens are subcommands / args, not test types
+        if ($arg -in @('session', 'resume')) { $parsingTestTypes = $false }
         continue
     }
 
@@ -1214,6 +1458,16 @@ if ($testTypes -contains 'resume') {
         exit 1
     }
     Invoke-ResumeTests -additionalArgs $additionalArgs
+    exit 0
+}
+
+# Handle 'session' test type: list or view persisted test sessions
+if ($testTypes -contains 'session') {
+    if ($testTypes.Count -gt 1) {
+        Write-Error "'session' must be the only test type. It operates on the .test-sessions/ directory."
+        exit 1
+    }
+    Invoke-SessionCommand -additionalArgs $additionalArgs
     exit 0
 }
 
