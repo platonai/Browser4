@@ -931,6 +931,210 @@ pub fn resolve_ref(raw_ref: &str) -> String {
     trimmed.to_string()
 }
 
+// ---------------------------------------------------------------------------
+// Table formatting utility
+// ---------------------------------------------------------------------------
+
+/// Column separator style for table rendering.
+#[derive(Clone, Copy)]
+pub enum TableSep {
+    /// `" | "` between columns, `-+-` junctions in the separator row.
+    Pipes,
+    /// `"  "` (two spaces) between columns, dashes only in the separator row.
+    Spaces,
+}
+
+/// A table renderer that auto-sizes columns from header and row content.
+///
+/// # Example
+///
+/// ```ignore
+/// let table = Table::new(&["Name", "Status", "URL"])
+///     .min_widths(&[4, 6, 3])
+///     .max_widths(&[30, 8, 80])
+///     .truncate(true)
+///     .add_rows(&rows);
+/// println!("{}", table.render());
+/// ```
+pub struct Table {
+    headers: Vec<String>,
+    rows: Vec<Vec<String>>,
+    separator: TableSep,
+    min_widths: Vec<usize>,
+    /// Per-column maximum widths; a value of `0` means no cap.
+    max_widths: Vec<usize>,
+    truncate: bool,
+}
+
+impl Table {
+    /// Create a new table with the given headers.
+    /// Column widths will be at least as wide as each header.
+    pub fn new(headers: &[&str]) -> Self {
+        let n = headers.len();
+        Self {
+            headers: headers.iter().map(|h| h.to_string()).collect(),
+            rows: Vec::new(),
+            separator: TableSep::Pipes,
+            min_widths: vec![0; n],
+            max_widths: vec![0; n],
+            truncate: false,
+        }
+    }
+
+    /// Set the column separator style (default: `Pipes`).
+    pub fn separator(mut self, sep: TableSep) -> Self {
+        self.separator = sep;
+        self
+    }
+
+    /// Set minimum column widths.
+    ///
+    /// If the slice is shorter than the number of columns, remaining columns
+    /// keep their current minimum (0, meaning header length is the floor).
+    pub fn min_widths(mut self, widths: &[usize]) -> Self {
+        for (i, &w) in widths.iter().enumerate() {
+            if i < self.min_widths.len() {
+                self.min_widths[i] = w;
+            }
+        }
+        self
+    }
+
+    /// Set maximum column widths.
+    ///
+    /// A value of `0` means no cap. If the slice is shorter than the number
+    /// of columns, remaining columns keep their current maximum.
+    pub fn max_widths(mut self, widths: &[usize]) -> Self {
+        for (i, &w) in widths.iter().enumerate() {
+            if i < self.max_widths.len() {
+                self.max_widths[i] = w;
+            }
+        }
+        self
+    }
+
+    /// Enable or disable truncation of cell values that exceed their
+    /// computed column width (default: `false`).
+    ///
+    /// When enabled, overflowing cell values are cut to `width - 1` chars
+    /// and a `…` (U+2026) suffix is appended.
+    pub fn truncate(mut self, truncate: bool) -> Self {
+        self.truncate = truncate;
+        self
+    }
+
+    /// Add a single data row. The row must have the same number of cells as
+    /// there are headers; extra cells are ignored, missing cells are empty.
+    pub fn add_row(mut self, row: &[String]) -> Self {
+        let mut cells = row.to_vec();
+        cells.resize(self.headers.len(), String::new());
+        cells.truncate(self.headers.len());
+        self.rows.push(cells);
+        self
+    }
+
+    /// Add multiple data rows at once.
+    pub fn add_rows(mut self, rows: &[Vec<String>]) -> Self {
+        for row in rows {
+            self = self.add_row(row);
+        }
+        self
+    }
+
+    /// Compute final column widths from headers and data, respecting
+    /// min/max caps. Returns one width per column.
+    fn compute_widths(&self) -> Vec<usize> {
+        let n = self.headers.len();
+        let mut widths: Vec<usize> = self.headers.iter().map(|h| h.len()).collect();
+
+        for row in &self.rows {
+            for (i, cell) in row.iter().enumerate() {
+                if i < n {
+                    widths[i] = widths[i].max(cell.len());
+                }
+            }
+        }
+
+        for i in 0..n {
+            // Apply minimum
+            let min_w = if i < self.min_widths.len() {
+                self.min_widths[i]
+            } else {
+                0
+            };
+            widths[i] = widths[i].max(min_w);
+
+            // Apply maximum (0 = no cap)
+            let max_w = if i < self.max_widths.len() {
+                self.max_widths[i]
+            } else {
+                0
+            };
+            if max_w > 0 {
+                widths[i] = widths[i].min(max_w);
+            }
+        }
+
+        widths
+    }
+
+    /// Render the table to a `String`.
+    pub fn render(&self) -> String {
+        let widths = self.compute_widths();
+        let n = widths.len();
+        if n == 0 {
+            return String::new();
+        }
+
+        let (col_sep, dash_junction): (&str, &str) = match self.separator {
+            TableSep::Pipes => (" | ", "-+-"),
+            TableSep::Spaces => ("  ", "  "),
+        };
+
+        let mut out = String::new();
+
+        // Header row
+        for (i, h) in self.headers.iter().enumerate() {
+            if i > 0 {
+                out.push_str(col_sep);
+            }
+            out.push_str(&format!("{:<width$}", h, width = widths[i]));
+        }
+        out.push('\n');
+
+        // Separator row
+        for i in 0..n {
+            if i > 0 {
+                out.push_str(dash_junction);
+            }
+            let dash: String = std::iter::repeat('-').take(widths[i]).collect();
+            out.push_str(&dash);
+        }
+        out.push('\n');
+
+        // Data rows
+        for row in &self.rows {
+            for (i, cell) in row.iter().enumerate() {
+                if i >= n {
+                    break;
+                }
+                if i > 0 {
+                    out.push_str(col_sep);
+                }
+                let display = if self.truncate && cell.len() > widths[i] && widths[i] > 1 {
+                    format!("{}\u{2026}", &cell[..widths[i] - 1])
+                } else {
+                    cell.clone()
+                };
+                out.push_str(&format!("{:<width$}", display, width = widths[i]));
+            }
+            out.push('\n');
+        }
+
+        out
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -71,7 +71,7 @@ use state::{
     clear_all_state, clear_state, epoch_millis_to_display, format_async_task_list,
     format_timestamp_display, prune_async_tasks, read_async_tasks, read_state,
     resolve_default_state_dir, resolve_ref, summarize_async_tasks, track_async_task,
-    update_async_task_status, write_async_tasks, write_state, CliState, MousePosition,
+    update_async_task_status, write_async_tasks, write_state, CliState, MousePosition, Table,
 };
 
 const VERSION: &str = env!("BROWSER4_CLI_VERSION");
@@ -2625,92 +2625,26 @@ async fn handle_list(client: &Client, base_url: &str) -> Result<(), String> {
         }
     }
 
-    // ---- compute column widths from data (with caps) ----
-    let name_w = rows
-        .iter()
-        .map(|r| r.name.len())
-        .max()
-        .unwrap_or(4)
-        .max(4)
-        .min(30);
-    let sid_w = rows
-        .iter()
-        .map(|r| r.session_id.len())
-        .max()
-        .unwrap_or(10)
-        .max(10)
-        .min(40);
-    let status_w = 8; // "Active" / "Stale" / "Unknown"
-    let created_w = 19; // "YYYY-MM-DD HH:MM:SS"
-    let last_access_w = 19;
-    let conn_w = rows
-        .iter()
-        .map(|r| r.connection.len())
-        .max()
-        .unwrap_or(10)
-        .max(10)
-        .min(50);
-    let next_w = rows
-        .iter()
-        .map(|r| r.next_open.len())
-        .max()
-        .unwrap_or(9)
-        .max(9);
+    // ---- render table ----
+    let table_rows: Vec<Vec<String>> = rows.iter().map(|r| {
+        vec![
+            r.name.clone(), r.session_id.clone(), r.status.clone(),
+            r.created.clone(), r.last_access.clone(), r.connection.clone(),
+            r.next_open.clone(),
+        ]
+    }).collect();
 
-    // ---- render ----
-    cli_println!(
-        "{:<name_w$} | {:<sid_w$} | {:<status_w$} | {:<created_w$} | {:<last_access_w$} | {:<conn_w$} | {:<next_w$}",
-        "Name",
-        "Session ID",
-        "Status",
-        "Created",
-        "Last Access",
-        "Connection",
-        "Next open",
-        name_w = name_w,
-        sid_w = sid_w,
-        status_w = status_w,
-        created_w = created_w,
-        last_access_w = last_access_w,
-        conn_w = conn_w,
-        next_w = next_w,
-    );
-    cli_println!(
-        "{:-<name_w$}-+-{:-<sid_w$}-+-{:-<status_w$}-+-{:-<created_w$}-+-{:-<last_access_w$}-+-{:-<conn_w$}-+-{:-<next_w$}",
-        "", "", "", "", "", "", "",
-        name_w = name_w,
-        sid_w = sid_w,
-        status_w = status_w,
-        created_w = created_w,
-        last_access_w = last_access_w,
-        conn_w = conn_w,
-        next_w = next_w,
-    );
+    let table = Table::new(&[
+        "Name", "Session ID", "Status", "Created", "Last Access", "Connection", "Next open",
+    ])
+    .min_widths(&[4, 10, 8, 19, 19, 10, 9])
+    .max_widths(&[30, 40, 8, 19, 19, 50, 0])
+    .truncate(true)
+    .add_rows(&table_rows);
+
+    cli_println!("{}", table.render().trim_end());
 
     for row in &rows {
-        // Truncate connection string if it exceeds its column width
-        let conn = if row.connection.len() > conn_w && conn_w > 1 {
-            format!("{}…", &row.connection[..conn_w - 1])
-        } else {
-            row.connection.clone()
-        };
-        cli_println!(
-            "{:<name_w$} | {:<sid_w$} | {:<status_w$} | {:<created_w$} | {:<last_access_w$} | {:<conn_w$} | {:<next_w$}",
-            row.name,
-            row.session_id,
-            row.status,
-            row.created,
-            row.last_access,
-            conn,
-            row.next_open,
-            name_w = name_w,
-            sid_w = sid_w,
-            status_w = status_w,
-            created_w = created_w,
-            last_access_w = last_access_w,
-            conn_w = conn_w,
-            next_w = next_w,
-        );
         json_sessions.push(json!({
             "name": row.name,
             "session_id": row.session_id,
