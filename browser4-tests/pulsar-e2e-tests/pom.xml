@@ -19,7 +19,7 @@
     </parent>
 
     <artifactId>pulsar-e2e-tests</artifactId>
-    <name>Browser4 E2E Tests</name>
+    <name>Pulsar E2E Tests</name>
 
     <build>
         <defaultGoal>verify</defaultGoal>
@@ -36,13 +36,6 @@
         <dependency>
             <groupId>ai.platon.pulsar</groupId>
             <artifactId>browser4-browser</artifactId>
-            <scope>test</scope>
-        </dependency>
-
-        <!-- MCP functionality for testing -->
-        <dependency>
-            <groupId>ai.platon.pulsar</groupId>
-            <artifactId>browser4-agentic</artifactId>
             <scope>test</scope>
         </dependency>
 
