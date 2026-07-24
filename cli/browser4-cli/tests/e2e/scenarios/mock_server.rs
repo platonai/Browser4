@@ -356,7 +356,7 @@ pub(super) fn test_list_active_session(ctx: &mut E2ECtx) {
     let result = run_command(ctx, &["list"]);
     assert_eq!(result.exit_code, 0, "expected list to succeed");
 
-    // The table should show the session as Active.
+    // The table should show the session as Active with timestamps.
     assert!(
         result.stdout.contains("Active"),
         "Expected 'Active' status in list output:\n{}",
@@ -365,6 +365,16 @@ pub(super) fn test_list_active_session(ctx: &mut E2ECtx) {
     assert!(
         result.stdout.contains("swarm-session-1"),
         "Expected session ID in list output:\n{}",
+        result.stdout
+    );
+    assert!(
+        result.stdout.contains("Created"),
+        "Expected 'Created' column header in list output:\n{}",
+        result.stdout
+    );
+    assert!(
+        result.stdout.contains("Last Access"),
+        "Expected 'Last Access' column header in list output:\n{}",
         result.stdout
     );
 
@@ -404,6 +414,12 @@ pub(super) fn test_list_stale_session(ctx: &mut E2ECtx) {
         "Expected 'Stale' status for stopped session:\n{}",
         result.stdout
     );
+    assert!(
+        result.stdout.contains("Created")
+            && result.stdout.contains("Last Access"),
+        "Expected 'Created' and 'Last Access' column headers:\n{}",
+        result.stdout
+    );
 }
 
 pub(super) fn test_list_backend_unreachable(ctx: &mut E2ECtx) {
@@ -440,6 +456,12 @@ pub(super) fn test_list_backend_unreachable(ctx: &mut E2ECtx) {
         "Expected unreachable note in output:\n{}",
         result.stdout
     );
+    assert!(
+        result.stdout.contains("Created")
+            && result.stdout.contains("Last Access"),
+        "Expected 'Created' and 'Last Access' column headers:\n{}",
+        result.stdout
+    );
 }
 
 pub(super) fn test_list_no_sessions(ctx: &mut E2ECtx) {
@@ -456,7 +478,9 @@ pub(super) fn test_list_no_sessions(ctx: &mut E2ECtx) {
     assert!(
         result.stdout.contains("Name")
             && result.stdout.contains("Session ID")
-            && result.stdout.contains("Status"),
+            && result.stdout.contains("Status")
+            && result.stdout.contains("Created")
+            && result.stdout.contains("Last Access"),
         "Expected table header in list output:\n{}",
         result.stdout
     );
@@ -542,6 +566,11 @@ pub(super) fn test_list_multiple_named_sessions(ctx: &mut E2ECtx) {
     assert!(
         output.contains("Stale"),
         "Expected 'Stale' for scraper:\n{output}"
+    );
+    assert!(
+        output.contains("Created")
+            && output.contains("Last Access"),
+        "Expected 'Created' and 'Last Access' column headers:\n{output}"
     );
 }
 

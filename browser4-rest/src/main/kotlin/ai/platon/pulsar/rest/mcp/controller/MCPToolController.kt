@@ -382,7 +382,8 @@ class MCPToolController(
 
     private fun handleListSessions(): ResponseEntity<MCPToolCallResponse> {
         val sessions = sessionManager.getAllSessions().map { s ->
-            """{"sessionId":"${s.sessionId}","url":"${s.url ?: ""}","status":"${s.status}"}"""
+            """{"sessionId":"${s.sessionId}","url":"${s.url ?: ""}","status":"${s.status}","""
+                .plus(""""createdAt":${s.createdAt},"lastAccessedAt":${s.lastAccessedAt}}""")
         }
         return ResponseEntity.ok(textResponse("[${sessions.joinToString(",")}]"))
     }

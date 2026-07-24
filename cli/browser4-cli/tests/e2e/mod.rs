@@ -625,22 +625,37 @@ struct MockListedSession {
     session_id: String,
     status: String,
     url: String,
+    created_at: Option<i64>,
+    last_accessed_at: Option<i64>,
+}
+
+fn mock_epoch_millis() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64
 }
 
 impl MockListedSession {
     fn active(session_id: &str) -> Self {
+        let now = mock_epoch_millis();
         Self {
             session_id: session_id.to_string(),
             status: "active".to_string(),
             url: "https://mock.browser4.local/current".to_string(),
+            created_at: Some(now - 3600_000), // 1 hour ago
+            last_accessed_at: Some(now),
         }
     }
 
     fn stopped(session_id: &str) -> Self {
+        let now = mock_epoch_millis();
         Self {
             session_id: session_id.to_string(),
             status: "stopped".to_string(),
             url: "https://mock.browser4.local/current".to_string(),
+            created_at: Some(now - 7200_000), // 2 hours ago
+            last_accessed_at: Some(now - 600_000), // 10 min ago
         }
     }
 }
@@ -935,11 +950,18 @@ fn serve_mock_browser4_request(mut stream: TcpStream, state: Arc<Mutex<MockBrows
                         listed_sessions
                             .into_iter()
                             .map(|session| {
-                                serde_json::json!({
+                                let mut obj = serde_json::json!({
                                     "sessionId": session.session_id,
                                     "url": session.url,
                                     "status": session.status,
-                                })
+                                });
+                                if let Some(created) = session.created_at {
+                                    obj["createdAt"] = serde_json::json!(created);
+                                }
+                                if let Some(accessed) = session.last_accessed_at {
+                                    obj["lastAccessedAt"] = serde_json::json!(accessed);
+                                }
+                                obj
                             })
                             .collect(),
                     )

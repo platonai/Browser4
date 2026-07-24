@@ -68,10 +68,10 @@ use managed_processes::{
 };
 use snapshot::{resolve_output_path, save_binary, save_snapshot, timestamped_filename};
 use state::{
-    clear_all_state, clear_state, format_async_task_list, format_timestamp_display,
-    prune_async_tasks, read_async_tasks, read_state, resolve_default_state_dir, resolve_ref,
-    summarize_async_tasks, track_async_task, update_async_task_status,
-    write_async_tasks, write_state, CliState, MousePosition,
+    clear_all_state, clear_state, epoch_millis_to_display, format_async_task_list,
+    format_timestamp_display, prune_async_tasks, read_async_tasks, read_state,
+    resolve_default_state_dir, resolve_ref, summarize_async_tasks, track_async_task,
+    update_async_task_status, write_async_tasks, write_state, CliState, MousePosition,
 };
 
 const VERSION: &str = env!("BROWSER4_CLI_VERSION");
@@ -691,6 +691,8 @@ async fn create_session(
     new_state.base_url = base_url.to_string();
     new_state.active_selector = None;
     new_state.last_mouse_position = None;
+    new_state.created_at = Some(Utc::now().to_rfc3339());
+    new_state.last_accessed_at = Some(Utc::now().to_rfc3339());
     write_state(&new_state, None, session_name).map_err(|e| e.to_string())?;
     Ok(session_id)
 }
@@ -1284,6 +1286,8 @@ async fn handle_attach(
         state.is_attached = true;
         state.attach_type = Some("extension".to_string());
         state.browser_channel = channel.clone();
+        state.created_at = Some(Utc::now().to_rfc3339());
+        state.last_accessed_at = Some(Utc::now().to_rfc3339());
         write_state(&state, None, session_name).map_err(|e| e.to_string())?;
 
         json_field("session_id", json!(&session_id));
@@ -1443,6 +1447,8 @@ async fn handle_attach(
     state.is_attached = true;
     state.attach_type = Some("cdp".to_string());
     state.cdp_endpoint = Some(cdp_endpoint.clone());
+    state.created_at = Some(Utc::now().to_rfc3339());
+    state.last_accessed_at = Some(Utc::now().to_rfc3339());
     write_state(&state, None, session_name).map_err(|e| e.to_string())?;
 
     json_field("session_id", json!(&session_id));
@@ -2487,6 +2493,54 @@ fn connection_label(state: &CliState) -> String {
     }
 }
 
+/// Get display timestamps for a session, preferring backend (canonical) over local state.
+/// Returns a pair of `(created, last_accessed)` display strings in "YYYY-MM-DD HH:MM:SS" format.
+fn list_session_timestamps(
+    backend_records: Option<&[BackendSessionRecord]>,
+    session_id: &str,
+    local_state: Option<&CliState>,
+) -> (String, String) {
+    // Prefer backend timestamps (epoch millis converted to local display)
+    if let Some(records) = backend_records {
+        if let Some(record) = records.iter().find(|r| r.session_id == session_id) {
+            let created = record
+                .created_at
+                .map(epoch_millis_to_display)
+                .unwrap_or_else(|| "-".to_string());
+            let accessed = record
+                .last_accessed_at
+                .map(epoch_millis_to_display)
+                .unwrap_or_else(|| "-".to_string());
+            return (created, accessed);
+        }
+    }
+    // Fall back to local state
+    if let Some(state) = local_state {
+        let created = state
+            .created_at
+            .as_ref()
+            .map(|iso| format_timestamp_display(iso))
+            .unwrap_or_else(|| "-".to_string());
+        let accessed = state
+            .last_accessed_at
+            .as_ref()
+            .map(|iso| format_timestamp_display(iso))
+            .unwrap_or_else(|| "-".to_string());
+        return (created, accessed);
+    }
+    ("-".to_string(), "-".to_string())
+}
+
+struct SessionRow {
+    name: String,
+    session_id: String,
+    status: String,
+    created: String,
+    last_access: String,
+    connection: String,
+    next_open: String,
+}
+
 async fn handle_list(client: &Client, base_url: &str) -> Result<(), String> {
     let (backend_sessions, backend_note): (Option<Vec<BackendSessionRecord>>, Option<String>) =
         match call_tool(client, base_url, "list_sessions", json!({})).await {
@@ -2501,20 +2555,11 @@ async fn handle_list(client: &Client, base_url: &str) -> Result<(), String> {
             Err(error) => return Err(error),
         };
 
-    cli_println!(
-        "{:<20} | {:<40} | {:<8} | {:<30} | {}",
-        "Name",
-        "Session ID",
-        "Status",
-        "Connection",
-        "Next open"
-    );
-    cli_println!("{:-<20}-+-{:-<40}-+-{:-<8}-+-{:-<30}-+-{:-<9}", "", "", "", "", "");
-
+    let mut rows: Vec<SessionRow> = Vec::new();
     let mut json_sessions: Vec<serde_json::Value> = Vec::new();
     let backend_reachable = backend_sessions.is_some();
 
-    // List named sessions
+    // ---- collect named sessions ----
     let state_dir = resolve_default_state_dir().join("sessions");
     if state_dir.exists() {
         if let Ok(entries) = std::fs::read_dir(state_dir) {
@@ -2525,27 +2570,26 @@ async fn handle_list(client: &Client, base_url: &str) -> Result<(), String> {
                     if let Ok(content) = std::fs::read_to_string(&path) {
                         if let Ok(state) = serde_json::from_str::<CliState>(&content) {
                             if let Some(ref sid) = state.session_id {
-                                let status = list_session_status(backend_sessions.as_deref(), &sid);
+                                let status = list_session_status(backend_sessions.as_deref(), sid);
                                 let next_open = list_session_next_open_action(
                                     backend_sessions.as_deref(),
-                                    &sid,
+                                    sid,
                                 );
                                 let conn = connection_label(&state);
-                                cli_println!(
-                                    "{:<20} | {:<40} | {:<8} | {:<30} | {}",
-                                    name,
+                                let (created, last_access) = list_session_timestamps(
+                                    backend_sessions.as_deref(),
                                     sid,
-                                    status,
-                                    conn,
-                                    next_open
+                                    Some(&state),
                                 );
-                                json_sessions.push(json!({
-                                    "name": name.to_string(),
-                                    "session_id": sid,
-                                    "status": status.to_lowercase(),
-                                    "connection": conn,
-                                    "next_open": next_open.to_lowercase(),
-                                }));
+                                rows.push(SessionRow {
+                                    name: name.to_string(),
+                                    session_id: sid.clone(),
+                                    status: status.to_string(),
+                                    created,
+                                    last_access,
+                                    connection: conn,
+                                    next_open: next_open.to_string(),
+                                });
                             }
                         }
                     }
@@ -2554,35 +2598,128 @@ async fn handle_list(client: &Client, base_url: &str) -> Result<(), String> {
         }
     }
 
-    // List default session — only show when the backend also knows about it.
-    // A default session that exists in local state but not on the backend was
-    // auto-created by a previous run and never actually navigated; hide it to
-    // avoid session clutter when all commands use `-s <name>`.
+    // ---- collect default session ----
     let default_state = read_state(None, None);
     if let Some(ref sid) = default_state.session_id {
         let backend_knows_session = backend_sessions.as_ref().map_or(true, |records| {
             records.iter().any(|r| r.session_id == *sid)
         });
         if backend_knows_session {
-            let status = list_session_status(backend_sessions.as_deref(), &sid);
-            let next_open = list_session_next_open_action(backend_sessions.as_deref(), &sid);
+            let status = list_session_status(backend_sessions.as_deref(), sid);
+            let next_open = list_session_next_open_action(backend_sessions.as_deref(), sid);
             let conn = connection_label(&default_state);
-            cli_println!(
-                "{:<20} | {:<40} | {:<8} | {:<30} | {}",
-                "(default)",
+            let (created, last_access) = list_session_timestamps(
+                backend_sessions.as_deref(),
                 sid,
-                status,
-                conn,
-                next_open
+                Some(&default_state),
             );
-            json_sessions.push(json!({
-                "name": "(default)",
-                "session_id": sid,
-                "status": status.to_lowercase(),
-                "connection": conn,
-                "next_open": next_open.to_lowercase(),
-            }));
+            rows.push(SessionRow {
+                name: "(default)".to_string(),
+                session_id: sid.clone(),
+                status: status.to_string(),
+                created,
+                last_access,
+                connection: conn,
+                next_open: next_open.to_string(),
+            });
         }
+    }
+
+    // ---- compute column widths from data (with caps) ----
+    let name_w = rows
+        .iter()
+        .map(|r| r.name.len())
+        .max()
+        .unwrap_or(4)
+        .max(4)
+        .min(30);
+    let sid_w = rows
+        .iter()
+        .map(|r| r.session_id.len())
+        .max()
+        .unwrap_or(10)
+        .max(10)
+        .min(40);
+    let status_w = 8; // "Active" / "Stale" / "Unknown"
+    let created_w = 19; // "YYYY-MM-DD HH:MM:SS"
+    let last_access_w = 19;
+    let conn_w = rows
+        .iter()
+        .map(|r| r.connection.len())
+        .max()
+        .unwrap_or(10)
+        .max(10)
+        .min(50);
+    let next_w = rows
+        .iter()
+        .map(|r| r.next_open.len())
+        .max()
+        .unwrap_or(9)
+        .max(9);
+
+    // ---- render ----
+    cli_println!(
+        "{:<name_w$} | {:<sid_w$} | {:<status_w$} | {:<created_w$} | {:<last_access_w$} | {:<conn_w$} | {:<next_w$}",
+        "Name",
+        "Session ID",
+        "Status",
+        "Created",
+        "Last Access",
+        "Connection",
+        "Next open",
+        name_w = name_w,
+        sid_w = sid_w,
+        status_w = status_w,
+        created_w = created_w,
+        last_access_w = last_access_w,
+        conn_w = conn_w,
+        next_w = next_w,
+    );
+    cli_println!(
+        "{:-<name_w$}-+-{:-<sid_w$}-+-{:-<status_w$}-+-{:-<created_w$}-+-{:-<last_access_w$}-+-{:-<conn_w$}-+-{:-<next_w$}",
+        "", "", "", "", "", "", "",
+        name_w = name_w,
+        sid_w = sid_w,
+        status_w = status_w,
+        created_w = created_w,
+        last_access_w = last_access_w,
+        conn_w = conn_w,
+        next_w = next_w,
+    );
+
+    for row in &rows {
+        // Truncate connection string if it exceeds its column width
+        let conn = if row.connection.len() > conn_w && conn_w > 1 {
+            format!("{}…", &row.connection[..conn_w - 1])
+        } else {
+            row.connection.clone()
+        };
+        cli_println!(
+            "{:<name_w$} | {:<sid_w$} | {:<status_w$} | {:<created_w$} | {:<last_access_w$} | {:<conn_w$} | {:<next_w$}",
+            row.name,
+            row.session_id,
+            row.status,
+            row.created,
+            row.last_access,
+            conn,
+            row.next_open,
+            name_w = name_w,
+            sid_w = sid_w,
+            status_w = status_w,
+            created_w = created_w,
+            last_access_w = last_access_w,
+            conn_w = conn_w,
+            next_w = next_w,
+        );
+        json_sessions.push(json!({
+            "name": row.name,
+            "session_id": row.session_id,
+            "status": row.status.to_lowercase(),
+            "created_at": row.created,
+            "last_accessed_at": row.last_access,
+            "connection": row.connection,
+            "next_open": row.next_open.to_lowercase(),
+        }));
     }
 
     json_field("sessions", json!(json_sessions));
@@ -2633,6 +2770,8 @@ fn count_tracked_sessions() -> usize {
 struct BackendSessionRecord {
     session_id: String,
     status: Option<String>,
+    created_at: Option<i64>,
+    last_accessed_at: Option<i64>,
 }
 
 fn list_session_status(
@@ -2748,6 +2887,8 @@ fn parse_backend_session_records(result: &str) -> Vec<BackendSessionRecord> {
                             .map(|session_id| BackendSessionRecord {
                                 session_id: session_id.to_string(),
                                 status: Some("active".to_string()),
+                                created_at: None,
+                                last_accessed_at: None,
                             })
                             .or_else(|| {
                                 entry
@@ -2760,6 +2901,12 @@ fn parse_backend_session_records(result: &str) -> Vec<BackendSessionRecord> {
                                             .get("status")
                                             .and_then(|value| value.as_str())
                                             .map(str::to_string),
+                                        created_at: entry
+                                            .get("createdAt")
+                                            .and_then(|v| v.as_i64()),
+                                        last_accessed_at: entry
+                                            .get("lastAccessedAt")
+                                            .and_then(|v| v.as_i64()),
                                     })
                             })
                     })
@@ -7501,6 +7648,8 @@ async fn handle_swarm_create(
     state.session_name = session_name.map(|s| s.to_string());
     state.session_id = Some(session_id.clone());
     state.base_url = base_url.to_string();
+    state.created_at = Some(Utc::now().to_rfc3339());
+    state.last_accessed_at = Some(Utc::now().to_rfc3339());
     write_state(&state, None, session_name).map_err(|e| e.to_string())?;
 
     // Check for stale swarm tasks from prior sessions and warn the user.
@@ -16186,10 +16335,14 @@ mod tests {
             BackendSessionRecord {
                 session_id: "session-1".to_string(),
                 status: Some("active".to_string()),
+                created_at: None,
+                last_accessed_at: None,
             },
             BackendSessionRecord {
                 session_id: "session-2".to_string(),
                 status: Some("stopped".to_string()),
+                created_at: None,
+                last_accessed_at: None,
             },
         ];
 
@@ -16209,10 +16362,14 @@ mod tests {
             BackendSessionRecord {
                 session_id: "session-1".to_string(),
                 status: Some("active".to_string()),
+                created_at: None,
+                last_accessed_at: None,
             },
             BackendSessionRecord {
                 session_id: "session-2".to_string(),
                 status: Some("stopped".to_string()),
+                created_at: None,
+                last_accessed_at: None,
             },
         ];
 
@@ -16416,6 +16573,8 @@ mod tests {
         let records = vec![BackendSessionRecord {
             session_id: "s1".to_string(),
             status: Some("active".to_string()),
+                created_at: None,
+                last_accessed_at: None,
         }];
         assert_eq!(list_session_status(Some(&records), "s1"), "Active");
     }
@@ -16425,6 +16584,8 @@ mod tests {
         let records = vec![BackendSessionRecord {
             session_id: "s1".to_string(),
             status: Some("stopped".to_string()),
+                created_at: None,
+                last_accessed_at: None,
         }];
         assert_eq!(list_session_status(Some(&records), "s1"), "Stale");
     }
@@ -16434,6 +16595,8 @@ mod tests {
         let records = vec![BackendSessionRecord {
             session_id: "s1".to_string(),
             status: Some("active".to_string()),
+                created_at: None,
+                last_accessed_at: None,
         }];
         // s2 is not in the backend records → Stale
         assert_eq!(list_session_status(Some(&records), "s2"), "Stale");

@@ -54,6 +54,14 @@ pub struct CliState {
     /// sessions, e.g. `"chrome"`, `"msedge"`, `"chrome-canary"`.
     #[serde(rename = "browserChannel", skip_serializing_if = "Option::is_none")]
     pub browser_channel: Option<String>,
+    /// ISO-8601 timestamp when this session was first created (local recording).
+    /// Used as fallback for display when the backend is unreachable.
+    #[serde(rename = "createdAt", skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<String>,
+    /// ISO-8601 timestamp when this session was last accessed (local recording).
+    /// Used as fallback for display when the backend is unreachable.
+    #[serde(rename = "lastAccessedAt", skip_serializing_if = "Option::is_none")]
+    pub last_accessed_at: Option<String>,
 }
 
 fn is_false(b: &bool) -> bool {
@@ -72,6 +80,8 @@ impl Default for CliState {
             attach_type: None,
             cdp_endpoint: None,
             browser_channel: None,
+            created_at: None,
+            last_accessed_at: None,
         }
     }
 }
@@ -889,6 +899,20 @@ pub fn format_timestamp_display(iso: &str) -> String {
         .or_else(|_| chrono::DateTime::parse_from_rfc3339(&format!("{}Z", iso)))
         .map(|dt| dt.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M:%S").to_string())
         .unwrap_or_else(|_| iso.chars().take(19).collect())
+}
+
+/// Convert epoch milliseconds to local display format "YYYY-MM-DD HH:MM:SS".
+///
+/// Returns `"-"` if the value is 0 or invalid.
+pub fn epoch_millis_to_display(millis: i64) -> String {
+    if millis <= 0 {
+        return "-".to_string();
+    }
+    let secs = millis / 1000;
+    let nanos = ((millis % 1000) * 1_000_000) as u32;
+    chrono::DateTime::from_timestamp(secs, nanos)
+        .map(|dt| dt.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M:%S").to_string())
+        .unwrap_or_else(|| "-".to_string())
 }
 
 /// Convert a CLI element ref into the selector format expected by Browser4.

@@ -126,12 +126,16 @@ class MCPToolControllerTest {
         `when`(managedSession.sessionId).thenReturn(sessionId)
         `when`(managedSession.url).thenReturn("https://example.com")
         `when`(managedSession.status).thenReturn("active")
+        `when`(managedSession.createdAt).thenReturn(1720000000000L)
+        `when`(managedSession.lastAccessedAt).thenReturn(1720086400000L)
 
         val result = controller.callTool(request, response)
 
         assertEquals(HttpStatus.OK, result.statusCode)
         assertTrue(result.body!!.content[0].text.contains(sessionId))
         assertTrue(result.body!!.content[0].text.contains("https://example.com"))
+        assertTrue(result.body!!.content[0].text.contains(""""createdAt":1720000000000"""))
+        assertTrue(result.body!!.content[0].text.contains(""""lastAccessedAt":1720086400000"""))
     }
 
     @Test
