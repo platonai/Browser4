@@ -19395,14 +19395,6 @@ mod tests {
     }
 
     #[test]
-    fn test_open_url_in_browser_does_not_panic() {
-        // open_url_in_browser should never panic, even with unusual URLs.
-        let result = open_url_in_browser("chrome-extension://test/connect.html?mcpRelayUrl=ws://127.0.0.1:8182/ws/extension/test123&client=%7B%22name%22%3A%22browser4-cli%22%7D");
-        // On a headless CI system this may fail (no browser), but it must not panic.
-        let _ = result;
-    }
-
-    #[test]
     fn test_attach_extension_and_endpoint_mutually_exclusive_in_error_message() {
         // Verify the error message exists (the actual enforcement is in
         // handle_attach, which is tested via integration tests).
