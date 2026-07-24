@@ -16,6 +16,8 @@ import ai.platon.pulsar.skeleton.session.PulsarSession
 import ai.platon.pulsar.skeleton.workflow.common.url.ParsableHyperlink
 import com.fasterxml.jackson.annotation.JsonCreator
 import com.fasterxml.jackson.annotation.JsonProperty
+import com.github.benmanes.caffeine.cache.Cache
+import com.github.benmanes.caffeine.cache.Caffeine
 import jakarta.annotation.PostConstruct
 import jakarta.annotation.PreDestroy
 import kotlinx.coroutines.*
@@ -24,7 +26,6 @@ import org.springframework.stereotype.Service
 import java.nio.file.Path
 import java.sql.ResultSet
 import java.util.*
-import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 
 data class CrawlRequest @JsonCreator constructor(
@@ -64,8 +65,17 @@ class CrawlService(
 ) {
     private val logger = LoggerFactory.getLogger(CrawlService::class.java)
 
-    /** Task store: taskId -> CrawlResponse */
-    private val taskStore = ConcurrentHashMap<String, CrawlResponse>()
+    /**
+     * Task store: taskId -> CrawlResponse.
+     *
+     * Size-bounded at 100 entries; Window TinyLFU eviction beyond that.
+     * Terminal tasks are purged by TTL in [purgeExpiredTasks] long before the
+     * cache fills up in normal operation.
+     */
+    private val taskStore: Cache<String, CrawlResponse> = Caffeine.newBuilder()
+        .maximumSize(100)
+        .recordStats()
+        .build()
 
     /** Active coroutine jobs: taskId -> Job (for cancellation) */
     private val jobStore = ConcurrentHashMap<String, Job>()
@@ -78,10 +88,22 @@ class CrawlService(
 
     @PostConstruct
     fun restoreFromDisk() {
+        val now = System.currentTimeMillis()
+        val ttlMillis = taskTtlMinutes * 60_000L
+        val terminalStatuses = setOf(
+            ResourceStatus.getStatusText(ResourceStatus.SC_OK),
+            ResourceStatus.getStatusText(ResourceStatus.SC_REQUEST_TIMEOUT),
+            ResourceStatus.getStatusText(ResourceStatus.SC_INTERNAL_SERVER_ERROR),
+        )
         persistence.restore { entry ->
-            if (entry.taskId.isNotBlank()) {
-                taskStore[entry.taskId] = entry
+            if (entry.taskId.isBlank()) return@restore
+            // Skip terminal entries that have already expired — they were
+            // purged from memory before shutdown and should not be revived.
+            if (entry.status in terminalStatuses && (now - entry.createdAt) > ttlMillis) {
+                logger.debug("Skipping expired crawl task {} during restore", entry.taskId)
+                return@restore
             }
+            taskStore.put(entry.taskId, entry)
         }
     }
 
@@ -98,7 +120,7 @@ class CrawlService(
 
     /** How long to keep completed/failed tasks in the store (minutes). */
     @Volatile
-    var taskTtlMinutes: Int = 60
+    var taskTtlMinutes: Int = 1440 // 1 day
 
     init {
         // Periodically purge expired tasks so stale entries don't accumulate
@@ -125,7 +147,7 @@ class CrawlService(
             taskId = taskId,
             status = ResourceStatus.getStatusText(ResourceStatus.SC_CREATED)
         )
-        taskStore[taskId] = response
+        taskStore.put(taskId, response)
         onStatusChanged(response)
 
         // Compute effective seed URL list
@@ -143,7 +165,7 @@ class CrawlService(
                 status = ResourceStatus.getStatusText(ResourceStatus.SC_INTERNAL_SERVER_ERROR),
                 error = "No URLs provided"
             )
-            taskStore[taskId] = errorResponse
+            taskStore.put(taskId, errorResponse)
             onStatusChanged(errorResponse)
             return taskId
         }
@@ -151,7 +173,7 @@ class CrawlService(
         val job = crawlScope.launch {
             try {
                 // Mark started when work begins
-                val existing = taskStore[taskId]
+                val existing = taskStore.getIfPresent(taskId)
                 if (existing != null && existing.startedTime == null) {
                     existing.startedTime = java.time.Instant.now()
                 }
@@ -168,9 +190,9 @@ class CrawlService(
                     }
                     results
                 }
-                val existingDiagnostic = taskStore[taskId]?.diagnostic
+                val existingDiagnostic = taskStore.getIfPresent(taskId)?.diagnostic
                 val now = java.time.Instant.now()
-                val previous = taskStore[taskId]
+                val previous = taskStore.getIfPresent(taskId)
                 val completed = CrawlResponse(
                     taskId = taskId,
                     status = ResourceStatus.getStatusText(ResourceStatus.SC_OK),
@@ -180,11 +202,11 @@ class CrawlService(
                     startedTime = previous?.startedTime ?: now,
                     finishTime = now
                 )
-                taskStore[taskId] = completed
+                taskStore.put(taskId, completed)
                 onStatusChanged(completed)
                 logger.info("Crawl task {} completed: {} pages", taskId, allPages.size)
             } catch (e: CancellationException) {
-                val existing = taskStore[taskId]
+                val existing = taskStore.getIfPresent(taskId)
                 val now = java.time.Instant.now()
                 if (existing == null || existing.status == ResourceStatus.getStatusText(ResourceStatus.SC_CREATED)) {
                     val timeout = CrawlResponse(
@@ -194,12 +216,12 @@ class CrawlService(
                         startedTime = existing?.startedTime ?: now,
                         finishTime = now
                     )
-                    taskStore[taskId] = timeout
+                    taskStore.put(taskId, timeout)
                     onStatusChanged(timeout)
                 }
                 logger.warn("Crawl task {} cancelled", taskId)
             } catch (e: Exception) {
-                val existing = taskStore[taskId]
+                val existing = taskStore.getIfPresent(taskId)
                 val now = java.time.Instant.now()
                 val failed = CrawlResponse(
                     taskId = taskId,
@@ -208,7 +230,7 @@ class CrawlService(
                     startedTime = existing?.startedTime ?: now,
                     finishTime = now
                 )
-                taskStore[taskId] = failed
+                taskStore.put(taskId, failed)
                 onStatusChanged(failed)
                 logger.error("Crawl task {} failed: {}", taskId, e.message, e)
             } finally {
@@ -230,7 +252,7 @@ class CrawlService(
         val job = jobStore.remove(taskId) ?: return false
         job.cancel()
         val now = java.time.Instant.now()
-        val previous = taskStore[taskId]
+        val previous = taskStore.getIfPresent(taskId)
         val cancelled = CrawlResponse(
             taskId = taskId,
             status = ResourceStatus.getStatusText(ResourceStatus.SC_REQUEST_TIMEOUT),
@@ -238,7 +260,7 @@ class CrawlService(
             startedTime = previous?.startedTime ?: now,
             finishTime = now
         )
-        taskStore[taskId] = cancelled
+        taskStore.put(taskId, cancelled)
         onStatusChanged(cancelled)
         logger.info("Crawl task {} cancelled by user", taskId)
         return true
@@ -254,8 +276,8 @@ class CrawlService(
             ResourceStatus.getStatusText(ResourceStatus.SC_REQUEST_TIMEOUT),
             ResourceStatus.getStatusText(ResourceStatus.SC_INTERNAL_SERVER_ERROR),
         )
-        val toRemove = taskStore.entries.filter { it.value.status in terminalStatuses }
-        toRemove.forEach { taskStore.remove(it.key) }
+        val toRemove = taskStore.asMap().entries.filter { it.value.status in terminalStatuses }
+        toRemove.forEach { taskStore.invalidate(it.key) }
         logger.info("Cleared {} terminal crawl tasks", toRemove.size)
         return toRemove.size
     }
@@ -273,21 +295,26 @@ class CrawlService(
             ResourceStatus.getStatusText(ResourceStatus.SC_INTERNAL_SERVER_ERROR),
         )
 
-        val expired = taskStore.entries.filter {
+        val expired = taskStore.asMap().entries.filter {
             it.value.status in terminalStatuses &&
                 (now - it.value.createdAt) > ttlMillis
         }
-        expired.forEach { taskStore.remove(it.key) }
-        if (expired.isNotEmpty()) {
-            logger.info("Purged {} expired crawl tasks (TTL: {} min)", expired.size, taskTtlMinutes)
-        }
+        if (expired.isEmpty()) return
+
+        expired.forEach { taskStore.invalidate(it.key) }
+        logger.info("Purged {} expired crawl tasks (TTL: {} min)", expired.size, taskTtlMinutes)
+
+        // Rewrite the persistence file so purged tasks don't revive on restart.
+        // The JSONL is append-only and would otherwise accumulate stale entries forever.
+        persistence.clear()
+        taskStore.asMap().values.forEach { persistence.append(it) }
     }
 
     /**
      * Get the current status/result of a crawl task.
      */
     fun getResult(taskId: String): CrawlResponse {
-        return taskStore[taskId] ?: CrawlResponse(
+        return taskStore.getIfPresent(taskId) ?: CrawlResponse(
             taskId = taskId,
             status = ResourceStatus.getStatusText(ResourceStatus.SC_NOT_FOUND),
             error = "Task not found: $taskId"
@@ -355,7 +382,7 @@ class CrawlService(
                     "page content loaded correctly."
                 logger.info("Crawl {}: {}", taskId, message)
                 // Write diagnostic to taskStore so the CLI can display it
-                taskStore[taskId] = CrawlResponse(
+                taskStore.put(taskId, CrawlResponse(
                     taskId = taskId,
                     status = ResourceStatus.getStatusText(ResourceStatus.SC_OK),
                     pagesFound = 0,
@@ -406,7 +433,7 @@ class CrawlService(
             logger.warn("Crawl {}: depth=1 timed out after collecting {} pages; saving partial results", taskId, results.size)
             // Save partial results BEFORE re-throwing — the outer launch catch
             // guards against overwriting already-saved partial results
-            val previous = taskStore[taskId]
+            val previous = taskStore.getIfPresent(taskId)
             val timeout = CrawlResponse(
                 taskId = taskId,
                 status = ResourceStatus.getStatusText(ResourceStatus.SC_REQUEST_TIMEOUT),
@@ -416,7 +443,7 @@ class CrawlService(
                 startedTime = previous?.startedTime ?: java.time.Instant.now(),
                 finishTime = java.time.Instant.now()
             )
-            taskStore[taskId] = timeout
+            taskStore.put(taskId, timeout)
             onStatusChanged(timeout)
             throw e
         } finally {
@@ -521,7 +548,7 @@ class CrawlService(
             return results.toList()
         } catch (e: TimeoutCancellationException) {
             logger.warn("Crawl {}: depth>1 timed out after collecting {} pages; saving partial results", taskId, results.size)
-            val previous = taskStore[taskId]
+            val previous = taskStore.getIfPresent(taskId)
             val timeout = CrawlResponse(
                 taskId = taskId,
                 status = ResourceStatus.getStatusText(ResourceStatus.SC_REQUEST_TIMEOUT),
@@ -531,7 +558,7 @@ class CrawlService(
                 startedTime = previous?.startedTime ?: java.time.Instant.now(),
                 finishTime = java.time.Instant.now()
             )
-            taskStore[taskId] = timeout
+            taskStore.put(taskId, timeout)
             onStatusChanged(timeout)
             throw e
         } finally {

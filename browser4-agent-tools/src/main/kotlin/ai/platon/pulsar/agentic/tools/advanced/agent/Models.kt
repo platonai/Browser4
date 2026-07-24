@@ -43,6 +43,9 @@ data class AgentTaskStatus(
 ) {
     val status: String get() = ResourceStatus.getStatusText(statusCode)
 
+    /** Set when the task is first created. */
+    var createdTime: Instant = Instant.now()
+
     /** Set when a worker first picks up the task (first refresh away from CREATED). */
     var startedTime: Instant? = null
 

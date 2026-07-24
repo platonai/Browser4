@@ -1,5 +1,6 @@
 package ai.platon.pulsar.rest.api.service
 
+import ai.platon.pulsar.agentic.tools.advanced.common.JsonlPersistence
 import ai.platon.pulsar.agentic.tools.advanced.crawl.ScrapeResponse
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import ai.platon.pulsar.rest.session.PulsarSessionManager
@@ -22,9 +23,9 @@ class SwarmServicePersistenceTest {
     fun `restoreFromDisk loads tasks from JSONL file`(@TempDir tempDir: Path) {
         val jsonlPath = tempDir.resolve("swarm-tasks.jsonl")
         val task1 = ScrapeResponse(id = "t1", statusCode = 201, pageStatusCode = 200)
-            .apply { createdTime = null; lastModifiedTime = null; startedTime = null; finishTime = null }
+            .apply { lastModifiedTime = null; startedTime = null; finishTime = null }
         val task2 = ScrapeResponse(id = "t2", statusCode = 200, pageStatusCode = 200)
-            .apply { createdTime = null; lastModifiedTime = null; startedTime = null; finishTime = null }
+            .apply { lastModifiedTime = null; startedTime = null; finishTime = null }
         Files.createDirectories(tempDir)
         Files.writeString(
             jsonlPath,
@@ -57,7 +58,7 @@ class SwarmServicePersistenceTest {
     fun `restoreFromDisk skips corrupt lines`(@TempDir tempDir: Path) {
         val jsonlPath = tempDir.resolve("swarm-tasks.jsonl")
         val task = ScrapeResponse(id = "good", statusCode = 200, pageStatusCode = 200)
-            .apply { createdTime = null; lastModifiedTime = null; startedTime = null; finishTime = null }
+            .apply { lastModifiedTime = null; startedTime = null; finishTime = null }
         Files.createDirectories(tempDir)
         Files.writeString(
             jsonlPath,
@@ -93,11 +94,11 @@ class SwarmServicePersistenceTest {
     fun `restoreFromDisk rebuilds status index`(@TempDir tempDir: Path) {
         val jsonlPath = tempDir.resolve("swarm-tasks.jsonl")
         val task1 = ScrapeResponse(id = "i1", statusCode = 201, pageStatusCode = 200)
-            .apply { createdTime = null; lastModifiedTime = null; startedTime = null; finishTime = null }
+            .apply { lastModifiedTime = null; startedTime = null; finishTime = null }
         val task2 = ScrapeResponse(id = "i2", statusCode = 200, pageStatusCode = 200)
-            .apply { createdTime = null; lastModifiedTime = null; startedTime = null; finishTime = null }
+            .apply { lastModifiedTime = null; startedTime = null; finishTime = null }
         val task3 = ScrapeResponse(id = "i3", statusCode = 200, pageStatusCode = 200)
-            .apply { createdTime = null; lastModifiedTime = null; startedTime = null; finishTime = null }
+            .apply { lastModifiedTime = null; startedTime = null; finishTime = null }
         Files.createDirectories(tempDir)
         Files.writeString(
             jsonlPath,
@@ -119,8 +120,10 @@ class SwarmServicePersistenceTest {
 
     /** Points the service at a temp directory then calls restoreFromDisk. */
     private fun invokeRestore(service: SwarmService, tempDir: Path) {
-        // `persistenceFile` is internal var — accessible from the same module
-        service.persistenceFile = tempDir.resolve("swarm-tasks.jsonl")
+        // Redirect JsonlPersistence to temp dir
+        val fileField = JsonlPersistence::class.java.getDeclaredField("file")
+        fileField.isAccessible = true
+        fileField.set(service.persistence, tempDir.resolve("swarm-tasks.jsonl"))
 
         // restoreFromDisk is @PostConstruct, call it via reflection
         val method = SwarmService::class.java.getDeclaredMethod("restoreFromDisk")

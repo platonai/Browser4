@@ -28,7 +28,7 @@ Every scenario script follows the same pattern:
 $ErrorActionPreference = "Stop"
 
 # ── Windows command-line argument escaping ────────────────────────────────────
-# Adapted from coworker/scripts/workers/agent-workflow.ps1.
+# Adapted from coworker/scripts/workers/agent.ps1.
 # Windows CreateProcess receives a single lpCommandLine string; the child parses
 # it via CommandLineToArgvW.  Backslashes preceding a double-quote must be
 # doubled, and trailing backslashes must be doubled, to prevent the quote from

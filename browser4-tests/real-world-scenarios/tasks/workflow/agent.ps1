@@ -16,10 +16,10 @@ API key is configured, the agent MUST find "541" in the result output.
 
 .NOTES
 Run from the repo root:
-  pwsh ./browser4-tests/real-world-scenarios/tasks/workflow/agent-workflow.ps1
+  pwsh ./browser4-tests/real-world-scenarios/tasks/workflow/agent.ps1
 
 In production mode:
-  pwsh ./browser4-tests/real-world-scenarios/tasks/workflow/agent-workflow.ps1 -Production
+  pwsh ./browser4-tests/real-world-scenarios/tasks/workflow/agent.ps1 -Production
 #>
 
 [CmdletBinding()]

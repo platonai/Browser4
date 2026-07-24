@@ -1,6 +1,7 @@
 package ai.platon.pulsar.rest.api.service
 
 import ai.platon.pulsar.agentic.GenericAgenticSession
+import ai.platon.pulsar.agentic.tools.advanced.common.JsonlPersistence
 import ai.platon.pulsar.agentic.tools.advanced.crawl.QueryRequest
 import ai.platon.pulsar.agentic.tools.advanced.crawl.ScrapeRequest
 import ai.platon.pulsar.agentic.tools.advanced.crawl.ScrapeResponse
@@ -14,12 +15,13 @@ import ai.platon.pulsar.rest.api.entities.ScrapeStatusRequest
 import com.github.benmanes.caffeine.cache.Cache
 import com.github.benmanes.caffeine.cache.Caffeine
 import jakarta.annotation.PostConstruct
+import jakarta.annotation.PreDestroy
+import kotlinx.coroutines.*
 import org.apache.commons.collections4.MultiMapUtils
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Service
-import java.nio.file.Files
 import java.nio.file.Path
-import java.nio.file.StandardOpenOption
+import java.time.Instant
 
 @Service
 class SwarmService(
@@ -47,7 +49,7 @@ class SwarmService(
      * - Persisted to a JSONL file so task statuses survive restarts.
      * */
     val responseCache: Cache<String, ScrapeResponse> = Caffeine.newBuilder()
-        .maximumSize(100_000)
+        .maximumSize(100)
         .removalListener<String, ScrapeResponse> { key, value, cause ->
             if (value != null && cause.wasEvicted()) {
                 responseStatusIndex[value.statusCode]?.remove(key)
@@ -60,58 +62,80 @@ class SwarmService(
         .recordStats()
         .build()
 
-    /** JSONL file for persisting swarm task responses across restarts. */
-    internal var persistenceFile: Path = Path.of(
-        System.getProperty("browser4.data.dir", System.getProperty("user.home")),
-        ".browser4", "data", "swarm"
-    ).resolve("swarm-tasks.jsonl")
+    /** JSONL persistence for swarm task responses across restarts. */
+    internal val persistence = JsonlPersistence(
+        file = Path.of(
+            System.getProperty("browser4.data.dir", System.getProperty("user.home")),
+            ".browser4", "data", "swarm", "swarm-tasks.jsonl"
+        ),
+        clazz = ScrapeResponse::class,
+        objectMapper = pulsarObjectMapper()
+    )
 
-    private val objectMapper = pulsarObjectMapper()
+    /** Dedicated dispatcher for cleanup operations. */
+    private val cleanupDispatcher = Dispatchers.IO.limitedParallelism(2)
+
+    private val cleanupScope = CoroutineScope(
+        cleanupDispatcher + SupervisorJob() + CoroutineName("swarm-cleanup")
+    )
+
+    /** How long to keep terminal tasks before compacting them out of the JSONL file. */
+    @Volatile
+    var taskTtlMinutes: Int = 43200 // 30 days
+
+    init {
+        // Periodically compact the JSONL file so stale entries don't accumulate forever.
+        cleanupScope.launch {
+            while (isActive) {
+                delay(5 * 60 * 1000L) // every 5 minutes
+                compactPersistence()
+            }
+        }
+    }
+
+    @PreDestroy
+    fun shutdown() {
+        cleanupScope.cancel()
+    }
 
     @PostConstruct
     fun restoreFromDisk() {
-        if (!Files.exists(persistenceFile)) {
-            logger.info("No swarm persistence file found at {}", persistenceFile)
-            return
-        }
+        val now = Instant.now()
+        val ttlCutoff = now.minusSeconds(taskTtlMinutes * 60L)
 
-        var restored = 0
-        try {
-            Files.newBufferedReader(persistenceFile).use { reader ->
-                reader.lines().forEach { line ->
-                    if (line.isBlank()) return@forEach
-                    try {
-                        val response = objectMapper.readValue(line, ScrapeResponse::class.java)
-                        response.id?.let { id ->
-                            responseCache.put(id, response)
-                            responseStatusIndex[response.statusCode].add(id)
-                            restored++
-                        }
-                    } catch (e: Exception) {
-                        logger.warn("Skipping corrupt swarm task line: {}", e.message)
-                    }
+        persistence.restore { response ->
+            response.id?.let { id ->
+                // Skip terminal entries whose TTL has expired — they were evicted
+                // from the cache before shutdown and should not be revived.
+                if (response.isDone && response.createdTime.isBefore(ttlCutoff)) {
+                    logger.debug("Skipping expired swarm task {} during restore (created={})", id, response.createdTime)
+                    return@restore
                 }
+                responseCache.put(id, response)
+                responseStatusIndex[response.statusCode].add(id)
             }
-        } catch (e: Exception) {
-            logger.error("Failed to restore swarm tasks from {}", persistenceFile, e)
         }
-
-        logger.info("Restored {} swarm task(s) from {}", restored, persistenceFile)
     }
 
-    /** Append a response to the persistence file. */
-    private fun persist(response: ScrapeResponse) {
-        try {
-            Files.createDirectories(persistenceFile.parent)
-            val line = objectMapper.writeValueAsString(response)
-            Files.writeString(
-                persistenceFile,
-                line + "\n",
-                StandardOpenOption.CREATE, StandardOpenOption.APPEND
-            )
-        } catch (e: Exception) {
-            logger.warn("Failed to persist swarm task {}: {}", response.id, e.message)
+    /** Compact the JSONL persistence file: remove stale terminal entries past TTL. */
+    private fun compactPersistence() {
+        val now = Instant.now()
+        val ttlCutoff = now.minusSeconds(taskTtlMinutes * 60L)
+
+        val stale = responseCache.asMap().entries.filter {
+            it.value.isDone && it.value.createdTime.isBefore(ttlCutoff)
         }
+        if (stale.isEmpty()) return
+
+        stale.forEach {
+            responseCache.invalidate(it.key)
+            responseStatusIndex[it.value.statusCode]?.remove(it.key)
+        }
+        logger.info("Compacted {} expired swarm tasks (TTL: {} min)", stale.size, taskTtlMinutes)
+
+        // Rewrite the persistence file so compacted tasks don't revive on restart.
+        persistence.clear()
+        responseCache.asMap().values.forEach { persistence.append(it) }
     }
 
     /**
@@ -121,7 +145,7 @@ class SwarmService(
         val hyperlink = createScrapeHyperlink(request)
         responseCache.put(hyperlink.uuid, hyperlink.response)
         hyperlink.response.id = hyperlink.uuid
-        persist(hyperlink.response)
+        persistence.append(hyperlink.response)
         val s = session
         require(s is GenericAgenticSession) {
             "Expected GenericAgenticSession but got ${s::class.simpleName} (uuid=${s.uuid})"
@@ -180,7 +204,7 @@ class SwarmService(
         return ScrapeHyperlinkFactory.create(request, session) { link ->
             responseCache.put(link.uuid, link.response)
             responseStatusIndex[link.response.statusCode].add(link.uuid)
-            persist(link.response)
+            persistence.append(link.response)
         }
     }
 }

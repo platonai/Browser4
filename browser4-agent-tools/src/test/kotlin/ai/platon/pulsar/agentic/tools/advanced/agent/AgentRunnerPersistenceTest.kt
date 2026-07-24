@@ -35,8 +35,10 @@ class AgentRunnerPersistenceTest {
         assertEquals(2, restored.size)
         assertEquals("a1", restored[0].id)
         assertEquals(201, restored[0].statusCode)
+        assertNotNull(restored[0].createdTime, "createdTime should survive JSONL round-trip")
         assertEquals("a2", restored[1].id)
         assertEquals("done", restored[1].processState)
+        assertNotNull(restored[1].createdTime, "createdTime should survive JSONL round-trip")
     }
 
     @Test
