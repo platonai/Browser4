@@ -1903,19 +1903,16 @@ async fn handle_close(
 async fn handle_tab_list(
     client: &Client,
     base_url: &str,
+    tool_params: &Value,
     session_name: Option<&str>,
 ) -> Result<(), String> {
     let result = with_session(client, base_url, session_name, false, |session_id| {
         let client = client.clone();
         let base_url = base_url.to_string();
+        let mut params = tool_params.clone();
         async move {
-            call_tool(
-                &client,
-                &base_url,
-                "browser_tabs",
-                json!({ "sessionId": session_id, "action": "list" }),
-            )
-            .await
+            params["sessionId"] = json!(session_id);
+            call_tool(&client, &base_url, "browser_tabs", params).await
         }
     })
     .await?;
@@ -2008,23 +2005,13 @@ async fn handle_tab_new(
     tool_params: &Value,
     session_name: Option<&str>,
 ) -> Result<(), String> {
-    let url = tool_params
-        .get("url")
-        .and_then(|v| v.as_str())
-        .unwrap_or("about:blank");
-
     let result = with_session(client, base_url, session_name, true, |session_id| {
         let client = client.clone();
         let base_url = base_url.to_string();
-        let url = url.to_string();
+        let mut params = tool_params.clone();
         async move {
-            call_tool(
-                &client,
-                &base_url,
-                "browser_tabs",
-                json!({ "sessionId": session_id, "action": "new", "url": url }),
-            )
-            .await
+            params["sessionId"] = json!(session_id);
+            call_tool(&client, &base_url, "browser_tabs", params).await
         }
     })
     .await?;
@@ -2083,95 +2070,16 @@ async fn handle_tab_new(
             }
         })
         .await;
+        let url = tool_params
+            .get("url")
+            .and_then(|v| v.as_str())
+            .unwrap_or("about:blank");
         cli_println!("Switched to tab {} ({})", new_index, url);
     } else {
         // Couldn't parse the tab list; still show a tip
         if !json_active() {
             eprintln!("💡 Tip: Use `tab-select <index>` to switch to the new tab.");
         }
-    }
-
-    Ok(())
-}
-
-async fn handle_tab_select(
-    client: &Client,
-    base_url: &str,
-    tool_params: &Value,
-    session_name: Option<&str>,
-) -> Result<(), String> {
-    let index_val = tool_params.get("index").cloned();
-    let guid_val = tool_params.get("tabId").cloned();
-
-    let result = with_session(client, base_url, session_name, false, |session_id| {
-        let client = client.clone();
-        let base_url = base_url.to_string();
-        let index_val = index_val.clone();
-        let guid_val = guid_val.clone();
-        async move {
-            let mut args = json!({ "sessionId": session_id, "action": "select" });
-            if let Some(ref idx) = index_val { args["index"] = idx.clone(); }
-            if let Some(ref g) = guid_val { args["tabId"] = g.clone(); }
-            call_tool(&client, &base_url, "browser_tabs", args).await
-        }
-    })
-    .await?;
-
-    // Print user-friendly confirmation.
-    if !json_active() {
-        if let Some(ref g) = guid_val {
-            let g_str = g.as_str().unwrap_or_default();
-            cli_println!("✓ Switched to tab {}", g_str);
-        } else if let Some(ref idx) = index_val {
-            let idx_str = idx.as_str().unwrap_or_default();
-            cli_println!("✓ Switched to tab {}", idx_str);
-        } else {
-            cli_println!("{}", result);
-        }
-    } else {
-        cli_println!("{}", result);
-    }
-
-    Ok(())
-}
-
-async fn handle_tab_close(
-    client: &Client,
-    base_url: &str,
-    tool_params: &Value,
-    session_name: Option<&str>,
-) -> Result<(), String> {
-    let index_val = tool_params.get("index").cloned();
-    let guid_val = tool_params.get("tabId").cloned();
-
-    let result = with_session(client, base_url, session_name, false, |session_id| {
-        let client = client.clone();
-        let base_url = base_url.to_string();
-        let index_val = index_val.clone();
-        let guid_val = guid_val.clone();
-        async move {
-            let mut args = json!({ "sessionId": session_id, "action": "close" });
-            if let Some(ref idx) = index_val { args["index"] = idx.clone(); }
-            if let Some(ref g) = guid_val { args["tabId"] = g.clone(); }
-            call_tool(&client, &base_url, "browser_tabs", args).await
-        }
-    })
-    .await?;
-
-    // Print confirmation with tab info when possible (skip if JSON mode —
-    // the caller wants structured output).
-    if !json_active() {
-        if let Some(ref g) = guid_val {
-            let g_str = g.as_str().unwrap_or_default();
-            cli_println!("✓ Closed tab {}", g_str);
-        } else if let Some(ref idx) = index_val {
-            let idx_str = idx.as_str().unwrap_or_default();
-            cli_println!("✓ Closed tab {}", idx_str);
-        } else {
-            cli_println!("✓ Closed current tab");
-        }
-    } else {
-        cli_println!("{}", result);
     }
 
     Ok(())
@@ -14865,28 +14773,16 @@ async fn run(
             .await?;
         }
         "tab-list" => {
-            handle_tab_list(&client, &base_url, global.session_name.as_deref()).await?;
+            handle_tab_list(
+                &client,
+                &base_url,
+                &tool_params,
+                global.session_name.as_deref(),
+            )
+            .await?;
         }
         "tab-new" => {
             handle_tab_new(
-                &client,
-                &base_url,
-                &tool_params,
-                global.session_name.as_deref(),
-            )
-            .await?;
-        }
-        "tab-select" => {
-            handle_tab_select(
-                &client,
-                &base_url,
-                &tool_params,
-                global.session_name.as_deref(),
-            )
-            .await?;
-        }
-        "tab-close" => {
-            handle_tab_close(
                 &client,
                 &base_url,
                 &tool_params,
