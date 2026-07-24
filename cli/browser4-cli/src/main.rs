@@ -1905,17 +1905,19 @@ async fn handle_tab_list(
     base_url: &str,
     session_name: Option<&str>,
 ) -> Result<(), String> {
-    let state = read_state(None, session_name);
-    let Some(session_id) = state.session_id.as_deref() else {
-        return Err(no_active_session_message());
-    };
-
-    let result = call_tool(
-        client,
-        base_url,
-        "browser_tabs",
-        json!({ "sessionId": session_id, "action": "list" }),
-    )
+    let result = with_session(client, base_url, session_name, false, |session_id| {
+        let client = client.clone();
+        let base_url = base_url.to_string();
+        async move {
+            call_tool(
+                &client,
+                &base_url,
+                "browser_tabs",
+                json!({ "sessionId": session_id, "action": "list" }),
+            )
+            .await
+        }
+    })
     .await?;
 
     let tabs = parse_tab_list(&result);
@@ -2011,17 +2013,20 @@ async fn handle_tab_new(
         .and_then(|v| v.as_str())
         .unwrap_or("about:blank");
 
-    let state = read_state(None, session_name);
-    let Some(session_id) = state.session_id.as_deref() else {
-        return Err(no_active_session_message());
-    };
-
-    let result = call_tool(
-        client,
-        base_url,
-        "browser_tabs",
-        json!({ "sessionId": session_id, "action": "new", "url": url }),
-    )
+    let result = with_session(client, base_url, session_name, true, |session_id| {
+        let client = client.clone();
+        let base_url = base_url.to_string();
+        let url = url.to_string();
+        async move {
+            call_tool(
+                &client,
+                &base_url,
+                "browser_tabs",
+                json!({ "sessionId": session_id, "action": "new", "url": url }),
+            )
+            .await
+        }
+    })
     .await?;
 
     cli_println!("{}", result);
@@ -2034,12 +2039,19 @@ async fn handle_tab_new(
 
     // Auto-switch to the newly created tab by listing tabs, locating the
     // entry whose guid matches, and issuing a select action.
-    let list_result = call_tool(
-        client,
-        base_url,
-        "browser_tabs",
-        json!({ "sessionId": session_id, "action": "list" }),
-    )
+    let list_result = with_session(client, base_url, session_name, false, |session_id| {
+        let client = client.clone();
+        let base_url = base_url.to_string();
+        async move {
+            call_tool(
+                &client,
+                &base_url,
+                "browser_tabs",
+                json!({ "sessionId": session_id, "action": "list" }),
+            )
+            .await
+        }
+    })
     .await?;
 
     let tabs = parse_tab_list(&list_result);
@@ -2057,12 +2069,19 @@ async fn handle_tab_new(
     if let Some(new_tab) = new_tab {
         let new_index = new_tab.index;
         // Select the new tab
-        let _ = call_tool(
-            client,
-            base_url,
-            "browser_tabs",
-            json!({ "sessionId": session_id, "action": "select", "index": new_index }),
-        )
+        let _ = with_session(client, base_url, session_name, false, |session_id| {
+            let client = client.clone();
+            let base_url = base_url.to_string();
+            async move {
+                call_tool(
+                    &client,
+                    &base_url,
+                    "browser_tabs",
+                    json!({ "sessionId": session_id, "action": "select", "index": new_index }),
+                )
+                .await
+            }
+        })
         .await;
         cli_println!("Switched to tab {} ({})", new_index, url);
     } else {
@@ -2084,16 +2103,19 @@ async fn handle_tab_select(
     let index_val = tool_params.get("index").cloned();
     let guid_val = tool_params.get("guid").cloned();
 
-    let state = read_state(None, session_name);
-    let Some(session_id) = state.session_id.as_deref() else {
-        return Err(no_active_session_message());
-    };
-
-    let mut args = json!({ "sessionId": session_id, "action": "select" });
-    if let Some(ref idx) = index_val { args["index"] = idx.clone(); }
-    if let Some(ref g) = guid_val { args["tabId"] = g.clone(); }
-
-    let result = call_tool(client, base_url, "browser_tabs", args).await?;
+    let result = with_session(client, base_url, session_name, false, |session_id| {
+        let client = client.clone();
+        let base_url = base_url.to_string();
+        let index_val = index_val.clone();
+        let guid_val = guid_val.clone();
+        async move {
+            let mut args = json!({ "sessionId": session_id, "action": "select" });
+            if let Some(ref idx) = index_val { args["index"] = idx.clone(); }
+            if let Some(ref g) = guid_val { args["tabId"] = g.clone(); }
+            call_tool(&client, &base_url, "browser_tabs", args).await
+        }
+    })
+    .await?;
 
     // Print user-friendly confirmation.
     if !json_active() {
@@ -2122,16 +2144,19 @@ async fn handle_tab_close(
     let index_val = tool_params.get("index").cloned();
     let guid_val = tool_params.get("guid").cloned();
 
-    let state = read_state(None, session_name);
-    let Some(session_id) = state.session_id.as_deref() else {
-        return Err(no_active_session_message());
-    };
-
-    let mut args = json!({ "sessionId": session_id, "action": "close" });
-    if let Some(ref idx) = index_val { args["index"] = idx.clone(); }
-    if let Some(ref g) = guid_val { args["tabId"] = g.clone(); }
-
-    let result = call_tool(client, base_url, "browser_tabs", args).await?;
+    let result = with_session(client, base_url, session_name, false, |session_id| {
+        let client = client.clone();
+        let base_url = base_url.to_string();
+        let index_val = index_val.clone();
+        let guid_val = guid_val.clone();
+        async move {
+            let mut args = json!({ "sessionId": session_id, "action": "close" });
+            if let Some(ref idx) = index_val { args["index"] = idx.clone(); }
+            if let Some(ref g) = guid_val { args["tabId"] = g.clone(); }
+            call_tool(&client, &base_url, "browser_tabs", args).await
+        }
+    })
+    .await?;
 
     // Print confirmation with tab info when possible (skip if JSON mode —
     // the caller wants structured output).
