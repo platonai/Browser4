@@ -180,29 +180,24 @@ open class PulsarWebDriver constructor(
             return state
         }
 
-        // Extension-attached drivers use chrome.debugger.sendCommand (per-tab CDP)
-        // through the Chrome Extension relay.  Browser-level commands like
-        // Target.getTargets are NOT available on per-tab connections — they fail
-        // even when the tab is perfectly healthy.  Use Page.getFrameTree instead:
-        // it is a page-level CDP command that works on every page type
-        // (about:blank, images, normal pages, etc.) without requiring a JavaScript
-        // execution context.
-        val isExtensionBacked = browser.chrome is ExtensionChromeService
-
-        if (isExtensionBacked) {
-            if (!browserProtocol.isPageAlive()) {
-                return CheckState(
-                    ResourceStatus.SC_SERVICE_UNAVAILABLE,
-                    "WebDriver service unavailable - the target page is not alive"
-                )
-            }
+        // Extension-attached drivers use chrome.debugger.sendCommand (per-tab
+        // CDP) through the Chrome Extension relay.  Browser-level commands
+        // like Target.getTargets are not available — they fail even when the
+        // tab is perfectly healthy.  Use isPageAlive() (→ Page.getFrameTree)
+        // instead: a page-level command that works on every page type
+        // (about:blank, images, normal pages, etc.) without requiring a
+        // JavaScript execution context.
+        val alive = if (browser.chrome is ExtensionChromeService) {
+            browserProtocol.isPageAlive()
         } else {
-            if (!browserProtocol.isTargetAlive()) {
-                return CheckState(
-                    ResourceStatus.SC_SERVICE_UNAVAILABLE,
-                    "WebDriver service unavailable - the target page is not alive"
-                )
-            }
+            browserProtocol.isTargetAlive()
+        }
+
+        if (!alive) {
+            return CheckState(
+                ResourceStatus.SC_SERVICE_UNAVAILABLE,
+                "WebDriver service unavailable - the target page is not alive"
+            )
         }
 
         return CheckState(0, "WebDriver is healthy")
