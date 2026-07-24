@@ -187,6 +187,21 @@ class PulsarSessionManager(
             return markSessionActive(session)
         }
 
+        // Extension-attached session whose WebSocket has disconnected.
+        // Do NOT fall through to recreateUnhealthySession — that would
+        // silently replace the extension-backed session with a fresh
+        // Browser4-launched Chrome, making the CLI show "Extension" in
+        // its list while actually driving a different browser.
+        if (extensionSessionIds.contains(sessionId)) {
+            markSessionInactive(session)
+            logger.info(
+                "Extension-attached session {} is disconnected — keeping as inactive " +
+                "(will not recreate as Browser4-CDP). Re-run attach --extension to reconnect.",
+                sessionId
+            )
+            return session
+        }
+
         if (checkHealthyBlocking(session).isOK) {
             return markSessionActive(session)
         }
@@ -271,6 +286,17 @@ class PulsarSessionManager(
     /** Active extension browser instances keyed by sessionId. */
     private val extensionBrowsers = ConcurrentHashMap<String, ExtensionChromeService>()
 
+    /**
+     * Tracks every session that was created via [createExtensionAttachedSession].
+     *
+     * Unlike [extensionBrowsers] (which only contains sessions whose WebSocket is
+     * currently connected), this set is permanent for the lifetime of the session.
+     * It allows [resolveHealthySession] to distinguish "extension-attached but
+     * disconnected" from "ordinary Browser4-launched" sessions — the former must
+     * never be silently recreated as a Browser4-CDP session.
+     */
+    private val extensionSessionIds = ConcurrentHashMap.newKeySet<String>()
+
     /** Injected by [ai.platon.pulsar.rest.config.ExtensionWebSocketConfig]. */
     @Volatile
     var serverPort: Int = 8182
@@ -308,6 +334,10 @@ class PulsarSessionManager(
         val session = sessions.computeIfAbsent(sessionId) {
             createManagedSession(sessionId, normalizedCapabilities)
         }
+
+        // Track this session as extension-attached so resolveHealthySession
+        // never silently recreates it as an ordinary Browser4-CDP session.
+        extensionSessionIds.add(sessionId)
 
         val wsEndpoint = "ws://127.0.0.1:$serverPort/ws/extension/$sessionId"
         pendingExtensionConnections[sessionId] = PendingExtensionConnection(
@@ -646,6 +676,7 @@ class PulsarSessionManager(
         // Clean up extension-related resources for this session
         extensionBrowsers.remove(sessionId)?.close()
         pendingExtensionConnections.remove(sessionId)
+        extensionSessionIds.remove(sessionId)
 
         return true
     }

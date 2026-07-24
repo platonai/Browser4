@@ -697,6 +697,14 @@ async fn create_session(
     new_state.base_url = base_url.to_string();
     new_state.active_selector = None;
     new_state.last_mouse_position = None;
+    // New sessions created via open_session are Browser4-managed, never
+    // attached.  Clear any leftover attachment flags so the CLI does not
+    // misrepresent the connection type in `list` (e.g. showing "Extension"
+    // for what is actually a fresh Browser4-CDP browser).
+    new_state.is_attached = false;
+    new_state.attach_type = None;
+    new_state.cdp_endpoint = None;
+    new_state.browser_channel = None;
     new_state.created_at = Some(Utc::now().to_rfc3339());
     new_state.last_accessed_at = Some(Utc::now().to_rfc3339());
     write_state(&new_state, None, session_name).map_err(|e| e.to_string())?;
@@ -19467,5 +19475,118 @@ mod tests {
         let error_msg = "--extension cannot be combined with --endpoint";
         assert!(error_msg.contains("--extension"));
         assert!(error_msg.contains("--endpoint"));
+    }
+
+    // =========================================================================
+    // create_session clears attachment flags
+    // =========================================================================
+
+    /// Simulate what create_session does to the persisted state: clone the
+    /// current state, set a new session ID, and write it back.  Attachment
+    /// flags must be cleared because the new session is Browser4-managed,
+    /// not extension/CDP-attached.
+    #[test]
+    fn create_session_logic_clears_attachment_flags() {
+        let tmp = test_temp_dir();
+        let dir = tmp.path();
+
+        // Build a state that looks like an extension-attached session.
+        let old_state = CliState {
+            session_id: Some("7fd8ffae-519b-4713-adfa-5b296a3249b9".to_string()),
+            base_url: "http://localhost:8182".to_string(),
+            is_attached: true,
+            attach_type: Some("extension".to_string()),
+            cdp_endpoint: None,
+            browser_channel: Some("chrome".to_string()),
+            ..Default::default()
+        };
+
+        // Simulate what create_session does.
+        let mut new_state = old_state.clone();
+        new_state.session_id = Some("new-browser4-session-id".to_string());
+        new_state.base_url = "http://localhost:8182".to_string();
+        new_state.active_selector = None;
+        new_state.last_mouse_position = None;
+        new_state.is_attached = false;
+        new_state.attach_type = None;
+        new_state.cdp_endpoint = None;
+        new_state.browser_channel = None;
+        new_state.created_at = Some("2026-07-25T00:00:00Z".to_string());
+        new_state.last_accessed_at = Some("2026-07-25T00:00:00Z".to_string());
+        write_state(&new_state, Some(dir), None).unwrap();
+
+        // Read back and verify.
+        let read = read_state(Some(dir), None);
+        assert_eq!(read.session_id.as_deref(), Some("new-browser4-session-id"));
+        assert!(!read.is_attached, "is_attached must be false for a new Browser4-managed session");
+        assert_eq!(read.attach_type, None, "attach_type must be None — not 'extension' or 'cdp'");
+        assert_eq!(read.cdp_endpoint, None);
+        assert_eq!(read.browser_channel, None);
+    }
+
+    /// CDP-attached sessions must also have their attachment flags cleared
+    /// when a new Browser4-managed session replaces them.
+    #[test]
+    fn create_session_logic_clears_cdp_attachment_flags() {
+        let tmp = test_temp_dir();
+        let dir = tmp.path();
+
+        let old_state = CliState {
+            session_id: Some("cdp-session-1".to_string()),
+            base_url: "http://localhost:8182".to_string(),
+            is_attached: true,
+            attach_type: Some("cdp".to_string()),
+            cdp_endpoint: Some("http://localhost:9222".to_string()),
+            browser_channel: None,
+            ..Default::default()
+        };
+
+        let mut new_state = old_state.clone();
+        new_state.session_id = Some("new-browser4-session-id".to_string());
+        new_state.is_attached = false;
+        new_state.attach_type = None;
+        new_state.cdp_endpoint = None;
+        new_state.browser_channel = None;
+        write_state(&new_state, Some(dir), None).unwrap();
+
+        let read = read_state(Some(dir), None);
+        assert!(!read.is_attached);
+        assert_eq!(read.attach_type, None);
+        assert_eq!(read.cdp_endpoint, None);
+    }
+
+    /// invalidate_session (as used in with_session recovery) keeps attachment
+    /// flags so the caller can decide whether to reconnect or create a new
+    /// session.  This test guards the distinction between invalidation and
+    /// creation.
+    #[test]
+    fn invalidate_session_preserves_attachment_flags() {
+        let tmp = test_temp_dir();
+        let dir = tmp.path();
+
+        let old_state = CliState {
+            session_id: Some("ext-session".to_string()),
+            base_url: "http://localhost:8182".to_string(),
+            is_attached: true,
+            attach_type: Some("extension".to_string()),
+            browser_channel: Some("chrome".to_string()),
+            ..Default::default()
+        };
+
+        write_state(&old_state, Some(dir), None).unwrap();
+
+        // Simulate invalidate_session: clear session_id but keep attachment
+        // flags so the caller can reconnect.
+        let mut invalidated = old_state.clone();
+        invalidated.session_id = None;
+        invalidated.active_selector = None;
+        invalidated.last_mouse_position = None;
+        write_state(&invalidated, Some(dir), None).unwrap();
+
+        let read = read_state(Some(dir), None);
+        assert!(read.session_id.is_none(), "invalidate_session clears session_id");
+        assert!(read.is_attached, "invalidate_session preserves is_attached");
+        assert_eq!(read.attach_type.as_deref(), Some("extension"),
+            "invalidate_session preserves attach_type for potential reconnect");
     }
 }
