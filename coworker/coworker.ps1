@@ -14,7 +14,7 @@
 # Commands:
 #   draft    Create or edit a task draft in 0draft/
 #   refine   Improve a draft task using AI analysis
-#   add      Move a task into 1ready/ for execution
+#   assign   Move a task into 1ready/ for execution (alias: add)
 #   list     Show tasks grouped by state
 #   view     Display full task content
 #   cancel   Move a task back to draft or remove it
@@ -44,8 +44,9 @@ Commands:
   refine    Improve a draft task using AI analysis
             coworker refine [-Path <path>] [-Audience <str>] [-InPlace]
 
-  add       Move a task into 1ready/ for execution
-            coworker add [-Path <path>] [-Name <str>] [-Rename] [-AutoApprove]
+  assign    Move a task into 1ready/ for execution
+            coworker assign [-Path <path>] [-Name <str>] [-Rename] [-AutoApprove]
+            (alias: add)
 
   list      Show tasks grouped by state
             coworker list [-State <str>] [-Count <int>] [-Brief] [-NoPager]
@@ -670,10 +671,10 @@ $draftContent
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Subcommand: add — Move a task into 1ready/ for execution
+# Subcommand: assign — Move a task into 1ready/ for execution (alias: add)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-function Invoke-Add {
+function Invoke-Assign {
     param(
         [string]$Path = '',
         [string]$Name = '',
@@ -1446,9 +1447,9 @@ Examples:
   coworker refine -Audience "Senior engineer"
 '@
         }
-        'add' {
+        'assign' {
             @'
-Usage: coworker add [options]
+Usage: coworker assign [options]
 
 Move a task file into 1ready/ for execution by the Coworker runner.
 
@@ -1460,9 +1461,31 @@ Options:
   -Force          Skip warnings (e.g. if task is already in 2working)
 
 Examples:
-  coworker add -Path 0draft/my-task.md
-  coworker add -Path 0draft/7.md -Rename
-  coworker add -Name my-task -AutoApprove
+  coworker assign -Path 0draft/my-task.md
+  coworker assign -Path 0draft/7.md -Rename
+  coworker assign -Name my-task -AutoApprove
+
+Note: "add" is a backward-compatible alias for "assign".
+'@
+        }
+        'add' {
+            @'
+Usage: coworker add [options]
+
+Move a task file into 1ready/ for execution by the Coworker runner.
+(DEPRECATED: use "assign" instead. "add" is kept for backward compatibility.)
+
+Options:
+  -Path <path>    File to add (required, unless -Name is used)
+  -Name <str>     Find draft by name in 0draft/
+  -Rename         AI-generate a descriptive kebab-case filename
+  -AutoApprove    Add #auto-approve tag (task goes straight to 5approved)
+  -Force          Skip warnings (e.g. if task is already in 2working)
+
+Examples:
+  coworker assign -Path 0draft/my-task.md
+  coworker assign -Path 0draft/7.md -Rename
+  coworker assign -Name my-task -AutoApprove
 '@
         }
         'list' {
@@ -1630,7 +1653,7 @@ if ($subArgs['Help']) {
 }
 
 # Show command help if no meaningful args and it's a command that requires args
-$needsArgs = @('refine', 'add', 'view', 'cancel', 'commit', 'push')
+$needsArgs = @('refine', 'assign', 'add', 'view', 'cancel', 'commit', 'push')
 if ($Command -in $needsArgs) {
     $hasArgs = ($subArgs['Path'] -or $subArgs['Name'] -or
                 $subArgs['Message'] -or $subArgs['Edit'])
@@ -1680,8 +1703,15 @@ try {
                 -InPlace:(Get-SwitchArg $subArgs 'InPlace') `
                 -OutputPath (Get-Arg $subArgs 'OutputPath')
         }
+        'assign' {
+            Invoke-Assign -Path (Get-Arg $subArgs 'Path') `
+                -Name (Get-Arg $subArgs 'Name') `
+                -Rename:(Get-SwitchArg $subArgs 'Rename') `
+                -AutoApprove:(Get-SwitchArg $subArgs 'AutoApprove') `
+                -Force:(Get-SwitchArg $subArgs 'Force')
+        }
         'add' {
-            Invoke-Add -Path (Get-Arg $subArgs 'Path') `
+            Invoke-Assign -Path (Get-Arg $subArgs 'Path') `
                 -Name (Get-Arg $subArgs 'Name') `
                 -Rename:(Get-SwitchArg $subArgs 'Rename') `
                 -AutoApprove:(Get-SwitchArg $subArgs 'AutoApprove') `
