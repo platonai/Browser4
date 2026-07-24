@@ -1957,12 +1957,15 @@ pub fn all_commands() -> Vec<CommandDef> {
             hidden: false,
             batch_supported: true,
             args: &[ArgDef { name: "index", description: "Zero-based tab index from tab-list output. If omitted, current tab is closed.", optional: true }],
-            options: &[],
+            options: &[
+                OptionDef { name: "guid", description: "Close by GUID instead of index (from tab-list output)", is_bool: false, short: None },
+            ],
             e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_tabs".to_string(),
             tool_params_fn: |args| {
                 let mut p = json!({ "action": "close" });
                 if let Some(index) = args.get("index") { p["index"] = index.clone(); }
+                if let Some(guid) = args.get("guid") { p["tabId"] = guid.clone(); }
                 p
             },
         },
@@ -1973,14 +1976,16 @@ pub fn all_commands() -> Vec<CommandDef> {
             hidden: false,
             batch_supported: true,
             args: &[ArgDef { name: "index", description: "Zero-based tab index", optional: false }],
-            options: &[],
+            options: &[
+                OptionDef { name: "guid", description: "Select by GUID instead of index (from tab-list output)", is_bool: false, short: None },
+            ],
             e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_tabs".to_string(),
             tool_params_fn: |args| {
-                json!({
-                    "action": "select",
-                    "index": args.get("index").cloned().unwrap_or_default(),
-                })
+                let mut p = json!({ "action": "select" });
+                if let Some(index) = args.get("index") { p["index"] = index.clone(); }
+                if let Some(guid) = args.get("guid") { p["tabId"] = guid.clone(); }
+                p
             },
         },
         // ---- Browsers / Sessions ----

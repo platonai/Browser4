@@ -1271,53 +1271,130 @@ pub(super) fn test_tab_commands(ctx: &mut E2ECtx) {
     goto_interactive_page(ctx);
     let interactive_url = ctx.interactive_url();
     let other_url = ctx.other_url();
+    let form_url = ctx.form_url();
 
+    // ── 1. Verify tab-list shows single tab with GUID column ──────────
     let initial_tabs = run_command(ctx, &["tab-list"]);
     let tab_output = strip_snapshot_output(&initial_tabs.stdout);
     assert!(
         tab_output.contains(&interactive_url),
         "Expected interactive URL in tab-list output:\n{tab_output}"
     );
+    let interactive_guid = extract_tab_guid(&tab_output, &interactive_url);
+    assert!(
+        !interactive_guid.is_empty(),
+        "Expected non-empty GUID for the initial tab in:\n{tab_output}"
+    );
 
+    // ── 2. Create a second tab — verify both appear ──────────────────
     run_command(ctx, &["tab-new", &other_url]);
-    let updated_tabs = run_command(ctx, &["tab-list"]);
-    let tab_output = strip_snapshot_output(&updated_tabs.stdout);
+    let two_tab_output = strip_snapshot_output(&run_command(ctx, &["tab-list"]).stdout);
     assert!(
-        tab_output.contains(&interactive_url),
-        "Expected interactive URL in updated tab-list"
+        two_tab_output.contains(&interactive_url),
+        "Expected interactive URL still present after tab-new:\n{two_tab_output}"
     );
     assert!(
-        tab_output.contains(&other_url),
-        "Expected other URL in updated tab-list"
+        two_tab_output.contains(&other_url),
+        "Expected other URL present after tab-new:\n{two_tab_output}"
     );
 
-    let other_tab_index = extract_tab_index(&tab_output, &other_url).to_string();
-
-    run_command(ctx, &["tab-select", &other_tab_index]);
+    // ── 3. tab-select by GUID ────────────────────────────────────────
+    let other_guid = extract_tab_guid(&two_tab_output, &other_url);
+    assert!(
+        !other_guid.is_empty(),
+        "Expected non-empty GUID for the new tab"
+    );
+    run_command(ctx, &["tab-select", "--guid", &other_guid]);
     let current_url = eval_text(ctx, "document.location.href");
     assert!(
         current_url.contains(&other_url),
-        "Expected tab-select {other_tab_index} to activate '{other_url}', got:\n{current_url}"
+        "Expected tab-select --guid {other_guid} to activate '{other_url}', got:\n{current_url}"
     );
 
-    run_command(ctx, &["tab-close", &other_tab_index]);
-    // The tab is closed asynchronously server-side (CDP Target.closeTarget +
-    // targetDestroyed event), so an immediate tab-list can still show the tab
-    // on a loaded CI runner.  Poll until it disappears instead of asserting
-    // on the first read.
+    // ── 4. Create a third tab — verify all three present ─────────────
+    run_command(ctx, &["tab-new", &form_url]);
+    let three_tab_output = strip_snapshot_output(&run_command(ctx, &["tab-list"]).stdout);
+    assert!(
+        three_tab_output.contains(&interactive_url),
+        "Expected interactive URL in three-tab list"
+    );
+    assert!(
+        three_tab_output.contains(&other_url),
+        "Expected other URL in three-tab list"
+    );
+    assert!(
+        three_tab_output.contains(&form_url),
+        "Expected form URL in three-tab list:\n{three_tab_output}"
+    );
+
+    // ── 5. tab-select by index — verify the correct tab activates ────
+    let form_index = extract_tab_index(&three_tab_output, &form_url).to_string();
+    run_command(ctx, &["tab-select", &form_index]);
+    let current_url = eval_text(ctx, "document.location.href");
+    assert!(
+        current_url.contains(&form_url),
+        "Expected tab-select {form_index} to activate '{form_url}', got:\n{current_url}"
+    );
+
+    // Switch back to the other tab by GUID for the close tests
+    run_command(ctx, &["tab-select", "--guid", &other_guid]);
+
+    // ── 6. tab-close by GUID — verify target tab disappears ─────────
+    run_command(ctx, &["tab-close", "--guid", &other_guid]);
     let deadline = std::time::Instant::now() + std::time::Duration::from_millis(5_000);
-    let mut final_tab_output = String::new();
+    let mut after_close_output = String::new();
     while std::time::Instant::now() < deadline {
-        let final_tabs = run_command(ctx, &["tab-list"]);
-        final_tab_output = strip_snapshot_output(&final_tabs.stdout);
-        if !final_tab_output.contains(&other_url) {
+        let check = run_command(ctx, &["tab-list"]);
+        after_close_output = strip_snapshot_output(&check.stdout);
+        if !after_close_output.contains(&other_url) {
             break;
         }
         std::thread::sleep(std::time::Duration::from_millis(300));
     }
     assert!(
-        !final_tab_output.contains(&other_url),
-        "Expected tab-close {other_tab_index} to remove '{other_url}' from tab-list:\n{final_tab_output}"
+        !after_close_output.contains(&other_url),
+        "Expected tab-close --guid {other_guid} to remove '{other_url}' from tab-list:\n{after_close_output}"
     );
+    assert!(
+        after_close_output.contains(&interactive_url),
+        "Expected interactive URL to survive GUID-based close"
+    );
+    assert!(
+        after_close_output.contains(&form_url),
+        "Expected form URL to survive GUID-based close"
+    );
+
+    // ── 7. tab-close current tab (no args) — verify tab count drops ──
+    // We are currently on the interactive tab (first tab, front after close).
+    // Switch to form tab first, then close it without args.
+    let form_idx_after = extract_tab_index(&after_close_output, &form_url).to_string();
+    run_command(ctx, &["tab-select", &form_idx_after]);
+    run_command(ctx, &["tab-close"]); // closes current tab (form)
+    let deadline2 = std::time::Instant::now() + std::time::Duration::from_millis(5_000);
+    let mut remaining_output = String::new();
+    while std::time::Instant::now() < deadline2 {
+        let check = run_command(ctx, &["tab-list"]);
+        remaining_output = strip_snapshot_output(&check.stdout);
+        if !remaining_output.contains(&form_url) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(300));
+    }
+    assert!(
+        !remaining_output.contains(&form_url),
+        "Expected tab-close (no args) to remove current tab '{form_url}' from tab-list:\n{remaining_output}"
+    );
+    assert!(
+        remaining_output.contains(&interactive_url),
+        "Expected interactive URL to survive no-arg close:\n{remaining_output}"
+    );
+
+    // ── 8. Verify tab-list GUIDs are stable across calls ─────────────
+    let final_guid = extract_tab_guid(&remaining_output, &interactive_url);
+    assert_eq!(
+        interactive_guid, final_guid,
+        "GUID should be stable across tab-list calls. Before: {interactive_guid}, after: {final_guid}"
+    );
+
     run_command(ctx, &["close"]);
 }

@@ -1688,6 +1688,11 @@ pub fn generate_help_entry(cmd: &CommandDef) -> String {
         args_text = format!("{} [--ref <ref>]", args_text.trim_end());
     }
 
+    // Surface the --guid option for tab commands so users discover the stable identifier
+    if cmd.name == "tab-close" || cmd.name == "tab-select" {
+        args_text = format!("{} [--guid <guid>]", args_text.trim_end());
+    }
+
     // Surface key required options for swarm-query in the help summary
     if cmd.name == "swarm-query" {
         args_text = format!("{} --sql <query> [--seed-file <file>] [--wait]", args_text.trim_end());

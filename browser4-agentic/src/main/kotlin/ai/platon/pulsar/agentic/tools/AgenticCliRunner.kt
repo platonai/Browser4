@@ -793,11 +793,13 @@ class AgenticCliRunner(
             "tab-close" to FixedCommandResolver("browser_tabs") { args ->
                 val params = mutableMapOf<String, Any?>("action" to "close")
                 args["index"]?.let { params["index"] = it }
+                args["tabId"]?.let { params["tabId"] = it }
                 params
             },
             "tab-select" to FixedCommandResolver("browser_tabs") { args ->
                 val params = mutableMapOf<String, Any?>("action" to "select")
                 args["index"]?.let { params["index"] = it }
+                args["tabId"]?.let { params["tabId"] = it }
                 params
             },
 
@@ -883,8 +885,8 @@ class AgenticCliRunner(
             "agent-result" to CommandDef(listOf("id")),
             "tab-list" to CommandDef(emptyList()),
             "tab-new" to CommandDef(listOf("url")),
-            "tab-close" to CommandDef(listOf("index")),
-            "tab-select" to CommandDef(listOf("index")),
+            "tab-close" to CommandDef(listOf("index", "tabId")),
+            "tab-select" to CommandDef(listOf("index", "tabId")),
         )
 
         /**

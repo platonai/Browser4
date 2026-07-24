@@ -2605,6 +2605,51 @@ fn extract_tab_index(output: &str, url: &str) -> usize {
     panic!("Could not find tab index for '{}' in:\n{}", url, output)
 }
 
+/// Extract the GUID for a tab from tab-list output by matching its URL.
+///
+/// The output can be JSON (--json mode) or human-readable table format.
+fn extract_tab_guid(output: &str, url: &str) -> String {
+    // Primary path: parse as JSON array of {index, guid, url} objects.
+    if let Ok(tabs) = serde_json::from_str::<Vec<serde_json::Value>>(output) {
+        for tab in &tabs {
+            if let Some(tab_url) = tab.get("url").and_then(|v| v.as_str()) {
+                if tab_url == url {
+                    if let Some(guid) = tab.get("guid").and_then(|v| v.as_str()) {
+                        return guid.to_string();
+                    }
+                    panic!(
+                        "Found URL '{}' in tab-list but guid field is missing:\n{}",
+                        url, output
+                    );
+                }
+            }
+        }
+        panic!("Could not find tab guid for '{}' in:\n{}", url, output);
+    }
+
+    // Fallback: parse human-readable table (Index | GUID | Title | URL).
+    // Lines look like: "  0  217099183  My Title  http://example.com/path"
+    static TABLE_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let table_re = TABLE_RE.get_or_init(|| {
+        regex::Regex::new(r#"^\s*(\d+)\s+(\S+)\s+.*\s+(https?://\S+)\s*$"#)
+            .expect("tab table guid regex compile")
+    });
+
+    for line in output.lines() {
+        if let Some(caps) = table_re.captures(line) {
+            let line_url = caps[3].to_string();
+            if line_url == url {
+                return caps[2].to_string();
+            }
+        }
+    }
+
+    panic!(
+        "Could not find tab guid for '{}' in:\n{}",
+        url, output
+    )
+}
+
 // ---------------------------------------------------------------------------
 // Swarm / agent helpers
 // ---------------------------------------------------------------------------

@@ -208,8 +208,8 @@ pdf                 Save the page as PDF. --filename
 ```
 tab-list            List all open tabs
 tab-new [url]       Create a new tab, optionally navigating to a URL
-tab-close [index]   Close a tab by zero-based index (omit for current tab)
-tab-select <index>  Select a tab by zero-based index
+tab-close [index]   Close a tab by zero-based index (omit for current tab). Use --guid for GUID-based close.
+tab-select <index>  Select a tab by zero-based index. Use --guid for GUID-based select.
 ```
 
 #### Dialogs

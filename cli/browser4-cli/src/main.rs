@@ -595,6 +595,7 @@ struct TabInfo {
     index: usize,
     url: String,
     title: String,
+    guid: Option<String>,
 }
 
 /// Parse the JSON response from a `browser_tabs` "list" action into a vec of
@@ -657,11 +658,16 @@ fn parse_tab_entry(value: &Value) -> Option<TabInfo> {
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
+    let guid = obj
+        .get("guid")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
     // We need at least an index to track the tab.
     index.map(|idx| TabInfo {
         index: idx,
         url,
         title,
+        guid,
     })
 }
 
@@ -1929,6 +1935,7 @@ async fn handle_tab_list(
             .map(|t| {
                 json!({
                     "index": t.index,
+                    "guid": t.guid,
                     "url": t.url,
                     "title": t.title,
                 })
@@ -1936,10 +1943,11 @@ async fn handle_tab_list(
             .collect();
         cli_println!("{}", serde_json::to_string_pretty(&json_tabs).unwrap_or_default());
     } else {
-        // Human-readable table: Index | Title | URL
+        // Human-readable table: Index | GUID | Title | URL
         let idx_w = "Index".len().max(
             tabs.last().map(|t| t.index.to_string().len()).unwrap_or(0),
         );
+        let guid_w = "GUID".len();
         let title_w = "Title".len().max(
             tabs.iter().map(|t| t.title.len()).max().unwrap_or(0).min(60),
         );
@@ -1948,20 +1956,27 @@ async fn handle_tab_list(
         );
 
         cli_println!(
-            "  {:<idx_w$}  {:<title_w$}  {:<url_w$}",
-            "Index", "Title", "URL",
+            "  {:<idx_w$}  {:<guid_w$}  {:<title_w$}  {:<url_w$}",
+            "Index", "GUID", "Title", "URL",
             idx_w = idx_w,
+            guid_w = guid_w,
             title_w = title_w,
             url_w = url_w,
         );
         cli_println!(
-            "  {:-<idx_w$}  {:-<title_w$}  {:-<url_w$}",
-            "", "", "",
+            "  {:-<idx_w$}  {:-<guid_w$}  {:-<title_w$}  {:-<url_w$}",
+            "", "", "", "",
             idx_w = idx_w,
+            guid_w = guid_w,
             title_w = title_w,
             url_w = url_w,
         );
         for tab in &tabs {
+            let guid_display = match &tab.guid {
+                Some(g) if g.len() > 10 => format!("{}…", &g[..9]),
+                Some(g) => g.clone(),
+                None => "-".to_string(),
+            };
             let title = if tab.title.len() > 60 {
                 format!("{}…", &tab.title[..59])
             } else {
@@ -1973,9 +1988,10 @@ async fn handle_tab_list(
                 tab.url.clone()
             };
             cli_println!(
-                "  {:<idx_w$}  {:<title_w$}  {:<url_w$}",
-                tab.index, title, url,
+                "  {:<idx_w$}  {:<guid_w$}  {:<title_w$}  {:<url_w$}",
+                tab.index, guid_display, title, url,
                 idx_w = idx_w,
+                guid_w = guid_w,
                 title_w = title_w,
                 url_w = url_w,
             );
@@ -2010,8 +2026,14 @@ async fn handle_tab_new(
 
     cli_println!("{}", result);
 
-    // Auto-switch to the newly created tab by listing tabs, finding the
-    // highest-index entry, and issuing a select action.
+    // Parse the new tab's GUID from the "new" action response so we can
+    // reliably find it in the tab list regardless of internal ordering.
+    let new_guid: Option<String> = serde_json::from_str::<Value>(&result)
+        .ok()
+        .and_then(|v| v.get("guid").and_then(|g| g.as_str().map(String::from)));
+
+    // Auto-switch to the newly created tab by listing tabs, locating the
+    // entry whose guid matches, and issuing a select action.
     let list_result = call_tool(
         client,
         base_url,
@@ -2021,7 +2043,18 @@ async fn handle_tab_new(
     .await?;
 
     let tabs = parse_tab_list(&list_result);
-    if let Some(new_tab) = tabs.last() {
+    let new_tab = if let Some(ref guid) = new_guid {
+        // Prefer matching by GUID — the list order is not guaranteed to
+        // reflect creation order (backed by ConcurrentHashMap).
+        tabs.iter().find(|t| t.guid.as_deref() == Some(guid.as_str()))
+    } else {
+        // If GUID parsing failed, fall back to the last tab as a best-effort
+        // heuristic (preserves legacy behaviour).
+        None
+    }
+    .or_else(|| tabs.last());
+
+    if let Some(new_tab) = new_tab {
         let new_index = new_tab.index;
         // Select the new tab
         let _ = call_tool(
@@ -2032,29 +2065,6 @@ async fn handle_tab_new(
         )
         .await;
         cli_println!("Switched to tab {} ({})", new_index, url);
-
-        // Refresh page info for the "### Page" section
-        let (page_url, page_title) = tokio::join!(
-            call_tool(
-                client,
-                base_url,
-                "page_url",
-                json!({ "sessionId": session_id }),
-            ),
-            call_tool(
-                client,
-                base_url,
-                "page_title",
-                json!({ "sessionId": session_id }),
-            ),
-        );
-        if let (Ok(pu), Ok(pt)) = (page_url, page_title) {
-            json_field("page_url", json!(&pu));
-            json_field("page_title", json!(&pt));
-            cli_println!("### Page");
-            cli_println!("- Page URL: {}", pu);
-            cli_println!("- Page Title: {}", pt);
-        }
     } else {
         // Couldn't parse the tab list; still show a tip
         if !json_active() {
@@ -2071,45 +2081,72 @@ async fn handle_tab_select(
     tool_params: &Value,
     session_name: Option<&str>,
 ) -> Result<(), String> {
-    let index_val = tool_params.get("index").cloned().unwrap_or_default();
+    let index_val = tool_params.get("index").cloned();
+    let guid_val = tool_params.get("guid").cloned();
 
     let state = read_state(None, session_name);
     let Some(session_id) = state.session_id.as_deref() else {
         return Err(no_active_session_message());
     };
 
-    let result = call_tool(
-        client,
-        base_url,
-        "browser_tabs",
-        json!({ "sessionId": session_id, "action": "select", "index": index_val }),
-    )
-    .await?;
+    let mut args = json!({ "sessionId": session_id, "action": "select" });
+    if let Some(ref idx) = index_val { args["index"] = idx.clone(); }
+    if let Some(ref g) = guid_val { args["tabId"] = g.clone(); }
 
-    cli_println!("{}", result);
+    let result = call_tool(client, base_url, "browser_tabs", args).await?;
 
-    // Refresh page info after tab switch so the "### Page" section shows the
-    // newly selected tab's URL and title instead of stale cached metadata.
-    let (page_url, page_title) = tokio::join!(
-        call_tool(
-            client,
-            base_url,
-            "page_url",
-            json!({ "sessionId": session_id }),
-        ),
-        call_tool(
-            client,
-            base_url,
-            "page_title",
-            json!({ "sessionId": session_id }),
-        ),
-    );
-    if let (Ok(pu), Ok(pt)) = (page_url, page_title) {
-        json_field("page_url", json!(&pu));
-        json_field("page_title", json!(&pt));
-        cli_println!("### Page");
-        cli_println!("- Page URL: {}", pu);
-        cli_println!("- Page Title: {}", pt);
+    // Print user-friendly confirmation.
+    if !json_active() {
+        if let Some(ref g) = guid_val {
+            let g_str = g.as_str().unwrap_or_default();
+            cli_println!("✓ Switched to tab {}", g_str);
+        } else if let Some(ref idx) = index_val {
+            let idx_str = idx.as_str().unwrap_or_default();
+            cli_println!("✓ Switched to tab {}", idx_str);
+        } else {
+            cli_println!("{}", result);
+        }
+    } else {
+        cli_println!("{}", result);
+    }
+
+    Ok(())
+}
+
+async fn handle_tab_close(
+    client: &Client,
+    base_url: &str,
+    tool_params: &Value,
+    session_name: Option<&str>,
+) -> Result<(), String> {
+    let index_val = tool_params.get("index").cloned();
+    let guid_val = tool_params.get("guid").cloned();
+
+    let state = read_state(None, session_name);
+    let Some(session_id) = state.session_id.as_deref() else {
+        return Err(no_active_session_message());
+    };
+
+    let mut args = json!({ "sessionId": session_id, "action": "close" });
+    if let Some(ref idx) = index_val { args["index"] = idx.clone(); }
+    if let Some(ref g) = guid_val { args["tabId"] = g.clone(); }
+
+    let result = call_tool(client, base_url, "browser_tabs", args).await?;
+
+    // Print confirmation with tab info when possible (skip if JSON mode —
+    // the caller wants structured output).
+    if !json_active() {
+        if let Some(ref g) = guid_val {
+            let g_str = g.as_str().unwrap_or_default();
+            cli_println!("✓ Closed tab {}", g_str);
+        } else if let Some(ref idx) = index_val {
+            let idx_str = idx.as_str().unwrap_or_default();
+            cli_println!("✓ Closed tab {}", idx_str);
+        } else {
+            cli_println!("✓ Closed current tab");
+        }
+    } else {
+        cli_println!("{}", result);
     }
 
     Ok(())
@@ -14816,6 +14853,15 @@ async fn run(
         }
         "tab-select" => {
             handle_tab_select(
+                &client,
+                &base_url,
+                &tool_params,
+                global.session_name.as_deref(),
+            )
+            .await?;
+        }
+        "tab-close" => {
+            handle_tab_close(
                 &client,
                 &base_url,
                 &tool_params,
