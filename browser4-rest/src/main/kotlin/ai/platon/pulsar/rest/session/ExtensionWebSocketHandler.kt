@@ -6,8 +6,10 @@ import org.springframework.web.socket.CloseStatus
 import org.springframework.web.socket.TextMessage
 import org.springframework.web.socket.WebSocketSession
 import org.springframework.web.socket.handler.TextWebSocketHandler
+import org.springframework.web.socket.adapter.NativeWebSocketSession
 import java.io.IOException
 import java.net.URI
+import java.time.Duration
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledExecutorService
@@ -55,8 +57,15 @@ class ExtensionWebSocketHandler(
 
             sessionManager.onExtensionConnected(sessionId, sender)
 
+            // Disable the Jetty connector's 30s idle timeout on this
+            // WebSocket connection.  Sending pings keeps the Chrome side
+            // alive, but Jetty's idle timeout is based on *incoming* data
+            // — outbound pings don't reset it.  Setting to 5 minutes
+            // prevents the server from closing the connection while idle.
+            configureIdleTimeout(session)
+
             // Schedule periodic keepalive pings to prevent the WebSocket from
-            // being closed by idle-timeout on the Jetty server or Chrome side.
+            // being closed by idle-timeout on the Chrome side.
             startPing(sessionId, session)
         } catch (e: Exception) {
             logger.warn("Failed to bind extension connection | sessionId={} | {}", sessionId, e.message, e)
@@ -96,6 +105,30 @@ class ExtensionWebSocketHandler(
     // ------------------------------------------------------------------
     // Keepalive
     // ------------------------------------------------------------------
+
+    /**
+     * Sets the Jetty WebSocket idle timeout to 5 minutes on the native session.
+     *
+     * Jetty's connector enforces a 30s idle timeout on connections by default.
+     * This timeout is based on *incoming* data — outbound pings (sent by
+     * [startPing]) do not reset it.  Without this, the server closes the
+     * WebSocket after 30s of not receiving any message from the extension.
+     */
+    private fun configureIdleTimeout(wsSession: WebSocketSession) {
+        try {
+            val native = (wsSession as? NativeWebSocketSession)?.nativeSession
+            if (native != null) {
+                // Use reflection to avoid a hard compile-time dependency on
+                // Jetty's Session class (the Jetty jar is present at runtime
+                // but we keep the import surface clean).
+                val setIdleTimeout = native.javaClass.getMethod("setIdleTimeout", Duration::class.java)
+                setIdleTimeout.invoke(native, Duration.ofMinutes(5))
+                logger.debug("Set idle timeout to 5min on native session | class={}", native.javaClass.simpleName)
+            }
+        } catch (e: Exception) {
+            logger.debug("Could not configure idle timeout on native session: {}", e.message)
+        }
+    }
 
     private fun startPing(sessionId: String, wsSession: WebSocketSession) {
         val future = pingExecutor.scheduleWithFixedDelay(
