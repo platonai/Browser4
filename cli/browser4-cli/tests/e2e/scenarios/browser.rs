@@ -1148,12 +1148,31 @@ pub(super) fn test_mouse_and_dialog(ctx: &mut E2ECtx) {
         "Expected mouseup to increment mouseUpCount",
     );
 
+    // Trigger the prompt dialog via a delayed click.  The button handler
+    // itself uses setTimeout(…, 0) before calling window.prompt(), so the
+    // dialog does not appear synchronously.  We poll dialog-accept in a
+    // retry loop instead of a fixed sleep to absorb CI variability.
     eval_text(
         ctx,
         "(() => { setTimeout(() => document.getElementById('prompt-target').click(), 100); return 'scheduled'; })()",
     );
-    thread::sleep(Duration::from_millis(500));
-    run_command(ctx, &["dialog-accept", "accepted by cli"]);
+    {
+        let deadline = Instant::now() + Duration::from_millis(10_000);
+        let mut accepted = false;
+        while Instant::now() < deadline {
+            let result =
+                run_command_allowing_failure(ctx, &["dialog-accept", "accepted by cli"]);
+            if result.exit_code == 0 {
+                accepted = true;
+                break;
+            }
+            thread::sleep(Duration::from_millis(300));
+        }
+        assert!(
+            accepted,
+            "Expected dialog-accept to succeed within 10 s"
+        );
+    }
     wait_for_state_or_abort(
         ctx,
         |s| s["promptResult"].as_str() == Some("accepted by cli"),
@@ -1161,12 +1180,27 @@ pub(super) fn test_mouse_and_dialog(ctx: &mut E2ECtx) {
         "Expected dialog-accept to set promptResult to 'accepted by cli'",
     );
 
+    // Trigger the confirm dialog — same retry approach as the prompt above.
     eval_text(
         ctx,
         "(() => { setTimeout(() => document.getElementById('confirm-target').click(), 100); return 'scheduled'; })()",
     );
-    thread::sleep(Duration::from_millis(500));
-    run_command(ctx, &["dialog-dismiss"]);
+    {
+        let deadline = Instant::now() + Duration::from_millis(10_000);
+        let mut dismissed = false;
+        while Instant::now() < deadline {
+            let result = run_command_allowing_failure(ctx, &["dialog-dismiss"]);
+            if result.exit_code == 0 {
+                dismissed = true;
+                break;
+            }
+            thread::sleep(Duration::from_millis(300));
+        }
+        assert!(
+            dismissed,
+            "Expected dialog-dismiss to succeed within 10 s"
+        );
+    }
     wait_for_state_or_abort(
         ctx,
         |s| s["confirmResult"].as_str() == Some("dismissed"),

@@ -173,24 +173,63 @@ class DirectChromeProtocol(
     }
 
     // ---------------------------------------------------------------------------
-    // Health checks
+    // Health checks — layered from transport up to JavaScript execution.
+    //
+    // Each method answers a different question:
+    //   isBrowserAlive()  — Can I reach the browser process?
+    //   isTargetAlive()   — Is the CDP transport responsive?
+    //   isV8Alive()       — Can the page execute JavaScript?
+    //
+    // For browser-level CDP connections (the normal case) the first two
+    // effectively verify the same thing — the WebSocket is still working.
+    // The layering matters for per-tab connections (chrome.debugger.attach
+    // / Chrome Extension) where browser-level commands are not available.
     // ---------------------------------------------------------------------------
 
+    /** Answers: "Is the browser process reachable via CDP?"
+     *
+     *  Sends `Browser.getVersion` — a tiny, fixed-size browser-level ping
+     *  that does not touch any page or execution context.
+     *
+     *  Concern: a successful response proves the browser process is alive,
+     *  but tells you nothing about whether a specific tab/target is usable.
+     *  A tab may have been closed or crashed independently of the browser. */
     override suspend fun isBrowserAlive(): Boolean {
         return runCatching { command("Browser.getVersion") }.isSuccess
     }
 
+    /** Answers: "Is the CDP transport responsive?"
+     *
+     *  Sends `Target.getTargets` — a browser-level command that enumerates
+     *  all open targets (tabs, workers, iframes).  For a browser-level CDP
+     *  connection (the normal case), this confirms the WebSocket is alive
+     *  and the browser is processing commands.
+     *
+     *  Concerns:
+     *  - Browser-level command: does not work on per-tab CDP connections
+     *    (chrome.debugger.attach / Chrome Extension).  Those code paths
+     *    must bypass this check (see checkHealthy in PulsarSessionManager).
+     *  - Enumeration cost: the response includes every open target.  With
+     *    many tabs the payload can grow, though in practice it remains
+     *    metadata-sized and is negligible over a local WebSocket. */
     override suspend fun isTargetAlive(): Boolean {
-        // Use Runtime.evaluate instead of Target.getTargets because
-        // Target.getTargets is a browser-level CDP command that does not work
-        // through per-tab debugger connections (e.g. chrome.debugger.attach
-        // via a Chrome Extension).  Runtime.evaluate is a tab-level command
-        // that works everywhere.
-        return runCatching {
-            command("Runtime.evaluate", mapOf("expression" to "1"))
-        }.isSuccess
+        return runCatching { command("Target.getTargets") }.isSuccess
     }
 
+    /** Answers: "Can the page execute JavaScript?"
+     *
+     *  Sends `Runtime.evaluate("1+1")` — a page-level command that requires
+     *  a valid JavaScript execution context in the target page.
+     *
+     *  Concerns:
+     *  - Requires a live V8 context: fails during page navigation, when the
+     *    main thread is blocked by a synchronous dialog (alert/confirm/
+     *    prompt), or before Page.enable has initialised the runtime.
+     *  - These transient failures look identical to a genuinely dead page,
+     *    so callers must tolerate false negatives or layer this behind
+     *    transport-level checks (isBrowserAlive / isTargetAlive) first.
+     *  - Currently unused in the codebase; kept as part of the health-check
+     *    API for callers that need to distinguish V8 health specifically. */
     override suspend fun isV8Alive(): Boolean {
         return runCatching {
             command("Runtime.evaluate", mapOf("expression" to "1+1"))
