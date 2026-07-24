@@ -289,9 +289,11 @@ function Invoke-MavenTests([string[]]$testTypes, [string[]]$additionalMvnArgs) {
         Update-TestSessionSystem -RepoRoot $repoRoot -SessionPath $script:SessionPath
         $status = if ($exitCode -eq 0) { 'pass' } else { 'fail' }
         $dur = [math]::Round($sw.Elapsed.TotalSeconds, 1)
+        $logDir = Join-Path $repoRoot 'target'
         foreach ($type in $testTypes) {
             Update-TestSessionResult -RepoRoot $repoRoot -TestKey "maven:$type" `
                 -Status $status -ExitCode $exitCode -DurationSec $dur `
+                -LogDir $logDir `
                 -SessionPath $script:SessionPath
         }
     }
@@ -369,15 +371,17 @@ function Invoke-Browser4CliTests([string[]]$additionalArgs) {
         # Attach the structured Rust test report if cargo wrote one.
         # The E2E harness writes test-report.json next to last-failed-scenarios.json
         # in the e2e temp directory (%TEMP%/browser4/browser4-cli/e2e/).
-        $reportPath = if ($IsWindows -or $env:OS -eq 'Windows_NT') {
-            Join-Path $env:TEMP 'browser4' 'browser4-cli' 'e2e' 'test-report.json'
+        $e2eLogDir = if ($IsWindows -or $env:OS -eq 'Windows_NT') {
+            Join-Path $env:TEMP 'browser4' 'browser4-cli' 'e2e'
         } else {
-            Join-Path ([System.IO.Path]::GetTempPath()) 'browser4' 'browser4-cli' 'e2e' 'test-report.json'
+            Join-Path ([System.IO.Path]::GetTempPath()) 'browser4' 'browser4-cli' 'e2e'
         }
+        $reportPath = Join-Path $e2eLogDir 'test-report.json'
         $failureReport = if (Test-Path -LiteralPath $reportPath) { $reportPath } else { '' }
 
         Update-TestSessionResult -RepoRoot $repoRoot -TestKey 'cli' `
             -Status $status -ExitCode $exitCode -DurationSec $dur `
+            -LogDir $e2eLogDir `
             -FailureReport $failureReport `
             -SessionPath $script:SessionPath
     }
@@ -762,6 +766,7 @@ function Invoke-RealWorldScenarioTests([string[]]$additionalArgs) {
         $sessionKey = if ($mode -eq 'scenarios') { 'rws:scenarios' } else { 'rws:task' }
         Update-TestSessionResult -RepoRoot $repoRoot -TestKey $sessionKey `
             -Status $status -ExitCode $exitCode -DurationSec $dur `
+            -LogDir (Join-Path $repoRoot 'target') `
             -SessionPath $script:SessionPath
     }
 
