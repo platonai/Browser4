@@ -145,9 +145,26 @@ Run:
     __CLI__ goto chrome://version/
 
 Verify:
-- The command exits with code 0.
-- The page title mentions "Chrome" or "版本" or "Version".
-- A snapshot is generated.
+- The command exits with code 0 (or fails with a clear error — see notes below).
+- If successful: the page navigates to `chrome://version/`.
+- If successful: the page title may be "Chrome", "版本", "Version", or
+  **empty**.  chrome:// pages do not always expose a standard `document.title`
+  via the accessibility tree; an empty title is expected and not a bug.
+
+**Important — Extension debugger detach:** Chrome's `debugger` API does not
+allow debugging `chrome://` internal pages.  When the extension-attached
+session navigates to `chrome://version/`, Chrome auto-detaches the debugger
+from the tab.  The Browser4 backend receives a `chrome.debugger.onDetach`
+event, cancels all pending CDP requests, and marks the session as unhealthy.
+
+This means:
+- The `goto chrome://version/` command may report a navigation error after
+  the page actually loads (the post-navigation CDP checks fail because the
+  debugger is gone).  This is expected.
+- The extension session is now **Stale**.  Any subsequent `goto` through this
+  session will fail with: "Attached session ... is no longer healthy. Re-run
+  `attach --extension` to reconnect."
+- **This is not a regression.**  It is a Chrome platform limitation.
 
 ### Step 6 -- Verify no user-data-dir in snapshot
 
@@ -156,16 +173,33 @@ Run:
     __CLI__ snapshot grep "user-data-dir"
 
 Verify:
-- The command exits with code 0.
+- The command exits with code 0 (or fails because the session is stale — if
+  so, note it and skip to Step 6b).
 - **The output MUST be empty or contain no matches.**  If `user-data-dir`
   appears, the navigation went to a Browser4-launched Chrome instead of
-  the extension-attached Chrome.  This is a **Critical** bug -- the attached
+  the extension-attached Chrome.  This is a **Critical** bug — the attached
   session silently fell through to a different browser.
 
 If `user-data-dir` IS present, record a Critical issue immediately and note
 the full snapshot line containing it.
 
-### Step 7 -- Navigate via extension session again
+### Step 6b -- Re-attach extension (recover from chrome:// detach)
+
+Because the chrome:// navigation detached the debugger, the extension
+session is now stale.  Re-attach to restore it:
+
+Run:
+
+    __CLI__ attach --extension
+
+Verify:
+- The command exits with code 0.
+- A NEW session ID is created (different from the first attach).
+- "Extension connected and healthy!" appears within 15 s.
+
+Record the new session ID for the remaining steps.
+
+### Step 7 -- Navigate via re-attached extension session
 
 Run:
 
@@ -174,7 +208,8 @@ Run:
 Verify:
 - The command exits with code 0.
 - The page navigates to `https://example.com/2`.
-- The session is still the extension-attached session (same session ID).
+- The DEFAULT session is the re-attached extension session from Step 6b.
+- "Using existing session DEFAULT" (or the new session ID) appears.
 
 ### Step 8 -- List after second navigation
 
@@ -183,9 +218,12 @@ Run:
     __CLI__ list
 
 Verify:
-- The extension session is still "Active".
-- CONNECTION is still "Extension".
-- LAST ACCESS has updated.
+- The command exits with code 0.
+- The re-attached extension session is "Active".
+- CONNECTION shows "Extension".
+- LAST ACCESS has updated since Step 2.
+- The old extension session from Step 1 (if still listed) shows "Stale" or
+  is absent.
 
 ### Step 9 -- Open a regular Browser4 session
 
@@ -323,6 +361,24 @@ With the `resolveHealthySession` extension-guard fix applied (July 2026):
   Re-run `attach --extension` to reconnect."
 - Re-attaching creates a new session with a new UUID.
 - The `list` command correctly reflects the connection type from local state.
+
+### chrome:// internal page behavior
+
+Chrome's `debugger` API does not permit debugging `chrome://` privileged pages.
+When the extension-attached session navigates to a chrome:// URL:
+
+1. Chrome auto-detaches the debugger from the tab and fires
+   `chrome.debugger.onDetach`.
+2. The Browser4 backend cancels all pending CDP requests immediately (the
+   2026-07-25 fix in `ExtensionChromeService.kt`), so the `goto` command fails
+   in ~10-15 s instead of the previous 90-120 s timeout cascade.
+3. The extension session becomes **Stale** — this is a Chrome platform
+   limitation, not a Browser4 bug.
+4. To continue, re-attach: `attach --extension`.  This creates a fresh
+   extension session that can navigate to regular (non-chrome://) pages.
+
+This is expected behavior, not a regression.  The workflow accounts for it
+by inserting a re-attach step (Step 6b) after chrome:// navigation.
 
 ## Notes
 
