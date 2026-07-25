@@ -430,6 +430,7 @@ $testTypeMap = @{
     'rws'           = 'rws'
     'ps'            = 'ps'
     'resume'        = 'resume'
+    'session'       = 'session'
 }
 
 # ── Anti-drift: verify this copy matches the live $testTypeMap in test.ps1 ──
@@ -573,7 +574,7 @@ $expectedTypes = @(
     'fast', 'it', 'e2e', 'rest', 'skills', 'mcp', 'main',
     'cli', 'browser4-cli',
     'server', 'mock-site', 'mocksite', 'mocksiteboot',
-    'rws', 'ps', 'resume'
+    'rws', 'ps', 'resume', 'session'
 )
 
 foreach ($type in $expectedTypes) {
@@ -590,7 +591,7 @@ Assert-Returns -Label 'Map: no extra keys beyond expected' -Actual $extraKeys.Co
 
 # Verify all categories are covered
 $categories = $testTypeMap.Values | Select-Object -Unique | Sort-Object
-$expectedCategories = @('cli', 'maven', 'maven-expand', 'ps', 'resume', 'rws', 'server')
+$expectedCategories = @('cli', 'maven', 'maven-expand', 'ps', 'resume', 'rws', 'server', 'session')
 $missingCategories = $expectedCategories | Where-Object { $_ -notin $categories }
 $extraCategories = $categories | Where-Object { $_ -notin $expectedCategories }
 Assert-Returns -Label 'Map: all categories covered' -Actual $missingCategories.Count -Expected 0

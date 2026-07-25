@@ -1611,17 +1611,6 @@ async fn handle_open(
     tool_params: &Value,
     session_name: Option<&str>,
 ) -> Result<(), String> {
-    // Block creation of a second unnamed session.
-    if let Err(e) = check_unnamed_slot_free(None, session_name) {
-        let url = tool_params
-            .get("url")
-            .and_then(|u| u.as_str())
-            .unwrap_or("<url>");
-        return Err(format!(
-            "{e}\nHint: browser4-cli -s <name> open {url}"
-        ));
-    }
-
     let (state, session_id, reused_existing_session) =
         get_or_create_navigation_session(client, base_url, tool_params, session_name, true).await?;
 
