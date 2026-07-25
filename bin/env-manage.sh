@@ -3,16 +3,16 @@
 # Browser4 Environment Variable Manager
 # ==============================================================================
 # Usage:
-#   ./scripts/env-manage.sh show              Show all Browser4 env vars with current values
-#   ./scripts/env-manage.sh show --detailed    Show all with descriptions and defaults
-#   ./scripts/env-manage.sh show <PREFIX>      Show vars matching a prefix (e.g. BROWSER4_CLI)
-#   ./scripts/env-manage.sh get <VAR>          Print the value of a single env var
-#   ./scripts/env-manage.sh set <VAR> <VALUE>  Set an env var in this shell (export)
-#   ./scripts/env-manage.sh unset <VAR>        Unset an env var in this shell
-#   ./scripts/env-manage.sh export             Print export commands to source in a shell
-#   ./scripts/env-manage.sh export > ~/.browser4-env && source ~/.browser4-env
-#   ./scripts/env-manage.sh list               List all known Browser4 env var names only
-#   ./scripts/env-manage.sh help               Show this help
+#   ./bin/env-manage.sh show              Show all Browser4 env vars with current values
+#   ./bin/env-manage.sh show --detailed    Show all with descriptions and defaults
+#   ./bin/env-manage.sh show <PREFIX>      Show vars matching a prefix (e.g. BROWSER4_CLI)
+#   ./bin/env-manage.sh get <VAR>          Print the value of a single env var
+#   ./bin/env-manage.sh set <VAR> <VALUE>  Set an env var in this shell (export)
+#   ./bin/env-manage.sh unset <VAR>        Unset an env var in this shell
+#   ./bin/env-manage.sh export             Print export commands to source in a shell
+#   ./bin/env-manage.sh export > ~/.browser4-env && source ~/.browser4-env
+#   ./bin/env-manage.sh list               List all known Browser4 env var names only
+#   ./bin/env-manage.sh help               Show this help
 # ==============================================================================
 
 set -euo pipefail
@@ -244,7 +244,7 @@ cmd_unset() {
 
 cmd_export() {
   echo "# Browser4 environment variables — source this file:"
-  echo "#   source <(./scripts/env-manage.sh export)"
+  echo "#   source <(./bin/env-manage.sh export)"
   echo ""
   for entry in "${KNOWN_VARS[@]}"; do
     IFS='|' read -r name category default desc <<< "$entry"
