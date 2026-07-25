@@ -197,7 +197,7 @@ var ISSUE_MODEL = (function() {
       // Parse notes
       var notesIdx = -1;
       for (var m = reviewIdx; m < lines.length; m++) {
-        if (/^\*\*Notes:\*\*/.test(lines[m])) { notesIdx = m; break; }
+        if (/^- \*\*Notes:\*\*/.test(lines[m])) { notesIdx = m; break; }
       }
       if (notesIdx >= 0) {
         var notesLines = [];

@@ -344,8 +344,10 @@ function Read-IssuesFile {
                     }
                 }
 
-                # Extract Notes: capture until next --- separator or next issue
-                if ($hrBlock -match '\*\*Notes:\*\*\s*\n((?s:.*?))(?=\n---\s*\n|\n###\s|\Z)') {
+                # Extract Notes: capture until next --- separator or next issue.
+                # NOTE: \s matches \n, so use [^\S\n] (whitespace except newline) to
+                # avoid consuming the newline that anchors the --- separator.
+                if ($hrBlock -match "\*\*Notes:\*\*[^\S\n]*\n((?s:.*?))(?=\n---|\n###\s|\Z)") {
                     $notesRaw = $Matches[1].Trim()
                     if ($notesRaw) {
                         $issue.Notes = $notesRaw
