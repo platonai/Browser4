@@ -57,9 +57,11 @@ class PulsarSessionManagerTest {
             )
         )
 
-        assertEquals("DEFAULT", session.sessionId)
-        assertEquals("DEFAULT", session.capabilities?.get("sessionId"))
-        assertEquals("DEFAULT", session.capabilities?.get("profileMode"))
+        // DEFAULT is resolved to a stable UUID; both calls produce the same session
+        val expectedId = session.sessionId
+        assertNotEquals("DEFAULT", expectedId, "DEFAULT should be resolved to a UUID")
+        assertEquals(expectedId, session.capabilities?.get("sessionId"))
+        assertEquals(expectedId, sameSession.sessionId)
         assertSame(session, sameSession)
         verify(agenticContext, times(1)).createSession(Mockito.any(PulsarSettings::class.java) ?: PulsarSettings())
     }
@@ -86,8 +88,10 @@ class PulsarSessionManagerTest {
             )
         )
 
-        assertEquals("DEFAULT", session.sessionId)
-        assertEquals("DEFAULT", session.capabilities?.get("sessionId"))
+        // DEFAULT is resolved to a stable UUID
+        val expectedId = session.sessionId
+        assertNotEquals("DEFAULT", expectedId, "DEFAULT should be resolved to a UUID")
+        assertEquals(expectedId, session.capabilities?.get("sessionId"))
         assertEquals("SEQUENTIAL", session.capabilities?.get("profileMode"))
     }
 
@@ -147,9 +151,13 @@ class PulsarSessionManagerTest {
     fun getSessionCreatesEnsureDefaultSessionOnDemand() {
         val session = sessionManager.getSession("default")
 
-        assertEquals("DEFAULT", session?.sessionId)
-        assertEquals("DEFAULT", session?.capabilities?.get("sessionId"))
-        assertEquals("DEFAULT", session?.capabilities?.get("profileMode"))
+        assertNotNull(session)
+        // DEFAULT is resolved to a stable UUID; it is no longer the literal "DEFAULT"
+        val expectedId = session!!.sessionId
+        assertNotEquals("DEFAULT", expectedId, "DEFAULT should be resolved to a UUID")
+        assertEquals(expectedId, session.capabilities?.get("sessionId"))
+        // Default sessions get SEQUENTIAL profile mode by default
+        assertNotNull(session.capabilities?.get("profileMode"))
     }
 
     @Test
