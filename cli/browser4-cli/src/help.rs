@@ -609,6 +609,14 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
             "    Supported channels: chrome (default), chrome-canary, msedge, msedge-dev."
                 .to_string(),
         );
+        lines.push(
+            "    Note: Navigating to chrome:// internal pages (chrome://version, chrome://settings, etc.)"
+                .to_string(),
+        );
+        lines.push(
+            "    may disconnect the extension. Re-attach with `attach --extension` if this occurs."
+                .to_string(),
+        );
         lines.push(String::new());
         lines.push("Examples:".to_string());
         lines.push("  browser4-cli attach --cdp http://localhost:9222".to_string());

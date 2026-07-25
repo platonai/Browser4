@@ -128,3 +128,21 @@ browser4-cli screenshot --filename remote-state.png
 | No CDP endpoint listening | Verify the port is correct and not blocked by a firewall |
 | Extension session goes stale | Re-attach with `attach --extension`; avoid navigating to chrome:// internal pages |
 | Extension not found / not installed | Install the Browser4 Chrome Extension in the target browser first |
+
+## Close vs Disconnect
+
+When you're done with an attached session, use `close` or its alias `disconnect`:
+
+```bash
+browser4-cli close       # or: browser4-cli disconnect
+```
+
+**Close/disconnect semantics by session type:**
+
+| Session Type | Behavior |
+|-------------|----------|
+| Browser4-launched (via `open`) | `close` terminates the browser process |
+| Extension-attached (via `attach --extension`) | `close` disconnects from the extension relay — your Chrome browser and its tabs remain untouched |
+| CDP-attached (via `attach --cdp`) | `close` disconnects from the remote debugging port — the browser continues running |
+
+The `disconnect` alias is available as a more accurate command name for attached sessions, but it's identical to `close` in behavior.

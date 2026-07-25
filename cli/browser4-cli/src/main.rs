@@ -342,6 +342,7 @@ fn no_snapshot_commands() -> HashSet<&'static str> {
         "act",
         "batch",
         "close",
+        "disconnect",
         "close-all",
         "console",
         "delete-data",
@@ -1031,13 +1032,28 @@ async fn get_or_create_navigation_session(
             if healthy {
                 attached_id.clone()
             } else {
-                return Err(format!(
+                let attach_cmd = if state.attach_type.as_deref() == Some("extension") {
+                    "attach --extension"
+                } else {
+                    "attach --cdp"
+                };
+                let mut msg = format!(
                     "Attached session {} is no longer healthy. \
                      The browser or extension may have disconnected.\n\
-                     Re-run `attach --extension` to reconnect, or \
+                     Re-run `{}` to reconnect, or \
                      `close` / `close-all` to clear this session state.",
-                    attached_id
-                ));
+                    attached_id, attach_cmd
+                );
+                // Add chrome:// page hint for extension sessions
+                if state.attach_type.as_deref() == Some("extension") {
+                    msg.push_str(
+                        "\n\nNote: Navigating to chrome:// internal pages \
+                         (chrome://version, chrome://settings, etc.) may \
+                         cause the extension connection to drop. After such \
+                         navigation, re-attach with `attach --extension`.",
+                    );
+                }
+                return Err(msg);
             }
         } else {
             return Err(
@@ -1926,7 +1942,11 @@ async fn handle_close(
     .await;
     clear_state(None, session_name);
     if is_attached {
-        cli_println!("Disconnected from attached browser. The browser remains running.");
+        if state.attach_type.as_deref() == Some("extension") {
+            cli_println!("Disconnected from Browser4 Chrome Extension. Your browser tabs and the extension remain active. Re-attach with `attach --extension`.");
+        } else {
+            cli_println!("Disconnected from attached browser. The browser remains running.");
+        }
     } else {
         cli_println!("Session closed. Browser terminated.");
     }
@@ -12531,6 +12551,7 @@ async fn handle_doctor_metrics(
 
 fn should_ensure_server_running(command: &str) -> bool {
     command != "close"
+        && command != "disconnect"
         && command != "close-all"
         && command != "kill-all"
         && command != "list"
@@ -14024,7 +14045,7 @@ async fn run(
             )
             .await?;
         }
-        "close" => {
+        "close" | "disconnect" => {
             handle_close(&client, &base_url, global.session_name.as_deref()).await?;
         }
         "close-all" => {
