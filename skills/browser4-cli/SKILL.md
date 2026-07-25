@@ -81,6 +81,55 @@ The `list` command displays a "Next open" column showing what happens when `goto
 - **Reuse** — reconnects to the existing browser window (session is active on the backend).
 - **Refresh** — opens a fresh window (session is stale or missing).
 
+### Tab Management
+
+Tab commands scope to a session — all operations affect the session targeted via `-s <session>` (or the DEFAULT session when `-s` is omitted).
+
+#### Tab Lifecycle
+
+```
+1. LIST     browser4-cli tab-list                    # See all tabs: index, GUID, title, URL
+2. CREATE   browser4-cli tab-new [url]               # Open a new tab (about:blank if URL omitted)
+3. SWITCH   browser4-cli tab-select <index>          # Switch by index
+           browser4-cli tab-select --guid <guid>    # Switch by stable GUID
+4. CLOSE    browser4-cli tab-close <index>           # Close by index
+           browser4-cli tab-close                   # Close current tab
+           browser4-cli tab-close --guid <guid>     # Close by GUID
+5. VERIFY   browser4-cli tab-list                    # Confirm state after changes
+```
+
+#### Key notes
+
+- **GUIDs:** `tab-list` shows a `GUID` column. Use `--guid` for stable targeting across tab reordering. Extension sessions show a `chrome:` prefix on numeric GUIDs; regular sessions use 32-char hex GUIDs.
+- **Machine-readable output:** Use the global `--json` flag *before* the command: `browser4-cli --json tab-list`. The output includes a `"tabs"` array with `index`, `guid`, `url`, `title` for each tab, plus a `"count"` field.
+- **Session scoping:** Prefix tab commands with `-s <session-id>` to target a non-default session. The `list` command shows all tracked sessions and their IDs.
+- **Last-tab behavior:** Chrome requires at least one open tab. Closing the last tab silently creates a replacement `about:blank` — `tab-list` will still show 1 tab afterward.
+- **Tab insert position:** New tabs are inserted by Chrome (not Browser4). The position depends on Chrome's native behavior — typically after the active tab. Use `tab-list` to verify.
+- **No auto-snapshot:** `tab-list` and `tab-close` do NOT trigger automatic snapshots. After `tab-select`, run `snapshot` explicitly to get fresh element refs for the new active tab.
+- **Re-snapshot after switches:** `tab-select` changes the active page context. Capture a fresh snapshot before interacting with page elements in the new tab.
+
+#### Examples
+
+```bash
+# List all tabs in the default session
+browser4-cli tab-list
+
+# Machine-readable tab data
+browser4-cli --json tab-list
+
+# Open a tab and switch to it
+browser4-cli tab-new https://httpbin.org/get
+# Output: Switched to tab 1 (https://httpbin.org/get)
+
+# Close by GUID (survives reordering)
+browser4-cli tab-close --guid 2AAA0C47D288D3943BA85D31AA8D084C
+
+# Cross-session tab operations
+browser4-cli -s ext-session tab-list
+browser4-cli -s ext-session tab-new https://example.com
+browser4-cli -s ext-session tab-select 0
+```
+
 ## 3. Command Map
 
 | Command family | Purpose | When to use | Full reference |
@@ -101,7 +150,8 @@ The `list` command displays a "Next open" column showing what happens when `goto
 | `webdb export`, `webdb normalize` | Export cached pages, normalize URLs to database keys | Post-crawl content extraction, URL key lookup | [webdb.md](references/webdb.md) |
 | `skills`, `skills get`, `skills path`, `skills unpack` | Bundled AI agent skill files | Refresh agent instructions, unpack skill files | [skills.md](references/skills.md) |
 | `skill-list`, `skill-info`, `skill-install`, `skill-uninstall`, `skill-reload` | Backend skill management | Install/manage server-side skills | [skills.md](references/skills.md) |
-| `screenshot`, `scroll`, `wait`, `resize`, `tab-*` | Visual capture & viewport control | Screenshots, tab management. `tab-select` / `tab-close` accept `--guid <guid>` for stable tab IDs; use `tab-list --json` to see full GUIDs. Re-snapshot after tab switches. | — |
+| `screenshot`, `scroll`, `wait`, `resize` | Visual capture & viewport control | Screenshots, viewport sizing, scroll control | — |
+| `tab-list`, `tab-new`, `tab-select`, `tab-close` | Tab management | Multi-tab workflows, session-scoped tab operations. See §Tab Management below. | — |
 
 ### Refreshing This Skill
 

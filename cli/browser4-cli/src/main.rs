@@ -395,6 +395,10 @@ fn no_snapshot_commands() -> HashSet<&'static str> {
         "swarm-status",
         "swarm-result",
         "swarm-list",
+        "tab-list",
+        "tab-new",
+        "tab-close",
+        "tab-select",
         "crawl",
         "crawl-status",
         "crawl-result",
@@ -622,6 +626,22 @@ struct TabInfo {
     url: String,
     title: String,
     guid: Option<String>,
+}
+
+/// Normalize a tab GUID for display. Extension sessions use numeric Chrome tab
+/// IDs while regular sessions use 32-char hex strings. Prefix numeric GUIDs with
+/// `chrome:` so users and scripts can distinguish the source without guessing.
+fn format_guid_display(guid: Option<&str>) -> String {
+    match guid {
+        Some(g) if !g.is_empty() => {
+            if g.chars().all(|c| c.is_ascii_digit()) {
+                format!("chrome:{}", g)
+            } else {
+                g.to_string()
+            }
+        }
+        _ => "-".to_string(),
+    }
 }
 
 /// Parse the JSON response from a `browser_tabs` "list" action into a vec of
@@ -1100,6 +1120,38 @@ async fn get_or_create_navigation_session(
             );
         }
     } else {
+        // When the user passes -s <id> and <id> happens to be the session_id
+        // of an existing attached session (e.g., extension), refuse to create a
+        // new Browser4 session under that name.  Creating a fresh session with
+        // the same identifier as an attached session silently overwrites the
+        // session metadata (connection type, etc.).  Direct the user toward
+        // the correct command for targeting the attached session.
+        if let Some(name) = session_name {
+            let default_state = read_state(None, None);
+            if default_state.session_id.as_deref() == Some(name)
+                && default_state.is_attached
+            {
+                let attach_cmd = if default_state.attach_type.as_deref() == Some("extension") {
+                    "attach --extension"
+                } else {
+                    "attach --cdp"
+                };
+                let conn_type = default_state
+                    .attach_type
+                    .as_deref()
+                    .unwrap_or("cdp");
+                return Err(format!(
+                    "'{}' is an existing {conn_type}-attached session, not a named Browser4 session.\n\
+                     Use '-s {}' directly with tab commands, e.g.:\n  \
+                     browser4-cli -s {} tab-list\n  \
+                     browser4-cli -s {} tab-new https://example.com\n\
+                     To reconnect to this session: `{}`.\n\
+                     To create a new Browser4 session: `open` (omit -s).",
+                    name, name, name, name, attach_cmd
+                ));
+            }
+        }
+
         let capabilities = build_open_session_capabilities(tool_params);
         let new_id =
             create_session(client, base_url, &state, session_name, Some(capabilities)).await?;
@@ -2041,29 +2093,33 @@ async fn handle_tab_list(
     .await?;
 
     let tabs = parse_tab_list(&result);
-    if tabs.is_empty() {
-        if json_active() {
-            cli_println!("[]");
-        } else {
-            cli_println!("No tabs found.");
-        }
-        return Ok(());
-    }
+
+    // Build structured tab data regardless of output mode.
+    // Normalize GUIDs for consistent display: numeric Chrome tab IDs from
+    // extension sessions get a `chrome:` prefix to distinguish them from
+    // the 32-char hex GUIDs used by regular Browser4 sessions.
+    let json_tabs: Vec<Value> = tabs
+        .iter()
+        .map(|t| {
+            json!({
+                "index": t.index,
+                "guid": format_guid_display(t.guid.as_deref()),
+                "url": t.url,
+                "title": t.title,
+            })
+        })
+        .collect();
 
     if json_active() {
-        // Machine-readable JSON (consistent with other commands' --json behavior)
-        let json_tabs: Vec<Value> = tabs
-            .iter()
-            .map(|t| {
-                json!({
-                    "index": t.index,
-                    "guid": t.guid,
-                    "url": t.url,
-                    "title": t.title,
-                })
-            })
-            .collect();
-        cli_println!("{}", serde_json::to_string_pretty(&json_tabs).unwrap_or_default());
+        // In --json mode, add tabs to the JSON envelope (cli_println! is
+        // suppressed, so we must use json_field).  Also include page metadata
+        // for context since tab-list does NOT trigger a post-command snapshot.
+        json_field("tabs", json!(json_tabs));
+        // Also set human-readable fields so the JSON envelope has context.
+        json_field("count", json!(tabs.len()));
+    } else if tabs.is_empty() {
+        cli_println!("No tabs found.");
+        return Ok(());
     } else {
         // Human-readable table: Index | GUID | Title | URL
         let idx_w = "Index".len().max(
@@ -2094,7 +2150,7 @@ async fn handle_tab_list(
             url_w = url_w,
         );
         for tab in &tabs {
-            let guid_display = tab.guid.as_deref().unwrap_or("-");
+            let guid_display = format_guid_display(tab.guid.as_deref());
             let title = if tab.title.len() > 60 {
                 format!("{}…", &tab.title[..59])
             } else {
@@ -2194,11 +2250,208 @@ async fn handle_tab_new(
             .and_then(|v| v.as_str())
             .unwrap_or("about:blank");
         cli_println!("Switched to tab {} ({})", new_index, url);
+        // In JSON mode, add the new tab's info to the envelope (cli_println!
+        // is suppressed, so we must use json_field).
+        json_field("tab", json!({
+            "index": new_index,
+            "url": url,
+            "guid": format_guid_display(new_tab.guid.as_deref()),
+        }));
     } else {
         // Couldn't parse the tab list; still show a tip
         if !json_active() {
             eprintln!("💡 Tip: Use `tab-select <index>` to switch to the new tab.");
         }
+    }
+
+    Ok(())
+}
+
+/// Handle `tab-select` with user-friendly output instead of raw driver JSON.
+async fn handle_tab_select(
+    client: &Client,
+    base_url: &str,
+    tool_params: &Value,
+    session_name: Option<&str>,
+) -> Result<(), String> {
+    // Resolve which tab will be selected before the switch so we can report
+    // its URL and index.
+    let list_before = with_session(client, base_url, session_name, false, |session_id| {
+        let client = client.clone();
+        let base_url = base_url.to_string();
+        async move {
+            call_tool(
+                &client,
+                &base_url,
+                "browser_tabs",
+                json!({ "sessionId": session_id, "action": "list" }),
+            )
+            .await
+        }
+    })
+    .await
+    .ok()
+    .and_then(|r| {
+        let tabs = parse_tab_list(&r);
+        if tabs.is_empty() {
+            None
+        } else {
+            Some(tabs)
+        }
+    });
+
+    // Perform the tab switch.
+    let _result = with_session(client, base_url, session_name, false, |session_id| {
+        let client = client.clone();
+        let base_url = base_url.to_string();
+        let mut params = tool_params.clone();
+        async move {
+            params["sessionId"] = json!(session_id);
+            call_tool(&client, &base_url, "browser_tabs", params).await
+        }
+    })
+    .await?;
+
+    // Resolve what was selected for a friendly message.
+    let index_opt = tool_params
+        .get("index")
+        .and_then(|v| v.as_u64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+        .map(|n| n as usize);
+    let guid_opt = tool_params
+        .get("tabId")
+        .and_then(|v| v.as_str())
+        .map(String::from);
+
+    if let Some(ref tabs) = list_before {
+        let target = tabs.iter().find(|t| {
+            if let Some(idx) = index_opt {
+                t.index == idx
+            } else if let Some(ref g) = guid_opt {
+                t.guid.as_deref() == Some(g.as_str())
+            } else {
+                false
+            }
+        });
+        if let Some(t) = target {
+            cli_println!("Switched to tab {} ({})", t.index, t.url);
+            json_field("selected_tab", json!({
+                "index": t.index,
+                "url": t.url,
+                "guid": format_guid_display(t.guid.as_deref()),
+            }));
+        } else {
+            cli_println!("Tab switched.");
+        }
+    } else {
+        cli_println!("Tab switched.");
+    }
+
+    Ok(())
+}
+
+/// Handle `tab-close` with user-friendly output instead of bare `true`.
+async fn handle_tab_close(
+    client: &Client,
+    base_url: &str,
+    tool_params: &Value,
+    session_name: Option<&str>,
+) -> Result<(), String> {
+    // Resolve which tab will be closed before the operation.
+    let tabs_before = with_session(client, base_url, session_name, false, |session_id| {
+        let client = client.clone();
+        let base_url = base_url.to_string();
+        async move {
+            call_tool(
+                &client,
+                &base_url,
+                "browser_tabs",
+                json!({ "sessionId": session_id, "action": "list" }),
+            )
+            .await
+        }
+    })
+    .await
+    .ok()
+    .and_then(|r| {
+        let tabs = parse_tab_list(&r);
+        if tabs.is_empty() {
+            None
+        } else {
+            Some(tabs)
+        }
+    });
+
+    let was_last_tab = tabs_before.as_ref().map_or(false, |t| t.len() == 1);
+
+    // Resolve which tab was targeted for a friendly message.
+    let index_opt = tool_params
+        .get("index")
+        .and_then(|v| v.as_u64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+        .map(|n| n as usize);
+    let guid_opt = tool_params
+        .get("tabId")
+        .and_then(|v| v.as_str())
+        .map(String::from);
+
+    let closed_tab_info = tabs_before.as_ref().and_then(|tabs| {
+        tabs.iter().find(|t| {
+            if let Some(idx) = index_opt {
+                t.index == idx
+            } else if let Some(ref g) = guid_opt {
+                t.guid.as_deref() == Some(g.as_str())
+            } else {
+                // No index, no guid → closing current tab (first tab)
+                t.index == 0
+            }
+        })
+    });
+
+    // Perform the close.
+    let _result = with_session(client, base_url, session_name, false, |session_id| {
+        let client = client.clone();
+        let base_url = base_url.to_string();
+        let mut params = tool_params.clone();
+        async move {
+            params["sessionId"] = json!(session_id);
+            call_tool(&client, &base_url, "browser_tabs", params).await
+        }
+    })
+    .await?;
+
+    // Emit friendly close message.
+    if let Some(t) = closed_tab_info {
+        if let Some(ref guid) = t.guid {
+            cli_println!("Closed tab {} ({} — GUID: {})", t.index, t.url, guid);
+        } else {
+            cli_println!("Closed tab {} ({})", t.index, t.url);
+        }
+        json_field("closed_tab", json!({
+            "index": t.index,
+            "url": t.url,
+            "guid": format_guid_display(t.guid.as_deref()),
+        }));
+    } else if let Some(ref guid) = guid_opt {
+        cli_println!("Closed tab with GUID: {}", guid);
+        json_field("closed_tab", json!({
+            "guid": guid.clone(),
+        }));
+    } else if let Some(idx) = index_opt {
+        cli_println!("Closed tab {}", idx);
+        json_field("closed_tab", json!({
+            "index": idx,
+        }));
+    } else {
+        cli_println!("Closed current tab.");
+        json_field("closed_tab", json!({}));
+    }
+
+    // When closing the last tab, Chrome automatically creates a replacement
+    // about:blank tab — warn the user so they understand the tab count didn't
+    // go to zero.
+    if was_last_tab && !json_active() {
+        eprintln!(
+            "Note: Chrome requires at least one open tab — a new blank tab was created."
+        );
     }
 
     Ok(())
@@ -14908,6 +15161,24 @@ async fn run(
         }
         "tab-new" => {
             handle_tab_new(
+                &client,
+                &base_url,
+                &tool_params,
+                global.session_name.as_deref(),
+            )
+            .await?;
+        }
+        "tab-select" => {
+            handle_tab_select(
+                &client,
+                &base_url,
+                &tool_params,
+                global.session_name.as_deref(),
+            )
+            .await?;
+        }
+        "tab-close" => {
+            handle_tab_close(
                 &client,
                 &base_url,
                 &tool_params,

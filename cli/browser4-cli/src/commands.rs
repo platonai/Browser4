@@ -1946,7 +1946,10 @@ pub fn all_commands() -> Vec<CommandDef> {
             tool_name_fn: |_| "browser_tabs".to_string(),
             tool_params_fn: |args| {
                 let mut p = json!({ "action": "new" });
-                if let Some(u) = get_opt_str(args, "url") { p["url"] = json!(u); }
+                // Always include url — default to about:blank when omitted so the
+                // backend's paramString default-value path is exercised correctly.
+                let url = get_opt_str(args, "url").unwrap_or("about:blank");
+                p["url"] = json!(url);
                 p
             },
         },
@@ -1965,7 +1968,10 @@ pub fn all_commands() -> Vec<CommandDef> {
             tool_params_fn: |args| {
                 let mut p = json!({ "action": "close" });
                 if let Some(index) = args.get("index") { p["index"] = index.clone(); }
-                if let Some(guid) = args.get("guid") { p["tabId"] = guid.clone(); }
+                if let Some(guid) = args.get("guid") {
+                    let raw = guid.as_str().unwrap_or("");
+                    p["tabId"] = json!(raw.strip_prefix("chrome:").unwrap_or(raw));
+                }
                 p
             },
         },
@@ -1984,7 +1990,10 @@ pub fn all_commands() -> Vec<CommandDef> {
             tool_params_fn: |args| {
                 let mut p = json!({ "action": "select" });
                 if let Some(index) = args.get("index") { p["index"] = index.clone(); }
-                if let Some(guid) = args.get("guid") { p["tabId"] = guid.clone(); }
+                if let Some(guid) = args.get("guid") {
+                    let raw = guid.as_str().unwrap_or("");
+                    p["tabId"] = json!(raw.strip_prefix("chrome:").unwrap_or(raw));
+                }
                 p
             },
         },

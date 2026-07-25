@@ -1701,6 +1701,82 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("  browser4-cli skills unpack /custom/path".to_string());
     }
 
+    if cmd.name == "tab-new" {
+        lines.push(String::new());
+        lines.push("Notes:".to_string());
+        lines.push(
+            "  - When no URL is given, the new tab opens with about:blank."
+                .to_string(),
+        );
+        lines.push(
+            "  - Tab insertion position is determined by Chrome (not Browser4). In most"
+                .to_string(),
+        );
+        lines.push(
+            "    cases the new tab appears immediately after the currently active tab."
+                .to_string(),
+        );
+        lines.push(
+            "  - After creation, the CLI auto-selects the new tab and prints its index."
+                .to_string(),
+        );
+        lines.push(
+            "  - Use the printed index or GUID from tab-list to reference the tab in"
+                .to_string(),
+        );
+        lines.push(
+            "    subsequent commands (tab-select, tab-close)."
+                .to_string(),
+        );
+        lines.push(String::new());
+        lines.push("Examples:".to_string());
+        lines.push("  browser4-cli tab-new".to_string());
+        lines.push("  browser4-cli tab-new https://example.com".to_string());
+        lines.push("  browser4-cli -s <session> tab-new https://httpbin.org/get".to_string());
+    }
+
+    if cmd.name == "tab-list" {
+        lines.push(String::new());
+        lines.push("Notes:".to_string());
+        lines.push(
+            "  - Outputs a table with Index, GUID, Title, and URL columns by default."
+                .to_string(),
+        );
+        lines.push(
+            "  - Use --json as a global flag (BEFORE the command) for machine-readable"
+                .to_string(),
+        );
+        lines.push(
+            "    output: `browser4-cli --json tab-list` returns { tabs: [...], count: N }."
+                .to_string(),
+        );
+        lines.push(
+            "  - GUIDs from extension sessions are prefixed with `chrome:` to distinguish"
+                .to_string(),
+        );
+        lines.push(
+            "    them from regular Browser4 session GUIDs (32-char hex)."
+                .to_string(),
+        );
+        lines.push(
+            "  - After a tab-list, the current tab's page metadata is NOT captured —"
+                .to_string(),
+        );
+        lines.push(
+            "    tab-list is read-only and does not trigger a snapshot. Run `snapshot`"
+                .to_string(),
+        );
+        lines.push(
+            "    explicitly if you need element refs after a tab switch."
+                .to_string(),
+        );
+        lines.push(String::new());
+        lines.push("Examples:".to_string());
+        lines.push("  browser4-cli tab-list".to_string());
+        lines.push("  browser4-cli --json tab-list".to_string());
+        lines.push("  browser4-cli -s <session> tab-list".to_string());
+    }
+
     lines.join("\n")
 }
 
