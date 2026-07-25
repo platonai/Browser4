@@ -93,11 +93,19 @@ Commands:
   build [args]     Build the project (delegates to bin/build.ps1)
 
 Examples:
-  b4w -s my-session          # runs: cli -s my-session
-  b4w cli -s my-session      # same as above
-  b4w coworker list          # runs: coworker/coworker.ps1 list
-  b4w test --e2e             # runs: bin/test.ps1 --e2e
-  b4w build                  # runs: bin/build.ps1
+  # cli (default — "cli" keyword is optional)
+  b4w                                   show this help
+  b4w -s my-session                     start a named session
+  b4w -s my-session -i                  interactive REPL
+  b4w --version                         print version
+  b4w --help                            CLI help
+  b4w --batch path\to\batch.json        run a batch file
+  b4w -- -s my-session -i               passthrough via --
+
+  # subcommands
+  b4w coworker list                     list Coworker tasks
+  b4w test --e2e                        run E2E tests
+  b4w build                             build browser4-cli
 '@
 
 # No arguments: show help
