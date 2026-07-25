@@ -632,11 +632,23 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
     if cmd.name == "open" {
         lines.push("Notes:".to_string());
         lines.push(
-            "  - Reuses the saved session for the current slot only when the backend still reports it as active."
+            "  - `open` reconnects to the saved session for the current slot when the backend still reports it as active."
                 .to_string(),
         );
         lines.push(
-            "  - If the saved session is missing or stale, `open` refreshes it by creating a new session."
+            "    The command shows \"Using existing session\" and the current page URL when reconnecting."
+                .to_string(),
+        );
+        lines.push(
+            "  - If the saved session is missing or stale, `open` creates a new browser session."
+                .to_string(),
+        );
+        lines.push(
+            "  - `open` without a URL reconnects or creates a session at about:blank without navigating."
+                .to_string(),
+        );
+        lines.push(
+            "  - Use `-s <name>` to create a named session that can be targeted by subsequent commands."
                 .to_string(),
         );
         lines.push(String::new());
@@ -740,9 +752,14 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
             "  - ",
             4,
         ));
+        lines.push(
+            "  - Use --verbose to show full session IDs without truncation (UUIDs are 36 chars, truncated to 40 by default)."
+                .to_string(),
+        );
         lines.push(String::new());
         lines.push("Examples:".to_string());
         lines.push("  browser4-cli list".to_string());
+        lines.push("  browser4-cli list --verbose".to_string());
     }
 
     if cmd.name == "goto" {
@@ -1899,9 +1916,9 @@ mod tests {
         let help = generate_command_help(open);
         assert!(help.contains("browser4-cli open [url]"));
         assert!(help
-            .contains("Open a browser session or refresh the saved one if it is no longer active"));
+            .contains("Open a browser session or reconnect to an existing one"));
         assert!(help.contains("backend still reports it as active"));
-        assert!(help.contains("creating a new session"));
+        assert!(help.contains("creates a new browser session"));
     }
 
     #[test]

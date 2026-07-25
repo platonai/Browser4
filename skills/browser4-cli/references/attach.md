@@ -76,6 +76,8 @@ browser4-cli -s debug-session snapshot
 browser4-cli -s debug-session screenshot --filename state.png
 ```
 
+> **Important:** When the default (unnamed) session slot is already occupied (e.g., by a prior `open` or `attach`), `attach --extension` without `-s <name>` will fail with "An unnamed session already exists." Use `-s <name>` to create a named session instead, or `close` the existing unnamed session first.
+
 ### 5. Attach via Browser4 Extension
 
 ```bash
@@ -106,7 +108,8 @@ $env:BROWSER4_EXTENSION_TOKEN = "<token-from-extension>"
 When the env var is set, the CLI appends `&token=...` to the connect page URL — the extension validates the token against its stored copy and auto-approves the connection. If you regenerate the token from the extension UI, update your env var to match.
 
 **Troubleshooting:**
-- Navigating to `chrome://` internal pages (e.g., `chrome://version/`) may disconnect the extension WebSocket. If the session goes stale, re-attach with `attach --extension`.
+- Navigating to `chrome://` internal pages (e.g., `chrome://version/`) may disconnect the extension WebSocket. If the session goes stale, run `close` first, then re-attach with `attach --extension`.
+- When the default (unnamed) session slot is already occupied by another session, `attach --extension` requires `-s <name>` to create a named session.
 - The extension creates a blank tab for the relay — "current page: about:blank" is normal for a freshly attached extension session.
 - Use `--endpoint` together with `--extension` to connect through a remote Browser4 server.
 
@@ -141,7 +144,7 @@ browser4-cli screenshot --filename remote-state.png
 | Cannot find target browser | Verify remote debugging is enabled; check the browser is running |
 | No matching channel found | Verify channel name spelling; try a CDP URL or port instead |
 | No CDP endpoint listening | Verify the port is correct and not blocked by a firewall |
-| Extension session goes stale | Re-attach with `attach --extension`; avoid navigating to chrome:// internal pages |
+| Extension session goes stale | Run `close` first, then re-attach with `attach --extension`; avoid navigating to chrome:// internal pages |
 | Extension not found / not installed | Install the Browser4 Chrome Extension in the target browser first |
 
 ## Close vs Disconnect

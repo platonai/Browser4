@@ -737,6 +737,16 @@ async fn create_session(
     Ok(session_id)
 }
 
+/// Format the "Session opened" message.
+/// Named sessions show both the alias and the UUID so the user can track either.
+fn format_session_opened_message(session_name: Option<&str>, session_id: &str) -> String {
+    if let Some(name) = session_name {
+        format!("Session opened: {} ({})", name, session_id)
+    } else {
+        format!("Session opened: {}", session_id)
+    }
+}
+
 fn build_open_session_capabilities(tool_params: &Value) -> Value {
     build_open_session_capabilities_with_test_mode(tool_params, should_use_test_temporary_profile())
 }
@@ -1031,7 +1041,10 @@ async fn get_or_create_navigation_session(
             let capabilities = build_open_session_capabilities(tool_params);
             let new_id =
                 create_session(client, base_url, &state, session_name, Some(capabilities)).await?;
-            cli_println!("Session opened: {}", new_id);
+            cli_println!(
+                "{}",
+                format_session_opened_message(session_name, &new_id)
+            );
             new_id
         } else {
             existing_id
@@ -1090,7 +1103,10 @@ async fn get_or_create_navigation_session(
         let capabilities = build_open_session_capabilities(tool_params);
         let new_id =
             create_session(client, base_url, &state, session_name, Some(capabilities)).await?;
-        cli_println!("Session opened: {}", new_id);
+        cli_println!(
+            "{}",
+            format_session_opened_message(session_name, &new_id)
+        );
         new_id
     };
 
@@ -1103,7 +1119,10 @@ async fn get_or_create_navigation_session(
             json!({ "sessionId": session_id }),
         ).await {
             if !url_result.is_empty() {
-                let label = session_name.unwrap_or("DEFAULT");
+                let label = match session_name {
+                    Some(name) => format!("{} ({})", name, session_id),
+                    None => "DEFAULT".to_string(),
+                };
                 cli_println!("Using existing session {} (current page: {}).", label, url_result);
             }
         }
@@ -1554,7 +1573,10 @@ async fn handle_attach(
     json_field("cdp_endpoint", json!(&cdp_endpoint));
 
     cli_println!("Attached to browser at {}", cdp_endpoint);
-    cli_println!("Session opened: {}", session_id);
+    cli_println!(
+        "{}",
+        format_session_opened_message(session_name, &session_id)
+    );
 
     // Take an initial snapshot so the user can see the current state
     post_command_snapshot(client, &effective_base_url, &session_id).await;
@@ -1659,7 +1681,10 @@ async fn handle_open(
                 let retry_id =
                     create_session(client, base_url, &state, session_name, Some(capabilities))
                         .await?;
-                cli_println!("Session opened: {}", retry_id);
+                cli_println!(
+                    "{}",
+                    format_session_opened_message(session_name, &retry_id)
+                );
                 params["sessionId"] = json!(retry_id);
                 let retry_result = call_tool(client, base_url, tool_name, params)
                     .await
@@ -1728,7 +1753,10 @@ async fn handle_goto(
             let capabilities = build_open_session_capabilities(tool_params);
             let retry_id =
                 create_session(client, base_url, &state, session_name, Some(capabilities)).await?;
-            cli_println!("Session opened: {}", retry_id);
+            cli_println!(
+                "{}",
+                format_session_opened_message(session_name, &retry_id)
+            );
             params["sessionId"] = json!(retry_id.clone());
 
             match call_tool(client, base_url, tool_name, params).await {
@@ -2604,7 +2632,7 @@ struct SessionRow {
     next_open: String,
 }
 
-async fn handle_list(client: &Client, base_url: &str) -> Result<(), String> {
+async fn handle_list(client: &Client, base_url: &str, verbose: bool) -> Result<(), String> {
     let (backend_sessions, backend_note): (Option<Vec<BackendSessionRecord>>, Option<String>) =
         match call_tool(client, base_url, "list_sessions", json!({})).await {
             Ok(result) => (Some(parse_backend_session_records(&result)), None),
@@ -2697,11 +2725,12 @@ async fn handle_list(client: &Client, base_url: &str) -> Result<(), String> {
         ]
     }).collect();
 
+    let session_id_max_width: usize = if verbose { 0 } else { 40 };
     let table = Table::new(&[
         "Name", "Session ID", "Status", "Created", "Last Access", "Connection", "Next open",
     ])
     .min_widths(&[4, 10, 8, 19, 19, 10, 9])
-    .max_widths(&[30, 40, 8, 19, 19, 50, 0])
+    .max_widths(&[30, session_id_max_width, 8, 19, 19, 50, 0])
     .truncate(true)
     .add_rows(&table_rows);
 
@@ -14092,7 +14121,11 @@ async fn run(
             handle_kill_all().await?;
         }
         "list" => {
-            handle_list(&client, &base_url).await?;
+            let verbose = tool_params
+                .get("verbose")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            handle_list(&client, &base_url, verbose).await?;
         }
         "install" => {
             handle_install(&tool_params).await?;

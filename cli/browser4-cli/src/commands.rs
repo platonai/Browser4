@@ -290,7 +290,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         // ---- Core ----
         CommandDef {
             name: "open",
-            description: "Open a browser session or refresh the saved one if it is no longer active",
+            description: "Open a browser session or reconnect to an existing one",
             category: Category::Browsers,
             hidden: false,
             batch_supported: false,
@@ -1998,6 +1998,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             args: &[],
             options: &[
                 OptionDef { name: "all", description: "List all browser sessions across all workspaces", is_bool: true, short: None },
+                OptionDef { name: "verbose", description: "Show full session IDs without truncation", is_bool: true, short: None },
             ],
             e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| String::new(),
@@ -4279,9 +4280,11 @@ mod tests {
         let cmd = map.get("list").expect("list command must exist");
         assert!(!cmd.hidden);
         assert_eq!(cmd.args.len(), 0);
-        assert_eq!(cmd.options.len(), 1);
+        assert_eq!(cmd.options.len(), 2);
         assert_eq!(cmd.options[0].name, "all");
         assert!(cmd.options[0].is_bool);
+        assert_eq!(cmd.options[1].name, "verbose");
+        assert!(cmd.options[1].is_bool);
     }
 
     // -----------------------------------------------------------------------

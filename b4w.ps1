@@ -6,6 +6,12 @@ param(
     [string[]]$RemainingArgs
 )
 
+# Save the original working directory so we can restore it on exit.
+# Some operations (cargo build, cargo run) may change the process CWD,
+# and restoring it prevents shell session CWD drift when b4w.ps1 is
+# invoked from a wrapper that tracks CWD across invocations.
+$OriginalCwd = Get-Location
+
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Manifest = "$ScriptDir\cli\browser4-cli\Cargo.toml"
 $Exe = Join-Path $ScriptDir "cli\browser4-cli\target\debug\browser4-cli.exe"
@@ -147,3 +153,7 @@ if (Test-Path $Exe) {
         cargo run --manifest-path $Manifest
     }
 }
+
+# Restore the original working directory so the caller's shell session
+# (e.g., Git Bash) sees a consistent CWD after b4w.ps1 exits.
+Set-Location $OriginalCwd
