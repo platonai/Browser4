@@ -90,6 +90,21 @@ Connect through the Browser4 Chrome Extension installed in the target browser. T
 
 **How it works:** The extension finds or opens a small WebSocket relay, and the CLI connects to it. All subsequent commands operate on the extension's active tab. This mode keeps your existing browser tabs and session intact — the browser is not launched by Browser4.
 
+**Auto-approval token (skip the connection dialog):** The extension auto-generates a per-browser auth token (visible on the Connect and Status pages). Set the `BROWSER4_EXTENSION_TOKEN` environment variable to this value to bypass the manual approval dialog:
+
+```bash
+# macOS / Linux
+export BROWSER4_EXTENSION_TOKEN=<token-from-extension>
+
+# Windows PowerShell (persistent, new terminals only)
+[Environment]::SetEnvironmentVariable("BROWSER4_EXTENSION_TOKEN", "<token-from-extension>", "User")
+
+# Windows PowerShell (current terminal immediately, dies with the terminal)
+$env:BROWSER4_EXTENSION_TOKEN = "<token-from-extension>"
+```
+
+When the env var is set, the CLI appends `&token=...` to the connect page URL — the extension validates the token against its stored copy and auto-approves the connection. If you regenerate the token from the extension UI, update your env var to match.
+
 **Troubleshooting:**
 - Navigating to `chrome://` internal pages (e.g., `chrome://version/`) may disconnect the extension WebSocket. If the session goes stale, re-attach with `attach --extension`.
 - The extension creates a blank tab for the relay — "current page: about:blank" is normal for a freshly attached extension session.
