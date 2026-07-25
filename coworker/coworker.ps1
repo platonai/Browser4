@@ -67,6 +67,9 @@ Commands:
   fix       Pick a task from 1ready/ and execute it once
             coworker fix [-Path <path>] [-Name <str>] [-Latest]
 
+  review    Review .issues.md files interactively (accept/reject/notes)
+            coworker review [-Path <path>] [-Name <str>] [-List] [-All]
+
 Run "coworker <command>" with no additional arguments to see
 command-specific help.
 
@@ -104,6 +107,9 @@ if (Test-Path $workflowHelper) { . $workflowHelper }
 
 $agentHelper = Join-Path $PSScriptRoot 'scripts\workers\agent.ps1'
 if (Test-Path $agentHelper) { . $agentHelper }
+
+$reviewHelper = Join-Path $PSScriptRoot 'scripts\review.ps1'
+if (Test-Path $reviewHelper) { . $reviewHelper }
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Shared helper functions
@@ -1691,6 +1697,47 @@ Examples:
   coworker fix -Path 0draft/experimental-task.md
 '@
         }
+        'review' {
+            @'
+Usage: coworker review [options]
+
+Interactive review of .issues.md files from the terminal.
+Lists files from tasks/issues/draft/ and tasks/issues/review/,
+then lets you browse issues, set review decisions, add notes,
+and save.
+
+Options:
+  -Path <path>   Specific .issues.md file to review
+  -Name <str>    Find issues file by partial name
+  -List           List available files and exit
+  -All            Include review/done/ files in the listing
+
+Keyboard shortcuts (interactive mode):
+  1-6             Set review decision (toggle to deselect)
+  n / p           Next / previous issue
+  N / P           Next / previous file
+  e               Edit review notes for current issue
+  a               AI review current issue
+  A               AI review ALL issues in file
+  v               Toggle single-issue / all-issues view
+  m               Mark file as done → review/done/
+  d               Discard file → review/done/discard/
+  q               Quit
+  ?               Show help
+  State saves automatically after every change.
+
+Decisions:
+  1 = ACCEPT      2 = ACCEPT with improvements
+  3 = DEFER       4 = WONTFIX
+  5 = REJECT      6 = DUPLICATE
+
+Examples:
+  coworker review
+  coworker review -Path tasks/issues/draft/my-issues.issues.md
+  coworker review -Name form-filling
+  coworker review -List
+'@
+        }
     }
 }
 
@@ -1731,6 +1778,8 @@ function Parse-SubcommandArgs {
             '-Long'          { $parsed['Long'] = $true; break }
             '-InPlace'       { $parsed['InPlace'] = $true; break }
             '-NoPull'        { $parsed['NoPull'] = $true; break }
+            '-List'          { $parsed['List'] = $true; break }
+            '-All'           { $parsed['All'] = $true; break }
             '-Help'          { $parsed['Help'] = $true; break }
             '-h'             { $parsed['Help'] = $true; break }
             '--help'         { $parsed['Help'] = $true; break }
@@ -1773,6 +1822,10 @@ if ($Command -in $needsArgs) {
     }
     if ($Command -eq 'push' -and -not $hasArgs) {
         # push can run without args
+        $hasArgs = $true
+    }
+    if ($Command -eq 'review' -and -not $hasArgs) {
+        # review can run without args (shows file picker)
         $hasArgs = $true
     }
     if (-not $hasArgs) {
@@ -1856,6 +1909,12 @@ try {
             Invoke-Fix -Path (Get-Arg $subArgs 'Path') `
                 -Name (Get-Arg $subArgs 'Name') `
                 -Latest:(Get-SwitchArg $subArgs 'Latest')
+        }
+        'review' {
+            Invoke-Review -Path (Get-Arg $subArgs 'Path') `
+                -Name (Get-Arg $subArgs 'Name') `
+                -List:(Get-SwitchArg $subArgs 'List') `
+                -All:(Get-SwitchArg $subArgs 'All')
         }
         default {
             Write-ConsoleLine -Message "Unknown command: $Command" -ForegroundColor Red
