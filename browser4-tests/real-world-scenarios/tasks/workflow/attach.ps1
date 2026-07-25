@@ -1,17 +1,21 @@
 #!/usr/bin/env pwsh
 <#
 .SYNOPSIS
-Attach workflow: exercise the full open/attach/goto command lifecycle and verify correctness.
+Attach workflow: exercise the full open/attach/goto command lifecycle,
+including multi-tab operations, and verify correctness.
 
 .DESCRIPTION
 Runs the exact sequence from the attach regression suite, verifying that
-arbitrary interleaving of open, attach, goto, and list commands works
+arbitrary interleaving of open, attach, goto, tab, and list commands works
 correctly.  Covers:
 
   - Extension attach lifecycle (connect -> navigate -> disconnect -> reconnect)
+  - Multi-tab operations through attached sessions (tab-new, tab-list,
+    tab-select, tab-close) — including tab persistence across re-attach
   - Session list consistency (connection type, status, timestamps)
   - Fallthrough prevention (dead extension session must NOT silently switch
     to a Browser4-launched Chrome)
+  - Cross-session tab isolation (regular vs extension tab scoping)
   - Mixed-session workflows (extension + regular sessions side by side)
 
 .NOTES
@@ -138,6 +142,114 @@ Verify:
 - The CONNECTION column still shows "Extension".
 - The LAST ACCESS timestamp has updated (it should be more recent than in Step 2).
 
+### Step 4b -- Create a second tab (extension session)
+
+Run:
+
+    __CLI__ tab-new https://httpbin.org/get
+
+Verify:
+- The command exits with code 0.
+- A GUID is returned for the new tab.
+- "Switched to tab" appears in the output (auto-selection to the new tab).
+- The URL `https://httpbin.org/get` appears in the output.
+
+### Step 4c -- List tabs after creating second tab
+
+Run:
+
+    __CLI__ tab-list
+
+Verify:
+- The command exits with code 0.
+- Two tabs are listed (indices 0 and 1).
+- Tab 0 URL: `https://example.com/1`, Tab 1 URL: `https://httpbin.org/get`.
+- Both tabs have non-empty GUIDs (not just "-").
+- Run `__CLI__ list` — the CONNECTION column still shows "Extension" (tab
+  operations must NOT silently change the connection type).
+
+### Step 4d -- Create a third tab
+
+Run:
+
+    __CLI__ tab-new https://httpbin.org/links/10
+
+Verify:
+- The command exits with code 0.
+- A third tab is created with a new GUID.
+- Run `__CLI__ tab-list` — exactly three tabs appear (indices 0, 1, 2).
+- All GUIDs are distinct and non-empty.
+- The extension session is still "Active" in `list`.
+
+### Step 4e -- Switch tabs by index and verify content
+
+Run:
+
+    __CLI__ tab-select 0
+
+Verify:
+- The command exits with code 0.
+
+Then run:
+
+    __CLI__ goto https://example.com/1
+
+Verify:
+- The goto navigates to (or confirms "already at") `https://example.com/1`.
+
+Then run:
+
+    __CLI__ tab-select 1
+
+Verify:
+- The command exits with code 0.
+- Run `__CLI__ snapshot -i` — the snapshot references `httpbin.org/get`,
+  proving the tab switch actually changed the active page.
+
+### Step 4f -- Switch tab by GUID
+
+Run:
+
+    __CLI__ tab-list --json
+
+From the JSON output, extract the GUID of the httpbin.org/links/10 tab.
+Then:
+
+    __CLI__ tab-select --guid <the-guid>
+
+Verify:
+- The command exits with code 0.
+- GUID-based selection works through an extension session.
+- Run `__CLI__ snapshot -i` — the page is `httpbin.org/links/10`.
+
+### Step 4g -- Close a tab by index (extension session)
+
+Run:
+
+    __CLI__ tab-close 1
+
+Verify:
+- The command exits with code 0.
+- Run `__CLI__ tab-list` — two tabs remain (example.com/1 and
+  httpbin.org/links/10).  The httpbin.org/get tab (index 1) is gone.
+- Indices may be re-indexed (0, 1) or preserved with a gap.  Note which
+  behavior occurs and whether it is consistent with the regular session
+  behavior observed in other workflows.
+- Run `__CLI__ list` — the session is still "Active" with CONNECTION
+  "Extension".  Closing a tab must NOT damage the session.
+
+### Step 4h -- Final tab switch before chrome:// test
+
+Run:
+
+    __CLI__ tab-select 0
+    __CLI__ goto https://example.com/1
+
+Verify:
+- The active tab is back on `https://example.com/1`.
+- The extension session is healthy (multi-tab operations did not degrade it).
+- Run `__CLI__ tab-list` — the tab count and URLs are consistent.
+
 ### Step 5 -- Navigate to chrome://version (internal page)
 
 Run:
@@ -225,6 +337,52 @@ Verify:
 - The old extension session from Step 1 (if still listed) shows "Stale" or
   is absent.
 
+### Step 8b -- List tabs after re-attach (tab discovery)
+
+After re-attaching the extension, run:
+
+    __CLI__ tab-list
+
+Verify:
+- The command exits with code 0.
+- The re-attached session can enumerate the browser's tabs.
+- The current active tab (example.com/2 from Step 7) appears.
+- Tabs that existed before the chrome:// detach (example.com/1,
+  httpbin.org/links/10 from Steps 4b–4h) may or may not still appear.
+  The re-attach creates a new blank tab via `newTab=true`; old tabs are
+  still open in the browser but may not be tracked by the new session.
+  Both behaviors are acceptable — **record which behavior occurs** and
+  whether it is adequately documented.  If old tabs are silently lost,
+  note this as a UX issue.
+- Run `__CLI__ list` — the CONNECTION column shows "Extension" (tab
+  operations after re-attach must not change the session type).
+
+### Step 8c -- Create tabs via re-attached session
+
+Run:
+
+    __CLI__ tab-new https://httpbin.org/get
+    __CLI__ tab-new https://httpbin.org/links/10
+
+Verify:
+- Both commands exit with code 0.
+- Run `__CLI__ tab-list` — all created tabs are present.
+- Run `__CLI__ list` — CONNECTION is still "Extension".
+
+### Step 8d -- Close a tab and switch (re-attached session)
+
+Run:
+
+    __CLI__ tab-close 1
+    __CLI__ tab-select 0
+    __CLI__ goto https://example.com/2
+
+Verify:
+- All commands exit with code 0.
+- Tab 1 closed successfully.
+- Switching to tab 0 and navigating to example.com/2 works.
+- The extension session remains healthy.
+
 ### Step 9 -- Open a regular Browser4 session
 
 Run:
@@ -261,6 +419,34 @@ Verify:
   - One with CONNECTION "Browser4" (the session from Step 9).
 - Both sessions show "Active" status.
 - The DEFAULT marker is on the most recently opened session.
+
+### Step 11b -- Verify cross-session tab isolation
+
+With the DEFAULT session still pointing to the **regular** Browser4 session
+(from Step 11), create a tab in the regular session:
+
+    __CLI__ tab-new https://httpbin.org/links/10
+    __CLI__ tab-list
+
+Verify:
+- The new tab is created in the **regular** session.
+- Run `__CLI__ list` — note the extension session's ID.
+
+Now switch to the extension session using the `-s` flag:
+
+    __CLI__ -s <extension-session-id> tab-list
+
+Verify:
+- The extension session's tab list does NOT include the httpbin.org/links/10
+  tab created in the regular session.  **Tab isolation is critical:** tab
+  operations in one session must NEVER leak into another session.
+- Only the extension session's own tabs appear.
+
+Switch the DEFAULT back to the regular session for subsequent steps
+(use the regular session's ID or name with `-s`).  If there is no
+single-command way to change the DEFAULT session, record this as a
+**Discoverability** or **UX** issue — users need to switch sessions
+frequently in mixed-session workflows.
 
 ### Step 12 -- Attach extension again (re-attach)
 
@@ -347,8 +533,23 @@ Verify:
    interference from the old one.
 7. Regular `open` commands create fresh Browser4 sessions without disturbing
    extension sessions.
-8. Arbitrary interleaving of `open`, `attach --extension`, and `goto` works
-   correctly regardless of order.
+8. Arbitrary interleaving of `open`, `attach --extension`, `goto`,
+   `tab-new`, `tab-select`, and `tab-close` works correctly regardless
+   of order.
+9. **Multi-Tab (Extension):** `tab-new`, `tab-list`, `tab-select` (by
+   index and GUID), and `tab-close` work correctly through
+   extension-attached sessions, matching the behavior of regular sessions.
+10. **Tab Persistence Across Re-attach:** After a stale-session re-attach
+    via `attach --extension`, the new extension session can discover and
+    manage browser tabs.  The behavior should be documented — if old tabs
+    are not visible after re-attach, that should be clearly explained.
+11. **Cross-Session Tab Isolation:** Tabs created in one session must not
+    appear in another session's `tab-list`.  Regular session tabs stay
+    scoped to the regular session; extension session tabs stay scoped to
+    the extension session.
+12. **Tab Operations Preserve Session Type:** Creating, switching, or
+    closing tabs through an extension session must not silently change
+    the CONNECTION type from "Extension" to "Browser4".
 
 ## Expected Behavior After the Fix
 
@@ -382,15 +583,31 @@ by inserting a re-attach step (Step 6b) after chrome:// navigation.
 
 ## Notes
 
-- If the Chrome extension is not installed, skip Steps 1-8 and 12-14.  Record
-  this as a **Medium** Limitation issue -- the extension-dependent steps could
-  not be verified.
-- If `snapshot grep` is not available, use `snapshot -v 0` and visually inspect
-  the output for `user-data-dir`.
+- If the Chrome extension is not installed, skip Steps 1-8, 4b-4h, 8b-8d,
+  and 11b.  Record this as a **Medium** Limitation issue -- the
+  extension-dependent steps could not be verified.
+- If `snapshot grep` is not available, use `snapshot -v 0` and visually
+  inspect the output for `user-data-dir`.
 - Record any confusing output, misleading messages, discoverability issues,
   wrong connection types, or wrong session states as you encounter them.
-- Pay special attention to the CONNECTION column in `list` -- it must accurately
-  reflect the actual browser connection type.
+- Pay special attention to the CONNECTION column in `list` -- it must
+  accurately reflect the actual browser connection type.
+- **Multi-tab expectations:** Each `attach --extension` creates a new
+  blank tab (via the `newTab=true` parameter in the extension connect
+  URL).  Existing browser tabs opened by previous sessions should still
+  be discoverable via `tab-list` in the new session.  If they are not,
+  record this as a **High Product** issue -- users expect to see all
+  their open tabs after reconnecting.
+- **Tab index semantics after re-attach:** Pay attention to whether the
+  tab indices change after re-attach.  The new blank tab created by
+  re-attach may shift existing tab indices.  Consistency is key.
+- **Session switching:** There is no dedicated `session` command in the
+  CLI.  Sessions are switched by passing `-s <name>` on each command or
+  by re-running `attach --extension` / `open`.  The `-s` global flag is
+  the canonical way to target a specific session.  If discovering this
+  requires reading the full SKILL.md, record it as a **Discoverability**
+  issue -- users should be able to discover session switching from the
+  `help` output of relevant commands.
 
 '@
 
