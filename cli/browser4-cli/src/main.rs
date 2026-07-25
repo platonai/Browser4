@@ -32,7 +32,7 @@ mod tips;
 
 use std::collections::{HashMap, HashSet};
 use std::io::{IsTerminal, Read};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use base64::Engine;
 use chrono::{Local, Utc};
@@ -516,6 +516,31 @@ fn persist_active_selector(
     state.base_url = base_url.to_string();
     state.active_selector = Some(selector.to_string());
     write_state(&state, None, session_name).map_err(|e| e.to_string())
+}
+
+/// Guard against creating a second unnamed session.
+///
+/// When `session_name` is `None` (no `-s` flag), the CLI writes to the shared
+/// `cli-state.json` slot.  If that slot already holds an active session,
+/// creating a new one would silently displace it.  This check returns an
+/// error with guidance to use `-s <name>` instead.
+///
+/// Named sessions (`-s <name>`) are always allowed — they each get their
+/// own isolated state file.
+fn check_unnamed_slot_free(state_dir: Option<&Path>, session_name: Option<&str>) -> Result<(), String> {
+    if session_name.is_some() {
+        return Ok(());
+    }
+    let state = read_state(state_dir, None);
+    if let Some(ref existing_id) = state.session_id {
+        return Err(format!(
+            "An unnamed session already exists: {existing_id}\n\
+             Use `-s <name>` to create a named session instead, e.g.:\n  \
+             browser4-cli -s myname ...\n\
+             Or run `browser4-cli close` to end the current unnamed session first."
+        ));
+    }
+    Ok(())
 }
 
 async fn restore_active_selector(
@@ -1223,6 +1248,18 @@ async fn handle_attach(
     session_name: Option<&str>,
     parsed_args: &HashMap<String, Value>,
 ) -> Result<(), String> {
+    // Block creation of a second unnamed session.
+    if let Err(e) = check_unnamed_slot_free(None, session_name) {
+        let hint = if parsed_args.get("extension").is_some() {
+            "browser4-cli -s <name> attach --extension"
+        } else if parsed_args.get("cdp").is_some() {
+            "browser4-cli -s <name> attach --cdp <endpoint>"
+        } else {
+            "browser4-cli -s <name> attach ..."
+        };
+        return Err(format!("{e}\nHint: {hint}"));
+    }
+
     // --cdp value
     let cdp_raw = parsed_args
         .get("cdp")
@@ -1574,6 +1611,17 @@ async fn handle_open(
     tool_params: &Value,
     session_name: Option<&str>,
 ) -> Result<(), String> {
+    // Block creation of a second unnamed session.
+    if let Err(e) = check_unnamed_slot_free(None, session_name) {
+        let url = tool_params
+            .get("url")
+            .and_then(|u| u.as_str())
+            .unwrap_or("<url>");
+        return Err(format!(
+            "{e}\nHint: browser4-cli -s <name> open {url}"
+        ));
+    }
+
     let (state, session_id, reused_existing_session) =
         get_or_create_navigation_session(client, base_url, tool_params, session_name, true).await?;
 
@@ -19639,5 +19687,77 @@ mod tests {
         assert!(read.is_attached, "invalidate_session preserves is_attached");
         assert_eq!(read.attach_type.as_deref(), Some("extension"),
             "invalidate_session preserves attach_type for potential reconnect");
+    }
+
+    // -----------------------------------------------------------------------
+    // check_unnamed_slot_free tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn unnamed_slot_free_when_no_state_file() {
+        let tmp = test_temp_dir();
+        let dir = tmp.path();
+        // No state file at all — should be free.
+        assert!(check_unnamed_slot_free(Some(dir), None).is_ok());
+        // Named sessions always pass.
+        assert!(check_unnamed_slot_free(Some(dir), Some("mysession")).is_ok());
+        // A state file without session_id should also be free.
+        write_state(&CliState::default(), Some(dir), None).unwrap();
+        assert!(check_unnamed_slot_free(Some(dir), None).is_ok());
+    }
+
+    #[test]
+    fn unnamed_slot_blocked_when_occupied() {
+        let tmp = test_temp_dir();
+        let dir = tmp.path();
+        let state = CliState {
+            session_id: Some("s-abc123".to_string()),
+            base_url: "http://localhost:8182".to_string(),
+            ..CliState::default()
+        };
+        write_state(&state, Some(dir), None).unwrap();
+
+        let err = check_unnamed_slot_free(Some(dir), None).unwrap_err();
+        assert!(err.contains("already exists"), "expected 'already exists' in: {err}");
+        assert!(err.contains("s-abc123"), "expected session id in: {err}");
+        assert!(err.contains("-s <name>"), "expected -s hint in: {err}");
+    }
+
+    #[test]
+    fn unnamed_slot_freed_after_close_state_cleared() {
+        let tmp = test_temp_dir();
+        let dir = tmp.path();
+        let state = CliState {
+            session_id: Some("s-xyz".to_string()),
+            base_url: "http://localhost:8182".to_string(),
+            ..CliState::default()
+        };
+        write_state(&state, Some(dir), None).unwrap();
+
+        // Should be blocked
+        assert!(check_unnamed_slot_free(Some(dir), None).is_err());
+
+        // Simulate close: clear state
+        clear_state(Some(dir), None);
+
+        // Now it's free
+        assert!(check_unnamed_slot_free(Some(dir), None).is_ok());
+    }
+
+    #[test]
+    fn named_sessions_never_blocked_by_unnamed_slot() {
+        let tmp = test_temp_dir();
+        let dir = tmp.path();
+        // Occupy the unnamed slot
+        let state = CliState {
+            session_id: Some("s-default".to_string()),
+            base_url: "http://localhost:8182".to_string(),
+            ..CliState::default()
+        };
+        write_state(&state, Some(dir), None).unwrap();
+
+        // Named sessions should always be allowed
+        assert!(check_unnamed_slot_free(Some(dir), Some("auth")).is_ok());
+        assert!(check_unnamed_slot_free(Some(dir), Some("scraper")).is_ok());
     }
 }
