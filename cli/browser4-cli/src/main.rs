@@ -71,7 +71,8 @@ use state::{
     clear_all_state, clear_state, epoch_millis_to_display, format_async_task_list,
     format_timestamp_display, prune_async_tasks, read_async_tasks, read_state,
     resolve_default_state_dir, resolve_ref, summarize_async_tasks, track_async_task,
-    update_async_task_status, write_async_tasks, write_state, CliState, MousePosition, Table,
+    update_async_task_status, write_async_tasks, write_state, CliState, MousePosition,
+    SessionKind, Table,
 };
 
 const VERSION: &str = env!("BROWSER4_CLI_VERSION");
@@ -704,6 +705,7 @@ async fn create_session(
     // for what is actually a fresh Browser4-CDP browser).
     new_state.is_attached = false;
     new_state.attach_type = None;
+    new_state.kind = SessionKind::Browser4Launched;
     new_state.cdp_endpoint = None;
     new_state.browser_channel = None;
     new_state.created_at = Some(Utc::now().to_rfc3339());
@@ -986,7 +988,7 @@ async fn get_or_create_navigation_session(
         // don't reuse it — create a new regular Browser4 session instead.
         // Save the attached session's state under the session ID as a
         // named session so it can still be targeted with -s <sessionId>.
-        if force_new_session && state.is_attached {
+        if force_new_session && !state.kind.owns_browser() {
             // Persist the attached session under its own session ID
             // so it can be listed and targeted with -s <sessionId>.
             let mut attached_state = state.clone();
@@ -1011,7 +1013,7 @@ async fn get_or_create_navigation_session(
         } else {
             existing_id
         }
-    } else if state.is_attached {
+    } else if !state.kind.owns_browser() {
         // For attached sessions (CDP or extension), never fall through to
         // create_session — that would launch a NEW browser instance instead
         // of using the attached one.  Verify health directly and reuse the
@@ -1032,10 +1034,9 @@ async fn get_or_create_navigation_session(
             if healthy {
                 attached_id.clone()
             } else {
-                let attach_cmd = if state.attach_type.as_deref() == Some("extension") {
-                    "attach --extension"
-                } else {
-                    "attach --cdp"
+                let attach_cmd = match state.kind {
+                    SessionKind::ExtensionAttached => "attach --extension",
+                    _ => "attach --cdp",
                 };
                 let mut msg = format!(
                     "Attached session {} is no longer healthy. \
@@ -1045,7 +1046,7 @@ async fn get_or_create_navigation_session(
                     attached_id, attach_cmd
                 );
                 // Add chrome:// page hint for extension sessions
-                if state.attach_type.as_deref() == Some("extension") {
+                if state.kind == SessionKind::ExtensionAttached {
                     msg.push_str(
                         "\n\nNote: Navigating to chrome:// internal pages \
                          (chrome://version, chrome://settings, etc.) may \
@@ -1347,6 +1348,7 @@ async fn handle_attach(
         state.last_mouse_position = None;
         state.is_attached = true;
         state.attach_type = Some("extension".to_string());
+        state.kind = SessionKind::ExtensionAttached;
         state.browser_channel = channel.clone();
         state.created_at = Some(Utc::now().to_rfc3339());
         state.last_accessed_at = Some(Utc::now().to_rfc3339());
@@ -1508,6 +1510,7 @@ async fn handle_attach(
     state.last_mouse_position = None;
     state.is_attached = true;
     state.attach_type = Some("cdp".to_string());
+    state.kind = SessionKind::CdpAttached;
     state.cdp_endpoint = Some(cdp_endpoint.clone());
     state.created_at = Some(Utc::now().to_rfc3339());
     state.last_accessed_at = Some(Utc::now().to_rfc3339());
@@ -1931,7 +1934,7 @@ async fn handle_close(
         return Ok(());
     };
     json_field("session_id", json!(&session_id));
-    let is_attached = state.is_attached;
+    let owns_browser = state.kind.owns_browser();
     // Ignore errors — session might already be closed
     let _ = call_tool(
         client,
@@ -1941,14 +1944,20 @@ async fn handle_close(
     )
     .await;
     clear_state(None, session_name);
-    if is_attached {
-        if state.attach_type.as_deref() == Some("extension") {
-            cli_println!("Disconnected from Browser4 Chrome Extension. Your browser tabs and the extension remain active. Re-attach with `attach --extension`.");
-        } else {
-            cli_println!("Disconnected from attached browser. The browser remains running.");
-        }
-    } else {
+    if owns_browser {
         cli_println!("Session closed. Browser terminated.");
+    } else {
+        match state.kind {
+            SessionKind::ExtensionAttached => {
+                cli_println!("Disconnected from Browser4 Chrome Extension. Your browser tabs and the extension remain active. Re-attach with `attach --extension`.");
+            }
+            SessionKind::CdpAttached => {
+                cli_println!("Disconnected from attached browser. The browser remains running.");
+            }
+            _ => {
+                cli_println!("Disconnected from session. The browser remains running.");
+            }
+        }
     }
     json_field("closed", json!(true));
     Ok(())
@@ -2500,22 +2509,23 @@ fn log_shutdown_result(action: &str, result: &ShutdownResult) {
 
 /// Format a session's browser connection type for the `list` command table.
 fn connection_label(state: &CliState) -> String {
-    match state.attach_type.as_deref() {
-        Some("cdp") => {
+    match state.kind {
+        SessionKind::CdpAttached => {
             if let Some(ref endpoint) = state.cdp_endpoint {
                 format!("CDP: {endpoint}")
             } else {
                 "CDP".to_string()
             }
         }
-        Some("extension") => {
+        SessionKind::ExtensionAttached => {
             if let Some(ref channel) = state.browser_channel {
                 format!("Extension ({channel})")
             } else {
                 "Extension".to_string()
             }
         }
-        _ => "Browser4".to_string(),
+        SessionKind::Swarm => "Swarm".to_string(),
+        SessionKind::Browser4Launched => "Browser4".to_string(),
     }
 }
 
@@ -2787,7 +2797,7 @@ async fn find_reusable_persisted_session_id(
         Err(error) if is_backend_unreachable_error(&error) => {
             // For attached sessions, don't invalidate on backend unreachable —
             // the attached browser/extension may still be alive.
-            if !state.is_attached {
+            if state.kind.owns_browser() {
                 invalidate_session(state, base_url, session_name);
             }
             return Ok(None);
@@ -2802,7 +2812,7 @@ async fn find_reusable_persisted_session_id(
     // For attached sessions (CDP or extension), the list_sessions status may
     // not reflect actual health — verify directly via check_session_ready
     // before giving up.
-    if state.is_attached {
+    if !state.kind.owns_browser() {
         let ready_params = json!({ "sessionId": &session_id });
         if let Ok(ready_result) =
             call_tool(client, base_url, "check_session_ready", ready_params).await
@@ -7608,6 +7618,7 @@ async fn handle_swarm_create(
     state.session_name = session_name.map(|s| s.to_string());
     state.session_id = Some(session_id.clone());
     state.base_url = base_url.to_string();
+    state.kind = SessionKind::Swarm;
     state.created_at = Some(Utc::now().to_rfc3339());
     state.last_accessed_at = Some(Utc::now().to_rfc3339());
     write_state(&state, None, session_name).map_err(|e| e.to_string())?;
@@ -19545,9 +19556,7 @@ mod tests {
         let old_state = CliState {
             session_id: Some("7fd8ffae-519b-4713-adfa-5b296a3249b9".to_string()),
             base_url: "http://localhost:8182".to_string(),
-            is_attached: true,
-            attach_type: Some("extension".to_string()),
-            cdp_endpoint: None,
+            kind: SessionKind::ExtensionAttached,
             browser_channel: Some("chrome".to_string()),
             ..Default::default()
         };
@@ -19558,8 +19567,7 @@ mod tests {
         new_state.base_url = "http://localhost:8182".to_string();
         new_state.active_selector = None;
         new_state.last_mouse_position = None;
-        new_state.is_attached = false;
-        new_state.attach_type = None;
+        new_state.kind = SessionKind::Browser4Launched;
         new_state.cdp_endpoint = None;
         new_state.browser_channel = None;
         new_state.created_at = Some("2026-07-25T00:00:00Z".to_string());
@@ -19569,6 +19577,8 @@ mod tests {
         // Read back and verify.
         let read = read_state(Some(dir), None);
         assert_eq!(read.session_id.as_deref(), Some("new-browser4-session-id"));
+        assert_eq!(read.kind, SessionKind::Browser4Launched,
+            "kind must be Browser4Launched for a new Browser4-managed session");
         assert!(!read.is_attached, "is_attached must be false for a new Browser4-managed session");
         assert_eq!(read.attach_type, None, "attach_type must be None — not 'extension' or 'cdp'");
         assert_eq!(read.cdp_endpoint, None);
@@ -19585,8 +19595,7 @@ mod tests {
         let old_state = CliState {
             session_id: Some("cdp-session-1".to_string()),
             base_url: "http://localhost:8182".to_string(),
-            is_attached: true,
-            attach_type: Some("cdp".to_string()),
+            kind: SessionKind::CdpAttached,
             cdp_endpoint: Some("http://localhost:9222".to_string()),
             browser_channel: None,
             ..Default::default()
@@ -19594,22 +19603,21 @@ mod tests {
 
         let mut new_state = old_state.clone();
         new_state.session_id = Some("new-browser4-session-id".to_string());
-        new_state.is_attached = false;
-        new_state.attach_type = None;
+        new_state.kind = SessionKind::Browser4Launched;
         new_state.cdp_endpoint = None;
         new_state.browser_channel = None;
         write_state(&new_state, Some(dir), None).unwrap();
 
         let read = read_state(Some(dir), None);
+        assert_eq!(read.kind, SessionKind::Browser4Launched);
         assert!(!read.is_attached);
         assert_eq!(read.attach_type, None);
         assert_eq!(read.cdp_endpoint, None);
     }
 
-    /// invalidate_session (as used in with_session recovery) keeps attachment
-    /// flags so the caller can decide whether to reconnect or create a new
-    /// session.  This test guards the distinction between invalidation and
-    /// creation.
+    /// invalidate_session (as used in with_session recovery) keeps session kind
+    /// so the caller can decide whether to reconnect or create a new session.
+    /// This test guards the distinction between invalidation and creation.
     #[test]
     fn invalidate_session_preserves_attachment_flags() {
         let tmp = test_temp_dir();
@@ -19618,16 +19626,15 @@ mod tests {
         let old_state = CliState {
             session_id: Some("ext-session".to_string()),
             base_url: "http://localhost:8182".to_string(),
-            is_attached: true,
-            attach_type: Some("extension".to_string()),
+            kind: SessionKind::ExtensionAttached,
             browser_channel: Some("chrome".to_string()),
             ..Default::default()
         };
 
         write_state(&old_state, Some(dir), None).unwrap();
 
-        // Simulate invalidate_session: clear session_id but keep attachment
-        // flags so the caller can reconnect.
+        // Simulate invalidate_session: clear session_id but keep kind
+        // so the caller can reconnect.
         let mut invalidated = old_state.clone();
         invalidated.session_id = None;
         invalidated.active_selector = None;
@@ -19636,6 +19643,8 @@ mod tests {
 
         let read = read_state(Some(dir), None);
         assert!(read.session_id.is_none(), "invalidate_session clears session_id");
+        assert_eq!(read.kind, SessionKind::ExtensionAttached,
+            "invalidate_session preserves kind for potential reconnect");
         assert!(read.is_attached, "invalidate_session preserves is_attached");
         assert_eq!(read.attach_type.as_deref(), Some("extension"),
             "invalidate_session preserves attach_type for potential reconnect");

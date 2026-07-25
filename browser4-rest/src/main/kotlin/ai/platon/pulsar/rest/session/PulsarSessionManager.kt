@@ -72,7 +72,7 @@ class PulsarSessionManager(
         }
 
         val session = sessions.computeIfAbsent(sessionId) {
-            ManagedSession(sessionId, agenticSession, normalizedCapabilities)
+            ManagedSession(sessionId, agenticSession, normalizedCapabilities, kind = SessionKind.SWARM)
         }
 
         return session
@@ -190,30 +190,37 @@ class PulsarSessionManager(
         capabilities: Map<String, String?>,
         session: ManagedSession,
     ): ManagedSession {
-        // Extension-attached sessions use an external browser (Chrome with the
-        // Browser4 extension installed).  They must never be recreated by
-        // Browser4 — the extension owns the browser lifecycle.  Recreating would
-        // launch a new Chrome instance, severing the link to the user's existing
-        // browser and its extension state.
-        if (extensionBrowsers.containsKey(sessionId)) {
-            return markSessionActive(session)
-        }
+        // Sessions that do NOT own their browser must never be recreated by
+        // Browser4 — that would launch a new browser instance, severing the
+        // link to the user's existing browser.  The kind enum drives this
+        // decision explicitly rather than relying on extension-specific map
+        // lookups.
+        if (!session.kind.ownsBrowser) {
+            // Extension-attached session whose WebSocket is still connected.
+            if (session.kind == SessionKind.EXTENSION_ATTACHED && extensionBrowsers.containsKey(sessionId)) {
+                return markSessionActive(session)
+            }
 
-        // Extension-attached session whose WebSocket has disconnected.
-        // Do NOT fall through to recreateUnhealthySession — that would
-        // silently replace the extension-backed session with a fresh
-        // Browser4-launched Chrome, making the CLI show "Extension" in
-        // its list while actually driving a different browser.
-        if (extensionSessionIds.contains(sessionId)) {
+            // All other non-owned sessions: check health, report status, but
+            // never recreate.  The user must re-attach manually.
+            if (checkHealthyBlocking(session).isOK) {
+                return markSessionActive(session)
+            }
+
             markSessionInactive(session)
+            val reconnectHint = when (session.kind) {
+                SessionKind.EXTENSION_ATTACHED -> "Re-run attach --extension to reconnect."
+                SessionKind.CDP_ATTACHED -> "Re-run attach --cdp to reconnect."
+                else -> ""
+            }
             logger.info(
-                "Extension-attached session {} is disconnected — keeping as inactive " +
-                "(will not recreate as Browser4-CDP). Re-run attach --extension to reconnect.",
-                sessionId
+                "Session {} (kind={}) is disconnected — keeping as inactive. {}",
+                sessionId, session.kind, reconnectHint
             )
             return session
         }
 
+        // Owned sessions (BROWSER4_LAUNCHED, SWARM): recreate if unhealthy.
         if (checkHealthyBlocking(session).isOK) {
             return markSessionActive(session)
         }
@@ -228,7 +235,11 @@ class PulsarSessionManager(
         }
     }
 
-    private fun createManagedSession(sessionId: String, capabilities: Map<String, String?>): ManagedSession {
+    private fun createManagedSession(
+        sessionId: String,
+        capabilities: Map<String, String?>,
+        kind: SessionKind = SessionKind.BROWSER4_LAUNCHED,
+    ): ManagedSession {
         val settings = PulsarSettings.parse(capabilities)
         val agenticSession = agenticContext.createSession(settings)
 
@@ -236,9 +247,10 @@ class PulsarSessionManager(
             sessionId = sessionId,
             agenticSession = agenticSession,
             capabilities = capabilities,
+            kind = kind,
             status = if (agenticSession.isActive) "active" else "stopped"
         ).also {
-            logger.info("Created session {} with capabilities: {}", sessionId, capabilities)
+            logger.info("Created session {} (kind={}) with capabilities: {}", sessionId, kind, capabilities)
         }
     }
 
@@ -273,7 +285,7 @@ class PulsarSessionManager(
         }
 
         val session = sessions.computeIfAbsent(sessionId) {
-            createManagedSession(sessionId, normalizedCapabilities)
+            createManagedSession(sessionId, normalizedCapabilities, SessionKind.CDP_ATTACHED)
         }
 
         // Bind the external browser to the session
@@ -281,7 +293,7 @@ class PulsarSessionManager(
         session.agenticSession.bindBrowser(browser)
 
         logger.info(
-            "Attached session {} to browser at port {} (endpoint: {})",
+            "Attached session {} (kind=CDP_ATTACHED) to browser at port {} (endpoint: {})",
             sessionId, port, cdpEndpoint ?: "N/A"
         )
 
@@ -344,7 +356,7 @@ class PulsarSessionManager(
 
         // Create the managed session (without a bound browser yet).
         val session = sessions.computeIfAbsent(sessionId) {
-            createManagedSession(sessionId, normalizedCapabilities)
+            createManagedSession(sessionId, normalizedCapabilities, SessionKind.EXTENSION_ATTACHED)
         }
 
         // Track this session as extension-attached so resolveHealthySession
@@ -545,9 +557,11 @@ class PulsarSessionManager(
         capabilities: Map<String, String?>,
         staleSession: ManagedSession,
     ): ManagedSession {
+        // Preserve the original session's kind when recreating.
+        val kind = staleSession.kind
         return sessions.compute(sessionId) { _, existingSession ->
             when {
-                existingSession == null -> createManagedSession(sessionId, capabilities)
+                existingSession == null -> createManagedSession(sessionId, capabilities, kind)
                 checkHealthyBlocking(existingSession).isOK -> {
                     if (!existingSession.status.equals("active", ignoreCase = true)) {
                         existingSession.status = "active"
@@ -562,7 +576,7 @@ class PulsarSessionManager(
                     } else {
                         logger.warn("Concurrent cached session {} is unhealthy, creating a replacement", sessionId)
                     }
-                    createManagedSession(sessionId, capabilities)
+                    createManagedSession(sessionId, capabilities, kind)
                 }
             }
         }!!
@@ -686,23 +700,23 @@ class PulsarSessionManager(
             val pulsarSession = session.agenticSession
             val browser = pulsarSession.boundBrowser
 
-            // logger.info("---------------------DELETE MANAGED SESSION BEGIN----------------------------")
             logger.info(
-                "---- Deleting session `{}`, closing pulsar session #{} {}",
-                sessionId, pulsarSession.id, pulsarSession.display
+                "---- Deleting session `{}` (kind={}, ownsBrowser={}), closing pulsar session #{} {}",
+                sessionId, session.kind, session.ownsBrowser, pulsarSession.id, pulsarSession.display
             )
 
-            // Close session
+            // Close the agentic session (unbinds driver).
             pulsarSession.close()
-            // Close the companion browser if it exists
-            if (browser != null) {
+
+            // Only close the browser if Browser4 owns it.
+            // Attached sessions (CDP, Extension) reference external browsers
+            // that the user manages independently.
+            if (session.ownsBrowser && browser != null) {
                 // might be already closed by the session, but we ensure it's closed here to release resources
-                // TODO: remove this redundant close call after confirming that session.close() always closes the browser
                 pulsarSession.context.browserManager.closeBrowser(browser)
             }
 
             logger.info("---- Deleted session `{}` and released resources", sessionId)
-            // logger.info("----------------------DELETE MANAGED SESSION END---------------------------")
         } catch (e: Exception) {
             logger.error("Error closing session {}: {}", sessionId, e.message, e)
         }

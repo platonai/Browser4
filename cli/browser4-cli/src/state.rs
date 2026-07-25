@@ -18,6 +18,74 @@ pub struct MousePosition {
     pub y: f64,
 }
 
+// ---------------------------------------------------------------------------
+// Session kind taxonomy
+// ---------------------------------------------------------------------------
+
+/// Explicit taxonomy of how a Browser4 session relates to its browser.
+///
+/// Previously this was implicit — derived from `is_attached` and `attach_type`
+/// flags.  Making it explicit lets lifecycle decisions (close vs detach,
+/// health-check recreation) be driven by the kind rather than by scattered
+/// boolean checks.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum SessionKind {
+    /// Browser4 launched and owns the browser process lifecycle.  Created by `open`.
+    Browser4Launched,
+    /// Attached to an externally-managed browser via CDP.  Created by `attach --cdp`.
+    CdpAttached,
+    /// Attached via the Browser4 Chrome Extension WebSocket relay.  Created by `attach --extension`.
+    ExtensionAttached,
+    /// Shared swarm session for parallel scraping.  Created by `swarm create`.
+    Swarm,
+}
+
+impl SessionKind {
+    /// Whether this kind of session owns its browser lifecycle.
+    pub fn owns_browser(self) -> bool {
+        matches!(self, SessionKind::Browser4Launched | SessionKind::Swarm)
+    }
+
+    /// Derive the legacy `is_attached` flag from this kind.
+    pub fn is_attached(self) -> bool {
+        matches!(self, SessionKind::CdpAttached | SessionKind::ExtensionAttached)
+    }
+
+    /// Derive the legacy `attach_type` string from this kind.
+    pub fn attach_type_str(self) -> Option<&'static str> {
+        match self {
+            SessionKind::CdpAttached => Some("cdp"),
+            SessionKind::ExtensionAttached => Some("extension"),
+            _ => None,
+        }
+    }
+
+    /// Infer the kind from legacy `is_attached` and `attach_type` fields.
+    /// Used when migrating old state files that lack the `kind` field.
+    pub fn from_legacy(is_attached: bool, attach_type: Option<&str>) -> Self {
+        if is_attached {
+            match attach_type {
+                Some("cdp") => SessionKind::CdpAttached,
+                Some("extension") => SessionKind::ExtensionAttached,
+                _ => SessionKind::CdpAttached, // best guess for old attached sessions
+            }
+        } else {
+            SessionKind::Browser4Launched
+        }
+    }
+}
+
+impl Default for SessionKind {
+    fn default() -> Self {
+        SessionKind::Browser4Launched
+    }
+}
+
+// ---------------------------------------------------------------------------
+// CliState
+// ---------------------------------------------------------------------------
+
 /// Persistent CLI state stored on disk.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CliState {
@@ -36,14 +104,21 @@ pub struct CliState {
     /// Last known mouse position used to restore pointer state across CLI invocations.
     #[serde(rename = "lastMousePosition", skip_serializing_if = "Option::is_none")]
     pub last_mouse_position: Option<MousePosition>,
+    /// Explicit session kind — drives ownership and lifecycle decisions.
+    /// Replaces the implicit `is_attached` / `attach_type` derivation.
+    /// Defaults to `Browser4Launched` for old state files that lack this field.
+    #[serde(rename = "sessionKind", default)]
+    pub kind: SessionKind,
     /// Whether this session was created via `attach` (external browser) rather
     /// than `open` (Browser4-launched).  Attached sessions leave the browser
     /// running after `close`.
+    /// DEPRECATED: prefer `kind`; kept for backward compat with old state files.
     #[serde(rename = "isAttached", default, skip_serializing_if = "is_false")]
     pub is_attached: bool,
     /// How this session connects to the browser: `"cdp"` for direct CDP
     /// connections, `"extension"` for Browser4 Chrome Extension relay.
     /// `None` (absent) for Browser4-launched sessions.
+    /// DEPRECATED: prefer `kind`; kept for backward compat with old state files.
     #[serde(rename = "attachType", skip_serializing_if = "Option::is_none")]
     pub attach_type: Option<String>,
     /// Resolved CDP HTTP endpoint URL for CDP-attached sessions, e.g.
@@ -76,6 +151,7 @@ impl Default for CliState {
             active_selector: None,
             session_name: None,
             last_mouse_position: None,
+            kind: SessionKind::default(),
             is_attached: false,
             attach_type: None,
             cdp_endpoint: None,
@@ -171,18 +247,41 @@ fn state_file(state_dir: &Path, session_name: Option<&str>) -> PathBuf {
 }
 
 /// Read the persisted CLI state from disk, falling back to defaults.
+/// Auto-migrates old state files that lack the `kind` field by inferring it
+/// from the legacy `is_attached` / `attach_type` fields.
 pub fn read_state(state_dir: Option<&Path>, session_name: Option<&str>) -> CliState {
     let dir = state_dir
         .map(|p| p.to_path_buf())
         .unwrap_or_else(resolve_default_state_dir);
     let path = state_file(&dir, session_name);
     match fs::read_to_string(&path) {
-        Ok(raw) => serde_json::from_str::<CliState>(&raw).unwrap_or_default(),
+        Ok(raw) => {
+            let mut state: CliState =
+                serde_json::from_str::<CliState>(&raw).unwrap_or_default();
+            migrate_legacy_kind(&mut state);
+            state
+        }
         Err(_) => CliState::default(),
     }
 }
 
+/// If the state was loaded from an old file that lacks the `kind` field,
+/// infer it from the legacy `is_attached` / `attach_type` fields so that
+/// all subsequent code can rely on `kind` being accurate.
+fn migrate_legacy_kind(state: &mut CliState) {
+    // Only migrate if kind is the default AND the legacy fields indicate
+    // something different.
+    if state.kind == SessionKind::Browser4Launched && state.is_attached {
+        state.kind = SessionKind::from_legacy(
+            state.is_attached,
+            state.attach_type.as_deref(),
+        );
+    }
+}
+
 /// Write the CLI state to disk, creating the directory if necessary.
+/// Syncs the legacy `is_attached` / `attach_type` fields from `kind` so
+/// old CLI versions can still read the state file.
 pub fn write_state(
     state: &CliState,
     state_dir: Option<&Path>,
@@ -197,7 +296,12 @@ pub fn write_state(
         fs::create_dir_all(parent)?;
     }
 
-    let json = serde_json::to_string_pretty(state).expect("state serialization should not fail");
+    // Sync legacy fields from kind for backward compat.
+    let mut state = state.clone();
+    state.is_attached = state.kind.is_attached();
+    state.attach_type = state.kind.attach_type_str().map(|s| s.to_string());
+
+    let json = serde_json::to_string_pretty(&state).expect("state serialization should not fail");
     fs::write(path, json)
 }
 

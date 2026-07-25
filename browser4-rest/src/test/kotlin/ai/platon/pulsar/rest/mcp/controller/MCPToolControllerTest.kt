@@ -11,6 +11,7 @@ import ai.platon.pulsar.agentic.tools.builtin.ToolExecutor
 import ai.platon.pulsar.agentic.tools.advanced.agent.StatefulAgentRunner
 import ai.platon.pulsar.rest.session.ManagedSession
 import ai.platon.pulsar.rest.session.PulsarSessionManager
+import ai.platon.pulsar.rest.session.SessionKind
 import ai.platon.pulsar.core.api.WebDriver
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 // DTO classes are defined in ai.platon.pulsar.rest.mcp.controller (top-level in MCPToolController.kt)
@@ -126,6 +127,8 @@ class MCPToolControllerTest {
         `when`(managedSession.sessionId).thenReturn(sessionId)
         `when`(managedSession.url).thenReturn("https://example.com")
         `when`(managedSession.status).thenReturn("active")
+        `when`(managedSession.kind).thenReturn(SessionKind.BROWSER4_LAUNCHED)
+        `when`(managedSession.ownsBrowser).thenReturn(true)
         `when`(managedSession.createdAt).thenReturn(1720000000000L)
         `when`(managedSession.lastAccessedAt).thenReturn(1720086400000L)
 

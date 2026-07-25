@@ -386,6 +386,8 @@ class MCPToolController(
                 "sessionId" to s.sessionId,
                 "url" to (s.url ?: ""),
                 "status" to s.status,
+                "kind" to s.kind.name,
+                "ownsBrowser" to s.ownsBrowser,
                 "createdAt" to s.createdAt,
                 "lastAccessedAt" to s.lastAccessedAt,
             )
