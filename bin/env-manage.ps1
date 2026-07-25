@@ -2,15 +2,18 @@
 # Browser4 Environment Variable Manager (PowerShell)
 # ==============================================================================
 # Usage:
-#   .\scripts\env-manage.ps1 show              Show all Browser4 env vars with current values
-#   .\scripts\env-manage.ps1 show -Detailed     Show all with descriptions and defaults
-#   .\scripts\env-manage.ps1 show BROWSER4_CLI  Show vars matching a prefix
-#   .\scripts\env-manage.ps1 get <VAR>          Print the value of a single env var
-#   .\scripts\env-manage.ps1 set <VAR> <VALUE>  Set an env var (process, user, or machine)
-#   .\scripts\env-manage.ps1 unset <VAR>        Unset an env var in this process
-#   .\scripts\env-manage.ps1 export             Print set commands to save in a profile
-#   .\scripts\env-manage.ps1 list               List all known Browser4 env var names
-#   .\scripts\env-manage.ps1 help               Show this help
+#   .\bin\env-manage.ps1 show              Show all Browser4 env vars (secrets masked)
+#   .\bin\env-manage.ps1 show -Reveal      Show all with secrets UNMASKED
+#   .\bin\env-manage.ps1 show -Detailed    Show all with descriptions and defaults
+#   .\bin\env-manage.ps1 show BROWSER4_CLI Show vars matching a prefix
+#   .\bin\env-manage.ps1 get <VAR>         Print the raw value of a single env var
+#   .\bin\env-manage.ps1 set <VAR> <VALUE> Set an env var (process, user, or machine)
+#   .\bin\env-manage.ps1 unset <VAR>       Unset an env var in this process
+#   .\bin\env-manage.ps1 export            Print set commands to save in a profile
+#   .\bin\env-manage.ps1 export -Reveal    Print set commands with secrets UNMASKED
+#   .\bin\env-manage.ps1 list              List all known Browser4 env var names
+#   .\bin\env-manage.ps1 list -Sensitive   List only sensitive (secret-bearing) vars
+#   .\bin\env-manage.ps1 help              Show this help
 # ==============================================================================
 
 [CmdletBinding()]
@@ -26,14 +29,14 @@ param(
 # ---- Env var registry ----
 $KnownVars = @(
     # ---- CLI: Runtime & Paths ----
-    @{Name='BROWSER4_EXTENSION_TOKEN';                Category='cli';           Default='';   Desc='Chrome extension auth token for auto-approval of attach requests'}
+    @{Name='BROWSER4_EXTENSION_TOKEN';                Category='cli';           Default='';   Desc='Chrome extension auth token for auto-approval of attach requests'; Sensitive=$true}
     @{Name='BROWSER4_CLI_SESSION';                     Category='cli';           Default='';   Desc='Default session ID for the CLI'}
     @{Name='BROWSER4_CLI_STATE_DIR';                   Category='cli';           Default='~/.browser4'; Desc='Override CLI session state directory'}
     @{Name='BROWSER4_RUNTIME_DIR';                     Category='cli';           Default='platform-dependent'; Desc='Override runtime bundle & download cache directory'}
     @{Name='BROWSER4_SKILLS_DIR';                      Category='cli';           Default='versioned-install-dir'; Desc='Override skills directory path'}
     @{Name='BROWSER4_BROWSER_PATH';                    Category='cli';           Default='(auto-detect)'; Desc='Custom Chromium/Chrome browser executable path'}
     @{Name='BROWSER4_SERVER_OPTS';                     Category='cli';           Default='';   Desc='JVM options injected into backend server launch (space-separated)'}
-    @{Name='BROWSER4_SERVER_LOG_DIR';                  Category='cli';           Default='$RUNTIME_DIR/logs'; Desc='Directory for server startup logs'}
+    @{Name='BROWSER4_SERVER_LOG_DIR';                  Category='cli';           Default='(RUNTIME_DIR)/logs'; Desc='Directory for server startup logs'}
 
     # ---- CLI: Download & Mirror ----
     @{Name='BROWSER4_RELEASES_BASE_URL';               Category='cli';           Default='https://github.com/platonAI/Browser4/releases'; Desc='Override releases download base URL'}
@@ -63,16 +66,16 @@ $KnownVars = @(
     @{Name='BROWSER4_CLI_TEST_TEMPORARY_PROFILE';      Category='cli';           Default='';   Desc='Internal test flag for temporary profile'}
 
     # ---- LLM / AI Provider Keys ----
-    @{Name='LLM_API_KEY';                              Category='llm';           Default='';   Desc='Generic LLM API key (fallback for all providers)'}
-    @{Name='OPENAI_API_KEY';                           Category='llm';           Default='';   Desc='OpenAI API key'}
-    @{Name='OPENROUTER_API_KEY';                       Category='llm';           Default='';   Desc='OpenRouter API key'}
-    @{Name='DEEPSEEK_API_KEY';                         Category='llm';           Default='';   Desc='DeepSeek API key'}
-    @{Name='VOLCENGINE_API_KEY';                       Category='llm';           Default='';   Desc='Volcengine (ByteDance) API key'}
+    @{Name='LLM_API_KEY';                              Category='llm';           Default='';   Desc='Generic LLM API key (fallback for all providers)'; Sensitive=$true}
+    @{Name='OPENAI_API_KEY';                           Category='llm';           Default='';   Desc='OpenAI API key'; Sensitive=$true}
+    @{Name='OPENROUTER_API_KEY';                       Category='llm';           Default='';   Desc='OpenRouter API key'; Sensitive=$true}
+    @{Name='DEEPSEEK_API_KEY';                         Category='llm';           Default='';   Desc='DeepSeek API key'; Sensitive=$true}
+    @{Name='VOLCENGINE_API_KEY';                       Category='llm';           Default='';   Desc='Volcengine (ByteDance) API key'; Sensitive=$true}
 
     # ---- CAPTCHA Solving ----
-    @{Name='CAPSOLVER_KEY';                            Category='captcha';       Default='';   Desc='Capsolver API key for CAPTCHA solving'}
-    @{Name='TWOCAPTCHA_KEY';                           Category='captcha';       Default='';   Desc='2Captcha API key for CAPTCHA solving'}
-    @{Name='ANTICAPTCHA_KEY';                          Category='captcha';       Default='';   Desc='Anti-Captcha API key for CAPTCHA solving'}
+    @{Name='CAPSOLVER_KEY';                            Category='captcha';       Default='';   Desc='Capsolver API key for CAPTCHA solving'; Sensitive=$true}
+    @{Name='TWOCAPTCHA_KEY';                           Category='captcha';       Default='';   Desc='2Captcha API key for CAPTCHA solving'; Sensitive=$true}
+    @{Name='ANTICAPTCHA_KEY';                          Category='captcha';       Default='';   Desc='Anti-Captcha API key for CAPTCHA solving'; Sensitive=$true}
 
     # ---- Observability (OpenTelemetry + Metrics) ----
     @{Name='OTEL_TRACES_ENABLED';                      Category='observability'; Default='true'; Desc='Enable OpenTelemetry tracing (true/false)'}
@@ -100,10 +103,10 @@ $KnownVars = @(
     @{Name='MOCK_SITE_WAIT_SEC';                       Category='test';          Default='';   Desc='Wait seconds for mock site startup'}
 
     # ---- Example Crawlers (credentials) ----
-    @{Name='PULSAR_TAOBAO_USERNAME';                   Category='example';       Default='';   Desc='Taobao login username (example crawlers)'}
-    @{Name='PULSAR_TAOBAO_PASSWORD';                   Category='example';       Default='';   Desc='Taobao login password (example crawlers)'}
-    @{Name='PULSAR_SIMUWANG_USERNAME';                 Category='example';       Default='';   Desc='Simuwang login username (example crawlers)'}
-    @{Name='PULSAR_SIMUWANG_PASSWORD';                 Category='example';       Default='';   Desc='Simuwang login password (example crawlers)'}
+    @{Name='PULSAR_TAOBAO_USERNAME';                   Category='example';       Default='';   Desc='Taobao login username (example crawlers)'; Sensitive=$true}
+    @{Name='PULSAR_TAOBAO_PASSWORD';                   Category='example';       Default='';   Desc='Taobao login password (example crawlers)'; Sensitive=$true}
+    @{Name='PULSAR_SIMUWANG_USERNAME';                 Category='example';       Default='';   Desc='Simuwang login username (example crawlers)'; Sensitive=$true}
+    @{Name='PULSAR_SIMUWANG_PASSWORD';                 Category='example';       Default='';   Desc='Simuwang login password (example crawlers)'; Sensitive=$true}
 
     # ---- System / Generic (read by Browser4) ----
     @{Name='http_proxy';                               Category='proxy';         Default='';   Desc='HTTP proxy (lowercase)'}
@@ -121,6 +124,14 @@ $KnownVars = @(
 
 # ---- helpers ----
 
+function Mask-Value {
+    param([string]$Value)
+    if ($Value.Length -le 7) {
+        return '****'
+    }
+    return '{0}****{1}' -f $Value.Substring(0, 4), $Value.Substring($Value.Length - 3)
+}
+
 function Write-CategoryColor {
     param([string]$Category)
     switch ($Category) {
@@ -136,23 +147,42 @@ function Write-CategoryColor {
     }
 }
 
+function Write-SecretBadge {
+    param([bool]$Sensitive)
+    if ($Sensitive) {
+        Write-Host -NoNewline -ForegroundColor Red ' [secret]'
+    }
+}
+
 function Write-ValueColor {
-    param([string]$Value)
-    if ($Value) {
-        if ($Value.Length -gt 50) {
-            Write-Host -NoNewline -ForegroundColor Green ('{0}...' -f $Value.Substring(0, 50))
-        } else {
-            Write-Host -NoNewline -ForegroundColor Green $Value
-        }
-    } else {
+    param([string]$Value, [bool]$Sensitive = $false, [bool]$Reveal = $false)
+
+    if (-not $Value) {
         Write-Host -NoNewline -ForegroundColor DarkGray '<not set>'
+        return
+    }
+
+    if ($Sensitive -and -not $Reveal) {
+        Write-Host -NoNewline -ForegroundColor Yellow (Mask-Value $Value)
+        return
+    }
+
+    # Non-sensitive or revealed: show full value (truncate if very long)
+    if ($Value.Length -gt 60) {
+        Write-Host -NoNewline -ForegroundColor Green ('{0}...' -f $Value.Substring(0, 60))
+    } else {
+        Write-Host -NoNewline -ForegroundColor Green $Value
     }
 }
 
 function Show-All {
-    param([switch]$Detailed, [string]$Filter)
+    param([switch]$Detailed, [string]$Filter, [switch]$Reveal, [switch]$SensitiveOnly)
 
-    Write-Host "Browser4 Environment Variables" -ForegroundColor White
+    if ($Reveal) {
+        Write-Host "Browser4 Environment Variables  *** SECRETS VISIBLE ***" -ForegroundColor White
+    } else {
+        Write-Host "Browser4 Environment Variables" -ForegroundColor White
+    }
     Write-Host "==============================" -ForegroundColor White
     Write-Host ""
 
@@ -160,22 +190,32 @@ function Show-All {
 
     foreach ($entry in $KnownVars) {
         if ($Filter -and -not $entry.Name.StartsWith($Filter)) { continue }
+        if ($SensitiveOnly -and -not $entry.Sensitive) { continue }
 
         $val = [Environment]::GetEnvironmentVariable($entry.Name, 'Process')
         if ($val) { $setCount++ }
         $count++
 
+        $isSensitive = [bool]$entry.Sensitive
+
         if ($Detailed) {
             Write-Host "──────────────────────────────────────────────────────────────────"
-            Write-Host ('  Variable:    {0}' -f $entry.Name)
+            Write-Host -NoNewline ('  Variable:    {0}' -f $entry.Name)
+            Write-SecretBadge $isSensitive
+            Write-Host ''
             Write-Host -NoNewline '  Category:    '; Write-CategoryColor $entry.Category; Write-Host ''
-            Write-Host -NoNewline '  Value:       '; Write-ValueColor $val; Write-Host ''
+            Write-Host -NoNewline '  Value:       '; Write-ValueColor $val -Sensitive:$isSensitive -Reveal:$Reveal; Write-Host ''
+            if ($isSensitive -and -not $Reveal -and $val) {
+                Write-Host -ForegroundColor DarkGray ('  (masked:     use -Reveal or ''get {0}'' for full value)' -f $entry.Name)
+            }
             Write-Host ('  Default:     {0}' -f $(if ($entry.Default) { $entry.Default } else { '<none>' }))
             Write-Host ('  Description: {0}' -f $entry.Desc)
             Write-Host ''
         } else {
-            Write-Host -NoNewline ('  {0,-45}  ' -f $entry.Name)
-            Write-ValueColor $val
+            Write-Host -NoNewline ('  {0,-40}' -f $entry.Name)
+            Write-SecretBadge $isSensitive
+            Write-Host -NoNewline '  '
+            Write-ValueColor $val -Sensitive:$isSensitive -Reveal:$Reveal
             Write-Host -NoNewline ('  {0,-12}  ' -f $(if ($entry.Default) { $entry.Default } else { '-' }))
             Write-Host $entry.Desc
         }
@@ -184,8 +224,14 @@ function Show-All {
     Write-Host ''
     Write-Host "──────────────────────────────────────────────────────────────────"
     Write-Host ('  {0}/{1} variables configured' -f $setCount, $count)
+    if (-not $Reveal) {
+        Write-Host -ForegroundColor DarkGray '  Secrets masked — use -Reveal to show full values'
+    }
     if ($Filter) {
         Write-Host ('  Filter: names starting with "{0}"' -f $Filter)
+    }
+    if ($SensitiveOnly) {
+        Write-Host -ForegroundColor DarkGray '  Showing only sensitive (secret-bearing) variables'
     }
 }
 
@@ -197,14 +243,23 @@ switch ($Command) {
     'show' {
         $Detailed = $false
         $Filter = ''
+        $Reveal = $false
+        $SensitiveOnly = $false
         if ($Arguments) {
             foreach ($a in $Arguments) {
-                if ($a -eq '-Detailed' -or $a -eq '-d') { $Detailed = $true }
-                elseif ($a -eq '-h' -or $a -eq '--help') { Show-Usage; return }
-                else { $Filter = $a }
+                switch ($a) {
+                    '-Detailed'   { $Detailed = $true }
+                    '-d'          { $Detailed = $true }
+                    '-Reveal'     { $Reveal = $true }
+                    '-r'          { $Reveal = $true }
+                    '-Sensitive'  { $SensitiveOnly = $true }
+                    '-h'          { Show-Usage; return }
+                    '--help'      { Show-Usage; return }
+                    default       { $Filter = $a }
+                }
             }
         }
-        Show-All -Detailed:$Detailed -Filter:$Filter
+        Show-All -Detailed:$Detailed -Filter:$Filter -Reveal:$Reveal -SensitiveOnly:$SensitiveOnly
     }
     'get' {
         $name = $Arguments[0]
@@ -213,6 +268,7 @@ switch ($Command) {
             Write-Host '<not set>'
             exit 1
         }
+        # get always returns the raw value — it's an explicit request
         Write-Host $val
     }
     'set' {
@@ -221,7 +277,9 @@ switch ($Command) {
         $scope = if ($Arguments.Count -gt 2) { $Arguments[2] } else { 'Process' }
         [Environment]::SetEnvironmentVariable($name, $value, $scope)
         Write-Host -NoNewline ('Set {0} ({1}) = ' -f $name, $scope)
-        Write-ValueColor $value
+        # Check if this is a known sensitive var for masked display
+        $isSensitive = ($KnownVars | Where-Object { $_.Name -eq $name } | ForEach-Object { [bool]$_.Sensitive }) -or $false
+        Write-ValueColor $value -Sensitive:$isSensitive
         Write-Host ''
     }
     'unset' {
@@ -230,21 +288,49 @@ switch ($Command) {
         Write-Host ('Unset {0}' -f $name)
     }
     'export' {
-        Write-Host '# Browser4 environment variables'
-        Write-Host '# Run: Invoke-Expression (. .\scripts\env-manage.ps1 export | Out-String)'
+        $Reveal = $false
+        if ($Arguments) {
+            foreach ($a in $Arguments) {
+                if ($a -eq '-Reveal' -or $a -eq '-r') { $Reveal = $true }
+            }
+        }
+        Write-Host '# Browser4 environment variables — source this file:'
+        Write-Host '# Run: Invoke-Expression (. .\bin\env-manage.ps1 export | Out-String)'
+        if (-not $Reveal) {
+            Write-Host '# Secrets are MASKED — use ''export -Reveal'' to write full values.'
+            Write-Host '# Run ''get <VAR>'' to retrieve individual raw values.'
+        }
         Write-Host ''
         foreach ($entry in $KnownVars) {
             $val = [Environment]::GetEnvironmentVariable($entry.Name, 'Process')
             if ($val) {
-                Write-Host ('$env:{0} = "{1}"' -f $entry.Name, $val.Replace('"', '`"'))
+                $isSensitive = [bool]$entry.Sensitive
+                if ($isSensitive -and -not $Reveal) {
+                    Write-Host ('# $env:{0} = "{1}"   # [secret] masked — use ''export -Reveal'' or ''get {0}''' -f $entry.Name, (Mask-Value $val))
+                } else {
+                    Write-Host ('$env:{0} = "{1}"' -f $entry.Name, $val.Replace('"', '`"'))
+                }
             }
         }
     }
     'list' {
-        $Filter = if ($Arguments) { $Arguments[0] } else { '' }
+        $Filter = ''
+        $SensitiveOnly = $false
+        if ($Arguments) {
+            foreach ($a in $Arguments) {
+                if ($a -eq '-Sensitive') { $SensitiveOnly = $true }
+                else { $Filter = $a }
+            }
+        }
         foreach ($entry in $KnownVars) {
             if ($Filter -and -not $entry.Name.StartsWith($Filter)) { continue }
-            Write-Host ('  {0,-45}  [{1}]  {2}' -f $entry.Name, $entry.Category, $entry.Desc)
+            if ($SensitiveOnly -and -not $entry.Sensitive) { continue }
+            Write-Host -NoNewline ('  {0,-45}  [{1}]  {2}' -f $entry.Name, $entry.Category, $entry.Desc)
+            if ($entry.Sensitive) {
+                Write-Host -ForegroundColor Red ' [secret]'
+            } else {
+                Write-Host ''
+            }
         }
     }
     'help' {

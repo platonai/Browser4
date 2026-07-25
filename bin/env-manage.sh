@@ -3,139 +3,163 @@
 # Browser4 Environment Variable Manager
 # ==============================================================================
 # Usage:
-#   ./bin/env-manage.sh show              Show all Browser4 env vars with current values
-#   ./bin/env-manage.sh show --detailed    Show all with descriptions and defaults
-#   ./bin/env-manage.sh show <PREFIX>      Show vars matching a prefix (e.g. BROWSER4_CLI)
-#   ./bin/env-manage.sh get <VAR>          Print the value of a single env var
-#   ./bin/env-manage.sh set <VAR> <VALUE>  Set an env var in this shell (export)
-#   ./bin/env-manage.sh unset <VAR>        Unset an env var in this shell
-#   ./bin/env-manage.sh export             Print export commands to source in a shell
+#   ./bin/env-manage.sh show              Show all Browser4 env vars (secrets masked)
+#   ./bin/env-manage.sh show --reveal     Show all with secrets UNMASKED
+#   ./bin/env-manage.sh show --detailed   Show all with descriptions and defaults
+#   ./bin/env-manage.sh show <PREFIX>     Show vars matching a prefix (e.g. BROWSER4_CLI)
+#   ./bin/env-manage.sh get <VAR>         Print the raw value of a single env var
+#   ./bin/env-manage.sh set <VAR> <VALUE> Set an env var in this shell (export)
+#   ./bin/env-manage.sh unset <VAR>       Unset an env var in this shell
+#   ./bin/env-manage.sh export            Print export commands to source in a shell
 #   ./bin/env-manage.sh export > ~/.browser4-env && source ~/.browser4-env
-#   ./bin/env-manage.sh list               List all known Browser4 env var names only
-#   ./bin/env-manage.sh help               Show this help
+#   ./bin/env-manage.sh list              List all known Browser4 env var names only
+#   ./bin/env-manage.sh list --sensitive  List only sensitive (secret-bearing) vars
+#   ./bin/env-manage.sh help              Show this help
 # ==============================================================================
 
 set -euo pipefail
 
 # ---------------------------------------------------------------------------
 # Env var registry — canonical list of every BROWSER4_* env var and related keys
-# Format: "VAR_NAME|Category|Default|Description"
+# Format: "VAR_NAME|Category|Default|Description|Sensitive"
+#   Sensitive: 1 = mask by default (API keys, tokens, passwords)
 # Categories: cli, backend, observability, llm, captcha, test, example, proxy, generic
 # ---------------------------------------------------------------------------
 
 KNOWN_VARS=(
   # ---- CLI: Runtime & Paths ----
-  "BROWSER4_EXTENSION_TOKEN|cli||Chrome extension auth token for auto-approval of attach requests"
-  "BROWSER4_CLI_SESSION|cli||Default session ID for the CLI"
-  "BROWSER4_CLI_STATE_DIR|cli|~/.browser4|Override CLI session state directory"
-  "BROWSER4_RUNTIME_DIR|cli|platform-dependent|Override runtime bundle & download cache directory"
-  "BROWSER4_SKILLS_DIR|cli|versioned-install-dir|Override skills directory path"
-  "BROWSER4_BROWSER_PATH|cli|(auto-detect)|Custom Chromium/Chrome browser executable path"
-  "BROWSER4_SERVER_OPTS|cli||JVM options injected into backend server launch (space-separated)"
-  'BROWSER4_SERVER_LOG_DIR|cli|(RUNTIME_DIR)/logs|Directory for server startup logs'
+  "BROWSER4_EXTENSION_TOKEN|cli||Chrome extension auth token for auto-approval of attach requests|1"
+  "BROWSER4_CLI_SESSION|cli||Default session ID for the CLI|"
+  "BROWSER4_CLI_STATE_DIR|cli|~/.browser4|Override CLI session state directory|"
+  "BROWSER4_RUNTIME_DIR|cli|platform-dependent|Override runtime bundle & download cache directory|"
+  "BROWSER4_SKILLS_DIR|cli|versioned-install-dir|Override skills directory path|"
+  "BROWSER4_BROWSER_PATH|cli|(auto-detect)|Custom Chromium/Chrome browser executable path|"
+  "BROWSER4_SERVER_OPTS|cli||JVM options injected into backend server launch (space-separated)|"
+  'BROWSER4_SERVER_LOG_DIR|cli|(RUNTIME_DIR)/logs|Directory for server startup logs|'
 
   # ---- CLI: Download & Mirror ----
-  "BROWSER4_RELEASES_BASE_URL|cli|https://github.com/platonAI/Browser4/releases|Override releases download base URL"
-  "BROWSER4_MIRRORS_CONFIG|cli|runtime/mirrors.json|Override mirror configuration file path"
-  "BROWSER4_CLI_MIRROR_CHECK_TIMEOUT_SECS|cli|5|Mirror reachability check timeout (seconds)"
-  "BROWSER4_CLI_MIRROR_SPEED_TEST_TIMEOUT_SECS|cli|30|Per-mirror speed test download timeout (seconds)"
-  "BROWSER4_CLI_MIRROR_PREFERENCE_TTL_SECS|cli|86400|Cached mirror preference TTL (seconds, 86400=24h)"
-  "BROWSER4_CLI_DOWNLOAD_TIMEOUT_SECS|cli|1800|Download timeout (seconds, 1800=30min)"
-  "BROWSER4_CLI_DISABLE_MIRROR_SPEED_TEST|cli||Set to 1 to disable speed testing (TCP-only fallback)"
-  "BROWSER4_CLI_INVOKE_DIR|cli|pwd|Root search start directory for relative paths"
+  "BROWSER4_RELEASES_BASE_URL|cli|https://github.com/platonAI/Browser4/releases|Override releases download base URL|"
+  "BROWSER4_MIRRORS_CONFIG|cli|runtime/mirrors.json|Override mirror configuration file path|"
+  "BROWSER4_CLI_MIRROR_CHECK_TIMEOUT_SECS|cli|5|Mirror reachability check timeout (seconds)|"
+  "BROWSER4_CLI_MIRROR_SPEED_TEST_TIMEOUT_SECS|cli|30|Per-mirror speed test download timeout (seconds)|"
+  "BROWSER4_CLI_MIRROR_PREFERENCE_TTL_SECS|cli|86400|Cached mirror preference TTL (seconds, 86400=24h)|"
+  "BROWSER4_CLI_DOWNLOAD_TIMEOUT_SECS|cli|1800|Download timeout (seconds, 1800=30min)|"
+  "BROWSER4_CLI_DISABLE_MIRROR_SPEED_TEST|cli||Set to 1 to disable speed testing (TCP-only fallback)|"
+  "BROWSER4_CLI_INVOKE_DIR|cli|pwd|Root search start directory for relative paths|"
 
   # ---- CLI: Build & Bundle ----
-  "BROWSER4_CLI_FORCE_REMOTE_BUNDLE|cli||Set to 1/true/yes/on to force download from remote releases"
-  "BROWSER4_CLI_FORCE_REBUILD_BUNDLE|cli||Set to 1/true/yes/on to force rebuild from source"
+  "BROWSER4_CLI_FORCE_REMOTE_BUNDLE|cli||Set to 1/true/yes/on to force download from remote releases|"
+  "BROWSER4_CLI_FORCE_REBUILD_BUNDLE|cli||Set to 1/true/yes/on to force rebuild from source|"
 
   # ---- CLI: Timeouts ----
-  "BROWSER4_CLI_HTTP_TIMEOUT_SECS|cli|30|Default HTTP request timeout (seconds)"
-  "BROWSER4_CLI_NAVIGATION_TIMEOUT_SECS|cli|120|Navigation request timeout (seconds)"
-  "BROWSER4_CLI_INPUT_TIMEOUT_SECS|cli|90|Text input request timeout (seconds)"
-  "BROWSER4_CLI_SNAPSHOT_TIMEOUT_SECS|cli|60|Snapshot request timeout (seconds)"
-  "BROWSER4_CLI_AGENT_TIMEOUT_SECS|cli|180|Agent tool request timeout (seconds)"
-  "BROWSER4_CLI_ACT_TIMEOUT_SECS|cli|60|Act tool request timeout (seconds)"
-  "BROWSER4_CLI_CRAWL_TIMEOUT_SECS|cli|600|Crawl request timeout (seconds)"
+  "BROWSER4_CLI_HTTP_TIMEOUT_SECS|cli|30|Default HTTP request timeout (seconds)|"
+  "BROWSER4_CLI_NAVIGATION_TIMEOUT_SECS|cli|120|Navigation request timeout (seconds)|"
+  "BROWSER4_CLI_INPUT_TIMEOUT_SECS|cli|90|Text input request timeout (seconds)|"
+  "BROWSER4_CLI_SNAPSHOT_TIMEOUT_SECS|cli|60|Snapshot request timeout (seconds)|"
+  "BROWSER4_CLI_AGENT_TIMEOUT_SECS|cli|180|Agent tool request timeout (seconds)|"
+  "BROWSER4_CLI_ACT_TIMEOUT_SECS|cli|60|Act tool request timeout (seconds)|"
+  "BROWSER4_CLI_CRAWL_TIMEOUT_SECS|cli|600|Crawl request timeout (seconds)|"
 
   # ---- CLI: Proxy ----
-  "BROWSER4_CLI_PROXY|cli||Explicit CLI download proxy URL (set by --proxy <url>)"
-  "BROWSER4_CLI_TEST_TEMPORARY_PROFILE|cli||Internal test flag for temporary profile"
+  "BROWSER4_CLI_PROXY|cli||Explicit CLI download proxy URL (set by --proxy <url>)|"
+  "BROWSER4_CLI_TEST_TEMPORARY_PROFILE|cli||Internal test flag for temporary profile|"
 
   # ---- LLM / AI Provider Keys ----
-  "LLM_API_KEY|llm||Generic LLM API key (fallback for all providers)"
-  "OPENAI_API_KEY|llm||OpenAI API key"
-  "OPENROUTER_API_KEY|llm||OpenRouter API key"
-  "DEEPSEEK_API_KEY|llm||DeepSeek API key"
-  "VOLCENGINE_API_KEY|llm||Volcengine (ByteDance) API key"
+  "LLM_API_KEY|llm||Generic LLM API key (fallback for all providers)|1"
+  "OPENAI_API_KEY|llm||OpenAI API key|1"
+  "OPENROUTER_API_KEY|llm||OpenRouter API key|1"
+  "DEEPSEEK_API_KEY|llm||DeepSeek API key|1"
+  "VOLCENGINE_API_KEY|llm||Volcengine (ByteDance) API key|1"
 
   # ---- CAPTCHA Solving ----
-  "CAPSOLVER_KEY|captcha||Capsolver API key for CAPTCHA solving"
-  "TWOCAPTCHA_KEY|captcha||2Captcha API key for CAPTCHA solving"
-  "ANTICAPTCHA_KEY|captcha||Anti-Captcha API key for CAPTCHA solving"
+  "CAPSOLVER_KEY|captcha||Capsolver API key for CAPTCHA solving|1"
+  "TWOCAPTCHA_KEY|captcha||2Captcha API key for CAPTCHA solving|1"
+  "ANTICAPTCHA_KEY|captcha||Anti-Captcha API key for CAPTCHA solving|1"
 
   # ---- Observability (OpenTelemetry + Metrics) ----
-  "OTEL_TRACES_ENABLED|observability|true|Enable OpenTelemetry tracing (true/false)"
-  "OTEL_EXPORTER_OTLP_ENDPOINT|observability|http://localhost:4317|OTLP gRPC collector endpoint"
-  "OTEL_SERVICE_NAME|observability|browser4-agentic|OpenTelemetry service name"
-  "OTEL_SERVICE_VERSION|observability|4.8.1-SNAPSHOT|OpenTelemetry service version"
-  "METRICS_ENABLED|observability|true|Enable metrics collection (true/false)"
-  "METRICS_PREFIX|observability|pulsar_agentic|Metrics name prefix"
-  "METRICS_COMMON_TAGS|observability||Comma-separated key=value pairs for metrics common tags"
+  "OTEL_TRACES_ENABLED|observability|true|Enable OpenTelemetry tracing (true/false)|"
+  "OTEL_EXPORTER_OTLP_ENDPOINT|observability|http://localhost:4317|OTLP gRPC collector endpoint|"
+  "OTEL_SERVICE_NAME|observability|browser4-agentic|OpenTelemetry service name|"
+  "OTEL_SERVICE_VERSION|observability|4.8.1-SNAPSHOT|OpenTelemetry service version|"
+  "METRICS_ENABLED|observability|true|Enable metrics collection (true/false)|"
+  "METRICS_PREFIX|observability|pulsar_agentic|Metrics name prefix|"
+  "METRICS_COMMON_TAGS|observability||Comma-separated key=value pairs for metrics common tags|"
 
   # ---- Backend (Kotlin/Spring) ----
-  "BROWSER4_TAB_READ_ACTIONS_WHITELIST|backend||Comma-separated list of read actions (e.g. read_snapshot,read_state)"
-  "PLAYWRIGHT_BROWSERS_PATH|backend||Custom path to Playwright browser binaries"
+  "BROWSER4_TAB_READ_ACTIONS_WHITELIST|backend||Comma-separated list of read actions (e.g. read_snapshot,read_state)|"
+  "PLAYWRIGHT_BROWSERS_PATH|backend||Custom path to Playwright browser binaries|"
 
   # ---- E2E Testing ----
-  "BROWSER4_E2E_SERVICE_URL|test||External Browser4 service URL for E2E tests"
-  "BROWSER4_E2E_SERVER_URL|test||Alias for BROWSER4_E2E_SERVICE_URL"
-  "BROWSER4_E2E_FIXTURE_HOST|test|127.0.0.1|Host the Browser4 container uses to reach fixture server"
-  "BROWSER4_E2E_CLI_TIMEOUT_SECS|test||Override per-command timeout in E2E tests (seconds)"
-  "BROWSER4_E2E_USE_MAVEN_STARTUP|test||Set to 1/true/yes/on for Maven-based startup in E2E"
-  "BROWSER4_E2E_FORCE_REMOTE_BUNDLE|test||Force remote bundle in E2E tests"
+  "BROWSER4_E2E_SERVICE_URL|test||External Browser4 service URL for E2E tests|"
+  "BROWSER4_E2E_SERVER_URL|test||Alias for BROWSER4_E2E_SERVICE_URL|"
+  "BROWSER4_E2E_FIXTURE_HOST|test|127.0.0.1|Host the Browser4 container uses to reach fixture server|"
+  "BROWSER4_E2E_CLI_TIMEOUT_SECS|test||Override per-command timeout in E2E tests (seconds)|"
+  "BROWSER4_E2E_USE_MAVEN_STARTUP|test||Set to 1/true/yes/on for Maven-based startup in E2E|"
+  "BROWSER4_E2E_FORCE_REMOTE_BUNDLE|test||Force remote bundle in E2E tests|"
 
   # ---- Mock Site Testing ----
-  "MOCK_SITE_PORT|test|8182|Port for mock site test server"
-  "MOCK_SITE_WAIT_SEC|test||Wait seconds for mock site startup"
+  "MOCK_SITE_PORT|test|8182|Port for mock site test server|"
+  "MOCK_SITE_WAIT_SEC|test||Wait seconds for mock site startup|"
 
   # ---- Example Crawlers (credentials) ----
-  "PULSAR_TAOBAO_USERNAME|example||Taobao login username (example crawlers)"
-  "PULSAR_TAOBAO_PASSWORD|example||Taobao login password (example crawlers)"
-  "PULSAR_SIMUWANG_USERNAME|example||Simuwang login username (example crawlers)"
-  "PULSAR_SIMUWANG_PASSWORD|example||Simuwang login password (example crawlers)"
+  "PULSAR_TAOBAO_USERNAME|example||Taobao login username (example crawlers)|1"
+  "PULSAR_TAOBAO_PASSWORD|example||Taobao login password (example crawlers)|1"
+  "PULSAR_SIMUWANG_USERNAME|example||Simuwang login username (example crawlers)|1"
+  "PULSAR_SIMUWANG_PASSWORD|example||Simuwang login password (example crawlers)|1"
 
   # ---- System / Generic (read by Browser4) ----
-  "http_proxy|proxy||HTTP proxy (lowercase)"
-  "HTTP_PROXY|proxy||HTTP proxy (uppercase)"
-  "https_proxy|proxy||HTTPS proxy (lowercase)"
-  "HTTPS_PROXY|proxy||HTTPS proxy (uppercase)"
-  "all_proxy|proxy||All-protocols proxy (lowercase)"
-  "ALL_PROXY|proxy||All-protocols proxy (uppercase)"
-  "TZ|generic||System timezone"
-  "LC_ALL|generic||Locale override (all categories)"
-  "LANG|generic||Locale (language)"
-  "LC_CTYPE|generic||Locale (character classification)"
-  "LC_MESSAGES|generic||Locale (messages)"
+  "http_proxy|proxy||HTTP proxy (lowercase)|"
+  "HTTP_PROXY|proxy||HTTP proxy (uppercase)|"
+  "https_proxy|proxy||HTTPS proxy (lowercase)|"
+  "HTTPS_PROXY|proxy||HTTPS proxy (uppercase)|"
+  "all_proxy|proxy||All-protocols proxy (lowercase)|"
+  "ALL_PROXY|proxy||All-protocols proxy (uppercase)|"
+  "TZ|generic||System timezone|"
+  "LC_ALL|generic||Locale override (all categories)|"
+  "LANG|generic||Locale (language)|"
+  "LC_CTYPE|generic||Locale (character classification)|"
+  "LC_MESSAGES|generic||Locale (messages)|"
 )
 
 # ---- helpers ----
 
 usage() {
-  sed -n '2,15p' "$0"
+  sed -n '2,18p' "$0"
+}
+
+# Mask a sensitive value: show first 4 + "****" + last 3 chars.
+# Short values (≤7): show "****" only.
+mask_value() {
+  local val="$1"
+  local len="${#val}"
+  if (( len <= 7 )); then
+    printf '****'
+  else
+    printf '%s****%s' "${val:0:4}" "${val: -3}"
+  fi
 }
 
 color_value() {
-  local val="$1"
-  if [[ -n "$val" ]]; then
-    # truncate long values (like tokens)
-    if [[ ${#val} -gt 50 ]]; then
-      printf '\033[32m%s...\033[0m' "${val:0:50}"
-    else
-      printf '\033[32m%s\033[0m' "$val"
-    fi
-  else
+  local val="$1" sensitive="$2" reveal="$3"
+  if [[ -z "$val" ]]; then
     printf '\033[90m<not set>\033[0m'
+    return
   fi
+  if [[ "$sensitive" == "1" && "$reveal" != "1" ]]; then
+    printf '\033[33m%s\033[0m' "$(mask_value "$val")"
+    return
+  fi
+  # truncate long values
+  if [[ ${#val} -gt 60 ]]; then
+    printf '\033[32m%s...\033[0m' "${val:0:60}"
+  else
+    printf '\033[32m%s\033[0m' "$val"
+  fi
+}
+
+# Return 0 if the category/entry is sensitive
+is_sensitive() {
+  [[ "${1:-}" == "1" ]]
 }
 
 color_category() {
@@ -152,19 +176,37 @@ color_category() {
   esac
 }
 
+sensitive_badge() {
+  if [[ "${1:-}" == "1" ]]; then
+    printf ' \033[31m[secret]\033[0m'
+  fi
+}
+
 show_var() {
-  local name="$1" category="$2" default="$3" desc="$4"
+  local name="$1" category="$2" default="$3" desc="$4" sensitive="$5" reveal="$6"
   local val="${!name:-}"
-  printf "  %-45s  %s  %-12s  %s\n" "$name" "$(color_value "$val")" "$default" "$desc"
+  printf "  %-40s%s  %s  %-12s  %s\n" \
+    "$name" \
+    "$(sensitive_badge "$sensitive")" \
+    "$(color_value "$val" "$sensitive" "$reveal")" \
+    "$default" \
+    "$desc"
 }
 
 show_var_detailed() {
-  local name="$1" category="$2" default="$3" desc="$4"
+  local name="$1" category="$2" default="$3" desc="$4" sensitive="$5" reveal="$6"
   local val="${!name:-}"
+  local masked="no"
+  [[ "$sensitive" == "1" && "$reveal" != "1" ]] && masked="yes"
   echo "──────────────────────────────────────────────────────────────────"
-  printf "  Variable:   %s\n" "$name"
+  printf "  Variable:   %s" "$name"
+  sensitive_badge "$sensitive"
+  echo
   printf "  Category:   " && color_category "$category" && echo
-  printf "  Value:      %s\n" "$(color_value "$val")"
+  printf "  Value:      %s\n" "$(color_value "$val" "$sensitive" "$reveal")"
+  if [[ "$masked" == "yes" && -n "$val" ]]; then
+    printf "  (masked:   use --reveal or 'get %s' for full value)\n" "$name"
+  fi
   printf "  Default:    %s\n" "${default:-<none>}"
   printf "  Description: %s\n" "$desc"
   echo
@@ -173,16 +215,23 @@ show_var_detailed() {
 show_all() {
   local detailed="${1:-}"
   local filter="${2:-}"
+  local reveal="${3:-}"
+  local sensitive_only="${4:-}"
 
-  echo "Browser4 Environment Variables"
+  if [[ "$reveal" == "1" ]]; then
+    echo "Browser4 Environment Variables  *** SECRETS VISIBLE ***"
+  else
+    echo "Browser4 Environment Variables"
+  fi
   echo "=============================="
   echo ""
 
   local count=0 set_count=0
   for entry in "${KNOWN_VARS[@]}"; do
-    IFS='|' read -r name category default desc <<< "$entry"
+    IFS='|' read -r name category default desc sensitive <<< "$entry"
 
     [[ -n "$filter" && "$name" != "$filter"* ]] && continue
+    [[ "$sensitive_only" == "1" && "$sensitive" != "1" ]] && continue
 
     if [[ -n "${!name:-}" ]]; then
       ((++set_count))
@@ -190,33 +239,43 @@ show_all() {
     ((++count))
 
     if [[ "$detailed" == "detailed" ]]; then
-      show_var_detailed "$name" "$category" "$default" "$desc"
+      show_var_detailed "$name" "$category" "$default" "$desc" "$sensitive" "$reveal"
     else
-      show_var "$name" "$category" "$default" "$desc"
+      show_var "$name" "$category" "$default" "$desc" "$sensitive" "$reveal"
     fi
   done
 
   echo ""
   echo "──────────────────────────────────────────────────────────────────"
   printf "  %d/%d variables configured\n" "$set_count" "$count"
+  if [[ "$reveal" != "1" ]]; then
+    printf "  Secrets masked — use --reveal to show full values\n"
+  fi
   if [[ -n "$filter" ]]; then
     printf "  Filter: names starting with \"%s\"\n" "$filter"
+  fi
+  if [[ "$sensitive_only" == "1" ]]; then
+    printf "  Showing only sensitive (secret-bearing) variables\n"
   fi
 }
 
 cmd_show() {
   local detailed="simple"
   local filter=""
+  local reveal=""
+  local sensitive_only=""
 
   for arg in "$@"; do
     case "$arg" in
       --detailed|-d) detailed="detailed" ;;
-      --help|-h) usage; return 0 ;;
-      *) filter="$arg" ;;
+      --reveal|-r)   reveal="1" ;;
+      --sensitive)   sensitive_only="1" ;;
+      --help|-h)     usage; return 0 ;;
+      *)             filter="$arg" ;;
     esac
   done
 
-  show_all "$detailed" "$filter"
+  show_all "$detailed" "$filter" "$reveal" "$sensitive_only"
 }
 
 cmd_get() {
@@ -225,6 +284,7 @@ cmd_get() {
     echo "<not set>"
     return 1
   fi
+  # get always returns the raw value — it's an explicit request
   echo "${!name}"
 }
 
@@ -232,7 +292,13 @@ cmd_set() {
   local name="$1" value="$2"
   export "$name"="$value"
   printf "Set %s = " "$name"
-  color_value "$value"
+  # Show masked if this is a known sensitive var
+  local sensitive=""
+  for entry in "${KNOWN_VARS[@]}"; do
+    IFS='|' read -r ename _ _ _ esensitive <<< "$entry"
+    [[ "$ename" == "$name" ]] && { sensitive="$esensitive"; break; }
+  done
+  color_value "$value" "$sensitive" ""
   echo
 }
 
@@ -243,23 +309,44 @@ cmd_unset() {
 }
 
 cmd_export() {
+  local reveal="${1:-}"
+  local masked_notice="yes"
+  [[ "$reveal" == "--reveal" || "$reveal" == "-r" ]] && masked_notice=""
+
   echo "# Browser4 environment variables — source this file:"
   echo "#   source <(./bin/env-manage.sh export)"
+  if [[ -n "$masked_notice" ]]; then
+    echo "# Secrets are MASKED — use 'export --reveal' to write full values."
+    echo "# Run 'get <VAR>' to retrieve individual raw values."
+    echo ""
+  fi
   echo ""
   for entry in "${KNOWN_VARS[@]}"; do
-    IFS='|' read -r name category default desc <<< "$entry"
+    IFS='|' read -r name _ _ _ sensitive <<< "$entry"
     if [[ -n "${!name:-}" ]]; then
-      printf "export %s=%q\n" "$name" "${!name}"
+      if [[ -n "$masked_notice" && "$sensitive" == "1" ]]; then
+        printf "# export %s=%q   # [secret] masked — use 'export --reveal' or 'get %s'\n" "$name" "$(mask_value "${!name}")" "$name"
+      else
+        printf "export %s=%q\n" "$name" "${!name}"
+      fi
     fi
   done
 }
 
 cmd_list() {
   local filter="${1:-}"
+  local sensitive_only=""
+  if [[ "$filter" == "--sensitive" ]]; then
+    sensitive_only="1"
+    filter=""
+  fi
   for entry in "${KNOWN_VARS[@]}"; do
-    IFS='|' read -r name category default desc <<< "$entry"
+    IFS='|' read -r name category _ desc sensitive <<< "$entry"
     [[ -n "$filter" && "$name" != "$filter"* ]] && continue
-    printf "%-45s  [%s]  %s\n" "$name" "$category" "$desc"
+    [[ "$sensitive_only" == "1" && "$sensitive" != "1" ]] && continue
+    printf "%-45s  [%s]  %s" "$name" "$category" "$desc"
+    [[ "$sensitive" == "1" ]] && printf ' \033[31m[secret]\033[0m'
+    echo
   done
 }
 
@@ -283,7 +370,8 @@ case "${1:-help}" in
     cmd_unset "$@"
     ;;
   export)
-    cmd_export
+    shift
+    cmd_export "${1:-}"
     ;;
   list)
     shift
