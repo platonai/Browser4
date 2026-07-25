@@ -20,6 +20,7 @@ import kotlinx.coroutines.runBlocking
 import org.slf4j.LoggerFactory
 import java.io.Closeable
 import java.net.URI
+import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 
 /**
@@ -34,6 +35,9 @@ class PulsarSessionManager(
     private val logger = LoggerFactory.getLogger(PulsarSessionManager::class.java)
 
     private val sessions = ConcurrentHashMap<String, ManagedSession>()
+
+    /** Maps display names (e.g. "DEFAULT") to UUID-based session IDs for consistent reuse. */
+    private val displayNameToSessionId = ConcurrentHashMap<String, String>()
 
     /**
      * The swarm session is a special session that used for swarm use cases. It is created on demand and shared
@@ -82,12 +86,20 @@ class PulsarSessionManager(
             return ensureSwarmSession(capabilities)
         }
 
-        val normalizedCapabilities = normalizeCapabilities(sessionId, capabilities)
-        val session = sessions.computeIfAbsent(sessionId) {
-            createManagedSession(sessionId, normalizedCapabilities)
+        // Resolve DEFAULT to a stable UUID so all session types use
+        // UUID-based IDs consistently (extension sessions already do).
+        val resolvedId = if (sessionId.equals(DEFAULT_SESSION_ID, ignoreCase = true)) {
+            generateDefaultSessionId()
+        } else {
+            sessionId
         }
 
-        val activeSession = resolveHealthySession(sessionId, normalizedCapabilities, session)
+        val normalizedCapabilities = normalizeCapabilities(resolvedId, capabilities)
+        val session = sessions.computeIfAbsent(resolvedId) {
+            createManagedSession(resolvedId, normalizedCapabilities)
+        }
+
+        val activeSession = resolveHealthySession(resolvedId, normalizedCapabilities, session)
 
         activeSession.lastAccessedAt = System.currentTimeMillis()
         return activeSession
@@ -575,13 +587,13 @@ class PulsarSessionManager(
         val hasExplicitSessionId = !explicitSessionId.isNullOrBlank()
         val requestedSessionId = normalizedCapabilities[SESSION_ID_CAPABILITY]?.trim()
         val sessionId = when {
-            explicitSessionId.equals(DEFAULT_SESSION_ID, ignoreCase = true) -> DEFAULT_SESSION_ID
+            explicitSessionId.equals(DEFAULT_SESSION_ID, ignoreCase = true) -> generateDefaultSessionId()
             explicitSessionId.equals(SWARM_SESSION_ID, ignoreCase = true) -> SWARM_SESSION_ID
             hasExplicitSessionId -> explicitSessionId.trim()
             requestedSessionId.isNullOrBlank() || requestedSessionId.equals(
                 DEFAULT_SESSION_ID,
                 ignoreCase = true
-            ) -> DEFAULT_SESSION_ID
+            ) -> generateDefaultSessionId()
 
             requestedSessionId.equals(SWARM_SESSION_ID, ignoreCase = true) -> SWARM_SESSION_ID
             else -> requestedSessionId
@@ -618,13 +630,35 @@ class PulsarSessionManager(
     }
 
     /**
+     * Generates a stable UUID for the default session slot.  The first call
+     * creates a new UUID and records the mapping; subsequent calls return the
+     * same UUID so that repeated {@code open_session} calls reuse the same
+     * session instead of creating a new one each time.
+     */
+    private fun generateDefaultSessionId(): String {
+        return displayNameToSessionId.computeIfAbsent(DEFAULT_SESSION_ID) {
+            UUID.randomUUID().toString()
+        }
+    }
+
+    /**
      * Retrieves a session by ID.
      *
      * @param sessionId The session identifier.
      * @return The managed session, or null if not found.
      */
     fun getSession(sessionId: String): ManagedSession? {
-        val session = if (sessionId.equals(DEFAULT_SESSION_ID, ignoreCase = true)) {
+        val resolvedId = displayNameToSessionId.getOrDefault(sessionId, sessionId)
+        val session = if (resolvedId != sessionId) {
+            // Look up by resolved UUID
+            sessions[resolvedId]?.let { existingSession ->
+                val normalizedCapabilities = normalizeCapabilities(
+                    resolvedId,
+                    existingSession.capabilities ?: mapOf(SESSION_ID_CAPABILITY to existingSession.sessionId)
+                )
+                resolveHealthySession(resolvedId, normalizedCapabilities, existingSession)
+            }
+        } else if (sessionId.equals(DEFAULT_SESSION_ID, ignoreCase = true)) {
             getOrCreateSession(mapOf(SESSION_ID_CAPABILITY to DEFAULT_SESSION_ID))
         } else {
             sessions[sessionId]?.let { existingSession ->
@@ -677,6 +711,9 @@ class PulsarSessionManager(
         extensionBrowsers.remove(sessionId)?.close()
         pendingExtensionConnections.remove(sessionId)
         extensionSessionIds.remove(sessionId)
+
+        // Clean up the display-name mapping if this session was a default session
+        displayNameToSessionId.values.remove(sessionId)
 
         return true
     }

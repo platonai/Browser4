@@ -601,11 +601,22 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
             "  - When attaching, the current session slot is associated with the external browser."
                 .to_string(),
         );
+        lines.push(
+            "  - --extension connects via the Browser4 Chrome Extension (browser must have the extension installed)."
+                .to_string(),
+        );
+        lines.push(
+            "    Supported channels: chrome (default), chrome-canary, msedge, msedge-dev."
+                .to_string(),
+        );
         lines.push(String::new());
         lines.push("Examples:".to_string());
         lines.push("  browser4-cli attach --cdp http://localhost:9222".to_string());
         lines.push("  browser4-cli attach --cdp chrome".to_string());
         lines.push("  browser4-cli attach --cdp msedge".to_string());
+        lines.push("  browser4-cli attach --extension".to_string());
+        lines.push("  browser4-cli attach --extension chrome-canary".to_string());
+        lines.push("  browser4-cli attach --extension msedge".to_string());
         lines.push("  browser4-cli attach --endpoint http://browser4-server:8182".to_string());
         lines.push("  browser4-cli attach --endpoint http://remote:8182 --cdp chrome".to_string());
     }
@@ -2301,6 +2312,9 @@ mod tests {
         assert!(help.contains("--endpoint"));
         assert!(help.contains("browser4-cli attach --cdp http://localhost:9222"));
         assert!(help.contains("browser4-cli attach --cdp chrome"));
+        assert!(help.contains("browser4-cli attach --extension"));
+        assert!(help.contains("browser4-cli attach --extension chrome-canary"));
+        assert!(help.contains("browser4-cli attach --extension msedge"));
     }
 
     #[test]

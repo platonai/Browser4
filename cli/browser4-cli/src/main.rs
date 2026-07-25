@@ -971,6 +971,7 @@ async fn get_or_create_navigation_session(
     base_url: &str,
     tool_params: &Value,
     session_name: Option<&str>,
+    force_new_session: bool,
 ) -> Result<(CliState, String, bool), String> {
     let mut state = read_state(None, session_name);
     state.session_name = session_name.map(|s| s.to_string());
@@ -979,7 +980,36 @@ async fn get_or_create_navigation_session(
         find_reusable_persisted_session_id(client, base_url, &state, session_name).await?;
     let reused_existing_session = reusable_session_id.is_some();
     let session_id = if let Some(existing_id) = reusable_session_id {
-        existing_id
+        // When force_new_session is set (e.g., `open` command), if the
+        // existing session is an attached session (CDP or extension),
+        // don't reuse it — create a new regular Browser4 session instead.
+        // Save the attached session's state under the session ID as a
+        // named session so it can still be targeted with -s <sessionId>.
+        if force_new_session && state.is_attached {
+            // Persist the attached session under its own session ID
+            // so it can be listed and targeted with -s <sessionId>.
+            let mut attached_state = state.clone();
+            attached_state.session_name = Some(existing_id.clone());
+            write_state(&attached_state, None, Some(&existing_id))
+                .map_err(|e| e.to_string())?;
+
+            cli_println!(
+                "Session '{}' is an attached/extension session. Creating a new Browser4 session.",
+                existing_id
+            );
+            cli_println!(
+                "Use '-s {}' to target the attached session.",
+                existing_id
+            );
+
+            let capabilities = build_open_session_capabilities(tool_params);
+            let new_id =
+                create_session(client, base_url, &state, session_name, Some(capabilities)).await?;
+            cli_println!("Session opened: {}", new_id);
+            new_id
+        } else {
+            existing_id
+        }
     } else if state.is_attached {
         // For attached sessions (CDP or extension), never fall through to
         // create_session — that would launch a NEW browser instance instead
@@ -1529,7 +1559,7 @@ async fn handle_open(
     session_name: Option<&str>,
 ) -> Result<(), String> {
     let (state, session_id, reused_existing_session) =
-        get_or_create_navigation_session(client, base_url, tool_params, session_name).await?;
+        get_or_create_navigation_session(client, base_url, tool_params, session_name, true).await?;
 
     json_field("session_id", json!(&session_id));
     json_field("reused", json!(reused_existing_session));
@@ -1608,7 +1638,7 @@ async fn handle_goto(
     session_name: Option<&str>,
 ) -> Result<(), String> {
     let (state, session_id, reused_existing_session) =
-        get_or_create_navigation_session(client, base_url, tool_params, session_name).await?;
+        get_or_create_navigation_session(client, base_url, tool_params, session_name, false).await?;
     let target_url = tool_params
         .get("url")
         .and_then(|value| value.as_str())
@@ -2973,7 +3003,7 @@ async fn handle_state_load(
     })?;
 
     let (_, session_id, _) =
-        get_or_create_navigation_session(client, base_url, &json!({}), session_name).await?;
+        get_or_create_navigation_session(client, base_url, &json!({}), session_name, false).await?;
     let result = call_tool(
         client,
         base_url,

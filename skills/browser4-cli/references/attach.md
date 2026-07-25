@@ -76,7 +76,26 @@ browser4-cli -s debug-session snapshot
 browser4-cli -s debug-session screenshot --filename state.png
 ```
 
-### 5. Debug a Remote Browser via SSH Tunnel
+### 5. Attach via Browser4 Extension
+
+```bash
+browser4-cli attach --extension
+browser4-cli attach --extension chrome-canary
+browser4-cli attach --extension msedge
+```
+
+Connect through the Browser4 Chrome Extension installed in the target browser. This is the easiest way to attach: no remote debugging flag or port configuration needed. The extension opens an about:blank tab and relays CDP commands over WebSocket.
+
+**Supported channels:** `chrome` (default), `chrome-canary`, `msedge`, `msedge-dev`.
+
+**How it works:** The extension finds or opens a small WebSocket relay, and the CLI connects to it. All subsequent commands operate on the extension's active tab. This mode keeps your existing browser tabs and session intact — the browser is not launched by Browser4.
+
+**Troubleshooting:**
+- Navigating to `chrome://` internal pages (e.g., `chrome://version/`) may disconnect the extension WebSocket. If the session goes stale, re-attach with `attach --extension`.
+- The extension creates a blank tab for the relay — "current page: about:blank" is normal for a freshly attached extension session.
+- Use `--endpoint` together with `--extension` to connect through a remote Browser4 server.
+
+### 6. Debug a Remote Browser via SSH Tunnel
 
 ```bash
 # On the remote machine: start Chrome with debugging
@@ -97,6 +116,7 @@ browser4-cli screenshot --filename remote-state.png
 |------|-------------|
 | `--cdp <channel\|url\|port>` | Channel name, CDP URL, WebSocket URL, bare port, or `host:port` |
 | `--endpoint <server-url>` | Browser4 server URL; when used alone, switches CLI to that server |
+| `--extension [channel]` | Connect via Browser4 Chrome Extension; optionally specify channel (chrome, chrome-canary, msedge, etc.) |
 | `-s <name>` | Name for the attached session (for `-s <name>` targeting later) |
 
 ## Errors & Recovery
@@ -106,3 +126,5 @@ browser4-cli screenshot --filename remote-state.png
 | Cannot find target browser | Verify remote debugging is enabled; check the browser is running |
 | No matching channel found | Verify channel name spelling; try a CDP URL or port instead |
 | No CDP endpoint listening | Verify the port is correct and not blocked by a firewall |
+| Extension session goes stale | Re-attach with `attach --extension`; avoid navigating to chrome:// internal pages |
+| Extension not found / not installed | Install the Browser4 Chrome Extension in the target browser first |

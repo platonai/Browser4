@@ -3,7 +3,7 @@
 param(
     [switch]$Rebuild,
     [Parameter(ValueFromRemainingArguments = $true)]
-    [string[]]$ScriptArgs
+    [string[]]$RemainingArgs
 )
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -34,13 +34,22 @@ if (!$Rebuild -and (Test-Path $Exe)) {
     }
 }
 
+# Support explicit passthrough: everything after '--' bypasses the
+# script's own param() block and goes directly to the CLI binary.
+# This allows flags like -s <session> to work without PowerShell
+# interpreting them as parameter names (e.g., -s → -ScriptArgs).
+$CliArgs = $RemainingArgs
+if ($RemainingArgs -and $RemainingArgs[0] -eq '--') {
+    $CliArgs = $RemainingArgs[1..$RemainingArgs.Length]
+}
+
 # Build a quoted argument list to prevent PowerShell from interpreting
 # dash-prefixed CLI flags (-v, -i, --sql, -Ex*, etc.) as its own
 # parameters.  Without this, PowerShell resolves -v to -Verbose (common
 # parameter), -i clashes with -InformationAction, and other flag-like
 # tokens can be consumed before reaching the CLI binary.
 # See also: b4w.sh for bash → pwsh passthrough handling.
-$SafeArgs = foreach ($a in $ScriptArgs) {
+$SafeArgs = foreach ($a in $CliArgs) {
     # Double-quote each argument and escape internal double quotes.
     '"' + ($a -replace '"', '""') + '"'
 }
