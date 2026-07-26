@@ -12,6 +12,7 @@ import java.nio.file.Path
 import java.time.Instant
 import kotlin.io.path.*
 import kotlin.test.*
+import kotlinx.coroutines.runBlocking
 
 /**
  * Tests for KnowledgeStore YAML persistence failure paths.
