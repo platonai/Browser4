@@ -165,14 +165,14 @@ function Print-Usage {
     Write-Host "  skills      Run skills-focused agentic tests"
     Write-Host "  mcp         Run MCP-focused agentic tests"
     Write-Host "  ps          Run all PowerShell *.tests.ps1 files in the project"
-    Write-Host "  rws         Show this help (requires --scenarios or --task)"
-    Write-Host "              With --scenarios: run all scenario tasks via run-tests.ps1"
+    Write-Host "  rws         Run real-world scenario tests (requires --scenarios/-sc or --task)"
+    Write-Host "              With --scenarios or -sc: run all scenario tasks via run-tests.ps1"
     Write-Host "              With --task <file>: run a single task via run-task.ps1"
     Write-Host "  session     List or view persisted test sessions (list, view)"
     Write-Host "              list --all | --count N   Paginate session listing (default: 15)"
     Write-Host ""
     Write-Host "  RWS flags (accepted after 'rws'):"
-    Write-Host "    --scenarios [names...]  Run agent-scenario tasks (requires claude or kimi)"
+    Write-Host "    --scenarios, -sc [names...]  Run agent-scenario tasks (requires claude or kimi)"
     Write-Host "    --task <file>           Run a single task file directly"
     Write-Host "    --production            Use installed browser4-cli instead of cargo run"
     Write-Host "    --fail-fast             Stop after the first failing scenario"
@@ -201,9 +201,10 @@ function Print-Usage {
     Write-Host "  test.ps1 ps                         # Run all PowerShell *.tests.ps1 files"
     Write-Host "  test.ps1 ps -Quiet                  # Run PowerShell tests with -Quiet flag"
     Write-Host "  test.ps1 resume                     # Resume from the last failed module"
-    Write-Host "  test.ps1 rws                        # Show RWS help (requires --scenarios or --task)"
+    Write-Host "  test.ps1 rws                        # Run real-world scenario tests (requires --scenarios/-sc or --task)"
     Write-Host "  test.ps1 rws --scenarios            # Run all agent-scenario tasks"
     Write-Host "  test.ps1 rws --scenarios amazon     # Run a specific scenario task"
+    Write-Host "  test.ps1 rws -sc amazon             # Same as --scenarios"
     Write-Host "  test.ps1 rws --scenarios --timeout 30  # Run all scenarios with 30-minute per-task timeout"
     Write-Host "  test.ps1 rws --scenarios --list     # List discovered scenario tasks"
     Write-Host "  test.ps1 rws --scenarios --production  # Run scenarios against installed CLI"
@@ -532,7 +533,7 @@ function Invoke-RealWorldScenarioTests([string[]]$additionalArgs) {
     $i = 0
     while ($i -lt $additionalArgs.Count) {
         $arg = $additionalArgs[$i]
-        if ($arg -eq '--scenarios') {
+        if ($arg -in '--scenarios', '-sc') {
             $mode = 'scenarios'
             $modeLabel = 'real-world scenarios'
             $i++
@@ -585,7 +586,7 @@ function Invoke-RealWorldScenarioTests([string[]]$additionalArgs) {
         Write-Host 'Usage: test.ps1 rws <mode> [options]'
         Write-Host ''
         Write-Host 'Modes (required, pick one):'
-        Write-Host '  --scenarios [names...]  Run agent-scenario tasks via run-tests.ps1'
+        Write-Host '  --scenarios, -sc [names...]  Run agent-scenario tasks via run-tests.ps1'
         Write-Host '  --task <file>           Run a single task file via run-task.ps1'
         Write-Host ''
         Write-Host 'Options:'
@@ -599,6 +600,7 @@ function Invoke-RealWorldScenarioTests([string[]]$additionalArgs) {
         Write-Host 'Examples:'
         Write-Host '  test.ps1 rws --scenarios                   # Run all agent-scenario tasks'
         Write-Host '  test.ps1 rws --scenarios amazon            # Run a specific scenario task'
+        Write-Host '  test.ps1 rws -sc amazon             # Same as --scenarios'
         Write-Host '  test.ps1 rws --scenarios --list            # List discovered scenario tasks'
         Write-Host '  test.ps1 rws --scenarios --production     # Run against installed CLI'
         Write-Host '  test.ps1 rws --task tasks/amazon.md        # Run a single task file directly'
@@ -618,7 +620,7 @@ function Invoke-RealWorldScenarioTests([string[]]$additionalArgs) {
         $runnerKind = 'Task runner'
     }
     else {
-        Write-Error "Unknown RWS mode '$mode'. Valid modes: --scenarios, --task <file>"
+        Write-Error "Unknown RWS mode '$mode'. Valid modes: --scenarios (-sc), --task <file>"
         exit 1
     }
 
