@@ -543,7 +543,18 @@ function Invoke-RealWorldScenarioTests([string[]]$additionalArgs) {
                 $i++
             }
             if ($scenarioNames.Count -eq 0) {
-                Write-Error "sc/scenarios mode requires at least one scenario name. Use --list to see available scenarios."
+                Write-Host ''
+                Write-Host 'sc requires at least one scenario name.' -ForegroundColor Yellow
+                Write-Host ''
+                Write-Host 'Usage:  test.ps1 rws sc <names...> [options]'
+                Write-Host ''
+                Write-Host 'Discover available scenarios:'
+                Write-Host '  test.ps1 rws sc --list'
+                Write-Host ''
+                Write-Host 'Examples:'
+                Write-Host '  test.ps1 rws sc amazon'
+                Write-Host '  test.ps1 rws sc amazon hn search-summary'
+                Write-Host ''
                 exit 1
             }
             $modeLabel = "real-world scenarios: $($scenarioNames -join ', ')"
