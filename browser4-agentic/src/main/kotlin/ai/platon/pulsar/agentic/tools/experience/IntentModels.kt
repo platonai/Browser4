@@ -131,7 +131,8 @@ enum class Intent(
                 scores[MONITOR] = (scores[MONITOR] ?: 0) + 4
             }
 
-            return scores.maxByOrNull { it.value }?.key ?: OTHER
+            val best = scores.maxByOrNull { it.value }
+            return if (best != null && best.value > 0) best.key else OTHER
         }
 
         private fun anyWordIn(text: String, vararg words: String): Boolean {

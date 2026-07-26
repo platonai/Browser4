@@ -81,7 +81,7 @@ class KnowledgeStore(
         val domainDir = tracesDir.resolve(trace.domain)
         if (!domainDir.exists()) Files.createDirectories(domainDir)
 
-        val timestamp = DateTimeFormatter.ofPattern("yyyy-MM-dd-HHmmss")
+        val timestamp = DateTimeFormatter.ofPattern("yyyy-MM-dd-HHmmss-SSS")
             .withZone(ZoneId.systemDefault()).format(trace.timestamp)
         val intentSlug = trace.intent.take(40).replace(Regex("[^a-zA-Z0-9_]"), "_")
         val filename = "$timestamp-$intentSlug.yaml"
@@ -362,13 +362,23 @@ class KnowledgeStore(
 
     private fun writeAtomicYaml(target: Path, data: Map<String, Any>) {
         val tmp = target.resolveSibling("${target.fileName}.tmp")
+        Files.createDirectories(target.parent)
         try {
             val yamlText = yaml.dump(data)
             Files.writeString(tmp, yamlText, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING)
-            Files.move(tmp, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+            // On Windows, ATOMIC_MOVE fails if the target exists even with REPLACE_EXISTING.
+            // Delete the target first, then move without ATOMIC_MOVE for cross-platform reliability.
+            Files.deleteIfExists(target)
+            Files.move(tmp, target)
         } catch (e: Exception) {
-            try { tmp.deleteExisting() } catch (_: Exception) {}
-            throw KnowledgeStoreException("Failed to write $target: ${e.message}", e)
+            // Fallback: try with REPLACE_EXISTING if delete-before-move failed
+            try {
+                Files.move(tmp, target, StandardCopyOption.REPLACE_EXISTING)
+            } catch (fallbackError: Exception) {
+                try { tmp.deleteExisting() } catch (_: Exception) {}
+                e.addSuppressed(fallbackError)
+                throw KnowledgeStoreException("Failed to write $target: ${e.message}", e)
+            }
         }
     }
 

@@ -261,7 +261,7 @@ class MCPToolControllerExperienceE2ETest {
             assertEquals("experience", toolCall.domain)
             assertEquals("list", toolCall.method)
             assertEquals("amazon", toolCall.arguments["filter"])
-            assertEquals("buy", toolCall.arguments["intent_filter"])
+            assertEquals("buy", toolCall.arguments["intentFilter"])
         }
     }
 
