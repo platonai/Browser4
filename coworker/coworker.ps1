@@ -1160,20 +1160,39 @@ function Invoke-Commit {
 Generate a conventional commit message for the following staged changes.
 
 Branch: $branch
-Repository: $targetRepo
 
 The message must follow the Conventional Commits format:
-  <type>[optional scope]: <description>
+  <type>[optional scope]: <imperative description>
 
 Types: feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert
 Breaking changes: append "!" after the type (e.g. "feat!:").
 
 Rules:
 - First line: "<type>: <imperative description>" (max 72 chars)
-- Leave a blank line after the first line
-- Optionally add a body paragraph explaining what and why (not how)
+- ALWAYS include a body paragraph explaining what was changed and why
+- Scope must reflect the code area (e.g. cli, tab, browser, rest, core, build,
+  coworker), NOT task-state directory names like "done", "draft", "ready",
+  "working", "review", "approved", "pushed", or "issues"
+- Ignore coworker task files (.md under coworker/tasks/) when determining type
+  and scope — they are task-tracker artifacts, not source code. Base the message
+  on the actual source-code and documentation changes
 - Do NOT wrap the message in code fences or quotes
 - Output ONLY the commit message, no conversational framing
+
+Examples of GOOD messages:
+  feat(cli): add tab-new, tab-close, and tab-select commands
+  ^^ body explains new commands, help text, and integration
+
+  fix(browser): resolve cursor positioning race in fill()
+  ^^ body describes the bug and the fix
+
+  docs(cli): add help text and examples for tab commands
+  ^^ body lists which help sections were updated
+
+Examples of BAD messages (DO NOT produce these):
+  fix(done): tab-workflow-issues    ← "done" is not a code area, missing body
+  chore: update files               ← too vague, no body
+  fix: stuff                        ← too vague, no body
 
 Staged changes summary:
 $diffStat
@@ -1315,12 +1334,39 @@ function Invoke-Push {
 Generate a conventional commit message for the following staged changes.
 
 Branch: $branch
-Repository: $targetRepo
+
+The message must follow the Conventional Commits format:
+  <type>[optional scope]: <imperative description>
+
+Types: feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert
+Breaking changes: append "!" after the type (e.g. "feat!:").
 
 Rules:
 - First line: "<type>: <imperative description>" (max 72 chars)
-- Leave a blank line, optionally add a body paragraph
-- Output ONLY the commit message, no code fences or framing
+- ALWAYS include a body paragraph explaining what was changed and why
+- Scope must reflect the code area (e.g. cli, tab, browser, rest, core, build,
+  coworker), NOT task-state directory names like "done", "draft", "ready",
+  "working", "review", "approved", "pushed", or "issues"
+- Ignore coworker task files (.md under coworker/tasks/) when determining type
+  and scope — they are task-tracker artifacts, not source code. Base the message
+  on the actual source-code and documentation changes
+- Do NOT wrap the message in code fences or quotes
+- Output ONLY the commit message, no conversational framing
+
+Examples of GOOD messages:
+  feat(cli): add tab-new, tab-close, and tab-select commands
+  ^^ body explains new commands, help text, and integration
+
+  fix(browser): resolve cursor positioning race in fill()
+  ^^ body describes the bug and the fix
+
+  docs(cli): add help text and examples for tab commands
+  ^^ body lists which help sections were updated
+
+Examples of BAD messages (DO NOT produce these):
+  fix(done): tab-workflow-issues    ← "done" is not a code area, missing body
+  chore: update files               ← too vague, no body
+  fix: stuff                        ← too vague, no body
 
 Staged changes summary:
 $diffStat
