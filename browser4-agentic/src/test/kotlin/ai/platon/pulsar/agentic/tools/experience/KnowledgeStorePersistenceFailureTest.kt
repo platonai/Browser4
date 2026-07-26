@@ -8,10 +8,10 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Files
 import java.nio.file.Path
-import java.nio.file.attribute.PosixFilePermissions
 import java.time.Instant
 import kotlin.io.path.*
 import kotlin.test.*
+import kotlinx.coroutines.runBlocking
 
 /**
  * Tests for KnowledgeStore YAML persistence failure paths.
