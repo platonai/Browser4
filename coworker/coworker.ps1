@@ -1769,7 +1769,7 @@ Keyboard shortcuts (interactive mode):
   a               AI review current issue
   A               AI review ALL issues in file
   v               Toggle single-issue / all-issues view
-  m               Mark file as done → review/done/
+  m               Mark file as done → moves to 1ready/ for execution
   d               Discard file → review/done/discard/
   q               Quit
   ?               Show help

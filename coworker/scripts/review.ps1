@@ -922,7 +922,7 @@ function Show-Help {
     Write-Host '  [a]             AI review — get AI suggestion for current issue'
     Write-Host '  [A]             AI review ALL issues in this file'
     Write-Host '  [v]             Toggle view: single-issue / all-issues table'
-    Write-Host '  [m]             Mark file as DONE → moves to review/done/'
+    Write-Host '  [m]             Mark file as DONE → moves to 1ready/ for execution'
     Write-Host '  [d]             Discard file → moves to review/done/discard/'
     Write-Host '  [q]             Quit'
     Write-Host '  [?]             Show this help'
@@ -1107,11 +1107,30 @@ function Start-ReviewSession {
             }
             Write-Host '  • Approved issues → keep full detail'
             Write-Host '  • Other issues → condensed abstract'
-            Write-Host '  • Original file → moved to review/done/'
+            Write-Host '  • Original file → moved to 1ready/ for execution'
             $confirm = Read-Host "Proceed? [y/N]"
             if ($confirm -match '^[yY]') {
                 try {
-                    $destPath = Move-IssuesFile -FilePath $ParsedFile.FilePath
+                    $tasksRoot = Get-TasksRoot
+                    $readyDir = Join-Path $tasksRoot 'main' '1ready'
+                    if (-not (Test-Path -LiteralPath $readyDir)) {
+                        New-Item -ItemType Directory -Path $readyDir -Force | Out-Null
+                    }
+                    $fileName = Split-Path -Leaf $ParsedFile.FilePath
+                    $destBaseName = [System.IO.Path]::GetFileNameWithoutExtension($fileName)
+                    $destPath = Join-Path $readyDir $fileName
+
+                    # Handle collisions
+                    if (Test-Path -LiteralPath $destPath) {
+                        $counter = 2
+                        $ext = [System.IO.Path]::GetExtension($fileName)
+                        while (Test-Path -LiteralPath $destPath) {
+                            $destPath = Join-Path $readyDir "$destBaseName.$counter$ext"
+                            $counter++
+                        }
+                    }
+
+                    Move-Item -Path $ParsedFile.FilePath -Destination $destPath -Force
                     Write-ConsoleLine -Message "Marked done → $destPath" -ForegroundColor Green
                     return 'done'
                 } catch {
