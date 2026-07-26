@@ -89,7 +89,18 @@ function ConvertTo-WindowsCommandLineArgument {
 # threads do not have — causing "There is no Runspace available to run scripts
 # in this thread."  A compiled C# class avoids PowerShell entirely for event
 # handling and works reliably on any thread.
-if (-not $script:_NativeCommandHandlerCompiled) {
+# Detect whether the already-loaded type has the GetTail method (added 2026-07-26).
+# On re-runs within the same pwsh session the type may be stale — force a
+# recompile if the old version is loaded.
+$needsCompile = (-not $script:_NativeCommandHandlerCompiled)
+if ($script:_NativeCommandHandlerCompiled) {
+    try {
+        $null = [NativeCommandOutputHandler].GetMethod('GetTail')
+    } catch {
+        $needsCompile = $true
+    }
+}
+if ($needsCompile) {
     Add-Type -TypeDefinition @'
 using System;
 using System.IO;
@@ -99,11 +110,19 @@ public class NativeCommandOutputHandler
 {
     private readonly string _capturePath;
     private readonly UTF8Encoding _utf8;
+    private readonly string[] _ringBuffer;
+    private int _ringIndex;
+    private int _ringCount;
+    private readonly object _lock;
 
     public NativeCommandOutputHandler(string capturePath)
     {
         _capturePath = capturePath;
         _utf8 = new UTF8Encoding(false);
+        _ringBuffer = new string[10];
+        _ringIndex = 0;
+        _ringCount = 0;
+        _lock = new object();
     }
 
     public void OnOutputReceived(object sender, System.Diagnostics.DataReceivedEventArgs e)
@@ -112,10 +131,39 @@ public class NativeCommandOutputHandler
         {
             Console.WriteLine(e.Data);
             File.AppendAllText(_capturePath, e.Data + Environment.NewLine, _utf8);
+
+            lock (_lock)
+            {
+                _ringBuffer[_ringIndex] = e.Data;
+                _ringIndex = (_ringIndex + 1) % _ringBuffer.Length;
+                if (_ringCount < _ringBuffer.Length) _ringCount++;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Returns the last <paramref name="maxLines"/> lines received, oldest
+    /// first.  Returns null when no output has been received yet.
+    /// </summary>
+    public string GetTail(int maxLines = 10)
+    {
+        lock (_lock)
+        {
+            if (_ringCount == 0) return null;
+            int n = maxLines < _ringCount ? maxLines : _ringCount;
+            int start = _ringCount < _ringBuffer.Length ? 0 : _ringIndex;
+            var sb = new StringBuilder();
+            for (int i = _ringCount - n; i < _ringCount; i++)
+            {
+                int idx = (start + i) % _ringBuffer.Length;
+                if (i > _ringCount - n) sb.Append('\n');
+                sb.Append(_ringBuffer[idx]);
+            }
+            return sb.ToString();
         }
     }
 }
-'@
+'@ -ErrorAction Stop
     $script:_NativeCommandHandlerCompiled = $true
 }
 
@@ -1283,6 +1331,26 @@ function Start-NativeCommand {
                 [Console]::WriteLine(
                     "  · ${cmdLabel} — running (${mins}m ${secs}s elapsed, heartbeat #${heartbeatCount})"
                 )
+
+                # Show the last 10 lines of agent output so the heartbeat is
+                # meaningful — the user can see what the agent is doing instead
+                # of just staring at an elapsed-time counter.
+                $tail = $nativeHandler.GetTail()
+                if ($tail) {
+                    [Console]::WriteLine('  ══ last 10 lines ══')
+                    $maxWidth = try { [Math]::Min([Console]::WindowWidth - 4, 160) } catch { 156 }
+                    foreach ($line in ($tail -split "`n")) {
+                        # Truncate long lines so they don't wrap awkwardly
+                        if ($line.Length -gt $maxWidth) {
+                            $line = $line.Substring(0, $maxWidth - 1) + [char]0x2026  # '…'
+                        }
+                        [Console]::WriteLine("  │ ${line}")
+                    }
+                    [Console]::WriteLine('  ══════════════════')
+                } else {
+                    [Console]::WriteLine('  · (no output yet)')
+                }
+
                 $lastHeartbeatSec = $elapsed
             }
         }
