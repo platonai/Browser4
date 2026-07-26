@@ -105,7 +105,6 @@ Examples:
   b4w -s my-session -i                  interactive REPL
   b4w --version                         print version
   b4w --help                            CLI help
-  b4w --batch path\to\batch.json        run a batch file
   b4w -- -s my-session -i               passthrough via --
 
   # subcommands
