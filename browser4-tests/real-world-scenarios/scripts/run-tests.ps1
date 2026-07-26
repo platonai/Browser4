@@ -88,7 +88,11 @@ param(
 
     # Override the agent CLI to use (claude, kimi, or opencode).
     # When empty, auto-detects. Forwarded to run-task.ps1.
-    [string] $Agent = ''
+    [string] $Agent = '',
+
+    # Custom tasks directory. When set, overrides the default tasks/ directory.
+    # Used by test.ps1 rws --dir to run tasks from an arbitrary directory.
+    [string] $TasksDir = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -103,7 +107,7 @@ $script:StartTime = Get-Date
 # ═══════════════════════════════════════════════════════════════════════════════
 
 $script:ScriptsDir = $PSScriptRoot
-$script:TasksDir   = Join-Path $ScriptsDir '..\tasks'
+$script:TasksDir   = if ($TasksDir) { $TasksDir } else { Join-Path $ScriptsDir '..\tasks' }
 $script:RunnerPath = Join-Path $ScriptsDir 'run-task.ps1'
 # Repo root is 3 levels up from scripts/ (scripts -> tests -> browser4-cli -> repo root)
 $script:RepoRoot   = (Resolve-Path "$ScriptsDir/../../..").Path

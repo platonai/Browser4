@@ -165,22 +165,24 @@ function Print-Usage {
     Write-Host "  skills      Run skills-focused agentic tests"
     Write-Host "  mcp         Run MCP-focused agentic tests"
     Write-Host "  ps          Run all PowerShell *.tests.ps1 files in the project"
-    Write-Host "  rws         Run real-world scenario tests (requires --scenarios/-sc or --task)"
-    Write-Host "              With --scenarios or -sc: run all scenario tasks via run-tests.ps1"
-    Write-Host "              With --task <file>: run a single task via run-task.ps1"
+    Write-Host "  rws         Run real-world scenario tests (requires a mode flag)"
+    Write-Host "              --scenarios, -sc, sc [names...]  run all/named tasks via run-tests.ps1"
+    Write-Host "              --dir, --directory <path>         run all .md tasks in a directory"
+    Write-Host "              --task <file>                     run a single task via run-task.ps1"
     Write-Host "  session     List or view persisted test sessions (list, view)"
     Write-Host "              list --all | --count N   Paginate session listing (default: 15)"
     Write-Host ""
     Write-Host "  RWS flags (accepted after 'rws'):"
-    Write-Host "    --scenarios, -sc [names...]  Run agent-scenario tasks (requires claude or kimi)"
-    Write-Host "    --task <file>           Run a single task file directly"
-    Write-Host "    --production            Use installed browser4-cli instead of cargo run"
-    Write-Host "    --fail-fast             Stop after the first failing scenario"
-    Write-Host "    --list                  List discovered scenarios, don't run"
-    Write-Host "    --silent                Suppress agent output"
-    Write-Host "    --skip-version-check    Skip browser4-cli version check"
-    Write-Host "    --timeout <minutes>     Kill each scenario task after N minutes (default: no timeout)"
-    Write-Host "    --agent <name>          Use a specific agent CLI (claude, kimi, or opencode)"
+    Write-Host "    --scenarios, -sc, sc [names...]  Run agent-scenario tasks (requires claude or kimi)"
+    Write-Host "    --dir, --directory <path>   Run all .md task files in a directory"
+    Write-Host "    --task <file>               Run a single task file directly"
+    Write-Host "    --production                Use installed browser4-cli instead of cargo run"
+    Write-Host "    --fail-fast                 Stop after the first failing scenario"
+    Write-Host "    --list                      List discovered scenarios, don't run"
+    Write-Host "    --silent                    Suppress agent output"
+    Write-Host "    --skip-version-check        Skip browser4-cli version check"
+    Write-Host "    --timeout <minutes>         Kill each scenario task after N minutes (default: no timeout)"
+    Write-Host "    --agent <name>              Use a specific agent CLI (claude, kimi, or opencode)"
     Write-Host "  resume      Resume from the last failed module (-rf)"
     Write-Host "  main    Run all Browser4 main tests (fast, rest, it, e2e)"
     Write-Host ""
@@ -201,10 +203,12 @@ function Print-Usage {
     Write-Host "  test.ps1 ps                         # Run all PowerShell *.tests.ps1 files"
     Write-Host "  test.ps1 ps -Quiet                  # Run PowerShell tests with -Quiet flag"
     Write-Host "  test.ps1 resume                     # Resume from the last failed module"
-    Write-Host "  test.ps1 rws                        # Run real-world scenario tests (requires --scenarios/-sc or --task)"
-    Write-Host "  test.ps1 rws --scenarios            # Run all agent-scenario tasks"
+    Write-Host "  test.ps1 rws                        # Show RWS help (requires a mode flag)"
+    Write-Host "  test.ps1 rws sc                     # Run all agent-scenario tasks (short)"
     Write-Host "  test.ps1 rws --scenarios amazon     # Run a specific scenario task"
     Write-Host "  test.ps1 rws -sc amazon             # Same as --scenarios"
+    Write-Host "  test.ps1 rws sc amazon              # Same as --scenarios"
+    Write-Host "  test.ps1 rws --dir tasks/real-world/generic  # Run all .md tasks in a directory"
     Write-Host "  test.ps1 rws --scenarios --timeout 30  # Run all scenarios with 30-minute per-task timeout"
     Write-Host "  test.ps1 rws --scenarios --list     # List discovered scenario tasks"
     Write-Host "  test.ps1 rws --scenarios --production  # Run scenarios against installed CLI"
@@ -527,16 +531,23 @@ function Invoke-RealWorldScenarioTests([string[]]$additionalArgs) {
     $mode = ''
     $modeLabel = ''
     $taskFile = $null
+    $taskDir = $null
     $setProduction = $false
     $passThroughArgs = @()
 
     $i = 0
     while ($i -lt $additionalArgs.Count) {
         $arg = $additionalArgs[$i]
-        if ($arg -in '--scenarios', '-sc') {
+        if ($arg -in '--scenarios', '-sc', 'sc') {
             $mode = 'scenarios'
             $modeLabel = 'real-world scenarios'
             $i++
+        }
+        elseif ($arg -in '--dir', '--directory' -and ($i + 1) -lt $additionalArgs.Count) {
+            $mode = 'dir'
+            $taskDir = $additionalArgs[$i + 1]
+            $modeLabel = "real-world scenario dir: $taskDir"
+            $i += 2
         }
         elseif ($arg -eq '--task' -and ($i + 1) -lt $additionalArgs.Count) {
             $mode = 'task'
@@ -586,26 +597,41 @@ function Invoke-RealWorldScenarioTests([string[]]$additionalArgs) {
         Write-Host 'Usage: test.ps1 rws <mode> [options]'
         Write-Host ''
         Write-Host 'Modes (required, pick one):'
-        Write-Host '  --scenarios, -sc [names...]  Run agent-scenario tasks via run-tests.ps1'
-        Write-Host '  --task <file>           Run a single task file via run-task.ps1'
+        Write-Host '  scenarios, sc [names...]  Run agent-scenario tasks via run-tests.ps1'
+        Write-Host '                            Flags: --scenarios, -sc, sc'
+        Write-Host '  dir <path>                Run all .md task files in a directory'
+        Write-Host '                            Flags: --dir, --directory'
+        Write-Host '  task <file>               Run a single task file via run-task.ps1'
+        Write-Host '                            Flag: --task'
         Write-Host ''
         Write-Host 'Options:'
-        Write-Host '  --production            Use installed browser4-cli instead of cargo run'
-        Write-Host '  --fail-fast             Stop after the first failing scenario'
-        Write-Host '  --list                  List discovered scenarios, don''t run'
-        Write-Host '  --silent                Suppress agent output'
-        Write-Host '  --skip-version-check    Skip browser4-cli version check'
-        Write-Host '  --agent <name>          Use a specific agent CLI (claude, kimi, opencode)'
+        Write-Host '  --production              Use installed browser4-cli instead of cargo run'
+        Write-Host '  --fail-fast               Stop after the first failing scenario'
+        Write-Host '  --list                    List discovered scenarios, don''t run'
+        Write-Host '  --silent                  Suppress agent output'
+        Write-Host '  --skip-version-check      Skip browser4-cli version check'
+        Write-Host '  --timeout <minutes>       Kill each scenario task after N minutes'
+        Write-Host '  --agent <name>            Use a specific agent CLI (claude, kimi, opencode)'
         Write-Host ''
         Write-Host 'Examples:'
-        Write-Host '  test.ps1 rws --scenarios                   # Run all agent-scenario tasks'
-        Write-Host '  test.ps1 rws --scenarios amazon            # Run a specific scenario task'
-        Write-Host '  test.ps1 rws -sc amazon             # Same as --scenarios'
-        Write-Host '  test.ps1 rws --scenarios --list            # List discovered scenario tasks'
+        Write-Host '  test.ps1 rws sc                           # Run all (short)'
+        Write-Host '  test.ps1 rws --scenarios amazon           # Run a specific scenario task'
+        Write-Host '  test.ps1 rws -sc amazon                   # Same as --scenarios'
+        Write-Host '  test.ps1 rws --dir tasks/real-world/generic  # Run all .md tasks in a directory'
+        Write-Host '  test.ps1 rws --scenarios --list           # List discovered scenario tasks'
         Write-Host '  test.ps1 rws --scenarios --production     # Run against installed CLI'
-        Write-Host '  test.ps1 rws --task tasks/amazon.md        # Run a single task file directly'
+        Write-Host '  test.ps1 rws --task tasks/amazon.md       # Run a single task file directly'
         Write-Host '  test.ps1 rws --task tasks/amazon.md --production'
         exit 0
+    }
+
+    # ── Resolve dir path relative to repo root ──────────────────────────────
+    if ($mode -eq 'dir' -and $taskDir) {
+        if (-not [System.IO.Path]::IsPathRooted($taskDir)) {
+            $taskDir = Join-Path $repoRoot $taskDir
+        }
+        $taskDir = [System.IO.Path]::GetFullPath($taskDir)
+        $modeLabel = "real-world scenario dir: $taskDir"
     }
 
     Write-CommandBanner -Label "Running $modeLabel..."
@@ -615,12 +641,16 @@ function Invoke-RealWorldScenarioTests([string[]]$additionalArgs) {
         $runner = $scenarioRunner
         $runnerKind = 'Scenario runner'
     }
+    elseif ($mode -eq 'dir') {
+        $runner = $scenarioRunner
+        $runnerKind = 'Scenario runner (custom dir)'
+    }
     elseif ($mode -eq 'task') {
         $runner = $taskRunner
         $runnerKind = 'Task runner'
     }
     else {
-        Write-Error "Unknown RWS mode '$mode'. Valid modes: --scenarios (-sc), --task <file>"
+        Write-Error "Unknown RWS mode '$mode'. Valid modes: scenarios (-sc, sc), dir (--dir, --directory), task (--task)"
         exit 1
     }
 
@@ -634,6 +664,9 @@ function Invoke-RealWorldScenarioTests([string[]]$additionalArgs) {
 
     if ($mode -eq 'task') {
         $pwshArgs += '-TaskFile', $taskFile
+    }
+    if ($mode -eq 'dir') {
+        $pwshArgs += '-TasksDir', $taskDir
     }
 
     $pwshArgs += $passThroughArgs
@@ -766,7 +799,7 @@ function Invoke-RealWorldScenarioTests([string[]]$additionalArgs) {
         Update-TestSessionSystem -RepoRoot $repoRoot -SessionPath $script:SessionPath
         $status = if ($exitCode -eq 0) { 'pass' } else { 'fail' }
         $dur = [math]::Round($sw.Elapsed.TotalSeconds, 1)
-        $sessionKey = if ($mode -eq 'scenarios') { 'rws:scenarios' } else { 'rws:task' }
+        $sessionKey = if ($mode -eq 'scenarios') { 'rws:scenarios' } elseif ($mode -eq 'dir') { 'rws:dir' } else { 'rws:task' }
         Update-TestSessionResult -RepoRoot $repoRoot -TestKey $sessionKey `
             -Status $status -ExitCode $exitCode -DurationSec $dur `
             -LogDir $script:TestLogDir `
