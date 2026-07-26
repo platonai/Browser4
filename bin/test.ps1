@@ -114,11 +114,7 @@ function Invoke-CommandAndReport {
     try {
         if ($PreExecPath) { Push-Location $PreExecPath }
         $global:LASTEXITCODE = 0
-        if ($NoExit) {
-            $null = & $ScriptBlock
-        } else {
-            & $ScriptBlock
-        }
+        & $ScriptBlock | Out-Host
         $exitCode = $LASTEXITCODE
     }
     catch {
