@@ -293,7 +293,16 @@ public class NativeCommandOutputHandler
         if (e.Data != null)
         {
             Console.WriteLine(e.Data);
-            File.AppendAllText(_capturePath, e.Data + Environment.NewLine, _utf8);
+            try
+            {
+                File.AppendAllText(_capturePath, e.Data + Environment.NewLine, _utf8);
+            }
+            catch (Exception ex)
+            {
+                // Log to console so failures are visible — the handler runs on
+                // .NET threadpool threads where unhandled exceptions are swallowed.
+                Console.Error.WriteLine("[NativeCommandOutputHandler] Failed to write capture line: " + ex.Message);
+            }
         }
     }
 }
@@ -1485,6 +1494,12 @@ function Start-NativeCommand {
 
         # ── Drain final output ─────────────────────────────────────────────
         # The process has exited but async reads may still have data in flight.
+        # WaitForExit() (parameterless) blocks until all OutputDataReceived /
+        # ErrorDataReceived event handlers have finished processing — without
+        # this, CancelOutputRead() may discard data that hasn't been delivered
+        # yet, losing most of the captured output.
+        try { $proc.WaitForExit() } catch { }
+
         # Cancel the async readers, then drain synchronously to capture
         # everything that remains.
         try { $proc.CancelOutputRead() } catch { }
@@ -1828,6 +1843,22 @@ function Invoke-Agent {
     if ([string]::IsNullOrWhiteSpace($capturedOutput)) {
         Write-Host "  WARNING: No output captured from agent (file: $captureFile)" -ForegroundColor Yellow
         return
+    }
+
+    # ── Truncation detection ────────────────────────────────────────────────
+    # Detect when the capture file contains only a closing statement (e.g.
+    # "The full report with N issues is above") without the actual report
+    # content.  This indicates the async output capture lost most of the data.
+    $hasStructuredSections = $capturedOutput -match '(?i)(###?\s+[ABCD][.\s])'
+    $looksTruncated = (-not $hasStructuredSections) -and (
+        ($capturedOutput -match '(?i)is above\.?\s*$') -or
+        ($capturedOutput.Length -lt 500 -and $capturedOutput -match '(?i)(report|issues?|evaluation)\s+(is|are|complete)')
+    )
+    if ($looksTruncated) {
+        Write-Host "  WARNING: Captured output may be truncated — only $($capturedOutput.Length) chars, no structured sections found." -ForegroundColor Yellow
+        Write-Host "    The agent output was likely lost by the async capture mechanism." -ForegroundColor DarkGray
+        Write-Host "    Full raw output saved to: $captureFile" -ForegroundColor DarkGray
+        Write-Host "    Re-running the scenario may produce a complete capture." -ForegroundColor DarkGray
     }
 
     # Write to the issues ready queue

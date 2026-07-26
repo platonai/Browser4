@@ -1283,6 +1283,220 @@ Write-Host '━━━ Timeout Conversion Logic ━━━' -ForegroundColor Yello
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# Test group 21: NativeCommandOutputHandler — C# class compiles and handles errors
+# ═══════════════════════════════════════════════════════════════════════════════
+
+Write-Host ''
+Write-Host '━━━ NativeCommandOutputHandler: Error Resilience ━━━' -ForegroundColor Yellow
+
+& {
+    $browser4cliMode = 'dev'
+    . "$PSScriptRoot/common.ps1"
+
+    # DataReceivedEventArgs has an internal constructor — use reflection.
+    $ctorInfo = [System.Diagnostics.DataReceivedEventArgs].GetConstructor(
+        [System.Reflection.BindingFlags]'NonPublic,Public,Instance',
+        $null, [Type[]]@([string]), $null)
+
+    Write-TestGroup 'C# handler type is compiled and loadable'
+    $handlerType = [NativeCommandOutputHandler]
+    Assert-True 'NativeCommandOutputHandler type exists' ($null -ne $handlerType)
+
+    Write-TestGroup 'Handler can be instantiated with a valid path'
+    $tempFile = [System.IO.Path]::GetTempFileName()
+    try {
+        $handler = New-Object NativeCommandOutputHandler $tempFile
+        Assert-True 'Handler instance created' ($null -ne $handler)
+    } finally {
+        Remove-Item $tempFile -ErrorAction SilentlyContinue
+    }
+
+    Write-TestGroup 'Handler writes data to capture file correctly'
+    $tempFile = [System.IO.Path]::GetTempFileName()
+    try {
+        $handler = New-Object NativeCommandOutputHandler $tempFile
+        $testLine = 'Test output line'
+        $eventArgs = $ctorInfo.Invoke(@($testLine))
+        $handler.OnOutputReceived($null, $eventArgs)
+
+        $content = [System.IO.File]::ReadAllText($tempFile, [System.Text.UTF8Encoding]::new($false))
+        Assert-True 'Capture file contains test line' $content.Contains($testLine)
+    } finally {
+        Remove-Item $tempFile -ErrorAction SilentlyContinue
+    }
+
+    Write-TestGroup 'Handler survives write to invalid path (try-catch prevents crash)'
+    $invalidPath = 'Z:\nonexistent\path\file.txt'
+    $handler = New-Object NativeCommandOutputHandler $invalidPath
+    $testLine = 'This write should fail gracefully'
+    $eventArgs = $ctorInfo.Invoke(@($testLine))
+    $threw = $false
+    try {
+        $handler.OnOutputReceived($null, $eventArgs)
+    } catch {
+        $threw = $true
+    }
+    Assert-True 'Handler does not throw on write failure (try-catch works)' (-not $threw)
+
+    Write-TestGroup 'Multiple writes accumulate in capture file'
+    $tempFile = [System.IO.Path]::GetTempFileName()
+    try {
+        $handler = New-Object NativeCommandOutputHandler $tempFile
+        $handler.OnOutputReceived($null, ($ctorInfo.Invoke(@('Line A'))))
+        $handler.OnOutputReceived($null, ($ctorInfo.Invoke(@('Line B'))))
+        $handler.OnOutputReceived($null, ($ctorInfo.Invoke(@('Line C'))))
+        $content = [System.IO.File]::ReadAllText($tempFile, [System.Text.UTF8Encoding]::new($false))
+        Assert-True 'All three lines captured' ($content.Contains('Line A') -and $content.Contains('Line B') -and $content.Contains('Line C'))
+    } finally {
+        Remove-Item $tempFile -ErrorAction SilentlyContinue
+    }
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Test group 22: Start-NativeCommand — WaitForExit fix present
+# ═══════════════════════════════════════════════════════════════════════════════
+
+Write-Host ''
+Write-Host '━━━ Start-NativeCommand: WaitForExit Fix ━━━' -ForegroundColor Yellow
+
+& {
+    $browser4cliMode = 'dev'
+    . "$PSScriptRoot/common.ps1"
+
+    Write-TestGroup 'Start-NativeCommand function exists'
+    Assert-True 'Function is defined' ($null -ne (Get-Command Start-NativeCommand -ErrorAction SilentlyContinue))
+
+    # Static analysis: verify the parameterless WaitForExit() call exists
+    # after the heartbeat loop and before CancelOutputRead()
+    $commonPath = Join-Path $PSScriptRoot 'common.ps1'
+    $commonContent = Get-Content -LiteralPath $commonPath -Raw -Encoding UTF8
+
+    Write-TestGroup 'Parameterless WaitForExit() is called before CancelOutputRead'
+    # Extract the drain section between the heartbeat loop and the timeout check
+    $drainSection = ''
+    if ($commonContent -match '(?s)# ── Drain final output.+?# ── Timeout:') {
+        $drainSection = $Matches[0]
+    }
+    $hasWaitForExit = $drainSection -match '\$proc\.WaitForExit\(\)'
+    Assert-True 'WaitForExit() (parameterless) is called in drain section' $hasWaitForExit
+
+    Write-TestGroup 'WaitForExit() is called BEFORE CancelOutputRead (code calls)'
+    # Use $proc. prefix to avoid matching comment text like
+    # "CancelOutputRead() may discard data that hasn't been delivered"
+    $waitPos = $drainSection.IndexOf('$proc.WaitForExit()')
+    $cancelPos = $drainSection.IndexOf('$proc.CancelOutputRead()')
+    Assert-True 'WaitForExit() appears before CancelOutputRead()' ($waitPos -ge 0 -and $cancelPos -ge 0 -and $waitPos -lt $cancelPos)
+
+    Write-TestGroup 'WaitForExit() is wrapped in try-catch'
+    $hasTryCatch = $drainSection -match '(?s)try\s*\{\s*\$proc\.WaitForExit\(\)'
+    Assert-True 'WaitForExit() is wrapped in try-catch' $hasTryCatch
+
+    Write-TestGroup 'Heartbeat loop polls HasExited before the drain section'
+    $hasHeartbeatLoop = $commonContent -match 'while\s*\(-not\s*\$proc\.HasExited\)'
+    Assert-True 'Heartbeat loop exists (polls HasExited)' $hasHeartbeatLoop
+
+    Write-TestGroup 'C# handler has try-catch for File.AppendAllText'
+    Assert-True 'Handler has try-catch' ($commonContent -match '(?s)try\s*\{.*File\.AppendAllText')
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Test group 23: Truncation detection — simulated content validation
+# ═══════════════════════════════════════════════════════════════════════════════
+
+Write-Host ''
+Write-Host '━━━ Truncation Detection ━━━' -ForegroundColor Yellow
+
+& {
+    $browser4cliMode = 'dev'
+    . "$PSScriptRoot/common.ps1"
+
+    Write-TestGroup 'Full output with all sections is NOT flagged as truncated'
+    $fullOutput = @'
+### A. Task Result
+Task completed successfully.
+
+### B. Execution Trace
+Used commands: open, goto, tab-list.
+
+### C. Issues Found
+
+### Issue 1: Test issue
+**Severity:** Medium
+**Category:** UX
+
+### D. Overall Assessment
+All good, rating 8/10.
+'@
+    $hasSections = $fullOutput -match '(?i)(###?\s+[ABCD][.\s])'
+    Assert-True 'Full output has structured sections' $hasSections
+
+    $looksTruncated = (-not $hasSections) -and (
+        ($fullOutput -match '(?i)is above\.?\s*$') -or
+        ($fullOutput.Length -lt 500 -and $fullOutput -match '(?i)(report|issues?|evaluation)\s+(is|are|complete)')
+    )
+    Assert-True 'Full output is NOT flagged truncated' (-not $looksTruncated)
+
+    Write-TestGroup 'Closing-only output ("is above") IS flagged as truncated'
+    $closingOnly = 'The evaluation is complete. All testing has been performed, and the full report with 10 documented issues is above.'
+    $hasSections2 = $closingOnly -match '(?i)(###?\s+[ABCD][.\s])'
+    $looksTruncated2 = (-not $hasSections2) -and (
+        ($closingOnly -match '(?i)is above\.?\s*$') -or
+        ($closingOnly.Length -lt 500 -and $closingOnly -match '(?i)(report|issues?|evaluation)\s+(is|are|complete)')
+    )
+    Assert-True 'Closing-only output IS flagged truncated' $looksTruncated2
+
+    Write-TestGroup 'Short completion message ("report is complete") IS flagged'
+    $shortComplete = 'The full report is complete.'
+    $hasSections3 = $shortComplete -match '(?i)(###?\s+[ABCD][.\s])'
+    $looksTruncated3 = (-not $hasSections3) -and (
+        ($shortComplete -match '(?i)is above\.?\s*$') -or
+        ($shortComplete.Length -lt 500 -and $shortComplete -match '(?i)(report|issues?|evaluation)\s+(is|are|complete)')
+    )
+    Assert-True 'Short completion message IS flagged truncated' $looksTruncated3
+
+    Write-TestGroup 'Long output without sections but without closing markers is NOT flagged'
+    $longRandom = ('Random agent output without structured sections. ' * 30).Trim()
+    $hasSections4 = $longRandom -match '(?i)(###?\s+[ABCD][.\s])'
+    $looksTruncated4 = (-not $hasSections4) -and (
+        ($longRandom -match '(?i)is above\.?\s*$') -or
+        ($longRandom.Length -lt 500 -and $longRandom -match '(?i)(report|issues?|evaluation)\s+(is|are|complete)')
+    )
+    Assert-True 'Long random output NOT flagged truncated' (-not $looksTruncated4)
+
+    Write-TestGroup 'Output with ### C. Issues Found section is NOT flagged'
+    $hasCIssue = @'
+Some preamble text.
+
+### C. Issues Found
+
+### Issue 1: Something broken
+**Severity:** High
+**Category:** Product
+'@
+    $hasSections5 = $hasCIssue -match '(?i)(###?\s+[ABCD][.\s])'
+    $looksTruncated5 = (-not $hasSections5) -and (
+        ($hasCIssue -match '(?i)is above\.?\s*$') -or
+        ($hasCIssue.Length -lt 500 -and $hasCIssue -match '(?i)(report|issues?|evaluation)\s+(is|are|complete)')
+    )
+    Assert-True 'Output with C section NOT flagged truncated' (-not $looksTruncated5)
+
+    Write-TestGroup 'Truncation pattern detects "is above" at end of line'
+    $endOfLine = "The report is above.`n"
+    $aboveMatch = $endOfLine -match '(?i)is above\.?\s*$'
+    Assert-True 'Matches "is above." at end' $aboveMatch
+
+    Write-TestGroup 'Truncation pattern does NOT match "above" mid-sentence'
+    $midSentence = 'The above report contains 10 issues.'
+    $aboveMatch2 = $midSentence -match '(?i)is above\.?\s*$'
+    Assert-True 'Does NOT match "above" mid-sentence' (-not $aboveMatch2)
+
+    Write-TestGroup 'Truncation detection variable exists in common.ps1'
+    $commonPath = Join-Path $PSScriptRoot 'common.ps1'
+    $commonContent = Get-Content -LiteralPath $commonPath -Raw -Encoding UTF8
+    Assert-True 'looksTruncated variable exists' ($commonContent -match 'looksTruncated')
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # Summary
 # ═══════════════════════════════════════════════════════════════════════════════
 
