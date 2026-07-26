@@ -1168,7 +1168,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
             4,
         ));
         lines.push(
-            "  - Export the full HTML snapshot from Browser4's page storage to a local file with `htmlsnapshot export --file <path>`."
+            "  - Export the full HTML snapshot from Browser4's page storage to a local file with `htmlsnapshot export --file <path>`. Add `--clean` to strip scripts, styles, and non-standard attributes."
                 .to_string(),
         );
         lines.push(wrap_text(
@@ -1246,8 +1246,9 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("  # Return only the resultSet array, omitting wrapper metadata".to_string());
         lines.push("  browser4-cli htmlsnapshot query --sql @query.sql --result-only".to_string());
         lines.push(String::new());
-        lines.push("  # Export the full snapshot HTML to a file".to_string());
+        lines.push("  # Export the full snapshot HTML to a file (add --clean for LLM consumption)".to_string());
         lines.push("  browser4-cli htmlsnapshot export --file snapshot.html".to_string());
+        lines.push("  browser4-cli htmlsnapshot export --file clean.html --clean".to_string());
         lines.push(String::new());
         lines.push("  # Generate a compressed page summary from the stored HTML snapshot".to_string());
         lines.push("  browser4-cli htmlsnapshot summary".to_string());
@@ -2289,6 +2290,7 @@ mod tests {
         assert!(help.contains("browser4-cli htmlsnapshot query --sql-base64"));
         assert!(help.contains("browser4-cli htmlsnapshot query --sql @query.sql --result-only"));
         assert!(help.contains("browser4-cli htmlsnapshot export --file snapshot.html"));
+        assert!(help.contains("browser4-cli htmlsnapshot export --file clean.html --clean"));
         assert!(help.contains("browser4-cli htmlsnapshot summary"));
         // grep and inspect
         assert!(help.contains("htmlsnapshot grep [OPTIONS] <pattern>"));
@@ -2362,6 +2364,7 @@ mod tests {
         assert!(help.contains("browser4-cli htmlsnapshot export"));
         assert!(help.contains("Export snapshot HTML from Browser4's page storage to a local file"));
         assert!(help.contains("--file"));
+        assert!(help.contains("--clean"));
         assert!(!help.contains("browser4-cli htmlsnapshot-export"));
     }
 

@@ -496,7 +496,7 @@ browser4-cli htmlsnapshot
 browser4-cli htmlsnapshot get <field> [selector] [name]
 browser4-cli htmlsnapshot get all <field> [selector] [name]
 browser4-cli htmlsnapshot query [url] --sql <query>
-browser4-cli htmlsnapshot export [--file <path>]
+browser4-cli htmlsnapshot export [--file <path>] [--clean]
 browser4-cli htmlsnapshot summary
 browser4-cli htmlsnapshot grep [OPTIONS] <pattern>
 browser4-cli htmlsnapshot inspect [selector] [--max N] [--depth D]
@@ -588,10 +588,11 @@ browser4-cli htmlsnapshot query --sql "
 
 #### htmlsnapshot export
 
-Save the full snapshot HTML to a local file.
+Save the full snapshot HTML to a local file. Use `--clean` to strip `<script>`, `<style>`, comments, and non-standard attributes — producing minimal HTML ideal for LLM consumption.
 
 ```bash
 browser4-cli htmlsnapshot export --file snapshot.html
+browser4-cli htmlsnapshot export --file page.html --clean
 ```
 
 #### htmlsnapshot summary

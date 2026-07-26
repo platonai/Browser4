@@ -191,7 +191,7 @@ htmlsnapshot capture                        捕获静态 DOM 快照并将其存�
 htmlsnapshot                                `htmlsnapshot capture` 的简写形式
 htmlsnapshot get <field> [selector] [name]  从存储的 DOM 快照中提取 text、html 或 attr
 htmlsnapshot query [url]                    对存储的 DOM 快照运行 X-SQL (--sql <query|@file>)
-htmlsnapshot export                         将快照 HTML 导出到本地文件 (--file <path>)
+htmlsnapshot export                         将快照 HTML 导出到本地文件 (--file <path>, --clean)
 htmlsnapshot summary                        生成压缩的网页摘要索引 (WPSI)
 htmlsnapshot grep <pattern>                 使用正则表达式搜索快照 HTML
                                            -i, -v, -c, -l, -F, -w, -A, -B, -C, --selector
@@ -404,6 +404,7 @@ browser4-cli htmlsnapshot capture
 browser4-cli htmlsnapshot
 browser4-cli htmlsnapshot get text "#main-content"
 browser4-cli htmlsnapshot query --sql @query.sql
+browser4-cli htmlsnapshot export --file page.html --clean
 browser4-cli htmlsnapshot grep -i "error"
 
 # AI 驱动的提取与总结（需要 LLM 密钥 — 参见上方的 LLM 配置）

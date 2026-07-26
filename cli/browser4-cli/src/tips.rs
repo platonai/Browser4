@@ -62,6 +62,9 @@ const TIPS_HTMLSNAPSHOT_GET: &[Tip] = &[
     Tip {
         text: "Use `--page N --page-size 500` for paginated results when extracting many elements",
     },
+    Tip {
+        text: "Use `htmlsnapshot export --clean` to strip scripts, styles, and non-standard attributes — produces minimal HTML ideal for LLM consumption",
+    },
 ];
 
 const TIPS_HTMLSNAPSHOT_QUERY: &[Tip] = &[
@@ -362,7 +365,7 @@ thread_local! {
 fn tips_for_command(command: &str) -> &'static [Tip] {
     match command {
         "snapshot" | "snapshot-grep" => TIPS_SNAPSHOT,
-        "htmlsnapshot" => TIPS_HTMLSNAPSHOT_GET,
+        "htmlsnapshot" | "htmlsnapshot-export" => TIPS_HTMLSNAPSHOT_GET,
         "htmlsnapshot-get" => TIPS_HTMLSNAPSHOT_GET,
         "htmlsnapshot-query" => TIPS_HTMLSNAPSHOT_QUERY,
         "htmlsnapshot-grep" => TIPS_HTMLSNAPSHOT_GREP,
@@ -492,6 +495,7 @@ mod tests {
         assert!(!tips_for_command("htmlsnapshot-get").is_empty());
         assert!(!tips_for_command("htmlsnapshot-query").is_empty());
         assert!(!tips_for_command("htmlsnapshot-grep").is_empty());
+        assert!(!tips_for_command("htmlsnapshot-export").is_empty());
         assert!(!tips_for_command("htmlsnapshot-inspect").is_empty());
         // Eval
         assert!(!tips_for_command("eval").is_empty());
