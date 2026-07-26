@@ -40,7 +40,7 @@
  *   ]
  * }
  *
- * ## Section labels (canonical order, matching common.ps1 Write-IssuesToReadyQueue):
+ * ## Section labels (canonical order, matching common.ps1 Write-IssuesToDraft):
  *
  *   Reproduction → Expected Behavior → Actual Behavior →
  *   Root Cause Analysis → Code Pointer → AI Suggested Improvement
