@@ -20,9 +20,9 @@ Tests common.ps1 functionality:
   1. Mode detection ($browser4cliMode → $helpCmd, $skillPath)
   2. $generalPrompt content and structure
   3. Invoke-Agent function signature and argument forwarding
-  4. Path resolution ($IssuesReadyDir, $RepoRoot)
+  4. Path resolution ($IssuesDraftDir, $RepoRoot)
   5. ConvertFrom-IssuesSection parsing
-  6. Write-IssuesToReadyQueue file output
+  6. Write-IssuesToDraft file output
   7. Invoke-Agent backward compatibility
 
 .NOTES
@@ -519,13 +519,13 @@ Write-Host '━━━ Path Resolution ━━━' -ForegroundColor Yellow
     $browser4cliMode = 'dev'
     . "$PSScriptRoot/common.ps1"
 
-    Write-TestGroup '$script:IssuesReadyDir is an absolute path'
-    $isAbs = [System.IO.Path]::IsPathRooted([string]$script:IssuesReadyDir)
-    Assert-True 'IssuesReadyDir is absolute' $isAbs
+    Write-TestGroup '$script:IssuesDraftDir is an absolute path'
+    $isAbs = [System.IO.Path]::IsPathRooted([string]$script:IssuesDraftDir)
+    Assert-True 'IssuesDraftDir is absolute' $isAbs
 
-    Write-TestGroup '$script:IssuesReadyDir ends with the expected suffix'
+    Write-TestGroup '$script:IssuesDraftDir ends with the expected suffix'
     $expectedSuffix = 'issues\draft'
-    $normalized = ([string]$script:IssuesReadyDir) -replace '[/\\]', '\'
+    $normalized = ([string]$script:IssuesDraftDir) -replace '[/\\]', '\'
     Assert-True "Ends with $expectedSuffix" $normalized.EndsWith($expectedSuffix)
 
     Write-TestGroup '$script:RepoRoot resolves to an existing directory'
@@ -795,17 +795,17 @@ Make it stable.
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Test group 13: Write-IssuesToReadyQueue
+# Test group 13: Write-IssuesToDraft
 # ═══════════════════════════════════════════════════════════════════════════════
 
 Write-Host ''
-Write-Host '━━━ Write-IssuesToReadyQueue ━━━' -ForegroundColor Yellow
+Write-Host '━━━ Write-IssuesToDraft ━━━' -ForegroundColor Yellow
 
 & {
     $browser4cliMode = 'dev'
     . "$PSScriptRoot/common.ps1"
 
-    # Use a temp directory to avoid polluting the real ready queue
+    # Use a temp directory to avoid polluting the real issues draft directory
     $tempDir = Join-Path ([System.IO.Path]::GetTempPath()) "b4cli-test-$(Get-Random)"
     New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
 
@@ -846,7 +846,7 @@ OK.
 '@
 
         Write-TestGroup 'Writes full.md file'
-        Write-IssuesToReadyQueue -ScenarioName 'unit-test' -Content $sampleContent -OutputDirectory $tempDir
+        Write-IssuesToDraft -ScenarioName 'unit-test' -Content $sampleContent -OutputDirectory $tempDir
         $fullFiles = Get-ChildItem -Path $tempDir -Filter '*.full.md'
         Assert-Equal 'Exactly 1 full.md file' 1 $fullFiles.Count
 

@@ -361,7 +361,7 @@ public class NativeCommandOutputHandler
 # ── Path resolution ──────────────────────────────────────────────────────────
 # Repo root is 3 levels up from scripts/ (scripts -> tests -> browser4-tests -> repo root)
 $script:RepoRoot = (Resolve-Path "$PSScriptRoot/../../..").Path
-$script:IssuesReadyDir = [System.IO.Path]::GetFullPath(
+$script:IssuesDraftDir = [System.IO.Path]::GetFullPath(
     (Join-Path $script:RepoRoot 'coworker' 'tasks' 'issues' 'draft')
 )
 
@@ -565,7 +565,7 @@ function ConvertFrom-IssuesSection {
         Returns an array of hashtables with fields: Title, Severity, Category,
         Reproduction, Expected, Actual, RootCause, CodePointer, Review, Suggestion.
         Returns empty array if no issues can be parsed (the full output is always
-        preserved by Write-IssuesToReadyQueue).
+        preserved by Write-IssuesToDraft).
     #>
     param(
         [Parameter(Mandatory = $true)]
@@ -1047,10 +1047,10 @@ function ConvertFrom-IssueJson {
 
 # ── Issue file output ─────────────────────────────────────────────────────────
 
-function Write-IssuesToReadyQueue {
+function Write-IssuesToDraft {
     <#
     .SYNOPSIS
-        Write the agent evaluation output to the issues draft ready queue.
+        Write the agent evaluation output to the issues draft directory.
     .DESCRIPTION
         Saves the complete agent output (containing A. Task Result, B. Execution Trace,
         C. Issues Found, D. Overall Assessment) as a markdown file in the
@@ -1069,7 +1069,7 @@ function Write-IssuesToReadyQueue {
     .PARAMETER Content
         The full text output from the agent evaluation.
     .PARAMETER OutputDirectory
-        Optional override for the ready queue directory. Defaults to $IssuesReadyDir.
+        Optional override for the draft directory. Defaults to $IssuesDraftDir.
     #>
     param(
         [Parameter(Mandatory = $true)]
@@ -1078,7 +1078,7 @@ function Write-IssuesToReadyQueue {
         [Parameter(Mandatory = $true)]
         [string]$Content,
 
-        [string]$OutputDirectory = $script:IssuesReadyDir
+        [string]$OutputDirectory = $script:IssuesDraftDir
     )
 
     if ([string]::IsNullOrWhiteSpace($Content)) {
@@ -1775,7 +1775,7 @@ function Invoke-Agent {
     .DESCRIPTION
         Runs the agent CLI resolved by Get-ScenarioAgent with the given prompt.
         When -ScenarioName is provided, captures output and writes evaluation
-        results to the issues draft ready queue.  When -ScenarioName is omitted,
+        results to the issues draft directory.  When -ScenarioName is omitted,
         preserves the original behavior (direct call, real-time output, no capture).
 
         In capture mode, output is simultaneously streamed to the console (so the
@@ -1792,7 +1792,7 @@ function Invoke-Agent {
         task-specific instructions.
     .PARAMETER ScenarioName
         Optional scenario name (e.g. "amazon", "hacker-news"). When provided, output
-        is captured and written to the issues ready queue at $IssuesReadyDir.
+        is captured and written to the issues draft directory at $IssuesDraftDir.
     .PARAMETER OutputFile
         Optional explicit path to save the raw agent output. Auto-generated from
         ScenarioName and timestamp when omitted.
@@ -1929,8 +1929,8 @@ function Invoke-Agent {
         Write-Host "    Re-running the scenario may produce a complete capture." -ForegroundColor DarkGray
     }
 
-    # Write to the issues ready queue
+    # Write to the issues draft directory
     if ($ScenarioName) {
-        Write-IssuesToReadyQueue -ScenarioName $ScenarioName -Content $capturedOutput
+        Write-IssuesToDraft -ScenarioName $ScenarioName -Content $capturedOutput
     }
 }
