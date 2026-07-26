@@ -1228,6 +1228,9 @@ $diffBody
             }
         }
 
+        # Append co-author trailer
+        $Message = $Message.TrimEnd() + "`n`nCo-Authored-By: Builtin Coworker"
+
         Write-ConsoleLine -Message "Target repo: $targetRepo" -ForegroundColor DarkGray
         Write-ConsoleLine -Message "Commit message:" -ForegroundColor Cyan
         Write-ConsoleLine -Message "────────────────" -ForegroundColor DarkGray
