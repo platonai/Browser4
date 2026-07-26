@@ -1455,7 +1455,7 @@ foreach ($arg in $ScriptArgs) {
     if ($parsingTestTypes -and $testTypeMap.ContainsKey($arg)) {
         $testTypes += $arg
         # Session and resume: subsequent tokens are subcommands / args, not test types
-        if ($arg -in @('session', 'resume')) { $parsingTestTypes = $false }
+        if ($arg -in @('session', 'resume', 'rws')) { $parsingTestTypes = $false }
         continue
     }
 
