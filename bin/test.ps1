@@ -166,7 +166,7 @@ function Print-Usage {
     Write-Host "  mcp         Run MCP-focused agentic tests"
     Write-Host "  ps          Run all PowerShell *.tests.ps1 files in the project"
     Write-Host "  rws         Run real-world scenario tests (requires a mode)"
-    Write-Host "              sc, scenarios [names...]  run all/named tasks via run-tests.ps1"
+    Write-Host "              sc, scenarios <names...>  run named tasks via run-tests.ps1"
     Write-Host "              dir, directory <path>     run all .md tasks in a directory"
     Write-Host "              task <file>               run a single task via run-task.ps1"
     Write-Host "  session     List or view persisted test sessions (list, view)"
@@ -201,12 +201,12 @@ function Print-Usage {
     Write-Host "  test.ps1 ps -Quiet                  # Run PowerShell tests with -Quiet flag"
     Write-Host "  test.ps1 resume                     # Resume from the last failed module"
     Write-Host "  test.ps1 rws                        # Show RWS help"
-    Write-Host "  test.ps1 rws sc                     # Run all agent-scenario tasks"
     Write-Host "  test.ps1 rws sc amazon              # Run a specific scenario task"
-    Write-Host "  test.ps1 rws scenarios --list       # List discovered scenario tasks"
+    Write-Host "  test.ps1 rws sc amazon hn           # Run multiple scenarios"
+    Write-Host "  test.ps1 rws scenarios --list       # List available scenarios"
     Write-Host "  test.ps1 rws dir tasks/real-world/generic  # Run all .md tasks in a directory"
-    Write-Host "  test.ps1 rws sc --timeout 30        # Run all scenarios with 30-minute timeout"
-    Write-Host "  test.ps1 rws sc --production        # Run scenarios against installed CLI"
+    Write-Host "  test.ps1 rws sc amazon --timeout 30 # Run with 30-minute per-task timeout"
+    Write-Host "  test.ps1 rws sc amazon --production # Run against installed CLI"
     Write-Host "  test.ps1 rws task tasks/real-world/generic/amazon.md  # Run a single task file"
     Write-Host "  test.ps1 main                       # Run all Browser4 main tests"
     Write-Host "  test.ps1 session list               # List all past test sessions"
@@ -535,8 +535,19 @@ function Invoke-RealWorldScenarioTests([string[]]$additionalArgs) {
         $arg = $additionalArgs[$i]
         if ($arg -in 'scenarios', 'sc', '--scenarios', '-sc') {
             $mode = 'scenarios'
-            $modeLabel = 'real-world scenarios'
             $i++
+            # Collect required scenario names (bare words until a --flag or end)
+            $scenarioNames = @()
+            while ($i -lt $additionalArgs.Count -and -not $additionalArgs[$i].StartsWith('-')) {
+                $scenarioNames += $additionalArgs[$i]
+                $i++
+            }
+            if ($scenarioNames.Count -eq 0) {
+                Write-Error "sc/scenarios mode requires at least one scenario name. Use --list to see available scenarios."
+                exit 1
+            }
+            $modeLabel = "real-world scenarios: $($scenarioNames -join ', ')"
+            $passThroughArgs += $scenarioNames
         }
         elseif ($arg -in 'dir', 'directory', '--dir', '--directory' -and ($i + 1) -lt $additionalArgs.Count) {
             $mode = 'dir'
@@ -592,7 +603,7 @@ function Invoke-RealWorldScenarioTests([string[]]$additionalArgs) {
         Write-Host 'Usage: test.ps1 rws <mode> [options]'
         Write-Host ''
         Write-Host 'Modes (required, pick one):'
-        Write-Host '  sc, scenarios [names...]  Run agent-scenario tasks via run-tests.ps1'
+        Write-Host '  sc, scenarios <names...>  Run named agent-scenario tasks via run-tests.ps1'
         Write-Host '  dir, directory <path>     Run all .md task files in a directory'
         Write-Host '  task <file>               Run a single task file via run-task.ps1'
         Write-Host ''
@@ -606,12 +617,12 @@ function Invoke-RealWorldScenarioTests([string[]]$additionalArgs) {
         Write-Host '  --agent <name>            Use a specific agent CLI (claude, kimi, opencode)'
         Write-Host ''
         Write-Host 'Examples:'
-        Write-Host '  test.ps1 rws sc                           # Run all tasks'
         Write-Host '  test.ps1 rws sc amazon                    # Run a specific scenario'
+        Write-Host '  test.ps1 rws sc amazon hn                 # Run multiple scenarios'
         Write-Host '  test.ps1 rws scenarios --list             # List discovered tasks'
         Write-Host '  test.ps1 rws dir tasks/real-world/generic # Run all .md tasks in a directory'
         Write-Host '  test.ps1 rws task tasks/amazon.md         # Run a single task file'
-        Write-Host '  test.ps1 rws sc --production              # Run against installed CLI'
+        Write-Host '  test.ps1 rws sc amazon --production       # Run against installed CLI'
         exit 0
     }
 
