@@ -3209,6 +3209,101 @@ pub fn all_commands() -> Vec<CommandDef> {
                 json!({ "description": get_str(args, "description").unwrap_or_default() })
             },
         },
+        // ---- Experience ----
+        CommandDef {
+            name: "experience-save",
+            description: "Save a task execution trace to the progressive experience memory. Records the steps taken, selectors used, and outcome so future tasks on the same domain can replay them.",
+            category: Category::Skills,
+            hidden: false,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "url", description: "The URL the task operated on", optional: false },
+                ArgDef { name: "trace", description: "JSON-encoded execution trace (steps, selectors, extraction results)", optional: false },
+            ],
+            options: &[
+                OptionDef { name: "outcome", description: "Task outcome: success (default) or failure", is_bool: false, short: None },
+                OptionDef { name: "intent", description: "Free-text description of what the task was trying to do", is_bool: false, short: None },
+                OptionDef { name: "task-type", description: "Canonical task type (e.g. extract_product_detail, search, navigate)", is_bool: false, short: None },
+            ],
+            e2e_coverage: E2eCoverage::Excluded,
+            tool_name_fn: |_| "experience_save".to_string(),
+            tool_params_fn: |args| {
+                let trace_str = get_str(args, "trace").unwrap_or_default();
+                let mut params = json!({ "url": get_str(args, "url").unwrap_or_default(), "trace": trace_str });
+                if let Some(outcome) = get_opt_str(args, "outcome") { params["outcome"] = json!(outcome); }
+                if let Some(intent) = get_opt_str(args, "intent") { params["intent"] = json!(intent); }
+                if let Some(task_type) = get_opt_str(args, "task-type") { params["task_type"] = json!(task_type); }
+                params
+            },
+        },
+        CommandDef {
+            name: "experience-query",
+            description: "Query the progressive experience memory for stored knowledge about a domain. Returns selectors, blockers, interaction hints, and confidence tier. Called automatically before every agent task.",
+            category: Category::Skills,
+            hidden: false,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "url", description: "The target URL to query knowledge for", optional: false },
+            ],
+            options: &[
+                OptionDef { name: "intent", description: "Free-text intent description for classification", is_bool: false, short: None },
+            ],
+            e2e_coverage: E2eCoverage::Excluded,
+            tool_name_fn: |_| "experience_query".to_string(),
+            tool_params_fn: |args| {
+                let mut params = json!({ "url": get_str(args, "url").unwrap_or_default() });
+                if let Some(intent) = get_opt_str(args, "intent") { params["intent"] = json!(intent); }
+                params
+            },
+        },
+        CommandDef {
+            name: "experience-list",
+            description: "List stored knowledge entries from the progressive experience memory. Filter by domain or intent to inspect what the system has learned.",
+            category: Category::Skills,
+            hidden: false,
+            batch_supported: false,
+            args: &[],
+            options: &[
+                OptionDef { name: "filter", description: "Filter by domain (partial case-insensitive match)", is_bool: false, short: None },
+                OptionDef { name: "intent-filter", description: "Filter by intent (partial case-insensitive match)", is_bool: false, short: None },
+                OptionDef { name: "page", description: "Page number (default: 1)", is_bool: false, short: None },
+                OptionDef { name: "page-size", description: "Results per page (default: 20, max: 100)", is_bool: false, short: None },
+            ],
+            e2e_coverage: E2eCoverage::Excluded,
+            tool_name_fn: |_| "experience_list".to_string(),
+            tool_params_fn: |args| {
+                let mut params = json!({});
+                if let Some(filter) = get_opt_str(args, "filter") { params["filter"] = json!(filter); }
+                if let Some(intent_filter) = get_opt_str(args, "intent-filter") { params["intent_filter"] = json!(intent_filter); }
+                if let Some(page) = get_opt_str(args, "page") { params["page"] = json!(page); }
+                if let Some(page_size) = get_opt_str(args, "page-size") { params["page_size"] = json!(page_size); }
+                params
+            },
+        },
+        CommandDef {
+            name: "experience-deep-learn",
+            description: "Run deep learning analysis on stored experience traces. Builds or updates verified knowledge facts (selectors, blockers, page structure). Promotes knowledge from hypothesis to verified when confidence thresholds are met.",
+            category: Category::Skills,
+            hidden: false,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "url", description: "The target URL to analyze", optional: false },
+                ArgDef { name: "intent", description: "Free-text intent description for classification", optional: false },
+            ],
+            options: &[
+                OptionDef { name: "force", description: "Force deep learning even if confidence is already high", is_bool: true, short: None },
+            ],
+            e2e_coverage: E2eCoverage::Excluded,
+            tool_name_fn: |_| "experience_deep_learn".to_string(),
+            tool_params_fn: |args| {
+                let mut params = json!({
+                    "url": get_str(args, "url").unwrap_or_default(),
+                    "intent": get_str(args, "intent").unwrap_or_default(),
+                });
+                if let Some(force) = get_bool(args, "force") { params["force"] = json!(force); }
+                params
+            },
+        },
     ]
 }
 
@@ -3296,6 +3391,10 @@ mod tests {
             "plugin-install",
             "plugin-remove",
             "act",
+            "experience-save",
+            "experience-query",
+            "experience-list",
+            "experience-deep-learn",
         ] {
             assert!(map.contains_key(*expected), "Missing command: {}", expected);
         }
@@ -6223,5 +6322,185 @@ mod tests {
         let cmd = map.get("webdb-normalize").unwrap();
         assert_eq!(cmd.args.len(), 1);
         assert_eq!(cmd.args[0].name, "url");
+    }
+
+    // =========================================================================
+    // experience command tests
+    // =========================================================================
+
+    #[test]
+    fn test_experience_save_tool_name() {
+        let map = commands_map();
+        let cmd = map.get("experience-save").unwrap();
+        assert_eq!((cmd.tool_name_fn)(&HashMap::new()), "experience_save");
+    }
+
+    #[test]
+    fn test_experience_save_params_with_all_options() {
+        let map = commands_map();
+        let cmd = map.get("experience-save").unwrap();
+        let mut args = HashMap::new();
+        args.insert("url".to_string(), json!("https://amazon.com/dp/test"));
+        args.insert("trace".to_string(), json!(r#"{"steps":[],"outcome":"success"}"#));
+        args.insert("outcome".to_string(), json!("failure"));
+        args.insert("intent".to_string(), json!("buy product"));
+        args.insert("task-type".to_string(), json!("extract_product_detail"));
+
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["url"], "https://amazon.com/dp/test");
+        assert_eq!(params["trace"], r#"{"steps":[],"outcome":"success"}"#);
+        assert_eq!(params["outcome"], "failure");
+        assert_eq!(params["intent"], "buy product");
+        assert_eq!(params["task_type"], "extract_product_detail");
+    }
+
+    #[test]
+    fn test_experience_save_params_minimal() {
+        let map = commands_map();
+        let cmd = map.get("experience-save").unwrap();
+        let mut args = HashMap::new();
+        args.insert("url".to_string(), json!("https://example.com"));
+        args.insert("trace".to_string(), json!("{}"));
+
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["url"], "https://example.com");
+        assert_eq!(params["trace"], "{}");
+        assert!(params.get("outcome").is_none());
+    }
+
+    #[test]
+    fn test_experience_query_tool_name() {
+        let map = commands_map();
+        let cmd = map.get("experience-query").unwrap();
+        assert_eq!((cmd.tool_name_fn)(&HashMap::new()), "experience_query");
+    }
+
+    #[test]
+    fn test_experience_query_params_with_intent() {
+        let map = commands_map();
+        let cmd = map.get("experience-query").unwrap();
+        let mut args = HashMap::new();
+        args.insert("url".to_string(), json!("https://amazon.com/dp/test"));
+        args.insert("intent".to_string(), json!("extract product details"));
+
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["url"], "https://amazon.com/dp/test");
+        assert_eq!(params["intent"], "extract product details");
+    }
+
+    #[test]
+    fn test_experience_query_params_without_intent() {
+        let map = commands_map();
+        let cmd = map.get("experience-query").unwrap();
+        let mut args = HashMap::new();
+        args.insert("url".to_string(), json!("https://example.com"));
+
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["url"], "https://example.com");
+        assert!(params.get("intent").is_none());
+    }
+
+    #[test]
+    fn test_experience_list_tool_name() {
+        let map = commands_map();
+        let cmd = map.get("experience-list").unwrap();
+        assert_eq!((cmd.tool_name_fn)(&HashMap::new()), "experience_list");
+    }
+
+    #[test]
+    fn test_experience_list_params_empty() {
+        let map = commands_map();
+        let cmd = map.get("experience-list").unwrap();
+        let params = (cmd.tool_params_fn)(&HashMap::new());
+        assert_eq!(params, json!({}));
+    }
+
+    #[test]
+    fn test_experience_list_params_with_filters() {
+        let map = commands_map();
+        let cmd = map.get("experience-list").unwrap();
+        let mut args = HashMap::new();
+        args.insert("filter".to_string(), json!("amazon"));
+        args.insert("intent-filter".to_string(), json!("buy"));
+        args.insert("page".to_string(), json!("3"));
+        args.insert("page-size".to_string(), json!("50"));
+
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["filter"], "amazon");
+        assert_eq!(params["intent_filter"], "buy");
+        assert_eq!(params["page"], "3");
+        assert_eq!(params["page_size"], "50");
+    }
+
+    #[test]
+    fn test_experience_deep_learn_tool_name() {
+        let map = commands_map();
+        let cmd = map.get("experience-deep-learn").unwrap();
+        assert_eq!((cmd.tool_name_fn)(&HashMap::new()), "experience_deep_learn");
+    }
+
+    #[test]
+    fn test_experience_deep_learn_params_required_only() {
+        let map = commands_map();
+        let cmd = map.get("experience-deep-learn").unwrap();
+        let mut args = HashMap::new();
+        args.insert("url".to_string(), json!("https://amazon.com/dp/test"));
+        args.insert("intent".to_string(), json!("buy product"));
+
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["url"], "https://amazon.com/dp/test");
+        assert_eq!(params["intent"], "buy product");
+        assert!(params.get("force").is_none());
+    }
+
+    #[test]
+    fn test_experience_deep_learn_params_with_force() {
+        let map = commands_map();
+        let cmd = map.get("experience-deep-learn").unwrap();
+        let mut args = HashMap::new();
+        args.insert("url".to_string(), json!("https://amazon.com"));
+        args.insert("intent".to_string(), json!("extract"));
+        args.insert("force".to_string(), json!(true));
+
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["force"], true);
+    }
+
+    #[test]
+    fn test_experience_commands_have_correct_category() {
+        let map = commands_map();
+        for name in &[
+            "experience-save",
+            "experience-query",
+            "experience-list",
+            "experience-deep-learn",
+        ] {
+            let cmd = map.get(*name).unwrap();
+            assert_eq!(cmd.category.as_str(), "skills", "{} should be in Skills category", name);
+        }
+    }
+
+    #[test]
+    fn test_experience_commands_have_required_args_defined() {
+        let map = commands_map();
+
+        let save = map.get("experience-save").unwrap();
+        assert_eq!(save.args.len(), 2);
+        assert!(!save.args[0].optional, "url should be required");
+        assert_eq!(save.args[0].name, "url");
+        assert!(!save.args[1].optional, "trace should be required");
+        assert_eq!(save.args[1].name, "trace");
+
+        let query = map.get("experience-query").unwrap();
+        assert_eq!(query.args.len(), 1);
+        assert!(!query.args[0].optional, "url should be required");
+
+        let list = map.get("experience-list").unwrap();
+        assert!(list.args.is_empty());
+
+        let dl = map.get("experience-deep-learn").unwrap();
+        assert_eq!(dl.args.len(), 2);
+        assert!(!dl.args[0].optional, "url should be required");
+        assert!(!dl.args[1].optional, "intent should be required");
     }
 }
