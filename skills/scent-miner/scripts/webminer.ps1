@@ -261,8 +261,17 @@ function Invoke-WebMiner {
     ) + $RemainingArgs
 
     Write-Host '[WebMiner] Launching ...' -ForegroundColor DarkGray
+
+    # Ensure PowerShell decodes Java's UTF-8 output correctly
+    $prevOutputEncoding = [Console]::OutputEncoding
+    [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+
     $javaExe = Join-Path $Java17Home 'bin\java.exe'
-    & $javaExe @javaArgs
+    try {
+        & $javaExe @javaArgs
+    } finally {
+        [Console]::OutputEncoding = $prevOutputEncoding
+    }
     return $LASTEXITCODE
 }
 
