@@ -102,7 +102,7 @@ Examples:
   # cli (default — "cli" keyword is optional)
   b4w                                   show this help
   b4w -s my-session                     start a named session
-  b4w -s my-session -i                  interactive REPL
+  b4w -s my-session snapshot -i         snapshot — interactive elements only
   b4w --version                         print version
   b4w --help                            CLI help
   b4w -- -s my-session -i               passthrough via --
