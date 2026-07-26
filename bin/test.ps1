@@ -543,19 +543,27 @@ function Invoke-RealWorldScenarioTests([string[]]$additionalArgs) {
                 $i++
             }
             if ($scenarioNames.Count -eq 0) {
-                Write-Host ''
-                Write-Host 'sc requires at least one scenario name.' -ForegroundColor Yellow
-                Write-Host ''
-                Write-Host 'Usage:  test.ps1 rws sc <names...> [options]'
-                Write-Host ''
-                Write-Host 'Discover available scenarios:'
-                Write-Host '  test.ps1 rws sc --list'
-                Write-Host ''
-                Write-Host 'Examples:'
-                Write-Host '  test.ps1 rws sc amazon'
-                Write-Host '  test.ps1 rws sc amazon hn search-summary'
-                Write-Host ''
-                exit 1
+                # --list is the only flag that makes sense without names
+                if ($i -lt $additionalArgs.Count -and $additionalArgs[$i] -in '--list', '-List') {
+                    $passThroughArgs += '-List'
+                    $i++
+                    $modeLabel = 'real-world scenarios (list)'
+                }
+                else {
+                    Write-Host ''
+                    Write-Host 'sc requires at least one scenario name.' -ForegroundColor Yellow
+                    Write-Host ''
+                    Write-Host 'Usage:  test.ps1 rws sc <names...> [options]'
+                    Write-Host ''
+                    Write-Host 'Discover available scenarios:'
+                    Write-Host '  test.ps1 rws sc --list'
+                    Write-Host ''
+                    Write-Host 'Examples:'
+                    Write-Host '  test.ps1 rws sc amazon'
+                    Write-Host '  test.ps1 rws sc amazon hn search-summary'
+                    Write-Host ''
+                    exit 1
+                }
             }
             $modeLabel = "real-world scenarios: $($scenarioNames -join ', ')"
             $passThroughArgs += $scenarioNames
