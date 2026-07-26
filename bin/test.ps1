@@ -165,17 +165,14 @@ function Print-Usage {
     Write-Host "  skills      Run skills-focused agentic tests"
     Write-Host "  mcp         Run MCP-focused agentic tests"
     Write-Host "  ps          Run all PowerShell *.tests.ps1 files in the project"
-    Write-Host "  rws         Run real-world scenario tests (requires a mode flag)"
-    Write-Host "              --scenarios, -sc, sc [names...]  run all/named tasks via run-tests.ps1"
-    Write-Host "              --dir, --directory <path>         run all .md tasks in a directory"
-    Write-Host "              --task <file>                     run a single task via run-task.ps1"
+    Write-Host "  rws         Run real-world scenario tests (requires a mode)"
+    Write-Host "              sc, scenarios [names...]  run all/named tasks via run-tests.ps1"
+    Write-Host "              dir, directory <path>     run all .md tasks in a directory"
+    Write-Host "              task <file>               run a single task via run-task.ps1"
     Write-Host "  session     List or view persisted test sessions (list, view)"
     Write-Host "              list --all | --count N   Paginate session listing (default: 15)"
     Write-Host ""
-    Write-Host "  RWS flags (accepted after 'rws'):"
-    Write-Host "    --scenarios, -sc, sc [names...]  Run agent-scenario tasks (requires claude or kimi)"
-    Write-Host "    --dir, --directory <path>   Run all .md task files in a directory"
-    Write-Host "    --task <file>               Run a single task file directly"
+    Write-Host "  RWS options (accepted after the mode):"
     Write-Host "    --production                Use installed browser4-cli instead of cargo run"
     Write-Host "    --fail-fast                 Stop after the first failing scenario"
     Write-Host "    --list                      List discovered scenarios, don't run"
@@ -203,16 +200,14 @@ function Print-Usage {
     Write-Host "  test.ps1 ps                         # Run all PowerShell *.tests.ps1 files"
     Write-Host "  test.ps1 ps -Quiet                  # Run PowerShell tests with -Quiet flag"
     Write-Host "  test.ps1 resume                     # Resume from the last failed module"
-    Write-Host "  test.ps1 rws                        # Show RWS help (requires a mode flag)"
-    Write-Host "  test.ps1 rws sc                     # Run all agent-scenario tasks (short)"
-    Write-Host "  test.ps1 rws --scenarios amazon     # Run a specific scenario task"
-    Write-Host "  test.ps1 rws -sc amazon             # Same as --scenarios"
-    Write-Host "  test.ps1 rws sc amazon              # Same as --scenarios"
-    Write-Host "  test.ps1 rws --dir tasks/real-world/generic  # Run all .md tasks in a directory"
-    Write-Host "  test.ps1 rws --scenarios --timeout 30  # Run all scenarios with 30-minute per-task timeout"
-    Write-Host "  test.ps1 rws --scenarios --list     # List discovered scenario tasks"
-    Write-Host "  test.ps1 rws --scenarios --production  # Run scenarios against installed CLI"
-    Write-Host "  test.ps1 rws --task tasks/real-world/generic/amazon.md   # Run a single task file directly"
+    Write-Host "  test.ps1 rws                        # Show RWS help"
+    Write-Host "  test.ps1 rws sc                     # Run all agent-scenario tasks"
+    Write-Host "  test.ps1 rws sc amazon              # Run a specific scenario task"
+    Write-Host "  test.ps1 rws scenarios --list       # List discovered scenario tasks"
+    Write-Host "  test.ps1 rws dir tasks/real-world/generic  # Run all .md tasks in a directory"
+    Write-Host "  test.ps1 rws sc --timeout 30        # Run all scenarios with 30-minute timeout"
+    Write-Host "  test.ps1 rws sc --production        # Run scenarios against installed CLI"
+    Write-Host "  test.ps1 rws task tasks/real-world/generic/amazon.md  # Run a single task file"
     Write-Host "  test.ps1 main                       # Run all Browser4 main tests"
     Write-Host "  test.ps1 session list               # List all past test sessions"
     Write-Host "  test.ps1 session view 20260724T1917 # View a specific session (prefix match)"
@@ -538,18 +533,18 @@ function Invoke-RealWorldScenarioTests([string[]]$additionalArgs) {
     $i = 0
     while ($i -lt $additionalArgs.Count) {
         $arg = $additionalArgs[$i]
-        if ($arg -in '--scenarios', '-sc', 'sc') {
+        if ($arg -in 'scenarios', 'sc', '--scenarios', '-sc') {
             $mode = 'scenarios'
             $modeLabel = 'real-world scenarios'
             $i++
         }
-        elseif ($arg -in '--dir', '--directory' -and ($i + 1) -lt $additionalArgs.Count) {
+        elseif ($arg -in 'dir', 'directory', '--dir', '--directory' -and ($i + 1) -lt $additionalArgs.Count) {
             $mode = 'dir'
             $taskDir = $additionalArgs[$i + 1]
             $modeLabel = "real-world scenario dir: $taskDir"
             $i += 2
         }
-        elseif ($arg -eq '--task' -and ($i + 1) -lt $additionalArgs.Count) {
+        elseif ($arg -in 'task', '--task' -and ($i + 1) -lt $additionalArgs.Count) {
             $mode = 'task'
             $taskFile = $additionalArgs[$i + 1]
             $modeLabel = "real-world scenario: $taskFile"
@@ -597,12 +592,9 @@ function Invoke-RealWorldScenarioTests([string[]]$additionalArgs) {
         Write-Host 'Usage: test.ps1 rws <mode> [options]'
         Write-Host ''
         Write-Host 'Modes (required, pick one):'
-        Write-Host '  scenarios, sc [names...]  Run agent-scenario tasks via run-tests.ps1'
-        Write-Host '                            Flags: --scenarios, -sc, sc'
-        Write-Host '  dir <path>                Run all .md task files in a directory'
-        Write-Host '                            Flags: --dir, --directory'
+        Write-Host '  sc, scenarios [names...]  Run agent-scenario tasks via run-tests.ps1'
+        Write-Host '  dir, directory <path>     Run all .md task files in a directory'
         Write-Host '  task <file>               Run a single task file via run-task.ps1'
-        Write-Host '                            Flag: --task'
         Write-Host ''
         Write-Host 'Options:'
         Write-Host '  --production              Use installed browser4-cli instead of cargo run'
@@ -614,14 +606,12 @@ function Invoke-RealWorldScenarioTests([string[]]$additionalArgs) {
         Write-Host '  --agent <name>            Use a specific agent CLI (claude, kimi, opencode)'
         Write-Host ''
         Write-Host 'Examples:'
-        Write-Host '  test.ps1 rws sc                           # Run all (short)'
-        Write-Host '  test.ps1 rws --scenarios amazon           # Run a specific scenario task'
-        Write-Host '  test.ps1 rws -sc amazon                   # Same as --scenarios'
-        Write-Host '  test.ps1 rws --dir tasks/real-world/generic  # Run all .md tasks in a directory'
-        Write-Host '  test.ps1 rws --scenarios --list           # List discovered scenario tasks'
-        Write-Host '  test.ps1 rws --scenarios --production     # Run against installed CLI'
-        Write-Host '  test.ps1 rws --task tasks/amazon.md       # Run a single task file directly'
-        Write-Host '  test.ps1 rws --task tasks/amazon.md --production'
+        Write-Host '  test.ps1 rws sc                           # Run all tasks'
+        Write-Host '  test.ps1 rws sc amazon                    # Run a specific scenario'
+        Write-Host '  test.ps1 rws scenarios --list             # List discovered tasks'
+        Write-Host '  test.ps1 rws dir tasks/real-world/generic # Run all .md tasks in a directory'
+        Write-Host '  test.ps1 rws task tasks/amazon.md         # Run a single task file'
+        Write-Host '  test.ps1 rws sc --production              # Run against installed CLI'
         exit 0
     }
 
@@ -650,7 +640,7 @@ function Invoke-RealWorldScenarioTests([string[]]$additionalArgs) {
         $runnerKind = 'Task runner'
     }
     else {
-        Write-Error "Unknown RWS mode '$mode'. Valid modes: scenarios (-sc, sc), dir (--dir, --directory), task (--task)"
+        Write-Error "Unknown RWS mode '$mode'. Valid modes: sc (scenarios), dir (directory), task"
         exit 1
     }
 
