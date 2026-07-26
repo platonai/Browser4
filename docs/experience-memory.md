@@ -1,177 +1,340 @@
 ---
-title: "Experience Memory — Architecture & Implementation Guide"
-description: "End-to-end guide for the Progressive Experience Memory learning system: knowledge store layout, MCP tool usage, retrieval chain, confidence model, and implementation patterns."
-tier: procedure
+title: "Experience System — Progressive Experience Memory (PEM)"
+description: "Complete reference for Browser4's self-learning knowledge system: three-tier storage, four MCP tools, confidence model, intent classification, failure taxonomy, and retrieval fallback chain."
+tier: reference
 ---
 
-# Progressive Experience Memory (PEM) — Implementation Guide
+# Progressive Experience Memory (PEM)
 
-## Quick Start
+The Experience system makes Browser4 **progressively smarter**: each completed task deposits reusable knowledge so future tasks — identical, similar, or on similar sites — complete faster with fewer steps.
 
-The experience tools (`experience_query`, `experience_save`, `experience_list`) are **MCP tools** called by the agent during `browser4-cli agent run` — they are not standalone CLI subcommands.
+## Overview
 
-```bash
-# 1. Run the agent with a task — it calls experience_query before starting
-#    and experience_save after completion, automatically persisting knowledge
-browser4-cli agent run "Go to https://amazon.com/dp/B0CXJ1NT4B and extract product details"
-
-# 2. Inspect stored knowledge entries
-browser4-cli agent run "List experience knowledge entries for amazon"
-```
-
-## When to Use
-
-Use `experience_query` **before every task** — it's a no-op on cold start (returns P5 with no penalty). Use `experience_save` **after every task** (success or failure) — knowledge compounds with each visit.
-
-When NOT to use:
-- Throwaway test sessions (skip the `experience_save` call or omit it entirely)
-- Tasks on sensitive/authenticated pages where selectors embed user data (the redaction layer in Phase 2+ will handle this automatically)
-
-## How It Works
-
-The PEM system has **three MCP tools** that read/write a **file-backed YAML knowledge store**. On task completion, the agent calls `experience_save` which:
-
-1. Persists the raw execution trace to `.traces/<domain>/<timestamp>-<task_type>.yaml`
-2. Extracts the domain from the URL
-3. Normalizes the URL (strips query params, `www.`, fragments)
-4. Derives a URL pattern (replaces high-cardinality path segments with `*`)
-5. Creates or updates a `KnowledgeEntry` in `sites/<domain>.yaml`
-6. Updates the in-memory index (`knowledge/.index.yaml`)
-7. Returns a save summary with confidence scores
-
-On the next visit to the same domain, `experience_query`:
-1. Normalizes the input URL
-2. Extracts the domain and looks up the index
-3. Finds the most specific matching URL pattern
-4. Loads the `KnowledgeEntry` from `sites/<domain>.yaml`
-5. Returns stored selectors, steps, extraction patterns, and blocker awareness
-
-## Architecture
-
-### Four-Layer Knowledge Model
+PEM is a persistent, file-backed knowledge layer implemented in Kotlin (`browser4-agentic`). It is exposed as an MCP tool domain (`"experience"`) with four tools, registered into the dispatch chain via Spring Boot auto-configuration in `browser4-rest`.
 
 ```
-L1: Site Profile         — domain, site_types, auth_pattern, load_strategy
-L2: Page Schema          — url_pattern, selectors_ranked, wpsi_landmarks
-L3: Task Playbook        — steps, extraction_fields, success_criteria, fallbacks
-L4: Abstract Patterns    — cross-site generalizations (Phase 4+)
+                  ┌──────────────────────────┐
+                  │   MCP Tool Controller    │
+                  │   (browser4-rest)         │
+                  └──────────┬───────────────┘
+                             │ dispatch
+                  ┌──────────▼───────────────┐
+                  │  ExperienceToolExecutor  │
+                  │  domain = "experience"    │
+                  │                          │
+                  │  save / query / list     │
+                  │  deep_learn              │
+                  └──────────┬───────────────┘
+                             │
+                  ┌──────────▼───────────────┐
+                  │     KnowledgeStore       │
+                  │  (file-backed YAML)      │
+                  │                          │
+                  │  traces/   experience/   │
+                  │  facts/    patterns/     │
+                  └──────────────────────────┘
 ```
 
-### Implementation Modules
+## Three-Tier Knowledge Model
 
-All PEM code lives in `browser4-agentic` under package `ai.platon.pulsar.agentic.tools.experience`:
+Knowledge flows through three progressively refined layers:
 
-| File | Purpose |
-|------|---------|
-| `ExperienceModels.kt` | Data classes: ExecutionTrace, SiteProfile, PageSchema, TaskPlaybook, KnowledgeEntry, ConfidenceScore, TaskType |
-| `KnowledgeStore.kt` | YAML file I/O with atomic rename, index management, domain-indexed storage |
-| `UrlNormalizer.kt` | URL normalization, pattern matching, specificity scoring |
-| `ExperienceToolExecutor.kt` | MCP tool executor (domain="experience") extending AbstractToolExecutor |
-| `config/ExperienceAutoConfiguration.kt` | Spring Boot auto-configuration registering executor via CustomToolRegistry |
+```
+TraceRecord              ExperienceStats           KnowledgeFacts
+(raw, 30d TTL,           (mutable, aggregated,     (verified, immutable,
+ never replayed)          confidence source)        used for replay)
+───────────────────────▶ ───────────────────────▶ ───────────────────
+ saveTrace()              updateStats()              saveFacts()
+                                                     promoteToVerified()
+```
 
-### Registration
+| Layer | Directory | Mutability | Purpose |
+|-------|-----------|------------|---------|
+| **Traces** | `traces/<domain>/` | Immutable, 30d TTL | Raw execution records — exactly what happened |
+| **Stats** | `experience/<domain>/` | Mutable, continuously updated | Aggregated success/failure counts; confidence derived here |
+| **Facts** | `facts/<domain>/` | Immutable once VERIFIED | Authoritative selectors, blockers, interaction hints for replay |
 
-The executor is registered at startup via Spring auto-configuration (`META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports`). It implements `ToolMount` so the `PluginManager` automatically wires it into the MCP dispatch chain. No changes to `AgentToolManager` or `MCPToolController` are needed.
+A fourth layer — **Patterns** (`patterns/families/`, `patterns/categories/`, `patterns/universal/`) — stores cross-site generalizations promoted from multiple domains.
 
-### Concurrency Model
+## Four MCP Tools
 
-- **Readers never lock** — atomic rename guarantees consistent view
-- **Writers to the same domain serialize** via per-domain `Mutex`
-- **Writers to different domains run concurrently**
+### experience_save — Fast Learning
+
+Records a task trace and updates statistics. Runs in ~tens of milliseconds. No analysis tools execute.
+
+| Argument | Required | Type | Description |
+|----------|----------|------|-------------|
+| `url` | Yes | String | The URL the task operated on |
+| `trace` | Yes | String (JSON) | JSON-encoded `ExecutionTrace` (steps, selectors, extraction results) |
+| `outcome` | No | String | `"success"` (default) or `"failure"` |
+| `intent` | No | String | Free-text description of what the task was trying to do |
+| `task_type` | No | String | One of the 12 canonical task types |
+
+**What it does:**
+
+1. Parses the trace JSON into an `ExecutionTrace`
+2. Normalizes the URL, extracts domain and URL pattern
+3. Classifies intent via `Intent.classify()` (keyword scoring)
+4. For failures, classifies the error via `FailureCategory.classify()`
+5. Writes a `TraceRecord` to `traces/<domain>/<timestamp>-<intent>.yaml`
+6. Updates `ExperienceStats` via `withSuccess()` or `withFailure()`
+
+**Returns:** `ExperienceSaveResult` — `{saved, domain, intent, confidence, retrieval_tier, failure_category, message}`
+
+### experience_query — Intent-Based Retrieval
+
+Queries stored knowledge before a task starts. Runs in ~single-digit milliseconds.
+
+| Argument | Required | Type | Description |
+|----------|----------|------|-------------|
+| `url` | Yes | String | The target URL |
+| `intent` | No | String | Free-text intent description for classification |
+
+**6-level resolution fallback:**
+
+1. **(domain, intent)** — exact match on domain + classified intent
+2. **(domain, url_pattern)** — match by URL pattern within same domain
+3. **(site_family, intent)** — cross-site family pattern (e.g., amazon-like sites)
+4. **(site_category, intent)** — cross-category pattern (e.g., all marketplaces)
+5. **(site_universal, intent)** — universal pattern (e.g., all ecommerce)
+6. **Cold start (P5)** — no knowledge; full discovery required
+
+**Returns:** `ExperienceQueryResult` — `{tier, confidence, domain, intent, url_pattern, primary_selectors, known_blockers, warnings, status}`
+
+### experience_list — Diagnostic Browser
+
+Lists stored knowledge entries with pagination and filtering.
+
+| Argument | Required | Type | Default | Description |
+|----------|----------|------|---------|-------------|
+| `filter` | No | String | — | Filter by domain (partial case-insensitive match) |
+| `intent_filter` | No | String | — | Filter by intent (partial case-insensitive match) |
+| `page` | No | Int | 1 | Page number |
+| `page_size` | No | Int | 20 | Results per page (max 100) |
+
+**Returns:** `ExperienceListResult` — `{total, page, page_size, total_pages, entries[]}`
+
+### experience_deep_learn — Deep Learning
+
+Runs analysis tools to build or update `KnowledgeFacts`. Explicit call — runs in ~seconds.
+
+| Argument | Required | Type | Default | Description |
+|----------|----------|------|---------|-------------|
+| `url` | Yes | String | — | The target URL |
+| `intent` | Yes | String | — | Free-text intent description |
+| `force` | No | Boolean | false | Bypass sampling; run even if confidence ≥ 0.90 |
+
+**What it does:**
+
+1. Classifies intent, loads current stats and facts
+2. **Sampling check:** skips if confidence ≥ 0.90 and `force=false`
+3. Loads the most recent successful trace for the domain
+4. Creates `KnowledgeFacts` as `HYPOTHESIS` (first run) or updates existing
+5. Calls `promoteToVerified()` — promotes if thresholds are met
+6. Saves facts to `facts/<domain>/<intent>.yaml`
+
+**Returns:** `DeepLearnResult` — `{completed, domain, intent, status_before, status_after, promoted, new_confidence, selectors_found, message}`
 
 ## Confidence Model
 
+Confidence is **computed on-the-fly** from `ExperienceStats` — it is never stored.
+
 ```
-confidence = α × success_ratio + (1 - α) × recency_factor
+confidence = α × success_ratio + (1 − α) × recency_factor
 
 Where:
-  success_ratio = (success_count + 1) / (success_count + failure_count + 2)  [Laplace-smoothed]
-  recency_factor = 0.5 ^ (days_since_last_verification / 60)  [60-day half-life]
-  α = 0.7
+  success_ratio  = (successes + 1) / (successes + failures + 2)    [Laplace smoothing]
+  recency_factor = 0.5 ^ (days_since_last_update / 60)            [60-day half-life]
+  α              = 0.7
 
-Special cases:
-  first verified save → fixed 0.50
-  cap → 0.95, floor → 0.05
+Constants:
+  Initial (first save)  → 0.50
+  Cap                    → 0.95
+  Floor                  → 0.05
 ```
 
-### Retrieval Tiers by Confidence
+### Retrieval Tiers
 
-| Tier | Range | Behavior |
-|------|-------|----------|
-| P1 | ≥ 0.85 | Direct replay — stored steps used without verification |
-| P2 | 0.60–0.84 | Verify-before-replay — each selector validated via `htmlsnapshot get` |
-| P3 | 0.40–0.59 | Hint mode — playbook suggests, full discovery runs |
-| P4 | < 0.40 | Advisory — knowledge surfaced as suggestion only |
-| P5 | No data | Cold start — `htmlsnapshot inspect` auto-discovery |
+| Tier | Confidence | Behavior |
+|------|-----------|----------|
+| **P1** Direct replay | ≥ 0.85 | Stored steps used without verification. Selectors used as-is. |
+| **P2** Verify-before-replay | 0.60–0.84 | Each selector validated before use. |
+| **P3** Hint mode | 0.40–0.59 | Knowledge suggests candidates; full discovery runs. |
+| **P4** Advisory | < 0.40 | Knowledge surfaced as suggestion only. |
+| **P5** Cold start | No data | No prior knowledge. Full exploration required. |
 
-## Task Types
+Tiers can be **degraded** by failure categories. If any recorded failure has `degradeRetrieval = true` (e.g., `ANTI_BOT`), the tier drops one level: P1 → P2, P2 → P3.
 
-| Type | Default Criteria |
-|------|-----------------|
-| `extract_product_list` | `field_not_null: title` AND `row_count_gt: 0` |
-| `extract_product_detail` | `field_not_null: title` |
-| `extract_article` | `field_not_null: title` AND `field_not_null: body` |
-| `search` | `row_count_gt: 0` |
-| `add_to_cart` | `selector_visible` for cart confirmation |
-| `fill_form` | `url_pattern: changed` |
-| `login` | `url_pattern: changed` |
-| `checkout` | `url_pattern` matches `/order/confirmation` |
-| `extract_table` | `row_count_gt: 0` AND `field_not_null: col_0` |
-| `navigate` | `url_pattern` matches target |
-| `download_file` | Non-zero file size |
-| `monitor_change` | Changed value from baseline |
+## Verification Pipeline
+
+Knowledge progresses through four verification states:
+
+```
+HYPOTHESIS  ──▶  CANDIDATE  ──▶  VERIFIED (locked, immutable)
+                                       │
+                                  CONTESTED (disconfirmations > confirmations)
+```
+
+| Status | Trigger | Confidence Required | Replay Behavior |
+|--------|---------|---------------------|-----------------|
+| **HYPOTHESIS** | Initial `deep_learn` pass | Any | Not used for replay |
+| **CANDIDATE** | `promoteToVerified()` | ≥ 0.60, ≥ 2 successes | Verify-before-replay |
+| **VERIFIED** | `promoteToVerified()` | ≥ 0.85, ≥ 5 successes | Direct replay; selectors LOCKED |
+| **CONTESTED** | Disconfirmations exceed confirmations | — | Under review |
+
+### Promotion thresholds (from `KnowledgeStore.promoteToVerified()`)
+
+- `confidence ≥ 0.85 AND successes ≥ 5` → **VERIFIED**
+- `confidence ≥ 0.60 AND successes ≥ 2` → **CANDIDATE**
+- Otherwise → stays at current status
+
+## Intent Classification
+
+Twelve intents, each with canonical action sequences used for keyword matching:
+
+| Intent | Canonical Actions | Trigger Keywords |
+|--------|-------------------|------------------|
+| `BUY` | search → select → add_to_cart → checkout | buy, purchase, order, add to cart, cheapest |
+| `SEARCH` | navigate → type → submit → extract | search, find, lookup, query |
+| `BOOK` | search → select → fill_form → confirm | book, reserve, appointment, ticket, flight, hotel |
+| `EXTRACT` | navigate → extract | extract, scrape, get data, fetch, collect |
+| `COMPARE` | search → extract → compare | compare, vs, versus, difference between |
+| `DOWNLOAD` | navigate → click → wait | download, save file, export |
+| `READ` | navigate → scroll → extract | read, article, news, blog, post |
+| `LOGIN` | navigate → fill → submit | login, sign in, authenticate |
+| `CHECKOUT` | review → fill → confirm | checkout, place order, confirm purchase |
+| `FILL_FORM` | navigate → fill → submit | fill, form, register, sign up, subscribe |
+| `MONITOR` | navigate → check → compare | monitor, watch, track, alert, notify |
+| `OTHER` | — | Fallback when no keywords match |
+
+Classification uses **keyword scoring**: canonical action words in the text score +2, display-name match scores +3, intent-specific keywords score +4. Highest-scoring intent wins.
+
+## Failure Taxonomy
+
+Twelve failure categories, each with recoverability and recovery hints:
+
+| Category | Recoverable | Degrades Tier | Detection Keywords |
+|----------|-------------|---------------|--------------------|
+| `SELECTOR_DRIFT` | Yes | No | selector, element not found, no such element |
+| `VISUAL_DRIFT` | Yes | No | not visible, not clickable, hidden, obscured |
+| `NETWORK` | Yes | No | timeout, network, connection, econnrefused |
+| `AUTH_REQUIRED` | No | No | login, sign in, 401, 403, unauthorized |
+| `PERMISSION_DENIED` | No | No | permission denied, not allowed, admin only |
+| `OVERLAY_BLOCKED` | Yes | No | overlay, modal, popup, cookie, consent |
+| `TIMING` | Yes | No | wait, loading, not ready, pending |
+| **`ANTI_BOT`** | **No** | **Yes** | captcha, recaptcha, bot detection, unusual traffic |
+| `LAZY_LOADING` | Yes | No | lazy, data-src, placeholder, skeleton |
+| `AB_EXPERIMENT` | Yes | No | a/b, variant, experiment, split test |
+| `UNEXPECTED_REDIRECT` | Yes | No | redirect, moved, url changed |
+| `UNKNOWN` | No | No | Fallback |
+
+Only `ANTI_BOT` degrades the retrieval tier. Failures are classified by keyword matching against the error message and the last attempted selector context.
 
 ## URL Normalization
 
-URLs are normalized before storage and matching:
-
-```
-Input:  https://www.amazon.com/dp/B0CXJ1NT4B/ref=sr_1_1?keywords=laptop&qid=1234567
+```text
+Input:  https://www.amazon.com/dp/B0CXJ1NT4B/ref=sr_1_1?keywords=laptop&qid=1234567#reviews
 Output: amazon.com/dp/B0CXJ1NT4B
 ```
 
-Rules:
-1. Strip `www.` prefix
-2. Strip trailing slash
+### Rules (in order)
+
+1. Strip `www.` prefix from host
+2. Strip trailing slash from path
 3. Strip fragment (`#section`)
-4. Strip query params except semantically significant ones (`?q=`, `?id=`, `?page=`, `?k=`)
-5. Replace high-cardinality path segments with `*` in URL patterns
+4. Strip query parameters **except** semantically significant ones: `q`, `id`, `page`, `k`
+5. URL patterns replace high-cardinality path segments with `*` (segments with digits, length > 4)
+
+### Pattern Matching
+
+Patterns like `/dp/*` match concrete URLs like `/dp/B0CXJ1NT4B`. When multiple patterns match, the one with the highest **specificity** (count of literal, non-wildcard segments) wins.
 
 ## Storage Layout
 
 ```
 {knowledge_dir}/
-├── sites/
-│   ├── amazon.com.yaml
-│   ├── ebay.com.yaml
-│   └── github.com.yaml
-├── .index.yaml
-├── .traces/
-│   └── amazon.com/
-│       ├── 2026-0717-142530-extract_product_list.yaml
-│       └── 2026-0717-143045-search.yaml
-└── .archive/
+├── traces/
+│   └── <domain>/
+│       └── 2026-07-26-143025-<intent>.yaml    ← TraceRecord (immutable, 30d TTL)
+├── experience/
+│   └── <domain>/
+│       └── <intent>.yaml                       ← ExperienceStats (mutable)
+├── facts/
+│   └── <domain>/
+│       └── <intent>.yaml                       ← KnowledgeFacts (verified, immutable)
+├── patterns/
+│   ├── families/<name>.yaml                    ← L4: site-family patterns
+│   ├── categories/<name>.yaml                  ← L4: site-category patterns
+│   └── universal/<name>.yaml                   ← L4: universal patterns
+├── .index.yaml                                 ← in-memory index (regenerated lazily)
+└── .archive/                                   ← evicted artifacts
 ```
 
-## Future Phases
+## Concurrency Model
 
-| Phase | Status | Key Features |
-|-------|--------|-------------|
-| Phase 1 | ✓ Implemented | Trace & Replay, URL pattern matching, knowledge store |
-| Phase 2 | Planned | `--with-experience` flags for inspect/summary, fast-path skip, stability scoring |
-| Phase 3 | Planned | PowerCSS `:expr()` analysis, X-SQL extraction query capture, P2 retrieval |
-| Phase 4 | Planned | Cross-site generalization, WPSI signature matching, geometric fingerprints |
-| Phase 5 | Planned | Continuous learning, time-decay staleness, periodic probes, automated rollback |
+- **Readers never lock** — atomic rename (write to `.tmp` → `fsync` → rename) guarantees a consistent view
+- **Writers to the same domain serialize** via per-domain `Mutex`
+- **Writers to different domains run concurrently**
 
 ## Configuration
 
 | Property | Default | Description |
 |----------|---------|-------------|
-| `browser4.experience.enabled` | `true` | Enable/disable the PEM system |
-| `knowledge.dir` | `$AGENT_BASE_DIR/knowledge` | Knowledge store root directory |
+| `browser4.experience.enabled` | `true` | Enable/disable the entire PEM system |
+| `knowledge.dir` | `knowledge/` (relative) | Knowledge store root directory |
 
-## Reference
+The `ExperienceToolMountConfiguration` in `browser4-rest` registers the executor via Spring Boot auto-configuration (conditional on `browser4.experience.enabled=true`). The executor implements `ToolMount`, so `PluginManager` automatically wires it into both the MCP dispatcher and the LLM agent tool system.
 
-- [Design proposal (v2)](../coworker/plan/feature/evolve/synthesis-proposed-solution.md) — Full 2300-line technical specification
+## Source Files
+
+All in `browser4-agentic/src/main/kotlin/ai/platon/pulsar/agentic/tools/experience/`:
+
+| File | Key Types | Purpose |
+|------|-----------|---------|
+| `ExperienceToolExecutor.kt` | `ExperienceToolExecutor` | MCP tool executor — dispatches `save`, `query`, `list`, `deep_learn` |
+| `ExperienceModels.kt` | `ExecutionTrace`, `ExperienceQueryResult`, `ExperienceSaveResult`, `DeepLearnResult`, `ExperienceListResult`, `ActionStep`, `SelectorEntry`, `TaskType`, `SuccessCriteria` | All data classes for tool I/O |
+| `ExperienceStats.kt` | `ExperienceStats`, `SelectorStats` | Aggregated statistics with confidence and tier computation |
+| `KnowledgeStore.kt` | `KnowledgeStore` | File-backed YAML store with atomic writes, query resolution, and promotion |
+| `KnowledgeFacts.kt` | `KnowledgeFacts`, `SiteFacts`, `PageFacts`, `VerifiedSelector`, `BlockerInfo`, `PromotionEvent`, `PatternPromotion` | Verified immutable knowledge layer |
+| `IntentModels.kt` | `Intent`, `FailureCategory`, `VerificationStatus`, `PromotionLevel` | Classification enums with keyword-based matching |
+| `TraceRecord.kt` | `TraceRecord`, `PageState` | Raw immutable execution record |
+| `UrlNormalizer.kt` | `UrlNormalizer` | URL normalization, pattern matching, specificity scoring |
+
+### Spring Configuration
+
+| File | Purpose |
+|------|---------|
+| `browser4-rest/.../config/ExperienceToolMountConfiguration.kt` | Registers `KnowledgeStore` and `ExperienceToolExecutor` as Spring beans, implements `ToolMount` |
+
+## Core Loop
+
+```
+Before task ──▶ experience_query ──▶ Get stored selectors, steps, blockers
+    │                                      │
+    ▼                                      ▼
+Execute task                        P1: Replay directly
+    │                               P2: Verify then replay
+    ▼                               P3: Hint mode (verify all)
+After task  ──▶ experience_save ──▶ P4: Advisory only
+    │                               P5: Cold start (no knowledge)
+    ▼
+(periodic) ──▶ experience_deep_learn ──▶ Build facts, promote status
+```
+
+## Promotion Hierarchy (Cross-Site)
+
+Patterns ascend a 4-level hierarchy as they're confirmed across more sites:
+
+| Level | Min Sites | Example |
+|-------|-----------|---------|
+| **SITE** | 1 | Selectors for `amazon.com/dp/*` |
+| **FAMILY** | 2 | Shared across amazon-like sites (amazon, ebay, walmart) |
+| **CATEGORY** | 3 | Shared across all marketplaces (amazon, ebay, etsy) |
+| **UNIVERSAL** | 4 | Shared across all ecommerce sites |
+
+A `PatternPromotion` can advance when `confirmed_sites ≥ minSitesRequired` and the confirmation ratio ≥ 75%.
+
+## Related Documents
+
 - [Skill: browser4-experience](../skills/browser4-experience/SKILL.md) — Agent-facing usage guide
-- [AGENTS.md](../AGENTS.md) — Code conventions and development patterns
+- [CLAUDE.md](../CLAUDE.md) — Project context and conventions

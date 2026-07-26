@@ -8701,6 +8701,138 @@ async fn handle_crawl_list(
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// Experience handlers
+// ---------------------------------------------------------------------------
+
+async fn handle_experience_save(
+    client: &Client,
+    base_url: &str,
+    tool_params: &Value,
+) -> Result<(), String> {
+    let result = call_tool(client, base_url, "experience_save", tool_params.clone()).await?;
+    let parsed: Value = serde_json::from_str(&result).unwrap_or_default();
+    cli_println!("{}", serde_json::to_string_pretty(&parsed).unwrap_or(result));
+    json_field("result", parsed);
+    Ok(())
+}
+
+async fn handle_experience_query(
+    client: &Client,
+    base_url: &str,
+    tool_params: &Value,
+) -> Result<(), String> {
+    let result = call_tool(client, base_url, "experience_query", tool_params.clone()).await?;
+    let parsed: Value = serde_json::from_str(&result).unwrap_or_default();
+    if let (Some(tier), Some(confidence)) = (
+        parsed.get("tier").and_then(|v| v.as_str()),
+        parsed.get("confidence").and_then(|v| v.as_f64()),
+    ) {
+        cli_println!("Tier: {}  |  Confidence: {:.3}", tier, confidence);
+    }
+    if let Some(summary) = parsed.get("summary").and_then(|v| v.as_str()) {
+        cli_println!("{}", summary);
+    }
+    if let Some(selectors) = parsed.get("primary_selectors").and_then(|v| v.as_object()) {
+        if !selectors.is_empty() {
+            cli_println!("\nPrimary selectors:");
+            for (k, v) in selectors {
+                cli_println!("  {}: {}", k, v.as_str().unwrap_or("-"));
+            }
+        }
+    }
+    if let Some(warnings) = parsed.get("warnings").and_then(|v| v.as_array()) {
+        if !warnings.is_empty() {
+            cli_println!("\nWarnings:");
+            for w in warnings {
+                cli_println!("  ! {}", w.as_str().unwrap_or("-"));
+            }
+        }
+    }
+    json_field("result", parsed);
+    Ok(())
+}
+
+async fn handle_experience_list(
+    client: &Client,
+    base_url: &str,
+    tool_params: &Value,
+) -> Result<(), String> {
+    let result = call_tool(client, base_url, "experience_list", tool_params.clone()).await?;
+    let parsed: Value = serde_json::from_str(&result).unwrap_or_default();
+    let total = parsed.get("total").and_then(|v| v.as_u64()).unwrap_or(0);
+    let page = parsed.get("page").and_then(|v| v.as_u64()).unwrap_or(1);
+    let total_pages = parsed.get("total_pages").and_then(|v| v.as_u64()).unwrap_or(1);
+    cli_println!("Experience entries: {} total (page {}/{})", total, page, total_pages);
+    if let Some(entries) = parsed.get("entries").and_then(|v| v.as_array()) {
+        if entries.is_empty() {
+            cli_println!("No knowledge entries found. Run an agent task to build experience, then use 'experience-deep-learn' to promote facts.");
+        } else {
+            cli_println!("{:<25}  {:<20}  {:<6}  {:<10}  {:<10}  {}", "DOMAIN", "INTENT", "TIER", "CONF", "STATUS", "SITE TYPES");
+            cli_println!("{}", "-".repeat(110));
+            for entry in entries {
+                let domain = entry.get("domain").and_then(|v| v.as_str()).unwrap_or("-");
+                let intent = entry.get("intent").and_then(|v| v.as_str()).unwrap_or("-");
+                let tier = entry.get("retrieval_tier").and_then(|v| v.as_str()).unwrap_or("-");
+                let confidence = entry.get("confidence").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                let status = entry.get("status").and_then(|v| v.as_str()).unwrap_or("-");
+                let site_types = entry.get("site_types").and_then(|v| v.as_array())
+                    .map(|a| a.iter().filter_map(|s| s.as_str()).collect::<Vec<_>>().join(", "))
+                    .unwrap_or_default();
+                cli_println!(
+                    "{:<25}  {:<20}  {:<6}  {:<10.3}  {:<10}  {}",
+                    truncate_str(domain, 25),
+                    truncate_str(intent, 20),
+                    tier,
+                    confidence,
+                    status,
+                    site_types,
+                );
+            }
+        }
+    }
+    json_field("result", parsed);
+    Ok(())
+}
+
+async fn handle_experience_deep_learn(
+    client: &Client,
+    base_url: &str,
+    tool_params: &Value,
+) -> Result<(), String> {
+    cli_println!("Running deep learning analysis (this may take a few seconds)...");
+    let result = call_tool(client, base_url, "experience_deep_learn", tool_params.clone()).await?;
+    let parsed: Value = serde_json::from_str(&result).unwrap_or_default();
+    if let Some(completed) = parsed.get("completed").and_then(|v| v.as_bool()) {
+        if !completed {
+            cli_println!("Deep learning skipped — confidence already high. Use --force to override.");
+        } else {
+            let promoted = parsed.get("promoted").and_then(|v| v.as_bool()).unwrap_or(false);
+            let status_after = parsed.get("status_after").and_then(|v| v.as_str()).unwrap_or("-");
+            let confidence = parsed.get("new_confidence").and_then(|v| v.as_f64()).unwrap_or(0.0);
+            let selectors = parsed.get("selectors_found").and_then(|v| v.as_i64()).unwrap_or(0);
+            cli_println!("Deep learning complete.");
+            cli_println!("  Status: {} (promoted: {})", status_after, promoted);
+            cli_println!("  Confidence: {:.3}", confidence);
+            cli_println!("  Selectors found: {}", selectors);
+        }
+    }
+    if let Some(msg) = parsed.get("message").and_then(|v| v.as_str()) {
+        cli_println!("{}", msg);
+    }
+    json_field("result", parsed);
+    Ok(())
+}
+
+/// Truncate a string to at most `max_len` characters, appending "…" if truncated.
+fn truncate_str(s: &str, max_len: usize) -> String {
+    if s.chars().count() <= max_len {
+        s.to_string()
+    } else {
+        format!("{}…", &s.chars().take(max_len.saturating_sub(1)).collect::<String>())
+    }
+}
+
 async fn handle_crawl_status(
     client: &Client,
     base_url: &str,
@@ -13042,9 +13174,21 @@ fn rewrite_prefixed_command(args: &[String]) -> Option<Vec<String>> {
         }
         return None;
     }
+    // `experience deep learn` is a two-level subcommand — rewrite to the flat
+    // `experience-deep-learn` form so the dispatch matches it correctly.
+    if prefix == "experience" && sub == "deep" {
+        if let Some(inner) = args.get(2) {
+            if inner == "learn" {
+                let mut rewritten = vec!["experience-deep-learn".to_string()];
+                rewritten.extend(args[3..].iter().cloned());
+                return Some(rewritten);
+            }
+        }
+    }
     let rewritten_command = match prefix {
         "swarm" => format!("swarm-{}", sub),
         "agent" => format!("agent-{}", sub),
+        "experience" => format!("experience-{}", sub),
         "htmlsnapshot" => format!("htmlsnapshot-{}", sub),
         "snapshot" => format!("snapshot-{}", sub),
         "skills" => format!("skills-{}", sub),
@@ -13089,6 +13233,10 @@ fn preferred_spaced_command_form(command: &str) -> Option<&'static str> {
         "htmlsnapshot-inspect" => Some("htmlsnapshot inspect"),
         "doctor-log" => Some("doctor log"),
         "doctor-metrics" => Some("doctor metrics"),
+        "experience-save" => Some("experience save"),
+        "experience-query" => Some("experience query"),
+        "experience-list" => Some("experience list"),
+        "experience-deep-learn" => Some("experience deep learn"),
         "plugin-list" => Some("plugin list"),
         "plugin-info" => Some("plugin info"),
         "plugin-install" => Some("plugin install"),
@@ -15028,6 +15176,18 @@ async fn run(
         "crawl-list" => {
             handle_crawl_list(&client, &base_url, &tool_params).await?;
         }
+        "experience-save" => {
+            handle_experience_save(&client, &base_url, &tool_params).await?;
+        }
+        "experience-query" => {
+            handle_experience_query(&client, &base_url, &tool_params).await?;
+        }
+        "experience-list" => {
+            handle_experience_list(&client, &base_url, &tool_params).await?;
+        }
+        "experience-deep-learn" => {
+            handle_experience_deep_learn(&client, &base_url, &tool_params).await?;
+        }
         "loop" => {
             handle_loop(&client, &base_url, global).await?;
         }
@@ -16565,6 +16725,55 @@ mod tests {
         assert_eq!(compiled.steps[0]["tool"], json!("browser_press_key"));
         assert_eq!(compiled.steps[0]["arguments"]["ref"], json!("#type-target"));
         assert_eq!(compiled.steps[0]["arguments"]["key"], json!("!"));
+    }
+
+    #[test]
+    fn rewrite_prefixed_command_handles_experience_save() {
+        let rewritten = rewrite_prefixed_command(&[
+            "experience".to_string(),
+            "save".to_string(),
+            "https://example.com".to_string(),
+            r#"{"steps":[]}"#.to_string(),
+        ])
+        .unwrap();
+        assert_eq!(rewritten[0], "experience-save");
+        assert_eq!(rewritten[1], "https://example.com");
+        assert_eq!(rewritten[2], r#"{"steps":[]}"#);
+    }
+
+    #[test]
+    fn rewrite_prefixed_command_handles_experience_deep_learn() {
+        let rewritten = rewrite_prefixed_command(&[
+            "experience".to_string(),
+            "deep".to_string(),
+            "learn".to_string(),
+            "https://example.com".to_string(),
+            "extract product".to_string(),
+        ])
+        .unwrap();
+        assert_eq!(rewritten[0], "experience-deep-learn");
+        assert_eq!(rewritten[1], "https://example.com");
+        assert_eq!(rewritten[2], "extract product");
+    }
+
+    #[test]
+    fn preferred_spaced_command_form_includes_experience_commands() {
+        assert_eq!(
+            preferred_spaced_command_form("experience-save"),
+            Some("experience save")
+        );
+        assert_eq!(
+            preferred_spaced_command_form("experience-query"),
+            Some("experience query")
+        );
+        assert_eq!(
+            preferred_spaced_command_form("experience-list"),
+            Some("experience list")
+        );
+        assert_eq!(
+            preferred_spaced_command_form("experience-deep-learn"),
+            Some("experience deep learn")
+        );
     }
 
     #[test]
