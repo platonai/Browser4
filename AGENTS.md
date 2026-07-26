@@ -214,6 +214,20 @@ File-queue system for task-driven AI workflows (`coworker/`). Task files (Markdo
 | Port 8182 in use | Override `server.port` in root `application.properties` |
 | BrowserProtocol retry log storms | Use existing retry utilities, lower log level |
 
+## Documentation Update Rule
+
+When a user says **"update documents"** (or "update docs", "refresh documentation"), update ALL of the following that reference the changed feature:
+
+1. **`README.md`** and **`README.zh.md`** — root-level project readmes
+2. **`skills/browser4-cli/SKILL.md`** — primary CLI skill document
+3. **`skills/browser4-cli/references/*.md`** — reference docs (htmlsnapshot.md, x-sql.md, etc.)
+4. **`cli/browser4-cli/README.md`** — CLI-specific README
+5. **`cli/browser4-cli/src/help.rs`** — CLI help text generation
+6. **`cli/browser4-cli/src/tips.rs`** — CLI tips/hints shown to users
+7. **Any other `.md` files** in `docs/`, `skills/`, or project root that reference the changed command or feature
+
+When adding a new CLI option or changing command behavior, always check these locations.
+
 ## Documentation References
 
 - [Testing Taxonomy](docs/TESTING.md)

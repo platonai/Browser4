@@ -1,0 +1,8 @@
+intent: buy
+domain: amazon.com
+url_pattern: ''
+total_attempts: 6
+successes: 6
+failures: 0
+avg_steps: 0.0
+last_updated: '2026-07-26T15:15:45.912662500Z'

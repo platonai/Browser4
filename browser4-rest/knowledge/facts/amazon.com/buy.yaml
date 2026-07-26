@@ -1,0 +1,24 @@
+intent: buy
+domain: amazon.com
+url_pattern: /dp/test-product
+status: verified
+site_facts:
+  domain: amazon.com
+page_facts:
+  page_type: extract_product_detail
+promotion_history:
+- to: hypothesis
+  date: '2026-07-26T15:15:45.971036300Z'
+  reason: Initial deep learning pass
+- from: hypothesis
+  to: candidate
+  date: '2026-07-26T15:15:45.971036300Z'
+  reason: 'Auto-promoted: confidence=0.825, visits=2'
+  verified_visits: 2
+- from: candidate
+  to: verified
+  date: '2026-07-26T15:15:45.971036300Z'
+  reason: 'Auto-promoted: confidence=0.900, visits=5'
+  verified_visits: 5
+created_at: '2026-07-26T15:15:45.971036300Z'
+updated_at: '2026-07-26T15:15:45.984258800Z'

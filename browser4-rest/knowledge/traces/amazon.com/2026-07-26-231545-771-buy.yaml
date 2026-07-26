@@ -1,0 +1,10 @@
+trace_id: 58f7b2e6-321b-458d-9eb7-232a6a4fb440
+intent: buy
+task_type: extract_product_detail
+domain: amazon.com
+url: https://amazon.com/dp/test-product
+url_pattern: /dp/test-product
+outcome: success
+final_state: {}
+timestamp: '2026-07-26T15:15:45.771009600Z'
+redacted: true
