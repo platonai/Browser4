@@ -2151,7 +2151,9 @@ async fn handle_tab_list(
         );
         for tab in &tabs {
             let guid_display = format_guid_display(tab.guid.as_deref());
-            let title = if tab.title.len() > 60 {
+            let title = if tab.title.is_empty() {
+                "(no title)".to_string()
+            } else if tab.title.len() > 60 {
                 format!("{}…", &tab.title[..59])
             } else {
                 tab.title.clone()
@@ -2191,13 +2193,22 @@ async fn handle_tab_new(
     })
     .await?;
 
-    cli_println!("{}", result);
-
     // Parse the new tab's GUID from the "new" action response so we can
     // reliably find it in the tab list regardless of internal ordering.
-    let new_guid: Option<String> = serde_json::from_str::<Value>(&result)
+    let new_guid_raw: Option<String> = serde_json::from_str::<Value>(&result)
         .ok()
         .and_then(|v| v.get("guid").and_then(|g| g.as_str().map(String::from)));
+
+    let new_guid: Option<String> = new_guid_raw.clone();
+
+    // Print a friendly message with the consistently-formatted GUID
+    // (extension sessions get a `chrome:` prefix just like tab-list output).
+    let guid_display = format_guid_display(new_guid_raw.as_deref());
+    let url = tool_params
+        .get("url")
+        .and_then(|v| v.as_str())
+        .unwrap_or("about:blank");
+    cli_println!("Created tab with GUID: {} ({})", guid_display, url);
 
     // Auto-switch to the newly created tab by listing tabs, locating the
     // entry whose guid matches, and issuing a select action.
@@ -2407,7 +2418,7 @@ async fn handle_tab_close(
     });
 
     // Perform the close.
-    let _result = with_session(client, base_url, session_name, false, |session_id| {
+    let close_result = with_session(client, base_url, session_name, false, |session_id| {
         let client = client.clone();
         let base_url = base_url.to_string();
         let mut params = tool_params.clone();
@@ -2416,7 +2427,62 @@ async fn handle_tab_close(
             call_tool(&client, &base_url, "browser_tabs", params).await
         }
     })
-    .await?;
+    .await;
+
+    // When the backend reports an error but the tab was actually closed
+    // (common with extension sessions where chrome.tabs.remove may fire an
+    // error callback even after successful removal), verify by listing tabs
+    // and treat as a success if the target tab is gone.
+    let close_err: Option<String> = match close_result {
+        Ok(_) => None,
+        Err(ref e) => Some(e.clone()),
+    };
+
+    if let Some(ref err_msg) = close_err {
+        // Check if the tab was actually removed despite the error.
+        let tabs_after = with_session(client, base_url, session_name, false, |session_id| {
+            let client = client.clone();
+            let base_url = base_url.to_string();
+            async move {
+                call_tool(
+                    &client,
+                    &base_url,
+                    "browser_tabs",
+                    json!({ "sessionId": session_id, "action": "list" }),
+                )
+                .await
+            }
+        })
+        .await
+        .ok()
+        .and_then(|r| {
+            let tabs = parse_tab_list(&r);
+            if tabs.is_empty() { None } else { Some(tabs) }
+        });
+
+        let tab_still_exists = tabs_after.as_ref().and_then(|tabs| {
+            tabs.iter().find(|t| {
+                if let Some(idx) = index_opt {
+                    t.index == idx
+                } else if let Some(ref g) = guid_opt {
+                    t.guid.as_deref() == Some(g.as_str())
+                } else {
+                    t.index == 0
+                }
+            })
+        }).is_some();
+
+        if !tab_still_exists {
+            // Tab was actually closed despite the error — treat as success
+            // with a warning so the user knows something unusual happened.
+            if !json_active() {
+                eprintln!("Note: Tab was closed but the backend reported: {}", err_msg);
+            }
+        } else {
+            // Tab still exists — the error is real.
+            return Err(err_msg.clone());
+        }
+    }
 
     // Emit friendly close message.
     if let Some(t) = closed_tab_info {
@@ -2446,11 +2512,11 @@ async fn handle_tab_close(
     }
 
     // When closing the last tab, Chrome automatically creates a replacement
-    // about:blank tab — warn the user so they understand the tab count didn't
-    // go to zero.
+    // tab (which may or may not be blank depending on Chrome's behavior) —
+    // warn the user so they understand the tab count didn't go to zero.
     if was_last_tab && !json_active() {
         eprintln!(
-            "Note: Chrome requires at least one open tab — a new blank tab was created."
+            "Note: Chrome requires at least one open tab — a replacement tab was created."
         );
     }
 
@@ -14155,7 +14221,9 @@ async fn main() {
     let (command, effective_global, from_spaced_prefix) = normalize_command_invocation(&global);
 
     if let Err(err) = run(&command, &effective_global, from_spaced_prefix).await {
-        if json_mode {
+        // json_mode covers global --json; json_active() covers subcommand-level
+        // --json (e.g. "tab-list --json") which enables JSON inside run().
+        if json_mode || json_active() {
             // Use println! directly -- cli_println! checks json_active()
             // which is true here (json_init was called inside run()),
             // and we MUST emit the JSON error envelope regardless.
@@ -14249,7 +14317,10 @@ async fn run(
     from_spaced_prefix: bool,
 ) -> Result<(), CliError> {
     // Initialise JSON output accumulator when --json is active.
-    if global.json {
+    // Use a mutable local so subcommand-level --json (e.g. "tab-list --json")
+    // can also enable it after the command-specific args are parsed.
+    let mut json_enabled = global.json;
+    if json_enabled {
         json_init();
     }
     // Initialise quiet mode when -q / --quiet is active.
@@ -14433,6 +14504,15 @@ async fn run(
 
     // Validate required positional arguments (fast-fail for malformed commands).
     validate_required_args(cmd_def, &parsed)?;
+
+    // Support --json after the command name (e.g. "tab-list --json").  When
+    // --json appears before the command it is captured by parse_global_flags;
+    // this handles the post-command position so users don't have to remember
+    // flag ordering.
+    if !json_enabled && parsed.get("json").and_then(|v| v.as_bool()).unwrap_or(false) {
+        json_enabled = true;
+        json_init();
+    }
 
     // Resolve tool name and parameters
     let tool_name = (cmd_def.tool_name_fn)(&parsed);
@@ -15454,7 +15534,7 @@ async fn run(
     // Use println! directly — cli_println! checks json_active() which is
     // true for the entire command lifetime, and we MUST emit the JSON
     // envelope regardless.  (Same pattern as the error envelope below.)
-    if global.json {
+    if json_enabled {
         if let Some(fields) = json_finish() {
             println!(
                 "{}",

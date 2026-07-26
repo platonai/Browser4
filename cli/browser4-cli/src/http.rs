@@ -392,6 +392,14 @@ async fn call_tool_with_timeout(
     let text = extract_mcp_text_payload(&data)
         .ok_or_else(|| "MCP response did not contain a readable payload.".to_string())?;
 
+    // Defensive check: some backend errors may arrive as text content without
+    // `isError: true` (e.g. error messages from legacy tool executors).  Treat
+    // a leading "ERROR:" prefix as a hard error so the CLI exits non-zero and
+    // scripts can detect failure reliably.
+    if text.starts_with("ERROR:") {
+        return Err(text.trim_start_matches("ERROR: ").to_string());
+    }
+
     let pagination = data
         .get("_pagination")
         .and_then(ServerPaginationMeta::from_json);

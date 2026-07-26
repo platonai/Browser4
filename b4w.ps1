@@ -111,6 +111,17 @@ Examples:
   b4w coworker list                     list Coworker tasks
   b4w test --e2e                        run E2E tests
   b4w build                             build browser4-cli
+
+Windows wrappers:
+  b4w.bat         Command Prompt wrapper — prevents PowerShell from
+                  intercepting short flags (-i, -v, etc.) by using
+                  the --% stop-parsing token.
+  b4w.sh          Git Bash / Linux / macOS wrapper — quotes arguments
+                  to prevent PowerShell parameter binding issues.
+
+Tip: When running b4w.ps1 directly and short flags like -i or -v are
+intercepted by PowerShell, either use b4w.bat / b4w.sh, or pass flags
+after "--" (e.g. ./b4w.ps1 -- snapshot -i).
 '@
 
 # No arguments: show help

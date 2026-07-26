@@ -28,11 +28,11 @@ Every browser4-cli session follows this pattern:
 
 ```bash
 browser4-cli goto "https://example.com"
-browser4-cli snapshot -v 0          # read the page; note refs
-browser4-cli fill <ref> "<value>"   # interact
+browser4-cli snapshot -v 0 --stdout       # read the page; note refs
+browser4-cli fill <ref> "<value>"         # interact
 browser4-cli press Enter
 browser4-cli wait --load networkidle
-browser4-cli snapshot -v 0 --auto-diff  # verify what changed
+browser4-cli snapshot -v 0 --auto-diff --stdout  # verify what changed
 browser4-cli htmlsnapshot get text "<css-selector>" --all
 ```
 
@@ -107,6 +107,7 @@ Tab commands scope to a session — all operations affect the session targeted v
 - **Tab insert position:** New tabs are inserted by Chrome (not Browser4). The position depends on Chrome's native behavior — typically after the active tab. Use `tab-list` to verify.
 - **No auto-snapshot:** `tab-list` and `tab-close` do NOT trigger automatic snapshots. After `tab-select`, run `snapshot` explicitly to get fresh element refs for the new active tab.
 - **Re-snapshot after switches:** `tab-select` changes the active page context. Capture a fresh snapshot before interacting with page elements in the new tab.
+- **Extension sessions:** When closing tabs on extension-attached sessions, the backend may report an error even though the tab was successfully closed (Chrome's `chrome.tabs.remove` callback can fire an error after the tab is already gone). The CLI verifies that the tab was actually removed and treats the operation as successful in this case. Extension sessions may also show "Stale" in `list` output after all tabs are closed — the session can be reconnected with `attach --extension`.
 
 #### Examples
 
@@ -354,6 +355,8 @@ browser4-cli install
 irm https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.ps1 | iex
 browser4-cli install
 ```
+
+> **PowerShell wrapper tip:** When running `b4w.ps1` directly in PowerShell, short flags like `-i` and `-v` may be intercepted by PowerShell's parameter binder (matching `-InformationAction` and `-Verbose`). Use `b4w.bat` from Command Prompt or `b4w.sh` from Git Bash to avoid this. When using `b4w.ps1` directly, pass flags after `--` (e.g. `./b4w.ps1 -- snapshot -i`) or quote arguments individually. See [shell-quoting.md](references/shell-quoting.md) for details.
 
 **Linux / macOS (bash):**
 ```bash
