@@ -188,7 +188,7 @@ htmlsnapshot capture                        Capture a static HTML snapshot and s
 htmlsnapshot                                Short form of `htmlsnapshot capture`
 htmlsnapshot get <field> [selector] [name]  Extract text, html, or attr from the stored HTML snapshot
 htmlsnapshot query [url]                    Run X-SQL against the stored HTML snapshot (--sql <query|@file>)
-htmlsnapshot export                         Export snapshot HTML to a local file (--file <path>)
+htmlsnapshot export                         Export snapshot HTML to a local file (--file <path>, --clean)
 htmlsnapshot summary                        Generate a compressed Web Page Summary Index (WPSI)
 htmlsnapshot grep <pattern>                 Search snapshot HTML with regex
                                            -i, -v, -c, -l, -F, -w, -A, -B, -C, --selector
@@ -401,6 +401,7 @@ browser4-cli htmlsnapshot capture
 browser4-cli htmlsnapshot
 browser4-cli htmlsnapshot get text "#main-content"
 browser4-cli htmlsnapshot query --sql @query.sql
+browser4-cli htmlsnapshot export --file page.html --clean
 browser4-cli htmlsnapshot grep -i "error"
 
 # AI-powered extraction and summarization (requires LLM key — see LLM Configuration above)

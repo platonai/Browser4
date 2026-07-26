@@ -2919,12 +2919,19 @@ pub fn all_commands() -> Vec<CommandDef> {
                     is_bool: false,
                     short: None,
                 },
+                OptionDef {
+                    name: "clean",
+                    description: "Strip <script>, <style>, comments, and non-standard attributes (keeps 'vi', aria-*, data-*, role, and standard HTML5 attrs)",
+                    is_bool: true,
+                    short: None,
+                },
             ],
             e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "html_snapshot_export".to_string(),
             tool_params_fn: |args| {
                 let mut p = json!({});
                 if let Some(f) = get_opt_str(args, "file") { p["file"] = json!(f); }
+                if let Some(true) = get_bool(args, "clean") { p["clean"] = json!(true); }
                 p
             },
         },
@@ -4931,6 +4938,19 @@ mod tests {
         args.insert("file".to_string(), json!("snapshot.html"));
         let params = (cmd.tool_params_fn)(&args);
         assert_eq!(params["file"], "snapshot.html");
+        assert!(params.get("clean").is_none());
+    }
+
+    #[test]
+    fn test_html_snapshot_export_clean_params() {
+        let map = commands_map();
+        let cmd = map.get("htmlsnapshot-export").unwrap();
+        let mut args = HashMap::new();
+        args.insert("file".to_string(), json!("snapshot.html"));
+        args.insert("clean".to_string(), json!(true));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["file"], "snapshot.html");
+        assert_eq!(params["clean"], true);
     }
 
     #[test]

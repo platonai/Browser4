@@ -146,7 +146,7 @@ echo "Exported $succeeded pages ($failed failed)"
 | Command | Exports | Format | Requires cache? |
 |---------|---------|--------|-----------------|
 | `webdb-export` | Raw page HTML | `.htm` files | Yes (webdb) |
-| `htmlsnapshot export` | Structured DOM snapshot | JSON | No (works from current page) |
+| `htmlsnapshot export` | Formatted HTML DOM | HTML (use `--clean` for minimal LLM-ready output) | No (works from current page) |
 | `screenshot` | Visual page image | PNG | No (renders live) |
 | `pdf` | Print-formatted page | PDF | No (renders live) |
 | `crawl --sql --format csv -o out.csv` | Extracted data fields | CSV/JSON/table | Yes (uses webdb internally) |

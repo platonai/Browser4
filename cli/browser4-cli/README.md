@@ -151,7 +151,7 @@ The backend server starts automatically in dev mode. Build the CLI with `cargo b
 | `htmlsnapshot capture` | Capture a static HTML snapshot and return metadata |
 | `htmlsnapshot get <field> [selector] [name]` | Extract elements from the stored HTML snapshot (text, html, attr) |
 | `htmlsnapshot query [url]` | Run X-SQL against the stored HTML snapshot |
-| `htmlsnapshot export` | Export snapshot HTML to a local file |
+| `htmlsnapshot export` | Export snapshot HTML to a local file (--clean strips scripts/styles/non-standard attrs) |
 | `htmlsnapshot summary` | Generate a compressed Web Page Summary Index (WPSI) from the stored HTML snapshot |
 | `htmlsnapshot grep [OPTIONS] <pattern>` | Search snapshot HTML with regex patterns and grep-style output |
 | `generate-locator <ref>` | Generate a unique CSS selector path for an element |

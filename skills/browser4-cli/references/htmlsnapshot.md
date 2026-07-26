@@ -26,7 +26,7 @@ browser4-cli htmlsnapshot                                # capture fresh static 
 browser4-cli htmlsnapshot get <field> [selector] [name] [--page N] [--page-size N] [--all]  # extract text/html/attr via CSS; html paginated at 2K lines, text not paginated
 browser4-cli htmlsnapshot query [url] --sql <query>      # X-SQL query against DOM (url defaults to current page)
 browser4-cli htmlsnapshot summary                        # compressed page summary (WPSI)
-browser4-cli htmlsnapshot export [--file <path>]         # save snapshot HTML to file
+browser4-cli htmlsnapshot export [--file <path>] [--clean]  # save snapshot HTML to file
 browser4-cli htmlsnapshot get all <field> [selector] [name] [--offset N] [--limit N] [--page N] [--page-size N] [--all]  # extract ALL matches; html paginated at 2K lines, text not paginated
 browser4-cli htmlsnapshot grep [OPTIONS] <pattern> [--page N] [--page-size N] [--all]  # search snapshot HTML with regex; paginated by default (2K lines)
 browser4-cli htmlsnapshot inspect [selector] [--max N] [--depth D]  # analyze DOM structure, suggest CSS selectors
@@ -160,10 +160,10 @@ browser4-cli htmlsnapshot summary
 
 ## Export
 
-Save full snapshot HTML to a local file. The exported HTML is pretty-formatted for direct use with tools like `grep`.
+Save full snapshot HTML to a local file. The exported HTML is pretty-formatted for direct use with tools like `grep`. Use `--clean` to produce a minimal HTML file suitable for LLM consumption — strips `<script>`, `<style>`, `<noscript>`, comments, and non-standard attributes while preserving semantic structure.
 
 ```bash
-browser4-cli htmlsnapshot export [--file page-snapshot.html]
+browser4-cli htmlsnapshot export [--file page-snapshot.html] [--clean]
 ```
 
 ## Grep — Search snapshot HTML
