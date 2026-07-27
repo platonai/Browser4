@@ -230,17 +230,27 @@ Assert-ContainsString -Label 'Build routing: unknown flag errors' -Haystack $out
 # ═══════════════════════════════════════════════════════════════════
 Write-Host "━━━ Subcommand: b4w install ━━━" -ForegroundColor Cyan
 
-# b4w b4w install should create the `b4w` bash launcher script
+# b4w b4w install should create the `b4w` bash launcher script (non-Windows only).
+# On Windows, the bash launcher is skipped — users invoke b4w via b4w.ps1 or b4w.bat.
 $output = pwsh -NoProfile -Command "& '$b4wAbs' b4w install *>&1" *>&1 | Out-String
 Assert-ContainsString -Label 'b4w install: reports success' -Haystack $output -Needle 'b4w installed successfully'
-Assert-ContainsString -Label 'b4w install: mentions bash launcher' -Haystack $output -Needle 'bash launcher:'
 Assert-ContainsString -Label 'b4w install: mentions PATH' -Haystack $output -Needle 'PATH'
 
-# Verify the `b4w` bash script was actually created
-$b4wBashPath = Join-Path $ScriptDir '..\..\b4w'
-Assert-Returns -Label 'b4w install: bash launcher file exists' -Actual (Test-Path $b4wBashPath) -Expected $true
+$isWinTest = ($IsWindows -or $env:OS -eq 'Windows_NT')
+if ($isWinTest) {
+    # Windows: bash launcher must NOT be created.
+    Assert-NotContainsString -Label 'b4w install Win: does NOT create bash launcher' -Haystack $output -Needle 'bash launcher'
+} else {
+    # Non-Windows: bash launcher is created as before.
+    Assert-ContainsString -Label 'b4w install: mentions bash launcher' -Haystack $output -Needle 'bash launcher:'
+}
 
-# Verify the content of the created bash launcher
+# Verify the `b4w` bash script is only created on non-Windows
+$b4wBashPath = Join-Path $ScriptDir '..\..\b4w'
+$bashExpected = -not $isWinTest
+Assert-Returns -Label 'b4w install: bash launcher file exists (platform-aware)' -Actual (Test-Path $b4wBashPath) -Expected $bashExpected
+
+# Verify the content of the created bash launcher (non-Windows only)
 if (Test-Path $b4wBashPath) {
     $b4wContent = Get-Content $b4wBashPath -Raw
     Assert-ContainsString -Label 'b4w install: bash launcher has shebang' -Haystack $b4wContent -Needle '#!/bin/bash'
@@ -252,12 +262,14 @@ if (Test-Path $b4wBashPath) {
 # ═══════════════════════════════════════════════════════════════════
 Write-Host "━━━ Subcommand: b4w uninstall ━━━" -ForegroundColor Cyan
 
-# b4w b4w uninstall should remove the bash launcher (created by install above)
+# b4w b4w uninstall should remove the bash launcher (created by install above).
+# On Windows, the bash launcher was never created, so uninstall just skips it.
 $output = pwsh -NoProfile -Command "& '$b4wAbs' b4w uninstall *>&1" *>&1 | Out-String
 Assert-ContainsString -Label 'b4w uninstall: reports success' -Haystack $output -Needle 'b4w uninstalled successfully'
 Assert-ContainsString -Label 'b4w uninstall: removes from PATH' -Haystack $output -Needle 'Removed from user PATH'
 
-# Verify the `b4w` bash script was deleted
+# Verify the `b4w` bash script is gone (or was never there on Windows).
+# On both platforms the file should not exist after uninstall.
 $b4wBashPath = Join-Path $ScriptDir '..\..\b4w'
 Assert-Returns -Label 'b4w uninstall: bash launcher file removed' -Actual (Test-Path $b4wBashPath) -Expected $false
 
