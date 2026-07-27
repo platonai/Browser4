@@ -155,3 +155,4 @@ bin/maintenance/state/*.lock
 /.claude/
 .build-state
 /.build/
+/b4w
