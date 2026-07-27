@@ -4,6 +4,7 @@ import ai.platon.browser4.chrome.dom.model.AriaSnapshotOptions
 import ai.platon.browser4.chrome.network.*
 import ai.platon.browser4.api.snapshot.ViewportSpec
 import ai.platon.browser4.chrome.protocol.ClickableDOM
+import ai.platon.browser4.chrome.protocol.DialogHandler
 import ai.platon.browser4.chrome.protocol.EmulationHandler
 import ai.platon.browser4.chrome.protocol.PageHandler
 import ai.platon.browser4.chrome.protocol.ScreenshotHandler
@@ -132,6 +133,25 @@ open class PulsarWebDriver constructor(
     private val messageWriter = MultiSinkMessageWriter()
 
     private val driverHelper get() = WebDriverHelper(this, rpc, page, browserProtocol)
+
+    /**
+     * Handler for native JavaScript dialogs (alert, confirm, prompt).
+     *
+     * Subscribes to CDP [Page.javascriptDialogOpening] events so click/dblclick
+     * handlers can detect when a dialog is blocking the page and act before
+     * the post-click health check (which requires page responsiveness) hangs.
+     *
+     * Created lazily so the CDP subscription is established only when the
+     * page is fully initialised (inside [enableAPIAgents0]), not during
+     * constructor invocation.
+     */
+    val dialogHandler: DialogHandler by lazy {
+        DialogHandler(browserProtocol).also { handler ->
+            browserProtocol.remoteDevToolsOrNull?.let { devTools ->
+                handler.subscribe(devTools)
+            }
+        }
+    }
 
     private val closed = AtomicBoolean()
 
@@ -716,8 +736,31 @@ open class PulsarWebDriver constructor(
         }
     }
 
+    /**
+     * Whether native JavaScript dialogs (alert, confirm, prompt) should be
+     * auto-accepted when detected after a click or dblclick operation.
+     *
+     * When enabled, [dialogHandler.drainAutoDismiss] is called before each
+     * click to clear any stale dialogs, and any dialog that opens during the
+     * click is accepted immediately via CDP [Page.handleJavaScriptDialog].
+     *
+     * Useful for batch/crawl/automation workloads where manual dialog
+     * handling is not feasible.
+     */
+    var autoDismissDialogs: Boolean
+        get() = dialogHandler.isAutoDismissEnabled
+        set(value) {
+            if (value) dialogHandler.enableAutoDismiss() else dialogHandler.disableAutoDismiss()
+        }
+
     @Throws(WebDriverException::class)
     override suspend fun click(selector: String, count: Int) {
+        // Drain any stale dialog before clicking — a leftover dialog from a
+        // previous operation would block CDP health checks and deadlock the
+        // current click.  DialogHandler handles the deferral/no-op when the
+        // queue is empty.
+        dialogHandler.dismissAllPending()
+
         rpc.invokeOnElement(selector, "click", scrollIntoView = true) { node ->
             waitForScrollSettled(selector)
             val isWindows = org.apache.commons.lang3.SystemUtils.IS_OS_WINDOWS
@@ -736,10 +779,19 @@ open class PulsarWebDriver constructor(
                 emulator.click(node, count, position = "center", modifier = null, delayMillis = delayMillis)
             }
         }
+
+        // If the click triggered a dialog and auto-dismiss is enabled, accept
+        // it now.  This prevents the post-click health check inside
+        // invokeOnElement → invokeWithRetry from hanging because the page's
+        // main thread is blocked by the dialog.
+        dialogHandler.drainAutoDismiss()
     }
 
     @Throws(WebDriverException::class)
     override suspend fun click(selector: String, modifier: String) {
+        // Drain stale dialogs before clicking (see single-click note above).
+        dialogHandler.dismissAllPending()
+
         rpc.invokeOnElement(selector, "click", scrollIntoView = true) { node ->
             val delayMillis = randomDelayMillis("click")
             waitForScrollSettled(selector)
@@ -749,6 +801,8 @@ open class PulsarWebDriver constructor(
             // or dispatchEvent, and adding a DOM fallback on top of CDP would
             // double-fire on Windows where both paths work.
         }
+
+        dialogHandler.drainAutoDismiss()
     }
 
     @Throws(WebDriverException::class)
@@ -797,6 +851,9 @@ open class PulsarWebDriver constructor(
      */
     @Throws(WebDriverException::class)
     override suspend fun dblclick(selector: String, modifier: String) {
+        // Drain stale dialogs before double-clicking (same rationale as click).
+        dialogHandler.dismissAllPending()
+
         rpc.invokeOnElement(selector, "dblclick", scrollIntoView = true) { node ->
             val isWindows = org.apache.commons.lang3.SystemUtils.IS_OS_WINDOWS
             val hasModifier = modifier.isNotBlank()
@@ -819,6 +876,8 @@ open class PulsarWebDriver constructor(
             }
             gap("dblclick")
         }
+
+        dialogHandler.drainAutoDismiss()
     }
 
     /**
@@ -941,18 +1000,28 @@ open class PulsarWebDriver constructor(
         }
     }
 
+    /**
+     * Accept (OK) the current JavaScript dialog (alert, confirm, prompt).
+     *
+     * Uses a direct CDP [Page.handleJavaScriptDialog] call — bypassing
+     * [rpc.invokeOnPage] — because native dialogs block the page's main
+     * thread, making any health check that requires page responsiveness
+     * (e.g. [Runtime.evaluate]) hang or time out.  The CDP dialog command
+     * is browser-level and completes even while the page is blocked.
+     */
     @Throws(WebDriverException::class)
     override suspend fun dialogAccept(promptText: String?) {
-        rpc.invokeOnPage("dialogAccept") {
-            browserProtocol.handleJavaScriptDialog(accept = true, promptText = promptText)
-        }
+        browserProtocol.handleJavaScriptDialog(accept = true, promptText = promptText)
     }
 
+    /**
+     * Dismiss (Cancel) the current JavaScript dialog.
+     *
+     * Same direct-CDP rationale as [dialogAccept].
+     */
     @Throws(WebDriverException::class)
     override suspend fun dialogDismiss() {
-        rpc.invokeOnPage("dialogDismiss") {
-            browserProtocol.handleJavaScriptDialog(accept = false)
-        }
+        browserProtocol.handleJavaScriptDialog(accept = false)
     }
 
     @Throws(WebDriverException::class)
