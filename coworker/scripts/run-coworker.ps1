@@ -632,12 +632,120 @@ Agent Log: $agentLogPath
                     # Check whether there is anything staged to commit
                     & git diff --cached --quiet 2>&1 | Out-Null
                     if ($LASTEXITCODE -ne 0) {
-                        # Build a multi-line commit message: subject + file list from --stat
+                        # ── Generate commit message via AI agent ──────────────────
+                        # Same prompt pattern as `coworker commit` — the agent
+                        # analyzes the staged diff and produces a conventional-commits
+                        # message. Falls back to fix(coworker): with diff stat if the
+                        # agent times out or returns empty.
                         $stat = & git diff --cached --stat 2>&1
-                        $commitBody = "fix(done): $workingBaseName`n`n$stat"
+                        $diffBody = & git diff --cached 2>&1
+                        $maxDiffChars = 8000
+                        if ($diffBody.Length -gt $maxDiffChars) {
+                            $diffBody = $diffBody.Substring(0, $maxDiffChars) + "`n... (truncated)"
+                        }
+                        $branch = & git rev-parse --abbrev-ref HEAD 2>&1
+
+                        $commitPrompt = @"
+Generate a conventional commit message for the following staged changes.
+
+Branch: $branch
+
+The message must follow the Conventional Commits format:
+  <type>[optional scope]: <imperative description>
+
+Types: feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert
+Breaking changes: append "!" after the type (e.g. "feat!:").
+
+Rules:
+- First line: "<type>: <imperative description>" (max 72 chars)
+- ALWAYS include a body paragraph explaining what was changed and why
+- Scope must reflect the code area (e.g. cli, tab, browser, rest, core, build,
+  coworker), NOT task-state directory names like "done", "draft", "ready",
+  "working", "review", "approved", "pushed", or "issues"
+- Ignore coworker task files (.md under coworker/tasks/) when determining type
+  and scope — they are task-tracker artifacts, not source code. Base the message
+  on the actual source-code and documentation changes
+- Do NOT wrap the message in code fences or quotes
+- Output ONLY the commit message, no conversational framing
+
+Examples of GOOD messages:
+  feat(cli): add tab-new, tab-close, and tab-select commands
+  ^^ body explains new commands, help text, and integration
+
+  fix(browser): resolve cursor positioning race in fill()
+  ^^ body describes the bug and the fix
+
+  docs(cli): add help text and examples for tab commands
+  ^^ body lists which help sections were updated
+
+Examples of BAD messages (DO NOT produce these):
+  fix(done): tab-workflow-issues    ← "done" is not a code area, missing body
+  chore: update files               ← too vague, no body
+  fix: stuff                        ← too vague, no body
+
+Staged changes summary:
+$stat
+
+Staged diff:
+$diffBody
+"@
+
+                        Write-LogMessage "Generating commit message via AI agent..." INFO
+
+                        # Invoke agent with 120s timeout
+                        $Message = $null
+                        try {
+                            $msgStdOut = [System.IO.Path]::GetTempFileName()
+                            $msgStdErr = [System.IO.Path]::GetTempFileName()
+                            try {
+                                $msgProcess = Start-AgentProcess -Executable $agentExecutable `
+                                    -BaseArgs $agentBaseArgs `
+                                    -Prompt $commitPrompt `
+                                    -WorkingDirectory $agentWorkingDirectory `
+                                    -StdOutPath $msgStdOut `
+                                    -StdErrPath $msgStdErr `
+                                    -NoNewWindow `
+                                    -Backend $agentBackend
+
+                                $msgTimeout = 120
+                                $msgCompleted = $msgProcess.WaitForExit($msgTimeout * 1000)
+                                if (-not $msgCompleted) {
+                                    Stop-Process -Id $msgProcess.Id -Force -ErrorAction SilentlyContinue
+                                    Write-LogMessage "Commit message generation timed out after ${msgTimeout}s. Using fallback." WARN
+                                }
+                                else {
+                                    $Message = Get-Content -Path $msgStdOut -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
+                                    # Strip any conversational framing or code fences
+                                    $Message = $Message -replace '^```[a-z]*\s*\n', '' -replace '\n```\s*$', ''
+                                    $Message = $Message.Trim()
+                                    if (-not $Message) {
+                                        Write-LogMessage "Agent returned empty commit message. Using fallback." WARN
+                                    }
+                                }
+                            }
+                            finally {
+                                Remove-Item $msgStdOut -ErrorAction SilentlyContinue
+                                Remove-Item $msgStdErr -ErrorAction SilentlyContinue
+                            }
+                        }
+                        catch {
+                            Write-LogMessage "Agent invocation failed: $_. Using fallback." WARN
+                        }
+
+                        # Fallback if agent didn't produce a message
+                        if (-not $Message) {
+                            $Message = "fix(coworker): $workingBaseName`n`n$stat"
+                        }
+
+                        # Append co-author trailer (same as coworker commit)
+                        $Message = $Message.TrimEnd() + "`n`nCo-Authored-By: Builtin Coworker"
+
+                        Write-LogMessage "Commit message:`n$Message" INFO
+
+                        # Commit
                         $tmpCommitMsgFile = [System.IO.Path]::GetTempFileName()
                         try {
-                            Set-Content -Path $tmpCommitMsgFile -Value $commitBody -Encoding UTF8
+                            Set-Content -Path $tmpCommitMsgFile -Value $Message -Encoding UTF8
                             & git commit -F $tmpCommitMsgFile 2>&1 | Out-Null
                             if ($LASTEXITCODE -eq 0) {
                                 Write-LogMessage "Auto-committed changes for finished task: $workingBaseName" INFO
