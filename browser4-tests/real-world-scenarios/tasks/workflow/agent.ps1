@@ -62,7 +62,7 @@ $preflightOk = Test-WorkflowPreflight
 if (-not $preflightOk) {
     Write-Host 'WARNING: Pre-flight checks failed. Agent may encounter errors.' -ForegroundColor Yellow
 }
-Write-WorkflowBanner -WorkflowName 'Agent Lifecycle' -StepCount 7 -EstimatedDuration '3–8 minutes'
+Write-WorkflowBanner -WorkflowName 'Agent Lifecycle' -StepCount 8 -EstimatedDuration '3–8 minutes'
 
 # ===============================================================================
 # Task-specific prompt
@@ -76,7 +76,7 @@ Report progress at EVERY step so the user can follow along in real time.
 The test harness shows the last 10 lines of your output every 30–120 seconds.
 
 **BEFORE each step** — print exactly (with angle brackets and step numbers):
-  >>> STEP <N>/7: <brief description of what this step does>
+  >>> STEP <N>/8: <brief description of what this step does>
 
 **AFTER each step** — print exactly:
   <<< STEP <N>: PASS — <one-line summary of what was verified>
@@ -97,9 +97,25 @@ for each step individually.
 
 ## Command Sequence
 
+### Step 0 — Smoke Test (quick subsystem check)
+
+>>> STEP 0/8: Smoke test — agent list
+
+Before diving into the full lifecycle, verify the agent subsystem responds:
+
+    $cliInvocation agent list
+
+Verify:
+- The command exits with code 0.
+- Some output is produced (even if "No tracked async tasks").
+- NO crash, stack trace, or connection error.
+
+If this step fails, the agent subsystem is fundamentally broken — record a
+**Critical** issue and skip remaining steps (go to Deliverables).
+
 ### Step 1 — Initial `agent list`
 
->>> STEP 1/7: Initial agent list
+>>> STEP 1/8: Initial agent list
 
 Run:
 
@@ -113,7 +129,7 @@ Verify:
 
 ### Step 2 — Submit an agent task
 
->>> STEP 2/7: Submit agent task (100th prime)
+>>> STEP 2/8: Submit agent task (100th prime)
 
 Run:
 
@@ -127,7 +143,7 @@ Verify:
 
 ### Step 3 — `agent list` after submission
 
->>> STEP 3/7: agent list after submission
+>>> STEP 3/8: agent list after submission
 
 Run:
 
@@ -141,7 +157,7 @@ Verify:
 
 ### Step 4 — `agent status`
 
->>> STEP 4/7: agent status (JSON check)
+>>> STEP 4/8: agent status (JSON check)
 
 Run (replace `<task-id>` with the actual task ID from Step 2):
 
@@ -156,7 +172,7 @@ Verify:
 
 ### Step 5 — `agent list` after status
 
->>> STEP 5/7: agent list after status
+>>> STEP 5/8: agent list after status
 
 Run:
 
@@ -170,7 +186,7 @@ Verify:
 
 ### Step 6 — `agent result` (THE CRITICAL CHECK)
 
->>> STEP 6/7: agent result (verify "541" in output)
+>>> STEP 6/8: agent result (verify "541" in output)
 
 **Wait up to 120 seconds** for the task to complete. If the task is still
 running after `agent status` reports `"isDone": false`, poll every 3-5 seconds
@@ -194,7 +210,7 @@ Verify:
 
 ### Step 7 — Final `agent list`
 
->>> STEP 7/7: Final agent list (lifecycle complete)
+>>> STEP 7/8: Final agent list (lifecycle complete)
 
 Run:
 

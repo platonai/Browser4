@@ -68,7 +68,7 @@ $preflightOk = Test-WorkflowPreflight
 if (-not $preflightOk) {
     Write-Host 'WARNING: Pre-flight checks failed. Agent may encounter errors.' -ForegroundColor Yellow
 }
-Write-WorkflowBanner -WorkflowName 'Experience System (PEM v2) Lifecycle' -StepCount 36 -EstimatedDuration '15–45 minutes'
+Write-WorkflowBanner -WorkflowName 'Experience System (PEM v2) Lifecycle' -StepCount 37 -EstimatedDuration '15–45 minutes'
 
 # ===============================================================================
 # Task-specific prompt (built from single-quoted fragments to avoid PowerShell
@@ -216,6 +216,24 @@ Reliability** issue — the experience CLI subcommands are not registered.
 ---
 
 # Part A — Command Discovery & Help
+
+### Step 0 — Smoke Test (quick experience subsystem check)
+
+>>> STEP 0/37: Smoke test — experience list
+
+Before diving into the full lifecycle, verify the experience subsystem responds:
+
+    __CLI__ experience list
+
+Verify:
+- The command exits with code 0.
+- Output is valid JSON with a `"total"` field (0 entries is acceptable).
+- NO crash, stack trace, or connection error.
+
+If this step fails, the experience subsystem is fundamentally broken — record a
+**Critical** issue and skip remaining steps (go to Deliverables).
+
+---
 
 ## A.1 — List experience commands
 

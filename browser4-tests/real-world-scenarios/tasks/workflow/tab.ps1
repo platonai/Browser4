@@ -67,7 +67,7 @@ $preflightOk = Test-WorkflowPreflight
 if (-not $preflightOk) {
     Write-Host 'WARNING: Pre-flight checks failed. Agent may encounter errors.' -ForegroundColor Yellow
 }
-Write-WorkflowBanner -WorkflowName 'Tab Lifecycle (All Session Types)' -StepCount 30 -EstimatedDuration '5–15 minutes'
+Write-WorkflowBanner -WorkflowName 'Tab Lifecycle (All Session Types)' -StepCount 31 -EstimatedDuration '5–15 minutes'
 
 # ===============================================================================
 # Task-specific prompt (built from single-quoted fragments to avoid PowerShell
@@ -135,6 +135,27 @@ Before starting the sequence, ensure:
 ---
 
 # Part A — Regular Browser4 Session
+
+### Step 0 — Smoke Test (quick tab subsystem check)
+
+>>> STEP 0/31: Smoke test — open + tab-list
+
+Before diving into the full lifecycle, verify the tab subsystem responds:
+
+    __CLI__ kill-all
+    __CLI__ open
+    __CLI__ tab-list
+    __CLI__ kill-all
+
+Verify:
+- All commands exit with code 0.
+- `tab-list` produces a table (at least one tab with a non-empty GUID).
+- NO crash, stack trace, or connection error.
+
+If this step fails, tab management is fundamentally broken — record a
+**Critical** issue and skip remaining steps (go to Deliverables).
+
+---
 
 These steps exercise the full tab lifecycle through a standard `open` session
 (Browser4-launched Chrome).  This is the most common path and must be rock-solid.

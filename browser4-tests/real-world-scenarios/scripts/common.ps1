@@ -274,14 +274,20 @@ function Read-TaskFile {
 # Detect whether the already-loaded type has the GetTail method (added 2026-07-26).
 # On re-runs within the same pwsh session the type may be stale — force a
 # recompile if the old version is loaded.
-$needsCompile = (-not $script:_NativeCommandHandlerCompiled)
-if ($script:_NativeCommandHandlerCompiled) {
-    try {
-        $null = [NativeCommandOutputHandler].GetMethod('GetCheckpointStepCount')
-    } catch {
-        $needsCompile = $true
-    }
+# Check both the script-level sentinel AND the .NET runtime — the former
+# persists across re-dot-sources within one script file, the latter is needed
+# when run-all.ps1 dot-sources common.ps1 across multiple script files in the
+# same pwsh session (the type survives, the script variable doesn't).
+$needsCompile = $true
+try {
+    $null = [NativeCommandOutputHandler].GetMethod('GetCheckpointStepCount')
+    # Type exists and has the checkpoint interface — no recompile needed
+    $needsCompile = $false
+} catch {
+    # Type doesn't exist, is stale (pre-checkpoint version, detected by missing
+    # GetCheckpointStepCount), or this is the first dot-source in this session.
 }
+
 if ($needsCompile) {
     Add-Type -TypeDefinition @'
 using System;

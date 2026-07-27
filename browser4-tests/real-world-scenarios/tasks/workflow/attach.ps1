@@ -68,7 +68,7 @@ $preflightOk = Test-WorkflowPreflight
 if (-not $preflightOk) {
     Write-Host 'WARNING: Pre-flight checks failed. Agent may encounter errors.' -ForegroundColor Yellow
 }
-Write-WorkflowBanner -WorkflowName 'Attach + Multi-Tab Lifecycle' -StepCount 25 -EstimatedDuration '10–30 minutes'
+Write-WorkflowBanner -WorkflowName 'Attach + Multi-Tab Lifecycle' -StepCount 26 -EstimatedDuration '10–30 minutes'
 
 # ===============================================================================
 # Task-specific prompt (built from single-quoted fragments to avoid PowerShell
@@ -114,6 +114,23 @@ Before starting the sequence, ensure:
 2. Run `__CLI__ kill-all` to start from a clean slate.
 
 ## Command Sequence
+
+### Step 0 — Smoke Test (quick session check)
+
+>>> STEP 0/26: Smoke test — list
+
+Before diving into the full lifecycle, verify the session subsystem responds:
+
+    __CLI__ kill-all
+    __CLI__ list
+
+Verify:
+- Both commands exit with code 0.
+- `list` produces a table (even if empty — "No sessions found" is acceptable).
+- NO crash, stack trace, or connection error.
+
+If this step fails, session management is fundamentally broken — record a
+**Critical** issue and skip remaining steps (go to Deliverables).
 
 ### Step 1 -- Extension attach
 
