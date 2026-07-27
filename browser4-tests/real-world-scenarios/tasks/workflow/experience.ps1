@@ -63,6 +63,13 @@ if (-not (Test-Path -LiteralPath $ScriptsDir -PathType Container)) {
 # -- Dot-source the shared helpers -----------------------------------------------
 . "$ScriptsDir/common.ps1"
 
+# -- Pre-flight checks (catches CLI/backend issues in seconds) -------------------
+$preflightOk = Test-WorkflowPreflight
+if (-not $preflightOk) {
+    Write-Host 'WARNING: Pre-flight checks failed. Agent may encounter errors.' -ForegroundColor Yellow
+}
+Write-WorkflowBanner -WorkflowName 'Experience System (PEM v2) Lifecycle' -StepCount 36 -EstimatedDuration '15–45 minutes'
+
 # ===============================================================================
 # Task-specific prompt (built from single-quoted fragments to avoid PowerShell
 # escape-character collisions with Markdown backtick-quoted inline code).
@@ -73,6 +80,29 @@ $cliRef = $cliInvocation
 
 # Single-quoted fragments avoid backtick-interpretation issues.
 $taskBody = @'
+
+## Progress Reporting (MANDATORY)
+
+Report progress at EVERY step so the user can follow along in real time.
+The test harness shows the last 10 lines of your output every 30–120 seconds.
+
+**BEFORE each step** — print exactly (with angle brackets and section letters):
+  >>> STEP <section>.<N>: <brief description of what this step does>
+  Use section letters: A for Discovery, B for Save, C for Query, D for List,
+  E for DeepLearn, F for ErrorHandling, G for E2E Pipeline, H for Isolation.
+  Example: `>>> STEP B.1/5: Save a success trace`
+
+**AFTER each step** — print exactly:
+  <<< STEP <section>.<N>: PASS — <one-line summary of what was verified>
+  or
+  <<< STEP <section>.<N>: FAIL — <one-line summary of what went wrong>
+
+**CRITICAL FAILURE** — if a Critical-severity issue makes remaining steps
+pointless, print:
+  !!! ABORT at step <section>.<N>: <reason> !!!
+Then skip all remaining steps and go directly to Deliverables.
+
+---
 
 Execute the following experience system test sequence **in order**. After each
 command, inspect its output and verify correctness before proceeding to the next
@@ -189,6 +219,8 @@ Reliability** issue — the experience CLI subcommands are not registered.
 
 ## A.1 — List experience commands
 
+>>> STEP A.1/5: List experience commands (discovery)
+
 Run:
 ```
 __CLI__ help | grep experience
@@ -226,6 +258,8 @@ Verify each prints usage with its expected positional args and options.
 # Part B — experience save (Fast Learning)
 
 ## B.1 — Save a success trace
+
+>>> STEP B.1/5: Save a success trace (Fast Learning)
 
 First, use browser4-cli to open a session and navigate to a test page:
 
@@ -327,6 +361,8 @@ Verify:
 
 ## C.1 — Cold start query (no prior knowledge)
 
+>>> STEP C.1/4: Cold start query (intent-based resolution)
+
 Query a domain that has never been seen before:
 
 ```
@@ -385,6 +421,8 @@ Verify:
 
 ## D.1 — List all entries
 
+>>> STEP D.1/4: List all knowledge entries
+
 ```
 __CLI__ experience list
 ```
@@ -433,6 +471,8 @@ Verify:
 # Part E — experience deep-learn (Deep Learning)
 
 ## E.1 — Save enough traces to build confidence
+
+>>> STEP E.1/5: Build confidence with additional traces
 
 We need multiple successful traces for a domain+intent to make deep_learn
 meaningful.  Save 3 more traces for `httpbin.org` + `extract`:
@@ -509,6 +549,8 @@ Verify:
 
 ## F.1 — Missing required argument (url)
 
+>>> STEP F.1/6: Error handling — missing required argument
+
 ```
 __CLI__ experience save
 ```
@@ -584,6 +626,8 @@ knowledge → deep_learn → list verification.
 
 ## G.1 — E2E: form filling trace
 
+>>> STEP G.1/4: End-to-end pipeline — form filling + trace save
+
 Open a browser session and fill in a form on httpbin:
 
 ```
@@ -646,6 +690,8 @@ Verify:
 # Part H — Cross-Intent & Cross-Domain Isolation
 
 ## H.1 — Verify domain isolation
+
+>>> STEP H.1/3: Cross-domain/intent isolation verification
 
 Query for one domain's knowledge and confirm it does NOT leak
 knowledge from other domains:

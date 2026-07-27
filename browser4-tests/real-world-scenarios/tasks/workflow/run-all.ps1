@@ -31,33 +31,57 @@ if (-not $scripts) {
 }
 
 Write-Host "=== Workflow runner: $($scripts.Count) script(s) found ===" -ForegroundColor Cyan
+
+# ── Pre-run summary ──────────────────────────────────────────────────────
+$scriptDescriptions = @{
+    'agent.ps1'      = 'Agent command lifecycle (agent list/run/status/result)'
+    'attach.ps1'     = 'Extension attach + multi-tab lifecycle'
+    'tab.ps1'        = 'Tab commands across all session types'
+    'experience.ps1' = 'Experience system (PEM v2) full pipeline'
+}
+foreach ($script in $scripts) {
+    $desc = if ($scriptDescriptions.ContainsKey($script.Name)) {
+        $scriptDescriptions[$script.Name]
+    } else {
+        '(no description)'
+    }
+    Write-Host "  $($script.Name) — $desc" -ForegroundColor DarkGray
+}
+Write-Host ''
+Write-Host "Estimated total: 35–90 minutes for all scripts." -ForegroundColor DarkGray
+Write-Host 'Progress markers (>>> STEP N/M) will appear in agent output as each step runs.' -ForegroundColor DarkGray
 Write-Host ''
 
 $results = [ordered]@{}
-$stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+$globalStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
 
 foreach ($script in $scripts) {
     $label = $script.Name
-    Write-Host "── [$($results.Count + 1)/$($scripts.Count)] $label ──" -ForegroundColor DarkGray
+    $scriptStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+    Write-Host "── [$($results.Count + 1)/$($scripts.Count)] $label ──" -ForegroundColor Cyan
 
     try {
         & $script.FullName
+        $scriptStopwatch.Stop()
+        $elapsed = [Math]::Round($scriptStopwatch.Elapsed.TotalSeconds, 1)
         if ($LASTEXITCODE -ne 0) {
             # The script itself exited non-zero
-            $results[$label] = "FAIL (exit code $LASTEXITCODE)"
-            Write-Host "FAIL (exit code $LASTEXITCODE)" -ForegroundColor Red
+            $results[$label] = "FAIL (exit code $LASTEXITCODE, ${elapsed}s)"
+            Write-Host "FAIL (exit code $LASTEXITCODE, ${elapsed}s)" -ForegroundColor Red
         } else {
-            $results[$label] = 'PASS'
-            Write-Host "PASS" -ForegroundColor Green
+            $results[$label] = "PASS (${elapsed}s)"
+            Write-Host "PASS (${elapsed}s)" -ForegroundColor Green
         }
     } catch {
-        $results[$label] = "FAIL ($($_.Exception.Message))"
-        Write-Host "FAIL ($($_.Exception.Message))" -ForegroundColor Red
+        $scriptStopwatch.Stop()
+        $elapsed = [Math]::Round($scriptStopwatch.Elapsed.TotalSeconds, 1)
+        $results[$label] = "FAIL ($($_.Exception.Message), ${elapsed}s)"
+        Write-Host "FAIL ($($_.Exception.Message), ${elapsed}s)" -ForegroundColor Red
     }
     Write-Host ''
 }
 
-$stopwatch.Stop()
+$globalStopwatch.Stop()
 
 # ── Summary ──────────────────────────────────────────────────────────
 Write-Host '=== Summary ===' -ForegroundColor Cyan
@@ -65,13 +89,15 @@ $passed = 0
 $failed = 0
 
 foreach ($entry in $results.GetEnumerator()) {
-    $color = if ($entry.Value -eq 'PASS') { 'Green' } else { 'Red' }
+    $isPass = $entry.Value -match '^PASS'
+    $color = if ($isPass) { 'Green' } else { 'Red' }
     Write-Host "  $($entry.Key): " -NoNewline
     Write-Host $entry.Value -ForegroundColor $color
-    if ($entry.Value -eq 'PASS') { $passed++ } else { $failed++ }
+    if ($isPass) { $passed++ } else { $failed++ }
 }
 
 Write-Host ''
-Write-Host "Total: $($scripts.Count)  |  Passed: $passed  |  Failed: $failed  |  Time: $([math]::Round($stopwatch.Elapsed.TotalSeconds, 1))s" -ForegroundColor $(if ($failed -eq 0) { 'Green' } else { 'Red' })
+$totalTime = [math]::Round($globalStopwatch.Elapsed.TotalSeconds, 1)
+Write-Host "Total: $($scripts.Count)  |  Passed: $passed  |  Failed: $failed  |  Time: ${totalTime}s" -ForegroundColor $(if ($failed -eq 0) { 'Green' } else { 'Red' })
 
 exit $failed

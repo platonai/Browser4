@@ -63,6 +63,13 @@ if (-not (Test-Path -LiteralPath $ScriptsDir -PathType Container)) {
 # -- Dot-source the shared helpers -----------------------------------------------
 . "$ScriptsDir/common.ps1"
 
+# -- Pre-flight checks (catches CLI/backend issues in seconds) -------------------
+$preflightOk = Test-WorkflowPreflight
+if (-not $preflightOk) {
+    Write-Host 'WARNING: Pre-flight checks failed. Agent may encounter errors.' -ForegroundColor Yellow
+}
+Write-WorkflowBanner -WorkflowName 'Attach + Multi-Tab Lifecycle' -StepCount 25 -EstimatedDuration '10–30 minutes'
+
 # ===============================================================================
 # Task-specific prompt (built from single-quoted fragments to avoid PowerShell
 # escape-character collisions with Markdown backtick-quoted inline code).
@@ -73,6 +80,26 @@ $cliRef = $cliInvocation
 
 # Single-quoted fragments avoid backtick-interpretation issues.
 $taskBody = @'
+
+## Progress Reporting (MANDATORY)
+
+Report progress at EVERY step so the user can follow along in real time.
+The test harness shows the last 10 lines of your output every 30–120 seconds.
+
+**BEFORE each step** — print exactly (with angle brackets and step numbers):
+  >>> STEP <N>/25: <brief description of what this step does>
+
+**AFTER each step** — print exactly:
+  <<< STEP <N>: PASS — <one-line summary of what was verified>
+  or
+  <<< STEP <N>: FAIL — <one-line summary of what went wrong>
+
+**CRITICAL FAILURE** — if a Critical-severity issue makes remaining steps
+pointless, print:
+  !!! ABORT at step <N>: <reason> !!!
+Then skip all remaining steps and go directly to Deliverables.
+
+---
 
 Execute the following attach/open/goto command sequence **in order**. After each
 command, inspect its output and verify correctness before proceeding to the next
@@ -89,6 +116,8 @@ Before starting the sequence, ensure:
 ## Command Sequence
 
 ### Step 1 -- Extension attach
+
+>>> STEP 1/25: Extension attach
 
 Run:
 
@@ -251,6 +280,8 @@ Verify:
 - Run `__CLI__ tab-list` — the tab count and URLs are consistent.
 
 ### Step 5 -- Navigate to chrome://version (internal page)
+
+>>> STEP 5/25: Navigate to chrome://version (tests debugger detach)
 
 Run:
 

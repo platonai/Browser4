@@ -277,7 +277,7 @@ function Read-TaskFile {
 $needsCompile = (-not $script:_NativeCommandHandlerCompiled)
 if ($script:_NativeCommandHandlerCompiled) {
     try {
-        $null = [NativeCommandOutputHandler].GetMethod('GetTail')
+        $null = [NativeCommandOutputHandler].GetMethod('GetCheckpointStepCount')
     } catch {
         $needsCompile = $true
     }
@@ -287,6 +287,8 @@ if ($needsCompile) {
 using System;
 using System.IO;
 using System.Text;
+using System.Text.RegularExpressions;
+using System.Collections.Generic;
 
 public class NativeCommandOutputHandler
 {
@@ -297,7 +299,32 @@ public class NativeCommandOutputHandler
     private int _ringCount;
     private readonly object _lock;
 
+    // ── Checkpoint support ──────────────────────────────────────────────
+    private readonly string _checkpointDir;
+    private readonly string _checkpointScenario;
+    private readonly object _checkpointLock;
+    private readonly List<StepRecord> _steps;
+    private string _currentStepId;
+    private string _currentStepLabel;
+    private DateTime _currentStepStart;
+
+    // Regex patterns for step markers the agent emits
+    private static readonly Regex _stepStartRx = new Regex(
+        @">>>\s+STEP\s+(\S+):\s*(.+)",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex _stepEndRx = new Regex(
+        @"<<<\s+STEP\s+(\S+):\s+(PASS|FAIL)\s*[—\-–]\s*(.+)",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex _abortRx = new Regex(
+        @"!!!\s+ABORT\s+at\s+step\s+(\S+):\s*(.+)\s*!!!",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
     public NativeCommandOutputHandler(string capturePath)
+        : this(capturePath, null, null) { }
+
+    public NativeCommandOutputHandler(string capturePath,
+                                       string checkpointDir,
+                                       string checkpointScenario)
     {
         _capturePath = capturePath;
         _utf8 = new UTF8Encoding(false);
@@ -305,31 +332,191 @@ public class NativeCommandOutputHandler
         _ringIndex = 0;
         _ringCount = 0;
         _lock = new object();
+
+        _checkpointDir = checkpointDir;
+        _checkpointScenario = checkpointScenario;
+        _checkpointLock = new object();
+        _steps = new List<StepRecord>();
     }
 
     public void OnOutputReceived(object sender, System.Diagnostics.DataReceivedEventArgs e)
     {
-        if (e.Data != null)
+        if (e.Data == null) return;
+
+        Console.WriteLine(e.Data);
+        try
         {
-            Console.WriteLine(e.Data);
+            File.AppendAllText(_capturePath, e.Data + Environment.NewLine, _utf8);
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine(
+                "[NativeCommandOutputHandler] Failed to write capture line: " + ex.Message);
+        }
+
+        lock (_lock)
+        {
+            _ringBuffer[_ringIndex] = e.Data;
+            _ringIndex = (_ringIndex + 1) % _ringBuffer.Length;
+            if (_ringCount < _ringBuffer.Length) _ringCount++;
+        }
+
+        // ── Checkpoint detection (runs when checkpointing is enabled) ──
+        if (_checkpointDir != null)
+        {
+            TryDetectStepMarker(e.Data);
+        }
+    }
+
+    private void TryDetectStepMarker(string line)
+    {
+        // Step start: >>> STEP 3/7: description
+        var startMatch = _stepStartRx.Match(line);
+        if (startMatch.Success)
+        {
+            _currentStepId = startMatch.Groups[1].Value.Trim();
+            _currentStepLabel = startMatch.Groups[2].Value.Trim();
+            _currentStepStart = DateTime.UtcNow;
+            return;
+        }
+
+        // Abort: !!! ABORT at step N: reason !!!
+        var abortMatch = _abortRx.Match(line);
+        if (abortMatch.Success)
+        {
+            var stepId = abortMatch.Groups[1].Value.Trim();
+            var reason = abortMatch.Groups[2].Value.Trim();
+            WriteCheckpoint(stepId, "ABORT", reason);
+            WriteProgressFile();
+            return;
+        }
+
+        // Step complete: <<< STEP 3/7: PASS — summary
+        var endMatch = _stepEndRx.Match(line);
+        if (endMatch.Success)
+        {
+            var stepId = endMatch.Groups[1].Value.Trim();
+            var result = endMatch.Groups[2].Value.Trim();
+            var summary = endMatch.Groups[3].Value.Trim();
+            WriteCheckpoint(stepId, result, summary);
+            WriteProgressFile();
+        }
+    }
+
+    private void WriteCheckpoint(string stepId, string result, string summary)
+    {
+        lock (_checkpointLock)
+        {
+            var elapsed = (_currentStepStart != default(DateTime))
+                ? (DateTime.UtcNow - _currentStepStart).TotalMilliseconds
+                : 0.0;
+
+            var rec = new StepRecord
+            {
+                step = stepId,
+                label = _currentStepLabel ?? "",
+                result = result,
+                summary = summary,
+                timestamp = DateTime.UtcNow.ToString("o"),
+                elapsedMs = (long)elapsed
+            };
+            _steps.Add(rec);
+
             try
             {
-                File.AppendAllText(_capturePath, e.Data + Environment.NewLine, _utf8);
+                var json = StepRecordToJson(rec);
+                var safeId = stepId.Replace('/', '-').Replace('\\', '-');
+                var fileName = string.Format("{0}-step-{1}.json",
+                    _checkpointScenario, safeId);
+                var filePath = Path.Combine(_checkpointDir, fileName);
+                File.WriteAllText(filePath, json, _utf8);
             }
             catch (Exception ex)
             {
-                // Log to console so failures are visible — the handler runs on
-                // .NET threadpool threads where unhandled exceptions are swallowed.
-                Console.Error.WriteLine("[NativeCommandOutputHandler] Failed to write capture line: " + ex.Message);
-            }
-
-            lock (_lock)
-            {
-                _ringBuffer[_ringIndex] = e.Data;
-                _ringIndex = (_ringIndex + 1) % _ringBuffer.Length;
-                if (_ringCount < _ringBuffer.Length) _ringCount++;
+                Console.Error.WriteLine(
+                    "[NativeCommandOutputHandler] Failed to write step checkpoint: " + ex.Message);
             }
         }
+    }
+
+    private void WriteProgressFile()
+    {
+        lock (_checkpointLock)
+        {
+            try
+            {
+                var sb = new StringBuilder();
+                sb.Append("{\n");
+                sb.AppendFormat("  \"scenario\": {0},\n",
+                    JsonEscape(_checkpointScenario));
+                sb.AppendFormat("  \"lastStep\": {0},\n",
+                    JsonEscape(_steps.Count > 0 ? _steps[_steps.Count - 1].step : ""));
+                sb.AppendFormat("  \"lastUpdate\": {0},\n",
+                    JsonEscape(DateTime.UtcNow.ToString("o")));
+                sb.AppendFormat("  \"stepCount\": {0},\n", _steps.Count);
+                sb.Append("  \"steps\": [\n");
+                for (int i = 0; i < _steps.Count; i++)
+                {
+                    if (i > 0) sb.Append(",\n");
+                    sb.Append("    ");
+                    sb.Append(StepRecordToJson(_steps[i]));
+                }
+                sb.Append("\n  ]\n}");
+                var filePath = Path.Combine(_checkpointDir,
+                    _checkpointScenario + "-progress.json");
+                File.WriteAllText(filePath, sb.ToString(), _utf8);
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine(
+                    "[NativeCommandOutputHandler] Failed to write progress file: " + ex.Message);
+            }
+        }
+    }
+
+    private static string StepRecordToJson(StepRecord r)
+    {
+        var sb = new StringBuilder();
+        sb.Append("{");
+        sb.AppendFormat("\"step\":{0},", JsonEscape(r.step));
+        sb.AppendFormat("\"label\":{0},", JsonEscape(r.label));
+        sb.AppendFormat("\"result\":{0},", JsonEscape(r.result));
+        sb.AppendFormat("\"summary\":{0},", JsonEscape(r.summary));
+        sb.AppendFormat("\"timestamp\":{0},", JsonEscape(r.timestamp));
+        sb.AppendFormat("\"elapsedMs\":{0}", r.elapsedMs);
+        sb.Append("}");
+        return sb.ToString();
+    }
+
+    private static string JsonEscape(string s)
+    {
+        if (string.IsNullOrEmpty(s)) return "\"\"";
+        var sb = new StringBuilder();
+        sb.Append('"');
+        foreach (char c in s)
+        {
+            switch (c)
+            {
+                case '"': sb.Append("\\\""); break;
+                case '\\': sb.Append("\\\\"); break;
+                case '\n': sb.Append("\\n"); break;
+                case '\r': sb.Append("\\r"); break;
+                case '\t': sb.Append("\\t"); break;
+                default: sb.Append(c); break;
+            }
+        }
+        sb.Append('"');
+        return sb.ToString();
+    }
+
+    private class StepRecord
+    {
+        public string step;
+        public string label;
+        public string result;
+        public string summary;
+        public string timestamp;
+        public long elapsedMs;
     }
 
     /// <summary>
@@ -351,6 +538,19 @@ public class NativeCommandOutputHandler
                 sb.Append(_ringBuffer[idx]);
             }
             return sb.ToString();
+        }
+    }
+
+    /// <summary>
+    /// Returns the number of completed checkpoint steps seen so far.
+    /// Used as a recompilation sentinel (GetMethod check above) and
+    /// available for heartbeat display.
+    /// </summary>
+    public int GetCheckpointStepCount()
+    {
+        lock (_checkpointLock ?? _lock)
+        {
+            return _steps?.Count ?? 0;
         }
     }
 }
@@ -1531,7 +1731,16 @@ function Start-NativeCommand {
         # Maximum seconds to wait before killing the process.
         # 0 (default) means no timeout.  Exit code 124 is returned on timeout
         # (matching the Unix `timeout` command convention).
-        [int] $TimeoutSeconds = 0
+        [int] $TimeoutSeconds = 0,
+
+        # ── Checkpoint support ──────────────────────────────────────────
+        # When both parameters are provided the output handler writes a
+        # per-step checkpoint JSON after every `<<< STEP N: PASS|FAIL`
+        # marker, plus a cumulative <scenario>-progress.json file.
+        # Checkpoints are written in real time as the agent emits markers.
+        [string] $CheckpointDir = '',
+
+        [string] $CheckpointScenario = ''
     )
 
     $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
@@ -1568,7 +1777,15 @@ function Start-NativeCommand {
     # PowerShell scriptblocks cast to delegates.  DataReceived events fire
     # on .NET threadpool threads where no PowerShell Runspace is guaranteed;
     # pure-C# handlers avoid "There is no Runspace available" crashes.
-    $nativeHandler = New-Object NativeCommandOutputHandler $capturePath
+    if ($CheckpointDir -and $CheckpointScenario) {
+        # Ensure checkpoint dir exists before the handler starts writing
+        if (-not (Test-Path -LiteralPath $CheckpointDir)) {
+            New-Item -ItemType Directory -Path $CheckpointDir -Force | Out-Null
+        }
+        $nativeHandler = New-Object NativeCommandOutputHandler $capturePath, $CheckpointDir, $CheckpointScenario
+    } else {
+        $nativeHandler = New-Object NativeCommandOutputHandler $capturePath
+    }
     $streamHandler = [Delegate]::CreateDelegate(
         [System.Diagnostics.DataReceivedEventHandler],
         $nativeHandler,
@@ -1746,6 +1963,16 @@ function Start-NativeCommand {
                 [Console]::WriteLine(
                     "  · ${cmdLabel} — running (${mins}m ${secs}s elapsed, heartbeat #${heartbeatCount})"
                 )
+
+                # When checkpoints are enabled, show how many steps completed
+                if ($CheckpointDir -and $CheckpointScenario) {
+                    $stepCount = $nativeHandler.GetCheckpointStepCount()
+                    if ($stepCount -gt 0) {
+                        [Console]::WriteLine(
+                            "  · Checkpoints: $stepCount step(s) completed → .test-sessions/${CheckpointScenario}-progress.json"
+                        )
+                    }
+                }
 
                 # Show the last 10 lines of agent output so the heartbeat is
                 # meaningful — the user can see what the agent is doing instead
@@ -1956,6 +2183,166 @@ function Assert-Browser4CliLatest {
     return 1
 }
 
+# ── Workflow pre-flight checks ─────────────────────────────────────────────────
+# Runs BEFORE the expensive agent invocation so common environment problems
+# (missing CLI, dead backend) are caught in seconds instead of waiting 5-20
+# minutes for the agent to discover them.
+
+function Test-WorkflowPreflight {
+    <#
+    .SYNOPSIS
+        Quick pre-flight checks before launching the expensive agent call.
+    .DESCRIPTION
+        Verifies that the CLI is available and the backend responds.  These checks
+        run in seconds — failing fast here avoids waiting minutes for an agent
+        to discover the same problem.
+
+        In dev mode, the first CLI invocation auto-starts the backend, so a
+        successful `help` call confirms both the CLI binary and backend are
+        functional.  In production mode it confirms the CLI is installed and
+        can reach the backend.
+
+        Returns $true when all checks pass, $false otherwise.  Callers may still
+        proceed on failure (the agent will diagnose further), but should print
+        a prominent warning.
+    .PARAMETER Silent
+        Suppress informational messages.  Failures are always reported.
+    .OUTPUTS
+        Boolean — $true when all checks pass.
+    #>
+    param(
+        [switch] $Silent
+    )
+
+    $allPassed = $true
+    $checkCount = 2
+
+    if (-not $Silent) {
+        Write-Host ''
+        Write-Host '=== Pre-flight checks ===' -ForegroundColor Cyan
+    }
+
+    # ── Check 1: CLI availability ──────────────────────────────────────────
+    if (-not $Silent) {
+        Write-Host "  [1/$checkCount] CLI ($cliInvocation) ... " -NoNewline
+    }
+    try {
+        $versionOut = & $cliInvocation --version 2>&1 | Out-String
+        if ($LASTEXITCODE -and $LASTEXITCODE -ne 0) {
+            throw "exit code $LASTEXITCODE"
+        }
+        if (-not $Silent) {
+            $ver = ($versionOut -replace '\s+', ' ').Trim()
+            Write-Host "OK ($ver)" -ForegroundColor Green
+        }
+    } catch {
+        $allPassed = $false
+        if (-not $Silent) {
+            Write-Host 'FAIL' -ForegroundColor Red
+            Write-Host "    CLI not functional: $_" -ForegroundColor Red
+            if ($browser4cliMode -eq 'production') {
+                Write-Host '    Ensure browser4-cli is installed and on PATH.' -ForegroundColor DarkGray
+            } else {
+                Write-Host '    The CLI may need to be built. Try running ./b4w.ps1 directly first.' -ForegroundColor DarkGray
+            }
+        }
+    }
+
+    # ── Check 2: Backend responds ──────────────────────────────────────────
+    if (-not $Silent) {
+        Write-Host "  [2/$checkCount] Backend ... " -NoNewline
+    }
+    try {
+        # Stopwatch for backend start timing (dev mode auto-starts the JAR)
+        $sw = [System.Diagnostics.Stopwatch]::StartNew()
+        $helpOut = & $cliInvocation help 2>&1 | Out-String
+        $sw.Stop()
+        if ($LASTEXITCODE -and $LASTEXITCODE -ne 0) {
+            throw "exit code $LASTEXITCODE"
+        }
+        if ($helpOut -match 'Usage:' -or $helpOut -match 'Commands:' -or $helpOut -match 'SUBCOMMANDS:') {
+            if (-not $Silent) {
+                $dur = [Math]::Round($sw.Elapsed.TotalSeconds, 1)
+                Write-Host "OK (${dur}s)" -ForegroundColor Green
+            }
+        } else {
+            throw 'help output does not contain expected sections'
+        }
+    } catch {
+        $allPassed = $false
+        if (-not $Silent) {
+            Write-Host 'FAIL' -ForegroundColor Red
+            Write-Host "    Backend not responding: $_" -ForegroundColor Red
+            if ($browser4cliMode -ne 'production') {
+                Write-Host '    In dev mode the backend auto-starts. Check Java and port availability.' -ForegroundColor DarkGray
+            } else {
+                Write-Host '    Ensure the Browser4 backend server is running.' -ForegroundColor DarkGray
+            }
+        }
+    }
+
+    # ── Summary ────────────────────────────────────────────────────────────
+    if (-not $Silent) {
+        if ($allPassed) {
+            Write-Host 'Pre-flight: ALL CHECKS PASSED' -ForegroundColor Green
+        } else {
+            Write-Host 'Pre-flight: SOME CHECKS FAILED — agent will run but may encounter errors' -ForegroundColor Yellow
+        }
+        Write-Host ''
+    }
+
+    return $allPassed
+}
+
+# ── Workflow banner ────────────────────────────────────────────────────────────
+# Prints a standardized header so users know what to expect before the agent
+# starts.  The estimated duration sets expectations and the step count provides
+# a reference for the progress markers the agent emits.
+
+function Write-WorkflowBanner {
+    <#
+    .SYNOPSIS
+        Print a standardized workflow banner before launching the agent.
+    .DESCRIPTION
+        Shows the workflow name, step count, and estimated duration so users
+        know what to expect.  The agent will emit `>>> STEP N/M` markers as it
+        progresses through steps, giving real-time visibility via the heartbeat
+        tail display.
+    .PARAMETER WorkflowName
+        Human-readable name shown in the banner.
+    .PARAMETER StepCount
+        Total number of verification steps the agent will execute (used for
+        progress-marker reference).
+    .PARAMETER EstimatedDuration
+        Human-readable duration estimate (e.g. "5–10 minutes").
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string] $WorkflowName,
+
+        [Parameter(Mandatory = $true)]
+        [int] $StepCount,
+
+        [string] $EstimatedDuration = '5–15 minutes'
+    )
+
+    $width = 64
+    $line = [string]::new([char]0x2500, $width)
+
+    Write-Host ''
+    Write-Host "  $line" -ForegroundColor Cyan
+    Write-Host "   Workflow : $WorkflowName" -ForegroundColor Cyan
+    Write-Host "   Steps    : $StepCount" -ForegroundColor Cyan
+    Write-Host "   Estimate : $EstimatedDuration" -ForegroundColor Cyan
+    Write-Host "  $line" -ForegroundColor Cyan
+    Write-Host ''
+
+    $agent = Get-ScenarioAgent
+    Write-Host "  Agent will emit >>> STEP N/$StepCount markers in real time." -ForegroundColor DarkGray
+    Write-Host "  Watch the heartbeat tail (every 30–120 s) for current step." -ForegroundColor DarkGray
+    Write-Host ''
+}
+
 # ── Agent invocation ────────────────────────────────────────────────────────
 
 function Get-ScenarioAgent {
@@ -2108,6 +2495,11 @@ function Invoke-Agent {
     if ($TimeoutSeconds -gt 0) {
         $startParams['TimeoutSeconds'] = $TimeoutSeconds
     }
+    # Enable real-time checkpoint files when a scenario name is provided
+    if ($ScenarioName) {
+        $startParams['CheckpointDir'] = $testSessionsDir
+        $startParams['CheckpointScenario'] = $ScenarioName
+    }
     $exitCode = Start-NativeCommand @startParams
 
     # ── Post-processing (only when capture was requested) ───────────────────
@@ -2130,6 +2522,31 @@ function Invoke-Agent {
     if ([string]::IsNullOrWhiteSpace($capturedOutput)) {
         Write-Host "  WARNING: No output captured from agent (file: $captureFile)" -ForegroundColor Yellow
         return
+    }
+
+    # ── Checkpoint summary ──────────────────────────────────────────────────
+    if ($ScenarioName) {
+        $progressFile = Join-Path $testSessionsDir "$ScenarioName-progress.json"
+        if (Test-Path -LiteralPath $progressFile) {
+            try {
+                $progress = Get-Content -LiteralPath $progressFile -Raw -Encoding UTF8 | ConvertFrom-Json
+                $stepCount = $progress.stepCount
+                $lastStep = $progress.lastStep
+                if ($stepCount -gt 0) {
+                    Write-Host ''
+                    Write-Host "  Checkpoint summary ($ScenarioName): $stepCount step(s) completed" -ForegroundColor Cyan
+                    foreach ($step in $progress.steps) {
+                        $color = if ($step.result -eq 'PASS') { 'Green' } elseif ($step.result -eq 'ABORT') { 'Red' } else { 'Yellow' }
+                        Write-Host "    $($step.step): " -NoNewline
+                        Write-Host "$($step.result)" -ForegroundColor $color -NoNewline
+                        Write-Host " — $($step.summary)"
+                    }
+                    Write-Host "    Full: .test-sessions/${ScenarioName}-progress.json" -ForegroundColor DarkGray
+                }
+            } catch {
+                Write-Host "  (checkpoint progress file could not be parsed)" -ForegroundColor DarkGray
+            }
+        }
     }
 
     # ── Truncation detection ────────────────────────────────────────────────

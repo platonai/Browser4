@@ -57,11 +57,38 @@ if (-not (Test-Path -LiteralPath $ScriptsDir -PathType Container)) {
 # -- Dot-source the shared helpers -----------------------------------------------
 . "$ScriptsDir/common.ps1"
 
+# -- Pre-flight checks (catches CLI/backend issues in seconds) -------------------
+$preflightOk = Test-WorkflowPreflight
+if (-not $preflightOk) {
+    Write-Host 'WARNING: Pre-flight checks failed. Agent may encounter errors.' -ForegroundColor Yellow
+}
+Write-WorkflowBanner -WorkflowName 'Agent Lifecycle' -StepCount 7 -EstimatedDuration '3–8 minutes'
+
 # ===============================================================================
 # Task-specific prompt
 # ===============================================================================
 
 $taskPrompt = @"
+
+## Progress Reporting (MANDATORY)
+
+Report progress at EVERY step so the user can follow along in real time.
+The test harness shows the last 10 lines of your output every 30–120 seconds.
+
+**BEFORE each step** — print exactly (with angle brackets and step numbers):
+  >>> STEP <N>/7: <brief description of what this step does>
+
+**AFTER each step** — print exactly:
+  <<< STEP <N>: PASS — <one-line summary of what was verified>
+  or
+  <<< STEP <N>: FAIL — <one-line summary of what went wrong>
+
+**CRITICAL FAILURE** — if a Critical-severity issue makes remaining steps
+pointless, print:
+  !!! ABORT at step <N>: <reason> !!!
+Then skip all remaining steps and go directly to Deliverables.
+
+---
 
 Execute the following `agent` command sequence **in order**. After each command,
 inspect its output and verify correctness before proceeding to the next step.
@@ -71,6 +98,8 @@ for each step individually.
 ## Command Sequence
 
 ### Step 1 — Initial `agent list`
+
+>>> STEP 1/7: Initial agent list
 
 Run:
 
@@ -84,6 +113,8 @@ Verify:
 
 ### Step 2 — Submit an agent task
 
+>>> STEP 2/7: Submit agent task (100th prime)
+
 Run:
 
     $cliInvocation agent run "给出第100个素数"
@@ -96,6 +127,8 @@ Verify:
 
 ### Step 3 — `agent list` after submission
 
+>>> STEP 3/7: agent list after submission
+
 Run:
 
     $cliInvocation agent list
@@ -107,6 +140,8 @@ Verify:
 - The label is NOT the deprecated `"done"` string.
 
 ### Step 4 — `agent status`
+
+>>> STEP 4/7: agent status (JSON check)
 
 Run (replace `<task-id>` with the actual task ID from Step 2):
 
@@ -121,6 +156,8 @@ Verify:
 
 ### Step 5 — `agent list` after status
 
+>>> STEP 5/7: agent list after status
+
 Run:
 
     $cliInvocation agent list
@@ -132,6 +169,8 @@ Verify:
   tasks should persist, not auto-prune).
 
 ### Step 6 — `agent result` (THE CRITICAL CHECK)
+
+>>> STEP 6/7: agent result (verify "541" in output)
 
 **Wait up to 120 seconds** for the task to complete. If the task is still
 running after `agent status` reports `"isDone": false`, poll every 3-5 seconds
@@ -154,6 +193,8 @@ Verify:
   - The command should still exit with code 0.
 
 ### Step 7 — Final `agent list`
+
+>>> STEP 7/7: Final agent list (lifecycle complete)
 
 Run:
 

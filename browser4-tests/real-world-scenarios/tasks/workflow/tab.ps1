@@ -62,6 +62,13 @@ if (-not (Test-Path -LiteralPath $ScriptsDir -PathType Container)) {
 # -- Dot-source the shared helpers -----------------------------------------------
 . "$ScriptsDir/common.ps1"
 
+# -- Pre-flight checks (catches CLI/backend issues in seconds) -------------------
+$preflightOk = Test-WorkflowPreflight
+if (-not $preflightOk) {
+    Write-Host 'WARNING: Pre-flight checks failed. Agent may encounter errors.' -ForegroundColor Yellow
+}
+Write-WorkflowBanner -WorkflowName 'Tab Lifecycle (All Session Types)' -StepCount 30 -EstimatedDuration '5–15 minutes'
+
 # ===============================================================================
 # Task-specific prompt (built from single-quoted fragments to avoid PowerShell
 # escape-character collisions with Markdown backtick-quoted inline code).
@@ -72,6 +79,28 @@ $cliRef = $cliInvocation
 
 # Single-quoted fragments avoid backtick-interpretation issues.
 $taskBody = @'
+
+## Progress Reporting (MANDATORY)
+
+Report progress at EVERY step so the user can follow along in real time.
+The test harness shows the last 10 lines of your output every 30–120 seconds.
+
+**BEFORE each step** — print exactly (with angle brackets and step numbers):
+  >>> STEP <section>.<N>: <brief description of what this step does>
+  Use section letters: A for Part A, B for Part B, C for Part C.
+  Example: `>>> STEP A.5/17: List after tab creation`
+
+**AFTER each step** — print exactly:
+  <<< STEP <section>.<N>: PASS — <one-line summary of what was verified>
+  or
+  <<< STEP <section>.<N>: FAIL — <one-line summary of what went wrong>
+
+**CRITICAL FAILURE** — if a Critical-severity issue makes remaining steps
+pointless, print:
+  !!! ABORT at step <section>.<N>: <reason> !!!
+Then skip all remaining steps and go directly to Deliverables.
+
+---
 
 Execute the following `tab` command sequence **in order** across all Browser4
 session types. After each command, inspect its output and verify correctness
@@ -111,6 +140,8 @@ These steps exercise the full tab lifecycle through a standard `open` session
 (Browser4-launched Chrome).  This is the most common path and must be rock-solid.
 
 ## A.1 — Setup
+
+>>> STEP A.1/17: Setup — kill-all, open, goto
 
 Run:
 
@@ -351,6 +382,8 @@ verified.
 
 ## B.1 — Setup
 
+>>> STEP B.1/8: Setup extension session
+
 Run:
 
     __CLI__ kill-all
@@ -470,6 +503,8 @@ These steps verify that tab commands correctly target the **current default
 session** when multiple sessions of different types are active simultaneously.
 
 ## C.1 — Setup: both session types active
+
+>>> STEP C.1/10: Setup mixed sessions (regular + extension)
 
 Run:
 
