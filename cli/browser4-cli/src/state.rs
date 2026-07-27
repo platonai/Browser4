@@ -687,6 +687,7 @@ pub fn track_async_task(
 }
 
 /// Remove completed/failed tasks from the tracked list.
+#[allow(dead_code)]
 pub fn prune_async_tasks(
     state_dir: Option<&std::path::Path>,
 ) -> std::io::Result<usize> {

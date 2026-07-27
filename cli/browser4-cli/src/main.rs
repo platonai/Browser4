@@ -69,7 +69,7 @@ use managed_processes::{
 use snapshot::{resolve_output_path, save_binary, save_snapshot, timestamped_filename};
 use state::{
     clear_all_state, clear_state, epoch_millis_to_display, format_async_task_list,
-    format_timestamp_display, prune_async_tasks, read_async_tasks, read_state,
+    format_timestamp_display, read_async_tasks, read_state,
     resolve_default_state_dir, resolve_ref, summarize_async_tasks, track_async_task,
     update_async_task_status, write_async_tasks, write_state, CliState, MousePosition, Table,
 };
