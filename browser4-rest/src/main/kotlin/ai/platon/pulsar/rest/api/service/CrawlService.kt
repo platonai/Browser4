@@ -189,7 +189,7 @@ class CrawlService(
                 if (existing != null && existing.startedTime == null) {
                     existing.startedTime = java.time.Instant.now()
                 }
-                val allPages = withContext(Dispatchers.IO) {
+                val result = withContext(Dispatchers.IO) {
                     val results = mutableListOf<CrawlPageResult>()
                     val seedStatuses = mutableListOf<CrawlSeedStatus>()
                     val totalSeeds = seedUrls.size
@@ -239,7 +239,7 @@ class CrawlService(
                     }
                     Pair(results, seedStatuses)
                 }
-                val (allPages, seedStatuses) = allPages
+                val (allPages, seedStatuses) = result
                 val existingDiagnostic = taskStore.getIfPresent(taskId)?.diagnostic
                 val now = java.time.Instant.now()
                 val previous = taskStore.getIfPresent(taskId)
