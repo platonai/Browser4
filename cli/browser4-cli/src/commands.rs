@@ -2583,6 +2583,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "no-norm", description: "Disable URL normalization", is_bool: true, short: None },
                 OptionDef { name: "readonly", description: "Non-destructive mode (no page modifications)", is_bool: true, short: None },
                 OptionDef { name: "background", description: "Submit crawl and return immediately; use 'crawl list' to track progress", is_bool: true, short: Some("bg") },
+                OptionDef { name: "verbose", description: "Show per-URL processing status in crawl results", is_bool: true, short: None },
             ],
             e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "crawl_submit".to_string(),
@@ -2744,8 +2745,10 @@ pub fn all_commands() -> Vec<CommandDef> {
             args: &[],
             options: &[
                 OptionDef { name: "clear", description: "Remove all tracked crawl tasks from the list", is_bool: true, short: None },
-                OptionDef { name: "limit", description: "Show at most N tasks (default: all)", is_bool: false, short: None },
+                OptionDef { name: "limit", description: "Show at most N tasks (default: 20)", is_bool: false, short: None },
                 OptionDef { name: "offset", description: "Skip the first N tasks (useful for pagination)", is_bool: false, short: None },
+                OptionDef { name: "status", description: "Filter by status: completed, running, failed, queued, or 'not found'", is_bool: false, short: None },
+                OptionDef { name: "since", description: "Show only tasks submitted since a relative time (e.g. 1h, 30m, 1d)", is_bool: false, short: None },
             ],
             e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| String::new(),
@@ -2754,6 +2757,8 @@ pub fn all_commands() -> Vec<CommandDef> {
                 if let Some(b) = get_bool(args, "clear") { p["clear"] = json!(b); }
                 if let Some(v) = get_str(args, "limit").and_then(|s| s.parse::<usize>().ok()) { p["limit"] = json!(v); }
                 if let Some(v) = get_str(args, "offset").and_then(|s| s.parse::<usize>().ok()) { p["offset"] = json!(v); }
+                if let Some(v) = get_str(args, "status") { p["status"] = json!(v); }
+                if let Some(v) = get_str(args, "since") { p["since"] = json!(v); }
                 p
             },
         },

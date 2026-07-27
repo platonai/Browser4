@@ -1766,7 +1766,61 @@ internal fun inspectDocument(
         suggestions.add(sug)
     }
 
-    // Reuse visual link groups detected early (visual geometry first algorithm)
+    // ── Singleton element detection ────────────────────────────────────────
+    // Find semantic singleton elements that auto-discovery may miss because
+    // they don't repeat. These include: elements with id attributes, heading
+    // elements, and elements containing price-like text patterns.
+    val singletonSuggestions = pulsarObjectMapper().createArrayNode()
+    val seenSingletonIds = mutableSetOf<String>()
+
+    // Helper: build a selector for an element and add it to suggestions
+    fun suggestSingleton(el: org.jsoup.nodes.Element, category: String, note: String) {
+        val sel = buildElementRef(el)
+        if (!seenSingletonIds.add(sel)) return
+        val text = truncateText(el.text().trim())
+        val obj = pulsarObjectMapper().createObjectNode()
+        obj.put("selector", sel)
+        obj.put("tag", el.tagName().lowercase())
+        obj.put("category", category)
+        if (text.isNotBlank()) obj.put("textPreview", text)
+        if (note.isNotBlank()) obj.put("note", note)
+        singletonSuggestions.add(obj)
+    }
+
+    // 1. Elements with id attributes (stable, semantic targets)
+    for (el in document.select("[id]")) {
+        val id = el.id()
+        if (id.isBlank() || id.any { it == '"' || it == '\'' }) continue
+        // Skip structural/repeating ids
+        if (id.matches(Regex("^(header|footer|nav|sidebar|main|content|root|app|wrapper|container)$", RegexOption.IGNORE_CASE))) continue
+        val tag = el.tagName().lowercase()
+        suggestSingleton(el, "id-element", "Semantic ID: $tag#$id")
+    }
+
+    // 2. Heading elements (h1-h6) — key content landmarks
+    for (tag in listOf("h1", "h2", "h3")) {
+        for (el in document.select(tag)) {
+            val text = el.text().trim()
+            if (text.isBlank()) continue
+            suggestSingleton(el, "heading", "Heading: $text")
+        }
+    }
+
+    // 3. Elements with price-like text patterns
+    val pricePattern = Regex("""[$€¥£]\s*\d+(?:[,.]\d+)?|\d+(?:[,.]\d+)\s*[$€¥£]""")
+    val seenPriceEls = mutableSetOf<String>()
+    for (el in document.select("*")) {
+        val ownText = el.ownText().trim()
+        if (ownText.isBlank()) continue
+        if (pricePattern.containsMatchIn(ownText)) {
+            val sel = buildElementRef(el)
+            if (seenPriceEls.add(sel)) {
+                suggestSingleton(el, "price", "Price pattern: $ownText")
+            }
+        }
+    }
+
+    // Build response
     return pulsarObjectMapper().createObjectNode().apply {
         put("matchCount", matchCount)
         put("selector", effectiveSelector)
@@ -1784,6 +1838,9 @@ internal fun inspectDocument(
         }
         set<ArrayNode>("samples", samples)
         set<ArrayNode>("suggestions", suggestions)
+        if (singletonSuggestions.size() > 0) {
+            set<ArrayNode>("singletonSuggestions", singletonSuggestions)
+        }
         if (visualLinkGroups.isNotEmpty()) {
             set<ArrayNode>("linkGroups", linkGroupsToJson(visualLinkGroups))
         }

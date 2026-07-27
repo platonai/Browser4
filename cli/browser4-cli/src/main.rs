@@ -8386,6 +8386,32 @@ fn friendly_crawl_status(status: &str) -> String {
     }
 }
 
+/// Parse a relative time string like "1h", "30m", "1d" into a chrono DateTime.
+/// Returns None if the string is unparseable.
+fn parse_relative_time(s: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+    let s = s.trim();
+    let (amount_str, unit) = if let Some(stripped) = s.strip_suffix('h') {
+        (stripped.trim(), "h")
+    } else if let Some(stripped) = s.strip_suffix('m') {
+        (stripped.trim(), "m")
+    } else if let Some(stripped) = s.strip_suffix('d') {
+        (stripped.trim(), "d")
+    } else if let Some(stripped) = s.strip_suffix('s') {
+        (stripped.trim(), "s")
+    } else {
+        return None;
+    };
+    let amount: f64 = amount_str.parse().ok()?;
+    let duration = match unit {
+        "s" => chrono::Duration::seconds(amount as i64),
+        "m" => chrono::Duration::minutes(amount as i64),
+        "h" => chrono::Duration::hours(amount as i64),
+        "d" => chrono::Duration::days(amount as i64),
+        _ => return None,
+    };
+    Some(chrono::Utc::now() - duration)
+}
+
 async fn handle_swarm_status(
     client: &Client,
     base_url: &str,
@@ -8749,13 +8775,20 @@ async fn handle_crawl_list(
 
     if backend_reachable {
         // Query backend for live status of each tracked crawl task.
+        let mut stale_ids: Vec<String> = Vec::new();
         for entry in list.tasks.iter_mut().filter(|t| t.command == "crawl") {
             let was_already_completed =
                 entry.last_status == "completed" || entry.last_status == "done" || entry.last_status == "OK";
             if let Ok(text) = get_crawl_result(client, base_url, &entry.task_id).await {
                 if let Ok(parsed) = serde_json::from_str::<Value>(&text) {
                     if let Some(s) = parsed.get("status").and_then(|v| v.as_str()) {
-                        entry.last_status = friendly_crawl_status(s);
+                        let friendly = friendly_crawl_status(s);
+                        // If the server no longer knows about this task, mark it for removal
+                        // so it doesn't linger in the list as "not found"
+                        if friendly.contains("not found") {
+                            stale_ids.push(entry.task_id.clone());
+                        }
+                        entry.last_status = friendly;
                     }
                     let now_completed = entry.last_status == "completed" || entry.last_status.starts_with("failed");
                     if !was_already_completed && now_completed {
@@ -8768,19 +8801,73 @@ async fn handle_crawl_list(
                 }
             }
         }
+        // Remove stale entries that the server has already cleaned up
+        if !stale_ids.is_empty() {
+            list.tasks.retain(|t| !stale_ids.contains(&t.task_id));
+            cli_println!(
+                "Cleaned up {} stale crawl task(s) — server no longer has them.",
+                stale_ids.len()
+            );
+        }
         let _ = write_async_tasks(&list, None);
     } else {
         cli_println!("Note: Backend unreachable — showing cached statuses. Start the server for live status.");
     }
 
-    let filtered: Vec<_> = list.tasks.iter().filter(|t| t.command == "crawl").cloned().collect();
+    let mut filtered: Vec<_> = list.tasks.iter().filter(|t| t.command == "crawl").cloned().collect();
+
+    // Apply --status filter
+    if let Some(status_filter) = tool_params.get("status").and_then(|v| v.as_str()) {
+        let sf = status_filter.to_lowercase();
+        filtered.retain(|t| {
+            let s = t.last_status.to_lowercase();
+            match sf.as_str() {
+                "completed" => s == "completed" || s == "done" || s == "ok",
+                "running" => s == "running" || s == "queued" || s == "created",
+                "failed" => s.starts_with("failed") || s.contains("error") || s.contains("timeout"),
+                "queued" => s == "queued" || s == "created",
+                "not found" | "not-found" => s.contains("not found"),
+                _ => true, // unknown filter — show all
+            }
+        });
+        if filtered.is_empty() {
+            cli_println!("No crawl tasks matching status filter '{}'.", status_filter);
+            return Ok(());
+        }
+    }
+
+    // Apply --since filter
+    if let Some(since) = tool_params.get("since").and_then(|v| v.as_str()) {
+        if let Some(cutoff) = parse_relative_time(since) {
+            let cutoff_str = cutoff.to_rfc3339();
+            filtered.retain(|t| {
+                t.submitted_at.as_str() >= cutoff_str.as_str()
+            });
+        } else {
+            cli_println!("Warning: could not parse --since '{}'. Expected format: 1h, 30m, 1d", since);
+        }
+        if filtered.is_empty() {
+            cli_println!("No crawl tasks found within the last '{}'.", since);
+            return Ok(());
+        }
+    }
+
     if filtered.is_empty() {
         cli_println!("No tracked crawl tasks. Start one with 'crawl <url>'.");
         return Ok(());
     }
     cli_println!("{}", summarize_async_tasks(&filtered));
 
-    let limit = tool_params.get("limit").and_then(|v| v.as_u64()).map(|n| n as usize);
+    // Default to 20 most recent if no explicit limit
+    let limit = tool_params.get("limit").and_then(|v| v.as_u64()).map(|n| n as usize)
+        .or_else(|| {
+            // If no explicit limit and no filters applied, default to 20
+            if tool_params.get("status").is_none() && tool_params.get("since").is_none() {
+                Some(20)
+            } else {
+                None
+            }
+        });
     let offset = tool_params.get("offset").and_then(|v| v.as_u64()).map(|n| n as usize);
     let display = state::AsyncTaskList { tasks: filtered };
     cli_println!("{}", format_async_task_list(&display, limit, offset));
@@ -8997,8 +9084,19 @@ async fn handle_crawl_clear(
 ) -> Result<(), String> {
     let result = clear_crawls(client, base_url).await?;
     cli_println!("{}", result);
-    // Also clean local tracking
-    let _ = prune_async_tasks(None);
+    // Remove ALL crawl tasks from local tracking (server-side clear removes
+    // all terminal tasks; local entries pointing to cleared tasks show
+    // "not found" if left behind).
+    let mut list = read_async_tasks(None);
+    let before = list.tasks.len();
+    list.tasks.retain(|t| t.command != "crawl");
+    let removed = before - list.tasks.len();
+    if removed > 0 {
+        let _ = write_async_tasks(&list, None);
+    }
+    if removed > 0 {
+        cli_println!("Removed {} crawl task(s) from local tracking.", removed);
+    }
     Ok(())
 }
 
@@ -9284,6 +9382,11 @@ async fn handle_crawl(
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
 
+    let verbose = tool_params
+        .get("verbose")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
     if background {
         cli_println!(
             "Running in background. Task ID: {}. Use 'browser4-cli crawl list' to view all tracked tasks.",
@@ -9392,6 +9495,36 @@ async fn handle_crawl(
                     let mut page_lines: Vec<String> = Vec::new();
                     page_lines.push(format!("Crawl completed. {} pages found.", page_count));
 
+                    // Display per-seed-URL status when verbose
+                    if verbose {
+                        if let Some(seed_statuses) = parsed["seedStatuses"].as_array() {
+                            if !seed_statuses.is_empty() {
+                                page_lines.push(String::new());
+                                page_lines.push("  Seed URL Status:".to_string());
+                                for ss in seed_statuses {
+                                    let s_url = ss["url"].as_str().unwrap_or("");
+                                    let s_status = ss["status"].as_str().unwrap_or("");
+                                    let s_pages = ss["pagesReturned"].as_i64().unwrap_or(0);
+                                    let s_error = ss["error"].as_str().unwrap_or("");
+                                    let icon = match s_status {
+                                        "fetched" => "✓",
+                                        "skipped" => "⊘",
+                                        _ => "✗",
+                                    };
+                                    if s_error.is_empty() {
+                                        page_lines.push(format!(
+                                            "    {} {} → {} page(s)", icon, s_url, s_pages
+                                        ));
+                                    } else {
+                                        page_lines.push(format!(
+                                            "    {} {} → {} (error: {})", icon, s_url, s_pages, s_error
+                                        ));
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     // Display diagnostic info when 0 pages found (e.g. selector matched no elements)
                     if page_count == 0 {
                         if let Some(diag) = parsed["diagnostic"].as_str() {
@@ -9407,10 +9540,18 @@ async fn handle_crawl(
                             let page_url = page["url"].as_str().unwrap_or("");
                             let page_title = page["title"].as_str().unwrap_or("");
                             let page_depth = page["depth"].as_i64().unwrap_or(0);
+                            let extraction_error = page["extractionError"].as_str();
                             page_lines.push(format!(
                                 "  depth={} | {} | {}",
                                 page_depth, page_url, page_title
                             ));
+                            if verbose {
+                                if let Some(err) = extraction_error {
+                                    page_lines.push(format!("    ⚠ X-SQL extraction error: {}", err));
+                                } else if has_sql && page["extracted"].as_array().map_or(false, |a| a.is_empty()) {
+                                    page_lines.push("    ⚠ X-SQL extraction returned 0 rows".to_string());
+                                }
+                            }
                         }
                     }
                     let page_output = page_lines.join("\n");

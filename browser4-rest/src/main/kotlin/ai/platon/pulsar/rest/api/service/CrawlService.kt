@@ -37,6 +37,13 @@ data class CrawlRequest @JsonCreator constructor(
     @param:JsonProperty("sql") val sql: String? = null
 )
 
+data class CrawlSeedStatus(
+    val url: String,
+    val status: String,  // "fetched", "skipped", "error"
+    val pagesReturned: Int = 0,
+    val error: String? = null,
+)
+
 data class CrawlResponse(
     val taskId: String = "",
     val status: String = "CREATED",
@@ -50,6 +57,8 @@ data class CrawlResponse(
     var startedTime: java.time.Instant? = null,
     /** Set when the task reaches a terminal state (OK, TIMEOUT, ERROR). */
     var finishTime: java.time.Instant? = null,
+    /** Per-seed-URL processing status (populated when verbose). */
+    val seedStatuses: List<CrawlSeedStatus>? = null,
 )
 
 data class CrawlPageResult(
@@ -57,7 +66,9 @@ data class CrawlPageResult(
     val title: String? = null,
     val contentLength: Long? = null,
     val depth: Int = 0,
-    val extracted: List<Map<String, Any?>>? = null
+    val extracted: List<Map<String, Any?>>? = null,
+    /** Non-null when X-SQL extraction was attempted but failed on this page. */
+    val extractionError: String? = null,
 )
 
 @Service
@@ -180,17 +191,55 @@ class CrawlService(
                 }
                 val allPages = withContext(Dispatchers.IO) {
                     val results = mutableListOf<CrawlPageResult>()
-                    for (seedUrl in seedUrls) {
+                    val seedStatuses = mutableListOf<CrawlSeedStatus>()
+                    val totalSeeds = seedUrls.size
+                    for ((index, seedUrl) in seedUrls.withIndex()) {
+                        logger.info(
+                            "Crawl {}: processing seed URL {}/{}: {}",
+                            taskId, index + 1, totalSeeds, seedUrl
+                        )
                         val seedRequest = request.copy(url = seedUrl, urls = null)
-                        val pages = when {
-                            seedRequest.depth == 0 -> crawlDepth0(taskId, seedRequest)
-                            seedRequest.depth <= 1 -> crawlDepth1(taskId, seedRequest)
-                            else -> crawlDepthN(taskId, seedRequest)
+                        val pages = try {
+                            val fetched = when {
+                                seedRequest.depth == 0 -> crawlDepth0(taskId, seedRequest)
+                                seedRequest.depth <= 1 -> crawlDepth1(taskId, seedRequest)
+                                else -> crawlDepthN(taskId, seedRequest)
+                            }
+                            logger.info(
+                                "Crawl {}: seed URL {}/{} completed: {} → {} page(s)",
+                                taskId, index + 1, totalSeeds, seedUrl, fetched.size
+                            )
+                            seedStatuses.add(CrawlSeedStatus(
+                                url = seedUrl,
+                                status = "fetched",
+                                pagesReturned = fetched.size
+                            ))
+                            fetched
+                        } catch (e: Exception) {
+                            logger.error(
+                                "Crawl {}: seed URL {}/{} failed: {} — {}",
+                                taskId, index + 1, totalSeeds, seedUrl, e.message, e
+                            )
+                            seedStatuses.add(CrawlSeedStatus(
+                                url = seedUrl,
+                                status = "error",
+                                pagesReturned = 0,
+                                error = e.message
+                            ))
+                            listOf(
+                                CrawlPageResult(
+                                    url = seedUrl,
+                                    title = null,
+                                    contentLength = null,
+                                    depth = 0
+                                )
+                            )
                         }
                         results.addAll(pages)
                     }
-                    results
+                    Pair(results, seedStatuses)
                 }
+                val (allPages, seedStatuses) = allPages
                 val existingDiagnostic = taskStore.getIfPresent(taskId)?.diagnostic
                 val now = java.time.Instant.now()
                 val previous = taskStore.getIfPresent(taskId)
@@ -201,7 +250,8 @@ class CrawlService(
                     pages = allPages,
                     diagnostic = existingDiagnostic,
                     startedTime = previous?.startedTime ?: now,
-                    finishTime = now
+                    finishTime = now,
+                    seedStatuses = seedStatuses
                 )
                 taskStore.put(taskId, completed)
                 onStatusChanged(completed)
@@ -333,16 +383,17 @@ class CrawlService(
             val page = session.load(request.url, options)
             val document = session.parse(page)
 
-            val extracted = if (request.sql != null) {
+            val extractionResult = if (request.sql != null) {
                 executeSqlQuery(session, request.url, request.sql)
-            } else null
+            } else Pair(null, null)
 
             val result = CrawlPageResult(
                 url = request.url,
                 title = document.title,
                 contentLength = page.contentLength,
                 depth = 0,
-                extracted = extracted
+                extracted = extractionResult.first,
+                extractionError = extractionResult.second
             )
             logger.info("Crawl {}: fetched seed URL {}", taskId, request.url)
             return listOf(result)
@@ -404,16 +455,17 @@ class CrawlService(
             // Submit each out-link as a ParsableHyperlink so we can collect results
             outLinks.forEach { linkUrl ->
                 val hyperlink = ParsableHyperlink("$linkUrl -parse") { _page: WebPage, _document: FeaturedDocument ->
-                    val extracted = if (request.sql != null) {
+                    val extractionResult = if (request.sql != null) {
                         executeSqlQuery(session, linkUrl, request.sql)
-                    } else null
+                    } else Pair(null, null)
                     results.add(
                         CrawlPageResult(
                             url = linkUrl,
                             title = _document.title,
                             contentLength = _page.contentLength,
                             depth = 1,
-                            extracted = extracted
+                            extracted = extractionResult.first,
+                            extractionError = extractionResult.second
                         )
                     )
                     // Signal completion when the last out-link finishes processing
@@ -482,16 +534,17 @@ class CrawlService(
                 val currentDepth = extractDepth(page) ?: 1
 
                 // Record this page
-                val extracted = if (request.sql != null) {
+                val extractionResult = if (request.sql != null) {
                     executeSqlQuery(session, pageUrl, request.sql)
-                } else null
+                } else Pair(null, null)
                 results.add(
                     CrawlPageResult(
                         url = pageUrl,
                         title = document.title,
                         contentLength = page.contentLength,
                         depth = currentDepth,
-                        extracted = extracted
+                        extracted = extractionResult.first,
+                        extractionError = extractionResult.second
                     )
                 )
                 visited.add(normalizeForVisit(pageUrl))
@@ -502,12 +555,20 @@ class CrawlService(
                 if (currentDepth < maxDepth) {
                     val selector = options.outLinkSelector
                     if (!selector.isNullOrBlank()) {
-                        val newLinks = document.selectHyperlinks(selector)
+                        val allLinks = document.selectHyperlinks(selector)
                             .map { it.url }
-                            .filter { link ->
-                                val norm = normalizeForVisit(link)
-                                norm !in visited && matchesPattern(link, options.outLinkPattern)
-                            }
+                            .toList()
+                        val (dupes, fresh) = allLinks.partition { link ->
+                            normalizeForVisit(link) in visited
+                        }
+                        if (dupes.isNotEmpty()) {
+                            logger.debug(
+                                "Crawl {}: {} link(s) skipped — already visited (depth={})",
+                                taskId, dupes.size, currentDepth
+                            )
+                        }
+                        val newLinks = fresh
+                            .filter { link -> matchesPattern(link, options.outLinkPattern) }
                             .take(options.topLinks)
                             .toList()
 
@@ -582,30 +643,38 @@ class CrawlService(
     /**
      * Execute an X-SQL query against the page at [pageUrl].
      * Uses [SQLTemplate] to substitute @url placeholder, then runs the query
-     * via the session's SQL context.  Returns the result set as a list of row
-     * maps, or null on failure (logged, not propagated — a single extraction
-     * failure does not fail the whole crawl).
+     * via the session's SQL context.  Returns a pair of (extracted rows, error message).
+     * On success the error is null; on failure the rows are null and the error
+     * describes what went wrong.
      */
     private fun executeSqlQuery(
         session: PulsarSession,
         pageUrl: String,
         sql: String
-    ): List<Map<String, Any?>>? {
+    ): Pair<List<Map<String, Any?>>?, String?> {
         return try {
             val processedSql = SQLTemplate(sql).createSQL(pageUrl)
-            logger.debug("executeSqlQuery: raw='{}' processed='{}'", sql.take(200), processedSql.take(200))
+            logger.info("Crawl X-SQL: executing query on '{}': {}", pageUrl, processedSql.take(300))
 
             val sqlContext = session.context as? AbstractBrowser4SQLContext
                 ?: run {
-                    logger.warn("Session context is not an SQL context; cannot execute X-SQL")
-                    return null
+                    val msg = "Session context is not an SQL context; cannot execute X-SQL"
+                    logger.warn(msg)
+                    return Pair(null, msg)
                 }
             val rs: ResultSet = sqlContext.executeQuery(processedSql)
             val copied = ResultSetUtils.copyResultSet(rs)
-            ResultSetUtils.getTextEntitiesFromResultSet(copied)
+            val rows = ResultSetUtils.getTextEntitiesFromResultSet(copied)
+            if (rows.isEmpty()) {
+                logger.info("Crawl X-SQL: query returned 0 rows for '{}'", pageUrl)
+            } else {
+                logger.info("Crawl X-SQL: extracted {} row(s) from '{}'", rows.size, pageUrl)
+            }
+            Pair(rows, null)
         } catch (e: Exception) {
-            logger.error("Failed to execute X-SQL on '{}': {} (SQL: {})", pageUrl, e.message, sql.take(300))
-            null
+            val msg = "${e.javaClass.simpleName}: ${e.message}"
+            logger.error("Failed to execute X-SQL on '{}': {} (SQL: {})", pageUrl, msg, sql.take(300))
+            Pair(null, msg)
         }
     }
 
