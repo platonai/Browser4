@@ -2549,15 +2549,53 @@ fn extract_submitted_task_id(output: &str) -> String {
 /// (pretty-print, line-wrapping, etc.).  If that fails we fall back to the
 /// legacy regex-based extraction for backward compatibility.
 fn extract_tab_index(output: &str, url: &str) -> usize {
-    // Primary path: parse as JSON array of {index, url} objects.
+    // Primary path: try the JSON envelope format first:
+    // {"status":"ok","command":"tab-list","output":{"count":N,"tabs":[...]}}
+    if let Ok(envelope) = serde_json::from_str::<serde_json::Value>(output) {
+        if let Some(tabs) = envelope
+            .get("output")
+            .and_then(|o| o.get("tabs"))
+            .and_then(|t| t.as_array())
+        {
+            for tab in tabs {
+                if let Some(tab_url) = tab.get("url").and_then(|v| v.as_str()) {
+                    if tab_url == url {
+                        // index can be either a JSON number or string
+                        if let Some(idx) = tab
+                            .get("index")
+                            .and_then(|v| {
+                                v.as_u64()
+                                    .map(|n| n as usize)
+                                    .or_else(|| v.as_str().and_then(|s| s.parse::<usize>().ok()))
+                            })
+                        {
+                            return idx;
+                        }
+                        panic!(
+                            "Found URL '{}' in tab-list but index field is missing or not parseable:\n{}",
+                            url, output
+                        );
+                    }
+                }
+            }
+            panic!("Could not find tab index for '{}' in:\n{}", url, output);
+        }
+    }
+
+    // Secondary path: parse as plain JSON array of {index, url} objects
+    // (legacy format).
     if let Ok(tabs) = serde_json::from_str::<Vec<serde_json::Value>>(output) {
         for tab in &tabs {
             if let Some(tab_url) = tab.get("url").and_then(|v| v.as_str()) {
                 if tab_url == url {
+                    // index can be either a JSON number or string
                     if let Some(idx) = tab
                         .get("index")
-                        .and_then(|v| v.as_str())
-                        .and_then(|s| s.parse::<usize>().ok())
+                        .and_then(|v| {
+                            v.as_u64()
+                                .map(|n| n as usize)
+                                .or_else(|| v.as_str().and_then(|s| s.parse::<usize>().ok()))
+                        })
                     {
                         return idx;
                     }
@@ -2615,7 +2653,33 @@ fn extract_tab_index(output: &str, url: &str) -> usize {
 ///
 /// The output can be JSON (--json mode) or human-readable table format.
 fn extract_tab_guid(output: &str, url: &str) -> String {
-    // Primary path: parse as JSON array of {index, guid, url} objects.
+    // Primary path: try the JSON envelope format first:
+    // {"status":"ok","command":"tab-list","output":{"count":N,"tabs":[...]}}
+    if let Ok(envelope) = serde_json::from_str::<serde_json::Value>(output) {
+        if let Some(tabs) = envelope
+            .get("output")
+            .and_then(|o| o.get("tabs"))
+            .and_then(|t| t.as_array())
+        {
+            for tab in tabs {
+                if let Some(tab_url) = tab.get("url").and_then(|v| v.as_str()) {
+                    if tab_url == url {
+                        if let Some(guid) = tab.get("guid").and_then(|v| v.as_str()) {
+                            return guid.to_string();
+                        }
+                        panic!(
+                            "Found URL '{}' in tab-list but guid field is missing:\n{}",
+                            url, output
+                        );
+                    }
+                }
+            }
+            panic!("Could not find tab guid for '{}' in:\n{}", url, output);
+        }
+    }
+
+    // Secondary path: parse as plain JSON array of {index, guid, url} objects
+    // (legacy format).
     if let Ok(tabs) = serde_json::from_str::<Vec<serde_json::Value>>(output) {
         for tab in &tabs {
             if let Some(tab_url) = tab.get("url").and_then(|v| v.as_str()) {
@@ -4590,6 +4654,10 @@ fn match_bool_flag(arg: &str, long: &str, short: &str) -> bool {
 /// otherwise returns the =value or short-alias next-arg.
 fn match_value_flag_start(arg: &str, long: &str, short: &str) -> Option<String> {
     if let Some(value) = arg.strip_prefix(&format!("--{long}=")) {
+        return Some(value.to_string());
+    }
+    // Support short-flag-with-equals form: -L=ALL, -s=pattern, etc.
+    if let Some(value) = arg.strip_prefix(&format!("{short}=")) {
         return Some(value.to_string());
     }
     if arg == format!("--{long}") || arg == short {

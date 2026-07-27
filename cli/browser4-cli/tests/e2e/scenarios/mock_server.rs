@@ -1178,7 +1178,7 @@ pub(super) fn test_named_session_reuses_opened_session(ctx: &mut E2ECtx) {
     assert!(
         open_result
             .stdout
-            .contains("Session opened: swarm-session-1"),
+            .contains("Session opened: amazon (swarm-session-1)"),
         "Expected named-session open output in:\n{}",
         open_result.stdout
     );

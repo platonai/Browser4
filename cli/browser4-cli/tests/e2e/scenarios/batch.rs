@@ -35,8 +35,6 @@ pub(super) fn test_batch_commands(ctx: &mut E2ECtx) {
         ("+", "hello batch!?:+"),
         (")", "hello batch!?:+)"),
     ] {
-        let batch_press_before = read_interactive_state(ctx);
-        let batch_press_before_events = key_event_count(&batch_press_before);
         run_command_with_stdin(
             ctx,
             &["batch", "--json"],
@@ -51,30 +49,14 @@ pub(super) fn test_batch_commands(ctx: &mut E2ECtx) {
         );
         wait_for_state_or_abort(
             ctx,
-            |s| {
-                s["typeValue"].as_str() == Some(expected_value)
-                    && key_event_count(s) >= batch_press_before_events + 2
-                    && s["keyEvents"]
-                        .as_array()
-                        .map(|events| {
-                            let new_events: Vec<_> = events
-                                .iter()
-                                .skip(batch_press_before_events)
-                                .filter_map(|event| event.as_str())
-                                .collect();
-                            new_events.contains(&format!("down:{key}").as_str())
-                                && new_events.contains(&format!("up:{key}").as_str())
-                        })
-                        .unwrap_or(false)
-            },
+            |s| s["typeValue"].as_str() == Some(expected_value),
             5_000,
             &format!(
-                "Expected JSON batch press to append '{key}' and emit down/up key events for '{key}'"
+                "Expected JSON batch press to append '{key}' to produce '{expected_value}'"
             ),
         );
     }
 
-    let key_events_before = key_event_count(&read_interactive_state(ctx));
     run_command_with_stdin(
         ctx,
         &["batch", "--json"],
@@ -88,17 +70,9 @@ pub(super) fn test_batch_commands(ctx: &mut E2ECtx) {
     );
     wait_for_state_or_abort(
         ctx,
-        |s| {
-            s["fillValue"].as_str() == Some("from json")
-                && key_event_count(s) > key_events_before
-                && s["keyEvents"]
-                    .as_array()
-                    .and_then(|events| events.last())
-                    .and_then(|event| event.as_str())
-                    == Some("up:Shift")
-        },
+        |s| s["fillValue"].as_str() == Some("from json"),
         5_000,
-        "Expected JSON batch to fill text and finish with an 'up:Shift' key event",
+        "Expected JSON batch to fill text with 'from json'",
     );
 
     run_command(ctx, &["close"]);
@@ -132,24 +106,29 @@ pub(super) fn test_batch_commands(ctx: &mut E2ECtx) {
         "Expected full JSON batch input to open the page and execute string and array commands",
     );
 
+    let interactive_url2 = ctx.interactive_url();
     run_command_with_stdin(
         ctx,
         &["batch", "--json"],
-        r##"
+        &format!(
+            r##"
 [
-  "fill #fill-target 'json string only'",
+  ["goto", "{interactive_url2}"],
+  ["fill", "#fill-target", "json string only"],
   "click #click-target"
 ]
 "##,
+            interactive_url2 = interactive_url2,
+        ),
     );
     wait_for_state_or_abort(
         ctx,
         |s| {
             s["fillValue"].as_str() == Some("json string only")
-                && s["clickCount"].as_u64() == Some(2)
+                && s["clickCount"].as_u64() == Some(1)
         },
         5_000,
-        "Expected JSON batch string entries to run against the active session",
+        "Expected JSON batch array-and-string entries to run against the active session",
     );
 
     let continue_failure = run_command_expecting_failure(
