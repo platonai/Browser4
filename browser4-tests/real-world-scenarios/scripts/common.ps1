@@ -1113,8 +1113,7 @@ function ConvertTo-IssueJson {
         issues     = $issueArray
     }
 
-    $jsonSettings = [System.Web.Script.Serialization.JavaScriptSerializer]::new()
-    return $jsonSettings.Serialize($result)
+    return $result | ConvertTo-Json -Depth 10
 }
 
 function ConvertFrom-IssueJson {
@@ -1135,8 +1134,7 @@ function ConvertFrom-IssueJson {
         [string]$Json
     )
 
-    $jsonSettings = [System.Web.Script.Serialization.JavaScriptSerializer]::new()
-    $data = $jsonSettings.DeserializeObject($Json)
+    $data = $Json | ConvertFrom-Json
 
     $issues = @()
     foreach ($iss in $data.issues) {
@@ -1211,10 +1209,18 @@ function Write-IssuesToDraft {
         issues/draft directory for downstream refinement.
 
         Also extracts background context (Sections A + B) and parses individual
-        issues from Section C, then writes a SINGLE consolidated issues file
-        (.issues.md) containing all issues, their reproduction context, and a
-        reproduction guide — because the issues discovered in a single scenario
-        are often interrelated and should be analyzed together.
+        issues from Section C, then writes three files:
+
+          - .full.md    — complete raw agent output (verbatim reference)
+          - .issues.md  — consolidated issues with background, reproduction
+                           guide, and overall assessment (markdown)
+          - .issues.json — canonical JSON per the schema shared with
+                            coworker/gui/frontend/issue-model.js
+                           (machine-readable, for GUI / CI consumption)
+
+        Issues discovered in a single scenario are kept together because they
+        are often interrelated — shared root causes, shared reproduction
+        environments, or cascading failures.
 
         Always writes the full output regardless of whether individual issues
         can be parsed.
@@ -1427,6 +1433,20 @@ function Write-IssuesToDraft {
     } else {
         Write-Host "  (No individual issues parsed -- full output + background context saved)" -ForegroundColor DarkGray
     }
+
+    # 5) Write the canonical JSON file for machine consumption (GUI, CI, etc.)
+    $jsonFileName = "$timestamp-$safeName.issues.json"
+    $jsonFilePath = Join-Path $OutputDirectory $jsonFileName
+    $absoluteJsonPath = [System.IO.Path]::GetFullPath($jsonFilePath)
+    $modeLabel = if ($browser4cliMode -eq 'production') { 'production' } else { 'dev' }
+    $jsonOutput = ConvertTo-IssueJson -ScenarioName $ScenarioName `
+        -SourceFile $fullFileName `
+        -Timestamp $timestamp `
+        -Mode $modeLabel `
+        -Background $bg `
+        -Issues $issues
+    [System.IO.File]::WriteAllText($absoluteJsonPath, $jsonOutput, $utf8NoBom)
+    Write-Host "  Wrote issues JSON: $absoluteJsonPath" -ForegroundColor DarkGray
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════

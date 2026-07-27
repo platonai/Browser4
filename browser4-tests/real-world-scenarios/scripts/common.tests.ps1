@@ -1874,6 +1874,26 @@ Steps taken.
         Write-TestGroup 'JSON path: background context is extracted'
         Assert-True 'Contains Scenario Background' $issueContent.Contains('## Scenario Background')
         Assert-True 'Contains Task subsection' $issueContent.Contains('### Task')
+
+        Write-TestGroup 'JSON path: .issues.json file is written'
+        $jsonFiles = Get-ChildItem -Path $tempDir -Filter '*.issues.json'
+        Assert-Equal 'Exactly 1 issues.json' 1 $jsonFiles.Count
+        Assert-True 'JSON file is non-empty' ($jsonFiles[0].Length -gt 10)
+
+        Write-TestGroup 'JSON path: .issues.json contains valid JSON'
+        $jsonText = Get-Content -Path $jsonFiles[0].FullName -Raw -Encoding UTF8
+        $parsed = $jsonText | ConvertFrom-Json
+        Assert-Equal 'meta.scenario' 'json-test' $parsed.meta.scenario
+        Assert-Equal 'meta.mode' 'dev' $parsed.meta.mode
+        Assert-True 'meta.source references full.md' $parsed.meta.source.Contains('.full.md')
+        Assert-Equal 'issues count' 1 $parsed.issues.Count
+        Assert-Equal 'issue title' 'JSON-parsed issue' $parsed.issues[0].title
+        Assert-Equal 'issue severity' 'Critical' $parsed.issues[0].severity
+        Assert-Equal 'issue category' 'Product' $parsed.issues[0].category
+        Assert-Equal 'sections count' 6 $parsed.issues[0].sections.Count
+        Assert-Equal 'first section label' 'Reproduction' $parsed.issues[0].sections[0].label
+        Assert-NotNullOrEmpty 'background.task is present' $parsed.background.task
+        Assert-True 'review.decision is null (no human review yet)' ($null -eq $parsed.issues[0].review.decision)
     }
     finally {
         Remove-Item -Path $tempDir -Recurse -Force -ErrorAction SilentlyContinue
