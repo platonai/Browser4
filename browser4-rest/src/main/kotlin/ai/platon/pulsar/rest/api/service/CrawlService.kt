@@ -510,7 +510,7 @@ class CrawlService(
 
     private suspend fun crawlDepthN(taskId: String, request: CrawlRequest): List<CrawlPageResult> {
         // Use sequential browsers for continuous crawling (same as _5_ContinuousCrawler.kt)
-        PulsarSettings.withSequentialBrowsers().maxOpenTabs(8)
+        try { PulsarSettings.withSequentialBrowsers().maxOpenTabs(8) } catch (e: Exception) { /* optional config */ }
 
         val session = AgenticContexts.createSession()
         val results = Collections.synchronizedList(mutableListOf<CrawlPageResult>())

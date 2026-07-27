@@ -133,20 +133,102 @@ intercepted by PowerShell, either use b4w.sh, or pass flags after "--"
 # ── Subcommand: b4w install ────────────────────────────────────────────────
 # Installs the b4w command globally so you can type `b4w <subcommand>` from
 # any directory without the .ps1 / .bat / .sh extension.
+#
+# On non-Windows platforms, installation places a bash launcher script at
+#   $HOME/.local/bin/b4w
+# and ensures that directory is on the user PATH.  The launcher delegates
+# to the repo's b4w.sh via an absolute path, so the repo can be moved or
+# deleted independently — just re-run install from the new location.
+#
+# On Windows, installation adds the repo directory ($ScriptDir) to the user
+# PATH so b4w.ps1 / b4w.bat are discoverable from any shell.
 if ($CliArgs -and $CliArgs[0] -eq 'b4w' -and $CliArgs[1] -eq 'install') {
     Write-Host "Installing b4w command..." -ForegroundColor Cyan
 
-    # 1. Refresh the user PATH: remove any stale b4w repo paths, then add
-    #    the current $ScriptDir so the global `b4w` command always resolves
-    #    to this local copy.
+    # ── Non-Windows: install to ~/.local/bin ─────────────────────────────
+    if (-not ($IsWindows -or $env:OS -eq 'Windows_NT')) {
+        $globalBin = Join-Path $HOME '.local/bin'
+        $globalLauncher = Join-Path $globalBin 'b4w'
+
+        # 1. Ensure ~/.local/bin exists.
+        if (-not (Test-Path $globalBin)) {
+            New-Item -ItemType Directory -Path $globalBin -Force | Out-Null
+            Write-Host "  + Created directory: $globalBin" -ForegroundColor Green
+        }
+
+        # 2. Create/update the global `b4w` bash launcher that delegates
+        #    to this repo's b4w.sh via an absolute path.
+        #    We build the content with explicit Unix line endings ("`n")
+        #    to avoid CRLF from the .ps1 file leaking into the bash script.
+        #    "$ScriptDir" is interpolated; "`$@" produces the literal
+        #    bash $@ so arguments are forwarded correctly.
+        $launcherExisted = Test-Path $globalLauncher
+        $launcherContent = "#!/bin/bash`n" +
+            "# b4w — global launcher for browser4-cli.`n" +
+            "# Installed by: $ScriptDir/b4w.ps1`n" +
+            "# Delegates to: $ScriptDir/b4w.sh`n" +
+            "exec `"$ScriptDir/b4w.sh`" `"`$@`"`n"
+        # Use ASCII encoding (no BOM) — WriteAllText writes LF on Linux.
+        [System.IO.File]::WriteAllText($globalLauncher, $launcherContent, [System.Text.Encoding]::ASCII)
+
+        # Make it executable.
+        chmod +x $globalLauncher 2>$null
+        if ($launcherExisted) {
+            Write-Host "  + Updated global launcher: $globalLauncher" -ForegroundColor Green
+        } else {
+            Write-Host "  + Created global launcher: $globalLauncher" -ForegroundColor Green
+        }
+
+        # 3. Ensure ~/.local/bin is on the user PATH.
+        $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+        $entries = @($userPath -split ';' -ne '')
+        $alreadyOnPath = $entries | Where-Object {
+            $_.TrimEnd('\', '/') -eq $globalBin.TrimEnd('\', '/')
+        }
+        if (-not $alreadyOnPath) {
+            $entries += $globalBin
+            $newPath = $entries -join ';'
+            [Environment]::SetEnvironmentVariable("Path", $newPath, "User")
+            Write-Host "  + Added to user PATH: $globalBin" -ForegroundColor Green
+        } else {
+            Write-Host "  - Already on PATH: $globalBin" -ForegroundColor DarkGray
+        }
+
+        # Also refresh the current process PATH.
+        $procEntries = @($env:Path -split ';' -ne '')
+        $alreadyInProc = $procEntries | Where-Object {
+            $_.TrimEnd('\', '/') -eq $globalBin.TrimEnd('\', '/')
+        }
+        if (-not $alreadyInProc) {
+            $procEntries += $globalBin
+            $env:Path = $procEntries -join ';'
+        }
+
+        Write-Host ""
+        Write-Host "b4w installed globally!" -ForegroundColor Green
+        Write-Host "  Launcher : $globalLauncher"
+        Write-Host "  Repo     : $ScriptDir"
+        Write-Host ""
+        Write-Host "Restart your shell (or run 'hash -r' / reopen the terminal)"
+        Write-Host "and then you can type just:  b4w <subcommand>" -ForegroundColor Yellow
+        Write-Host ""
+        Write-Host "Examples:" -ForegroundColor White
+        Write-Host "  b4w --help"
+        Write-Host "  b4w coworker list"
+        Write-Host "  b4w test --e2e"
+        Write-Host "  b4w build"
+        Write-Host "  b4w -- snapshot -i"
+
+        Set-Location $OriginalCwd
+        exit 0
+    }
+
+    # ── Windows: add the repo directory to PATH ──────────────────────────
     $normalizedCurrent = $ScriptDir.TrimEnd('\', '/')
     $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
     $entries = $userPath -split ';' -ne ''
     $cleaned = $entries | Where-Object {
         $entry = $_.TrimEnd('\', '/')
-        # Remove entries that point to a different b4w repo (any path
-        # whose leaf is a b4w.ps1 sibling) so stale installs don't
-        # shadow the current one.
         -not (Test-Path (Join-Path $entry 'b4w.ps1')) -or $entry -eq $normalizedCurrent
     }
     $alreadyThere = $cleaned | Where-Object { $_.TrimEnd('\', '/') -eq $normalizedCurrent }
@@ -170,39 +252,6 @@ if ($CliArgs -and $CliArgs[0] -eq 'b4w' -and $CliArgs[1] -eq 'install') {
     }
     $env:Path = $procCleaned -join ';'
 
-    # 2. On non-Windows platforms, create/update the bare `b4w` bash
-    #    script (no extension) so the global launcher works from bash/zsh.
-    #    On Windows, users invoke b4w via b4w.ps1 or b4w.bat — a bash
-    #    launcher would be useless and pollute the repo root.
-    if (-not ($IsWindows -or $env:OS -eq 'Windows_NT')) {
-        $b4wBash = Join-Path $ScriptDir 'b4w'
-        $b4wExisted = Test-Path $b4wBash
-        @'
-#!/bin/bash
-# b4w — short-form launcher for browser4-cli (delegates to b4w.sh).
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-exec "$SCRIPT_DIR/b4w.sh" "$@"
-'@ | Set-Content -Path $b4wBash -Encoding UTF8 -NoNewline
-        # Append a final newline (Set-Content -NoNewline omits it for the heredoc).
-        Add-Content -Path $b4wBash -Value ""
-        if ($b4wExisted) {
-            Write-Host "  + Updated bash launcher: $b4wBash" -ForegroundColor Green
-        } else {
-            Write-Host "  + Created bash launcher: $b4wBash" -ForegroundColor Green
-        }
-
-        # 3. Ensure the bash script is executable (git update-index --chmod=+x).
-        Push-Location $ScriptDir
-        try {
-            git update-index --chmod=+x b4w 2>$null
-            if ($LASTEXITCODE -eq 0) {
-                Write-Host "  + Marked b4w as executable in git index" -ForegroundColor Green
-            }
-        } finally {
-            Pop-Location
-        }
-    }
-
     Write-Host ""
     Write-Host "b4w installed successfully!" -ForegroundColor Green
     Write-Host ""
@@ -221,16 +270,79 @@ exec "$SCRIPT_DIR/b4w.sh" "$@"
 }
 
 # ── Subcommand: b4w uninstall ──────────────────────────────────────────────
-# Removes b4w from the user's PATH and deletes the generated launcher file.
+# Removes the globally-installed b4w launcher and cleans up PATH entries.
+#
+# On non-Windows: removes ~/.local/bin/b4w (the global launcher).
+# On Windows: removes the repo directory from the user PATH.
 if ($CliArgs -and $CliArgs[0] -eq 'b4w' -and $CliArgs[1] -eq 'uninstall') {
     Write-Host "Uninstalling b4w command..." -ForegroundColor Cyan
 
-    # 1. Remove the repo root from the user's PATH environment variable.
+    # ── Non-Windows: remove the global launcher ──────────────────────────
+    if (-not ($IsWindows -or $env:OS -eq 'Windows_NT')) {
+        $globalBin = Join-Path $HOME '.local/bin'
+        $globalLauncher = Join-Path $globalBin 'b4w'
+
+        # 1. Remove the global launcher file.
+        if (Test-Path $globalLauncher) {
+            Remove-Item $globalLauncher -Force
+            Write-Host "  + Removed global launcher: $globalLauncher" -ForegroundColor Green
+        } else {
+            Write-Host "  - Global launcher not found: $globalLauncher" -ForegroundColor DarkGray
+        }
+
+        # 2. Also clean up the legacy repo-local bash launcher if it exists
+        #    (from b4w installs prior to the global-install change).
+        $legacyLauncher = Join-Path $ScriptDir 'b4w'
+        if (Test-Path $legacyLauncher) {
+            # Only remove if it looks like a generated launcher (not a
+            # hand-maintained script).
+            $content = Get-Content $legacyLauncher -Raw -ErrorAction SilentlyContinue
+            if ($content -match 'b4w — short-form launcher') {
+                Remove-Item $legacyLauncher -Force
+                Write-Host "  + Removed legacy repo launcher: $legacyLauncher" -ForegroundColor Green
+            }
+        }
+
+        # 3. Clean any b4w-repo PATH entries from the user PATH (legacy).
+        $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+        $normalizedRepo = $ScriptDir.TrimEnd('\', '/')
+        $entries = @($userPath -split ';' -ne '')
+        $cleaned = $entries | Where-Object {
+            $entry = $_.TrimEnd('\', '/')
+            # Remove entries that point to this repo (legacy install style).
+            -not (Test-Path (Join-Path $entry 'b4w.ps1') -and $entry -eq $normalizedRepo)
+        }
+        if ($cleaned.Count -ne $entries.Count) {
+            $newPath = $cleaned -join ';'
+            [Environment]::SetEnvironmentVariable("Path", $newPath, "User")
+            Write-Host "  + Removed repo from user PATH: $ScriptDir" -ForegroundColor Green
+
+            # Also refresh current process PATH.
+            $procEntries = @($env:Path -split ';' -ne '')
+            $procCleaned = $procEntries | Where-Object {
+                $e = $_.TrimEnd('\', '/')
+                -not (Test-Path (Join-Path $e 'b4w.ps1') -and $e -eq $normalizedRepo)
+            }
+            if ($procCleaned.Count -ne $procEntries.Count) {
+                $env:Path = $procCleaned -join ';'
+            }
+        } else {
+            Write-Host "  - Repo not on user PATH (nothing to clean)" -ForegroundColor DarkGray
+        }
+
+        Write-Host ""
+        Write-Host "b4w uninstalled successfully!" -ForegroundColor Green
+        Write-Host ""
+        Write-Host "Note: ~/.local/bin remains on your PATH (used by other tools)." -ForegroundColor DarkGray
+        Write-Host "To reinstall later:  ./b4w.ps1 b4w install"
+
+        Set-Location $OriginalCwd
+        exit 0
+    }
+
+    # ── Windows: remove the repo directory from PATH ─────────────────────
     $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
     if ($userPath -like "*$ScriptDir*") {
-        # Split on ';' and filter out the ScriptDir entry (handle trailing
-        # backslash variations and the entry possibly being at start, middle,
-        # or end of the PATH string).
         $entries = $userPath -split ';' -ne ''
         $cleaned = $entries | Where-Object {
             $normalized = $_.TrimEnd('\', '/')
@@ -252,17 +364,6 @@ if ($CliArgs -and $CliArgs[0] -eq 'b4w' -and $CliArgs[1] -eq 'uninstall') {
         }
         $env:Path = $cleaned -join ';'
         Write-Host "  + Removed from current session PATH" -ForegroundColor Green
-    }
-
-    # 2. Delete the `b4w` bash launcher (non-Windows only — matches install).
-    if (-not ($IsWindows -or $env:OS -eq 'Windows_NT')) {
-        $b4wBash = Join-Path $ScriptDir 'b4w'
-        if (Test-Path $b4wBash) {
-            Remove-Item $b4wBash -Force
-            Write-Host "  + Deleted bash launcher: $b4wBash" -ForegroundColor Green
-        } else {
-            Write-Host "  - Bash launcher not found (already removed): $b4wBash" -ForegroundColor DarkGray
-        }
     }
 
     Write-Host ""

@@ -64,11 +64,11 @@ class CrawlToolExecutor(
 
         return when (functionName) {
             "submit" -> {
-                val url = paramString(args, "url", functionName)!!
+                val url = paramString(args, "url", functionName, required = false, default = "") ?: ""
+                val urls = paramStringList(args, "urls", functionName, required = false).ifEmpty { null }
                 val depth = paramInt(args, "depth", functionName, required = false, default = 1) ?: 1
                 val crawlArgs = paramString(args, "args", functionName, required = false, default = "") ?: ""
                 val sql = paramString(args, "sql", functionName, required = false, default = null)
-                val urls: List<String>? = paramStringList(args, "urls", functionName, required = false).ifEmpty { null }
                 crawlService.submit(CrawlRequest(url = url, args = crawlArgs, depth = depth, sql = sql, urls = urls))
             }
             "status" -> {
