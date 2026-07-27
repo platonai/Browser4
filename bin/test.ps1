@@ -1,12 +1,12 @@
 #!/usr/bin/env pwsh
 
-# ═══════════════════════════════════════════════════════════════════
+# ===================================================================
 # CROSS-PLATFORM: This script must run on Linux, macOS, and Windows.
 # - Use $IsWindows / $IsLinux / $IsMacOS for platform detection.
 # - Use "($IsWindows -or $env:OS -eq 'Windows_NT')" for PS 5.1 compat.
 # - Windows-only env vars ($env:TEMP) need $env:TMPDIR fallback.
 # - Guard "chcp" and other Windows-only commands behind platform checks.
-# ═══════════════════════════════════════════════════════════════════
+# ===================================================================
 
 [CmdletBinding(PositionalBinding = $false)]
 param(
@@ -51,9 +51,9 @@ $mvnwScript = if ($IsWindows -or $env:OS -eq 'Windows_NT') {
     Join-Path $repoRoot 'mvnw'
 }
 
-# ═══════════════════════════════════════════════════════════════════
+# ===================================================================
 # Internal helper functions
-# ═══════════════════════════════════════════════════════════════════
+# ===================================================================
 
 function Write-Rule {
     <#
@@ -73,7 +73,7 @@ function Write-CommandBanner {
     .PARAMETER Subtitle
         Optional detail line (e.g. the full command being run).
     .PARAMETER Icon
-        Optional status icon (e.g. '✅', '❌', '[SHOW]').
+        Optional status icon (e.g. '[PASS]', '[FAIL]', '[SHOW]').
     #>
     param(
         [string]$Label,
@@ -130,18 +130,18 @@ function Invoke-CommandAndReport {
     }
 
     if ($exitCode -ne 0) {
-        Write-CommandBanner -Label "$Label failed with exit code $exitCode" -Icon '❌'
+        Write-CommandBanner -Label "$Label failed with exit code $exitCode" -Icon '[FAIL]'
         if (-not $NoExit) { exit $exitCode }
         return $exitCode
     }
 
-    Write-CommandBanner -Label "$Label completed successfully" -Icon '✅'
+    Write-CommandBanner -Label "$Label completed successfully" -Icon '[PASS]'
     return $exitCode
 }
 
-# ═══════════════════════════════════════════════════════════════════
+# ===================================================================
 # Usage
-# ═══════════════════════════════════════════════════════════════════
+# ===================================================================
 
 function Print-Usage {
     param([int]$ExitCode = 1)
@@ -193,6 +193,8 @@ function Print-Usage {
     Write-Host "  test.ps1 e2e                        # Run end-to-end tests"
     Write-Host "  test.ps1 cli                        # Run CLI tests (cargo test --test e2e -- --nocapture)"
     Write-Host "  test.ps1 cli --help                 # Run CLI tests with extra cargo test args"
+    Write-Host "  test.ps1 cli -- -L=ALL -b -i       # Run all levels, incl. batch & install scenarios"
+    Write-Host "  test.ps1 cli -- -s=tool_* -L=ALL    # Run scenarios matching a glob pattern (ALL levels)"
     Write-Host "  test.ps1 mock-site -Dmock.site.port=18080"
     Write-Host "  test.ps1 mock-site --force              # Auto-kill process on port 18080"
     Write-Host "  test.ps1 skills                     # Run skills-focused agentic tests"
@@ -220,9 +222,9 @@ function Exit-UnknownTestType([string]$testType) {
     exit 1
 }
 
-# ═══════════════════════════════════════════════════════════════════
+# ===================================================================
 # Execution functions
-# ═══════════════════════════════════════════════════════════════════
+# ===================================================================
 
 function Invoke-MavenTests([string[]]$testTypes, [string[]]$additionalMvnArgs) {
     if (-not (Test-Path $mvnwScript)) {
@@ -284,7 +286,7 @@ function Invoke-MavenTests([string[]]$testTypes, [string[]]$additionalMvnArgs) {
         -Label "Maven tests: $($testTypes -join ', ')" -NoExit
     $sw.Stop()
 
-    # ── Persist session ──────────────────────────────────────────────────
+    # -- Persist session --------------------------------------------------
     if ($script:SessionAvailable) {
         Update-TestSessionSystem -RepoRoot $repoRoot -SessionPath $script:SessionPath
         $status = if ($exitCode -eq 0) { 'pass' } else { 'fail' }
@@ -343,11 +345,11 @@ function Invoke-Browser4CliTests([string[]]$additionalArgs) {
     Push-Location $browser4CliDir
     try {
         Write-Host ''
-        Write-Host '── Rust test output (println! etc.) ──' -ForegroundColor DarkCyan
+        Write-Host '-- Rust test output (println! etc.) --' -ForegroundColor DarkCyan
         $global:LASTEXITCODE = 0
         & cargo @cargoArgs
         $exitCode = $LASTEXITCODE
-        Write-Host '── End Rust output ──' -ForegroundColor DarkCyan
+        Write-Host '-- End Rust output --' -ForegroundColor DarkCyan
     } catch {
         Write-Error "Failed to execute Browser4 CLI tests: $_"
         exit 1
@@ -357,12 +359,12 @@ function Invoke-Browser4CliTests([string[]]$additionalArgs) {
     $sw.Stop()
 
     if ($exitCode -ne 0) {
-        Write-CommandBanner -Label "Browser4 CLI tests failed with exit code $exitCode" -Icon '❌'
+        Write-CommandBanner -Label "Browser4 CLI tests failed with exit code $exitCode" -Icon '[FAIL]'
     } else {
-        Write-CommandBanner -Label 'Browser4 CLI tests completed successfully' -Icon '✅'
+        Write-CommandBanner -Label 'Browser4 CLI tests completed successfully' -Icon '[PASS]'
     }
 
-    # ── Persist session ──────────────────────────────────────────────────
+    # -- Persist session --------------------------------------------------
     if ($script:SessionAvailable) {
         Update-TestSessionSystem -RepoRoot $repoRoot -SessionPath $script:SessionPath
         $status = if ($exitCode -eq 0) { 'pass' } else { 'fail' }
@@ -417,7 +419,7 @@ function Invoke-MockSiteBoot([string[]]$additionalArgs) {
         }
     }
 
-    # ── Pre-check port availability ──────────────────────────────────────
+    # -- Pre-check port availability --------------------------------------
     $mockSitePort = 18080
     foreach ($jvmArg in $mockSiteJvmArgs) {
         if ($jvmArg -match '^-Dmock\.site\.port[= ](\d+)$') {
@@ -522,7 +524,7 @@ function Invoke-RealWorldScenarioTests([string[]]$additionalArgs) {
     $scenarioRunner = Join-Path $rwsScriptsDir 'run-tests.ps1'
     $taskRunner = Join-Path $rwsScriptsDir 'run-task.ps1'
 
-    # ── Determine mode from additional args ──────────────────────────────────
+    # -- Determine mode from additional args ----------------------------------
     $mode = ''
     $modeLabel = ''
     $taskFile = $null
@@ -616,7 +618,7 @@ function Invoke-RealWorldScenarioTests([string[]]$additionalArgs) {
         }
     }
 
-    # ── No mode flag provided: show RWS help ──────────────────────────────────
+    # -- No mode flag provided: show RWS help ----------------------------------
     if ($mode -eq '') {
         Write-Host ''
         Write-Host 'Usage: test.ps1 rws <mode> [options]'
@@ -645,7 +647,7 @@ function Invoke-RealWorldScenarioTests([string[]]$additionalArgs) {
         exit 0
     }
 
-    # ── Resolve dir path relative to repo root ──────────────────────────────
+    # -- Resolve dir path relative to repo root ------------------------------
     if ($mode -eq 'dir' -and $taskDir) {
         if (-not [System.IO.Path]::IsPathRooted($taskDir)) {
             $taskDir = Join-Path $repoRoot $taskDir
@@ -656,7 +658,7 @@ function Invoke-RealWorldScenarioTests([string[]]$additionalArgs) {
 
     Write-CommandBanner -Label "Running $modeLabel..."
 
-    # ── Resolve the script path for the chosen mode ──────────────────────────
+    # -- Resolve the script path for the chosen mode --------------------------
     if ($mode -eq 'scenarios') {
         $runner = $scenarioRunner
         $runnerKind = 'Scenario runner'
@@ -679,7 +681,7 @@ function Invoke-RealWorldScenarioTests([string[]]$additionalArgs) {
         exit 1
     }
 
-    # ── Build pwsh invocation ────────────────────────────────────────────────
+    # -- Build pwsh invocation ------------------------------------------------
     $pwshArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $runner)
 
     if ($mode -eq 'task') {
@@ -691,7 +693,7 @@ function Invoke-RealWorldScenarioTests([string[]]$additionalArgs) {
 
     $pwshArgs += $passThroughArgs
 
-    # ── Show / DryRun ────────────────────────────────────────────────────────
+    # -- Show / DryRun --------------------------------------------------------
     if ($script:Show) {
         $envHint = if ($setProduction) { '$env:BROWSER4CLI_MODE=production ' } else { '' }
         Write-CommandBanner -Label '[SHOW] Would execute:' -Subtitle "  ${envHint}pwsh $($pwshArgs -join ' ')"
@@ -704,7 +706,7 @@ function Invoke-RealWorldScenarioTests([string[]]$additionalArgs) {
         return
     }
 
-    # ── Execute with real-time agent output monitoring ────────────────────
+    # -- Execute with real-time agent output monitoring --------------------
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
 
     # Clean up stale marker from previous runs
@@ -717,11 +719,11 @@ function Invoke-RealWorldScenarioTests([string[]]$additionalArgs) {
 
         if ($setProduction) { $env:BROWSER4CLI_MODE = 'production' }
 
-        # ── Start child pwsh process ──────────────────────────────────────
+        # -- Start child pwsh process --------------------------------------
         $proc = Start-Process -FilePath 'pwsh' -ArgumentList $pwshArgs `
             -NoNewWindow -PassThru
 
-        # ── Monitor capture file in real-time ─────────────────────────────
+        # -- Monitor capture file in real-time -----------------------------
         $capturePath = $null
         $lastSize = 0
         $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
@@ -769,7 +771,7 @@ function Invoke-RealWorldScenarioTests([string[]]$additionalArgs) {
             Start-Sleep -Seconds 2
         }
 
-        # ── Final drain of any remaining output ───────────────────────────
+        # -- Final drain of any remaining output ---------------------------
         if ($capturePath -and (Test-Path -LiteralPath $capturePath)) {
             try {
                 $content = [System.IO.File]::ReadAllText($capturePath, $utf8NoBom)
@@ -801,20 +803,20 @@ function Invoke-RealWorldScenarioTests([string[]]$additionalArgs) {
     $exitCode = $LASTEXITCODE
     $sw.Stop()
 
-    # ── Report exit status ────────────────────────────────────────────────
+    # -- Report exit status ------------------------------------------------
     if ($exitCode -ne 0) {
-        Write-CommandBanner -Label "$modeLabel failed with exit code $exitCode" -Icon '❌'
+        Write-CommandBanner -Label "$modeLabel failed with exit code $exitCode" -Icon '[FAIL]'
         if ($exitCode -eq 124) {
             Write-Host '  Task timed out.' -ForegroundColor Yellow
         }
     } else {
-        Write-CommandBanner -Label "$modeLabel completed successfully" -Icon '✅'
+        Write-CommandBanner -Label "$modeLabel completed successfully" -Icon '[PASS]'
     }
 
-    # ── Clean up marker ────────────────────────────────────────────────────
+    # -- Clean up marker ----------------------------------------------------
     Remove-Item -LiteralPath $markerFile -ErrorAction SilentlyContinue
 
-    # ── Persist session ──────────────────────────────────────────────────
+    # -- Persist session --------------------------------------------------
     if ($script:SessionAvailable) {
         Update-TestSessionSystem -RepoRoot $repoRoot -SessionPath $script:SessionPath
         $status = if ($exitCode -eq 0) { 'pass' } else { 'fail' }
@@ -855,7 +857,7 @@ function Invoke-PowerShellTests([string[]]$additionalArgs) {
         return
     }
 
-    # ── Show / DryRun ────────────────────────────────────────────────────────
+    # -- Show / DryRun --------------------------------------------------------
     if ($script:Show -or $script:DryRun) {
         $label = if ($script:Show) { '[SHOW] Would execute' } else { '[DRY RUN] Would execute' }
         Write-CommandBanner -Label $label
@@ -871,11 +873,11 @@ function Invoke-PowerShellTests([string[]]$additionalArgs) {
 
     Write-CommandBanner -Label "Running $($testFiles.Count) PowerShell test file(s)..."
 
-    # ── Ensure UTF-8 encoding when capturing child pwsh output ────────────
+    # -- Ensure UTF-8 encoding when capturing child pwsh output ------------
     # Child test processes output Unicode (emoji, box-drawing chars) via
     # Write-Host.  On Windows the default console encoding is the system
     # OEM code page, which cannot decode UTF-8 bytes and produces garbled
-    # text like "馃Ч" instead of "🧹".  Align with what the children write.
+    # text like "[garbled text]" instead of "[broom emoji]".  Align with what the children write.
     $originalOutputEncoding = [Console]::OutputEncoding
     [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
@@ -893,7 +895,7 @@ function Invoke-PowerShellTests([string[]]$additionalArgs) {
     foreach ($file in $testFiles) {
         $relativePath = $file.FullName.Substring($repoRoot.Length + 1)
         Write-Host ''
-        Write-Host "  ▶ $relativePath" -ForegroundColor Cyan
+        Write-Host "  > $relativePath" -ForegroundColor Cyan
 
         # Detect if this file uses Pester (contains Describe/Context blocks)
         $usesPester = Select-String -Path $file.FullName -Pattern '\b(Describe|Context)\s+[''"'']' -Quiet -ErrorAction SilentlyContinue
@@ -902,9 +904,9 @@ function Invoke-PowerShellTests([string[]]$additionalArgs) {
         $exitCode = 0
 
         if ($usesPester) {
-            # This is a Pester test — run via Invoke-Pester
+            # This is a Pester test -- run via Invoke-Pester
             if (-not $pesterAvailable) {
-                Write-Host "    ⚠ SKIP: Pester 5+ not found. Install with: Install-Module -Name Pester -Force -Scope CurrentUser -SkipPublisherCheck" -ForegroundColor Yellow
+                Write-Host "    [WARN] SKIP: Pester 5+ not found. Install with: Install-Module -Name Pester -Force -Scope CurrentUser -SkipPublisherCheck" -ForegroundColor Yellow
                 [void]$perFileResults.Add(@{
                     path        = $relativePath
                     status      = 'skip'
@@ -927,7 +929,7 @@ function Invoke-PowerShellTests([string[]]$additionalArgs) {
             $exitCode = $LASTEXITCODE
         }
         else {
-            # Plain PowerShell test — run directly, capture output for diagnostics
+            # Plain PowerShell test -- run directly, capture output for diagnostics
             $rawOutput = & pwsh -NoProfile -ExecutionPolicy Bypass -File $file.FullName @additionalArgs *>&1
             $exitCode = $LASTEXITCODE
             # Replay captured output so the console still shows test progress
@@ -950,25 +952,25 @@ function Invoke-PowerShellTests([string[]]$additionalArgs) {
         })
 
         if ($exitCode -eq 0) {
-            Write-Host "    ✅ PASS ($elapsed)" -ForegroundColor Green
+            Write-Host "    [PASS] PASS ($elapsed)" -ForegroundColor Green
             $passed++
         }
         else {
-            Write-Host "    ❌ FAIL (exit $exitCode, $elapsed)" -ForegroundColor Red
+            Write-Host "    [FAIL] FAIL (exit $exitCode, $elapsed)" -ForegroundColor Red
             [void]$failed.Add(@{ Path = $relativePath; ExitCode = $exitCode })
-            # ── Extract failure details from captured output ──────────────
-            # Match assertion-failure lines (indented "FAIL  Label …") and the
+            # -- Extract failure details from captured output --------------
+            # Match assertion-failure lines (indented "FAIL  Label ...") and the
             # test file's own summary ("=== FAILURE DETAILS ===") but exclude
-            # log lines like "[ERROR] [docker …]" or "[ERROR] [fix-links.py …]".
+            # log lines like "[ERROR] [docker ...]" or "[ERROR] [fix-links.py ...]".
             $failLines = @($rawOutput | Where-Object {
                 $_ -is [string] -and (
                     $_ -match '^\s+FAIL\s+\S' -or
                     $_ -match '=== FAILURE DETAILS ===' -or
-                    $_ -match '^\s+❌\s'
+                    $_ -match '^\s+[FAIL]\s'
                 )
             })
             if ($failLines.Count -gt 0) {
-                Write-Host "    ── Failure details ──" -ForegroundColor DarkYellow
+                Write-Host "    -- Failure details --" -ForegroundColor DarkYellow
                 $maxShow = 30
                 $failLines | Select-Object -First $maxShow | ForEach-Object {
                     Write-Host "      $_" -ForegroundColor DarkYellow
@@ -990,17 +992,17 @@ function Invoke-PowerShellTests([string[]]$additionalArgs) {
                     )
                 })
                 if ($errorLines.Count -gt 0) {
-                    Write-Host "    ── Error details ──" -ForegroundColor DarkYellow
+                    Write-Host "    -- Error details --" -ForegroundColor DarkYellow
                     $errorLines | ForEach-Object {
                         Write-Host "      $_" -ForegroundColor DarkYellow
                     }
                 } else {
-                    # No structured error found — show last 50 lines of output
+                    # No structured error found -- show last 50 lines of output
                     # (upped from 15: long test files like common.tests.ps1 need
                     # more context to surface the cause of a non-zero exit).
                     $tail = @($rawOutput | Where-Object { $_ -is [string] } | Select-Object -Last 50)
                     if ($tail.Count -gt 0) {
-                        Write-Host "    ── Last output lines (no FAIL/error markers found) ──" -ForegroundColor DarkYellow
+                        Write-Host "    -- Last output lines (no FAIL/error markers found) --" -ForegroundColor DarkYellow
                         $tail | ForEach-Object { Write-Host "      $_" -ForegroundColor DarkGray }
                     }
                 }
@@ -1017,19 +1019,19 @@ function Invoke-PowerShellTests([string[]]$additionalArgs) {
     Write-Host ''
     Write-Rule
     if ($failed.Count -eq 0) {
-        Write-Host "✅ PowerShell tests: $passed passed, 0 failed ($total total)" -ForegroundColor Green
+        Write-Host "[PASS] PowerShell tests: $passed passed, 0 failed ($total total)" -ForegroundColor Green
     }
     else {
-        Write-Host "❌ PowerShell tests: $passed passed, $($failed.Count) failed ($total total)" -ForegroundColor Red
+        Write-Host "[FAIL] PowerShell tests: $passed passed, $($failed.Count) failed ($total total)" -ForegroundColor Red
         Write-Host ''
         Write-Host 'Failed files (see failure details above):' -ForegroundColor Red
         foreach ($f in $failed) {
-            Write-Host "  ❌ $($f.Path) (exit $($f.ExitCode))" -ForegroundColor Red
+            Write-Host "  [FAIL] $($f.Path) (exit $($f.ExitCode))" -ForegroundColor Red
         }
     }
     Write-Rule
 
-    # ── Persist session ──────────────────────────────────────────────────
+    # -- Persist session --------------------------------------------------
     if ($script:SessionAvailable) {
         Update-TestSessionSystem -RepoRoot $repoRoot -SessionPath $script:SessionPath
         Update-TestSessionResult -RepoRoot $repoRoot -TestKey 'ps' `
@@ -1182,7 +1184,7 @@ function Invoke-SessionCommand([string[]]$additionalArgs) {
     # Select-Object -Skip keeps result as array (avoids PowerShell if-statement unwrap)
     $subArgs = @($additionalArgs | Select-Object -Skip 1)
 
-    # ── Help (no subcommand or unknown) ───────────────────────────────
+    # -- Help (no subcommand or unknown) -------------------------------
     if ($subcommand -eq '' -or $subcommand -notin @('list', 'view')) {
         if ($subcommand -ne '' -and $subcommand -notin @('list', 'view')) {
             Write-Error "Unknown session subcommand '$subcommand'. Valid subcommands: list, view"
@@ -1207,22 +1209,22 @@ function Invoke-SessionCommand([string[]]$additionalArgs) {
         exit 0
     }
 
-    # ── Guard: .test-sessions directory must exist ────────────────────
+    # -- Guard: .test-sessions directory must exist --------------------
     if (-not (Test-Path -LiteralPath $sessionsDir -PathType Container)) {
         Write-Host 'No .test-sessions directory found. Run some tests first.' -ForegroundColor Yellow
         exit 0
     }
 
-    # ═══════════════════════════════════════════════════════════════════
+    # ===================================================================
     # session list [--all] [--count N]
-    # ═══════════════════════════════════════════════════════════════════
+    # ===================================================================
     if ($subcommand -eq 'list') {
         if ($script:Show -or $script:DryRun) {
             Write-Host "[$(if ($script:Show) { 'SHOW' } else { 'DRY RUN' })] Would list sessions in: $sessionsDir"
             return
         }
 
-        # ── Parse list-specific flags ──────────────────────────────────
+        # -- Parse list-specific flags ----------------------------------
         $listAll = $false
         $listCount = 0  # 0 = use default
 
@@ -1256,7 +1258,7 @@ function Invoke-SessionCommand([string[]]$additionalArgs) {
             exit 0
         }
 
-        # ── Paginate ───────────────────────────────────────────────────
+        # -- Paginate ---------------------------------------------------
         $defaultLimit = 15
         $limit = if ($listAll) { $sessionDirs.Count }
                  elseif ($listCount -gt 0) { [math]::Min($listCount, $sessionDirs.Count) }
@@ -1265,7 +1267,7 @@ function Invoke-SessionCommand([string[]]$additionalArgs) {
         $shown = $sessionDirs | Select-Object -First $limit
         $remaining = $sessionDirs.Count - $limit
 
-        # ── Heading ────────────────────────────────────────────────────
+        # -- Heading ----------------------------------------------------
         Write-Host ''
         if ($listAll) {
             Write-Host "Test sessions ($($sessionDirs.Count) total, newest first):" -ForegroundColor Cyan
@@ -1276,7 +1278,7 @@ function Invoke-SessionCommand([string[]]$additionalArgs) {
         }
         Write-Host ''
 
-        # ── Print rows ─────────────────────────────────────────────────
+        # -- Print rows -------------------------------------------------
         foreach ($dir in $shown) {
             $sessionId = $dir.Name
             $sessionPath = Join-Path $dir.FullName 'test-session.json'
@@ -1285,7 +1287,7 @@ function Invoke-SessionCommand([string[]]$additionalArgs) {
                 $json = Get-Content -LiteralPath $sessionPath -Raw -Encoding UTF8 -ErrorAction Stop
                 $obj = $json | ConvertFrom-Json -ErrorAction Stop
             } catch {
-                Write-Host "  $(('▶' + ' ' + $sessionId).PadRight(46)) ⚠ unreadable" -ForegroundColor DarkYellow
+                Write-Host "  $(('>' + ' ' + $sessionId).PadRight(46)) [WARN] unreadable" -ForegroundColor DarkYellow
                 continue
             }
 
@@ -1307,26 +1309,26 @@ function Invoke-SessionCommand([string[]]$additionalArgs) {
                     $key = $prop.Name
                     $val = $prop.Value
                     if (-not $val) { continue }
-                    $status = if ($val.lastStatus -eq 'pass') { '✅' }
-                    elseif ($val.lastStatus -eq 'fail') { '❌' }
-                    else { '·' }
+                    $status = if ($val.lastStatus -eq 'pass') { '[PASS]' }
+                    elseif ($val.lastStatus -eq 'fail') { '[FAIL]' }
+                    else { '-' }
                     $testSummaries += "$status$key"
                 }
             }
 
             $testLine = if ($testSummaries.Count -gt 0) { ($testSummaries -join '  ') } else { '(no test results)' }
 
-            # ── Print session row ──────────────────────────────────────
-            Write-Host "  ▶ $sessionId" -ForegroundColor White
+            # -- Print session row --------------------------------------
+            Write-Host "  > $sessionId" -ForegroundColor White
             Write-Host "    Date:   $friendlyDate"
             Write-Host "    Branch: $branch  Commit: $commit"
             Write-Host "    Tests:  $testLine"
             Write-Host ''
         }
 
-        # ── Footer ─────────────────────────────────────────────────────
+        # -- Footer -----------------------------------------------------
         if ($remaining -gt 0) {
-            Write-Host "  … $remaining more session(s). Use " -NoNewline
+            Write-Host "  ... $remaining more session(s). Use " -NoNewline
             Write-Host '--all' -ForegroundColor Yellow -NoNewline
             Write-Host ' to list all, or ' -NoNewline
             Write-Host '--count N' -ForegroundColor Yellow -NoNewline
@@ -1338,9 +1340,9 @@ function Invoke-SessionCommand([string[]]$additionalArgs) {
         exit 0
     }
 
-    # ═══════════════════════════════════════════════════════════════════
+    # ===================================================================
     # session view <sessionId>
-    # ═══════════════════════════════════════════════════════════════════
+    # ===================================================================
     if ($subcommand -eq 'view') {
         if ($subArgs.Count -eq 0) {
             Write-Error "session view requires a <sessionId>. Use 'session list' to see available sessions."
@@ -1396,9 +1398,9 @@ function Invoke-SessionCommand([string[]]$additionalArgs) {
     }
 }
 
-# ═══════════════════════════════════════════════════════════════════
+# ===================================================================
 # Argument parsing
-# ═══════════════════════════════════════════════════════════════════
+# ===================================================================
 
 # Dispatch-category lookup table.  Maps every known test-type name
 # (and its aliases) to a category used later in the dispatch block.
@@ -1486,7 +1488,7 @@ foreach ($arg in $ScriptArgs) {
     }
 
     # First non-test-type arg switches us to pass-through mode.
-    # After this point, all tokens — flags and bare words — are forwarded.
+    # After this point, all tokens -- flags and bare words -- are forwarded.
     $parsingTestTypes = $false
     $additionalArgs += $arg
 }
@@ -1496,9 +1498,9 @@ if ($testTypes.Count -eq 0) {
     $testTypes += 'fast'
 }
 
-# ═══════════════════════════════════════════════════════════════════
+# ===================================================================
 # Load test-session module (soft dependency, skipped when -NoSession)
-# ═══════════════════════════════════════════════════════════════════
+# ===================================================================
 $script:SessionAvailable = $false
 $script:_NextIsSessionPath = $false
 if (-not $script:NoSession) {
@@ -1515,9 +1517,9 @@ $script:TestLogDir = Join-Path $repoRoot '.test' (
     (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd-HHmmss')
 )
 
-# ═══════════════════════════════════════════════════════════════════
+# ===================================================================
 # Dispatch
-# ═══════════════════════════════════════════════════════════════════
+# ===================================================================
 
 # Handle 'resume' test type: find last failed module and resume with -rf
 if ($testTypes -contains 'resume') {
@@ -1568,7 +1570,7 @@ if ($launchTargets.Count -gt 0 -and (($mavenTests.Count -gt 0) -or ($cliTests.Co
     exit 1
 }
 
-# ── Execute ──────────────────────────────────────────────────────────
+# -- Execute ----------------------------------------------------------
 
 if ($mavenTests.Count -gt 0) {
     Invoke-MavenTests -testTypes $mavenTests -additionalMvnArgs $additionalArgs
