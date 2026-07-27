@@ -111,6 +111,9 @@ if (Test-Path $agentHelper) { . $agentHelper }
 $reviewHelper = Join-Path $PSScriptRoot 'scripts\review.ps1'
 if (Test-Path $reviewHelper) { . $reviewHelper }
 
+$stateHelper = Join-Path $PSScriptRoot 'scripts\common\State.ps1'
+if (Test-Path $stateHelper) { . $stateHelper }
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # Shared helper functions
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -347,7 +350,8 @@ function Invoke-Draft {
         [string]$Content = '',
         [string]$Prompt = '',
         [switch]$Edit,
-        [string]$Name = ''
+        [string]$Name = '',
+        [switch]$RefreshEditor
     )
 
     $dirs = Get-TaskDirectories
@@ -418,6 +422,10 @@ Created: $(Get-CoworkerTimestamp)
 
     # Open editor if requested
     if ($Edit) {
+        if ($RefreshEditor) {
+            Write-ConsoleLine -Message 'Refreshing editor cache...' -ForegroundColor Cyan
+            Set-StateEditor -Command $null
+        }
         $editorCmd = Find-BestEditor
         Write-ConsoleLine -Message "Opening editor: $($editorCmd -join ' ')" -ForegroundColor Cyan
         try {
@@ -438,6 +446,14 @@ Created: $(Get-CoworkerTimestamp)
     blocks until the user closes the file.
 #>
 function Find-BestEditor {
+    # Check state cache first (skips the full tier scan on repeat runs)
+    $cached = Get-StateEditor
+    if ($cached) {
+        return $cached
+    }
+
+    $desc = ''
+
     # Tier 1: Modern GUI editors with --wait support (VS Code family)
     $tier1 = @(
         @{ Exe = 'code';     WaitFlag = '--wait'; Desc = 'VS Code' }
@@ -447,7 +463,9 @@ function Find-BestEditor {
     )
     foreach ($e in $tier1) {
         if (Get-Command $e.Exe -ErrorAction SilentlyContinue) {
-            return @($e.Exe, $e.WaitFlag)
+            $result = @($e.Exe, $e.WaitFlag)
+            Set-StateEditor -Command $result -Desc $e.Desc
+            return $result
         }
     }
 
@@ -457,18 +475,24 @@ function Find-BestEditor {
     )
     foreach ($e in $tier2) {
         if (Get-Command $e.Exe -ErrorAction SilentlyContinue) {
-            return @($e.Exe, $e.WaitFlag)
+            $result = @($e.Exe, $e.WaitFlag)
+            Set-StateEditor -Command $result -Desc $e.Desc
+            return $result
         }
     }
 
     # Tier 3: Sublime Text
     if (Get-Command 'subl' -ErrorAction SilentlyContinue) {
-        return @('subl', '--wait')
+        $result = @('subl', '--wait')
+        Set-StateEditor -Command $result -Desc 'Sublime Text'
+        return $result
     }
 
     # Tier 4: Notepad++ (Windows)
     if (Get-Command 'notepad++' -ErrorAction SilentlyContinue) {
-        return @('notepad++')
+        $result = @('notepad++')
+        Set-StateEditor -Command $result -Desc 'Notepad++'
+        return $result
     }
 
     # Tier 5: GUI editors without --wait
@@ -479,18 +503,24 @@ function Find-BestEditor {
     )
     foreach ($e in $tier5) {
         if (Get-Command $e.Exe -ErrorAction SilentlyContinue) {
-            return @($e.Exe)
+            $result = @($e.Exe)
+            Set-StateEditor -Command $result -Desc $e.Desc
+            return $result
         }
     }
 
     # Tier 6: macOS TextEdit
     if ($IsMacOS) {
-        return @('open', '-a', 'TextEdit')
+        $result = @('open', '-a', 'TextEdit')
+        Set-StateEditor -Command $result -Desc 'TextEdit'
+        return $result
     }
 
     # Tier 7: $env:EDITOR (user preference)
     if ($env:EDITOR) {
-        return @($env:EDITOR)
+        $result = @($env:EDITOR)
+        Set-StateEditor -Command $result -Desc "`$env:EDITOR"
+        return $result
     }
 
     # Tier 8: Terminal editors (powerful fallbacks when no GUI available)
@@ -500,15 +530,21 @@ function Find-BestEditor {
     )
     foreach ($e in $tier8) {
         if (Get-Command $e.Exe -ErrorAction SilentlyContinue) {
-            return @($e.Exe)
+            $result = @($e.Exe)
+            Set-StateEditor -Command $result -Desc $e.Desc
+            return $result
         }
     }
 
     # Tier 9: Platform fallback
     if ($IsWindows -or $env:OS -eq 'Windows_NT') {
-        return @('notepad.exe')
+        $result = @('notepad.exe')
+        Set-StateEditor -Command $result -Desc 'Windows Notepad'
+        return $result
     }
-    return @('nano')
+    $result = @('nano')
+    Set-StateEditor -Command $result -Desc 'Nano'
+    return $result
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1557,11 +1593,12 @@ Usage: coworker draft [options]
 Create or edit a task draft in 0draft/.
 
 Options:
-  -Title <str>     Task title (creates structured format)
-  -Content <str>   Task content / prompt body
-  -Prompt <str>    Alias for -Content
-  -Edit            Open the draft in an editor after creation
-  -Name <str>      Specify the filename (without .md extension)
+  -Title <str>       Task title (creates structured format)
+  -Content <str>     Task content / prompt body
+  -Prompt <str>      Alias for -Content
+  -Edit              Open the draft in an editor after creation
+  -Name <str>        Specify the filename (without .md extension)
+  -RefreshEditor     Re-detect available editor (ignore state cache)
 
 Examples:
   coworker draft -Title "Fix login timeout" -Content "The login..."
@@ -1817,6 +1854,7 @@ function Parse-SubcommandArgs {
             '-Count'         { $parsed['Count'] = [int]$ArgList[++$i]; break }
             '-FileName'      { $parsed['FileName'] = $ArgList[++$i]; break }
             '-Edit'          { $parsed['Edit'] = $true; break }
+            '-RefreshEditor' { $parsed['RefreshEditor'] = $true; break }
             '-Rename'        { $parsed['Rename'] = $true; break }
             '-AutoApprove'   { $parsed['AutoApprove'] = $true; break }
             '-Force'         { $parsed['Force'] = $true; break }
@@ -1905,7 +1943,8 @@ try {
                 -Content (Get-Arg $subArgs 'Content') `
                 -Prompt (Get-Arg $subArgs 'Prompt') `
                 -Edit:(Get-SwitchArg $subArgs 'Edit') `
-                -Name (Get-Arg $subArgs 'Name')
+                -Name (Get-Arg $subArgs 'Name') `
+                -RefreshEditor:(Get-SwitchArg $subArgs 'RefreshEditor')
         }
         'refine' {
             Invoke-Refine -Path (Get-Arg $subArgs 'Path') `
