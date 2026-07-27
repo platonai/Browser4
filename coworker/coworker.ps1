@@ -67,8 +67,8 @@ Commands:
   fix       Pick a task from 1ready/ and execute it once
             coworker fix [-Path <path>] [-Name <str>] [-Latest]
 
-  review    Review .issues.md files interactively (accept/reject/notes)
-            coworker review [-Path <path>] [-Name <str>] [-List] [-All]
+  review    Review .issues.md files (interactive or inline AI review)
+            coworker review [-Path <path>] [-Name <str>] [-List] [-All] [-Inline] [-AutoApprove]
 
 Run "coworker <command>" with no additional arguments to see
 command-specific help.
@@ -1787,16 +1787,27 @@ Examples:
             @'
 Usage: coworker review [options]
 
-Interactive review of .issues.md files from the terminal.
-Lists files from tasks/issues/draft/ and tasks/issues/review/,
-then lets you browse issues, set review decisions, add notes,
-and save.
+Review .issues.md files — interactively or inline (non-interactive).
+
+Interactive mode (default): Lists files from tasks/issues/draft/ and
+tasks/issues/review/, then lets you browse issues, set review decisions,
+add notes, and save.
+
+Inline mode (-Inline): Requires -Path.  Runs AI batch review on all
+issues, writes decisions, and moves the file to 1ready/ without any
+interactive prompts.
 
 Options:
   -Path <path>   Specific .issues.md file to review
   -Name <str>    Find issues file by partial name
   -List           List available files and exit
   -All            Include review/done/ files in the listing
+  -Inline         Non-interactive: AI review all issues → move to 1ready/
+  -AutoApprove    With -Inline: inject #auto-approve tag
+
+Inline examples:
+  coworker review -Inline -Path tasks/issues/draft/my-issues.issues.md
+  coworker review -Inline -Path review/issues.issues.md -AutoApprove
 
 Keyboard shortcuts (interactive mode):
   1-6             Set review decision (toggle to deselect)
@@ -1822,6 +1833,7 @@ Examples:
   coworker review -Path tasks/issues/draft/my-issues.issues.md
   coworker review -Name form-filling
   coworker review -List
+  coworker review -Inline -Path tasks/issues/draft/my-issues.issues.md
 '@
         }
     }
@@ -1867,6 +1879,8 @@ function Parse-SubcommandArgs {
             '-NoPull'        { $parsed['NoPull'] = $true; break }
             '-List'          { $parsed['List'] = $true; break }
             '-All'           { $parsed['All'] = $true; break }
+            '-Inline'        { $parsed['Inline'] = $true; break }
+            '-AutoApprove'   { $parsed['AutoApprove'] = $true; break }
             '-Help'          { $parsed['Help'] = $true; break }
             '-h'             { $parsed['Help'] = $true; break }
             '--help'         { $parsed['Help'] = $true; break }
@@ -2002,7 +2016,9 @@ try {
             Invoke-Review -Path (Get-Arg $subArgs 'Path') `
                 -Name (Get-Arg $subArgs 'Name') `
                 -List:(Get-SwitchArg $subArgs 'List') `
-                -All:(Get-SwitchArg $subArgs 'All')
+                -All:(Get-SwitchArg $subArgs 'All') `
+                -Inline:(Get-SwitchArg $subArgs 'Inline') `
+                -AutoApprove:(Get-SwitchArg $subArgs 'AutoApprove')
         }
         default {
             Write-ConsoleLine -Message "Unknown command: $Command" -ForegroundColor Red

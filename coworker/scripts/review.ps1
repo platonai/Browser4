@@ -533,6 +533,54 @@ function Move-IssuesFile {
     return $destPath
 }
 
+function Move-IssuesFileToReady {
+    <#
+    .SYNOPSIS
+        Move a .issues.md file to main/1ready/ for Coworker execution.
+    .DESCRIPTION
+        Moves the file from its current location (draft/ or review/) into
+        the main task queue.  Handles filename collisions by appending a
+        numeric suffix.
+    .PARAMETER FilePath
+        Absolute path to the .issues.md file to move.
+    .OUTPUTS
+        Destination path string, or $null on failure.
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$FilePath
+    )
+
+    try {
+        $tasksRoot = Get-TasksRoot
+        $readyDir = Join-Path $tasksRoot 'main' '1ready'
+        if (-not (Test-Path -LiteralPath $readyDir)) {
+            New-Item -ItemType Directory -Path $readyDir -Force | Out-Null
+        }
+
+        $fileName = Split-Path -Leaf $FilePath
+        $destBaseName = [System.IO.Path]::GetFileNameWithoutExtension($fileName)
+        $destPath = Join-Path $readyDir $fileName
+
+        # Handle collisions
+        if (Test-Path -LiteralPath $destPath) {
+            $counter = 2
+            $ext = [System.IO.Path]::GetExtension($fileName)
+            while (Test-Path -LiteralPath $destPath) {
+                $destPath = Join-Path $readyDir "$destBaseName.$counter$ext"
+                $counter++
+            }
+        }
+
+        Move-Item -Path $FilePath -Destination $destPath -Force
+        Write-ConsoleLine -Message "Moved to 1ready → $destPath" -ForegroundColor Green
+        return $destPath
+    } catch {
+        Write-ConsoleLine -Message "Move to 1ready failed: $_" -ForegroundColor Red
+        return $null
+    }
+}
+
 # ── Display rendering ──────────────────────────────────────────────────────────
 
 function Write-ProgressBar {
@@ -1194,6 +1242,7 @@ function Invoke-AiReview {
     .DESCRIPTION
         Sends issue details to the AI agent and parses the response for a
         decision.  When -Batch is set, all issues are reviewed together.
+        Uses the Coworker-configured agent backend (claude > kimi > copilot).
     .PARAMETER ParsedFile
         The structured review file.
     .PARAMETER Issue
@@ -1210,29 +1259,24 @@ function Invoke-AiReview {
         [switch]$Batch
     )
 
-    # Check if an agent CLI is available
-    $agent = 'claude'
-    if (-not (Get-Command claude -ErrorAction SilentlyContinue)) {
-        if (Get-Command kimi -ErrorAction SilentlyContinue) {
-            $agent = 'kimi'
-        } elseif (Get-Command opencode -ErrorAction SilentlyContinue) {
-            $agent = 'opencode'
-        } else {
-            Write-ConsoleLine -Message "AI review requires 'claude', 'kimi', or 'opencode' on PATH." -ForegroundColor Red
-            Start-Sleep -Milliseconds 500
-            return $false
-        }
+    # Use the Coworker-configured agent backend (consistent with the rest of the system)
+    $agentCommand = Get-AgentCommand -RepoRoot (Get-WorkspaceRoot)
+    if (-not $agentCommand -or -not $agentCommand.Executable) {
+        Write-ConsoleLine -Message "AI review requires a configured agent (claude, kimi, or copilot)." -ForegroundColor Red
+        Write-ConsoleLine -Message "Check coworker/scripts/config.psd1 to configure the agent backend." -ForegroundColor DarkGray
+        Start-Sleep -Milliseconds 500
+        return $false
     }
 
     if ($Batch) {
-        return Invoke-AiReviewBatch -ParsedFile $ParsedFile -Agent $agent
+        return Invoke-AiReviewBatch -ParsedFile $ParsedFile
     } else {
-        return Invoke-AiReviewSingle -ParsedFile $ParsedFile -Issue $Issue -Agent $agent
+        return Invoke-AiReviewSingle -ParsedFile $ParsedFile -Issue $Issue
     }
 }
 
 function Invoke-AiReviewSingle {
-    param([PSObject]$ParsedFile, [PSObject]$Issue, [string]$Agent)
+    param([PSObject]$ParsedFile, [PSObject]$Issue)
 
     Write-ConsoleLine -Message "AI reviewing issue $($Issue.Number)..." -ForegroundColor Cyan
 
@@ -1282,12 +1326,12 @@ DECISION: <exact decision name>
 NOTES: <brief rationale — 1-3 sentences explaining why you chose this decision>
 "@
 
-    $result = Invoke-AgentPrompt -Prompt $prompt -Agent $Agent -Label "AI Review Issue $($Issue.Number)"
+    $result = Invoke-AgentPrompt -Prompt $prompt -Label "AI Review Issue $($Issue.Number)"
     return Apply-AiResult -ParsedFile $ParsedFile -IssueNumber $Issue.Number -ResultText $result
 }
 
 function Invoke-AiReviewBatch {
-    param([PSObject]$ParsedFile, [string]$Agent)
+    param([PSObject]$ParsedFile)
 
     Write-ConsoleLine -Message "AI reviewing all $($ParsedFile.Issues.Count) issues..." -ForegroundColor Cyan
 
@@ -1327,73 +1371,68 @@ DECISION: <decision>
 NOTES: <rationale — 1-2 sentences>
 "@
 
-    $result = Invoke-AgentPrompt -Prompt $prompt -Agent $Agent -Label 'AI Review All'
+    $result = Invoke-AgentPrompt -Prompt $prompt -Label 'AI Review All'
     return Apply-AiBatchResult -ParsedFile $ParsedFile -ResultText $result
 }
 
 function Invoke-AgentPrompt {
-    param([string]$Prompt, [string]$Agent, [string]$Label)
+    <#
+    .SYNOPSIS
+        Run a prompt through the Coworker-configured AI agent and return stdout.
+    .DESCRIPTION
+        Uses Start-AgentProcess from agent.ps1 for consistent agent invocation
+        across the Coworker system.  Captures stdout and returns it as a string.
+    .PARAMETER Prompt
+        The full prompt text to send to the agent.
+    .PARAMETER Label
+        Human-readable label for progress messages.
+    .OUTPUTS
+        String — agent stdout, or empty string on failure/timeout.
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Prompt,
+        [string]$Label = 'AI Review'
+    )
 
     try {
-        $tempFile = [System.IO.Path]::GetTempFileName()
-        $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
-        [System.IO.File]::WriteAllText($tempFile, $Prompt, $utf8NoBom)
-
+        $agentCommand = Get-AgentCommand -RepoRoot (Get-WorkspaceRoot)
         $stdOutPath = [System.IO.Path]::GetTempFileName()
         $stdErrPath = [System.IO.Path]::GetTempFileName()
 
         try {
-            $procInfo = New-Object System.Diagnostics.ProcessStartInfo
-            $procInfo.FileName = $Agent
-            $procInfo.RedirectStandardInput = $true
-            $procInfo.RedirectStandardOutput = $true
-            $procInfo.RedirectStandardError = $true
-            $procInfo.UseShellExecute = $false
-            $procInfo.CreateNoWindow = $true
-            $procInfo.StandardOutputEncoding = $utf8NoBom
-            $procInfo.StandardErrorEncoding = $utf8NoBom
-
-            switch ($Agent) {
-                'claude' {
-                    $procInfo.ArgumentList.Add('--dangerously-skip-permissions')
-                    $procInfo.ArgumentList.Add('-p')
-                    # Prompt is piped via stdin below to avoid command-line limits
-                }
-                'kimi' {
-                    $procInfo.ArgumentList.Add('-p')
-                    # Prompt via stdin
-                }
-                'opencode' {
-                    $procInfo.ArgumentList.Add('run')
-                    # Prompt via stdin
-                }
-            }
-
-            $proc = New-Object System.Diagnostics.Process
-            $proc.StartInfo = $procInfo
-            $proc.Start() | Out-Null
-
-            # Feed prompt via stdin
-            $proc.StandardInput.Write($Prompt)
-            $proc.StandardInput.Close()
+            $process = Start-AgentProcess -Executable $agentCommand.Executable `
+                -BaseArgs $agentCommand.BaseArgs `
+                -Prompt $Prompt `
+                -WorkingDirectory $agentCommand.WorkingDirectory `
+                -StdOutPath $stdOutPath `
+                -StdErrPath $stdErrPath `
+                -NoNewWindow `
+                -Backend $agentCommand.Backend
 
             $timeoutMs = 120000
-            if (-not $proc.WaitForExit($timeoutMs)) {
-                $proc.Kill()
-                Write-ConsoleLine -Message "AI review timed out." -ForegroundColor Yellow
+            if (-not $process.WaitForExit($timeoutMs)) {
+                $process.Kill()
+                Write-ConsoleLine -Message "$Label timed out after 120s." -ForegroundColor Yellow
                 Start-Sleep -Milliseconds 500
                 return ''
             }
 
-            $stdout = $proc.StandardOutput.ReadToEnd()
+            if ($process.ExitCode -ne 0) {
+                Write-ConsoleLine -Message "$Label exited with code $($process.ExitCode) — continuing." -ForegroundColor DarkGray
+            }
+
+            $stdout = ''
+            if (Test-Path $stdOutPath) {
+                $stdout = Get-Content -Path $stdOutPath -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
+            }
             return $stdout
         } finally {
-            Remove-Item $tempFile -ErrorAction SilentlyContinue
             Remove-Item $stdOutPath -ErrorAction SilentlyContinue
             Remove-Item $stdErrPath -ErrorAction SilentlyContinue
         }
     } catch {
-        Write-ConsoleLine -Message "AI review failed: $_" -ForegroundColor Red
+        Write-ConsoleLine -Message "$Label failed: $_" -ForegroundColor Red
         Start-Sleep -Milliseconds 500
         return ''
     }
@@ -1604,16 +1643,124 @@ function Show-FilePicker {
     return $null
 }
 
+# ── Inline (non-interactive) review ─────────────────────────────────────────────
+
+function Invoke-InlineReview {
+    <#
+    .SYNOPSIS
+        Non-interactive review pipeline: parse → AI review → write → move to ready.
+    .DESCRIPTION
+        Takes a .issues.md file, runs AI batch review on all issues, writes
+        decisions back to the file, and moves it to main/1ready/ for Coworker
+        execution.  No interactive prompts — designed for scripted/CI use.
+    .PARAMETER Path
+        Path to the .issues.md file to review (required).
+    .PARAMETER AutoApprove
+        If set, injects #auto-approve tag so the task goes straight to 5approved
+        after execution instead of stopping in 3complete for manual review.
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path,
+        [switch]$AutoApprove
+    )
+
+    # Resolve the file path
+    $filePath = Resolve-IssuesFile -Path $Path
+    if (-not $filePath) {
+        Write-ConsoleLine -Message "Error: File not found: $Path" -ForegroundColor Red
+        return
+    }
+
+    Write-ConsoleLine -Message "Inline review: $filePath" -ForegroundColor Cyan
+
+    # 1. Parse the issues file
+    try {
+        $parsed = Read-IssuesFile -FilePath $filePath
+    } catch {
+        Write-ConsoleLine -Message "Error reading file: $_" -ForegroundColor Red
+        return
+    }
+
+    if ($parsed.Issues.Count -eq 0) {
+        Write-ConsoleLine -Message "No issues found in file. Nothing to review." -ForegroundColor Yellow
+        return
+    }
+
+    Write-ConsoleLine -Message "Parsed $($parsed.Issues.Count) issue(s) from: $($parsed.Meta.Scenario)" -ForegroundColor DarkGray
+
+    # 2. Run AI batch review on all issues
+    $aiResult = Invoke-AiReview -ParsedFile $parsed -Batch
+    if (-not $aiResult) {
+        Write-ConsoleLine -Message "AI review returned no decisions. Defaulting unreviewed issues to DEFER..." -ForegroundColor Yellow
+        foreach ($issue in $parsed.Issues) {
+            if (-not $issue.Decision) {
+                $issue.Decision = 'DEFER'
+                $issue.Notes = '[AI review unavailable — defaulted to DEFER]'
+            }
+        }
+    }
+
+    # 3. Persist decisions back to the file
+    try {
+        Write-IssuesFile -ParsedFile $parsed
+        Write-ConsoleLine -Message "Decisions written back to file." -ForegroundColor DarkGray
+    } catch {
+        Write-ConsoleLine -Message "Error writing decisions: $_" -ForegroundColor Red
+        return
+    }
+
+    # 4. Inject #auto-approve if requested
+    if ($AutoApprove) {
+        $content = Get-Content -Path $parsed.FilePath -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
+        if ($content -notmatch '#auto-approve') {
+            $content = "$content`n`n#auto-approve"
+            Set-Content -Path $parsed.FilePath -Value $content -Encoding UTF8
+            Write-ConsoleLine -Message "Added #auto-approve tag." -ForegroundColor DarkGray
+        }
+    }
+
+    # 5. Move the reviewed file to 1ready/ for execution
+    $destPath = Move-IssuesFileToReady -FilePath $parsed.FilePath
+    if (-not $destPath) {
+        Write-ConsoleLine -Message "Error: Failed to move file to 1ready/." -ForegroundColor Red
+        return
+    }
+
+    # 6. Print summary table
+    $reviewed = @($parsed.Issues | Where-Object { $_.Decision }).Count
+    Write-Host ''
+    Write-Host ('═' * 50) -ForegroundColor DarkGray
+    Write-Host '  Review complete!' -ForegroundColor Green
+    Write-Host "  Destination : $destPath" -ForegroundColor White
+    Write-Host "  Issues      : $($parsed.Issues.Count) total, $reviewed reviewed" -ForegroundColor White
+    Write-Host ''
+    foreach ($issue in $parsed.Issues) {
+        $decColor = if ($script:DecisionColors.ContainsKey($issue.Decision)) { $script:DecisionColors[$issue.Decision] } else { 'White' }
+        $decLabel = if ($issue.Decision) { $issue.Decision } else { 'UNSET' }
+        $numStr = "$($issue.Number)".PadLeft(2)
+        $line = "  [$numStr] $decLabel".PadRight(32) + " $($issue.Title)"
+        Write-Host $line -ForegroundColor $decColor
+    }
+    Write-Host ''
+    Write-Host ('═' * 50) -ForegroundColor DarkGray
+}
+
 # ── Entry point ────────────────────────────────────────────────────────────────
 
 function Invoke-Review {
     <#
     .SYNOPSIS
-        Interactive review of .issues.md files from the terminal.
+        Review .issues.md files — interactively or inline (non-interactive).
     .DESCRIPTION
-        Lists .issues.md files and lets the user select one, or opens a
-        specific file when -Path or -Name is provided.  Enters an interactive
-        session for setting review decisions, adding notes, and finalizing.
+        Interactive mode (default): lists .issues.md files and lets the user
+        select one, or opens a specific file when -Path or -Name is provided.
+        Enters an interactive session for setting review decisions, adding
+        notes, and finalizing.
+
+        Inline mode (-Inline): requires -Path.  Runs AI batch review on all
+        issues, writes decisions, and moves the file to main/1ready/ without
+        any interactive prompts.
     .PARAMETER Path
         Specific .issues.md file to review.
     .PARAMETER Name
@@ -1622,13 +1769,32 @@ function Invoke-Review {
         Show available files and exit.
     .PARAMETER All
         Include review/done/ files in the listing.
+    .PARAMETER Inline
+        Run in non-interactive mode: AI review all issues and move to 1ready/.
+        Requires -Path.
+    .PARAMETER AutoApprove
+        When used with -Inline, injects #auto-approve tag so the task goes
+        straight to 5approved after execution.
     #>
     param(
         [string]$Path = '',
         [string]$Name = '',
         [switch]$List,
-        [switch]$All
+        [switch]$All,
+        [switch]$Inline,
+        [switch]$AutoApprove
     )
+
+    # ── Inline (non-interactive) mode ──────────────────────────────────────────
+    if ($Inline) {
+        if (-not $Path) {
+            Write-ConsoleLine -Message "Error: -Inline requires -Path to specify which file to review." -ForegroundColor Red
+            Write-ConsoleLine -Message "Usage: coworker review -Inline -Path <file> [-AutoApprove]" -ForegroundColor DarkGray
+            return
+        }
+        Invoke-InlineReview -Path $Path -AutoApprove:$AutoApprove
+        return
+    }
 
     $allFiles = Find-IssuesFiles -IncludeDone:$All
 
