@@ -168,7 +168,7 @@ function Find-RecentIssueFiles {
                     FileInfo     = $file
                     SourceLabel  = $SourceLabel
                     SourceDir    = $BaseDirectory
-                    IsInDraft    = $file.FullName.StartsWith([System.IO.Path]::GetFullPath($DraftDir), [StringComparison]::OrdinalIgnoreCase)
+                    IsInDraft    = ($SourceLabel -eq 'draft')
                 })
             }
 
@@ -186,7 +186,8 @@ function Find-RecentIssueFiles {
     }
 
     # Sort: draft files first (they need moving), then by modification time (newest first)
-    return @($result | Sort-Object { -not $_.IsInDraft }, { $_.FileInfo.LastWriteTime.ToString('o') })
+    $sorted = $result | Sort-Object { -not $_.IsInDraft }, { $_.FileInfo.LastWriteTime.ToString('o') }
+    return , @($sorted)
 }
 
 # ── Move a file from draft/ to review/ ──────────────────────────────────────
