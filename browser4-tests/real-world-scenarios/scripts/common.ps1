@@ -274,22 +274,33 @@ function Read-TaskFile {
 # Detect whether the already-loaded type has the GetTail method (added 2026-07-26).
 # On re-runs within the same pwsh session the type may be stale — force a
 # recompile if the old version is loaded.
-# Check both the script-level sentinel AND the .NET runtime — the former
-# persists across re-dot-sources within one script file, the latter is needed
-# when run-all.ps1 dot-sources common.ps1 across multiple script files in the
-# same pwsh session (the type survives, the script variable doesn't).
-$needsCompile = $true
+# Determine whether the handler type is available and whether it has
+# checkpoint support (the 3-arg constructor added July 2026).  Three states:
+#   1. Type doesn't exist  → compile it fresh
+#   2. Type exists, has checkpoints → use as-is
+#   3. Type exists, OLD (no checkpoints) → use old 1-arg ctor, skip checkpoints
+# State 3 happens when a pwsh session survives across a git checkout that
+# changed the C# source — the old type is still loaded and Add-Type can't
+# replace it without restarting the session.
+$script:HandlerHasCheckpoints = $false
 try {
     $null = [NativeCommandOutputHandler].GetMethod('GetCheckpointStepCount')
-    # Type exists and has the checkpoint interface — no recompile needed
-    $needsCompile = $false
+    $script:HandlerHasCheckpoints = $true
 } catch {
-    # Type doesn't exist, is stale (pre-checkpoint version, detected by missing
-    # GetCheckpointStepCount), or this is the first dot-source in this session.
-}
+    # Checkpoint method not found — type is either missing or pre-checkpoint
+    $typeExists = $false
+    try { $null = [NativeCommandOutputHandler]; $typeExists = $true } catch { }
 
-if ($needsCompile) {
-    Add-Type -TypeDefinition @'
+    if ($typeExists) {
+        # Old version loaded — can't recompile.  Degrade gracefully.
+        if (-not $script:_OldHandlerWarningShown) {
+            Write-Host '  Note: NativeCommandOutputHandler (old) loaded — checkpoint files unavailable.' -ForegroundColor DarkGray
+            Write-Host '  Restart your PowerShell session for real-time step checkpoints.' -ForegroundColor DarkGray
+            $script:_OldHandlerWarningShown = $true
+        }
+    } else {
+        # Type doesn't exist — compile fresh
+        Add-Type -TypeDefinition @'
 using System;
 using System.IO;
 using System.Text;
@@ -561,7 +572,9 @@ public class NativeCommandOutputHandler
     }
 }
 '@ -ErrorAction Stop
-    $script:_NativeCommandHandlerCompiled = $true
+        $script:_NativeCommandHandlerCompiled = $true
+        $script:HandlerHasCheckpoints = $true
+    }
 }
 
 # ── Path resolution ──────────────────────────────────────────────────────────
@@ -1783,7 +1796,7 @@ function Start-NativeCommand {
     # PowerShell scriptblocks cast to delegates.  DataReceived events fire
     # on .NET threadpool threads where no PowerShell Runspace is guaranteed;
     # pure-C# handlers avoid "There is no Runspace available" crashes.
-    if ($CheckpointDir -and $CheckpointScenario) {
+    if ($CheckpointDir -and $CheckpointScenario -and $script:HandlerHasCheckpoints) {
         # Ensure checkpoint dir exists before the handler starts writing
         if (-not (Test-Path -LiteralPath $CheckpointDir)) {
             New-Item -ItemType Directory -Path $CheckpointDir -Force | Out-Null
@@ -1971,7 +1984,7 @@ function Start-NativeCommand {
                 )
 
                 # When checkpoints are enabled, show how many steps completed
-                if ($CheckpointDir -and $CheckpointScenario) {
+                if ($CheckpointDir -and $CheckpointScenario -and $script:HandlerHasCheckpoints) {
                     $stepCount = $nativeHandler.GetCheckpointStepCount()
                     if ($stepCount -gt 0) {
                         [Console]::WriteLine(
