@@ -49,7 +49,7 @@ Commands:
             coworker assign [-Path <path>] [-Name <str>] [-Rename] [-AutoApprove]
             (alias: add)
 
-  list      Show tasks grouped by state
+  list      Show tasks grouped by state (default: 20 per state)
             coworker list [-State <str>] [-Count <int>] [-Brief] [-NoPager]
 
   view      Display full task content
@@ -810,7 +810,7 @@ function Invoke-Assign {
 function Invoke-List {
     param(
         [string]$State = 'all',
-        [int]$Count = 0,
+        [int]$Count = 20,
         [switch]$Brief,
         [switch]$NoPager
     )
@@ -1641,7 +1641,7 @@ Output is paginated automatically when it exceeds terminal height.
 Options:
   -State <str>  Filter by state: draft, ready, working, done, review,
                 approved, pushed, all (default)
-  -Count <int>  Limit to N most recent tasks per state
+  -Count <int>  Limit to N most recent tasks per state (default: 20, use 0 for all)
   -Brief        Compact output (filenames only)
   -NoPager      Disable pagination (print everything at once)
 
@@ -1931,7 +1931,7 @@ try {
         }
         'list' {
             Invoke-List -State (Get-Arg $subArgs 'State' 'all') `
-                -Count (Get-Arg $subArgs 'Count' 0) `
+                -Count (Get-Arg $subArgs 'Count' 20) `
                 -Brief:(Get-SwitchArg $subArgs 'Brief') `
                 -NoPager:(Get-SwitchArg $subArgs 'NoPager')
         }

@@ -4000,7 +4000,8 @@ async fn handle_snapshot(
         // Hint: suggest --stdout to print inline instead of opening the file
         if !json_active() {
             eprintln!(
-                "💡 Tip: Use `--stdout` to print element refs inline instead of opening the snapshot file"
+                "💡 Tip: Use `--stdout` to print element refs inline instead of opening the snapshot file.\n\
+                 \x20  Use `snapshot grep <pattern>` to search the accessibility tree — it always shows matches inline."
             );
         }
         // Brief preview: show first few non-comment lines of the snapshot
@@ -5795,6 +5796,16 @@ fn format_summary_outline(yaml: &str, verbose: bool) -> String {
         } else {
             outline.push_str("  # Add --verbose to see internal scoring and score legend.\n");
         }
+
+        // Warn if any suggested selector contains backslash escapes
+        // (e.g. from HTML with literal quotes in attribute values).
+        let has_escaped = linkgroup_selectors.iter().any(|s| s.contains('\\'));
+        if has_escaped {
+            outline.push_str(
+                "  # ⚠️  Some selectors contain backslash-escaped characters and may need manual\n\
+                 \x20 #     un-escaping before use. Try simplified selectors like `#id` or `tag` instead.\n"
+            );
+        }
     }
 
     outline
@@ -6292,21 +6303,31 @@ struct GrepOptions {
 }
 
 fn parse_grep_options(tool_params: &Value) -> Result<GrepOptions, String> {
+    // Extract pattern value, handling both string and numeric JSON values.
+    // Numeric positional args (e.g. `899`) get stored as JSON numbers by
+    // build_command_args(), so v.as_str() returns None for them.
+    fn value_to_str(v: &Value) -> Option<String> {
+        v.as_str().map(|s| s.to_string())
+            .or_else(|| v.as_i64().map(|n| n.to_string()))
+            .or_else(|| v.as_f64().map(|n| n.to_string()))
+    }
     let pattern = tool_params
         .get("pattern")
-        .and_then(|v| v.as_str())
+        .and_then(value_to_str)
         .filter(|s| !s.is_empty())
-        .unwrap_or("")
-        .to_string();
+        .unwrap_or_default();
 
     // Collect -e / --regexp patterns (supports both single string and array
     // of strings when the flag is repeated, e.g. -e price -e rating -e stars).
     let extra_patterns: Vec<String> = match tool_params.get("regexp") {
         Some(Value::Array(arr)) => arr
             .iter()
-            .filter_map(|v| v.as_str().map(String::from))
+            .filter_map(|v| value_to_str(v))
             .collect(),
-        Some(Value::String(s)) if !s.is_empty() => vec![s.clone()],
+        Some(v) => {
+            let s = value_to_str(v).unwrap_or_default();
+            if s.is_empty() { vec![] } else { vec![s] }
+        }
         _ => vec![],
     };
 

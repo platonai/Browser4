@@ -1596,7 +1596,9 @@ internal fun inspectDocument(
             if (descTag in structuralTags) continue
 
             val descClass = desc.className()
+                .replace("\"", "").replace("'", "")  // strip literal quotes (defense against malformed HTML)
             val descId = desc.id()
+                .replace("\"", "").replace("'", "")  // same for id
             val descText = desc.ownText().trim().take(80)
 
             // Build selector candidates: class/id first, then attribute, then bare tag
@@ -1835,6 +1837,7 @@ internal fun findClosestId(el: org.jsoup.nodes.Element, maxLevels: Int = 6): Str
 /** Format up to 2 CSS classes as `.class1.class2`, or empty string if none. */
 internal fun formatClassList(el: org.jsoup.nodes.Element): String {
     val cls = el.className().trim()
+        .replace("\"", "").replace("'", "")  // strip literal quotes (defense against malformed HTML)
     if (cls.isBlank()) return ""
     val classes = cls.split("\\s+".toRegex()).take(2)
     return classes.joinToString("") { ".$it" }

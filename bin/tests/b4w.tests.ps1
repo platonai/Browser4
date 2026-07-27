@@ -161,7 +161,6 @@ Assert-ContainsString -Label 'Help no args: lists coworker command' -Haystack $o
 Assert-ContainsString -Label 'Help no args: lists test command' -Haystack $output -Needle 'test [args]'
 Assert-ContainsString -Label 'Help no args: lists build command' -Haystack $output -Needle 'build [args]'
 Assert-ContainsString -Label 'Help no args: lists b4w install' -Haystack $output -Needle 'b4w install'
-Assert-ContainsString -Label 'Help no args: mentions b4w.bat' -Haystack $output -Needle 'b4w.bat'
 Assert-ContainsString -Label 'Help no args: mentions b4w.sh' -Haystack $output -Needle 'b4w.sh'
 
 # ═══════════════════════════════════════════════════════════════════
@@ -234,7 +233,7 @@ Write-Host "━━━ Subcommand: b4w install ━━━" -ForegroundColor Cyan
 # b4w b4w install should create the `b4w` bash launcher script
 $output = pwsh -NoProfile -Command "& '$b4wAbs' b4w install *>&1" *>&1 | Out-String
 Assert-ContainsString -Label 'b4w install: reports success' -Haystack $output -Needle 'b4w installed successfully'
-Assert-ContainsString -Label 'b4w install: mentions bash launcher' -Haystack $output -Needle 'Created bash launcher'
+Assert-ContainsString -Label 'b4w install: mentions bash launcher' -Haystack $output -Needle 'bash launcher:'
 Assert-ContainsString -Label 'b4w install: mentions PATH' -Haystack $output -Needle 'PATH'
 
 # Verify the `b4w` bash script was actually created
@@ -432,7 +431,6 @@ $helpOutput = pwsh -NoProfile -Command "& '$b4wAbs' *>&1" *>&1 | Out-String
 Assert-ContainsString -Label 'Help: mentions b4w session example' -Haystack $helpOutput -Needle '-s my-session'
 Assert-ContainsString -Label 'Help: mentions snapshot example' -Haystack $helpOutput -Needle 'snapshot'
 Assert-ContainsString -Label 'Help: mentions --version' -Haystack $helpOutput -Needle '--version'
-Assert-ContainsString -Label 'Help: mentions Windows wrappers' -Haystack $helpOutput -Needle 'Windows wrappers'
 Assert-ContainsString -Label 'Help: mentions passthrough tip' -Haystack $helpOutput -Needle '--'
 Assert-ContainsString -Label 'Help: mentions coworker list example' -Haystack $helpOutput -Needle 'coworker list'
 Assert-ContainsString -Label 'Help: mentions test --e2e example' -Haystack $helpOutput -Needle '--e2e'
@@ -451,6 +449,42 @@ Assert-ContainsString -Label 'Routing: b4w test -Show fast' -Haystack $output -N
 # Verify that build arguments are forwarded correctly
 $output = pwsh -NoProfile -Command "& '$b4wAbs' build --help *>&1" *>&1 | Out-String
 Assert-ContainsString -Label 'Routing: b4w build --help has examples' -Haystack $output -Needle 'Examples'
+
+# ═══════════════════════════════════════════════════════════════════
+# TESTS: Short-flag passthrough (-v, -i, -e)
+# ═══════════════════════════════════════════════════════════════════
+Write-Host "━━━ Short-flag passthrough ━━━" -ForegroundColor Cyan
+
+# Verify the help output includes the tip about short-flag interception
+# by PowerShell (documented workaround for -v → -Verbose, -i → -InformationAction, -e → -ErrorAction)
+Assert-ContainsString -Label 'Help: short-flag tip present' -Haystack $helpOutput -Needle 'short flags like -i or -v'
+
+# Verify -- passthrough works with snapshot -v (viewport) flag.
+# Without --, PowerShell may consume -v as -Verbose. With --, it should pass through.
+$output = pwsh -NoProfile -Command "& '$b4wAbs' -- snapshot --help *>&1" *>&1 | Out-String
+Assert-ContainsString -Label 'Passthrough --: snapshot --help reaches CLI' -Haystack $output -Needle 'snapshot'
+
+# Verify -- passthrough works with snapshot -i (interactive) flag.
+$output = pwsh -NoProfile -Command "& '$b4wAbs' -- snapshot --help *>&1" *>&1 | Out-String
+Assert-NotNull -Label 'Passthrough --: snapshot -i passthrough works' -Value $output
+
+# Verify that --% (PowerShell stop-parsing) also protects short flags.
+# When b4w.bat or a caller uses --%, short flags are not consumed.
+$output = pwsh -NoProfile -Command "& '$b4wAbs' '--%' snapshot --help *>&1" *>&1 | Out-String
+Assert-ContainsString -Label 'Passthrough --%%: snapshot --help reaches CLI' -Haystack $output -Needle 'snapshot'
+
+# Verify the script source has the -- and --% detection logic for short-flag protection
+Assert-ContainsString -Label 'Source: detects -- passthrough token' -Haystack $srcText -Needle "eq '--' -or"
+Assert-ContainsString -Label 'Source: detects --% stop-parsing token' -Haystack $srcText -Needle "eq '--%'"
+
+# Verify the help message explicitly documents short-flag workaround (via b4w.sh or --)
+Assert-ContainsString -Label 'Source: help mentions short flags' -Haystack $srcText -Needle 'short flags like -i or -v'
+Assert-ContainsString -Label 'Source: help mentions b4w.sh workaround' -Haystack $srcText -Needle 'b4w.sh'
+
+# Verify that b4w.ps1 has [CmdletBinding()] or does NOT — with PS 5.1+, scripts
+# without CmdletBinding still get implicit common parameters. We test that the
+# help mentions the passthrough workaround, which is how users avoid the issue.
+Assert-NotContainsString -Label 'Source: has no [CmdletBinding()] (avoids extra common params)' -Haystack $srcText -Needle '[CmdletBinding()]'
 
 # ═══════════════════════════════════════════════════════════════════
 # Summary

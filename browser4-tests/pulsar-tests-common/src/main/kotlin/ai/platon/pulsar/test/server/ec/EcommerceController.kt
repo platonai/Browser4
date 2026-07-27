@@ -21,7 +21,8 @@ class EcommerceController(
     @GetMapping("/")
     @ResponseBody
     fun home(): ResponseEntity<String> {
-        val html = htmlRenderer.renderHome()
+        val bestsellers = catalogService.getBestsellers(6)
+        val html = htmlRenderer.renderHome(featuredProducts = bestsellers)
         return ResponseEntity.ok().contentType(MediaType.TEXT_HTML).body(html)
     }
 

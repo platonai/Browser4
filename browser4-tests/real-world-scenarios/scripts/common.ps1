@@ -524,6 +524,46 @@ Leave the checkboxes empty — they are for the human reviewer to fill in.
 
 Use `---` (horizontal rule) to separate issues.
 
+#### Alternative JSON format (preferred for machine processing):
+
+As an alternative to the markdown format above, you may deliver Sections C (Issues Found) and D (Overall Assessment) as a **single JSON code block**. This format is **preferred** — it ensures reliable machine parsing, while the markdown format above is a backward-compatible fallback. Sections A (Task Result) and B (Execution Trace) must still be written as prose above the JSON block.
+
+``````json
+{
+  "issues": [
+    {
+      "title": "Brief descriptive title",
+      "severity": "Critical",
+      "category": "Product",
+      "reproduction": "Exact command(s) or steps to reproduce the issue.",
+      "expected": "What should have happened.",
+      "actual": "What actually happened.",
+      "rootCause": "Your best analysis of the technical cause. Infer from observed behavior when possible; note what investigation is needed when uncertain. This is essential for an AI coder to fix the issue later.",
+      "codePointer": "File path and function name where a fix should likely be applied (e.g. cli/browser4-cli/src/snapshot.rs:render_snapshot()). Leave empty string if unknown.",
+      "suggestion": "- First concrete suggestion\n- Second concrete suggestion\n- Additional suggestions as needed"
+    }
+  ],
+  "assessment": {
+    "completionStatus": "Successful / Partially Successful / Failed — describe the overall task outcome",
+    "successRate": "e.g. 80% — estimated percentage of task steps that succeeded",
+    "issuesFound": 8,
+    "majorBlockers": "Description of any major blockers encountered, or empty string if none.",
+    "mostConfusingAspects": "Most confusing aspects for a first-time user.",
+    "mostValuableImprovements": "Most valuable suggested improvements.",
+    "usabilityRating": 5
+  }
+}
+``````
+
+**Rules for the JSON format:**
+
+- Every field is a string except **issuesFound** (integer) and **usabilityRating** (integer 1–10).
+- **severity** must be one of: Critical, High, Medium, Low.
+- **category** must be one of: Product, Documentation, UX, Reliability, Discoverability.
+- Empty/unavailable fields should be an empty string "", never omitted.
+- Use \n for multi-line content within string values (e.g. bullet lists in **suggestion**).
+- Place the JSON block after Sections A and B. It replaces Sections C and D entirely.
+
 ### D. Overall Assessment
 
 Include:
@@ -756,6 +796,118 @@ function ConvertFrom-IssuesSection {
 
     # Return as array (ArrayList.ToArray() avoids pipeline wrapping)
     return $results.ToArray()
+}
+
+# ── JSON evaluation extraction ─────────────────────────────────────────────────
+# Preferred format.  Detects a ```json code block containing the canonical
+# evaluation schema (issues array + optional assessment object) and returns
+# structured hashtables directly — no regex parsing needed.  Returns $null
+# when no valid JSON block is found, signalling the caller to fall back to
+# markdown parsing.
+
+function ConvertFrom-JsonEvaluation {
+    <#
+    .SYNOPSIS
+        Extract issues and assessment from a JSON code block in agent output.
+    .DESCRIPTION
+        Searches the agent output for ```json code blocks and attempts to parse
+        each as the evaluation JSON schema.  Returns structured hashtables on
+        success, or $null when no valid JSON is found so the caller can fall
+        back to markdown parsing.
+
+        The expected JSON schema mirrors the prompt instructions:
+
+          { "issues": [ { title, severity, category, reproduction, expected,
+              actual, rootCause, codePointer, suggestion } ],
+            "assessment": { completionStatus, successRate, issuesFound,
+              majorBlockers, mostConfusingAspects, mostValuableImprovements,
+              usabilityRating } }
+
+        Issues are returned in the same hashtable format as
+        ConvertFrom-IssuesSection so downstream code works unchanged.
+    .PARAMETER Content
+        The full raw agent output.
+    .OUTPUTS
+        Hashtable with keys Issues (array of hashtables) and Assessment
+        (hashtable), or $null if no valid JSON block is found.
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Content
+    )
+
+    $normalized = $Content -replace '\r\n', "`n"
+
+    # Find all ```json code blocks — try each one until we get a valid parse
+    $blockPattern = '(?s)```json\s*\n(.*?)```'
+    $blockMatches = [regex]::Matches($normalized, $blockPattern)
+
+    foreach ($blockMatch in $blockMatches) {
+        $jsonStr = $blockMatch.Groups[1].Value.Trim()
+        if (-not $jsonStr) { continue }
+
+        try {
+            $data = $jsonStr | ConvertFrom-Json -ErrorAction Stop
+        } catch {
+            # Not valid JSON — try the next block
+            continue
+        }
+
+        # Must have at least an issues array
+        if (-not $data.issues) { continue }
+
+        $issueArray = @($data.issues)  # @() guards against single-object unwrapping
+        if ($issueArray.Count -eq 0) { continue }
+
+        # ── Map JSON issues → hashtable array (same shape as ConvertFrom-IssuesSection) ──
+        $defaultReview = @'
+- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+- [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
+- [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- **Notes:**
+'@
+
+        $issues = [System.Collections.ArrayList]::new()
+        foreach ($iss in $issueArray) {
+            $issueNum = $issues.Count + 1
+            [void]$issues.Add(@{
+                Title        = [string]$iss.title
+                Severity     = [string]$iss.severity
+                Category     = [string]$iss.category
+                Reproduction = [string]$iss.reproduction
+                Expected     = [string]$iss.expected
+                Actual       = [string]$iss.actual
+                RootCause    = [string]$iss.rootCause
+                CodePointer  = [string]$iss.codePointer
+                Review       = $defaultReview
+                Suggestion   = [string]$iss.suggestion
+            })
+        }
+
+        # ── Map JSON assessment → hashtable (if present) ──────────────────────
+        $assessment = $null
+        if ($data.assessment) {
+            $a = $data.assessment
+            $assessment = @{
+                CompletionStatus        = if ($a.completionStatus)        { [string]$a.completionStatus }        else { '' }
+                SuccessRate             = if ($a.successRate)             { [string]$a.successRate }             else { '' }
+                IssuesFound             = if ($null -ne $a.issuesFound)   { [int]$a.issuesFound }                else { 0 }
+                MajorBlockers           = if ($a.majorBlockers)           { [string]$a.majorBlockers }           else { '' }
+                MostConfusingAspects    = if ($a.mostConfusingAspects)    { [string]$a.mostConfusingAspects }    else { '' }
+                MostValuableImprovements = if ($a.mostValuableImprovements) { [string]$a.mostValuableImprovements } else { '' }
+                UsabilityRating         = if ($null -ne $a.usabilityRating) { [int]$a.usabilityRating }           else { 0 }
+            }
+        }
+
+        return @{
+            Issues     = $issues.ToArray()
+            Assessment = $assessment
+        }
+    }
+
+    return $null
 }
 
 # ── Background context extraction ──────────────────────────────────────────────
@@ -1108,8 +1260,17 @@ function Write-IssuesToDraft {
     # 2) Extract background context (Sections A + B) for AI reproduction
     $bg = Extract-BackgroundContext -Content $Content
 
-    # 3) Parse individual issues from Section C
-    $issues = ConvertFrom-IssuesSection -Content $Content
+    # 3) Parse issues — try JSON first (preferred, more reliable), fall back to
+    #    markdown parsing when no valid JSON block is found.
+    $jsonEval = ConvertFrom-JsonEvaluation -Content $Content
+    if ($jsonEval) {
+        $issues = $jsonEval.Issues
+        $assessment = $jsonEval.Assessment
+        Write-Host "  Parsed $($issues.Count) issue(s) from JSON block" -ForegroundColor DarkGray
+    } else {
+        $issues = ConvertFrom-IssuesSection -Content $Content
+        $assessment = $null
+    }
 
     # 4) Write a SINGLE consolidated issues file with background context and
     #    reproduction guide.  Writing all issues together preserves their
@@ -1197,6 +1358,33 @@ function Write-IssuesToDraft {
                 $consBody += "#### Human Review`n`n$($issue.Review)`n`n"
             }
 
+            $consBody += "---`n`n"
+        }
+
+        # ── Overall assessment (JSON-parsed evaluations only) ───────────────
+        if ($assessment) {
+            $consBody += "## Overall Assessment`n`n"
+            if ($assessment.CompletionStatus) {
+                $consBody += "**Completion Status:** $($assessment.CompletionStatus)`n`n"
+            }
+            if ($assessment.SuccessRate) {
+                $consBody += "**Success Rate:** $($assessment.SuccessRate)`n`n"
+            }
+            if ($assessment.IssuesFound -gt 0) {
+                $consBody += "**Issues Found:** $($assessment.IssuesFound)`n`n"
+            }
+            if ($assessment.MajorBlockers) {
+                $consBody += "**Major Blockers:** $($assessment.MajorBlockers)`n`n"
+            }
+            if ($assessment.MostConfusingAspects) {
+                $consBody += "**Most Confusing Aspects:** $($assessment.MostConfusingAspects)`n`n"
+            }
+            if ($assessment.MostValuableImprovements) {
+                $consBody += "**Most Valuable Improvements:** $($assessment.MostValuableImprovements)`n`n"
+            }
+            if ($assessment.UsabilityRating -gt 0) {
+                $consBody += "**Usability Rating:** $($assessment.UsabilityRating)/10`n`n"
+            }
             $consBody += "---`n`n"
         }
 
