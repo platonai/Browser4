@@ -402,6 +402,7 @@ You are evaluating the usability, discoverability, and reliability of browser4-c
 Before performing any browser interaction:
 
 0. Verify your working directory is the repository root: `$($RepoRootPath)`. If `pwd` is anything other than this directory, navigate there immediately with `cd "$RepoRootPath"`. All browser4-cli commands use `$($cliInvocation)` which works from the repo root — stay in this directory for all commands.
+    **IMPORTANT — Temporary files:** Create ALL temporary, intermediate, and scratch files (scripts, data dumps, HTML snapshots, JSON exports, markdown drafts, log files, etc.) inside `./.test-sessions/` (not the repo root). Before creating any file, ensure the directory exists with `mkdir -p .test-sessions`. Do NOT pollute the repository root with temporary files — every generated file that is not a permanent project asset belongs under `.test-sessions/`.
 1. Run `$($helpCmd)`.
 2. Read `$($skillPath)` completely.
 3. Learn the available commands, workflows, and conventions directly from the documentation.
@@ -542,6 +543,7 @@ Include:
 * Prefer evidence gathered from actual usage over assumptions.
 * Record both major and minor usability issues.
 * The task is considered successful only if both the task itself and the usability evaluation are completed.
+* **ALL temporary files** (scripts, data files, HTML exports, JSON dumps, screenshots, logs, markdown drafts, etc.) **MUST** be created inside `./.test-sessions/`. Never write temporary files to the repository root. Before creating any file, run `mkdir -p .test-sessions` if the directory does not already exist.
 
 # Task
 
@@ -1850,6 +1852,15 @@ function Invoke-Agent {
             # Unknown agent — assume -p mode (claude-compatible)
             $agentArgs += @('-p', $Prompt)
         }
+    }
+
+    # ── Ensure .test-sessions directory exists ────────────────────────────────
+    # Agents are instructed to create temp files here.  Pre-create the directory
+    # so the agent doesn't fail on the very first `mkdir -p .test-sessions` call.
+    $testSessionsDir = Join-Path $script:RepoRoot '.test-sessions'
+    if (-not (Test-Path -LiteralPath $testSessionsDir)) {
+        New-Item -ItemType Directory -Path $testSessionsDir -Force | Out-Null
+        Write-Host "  Created .test-sessions/ for agent temp files" -ForegroundColor DarkGray
     }
 
     # ── Resolve capture file path ──────────────────────────────────────────

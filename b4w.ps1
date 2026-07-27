@@ -45,8 +45,13 @@ if (!$Rebuild -and (Test-Path $Exe)) {
 # This allows flags like -s <session> to work without PowerShell
 # interpreting them as parameter names (e.g., -s → -ScriptArgs).
 $CliArgs = $RemainingArgs
-if ($RemainingArgs -and $RemainingArgs[0] -eq '--') {
-    $CliArgs = $RemainingArgs[1..$RemainingArgs.Length]
+if ($RemainingArgs -and ($RemainingArgs[0] -eq '--' -or $RemainingArgs[0] -eq '--%')) {
+    # Strip the passthrough / stop-parsing token so it doesn't interfere
+    # with subcommand routing below.  -- is the conventional passthrough
+    # separator.  --% (PowerShell stop-parsing symbol) may arrive as a
+    # literal argument when b4w.bat calls pwsh -File ... --% %* ¡ª
+    # pwsh.exe's native command-line parser doesn't always consume it.
+    $CliArgs = $RemainingArgs[1..($RemainingArgs.Count - 1)]
 }
 
 # ── Subcommand: coworker ──────────────────────────────────────────────────
@@ -116,16 +121,13 @@ Examples:
   b4w b4w install                       install b4w globally (one-time setup)
   b4w b4w uninstall                     remove b4w from PATH and launcher
 
-Windows wrappers:
-  b4w.bat         Command Prompt wrapper — prevents PowerShell from
-                  intercepting short flags (-i, -v, etc.) by using
-                  the --% stop-parsing token.
+Wrapper:
   b4w.sh          Git Bash / Linux / macOS wrapper — quotes arguments
                   to prevent PowerShell parameter binding issues.
 
 Tip: When running b4w.ps1 directly and short flags like -i or -v are
-intercepted by PowerShell, either use b4w.bat / b4w.sh, or pass flags
-after "--" (e.g. ./b4w.ps1 -- snapshot -i).
+intercepted by PowerShell, either use b4w.sh, or pass flags after "--"
+(e.g. ./b4w.ps1 -- snapshot -i).
 '@
 
 # ── Subcommand: b4w install ────────────────────────────────────────────────
@@ -244,10 +246,25 @@ if ($CliArgs -and $CliArgs[0] -eq 'b4w' -and $CliArgs[1] -eq 'uninstall') {
     exit 0
 }
 
+# ── b4w subcommand help ────────────────────────────────────────────────────
+$B4wHelp = @'
+Usage: b4w b4w <subcommand>
+
+Manage the b4w launcher itself.
+
+Subcommands:
+  b4w install      Install b4w as a global command (adds to PATH, creates bash launcher)
+  b4w uninstall    Remove b4w from PATH and delete the generated launcher
+
+Examples:
+  ./b4w.ps1 b4w install       install b4w globally
+  ./b4w.ps1 b4w uninstall     remove b4w from PATH
+'@
+
 # ── Subcommand: b4w (bare / unknown subcommand) ───────────────────────────
-# Running just `b4w` or `b4w <unknown>` prints the top-level help.
+# Running `b4w b4w` (bare) or `b4w b4w <unknown>` prints b4w-specific help.
 if ($CliArgs -and $CliArgs[0] -eq 'b4w') {
-    Write-Host $TopHelp
+    Write-Host $B4wHelp
     Set-Location $OriginalCwd
     exit 0
 }

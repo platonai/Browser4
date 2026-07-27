@@ -267,15 +267,15 @@ Assert-Returns -Label 'b4w uninstall: bash launcher file removed' -Actual (Test-
 # ═══════════════════════════════════════════════════════════════════
 Write-Host "━━━ Subcommand: b4w (bare / unknown) ━━━" -ForegroundColor Cyan
 
-# b4w b4w (no subcommand) should print the top-level help
+# b4w b4w (no subcommand) should print b4w-specific help
 $output = pwsh -NoProfile -Command "& '$b4wAbs' b4w *>&1" *>&1 | Out-String
-Assert-ContainsString -Label 'b4w bare: shows top-level help' -Haystack $output -Needle 'Usage: b4w [command] [options]'
+Assert-ContainsString -Label 'b4w bare: shows b4w-specific help' -Haystack $output -Needle 'Usage: b4w b4w <subcommand>'
 Assert-ContainsString -Label 'b4w bare: lists install command' -Haystack $output -Needle 'b4w install'
 Assert-ContainsString -Label 'b4w bare: lists uninstall command' -Haystack $output -Needle 'b4w uninstall'
 
-# b4w b4w <unknown-subcommand> should also print help
+# b4w b4w <unknown-subcommand> should also print b4w-specific help
 $output = pwsh -NoProfile -Command "& '$b4wAbs' b4w bogus-cmd *>&1" *>&1 | Out-String
-Assert-ContainsString -Label 'b4w unknown: shows help' -Haystack $output -Needle 'Usage: b4w [command] [options]'
+Assert-ContainsString -Label 'b4w unknown: shows b4w-specific help' -Haystack $output -Needle 'Usage: b4w b4w <subcommand>'
 
 # b4w b4w should NOT try to run the CLI binary (it must not cause cargo-run noise)
 Assert-NotContainsString -Label 'b4w bare: does not invoke cargo' -Haystack $output -Needle 'cargo run'
@@ -310,6 +310,38 @@ Assert-NotNull -Label 'Passthrough --: --help reaches CLI' -Value $output
 # b4w -- --version should forward --version to the CLI binary
 $output = pwsh -NoProfile -Command "& '$b4wAbs' -- --version *>&1" *>&1 | Out-String
 Assert-NotNull -Label 'Passthrough --: --version reaches CLI' -Value $output
+
+# ═══════════════════════════════════════════════════════════════════
+# TESTS: Argument passthrough via --% (stop-parsing token)
+# ═══════════════════════════════════════════════════════════════════
+Write-Host "━━━ Argument passthrough: --% ━━━" -ForegroundColor Cyan
+
+# --% is PowerShell's stop-parsing token.  When b4w.bat invokes
+# pwsh -File script.ps1 --% <args>, the --% may or may not be
+# consumed by pwsh.exe's native command-line parser (behavior varies
+# by PowerShell version).  b4w.ps1 treats --% like -- and strips it.
+#
+# Simulate the case where --% passes through as a literal argument
+# (as it would from b4w.bat on some PowerShell versions).
+
+# --% b4w install: should route to the install handler
+$output = pwsh -NoProfile -Command "& '$b4wAbs' '--%' b4w install *>&1" *>&1 | Out-String
+Assert-ContainsString -Label 'Passthrough --%%: b4w install routes correctly' -Haystack $output -Needle 'Installing b4w command'
+
+# --% b4w uninstall: should route to the uninstall handler
+$output = pwsh -NoProfile -Command "& '$b4wAbs' '--%' b4w uninstall *>&1" *>&1 | Out-String
+Assert-ContainsString -Label 'Passthrough --%%: b4w uninstall routes correctly' -Haystack $output -Needle 'Uninstalling b4w command'
+
+# --% b4w (bare): should print b4w-specific help, not fall through to CLI
+$output = pwsh -NoProfile -Command "& '$b4wAbs' '--%' b4w *>&1" *>&1 | Out-String
+Assert-ContainsString -Label 'Passthrough --%%: b4w bare shows help' -Haystack $output -Needle 'Usage: b4w b4w <subcommand>'
+
+# --% coworker list: should delegate to coworker.ps1
+$coworkerScript = Join-Path $ScriptDir '..\..\coworker\coworker.ps1'
+if (Test-Path $coworkerScript) {
+    $output = pwsh -NoProfile -Command "& '$b4wAbs' '--%' coworker list *>&1" *>&1 | Out-String
+    Assert-NotNull -Label 'Passthrough --%%: coworker routing works' -Value $output
+}
 
 # ═══════════════════════════════════════════════════════════════════
 # TESTS: CWD restoration
