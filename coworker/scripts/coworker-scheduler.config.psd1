@@ -91,5 +91,15 @@
             ScriptPath      = 'coworker\scripts\workers\update-readmes.ps1'
             Arguments       = @('-Update', '-MaxTasks', '2')
         }
+        @{
+            Name            = 'review-recent-issues'
+            Description     = 'Find .issues.md files from the last 3 days in draft/ and review/, move draft files to review/, and run inline AI review on each.'
+            Enabled         = $true
+            IntervalSeconds = 120
+            WindowStyle     = 'Minimized'
+            PendingPaths    = @()
+            ScriptPath      = 'coworker\scripts\workers\review-recent-issues.ps1'
+            Arguments       = @()
+        }
     )
 }
