@@ -136,25 +136,44 @@ intercepted by PowerShell, either use b4w.sh, or pass flags after "--"
 if ($CliArgs -and $CliArgs[0] -eq 'b4w' -and $CliArgs[1] -eq 'install') {
     Write-Host "Installing b4w command..." -ForegroundColor Cyan
 
-    # 1. Add the repo root to the user's PATH environment variable (permanent).
+    # 1. Refresh the user PATH: remove any stale b4w repo paths, then add
+    #    the current $ScriptDir so the global `b4w` command always resolves
+    #    to this local copy.
+    $normalizedCurrent = $ScriptDir.TrimEnd('\', '/')
     $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
-    if ($userPath -notlike "*$ScriptDir*") {
-        [Environment]::SetEnvironmentVariable(
-            "Path", "$userPath;$ScriptDir", "User")
+    $entries = $userPath -split ';' -ne ''
+    $cleaned = $entries | Where-Object {
+        $entry = $_.TrimEnd('\', '/')
+        # Remove entries that point to a different b4w repo (any path
+        # whose leaf is a b4w.ps1 sibling) so stale installs don't
+        # shadow the current one.
+        -not (Test-Path (Join-Path $entry 'b4w.ps1')) -or $entry -eq $normalizedCurrent
+    }
+    $alreadyThere = $cleaned | Where-Object { $_.TrimEnd('\', '/') -eq $normalizedCurrent }
+    if (-not $alreadyThere) {
+        $cleaned += $ScriptDir
         Write-Host "  + Added to user PATH: $ScriptDir" -ForegroundColor Green
     } else {
         Write-Host "  - Already on PATH: $ScriptDir" -ForegroundColor DarkGray
     }
+    $newPath = $cleaned -join ';'
+    [Environment]::SetEnvironmentVariable("Path", $newPath, "User")
 
-    # Also update the current process PATH so `b4w` works immediately.
-    if ($env:Path -notlike "*$ScriptDir*") {
-        $env:Path = "$env:Path;$ScriptDir"
+    # Also refresh the current process PATH (de-dup + add current).
+    $procEntries = $env:Path -split ';' -ne ''
+    $procCleaned = $procEntries | Where-Object {
+        $entry = $_.TrimEnd('\', '/')
+        -not (Test-Path (Join-Path $entry 'b4w.ps1')) -or $entry -eq $normalizedCurrent
     }
+    if (-not ($procCleaned | Where-Object { $_.TrimEnd('\', '/') -eq $normalizedCurrent })) {
+        $procCleaned += $ScriptDir
+    }
+    $env:Path = $procCleaned -join ';'
 
-    # 2. Create a bare `b4w` bash script (no extension) for Git Bash / WSL.
-    #    bash auto-completes `b4w` → `b4w` if the file has +x; this avoids
-    #    the cmd.exe round-trip that `b4w.bat` would take in bash.
+    # 2. Always overwrite the bare `b4w` bash script (no extension) so the
+    #    global launcher is a fresh copy of the local version.
     $b4wBash = Join-Path $ScriptDir 'b4w'
+    $b4wExisted = Test-Path $b4wBash
     @'
 #!/bin/bash
 # b4w — short-form launcher for browser4-cli (delegates to b4w.sh).
@@ -163,7 +182,11 @@ exec "$SCRIPT_DIR/b4w.sh" "$@"
 '@ | Set-Content -Path $b4wBash -Encoding UTF8 -NoNewline
     # Append a final newline (Set-Content -NoNewline omits it for the heredoc).
     Add-Content -Path $b4wBash -Value ""
-    Write-Host "  + Created bash launcher: $b4wBash" -ForegroundColor Green
+    if ($b4wExisted) {
+        Write-Host "  + Updated bash launcher: $b4wBash" -ForegroundColor Green
+    } else {
+        Write-Host "  + Created bash launcher: $b4wBash" -ForegroundColor Green
+    }
 
     # 3. Ensure the bash script is executable (git update-index --chmod=+x).
     Push-Location $ScriptDir
