@@ -57,6 +57,9 @@ if (-not (Test-Path -LiteralPath $ScriptsDir -PathType Container)) {
 # -- Dot-source the shared helpers -----------------------------------------------
 . "$ScriptsDir/common.ps1"
 
+# -- Start clean ----------------------------------------------------------------
+& $cliInvocation kill-all 2>&1 | Out-Null
+
 # -- Pre-flight checks (catches CLI/backend issues in seconds) -------------------
 $preflightOk = Test-WorkflowPreflight
 if (-not $preflightOk) {
