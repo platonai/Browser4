@@ -1,4 +1,17 @@
 #!/usr/bin/env pwsh
+<#
+.SYNOPSIS
+    b4w — browser4-cli wrapper with additional development tools.
+
+.DESCRIPTION
+    b4w (browser4-cli wrapper) is a development-only launcher that builds and
+    runs the browser4-cli Rust binary directly from the current codebase.  It
+    also bundles extra dev-tool subcommands (coworker, test, build) that are
+    not part of the published browser4-cli release.
+
+    This script is not shipped to end users — it lives in the repo root and
+    expects the Cargo workspace at ../cli/browser4-cli relative to itself.
+#>
 
 param(
     [switch]$Rebuild,
@@ -95,6 +108,13 @@ if ($CliArgs -and $CliArgs[0] -eq 'build') {
 
 # ── Top-level help ────────────────────────────────────────────────────────
 $TopHelp = @'
+b4w — browser4-cli wrapper with additional development tools.
+
+b4w is a development-only launcher that builds and runs browser4-cli
+directly from the current codebase.  It also bundles extra dev-tool
+subcommands (coworker, test, build) that are not part of the published
+browser4-cli release.
+
 Usage: b4w [command] [options]
 
 Commands:
