@@ -282,25 +282,30 @@ function Read-TaskFile {
 # State 3 happens when a pwsh session survives across a git checkout that
 # changed the C# source — the old type is still loaded and Add-Type can't
 # replace it without restarting the session.
+#
+# IMPORTANT: GetMethod() returns null for missing methods — it does NOT throw.
+# We must check the return value, not rely on try/catch.
 $script:HandlerHasCheckpoints = $false
-try {
-    $null = [NativeCommandOutputHandler].GetMethod('GetCheckpointStepCount')
-    $script:HandlerHasCheckpoints = $true
-} catch {
-    # Checkpoint method not found — type is either missing or pre-checkpoint
-    $typeExists = $false
-    try { $null = [NativeCommandOutputHandler]; $typeExists = $true } catch { }
+$typeExists = $false
+$method = $null
+try { $null = [NativeCommandOutputHandler]; $typeExists = $true } catch { }
 
-    if ($typeExists) {
-        # Old version loaded — can't recompile.  Degrade gracefully.
+if ($typeExists) {
+    try { $method = [NativeCommandOutputHandler].GetMethod('GetCheckpointStepCount') } catch { }
+    if ($null -ne $method) {
+        # State 2: type exists with checkpoint support
+        $script:HandlerHasCheckpoints = $true
+    } else {
+        # State 3: old version loaded — degrade gracefully
         if (-not $script:_OldHandlerWarningShown) {
             Write-Host '  Note: NativeCommandOutputHandler (old) loaded — checkpoint files unavailable.' -ForegroundColor DarkGray
             Write-Host '  Restart your PowerShell session for real-time step checkpoints.' -ForegroundColor DarkGray
             $script:_OldHandlerWarningShown = $true
         }
-    } else {
-        # Type doesn't exist — compile fresh
-        Add-Type -TypeDefinition @'
+    }
+} else {
+    # State 1: type doesn't exist — compile fresh
+    Add-Type -TypeDefinition @'
 using System;
 using System.IO;
 using System.Text;
@@ -575,7 +580,6 @@ public class NativeCommandOutputHandler
         $script:_NativeCommandHandlerCompiled = $true
         $script:HandlerHasCheckpoints = $true
     }
-}
 
 # ── Path resolution ──────────────────────────────────────────────────────────
 # Repo root is 3 levels up from scripts/ (scripts -> tests -> browser4-tests -> repo root)
