@@ -786,12 +786,18 @@ open class PulsarWebDriver constructor(
     }
 
     /**
-     * focus on an element with [selector] and dblclick it with [modifier] pressed
-     * */
+     * Double-click on the element identified by [selector], optionally with a
+     * [modifier] key held.
+     *
+     * Unlike [click], `dblclick` does **not** require the element to be
+     * focusable — many real-world double-click targets are generic `<div>`
+     * elements with event listeners but no `tabindex`.  The element is scrolled
+     * into view and the dblclick sequence is dispatched without an explicit
+     * `DOM.focus()` call.
+     */
     @Throws(WebDriverException::class)
     override suspend fun dblclick(selector: String, modifier: String) {
-        rpc.invokeOnElement(selector, "dblclick") {
-            val node = page.focusOnSelector(selector) ?: return@invokeOnElement
+        rpc.invokeOnElement(selector, "dblclick", scrollIntoView = true) { node ->
             val isWindows = org.apache.commons.lang3.SystemUtils.IS_OS_WINDOWS
             val hasModifier = modifier.isNotBlank()
             if (isWindows && !hasModifier) {
@@ -1340,6 +1346,110 @@ open class PulsarWebDriver constructor(
             }
         } catch (e: ChromeDriverException) {
             rpc.interceptChromeException(e, "dragAndDrop")
+        }
+    }
+
+    /**
+     * Returns `true` if [selector] is a snapshot element reference (e.g. `e5`,
+     * `e79`) that must be resolved via CDP backend node ID rather than
+     * `document.querySelector`.
+     */
+    private fun isSnapshotRef(selector: String): Boolean {
+        val trimmed = selector.trim()
+        return trimmed.startsWith("e") && trimmed.length > 1
+                && trimmed.substring(1).all { it.isDigit() }
+    }
+
+    /**
+     * Drags the element identified by [sourceSelector] onto the element identified
+     * by [targetSelector].
+     *
+     * This override resolves both `backend:N` and `eN` (snapshot) node references
+     * (which `document.querySelector` cannot handle) via [page.dom.queryLocator]
+     * before dispatching the HTML5 drag sequence through CDP.  Plain CSS selectors
+     * delegate to the default JS-based implementation in [WebDriver.drag].
+     */
+    @Throws(WebDriverException::class)
+    override suspend fun drag(sourceSelector: String, targetSelector: String) {
+        val needsSourceResolution = sourceSelector.startsWith("backend:") || isSnapshotRef(sourceSelector)
+        val needsTargetResolution = targetSelector.startsWith("backend:") || isSnapshotRef(targetSelector)
+
+        if (!needsSourceResolution && !needsTargetResolution) {
+            super.drag(sourceSelector, targetSelector)
+            return
+        }
+
+        rpc.invokeOnPage("drag") {
+            val sourceNode = page.dom.queryLocator(sourceSelector)
+                ?: throw WebDriverException("Source element was not found: $sourceSelector", driver = this@PulsarWebDriver)
+            val targetNode = page.dom.queryLocator(targetSelector)
+                ?: throw WebDriverException("Target element was not found: $targetSelector", driver = this@PulsarWebDriver)
+
+            withNodeObjectId(browserProtocol, sourceNode) { sourceObjectId ->
+                withNodeObjectId(browserProtocol, targetNode) { targetObjectId ->
+                    val script = """
+                        function() {
+                            const source = this;
+                            const target = arguments[0];
+                            if (typeof DataTransfer === 'undefined' || typeof DragEvent === 'undefined') {
+                                return JSON.stringify({
+                                    ok: false,
+                                    error: 'HTML5 drag-and-drop APIs are not available in the current page context'
+                                });
+                            }
+
+                            const sourceRect = source.getBoundingClientRect();
+                            const targetRect = target.getBoundingClientRect();
+                            const sourceX = Math.round(sourceRect.left + sourceRect.width / 2);
+                            const sourceY = Math.round(sourceRect.top + sourceRect.height / 2);
+                            const targetX = Math.round(targetRect.left + targetRect.width / 2);
+                            const targetY = Math.round(targetRect.top + targetRect.height / 2);
+                            const dataTransfer = new DataTransfer();
+
+                            const fire = (element, type, clientX, clientY) => {
+                                const event = new DragEvent(type, {
+                                    bubbles: true,
+                                    cancelable: true,
+                                    composed: true,
+                                    dataTransfer,
+                                    clientX,
+                                    clientY
+                                });
+                                element.dispatchEvent(event);
+                            };
+
+                            fire(source, 'dragstart', sourceX, sourceY);
+                            fire(target, 'dragenter', targetX, targetY);
+                            fire(target, 'dragover', targetX, targetY);
+                            fire(target, 'drop', targetX, targetY);
+                            fire(source, 'dragend', targetX, targetY);
+
+                            return JSON.stringify({ ok: true });
+                        }
+                    """.trimIndent()
+
+                    val result = browserProtocol.callFunctionOn(
+                        script,
+                        objectId = sourceObjectId,
+                        arguments = listOf(CallArgument(objectId = targetObjectId)),
+                        returnByValue = true,
+                        userGesture = true,
+                        awaitPromise = true
+                    )
+
+                    val json = (result.result.value as? String) ?: "{}"
+                    val parsed = runCatching { jacksonObjectMapper().readTree(json) }.getOrNull()
+                    if (parsed?.get("ok")?.asBoolean() != true) {
+                        val error = parsed?.get("error")?.asText() ?: "Unknown drag failure"
+                        throw WebDriverException(
+                            "Failed to drag '$sourceSelector' to '$targetSelector': $error",
+                            driver = this@PulsarWebDriver
+                        )
+                    }
+                }
+            }
+
+            gap()
         }
     }
 

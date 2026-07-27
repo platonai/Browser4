@@ -1,1 +1,0 @@
-SELECT * FROM DOM_LOAD_AND_SELECT(@url, 'body')

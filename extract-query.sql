@@ -1,1 +1,0 @@
-SELECT dom_first_text(dom, '#productTitle') AS title, dom_first_text(dom, '#product-price') AS price FROM load_and_select(@url, ':root')

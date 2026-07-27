@@ -138,7 +138,8 @@ browser4-cli -s ext-session tab-select 0
 | `goto`, `open`, `close`, `reload` | Navigation & session management | Every session starts here | — |
 | `snapshot` | Capture accessibility tree with refs | Before/after interactions | [htmlsnapshot.md](references/htmlsnapshot.md) |
 | `snapshot grep` | Search snapshot content with regex | Find elements by text or pattern | — |
-| `click`, `fill`, `type`, `press`, `select`, `check`, `drag` | Page interaction | Form filling, button clicks, navigation | — |
+| `click`, `dblclick`, `drag`, `hover`, `fill`, `type`, `press`, `select`, `check`, `generate-locator` | Page interaction | Form filling, button clicks, mouse actions, navigation | — |
+| `dialog-accept`, `dialog-dismiss` | Native JS dialog handling | After clicking buttons that trigger alert/confirm/prompt | — |
 | `htmlsnapshot get`, `get all` | Extract text/html/attr via CSS selectors | Single-field data extraction | [htmlsnapshot.md](references/htmlsnapshot.md) |
 | `htmlsnapshot query` | X-SQL queries for structured extraction | Multi-field, filtered, sorted data | [x-sql.md](references/x-sql.md) |
 | `eval` | Execute JavaScript in the page | Live DOM access, complex transforms | — |
@@ -244,6 +245,66 @@ browser4-cli snapshot -v 0                        # capture snapshot first
 browser4-cli snapshot grep "See also"             # search for text in the full AX tree
 browser4-cli snapshot grep -i "price|rating"      # case-insensitive regex alternation
 browser4-cli snapshot grep -A 3 -B 1 "Checkout"   # show surrounding context lines
+```
+
+### Mouse Interactions
+
+```bash
+# Hover — reveal tooltips, expand menus, trigger hover effects
+browser4-cli hover <ref>                          # hover over an element
+browser4-cli snapshot grep "tooltip"              # verify tooltip appeared
+
+# Double-click — trigger dblclick handlers
+browser4-cli dblclick <ref>                       # double-click an element
+
+# Drag-and-drop — move elements between containers
+browser4-cli drag <source-ref> <target-ref>       # drag source onto target
+browser4-cli snapshot grep "new position"         # verify element was moved
+```
+
+### Dialog Handling
+
+Native browser dialogs (`alert()`, `confirm()`, `prompt()`) block the page's main thread. When a dialog appears (e.g., after clicking a button), `click` will time out. Handle the dialog with a separate command:
+
+```bash
+browser4-cli click "#alertBtn"                    # triggers alert — click will time out
+browser4-cli dialog-accept                        # dismiss the alert ("OK")
+
+browser4-cli click "#confirmBtn"                  # triggers confirm
+browser4-cli dialog-accept                        # click "OK" (returns true to page)
+
+browser4-cli click "#promptBtn"                   # triggers prompt
+browser4-cli dialog-accept "Hello from Browser4"  # fill prompt and accept
+
+browser4-cli dialog-dismiss                       # cancel/dismiss any dialog
+```
+
+**Note:** `dialog-accept` and `dialog-dismiss` must be run in a separate invocation — they cannot be part of the same command as the triggering `click`.
+
+### Verifying Results (verify-after-interaction)
+
+Every interaction should be followed by verification. These patterns show how to confirm your actions had the expected effect:
+
+```bash
+# After click — diff vs previous snapshot
+browser4-cli click <submit-ref>
+browser4-cli snapshot -v 0 --auto-diff --stdout   # shows only what changed
+
+# After hover — search for expected content
+browser4-cli hover <ref>
+browser4-cli snapshot grep "expected-tooltip-text"
+
+# After drag — confirm reordering
+browser4-cli drag <source> <target>
+browser4-cli snapshot grep "new order|reordered|moved"
+
+# After dialog — verify the interaction log
+browser4-cli click "#alertBtn" && browser4-cli dialog-accept
+browser4-cli snapshot grep "\[alert\]|\[confirm\]|\[prompt\]"
+
+# Generate resilient CSS selectors from snapshot refs
+browser4-cli generate-locator <ref>               # produces e.g. "#contactForm > button.primary"
+browser4-cli get text "#contactForm > button.primary"  # verify with the generated selector
 ```
 
 ### Static Data Extraction (Single Field)
