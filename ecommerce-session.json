@@ -1,9 +1,0 @@
-{
-  "cookies": [],
-  "origins": [
-    {
-      "localStorage": [],
-      "origin": "http://localhost:18080"
-    }
-  ]
-}

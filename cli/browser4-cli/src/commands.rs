@@ -976,6 +976,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "modifiers", description: "Modifier keys to press", is_bool: false, short: None },
                 OptionDef { name: "follow", description: "After clicking, detect and follow navigation to new tabs", is_bool: true, short: None },
                 OptionDef { name: "no-snapshot", description: "Skip the automatic post-command accessibility tree snapshot", is_bool: true, short: None },
+                OptionDef { name: "auto-dismiss-dialogs", description: "Auto-accept any native JavaScript dialog (alert/confirm/prompt) triggered by the click", is_bool: true, short: None },
             ],
             e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_click".to_string(),
@@ -983,6 +984,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 let mut p = json!({ "ref": get_str(args, "ref").unwrap_or_default() });
                 if let Some(b) = get_opt_str(args, "button") { p["button"] = json!(b); }
                 if let Some(m) = args.get("modifiers") { p["modifiers"] = m.clone(); }
+                if args.contains_key("auto-dismiss-dialogs") { p["autoDismissDialogs"] = json!(true); }
                 p
             },
         },
@@ -1000,6 +1002,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "modifiers", description: "Modifier keys to press", is_bool: false, short: None },
                 OptionDef { name: "follow", description: "After clicking, detect and follow navigation to new tabs", is_bool: true, short: None },
                 OptionDef { name: "no-snapshot", description: "Skip the automatic post-command accessibility tree snapshot", is_bool: true, short: None },
+                OptionDef { name: "auto-dismiss-dialogs", description: "Auto-accept any native JavaScript dialog (alert/confirm/prompt) triggered by the double-click", is_bool: true, short: None },
             ],
             e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_click".to_string(),
@@ -1010,6 +1013,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 });
                 if let Some(b) = get_opt_str(args, "button") { p["button"] = json!(b); }
                 if let Some(m) = args.get("modifiers") { p["modifiers"] = m.clone(); }
+                if args.contains_key("auto-dismiss-dialogs") { p["autoDismissDialogs"] = json!(true); }
                 p
             },
         },

@@ -69,7 +69,7 @@ use managed_processes::{
 use snapshot::{resolve_output_path, save_binary, save_snapshot, timestamped_filename};
 use state::{
     clear_all_state, clear_state, epoch_millis_to_display, format_async_task_list,
-    format_timestamp_display, prune_async_tasks, read_async_tasks, read_state,
+    format_timestamp_display, read_async_tasks, read_state,
     resolve_default_state_dir, resolve_ref, summarize_async_tasks, track_async_task,
     update_async_task_status, write_async_tasks, write_state, CliState, MousePosition, Table,
 };
@@ -1781,6 +1781,7 @@ async fn handle_goto(
             if !result.is_empty() {
                 cli_println!("{}", result);
             }
+            warn_if_url_has_encoded_quotes(target_url);
             post_command_snapshot(client, base_url, &session_id).await;
         }
         Err(err) => {
@@ -1816,6 +1817,7 @@ async fn handle_goto(
                     if !result.is_empty() {
                         cli_println!("{}", result);
                     }
+                    warn_if_url_has_encoded_quotes(target_url);
                     post_command_snapshot(client, base_url, &retry_id).await;
                 }
                 Err(retry_err) => {
@@ -1833,6 +1835,19 @@ async fn handle_goto(
     }
 
     Ok(())
+}
+
+/// Warn the user when a URL contains percent-encoded quotes (%22),
+/// which typically indicates malformed HTML href attributes.
+fn warn_if_url_has_encoded_quotes(target_url: &str) {
+    if target_url.contains("%22") {
+        let cleaned = target_url.replace("%22", "");
+        eprintln!(
+            "⚠️  URL contains encoded quotes (%22): {target_url}\n\
+             💡 This usually means the link element has malformed escaped-quote attributes.\n\
+             💡 Try the corrected URL instead: goto \"{cleaned}\""
+        );
+    }
 }
 
 fn is_timeout_error_message(error: &str) -> bool {
