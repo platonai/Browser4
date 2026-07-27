@@ -105,7 +105,7 @@ open class WebDriverService(
      * URL change before the onFrameNavigated handler has finished recreating the isolated world
      * and re-injecting the runtime. This helper retries with a short delay to bridge that gap.
      */
-    suspend fun waitForPulsarUtils(driver: WebDriver, maxRetries: Int = 10, delayMs: Long = 100) {
+    suspend fun waitForPulsarUtils(driver: WebDriver, maxRetries: Int = 40, delayMs: Long = 150) {
         repeat(maxRetries) { attempt ->
             val result = driver.evaluateValue("typeof(__pulsar_utils__)")
             if (result?.toString() == "function") return
