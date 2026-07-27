@@ -59,6 +59,7 @@ function Get-IssuesDirectories {
         Review         = Join-Path $issuesRoot 'review'
         ReviewDone     = Join-Path $issuesRoot 'review' 'done'
         ReviewDiscard  = Join-Path $issuesRoot 'review' 'done' 'discard'
+        Archive        = Join-Path $issuesRoot 'archive'
     }
 }
 
@@ -68,8 +69,8 @@ function Find-IssuesFiles {
         Find all .issues.md files in draft and review directories.
     .DESCRIPTION
         Scans draft/ and review/ recursively for *.issues.md files,
-        EXCLUDING review/done/ and review/done/discard/ subdirectories
-        (those contain already-processed files).
+        EXCLUDING archive/, review/done/, and review/done/discard/
+        subdirectories (those contain already-processed or archived files).
     .PARAMETER IncludeDone
         Also scan review/done/ directories.
     .OUTPUTS
@@ -93,6 +94,9 @@ function Find-IssuesFiles {
     $discardNormalized = if (Test-Path -LiteralPath $dirs.ReviewDiscard) {
         (Resolve-Path -LiteralPath $dirs.ReviewDiscard).Path
     } else { '' }
+    $archiveNormalized = if (Test-Path -LiteralPath $dirs.Archive) {
+        (Resolve-Path -LiteralPath $dirs.Archive).Path
+    } else { '' }
 
     $results = [System.Collections.ArrayList]::new()
     $seen = [System.Collections.Generic.HashSet[string]]::new()
@@ -104,8 +108,12 @@ function Find-IssuesFiles {
             Where-Object {
                 # Exclude files under review/done/ and review/done/discard/
                 # when -IncludeDone is not set and we are scanning Review
+                # Always exclude archive files — they are historical, not actionable
+                $full = $_.FullName
+                if ($archiveNormalized -and $full.StartsWith($archiveNormalized, [StringComparison]::OrdinalIgnoreCase)) {
+                    return $false
+                }
                 if (-not $IncludeDone) {
-                    $full = $_.FullName
                     if ($doneNormalized -and $full.StartsWith($doneNormalized, [StringComparison]::OrdinalIgnoreCase)) {
                         return $false
                     }
