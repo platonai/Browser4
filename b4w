@@ -1,0 +1,4 @@
+#!/bin/bash
+# b4w — short-form launcher for browser4-cli (delegates to b4w.sh).
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+exec "$SCRIPT_DIR/b4w.sh" "$@"

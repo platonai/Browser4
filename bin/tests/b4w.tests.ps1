@@ -160,6 +160,7 @@ Assert-ContainsString -Label 'Help no args: lists cli command' -Haystack $output
 Assert-ContainsString -Label 'Help no args: lists coworker command' -Haystack $output -Needle 'coworker'
 Assert-ContainsString -Label 'Help no args: lists test command' -Haystack $output -Needle 'test [args]'
 Assert-ContainsString -Label 'Help no args: lists build command' -Haystack $output -Needle 'build [args]'
+Assert-ContainsString -Label 'Help no args: lists b4w install' -Haystack $output -Needle 'b4w install'
 Assert-ContainsString -Label 'Help no args: mentions b4w.bat' -Haystack $output -Needle 'b4w.bat'
 Assert-ContainsString -Label 'Help no args: mentions b4w.sh' -Haystack $output -Needle 'b4w.sh'
 
@@ -224,6 +225,60 @@ Assert-ContainsString -Label 'Build routing: --help shows build help' -Haystack 
 # b4w build with unknown flag should error from build.ps1
 $output = pwsh -NoProfile -Command "& '$b4wAbs' build --nonexistent-flag-xyz *>&1" *>&1 | Out-String
 Assert-ContainsString -Label 'Build routing: unknown flag errors' -Haystack $output -Needle 'Unknown flag:'
+
+# ═══════════════════════════════════════════════════════════════════
+# TESTS: Subcommand routing — b4w install
+# ═══════════════════════════════════════════════════════════════════
+Write-Host "━━━ Subcommand: b4w install ━━━" -ForegroundColor Cyan
+
+# b4w b4w install should create the `b4w` bash launcher script
+$output = pwsh -NoProfile -Command "& '$b4wAbs' b4w install *>&1" *>&1 | Out-String
+Assert-ContainsString -Label 'b4w install: reports success' -Haystack $output -Needle 'b4w installed successfully'
+Assert-ContainsString -Label 'b4w install: mentions bash launcher' -Haystack $output -Needle 'Created bash launcher'
+Assert-ContainsString -Label 'b4w install: mentions PATH' -Haystack $output -Needle 'PATH'
+
+# Verify the `b4w` bash script was actually created
+$b4wBashPath = Join-Path $ScriptDir '..\..\b4w'
+Assert-Returns -Label 'b4w install: bash launcher file exists' -Actual (Test-Path $b4wBashPath) -Expected $true
+
+# Verify the content of the created bash launcher
+if (Test-Path $b4wBashPath) {
+    $b4wContent = Get-Content $b4wBashPath -Raw
+    Assert-ContainsString -Label 'b4w install: bash launcher has shebang' -Haystack $b4wContent -Needle '#!/bin/bash'
+    Assert-ContainsString -Label 'b4w install: bash launcher delegates to b4w.sh' -Haystack $b4wContent -Needle 'b4w.sh'
+}
+
+# ═══════════════════════════════════════════════════════════════════
+# TESTS: Subcommand routing — b4w uninstall
+# ═══════════════════════════════════════════════════════════════════
+Write-Host "━━━ Subcommand: b4w uninstall ━━━" -ForegroundColor Cyan
+
+# b4w b4w uninstall should remove the bash launcher (created by install above)
+$output = pwsh -NoProfile -Command "& '$b4wAbs' b4w uninstall *>&1" *>&1 | Out-String
+Assert-ContainsString -Label 'b4w uninstall: reports success' -Haystack $output -Needle 'b4w uninstalled successfully'
+Assert-ContainsString -Label 'b4w uninstall: removes from PATH' -Haystack $output -Needle 'Removed from user PATH'
+
+# Verify the `b4w` bash script was deleted
+$b4wBashPath = Join-Path $ScriptDir '..\..\b4w'
+Assert-Returns -Label 'b4w uninstall: bash launcher file removed' -Actual (Test-Path $b4wBashPath) -Expected $false
+
+# ═══════════════════════════════════════════════════════════════════
+# TESTS: Subcommand routing — b4w (bare / unknown)
+# ═══════════════════════════════════════════════════════════════════
+Write-Host "━━━ Subcommand: b4w (bare / unknown) ━━━" -ForegroundColor Cyan
+
+# b4w b4w (no subcommand) should print the top-level help
+$output = pwsh -NoProfile -Command "& '$b4wAbs' b4w *>&1" *>&1 | Out-String
+Assert-ContainsString -Label 'b4w bare: shows top-level help' -Haystack $output -Needle 'Usage: b4w [command] [options]'
+Assert-ContainsString -Label 'b4w bare: lists install command' -Haystack $output -Needle 'b4w install'
+Assert-ContainsString -Label 'b4w bare: lists uninstall command' -Haystack $output -Needle 'b4w uninstall'
+
+# b4w b4w <unknown-subcommand> should also print help
+$output = pwsh -NoProfile -Command "& '$b4wAbs' b4w bogus-cmd *>&1" *>&1 | Out-String
+Assert-ContainsString -Label 'b4w unknown: shows help' -Haystack $output -Needle 'Usage: b4w [command] [options]'
+
+# b4w b4w should NOT try to run the CLI binary (it must not cause cargo-run noise)
+Assert-NotContainsString -Label 'b4w bare: does not invoke cargo' -Haystack $output -Needle 'cargo run'
 
 # ═══════════════════════════════════════════════════════════════════
 # TESTS: Subcommand routing — cli (explicit)
@@ -325,6 +380,13 @@ Assert-ContainsString -Label 'Integrity: restores CWD' -Haystack $srcText -Needl
 Assert-ContainsString -Label 'Integrity: has coworker routing' -Haystack $srcText -Needle 'coworker/coworker.ps1'
 Assert-ContainsString -Label 'Integrity: has test routing' -Haystack $srcText -Needle 'bin\test.ps1'
 Assert-ContainsString -Label 'Integrity: has build routing' -Haystack $srcText -Needle 'bin\build.ps1'
+Assert-ContainsString -Label 'Integrity: has b4w install routing' -Haystack $srcText -Needle "b4w' -and `$CliArgs[1] -eq 'install'"
+Assert-ContainsString -Label 'Integrity: b4w install adds to PATH' -Haystack $srcText -Needle 'SetEnvironmentVariable'
+Assert-ContainsString -Label 'Integrity: b4w install creates bash launcher' -Haystack $srcText -Needle 'b4w — short-form launcher'
+Assert-ContainsString -Label 'Integrity: has b4w uninstall routing' -Haystack $srcText -Needle "b4w' -and `$CliArgs[1] -eq 'uninstall'"
+Assert-ContainsString -Label 'Integrity: b4w uninstall removes from PATH' -Haystack $srcText -Needle 'Removed from user PATH'
+Assert-ContainsString -Label 'Integrity: b4w uninstall deletes launcher' -Haystack $srcText -Needle 'Deleted bash launcher'
+Assert-ContainsString -Label 'Integrity: b4w bare prints help' -Haystack $srcText -Needle "b4w (bare / unknown subcommand)"
 Assert-ContainsString -Label 'Integrity: cli subcommand stripping' -Haystack $srcText -Needle "eq 'cli'"
 
 # ═══════════════════════════════════════════════════════════════════

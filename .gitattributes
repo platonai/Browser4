@@ -7,6 +7,7 @@
 *.sh      text eol=lf
 *.bash    text eol=lf
 *.zsh     text eol=lf
+b4w       text eol=lf
 *.cmd     text eol=crlf
 *.bat     text eol=crlf
 # PowerShell works cross-platform; CRLF preferred on Windows

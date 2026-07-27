@@ -97,6 +97,8 @@ Commands:
   coworker <cmd>   Manage Coworker tasks (delegates to coworker/coworker.ps1)
   test [args]      Run tests (delegates to bin/test.ps1)
   build [args]     Build the project (delegates to bin/build.ps1)
+  b4w install      Install b4w as a global command (adds to PATH)
+  b4w uninstall    Remove b4w from PATH and delete generated launcher
 
 Examples:
   # cli (default — "cli" keyword is optional)
@@ -111,6 +113,8 @@ Examples:
   b4w coworker list                     list Coworker tasks
   b4w test --e2e                        run E2E tests
   b4w build                             build browser4-cli
+  b4w b4w install                       install b4w globally (one-time setup)
+  b4w b4w uninstall                     remove b4w from PATH and launcher
 
 Windows wrappers:
   b4w.bat         Command Prompt wrapper — prevents PowerShell from
@@ -123,6 +127,130 @@ Tip: When running b4w.ps1 directly and short flags like -i or -v are
 intercepted by PowerShell, either use b4w.bat / b4w.sh, or pass flags
 after "--" (e.g. ./b4w.ps1 -- snapshot -i).
 '@
+
+# ── Subcommand: b4w install ────────────────────────────────────────────────
+# Installs the b4w command globally so you can type `b4w <subcommand>` from
+# any directory without the .ps1 / .bat / .sh extension.
+if ($CliArgs -and $CliArgs[0] -eq 'b4w' -and $CliArgs[1] -eq 'install') {
+    Write-Host "Installing b4w command..." -ForegroundColor Cyan
+
+    # 1. Add the repo root to the user's PATH environment variable (permanent).
+    $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+    if ($userPath -notlike "*$ScriptDir*") {
+        [Environment]::SetEnvironmentVariable(
+            "Path", "$userPath;$ScriptDir", "User")
+        Write-Host "  + Added to user PATH: $ScriptDir" -ForegroundColor Green
+    } else {
+        Write-Host "  - Already on PATH: $ScriptDir" -ForegroundColor DarkGray
+    }
+
+    # Also update the current process PATH so `b4w` works immediately.
+    if ($env:Path -notlike "*$ScriptDir*") {
+        $env:Path = "$env:Path;$ScriptDir"
+    }
+
+    # 2. Create a bare `b4w` bash script (no extension) for Git Bash / WSL.
+    #    bash auto-completes `b4w` → `b4w` if the file has +x; this avoids
+    #    the cmd.exe round-trip that `b4w.bat` would take in bash.
+    $b4wBash = Join-Path $ScriptDir 'b4w'
+    @'
+#!/bin/bash
+# b4w — short-form launcher for browser4-cli (delegates to b4w.sh).
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+exec "$SCRIPT_DIR/b4w.sh" "$@"
+'@ | Set-Content -Path $b4wBash -Encoding UTF8 -NoNewline
+    # Append a final newline (Set-Content -NoNewline omits it for the heredoc).
+    Add-Content -Path $b4wBash -Value ""
+    Write-Host "  + Created bash launcher: $b4wBash" -ForegroundColor Green
+
+    # 3. Ensure the bash script is executable (git update-index --chmod=+x).
+    Push-Location $ScriptDir
+    try {
+        git update-index --chmod=+x b4w 2>$null
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "  + Marked b4w as executable in git index" -ForegroundColor Green
+        }
+    } finally {
+        Pop-Location
+    }
+
+    Write-Host ""
+    Write-Host "b4w installed successfully!" -ForegroundColor Green
+    Write-Host ""
+    Write-Host "Restart your shell (or run 'refreshenv' / reopen the terminal)"
+    Write-Host "and then you can type just:  b4w <subcommand>" -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "Examples:" -ForegroundColor White
+    Write-Host "  b4w --help"
+    Write-Host "  b4w coworker list"
+    Write-Host "  b4w test --e2e"
+    Write-Host "  b4w build"
+    Write-Host "  b4w -- snapshot -i"
+
+    Set-Location $OriginalCwd
+    exit 0
+}
+
+# ── Subcommand: b4w uninstall ──────────────────────────────────────────────
+# Removes b4w from the user's PATH and deletes the generated launcher file.
+if ($CliArgs -and $CliArgs[0] -eq 'b4w' -and $CliArgs[1] -eq 'uninstall') {
+    Write-Host "Uninstalling b4w command..." -ForegroundColor Cyan
+
+    # 1. Remove the repo root from the user's PATH environment variable.
+    $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+    if ($userPath -like "*$ScriptDir*") {
+        # Split on ';' and filter out the ScriptDir entry (handle trailing
+        # backslash variations and the entry possibly being at start, middle,
+        # or end of the PATH string).
+        $entries = $userPath -split ';' -ne ''
+        $cleaned = $entries | Where-Object {
+            $normalized = $_.TrimEnd('\', '/')
+            $normalized -ne $ScriptDir.TrimEnd('\', '/')
+        }
+        $newPath = $cleaned -join ';'
+        [Environment]::SetEnvironmentVariable("Path", $newPath, "User")
+        Write-Host "  + Removed from user PATH: $ScriptDir" -ForegroundColor Green
+    } else {
+        Write-Host "  - Not on user PATH: $ScriptDir" -ForegroundColor DarkGray
+    }
+
+    # Also remove from the current process PATH.
+    if ($env:Path -like "*$ScriptDir*") {
+        $entries = $env:Path -split ';' -ne ''
+        $cleaned = $entries | Where-Object {
+            $normalized = $_.TrimEnd('\', '/')
+            $normalized -ne $ScriptDir.TrimEnd('\', '/')
+        }
+        $env:Path = $cleaned -join ';'
+        Write-Host "  + Removed from current session PATH" -ForegroundColor Green
+    }
+
+    # 2. Delete the `b4w` bash launcher (generated by `b4w install`).
+    $b4wBash = Join-Path $ScriptDir 'b4w'
+    if (Test-Path $b4wBash) {
+        Remove-Item $b4wBash -Force
+        Write-Host "  + Deleted bash launcher: $b4wBash" -ForegroundColor Green
+    } else {
+        Write-Host "  - Bash launcher not found (already removed): $b4wBash" -ForegroundColor DarkGray
+    }
+
+    Write-Host ""
+    Write-Host "b4w uninstalled successfully!" -ForegroundColor Green
+    Write-Host ""
+    Write-Host "Restart your shell for the PATH change to take full effect." -ForegroundColor Yellow
+    Write-Host "To reinstall later:  ./b4w.ps1 b4w install"
+
+    Set-Location $OriginalCwd
+    exit 0
+}
+
+# ── Subcommand: b4w (bare / unknown subcommand) ───────────────────────────
+# Running just `b4w` or `b4w <unknown>` prints the top-level help.
+if ($CliArgs -and $CliArgs[0] -eq 'b4w') {
+    Write-Host $TopHelp
+    Set-Location $OriginalCwd
+    exit 0
+}
 
 # No arguments: show help
 if (-not $CliArgs) {
