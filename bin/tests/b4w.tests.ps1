@@ -428,7 +428,7 @@ Assert-ContainsString -Label 'Integrity: b4w install adds to PATH' -Haystack $sr
 Assert-ContainsString -Label 'Integrity: b4w install creates bash launcher' -Haystack $srcText -Needle 'b4w — short-form launcher'
 Assert-ContainsString -Label 'Integrity: has b4w uninstall routing' -Haystack $srcText -Needle "b4w' -and `$CliArgs[1] -eq 'uninstall'"
 Assert-ContainsString -Label 'Integrity: b4w uninstall removes from PATH' -Haystack $srcText -Needle 'Removed from user PATH'
-Assert-ContainsString -Label 'Integrity: b4w uninstall deletes launcher' -Haystack $srcText -Needle 'Deleted bash launcher'
+Assert-ContainsString -Label 'Integrity: b4w uninstall deletes launcher' -Haystack $srcText -Needle 'Removed global launcher'
 Assert-ContainsString -Label 'Integrity: b4w bare prints help' -Haystack $srcText -Needle "b4w (bare / unknown subcommand)"
 Assert-ContainsString -Label 'Integrity: cli subcommand stripping' -Haystack $srcText -Needle "eq 'cli'"
 
