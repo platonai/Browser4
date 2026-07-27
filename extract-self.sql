@@ -1,0 +1,1 @@
+SELECT dom_first_text(dom, '#productTitle') AS title, dom_first_text(dom, '#product-price') AS price FROM load_and_select('http://localhost:18080/generated/crawl/product/1.html -parse -refresh', ':root')

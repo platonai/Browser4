@@ -858,6 +858,7 @@ function Invoke-PowerShellTests([string[]]$additionalArgs) {
     # ── Show / DryRun ────────────────────────────────────────────────────────
     if ($script:Show -or $script:DryRun) {
         $label = if ($script:Show) { '[SHOW] Would execute' } else { '[DRY RUN] Would execute' }
+        Write-CommandBanner -Label $label
         Write-Host "Found $($testFiles.Count) PowerShell test file(s):"
         foreach ($file in $testFiles) {
             $relativePath = $file.FullName.Substring($repoRoot.Length + 1)

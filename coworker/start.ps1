@@ -2,12 +2,15 @@
 
 <#
 .SYNOPSIS
-    Starts the coworker scheduler and the task-manager GUI server together.
+    Starts the coworker scheduler. The GUI server is opt-in via -Gui.
 
 .DESCRIPTION
-    Launches the Node.js GUI server (coworker/gui/server.js) as a background
-    process, then runs the coworker scheduler in the foreground.
-    Press Ctrl+C to stop both.
+    Runs the coworker scheduler in the foreground.
+    Optionally starts the Node.js GUI server (coworker/gui/server.js) as a
+    background process when -Gui is passed. Press Ctrl+C to stop both.
+
+.PARAMETER Gui
+    Start the GUI server alongside the scheduler.
 
 .PARAMETER GuiPort
     Port for the GUI server. Default: 8090.
@@ -18,11 +21,12 @@
 .PARAMETER OpenBrowser
     Open the default browser to the GUI when the server starts.
 
-.PARAMETER NoGui
-    Skip the GUI server and start only the scheduler.
-
 .PARAMETER ConfigPath
     Path to the scheduler configuration file (passed through).
+
+.PARAMETER Background
+    Run the scheduler as a background process and exit. The script returns
+    immediately; the scheduler keeps running in its own PowerShell process.
 
 .PARAMETER Once
     Run the scheduler once and exit (passed through).
@@ -30,10 +34,11 @@
 
 [CmdletBinding()]
 param(
+    [switch]$Gui,
     [int]$GuiPort = 8090,
     [string]$GuiHost = '127.0.0.1',
     [switch]$OpenBrowser,
-    [switch]$NoGui,
+    [switch]$Background,
     [string]$ConfigPath,
     [switch]$Once
 )
@@ -60,8 +65,8 @@ $guiServerPath = Join-Path $scriptDir 'gui' 'server.js'
 $tasksRoot = Join-Path $scriptDir 'tasks'
 
 function Start-GuiServer {
-    if ($NoGui) {
-        Write-Host '[coworker] GUI server skipped (--NoGui).'
+    if (-not $Gui) {
+        Write-Host '[coworker] GUI server not requested (use -Gui to start it).'
         return
     }
 
@@ -71,12 +76,12 @@ function Start-GuiServer {
     }
 
     if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
-        Write-Warning '[coworker] Node.js not found on PATH. Install Node.js or use --NoGui to skip the GUI.'
+        Write-Warning '[coworker] Node.js not found on PATH. Install Node.js to use the GUI.'
         return
     }
 
     if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
-        Write-Warning '[coworker] npm not found on PATH. Install Node.js or use --NoGui to skip the GUI.'
+        Write-Warning '[coworker] npm not found on PATH. Install Node.js to use the GUI.'
         return
     }
 
@@ -158,11 +163,36 @@ if ($Once)       { $schedulerArgs['Once'] = $true }
 # Main — start GUI, then run scheduler in foreground
 # ═══════════════════════════════════════════════════════════════════════════
 
+$bannerTitle = if ($Gui) { 'Coworker — Task Pipeline + GUI Manager' } else { 'Coworker — Task Pipeline' }
 Write-Host '═══════════════════════════════════════════════════'
-Write-Host '  Coworker — Task Pipeline + GUI Manager'
+Write-Host "  $bannerTitle"
 Write-Host "  Tasks root : $tasksRoot"
 Write-Host '═══════════════════════════════════════════════════'
 
+# ── Background mode: launch scheduler as separate process, exit immediately ──
+if ($Background) {
+    Start-GuiServer
+
+    $pwshArgs = @('-NoProfile', '-File', $schedulerPath)
+    if ($ConfigPath) { $pwshArgs += '-ConfigPath'; $pwshArgs += $ConfigPath }
+    if ($Once)       { $pwshArgs += '-Once' }
+
+    Write-Host "[coworker] Starting scheduler in background..."
+    $schedulerProcess = Start-Process -FilePath 'pwsh' `
+        -ArgumentList $pwshArgs `
+        -NoNewWindow `
+        -PassThru
+
+    Write-Host "[coworker] Scheduler started (PID $($schedulerProcess.Id))."
+    if ($Gui) {
+        Write-Host "[coworker] GUI server → http://${GuiHost}:${GuiPort}"
+    }
+    Write-Host "[coworker] This terminal can be closed."
+    Write-Host "[coworker] To stop: Stop-Process $($schedulerProcess.Id)"
+    return
+}
+
+# ── Foreground mode: GUI (if requested), then scheduler in foreground ──
 Start-GuiServer
 Write-Host '[coworker] Starting scheduler (Ctrl+C to stop all)...'
 Write-Host ''

@@ -1,0 +1,4 @@
+# MockSite E-commerce Product URLs — Electronics Category
+http://localhost:18080/ec/dp/B0E000001
+http://localhost:18080/ec/dp/B0E000002
+http://localhost:18080/ec/dp/B0E000003
