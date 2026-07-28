@@ -91,7 +91,7 @@ open class PptxGenerator(
             }
 
             // 5. Write to file
-            val filename = sanitizeFilename(pageTitle) + "_" + timestamp() + ".pptx"
+            val filename = sanitizeFilename(pageTitle, pageUrl) + "_" + timestamp() + ".pptx"
             val outputPath = outputDir.resolve(filename)
 
             FileOutputStream(outputPath.toFile()).use { fos ->
@@ -555,13 +555,29 @@ open class PptxGenerator(
         }
     }
 
-    private fun sanitizeFilename(name: String): String {
-        return name
+    private fun sanitizeFilename(name: String, fallbackUrl: String = ""): String {
+        val sanitized = name
             .replace(Regex("""[<>:"/\\|?*]"""), "_")
             .replace(Regex("""\s+"""), "_")
             .take(100)
             .trimEnd('.', '_')
-            .ifBlank { "presentation" }
+
+        if (sanitized.isNotBlank()) return sanitized
+
+        // Fall back to URL-derived name when the page title is empty.
+        // Extract a filename-friendly slug from the URL host + path.
+        if (fallbackUrl.isNotBlank()) {
+            val urlSlug = fallbackUrl
+                .removePrefix("https://")
+                .removePrefix("http://")
+                .replace(Regex("""[<>:"/\\|?*\s]"""), "_")
+                .replace(Regex("""_+"""), "_")
+                .take(100)
+                .trimEnd('.', '_')
+            if (urlSlug.isNotBlank()) return urlSlug
+        }
+
+        return "presentation"
     }
 
     private fun truncateText(text: String, maxLength: Int): String {

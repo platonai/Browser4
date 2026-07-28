@@ -210,13 +210,14 @@ object CaptchaSolveScripts {
     val DETECT_IMAGE_CAPTCHA = """
         (() => {
             try {
-                const result = { present: false, imageSelector: null, inputSelector: null };
+                const result = { present: false, imageSelector: null, inputSelector: null, confidence: 0.0 };
 
-                // Common selectors for image captchas
+                // Common keywords found in CAPTCHA image URLs/attributes
                 const captchaKeywords = ['captcha', 'verification', 'verify', 'security', 'challenge'];
 
-                // Check images
+                // ---- Heuristic: find images matching captcha keywords ----
                 const allImages = document.querySelectorAll('img');
+                let candidateImage = null;
                 for (const img of allImages) {
                     const src = (img.src || '').toLowerCase();
                     const alt = (img.alt || '').toLowerCase();
@@ -225,24 +226,81 @@ object CaptchaSolveScripts {
 
                     const combined = [src, alt, id, cls].join(' ');
                     if (captchaKeywords.some(kw => combined.includes(kw))) {
-                        result.present = true;
-                        result.imageSelector = img.id ? '#' + img.id : (img.className ? '.' + img.className.split(' ')[0] : 'img');
+                        candidateImage = img;
                         break;
                     }
                 }
 
-                // Check for captcha text input nearby
-                if (result.present) {
-                    const inputs = document.querySelectorAll('input[type="text"], input:not([type])');
-                    for (const input of inputs) {
-                        const name = (input.name || '').toLowerCase();
-                        const placeholder = (input.placeholder || '').toLowerCase();
-                        if (captchaKeywords.some(kw => name.includes(kw) || placeholder.includes(kw))) {
-                            result.inputSelector = input.id ? '#' + input.id :
-                                (input.name ? 'input[name="' + input.name + '"]' : 'input');
-                            break;
-                        }
+                if (!candidateImage) {
+                    return JSON.stringify(result);
+                }
+
+                // ---- Heuristic: check form/interaction context ----
+                // Real CAPTCHAs are always part of a form or have a captcha input nearby.
+                // Article illustrations lack this context.
+                let hasFormContext = false;
+                let hasCaptchaInput = false;
+                let captchaInputSelector = null;
+
+                // Check if the image is inside a <form>
+                let parent = candidateImage.parentElement;
+                while (parent) {
+                    if (parent.tagName === 'FORM') {
+                        hasFormContext = true;
+                        break;
                     }
+                    parent = parent.parentElement;
+                }
+
+                // Check for captcha text input anywhere on the page
+                const inputs = document.querySelectorAll('input[type="text"], input:not([type])');
+                for (const input of inputs) {
+                    const name = (input.name || '').toLowerCase();
+                    const placeholder = (input.placeholder || '').toLowerCase();
+                    const inputId = (input.id || '').toLowerCase();
+                    const combined = [name, placeholder, inputId].join(' ');
+                    if (captchaKeywords.some(kw => combined.includes(kw))) {
+                        hasCaptchaInput = true;
+                        captchaInputSelector = input.id ? '#' + input.id :
+                            (input.name ? 'input[name="' + input.name + '"]' : 'input');
+                        break;
+                    }
+                }
+
+                // Check image dimensions — real CAPTCHAs are typically 200-400px wide
+                const imgWidth = candidateImage.naturalWidth || candidateImage.width || 0;
+                const imgHeight = candidateImage.naturalHeight || candidateImage.height || 0;
+                const hasTypicalSize = (imgWidth >= 150 && imgWidth <= 500 && imgHeight >= 40 && imgHeight <= 200);
+
+                // ---- Confidence scoring ----
+                let confidence = 0.0;
+
+                // Base confidence from keyword match
+                confidence += 0.30;
+
+                // Form context is the strongest signal
+                if (hasFormContext && hasCaptchaInput) {
+                    confidence += 0.50;  // Strong signal
+                } else if (hasFormContext || hasCaptchaInput) {
+                    confidence += 0.35;  // Moderate signal
+                }
+                // Without form context or captcha input, this is likely an article illustration
+
+                // Typical dimensions boost
+                if (hasTypicalSize) {
+                    confidence += 0.15;
+                }
+
+                // ---- Determine result ----
+                // Require confidence >= 0.65 to report as present (was 0.70 previously
+                // but we now have better heuristics). Pure keyword match without any
+                // form/interaction context gets at most 0.30 (below threshold).
+                if (confidence >= 0.65) {
+                    result.present = true;
+                    result.imageSelector = candidateImage.id ? '#' + candidateImage.id :
+                        (candidateImage.className ? '.' + candidateImage.className.split(' ')[0] : 'img');
+                    result.inputSelector = captchaInputSelector;
+                    result.confidence = confidence;
                 }
 
                 return JSON.stringify(result);

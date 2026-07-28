@@ -1,5 +1,6 @@
 package ai.platon.browser4.boot.plugin
 
+import ai.platon.pulsar.agentic.tools.CustomToolRegistry
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.skeleton.plugin.PluginManifest
 import org.springframework.context.ApplicationContext
@@ -157,14 +158,7 @@ class PluginService(
 
     private fun toPluginInfo(jarPath: Path): PluginInfo {
         val manifest = readManifest(jarPath)
-        val loaded = manifest?.autoConfigurationClasses?.any { className ->
-            try {
-                val clazz = Class.forName(className, false, javaClass.classLoader)
-                applicationContext.getBeanNamesForType(clazz).isNotEmpty()
-            } catch (_: Exception) {
-                false
-            }
-        } ?: false
+        val loaded = isPluginLoaded(manifest)
 
         return PluginInfo(
             fileName = jarPath.name,
@@ -173,6 +167,48 @@ class PluginService(
             manifest = manifest,
             loaded = loaded,
         )
+    }
+
+    /**
+     * Determine whether a plugin is currently loaded.
+     *
+     * Checks (in order):
+     * 1. Whether any of the plugin's auto-configuration classes are Spring beans
+     * 2. Whether any tools from the plugin's domain are registered in [CustomToolRegistry]
+     *
+     * Using the thread-context classloader (which includes plugin JARs added by
+     * [PluginClasspathEnhancer]) rather than [javaClass.classLoader] ensures we
+     * find dynamically-loaded plugin classes.
+     */
+    private fun isPluginLoaded(manifest: PluginManifest?): Boolean {
+        if (manifest == null) return false
+
+        // Check 1: auto-configuration class beans
+        val hasConfigBean = manifest.autoConfigurationClasses.any { className ->
+            try {
+                val ctxLoader = Thread.currentThread().contextClassLoader
+                val clazz = Class.forName(className, false, ctxLoader)
+                applicationContext.getBeanNamesForType(clazz).isNotEmpty()
+            } catch (_: Exception) {
+                false
+            }
+        }
+        if (hasConfigBean) return true
+
+        // Check 2: tools registered in CustomToolRegistry
+        // Derive the tool domain from the plugin manifest name.
+        // Plugin names are "browser4-<domain>" (e.g. "browser4-captcha").
+        // For the images plugin, the manifest name is "browser4-images" but the
+        // tool domain is "image" (singular), so also try stripping a trailing "s".
+        val baseName = manifest.name.removePrefix("browser4-")
+        val candidateDomains = listOf(baseName, baseName.removeSuffix("s"))
+        return candidateDomains.any { domain ->
+            try {
+                CustomToolRegistry.instance.contains(domain)
+            } catch (_: Exception) {
+                false
+            }
+        }
     }
 
     private fun readManifest(jarPath: Path): PluginManifest? {
