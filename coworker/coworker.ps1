@@ -900,7 +900,7 @@ function Invoke-List {
 
         # Sort by LastWriteTime descending, limit if Count specified
         $files = @($files | Sort-Object LastWriteTime -Descending)
-        if ($Count -gt 0) { $files = $files | Select-Object -First $Count }
+        if ($Count -gt 0) { $files = @($files | Select-Object -First $Count) }
 
         $totalTasks += $files.Count
         $stateColor = Get-StateColor -DirPath $dir
