@@ -13,6 +13,7 @@ param(
     [switch]$DryRun,
     [switch]$Show,
     [switch]$NoSession,
+    [switch]$BuildBackend,
     [string]$SessionPath = '',
     [Parameter(ValueFromRemainingArguments = $true)]
     [string[]]$ScriptArgs
@@ -21,6 +22,7 @@ param(
 $script:DryRun = $DryRun
 $script:Show = $Show
 $script:NoSession = $NoSession
+$script:BuildBackend = $BuildBackend
 $script:SessionPath = $SessionPath
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -139,18 +141,52 @@ function Invoke-CommandAndReport {
     return $exitCode
 }
 
+function Invoke-BackendBuild {
+    <#
+    .SYNOPSIS
+        Build the backend (compile only, skip tests) before running tests.
+        Fails fast on compilation errors.
+    #>
+    if (-not (Test-Path $mvnwScript)) {
+        Write-Error "Maven wrapper not found at $mvnwScript"
+        exit 1
+    }
+
+    Write-CommandBanner -Label 'Building backend (compile only, skipping tests)...'
+
+    $mvnArgs = @('test-compile')
+
+    if ($script:Show) {
+        Write-CommandBanner -Label '[SHOW] Would execute:' -Subtitle "  $mvnwScript $($mvnArgs -join ' ')"
+        return
+    }
+
+    if ($script:DryRun) {
+        Write-CommandBanner -Label '[DRY RUN] Executing:' -Subtitle "  $mvnwScript $($mvnArgs -join ' ')"
+    }
+
+    $exitCode = Invoke-CommandAndReport -ScriptBlock { & $mvnwScript @mvnArgs } `
+        -Label 'Backend build' -NoExit
+
+    if ($exitCode -ne 0) {
+        Write-CommandBanner -Label 'Backend build failed — aborting test run' -Icon '[FAIL]'
+        exit $exitCode
+    }
+}
+
 # ===================================================================
 # Usage
 # ===================================================================
 
 function Print-Usage {
     param([int]$ExitCode = 1)
-    Write-Host "Usage: test.ps1 [-DryRun] [-Show] [-NoSession] [-SessionPath <path>] [test-types...] [additional-args...]"
+    Write-Host "Usage: test.ps1 [-DryRun] [-Show] [-NoSession] [-BuildBackend] [-SessionPath <path>] [test-types...] [additional-args...]"
     Write-Host ""
     Write-Host "Options:"
     Write-Host "  -DryRun      Compile only (test-compile), do not run tests"
     Write-Host "  -Show        Print the final command, do not execute anything"
     Write-Host "  -NoSession     Skip persisting test results to .test-sessions/<session-id>/test-session.json"
+    Write-Host "  -BuildBackend  Run mvnw test-compile before any tests (fail fast on build errors)"
     Write-Host "  -SessionPath   Custom path for the test-session JSON file"
     Write-Host "               (default: <repo-root>/.test-sessions/<timestamp>/test-session.json)"
     Write-Host ""
@@ -185,6 +221,7 @@ function Print-Usage {
     Write-Host ""
     Write-Host "Examples:"
     Write-Host "  test.ps1 fast                       # Run fast unit tests"
+    Write-Host "  test.ps1 -BuildBackend fast         # Build backend, then run fast tests"
     Write-Host "  test.ps1 -NoSession fast              # Run fast tests without persisting session"
     Write-Host "  test.ps1 -SessionPath out/session.json ps  # Write session to a custom path"
     Write-Host "  test.ps1 -DryRun fast               # Show the Maven command for fast tests"
@@ -1462,6 +1499,11 @@ foreach ($arg in $ScriptArgs) {
         continue
     }
 
+    if ($arg -eq '--build-backend') {
+        $script:BuildBackend = $true
+        continue
+    }
+
     if ($arg -eq '--session-path') {
         $script:_NextIsSessionPath = $true
         continue
@@ -1568,6 +1610,12 @@ $launchTargets = $launchTargets | Select-Object -Unique
 if ($launchTargets.Count -gt 0 -and (($mavenTests.Count -gt 0) -or ($cliTests.Count -gt 0) -or ($rwsTests.Count -gt 0) -or ($psTests.Count -gt 0) -or ($launchTargets.Count -gt 1))) {
     Write-Error "mock-site (or server) must be run by itself. Pass any Maven properties after it, for example: test.ps1 mock-site -Dmock.site.port=18080"
     exit 1
+}
+
+# -- Build backend (if requested) ------------------------------------
+
+if ($script:BuildBackend) {
+    Invoke-BackendBuild
 }
 
 # -- Execute ----------------------------------------------------------
