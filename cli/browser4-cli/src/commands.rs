@@ -2919,7 +2919,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "htmlsnapshot-query",
-            description: "Run X-SQL against the HTML snapshot stored in Browser4's page storage via the scrape API",
+            description: "Run X-SQL. DOM_LOAD_AND_SELECT(@url, ...) re-fetches the page fresh via the scrape API (independent of the stored snapshot). htmlsnapshot capture is only needed for inspect/get/summary, not for query with @url.",
             category: Category::Snapshot,
             hidden: false,
             batch_supported: false,
@@ -4997,7 +4997,7 @@ mod tests {
         args.insert("url".to_string(), json!("https://example.com"));
         args.insert(
             "sql".to_string(),
-            json!("SELECT dom_base_uri(dom) AS url FROM load_and_select('@url', ':root')"),
+            json!("SELECT DOM_BASE_URI(DOM) AS url FROM DOM_LOAD_AND_SELECT('@url', ':root')"),
         );
         assert_eq!((cmd.tool_name_fn)(&args), "html_snapshot_query");
         let params = (cmd.tool_params_fn)(&args);
@@ -5579,11 +5579,11 @@ mod tests {
         let cmd = map.get("crawl").unwrap();
         let mut args = HashMap::new();
         args.insert("url".to_string(), json!("https://example.com"));
-        args.insert("sql".to_string(), json!("SELECT dom_first_text(dom, 'h1') FROM load_and_select(@url, ':root')"));
+        args.insert("sql".to_string(), json!("SELECT DOM_FIRST_TEXT(DOM, 'h1') FROM DOM_LOAD_AND_SELECT(@url, ':root')"));
         let params = (cmd.tool_params_fn)(&args);
         assert_eq!(
             params["sql"].as_str().unwrap(),
-            "SELECT dom_first_text(dom, 'h1') FROM load_and_select(@url, ':root')"
+            "SELECT DOM_FIRST_TEXT(DOM, 'h1') FROM DOM_LOAD_AND_SELECT(@url, ':root')"
         );
     }
 

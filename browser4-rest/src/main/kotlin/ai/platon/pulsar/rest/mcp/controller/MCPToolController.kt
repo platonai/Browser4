@@ -1547,7 +1547,8 @@ internal fun inspectDocument(
         if (mBox.isNotBlank()) sample.put("box", mBox)
         // Text: full descendant text ≤5 words / ≤5 CJK chars
         // (ownText is often empty — e.g. <a><em>$</em><span>140</span></a>)
-        val ownText = truncateText(m.text().trim())
+        val rawFullText = m.text().trim()
+        val ownText = truncateText(rawFullText)
         if (ownText.isNotBlank()) sample.put("text", ownText)
 
         // Direct children (also in Section 8 format)
@@ -1563,6 +1564,33 @@ internal fun inspectDocument(
             children.add(cObj)
         }
         sample.set<ArrayNode>("children", children)
+
+        // ── Truncation detection ──────────────────────────────────────────
+        // When visible text ends with "..." (CSS text-overflow: ellipsis or
+        // HTML-source truncation), check child elements for title/aria-label/alt
+        // attributes that contain fuller text. Surface these as alternative
+        // selectors for DOM_FIRST_ATTR-based extraction.
+        if (rawFullText.endsWith("...") && rawFullText.length > 4) {
+            val truncationHints = pulsarObjectMapper().createArrayNode()
+            for (child in m.children()) {
+                val childEl = child as? org.jsoup.nodes.Element ?: continue
+                for (attr in listOf("title", "aria-label", "alt")) {
+                    val attrVal = childEl.attr(attr).trim()
+                    if (attrVal.isNotBlank() && attrVal.length > rawFullText.length) {
+                        val hint = pulsarObjectMapper().createObjectNode()
+                        hint.put("childSelector", buildElementRef(childEl))
+                        hint.put("attribute", attr)
+                        hint.put("sampleValue", truncateText(attrVal, maxWords = 8))
+                        hint.put("fullTextLength", attrVal.length)
+                        truncationHints.add(hint)
+                        break  // one hint per child — prefer first matching attr
+                    }
+                }
+            }
+            if (truncationHints.size() > 0) {
+                sample.set<ArrayNode>("truncationHints", truncationHints)
+            }
+        }
         samples.add(sample)
     }
 

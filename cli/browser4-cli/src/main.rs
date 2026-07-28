@@ -5454,7 +5454,7 @@ async fn handle_html_snapshot_capture(
     }
     cli_println!("     htmlsnapshot inspect  # discover recurring patterns");
     if !url.is_empty() {
-        cli_println!("     htmlsnapshot query --sql \"SELECT dom_text(dom) as text FROM load_and_select(@url, 'a')\"");
+        cli_println!("     htmlsnapshot query --sql \"SELECT DOM_TEXT(DOM) AS text FROM DOM_LOAD_AND_SELECT(@url, 'a')\"");
     }
 
     Ok(())
@@ -6546,6 +6546,20 @@ async fn handle_html_snapshot_inspect(
                     cli_println!("     text: \"{}\"", text);
                 }
 
+                // Truncation hints: when visible text ends with "..." (CSS text-overflow),
+                // the backend may suggest child-element attributes with fuller text.
+                if let Some(hints) = sample.get("truncationHints").and_then(|v| v.as_array()) {
+                    if !hints.is_empty() {
+                        cli_println!("     💡 Visible text appears truncated. For full values, try attribute extraction:");
+                        for hint in hints {
+                            let child_sel = hint.get("childSelector").and_then(|v| v.as_str()).unwrap_or("");
+                            let attr = hint.get("attribute").and_then(|v| v.as_str()).unwrap_or("");
+                            let sample_val = hint.get("sampleValue").and_then(|v| v.as_str()).unwrap_or("");
+                            cli_println!("        DOM_FIRST_ATTR(DOM, '{}', '{}') → \"{}\"", child_sel, attr, sample_val);
+                        }
+                    }
+                }
+
                 // Children
                 if let Some(children) = sample.get("children").and_then(|v| v.as_array()) {
                     for child in children {
@@ -6687,7 +6701,7 @@ async fn handle_html_snapshot_inspect(
             cli_println!("     htmlsnapshot get attr \"a[href]\" href --limit 20  # link URLs");
             cli_println!("     htmlsnapshot get attr \"img[src]:expr(width > 200 && height > 200)\" src --limit 20  # large images only");
             if let Some(first) = actionable.first() {
-                cli_println!("     htmlsnapshot query --sql \"SELECT dom_text(dom) as text FROM load_and_select(@url, '{}')\"", first);
+                cli_println!("     htmlsnapshot query --sql \"SELECT DOM_TEXT(DOM) AS text FROM DOM_LOAD_AND_SELECT(@url, '{}')\"", first);
             }
         } else {
             // Fallback when no quality selectors found (e.g., all bare tags)
@@ -20115,7 +20129,7 @@ mod tests {
     fn build_crawl_server_params_injects_resolved_sql() {
         let tool_params = json!({"url": "https://example.com"});
         let urls = vec!["https://example.com".to_string()];
-        let sql = "SELECT dom_first_text(dom, 'h1') FROM load_and_select(@url, ':root')";
+        let sql = "SELECT DOM_FIRST_TEXT(DOM, 'h1') FROM DOM_LOAD_AND_SELECT(@url, ':root')";
         let result = build_crawl_server_params(&tool_params, &urls, Some(sql), None);
         assert_eq!(result["sql"], json!(sql));
     }

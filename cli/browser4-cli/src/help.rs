@@ -340,6 +340,21 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
     if cmd.name == "htmlsnapshot-query" {
         lines.push("Notes:".to_string());
         lines.push(
+            "  - DOM_LOAD_AND_SELECT(@url, ...) re-fetches the page fresh via the scrape API."
+                .to_string(),
+        );
+        lines.push(
+            "    It does NOT use the stored snapshot from htmlsnapshot capture."
+                .to_string(),
+        );
+        lines.push(
+            "    htmlsnapshot capture is only needed for inspect/get/summary, not for query with @url."
+                .to_string(),
+        );
+        lines.push(
+            "  - Function names are case-insensitive (DOM_FIRST_TEXT = dom_first_text).".to_string(),
+        );
+        lines.push(
             "  - Use --format table for human-readable output (json, csv, or table).".to_string(),
         );
         lines.push(
@@ -356,7 +371,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push(String::new());
         lines.push("Examples:".to_string());
         lines.push(wrap_text(
-            "browser4-cli htmlsnapshot query --sql \"SELECT dom_first_text(dom, 'h1') AS title FROM load_and_select(@url, ':root')\"",
+            "browser4-cli htmlsnapshot query --sql \"SELECT DOM_FIRST_TEXT(DOM, 'h1') AS title FROM DOM_LOAD_AND_SELECT(@url, ':root')\"",
             "  ",
             2,
         ));
@@ -847,8 +862,8 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push(
             r##"  browser4-cli swarm submit "https://www.amazon.com/dp/B08PP5MSVB" --sql ""##
                 .to_string()
-                + r#""SELECT dom_base_uri(dom) AS url, dom_first_text(dom, '#productTitle') AS title ""#
-                + r#""FROM load_and_select(@url, 'body')""#
+                + r#""SELECT DOM_BASE_URI(DOM) AS url, DOM_FIRST_TEXT(DOM, '#productTitle') AS title ""#
+                + r#""FROM DOM_LOAD_AND_SELECT(@url, 'body')""#
                 + r#"""#
         );
         lines.push(String::new());
@@ -899,8 +914,8 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push(
             r##"  browser4-cli swarm query "https://www.amazon.com/dp/B08PP5MSVB" --sql ""##
                 .to_string()
-                + r#""SELECT dom_base_uri(dom) AS url, dom_first_text(dom, '#productTitle') AS title ""#
-                + r#""FROM load_and_select(@url, 'body')""#
+                + r#""SELECT DOM_BASE_URI(DOM) AS url, DOM_FIRST_TEXT(DOM, '#productTitle') AS title ""#
+                + r#""FROM DOM_LOAD_AND_SELECT(@url, 'body')""#
                 + r#"""#
         );
         lines.push(String::new());
@@ -1217,7 +1232,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push(String::new());
         lines.push("  # Correlated multi-field extraction: title, price, and link per product".to_string());
         lines.push(wrap_text(
-            "browser4-cli htmlsnapshot query --sql \"SELECT dom_first_text(dom, '.title') AS title, dom_first_text(dom, '.price') AS price, dom_first_href(dom, 'a') AS link FROM load_and_select(@url, '.product')\"",
+            "browser4-cli htmlsnapshot query --sql \"SELECT DOM_FIRST_TEXT(DOM, '.title') AS title, DOM_FIRST_TEXT(DOM, '.price') AS price, DOM_FIRST_HREF(DOM, 'a') AS link FROM DOM_LOAD_AND_SELECT(@url, '.product')\"",
             "  ",
             2,
         ));
@@ -1236,7 +1251,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push(String::new());
         lines.push("  # Run an X-SQL query against the current page URL".to_string());
         lines.push(wrap_text(
-            "browser4-cli htmlsnapshot query --sql \"SELECT dom_first_text(dom, 'h1') AS title FROM load_and_select(@url, ':root')\"",
+            "browser4-cli htmlsnapshot query --sql \"SELECT DOM_FIRST_TEXT(DOM, 'h1') AS title FROM DOM_LOAD_AND_SELECT(@url, ':root')\"",
             "  ",
             2,
         ));
@@ -1604,7 +1619,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(
-            "  browser4-cli loop \"select dom.title from load_and_select('https://example.com')\" --count 5"
+            "  browser4-cli loop \"select dom.title from DOM_LOAD_AND_SELECT('https://example.com')\" --count 5"
                 .to_string(),
         );
         lines.push("  browser4-cli loop --list".to_string());
@@ -2296,7 +2311,7 @@ mod tests {
         assert!(help.contains("SwarmController.query(query)"));
         assert!(help.contains("--sql"));
         assert!(help.contains("@url"));
-        assert!(help.contains("load_and_select"));
+        assert!(help.contains("DOM_LOAD_AND_SELECT"));
         assert!(help.contains("query.sql"));
     }
 
@@ -2309,7 +2324,7 @@ mod tests {
         assert!(help.contains("--sql"));
         assert!(help.contains("@url"));
         assert!(help.contains("SwarmController.query(query)"));
-        assert!(help.contains("load_and_select"));
+        assert!(help.contains("DOM_LOAD_AND_SELECT"));
         assert!(help.contains("query.sql"));
         assert!(help.contains("seed file"));
         assert!(help.contains("inline X-SQL"));
@@ -2413,9 +2428,9 @@ mod tests {
         assert!(help.contains("use `htmlsnapshot query` with X-SQL's `DOM_LOAD_AND_SELECT`"));
         // correlated multi-field example
         assert!(help.contains("Correlated multi-field extraction: title, price, and link per product"));
-        assert!(help.contains("dom_first_text(dom, '.title') AS title, dom_first_text(dom, '.price') AS"));
-        assert!(help.contains("price, dom_first_href"));
-        assert!(help.contains("FROM load_and_select(@url, '.product')"));
+        assert!(help.contains("DOM_FIRST_TEXT(DOM, '.title') AS title, DOM_FIRST_TEXT(DOM, '.price') AS"));
+        assert!(help.contains("price, DOM_FIRST_HREF"));
+        assert!(help.contains("FROM DOM_LOAD_AND_SELECT(@url, '.product')"));
     }
 
     #[test]
@@ -2436,7 +2451,8 @@ mod tests {
         let cmd = cmds.iter().find(|c| c.name == "htmlsnapshot-query").unwrap();
         let help = generate_command_help(cmd);
         assert!(help.contains("browser4-cli htmlsnapshot query [url]"));
-        assert!(help.contains("Run X-SQL against the HTML snapshot stored in Browser4's page storage via the scrape API"));
+        assert!(help.contains("DOM_LOAD_AND_SELECT(@url, ...) re-fetches the page fresh via the scrape API"));
+        assert!(help.contains("htmlsnapshot capture is only needed for inspect/get/summary"));
         assert!(help.contains("--sql"));
         assert!(help.contains("--sql-stdin"));
         assert!(help.contains("--sql-base64"));
