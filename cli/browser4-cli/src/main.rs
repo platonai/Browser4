@@ -4320,6 +4320,269 @@ async fn handle_snapshot_grep(
     run_grep_on_source(&source, grep_options, "snapshot", page, page_size, show_all)
 }
 
+/// List saved snapshot files with timestamps and sizes.
+fn handle_snapshot_list(args: &Value) -> Result<(), String> {
+    let snap_dir = snapshot::snapshot_dir();
+    if !snap_dir.is_dir() {
+        cli_println!("No snapshot directory found at {}", snap_dir.display());
+        cli_println!("Run a snapshot command first to create snapshot files.");
+        return Ok(());
+    }
+
+    let show_all = args.get("all").and_then(|v| v.as_bool()).unwrap_or(false);
+    let count_limit: usize = args
+        .get("count")
+        .and_then(|v| v.as_str().or_else(|| v.as_i64().map(|_| "")))
+        .and_then(|s| {
+            if s.is_empty() {
+                // numeric value from JSON
+                args.get("count")?.as_i64().map(|n| n as usize)
+            } else {
+                s.parse().ok()
+            }
+        })
+        .unwrap_or(20);
+
+    let mut entries: Vec<(String, u64, String)> = Vec::new(); // (name, size, modified)
+
+    // Collect main snapshot directory entries
+    if let Ok(iter) = std::fs::read_dir(&snap_dir) {
+        for entry in iter.flatten() {
+            let path = entry.path();
+            if path.extension().map_or(false, |ext| ext == "yml") {
+                if let Ok(meta) = path.metadata() {
+                    let size = meta.len();
+                    let modified = meta
+                        .modified()
+                        .ok()
+                        .and_then(|t| {
+                            let dt: chrono::DateTime<chrono::Utc> = t.into();
+                            Some(dt.format("%Y-%m-%d %H:%M:%S UTC").to_string())
+                        })
+                        .unwrap_or_else(|| "unknown".to_string());
+                    let name = path
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .to_string();
+                    entries.push((name, size, modified));
+                }
+            }
+        }
+    }
+
+    // Collect archive entries if --all
+    if show_all {
+        let archive_dir = snapshot::archive_dir();
+        if archive_dir.is_dir() {
+            if let Ok(date_dirs) = std::fs::read_dir(&archive_dir) {
+                for date_dir in date_dirs.flatten() {
+                    if date_dir.path().is_dir() {
+                        if let Ok(files) = std::fs::read_dir(date_dir.path()) {
+                            for file in files.flatten() {
+                                let path = file.path();
+                                if path.extension().map_or(false, |ext| ext == "yml") {
+                                    if let Ok(meta) = path.metadata() {
+                                        let size = meta.len();
+                                        let modified = meta
+                                            .modified()
+                                            .ok()
+                                            .and_then(|t| {
+                                                let dt: chrono::DateTime<chrono::Utc> = t.into();
+                                                Some(dt.format("%Y-%m-%d %H:%M:%S UTC").to_string())
+                                            })
+                                            .unwrap_or_else(|| "unknown".to_string());
+                                        let date_folder = date_dir
+                                            .file_name()
+                                            .to_string_lossy()
+                                            .to_string();
+                                        let fname = path
+                                            .file_name()
+                                            .unwrap_or_default()
+                                            .to_string_lossy()
+                                            .to_string();
+                                        let name = format!("archive/{}/{}", date_folder, fname);
+                                        entries.push((name, size, modified));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Sort by name descending (timestamp-based names sort chronologically)
+    entries.sort_by(|a, b| b.0.cmp(&a.0));
+
+    let total = entries.len();
+    if total == 0 {
+        cli_println!("No snapshot files found.");
+        return Ok(());
+    }
+
+    // Limit to requested count
+    if entries.len() > count_limit {
+        entries.truncate(count_limit);
+    }
+
+    cli_println!(
+        "Snapshots in {} (showing {} of {} total):\n",
+        snap_dir.display(),
+        entries.len(),
+        total
+    );
+
+    // Widths: name col gets most space, size gets fixed width
+    let max_name = entries.iter().map(|(n, _, _)| n.len()).max().unwrap_or(40).min(80);
+    for (name, size, modified) in &entries {
+        let size_str = if *size >= 1024 * 1024 {
+            format!("{:>6.1} MB", *size as f64 / (1024.0 * 1024.0))
+        } else if *size >= 1024 {
+            format!("{:>6.1} KB", *size as f64 / 1024.0)
+        } else {
+            format!("{:>6} B", size)
+        };
+        cli_println!("  {:width$}  {}  {}", name, size_str, modified, width = max_name);
+    }
+
+    if total > entries.len() {
+        cli_println!(
+            "\n... and {} more. Use --all to include archived snapshots, -n to adjust count.",
+            total - entries.len()
+        );
+    }
+
+    Ok(())
+}
+
+/// Remove old snapshot files from the snapshot directory.
+fn handle_snapshot_clean(args: &Value) -> Result<(), String> {
+    use std::fs;
+    use std::path::PathBuf;
+
+    let snap_dir = snapshot::snapshot_dir();
+    let archive_dir = snapshot::archive_dir();
+    let remove_all = args.get("all").and_then(|v| v.as_bool()).unwrap_or(false);
+    let dry_run = args.get("dry-run").and_then(|v| v.as_bool()).unwrap_or(false);
+    let keep: usize = args
+        .get("keep")
+        .and_then(|v| {
+            if let Some(s) = v.as_str() {
+                s.parse().ok()
+            } else if let Some(n) = v.as_i64() {
+                Some(n as usize)
+            } else {
+                None
+            }
+        })
+        .unwrap_or(100);
+
+    // Collect main directory entries
+    let mut to_delete: Vec<(PathBuf, u64)> = Vec::new();
+
+    if snap_dir.is_dir() {
+        let mut entries: Vec<(PathBuf, u64)> = Vec::new();
+        if let Ok(iter) = fs::read_dir(&snap_dir) {
+            for entry in iter.flatten() {
+                let path = entry.path();
+                if path.extension().map_or(false, |ext| ext == "yml") {
+                    if let Ok(meta) = path.metadata() {
+                        entries.push((path, meta.len()));
+                    }
+                }
+            }
+        }
+        // Sort by modification time, newest first
+        entries.sort_by(|a, b| {
+            let ta = fs::metadata(&a.0).ok().and_then(|m| m.modified().ok());
+            let tb = fs::metadata(&b.0).ok().and_then(|m| m.modified().ok());
+            tb.cmp(&ta) // newest first
+        });
+
+        if remove_all {
+            to_delete = entries;
+        } else if entries.len() > keep {
+            to_delete = entries.split_off(keep);
+        }
+    }
+
+    // Collect archive files if --all
+    if remove_all && archive_dir.is_dir() {
+        if let Ok(date_dirs) = fs::read_dir(&archive_dir) {
+            for date_dir in date_dirs.flatten() {
+                if date_dir.path().is_dir() {
+                    if let Ok(files) = fs::read_dir(date_dir.path()) {
+                        for file in files.flatten() {
+                            let path = file.path();
+                            if path.extension().map_or(false, |ext| ext == "yml") {
+                                if let Ok(meta) = path.metadata() {
+                                    to_delete.push((path, meta.len()));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if to_delete.is_empty() {
+        cli_println!("No snapshot files to clean up.");
+        return Ok(());
+    }
+
+    let total_size: u64 = to_delete.iter().map(|(_, s)| s).sum();
+    let total_size_str = if total_size >= 1024 * 1024 {
+        format!("{:.1} MB", total_size as f64 / (1024.0 * 1024.0))
+    } else if total_size >= 1024 {
+        format!("{:.1} KB", total_size as f64 / 1024.0)
+    } else {
+        format!("{} bytes", total_size)
+    };
+
+    if dry_run {
+        cli_println!(
+            "Would delete {} snapshot file(s) ({} total). Use without --dry-run to confirm.",
+            to_delete.len(),
+            total_size_str
+        );
+        for (path, _size) in &to_delete {
+            cli_println!("  - {}", path.display());
+        }
+        return Ok(());
+    }
+
+    let mut deleted = 0;
+    for (path, _) in &to_delete {
+        if let Err(e) = fs::remove_file(path) {
+            eprintln!("Warning: failed to delete {}: {e}", path.display());
+        } else {
+            deleted += 1;
+        }
+    }
+
+    cli_println!(
+        "Cleaned up {} snapshot file(s) ({} freed).",
+        deleted,
+        total_size_str
+    );
+
+    // Clean empty archive subdirectories if --all
+    if remove_all && archive_dir.is_dir() {
+        if let Ok(date_dirs) = fs::read_dir(&archive_dir) {
+            for date_dir in date_dirs.flatten() {
+                if date_dir.path().is_dir() {
+                    let _ = fs::remove_dir(date_dir.path()); // Only works if empty
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
 async fn handle_screenshot(
     client: &Client,
     base_url: &str,
@@ -13503,6 +13766,8 @@ fn should_ensure_server_running(command: &str) -> bool {
         && command != "skills-path"
         && command != "skills-unpack"
         && command != "loop"
+        && command != "snapshot-list"
+        && command != "snapshot-clean"
 }
 
 /// Commands that require a web page to already be loaded in the browser.
@@ -13726,6 +13991,8 @@ fn preferred_spaced_command_form(command: &str) -> Option<&'static str> {
         "skills-path" => Some("skills path"),
         "skills-unpack" => Some("skills unpack"),
         "snapshot-grep" => Some("snapshot grep"),
+        "snapshot-list" => Some("snapshot list"),
+        "snapshot-clean" => Some("snapshot clean"),
         "webdb-export" => Some("webdb export"),
         "webdb-normalize" => Some("webdb normalize"),
         _ => None,
@@ -15782,6 +16049,12 @@ async fn run(
                 &grep_options,
             )
             .await?;
+        }
+        "snapshot-list" => {
+            handle_snapshot_list(&tool_params)?;
+        }
+        "snapshot-clean" => {
+            handle_snapshot_clean(&tool_params)?;
         }
         "generate-locator" => {
             handle_generate_locator(

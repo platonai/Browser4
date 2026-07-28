@@ -65,13 +65,19 @@ pub fn parse_global_flags(argv: &[String]) -> GlobalFlags {
     while i < argv.len() {
         let arg = &argv[i];
         if arg.starts_with("-s=") {
-            flags.session_name = Some(arg["-s=".len()..].to_string());
+            if !seen_command {
+                flags.session_name = Some(arg["-s=".len()..].to_string());
+            }
         } else if arg.starts_with("--session=") {
-            flags.session_name = Some(arg["--session=".len()..].to_string());
+            if !seen_command {
+                flags.session_name = Some(arg["--session=".len()..].to_string());
+            }
         } else if arg == "-s" || arg == "--session" {
-            if i + 1 < argv.len() && !argv[i + 1].starts_with('-') {
-                i += 1;
-                flags.session_name = Some(argv[i].clone());
+            if !seen_command {
+                if i + 1 < argv.len() && !argv[i + 1].starts_with('-') {
+                    i += 1;
+                    flags.session_name = Some(argv[i].clone());
+                }
             }
         } else if !seen_command && arg == "--json" {
             flags.json = true;

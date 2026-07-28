@@ -1244,7 +1244,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "snapshot",
-            description: "Capture page snapshot to obtain element refs. Use -v N to capture a specific screen-height chunk of the page (viewport pagination), -i for interactive, --auto-diff for change detection. Run `snapshot --help` for all flags.",
+            description: "Capture page snapshot to obtain element refs. See flags below for filtering, scoping, and output options.",
             category: Category::Core,
             hidden: false,
             batch_supported: true,
@@ -1258,11 +1258,11 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "compact", description: "Remove empty structural elements (enabled by default)", is_bool: true, short: Some("c") },
                 OptionDef { name: "no-compact", description: "Disable compact mode; include all structural nodes", is_bool: true, short: None },
                 OptionDef { name: "depth", description: "Limit tree depth to n levels", is_bool: false, short: Some("d") },
-                OptionDef { name: "selector", description: "Scope snapshot to a CSS selector", is_bool: false, short: Some("s") },
+                OptionDef { name: "selector", description: "Scope snapshot to a CSS selector (use --selector; -s is reserved for --session globally). Note: root-to-leaf ancestor elements outside the matched scope are included for tree-path context.", is_bool: false, short: None },
                 OptionDef { name: "raw", description: "Strip page info and return only snapshot content (alias for --stdout)", is_bool: true, short: None },
                 OptionDef { name: "stdout", description: "Print snapshot content to stdout instead of saving to file", is_bool: true, short: None },
                 OptionDef { name: "viewport", description: "Capture specific screen-height page chunks (viewports). Each chunk = one screen height (~viewport height px). Formats: single index (3), comma list (0,2,4), range (1-3), or mixed (0,2-4,7). Example: -v 1-3 captures the 2nd through 4th screen-heights.", is_bool: false, short: Some("v") },
-                OptionDef { name: "auto-diff", description: "Diff against the previous snapshot — show only what changed since the last capture", is_bool: true, short: None },
+                OptionDef { name: "auto-diff", description: "Diff against the previous snapshot — show only what changed since the last capture. Note: after page navigation (goto/open), all elements appear as changed because the entire DOM is new.", is_bool: true, short: None },
                 OptionDef { name: "page", short: None, is_bool: false, description: "Page number for paginated snapshot output (1-based, default: 1)" },
                 OptionDef { name: "page-size", short: None, is_bool: false, description: "Lines per page for snapshot output (default: 2000)" },
                 OptionDef { name: "all", short: None, is_bool: true, description: "Show all output, disabling pagination" },
@@ -1330,6 +1330,49 @@ pub fn all_commands() -> Vec<CommandDef> {
                     if k != "_" {
                         p[k] = v.clone();
                     }
+                }
+                p
+            },
+        },
+        CommandDef {
+            name: "snapshot-list",
+            description: "List saved snapshot files with timestamps and sizes",
+            category: Category::Core,
+            hidden: false,
+            batch_supported: false,
+            args: &[],
+            options: &[
+                OptionDef { name: "count", short: Some("n"), is_bool: false, description: "Show only the most recent N snapshots (default: 20)" },
+                OptionDef { name: "all", short: None, is_bool: true, description: "Show all snapshots including archived ones" },
+            ],
+            e2e_coverage: E2eCoverage::Excluded, // filesystem-only, no backend
+            tool_name_fn: |_| "snapshot_list".to_string(),
+            tool_params_fn: |args| {
+                let mut p = json!({});
+                for (k, v) in args {
+                    if k != "_" { p[k] = v.clone(); }
+                }
+                p
+            },
+        },
+        CommandDef {
+            name: "snapshot-clean",
+            description: "Remove old snapshot files from the snapshot directory",
+            category: Category::Core,
+            hidden: false,
+            batch_supported: false,
+            args: &[],
+            options: &[
+                OptionDef { name: "keep", short: Some("k"), is_bool: false, description: "Keep the most recent N snapshots, delete the rest (default: 100)" },
+                OptionDef { name: "all", short: None, is_bool: true, description: "Remove all snapshot files (including archive)" },
+                OptionDef { name: "dry-run", short: None, is_bool: true, description: "Show what would be deleted without actually deleting" },
+            ],
+            e2e_coverage: E2eCoverage::Excluded, // filesystem-only, no backend
+            tool_name_fn: |_| "snapshot_clean".to_string(),
+            tool_params_fn: |args| {
+                let mut p = json!({});
+                for (k, v) in args {
+                    if k != "_" { p[k] = v.clone(); }
                 }
                 p
             },
