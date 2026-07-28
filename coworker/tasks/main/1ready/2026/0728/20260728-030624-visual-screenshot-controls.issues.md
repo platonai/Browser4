@@ -88,12 +88,14 @@ The `scroll` command was designed for incremental scrolling only. No `scroll-top
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Genuine feature gap — incremental-only scroll forces non-technical users into `eval` for basic operations like "scroll to top." Adding `scroll top`/`scroll bottom` subcommands is low-cost and high-impact for usability parity with every other browser automation tool.
 
 ---
 
@@ -125,12 +127,14 @@ The scroll command output formatter doesn't query `document.body.scrollHeight` o
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Low-cost, high-signal UX improvement. The total page height is already queryable from the DOM during the scroll operation; exposing it in output turns a blind scroll into an informed one. No architectural change needed.
 
 ---
 
@@ -164,11 +168,13 @@ Auto-session-reuse is the default behavior of `goto`. The message `Using existin
 #### Human Review
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [x] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT with improvements] The auto-reuse behavior is correct and desirable — don't change it. The fix is messaging: on first-ever use (no prior sessions), suppress or reword the "Using existing session" line, and add a one-time hint that sessions persist across commands. The `--fresh` flag suggestion is a separate, lower-priority feature request.
 
 ---
 
@@ -200,12 +206,14 @@ The screenshot command was designed as a file-output-only operation. Streaming b
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Consistency gap — `snapshot` already has `--stdout`; `screenshot` should too. This enables shell pipelines (`screenshot --stdout | feh -`) and matches user expectations set by the snapshot command. Straightforward to implement; the binary data path already exists for file output.
 
 ---
 
@@ -238,12 +246,14 @@ The output formatter uses the absolute path. No relative-path or tilde-shortenin
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Minor formatting polish. The absolute path is correct but noisy. Showing `~/.browser4-cli/snapshot/...` when under $HOME, or a relative path when under CWD, would cut terminal noise significantly. Keep the full path accessible via `--verbose` or on hover/click in terminals that support it.
 
 ---
 
@@ -275,12 +285,14 @@ The help text assumes the user already knows the snapshot directory location fro
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Documentation bug — the help text references a "snapshot directory" without saying where it is. This is a one-line fix in the help string. The path is deterministic (`.browser4-cli/snapshot/` under the working directory) and should be stated.
 
 ---
 
@@ -312,12 +324,14 @@ The CLI help is intentionally brief, with detailed guidance in SKILL.md. However
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Discoverability gap. The help text lists flags tersely with no guidance on when to use each mode. Adding a one-line mode summary (e.g., "Use -v N for full-page capture in chunks, -i for interactive element picking") and a pointer to SKILL.md would bridge new users to the detailed docs without bloating the help output.
 
 ---
 
@@ -349,12 +363,14 @@ The positional argument has dual semantics (time vs. selector). Non-numeric stri
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Documentation/clarity issue. The dual-semantics positional argument (milliseconds if numeric, selector otherwise) is a reasonable design, but the help should explicitly state the disambiguation rule and recommend `wait --text` for text-content matching. Consider adding a warning when a non-numeric string fails both CSS selector parsing and element lookup, to help users understand why their wait didn't match.
 
 ---
 

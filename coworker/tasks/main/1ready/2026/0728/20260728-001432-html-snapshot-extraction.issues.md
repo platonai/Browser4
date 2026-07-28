@@ -86,11 +86,13 @@ The task template uses $(./b4w.ps1) as an invocation prefix, but in bash this is
 #### Human Review
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [x] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT with improvements] Real UX trap for bash/git-bash users — `$(...)` captures stdout instead of forwarding it. Fix is primarily documentation (differentiate b4w.sh vs b4w.ps1 in task templates) plus a defensive check in b4w.ps1 to warn when stdout is not a terminal. Related to Issue 6 (both involve shell-launcher noise on stdout).
 
 ---
 
@@ -127,12 +129,14 @@ The `htmlsnapshot export` subcommand uses a named flag (`--file`) rather than a 
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Exporting to a file path is the most natural positional argument for an "export" subcommand. Supporting both positional `<path>` and `--file <path>` (with positional taking precedence) is the standard CLI pattern. At minimum, the error message should guide users to `--file` instead of saying "too many arguments."
 
 ---
 
@@ -166,11 +170,13 @@ The HTML snapshot captures the rendered text content which may be visually trunc
 #### Human Review
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [x] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT with improvements] The snapshot's primary purpose is data extraction; capturing CSS-truncated rendered text instead of full `textContent` directly undermines that. The workaround (title attribute) is not obvious. Either store full textContent or clearly document the limitation. The suggested `inspect` flag for truncated text is a nice-to-have, not the core fix.
 
 ---
 
@@ -206,12 +212,14 @@ The tips section after capture suggests `get all text` and `get attr` examples b
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] The tips section after `htmlsnapshot capture` is the critical discoverability moment. Leading with `htmlsnapshot inspect` as the recommended next step (before `get all text` examples) costs nothing and would prevent users from guessing selectors manually. Related to Issue 7 (both are htmlsnapshot discoverability gaps).
 
 ---
 
@@ -247,12 +255,14 @@ The HTML snapshot stores UTF-8 content, but the grep output path passes through 
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Straightforward UTF-8 encoding bug — `0xC2 0xA3` (UTF-8 £) being rendered byte-by-byte as Latin-1. Fix in the grep output path to ensure proper UTF-8 stdout encoding. Should have a regression test with non-ASCII characters.
 
 ---
 
@@ -289,12 +299,14 @@ b4w.sh line 17 unconditionally echoes this recommendation to stdout before execu
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Printing an unconditional recommendation to stdout on every invocation pollutes machine-readable output and is noise for Linux users who may not even have pwsh installed. Move to stderr, print only once per session, or suppress entirely on non-Windows. Related to Issue 1 (both stem from the PowerShell-first design assumption leaking into bash UX).
 
 ---
 
@@ -332,11 +344,13 @@ htmlsnapshot is intentionally a shorthand for htmlsnapshot capture, but the help
 #### Human Review
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [x] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT with improvements] Two commands with identical behavior and identical help output increase cognitive load. Either clarify the equivalence prominently in both help texts, or remove the bare `htmlsnapshot` alias from `--help` to reduce surface area. Related to Issue 4 (both are htmlsnapshot UX polish).
 
 ---
 
@@ -372,12 +386,14 @@ The grep subcommand supports `-c` (count-only mode, like standard grep) but the 
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Simple documentation gap — `-c`/`--count` is implemented but not listed in help output. Also consider auditing for other standard grep flags (`-i`, `-n`) that may be implemented but undocumented.
 
 ---
 

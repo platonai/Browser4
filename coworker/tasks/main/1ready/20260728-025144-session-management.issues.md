@@ -168,12 +168,14 @@ PowerShell's common parameter binder matches `-v` to `-Verbose` and consumes it 
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Genuine reliability bug. PowerShell's common parameter binder consumes `-v` (matching `-Verbose`) before the script sees it, silently corrupting the argument vector. The `--` passthrough also reportedly fails. Fix should be in `b4w.ps1` — either add `[CmdletBinding()]` with explicit parameter disambiguation, or document `--%` / `--` usage as the workaround.
 
 ---
 
@@ -214,7 +216,9 @@ The CLI binary's argument parser receives `snapshot` followed by `0` (because `-
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [x] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: DUPLICATE] Same root cause as Issue 1 — PowerShell consumes `-v`, so the CLI binary receives `snapshot 0` and concatenates it to `snapshot-0`. Fixing the PowerShell wrapper in Issue 1 eliminates the primary reproduction path. The CLI's misleading concatenation error is a secondary concern that only manifests because of Issue 1; if encountered via other means, it can be tracked separately.
 
 ---
 
@@ -251,11 +255,13 @@ The CLI uses a positional argument parser where `-s` must appear before the subc
 #### Human Review
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [x] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT with improvements] The "Not tested" caveat makes this speculative — verify first whether `-s` after the subcommand actually fails or silently ignores. If confirmed, the fix should either accept `-s` in any position (preferred, matches GNU conventions) or emit a clear diagnostic like "The -s flag must appear before the command." The CLI already parses global flags before subcommand dispatch, so relaxing the position constraint may be straightforward.
 
 ---
 
@@ -291,12 +297,14 @@ The b4w.sh wrapper unconditionally prints this recommendation, likely as a devel
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Straightforward UX papercut. The unconditional pwsh recommendation on Linux/macOS is noise. Gate it: suppress when `pwsh` is not installed, when `$SHELL` is not PowerShell-adjacent, or behind a `--verbose` flag. Trivial to fix, clear value.
 
 ---
 
@@ -329,12 +337,14 @@ Output was 63.9KB for Hacker News and 36.8KB for Wikipedia. The output was so la
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Documentation gap, not a code defect. SKILL.md already warns about snapshot file size but never mentions that `--stdout` has the same volume problem. Add a parallel warning and a tip pointing users to `snapshot grep` for targeted queries. A `--max-lines` truncation flag is a reasonable future enhancement but not required for the doc fix.
 
 ---
 
@@ -366,12 +376,14 @@ Browser4 backend creates a default session when first started (e.g., by a previo
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Minor onboarding friction. The `list` output should annotate the `(default)` session with its origin (e.g., "automatically created") so new users understand it's not an error. A first-run message when no `-s` is provided ("Using default session. Create a named session with -s <name>.") would also help. Low effort, good discoverability payoff.
 
 ---
 
@@ -403,12 +415,14 @@ The `goto` command reports the final page state after navigation, including any 
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Clear UX improvement. When `goto`'s final URL differs from the requested URL, the output should note the redirect explicitly (e.g., "Redirected from <original> → <final>"). This eliminates user confusion about whether they landed on the wrong page and costs almost nothing to implement — the CLI already has both URLs at the point it prints the summary.
 
 ---
 

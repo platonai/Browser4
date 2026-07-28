@@ -164,12 +164,14 @@ The inspect tool extracts `textContent` from DOM nodes which reflects CSS `text-
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Genuine heuristic gap — the inspect tool extracts `textContent` which reflects CSS truncation without checking child-element attributes like `title` for fuller text. A comparison of visible text length vs attribute text length is a concrete, low-cost improvement that directly aids selector discovery.
 
 ---
 
@@ -206,12 +208,14 @@ The `htmlsnapshot query` command description conflates two concepts: the stored 
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] The help text is factually wrong — it claims `htmlsnapshot query` runs "against the HTML snapshot stored … via the scrape API" when `DOM_LOAD_AND_SELECT` actually re-fetches the page independently. This is a correctness bug in documentation that misleads users about what prerequisite steps are actually needed.
 
 ---
 
@@ -248,12 +252,14 @@ The --help text examples were likely written independently from the reference do
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Minor but real — help examples use lowercase (`dom_first_text`) while reference docs use uppercase (`DOM_FIRST_TEXT`). Both work due to H2's case-insensitivity, but the inconsistency creates unnecessary cognitive friction for new users. Standardize on UPPERCASE to match the reference docs; add a one-line note that casing is optional.
 
 ---
 
@@ -290,12 +296,14 @@ This is a cargo/rust build warning emitted during the `cargo run` step in `b4w.p
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] A build warning on every single invocation degrades perceived quality, especially for a CLI tool used interactively. Can be resolved by suppressing the specific warning in `build.rs`/`Cargo.toml` (it's expected behavior — embedding skill files is intentional) or by filtering stderr in `b4w.ps1`.
 
 ---
 
@@ -329,11 +337,13 @@ The `htmlsnapshot` capture and `inspect` are separate architectural layers — c
 #### Human Review
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [x] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT with improvements] The 4-step friction is real and the documentation-note suggestion (query works independently of capture) overlaps with Issue 2 — that part should be resolved under Issue 2's doc fix. The `--auto`/`--inspect` flag suggestion is a feature request that needs design work (what selectors to auto-discover, what query template to generate). Consider splitting: fix the docs now (Issue 2), and track the combined-command idea as a separate enhancement.
 
 ---
 
@@ -367,10 +377,12 @@ N/A — flag exists but was not exercised in this evaluation.
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
-- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+- [x] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: DEFER] No confirmed bug — the reporter explicitly states "I did not test it" and "N/A — not tested." The title implies a non-functional flag but the body contains no reproduction or evidence. The suggestion to make `--format table` the default is a separate UX preference question, not a defect. Re-open if someone reproduces an actual failure with the flag.
 
 ---
 

@@ -87,12 +87,14 @@ The plugin's pom.xml declares poi and poi-ooxml with default (compile) scope but
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] The plugin JAR is non-functional as shipped — missing transitive dependencies make the plugin fail at bean-creation time. This is a build packaging defect, not a code defect, and the suggested maven-shade-plugin fix is the standard solution.
 
 ---
 
@@ -130,12 +132,14 @@ The CLI's `handle_dynamic_plugin_command` function calls `call_tool()` which use
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] The 30s hardcoded timeout makes the pptx plugin (and any future long-running tool) unusable via the CLI. Adding a `--timeout` flag is low-effort and high-impact. The async execution pattern is a good longer-term direction but the immediate fix should be the flag plus a higher default (120s) for plugin commands.
 
 ---
 
@@ -179,7 +183,9 @@ The `plugin-<domain>` command is implemented in main.rs:14615-14631 as a dynamic
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [x] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: DUPLICATE] Same root cause (undocumented `plugin-<domain>` invocation pattern) described from the documentation-gap angle. Issue 4 captures the fuller user journey of failed discovery. Resolve both with a single fix: add plugin tool invocation docs to help output, SKILL.md, and plugin info output.
 
 ---
 
@@ -217,12 +223,14 @@ The plugin-<domain> command system was added as a dynamic dispatch mechanism wit
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] This is the core discoverability issue — the user-tested journey from help → SKILL.md → trial-and-error → source-code reading is a real UX failure. The suggested improvements (help output, SKILL.md, plugin list/info output, "after install" tips) address the full discovery surface. Keep the focus on the `plugin-<domain>` pattern; aliases like `pptx generate` are nice-to-have but secondary.
 
 ---
 
@@ -260,12 +268,14 @@ The `handle_dynamic_plugin_command` function at line 11544-11550 parses args wit
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] The dynamic plugin command's argument handling is broken — it doesn't distinguish positional method names from tool parameters, and may not correctly map `--key value` pairs. This is a real functional bug. The suggestion to support method selection via first positional arg is a prerequisite for plugins with multiple tools.
 
 ---
 
@@ -303,12 +313,14 @@ The PptxImageDownloader.downloadImages function downloads images concurrently bu
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Multi-minute silence during image download creates a false impression that the tool is hung. Periodic progress logging (every N images) and upgrading failure logs from DEBUG to INFO/WARN are low-risk changes with high UX payoff.
 
 ---
 
@@ -345,12 +357,14 @@ The `handle_dynamic_plugin_command` function queries /mcp/tools and lists matchi
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] The CLI error message ("No plugin tools found for pptx") tells the user what happened but not why or what to do about it. The server-side error (silently caught in getToolExecutors) should log the full stack trace. The CLI should guide the user to check `plugin list` and server logs. This is partially a symptom of Issue 1 but independently necessary — any plugin can fail to load for other reasons.
 
 ---
 
@@ -387,12 +401,14 @@ In PptxGenerator.sanitizeFilename(), when name is empty after sanitization, it d
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] "presentation.pptx" as a fallback is a reasonable last resort, but the URL hostname+path is almost always available and more descriptive. Low severity but trivial to implement — just extract a slug from the URL before falling back to "presentation".
 
 ---
 

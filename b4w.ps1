@@ -13,11 +13,38 @@
     expects the Cargo workspace at ../cli/browser4-cli relative to itself.
 #>
 
-param(
-    [switch]$Rebuild,
-    [Parameter(ValueFromRemainingArguments = $true)]
-    [string[]]$RemainingArgs
-)
+# Use $args directly instead of PowerShell's param() block so that CLI flags
+# like -o, -i, and -v are NOT intercepted by PowerShell's common parameter
+# binder (where -o is ambiguous between -OutVariable/-OutBuffer, -i matches
+# -InformationAction, and -v matches -Verbose).
+#
+# With manual args parsing, all tokens pass through to the $RemainingArgs
+# array without PowerShell trying to bind them to script parameters.
+
+$Rebuild = $false
+$RemainingArgs = @()
+
+for ($i = 0; $i -lt $args.Count; $i++) {
+    if ($args[$i] -eq '-Rebuild') {
+        $Rebuild = $true
+    } else {
+        $RemainingArgs += $args[$i]
+    }
+}
+
+# Warn about short flags that PowerShell would have intercepted under a
+# param() block.  These are now safe with manual $args parsing, but the
+# warning educates users about the preferred long-form flags and provides
+# cross-platform alternatives.
+$COMMON_INTERCEPTED = @('-o', '-i', '-v')
+$interceptedFlags = @($RemainingArgs | Where-Object { $_ -in $COMMON_INTERCEPTED })
+if ($interceptedFlags.Count -gt 0) {
+    Write-Host "⚠  Short flags detected: $($interceptedFlags -join ', ')" -ForegroundColor Yellow
+    Write-Host "   PowerShell may intercept these in other contexts (b4w.sh, direct pwsh)." -ForegroundColor Yellow
+    Write-Host "   Prefer long-form equivalents: --output, --interactive, --viewport" -ForegroundColor Yellow
+    Write-Host "   Or use b4w.sh / b4w.bat (cmd.exe) for full compatibility." -ForegroundColor Yellow
+    Write-Host ""
+}
 
 # Save the original working directory so we can restore it on exit.
 # Some operations (cargo build, cargo run) may change the process CWD,
@@ -142,12 +169,13 @@ Examples:
   b4w b4w uninstall                     remove b4w from PATH and launcher
 
 Wrapper:
-  b4w.sh          Git Bash / Linux / macOS wrapper — quotes arguments
-                  to prevent PowerShell parameter binding issues.
+  b4w.sh          Git Bash / Linux / macOS wrapper — preferred for bash
+                  environments when PowerShell flag interception occurs.
 
-Tip: When running b4w.ps1 directly and short flags like -i or -v are
-intercepted by PowerShell, either use b4w.sh, or pass flags after "--"
-(e.g. ./b4w.ps1 -- snapshot -i).
+Tip: Use long-form flags (--output, --interactive, --viewport) for
+cross-shell compatibility.  Short flags (-o, -i, -v) are now safe with
+b4w.ps1 thanks to manual argument parsing that avoids PowerShell's
+parameter binder.
 '@
 
 # ── Subcommand: b4w install ────────────────────────────────────────────────

@@ -189,7 +189,8 @@ class CrawlService(
                 if (existing != null && existing.startedTime == null) {
                     existing.startedTime = java.time.Instant.now()
                 }
-                val result = withContext(Dispatchers.IO) {
+                val result = withTimeout(CRAWL_TASK_TIMEOUT_MS) {
+                    withContext(Dispatchers.IO) {
                     val results = mutableListOf<CrawlPageResult>()
                     val seedStatuses = mutableListOf<CrawlSeedStatus>()
                     val totalSeeds = seedUrls.size
@@ -236,9 +237,18 @@ class CrawlService(
                             )
                         }
                         results.addAll(pages)
+
+                        // Small delay between seed URLs to allow protocol handler
+                        // cleanup from the previous session to complete before the
+                        // next session is created. Prevents "Protocol not found" errors
+                        // when processing multiple seed URLs in the same crawl.
+                        if (index < totalSeeds - 1) {
+                            delay(SEED_INTERVAL_MS)
+                        }
                     }
                     Pair(results, seedStatuses)
                 }
+                } // withTimeout
                 val (allPages, seedStatuses) = result
                 val existingDiagnostic = taskStore.getIfPresent(taskId)?.diagnostic
                 val now = java.time.Instant.now()
@@ -330,7 +340,33 @@ class CrawlService(
         val toRemove = taskStore.asMap().entries.filter { it.value.status in terminalStatuses }
         toRemove.forEach { taskStore.invalidate(it.key) }
         logger.info("Cleared {} terminal crawl tasks", toRemove.size)
+
+        // Rewrite the JSONL persistence file so cleared tasks don't revive on restart.
+        // Without this, terminal tasks removed from the in-memory Caffeine cache are
+        // re-read from the append-only JSONL file at startup.
+        if (toRemove.isNotEmpty()) {
+            persistence.clear()
+            taskStore.asMap().values.forEach { persistence.append(it) }
+        }
+
         return toRemove.size
+    }
+
+    /**
+     * Remove ALL tasks from the store, including actively-running ones.
+     * Cancels running jobs before clearing.  Use with caution.
+     * @return the number of tasks removed.
+     */
+    fun clearAll(): Int {
+        // Cancel all active jobs first
+        jobStore.values.forEach { it.cancel() }
+        jobStore.clear()
+
+        val size = taskStore.asMap().size.toInt()
+        taskStore.invalidateAll()
+        persistence.clear()
+        logger.info("Cleared all {} crawl tasks (including active)", size)
+        return size
     }
 
     /**
@@ -377,39 +413,85 @@ class CrawlService(
     // ------------------------------------------------------------------
 
     private suspend fun crawlDepth0(taskId: String, request: CrawlRequest): List<CrawlPageResult> {
-        val session = AgenticContexts.createSession()
-        try {
-            val options = parseOptions(session, request.args)
-            val page = session.load(request.url, options)
-            val document = session.parse(page)
+        // Depth=0 bulk-fetch: always use -refresh so that internal HTTP
+        // caches and protocol-level state from prior sessions don't cause
+        // 0-byte responses or "Protocol not found" for URLs after the first.
+        val effectiveArgs = if (request.args.isBlank()) "-refresh" else "${request.args} -refresh"
 
-            val extractionResult = if (request.sql != null) {
-                executeSqlQuery(session, request.url, request.sql)
-            } else Pair(null, null)
+        var lastError: Exception? = null
+        repeat(MAX_FETCH_RETRIES) { attempt ->
+            val session = AgenticContexts.createSession()
+            try {
+                val options = parseOptions(session, effectiveArgs)
+                val page = session.load(request.url, options)
 
-            val result = CrawlPageResult(
-                url = request.url,
-                title = document.title,
-                contentLength = page.contentLength,
-                depth = 0,
-                extracted = extractionResult.first,
-                extractionError = extractionResult.second
-            )
-            logger.info("Crawl {}: fetched seed URL {}", taskId, request.url)
-            return listOf(result)
-        } catch (e: Exception) {
-            logger.error("Crawl {}: failed to fetch seed URL {}", taskId, request.url, e)
-            return listOf(
-                CrawlPageResult(
+                // If the page loaded but content is empty, retry after a delay.
+                // This handles transient "Protocol not found" errors where the
+                // HTTP protocol handler hasn't re-registered after the previous
+                // session was closed.
+                if (page.contentLength == 0L) {
+                    val msg = "fetch returned 0 bytes (possible protocol handler not ready)"
+                    if (attempt < MAX_FETCH_RETRIES - 1) {
+                        logger.warn("Crawl {}: {} for '{}', retrying in {}ms (attempt {}/{})",
+                            taskId, msg, request.url, FETCH_RETRY_DELAY_MS, attempt + 1, MAX_FETCH_RETRIES)
+                        runCatching { session.close() }
+                        delay(FETCH_RETRY_DELAY_MS)
+                        return@repeat
+                    }
+                    logger.error("Crawl {}: {} for '{}' after {} attempts", taskId, msg, request.url, MAX_FETCH_RETRIES)
+                    return listOf(CrawlPageResult(
+                        url = request.url, title = null, contentLength = 0, depth = 0,
+                        extractionError = msg
+                    ))
+                }
+
+                val document = session.parse(page)
+
+                val extractionResult = if (request.sql != null) {
+                    executeSqlQuery(session, request.url, request.sql)
+                } else Pair(null, null)
+
+                val result = CrawlPageResult(
                     url = request.url,
-                    title = null,
-                    contentLength = null,
-                    depth = 0
+                    title = document.title,
+                    contentLength = page.contentLength,
+                    depth = 0,
+                    extracted = extractionResult.first,
+                    extractionError = extractionResult.second
                 )
-            )
-        } finally {
-            runCatching { session.close() }
+                logger.info("Crawl {}: fetched seed URL {} ({} bytes)", taskId, request.url, page.contentLength)
+                return listOf(result)
+            } catch (e: Exception) {
+                lastError = e
+                val isProtocolError = e.message?.contains("Protocol not found", ignoreCase = true) == true
+                    || e.javaClass.simpleName.contains("ProtocolNotFound")
+                if (attempt < MAX_FETCH_RETRIES - 1 && isProtocolError) {
+                    logger.warn("Crawl {}: protocol error for '{}', retrying in {}ms (attempt {}/{})",
+                        taskId, request.url, FETCH_RETRY_DELAY_MS, attempt + 1, MAX_FETCH_RETRIES)
+                    runCatching { session.close() }
+                    delay(FETCH_RETRY_DELAY_MS)
+                    return@repeat
+                }
+                logger.error("Crawl {}: failed to fetch seed URL {}", taskId, request.url, e)
+                return listOf(
+                    CrawlPageResult(
+                        url = request.url,
+                        title = null,
+                        contentLength = null,
+                        depth = 0
+                    )
+                )
+            } finally {
+                runCatching { session.close() }
+            }
         }
+
+        // All retries exhausted with 0-byte results
+        logger.error("Crawl {}: all {} fetch attempts returned 0 bytes for '{}'", taskId, MAX_FETCH_RETRIES, request.url)
+        return listOf(CrawlPageResult(
+            url = request.url, title = null, contentLength = 0, depth = 0,
+            extractionError = lastError?.message ?: "All fetch attempts returned 0 bytes"
+        ))
     }
 
     // ------------------------------------------------------------------
@@ -422,6 +504,19 @@ class CrawlService(
         try {
             val options = parseOptions(session, request.args)
             if (options.outLinkSelector.isNullOrBlank()) {
+                // If X-SQL extraction was requested but no out-link selector is configured,
+                // auto-switch to depth=0 behavior (bulk fetch + extraction).  This prevents
+                // the silent "0 pages returned" UX trap where users specify --sql without
+                // --depth 0 (which defaults to depth=1 link-discovery mode).
+                if (request.sql != null) {
+                    logger.info(
+                        "Crawl {}: X-SQL extraction requested without --out-link-selector; " +
+                        "auto-switching to depth=0 (bulk fetch + extraction mode)",
+                        taskId
+                    )
+                    runCatching { session.close() }
+                    return crawlDepth0(taskId, request)
+                }
                 logger.warn("Crawl {}: no outLinkSelector provided, returning empty result", taskId)
                 return emptyList()
             }
@@ -745,6 +840,18 @@ class CrawlService(
     }
 
     companion object {
+        /** Maximum fetch retries when content is 0 bytes or protocol error occurs. */
+        private const val MAX_FETCH_RETRIES = 3
+
+        /** Delay in ms between fetch retries to allow protocol handler re-registration. */
+        private const val FETCH_RETRY_DELAY_MS = 500L
+
+        /** Delay in ms between seed URL processing to allow session cleanup. */
+        private const val SEED_INTERVAL_MS = 100L
+
+        /** Maximum time (ms) a crawl task may run before being cancelled. */
+        private const val CRAWL_TASK_TIMEOUT_MS = 600_000L // 10 minutes
+
         fun crawlPersistencePath(): Path = Path.of(
             System.getProperty("browser4.data.dir", System.getProperty("user.home")),
             ".browser4", "data", "crawl", "crawl-tasks.jsonl"

@@ -143,12 +143,14 @@ MCPToolController.toMcpToolName() converts camelCase method names to snake_case 
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Critical — the missing snake_case→camelCase reverse conversion in `dispatchToCustomExecutor` breaks all custom plugin tool calls. The one-line fix is clear: convert the extracted method name back to camelCase before passing to `callFunctionOn`.
 
 ---
 
@@ -186,12 +188,14 @@ In handle_dynamic_plugin_command() (main.rs line 11541), matching[0] is used unc
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] High — real product gap. `plugin-<domain>` always dispatches to the first alphabetically-matching tool with no way to select a specific method. Supporting `plugin-<domain> <method>` syntax (treating the first positional arg as the method name) is the right approach and consistent with CLI subcommand conventions.
 
 ---
 
@@ -228,12 +232,14 @@ The command parser appears to intercept bare 'plugin' before it reaches the dyna
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] High — command normalization/rewriting intercepts bare `plugin` before the `is_bare_plugin` handler at line 14622 can process it. The code intent is clear (list plugin tools when bare `plugin` is typed), but it never executes. Needs a trace through `normalize_command_invocation` and `rewrite_prefixed_command` to find where it's being swallowed.
 
 ---
 
@@ -273,12 +279,14 @@ The plugin status reporting may check a stale flag or use a different mechanism 
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Medium — status reporting is stale/misleading. Plugins work functionally (tool calls succeed), but `plugin list` shows "inactive (restart required)" after a full stop/start cycle. Likely a persistence-vs-runtime mismatch: the status flag is stored in one place (file/memory) but the runtime loader uses a different mechanism (classpath scanning), so they desync. Needs investigation into the status storage path.
 
 ---
 
@@ -316,12 +324,14 @@ The -v short flag is being consumed by the shell, the b4w.ps1 wrapper, or the ar
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Medium — the `-v` short flag is consumed before reaching the snapshot handler even in bash (not just PowerShell per SKILL.md). The fix should trace where the flag goes (shell wrapper, argument parser, or early-consume in main). Consider deprecating `-v` in favor of `--viewport` only if the root cause is cross-shell flag-parsing ambiguity that can't be reliably fixed.
 
 ---
 
@@ -359,12 +369,14 @@ VideoDetector.detect() receives a WebDriver and calls driver.evaluate() or parse
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Medium — `VideoDetector` only scans `driver.pageSource`/`evaluate()` on the top-level frame. Cross-origin iframes are inherently unscannable, but same-origin iframes (like w3schools' `iframeResult`) are accessible via CDP `Page.getFrameTree` + `Runtime.evaluate` with `contextId`. Worth implementing same-origin recursion and documenting cross-origin as a known limitation.
 
 ---
 
@@ -403,10 +415,12 @@ The CLI is built from local source (cargo build), but the backend auto-starts fr
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
-- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+- [x] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: DEFER] Low — this is a dev-workflow friction, not a product bug. The runtime bundle in `browser4-bundle/target/` goes stale when source changes and isn't auto-rebuilt. Affects developers iterating on backend code. Worth a doc note or a `--use-local-backend` flag eventually, but no end-user impact. No urgency.
 
 ---
 
@@ -444,12 +458,14 @@ The dynamic plugin command handler exists in code (handle_dynamic_plugin_command
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Low — clear discoverability gap. `handle_dynamic_plugin_command` exists and works, but `help` output and SKILL.md make zero mention of `plugin-<domain>` syntax. Users only discover it by reading Rust source. Should be added to both help output (under a Plugins category) and SKILL.md, with at minimum `plugin-media` and `plugin-pptx` as examples.
 
 ---
 

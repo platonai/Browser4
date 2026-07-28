@@ -96,6 +96,18 @@ class CrawlController(
         return mapOf("cleared" to count)
     }
 
+    /**
+     * Remove ALL tasks from the crawl task store, including actively-running ones.
+     * Cancels running jobs before clearing.  Use with caution.
+     *
+     * @return the number of tasks removed
+     */
+    @PostMapping("/clear-all", consumes = [MediaType.ALL_VALUE], produces = [MediaType.APPLICATION_JSON_VALUE])
+    fun clearAllCrawls(): Map<String, Any> {
+        val count = crawlService.clearAll()
+        return mapOf("cleared" to count)
+    }
+
     @ResponseStatus(HttpStatus.BAD_REQUEST)
     @ExceptionHandler(IllegalArgumentException::class)
     fun handleBadRequest(e: IllegalArgumentException): Map<String, Any> {

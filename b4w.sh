@@ -11,11 +11,15 @@
 # as PowerShell parameter names.
 #
 # Usage: ./b4w.sh [args...]          (same as ./b4w.ps1 [args...])
+#
+# Shell selection guide:
+#   b4w.sh   — Git Bash / Linux / macOS (auto-quotes args for pwsh safety)
+#   b4w.ps1  — PowerShell (direct, now uses manual arg parsing to avoid
+#              -o/-i/-v interception; preferred on Windows where pwsh is the
+#              primary shell)
+#   b4w.bat  — cmd.exe (uses --% stop-parsing to avoid flag interception)
 
 . "$(dirname "$0")/bin/tools/install-powershell.sh"
-
-echo "It is strongly recommended to launch \`pwsh\` and run the .ps1 commands directly within the \`pwsh\` terminal."
-echo ""
 
 # When PowerShell receives arguments from bash, dash-prefixed flags like
 # --sql, --stdout, -v can be misinterpreted as PowerShell parameter names

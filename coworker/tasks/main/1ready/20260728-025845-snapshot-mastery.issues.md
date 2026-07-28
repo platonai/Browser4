@@ -209,11 +209,13 @@ b4w.ps1 has a param() block with [switch]$Rebuild and [Parameter(ValueFromRemain
 #### Human Review
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [x] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT with improvements] The root cause is real (PowerShell param block consumes `-v`/`-i`/`-s`), but the fix is already implemented in the working tree — `b4w.ps1` has been refactored from `param()` to manual `$args` parsing with a warning banner for short flags. Commit the fix and close.
 
 ---
 
@@ -250,12 +252,14 @@ The global -s <name> flag is parsed before subcommand-specific flags. When both 
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Confirmed in `args.rs:71-75` — `parse_global_flags` unconditionally consumes `-s`/`--session` regardless of position relative to the command name. When `-s` appears after `snapshot`, it should be treated as `--selector`, not `--session`. The fix is to add a `seen_command` guard to the `-s` branch (same as `--json` at line 76). Short of full context-aware parsing, the pragmatic fix is removing the `-s` short form from `--selector` in snapshot's `OptionDef` and requiring `--selector` explicitly.
 
 ---
 
@@ -292,12 +296,14 @@ Lines 22-23 of b4w.sh unconditionally echo this message before invoking pwsh. Th
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Confirmed fixed in the working tree. The `echo` banner at b4w.sh lines 22-23 has been removed and replaced with a shell-selection guide comment. The fix just needs to be committed.
 
 ---
 
@@ -335,11 +341,13 @@ The accessibility tree builder likely includes ancestor elements needed to const
 #### Human Review
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [x] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT with improvements] The behavior (ancestors included for tree-path context) is likely by design — accessibility tree snapshots need the full root-to-leaf path for element identification. However, this is unintuitive and undocumented. The suggested fix is documentation + a `--selector-strict` flag for descendant-only output, not changing default behavior which would break `ref` path resolution.
 
 ---
 
@@ -372,11 +380,13 @@ The snapshot is serialized as YAML by design for human readability. A JSON outpu
 #### Human Review
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [x] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT with improvements] Confirmed at `main.rs:4027-4032` — snapshot already warns about no JSON support and directs users to `htmlsnapshot` commands for machine-readable output. The workaround exists (use `htmlsnapshot query/get/export`), so this is lower priority than the issue suggests. A JSON output mode for snapshot would be a nice enhancement but the current error message provides an actionable alternative.
 
 ---
 
@@ -409,12 +419,14 @@ Snapshot files are treated as implementation detail, not user-managed resources.
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Valid discoverability gap. Snapshot files accumulate with no CLI management surface. The suggested `snapshot list` and `snapshot clean` subcommands are reasonable additions.
 
 ---
 
@@ -451,12 +463,14 @@ The diff works at the DOM node level — when the URL changes, all nodes are new
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Valid documentation gap. The `--auto-diff` help text at `commands.rs:1265` says "Diff against the previous snapshot — show only what changed" without noting that page navigation produces full-page diffs. Adding a note is trivial and high-value for UX.
 
 ---
 
@@ -491,12 +505,14 @@ The description text for the snapshot command was written assuming it would appe
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Confirmed at `commands.rs:1247` — the description ends with "Run `snapshot --help` for all flags" which is exactly the command the user already ran to see this text. Replace with: "Capture page snapshot to obtain element refs. See flags below for filtering, scoping, and output options."
 
 ---
 
@@ -533,7 +549,9 @@ No lifecycle management for snapshot artifacts.
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [x] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: DUPLICATE] Same root cause — no snapshot file lifecycle management. Issue 6 covers CLI commands (`list`/`clean`); Issue 9 covers automatic cleanup on session close. Both are facets of the same gap. Resolve as a single feature (snapshot file lifecycle) covering both manual CLI management and auto-cleanup hooks.
 
 ---
 

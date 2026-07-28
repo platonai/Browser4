@@ -56,7 +56,7 @@ use help::{
     public_command_name, resolve_category_alias, CATEGORY_TITLES,
 };
 use http::{
-    call_tool, call_tool_with_result, cancel_crawl, clear_crawls, crawl_request_timeout,
+    call_tool, call_tool_with_result, cancel_crawl, clear_all_crawls, clear_crawls, crawl_request_timeout,
     get_command_result, get_command_status, get_crawl_result, get_crawl_status,
     get_swarm_result, get_swarm_status,
     is_stale_session_error, make_client, submit_batch_commands, submit_crawl,
@@ -9252,8 +9252,13 @@ async fn handle_crawl_cancel(
 async fn handle_crawl_clear(
     client: &Client,
     base_url: &str,
+    clear_all: bool,
 ) -> Result<(), String> {
-    let result = clear_crawls(client, base_url).await?;
+    let result = if clear_all {
+        clear_all_crawls(client, base_url).await?
+    } else {
+        clear_crawls(client, base_url).await?
+    };
     cli_println!("{}", result);
     // Remove ALL crawl tasks from local tracking (server-side clear removes
     // all terminal tasks; local entries pointing to cleared tasks show
@@ -12628,44 +12633,24 @@ async fn handle_status(client: &Client, base_url: &str) -> Result<(), String> {
     json_field("cli_version", json!(VERSION));
     json_field("server_url", json!(base_url));
 
-    // Check installed runtime
+    // Show installed runtime bundle info (informational only).
     if let Some(metadata) = daemon::read_installed_browser4_runtime_metadata() {
-        cli_println!("Installed version: {}", metadata.tag);
-        cli_println!("Installed at: {}", metadata.installed_at);
+        cli_println!("Installed bundle: {} (at {})", metadata.tag, metadata.installed_at);
         json_field("installed_version", json!(&metadata.tag));
         json_field("installed_at", json!(&metadata.installed_at));
-
-        // Compare CLI version with the installed backend version.
-        // The installed tag may have a "v" prefix (e.g. "v4.11.22").
-        let installed_ver = metadata.tag.trim().trim_start_matches('v');
-        let cli_ver = VERSION.trim();
-        if installed_ver != cli_ver {
-            cli_println!(
-                "⚠  Version mismatch: CLI is {} but installed backend is {}.",
-                cli_ver, metadata.tag
-            );
-            cli_println!(
-                "   The CLI was built from local source while the backend runs from a pre-installed bundle."
-            );
-            cli_println!(
-                "   Test results may reflect the installed backend's behavior, not the current source tree."
-            );
-            cli_println!(
-                "   To use the locally-built backend, run: cd browser4-rest && mvn spring-boot:run"
-            );
-            json_field("version_mismatch", json!(true));
-        } else {
-            json_field("version_mismatch", json!(false));
-        }
     } else {
-        cli_println!("Installed version: not installed (run 'browser4-cli install')");
+        cli_println!("Installed bundle: not installed (run 'browser4-cli install')");
         json_field("installed_version", json!(null));
         json_field("installed_at", json!(null));
     }
 
-    // Check server health
+    // Check server health and, if reachable, get the running backend's actual
+    // version.  Comparing against the live backend prevents false "version
+    // mismatch" warnings when the installed bundle is a different version than
+    // the locally-built dev backend.
     let health_url = format!("{base_url}/actuator/health");
     let health;
+    let mut server_version: Option<String> = None;
     match client.get(&health_url).send().await {
         Ok(response) => {
             if response.status().is_success() {
@@ -12683,6 +12668,25 @@ async fn handle_status(client: &Client, base_url: &str) -> Result<(), String> {
                         health = "ERROR";
                     }
                 }
+
+                // Query the running backend for its actual version so we compare
+                // CLI version against the live server, not a stale installed bundle.
+                if health == "UP" {
+                    let build_url = format!("{base_url}/api/system/build");
+                    if let Ok(build_resp) = client.get(&build_url).send().await {
+                        if let Ok(body) = build_resp.text().await {
+                            if let Ok(parsed) = serde_json::from_str::<Value>(&body) {
+                                server_version = parsed.get("version")
+                                    .and_then(|v| v.as_str())
+                                    .map(|s| s.to_string());
+                                if let Some(ref ver) = server_version {
+                                    cli_println!("Server version: {}", ver);
+                                    json_field("server_version", json!(ver));
+                                }
+                            }
+                        }
+                    }
+                }
             } else {
                 cli_println!("Server health: DOWN (HTTP {})", response.status());
                 health = "DOWN";
@@ -12694,6 +12698,48 @@ async fn handle_status(client: &Client, base_url: &str) -> Result<(), String> {
         }
     }
     json_field("health", json!(health));
+
+    // Version comparison: use the live server version if available; fall back
+    // to the installed bundle only when the server is unreachable.
+    if let Some(ref server_ver) = server_version {
+        if server_ver != VERSION {
+            cli_println!(
+                "⚠  Version mismatch: CLI is {} but running backend is {}.",
+                VERSION, server_ver
+            );
+            cli_println!(
+                "   The CLI and backend were built from different versions of the source tree."
+            );
+            cli_println!(
+                "   Rebuild both to match:  mvn install -pl browser4-rest -am && cargo build --manifest-path cli/browser4-cli/Cargo.toml"
+            );
+            json_field("version_mismatch", json!(true));
+        } else {
+            json_field("version_mismatch", json!(false));
+        }
+    } else if health == "UNREACHABLE" || health == "DOWN" {
+        // Server not reachable — compare against installed bundle as fallback.
+        if let Some(ref metadata) =
+            daemon::read_installed_browser4_runtime_metadata()
+        {
+            let installed_ver = metadata.tag.trim().trim_start_matches('v');
+            if installed_ver != VERSION.trim() {
+                cli_println!(
+                    "⚠  Version mismatch: CLI is {} but installed backend is {}.",
+                    VERSION, metadata.tag
+                );
+                cli_println!(
+                    "   The backend is not running, so the installed bundle version is shown."
+                );
+                cli_println!(
+                    "   Start the backend to compare against the live server version."
+                );
+                json_field("version_mismatch", json!(true));
+            } else {
+                json_field("version_mismatch", json!(false));
+            }
+        }
+    }
 
     Ok(())
 }
@@ -15588,7 +15634,8 @@ async fn run(
             handle_crawl_cancel(&client, &base_url, &tool_params).await?;
         }
         "crawl-clear" => {
-            handle_crawl_clear(&client, &base_url).await?;
+            let clear_all = tool_params.get("all").and_then(|v| v.as_bool()).unwrap_or(false);
+            handle_crawl_clear(&client, &base_url, clear_all).await?;
         }
         "crawl-list" => {
             handle_crawl_list(&client, &base_url, &tool_params).await?;

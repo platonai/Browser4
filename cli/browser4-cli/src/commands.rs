@@ -2756,7 +2756,9 @@ pub fn all_commands() -> Vec<CommandDef> {
             hidden: false,
             batch_supported: false,
             args: &[],
-            options: &[],
+            options: &[
+                OptionDef { name: "all", description: "Also cancel and clear actively-running crawl tasks", is_bool: true, short: None },
+            ],
             e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| String::new(),
             tool_params_fn: |_| json!({}),
@@ -5639,6 +5641,8 @@ mod tests {
         let cmd = map.get("crawl-clear").expect("crawl-clear command should exist");
         assert!(!cmd.hidden);
         assert!(cmd.args.is_empty());
+        assert_eq!(cmd.options.len(), 1);
+        assert_eq!(cmd.options[0].name, "all");
         assert_eq!(cmd.category, Category::Swarm);
     }
 

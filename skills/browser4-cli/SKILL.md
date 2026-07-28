@@ -18,18 +18,23 @@ command — substitute accordingly for dev-mode work:
 
 | Platform | Command | Notes |
 |---|---|---|
-| **PowerShell** (Windows) | `./b4w.ps1 <command>` | Auto-builds from source when needed. Awaits `--` passthrough for flags that conflict with PowerShell parameters. |
-| **Git Bash / Linux / macOS** | `./b4w.sh <command>` | Bash wrapper, avoids PowerShell parameter binding issues entirely. |
+| **PowerShell** (Windows) | `./b4w.ps1 <command>` | Auto-builds from source when needed. Uses manual argument parsing — short flags (`-o`, `-i`, `-v`) are safe. Preferred on Windows. |
+| **Git Bash / Linux / macOS** | `./b4w.sh <command>` | Bash wrapper that individually quotes arguments before passing to pwsh. Avoids PowerShell parameter binding entirely. |
 | **CMD** (Windows) | `./b4w.bat <command>` | Uses `--%` stop-parsing token to prevent PowerShell from consuming `-i`/`-v` flags. |
 | **Cargo (any platform)** | `cargo run --manifest-path cli/browser4-cli/Cargo.toml -- <command>` | Slower (compiles each run unless `--quiet` is added). Good for one-off debugging. |
 
-**Example:** The installed command `browser4-cli snapshot -v 0` becomes `./b4w.ps1 -- snapshot -v 0` (PowerShell)
+**Example:** The installed command `browser4-cli snapshot -v 0` becomes `./b4w.ps1 snapshot -v 0` (PowerShell)
 or `./b4w.sh snapshot -v 0` (Git Bash) when running from source.
 
-Note: PowerShell's parameter binder may intercept short flags (`-i`, `-v`) that happen to match
-common PowerShell parameters (`-InformationAction`, `-Verbose`). Use the `--` separator
-(`./b4w.ps1 -- snapshot -i`) or the long-form flags (`--interactive`, `--viewport`) to avoid this.
-When in doubt, `./b4w.sh` (Git Bash) avoids the issue entirely.
+**Shell selection guide:**
+- `b4w.ps1` — PowerShell (Windows): primary choice. Uses manual `$args` parsing so common
+  short flags (`-o`/`-i`/`-v`) are no longer intercepted by PowerShell's parameter binder.
+  Use long-form flags (`--output`, `--interactive`, `--viewport`) for cross-shell compatibility.
+- `b4w.sh` — Git Bash / Linux / macOS: individually quotes each argument to prevent
+  pwsh from interpreting dash-prefixed CLI flags as PowerShell parameters. Recommended
+  when running from bash environments.
+- `b4w.bat` — cmd.exe: uses PowerShell's `--%` stop-parsing token. Good fallback when
+  both `b4w.ps1` and `b4w.sh` encounter parameter binding issues.
 
 ## 1. Core Loop
 

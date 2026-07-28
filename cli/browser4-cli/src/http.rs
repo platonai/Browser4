@@ -691,6 +691,15 @@ pub async fn clear_crawls(
     send_rest_request(client.post(url)).await
 }
 
+/// Clear ALL crawl tasks (including active ones) via `CrawlController.clearAllCrawls()`.
+pub async fn clear_all_crawls(
+    client: &Client,
+    base_url: &str,
+) -> Result<String, String> {
+    let url = build_endpoint_url(base_url, "/api/crawl/clear-all");
+    send_rest_request(client.post(url)).await
+}
+
 /// Get the status of a crawl task via `CrawlController.getStatus(id)`.
 pub async fn get_crawl_status(
     client: &Client,
