@@ -1,5 +1,7 @@
 package ai.platon.pulsar.test
 
+import ai.platon.pulsar.test.server.MockServerPorts
+
 object TestUrls {
 
     var PRODUCT_LIST_URL = "https://www.amazon.com/b?node=1292115011"
@@ -15,19 +17,20 @@ object TestUrls {
     var PRODUCT_DETAIL_URL_ZH = "https://e.dangdang.com/products/1900089800.html"
 
     // Using mock EC server URLs instead of real Amazon URLs
-    const val MOCK_PRODUCT_LIST_URL = "http://localhost:18080/ec/b?node=1292115012"
+    // Port is resolved dynamically via MockServerPorts (supports both embedded and separate-server patterns)
+    val MOCK_PRODUCT_LIST_URL get() = "${MockServerPorts.baseUrl()}/ec/b?node=1292115012"
 
-    const val MOCK_PRODUCT_DETAIL_URL = "http://localhost:18080/ec/dp/B0E000001"
+    val MOCK_PRODUCT_DETAIL_URL get() = "${MockServerPorts.baseUrl()}/ec/dp/B0E000001"
 
     // HTML Snapshot scenario mock pages (see HtmlSnapshotMockController)
-    const val MOCK_HTML_SNAPSHOT_BASE = "http://localhost:18080/htmlsnapshot-test"
-    const val MOCK_NEWS_URL = "$MOCK_HTML_SNAPSHOT_BASE/news"
-    const val MOCK_SEO_URL = "$MOCK_HTML_SNAPSHOT_BASE/seo"
-    const val MOCK_JOBS_URL = "$MOCK_HTML_SNAPSHOT_BASE/jobs"
-    const val MOCK_COMPLIANCE_URL = "$MOCK_HTML_SNAPSHOT_BASE/compliance"
-    const val MOCK_RESEARCH_URL = "$MOCK_HTML_SNAPSHOT_BASE/research"
-    const val MOCK_REAL_ESTATE_URL = "$MOCK_HTML_SNAPSHOT_BASE/real-estate"
-    const val MOCK_FORM_PAGE_URL = "http://localhost:18080/assets/test-pages/form-page.html"
+    val MOCK_HTML_SNAPSHOT_BASE get() = "${MockServerPorts.baseUrl()}/htmlsnapshot-test"
+    val MOCK_NEWS_URL get() = "$MOCK_HTML_SNAPSHOT_BASE/news"
+    val MOCK_SEO_URL get() = "$MOCK_HTML_SNAPSHOT_BASE/seo"
+    val MOCK_JOBS_URL get() = "$MOCK_HTML_SNAPSHOT_BASE/jobs"
+    val MOCK_COMPLIANCE_URL get() = "$MOCK_HTML_SNAPSHOT_BASE/compliance"
+    val MOCK_RESEARCH_URL get() = "$MOCK_HTML_SNAPSHOT_BASE/research"
+    val MOCK_REAL_ESTATE_URL get() = "$MOCK_HTML_SNAPSHOT_BASE/real-estate"
+    val MOCK_FORM_PAGE_URL get() = "${MockServerPorts.baseUrl()}/assets/test-pages/form-page.html"
 
     var urlGroups = mutableMapOf<String, Array<String>>()
 

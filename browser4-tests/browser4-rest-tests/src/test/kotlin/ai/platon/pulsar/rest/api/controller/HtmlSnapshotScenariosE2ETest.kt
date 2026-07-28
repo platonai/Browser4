@@ -2,6 +2,7 @@ package ai.platon.pulsar.rest.api.controller
 
 import ai.platon.pulsar.rest.mcp.controller.dto.MCPToolCallResponse
 import ai.platon.pulsar.test.TestUrls
+import ai.platon.pulsar.test.server.MockServerPorts
 import com.fasterxml.jackson.databind.DeserializationFeature
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.databind.node.ObjectNode
@@ -19,7 +20,7 @@ import kotlin.test.assertTrue
  * skills/browser4-cli/references/htmlsnapshot-scenarios.md.
  *
  * Each test navigates to a mock page served by the embedded mock EC server
- * (port 18080 via [MockEcServerConfiguration]) and exercises the html_snapshot_*
+ * (dynamic port via [MockEcServerConfiguration]) and exercises the html_snapshot_*
  * MCP tools.
  *
  * NOTE: The `html_snapshot_query` tool uses the scrape service which employs an
@@ -412,7 +413,7 @@ private val createdSessions = mutableListOf<String>()
         assertTrue(r1[0]["title"]?.asText()?.contains("4K OLED TV") == true)
 
         // Navigate to another product page (use a different product)
-        navigate(sessionId, "http://localhost:18080/ec/dp/B0E000002")
+        navigate(sessionId, "${MockServerPorts.baseUrl()}/ec/dp/B0E000002")
         awaitPageTitle(sessionId, "Wireless")
 
         val sql2 = """

@@ -293,6 +293,24 @@ pub async fn call_tool(
         .map(|r| r.text)
 }
 
+/// Like [call_tool] but allows overriding the default HTTP timeout.
+/// Pass [None] to use the tool-specific default timeout.
+pub async fn call_tool_with_timeout_override(
+    client: &Client,
+    base_url: &str,
+    tool: &str,
+    args: Value,
+    timeout_override_secs: Option<u64>,
+) -> Result<String, String> {
+    let timeout = match timeout_override_secs {
+        Some(secs) => std::time::Duration::from_secs(secs),
+        None => effective_timeout(tool, &args),
+    };
+    call_tool_with_timeout(client, base_url, tool, args, Some(timeout))
+        .await
+        .map(|r| r.text)
+}
+
 /// Like [call_tool] but also returns any server-side pagination metadata present
 /// in the response.
 pub async fn call_tool_with_result(

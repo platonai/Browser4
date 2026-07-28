@@ -25,8 +25,8 @@ open class MockSiteAccess {
     @Autowired
     lateinit var session: AgenticSession
 
-    @Value("\${server.port}")
-    var port: Int = 18080
+    @Value("\${local.server.port}")
+    var port: Int = 0
 
     val context get() = session.context
 

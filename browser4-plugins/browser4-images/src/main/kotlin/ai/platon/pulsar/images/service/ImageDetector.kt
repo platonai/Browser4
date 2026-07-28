@@ -147,262 +147,264 @@ open class ImageDetector(
          * - `<meta property="og:image">`, `<meta name="twitter:image">`
          * - `<image>` elements in inline SVG
          */
+        // Uses a named function declaration + invocation pattern (not IIFE)
+        // to avoid breakage by the JS confuser pipeline (JsUtils.toCDPCompatibleExpression
+        // + confuser.confuse()) which incorrectly wraps parenthesized function expressions
+        // as ((fn))() producing "(intermediate value)(...) is not a function" errors.
         private val DETECTION_SCRIPT = """
-(function() {
-    var results = [];
-    var seen = {};
+var __b4_image_results = [];
+var __b4_image_seen = {};
 
-    var IMAGE_EXTENSIONS = /\.(jpg|jpeg|png|gif|webp|svg|bmp|ico|tiff?|avif|heic|heif)([?#].*)?$/i;
-    var SVG_EXTENSION = /\.svg([?#].*)?$/i;
-    var DATA_URI_RE = /^data:image\//i;
+var IMAGE_EXTENSIONS = /\.(jpg|jpeg|png|gif|webp|svg|bmp|ico|tiff?|avif|heic|heif)([?#].*)?$/i;
+var SVG_EXTENSION = /\.svg([?#].*)?$/i;
+var DATA_URI_RE = /^data:image\//i;
 
-    function add(item) {
-        var key = item.resolvedUrl || item.srcUrl || '';
-        if (key && seen[key]) return;
-        if (key) seen[key] = true;
-        results.push(item);
+function __b4_image_add(item) {
+    var key = item.resolvedUrl || item.srcUrl || '';
+    if (key && __b4_image_seen[key]) return;
+    if (key) __b4_image_seen[key] = true;
+    __b4_image_results.push(item);
+}
+
+// ---- 1. <img> elements ----
+var imgs = document.querySelectorAll('img');
+for (var i = 0; i < imgs.length; i++) {
+    var el = imgs[i];
+    var src = el.currentSrc || el.src || '';
+    var srcAttr = el.getAttribute('src') || '';
+    var srcset = el.getAttribute('srcset') || '';
+    __b4_image_add({
+        tagName: 'img',
+        srcUrl: src || srcAttr || null,
+        resolvedUrl: src || el.src || null,
+        type: null,
+        width: el.width || null,
+        height: el.height || null,
+        naturalWidth: el.naturalWidth || null,
+        naturalHeight: el.naturalHeight || null,
+        alt: el.alt || el.getAttribute('alt') || null,
+        isDataUri: DATA_URI_RE.test(src || srcAttr),
+        isSvg: SVG_EXTENSION.test(src || srcAttr)
+    });
+
+    // Handle srcset candidates (pick the largest)
+    if (srcset && !src) {
+        var candidates = srcset.split(',').map(function(s) { return s.trim(); });
+        var bestUrl = '';
+        var bestDensity = 0;
+        for (var c = 0; c < candidates.length; c++) {
+            var parts = candidates[c].split(/\s+/);
+            var candidateUrl = parts[0];
+            var descriptor = parts[1] || '1x';
+            var density = parseFloat(descriptor) || 1;
+            if (density > bestDensity && candidateUrl) {
+                bestDensity = density;
+                bestUrl = candidateUrl;
+            }
+        }
+        if (bestUrl) {
+            var resolvedBest = (new URL(bestUrl, document.baseURI)).href;
+            __b4_image_add({
+                tagName: 'img',
+                srcUrl: bestUrl,
+                resolvedUrl: resolvedBest,
+                type: null,
+                width: el.width || null,
+                height: el.height || null,
+                naturalWidth: el.naturalWidth || null,
+                naturalHeight: el.naturalHeight || null,
+                alt: el.alt || null,
+                isDataUri: DATA_URI_RE.test(bestUrl),
+                isSvg: SVG_EXTENSION.test(bestUrl)
+            });
+        }
     }
+}
 
-    // ---- 1. <img> elements ----
-    var imgs = document.querySelectorAll('img');
-    for (var i = 0; i < imgs.length; i++) {
-        var el = imgs[i];
-        var src = el.currentSrc || el.src || '';
-        var srcAttr = el.getAttribute('src') || '';
-        var srcset = el.getAttribute('srcset') || '';
-        add({
-            tagName: 'img',
-            srcUrl: src || srcAttr || null,
-            resolvedUrl: src || el.src || null,
+// ---- 2. <picture> elements ----
+var pictures = document.querySelectorAll('picture');
+for (var p = 0; p < pictures.length; p++) {
+    var picture = pictures[p];
+    var sources = picture.querySelectorAll('source');
+    for (var s = 0; s < sources.length; s++) {
+        var source = sources[s];
+        var sourceSrcset = source.getAttribute('srcset') || '';
+        if (!sourceSrcset) {
+            var sourceSrc = source.getAttribute('src') || '';
+            if (sourceSrc) sourceSrcset = sourceSrc + ' 1x';
+        }
+        if (!sourceSrcset) continue;
+
+        var candidates = sourceSrcset.split(',').map(function(cs) { return cs.trim(); });
+        for (var c = 0; c < candidates.length; c++) {
+            var parts = candidates[c].split(/\s+/);
+            var candidateUrl = parts[0];
+            if (!candidateUrl) continue;
+            var resolvedUrl = (new URL(candidateUrl, document.baseURI)).href;
+            __b4_image_add({
+                tagName: 'source',
+                srcUrl: candidateUrl,
+                resolvedUrl: resolvedUrl,
+                type: source.getAttribute('type') || null,
+                width: null,
+                height: null,
+                naturalWidth: null,
+                naturalHeight: null,
+                alt: null,
+                isDataUri: DATA_URI_RE.test(candidateUrl),
+                isSvg: SVG_EXTENSION.test(candidateUrl)
+            });
+        }
+    }
+}
+
+// ---- 3. <a> links pointing to image files ----
+var anchors = document.querySelectorAll('a[href]');
+for (var k = 0; k < anchors.length; k++) {
+    var a = anchors[k];
+    var href = a.href || '';
+    if (IMAGE_EXTENSIONS.test(href)) {
+        __b4_image_add({
+            tagName: 'a',
+            srcUrl: a.getAttribute('href') || href || null,
+            resolvedUrl: href || null,
             type: null,
-            width: el.width || null,
-            height: el.height || null,
-            naturalWidth: el.naturalWidth || null,
-            naturalHeight: el.naturalHeight || null,
-            alt: el.alt || el.getAttribute('alt') || null,
-            isDataUri: DATA_URI_RE.test(src || srcAttr),
-            isSvg: SVG_EXTENSION.test(src || srcAttr)
+            width: null,
+            height: null,
+            naturalWidth: null,
+            naturalHeight: null,
+            alt: a.textContent ? a.textContent.trim().substring(0, 200) : null,
+            isDataUri: false,
+            isSvg: SVG_EXTENSION.test(href)
         });
-
-        // Handle srcset candidates (pick the largest)
-        if (srcset && !src) {
-            var candidates = srcset.split(',').map(function(s) { return s.trim(); });
-            var bestUrl = '';
-            var bestDensity = 0;
-            for (var c = 0; c < candidates.length; c++) {
-                var parts = candidates[c].split(/\s+/);
-                var candidateUrl = parts[0];
-                var descriptor = parts[1] || '1x';
-                var density = parseFloat(descriptor) || 1;
-                if (density > bestDensity && candidateUrl) {
-                    bestDensity = density;
-                    bestUrl = candidateUrl;
-                }
-            }
-            if (bestUrl) {
-                var resolvedBest = (new URL(bestUrl, document.baseURI)).href;
-                add({
-                    tagName: 'img',
-                    srcUrl: bestUrl,
-                    resolvedUrl: resolvedBest,
-                    type: null,
-                    width: el.width || null,
-                    height: el.height || null,
-                    naturalWidth: el.naturalWidth || null,
-                    naturalHeight: el.naturalHeight || null,
-                    alt: el.alt || null,
-                    isDataUri: DATA_URI_RE.test(bestUrl),
-                    isSvg: SVG_EXTENSION.test(bestUrl)
-                });
-            }
-        }
     }
+}
 
-    // ---- 2. <picture> elements ----
-    var pictures = document.querySelectorAll('picture');
-    for (var p = 0; p < pictures.length; p++) {
-        var picture = pictures[p];
-        var sources = picture.querySelectorAll('source');
-        for (var s = 0; s < sources.length; s++) {
-            var source = sources[s];
-            var sourceSrcset = source.getAttribute('srcset') || '';
-            if (!sourceSrcset) {
-                var sourceSrc = source.getAttribute('src') || '';
-                if (sourceSrc) sourceSrcset = sourceSrc + ' 1x';
-            }
-            if (!sourceSrcset) continue;
+// ---- 4. Elements with inline background-image CSS ----
+var allElements = document.querySelectorAll('*');
+for (var e = 0; e < allElements.length; e++) {
+    var elem = allElements[e];
+    var style = elem.style;
+    if (!style || !style.backgroundImage) continue;
+    var bg = style.backgroundImage;
+    if (bg === 'none' || bg === 'initial' || bg === 'inherit') continue;
 
-            var candidates = sourceSrcset.split(',').map(function(cs) { return cs.trim(); });
-            for (var c = 0; c < candidates.length; c++) {
-                var parts = candidates[c].split(/\s+/);
-                var candidateUrl = parts[0];
-                if (!candidateUrl) continue;
-                var resolvedUrl = (new URL(candidateUrl, document.baseURI)).href;
-                add({
-                    tagName: 'source',
-                    srcUrl: candidateUrl,
-                    resolvedUrl: resolvedUrl,
-                    type: source.getAttribute('type') || null,
-                    width: null,
-                    height: null,
-                    naturalWidth: null,
-                    naturalHeight: null,
-                    alt: null,
-                    isDataUri: DATA_URI_RE.test(candidateUrl),
-                    isSvg: SVG_EXTENSION.test(candidateUrl)
-                });
-            }
-        }
+    var urlMatch = bg.match(/url\(["']?([^)"'\s]+)["']?\)/);
+    if (!urlMatch) continue;
+    var bgUrl = urlMatch[1];
+    if (!bgUrl) continue;
+
+    // Skip data URIs for background images by default (they're often icons/sprites)
+    if (DATA_URI_RE.test(bgUrl)) continue;
+
+    try {
+        var resolvedBgUrl = (new URL(bgUrl, document.baseURI)).href;
+        __b4_image_add({
+            tagName: 'background',
+            srcUrl: bgUrl,
+            resolvedUrl: resolvedBgUrl,
+            type: null,
+            width: elem.offsetWidth || null,
+            height: elem.offsetHeight || null,
+            naturalWidth: null,
+            naturalHeight: null,
+            alt: null,
+            isDataUri: false,
+            isSvg: SVG_EXTENSION.test(bgUrl)
+        });
+    } catch(ex) {
+        // Ignore invalid URLs in background-image
     }
+}
 
-    // ---- 3. <a> links pointing to image files ----
-    var anchors = document.querySelectorAll('a[href]');
-    for (var k = 0; k < anchors.length; k++) {
-        var a = anchors[k];
-        var href = a.href || '';
-        if (IMAGE_EXTENSIONS.test(href)) {
-            add({
-                tagName: 'a',
-                srcUrl: a.getAttribute('href') || href || null,
-                resolvedUrl: href || null,
+// ---- 5. <link rel="icon"> / <link rel="apple-touch-icon"> ----
+var links = document.querySelectorAll('link[rel]');
+for (var l = 0; l < links.length; l++) {
+    var link = links[l];
+    var rel = (link.getAttribute('rel') || '').toLowerCase();
+    var isIcon = /(^|\s)(icon|shortcut icon|apple-touch-icon|apple-touch-icon-precomposed)($|\s)/i.test(rel);
+    if (!isIcon) continue;
+    var linkHref = link.href || '';
+    if (!linkHref) continue;
+    __b4_image_add({
+        tagName: 'link',
+        srcUrl: link.getAttribute('href') || linkHref || null,
+        resolvedUrl: linkHref || null,
+        type: link.getAttribute('type') || null,
+        width: parseInt(link.getAttribute('sizes') || '') || null,
+        height: parseInt((link.getAttribute('sizes') || '').split('x')[1] || '') || null,
+        naturalWidth: null,
+        naturalHeight: null,
+        alt: rel || null,
+        isDataUri: DATA_URI_RE.test(linkHref),
+        isSvg: SVG_EXTENSION.test(linkHref)
+    });
+}
+
+// ---- 6. <meta property="og:image"> / <meta name="twitter:image"> ----
+var metas = document.querySelectorAll('meta[property], meta[name]');
+for (var m = 0; m < metas.length; m++) {
+    var meta = metas[m];
+    var property = (meta.getAttribute('property') || '').toLowerCase();
+    var name = (meta.getAttribute('name') || '').toLowerCase();
+    var content = meta.getAttribute('content') || '';
+    if (!content) continue;
+
+    var isOgImage = property === 'og:image' || property === 'og:image:url' || property === 'og:image:secure_url';
+    var isTwitterImage = name === 'twitter:image' || name === 'twitter:image:src';
+
+    if (isOgImage || isTwitterImage) {
+        try {
+            var resolvedMetaUrl = (new URL(content, document.baseURI)).href;
+            __b4_image_add({
+                tagName: 'meta',
+                srcUrl: content,
+                resolvedUrl: resolvedMetaUrl,
                 type: null,
                 width: null,
                 height: null,
                 naturalWidth: null,
                 naturalHeight: null,
-                alt: a.textContent ? a.textContent.trim().substring(0, 200) : null,
-                isDataUri: false,
-                isSvg: SVG_EXTENSION.test(href)
-            });
-        }
-    }
-
-    // ---- 4. Elements with inline background-image CSS ----
-    var allElements = document.querySelectorAll('*');
-    for (var e = 0; e < allElements.length; e++) {
-        var elem = allElements[e];
-        var style = elem.style;
-        if (!style || !style.backgroundImage) continue;
-        var bg = style.backgroundImage;
-        if (bg === 'none' || bg === 'initial' || bg === 'inherit') continue;
-
-        var urlMatch = bg.match(/url\(["']?([^)"'\s]+)["']?\)/);
-        if (!urlMatch) continue;
-        var bgUrl = urlMatch[1];
-        if (!bgUrl) continue;
-
-        // Skip data URIs for background images by default (they're often icons/sprites)
-        if (DATA_URI_RE.test(bgUrl)) continue;
-
-        try {
-            var resolvedBgUrl = (new URL(bgUrl, document.baseURI)).href;
-            add({
-                tagName: 'background',
-                srcUrl: bgUrl,
-                resolvedUrl: resolvedBgUrl,
-                type: null,
-                width: elem.offsetWidth || null,
-                height: elem.offsetHeight || null,
-                naturalWidth: null,
-                naturalHeight: null,
-                alt: null,
-                isDataUri: false,
-                isSvg: SVG_EXTENSION.test(bgUrl)
-            });
-        } catch(ex) {
-            // Ignore invalid URLs in background-image
-        }
-    }
-
-    // ---- 5. <link rel="icon"> / <link rel="apple-touch-icon"> ----
-    var links = document.querySelectorAll('link[rel]');
-    for (var l = 0; l < links.length; l++) {
-        var link = links[l];
-        var rel = (link.getAttribute('rel') || '').toLowerCase();
-        var isIcon = /(^|\s)(icon|shortcut icon|apple-touch-icon|apple-touch-icon-precomposed)($|\s)/i.test(rel);
-        if (!isIcon) continue;
-        var linkHref = link.href || '';
-        if (!linkHref) continue;
-        add({
-            tagName: 'link',
-            srcUrl: link.getAttribute('href') || linkHref || null,
-            resolvedUrl: linkHref || null,
-            type: link.getAttribute('type') || null,
-            width: parseInt(link.getAttribute('sizes') || '') || null,
-            height: parseInt((link.getAttribute('sizes') || '').split('x')[1] || '') || null,
-            naturalWidth: null,
-            naturalHeight: null,
-            alt: rel || null,
-            isDataUri: DATA_URI_RE.test(linkHref),
-            isSvg: SVG_EXTENSION.test(linkHref)
-        });
-    }
-
-    // ---- 6. <meta property="og:image"> / <meta name="twitter:image"> ----
-    var metas = document.querySelectorAll('meta[property], meta[name]');
-    for (var m = 0; m < metas.length; m++) {
-        var meta = metas[m];
-        var property = (meta.getAttribute('property') || '').toLowerCase();
-        var name = (meta.getAttribute('name') || '').toLowerCase();
-        var content = meta.getAttribute('content') || '';
-        if (!content) continue;
-
-        var isOgImage = property === 'og:image' || property === 'og:image:url' || property === 'og:image:secure_url';
-        var isTwitterImage = name === 'twitter:image' || name === 'twitter:image:src';
-
-        if (isOgImage || isTwitterImage) {
-            try {
-                var resolvedMetaUrl = (new URL(content, document.baseURI)).href;
-                add({
-                    tagName: 'meta',
-                    srcUrl: content,
-                    resolvedUrl: resolvedMetaUrl,
-                    type: null,
-                    width: null,
-                    height: null,
-                    naturalWidth: null,
-                    naturalHeight: null,
-                    alt: isOgImage ? 'og:image' : 'twitter:image',
-                    isDataUri: DATA_URI_RE.test(content),
-                    isSvg: SVG_EXTENSION.test(content)
-                });
-            } catch(ex) {
-                // Ignore invalid URLs
-            }
-        }
-    }
-
-    // ---- 7. <image> elements inside inline SVG ----
-    var svgImages = document.querySelectorAll('svg image[href], svg image[xlink\\:href]');
-    for (var si = 0; si < svgImages.length; si++) {
-        var svgImg = svgImages[si];
-        var xiHref = svgImg.getAttributeNS
-            ? svgImg.getAttributeNS('http://www.w3.org/1999/xlink', 'href')
-            : svgImg.getAttribute('xlink:href');
-        var svgHref = svgImg.getAttribute('href') || xiHref || '';
-        if (!svgHref) continue;
-        try {
-            var resolvedSvgUrl = (new URL(svgHref, document.baseURI)).href;
-            add({
-                tagName: 'svg:image',
-                srcUrl: svgHref,
-                resolvedUrl: resolvedSvgUrl,
-                type: null,
-                width: svgImg.getAttribute('width') ? parseInt(svgImg.getAttribute('width')) : null,
-                height: svgImg.getAttribute('height') ? parseInt(svgImg.getAttribute('height')) : null,
-                naturalWidth: null,
-                naturalHeight: null,
-                alt: null,
-                isDataUri: DATA_URI_RE.test(svgHref),
-                isSvg: SVG_EXTENSION.test(svgHref)
+                alt: isOgImage ? 'og:image' : 'twitter:image',
+                isDataUri: DATA_URI_RE.test(content),
+                isSvg: SVG_EXTENSION.test(content)
             });
         } catch(ex) {
             // Ignore invalid URLs
         }
     }
+}
 
-    return JSON.stringify(results);
-})()
+// ---- 7. <image> elements inside inline SVG ----
+var svgImages = document.querySelectorAll('svg image[href], svg image[xlink\\:href]');
+for (var si = 0; si < svgImages.length; si++) {
+    var svgImg = svgImages[si];
+    var xiHref = svgImg.getAttributeNS
+        ? svgImg.getAttributeNS('http://www.w3.org/1999/xlink', 'href')
+        : svgImg.getAttribute('xlink:href');
+    var svgHref = svgImg.getAttribute('href') || xiHref || '';
+    if (!svgHref) continue;
+    try {
+        var resolvedSvgUrl = (new URL(svgHref, document.baseURI)).href;
+        __b4_image_add({
+            tagName: 'svg:image',
+            srcUrl: svgHref,
+            resolvedUrl: resolvedSvgUrl,
+            type: null,
+            width: svgImg.getAttribute('width') ? parseInt(svgImg.getAttribute('width')) : null,
+            height: svgImg.getAttribute('height') ? parseInt(svgImg.getAttribute('height')) : null,
+            naturalWidth: null,
+            naturalHeight: null,
+            alt: null,
+            isDataUri: DATA_URI_RE.test(svgHref),
+            isSvg: SVG_EXTENSION.test(svgHref)
+        });
+    } catch(ex) {
+        // Ignore invalid URLs
+    }
+}
+
+JSON.stringify(__b4_image_results)
 """.trimIndent()
     }
 }

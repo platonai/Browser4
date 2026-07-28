@@ -56,11 +56,11 @@ use help::{
     public_command_name, resolve_category_alias, CATEGORY_TITLES,
 };
 use http::{
-    call_tool, call_tool_with_result, cancel_crawl, clear_all_crawls, clear_crawls, crawl_request_timeout,
-    get_command_result, get_command_status, get_crawl_result, get_crawl_status,
-    get_swarm_result, get_swarm_status,
-    is_stale_session_error, make_client, submit_batch_commands, submit_crawl,
-    submit_plain_command, submit_swarm_payload, submit_swarm_query, CallToolResult,
+    call_tool, call_tool_with_result, call_tool_with_timeout_override, cancel_crawl,
+    clear_all_crawls, clear_crawls, crawl_request_timeout, get_command_result,
+    get_command_status, get_crawl_result, get_crawl_status, get_swarm_result,
+    get_swarm_status, is_stale_session_error, make_client, submit_batch_commands,
+    submit_crawl, submit_plain_command, submit_swarm_payload, submit_swarm_query, CallToolResult,
 };
 use managed_processes::{
     read_managed_server_processes, stop_browser4_server_forcibly, ManagedServerProcess,
@@ -12088,6 +12088,7 @@ async fn handle_dynamic_plugin_command(
     let session_name = global.session_name.as_deref();
 
     // Execute the tool
+    let timeout_override = global.timeout_secs;
     let result = with_session(
         client,
         base_url,
@@ -12099,7 +12100,9 @@ async fn handle_dynamic_plugin_command(
             let tool_name = tool_name.clone();
             let mut params = Value::Object(tool_params.clone());
             params["sessionId"] = json!(session_id);
-            async move { call_tool(&client, &base_url, &tool_name, params).await }
+            async move {
+                call_tool_with_timeout_override(&client, &base_url, &tool_name, params, timeout_override).await
+            }
         },
     )
     .await
@@ -14100,6 +14103,7 @@ fn normalize_command_invocation(global: &args::GlobalFlags) -> (String, args::Gl
             proxy_url: global.proxy_url.clone(),
             show_tip: global.show_tip,
             pretty: global.pretty,
+            timeout_secs: global.timeout_secs,
             args: rewritten,
         };
         (cmd, new_global, true)
@@ -17407,6 +17411,7 @@ mod tests {
             proxy_url: None,
             show_tip: false,
             pretty: false,
+            timeout_secs: None,
             args: vec![
                 "agent".to_string(),
                 "status".to_string(),
@@ -17432,6 +17437,7 @@ mod tests {
             proxy_url: None,
             show_tip: false,
             pretty: false,
+            timeout_secs: None,
             args: vec!["agent-run".to_string(), "task".to_string()],
         };
 

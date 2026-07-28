@@ -2,6 +2,7 @@ package ai.platon.pulsar.rest.api.common
 
 import ai.platon.browser4.boot.autoconfigure.test.PulsarTestContextInitializer
 import ai.platon.pulsar.rest.api.config.MockEcServerConfiguration
+import ai.platon.pulsar.test.server.MockServerPorts
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Tag
 import org.springframework.beans.factory.annotation.Autowired
@@ -32,11 +33,11 @@ abstract class MockEcServerTestBase {
     @Autowired
     protected lateinit var restTemplate: RestTemplate
 
-    protected val mockServerBaseUrl = "http://localhost:18080"
+    protected val mockServerBaseUrl get() = MockServerPorts.baseUrl()
 
-    // Common mock URLs for testing
-    protected val mockProductListUrl = "$mockServerBaseUrl/ec/b?node=1292115012"
-    protected val mockProductDetailUrl = "$mockServerBaseUrl/ec/dp/B0E000001"
+    // Common mock URLs for testing (lazy — port is resolved when first accessed)
+    protected val mockProductListUrl get() = "$mockServerBaseUrl/ec/b?node=1292115012"
+    protected val mockProductDetailUrl get() = "$mockServerBaseUrl/ec/dp/B0E000001"
 
     @BeforeEach
     fun setup() {
