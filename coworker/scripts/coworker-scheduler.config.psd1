@@ -95,7 +95,7 @@
             Name            = 'review-recent-issues'
             Description     = 'Find .issues.md files from the last 3 days in draft/ and review/, move draft files to review/, and run inline AI review on each.'
             Enabled         = $true
-            IntervalSeconds = 120
+            IntervalSeconds = 20
             WindowStyle     = 'Minimized'
             PendingPaths    = @()
             ScriptPath      = 'coworker\scripts\workers\review-recent-issues.ps1'

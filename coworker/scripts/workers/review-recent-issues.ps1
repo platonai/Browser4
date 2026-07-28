@@ -274,8 +274,9 @@ function Invoke-ReviewForFile {
     $stdErrPath = [System.IO.Path]::GetTempFileName()
 
     try {
+        $allArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $b4wScript) + $reviewArgs
         $process = Start-Process -FilePath 'pwsh' `
-            -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $b4wScript) + $reviewArgs `
+            -ArgumentList $allArgs `
             -PassThru -NoNewWindow `
             -RedirectStandardOutput $stdOutPath `
             -RedirectStandardError $stdErrPath
