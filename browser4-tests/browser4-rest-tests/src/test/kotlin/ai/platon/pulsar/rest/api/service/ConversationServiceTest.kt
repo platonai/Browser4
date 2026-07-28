@@ -11,6 +11,7 @@ import ai.platon.pulsar.rest.api.config.MockEcServerConfiguration
 import ai.platon.pulsar.rest.api.entities.CommandRequest
 import ai.platon.pulsar.rest.api.entities.PromptRequest
 import ai.platon.pulsar.test.TestUrls
+import ai.platon.pulsar.test.server.MockServerPorts
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assumptions
 import org.junit.jupiter.api.BeforeEach
@@ -22,16 +23,18 @@ import org.springframework.context.annotation.Import
 import org.springframework.test.context.ContextConfiguration
 import kotlin.test.*
 
-const val PAGE_VISIT_COMMAND_PROMPT1 = """
-Visit http://localhost:18080/ec/dp/B0E000001
+private val MOCK_PRODUCT_URL get() = "${MockServerPorts.baseUrl()}/ec/dp/B0E000001"
+
+val PAGE_VISIT_COMMAND_PROMPT1 get() = """
+Visit $MOCK_PRODUCT_URL
 After page load: click #title, then scroll to the middle.
 Summarize the product.
 Extract: product name, price, ratings.
 Find all links containing /dp/.
     """
 
-const val PAGE_VISIT_COMMAND_PROMPT2 = """
-Visit http://localhost:18080/ec/dp/B0E000001
+val PAGE_VISIT_COMMAND_PROMPT2 get() = """
+Visit $MOCK_PRODUCT_URL
 When the page is ready, click the element with id "title" and scroll to the middle.
 
 Page summary prompt: Provide a brief introduction of this product.
@@ -40,8 +43,8 @@ Extract links: all links containing `/dp/` on the page.
 
     """
 
-const val PAGE_VISIT_COMMAND_PROMPT3 = """
-Visit the page: http://localhost:18080/ec/dp/B0E000001
+val PAGE_VISIT_COMMAND_PROMPT3 get() = """
+Visit the page: $MOCK_PRODUCT_URL
 
 ### 📝 Tasks:
 
@@ -106,8 +109,8 @@ class ConversationServiceTest : MockEcServerTestBase() {
     @Test
     @DisplayName("test convertPlainCommandToJSON with X-SQL")
     fun testConvertPlainCommandToJsonWithXSql() {
-        val url1 = "http://localhost:18080/ec/dp/B0E000001"
-        val url2 = "http://localhost:18080/ec/dp/B0E000002"
+        val url1 = "${MockServerPorts.baseUrl()}/ec/dp/B0E000001"
+        val url2 = "${MockServerPorts.baseUrl()}/ec/dp/B0E000002"
 
         val commandTemplate = """
 Go to {PLACEHOLDER_URL}
@@ -165,8 +168,8 @@ from load_and_select(@url, 'body');
     @Test
     @DisplayName("test convertPlainCommandToJSON with cache")
     fun testConvertPlainCommandToJsonWithCache() {
-        val url1 = "http://localhost:18080/ec/dp/B0E000001"
-        val url2 = "http://localhost:18080/ec/dp/B0E000002"
+        val url1 = "${MockServerPorts.baseUrl()}/ec/dp/B0E000001"
+        val url2 = "${MockServerPorts.baseUrl()}/ec/dp/B0E000002"
 
         val prompt1 = """
 Visit $url1
@@ -198,7 +201,7 @@ Page summary prompt: Provide a brief introduction of this product.
     @DisplayName("test prompt conversion without URL")
     fun testPromptConversionWithoutUrl() {
         val prompt = """
-Go to localhost:18080/ec/dp/B0E000001
+Go to localhost:${MockServerPorts.port()}/ec/dp/B0E000001
 
 Page summary prompt: Provide a brief introduction of this product.
         """.trimIndent()
@@ -268,8 +271,9 @@ Page summary prompt: Provide a brief introduction of this product.
     }
 
     private fun verifyPromptRequestL2(request: CommandRequest) {
-        assertTrue { request.url == "http://localhost:18080/ec/dp/B0E000001" }
-        assertEquals("http://localhost:18080/ec/dp/B0E000001", request.url)
+        val expectedUrl = "${MockServerPorts.baseUrl()}/ec/dp/B0E000001"
+        assertTrue { request.url == expectedUrl }
+        assertEquals(expectedUrl, request.url)
         assertNotNull(request.pageSummaryPrompt)
         assertNotNull(request.dataExtractionRules)
         assertNotNull(request.uriExtractionRules)

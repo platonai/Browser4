@@ -21,8 +21,8 @@ class MockWebSiteAccess {
     @Autowired
     lateinit var session: AgenticSession
 
-    @Value($$"${server.port}")
-    var port: Int = 18080
+    @Value("\${local.server.port}")
+    var port: Int = 0
 
     protected val baseURL get() = "http://127.0.0.1:$port"
 
