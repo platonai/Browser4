@@ -92,13 +92,14 @@ Likely related to the backend version mismatch (v4.11.15 vs v4.12.0). The X-SQL 
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-
+[AI suggested: ACCEPT] Real X-SQL bug — likely a downstream symptom of the backend version mismatch (Issue 3). Fixing Issue 3 should be the first step; if X-SQL still fails with the correct backend JAR, then debug `load_and_select` / `SQLTemplate` URL resolution independently.
 
 ---
 
@@ -142,13 +143,14 @@ Confirmed with a test using only URLs 2 and 3 — in that case URL 2 was fetched
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-
+[AI suggested: ACCEPT] Critical reliability bug — crawl loop exits after the first seed URL completes. Likely an early-termination bug in the iteration or a dedup false-positive. Independent of the backend version issue (reproducible with the stale backend); needs direct investigation of the crawl task executor loop.
 
 ---
 
@@ -187,13 +189,14 @@ The daemon auto-start mechanism uses the globally installed backend bundle (from
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-
+[AI suggested: ACCEPT] Root cause or significant contributor to Issues 1 and 8. The auto-start picks up the globally installed JAR instead of the local Maven build. Fix by having `b4w.ps1` detect a local `browser4-rest/target/*.jar` and prefer it, or document the `mvn spring-boot:run` fallback prominently.
 
 ---
 
@@ -233,13 +236,14 @@ The crawl result doesn't distinguish between "X-SQL was not requested" and "X-SQ
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-
+[AI suggested: ACCEPT] Related to Issue 1 in the X-SQL domain but distinct — Issue 1 is about correctness (should return data), Issue 4 is about UX (when there is genuinely no data, communicate it clearly). Include `resultSet: []` and an `extractionStatus` field even when Issue 1 is fixed, since legitimate no-match queries will still occur.
 
 ---
 
@@ -276,13 +280,14 @@ X-SQL aliases map multiple names to the same function, but the documentation doe
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-
+[AI suggested: ACCEPT] Straightforward documentation fix. Standardize on `load_and_select` as canonical (matches CLI help), add an alias note at the top of `x-sql-dom-load-select.md`, and audit all reference docs for consistency. Low effort, high payoff for new-user experience.
 
 ---
 
@@ -320,13 +325,14 @@ The CLI's status polling mechanism checks a status field that stays "created" th
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-
+[AI suggested: ACCEPT] The "Still waiting for crawl to start…" message is factually wrong — the crawl is running. Fix the status polling to detect the actual crawl state, or at minimum change the text to "Waiting for crawl… (N seconds)" without "to start." Related to Issue 8 (the 16s polling interval compounds the delay perception).
 
 ---
 
@@ -366,13 +372,14 @@ The `--parse` flag may trigger a different page processing path that doesn't pre
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-
+[AI suggested: ACCEPT] `--parse` clobbers title extraction in the JSON result. Likely a different code path for parsed pages that doesn't carry forward the `<title>` element. Should be a straightforward fix — preserve title metadata across the parse step.
 
 ---
 
@@ -409,13 +416,14 @@ The "Still waiting for crawl to start..." messages suggest the backend's crawl t
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-
+[AI suggested: ACCEPT] The 80-100s delay likely has multiple contributors: (a) stale backend JAR from Issue 3, (b) 16s polling interval compounding perceived wait, (c) possible crawl dispatcher startup delay. Fix Issue 3 first, reduce polling to 5s (as suggested in Issue 6), then profile what remains.
 
 ---
 
@@ -453,13 +461,14 @@ Stale tasks from previous sessions are either auto-cleaned or clearly separated 
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-
+[AI suggested: ACCEPT] Low-severity hygiene issue. `crawl clear` should handle "not found" tasks (either remove them or offer a `--force` flag). Auto-expiry after 24h would also help. Simple CLI-side fix.
 
 ---
 
@@ -497,12 +506,13 @@ The effects of these flags are invisible for simple depth-0 crawls against stati
 #### Human Review
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [x] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-
+[AI suggested: ACCEPT with improvements] The flags do work — the root cause analysis confirms their effects are invisible for simple depth-0 crawls against static pages. The real fix is discoverability: add a "flags applied" section to crawl output, include effective `LoadOptions` in the JSON result, and document which flags are preventive vs. visibly impactful.
 
 ---
 
@@ -535,13 +545,14 @@ PowerShell's parameter binding intercepts flags that match common parameters (`-
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-
+[AI suggested: ACCEPT] Documentation fix — move the PowerShell flag caveat from the Installation section to a prominent callout near the Quick Patterns or Core Loop section. The `--` workaround works but new users won't find it buried at the bottom.
 
 ---
 

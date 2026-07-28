@@ -189,12 +189,14 @@ The agent --help output only enumerates subcommands, not their flags. The --clea
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] `agent --help` should surface the existence of `--clear` even if it lives on a subcommand. Strongly related to Issue 7 — both should be addressed together (add a note to top-level help AND consider an `agent clear` alias).
 
 ---
 
@@ -229,12 +231,14 @@ The --clear flag likely just clears the local task tracking store without checki
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Silently dropping visibility of in-progress tasks that continue running backend-side is a real UX hazard. The fix should be coordinated with Issue 1/7: if clear becomes more discoverable, this surprising behavior is exposed to more users. At minimum, warn about in-progress tasks before clearing; ideally, only clear terminal-state tasks by default and require `--force`/`--all` for active ones.
 
 ---
 
@@ -271,12 +275,14 @@ Documentation was written before the task ID format was finalized or was never u
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Trivial documentation fix. Update all examples in agent.md and help strings to use realistic UUID-format IDs. Related to Issue 8 — both fix stale docs in the same file; a single editing pass should address both.
 
 ---
 
@@ -309,12 +315,14 @@ No TTL/timeout mechanism for tasks stuck in queued state. The task was likely or
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Legitimate reliability concern. An 8-day-old queued task that never started is almost certainly orphaned. Implement a configurable TTL (e.g., 24h) after which queued tasks auto-transition to `failed (timeout)`, and surface a warning in `agent list` for tasks older than N hours.
 
 ---
 
@@ -347,12 +355,14 @@ Internal event tracing from StatefulPageVisitor/StatefulAgentRunner is serialize
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Internal `StatefulPageVisitor`/`StatefulAgentRunner` event traces should not leak into the user-facing `message` field. Keep `message` concise and human-readable; move the event trace to a debug-only field gated behind `--verbose`. Related to Issue 6 — both are problems in the same JSON response payload.
 
 ---
 
@@ -386,12 +396,14 @@ The list display normalizes status to lowercase for the table view, while the JS
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] `agent list` shows lowercase labels (completed, processing, queued) while `agent status` JSON returns `"status":"OK"` and `"status":"Processing"`. The `OK` label in particular is not a standard lifecycle term. Normalize to a single consistent set (completed, processing, queued, failed) across all interfaces. Related to Issue 5 — fix both in the same serialization pass.
 
 ---
 
@@ -424,12 +436,14 @@ The agent command family was designed with --clear as a flag on list, while the 
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Adding `agent clear` as a standalone command (or alias) aligns the agent UX with the existing `crawl clear` pattern. This is a companion fix to Issue 1 — the top-level help should list `clear` as a subcommand, and `agent list --clear` can be retained as a convenience alias. Implement together with Issue 1.
 
 ---
 
@@ -466,12 +480,14 @@ The agent.md documentation was written for an earlier version of the agent syste
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] agent.md documents `RUNNING`/`COMPLETED`/`FAILED` and `processState: "processing"` but actual output uses `OK`/`Processing` and `processState: "in_progress"`. Related to Issues 3, 5, and 6 — once the code-side status labels are normalized (Issue 6), update agent.md to match the actual output. Address in the same docs pass as Issue 3.
 
 ---
 

@@ -110,11 +110,12 @@ The grep implementation slices the HTML string at byte offsets without verifying
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
-- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+- [x] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-
+[AI review unavailable — defaulted to DEFER]
 
 ---
 
@@ -153,11 +154,12 @@ The backend uses HTTP 417 as a catch-all for X-SQL query failures without propag
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
-- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+- [x] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-
+[AI review unavailable — defaulted to DEFER]
 
 ---
 
@@ -199,11 +201,12 @@ Returns 417 "Expectation Failed" with empty result set.
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
-- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+- [x] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-
+[AI review unavailable — defaulted to DEFER]
 
 ---
 
@@ -253,11 +256,12 @@ The `htmlsnapshot get`/`inspect` commands use the stored HTML snapshot (parsed o
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
-- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+- [x] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-
+[AI review unavailable — defaulted to DEFER]
 
 ---
 
@@ -299,11 +303,12 @@ The `DOM_LOAD_AND_SELECT` function uses 1-based indexing for the offset paramete
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
-- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+- [x] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-
+[AI review unavailable — defaulted to DEFER]
 
 ---
 
@@ -338,11 +343,12 @@ The documentation index prioritizes brevity over completeness. Function signatur
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
-- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+- [x] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-
+[AI review unavailable — defaulted to DEFER]
 
 ---
 
@@ -387,11 +393,12 @@ The auto-discovery algorithm extracts the class attribute value (which contains 
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
-- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+- [x] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-
+[AI review unavailable — defaulted to DEFER]
 
 ---
 
@@ -426,11 +433,12 @@ The `htmlsnapshot query` command only produces JSON output. There's no terminal 
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
-- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+- [x] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-
+[AI review unavailable — defaulted to DEFER]
 
 ---
 
@@ -469,11 +477,12 @@ Users must read up to 6 files to understand the full function surface. The index
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
-- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+- [x] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-
+[AI review unavailable — defaulted to DEFER]
 
 ---
 

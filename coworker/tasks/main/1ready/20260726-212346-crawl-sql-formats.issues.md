@@ -76,13 +76,14 @@ Crawl completes with 0 extracted rows. CSV contains "No extracted data." Log con
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-
+[AI suggested: ACCEPT] Clear code defect — `CrawlToolExecutor` never extracts `sql`/`sqlStdin`/`sqlBase64` from MCP params, so X-SQL extraction is always silently skipped regardless of CLI flags. Fix is a one-line addition at the identified code pointer plus a unit test.
 
 ---
 
@@ -127,13 +128,14 @@ The internal HTTP fetch mechanism (`FetchComponent`) logs "Protocol not found" f
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-
+[AI suggested: ACCEPT] Reproducible critical bug — `FetchComponent` logs "Protocol not found" for every URL after the first in a `StaticAgenticSession`, returning 0 bytes. Suggests the HTTP protocol handler is deregistered or corrupted after first use. This is the most concrete manifestation of the backend degradation pattern; Issue 5 is the same root cause observed over time (see DUPLICATE below).
 
 ---
 
@@ -172,13 +174,14 @@ Likely a coroutine dispatcher bottleneck. The `crawlScope` launches coroutines b
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-
+[AI suggested: ACCEPT] Crawl queue dispatcher bottleneck causes multi-minute delays and permanently stuck tasks. The `crawl clear` command also fails to purge the JSONL persistence file, so stale tasks revive on restart (28+ restored entries observed). The `htmlsnapshot` timeout in Issue 4 is a downstream symptom of this same dispatcher/resource exhaustion (see DUPLICATE below).
 
 ---
 
@@ -223,8 +226,9 @@ The backend endpoint `/mcp/call-tool` is unresponsive for the `html_snapshot_cap
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [x] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-
+[AI suggested: DUPLICATE] The 60s timeout on `html_snapshot_capture` is a symptom of the backend thread-pool congestion described in Issue 3, as the issue itself identifies. The shared dispatcher that's saturated by stuck crawl tasks also blocks MCP tool dispatch. Fix Issue 3 first, then verify whether htmlsnapshot still times out independently.
 
 ---
 
@@ -267,8 +271,9 @@ The backend accumulates state from failed crawl tasks (stale contexts, unrelease
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [x] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-
+[AI suggested: DUPLICATE] Both describe the same `ProtoNotFound(1600)` / "Protocol not found" failure in `FetchComponent`. Issue 2 captures the immediate, reproducible trigger (non-first URL in a batch always fails); Issue 5 describes the progressive degradation where the same error spreads to all URLs over time. Same root cause — the protocol handler leak/cleanup problem in `StaticAgenticContext`. Merge into Issue 2's fix scope.
 
 ---
 
@@ -308,13 +313,14 @@ The default `depth=1` triggers link-discovery mode which requires `--out-link-se
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-
+[AI suggested: ACCEPT] When `--sql` is present without `--out-link-selector` and `--depth` defaults to 1, the crawl short-circuits with a misleading warning. The code should auto-detect: if `--sql` is provided but no link selector is given, treat as depth=0 (bulk fetch + extraction) instead of depth=1 (link discovery) that immediately returns empty. Clear, low-risk fix with high UX impact.
 
 ---
 
@@ -355,12 +361,13 @@ PowerShell's parameter binder intercepts `-o` before it reaches the browser4-cli
 #### Human Review
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [x] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-
+[AI suggested: ACCEPT with improvements] Valid PowerShell-specific issue, but the suggested fix of renaming `b4w.ps1` is excessive. Keep the fix scoped to: (a) add a startup warning in `b4w.ps1` when `-o`, `-i`, or `-v` are detected in `$args`, and (b) use `--output` long-form in all documentation examples. The `--` separator workaround should also be documented prominently.
 
 ---
 
@@ -400,13 +407,14 @@ After `crawl clear`, the task list is empty or only contains actively running ta
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-
+[AI suggested: ACCEPT] `crawl clear` only removes terminal-state tasks from the in-memory Caffeine cache; orphaned JSONL persistence entries produce synthetic "not found" responses that survive both `clear` and server restart. Fix should: (a) rewrite the JSONL file from scratch during `clear` to drop stale entries, (b) filter "not found" from `crawl list` output, and (c) add a `--all` flag to force-clear non-terminal tasks.
 
 ---
 
@@ -450,13 +458,14 @@ The `status` command checks the version of a pre-installed runtime bundle rather
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-
+[AI suggested: ACCEPT] The `status` command compares CLI version against an installed runtime bundle path rather than querying the running backend's actual version (available from server logs or a `/actuator/info`-style endpoint). This produces false "version mismatch" warnings in dev environments. Fix: query the live backend (add a `/api/version` endpoint or parse the health-check response) instead of checking a filesystem bundle.
 
 ---
 
@@ -490,12 +499,13 @@ The `b4w.sh` wrapper is a convenience script but its design intent is unclear �
 #### Human Review
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [x] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-
+[AI suggested: ACCEPT with improvements] Two real problems: (a) `b4w.sh` prints a loud "use pwsh instead" warning on every invocation, and (b) `b4w.ps1` has the flag interception documented in Issue 7. The suggested symlink fix isn't portable on Windows. Instead: remove the per-invocation warning from `b4w.sh` (keep it in docs/SKILL.md), document the shell-specific trade-offs once at install time, and ensure both scripts produce equivalent exit codes and stdout/stderr behavior.
 
 ---
 

@@ -1813,6 +1813,18 @@ async fn handle_goto(
         .get("url")
         .and_then(|value| value.as_str())
         .unwrap_or("<unknown>");
+
+    // Check whether the browser is already at the target URL before
+    // navigating, so we can tell the user whether a navigation occurred.
+    let was_already_at_url = if reused_existing_session {
+        current_session_url(client, base_url, session_name)
+            .await
+            .map(|current| urls_match_for_display(&current, target_url))
+            .unwrap_or(false)
+    } else {
+        false
+    };
+
     let mut params = tool_params.clone();
     params["sessionId"] = json!(session_id.clone());
     let navigate_result = call_tool(client, base_url, tool_name, params.clone()).await;
@@ -1820,6 +1832,11 @@ async fn handle_goto(
         Ok(result) => {
             if !result.is_empty() {
                 cli_println!("{}", result);
+            }
+            if was_already_at_url {
+                cli_println!("Already at {} — page unchanged.", target_url);
+            } else {
+                cli_println!("Navigated to {}", target_url);
             }
             warn_if_url_has_encoded_quotes(target_url);
             post_command_snapshot(client, base_url, &session_id).await;
@@ -1857,6 +1874,7 @@ async fn handle_goto(
                     if !result.is_empty() {
                         cli_println!("{}", result);
                     }
+                    cli_println!("Navigated to {}", target_url);
                     warn_if_url_has_encoded_quotes(target_url);
                     post_command_snapshot(client, base_url, &retry_id).await;
                 }
@@ -1875,6 +1893,12 @@ async fn handle_goto(
     }
 
     Ok(())
+}
+
+/// Compare two URLs for display purposes — treats URLs that differ only by a
+/// trailing slash (or its absence) as equivalent.
+fn urls_match_for_display(a: &str, b: &str) -> bool {
+    a.trim_end_matches('/').trim().eq_ignore_ascii_case(b.trim_end_matches('/').trim())
 }
 
 /// Warn the user when a URL contains percent-encoded quotes (%22),
@@ -2528,10 +2552,42 @@ async fn handle_tab_close(
         }).is_some();
 
         if !tab_still_exists {
-            // Tab was actually closed despite the error — treat as success
-            // with a warning so the user knows something unusual happened.
-            if !json_active() {
-                eprintln!("Note: Tab was closed but the backend reported: {}", err_msg);
+            // Tab is gone after the close attempt. Distinguish two cases:
+            // 1. Tab existed before close → extension-session callback race
+            //    (chrome.tabs.remove fired an error callback after success).
+            //    Treat as success with a clean informational note.
+            // 2. Tab was never in the list → the GUID/index was invalid.
+            //    Surface the real error (tab not found).
+            if closed_tab_info.is_some() {
+                // Case 1: tab was verified present before the close — the
+                // close succeeded but the backend callback raced. Show a
+                // clean note without the raw backend ERROR text.
+                if !json_active() {
+                    eprintln!(
+                        "Note: Tab closed (extension session — backend confirmation delayed)."
+                    );
+                }
+            } else {
+                // Case 2: tab was never present — the GUID/index is invalid.
+                // Surface a clean error message without raw backend traces.
+                if let Some(ref guid) = guid_opt {
+                    return Err(format!(
+                        "No tab found with GUID '{}'. Use `tab-list` to see current tabs.",
+                        guid
+                    ));
+                } else if let Some(idx) = index_opt {
+                    let count = tabs_before.as_ref().map_or(0, |t| t.len());
+                    return Err(format!(
+                        "Tab index {} is out of range. There {} {} tab{} (indices 0-{}).",
+                        idx,
+                        if count == 1 { "is" } else { "are" },
+                        count,
+                        if count == 1 { "" } else { "s" },
+                        if count > 0 { count - 1 } else { 0 }
+                    ));
+                } else {
+                    return Err("No tab to close — the current tab list is empty.".to_string());
+                }
             }
         } else {
             // Tab still exists — the error is real.

@@ -98,13 +98,14 @@ When swarm workers execute X-SQL queries in parallel, the H2 database session po
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-
+[AI suggested: ACCEPT] Well-documented critical race condition with clear reproduction, root cause, and code pointers. The H2 session lifecycle must be tied to the swarm session, not individual task completion. Fixing this also resolves the core symptom behind Issue 4.
 
 ---
 
@@ -149,13 +150,14 @@ The swarm task status reporting has two bugs: (1) `isDone` is not set to `true` 
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-
+[AI suggested: ACCEPT] Distinct from Issue 1 — even after fixing the H2 race, error propagation needs to work. Two independent bugs: `isDone` incorrectly gated to `completed` only, and exception messages not plumbed to the `message` field. Both are straightforward fixes with clear code pointers.
 
 ---
 
@@ -198,12 +200,13 @@ The two commands evolved separately rather than being designed as a coherent pai
 #### Human Review
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [x] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-
+[AI suggested: ACCEPT with improvements] The naming confusion is real and the docs acknowledge it ("Prefer `swarm query` over `swarm submit --sql`"), but consolidation into a single command risks breaking existing workflows. The suggestion to add a comparison table to `--help` is low-cost and should be done regardless. The consolidation/rename decision needs a design discussion weighing backward compatibility against simplification.
 
 ---
 
@@ -242,11 +245,12 @@ The docs describe `--wait` as a client-side polling convenience, but it may trig
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
-- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+- [x] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-
+[AI suggested: DEFER] This is a documentation workaround for Issue 1, not a standalone concern. If Issue 1 is fixed (H2 session lifecycle tied to swarm session), `--wait` becomes purely a client-side convenience as documented, and the warning is unnecessary. Add the temporary warning only if Issue 1 cannot be fixed in the current cycle.
 
 ---
 
@@ -284,13 +288,14 @@ A `println` or `logger.info` statement in the CLI's startup/initialization path 
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-
+[AI suggested: ACCEPT] Straightforward logging hygiene fix. The root-resolution message should be gated behind `--verbose` or directed to stderr. A single-line change with no architectural impact.
 
 ---
 
@@ -326,13 +331,14 @@ The result JSON serializes the raw byte count from the backend without any forma
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-
+[AI suggested: ACCEPT] Simple UX polish. Add a human-readable `pageContentSize` field (e.g., `"4.5 KiB"`) alongside the raw `pageContentBytes`. Low effort, clear user benefit, no breaking change.
 
 ---
 

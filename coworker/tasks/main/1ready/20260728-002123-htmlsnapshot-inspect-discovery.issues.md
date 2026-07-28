@@ -63,12 +63,14 @@ The HTML snapshot stores computed visible text. When a site uses `text-overflow:
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Data-correctness issue — users receive silently truncated text with no warning. The snapshot system captures CSS-rendered visible text rather than DOM textContent, which is a fundamental design choice that needs at minimum a truncation warning and ideally a `--full-text` escape hatch.
 
 ---
 
@@ -101,12 +103,14 @@ The grep command is designed primarily for content search, with --selector as a 
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Legitimate UX friction — forcing a dummy pattern to count/validate selector matches is unintuitive. A `--count-only` mode or allowing empty pattern with `--selector` are both reasonable improvements. Related to Issues 5/6 in the broader discoverability theme, but addresses a distinct workflow gap.
 
 ---
 
@@ -139,12 +143,14 @@ The inspect algorithm focuses on CSS class selectors, PowerCSS :expr() patterns,
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Valid discoverability gap that compounds Issue 1 — when text IS truncated, inspect should help users find the `title` attribute escape hatch. Closely coupled to Issue 1 (truncation detection is the prerequisite), but distinct: Issue 1 is about fixing/warning about the data loss itself; Issue 3 is about inspect proactively offering workarounds. Should be prioritized after Issue 1's truncation-detection infrastructure exists.
 
 ---
 
@@ -177,12 +183,14 @@ X-SQL DOM_LOAD_AND_SELECT is designed to work independently of the snapshot syst
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Legitimate inefficiency — two independent page-fetch paths (snapshot vs X-SQL) create both wasted bandwidth and potential content-drift between capture and query. A `DOM_FROM_SNAPSHOT` function is the cleanest resolution but requires significant plumbing. Accept at Low severity is appropriate given the workaround exists (re-fetch works, just inefficiently).
 
 ---
 
@@ -215,12 +223,14 @@ The auto-discovery uses sibling-group detection in the DOM tree to find repeatin
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Reasonable transparency concern — the auto-discovery heuristic is powerful but unexplained, which undermines user trust in its output. A `--verbose` flag explaining the sibling-group detection algorithm is the right level of investment (low effort, high UX return). Cross-links with Issue 6 (both are about helping users discover what the tool can do).
 
 ---
 
@@ -253,12 +263,14 @@ The help system organizes by category (nav, extract, session, kb, swarm, crawl) 
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Simple discoverability fix — `--help htmlsnapshot` as a category filter is low-effort and consistent with existing `--help extract`/`--help nav` patterns. Cross-links with Issue 5: both aim to make htmlsnapshot's discovery-oriented subcommands (inspect, summary) more visible to new users exploring the tool.
 
 ---
 

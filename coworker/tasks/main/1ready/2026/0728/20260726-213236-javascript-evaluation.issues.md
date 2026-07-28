@@ -97,13 +97,14 @@ The correct usage — `function() { return this.tagName; }` — works because th
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-
+[AI suggested: ACCEPT] Genuine bug — `normalizeElementFunctionDeclaration()` unconditionally wraps with `.call(this, this)`, which throws for non-callable expressions like `this.tagName` (a string has no `.call()`). The silent `null` return makes this actively misleading. Fix should detect callable vs. non-callable and evaluate non-callables directly with the element as `this`, or wrap in a function body instead of calling `.call()`.
 
 ---
 
@@ -148,13 +149,14 @@ PowerShell's parameter binder matches short flags to common parameters before th
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-
+[AI suggested: ACCEPT] Real platform reliability issue — PowerShell's parameter binder intercepts short flags (`-i`, `-v`) before `--` can protect them, and the documented `--` workaround itself fails. The `b4w.ps1` wrapper should use `--%` (stop-parsing symbol) or splatting to pass all arguments through unmodified. Until fixed, the only reliable workaround is long-form flags, which should be prominently documented.
 
 ---
 
@@ -196,13 +198,14 @@ The command definition in `commands.rs:1344` provides a minimal description for 
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-
+[AI suggested: ACCEPT] Clear documentation gap — the `--ref` option description says only "CSS selector or snapshot ref to scope evaluation" with no explanation of the JS context model (`this` binding) or the function-declaration requirement (if Issue 1's fix retains it). A `--ref` example in the examples section is also missing. Low-effort high-impact fix.
 
 ---
 
@@ -242,13 +245,14 @@ Only the return value appears. The `console.log` call in the script produces no 
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-
+[AI suggested: ACCEPT] Valid UX gap — users naturally add `console.log` for debugging and are confused when output vanishes. Minimum fix: document in `eval --help` that `console.log` is not captured and point users to the `console` command. The `--console` flag suggestion is a reasonable enhancement but can be deferred. Related to Issue 3 (both are eval documentation gaps) but distinct in scope.
 
 ---
 
@@ -286,13 +290,14 @@ The "Quick Patterns" section in SKILL.md shows `snapshot grep` but not `htmlsnap
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-
+[AI suggested: ACCEPT] Valid discoverability issue — `htmlsnapshot grep` exists but isn't surfaced alongside `snapshot grep` in Quick Patterns, and the distinction between searching the accessibility tree vs. raw HTML isn't explained. Trivial to fix with one additional example and a one-line explanation. Low priority but zero cost.
 
 ---
 
@@ -328,13 +333,14 @@ The ref lifecycle documentation in SKILL.md lists only interaction commands (`fi
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-
+[AI suggested: ACCEPT] Straightforward documentation omission — the Ref Lifecycle section lists interaction commands that invalidate refs but omits read-only commands like `eval`, `htmlsnapshot get`, `htmlsnapshot query`, and `get`. Adding a "Safe" category with these commands would resolve the ambiguity. Related to Issues 3 and 4 (all eval documentation gaps) but addresses a different document (SKILL.md vs. CLI --help).
 
 ---
 

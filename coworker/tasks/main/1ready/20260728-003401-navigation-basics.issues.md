@@ -64,11 +64,13 @@ b4w.ps1's param() block does not declare `-v`, so PowerShell's common parameter 
 #### Human Review
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [x] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT with improvements] Real PowerShell bug — `-v` is consumed as `-Verbose` before `$RemainingArgs` binding. Adding `[switch]$v` or `[string]$Viewport` to `param()` would prevent interception. The suggested detect-and-warn fallback is a good defense-in-depth addition, but the primary fix should be adding the parameter so binding succeeds. Consider a general solution for ALL single-letter flags that collide with PowerShell common parameters (e.g., `-d`/`-Debug`, `-e`/`-ErrorAction`).
 
 ---
 
@@ -106,11 +108,13 @@ PowerShell treats `--` as a parameter name attempt (since it starts with `-`) an
 #### Human Review
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [x] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT with improvements] Confirmed — `--` is not a stop-parsing token for PowerShell scripts/functions (only for external executables). The `--%` stop-parsing symbol works in `pwsh` but has severe limitations (no variable expansion after it) and doesn't help `b4w.sh` users. The fix is documentation-only: remove the broken `./b4w.ps1 -- snapshot -i` recommendation. Document `b4w.sh` or `pwsh -c './b4w.ps1 snapshot ''-v'' ''0'''` as the workaround. Strongly related to Issue 1 (same underlying cause) but distinct — Issue 1 fixes a specific flag, Issue 2 fixes the documentation that claims a broken workaround.
 
 ---
 
@@ -148,12 +152,14 @@ The dev-mode daemon auto-starts a pre-installed backend JAR (from a prior `brows
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Legitimate dev-experience friction. The auto-start daemon preferring the installed bundle over a locally-built JAR breaks the expectation that a dev checkout is self-contained. The suggested fix (auto-detect `browser4-rest/target/*.jar`) is correct but should also check the JAR's manifest version to confirm it matches the CLI. Consider making this dev-mode-only behavior — production installs should still use the installed bundle.
 
 ---
 
@@ -193,11 +199,13 @@ The viewport pagination (`-v N`) uses absolute page coordinates rather than the 
 #### Human Review
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [x] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT with improvements] The absolute-coordinate behavior for `-v` is arguably correct (it's viewport chunk N from page top), but it's unintuitive and undocumented. Rather than changing the semantics of `-v` (which would break scripts), add a separate `-c`/`--current` flag that captures the currently visible viewport using scroll offset. The core fix is documentation: `snapshot --help` must state "`-v N` captures viewport chunk N from the absolute top of the page, regardless of scroll position." This issue is distinct from Issue 5 — Issue 4 is about coordinate semantics, Issue 5 is about tree population.
 
 ---
 
@@ -237,12 +245,14 @@ The Chromium accessibility tree is lazily expanded — only nodes near the visib
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Real CDP limitation — Chromium's accessibility tree is lazily populated around the visible viewport. After programmatic scrolling, nodes outside the new viewport area may not be expanded. The suggested fix (force full tree expansion via `DOM.getDocument` with `depth=-1` or iterative `Accessibility.getPartialAXTree`) is the right approach. This is the server-side counterpart to Issue 4 — fixing both together would make scroll+snapshot workflows reliable. The warning message should include a concrete workaround (e.g., "try `snapshot --full-tree` or scroll to the target area and wait 500ms before snapshotting").
 
 ---
 
@@ -281,11 +291,13 @@ The help system is organized as a monolithic dump with category filtering as an 
 #### Human Review
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [x] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT with improvements] Valid discoverability concern, but the proposed solution should preserve power-user workflows. Default help should show: (1) a 5-8 line quickstart with the core loop (goto → snapshot → click/fill → extract), (2) top-level command categories with counts, (3) "Run `--help <category>` for details" and "Run `--help all` for the full list." Category filtering should NOT be buried — it should be the primary drill-down mechanism. The proposed `quickstart` interactive command is higher-effort; defer that to a follow-up unless it's trivial to implement.
 
 ---
 
@@ -322,12 +334,14 @@ b4w.sh likely includes this warning unconditionally as a preamble, possibly to s
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Straightforward fix. Show once per session via a sentinel file in `$TMPDIR` or an env var (`B4W_SH_WARNED=1`). Alternatively, suppress it when `$BROWSER4_DEV` is set (already in-repo context). The warning has value for new users who don't know about the PowerShell wrapper's quoting advantages, so removing it entirely would be wrong — but every-invocation is excessive.
 
 ---
 
@@ -364,12 +378,14 @@ The snapshot YAML may have trailing whitespace, invisible characters, or the gre
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Likely cause is trailing whitespace in snapshot YAML lines — `See also$` won't match `See also  ` (trailing spaces). The fix should trim trailing whitespace from snapshot lines before writing (low-risk, fixes the root cause). The suggested `--fixed-string` flag is good for discoverability but doesn't address the root cause. Note: if using Rust's `regex` crate, `$` does match end-of-string (including before `\n`), so trailing whitespace is the most likely culprit. Related to Issue 9 — both are about snapshot output format friction.
 
 ---
 
@@ -407,11 +423,13 @@ The snapshot file can be very large (42KB+), so the default behavior writes to a
 #### Human Review
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [x] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT with improvements] The size-threshold heuristic (inline if <100 lines) is a good approach but has edge cases — a 95-line snapshot with 80 interactive elements could still be overwhelming. Better: always show a compact "Interactive elements" summary line after the file path, even when writing to file. Something like: `[Snapshot saved] …/snapshot.yml (42KB, 847 nodes, 23 interactive: e1343=button, e1595=link, e1611=button, …)`. This gives the user actionable refs immediately without forcing `--stdout` re-runs. The 10-line structural preview is good but doesn't surface refs, which is the user's primary need.
 
 ---
 

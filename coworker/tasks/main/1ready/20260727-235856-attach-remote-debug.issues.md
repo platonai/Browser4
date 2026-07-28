@@ -71,11 +71,13 @@ The b4w.ps1 PowerShell script doesn't properly shield short flags from PowerShel
 #### Human Review
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [x] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT with improvements] PowerShell's parameter binder intercepting `-v`/`-i` on Linux pwsh is a real reliability bug that silently corrupts commands. The fix should be in `b4w.ps1` (pass args verbatim via `--%` or `@args` with stop-parsing). Cross-reference with Issue 2 — this is the root cause of misleading CLI errors when flags vanish.
 
 ---
 
@@ -107,12 +109,14 @@ PowerShell strips -v (matching -Verbose), leaving 'snapshot 0 --stdout'. The CLI
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] The `snapshot-0` → "Unknown command" error is genuinely misleading. While Issue 1 (PowerShell stripping `-v`) is the root cause, the CLI should never form a subcommand name from a bare numeric argument and suggest it as a command. A specific hint like "If you meant to pass a flag value, check your shell wrapper" would help self-diagnosis. No improvement suffix needed — just fix the error path.
 
 ---
 
@@ -146,11 +150,13 @@ The daemon auto-start logic prioritizes an already-installed backend bundle over
 #### Human Review
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [x] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT with improvements] Dev workflow friction when daemon starts a stale installed backend instead of the locally-built JAR. The improvement should be: in source-checkout context, check `browser4-rest/target/` first before falling back to the installed bundle, and update CLAUDE.md with the prerequisite `mvn package` step. This is a bite-sized change in the daemon startup resolution logic.
 
 ---
 
@@ -184,11 +190,13 @@ Session management enforces one-unnamed-session constraint rigidly. The attach c
 #### Human Review
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [x] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT with improvements] The session collision UX forces a manual close-then-attach dance. A `--force` flag on `attach` to auto-close the conflicting unnamed session is the cleanest fix — it's explicit (no surprise replacement), backward-compatible, and consistent with how `--force` is used elsewhere in CLI tools.
 
 ---
 
@@ -225,12 +233,14 @@ b4w.sh unconditionally prints this warning regardless of platform. The warning i
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Printing a pwsh recommendation on native Linux is noise that undermines user trust in the tool's guidance. Simple fix: gate the warning on `uname` or `$OSTYPE` so it only fires on Windows/WSL/Git-Bash. Cross-reference with Issue 1 — both are wrapper-platform-awareness bugs; fix together for consistency.
 
 ---
 
@@ -264,11 +274,13 @@ state-save uses the provided filename as-is, resolved against CWD. There's no --
 #### Human Review
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [x] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT with improvements] `state-save` dropping files in CWD with no destination control is a minor but real UX gap. Add `--output-dir` flag. Defaulting to `.browser4-cli/sessions/` is tempting but would be a behavior change — safer to add the flag first and consider a default change separately. Cross-reference: same `--output-dir` pattern may apply to `crawl` and `htmlsnapshot` export paths for consistency.
 
 ---
 
@@ -302,11 +314,13 @@ The snapshot rendering truncates long text nodes with an inline marker but doesn
 #### Human Review
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [x] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT with improvements] Truncating mid-escape-sequence produces malformed YAML that's worse than no truncation. The fix should truncate at clean boundaries (end of a YAML-safe segment) and consider a `--no-truncate` flag for full-content workflows. The improvement over plain ACCEPT is important here: a naive "truncate at N chars" fix won't help if the boundary still falls inside an escape sequence — needs content-aware truncation.
 
 ---
 
@@ -339,12 +353,14 @@ Chrome inserts new tabs after the active tab. When the active tab is at index 0,
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] "Switched to tab 0" when creating a brand-new tab is confusing. The fix is a one-line output change: include the created tab's GUID plus a note about insertion position (e.g., "Created tab F122... at index 0 (existing tab shifted to index 1)"). No architectural change needed — purely a messaging improvement.
 
 ---
 

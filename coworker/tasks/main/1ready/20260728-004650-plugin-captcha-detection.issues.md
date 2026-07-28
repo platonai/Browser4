@@ -85,12 +85,14 @@ The captcha plugin JAR is added to the classpath dynamically by PluginClasspathE
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Critical blocker — PluginClasspathEnhancer adds JARs to the classpath after Spring Boot auto-configuration scanning, so @Bean methods in plugin @AutoConfiguration classes are never processed. The three mitigation options (earlier classpath enhancement, manual bean chain instantiation, or programmatic context registration) are all valid; programmatic registration via ConfigurableApplicationContext is the most idiomatic Spring approach.
 
 ---
 
@@ -128,12 +130,14 @@ Plugin tools are registered dynamically via CustomToolRegistry at server startup
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Genuine discoverability gap. Plugin tools are dynamically registered server-side but the CLI has zero awareness of them. The simplest fix — fetching /mcp/tools at startup and listing plugin-prefixed tools in help output — is low-risk and immediately useful. The method-selection syntax suggestion overlaps with Issue 6 and should be coordinated.
 
 ---
 
@@ -170,12 +174,14 @@ b4w.ps1 line 442-446 builds a quoted argument list using Invoke-Expression, but 
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Real UX bug for Windows users. Renaming param() block parameters to avoid PowerShell common-parameter collisions (e.g., -B4wRebuild, -B4wVerbose) is the cleanest fix. The --% stop-parsing approach is fragile because it prevents the wrapper from doing anything useful with its own flags. This should be paired with a regression test that passes short flags like -v and -i through the wrapper.
 
 ---
 
@@ -214,11 +220,13 @@ The ImageCaptchaDetector likely uses a simple src/id substring match for 'captch
 #### Human Review
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [x] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT with improvements] The substring-match heuristic on src/id is too naive. Form proximity, image dimensions (real CAPTCHAs are typically 200-400px), and visibility checks are reasonable heuristics. However, the suggested domain allowlist/blocklist should be avoided — it creates an unbounded maintenance burden and breaks on mirrors/localized domains. Instead, weight the confidence score multiplicatively: a pure src-match with no form context gets low confidence, not a hard false.
 
 ---
 
@@ -256,12 +264,14 @@ The 'inactive' status logic in PluginService/PluginController is unclear. The pl
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Multiple compounding UX failures: unclear "inactive" status semantics, 409 on reinstall with no documented --replace path, and no activation command. The inactive-after-restart behavior suggests a state-persistence bug in PluginService that should be root-caused separately from the CLI UX improvements. Issue 8 is a subset of this issue (the missing --replace flag is one symptom).
 
 ---
 
@@ -299,12 +309,14 @@ The dynamic plugin command was designed with only one tool per domain in mind. h
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Complements Issue 2 — Issue 2 covers discoverability, this covers invocation once the tools are known. The `plugin-<domain> <method>` syntax is intuitive and consistent with how subcommands work elsewhere in the CLI. The fallback behavior (single match → auto-select, multiple matches → list) is well-designed.
 
 ---
 
@@ -341,12 +353,14 @@ resolve_server_launch_spec() searches for the runtime bundle in multiple locatio
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Legitimate dev-experience papercut. The global-install-vs-local-build priority inversion means a developer making changes to browser4-rest won't see them unless they manually kill the stale server. A `--dev` flag or CWD-based heuristic (repo root → prefer local build) is reasonable. Should be low-priority compared to the plugin-critical Issues 1/2/5/6/8.
 
 ---
 
@@ -387,7 +401,9 @@ The replace parameter exists in the code but wasn't wired to a CLI flag (--repla
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [x] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: DUPLICATE] The missing --replace/--force CLI flag is one of the four symptoms explicitly listed in Issue 5's root cause analysis and suggested improvements. Fixing Issue 5's plugin installation workflow should include exposing this flag as part of the broader resolution.
 
 ---
 

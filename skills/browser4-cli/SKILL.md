@@ -122,7 +122,7 @@ Tab commands scope to a session — all operations affect the session targeted v
 #### Key notes
 
 - **GUIDs:** `tab-list` shows a `GUID` column. Use `--guid` for stable targeting across tab reordering. Extension sessions show a `chrome:` prefix on numeric GUIDs; regular sessions use 32-char hex GUIDs.
-- **Machine-readable output:** Use the global `--json` flag *before* the command: `browser4-cli --json tab-list`. The output includes a `"tabs"` array with `index`, `guid`, `url`, `title` for each tab, plus a `"count"` field.
+- **Machine-readable output:** Use `--json` either before or after the command: `browser4-cli --json tab-list` or `browser4-cli tab-list --json`. Output is a JSON envelope: `{"command":"tab-list","output":{"count":N,"tabs":[{"index":0,"guid":"...","url":"...","title":"..."}]},"status":"ok"}`. The `tabs` array and `count` are nested inside `output`.
 - **Session scoping:** Prefix tab commands with `-s <session-id>` to target a non-default session. The `list` command shows all tracked sessions and their IDs.
 - **Last-tab behavior:** Chrome requires at least one open tab. Closing the last tab silently creates a replacement `about:blank` — `tab-list` will still show 1 tab afterward.
 - **Tab insert position:** New tabs are inserted by Chrome (not Browser4). The position depends on Chrome's native behavior — typically after the active tab. Use `tab-list` to verify.
@@ -137,8 +137,10 @@ Tab commands scope to a session — all operations affect the session targeted v
 # List all tabs in the default session
 browser4-cli tab-list
 
-# Machine-readable tab data
+# Machine-readable tab data (both forms work)
 browser4-cli --json tab-list
+browser4-cli tab-list --json
+# Output: {"command":"tab-list","output":{"count":1,"tabs":[{"index":0,"guid":"...","url":"about:blank","title":"(no title)"}]},"status":"ok"}
 
 # Open a tab and switch to it
 browser4-cli tab-new https://httpbin.org/get

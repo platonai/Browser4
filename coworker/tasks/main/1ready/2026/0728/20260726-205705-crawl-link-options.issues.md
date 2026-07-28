@@ -66,13 +66,14 @@ The CLI's backend discovery prioritizes the installed runtime over the local bui
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-
+[AI suggested: ACCEPT] Clear discrepancy between documented behavior (CLAUDE.md says "auto-starts locally-built JAR") and actual behavior (finds installed backend first). The `resolve_base_url()` priority order needs inversion for dev mode, and the `--dev` flag is a sensible escape hatch.
 
 ---
 
@@ -109,13 +110,14 @@ Crawl should traverse multiple depth levels following links.
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-
+[AI suggested: ACCEPT] Straightforward configuration bug — `Browser4AutoConfiguration` exists with `@AutoConfiguration` but isn't registered in `AutoConfiguration.imports`, causing a hard crash on any depth > 0 crawl. The fix is a one-line addition to the imports file; the suggested graceful-degradation fallback is lower priority but worth capturing as a follow-up.
 
 ---
 
@@ -152,13 +154,14 @@ CLI shows "URLs: 2" but only 1 page is found. The second URL is silently dropped
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-
+[AI suggested: ACCEPT] Clear omission in `CrawlToolExecutor` — the `urls` parameter is never extracted or forwarded to `CrawlRequest`, despite the CLI correctly sending it. Silently dropping seed-file URLs is a data-loss class bug. Fix is well-scoped: add `paramStringList` extraction and wire it into the request object. Related to but distinct from Issue 2 (both block crawl functionality, but at different layers and with different root causes).
 
 ---
 
@@ -195,13 +198,14 @@ The CLI polling loop (`handle_crawl` in `main.rs`) waits for the crawl to "start
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-
+[AI suggested: ACCEPT] The crawl polling loop only checks `pagesFound` and never inspects the task `status` field, so terminal errors (like the Issue 2 bean failure) waste 600 seconds of user time. Should check status and surface backend errors. Related to Issue 8 (both touch the same polling loop in `handle_crawl`) but addresses a different defect: Issue 4 is about error-detection blindness, Issue 8 is about genuine cold-start latency. Fixes should be coordinated since they touch the same code.
 
 ---
 
@@ -238,13 +242,14 @@ The `extractOutLinks` function uses `session.loadDocument(portalUrl, normOptions
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-
+[AI suggested: ACCEPT] 0 out-links when the HTML demonstrably contains matching elements suggests a DOM rendering gap in the WebDriver path for localhost pages. The `extractOutLinks` diagnostic should surface `allAnchors` count (already computed but not reported) to distinguish "page didn't render" from "wrong selector." The ProtoNotFound(1600) log hint deserves deeper investigation — may have the same root cause as the title-extraction gap in Issue 9.
 
 ---
 
@@ -281,13 +286,14 @@ The `browser4-rest` module doesn't include the Spring Boot Maven plugin to packa
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-
+[AI suggested: ACCEPT] `browser4-rest` JAR isn't a Spring Boot fat JAR, making the status command's suggestion incorrect. Fix should update the status message to point to the bundle build (`mvn install -DallMainModules=true`) and ideally add a convenience launcher script. Adding the Spring Boot plugin is an option but may change the module's packaging semantics — the doc/clarify fix is lower risk. Related to Issue 1 (both affect the local-dev bootstrap experience) and Issue 10 (bundle artifact quality).
 
 ---
 
@@ -324,13 +330,14 @@ PowerShell's parameter binder intercepts short flags that match its common param
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-
+[AI suggested: ACCEPT] Well-understood PowerShell parameter-binding issue. `-d` matching `-Debug` is the same class of problem as the already-documented `-i`/`-v`. Fix is: (a) add `-d` to the SKILL.md warning, (b) prefer `--depth` in examples, (c) add explicit `[switch]$Debug` in the param block to stop PowerShell from consuming it silently.
 
 ---
 
@@ -368,12 +375,13 @@ The CoroutineDispatcher has a limited worker pool (`Dispatchers.IO.limitedParall
 #### Human Review
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [x] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-
+[AI suggested: ACCEPT with improvements] 80-160s startup delay is severe, but the root cause is speculative (dispatcher contention vs. session init vs. first-page-load overhead). Needs profiling before committing to a fix. Accept the diagnostic work. The suggestion to display "Starting crawl engine…" during cold-start vs. "Waiting for crawl to start" is a quick UX win that doesn't require solving the root cause. Coordinate with Issue 4 since both modify the same polling code.
 
 ---
 
@@ -409,13 +417,14 @@ Unknown — the page titles are present in the HTML (`<title>Crawl Test Hub</tit
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-
+[AI suggested: ACCEPT] Page titles being always null degrades crawl output quality. May share a root cause with Issue 5 (ProtoNotFound(1600) suggesting protocol-handler issues with localhost pages). Title extraction from parsed DOM failing while raw HTML has `<title>` tags suggests a parsing gap. The fallback suggestion (regex-extract `<title>` from raw HTML) is a pragmatic interim fix while the deeper protocol issue is investigated.
 
 ---
 
@@ -451,13 +460,14 @@ The Maven assembly or copy step in the bundle build doesn't preserve/apply execu
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-
+[AI suggested: ACCEPT] Missing execute permissions on bundled binaries is a straightforward Maven assembly fix (`<fileMode>0755</fileMode>`). The CLI auto-start workaround (fix permissions before launching) is viable but the real fix belongs in the build. Low severity but trivially fixable — pair it with Issue 6 in a dev-setup polish pass.
 
 ---
 
