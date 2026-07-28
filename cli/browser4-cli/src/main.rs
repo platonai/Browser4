@@ -1013,7 +1013,7 @@ async fn post_command_snapshot(client: &Client, base_url: &str, session_id: &str
     cli_println!("[Snapshot]({})", out_path.display());
     if !json_active() {
         eprintln!(
-            "💡 Tip: Run `snapshot -v 0` to see interactive element refs"
+            "💡 Tip: Try `htmlsnapshot get text \"h1\"` to extract the page heading, or `htmlsnapshot inspect` to discover CSS selectors"
         );
     }
 }
@@ -6034,6 +6034,21 @@ async fn handle_html_snapshot_inspect(
             render_speculative(sel, count);
         }
         cli_println!("- No elements matched. Check the CSS selector and ensure a HTML snapshot has been captured (`browser4-cli htmlsnapshot`).");
+        // Add actionable troubleshooting hints
+        if selector.starts_with('.') {
+            let class_hint = selector.trim_start_matches('.');
+            cli_println!("  💡 The selector looks like a class selector. If the page uses non-standard class names");
+            cli_println!("     (e.g. with embedded quotes or special characters), try an attribute selector instead:");
+            cli_println!("       htmlsnapshot inspect \"[class*=\"{}\"]\"", class_hint);
+            cli_println!("     Or search the raw HTML for this class name:");
+            cli_println!("       htmlsnapshot grep \"{}\"", class_hint);
+        } else {
+            cli_println!("  💡 Try these troubleshooting steps:");
+            cli_println!("       htmlsnapshot grep \"{}\"    # search raw HTML for matching text", selector.trim_matches(|c: char| c == '.' || c == '#' || c == '[' || c == ']' || c == '"' || c == '\'' || c == '=' || c == '*'));
+            cli_println!("       htmlsnapshot export          # inspect the actual HTML structure");
+            cli_println!("       htmlsnapshot inspect          # auto-discover recurring CSS selectors");
+            cli_println!("       htmlsnapshot inspect --max 10 --depth 3   # deeper discovery");
+        }
         json_field("matchCount", json!(0));
         json_field("selector", json!(selector));
         return Ok(());

@@ -6,14 +6,14 @@ See [`cli/README.md`](../README.md) for the user-facing documentation.
 ## Running from source
 
 ```bash
-# From the repo root:
-cargo run --manifest-path cli/browser4-cli/Cargo.toml -- <command>
+# From the repo root (omit --quiet to see build status):
+cargo run --quiet --manifest-path cli/browser4-cli/Cargo.toml -- <command>
 
 # From this directory:
-cd cli/browser4-cli && cargo run -- <command>
+cd cli/browser4-cli && cargo run --quiet -- <command>
 ```
 
-The backend server starts automatically in dev mode. Build the CLI with `cargo build` (debug) or `cargo build --release` (optimized).
+The backend server starts automatically in dev mode. Build the CLI with `cargo build` (debug) or `cargo build --release` (optimized). Add `--quiet` to `cargo run` to suppress "Finished" / "Running" build-status lines.
 
 ## Commands
 

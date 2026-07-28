@@ -92,13 +92,14 @@ The MockSite HTML encodes class names with embedded HTML entities (`&quot;`) whi
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Real bug — MockSite's `&quot;` entities decode to literal `"` in DOM attributes, breaking CSS class selectors like `."product-card"`. Root cause is in MockSite HTML generation, not the auto-discovery algorithm. Fix in the test fixture generator and add the suggested diagnostic for zero-match selectors.
 
 ---
 
@@ -139,12 +140,13 @@ The error message is a catch-all that doesn't analyze *why* there are no matches
 #### Human Review
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [x] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT with improvements] The zero-match message is genuinely unhelpful UX, but the suggested improvements mix diagnostic logic (checking if snapshot exists) with generic hints. Keep it simple: add one actionable suggestion per failure mode (no snapshot → "run htmlsnapshot first"; selector mismatch → "try htmlsnapshot grep or [class*=\"...\"]"). Skip the stale-snapshot check — that's a separate feature.
 
 ---
 
@@ -181,13 +183,14 @@ The documentation is written for end users of the installed binary first, with d
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Legitimate onboarding friction for contributors. The README should have a "Running from source" section near the top, and a one-liner in `--help` footer is low-cost. Skip the Makefile/justfile suggestion — that's scope creep for a discoverability fix and adds a new maintenance surface.
 
 ---
 
@@ -227,13 +230,14 @@ The tip is likely shared between `snapshot` and `htmlsnapshot` output handlers, 
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Clear UX bug — the footer tip is context-wrong. The fix is narrow: route `snapshot -v 0` tips to the accessibility snapshot code path only, and ensure `htmlsnapshot` output shows HTML-workflow tips (which the existing "Try these next" block already does — the `snapshot -v 0` tip is just an erroneous addition).
 
 ---
 
@@ -270,13 +274,14 @@ Every function in the index should have a usage example in the detailed referenc
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Documentation gap. `DOM_ATTR` should be documented in `x-sql-dom-functions.md`. The index should also annotate which reference file covers each function category — that's the real root cause (the index doesn't tell you where to look).
 
 ---
 
@@ -314,12 +319,13 @@ Two extra lines of build output precede every command's actual output, adding vi
 #### Human Review
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [x] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT with improvements] Not a browser4 bug — it's Cargo's default behavior. The suggested documentation improvements are reasonable (promote `--quiet` and an alias in dev docs), but skip the Makefile/justfile suggestion for the same reason as Issue 3. Consider adding `--quiet` to the README's example commands so new contributors see it immediately.
 
 ---
 
@@ -361,8 +367,9 @@ The MockSite HTML generator wraps attribute values in `&quot;` entities, which d
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
-- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
+- [x] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: DUPLICATE] Same root cause as Issue 1 — MockSite `&quot;` HTML entities producing literal `"` characters in DOM attribute values. Issue 1 covers class names; this covers href/src. Fix them together in the MockSite generator. The diagnostic suggestion from Issue 1's improvement list would also catch malformed URLs as a side effect.
 
 ---
 

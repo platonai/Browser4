@@ -200,6 +200,10 @@ pub fn generate_help() -> String {
         "Run `browser4-cli help <command>` or `<command> --help` for detailed options and examples."
             .to_string(),
     );
+    lines.push(
+        "Dev mode: cargo run --manifest-path cli/browser4-cli/Cargo.toml -- <command>"
+            .to_string(),
+    );
 
     lines.join("\n")
 }

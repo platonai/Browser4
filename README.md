@@ -451,6 +451,23 @@ browser4-cli close
    ./mvnw -DskipTests
    ```
 
+4. **Build and run the CLI (from source)**
+   ```shell
+   # Build the Rust CLI (requires Rust toolchain)
+   cd cli/browser4-cli && cargo build --release
+
+   # Or run directly without installing:
+   cargo run --manifest-path cli/browser4-cli/Cargo.toml -- --help
+
+   # Add --quiet to suppress Cargo build-status output:
+   cargo run --quiet --manifest-path cli/browser4-cli/Cargo.toml -- <command>
+
+   # Or install globally:
+   cd cli/browser4-cli && cargo install --path .
+   ```
+   > On Windows, prefix the command with `chcp 65001 >nul &&` for proper UTF-8 output.
+   > See [Build from Source](docs/build-from-source.md) for full platform-specific instructions.
+
 ---
 
 🎬 YouTube:
