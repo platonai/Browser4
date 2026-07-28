@@ -158,6 +158,13 @@ pub fn generate_help() -> String {
         }
     }
 
+    lines.push("\nPlugin tools:".to_string());
+    lines.push("  Installed plugins expose their tools via the plugin-<name> <method> pattern:".to_string());
+    lines.push("    plugin-<name>              invoke the default tool for a plugin domain".to_string());
+    lines.push("    plugin-<name> <method>     invoke a specific method (e.g. plugin-media download --url ...)".to_string());
+    lines.push("    plugin                     list all available plugin tool domains".to_string());
+    lines.push("  Use `plugin list` to see installed plugins and their status.".to_string());
+
     lines.push("\nGlobal options:".to_string());
     lines.push(format_with_gap(
         "  --help [cmd|category]",
@@ -181,6 +188,11 @@ pub fn generate_help() -> String {
         30,
     ));
     lines.push(format_with_gap("  -s <name>", "named session label", 30));
+    lines.push(format_with_gap(
+        "  --timeout <seconds>",
+        "override the default HTTP timeout for tool calls (e.g. --timeout 300 for long-running plugin tools)",
+        30,
+    ));
     lines.push(format_with_gap(
         "  --server <url>",
         "override Browser4 server URL",
