@@ -115,13 +115,14 @@ Script executes via the `#!/usr/bin/env pwsh` shebang.
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-
+[AI suggested: ACCEPT] `.gitattributes` line 14 (`*.ps1 text eol=crlf`) forces CRLF on `b4w.ps1`, which breaks the `#!/usr/bin/env pwsh` shebang on Linux (kernel looks for `pwsh\r`). The issue's claim about `b4w.sh` is mitigated — line 7 already sets `*.sh text eol=lf`. Fix: add `b4w.ps1 text eol=lf` as an exception. The existing `b4w` entry (line 10) covers the generated bash launcher but not the PowerShell script.
 
 ---
 
@@ -159,13 +160,14 @@ The `b4w.ps1` script uses `param(...)` with `[Parameter(ValueFromRemainingArgume
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-
+[AI suggested: ACCEPT] PowerShell's parameter binder consumes `-i` (matches `-InformationAction`) and `-v` (matches `-Verbose`) at the command-line parser level, before they ever reach the script's `param()` block. The `b4w.ps1` `--` passthrough (lines 60-68) only works after the script receives control; it cannot defend against PowerShell's own parser. The `b4w.sh` wrapper already solves this correctly (lines 35-39 individually quote every argument). Fix: make `b4w.sh` the documented primary entry point on Linux/macOS/Git Bash and add a warning to `b4w.ps1` help output.
 
 ---
 
@@ -203,13 +205,14 @@ The `DefaultArgumentNormalizer` maps `ref` → `selector` by converting `e86` to
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-
+[AI suggested: ACCEPT] `DefaultArgumentNormalizer` maps snapshot refs (`e86`) to `backend:86` pseudo-selectors, which work for click/fill/hover via backend node resolution, but the drag implementation passes them directly to `document.querySelector()`, which rejects them. Using raw CSS selectors works as a workaround. The drag handler needs to resolve backend node IDs before calling `querySelector`, matching how click/hover resolve refs.
 
 ---
 
@@ -247,13 +250,14 @@ The `dblclick` implementation requires the target element to be focusable (it ca
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-
+[AI suggested: ACCEPT] The `dblclick` implementation requires the element to be focusable (calls `element.focus()` before dispatching), but many real-world double-click targets (divs, cards, zones) are not natively focusable. The workaround (injecting `tabindex="0"` via `eval`) is unreasonable for end users. Fix should either auto-set `tabindex="-1"` (programmatically focusable without joining tab order) or use coordinate-based CDP dispatch that doesn't require focus.
 
 ---
 
@@ -290,13 +294,14 @@ The `b4w.sh` script hardcodes this warning message (line 17-18) via `echo`. It a
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-
+[AI suggested: ACCEPT] `b4w.sh` lines 17-18 hardcode a warning recommending direct `pwsh` invocation, but on Linux that's exactly the wrong advice — direct `pwsh` invocation has the flag-interception problems described in Issue 2. The warning contradicts the actual purpose of `b4w.sh` (it exists specifically to avoid PowerShell parameter binding). Coordinated fix with Issue 2: remove or gate behind `$B4W_SUPPRESS_WARNING`, and update the message to reflect that `b4w.sh` is the recommended entry point on non-Windows.
 
 ---
 
@@ -333,13 +338,14 @@ The click command waits for the page to settle (network idle or similar), but th
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-
+[AI suggested: ACCEPT] When a click triggers `alert()`/`confirm()`/`prompt()`, the command hangs waiting for page settle, which never completes because the dialog blocks the event loop. The user must run `dialog-accept` from a separate invocation, which breaks natural command sequencing. The click handler should check for `Page.javascriptDialogOpening` CDP event after dispatching and return immediately with a clear message ("Dialog detected — use dialog-accept or dialog-dismiss"). The `--auto-dismiss-dialogs` flag already exists on `click` and `dblclick` (visible in `commands.rs:1003`), which partly addresses this.
 
 ---
 
@@ -377,13 +383,14 @@ The CLI's auto-start mechanism prefers the installed bundle over the locally-bui
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-
+[AI suggested: ACCEPT] Dev-mode CLI (built from source via `cargo build`) connects to an installed backend bundle at a different version (v4.11.15 vs v4.12.0), making it unclear which code is actually running. The daemon auto-start logic should prefer the locally-built JAR when the CLI binary was built from source, or provide a clear `--dev` flag/env var to force this behavior.
 
 ---
 
@@ -420,13 +427,14 @@ The `browser4-tests/browser4-rest-tests` module is only included in specific Mav
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-
+[AI suggested: ACCEPT] `bin/test.ps1`'s `Invoke-MockSiteBoot` doesn't pass `-DallTestModules=true` to Maven, but `browser4-tests/browser4-rest-tests` is gated behind that profile. The fix is a one-line addition to the Maven args in the script, plus documentation of the profile requirements.
 
 ---
 
@@ -464,13 +472,14 @@ The `htmlsnapshot capture` tool makes an HTTP request to the backend MCP endpoin
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-
+[AI suggested: ACCEPT] The 60-second timeout for `htmlsnapshot capture` may be too short for complex pages after repeated interactions, but the immediate improvement is clear: add a helpful error message ("Timed out capturing HTML snapshot. Try reloading the page first.") and make the timeout configurable. Deeper investigation of whether page state size or resource exhaustion is the root cause can follow as a separate task.
 
 ---
 
@@ -508,8 +517,9 @@ When using `pwsh -Command` with the `&` call operator, PowerShell still parses `
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [x] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-
+[AI suggested: DUPLICATE] Same root cause as Issue 2: PowerShell's parameter binder consumes `-v` and glues it to the preceding token, producing `snapshot-0`. The mechanism (PowerShell command-line parsing) and the fix (use `b4w.sh` which individually quotes args) are identical to Issue 2. Consolidate into Issue 2 with this as a specific repro case.
 
 ---
 
@@ -546,13 +556,14 @@ Regular snapshots capture visible text content only, while interactive snapshots
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-
+[AI suggested: ACCEPT] Regular (`-v 0`) snapshots miss CSS tooltip content that only appears in `title` attributes or `aria-describedby`. Interactive (`-i`) snapshots capture ARIA labels but strip generic divs, forcing an undesirable trade-off. The snapshot generation logic should include `title` and `aria-describedby` content as inline annotations in regular snapshots. Low severity but a genuine completeness gap.
 
 ---
 
@@ -586,13 +597,14 @@ The `hover`, `drag`, `dblclick`, `dialog-accept`, and `dialog-dismiss` commands 
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-
+[AI suggested: ACCEPT] Confirmed: `hover`, `dblclick`, `drag`, `dialog-accept`, and `dialog-dismiss` have `CommandDef` entries in `commands.rs` with args/options, but `help.rs`'s `generate_command_help()` has zero dedicated blocks for these commands — they fall through to the generic format without notes, examples, or known limitations. Compare: `click`, `fill`, `eval`, `wait`, `get`, `snapshot`, `tab-list`, etc. all have extensive per-command help. Fix: add `if cmd.name == "hover"` (etc.) blocks with notes on known limitations (e.g., "dblclick requires a focusable element; use eval to add tabindex if needed") and usage examples.
 
 ---
 

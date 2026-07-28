@@ -112,13 +112,14 @@ The Rust code in `src/main.rs` at line 6545 uses byte-index slicing on a UTF-8 s
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-
+[AI suggested: ACCEPT] Clear crash bug — byte-index slicing on a `&str` at line 6545 without char-boundary checks. Critical severity is correct. Fix is straightforward (use `.char_indices()` or `.chars()`). Should include a regression test with multi-byte characters.
 
 ---
 
@@ -156,13 +157,14 @@ The `b4w.ps1` script uses `param()` with `ValueFromRemainingArguments`, but Powe
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-
+[AI suggested: ACCEPT] Real design flaw in `b4w.ps1` — PowerShell's common-parameter binder runs before `ValueFromRemainingArguments` populates, so `-v`/`-i` are irrecoverably stripped. Issue 8 (confusing error message) is a DUPLICATE of this root cause; fold Issue 8's "add a heuristic error" suggestion into this issue's fix plan. The `--%` stop-parsing token or `[CmdletBinding()]` suppression are the right long-term fixes.
 
 ---
 
@@ -202,13 +204,14 @@ The accessibility tree snapshot serializes the `href` attribute with escaped quo
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-
+[AI suggested: ACCEPT] URL resolution doesn't strip surrounding escaped quotes from href values extracted from the accessibility tree, producing `%22`-polluted URLs. Shares root cause with Issue 6 (MockSite embeds literal `"` in attributes), but the fix belongs in the URL resolver, not the MockSite — the resolver should be robust to malformed input regardless.
 
 ---
 
@@ -247,12 +250,13 @@ The `b4w.sh` script unconditionally echoes this message at line 16. It appears t
 #### Human Review
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [x] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-
+[AI suggested: ACCEPT with improvements] The unconditional "use pwsh instead" echo on every `b4w.sh` invocation is counterproductive given that `b4w.sh` is the *only* reliable flag-passing wrapper (per Issue 2). Improvement: remove the message entirely, or gate it behind a `B4W_SH_WARNED` env-var check so it prints once per session. The suggested "make b4w.sh the recommended wrapper" framing is the correct strategic direction.
 
 ---
 
@@ -289,13 +293,14 @@ The `$(./b4w.ps1)` syntax implies command substitution, but `b4w.ps1` with no ar
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-
+[AI suggested: ACCEPT] Documentation bug — `$(./b4w.ps1)` is command substitution that executes the help text as a command, which fails. The fix is trivial: replace with `./b4w.sh` (or `./b4w.ps1` for flag-free commands) in the evaluation template.
 
 ---
 
@@ -333,13 +338,14 @@ The MockSite generates class names with literal double quotes in them (`class="\
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-
+[AI suggested: ACCEPT] Auto-discovered CSS selectors from class names containing literal `"` characters are unusable. Shares root cause with Issue 3 (MockSite's quoted attributes), but the fix is in the discovery/inspect logic: sanitize class names before selector construction, and fall back to `[class*="..."]` attribute selectors when class names contain characters illegal in CSS identifiers. Cross-reference Issue 3.
 
 ---
 
@@ -377,13 +383,14 @@ CSS attribute selectors use brackets and quotes, which conflict with shell quoti
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-
+[AI suggested: ACCEPT] CSS attribute selectors like `[class*="product-title"]` conflict with shell quoting across the bash→pwsh→CLI chain. The suggested improvements (promote `--file`/`--sql @file` patterns, add `--selector-base64`, add `--stdin` for selectors) are all reasonable. Since Issues 2/4/7 all touch the wrapper experience, consider addressing them together in a "shell wrapper hardening" pass.
 
 ---
 
@@ -425,8 +432,9 @@ When PowerShell strips `-v`, the remaining args `snapshot` and `0` are concatena
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [x] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-
+[AI suggested: DUPLICATE] This is a symptom of Issue 2's root cause (PowerShell consumes `-v`/`-i`). When PowerShell strips `-v 0`, the remaining args `snapshot` and `0` concatenate into `snapshot-0`, producing a misleading error. Merge this into Issue 2 — the fix for Issue 2 (preventing flag consumption) eliminates this symptom. If a defense-in-depth heuristic error is desired, track it as a sub-task under Issue 2.
 
 ---
 
@@ -463,13 +471,14 @@ The MockSite home page only renders category navigation. The task description do
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-
+[AI suggested: ACCEPT] Valid mismatch between task instructions ("Click on the first product link") and MockSite structure (home page has only category links). Low severity is correct — this is a task-design polish item. Fix the task description to acknowledge the two-step navigation, or add featured products to the MockSite home page.
 
 ---
 

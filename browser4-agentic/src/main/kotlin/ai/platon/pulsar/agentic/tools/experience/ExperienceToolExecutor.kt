@@ -126,7 +126,19 @@ class ExperienceToolExecutor(
         val traceJson = paramString(args, "trace", "save")!!
         val outcome = paramString(args, "outcome", "save", required = false, default = "success")!!
         val intentText = paramString(args, "intent", "save", required = false)
+
+        // Validate URL format — at minimum warn if not http/https
+        val trimmedUrl = url.trim()
+        if (!trimmedUrl.startsWith("http://") && !trimmedUrl.startsWith("https://")) {
+            throw IllegalArgumentException(
+                "Invalid URL: '$trimmedUrl' — must start with http:// or https://. " +
+                "Example: https://example.com/page"
+            )
+        }
+        // DefaultArgumentNormalizer converts snake_case keys to camelCase (task_type → taskType).
+        // Accept both forms so the executor works regardless of whether the normalizer runs.
         val taskType = paramString(args, "task_type", "save", required = false)
+            ?: paramString(args, "taskType", "save", required = false)
 
         // Parse trace JSON
         val executionTrace = try {
@@ -140,7 +152,12 @@ class ExperienceToolExecutor(
         val urlPattern = extractUrlPattern(normalizedUrl)
 
         // Classify intent and failure
-        val classifiedIntent = Intent.classify(intentText ?: executionTrace.intent)
+        // Use explicit --intent first, then trace's intent field, then fall back to
+        // taskType (e.g., login → LOGIN, extract_product_detail → EXTRACT).
+        val classifiedIntent = Intent.classify(
+            intentText ?: executionTrace.intent
+            ?: taskTypeToIntent(taskType ?: executionTrace.taskType)
+        )
         val failureCategory = if (outcome == "failure") {
             FailureCategory.classify(
                 executionTrace.errorMessage,
@@ -169,12 +186,21 @@ class ExperienceToolExecutor(
             errorMessage = executionTrace.errorMessage,
         )
 
-        // Fast Learning: save trace + update stats
+        // Fast Learning: save trace + update stats + index facts
         val tracePath = knowledgeStore.saveTrace(trace)
         knowledgeStore.updateStats(trace)
 
+        // Also create/save KnowledgeFacts so list() and query() find this entry
+        // without requiring an explicit deep_learn call.
+        val intentKey = classifiedIntent.name.lowercase()
+        val existingFacts = knowledgeStore.loadFacts(domainName, intentKey)
+        if (existingFacts == null) {
+            val facts = KnowledgeFacts.createHypothesis(intentKey, domainName, urlPattern)
+            knowledgeStore.saveFacts(facts)
+        }
+
         // Load stats for response
-        val stats = knowledgeStore.loadStats(domainName, classifiedIntent.name.lowercase())
+        val stats = knowledgeStore.loadStats(domainName, intentKey)
 
         val result = ExperienceSaveResult(
             saved = true,
@@ -212,9 +238,13 @@ class ExperienceToolExecutor(
 
     private fun handleList(args: Map<String, Any?>): String {
         val filter = paramString(args, "filter", "list", required = false)
+        // DefaultArgumentNormalizer converts snake_case keys to camelCase.
+        // Accept both forms.
         val intentFilter = paramString(args, "intent_filter", "list", required = false)
+            ?: paramString(args, "intentFilter", "list", required = false)
         val page = paramInt(args, "page", "list", required = false, default = 1) ?: 1
-        val pageSize = paramInt(args, "page_size", "list", required = false, default = 20) ?: 20
+        val pageSize = paramInt(args, "page_size", "list", required = false, default = 20)
+            ?: paramInt(args, "pageSize", "list", required = false, default = 20) ?: 20
 
         val result = knowledgeStore.list(
             domainFilter = filter,
@@ -298,6 +328,30 @@ class ExperienceToolExecutor(
     // =========================================================================
     // Helpers
     // =========================================================================
+
+    /**
+     * Map a task type string to the closest intent when no explicit intent is provided.
+     *
+     * Maps canonical task types (from [TaskType] enum) to the most likely [Intent].
+     * Used as a fallback when --intent is omitted and the trace has a taskType field.
+     */
+    private fun taskTypeToIntent(taskType: String?): String? {
+        if (taskType.isNullOrBlank()) return null
+        val lower = taskType.lowercase().trim()
+        return when {
+            lower.contains("login") || lower.contains("sign_in") -> "login"
+            lower.contains("extract") || lower.contains("scrape") || lower.contains("fetch") -> "extract"
+            lower.contains("search") || lower.contains("find") || lower.contains("query") -> "search"
+            lower.contains("fill_form") || lower.contains("fill") || lower.contains("form") -> "fill_form"
+            lower.contains("navigate") || lower.contains("goto") || lower.contains("visit") -> "navigate"
+            lower.contains("checkout") || lower.contains("purchase") || lower.contains("order") -> "checkout"
+            lower.contains("add_to_cart") || lower.contains("cart") -> "buy"
+            lower.contains("download") || lower.contains("save_file") -> "download"
+            lower.contains("monitor") || lower.contains("watch") || lower.contains("track") -> "monitor"
+            lower.contains("compare") || lower.contains("diff") -> "compare"
+            else -> null
+        }
+    }
 
     private fun extractUrlPattern(normalizedUrl: String): String {
         val path = UrlNormalizer.extractPath(normalizedUrl)

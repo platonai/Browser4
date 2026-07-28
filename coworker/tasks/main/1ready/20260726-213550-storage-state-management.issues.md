@@ -96,12 +96,13 @@ SKILL.md is written for end-users of the installed CLI, not for developers worki
 #### Human Review
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [x] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-
+[AI suggested: ACCEPT with improvements] The doc gap is real — source-tree developers need different invocation. Add a one-liner at the top of the copy-paste section: "If running from source, replace `browser4-cli` with `./b4w.ps1` or `cargo run --`." A cross-link to `references/development.md` is worthwhile; a `dev` alias is over-engineering for now.
 
 ---
 
@@ -140,13 +141,14 @@ The `s` in "entries" was mistakenly placed inside the parenthesized plural marke
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-
+[AI suggested: ACCEPT] Straightforward typo bug. "entrie(s)" → "entries" (always plural, simplest fix) or "entry(s)" (grammatically correct singular/plural). Either is valid; "entries" is fewer characters and unambiguous. Low effort, clear correctness improvement.
 
 ---
 
@@ -187,12 +189,13 @@ The session auto-reconnect behavior is designed for convenience (reusing auth st
 #### Human Review
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [x] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-
+[AI suggested: ACCEPT with improvements] Session reuse is by-design for convenience (auth persistence) and shouldn't change. The discoverability gap is real. A one-time tip on first reuse ("Sessions persist browser state. Use `list` to see sessions, `-s <name>` for named sessions, `close` to end.") is lightweight and solves the onboarding confusion. A `--fresh` flag adds API surface for a niche use case — defer it unless users request it.
 
 ---
 
@@ -233,12 +236,13 @@ The CLI passes the `--expires` value directly to the CDP `Network.setCookie` met
 #### Human Review
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [x] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-
+[AI suggested: ACCEPT with improvements] Silently accepting a 1970 timestamp that immediately expires the cookie is a data-loss trap. A warning on past timestamps is low-cost and high-value. Human-readable date parsing (e.g., `--expires "2026-08-03"`) is a separate feature — defer to a future enhancement. The immediate fix: validate `expires > now()` and warn if not.
 
 ---
 
@@ -274,13 +278,14 @@ The documentation may describe behavior for an older version where cookies requi
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-
+[AI suggested: ACCEPT] Documentation inaccuracy. The distinction between "cookies in the jar" (immediate, visible in `cookie-list`) vs. "cookies sent in requests" (requires navigation) is the key nuance. The suggested rephrase ("Cookies are restored immediately and appear in `cookie-list`. Reload the page only if you need them sent with the next request.") is correct and clarifies without removing the reload hint entirely.
 
 ---
 
@@ -318,12 +323,13 @@ The clear command reports "cleared: N entrie(s)" which is the number of entries 
 #### Human Review
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [x] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-
+[AI suggested: ACCEPT with improvements] The ambiguity is real — "0 entrie(s)" after a clear could mean "nothing to clear" or "now empty." Fixing Issue 2's typo helps, but the semantic fix is the output format: "localStorage cleared (3 removed, 0 remain)." This unambiguously communicates both the action and the resulting state. A `--verify` flag is over-engineering when a clear output message suffices.
 
 ---
 
@@ -363,12 +369,13 @@ The backend (Java/Kotlin) likely stores the expiration as a `Double` type, and J
 #### Human Review
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [x] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-
+[AI suggested: ACCEPT with improvements] `1785715200.0` is valid JSON but non-idiomatic for Unix timestamps, and it breaks round-trip comparison with integer input. The fix depends on CDP protocol requirements: if CDP accepts Long/Integer for `expires`, change the Kotlin data class field type; if Double is required, apply a `@JsonSerialize` custom serializer that writes whole numbers without `.0`. Verify CDP wire format before choosing the approach.
 
 ---
 

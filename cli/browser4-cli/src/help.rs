@@ -39,7 +39,7 @@ pub fn public_command_name(name: &str) -> &str {
         "experience-save" => "experience save",
         "experience-query" => "experience query",
         "experience-list" => "experience list",
-        "experience-deep-learn" => "experience deep learn",
+        "experience-deep-learn" => "experience deep-learn",
         "plugin-list" => "plugin list",
         "plugin-info" => "plugin info",
         "plugin-install" => "plugin install",

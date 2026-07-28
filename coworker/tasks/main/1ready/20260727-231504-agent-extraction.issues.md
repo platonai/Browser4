@@ -82,12 +82,14 @@ The agent task's LLM-extracted data is stored in instructResults but the agent r
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Critical data-loss bug — `instructResults` holds the extracted data but `agent result` reads from `commandResult` which is empty. The result pipeline has a clear disconnect; this blocks the primary use case of agent-based extraction.
 
 ---
 
@@ -125,11 +127,13 @@ The b4w.ps1 script is committed with Windows CRLF line endings. On Linux, the sh
 #### Human Review
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [x] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT with improvements] CRLF in a shebang is a packaging defect. The fix should combine `.gitattributes` (`*.ps1 text eol=lf`) with a CI `dos2unix` check, not just one or the other. The suggestion to ship a separate `b4w.sh` for Linux is already done — this issue is about making the existing `.ps1` safe everywhere.
 
 ---
 
@@ -168,11 +172,13 @@ b4w.sh's escaping logic replaces `"` with `\"` inside each argument, then wraps 
 #### Human Review
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [x] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT with improvements] Bash-to-pwsh JSON argument passing is fundamentally fragile with inline escaping. The suggested fixes (stdin, base64, `@file`) are good but the real fix is to route complex arguments through a temp file or env var rather than trying to escape them for `pwsh -Command`. Patching the current escaping is whack-a-mole.
 
 ---
 
@@ -211,11 +217,13 @@ The --schema flag name and help text say 'JSON schema' but the backend expects a
 #### Human Review
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [x] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT with improvements] Calling a custom format "JSON Schema" is actively misleading. The best fix is dual: rename the flag to `--fields` AND accept standard JSON Schema as an alternative input format (auto-detect or add `--json-schema`). Updating `--help` alone is insufficient — the flag name itself is the problem.
 
 ---
 
@@ -253,12 +261,14 @@ When b4w.ps1 is invoked via pwsh -File from bash, short flags like -v and -i are
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] This is a well-known PowerShell parameter-binding footgun with no clean fix inside `.ps1` itself. The `--` workaround is the standard answer. The actionable fix is documentation: prominently direct Linux/macOS users to `b4w.sh` and document the `--` escape in SKILL.md for pwsh users.
 
 ---
 
@@ -295,12 +305,14 @@ The --sql flag supports @file.sql references but the --schema flag parser does n
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Straightforward feature-parity gap. `--sql` supports `@file`; `--schema` should too. Combined with Issue 3, `@file` support for `--schema` is doubly necessary since inline JSON is already broken through the shell wrappers.
 
 ---
 
@@ -336,12 +348,14 @@ The error message template in the backend contains hardcoded Chinese text for th
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Mixed-language error messages degrade trust. The fix is simple: replace the Chinese help prefix with English. No i18n framework needed — just consistency with the CLI's language.
 
 ---
 
@@ -379,11 +393,13 @@ The CLI is built from the local source tree (4.12.x branch), while a pre-install
 #### Human Review
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [x] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT with improvements] The version warning is actively harmful in dev mode — it contradicts the auto-start behavior and points users at a manual `mvn` command they shouldn't need. Suppress the mismatch warning when running from a local source build, and remove the stale `mvn spring-boot:run` advice.
 
 ---
 
@@ -419,12 +435,14 @@ b4w.sh has a hardcoded echo statement on line 17 that prints this message uncond
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Unconditional nag messages on every command are anti-pattern UX. Remove the echo or gate it behind a first-run check (e.g., touch a sentinel file in `~/.browser4/`). If `b4w.sh` is the supported path for Linux users, it must be silent by default.
 
 ---
 
@@ -460,12 +478,14 @@ The agent.md reference was written for an older version that used sequential IDs
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Documentation drift — the examples use sequential IDs but the implementation uses UUIDs. Update `agent.md` to match reality. No code change needed.
 
 ---
 
@@ -504,11 +524,13 @@ The dev-mode auto-start builds the runtime bundle from source using Maven, then 
 #### Human Review
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [x] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT with improvements] ~24s first-command latency is a poor first impression. Can't eliminate Maven + JVM startup entirely, but can mitigate: show a progress indicator during the build, cache the bundle with source-change detection, and pre-build during `cargo build`. The silent wait is the worst part.
 
 ---
 
@@ -545,12 +567,14 @@ The agent list output formatter doesn't truncate long field values or adapt to t
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Standard terminal-UI problem with a standard fix: truncate long column values and/or detect terminal width. The `--json` escape hatch already exists, so the human-readable default just needs basic width awareness.
 
 ---
 

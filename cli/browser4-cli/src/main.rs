@@ -13580,7 +13580,7 @@ fn preferred_spaced_command_form(command: &str) -> Option<&'static str> {
         "experience-save" => Some("experience save"),
         "experience-query" => Some("experience query"),
         "experience-list" => Some("experience list"),
-        "experience-deep-learn" => Some("experience deep learn"),
+        "experience-deep-learn" => Some("experience deep-learn"),
         "plugin-list" => Some("plugin list"),
         "plugin-info" => Some("plugin info"),
         "plugin-install" => Some("plugin install"),
@@ -17133,7 +17133,7 @@ mod tests {
         );
         assert_eq!(
             preferred_spaced_command_form("experience-deep-learn"),
-            Some("experience deep learn")
+            Some("experience deep-learn")
         );
     }
 
