@@ -4107,6 +4107,8 @@ fn tested_commands(include_batch_command: bool) -> HashSet<&'static str> {
         "open",
         "list",
         "close",
+        // test_session_default_*
+        "session-default",
         // test_close_*, test_close_all_*
         "close-all",
         // test_kill_all_*
