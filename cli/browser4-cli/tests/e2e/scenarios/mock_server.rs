@@ -227,6 +227,159 @@ pub(super) fn test_close_all_single_server(ctx: &mut E2ECtx) {
     );
 }
 
+// ---------------------------------------------------------------------------
+// session-default
+// ---------------------------------------------------------------------------
+
+pub(super) fn test_session_default_promotes_named_to_default(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let mock_server = MockBrowser4Server::start();
+    ctx.browser4_base_url = mock_server.base_url();
+
+    // Write a named session file.
+    let auth_path = state_file_path(&ctx.state_dir, Some("auth"));
+    fs::create_dir_all(auth_path.parent().unwrap()).expect("create sessions dir");
+    fs::write(
+        &auth_path,
+        serde_json::json!({
+            "sessionId": "swarm-session-auth",
+            "baseUrl": mock_server.base_url(),
+        })
+        .to_string(),
+    )
+    .expect("write auth state");
+
+    let result = run_command(ctx, &["session-default", "auth"]);
+    assert_eq!(result.exit_code, 0, "expected session-default to succeed");
+    assert!(
+        result.stdout.contains("now the DEFAULT session"),
+        "Expected success message in:\n{}",
+        result.stdout
+    );
+
+    // Default state file must now have the named session's ID.
+    assert_eq!(
+        read_persisted_session_id(&ctx.state_dir),
+        "swarm-session-auth"
+    );
+
+    // Named session file must be removed after promotion (prevents split state).
+    assert!(
+        !auth_path.exists(),
+        "expected named session file to be removed after promotion"
+    );
+}
+
+pub(super) fn test_session_default_warns_when_overwriting_default(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let mock_server = MockBrowser4Server::start();
+    ctx.browser4_base_url = mock_server.base_url();
+
+    // Write a default session.
+    let default_state = serde_json::json!({
+        "sessionId": "swarm-session-old",
+        "baseUrl": mock_server.base_url(),
+    });
+    fs::write(
+        state_file_path(&ctx.state_dir, None),
+        default_state.to_string(),
+    )
+    .expect("write default state");
+
+    // Write a named session.
+    let auth_path = state_file_path(&ctx.state_dir, Some("auth"));
+    fs::create_dir_all(auth_path.parent().unwrap()).expect("create sessions dir");
+    fs::write(
+        &auth_path,
+        serde_json::json!({
+            "sessionId": "swarm-session-auth",
+            "baseUrl": mock_server.base_url(),
+        })
+        .to_string(),
+    )
+    .expect("write auth state");
+
+    let result = run_command(ctx, &["session-default", "auth"]);
+    assert_eq!(result.exit_code, 0);
+
+    // Warning about replacing existing default must appear in stderr.
+    let combined = format!("{}\n{}", result.stdout, result.stderr);
+    assert!(
+        combined.contains("Replacing existing default session"),
+        "Expected overwrite warning, got stdout+stderr:\n{}",
+        combined
+    );
+    assert!(
+        combined.contains("swarm-session-old"),
+        "Expected old session ID in warning, got stdout+stderr:\n{}",
+        combined
+    );
+
+    // Named file must be removed.
+    assert!(!auth_path.exists());
+}
+
+pub(super) fn test_session_default_errors_on_nonexistent(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let mock_server = MockBrowser4Server::start();
+    ctx.browser4_base_url = mock_server.base_url();
+
+    let result = run_command_expecting_failure(
+        ctx,
+        &["session-default", "nonexistent"],
+        "No session found",
+    );
+    assert_ne!(result.exit_code, 0);
+}
+
+pub(super) fn test_session_default_updates_timestamp(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let mock_server = MockBrowser4Server::start();
+    ctx.browser4_base_url = mock_server.base_url();
+
+    // Write a named session with a known old timestamp.
+    let auth_path = state_file_path(&ctx.state_dir, Some("auth"));
+    fs::create_dir_all(auth_path.parent().unwrap()).expect("create sessions dir");
+    fs::write(
+        &auth_path,
+        serde_json::json!({
+            "sessionId": "swarm-session-auth",
+            "baseUrl": mock_server.base_url(),
+            "lastAccessedAt": "2020-01-01T00:00:00+00:00",
+        })
+        .to_string(),
+    )
+    .expect("write auth state");
+
+    let result = run_command(ctx, &["session-default", "auth"]);
+    assert_eq!(result.exit_code, 0);
+
+    // Read the default state and verify the timestamp was refreshed.
+    let default_path = state_file_path(&ctx.state_dir, None);
+    let raw = fs::read_to_string(&default_path).expect("read default state");
+    let parsed: serde_json::Value =
+        serde_json::from_str(&raw).expect("valid JSON");
+    let ts = parsed["lastAccessedAt"]
+        .as_str()
+        .expect("lastAccessedAt must exist");
+    // The old timestamp must have been replaced.
+    assert_ne!(
+        ts, "2020-01-01T00:00:00+00:00",
+        "Expected lastAccessedAt to be refreshed, but got old value: {}",
+        ts
+    );
+    // It should parse as a recent year (not the epoch default).
+    assert!(
+        ts.starts_with("202"),
+        "Expected recent timestamp, got: {}",
+        ts
+    );
+}
+
 pub(super) fn test_close_all_no_active_sessions(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
 

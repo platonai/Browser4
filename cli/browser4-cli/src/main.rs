@@ -2682,6 +2682,13 @@ async fn handle_close_all(client: &Client, base_url: &str) -> Result<(), String>
     Ok(())
 }
 
+/// Promote a named session to the default (unnamed) slot.
+///
+/// This command operates entirely on local state files — it does not contact the
+/// backend.  If the named session's browser tab has been killed externally, the
+/// promotion will succeed locally but subsequent commands will fail with
+/// backend errors.  Use `list` to verify the session is still active before
+/// promoting.
 async fn handle_session_default(tool_params: &Value) -> Result<(), String> {
     let name = tool_params
         .get("name")
@@ -2700,10 +2707,25 @@ async fn handle_session_default(tool_params: &Value) -> Result<(), String> {
         ));
     }
 
+    // Warn if an existing default session will be overwritten.
+    let existing_default = read_state(None, None);
+    if let Some(ref existing_id) = existing_default.session_id {
+        eprintln!(
+            "NOTE: Replacing existing default session ({}) with '{}' ({}).",
+            existing_id, name, named_id
+        );
+    }
+
     // Write the named session state to the default (unnamed) slot.
     let mut default_state = named_state.clone();
     default_state.session_name = None; // Clear the name — it's now the default
+    default_state.last_accessed_at = Some(Utc::now().to_rfc3339());
     write_state(&default_state, None, None).map_err(|e| e.to_string())?;
+
+    // Remove the named session file so it doesn't point to the same live
+    // session as the default slot — that would create a split state where
+    // closing one slot leaves a stale reference in the other.
+    clear_state(None, Some(name));
 
     cli_println!("Session '{}' ({}) is now the DEFAULT session.", name, named_id);
     cli_println!("Subsequent commands will target this session without needing -s.");
