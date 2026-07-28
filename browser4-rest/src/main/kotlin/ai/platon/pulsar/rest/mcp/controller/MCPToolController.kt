@@ -768,16 +768,18 @@ class MCPToolController(
         executor: ToolExecutor,
         request: MCPToolCallRequest,
     ): ResponseEntity<MCPToolCallResponse> {
-        // Derive method name from tool name: "pptx_generate" → "generate"
-        // Convert from snake_case to camelCase so that custom executors
-        // (e.g. MediaToolExecutor) which match on camelCase method names
-        // can resolve the method correctly.
+        // Derive method name from tool name: "pptx_generate" → "generate".
+        // The raw substring is snake_case (e.g. "detect_videos"); resolve it
+        // back to the executor's native camelCase method name (e.g. "detectVideos")
+        // by reverse-matching through the executor's registered tool specs.
         val rawMethod = if (toolName.startsWith("${domain}_")) {
             toolName.substring(domain.length + 1)
         } else {
             toolName
         }
-        val method = snakeToCamelCase(rawMethod)
+        val method = executor.getToolSpecs().keys.firstOrNull { specMethod ->
+            toMcpToolName(domain, specMethod) == toolName
+        } ?: rawMethod
 
         // Resolve the receiver: for executors that require a WebDriver (e.g., pptx),
         // extract the session ID and get the session's driver.
