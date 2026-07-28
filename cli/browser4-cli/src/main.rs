@@ -1836,7 +1836,19 @@ async fn handle_goto(
             if was_already_at_url {
                 cli_println!("Already at {} — page unchanged.", target_url);
             } else {
-                cli_println!("Navigated to {}", target_url);
+                // Detect redirects: compare the final URL with the requested URL
+                let final_url = current_session_url(client, base_url, session_name)
+                    .await
+                    .unwrap_or_else(|_| target_url.to_string());
+                if !urls_match_for_display(&final_url, target_url) {
+                    cli_println!(
+                        "Navigated to {} (redirected from {})",
+                        final_url,
+                        target_url
+                    );
+                } else {
+                    cli_println!("Navigated to {}", target_url);
+                }
             }
             warn_if_url_has_encoded_quotes(target_url);
             post_command_snapshot(client, base_url, &session_id).await;
@@ -1874,7 +1886,19 @@ async fn handle_goto(
                     if !result.is_empty() {
                         cli_println!("{}", result);
                     }
-                    cli_println!("Navigated to {}", target_url);
+                    // Detect redirects: compare the final URL with the requested URL
+                    let final_url = current_session_url(client, base_url, session_name)
+                        .await
+                        .unwrap_or_else(|_| target_url.to_string());
+                    if !urls_match_for_display(&final_url, target_url) {
+                        cli_println!(
+                            "Navigated to {} (redirected from {})",
+                            final_url,
+                            target_url
+                        );
+                    } else {
+                        cli_println!("Navigated to {}", target_url);
+                    }
                     warn_if_url_has_encoded_quotes(target_url);
                     post_command_snapshot(client, base_url, &retry_id).await;
                 }
@@ -3195,6 +3219,16 @@ async fn handle_list(client: &Client, base_url: &str, verbose: bool) -> Result<(
     .add_rows(&table_rows);
 
     cli_println!("{}", table.render().trim_end());
+
+    // Explain the (default) session if present — new users often wonder
+    // where it came from.
+    let has_default = rows.iter().any(|r| r.name == "(default)");
+    if has_default {
+        cli_println!(
+            "\n(default) = unnamed session auto-created by goto/open without -s <name>. \
+             It is safe to close or switch away from with `session-default <name>`."
+        );
+    }
 
     for row in &rows {
         json_sessions.push(json!({

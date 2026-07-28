@@ -121,8 +121,7 @@ pub fn commands_in_category(category_name: &str) -> Vec<CommandDef> {
 pub fn generate_help() -> String {
     let cmds = all_commands();
     let mut lines: Vec<String> = vec![
-        "Usage: browser4-cli <command> [args] [options]".to_string(),
-        "Usage: browser4-cli -s <session> <command> [args] [options]".to_string(),
+        "Usage: browser4-cli [-s <session>] <command> [args] [options]".to_string(),
     ];
 
     // Common workflows — show the 5 most common patterns
