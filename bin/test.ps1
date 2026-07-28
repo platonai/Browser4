@@ -607,7 +607,7 @@ function Invoke-RealWorldScenarioTests([string[]]$additionalArgs) {
             $modeLabel = "real-world scenarios: $($scenarioNames -join ', ')"
             $passThroughArgs += $scenarioNames
         }
-        elseif ($arg -in 'dir', 'directory', '--dir', '--directory' -and ($i + 1) -lt $additionalArgs.Count) {
+        elseif (($arg -in 'dir', 'directory', '--dir', '--directory') -and (($i + 1) -lt $additionalArgs.Count)) {
             $mode = 'dir'
             $taskDir = $additionalArgs[$i + 1]
             $modeLabel = "real-world scenario dir: $taskDir"
@@ -743,12 +743,19 @@ function Invoke-RealWorldScenarioTests([string[]]$additionalArgs) {
         return
     }
 
-    # -- Execute with real-time agent output monitoring --------------------
+    # -- Execute with real-time output monitoring --------------------------
+    # We capture ALL child pwsh stdout/stderr by redirecting to temp files
+    # and polling them.  This avoids the fragility of Console.WriteLine
+    # through a deep process chain (Start-Process -NoNewWindow uses
+    # CREATE_NO_WINDOW on Windows, which detaches the console and can
+    # discard output from grandchild processes like the agent).
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
 
-    # Clean up stale marker from previous runs
-    $markerFile = Join-Path $repoRoot 'target' '.current-capture-path'
-    Remove-Item -LiteralPath $markerFile -ErrorAction SilentlyContinue
+    $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+
+    # Temp files for stdout / stderr capture
+    $tmpOut = [System.IO.Path]::GetTempFileName()
+    $tmpErr = [System.IO.Path]::GetTempFileName()
 
     try {
         if ($repoRoot) { Push-Location $repoRoot }
@@ -756,77 +763,80 @@ function Invoke-RealWorldScenarioTests([string[]]$additionalArgs) {
 
         if ($setProduction) { $env:BROWSER4CLI_MODE = 'production' }
 
-        # -- Start child pwsh process --------------------------------------
+        Write-Host ''
+        Write-Rule
+        Write-Host "Child process output (live):" -ForegroundColor DarkCyan
+        Write-Rule
+
+        # -- Start child pwsh with redirected stdout / stderr ------------
         $proc = Start-Process -FilePath 'pwsh' -ArgumentList $pwshArgs `
+            -RedirectStandardOutput $tmpOut -RedirectStandardError $tmpErr `
             -NoNewWindow -PassThru
 
-        # -- Monitor capture file in real-time -----------------------------
-        $capturePath = $null
-        $lastSize = 0
-        $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
-        $markerTimeoutSec = 120
-        $monitorStart = Get-Date
-        $shownHeader = $false
+        $lastOutSize = 0
+        $lastErrSize = 0
 
         while (-not $proc.HasExited) {
-            # Check for marker file (written by run-task.ps1 before agent starts)
-            if (-not $capturePath -and (Test-Path -LiteralPath $markerFile)) {
+            # -- Display new stdout content -------------------------------
+            if (Test-Path -LiteralPath $tmpOut) {
                 try {
-                    $capturePath = (Get-Content -LiteralPath $markerFile -TotalCount 1).Trim()
-                    if ($capturePath) {
-                        Write-Host ''
-                        Write-Rule
-                        Write-Host "Agent output (live): $capturePath" -ForegroundColor DarkCyan
-                        Write-Rule
-                        $shownHeader = $true
-                    }
-                } catch { }
-            }
-
-            # Display new content from the capture file
-            if ($capturePath -and (Test-Path -LiteralPath $capturePath)) {
-                try {
-                    $currentSize = (Get-Item -LiteralPath $capturePath).Length
-                    if ($currentSize -gt $lastSize) {
-                        $content = [System.IO.File]::ReadAllText($capturePath, $utf8NoBom)
-                        if ($content.Length -gt $lastSize) {
-                            $newContent = $content.Substring($lastSize)
+                    $currentSize = (Get-Item -LiteralPath $tmpOut).Length
+                    if ($currentSize -gt $lastOutSize) {
+                        $content = [System.IO.File]::ReadAllText($tmpOut, $utf8NoBom)
+                        if ($content.Length -gt $lastOutSize) {
+                            $newContent = $content.Substring($lastOutSize)
                             Write-Host $newContent -NoNewline
-                            $lastSize = $content.Length
+                            $lastOutSize = $content.Length
                         }
                     }
                 } catch { }
             }
 
-            # Timeout waiting for marker
-            if (-not $capturePath -and ((Get-Date) - $monitorStart).TotalSeconds -gt $markerTimeoutSec) {
-                Write-Host 'WARNING: Timed out waiting for agent output marker.' -ForegroundColor Yellow
-                break
+            # -- Display new stderr content -------------------------------
+            if (Test-Path -LiteralPath $tmpErr) {
+                try {
+                    $currentSize = (Get-Item -LiteralPath $tmpErr).Length
+                    if ($currentSize -gt $lastErrSize) {
+                        $content = [System.IO.File]::ReadAllText($tmpErr, $utf8NoBom)
+                        if ($content.Length -gt $lastErrSize) {
+                            $newContent = $content.Substring($lastErrSize)
+                            Write-Host $newContent -NoNewline -ForegroundColor Red
+                            $lastErrSize = $content.Length
+                        }
+                    }
+                } catch { }
             }
 
             $proc.Refresh()
-            Start-Sleep -Seconds 2
+            Start-Sleep -Milliseconds 500
         }
 
-        # -- Final drain of any remaining output ---------------------------
-        if ($capturePath -and (Test-Path -LiteralPath $capturePath)) {
-            try {
-                $content = [System.IO.File]::ReadAllText($capturePath, $utf8NoBom)
-                if ($content.Length -gt $lastSize) {
-                    $newContent = $content.Substring($lastSize)
-                    Write-Host $newContent -NoNewline
-                }
-            } catch { }
-        }
-
-        if ($shownHeader) {
-            Write-Rule
-            Write-Host 'End of agent output' -ForegroundColor DarkGray
-            Write-Rule
-            Write-Host ''
-        }
-
+        # -- Final drain of remaining output ------------------------------
         $proc.WaitForExit()
+
+        foreach ($pair in @(@($tmpOut, $false, [ref]$lastOutSize),
+                            @($tmpErr, $true,  [ref]$lastErrSize))) {
+            $path = $pair[0]; $isError = $pair[1]; $lastRef = $pair[2]
+            if (Test-Path -LiteralPath $path) {
+                try {
+                    $content = [System.IO.File]::ReadAllText($path, $utf8NoBom)
+                    if ($content.Length -gt $lastRef.Value) {
+                        $newContent = $content.Substring($lastRef.Value)
+                        if ($isError) {
+                            Write-Host $newContent -NoNewline -ForegroundColor Red
+                        } else {
+                            Write-Host $newContent -NoNewline
+                        }
+                    }
+                } catch { }
+            }
+        }
+
+        Write-Rule
+        Write-Host 'End of child process output' -ForegroundColor DarkGray
+        Write-Rule
+        Write-Host ''
+
         $global:LASTEXITCODE = $proc.ExitCode
         $proc.Dispose()
 
@@ -834,6 +844,8 @@ function Invoke-RealWorldScenarioTests([string[]]$additionalArgs) {
         Write-Error "Failed to execute $modeLabel`: $_"
         exit 1
     } finally {
+        # Clean up temp files
+        Remove-Item $tmpOut, $tmpErr -ErrorAction SilentlyContinue
         if ($repoRoot) { Pop-Location }
     }
 
@@ -849,9 +861,6 @@ function Invoke-RealWorldScenarioTests([string[]]$additionalArgs) {
     } else {
         Write-CommandBanner -Label "$modeLabel completed successfully" -Icon '[PASS]'
     }
-
-    # -- Clean up marker ----------------------------------------------------
-    Remove-Item -LiteralPath $markerFile -ErrorAction SilentlyContinue
 
     # -- Persist session --------------------------------------------------
     if ($script:SessionAvailable) {

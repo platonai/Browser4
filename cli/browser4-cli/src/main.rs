@@ -11938,6 +11938,67 @@ async fn handle_plugin_remove(
     Ok(())
 }
 
+/// Convert camelCase to snake_case.
+///
+/// Examples: "detectVideos" → "detect_videos", "download" → "download",
+/// "getInfo" → "get_info".
+fn camel_to_snake(s: &str) -> String {
+    let mut result = String::with_capacity(s.len() + 4);
+    for (i, ch) in s.char_indices() {
+        if ch.is_uppercase() {
+            if i > 0 {
+                result.push('_');
+            }
+            result.push(ch.to_ascii_lowercase());
+        } else {
+            result.push(ch);
+        }
+    }
+    result
+}
+
+/// Resolve which MCP tool to invoke from a plugin-<domain> command.
+///
+/// If the first positional argument matches a known method (after converting to
+/// snake_case and prefixing with the domain), that specific tool is selected and
+/// the method name is stripped from the positional args.  Otherwise falls back
+/// to the first matching tool alphabetically.
+fn resolve_plugin_method(
+    tools: &[&str],
+    domain: &str,
+    matching: &[&&str],
+    raw_parsed: &mut HashMap<String, Value>,
+) -> String {
+    // Get the positional args and look at the first one after the command name.
+    let positionals = raw_parsed
+        .get("_")
+        .and_then(|v| v.as_array())
+        .map(|a| a.iter().collect::<Vec<_>>())
+        .unwrap_or_default();
+
+    // The first positional (_[0]) is the command itself (e.g. "plugin-media").
+    // The second positional (_[1]) is the candidate method name.
+    if positionals.len() >= 2 {
+        if let Some(candidate) = positionals[1].as_str() {
+            let snake_method = camel_to_snake(candidate);
+            let candidate_tool = format!("{}_{}", domain, snake_method);
+            if tools.contains(&candidate_tool.as_str()) {
+                // Remove the method name from positionals so it isn't
+                // passed as a tool parameter.
+                if let Some(arr) = raw_parsed.get_mut("_").and_then(|v| v.as_array_mut()) {
+                    if arr.len() > 1 {
+                        arr.remove(1);
+                    }
+                }
+                return candidate_tool;
+            }
+        }
+    }
+
+    // Fall back: use the first matching tool alphabetically
+    matching[0].to_string()
+}
+
 /// Handle a dynamic plugin command (plugin-<name>) that has no hardcoded
 /// CommandDef.  Discovers the matching MCP tool from the server's /mcp/tools
 /// endpoint and executes it generically.
@@ -12009,11 +12070,13 @@ async fn handle_dynamic_plugin_command(
         ));
     }
 
-    // Use the first matching tool
-    let tool_name = matching[0].to_string();
-
     // Parse remaining args generically: pass through all --key value pairs
-    let raw_parsed = parse_raw_args(&global.args, None, None);
+    let mut raw_parsed = parse_raw_args(&global.args, None, None);
+
+    // Try to resolve a specific method from the first positional argument.
+    // Supports: plugin-media detectVideos, plugin-media download --url ..., etc.
+    let tool_name = resolve_plugin_method(&tools, domain, &matching, &mut raw_parsed);
+
     let mut tool_params = serde_json::Map::new();
     for (key, value) in &raw_parsed {
         if key != "_" {
@@ -21046,5 +21109,97 @@ mod tests {
         // Named sessions should always be allowed
         assert!(check_unnamed_slot_free(Some(dir), Some("auth")).is_ok());
         assert!(check_unnamed_slot_free(Some(dir), Some("scraper")).is_ok());
+    }
+
+    // =====================================================================
+    // camel_to_snake tests
+    // =====================================================================
+
+    #[test]
+    fn test_camel_to_snake_already_lowercase() {
+        assert_eq!(camel_to_snake("download"), "download");
+        assert_eq!(camel_to_snake("compress"), "compress");
+    }
+
+    #[test]
+    fn test_camel_to_snake_single_word() {
+        assert_eq!(camel_to_snake("getInfo"), "get_info");
+    }
+
+    #[test]
+    fn test_camel_to_snake_multi_word() {
+        assert_eq!(camel_to_snake("detectVideos"), "detect_videos");
+        assert_eq!(camel_to_snake("extractAudio"), "extract_audio");
+    }
+
+    #[test]
+    fn test_camel_to_snake_no_uppercase() {
+        assert_eq!(camel_to_snake("process"), "process");
+        assert_eq!(camel_to_snake("trim"), "trim");
+    }
+
+    // =====================================================================
+    // resolve_plugin_method tests
+    // =====================================================================
+
+    #[test]
+    fn test_resolve_plugin_method_with_valid_method() {
+        let tools = vec!["media_detect_videos", "media_download", "media_get_info"];
+        let matching: Vec<&&str> = tools.iter().collect();
+        let mut args = HashMap::from([
+            ("_".to_string(), json!(["plugin-media", "download"])),
+        ]);
+        let result = resolve_plugin_method(&tools, "media", &matching, &mut args);
+        assert_eq!(result, "media_download");
+        // The method name should be stripped from positionals
+        let pos = args.get("_").and_then(|v| v.as_array()).unwrap();
+        assert_eq!(pos.len(), 1);
+        assert_eq!(pos[0].as_str().unwrap(), "plugin-media");
+    }
+
+    #[test]
+    fn test_resolve_plugin_method_camel_case_conversion() {
+        let tools = vec!["media_detect_videos", "media_download", "media_get_info"];
+        let matching: Vec<&&str> = tools.iter().collect();
+        let mut args = HashMap::from([
+            ("_".to_string(), json!(["plugin-media", "detectVideos"])),
+        ]);
+        let result = resolve_plugin_method(&tools, "media", &matching, &mut args);
+        assert_eq!(result, "media_detect_videos");
+    }
+
+    #[test]
+    fn test_resolve_plugin_method_falls_back_to_first() {
+        let tools = vec!["media_compress", "media_detect_videos", "media_download"];
+        let matching: Vec<&&str> = tools.iter().collect();
+        let mut args = HashMap::from([
+            ("_".to_string(), json!(["plugin-media", "someUrl"])),
+        ]);
+        let result = resolve_plugin_method(&tools, "media", &matching, &mut args);
+        // Falls back to first matching (alphabetically) since "someUrl" doesn't match a method
+        assert_eq!(result, "media_compress");
+        // Positionals unchanged
+        let pos = args.get("_").and_then(|v| v.as_array()).unwrap();
+        assert_eq!(pos.len(), 2); // still has both entries
+    }
+
+    #[test]
+    fn test_resolve_plugin_method_no_positionals() {
+        let tools = vec!["media_compress", "media_download"];
+        let matching: Vec<&&str> = tools.iter().collect();
+        let mut args = HashMap::new();
+        let result = resolve_plugin_method(&tools, "media", &matching, &mut args);
+        assert_eq!(result, "media_compress"); // first match
+    }
+
+    #[test]
+    fn test_resolve_plugin_method_only_command() {
+        let tools = vec!["pptx_generate", "pptx_convert"];
+        let matching: Vec<&&str> = tools.iter().collect();
+        let mut args = HashMap::from([
+            ("_".to_string(), json!(["plugin-pptx"])),
+        ]);
+        let result = resolve_plugin_method(&tools, "pptx", &matching, &mut args);
+        assert_eq!(result, "pptx_generate"); // first match (no method specified)
     }
 }

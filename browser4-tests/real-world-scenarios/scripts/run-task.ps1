@@ -47,10 +47,10 @@ param(
     # Run in production mode (browser4-cli instead of cargo run).
     [switch] $Production,
 
-    # Maximum minutes to wait for the agent to complete.
-    # 0 (default) means no timeout.  On timeout the process is killed and
-    # exit code 124 is returned (matching the Unix `timeout` convention).
-    [int] $TimeoutMinutes = 0,
+    # Maximum minutes to wait for the agent to complete (default 60 = 1 hour).
+    # On timeout the process is killed and exit code 124 is returned
+    # (matching the Unix `timeout` convention).  Set to 0 to disable.
+    [int] $TimeoutMinutes = 60,
 
     # Override the agent CLI to use (claude, kimi, or opencode).
     # When empty, auto-detects with priority claude > kimi > opencode.
@@ -141,9 +141,9 @@ try {
     if ($Silent) {
         $invokeParams['Silent'] = $true
     }
-    if ($TimeoutMinutes -gt 0) {
-        $invokeParams['TimeoutSeconds'] = $TimeoutMinutes * 60
-    }
+    # Always forward the timeout (even 0 = disabled) so Invoke-Agent
+    # receives the caller's intent.
+    $invokeParams['TimeoutSeconds'] = $TimeoutMinutes * 60
 
     Invoke-Agent @invokeParams
 } catch {

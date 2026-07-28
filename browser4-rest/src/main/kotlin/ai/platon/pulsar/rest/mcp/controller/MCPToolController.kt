@@ -769,11 +769,15 @@ class MCPToolController(
         request: MCPToolCallRequest,
     ): ResponseEntity<MCPToolCallResponse> {
         // Derive method name from tool name: "pptx_generate" → "generate"
-        val method = if (toolName.startsWith("${domain}_")) {
+        // Convert from snake_case to camelCase so that custom executors
+        // (e.g. MediaToolExecutor) which match on camelCase method names
+        // can resolve the method correctly.
+        val rawMethod = if (toolName.startsWith("${domain}_")) {
             toolName.substring(domain.length + 1)
         } else {
             toolName
         }
+        val method = snakeToCamelCase(rawMethod)
 
         // Resolve the receiver: for executors that require a WebDriver (e.g., pptx),
         // extract the session ID and get the session's driver.
@@ -1074,6 +1078,25 @@ class MCPToolController(
             "tab", "system" -> snake
             else -> "${domain}_$snake"
         }
+    }
+
+    /**
+     * Convert snake_case back to camelCase.
+     * Inverse of the snake_case portion of [toMcpToolName].
+     *
+     * Examples: "detect_videos" → "detectVideos", "generate" → "generate",
+     * "get_info" → "getInfo", "html_snapshot_capture" → "htmlSnapshotCapture".
+     *
+     * This is needed in [dispatchToCustomExecutor] because the MCP tool name
+     * is snake_cased (e.g. "media_detect_videos") but custom executors like
+     * [MediaToolExecutor] match on the original camelCase method name
+     * ("detectVideos").
+     */
+    internal fun snakeToCamelCase(snake: String): String {
+        if (!snake.contains('_')) return snake
+        return snake.split('_').mapIndexed { index, part ->
+            if (index == 0) part else part.replaceFirstChar { it.uppercase() }
+        }.joinToString("")
     }
 
     private fun normalizeFrontendToolCall(toolName: String, args: Map<String, Any?>): NormalizedToolCall {

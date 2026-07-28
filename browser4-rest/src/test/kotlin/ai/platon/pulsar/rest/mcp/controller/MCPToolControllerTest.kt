@@ -1339,4 +1339,48 @@ class MCPToolControllerTest {
             assertEquals(domain, extracted, "extractDomain round-trip failed: $toolName → $extracted, expected $domain")
         }
     }
+
+    // =====================================================================
+    // snakeToCamelCase tests
+    // =====================================================================
+
+    @Test
+    fun `snakeToCamelCase converts simple snake_case to camelCase`() {
+        assertEquals("detectVideos", controller.snakeToCamelCase("detect_videos"))
+        assertEquals("getInfo", controller.snakeToCamelCase("get_info"))
+        assertEquals("extractAudio", controller.snakeToCamelCase("extract_audio"))
+    }
+
+    @Test
+    fun `snakeToCamelCase preserves already camelCase`() {
+        assertEquals("download", controller.snakeToCamelCase("download"))
+        assertEquals("compress", controller.snakeToCamelCase("compress"))
+        assertEquals("detectVideos", controller.snakeToCamelCase("detectVideos"))
+    }
+
+    @Test
+    fun `snakeToCamelCase handles single word`() {
+        assertEquals("navigate", controller.snakeToCamelCase("navigate"))
+        assertEquals("generate", controller.snakeToCamelCase("generate"))
+    }
+
+    @Test
+    fun `snakeToCamelCase handles empty string`() {
+        assertEquals("", controller.snakeToCamelCase(""))
+    }
+
+    @Test
+    fun `snakeToCamelCase round-trips with toMcpToolName`() {
+        // The full pipeline: original method → toMcpToolName → extractDomain → snakeToCamelCase
+        val testMethods = listOf("detectVideos", "download", "getInfo", "extractAudio", "trim", "compress")
+        for (method in testMethods) {
+            val mcpName = controller.toMcpToolName("media", method)
+            val domain = controller.extractDomain(mcpName)
+            assertEquals("media", domain, "extractDomain failed for $mcpName")
+            // Now simulate dispatchToCustomExecutor: extract method from MCP name and convert back
+            val rawMethod = mcpName.substring(domain.length + 1) // after domain_
+            val camelMethod = controller.snakeToCamelCase(rawMethod)
+            assertEquals(method, camelMethod, "snakeToCamelCase round-trip failed: $rawMethod → $camelMethod, expected $method")
+        }
+    }
 }

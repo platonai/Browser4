@@ -1161,8 +1161,7 @@ function Invoke-Commit {
     $targetRepo = Get-TargetRepositoryRoot
 
     # Locate the shared commit script
-    $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-    $commitScriptPath = Join-Path $scriptDir 'scripts\workers\git-commit.ps1'
+    $commitScriptPath = Join-Path $PSScriptRoot 'scripts\workers\git-commit.ps1'
     if (-not (Test-Path $commitScriptPath)) {
         Write-ConsoleLine -Message "Error: Commit script not found: $commitScriptPath" -ForegroundColor Red
         exit 1
@@ -1199,8 +1198,7 @@ function Invoke-Push {
     $targetRepo = Get-TargetRepositoryRoot
 
     # Locate the shared commit script
-    $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-    $commitScriptPath = Join-Path $scriptDir 'scripts\workers\git-commit.ps1'
+    $commitScriptPath = Join-Path $PSScriptRoot 'scripts\workers\git-commit.ps1'
     if (-not (Test-Path $commitScriptPath)) {
         Write-ConsoleLine -Message "Error: Commit script not found: $commitScriptPath" -ForegroundColor Red
         exit 1

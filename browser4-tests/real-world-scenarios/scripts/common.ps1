@@ -265,6 +265,34 @@ function Read-TaskFile {
     }
 }
 
+# ── Duration formatting ──────────────────────────────────────────────────────
+
+function Format-Duration {
+    <#
+    .SYNOPSIS
+        Formats a TimeSpan into a human-readable string.
+    .DESCRIPTION
+        Returns '<1s' for sub-second durations, 'N.Ns' for seconds,
+        'Nm Ns' for minutes, and 'Nh Nm Ns' for hours.
+    .PARAMETER Duration
+        The TimeSpan to format.
+    .OUTPUTS
+        String like '<1s', '2.5s', '2m 30s', or '1h 30m 0s'.
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [TimeSpan] $Duration
+    )
+    if ($Duration.TotalSeconds -lt 1) { return '<1s' }
+    if ($Duration.TotalMinutes -lt 1) {
+        return '{0:F1}s' -f $Duration.TotalSeconds
+    }
+    if ($Duration.TotalHours -lt 1) {
+        return '{0}m {1}s' -f $Duration.Minutes, $Duration.Seconds
+    }
+    return '{0}h {1}m {2}s' -f $Duration.Hours, $Duration.Minutes, $Duration.Seconds
+}
+
 # ── Compiled output handler (C#) ──────────────────────────────────────────────
 # DataReceived events fire on .NET threadpool threads.  PowerShell scriptblocks
 # cast to delegates require a Runspace on the executing thread, which threadpool

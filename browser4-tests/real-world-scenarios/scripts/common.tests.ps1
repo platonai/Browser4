@@ -1228,8 +1228,8 @@ Write-Host '━━━ run-task.ps1 Timeout Parameter ━━━' -ForegroundColor
     $scriptContent = Get-Content -LiteralPath $taskRunnerPath -Raw -Encoding UTF8
 
     Write-TestGroup 'Has $TimeoutMinutes parameter in param block'
-    $hasTimeoutParam = $scriptContent -match '\[\s*int\s*\]\s*\$TimeoutMinutes\s*=\s*0'
-    Assert-True 'Script declares [int] $TimeoutMinutes = 0' $hasTimeoutParam
+    $hasTimeoutParam = $scriptContent -match '\[\s*int\s*\]\s*\$TimeoutMinutes\s*=\s*60'
+    Assert-True 'Script declares [int] $TimeoutMinutes = 60' $hasTimeoutParam
 
     Write-TestGroup 'Has timeout forwarding logic to Invoke-Agent'
     $hasForwarding = $scriptContent -match '\$invokeParams\[''TimeoutSeconds''\]\s*=\s*\$TimeoutMinutes\s*\*\s*60'
@@ -1248,14 +1248,13 @@ Write-Host ''
 Write-Host '━━━ Timeout Conversion Logic ━━━' -ForegroundColor Yellow
 
 & {
-    Write-TestGroup 'TimeoutMinutes=0 → no TimeoutSeconds key'
+    Write-TestGroup 'TimeoutMinutes=0 → TimeoutSeconds=0 (no timeout)'
     $TimeoutMinutes = 0
     $invokeParams = @{ Prompt = 'test' }
-    if ($TimeoutMinutes -gt 0) {
-        $invokeParams['TimeoutSeconds'] = $TimeoutMinutes * 60
-    }
-    Assert-True 'No TimeoutSeconds when TimeoutMinutes is 0' `
-        (-not $invokeParams.ContainsKey('TimeoutSeconds'))
+    # Always forward (matching run-task.ps1 behavior):
+    # $TimeoutMinutes * 60 = 0, which means "no timeout" downstream
+    $invokeParams['TimeoutSeconds'] = $TimeoutMinutes * 60
+    Assert-Equal 'TimeoutSeconds is 0 (no timeout) when TimeoutMinutes is 0' 0 $invokeParams['TimeoutSeconds']
 
     Write-TestGroup 'TimeoutMinutes=5 → TimeoutSeconds=300'
     $TimeoutMinutes = 5
