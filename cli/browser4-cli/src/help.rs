@@ -1786,6 +1786,95 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("  browser4-cli -s <session> tab-list".to_string());
     }
 
+    if cmd.name == "tab-close" {
+        lines.push(String::new());
+        lines.push("Notes:".to_string());
+        lines.push(
+            "  - Zero-based indexing — the first tab is index 0."
+                .to_string(),
+        );
+        lines.push(
+            "  - Closing a tab shifts the indices of all subsequent tabs down by 1."
+                .to_string(),
+        );
+        lines.push(
+            "    Run tab-list to see the updated indices."
+                .to_string(),
+        );
+        lines.push(
+            "  - When the last tab is closed, Chrome automatically creates a replacement"
+                .to_string(),
+        );
+        lines.push(
+            "    tab — tab-list will still show 1 tab afterward."
+                .to_string(),
+        );
+        lines.push(
+            "  - Use --guid <guid> for stable targeting across tab reordering. GUIDs are"
+                .to_string(),
+        );
+        lines.push(
+            "    printed by tab-list and survive index shifts."
+                .to_string(),
+        );
+        lines.push(
+            "  - On extension sessions, the backend may report an error even when the"
+                .to_string(),
+        );
+        lines.push(
+            "    close succeeded. The CLI verifies the tab was actually removed and treats"
+                .to_string(),
+        );
+        lines.push(
+            "    it as successful in that case."
+                .to_string(),
+        );
+        lines.push(String::new());
+        lines.push("Examples:".to_string());
+        lines.push("  browser4-cli tab-close 1           # Close tab at index 1".to_string());
+        lines.push("  browser4-cli tab-close              # Close the current tab".to_string());
+        lines.push("  browser4-cli tab-close --guid <guid> # Close by stable GUID".to_string());
+        lines.push("  browser4-cli -s <session> tab-close 0".to_string());
+    }
+
+    if cmd.name == "tab-select" {
+        lines.push(String::new());
+        lines.push("Notes:".to_string());
+        lines.push(
+            "  - Zero-based indexing — the first tab is index 0."
+                .to_string(),
+        );
+        lines.push(
+            "  - New tabs are inserted after the currently active tab (Chrome default)."
+                .to_string(),
+        );
+        lines.push(
+            "    Existing tabs beyond the insertion point shift their indices. Run tab-list"
+                .to_string(),
+        );
+        lines.push(
+            "    after creating new tabs to see the actual layout."
+                .to_string(),
+        );
+        lines.push(
+            "  - After switching tabs, capture a fresh snapshot to get valid element refs"
+                .to_string(),
+        );
+        lines.push(
+            "    for the new active page. Snapshot refs do not carry over between tabs."
+                .to_string(),
+        );
+        lines.push(
+            "  - Use --guid <guid> for stable targeting across tab reordering."
+                .to_string(),
+        );
+        lines.push(String::new());
+        lines.push("Examples:".to_string());
+        lines.push("  browser4-cli tab-select 0           # Select the first tab".to_string());
+        lines.push("  browser4-cli tab-select 2           # Select tab at index 2".to_string());
+        lines.push("  browser4-cli tab-select --guid <guid> # Select by stable GUID".to_string());
+    }
+
     lines.join("\n")
 }
 
