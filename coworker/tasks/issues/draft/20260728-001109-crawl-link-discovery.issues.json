@@ -1,0 +1,13 @@
+{
+  "meta": {
+    "source": "20260728-001109-crawl-link-discovery.full.md",
+    "scenario": "crawl-link-discovery",
+    "date": "20260728-001109",
+    "mode": "dev"
+  },
+  "background": {
+    "executionContext": "",
+    "task": "The task was **partially successful**. The core crawl functionality (link discovery) is broken, preventing completion of steps 1-4 as specifi"
+  },
+  "issues": []
+}

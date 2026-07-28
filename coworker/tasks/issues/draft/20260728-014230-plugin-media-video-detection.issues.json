@@ -1,0 +1,302 @@
+{
+  "meta": {
+    "source": "20260728-014230-plugin-media-video-detection.full.md",
+    "mode": "dev",
+    "date": "20260728-014230",
+    "scenario": "plugin-media-video-detection"
+  },
+  "background": {
+    "executionContext": "**Commands used:**\n```\n./b4w.ps1 help\n./b4w.ps1 plugin list\n./b4w.ps1 plugin install <media-jar>\n./b4w.ps1 stop / goto (restart cycle ×2 for plugin activation)\n./b4w.ps1 goto \"https://www.w3schools.com/html/html5_video.asp\"\n./b4w.ps1 plugin-media                                   → camelCase bug\n./b4w.ps1 eval --json \"JSON.stringify(...video scan...)\"  → workaround\n./b4w.ps1 goto \"https://www.w3schools.com/html/html_youtube.asp\"\n./b4w.ps1 eval --json \"JSON.stringify(...iframe scan...)\"\n./b4w.ps1 goto \"https://www.w3schools.com/html/tryit.asp?filename=tryhtml5_video\"\n./b4w.ps1 eval --json \"JSON.stringify(...iframe content scan...)\"\ncurl -L -o .test-sessions/mov_bbb.mp4 \"https://www.w3schools.com/html/mov_bbb.mp4\"\nffprobe -v quiet -print_format json -show_format -show_streams .test-sessions/mov_bbb.mp4\n```\n\n**Major steps:**\n1. Read help and SKILL.md for command discovery\n2. Installed browser4-media plugin JAR, restarted server (plugin still showed \"inactive\")\n3. Discovered `plugin-media` dynamic command syntax from source code\n4. Hit camelCase/snake_case mismatch bug → used JS `eval` as workaround\n5. Discovered `plugin-media` cannot select specific methods → used `curl` and `ffprobe`\n6. Completed all 6 task steps using workarounds\n\n**Workarounds required:**\n- JS `eval` for video detection (3 pages)\n- `curl` for video download\n- `ffprobe` for media metadata\n- Long-form `--viewport` flag instead of `-v` (flag parsing issue)\n\n---\n\n## C & D: Issues Found + Overall Assessment\n\n```json\n{\n  \"issues\": [\n    {\n      \"title\": \"dispatchToCustomExecutor does not convert snake_case method names back to camelCase\",\n      \"severity\": \"Critical\",\n      \"category\": \"Product\",\n      \"reproduction\": \"./b4w.ps1 goto \\\"https://www.w3schools.com/html/html5_video.asp\\\" && ./b4w.ps1 plugin-media\",\n      \"expected\": \"media.detectVideos executes successfully and returns detected video sources.\",\n      \"actual\": \"Error: media_detect_videos failed: Unsupported media method: detect_videos. Supported: detectVideos, download, process, extractAudio, trim, compress, getInfo.\",\n      \"rootCause\": \"MCPToolController.toMcpToolName() converts camelCase method names to snake_case for MCP tool names (e.g. detectVideos → detect_videos → media_detect_videos). When dispatchToCustomExecutor extracts the method portion from the MCP tool name at line 772, it does substring(domain.length + 1) yielding detect_videos (snake_case). But MediaToolExecutor.callFunctionOn() matches against camelCase method names (detectVideos). The reverse conversion (snake_case → camelCase) is never applied in the custom executor path, though resolveMcpToolCall() in the AgentToolManager path correctly resolves it by iterating through all registered tool specs.\",\n      \"codePointer\": \"browser4-rest/src/main/kotlin/ai/platon/pulsar/rest/mcp/controller/MCPToolController.kt:dispatchToCustomExecutor() lines 771-776\",\n      \"suggestion\": \"- Convert extracted method name from snake_case back to camelCase in dispatchToCustomExecutor (e.g. detect_videos → detectVideos) before passing to callFunctionOn\\n- Alternatively, make MediaToolExecutor.callFunctionOn() accept both camelCase and snake_case method names\\n- Add a unit test that verifies round-trip conversion: toMcpToolName → extract method → camelCase matches original method name\\n- Consider adding a ToolCall factory that handles the conversion, so all custom executors benefit\"\n    },\n    {\n      \"title\": \"plugin-<domain> command cannot select specific tool methods — always dispatches to first matching tool\",\n      \"severity\": \"High\",\n      \"category\": \"Product\",\n      \"reproduction\": \"./b4w.ps1 plugin-media  (always calls media_compress or media_detect_videos, never media_download or media_getInfo)\",\n      \"expected\": \"A way to invoke specific plugin methods, e.g. plugin-media download --url <url> or plugin-media detectVideos.\",\n      \"actual\": \"plugin-media always picks matching[0] (first tool alphabetically matching the 'media_' prefix). There is no syntax for selecting a specific method within a plugin domain.\",\n      \"rootCause\": \"In handle_dynamic_plugin_command() (main.rs line 11541), matching[0] is used unconditionally. The remaining positional args after the command name are parsed as key-value parameters rather than as a subcommand. There is no mechanism to route plugin-media download to media_download vs plugin-media detectVideos to media_detect_videos.\",\n      \"codePointer\": \"cli/browser4-cli/src/main.rs:handle_dynamic_plugin_command() lines 11541-11544\",\n      \"suggestion\": \"- Support plugin-<domain> <method> syntax: treat the first positional arg after plugin-media as the method name, construct MCP tool name as <domain>_<snake_case_method>, and match against available tools\\n- Example: plugin-media detectVideos → matches media_detect_videos, plugin-media download --url ... → matches media_download\\n- Fall back to current behavior (list/dispatch first) when no method argument is provided\\n- Update help output to document this syntax\"\n    },\n    {\n      \"title\": \"Bare 'plugin' command returns 'Unsupported command form' error\",\n      \"severity\": \"High\",\n      \"category\": \"Reliability\",\n      \"reproduction\": \"./b4w.ps1 plugin\",\n      \"expected\": \"Lists available plugin tools or shows plugin subcommands, as the code at main.rs:14622-14631 intends.\",\n      \"actual\": \"Error: Unsupported command form: plugin. Use 'browser4-cli plugin <subcommand>' instead.\",\n      \"rootCause\": \"The command parser appears to intercept bare 'plugin' before it reaches the dynamic plugin handler at line 14622-14623. The normalization/rewriting logic (normalize_command_invocation, rewrite_prefixed_command) may be rejecting or rewriting the bare 'plugin' form. The code path at line 14622-14623 (is_bare_plugin) is never reached.\",\n      \"codePointer\": \"cli/browser4-cli/src/main.rs: command normalization/rewriting before line 14611, or the match at line 14611-14650\",\n      \"suggestion\": \"- Trace why bare 'plugin' never reaches the is_bare_plugin check at line 14622\\n- Ensure the command normalization doesn't rewrite or reject bare 'plugin' before the dynamic handler can process it\\n- Add a test case for bare 'plugin' command invocation\"\n    },\n    {\n      \"title\": \"Plugin status always shows 'inactive (restart required)' even after server restart\",\n      \"severity\": \"Medium\",\n      \"category\": \"Reliability\",\n      \"reproduction\": \"1. ./b4w.ps1 plugin install <jar>\\n2. ./b4w.ps1 stop\\n3. ./b4w.ps1 goto <url>  (auto-starts server)\\n4. ./b4w.ps1 plugin list\",\n      \"expected\": \"All plugins show 'active' status after server restart.\",\n      \"actual\": \"All 4 plugins show 'inactive (restart required)' even though the server was fully stopped and restarted, and the JARs are present in the runtime bundle's plugins/ directory.\",\n      \"rootCause\": \"The plugin status reporting may check a stale flag or use a different mechanism than actual plugin loading. The plugins are functionally loaded (plugin-media responds to tool calls), but the status display still reports them as inactive. This could be a mismatch between how plugin status is persisted/checked vs. how the runtime actually loads plugins.\",\n      \"codePointer\": \"Unknown — needs investigation into plugin status reporting mechanism vs. runtime classpath loading\",\n      \"suggestion\": \"- Investigate the plugin status storage mechanism — is it file-based, in-memory, or derived from classpath scanning?\\n- Ensure status reflects actual runtime state rather than a stale installation flag\\n- If 'inactive (restart required)' is shown, add a hint about how to actually activate (e.g., 'Run browser4-cli stop && browser4-cli goto <url> to restart')\"\n    },\n    {\n      \"title\": \"Short flag -v 0 is silently consumed, causing snapshot to show help instead of viewport 0\",\n      \"severity\": \"Medium\",\n      \"category\": \"UX\",\n      \"reproduction\": \"./b4w.ps1 snapshot -v 0 --stdout\",\n      \"expected\": \"Snapshot output for viewport 0 (top of page).\",\n      \"actual\": \"Help text is printed. The command was parsed as 'snapshot 0 --stdout' (the -v flag was consumed somewhere).\",\n      \"rootCause\": \"The -v short flag is being consumed by the shell, the b4w.ps1 wrapper, or the argument parser before reaching the snapshot handler. The SKILL.md documents this as a known PowerShell issue, but it also occurs in bash. The long form --viewport 0 works correctly.\",\n      \"codePointer\": \"cli/browser4-cli/src/main.rs: argument parsing for snapshot command, or the b4w.ps1 wrapper script\",\n      \"suggestion\": \"- Debug why -v is consumed even in bash (not PowerShell)\\n- Add a diagnostic message when flags are unexpectedly consumed\\n- Consider deprecating -v in favor of --viewport if the short form is unreliable across shells\\n- Document this as a known bash issue too, not just PowerShell\"\n    },\n    {\n      \"title\": \"media.detectVideos scans only top-level DOM, cannot detect videos inside iframes\",\n      \"severity\": \"Medium\",\n      \"category\": \"Product\",\n      \"reproduction\": \"1. ./b4w.ps1 goto \\\"https://www.w3schools.com/html/tryit.asp?filename=tryhtml5_video\\\"\\n2. ./b4w.ps1 plugin-media  (would return 0 videos if the camelCase bug were fixed)\",\n      \"expected\": \"VideoDetector detects the <video> element inside iframeResult (1 video, 2 sources).\",\n      \"actual\": \"From JS eval: main page has 0 videos. The video is inside the iframeResult iframe. VideoDetector only scans driver.pageSource/document of the top-level frame.\",\n      \"rootCause\": \"VideoDetector.detect() receives a WebDriver and calls driver.evaluate() or parses driver.pageSource — both operate on the top-level browsing context only. There is no logic to enumerate frames/iframes and recursively scan their content.\",\n      \"codePointer\": \"browser4-plugins/browser4-media/src/main/kotlin/ai/platon/pulsar/media/service/VideoDetector.kt:detect()\",\n      \"suggestion\": \"- Add frame enumeration to VideoDetector: use CDP to list all frames (Page.getFrameTree), then evaluate in each frame context\\n- Allow same-origin iframe contentDocument access via driver.switchToFrame() or CDP Runtime.evaluate with contextId\\n- Document the iframe limitation if recursive scanning is not feasible for cross-origin frames\"\n    },\n    {\n      \"title\": \"CLI version mismatch: CLI 4.12.1 vs. backend v4.11.15 causes confusion about which code is being tested\",\n      \"severity\": \"Low\",\n      \"category\": \"UX\",\n      \"reproduction\": \"./b4w.ps1 status\",\n      \"expected\": \"CLI and backend versions match (both from local source tree).\",\n      \"actual\": \"CLI version: 4.12.1, Installed version: v4.11.15. Warning about version mismatch and suggestion to run mvn spring-boot:run.\",\n      \"rootCause\": \"The CLI is built from local source (cargo build), but the backend auto-starts from a pre-built runtime bundle in browser4-apps/browser4-bundle/target/ which was built from an older version. The runtime bundle is not automatically rebuilt when source changes.\",\n      \"codePointer\": \"N/A — build/dev workflow issue\",\n      \"suggestion\": \"- Auto-detect when the runtime bundle is stale vs. source and offer to rebuild\\n- Add a --use-local-backend flag that runs mvn spring-boot:run automatically\\n- Clarify in dev workflow docs when and how to rebuild the runtime bundle\"\n    },\n    {\n      \"title\": \"No mention of plugin-<domain> command syntax in help output or SKILL.md\",\n      \"severity\": \"Low\",\n      \"category\": \"Discoverability\",\n      \"reproduction\": \"./b4w.ps1 help  (search for 'plugin-' or 'media' — not found)\",\n      \"expected\": \"Help output documents the plugin-<domain> dynamic command syntax and lists available plugin domains.\",\n      \"actual\": \"Help shows 'plugin list|info|install|remove' but no mention of plugin-<domain> for invoking plugin tools. The syntax was only discovered by reading Rust source code.\",\n      \"rootCause\": \"The dynamic plugin command handler exists in code (handle_dynamic_plugin_command) but is not documented in CLI help, SKILL.md, or any reference file. Users have no way to discover this feature without reading source code.\",\n      \"codePointer\": \"cli/browser4-cli/src/main.rs and skills/browser4-cli/SKILL.md\",\n      \"suggestion\": \"- Add plugin-<domain> syntax to help output under a 'Plugins' category\\n- Document in SKILL.md with examples: plugin-media, plugin-pptx, etc.\\n- Add 'browser4-cli plugin' to list available plugin domains/tools\\n- Add --help plugins category that shows available plugin domains and tools\"\n    }\n  ],\n  \"assessment\": {\n    \"completionStatus\": \"Partially Successful — All 6 task steps were completed, but every step requiring the browser4-media plugin required a workaround (JS eval, curl, ffprobe) due to the critical camelCase/snake_case conversion bug and the inability to select specific plugin methods.\",\n    \"successRate\": \"60% — 3 of 5 plugin-reliant steps required external tool workarounds. The core browser automation (goto, eval, snapshot) worked reliably.\",\n    \"issuesFound\": 8,\n    \"majorBlockers\": \"The camelCase/snake_case mismatch in dispatchToCustomExecutor (Issue 1) makes ALL MediaToolExecutor methods unusable from the CLI. Combined with the inability to select specific plugin methods (Issue 2), no plugin media tool can be invoked successfully. These two issues together completely block plugin functionality.\",\n    \"mostConfusingAspects\": \"1. Discovering that plugin tools use a completely different invocation syntax (plugin-<domain>) not documented anywhere in help or SKILL.md. 2. The 'inactive (restart required)' status persisting after restart — it's unclear whether plugins are actually loaded. 3. The bare 'plugin' command returning an error, contradicting what the source code suggests should work.\",\n    \"mostValuableImprovements\": \"- Fix the camelCase/snake_case conversion in dispatchToCustomExecutor (one-line fix that unblocks all plugin tools)\\n- Add plugin-<domain> <method> subcommand support so users can select specific tool methods\\n- Document the plugin-<domain> syntax in help output and SKILL.md\\n- Fix the bare 'plugin' command to list available plugin tools\",\n    \"usabilityRating\": 4\n  }\n}\n```",
+    "task": "### Step 1–2: Video Detection on w3schools HTML5 Video Page\n\nNavigated to `https://www.w3schools.com/html/html5_video.asp`. The `media.detectVideos` tool could not be used directly due to a critical camelCase/snake_case conversion bug in the tool dispatch layer (see Issue 1). Instead, JavaScript evaluation (`eval`) was used as a workaround.\n\n**Results from JS-based detection:**\n\n| # | Tag | Source URL | MIME Type | Dimensions | Controls |\n|---|-----|-----------|-----------|------------|----------|\n| 1 | `<video>` | `mov_bbb.mp4` (currentSrc) | — | 320×176 | Yes |\n| 2 | `<source>` | `https://www.w3schools.com/html/mov_bbb.mp4` | `video/mp4` | — | — |\n| 3 | `<source>` | `https://www.w3schools.com/html/mov_bbb.ogg` | `video/ogg` | — | — |\n| 4 | `<video>` | `mov_bbb.mp4` (currentSrc) | — | 480×176 | No |\n| 5 | `<source>` | `https://www.w3schools.com/html/mov_bbb.mp4` | `video/mp4` | — | — |\n| 6 | `<source>` | `https://www.w3schools.com/html/mov_bbb.ogg` | `video/ogg` | — | — |\n\n- **Total video sources detected:** 6 (2 `<video>` tags + 4 `<source>` children)\n- **`<video>` tags:** 2\n- **`<source>` children:** 4\n- **Iframe embeds:** 1 (empty src, likely ad container)\n- **HLS/DASH streams:** None detected (only direct MP4 and OGG files)\n\n### Step 3: Download MP4 Video\n\nThe `media.download` tool could not be invoked because `plugin-media` always dispatches to the first matching tool alphabetically and provides no subcommand mechanism to select `download` (see Issue 2). Used `curl` as a workaround.\n\n- **Direct MP4 URL:** `https://www.w3schools.com/html/mov_bbb.mp4`\n- **Download success:** Yes (788,493 bytes)\n- **File on disk:** Verified at `.test-sessions/mov_bbb.mp4` (valid ISO Media/MP4)\n\n### Step 4: YouTube Embed Detection\n\nNavigated to `https://www.w3schools.com/html/html_youtube.asp`.\n\n- **`<video>` elements:** 0\n- **`<source>` elements:** 0\n- **Iframes:** 7 (mostly `about:blank` and ad containers; no `youtube.com` src detected in initial DOM)\n- **YouTube embeds:** The w3schools page likely loads YouTube players dynamically via JavaScript after page load, so the YouTube iframe is not present in the static DOM at inspection time.\n- **`media.detectVideos`:** Same camelCase/snake_case bug persists; backend would report 0 video elements from the top-level DOM.\n\n### Step 5: Video Inside Iframe\n\nNavigated to `https://www.w3schools.com/html/tryit.asp?filename=tryhtml5_video`.\n\n- **Main page:** 0 `<video>` elements, 0 `<source>` elements\n- **Inside `iframeResult`:** 1 `<video>` with `controls=true`, `320×176`, 2 `<source>` children (MP4 + OGG)\n- **`media.detectVideos` from backend perspective:** Would report 0 videos — the `VideoDetector` scans only the top-level DOM and does not descend into iframes (see Issue 6).\n\n### Step 6: Video Metadata\n\nUsed `ffprobe` as workaround since `media.getInfo` suffers from the same camelCase/snake_case bug.\n\n| Property | Value |\n|----------|-------|\n| **Format** | MP4 (QuickTime/MOV), `mp42` brand |\n| **Duration** | 10.027 seconds |\n| **Resolution** | 320 × 176 |\n| **Video codec** | H.264 (Main profile), 25 fps, ~301 kbps |\n| **Audio codec** | AAC LC, 48 kHz stereo, ~161 kbps |\n| **Container bitrate** | ~629 kbps |\n| **Streams** | 4 (1 video + 2 audio + 1 data/timed text) |\n\n---"
+  },
+  "issues": [
+    {
+      "number": 1,
+      "title": "dispatchToCustomExecutor does not convert snake_case method names back to camelCase",
+      "severity": "Critical",
+      "category": "Product",
+      "sections": [
+        {
+          "body": "./b4w.ps1 goto \"https://www.w3schools.com/html/html5_video.asp\" && ./b4w.ps1 plugin-media",
+          "label": "Reproduction"
+        },
+        {
+          "body": "media.detectVideos executes successfully and returns detected video sources.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "Error: media_detect_videos failed: Unsupported media method: detect_videos. Supported: detectVideos, download, process, extractAudio, trim, compress, getInfo.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "MCPToolController.toMcpToolName() converts camelCase method names to snake_case for MCP tool names (e.g. detectVideos → detect_videos → media_detect_videos). When dispatchToCustomExecutor extracts the method portion from the MCP tool name at line 772, it does substring(domain.length + 1) yielding detect_videos (snake_case). But MediaToolExecutor.callFunctionOn() matches against camelCase method names (detectVideos). The reverse conversion (snake_case → camelCase) is never applied in the custom executor path, though resolveMcpToolCall() in the AgentToolManager path correctly resolves it by iterating through all registered tool specs.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "browser4-rest/src/main/kotlin/ai/platon/pulsar/rest/mcp/controller/MCPToolController.kt:dispatchToCustomExecutor() lines 771-776",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Convert extracted method name from snake_case back to camelCase in dispatchToCustomExecutor (e.g. detect_videos → detectVideos) before passing to callFunctionOn\n- Alternatively, make MediaToolExecutor.callFunctionOn() accept both camelCase and snake_case method names\n- Add a unit test that verifies round-trip conversion: toMcpToolName → extract method → camelCase matches original method name\n- Consider adding a ToolCall factory that handles the conversion, so all custom executors benefit",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 2,
+      "title": "plugin-<domain> command cannot select specific tool methods — always dispatches to first matching tool",
+      "severity": "High",
+      "category": "Product",
+      "sections": [
+        {
+          "body": "./b4w.ps1 plugin-media  (always calls media_compress or media_detect_videos, never media_download or media_getInfo)",
+          "label": "Reproduction"
+        },
+        {
+          "body": "A way to invoke specific plugin methods, e.g. plugin-media download --url <url> or plugin-media detectVideos.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "plugin-media always picks matching[0] (first tool alphabetically matching the 'media_' prefix). There is no syntax for selecting a specific method within a plugin domain.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "In handle_dynamic_plugin_command() (main.rs line 11541), matching[0] is used unconditionally. The remaining positional args after the command name are parsed as key-value parameters rather than as a subcommand. There is no mechanism to route plugin-media download to media_download vs plugin-media detectVideos to media_detect_videos.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "cli/browser4-cli/src/main.rs:handle_dynamic_plugin_command() lines 11541-11544",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Support plugin-<domain> <method> syntax: treat the first positional arg after plugin-media as the method name, construct MCP tool name as <domain>_<snake_case_method>, and match against available tools\n- Example: plugin-media detectVideos → matches media_detect_videos, plugin-media download --url ... → matches media_download\n- Fall back to current behavior (list/dispatch first) when no method argument is provided\n- Update help output to document this syntax",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 3,
+      "title": "Bare 'plugin' command returns 'Unsupported command form' error",
+      "severity": "High",
+      "category": "Reliability",
+      "sections": [
+        {
+          "body": "./b4w.ps1 plugin",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Lists available plugin tools or shows plugin subcommands, as the code at main.rs:14622-14631 intends.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "Error: Unsupported command form: plugin. Use 'browser4-cli plugin <subcommand>' instead.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The command parser appears to intercept bare 'plugin' before it reaches the dynamic plugin handler at line 14622-14623. The normalization/rewriting logic (normalize_command_invocation, rewrite_prefixed_command) may be rejecting or rewriting the bare 'plugin' form. The code path at line 14622-14623 (is_bare_plugin) is never reached.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "cli/browser4-cli/src/main.rs: command normalization/rewriting before line 14611, or the match at line 14611-14650",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Trace why bare 'plugin' never reaches the is_bare_plugin check at line 14622\n- Ensure the command normalization doesn't rewrite or reject bare 'plugin' before the dynamic handler can process it\n- Add a test case for bare 'plugin' command invocation",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 4,
+      "title": "Plugin status always shows 'inactive (restart required)' even after server restart",
+      "severity": "Medium",
+      "category": "Reliability",
+      "sections": [
+        {
+          "body": "1. ./b4w.ps1 plugin install <jar>\n2. ./b4w.ps1 stop\n3. ./b4w.ps1 goto <url>  (auto-starts server)\n4. ./b4w.ps1 plugin list",
+          "label": "Reproduction"
+        },
+        {
+          "body": "All plugins show 'active' status after server restart.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "All 4 plugins show 'inactive (restart required)' even though the server was fully stopped and restarted, and the JARs are present in the runtime bundle's plugins/ directory.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The plugin status reporting may check a stale flag or use a different mechanism than actual plugin loading. The plugins are functionally loaded (plugin-media responds to tool calls), but the status display still reports them as inactive. This could be a mismatch between how plugin status is persisted/checked vs. how the runtime actually loads plugins.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "Unknown — needs investigation into plugin status reporting mechanism vs. runtime classpath loading",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Investigate the plugin status storage mechanism — is it file-based, in-memory, or derived from classpath scanning?\n- Ensure status reflects actual runtime state rather than a stale installation flag\n- If 'inactive (restart required)' is shown, add a hint about how to actually activate (e.g., 'Run browser4-cli stop && browser4-cli goto <url> to restart')",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 5,
+      "title": "Short flag -v 0 is silently consumed, causing snapshot to show help instead of viewport 0",
+      "severity": "Medium",
+      "category": "UX",
+      "sections": [
+        {
+          "body": "./b4w.ps1 snapshot -v 0 --stdout",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Snapshot output for viewport 0 (top of page).",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "Help text is printed. The command was parsed as 'snapshot 0 --stdout' (the -v flag was consumed somewhere).",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The -v short flag is being consumed by the shell, the b4w.ps1 wrapper, or the argument parser before reaching the snapshot handler. The SKILL.md documents this as a known PowerShell issue, but it also occurs in bash. The long form --viewport 0 works correctly.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "cli/browser4-cli/src/main.rs: argument parsing for snapshot command, or the b4w.ps1 wrapper script",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Debug why -v is consumed even in bash (not PowerShell)\n- Add a diagnostic message when flags are unexpectedly consumed\n- Consider deprecating -v in favor of --viewport if the short form is unreliable across shells\n- Document this as a known bash issue too, not just PowerShell",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 6,
+      "title": "media.detectVideos scans only top-level DOM, cannot detect videos inside iframes",
+      "severity": "Medium",
+      "category": "Product",
+      "sections": [
+        {
+          "body": "1. ./b4w.ps1 goto \"https://www.w3schools.com/html/tryit.asp?filename=tryhtml5_video\"\n2. ./b4w.ps1 plugin-media  (would return 0 videos if the camelCase bug were fixed)",
+          "label": "Reproduction"
+        },
+        {
+          "body": "VideoDetector detects the <video> element inside iframeResult (1 video, 2 sources).",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "From JS eval: main page has 0 videos. The video is inside the iframeResult iframe. VideoDetector only scans driver.pageSource/document of the top-level frame.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "VideoDetector.detect() receives a WebDriver and calls driver.evaluate() or parses driver.pageSource — both operate on the top-level browsing context only. There is no logic to enumerate frames/iframes and recursively scan their content.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "browser4-plugins/browser4-media/src/main/kotlin/ai/platon/pulsar/media/service/VideoDetector.kt:detect()",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Add frame enumeration to VideoDetector: use CDP to list all frames (Page.getFrameTree), then evaluate in each frame context\n- Allow same-origin iframe contentDocument access via driver.switchToFrame() or CDP Runtime.evaluate with contextId\n- Document the iframe limitation if recursive scanning is not feasible for cross-origin frames",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 7,
+      "title": "CLI version mismatch: CLI 4.12.1 vs. backend v4.11.15 causes confusion about which code is being tested",
+      "severity": "Low",
+      "category": "UX",
+      "sections": [
+        {
+          "body": "./b4w.ps1 status",
+          "label": "Reproduction"
+        },
+        {
+          "body": "CLI and backend versions match (both from local source tree).",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "CLI version: 4.12.1, Installed version: v4.11.15. Warning about version mismatch and suggestion to run mvn spring-boot:run.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The CLI is built from local source (cargo build), but the backend auto-starts from a pre-built runtime bundle in browser4-apps/browser4-bundle/target/ which was built from an older version. The runtime bundle is not automatically rebuilt when source changes.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "N/A — build/dev workflow issue",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Auto-detect when the runtime bundle is stale vs. source and offer to rebuild\n- Add a --use-local-backend flag that runs mvn spring-boot:run automatically\n- Clarify in dev workflow docs when and how to rebuild the runtime bundle",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 8,
+      "title": "No mention of plugin-<domain> command syntax in help output or SKILL.md",
+      "severity": "Low",
+      "category": "Discoverability",
+      "sections": [
+        {
+          "body": "./b4w.ps1 help  (search for 'plugin-' or 'media' — not found)",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Help output documents the plugin-<domain> dynamic command syntax and lists available plugin domains.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "Help shows 'plugin list|info|install|remove' but no mention of plugin-<domain> for invoking plugin tools. The syntax was only discovered by reading Rust source code.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The dynamic plugin command handler exists in code (handle_dynamic_plugin_command) but is not documented in CLI help, SKILL.md, or any reference file. Users have no way to discover this feature without reading source code.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "cli/browser4-cli/src/main.rs and skills/browser4-cli/SKILL.md",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Add plugin-<domain> syntax to help output under a 'Plugins' category\n- Document in SKILL.md with examples: plugin-media, plugin-pptx, etc.\n- Add 'browser4-cli plugin' to list available plugin domains/tools\n- Add --help plugins category that shows available plugin domains and tools",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    }
+  ]
+}

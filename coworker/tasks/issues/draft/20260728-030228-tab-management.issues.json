@@ -1,0 +1,298 @@
+{
+  "meta": {
+    "source": "20260728-030228-tab-management.full.md",
+    "date": "20260728-030228",
+    "mode": "dev",
+    "scenario": "tab-management"
+  },
+  "background": {
+    "executionContext": "| Step | Command | Outcome |\n|------|---------|---------|\n| 1 | `./b4w.ps1 goto \"https://en.wikipedia.org/wiki/Web_scraping\"` | ✅ Success |\n| 2 | `./b4w.ps1 tab-list` | ✅ 1 tab shown |\n| 3 | `./b4w.ps1 tab-new \"https://news.ycombinator.com\"` | ✅ Tab 1 created |\n| 4 | `./b4w.ps1 tab-new \"https://en.wikipedia.org/wiki/Data_mining\"` | ✅ Tab 2 created |\n| 5 | `./b4w.ps1 tab-list` | ✅ 3 tabs shown |\n| 6a | `./b4w.ps1 tab-select 0` | ✅ Switched |\n| 6b | `./b4w.ps1 snapshot -v 0` | ❌ PowerShell consumed `-v` flag |\n| 6c | `./b4w.ps1 -- snapshot -v 0` | ❌ PowerShell param binding error |\n| 6d | `./b4w.sh snapshot -v 0` | ✅ Snapshot taken |\n| 7a | `./b4w.sh tab-select 1` | ✅ Switched |\n| 7b | `./b4w.sh snapshot -v 0` | ✅ Snapshot taken |\n| 8 | `./b4w.sh tab-close 1` | ✅ Closed |\n| 9 | `./b4w.sh tab-list` | ✅ 2 tabs confirmed |\n| 10a | `./b4w.sh tab-select 0` + `snapshot -v 0` | ✅ Verified |\n| 10b | `./b4w.sh tab-select 1` + `snapshot -v 0` | ✅ Verified |\n\n**Key decisions:** Switched to `b4w.sh` after `b4w.ps1` couldn't pass `-v` flags. Continued using `b4w.sh` for consistency. Used `snapshot -v 0` viewport pagination as recommended by SKILL.md for getting element refs.\n\n```json\n{\n  \"issues\": [\n    {\n      \"title\": \"PowerShell -v flag interception makes snapshot -v 0 fail with b4w.ps1\",\n      \"severity\": \"High\",\n      \"category\": \"UX\",\n      \"reproduction\": \"./b4w.ps1 snapshot -v 0\",\n      \"expected\": \"Snapshot captured with viewport 0 (top of page).\",\n      \"actual\": \"Error: Unknown command: 'snapshot-0'. Did you mean: 'snapshot'? The -v flag was consumed by PowerShell as -Verbose, leaving '0' appended to 'snapshot'.\",\n      \"rootCause\": \"PowerShell's parameter binder matches -v to its built-in -Verbose common parameter before the script's $RemainingArgs collection receives it. The script uses [Parameter(ValueFromRemainingArguments = $true)] which only collects arguments not matched by any declared parameter, but -v matches -Verbose.\",\n      \"codePointer\": \"b4w.ps1: the param() block and how RemainingArgs is forwarded to cargo run\",\n      \"suggestion\": \"- Add a -v shorthand param to b4w.ps1 that explicitly passes it through to the CLI (e.g., [switch]$v plus manual argument reconstruction)\\n- Or document prominently that Linux/bash users should prefer b4w.sh, and explain why\\n- Fix the documented -- separator workaround (currently broken: 'Parameter name '' is ambiguous')\\n- Consider detecting pwsh version and warning about known parameter binding conflicts\"\n    },\n    {\n      \"title\": \"Documented -- separator workaround for b4w.ps1 doesn't work\",\n      \"severity\": \"High\",\n      \"category\": \"Documentation\",\n      \"reproduction\": \"./b4w.ps1 -- snapshot -v 0\",\n      \"expected\": \"The -- separator should pass snapshot -v 0 through to the CLI.\",\n      \"actual\": \"PowerShell error: 'Parameter cannot be processed because the parameter name '' is ambiguous. Possible matches include: -Rebuild -RemainingArgs -Verbose ...'\",\n      \"rootCause\": \"The b4w.ps1 param block declares [Parameter(ValueFromRemainingArguments = $true)] which doesn't interact correctly with -- when the script itself is the target. PowerShell's -- separator only works for native commands, not script parameters.\",\n      \"codePointer\": \"b4w.ps1: param() declaration and argument forwarding logic\",\n      \"suggestion\": \"- Either fix b4w.ps1 to properly handle -- separator by parsing it before the param block\\n- Or update the SKILL.md documentation to remove this as a recommended workaround since it doesn't work\\n- Or recommend using b4w.sh on Linux/macOS and b4w.bat on Windows CMD as the primary workaround\"\n    },\n    {\n      \"title\": \"b4w.sh prints intrusive nag message on every invocation\",\n      \"severity\": \"Medium\",\n      \"category\": \"UX\",\n      \"reproduction\": \"Run any command via ./b4w.sh. E.g., ./b4w.sh tab-list\",\n      \"expected\": \"Clean output with only the command result, or at most a one-time warning.\",\n      \"actual\": \"Every invocation prints: 'It is strongly recommended to launch pwsh and run the .ps1 commands directly within the pwsh terminal.' This appears on stderr for every single command, creating noise.\",\n      \"rootCause\": \"b4w.sh includes this warning unconditionally before every execution, likely as a cross-platform guidance mechanism, but it fires on every command rather than once per session.\",\n      \"codePointer\": \"b4w.sh: the echo/warning line before the pwsh invocation\",\n      \"suggestion\": \"- Only print the warning once per shell session (e.g., check for an env var like B4W_SH_WARNED)\\n- Or remove the warning entirely on Linux since pwsh is an optional dependency, not the native shell\\n- Or move the warning to stderr with a --quiet guard so --json consumers aren't affected\"\n    },\n    {\n      \"title\": \"Cargo build warning clutters every command output\",\n      \"severity\": \"Low\",\n      \"category\": \"UX\",\n      \"reproduction\": \"Run any command via ./b4w.ps1 or ./b4w.sh\",\n      \"expected\": \"Clean invocation without build-system noise, or build warnings only on first run.\",\n      \"actual\": \"Every command prints: 'warning: browser4-cli@4.12.0: browser4-cli: embedded 31 skill files from /home/vincent/workspace/Browser4-4.12/skills' and 'Finished dev profile [unoptimized + debuginfo] target(s) in 0.XXs'\",\n      \"rootCause\": \"Cargo outputs build status even when nothing needs rebuilding. The warning about embedded skill files comes from the build script (build.rs) that embeds skill files into the binary.\",\n      \"codePointer\": \"cli/browser4-cli/build.rs: the cargo:warning= directive for skill file embedding\",\n      \"suggestion\": \"- Demote the skill-file embedding message from warning to info/message level\\n- Or redirect cargo stderr in b4w.sh/b4w.ps1 and only show it when the build actually fails\\n- Consider embedding skill files only during release builds, not dev builds\"\n    },\n    {\n      \"title\": \"Help output is a wall of text — category filters are buried at the bottom\",\n      \"severity\": \"Medium\",\n      \"category\": \"Discoverability\",\n      \"reproduction\": \"Run ./b4w.ps1 help or ./b4w.ps1 --help\",\n      \"expected\": \"Concise overview with clear pointers to drill down. Category filters should be prominent.\",\n      \"actual\": \"The help output lists every command in a large flat wall. The category filter hint ('Filter help by category: --help nav | --help extract | ...') appears as a single line near the top but is easily missed. A first-time user sees ~200 lines of commands with no obvious structure.\",\n      \"rootCause\": \"The help system prioritizes completeness over discoverability. All commands are shown at once rather than using a hierarchical drill-down approach.\",\n      \"codePointer\": \"cli/browser4-cli/src/ (help/usage formatting module)\",\n      \"suggestion\": \"- Default help should show only top-level categories with a prominent 'Use --help <category> for details' message\\n- Add a 'Getting Started' section at the very top with the 3 most common commands (goto, snapshot, click)\\n- Use color or bold to visually distinguish category headers from individual commands\\n- Consider an interactive --help that asks what you want to do (navigate, extract, etc.)\"\n    },\n    {\n      \"title\": \"tab-new auto-switches to the new tab with no opt-out\",\n      \"severity\": \"Low\",\n      \"category\": \"UX\",\n      \"reproduction\": \"Open multiple tabs: tab-new url1, then tab-new url2\",\n      \"expected\": \"Option to open tab in background (stay on current tab) or foreground (switch to new tab).\",\n      \"actual\": \"tab-new always switches to the new tab. To open multiple tabs and stay on the original, you must tab-select back after each tab-new.\",\n      \"rootCause\": \"tab-new always calls tab-select after creating the tab. There's no --background flag.\",\n      \"codePointer\": \"cli/browser4-cli/src/ (tab-new handler), and the backend MCP tool that creates tabs\",\n      \"suggestion\": \"- Add a --background flag to tab-new that creates the tab without switching to it\\n- Document the auto-switch behavior more prominently (it's mentioned but buried in the examples section notes)\"\n    },\n    {\n      \"title\": \"No tab-title or tab-url command for quick context checks\",\n      \"severity\": \"Low\",\n      \"category\": \"UX\",\n      \"reproduction\": \"After switching tabs, you need to run a full snapshot just to verify which page you're on.\",\n      \"expected\": \"A lightweight command like 'tab-current' or 'tab-info' that shows the current tab's URL and title without a full snapshot.\",\n      \"actual\": \"The only way to confirm the current page is to run 'snapshot' or 'tab-list' and infer which tab is active. Snapshot takes a full accessibility tree capture which is overkill for a simple context check.\",\n      \"rootCause\": \"No lightweight tab-state query command exists. tab-list shows all tabs but doesn't highlight the active one.\",\n      \"codePointer\": \"\",\n      \"suggestion\": \"- Add a 'tab-current' command that prints just the active tab's index, GUID, title, and URL\\n- Or add an active-tab indicator (e.g., '*') in the tab-list output to show which tab has focus\\n- This would reduce the need for full snapshots during tab-switching workflows\"\n    },\n    {\n      \"title\": \"tab-list doesn't indicate which tab is currently active\",\n      \"severity\": \"Low\",\n      \"category\": \"UX\",\n      \"reproduction\": \"Open 3 tabs, switch to tab 1, then run tab-list\",\n      \"expected\": \"The currently active tab should be visually marked (e.g., with an asterisk or arrow).\",\n      \"actual\": \"tab-list shows all tabs identically. After switching tabs multiple times, the user has no way to tell from tab-list output which tab is active without running a snapshot.\",\n      \"rootCause\": \"The tab-list output format doesn't include an active-tab indicator despite having access to this information from the browser.\",\n      \"codePointer\": \"Backend: the tab-list handler in the session/tab management code\",\n      \"suggestion\": \"- Add a '*' or '>' prefix to the active tab row in tab-list output\\n- Include an 'active' boolean field in the --json output for tab-list\\n- Document which tab becomes active after tab-close (currently unspecified)\"\n    }\n  ],\n  \"assessment\": {\n    \"completionStatus\": \"Successful — all 10 task steps completed. Tab management (create, list, switch, close, verify) worked reliably. The core functionality is solid once the invocation issues are worked around.\",\n    \"successRate\": \"90% — 9/10 steps worked on first attempt; step 6 required 2 retries due to PowerShell flag interception before finding the b4w.sh workaround\",\n    \"issuesFound\": 8,\n    \"majorBlockers\": \"The b4w.ps1 -v flag interception is a significant first-time-user friction point. A user following the documented workflow 'goto url → snapshot -v 0 → click ref' would hit this on step 2. The documented -- separator workaround doesn't work, leaving the user with no clear path forward unless they discover b4w.sh independently.\",\n    \"mostConfusingAspects\": \"1) The PowerShell flag interception issue — the help output and SKILL.md both show 'snapshot -v 0' as the canonical workflow, but it silently fails with a confusing error when using b4w.ps1. 2) The 'It is strongly recommended to launch pwsh' nag message on every b4w.sh invocation makes the user feel they're doing something wrong, when in fact b4w.sh is the correct launcher on Linux. 3) The cargo build warnings that appear on every command make it unclear whether something is wrong or if this is normal.\",\n    \"mostValuableImprovements\": \"1) Fix b4w.ps1 flag forwarding so -v and -i work without interception — this is the #1 friction point. 2) Add an active-tab indicator to tab-list output. 3) Default help should show a concise overview with category drill-down rather than a wall of text. 4) Remove or rate-limit the b4w.sh nag message.\",\n    \"usabilityRating\": 6\n  }\n}\n```\n\n---\n\n### Summary\n\nThe **tab management workflow** (tab-list, tab-new, tab-select, tab-close) is well-designed and reliable. Commands are named intuitively, output is clear, and the indexed-based + GUID-based dual targeting system is a good design choice. The snapshot verification pattern works well for confirming context after tab switches.\n\nHowever, the **first-time experience is significantly marred** by the PowerShell wrapper issues. A user following the documented workflow (`goto → snapshot -v 0 → click`) would encounter confusing failures on step 2, and the documented `--` separator workaround doesn't work. This is the single biggest barrier to a smooth onboarding experience.\n\nThe noise level is also higher than it should be: cargo build warnings on every invocation and the b4w.sh nag message create a sense that something is wrong even when everything is working fine.",
+    "task": "All 10 steps of the task were completed successfully:\n\n1. ✅ Navigated to `https://en.wikipedia.org/wiki/Web_scraping` — page loaded with title \"Web scraping - Wikipedia\"\n2. ✅ Listed tabs — initial state showed 1 tab (index 0, Web scraping)\n3. ✅ Opened new tab and navigated to `https://news.ycombinator.com` — tab created at index 1\n4. ✅ Opened new tab and navigated to `https://en.wikipedia.org/wiki/Data_mining` — tab created at index 2\n5. ✅ Listed all tabs — three tabs confirmed with correct indices, titles, and URLs\n6. ✅ Switched to tab 0 (Web scraping) and took a snapshot — confirmed \"Web scraping - Wikipedia\" title\n7. ✅ Switched to tab 1 (Hacker News) and took a snapshot — confirmed \"Hacker News\" title\n8. ✅ Closed Hacker News tab (index 1) — closed with GUID confirmation\n9. ✅ Listed tabs — confirmed only 2 tabs remained, index 0 (Web scraping) and index 1 (Data mining, renumbered from 2)\n10. ✅ Switched to each remaining tab and took snapshots — both tabs fully functional\n\n**Workaround required:** Had to switch from `./b4w.ps1` to `./b4w.sh` after the `-v` flag was intercepted by PowerShell's parameter binder on step 6. The documented `--` separator workaround also failed.\n\n---"
+  },
+  "issues": [
+    {
+      "number": 1,
+      "title": "PowerShell -v flag interception makes snapshot -v 0 fail with b4w.ps1",
+      "severity": "High",
+      "category": "UX",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "./b4w.ps1 snapshot -v 0"
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "Snapshot captured with viewport 0 (top of page)."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "Error: Unknown command: 'snapshot-0'. Did you mean: 'snapshot'? The -v flag was consumed by PowerShell as -Verbose, leaving '0' appended to 'snapshot'."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "PowerShell's parameter binder matches -v to its built-in -Verbose common parameter before the script's $RemainingArgs collection receives it. The script uses [Parameter(ValueFromRemainingArguments = $true)] which only collects arguments not matched by any declared parameter, but -v matches -Verbose."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "b4w.ps1: the param() block and how RemainingArgs is forwarded to cargo run"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Add a -v shorthand param to b4w.ps1 that explicitly passes it through to the CLI (e.g., [switch]$v plus manual argument reconstruction)\n- Or document prominently that Linux/bash users should prefer b4w.sh, and explain why\n- Fix the documented -- separator workaround (currently broken: 'Parameter name '' is ambiguous')\n- Consider detecting pwsh version and warning about known parameter binding conflicts"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 2,
+      "title": "Documented -- separator workaround for b4w.ps1 doesn't work",
+      "severity": "High",
+      "category": "Documentation",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "./b4w.ps1 -- snapshot -v 0"
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "The -- separator should pass snapshot -v 0 through to the CLI."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "PowerShell error: 'Parameter cannot be processed because the parameter name '' is ambiguous. Possible matches include: -Rebuild -RemainingArgs -Verbose ...'"
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "The b4w.ps1 param block declares [Parameter(ValueFromRemainingArguments = $true)] which doesn't interact correctly with -- when the script itself is the target. PowerShell's -- separator only works for native commands, not script parameters."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "b4w.ps1: param() declaration and argument forwarding logic"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Either fix b4w.ps1 to properly handle -- separator by parsing it before the param block\n- Or update the SKILL.md documentation to remove this as a recommended workaround since it doesn't work\n- Or recommend using b4w.sh on Linux/macOS and b4w.bat on Windows CMD as the primary workaround"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 3,
+      "title": "b4w.sh prints intrusive nag message on every invocation",
+      "severity": "Medium",
+      "category": "UX",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "Run any command via ./b4w.sh. E.g., ./b4w.sh tab-list"
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "Clean output with only the command result, or at most a one-time warning."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "Every invocation prints: 'It is strongly recommended to launch pwsh and run the .ps1 commands directly within the pwsh terminal.' This appears on stderr for every single command, creating noise."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "b4w.sh includes this warning unconditionally before every execution, likely as a cross-platform guidance mechanism, but it fires on every command rather than once per session."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "b4w.sh: the echo/warning line before the pwsh invocation"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Only print the warning once per shell session (e.g., check for an env var like B4W_SH_WARNED)\n- Or remove the warning entirely on Linux since pwsh is an optional dependency, not the native shell\n- Or move the warning to stderr with a --quiet guard so --json consumers aren't affected"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 4,
+      "title": "Help output is a wall of text — category filters are buried at the bottom",
+      "severity": "Medium",
+      "category": "Discoverability",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "Run ./b4w.ps1 help or ./b4w.ps1 --help"
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "Concise overview with clear pointers to drill down. Category filters should be prominent."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "The help output lists every command in a large flat wall. The category filter hint ('Filter help by category: --help nav | --help extract | ...') appears as a single line near the top but is easily missed. A first-time user sees ~200 lines of commands with no obvious structure."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "The help system prioritizes completeness over discoverability. All commands are shown at once rather than using a hierarchical drill-down approach."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "cli/browser4-cli/src/ (help/usage formatting module)"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Default help should show only top-level categories with a prominent 'Use --help <category> for details' message\n- Add a 'Getting Started' section at the very top with the 3 most common commands (goto, snapshot, click)\n- Use color or bold to visually distinguish category headers from individual commands\n- Consider an interactive --help that asks what you want to do (navigate, extract, etc.)"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 5,
+      "title": "Cargo build warning clutters every command output",
+      "severity": "Low",
+      "category": "UX",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "Run any command via ./b4w.ps1 or ./b4w.sh"
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "Clean invocation without build-system noise, or build warnings only on first run."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "Every command prints: 'warning: browser4-cli@4.12.0: browser4-cli: embedded 31 skill files from /home/vincent/workspace/Browser4-4.12/skills' and 'Finished dev profile [unoptimized + debuginfo] target(s) in 0.XXs'"
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "Cargo outputs build status even when nothing needs rebuilding. The warning about embedded skill files comes from the build script (build.rs) that embeds skill files into the binary."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "cli/browser4-cli/build.rs: the cargo:warning= directive for skill file embedding"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Demote the skill-file embedding message from warning to info/message level\n- Or redirect cargo stderr in b4w.sh/b4w.ps1 and only show it when the build actually fails\n- Consider embedding skill files only during release builds, not dev builds"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 6,
+      "title": "tab-new auto-switches to the new tab with no opt-out",
+      "severity": "Low",
+      "category": "UX",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "Open multiple tabs: tab-new url1, then tab-new url2"
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "Option to open tab in background (stay on current tab) or foreground (switch to new tab)."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "tab-new always switches to the new tab. To open multiple tabs and stay on the original, you must tab-select back after each tab-new."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "tab-new always calls tab-select after creating the tab. There's no --background flag."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "cli/browser4-cli/src/ (tab-new handler), and the backend MCP tool that creates tabs"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Add a --background flag to tab-new that creates the tab without switching to it\n- Document the auto-switch behavior more prominently (it's mentioned but buried in the examples section notes)"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 7,
+      "title": "No tab-title or tab-url command for quick context checks",
+      "severity": "Low",
+      "category": "UX",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "After switching tabs, you need to run a full snapshot just to verify which page you're on."
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "A lightweight command like 'tab-current' or 'tab-info' that shows the current tab's URL and title without a full snapshot."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "The only way to confirm the current page is to run 'snapshot' or 'tab-list' and infer which tab is active. Snapshot takes a full accessibility tree capture which is overkill for a simple context check."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "No lightweight tab-state query command exists. tab-list shows all tabs but doesn't highlight the active one."
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Add a 'tab-current' command that prints just the active tab's index, GUID, title, and URL\n- Or add an active-tab indicator (e.g., '*') in the tab-list output to show which tab has focus\n- This would reduce the need for full snapshots during tab-switching workflows"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 8,
+      "title": "tab-list doesn't indicate which tab is currently active",
+      "severity": "Low",
+      "category": "UX",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "Open 3 tabs, switch to tab 1, then run tab-list"
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "The currently active tab should be visually marked (e.g., with an asterisk or arrow)."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "tab-list shows all tabs identically. After switching tabs multiple times, the user has no way to tell from tab-list output which tab is active without running a snapshot."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "The tab-list output format doesn't include an active-tab indicator despite having access to this information from the browser."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "Backend: the tab-list handler in the session/tab management code"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Add a '*' or '>' prefix to the active tab row in tab-list output\n- Include an 'active' boolean field in the --json output for tab-list\n- Document which tab becomes active after tab-close (currently unspecified)"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    }
+  ]
+}
