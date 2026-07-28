@@ -46,7 +46,10 @@ data class CommandStatus(
     var pageStatusCode: Int = ProtocolStatusCodes.SC_CREATED,
     var pageContentBytes: Int = 0,
 
-    var message: String? = null, // additional message, e.g. the action flow
+    var message: String? = null, // human-readable status description
+
+    /** Internal event trace for debugging — concatenated lifecycle event names. */
+    var eventTrace: String? = null,
 
     var request: CommandRequest? = null,
     var commandResult: CommandResult? = null,
@@ -61,7 +64,9 @@ data class CommandStatus(
      * Serialized as "isDone" in JSON — the Jackson Kotlin module preserves the Kotlin
      * property name directly, unlike the Java Bean convention which would strip "is".
      */
-    val isDone: Boolean get() = processState == "done"
+    /** True when the task has reached a terminal state. Accepts the legacy "done" and the
+     * user-facing "completed" (mapped by [AgentTaskStatus.toCommandStatus]). */
+    val isDone: Boolean get() = processState == "done" || processState == "completed"
 
     @get:JsonIgnore
     private var agentStateSnapshot: CommandAgentState? = null
@@ -135,7 +140,22 @@ fun CommandStatus.failed(statusCode: Int): CommandStatus {
 
 fun CommandStatus.emitEvent(event: String) {
     this.event = event
-    message = if (message != null) "$message,$event" else event
+    // Keep the internal event trace for debugging separate from the user-facing message.
+    eventTrace = if (eventTrace != null) "$eventTrace,$event" else event
+    // Generate a concise human-readable status description.
+    message = when {
+        "created" in event -> "Task created, waiting to start"
+        "onWillRun" in event -> "Agent starting up"
+        "onWillAct" in event -> "Agent planning next action"
+        "onDidAct" in event -> "Agent completed an action"
+        "onWillGenerate" in event -> "Agent generating response"
+        "onDidGenerate" in event -> "Agent response generated"
+        "onError" in event -> "Agent encountered an error"
+        "onDidRun" in event -> "Agent run completed, finalizing"
+        "onWillFail" in event -> "Agent task failing"
+        "onDidFail" in event -> "Agent task failed"
+        else -> "Task is in progress"
+    }
 }
 
 fun CommandStatus.failed(statusCode: Int, pageStatusCode: Int): CommandStatus {
@@ -181,8 +201,10 @@ fun AgentTaskStatus.toCommandStatus(): CommandStatus {
     // Transfer all status fields
     status.statusCode = this.statusCode
     status.event = this.event
-    status.processState = this.processState
+    // Map internal "done" processState to user-facing "completed" in the JSON output.
+    status.processState = if (this.processState == "done") "completed" else this.processState
     status.message = this.message
+    status.eventTrace = this.eventTrace
     status.lastModifiedTime = this.lastModifiedTime
     status.finishTime = this.finishTime
 
@@ -234,7 +256,8 @@ fun PageVisitStatus.toCommandStatus(): CommandStatus {
     // Transfer all basic status fields
     status.statusCode = this.statusCode
     status.event = this.event
-    status.processState = this.processState
+    // Map internal "done" processState to user-facing "completed" in the JSON output.
+    status.processState = if (this.processState == "done") "completed" else this.processState
     status.pageStatusCode = this.pageStatusCode
     status.pageContentBytes = this.pageContentBytes
     status.message = this.message

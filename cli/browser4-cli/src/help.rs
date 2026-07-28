@@ -138,7 +138,7 @@ pub fn generate_help() -> String {
     lines.push("    eval --file script.js                     # read JS from file (no quoting issues)".to_string());
     lines.push("  Bulk crawl:".to_string());
     lines.push("    crawl <url> --out-link-selector \"...\" --depth 1 --sql @query.sql".to_string());
-    lines.push("\nFilter help by category:  --help nav | --help extract | --help session | --help kb | --help swarm | --help crawl".to_string());
+    lines.push("\nFilter help by category:  --help nav | --help extract | --help session | --help kb | --help agent | --help swarm | --help crawl".to_string());
 
     let mut first_category = true;
     for (cat_name, cat_title) in CATEGORY_TITLES {
@@ -162,7 +162,7 @@ pub fn generate_help() -> String {
     lines.push("\nGlobal options:".to_string());
     lines.push(format_with_gap(
         "  --help [cmd|category]",
-        "print help (try: nav, extract, session, kb)",
+        "print help (try: nav, extract, session, kb, agent)",
         30,
     ));
     lines.push(format_with_gap("  --version", "print version", 30));

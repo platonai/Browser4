@@ -7703,7 +7703,7 @@ async fn handle_agent_run(
     }
 
     cli_println!(
-        "Use 'browser4-cli agent status {}' to check progress, or 'browser4-cli agent list' to view all tracked tasks.",
+        "Use 'agent status {}' to check progress, or 'agent list' to view all tracked tasks.",
         task_id
     );
 
@@ -7920,8 +7920,6 @@ async fn handle_agent_list(
             if entry.command != "agent" {
                 continue;
             }
-            let was_already_completed =
-                entry.last_status == "completed" || entry.last_status == "done";
             if let Ok(status_json) = get_command_status(client, base_url, &entry.task_id).await {
                 if let Ok(parsed) = serde_json::from_str::<Value>(&status_json) {
                     let process_state = parsed.get("processState").and_then(|v| v.as_str()).unwrap_or("");
@@ -7929,8 +7927,10 @@ async fn handle_agent_list(
                     let status_code = parse_status_code_from_json(&parsed);
                     entry.last_status = friendly_agent_status(process_state, is_done, &status_code);
                     // Prefer backend finishTime; fall back to local clock.
+                    // Only set completed_at when it hasn't been set yet — once set,
+                    // keep the first completion timestamp (don't overwrite on later polls).
                     let now_completed = entry.last_status == "completed" || entry.last_status.starts_with("failed");
-                    if !was_already_completed && now_completed {
+                    if now_completed && entry.completed_at.is_none() {
                         if let Some(ts) = parsed.get("finishTime").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
                             entry.completed_at = Some(ts.to_string());
                         } else {
@@ -7942,7 +7942,7 @@ async fn handle_agent_list(
         }
         let _ = write_async_tasks(&list, None);
     } else {
-        cli_println!("Note: Backend unreachable — showing cached statuses. Start the server for live status.");
+        cli_println!("Note: Backend unreachable — showing cached statuses. Run `agent run <task>` or `open <url>` to auto-start the backend for live status.");
     }
 
     let filtered: Vec<_> = list.tasks.iter().filter(|t| t.command == "agent").cloned().collect();
@@ -8639,7 +8639,7 @@ async fn handle_swarm_list(
             }
         }
     } else {
-        cli_println!("Note: Backend unreachable — showing cached statuses. Start the server for live status.");
+        cli_println!("Note: Backend unreachable — showing cached statuses. Run `swarm query <url>` or `open <url>` to auto-start the backend for live status.");
     }
 
     // Persist updated statuses so prune_async_tasks works next time.
@@ -8807,8 +8807,6 @@ async fn handle_crawl_list(
         // Query backend for live status of each tracked crawl task.
         let mut stale_ids: Vec<String> = Vec::new();
         for entry in list.tasks.iter_mut().filter(|t| t.command == "crawl") {
-            let was_already_completed =
-                entry.last_status == "completed" || entry.last_status == "done" || entry.last_status == "OK";
             if let Ok(text) = get_crawl_result(client, base_url, &entry.task_id).await {
                 if let Ok(parsed) = serde_json::from_str::<Value>(&text) {
                     if let Some(s) = parsed.get("status").and_then(|v| v.as_str()) {
@@ -8820,8 +8818,10 @@ async fn handle_crawl_list(
                         }
                         entry.last_status = friendly;
                     }
+                    // Only set completed_at when it hasn't been set yet — once set,
+                    // keep the first completion timestamp (don't overwrite on later polls).
                     let now_completed = entry.last_status == "completed" || entry.last_status.starts_with("failed");
-                    if !was_already_completed && now_completed {
+                    if now_completed && entry.completed_at.is_none() {
                         if let Some(ts) = parsed.get("finishTime").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
                             entry.completed_at = Some(ts.to_string());
                         } else {
@@ -8841,7 +8841,7 @@ async fn handle_crawl_list(
         }
         let _ = write_async_tasks(&list, None);
     } else {
-        cli_println!("Note: Backend unreachable — showing cached statuses. Start the server for live status.");
+        cli_println!("Note: Backend unreachable — showing cached statuses. Run `crawl <url>` or `open <url>` to auto-start the backend for live status.");
     }
 
     let mut filtered: Vec<_> = list.tasks.iter().filter(|t| t.command == "crawl").cloned().collect();

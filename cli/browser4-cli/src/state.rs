@@ -709,6 +709,7 @@ pub fn prune_async_tasks(
 }
 
 /// Update the last_status field for a tracked async task.
+/// When `completed_at` is provided, it also sets the completion timestamp.
 pub fn update_async_task_status(
     task_id: &str,
     status: &str,
@@ -717,6 +718,12 @@ pub fn update_async_task_status(
     let mut list = read_async_tasks(state_dir);
     if let Some(entry) = list.tasks.iter_mut().find(|t| t.task_id == task_id) {
         entry.last_status = status.to_string();
+        // Set completed_at when transitioning to a terminal state, but only
+        // if it hasn't been set yet (keep the first completion timestamp).
+        let is_terminal = status == "completed" || status.starts_with("failed");
+        if is_terminal && entry.completed_at.is_none() {
+            entry.completed_at = Some(chrono::Utc::now().to_rfc3339());
+        }
         write_async_tasks(&list, state_dir)?;
     }
     Ok(())

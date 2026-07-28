@@ -368,6 +368,54 @@ element:expr(expression)
 
 Operators in expressions include `+`, `-`, `*`, `/`, `^`, `%`, `==`, `!=`, `<`, `>`, `<=`, `>=`, `&&`, `||`. Use parentheses for grouping.
 
+### Agent Task Lifecycle (Async)
+
+Agent tasks run asynchronously — submit a task, poll for completion, then fetch results:
+
+```bash
+# 1. Submit a natural-language task (returns <task-id>)
+browser4-cli agent run "Find the top 5 products and their prices on this page"
+
+# 2. Poll until complete (use --wait to block instead)
+browser4-cli agent status <task-id>
+# Look for: "processState": "done" or "isDone": true
+
+# 3. Get the result
+browser4-cli agent result <task-id>
+```
+
+**Alternative (blocking):** `browser4-cli agent run --wait "<task>"` polls every 2s for up to 10 minutes and prints the result when done.
+
+**Polling with `isDone`:** The JSON from `agent status` includes `isDone: true` when finished. Shell scripts can parse this:
+```bash
+while true; do
+  done=$(browser4-cli agent status <task-id> | grep -o '"isDone" *: *true')
+  [ -n "$done" ] && break
+  sleep 2
+done
+browser4-cli agent result <task-id>
+```
+
+**Status codes reference:**
+
+| statusCode | processState | Meaning |
+|-----------|-------------|---------|
+| (null) | `"created"` | Queued, not yet picked up |
+| 102 | `"in_progress"` | Agent is actively working |
+| 200 | `"done"` | Task completed successfully |
+| 417 | `"done"` | Expectation failed (e.g., missing LLM key) |
+| 4xx/5xx | `"done"` | Task failed — inspect `message` for details |
+
+**CLI status labels:**
+- `queued` — task submitted, waiting to start
+- `processing` — agent is working on the task
+- `completed` — task finished successfully (call `agent result`)
+- `failed (NNN)` — task failed with HTTP status NNN
+
+**Listing tasks:** `browser4-cli agent list` shows all tracked tasks with ID, description, started/finished times, and status.
+
+See **[agent.md](references/agent.md)** for full details including LLM key configuration, error recovery, and `extract`/`summarize` synchronous variants.
+
 ## 7. Reference Map
 
 Organized by task — follow the link that matches what you're trying to do:

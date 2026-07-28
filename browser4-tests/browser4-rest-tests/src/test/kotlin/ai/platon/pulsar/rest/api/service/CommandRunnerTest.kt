@@ -460,7 +460,7 @@ After page load: click #title, then scroll to the middle.
         var status = commandExecutor.getStatus(sessionId, statusId)
 
         var n = waitCompletionTimeout.inWholeSeconds
-        while (n-- > 0 && status?.processState != "done") {
+        while (n-- > 0 && status?.processState != "done" && status?.processState != "completed") {
             status = commandExecutor.getStatus(sessionId, statusId)
             printlnPro(status)
             sleepSeconds(1)
