@@ -28,7 +28,7 @@
 
 ## 参考资料
 
-- [coworker.ps1](../../scripts/coworker.ps1)
+- [coworker.ps1](../../../coworker.ps1)
 - [coworker-scheduler.ps1](../../scripts/coworker-scheduler.ps1)
 - [coworker-scheduler.config.psd1](../../scripts/coworker-scheduler.config.psd1)
 - [refine-github-issues.ps1](../../scripts/workers/refine-github-issues.ps1)
