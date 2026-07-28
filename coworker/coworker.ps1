@@ -59,10 +59,10 @@ Commands:
             coworker cancel [-Path <path>] [-Remove] [-Force]
 
   commit    Git commit workspace changes (no push, AI-generated message)
-            coworker commit [-Message <str>]
+            coworker commit [-Message <str>] [-AdditionalMessage <str>]
 
   push      Commit (AI-generated msg) and push to remote
-            coworker push [-Message <str>] [-Force] [-NoPull]
+            coworker push [-Message <str>] [-AdditionalMessage <str>] [-Force] [-NoPull]
 
   fix       Pick a task from 1ready/ and execute it once
             coworker fix [-Path <path>] [-Name <str>] [-Latest]
@@ -1154,161 +1154,34 @@ function Invoke-Cancel {
 
 function Invoke-Commit {
     param(
-        [string]$Message = ''
+        [string]$Message = '',
+        [string]$AdditionalMessage = ''
     )
 
     $targetRepo = Get-TargetRepositoryRoot
 
-    # Verify git is available
-    $gitCmd = Get-Command git -ErrorAction SilentlyContinue
-    if (-not $gitCmd) {
-        Write-ConsoleLine -Message "Error: Git is not installed or not on PATH." -ForegroundColor Red
+    # Locate the shared commit script
+    $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+    $commitScriptPath = Join-Path $scriptDir 'scripts\workers\git-commit.ps1'
+    if (-not (Test-Path $commitScriptPath)) {
+        Write-ConsoleLine -Message "Error: Commit script not found: $commitScriptPath" -ForegroundColor Red
         exit 1
     }
 
-    # Verify it's a git repo
-    Push-Location $targetRepo
-    try {
-        # Stage all changes first
-        & git add -A 2>&1 | Out-Null
+    Write-ConsoleLine -Message "Target repo: $targetRepo" -ForegroundColor DarkGray
 
-        # Check if there's anything to commit
-        & git diff --cached --quiet 2>&1 | Out-Null
-        if ($LASTEXITCODE -eq 0) {
-            Write-ConsoleLine -Message "Nothing to commit — working tree clean." -ForegroundColor Yellow
-            exit 0
-        }
+    # Build arguments for the shared commit script
+    $commitArgs = @()
+    if ($Message) { $commitArgs += '-Message'; $commitArgs += $Message }
+    if ($AdditionalMessage) { $commitArgs += '-AdditionalMessage'; $commitArgs += $AdditionalMessage }
 
-        # Collect staged diff for the agent to analyze
-        $diffStat = & git diff --cached --stat 2>&1
-        $diffBody = & git diff --cached 2>&1
-
-        # Truncate diff if it's huge (agent has context limits)
-        $maxDiffChars = 8000
-        if ($diffBody.Length -gt $maxDiffChars) {
-            $diffBody = $diffBody.Substring(0, $maxDiffChars) + "`n... (diff truncated, $($diffBody.Length) total chars)"
-        }
-
-        # Build commit message via AI agent
-        if (-not $Message) {
-            $branch = & git rev-parse --abbrev-ref HEAD 2>&1
-            $commitPrompt = @"
-Generate a conventional commit message for the following staged changes.
-
-Branch: $branch
-
-The message must follow the Conventional Commits format:
-  <type>[optional scope]: <imperative description>
-
-Types: feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert
-Breaking changes: append "!" after the type (e.g. "feat!:").
-
-Rules:
-- First line: "<type>: <imperative description>" (max 72 chars)
-- ALWAYS include a body paragraph explaining what was changed and why
-- Scope must reflect the code area (e.g. cli, tab, browser, rest, core, build,
-  coworker), NOT task-state directory names like "done", "draft", "ready",
-  "working", "review", "approved", "pushed", or "issues"
-- Ignore coworker task files (.md under coworker/tasks/) when determining type
-  and scope — they are task-tracker artifacts, not source code. Base the message
-  on the actual source-code and documentation changes
-- Do NOT wrap the message in code fences or quotes
-- Output ONLY the commit message, no conversational framing
-
-Examples of GOOD messages:
-  feat(cli): add tab-new, tab-close, and tab-select commands
-  ^^ body explains new commands, help text, and integration
-
-  fix(browser): resolve cursor positioning race in fill()
-  ^^ body describes the bug and the fix
-
-  docs(cli): add help text and examples for tab commands
-  ^^ body lists which help sections were updated
-
-Examples of BAD messages (DO NOT produce these):
-  fix(done): tab-workflow-issues    ← "done" is not a code area, missing body
-  chore: update files               ← too vague, no body
-  fix: stuff                        ← too vague, no body
-
-Staged changes summary:
-$diffStat
-
-Staged diff:
-$diffBody
-"@
-
-            Write-ConsoleLine -Message "Generating commit message via AI agent..." -ForegroundColor Cyan
-
-            $agentCommand = Get-AgentCommand -RepoRoot $targetRepo
-            try {
-                $msgStdOut = [System.IO.Path]::GetTempFileName()
-                $msgStdErr = [System.IO.Path]::GetTempFileName()
-
-                try {
-                    $msgProcess = Start-AgentProcess -Executable $agentCommand.Executable `
-                        -BaseArgs $agentCommand.BaseArgs `
-                        -Prompt $commitPrompt `
-                        -WorkingDirectory $targetRepo `
-                        -StdOutPath $msgStdOut `
-                        -StdErrPath $msgStdErr `
-                        -NoNewWindow `
-                        -Backend $agentCommand.Backend
-
-                    $msgTimeout = 120
-                    $msgCompleted = $msgProcess.WaitForExit($msgTimeout * 1000)
-                    if (-not $msgCompleted) {
-                        Stop-Process -Id $msgProcess.Id -Force -ErrorAction SilentlyContinue
-                        Write-ConsoleLine -Message "Warning: Commit message generation timed out. Using fallback." -ForegroundColor Yellow
-                        $Message = "fix(coworker): task update"
-                    }
-                    else {
-                        $Message = Get-Content -Path $msgStdOut -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
-                        # Strip any conversational framing or code fences
-                        $Message = $Message -replace '^```[a-z]*\s*\n', '' -replace '\n```\s*$', ''
-                        $Message = $Message.Trim()
-                        if (-not $Message) {
-                            $Message = "fix(coworker): task update"
-                            Write-ConsoleLine -Message "Warning: Agent returned empty message. Using fallback." -ForegroundColor Yellow
-                        }
-                    }
-                }
-                finally {
-                    Remove-Item $msgStdOut -ErrorAction SilentlyContinue
-                    Remove-Item $msgStdErr -ErrorAction SilentlyContinue
-                }
-            }
-            catch {
-                Write-ConsoleLine -Message "Warning: Agent invocation failed: $_. Using fallback." -ForegroundColor Yellow
-                $Message = "fix(coworker): task update"
-            }
-        }
-
-        # Append co-author trailer
-        $Message = $Message.TrimEnd() + "`n`nCo-Authored-By: Builtin Coworker"
-
-        Write-ConsoleLine -Message "Target repo: $targetRepo" -ForegroundColor DarkGray
-        Write-ConsoleLine -Message "Commit message:" -ForegroundColor Cyan
-        Write-ConsoleLine -Message "────────────────" -ForegroundColor DarkGray
-        Write-ConsoleLine -Message $Message -ForegroundColor White
-        Write-ConsoleLine -Message "────────────────" -ForegroundColor DarkGray
-
-        # Commit
-        $output = & git commit -m $Message 2>&1
-        if ($LASTEXITCODE -eq 0) {
-            Write-ConsoleLine -Message "Committed successfully." -ForegroundColor Green
-            Write-Output $output
-            $sha = & git rev-parse --short HEAD 2>&1
-            Write-ConsoleLine -Message "Commit: $sha" -ForegroundColor Green
-        }
-        else {
-            Write-ConsoleLine -Message "Commit failed:" -ForegroundColor Red
-            Write-Output $output
-            exit 1
-        }
+    # Delegate to shared script — it handles staging, message generation, and commit
+    if ($commitArgs) {
+        & $commitScriptPath @commitArgs
+    } else {
+        & $commitScriptPath
     }
-    finally {
-        Pop-Location
-    }
+    exit $LASTEXITCODE
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1318,180 +1191,35 @@ $diffBody
 function Invoke-Push {
     param(
         [string]$Message = '',
+        [string]$AdditionalMessage = '',
         [switch]$Force,
         [switch]$NoPull
     )
 
     $targetRepo = Get-TargetRepositoryRoot
 
-    # Verify git is available
-    $gitCmd = Get-Command git -ErrorAction SilentlyContinue
-    if (-not $gitCmd) {
-        Write-ConsoleLine -Message "Error: Git is not installed or not on PATH." -ForegroundColor Red
+    # Locate the shared commit script
+    $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+    $commitScriptPath = Join-Path $scriptDir 'scripts\workers\git-commit.ps1'
+    if (-not (Test-Path $commitScriptPath)) {
+        Write-ConsoleLine -Message "Error: Commit script not found: $commitScriptPath" -ForegroundColor Red
         exit 1
     }
 
     Write-ConsoleLine -Message "Target repo: $targetRepo" -ForegroundColor DarkGray
 
-    Push-Location $targetRepo
-    try {
-        # Verify it's a git repo
-        & git rev-parse --git-dir 2>&1 | Out-Null
-        if ($LASTEXITCODE -ne 0) {
-            Write-ConsoleLine -Message "Error: Not a git repository: $targetRepo" -ForegroundColor Red
-            exit 1
-        }
+    # Build arguments for the shared commit script
+    $commitArgs = @('-Push')
+    if ($Message) { $commitArgs += '-Message'; $commitArgs += $Message }
+    if ($AdditionalMessage) { $commitArgs += '-AdditionalMessage'; $commitArgs += $AdditionalMessage }
+    if ($Force) { $commitArgs += '-Force' }
 
-        # Check for remote
-        $remote = & git remote 2>&1 | Select-Object -First 1
-        if (-not $remote) {
-            Write-ConsoleLine -Message "Error: No git remote configured." -ForegroundColor Red
-            exit 1
-        }
+    # Note: -NoPull is not forwarded — the shared script always pulls before
+    # pushing. If the caller needs to skip the pull they should push manually.
 
-        # Get current branch
-        $branch = & git rev-parse --abbrev-ref HEAD 2>&1
-        Write-ConsoleLine -Message "Branch: $branch | Remote: $remote" -ForegroundColor DarkGray
-
-        # Stage and optionally commit
-        & git add -A 2>&1 | Out-Null
-        & git diff --cached --quiet 2>&1 | Out-Null
-        if ($LASTEXITCODE -ne 0) {
-            # There are staged changes — generate commit message via agent
-            if (-not $Message) {
-                $diffStat = & git diff --cached --stat 2>&1
-                $diffBody = & git diff --cached 2>&1
-                $maxDiffChars = 8000
-                if ($diffBody.Length -gt $maxDiffChars) {
-                    $diffBody = $diffBody.Substring(0, $maxDiffChars) + "`n... (truncated)"
-                }
-
-                $commitPrompt = @"
-Generate a conventional commit message for the following staged changes.
-
-Branch: $branch
-
-The message must follow the Conventional Commits format:
-  <type>[optional scope]: <imperative description>
-
-Types: feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert
-Breaking changes: append "!" after the type (e.g. "feat!:").
-
-Rules:
-- First line: "<type>: <imperative description>" (max 72 chars)
-- ALWAYS include a body paragraph explaining what was changed and why
-- Scope must reflect the code area (e.g. cli, tab, browser, rest, core, build,
-  coworker), NOT task-state directory names like "done", "draft", "ready",
-  "working", "review", "approved", "pushed", or "issues"
-- Ignore coworker task files (.md under coworker/tasks/) when determining type
-  and scope — they are task-tracker artifacts, not source code. Base the message
-  on the actual source-code and documentation changes
-- Do NOT wrap the message in code fences or quotes
-- Output ONLY the commit message, no conversational framing
-
-Examples of GOOD messages:
-  feat(cli): add tab-new, tab-close, and tab-select commands
-  ^^ body explains new commands, help text, and integration
-
-  fix(browser): resolve cursor positioning race in fill()
-  ^^ body describes the bug and the fix
-
-  docs(cli): add help text and examples for tab commands
-  ^^ body lists which help sections were updated
-
-Examples of BAD messages (DO NOT produce these):
-  fix(done): tab-workflow-issues    ← "done" is not a code area, missing body
-  chore: update files               ← too vague, no body
-  fix: stuff                        ← too vague, no body
-
-Staged changes summary:
-$diffStat
-
-Staged diff:
-$diffBody
-"@
-
-                Write-ConsoleLine -Message "Generating commit message via AI agent..." -ForegroundColor Cyan
-                $agentCommand = Get-AgentCommand -RepoRoot $targetRepo
-                try {
-                    $msgStdOut = [System.IO.Path]::GetTempFileName()
-                    $msgStdErr = [System.IO.Path]::GetTempFileName()
-                    try {
-                        $msgProcess = Start-AgentProcess -Executable $agentCommand.Executable `
-                            -BaseArgs $agentCommand.BaseArgs -Prompt $commitPrompt `
-                            -WorkingDirectory $targetRepo -StdOutPath $msgStdOut `
-                            -StdErrPath $msgStdErr -NoNewWindow -Backend $agentCommand.Backend
-                        if ($msgProcess.WaitForExit(120000)) {
-                            $Message = (Get-Content -Path $msgStdOut -Raw -Encoding UTF8 -ErrorAction SilentlyContinue) -replace '^```[a-z]*\s*\n', '' -replace '\n```\s*$', ''
-                            $Message = $Message.Trim()
-                        }
-                    }
-                    finally {
-                        Remove-Item $msgStdOut -ErrorAction SilentlyContinue
-                        Remove-Item $msgStdErr -ErrorAction SilentlyContinue
-                    }
-                }
-                catch { }
-                if (-not $Message) {
-                    $Message = "fix(coworker): task update"
-                    Write-ConsoleLine -Message "Warning: Could not generate message via agent. Using fallback." -ForegroundColor Yellow
-                }
-            }
-
-            Write-ConsoleLine -Message "Commit message:" -ForegroundColor Cyan
-            Write-ConsoleLine -Message $Message -ForegroundColor White
-            Write-ConsoleLine -Message "Committing..." -ForegroundColor Cyan
-            & git commit -m $Message 2>&1 | Out-Null
-            if ($LASTEXITCODE -ne 0) {
-                Write-ConsoleLine -Message "Error: Commit failed." -ForegroundColor Red
-                exit 1
-            }
-            Write-ConsoleLine -Message "Committed." -ForegroundColor Green
-        }
-        else {
-            Write-ConsoleLine -Message "No changes to commit." -ForegroundColor DarkGray
-        }
-
-        # Pull first (unless --no-pull)
-        if (-not $NoPull) {
-            Write-ConsoleLine -Message "Pulling from $remote/$branch..." -ForegroundColor Cyan
-            $pullOutput = & git pull --rebase $remote $branch 2>&1
-            if ($LASTEXITCODE -ne 0) {
-                Write-ConsoleLine -Message "Error: Pull failed. There may be conflicts." -ForegroundColor Red
-                Write-Output $pullOutput
-                Write-ConsoleLine -Message "`nConflicts must be resolved manually. Then run:" -ForegroundColor Yellow
-                Write-ConsoleLine -Message "  git rebase --continue && git push" -ForegroundColor Yellow
-                exit 1
-            }
-            Write-ConsoleLine -Message "Pull succeeded." -ForegroundColor DarkGray
-        }
-
-        # Push
-        $pushFlag = if ($Force) { '--force-with-lease' } else { '' }
-        Write-ConsoleLine -Message "Pushing to $remote/$branch..." -ForegroundColor Cyan
-        if ($pushFlag) {
-            $pushOutput = & git push $pushFlag $remote $branch 2>&1
-        }
-        else {
-            $pushOutput = & git push $remote $branch 2>&1
-        }
-
-        if ($LASTEXITCODE -eq 0) {
-            Write-ConsoleLine -Message "Push succeeded!" -ForegroundColor Green
-            Write-Output $pushOutput
-        }
-        else {
-            Write-ConsoleLine -Message "Push failed:" -ForegroundColor Red
-            Write-Output $pushOutput
-            if ($pushOutput -match 'non-fast-forward') {
-                Write-ConsoleLine -Message "`nRemote has diverged. Use -Force for --force-with-lease." -ForegroundColor Yellow
-            }
-            exit 1
-        }
-    }
-    finally {
-        Pop-Location
-    }
+    # Delegate to shared script — it handles staging, message generation, commit, pull, and push
+    & $commitScriptPath @commitArgs
+    exit $LASTEXITCODE
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1548,14 +1276,14 @@ function Invoke-Fix {
 
     Write-ConsoleLine -Message "Fixing task: $taskFile" -ForegroundColor Cyan
 
-    # Locate run-coworker.ps1
-    $runCoworkerScript = Join-Path $PSScriptRoot 'scripts\run-coworker.ps1'
+    # Locate engineer.ps1
+    $runCoworkerScript = Join-Path $PSScriptRoot 'scripts\engineer.ps1'
     if (-not (Test-Path $runCoworkerScript)) {
-        Write-ConsoleLine -Message "Error: run-coworker.ps1 not found at $runCoworkerScript" -ForegroundColor Red
+        Write-ConsoleLine -Message "Error: engineer.ps1 not found at $runCoworkerScript" -ForegroundColor Red
         exit 1
     }
 
-    # Launch run-coworker.ps1 with the task file, streaming output to the terminal
+    # Launch engineer.ps1 with the task file, streaming output to the terminal
     $powerShell = if ($IsWindows) {
         if (Get-Command 'pwsh.exe' -ErrorAction SilentlyContinue) { 'pwsh.exe' }
         else { 'powershell.exe' }
@@ -1736,11 +1464,14 @@ The commit message is generated by an AI agent that analyzes the
 staged diff and produces a conventional-commits message.
 
 Options:
-  -Message <str>   Override the AI-generated commit message
+  -Message <str>             Override the AI-generated commit message
+  -AdditionalMessage <str>   Extra text appended to the commit body
+                             (e.g. "Task: fix-crawl.md")
 
 Examples:
   coworker commit
   coworker commit -Message "fix(auth): resolve token expiry"
+  coworker commit -AdditionalMessage "Task: fix-crawl-sql-formats.md"
 '@
         }
         'push' {
@@ -1751,13 +1482,15 @@ Stage, commit, pull, and push all changes to the remote.
 The commit message is AI-generated from the staged diff.
 
 Options:
-  -Message <str>   Override the AI-generated commit message
-  -Force           Use --force-with-lease on push
-  -NoPull          Skip git pull before pushing
+  -Message <str>             Override the AI-generated commit message
+  -AdditionalMessage <str>   Extra text appended to the commit body
+  -Force                     Use --force-with-lease on push
+  -NoPull                    Skip git pull before pushing
 
 Examples:
   coworker push
   coworker push -Message "fix(coworker): resolve issues"
+  coworker push -AdditionalMessage "Task: fix-crawl.md"
   coworker push -Force
 '@
         }
@@ -1766,7 +1499,7 @@ Examples:
 Usage: coworker fix [options]
 
 Pick a task from 1ready/ and execute it once via the Coworker
-task runner (run-coworker.ps1). The task goes through the full
+task runner (engineer.ps1). The task goes through the full
 pipeline: rename, execute, move to done, and auto-commit.
 
 Without options, picks the oldest task (FIFO) from 1ready/.
@@ -1861,8 +1594,9 @@ function Parse-SubcommandArgs {
             '-Audience'      { $parsed['Audience'] = $ArgList[++$i]; break }
             '-DomainContext' { $parsed['DomainContext'] = $ArgList[++$i]; break }
             '-OutputPath'    { $parsed['OutputPath'] = $ArgList[++$i]; break }
-            '-Message'       { $parsed['Message'] = $ArgList[++$i]; break }
-            '-TaskRef'       { $parsed['TaskRef'] = $ArgList[++$i]; break }
+            '-Message'           { $parsed['Message'] = $ArgList[++$i]; break }
+            '-AdditionalMessage' { $parsed['AdditionalMessage'] = $ArgList[++$i]; break }
+            '-TaskRef'           { $parsed['TaskRef'] = $ArgList[++$i]; break }
             '-Count'         { $parsed['Count'] = [int]$ArgList[++$i]; break }
             '-FileName'      { $parsed['FileName'] = $ArgList[++$i]; break }
             '-Edit'          { $parsed['Edit'] = $true; break }
@@ -2000,10 +1734,12 @@ try {
                 -Force:(Get-SwitchArg $subArgs 'Force')
         }
         'commit' {
-            Invoke-Commit -Message (Get-Arg $subArgs 'Message')
+            Invoke-Commit -Message (Get-Arg $subArgs 'Message') `
+                -AdditionalMessage (Get-Arg $subArgs 'AdditionalMessage')
         }
         'push' {
             Invoke-Push -Message (Get-Arg $subArgs 'Message') `
+                -AdditionalMessage (Get-Arg $subArgs 'AdditionalMessage') `
                 -Force:(Get-SwitchArg $subArgs 'Force') `
                 -NoPull:(Get-SwitchArg $subArgs 'NoPull')
         }

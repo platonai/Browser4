@@ -18,7 +18,7 @@
                 'coworker\tasks\main\1ready'
                 'coworker\tasks\main\5approved'
             )
-            ScriptPath      = 'coworker\scripts\run-coworker.ps1'
+            ScriptPath      = 'coworker\scripts\engineer.ps1'
             Arguments       = @()
         }
         @{

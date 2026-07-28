@@ -161,12 +161,12 @@ doctor --verbose                  show backend logs inline in command output
 
 | File Pattern | Created By | Content |
 |---|---|---|
-| `HHmmss-coworker.log` | `run-coworker.ps1` | Script-level log (all `Write-LogMessage` calls) |
-| `HHmmss-<name>.task.log` | `run-coworker.ps1` | Task metadata + prompt + execution summary |
-| `HHmmss-<name>.agent.log` | `run-coworker.ps1` | Agent stdout + stderr (merged) |
-| `HHmmss-<name>.agent.log.stdout` | `run-coworker.ps1` (temp) | Agent stdout (merged then deleted) |
-| `HHmmss-<name>.agent.log.stderr` | `run-coworker.ps1` (temp) | Agent stderr (merged then deleted) |
-| `HHmmss-memory-context.err` | `run-coworker.ps1` (temp) | Memory context script stderr |
+| `HHmmss-coworker.log` | `engineer.ps1` | Script-level log (all `Write-LogMessage` calls) |
+| `HHmmss-<name>.task.log` | `engineer.ps1` | Task metadata + prompt + execution summary |
+| `HHmmss-<name>.agent.log` | `engineer.ps1` | Agent stdout + stderr (merged) |
+| `HHmmss-<name>.agent.log.stdout` | `engineer.ps1` (temp) | Agent stdout (merged then deleted) |
+| `HHmmss-<name>.agent.log.stderr` | `engineer.ps1` (temp) | Agent stderr (merged then deleted) |
+| `HHmmss-memory-context.err` | `engineer.ps1` (temp) | Memory context script stderr |
 | `HHmmss-<name>.stdout.log` | `coworker-scheduler.ps1` | Task stdout + PowerShell transcript |
 | `HHmmss-<name>.stderr.log` | `coworker-scheduler.ps1` | Task stderr |
 | `scheduled-tasks.status.json` | `coworker-scheduler.ps1` | Scheduler status snapshot |
@@ -186,7 +186,7 @@ doctor --verbose                  show backend logs inline in command output
 | Script | Role |
 |---|---|
 | `coworker/scripts/coworker-scheduler.ps1` | Polls for pending tasks, spawns them with `Start-Transcript` |
-| `coworker/scripts/run-coworker.ps1` | Processes a batch of task files, runs agent, auto-commits |
+| `coworker/scripts/engineer.ps1` | Processes a batch of task files, runs agent, auto-commits |
 | `coworker/scripts/config.ps1` | Loads config, dot-sources all utility modules |
 | `coworker/scripts/common/Paths.ps1` | `Get-LogDirectory` — resolves log path from config |
 | `coworker/coworker.ps1` | Main dispatch script (`coworker commit`, `coworker run`, etc.) |

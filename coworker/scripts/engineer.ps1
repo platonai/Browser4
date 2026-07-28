@@ -213,18 +213,21 @@ foreach ($taskRoot in $taskRoots) {
                 Write-LogMessage "Task moved to pushed: $($pushedInfo.Path)" INFO
             }
 
-            # Call commit script
-            $commitScript = Join-Path $scriptsDir "workers/git-sync.ps1"
-            if (Test-Path $commitScript) {
-                Write-LogMessage "Executing commit script for approved tasks..." INFO
-                & $commitScript
+            # Push approved tasks to remote via shared git-commit.ps1.
+            # The commit already happened when the task landed in 5approved;
+            # this step pushes those committed changes and handles any
+            # remaining uncommitted work (e.g. task-file moves, other tasks).
+            $pushScript = Join-Path $scriptsDir "workers/git-commit.ps1"
+            if (Test-Path $pushScript) {
+                Write-LogMessage "Pushing approved tasks to remote..." INFO
+                & $pushScript -Push 2>&1 | Out-Null
                 if ($LASTEXITCODE -eq 0) {
-                    Write-LogMessage "Git sync executed successfully." INFO
+                    Write-LogMessage "Push for approved tasks succeeded." INFO
                 } else {
-                    Write-LogMessage "Git sync failed with exit code $LASTEXITCODE." ERROR
+                    Write-LogMessage "Push for approved tasks failed (exit=$LASTEXITCODE)." WARN
                 }
             } else {
-                Write-LogMessage "Commit script not found at $commitScript" WARN
+                Write-LogMessage "Commit script not found at $pushScript" WARN
             }
         }
     }
@@ -249,6 +252,7 @@ foreach ($taskRoot in $taskRoots) {
     foreach ($file in $files) {
         # 1. Determine the descriptive name based on content (while still in created dir)
         $renameScript = Join-Path $scriptsDir "workers\rename.ps1"
+        $commitScript = Join-Path $scriptsDir "workers\git-commit.ps1"
         $descriptiveName = ""
 
         # Read content for fallback title
@@ -618,152 +622,40 @@ Agent Log: $agentLogPath
             Write-LogMessage "Task file not found at working path (may have been moved/deleted by agent): $workingPath" WARN
         }
 
-        # Auto-commit changes for finished tasks (3done) without pushing.
-        # Tasks with #auto-approve go to 5approved and are committed+ pushed
-        # later by git-sync.ps1 — skip those here to avoid a double commit.
-        if ($targetDir -eq $finishedDir) {
+        # ── Auto-commit via shared git-commit.ps1 ─────────────────────────
+        # Both regular (3done) and #auto-approve (5approved) tasks are
+        # committed immediately with the task filename included in the
+        # commit message body for traceability.
+        #
+        # #auto-approve tasks also push directly so the approved change
+        # lands on the remote without waiting for the next scheduler cycle.
+        $taskRef = "Task: $workingBaseName"
+        if (Test-Path $commitScript) {
             try {
-                $gitAvailable = Get-Command git -ErrorAction Stop
-                Push-Location $targetRepoRoot
-                try {
-                    # Stage all changes the agent made while working on this task
-                    & git add -A 2>&1 | Out-Null
-
-                    # Check whether there is anything staged to commit
-                    & git diff --cached --quiet 2>&1 | Out-Null
-                    if ($LASTEXITCODE -ne 0) {
-                        # ── Generate commit message via AI agent ──────────────────
-                        # Same prompt pattern as `coworker commit` — the agent
-                        # analyzes the staged diff and produces a conventional-commits
-                        # message. Falls back to fix(coworker): with diff stat if the
-                        # agent times out or returns empty.
-                        $stat = & git diff --cached --stat 2>&1
-                        $diffBody = & git diff --cached 2>&1
-                        $maxDiffChars = 8000
-                        if ($diffBody.Length -gt $maxDiffChars) {
-                            $diffBody = $diffBody.Substring(0, $maxDiffChars) + "`n... (truncated)"
-                        }
-                        $branch = & git rev-parse --abbrev-ref HEAD 2>&1
-
-                        $commitPrompt = @"
-Generate a conventional commit message for the following staged changes.
-
-Branch: $branch
-
-The message must follow the Conventional Commits format:
-  <type>[optional scope]: <imperative description>
-
-Types: feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert
-Breaking changes: append "!" after the type (e.g. "feat!:").
-
-Rules:
-- First line: "<type>: <imperative description>" (max 72 chars)
-- ALWAYS include a body paragraph explaining what was changed and why
-- Scope must reflect the code area (e.g. cli, tab, browser, rest, core, build,
-  coworker), NOT task-state directory names like "done", "draft", "ready",
-  "working", "review", "approved", "pushed", or "issues"
-- Ignore coworker task files (.md under coworker/tasks/) when determining type
-  and scope — they are task-tracker artifacts, not source code. Base the message
-  on the actual source-code and documentation changes
-- Do NOT wrap the message in code fences or quotes
-- Output ONLY the commit message, no conversational framing
-
-Examples of GOOD messages:
-  feat(cli): add tab-new, tab-close, and tab-select commands
-  ^^ body explains new commands, help text, and integration
-
-  fix(browser): resolve cursor positioning race in fill()
-  ^^ body describes the bug and the fix
-
-  docs(cli): add help text and examples for tab commands
-  ^^ body lists which help sections were updated
-
-Examples of BAD messages (DO NOT produce these):
-  fix(done): tab-workflow-issues    ← "done" is not a code area, missing body
-  chore: update files               ← too vague, no body
-  fix: stuff                        ← too vague, no body
-
-Staged changes summary:
-$stat
-
-Staged diff:
-$diffBody
-"@
-
-                        Write-LogMessage "Generating commit message via AI agent..." INFO
-
-                        # Invoke agent with 120s timeout
-                        $Message = $null
-                        try {
-                            $msgStdOut = [System.IO.Path]::GetTempFileName()
-                            $msgStdErr = [System.IO.Path]::GetTempFileName()
-                            try {
-                                $msgProcess = Start-AgentProcess -Executable $agentExecutable `
-                                    -BaseArgs $agentBaseArgs `
-                                    -Prompt $commitPrompt `
-                                    -WorkingDirectory $agentWorkingDirectory `
-                                    -StdOutPath $msgStdOut `
-                                    -StdErrPath $msgStdErr `
-                                    -NoNewWindow `
-                                    -Backend $agentBackend
-
-                                $msgTimeout = 120
-                                $msgCompleted = $msgProcess.WaitForExit($msgTimeout * 1000)
-                                if (-not $msgCompleted) {
-                                    Stop-Process -Id $msgProcess.Id -Force -ErrorAction SilentlyContinue
-                                    Write-LogMessage "Commit message generation timed out after ${msgTimeout}s. Using fallback." WARN
-                                }
-                                else {
-                                    $Message = Get-Content -Path $msgStdOut -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
-                                    # Strip any conversational framing or code fences
-                                    $Message = $Message -replace '^```[a-z]*\s*\n', '' -replace '\n```\s*$', ''
-                                    $Message = $Message.Trim()
-                                    if (-not $Message) {
-                                        Write-LogMessage "Agent returned empty commit message. Using fallback." WARN
-                                    }
-                                }
-                            }
-                            finally {
-                                Remove-Item $msgStdOut -ErrorAction SilentlyContinue
-                                Remove-Item $msgStdErr -ErrorAction SilentlyContinue
-                            }
-                        }
-                        catch {
-                            Write-LogMessage "Agent invocation failed: $_. Using fallback." WARN
-                        }
-
-                        # Fallback if agent didn't produce a message
-                        if (-not $Message) {
-                            $Message = "fix(coworker): $workingBaseName`n`n$stat"
-                        }
-
-                        # Append co-author trailer (same as coworker commit)
-                        $Message = $Message.TrimEnd() + "`n`nCo-Authored-By: Builtin Coworker"
-
-                        Write-LogMessage "Commit message:`n$Message" INFO
-
-                        # Commit
-                        $tmpCommitMsgFile = [System.IO.Path]::GetTempFileName()
-                        try {
-                            Set-Content -Path $tmpCommitMsgFile -Value $Message -Encoding UTF8
-                            & git commit -F $tmpCommitMsgFile 2>&1 | Out-Null
-                            if ($LASTEXITCODE -eq 0) {
-                                Write-LogMessage "Auto-committed changes for finished task: $workingBaseName" INFO
-                            } else {
-                                Write-LogMessage "Git commit failed for task: $workingBaseName" WARN
-                            }
-                        } finally {
-                            Remove-Item $tmpCommitMsgFile -ErrorAction SilentlyContinue
-                        }
+                if ($targetDir -eq $approvedDir) {
+                    # Auto-approved: commit and push immediately
+                    Write-LogMessage "Auto-committing and pushing for auto-approved task: $workingBaseName" INFO
+                    & $commitScript -AdditionalMessage $taskRef -Push 2>&1 | Out-Null
+                    if ($LASTEXITCODE -eq 0) {
+                        Write-LogMessage "Auto-commit+push succeeded for task: $workingBaseName" INFO
                     } else {
-                        Write-LogVerbose "No changes to commit for task: $workingBaseName"
+                        Write-LogMessage "Auto-commit+push failed (exit=$LASTEXITCODE) for task: $workingBaseName" WARN
                     }
-                } finally {
-                    Pop-Location
+                } else {
+                    # Regular done: commit only (no push)
+                    Write-LogMessage "Auto-committing for finished task: $workingBaseName" INFO
+                    & $commitScript -AdditionalMessage $taskRef 2>&1 | Out-Null
+                    if ($LASTEXITCODE -eq 0) {
+                        Write-LogMessage "Auto-commit succeeded for task: $workingBaseName" INFO
+                    } else {
+                        Write-LogMessage "Auto-commit failed (exit=$LASTEXITCODE) for task: $workingBaseName" WARN
+                    }
                 }
             } catch {
-                Write-LogMessage "Git unavailable, skipping auto-commit for task: $workingBaseName" WARN
+                Write-LogMessage "Git commit script failed for task: $workingBaseName — $_" WARN
             }
+        } else {
+            Write-LogMessage "Commit script not found at $commitScript — skipping auto-commit" WARN
         }
 
         Ensure-DraftPlaceholders -DraftDirectory $draftDir

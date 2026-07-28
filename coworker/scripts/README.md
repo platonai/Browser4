@@ -83,7 +83,7 @@ The primary task execution engine. Processes tasks through the full pipeline:
 
 Supports passing a specific task file directly:
 ```powershell
-.\coworker\scripts\run-coworker.ps1 path\to\task.md
+.\coworker\scripts\engineer.ps1 path\to\task.md
 ```
 
 Uses a script-level mutex to prevent concurrent instances. All agent execution output is logged to `~\.browser4-coworker\tasks\300logs\YYYY\MM\DD\`.
@@ -263,7 +263,7 @@ When the Claude or Kimi backend is active, copilot-specific flags (`--allow-all-
 
 ```powershell
 # Pass a specific task file to the runner
-.\coworker\scripts\run-coworker.ps1 .\coworker\tasks\main\0draft\my-task.md
+.\coworker\scripts\engineer.ps1 .\coworker\tasks\main\0draft\my-task.md
 ```
 
 ### Backend invocation

@@ -61,7 +61,7 @@ AI 协作助手是一个代理（agent），可协助你在指定仓库中完成
    ```powershell
    .\coworker\scripts\coworker-scheduler.ps1
    # 或单次执行：
-   .\coworker\scripts\run-coworker.ps1
+   .\coworker\scripts\engineer.ps1
    ```
 4. **审查** — 任务执行后会进入 `main/3done`，可审查更改。
 5. **批准** — 将任务移至 `main/5approved`，定时任务会自动提交并推送。
