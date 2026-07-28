@@ -46,7 +46,7 @@ object MockSiteLauncher : Closeable {
      */
     @Synchronized
     fun start(
-        port: Int = 18080,
+        port: Int = 0,
         properties: Map<String, Any> = emptyMap(),
         profiles: Array<String> = emptyArray(),
         headless: Boolean = true,

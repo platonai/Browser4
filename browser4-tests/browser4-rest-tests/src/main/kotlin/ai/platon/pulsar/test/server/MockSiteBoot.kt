@@ -16,7 +16,7 @@ import java.time.Duration
 fun main(args: Array<String>) {
     val port = (System.getProperty("mock.site.port")
         ?: System.getenv("MOCK_SITE_PORT")
-        ?: "18080").toIntOrNull() ?: 18080
+        ?: "0").toIntOrNull() ?: 0
     val waitSeconds = (System.getProperty("mock.site.waitSec")
         ?: System.getenv("MOCK_SITE_WAIT_SEC")
         ?: "6").toLongOrNull() ?: 6L

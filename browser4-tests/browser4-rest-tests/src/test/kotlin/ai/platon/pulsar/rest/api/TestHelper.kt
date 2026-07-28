@@ -8,10 +8,10 @@ import org.junit.jupiter.api.Assumptions
 object TestHelper {
     val session = PulsarContexts.getOrCreateSession()
 
-    // Using mock EC server URLs instead of real Amazon URLs
-    const val MOCK_PRODUCT_LIST_URL = TestUrls.MOCK_PRODUCT_LIST_URL
+    // Using mock EC server URLs instead of real Amazon URLs (ports resolved dynamically)
+    val MOCK_PRODUCT_LIST_URL get() = TestUrls.MOCK_PRODUCT_LIST_URL
 
-    const val MOCK_PRODUCT_DETAIL_URL = TestUrls.MOCK_PRODUCT_DETAIL_URL
+    val MOCK_PRODUCT_DETAIL_URL get() = TestUrls.MOCK_PRODUCT_DETAIL_URL
 
     suspend fun ensurePage(url: String) {
         val pageRequirement = { page: WebPage -> page.protocolStatus.isSuccess && page.persistedContentLength > 8000 }
