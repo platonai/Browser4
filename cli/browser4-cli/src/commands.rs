@@ -2074,7 +2074,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 },
             ],
             options: &[],
-            e2e_coverage: E2eCoverage::Excluded,
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| String::new(),
             tool_params_fn: |args| {
                 let name = args.get("name").and_then(|v| v.as_str()).unwrap_or("");
