@@ -389,8 +389,8 @@ Assert-ContainsString -Label 'Safe args: escapes internal double quotes' -Haysta
 # ═══════════════════════════════════════════════════════════════════
 Write-Host "━━━ Rebuild flag ━━━" -ForegroundColor Cyan
 
-# Verify the -Rebuild parameter exists in the param block
-Assert-ContainsString -Label 'Rebuild: param switch defined' -Haystack $srcText -Needle '[switch]$Rebuild'
+# Verify the -Rebuild flag is handled via manual $args parsing (no param() block)
+Assert-ContainsString -Label 'Rebuild: param switch defined' -Haystack $srcText -Needle '$Rebuild = $false'
 Assert-ContainsString -Label 'Rebuild: forces rebuild message' -Haystack $srcText -Needle 'Rebuilding browser4-cli'
 
 # Verify stale-source auto-detection logic
@@ -469,7 +469,7 @@ Write-Host "━━━ Short-flag passthrough ━━━" -ForegroundColor Cyan
 
 # Verify the help output includes the tip about short-flag interception
 # by PowerShell (documented workaround for -v → -Verbose, -i → -InformationAction, -e → -ErrorAction)
-Assert-ContainsString -Label 'Help: short-flag tip present' -Haystack $helpOutput -Needle 'short flags like -i or -v'
+Assert-ContainsString -Label 'Help: short-flag tip present' -Haystack $helpOutput -Needle 'Short flags (-o, -i, -v) are now safe'
 
 # Verify -- passthrough works with snapshot -v (viewport) flag.
 # Without --, PowerShell may consume -v as -Verbose. With --, it should pass through.
@@ -490,7 +490,7 @@ Assert-ContainsString -Label 'Source: detects -- passthrough token' -Haystack $s
 Assert-ContainsString -Label 'Source: detects --% stop-parsing token' -Haystack $srcText -Needle "eq '--%'"
 
 # Verify the help message explicitly documents short-flag workaround (via b4w.sh or --)
-Assert-ContainsString -Label 'Source: help mentions short flags' -Haystack $srcText -Needle 'short flags like -i or -v'
+Assert-ContainsString -Label 'Source: help mentions short flags' -Haystack $srcText -Needle 'Short flags (-o, -i, -v) are now safe'
 Assert-ContainsString -Label 'Source: help mentions b4w.sh workaround' -Haystack $srcText -Needle 'b4w.sh'
 
 # Verify that b4w.ps1 has [CmdletBinding()] or does NOT — with PS 5.1+, scripts
