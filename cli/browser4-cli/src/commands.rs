@@ -2018,6 +2018,27 @@ pub fn all_commands() -> Vec<CommandDef> {
             tool_params_fn: |_| json!({}),
         },
         CommandDef {
+            name: "session-default",
+            description: "Set a named session as the DEFAULT (unnamed) session so it can be targeted without -s",
+            category: Category::Browsers,
+            hidden: false,
+            batch_supported: false,
+            args: &[
+                ArgDef {
+                    name: "name",
+                    optional: false,
+                    description: "The name of the session to make the default",
+                },
+            ],
+            options: &[],
+            e2e_coverage: E2eCoverage::Tested,
+            tool_name_fn: |_| String::new(),
+            tool_params_fn: |args| {
+                let name = args.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                json!({ "name": name })
+            },
+        },
+        CommandDef {
             name: "close-all",
             description: "Close all browser sessions without stopping the Browser4 backend",
             category: Category::Browsers,

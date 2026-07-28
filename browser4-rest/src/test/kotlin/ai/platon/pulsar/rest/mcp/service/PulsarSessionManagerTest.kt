@@ -75,8 +75,9 @@ class PulsarSessionManagerTest {
             )
         )
 
-        assertEquals("team-a", session.sessionId)
-        assertEquals("team-a", session.capabilities?.get("sessionId"))
+        // Named sessions get UUID-based IDs; the display name is a label, not the ID
+        assertNotEquals("team-a", session.sessionId, "Named session should use UUID, not raw name")
+        assertEquals(session.sessionId, session.capabilities?.get("sessionId"))
         assertEquals("SEQUENTIAL", session.capabilities?.get("profileMode"))
     }
 
@@ -104,7 +105,9 @@ class PulsarSessionManagerTest {
             )
         )
 
-        assertEquals("team-b", session.sessionId)
+        // Named sessions get UUID-based IDs; the display name is a label, not the ID
+        assertNotEquals("team-b", session.sessionId, "Named session should use UUID, not raw name")
+        assertEquals(session.sessionId, session.capabilities?.get("sessionId"))
         assertEquals("SEQUENTIAL", session.capabilities?.get("profileMode"))
         assertSame(session, sessionManager.getSession("team-b"))
     }
@@ -171,10 +174,12 @@ class PulsarSessionManagerTest {
         val firstSession = sessionManager.getOrCreateSession(mapOf("sessionId" to "team-c"))
         val secondSession = sessionManager.getOrCreateSession(mapOf("sessionId" to "team-c"))
 
-        assertEquals("team-c", firstSession.sessionId)
+        // Named sessions get UUID-based IDs
+        assertNotEquals("team-c", firstSession.sessionId, "Named session should use UUID, not raw name")
+        assertEquals(firstSession.sessionId, firstSession.capabilities?.get("sessionId"))
         assertEquals("SEQUENTIAL", firstSession.capabilities?.get("profileMode"))
         assertEquals("active", firstSession.status)
-        assertEquals("team-c", secondSession.sessionId)
+        assertEquals(firstSession.sessionId, secondSession.sessionId) // same UUID for same display name
         assertEquals("SEQUENTIAL", secondSession.capabilities?.get("profileMode"))
         assertEquals("active", secondSession.status)
         assertSame(firstSession, secondSession)
@@ -198,7 +203,9 @@ class PulsarSessionManagerTest {
 
         requireNotNull(fetchedSession)
         assertNotSame(firstSession, fetchedSession)
-        assertEquals("team-d", fetchedSession.sessionId)
+        // Named sessions get UUID-based IDs
+        assertNotEquals("team-d", fetchedSession.sessionId, "Named session should use UUID, not raw name")
+        assertEquals(fetchedSession.sessionId, fetchedSession.capabilities?.get("sessionId"))
         assertEquals("active", fetchedSession.status)
         verify(agenticContext, times(2)).createSession(Mockito.any(PulsarSettings::class.java) ?: PulsarSettings())
     }
@@ -218,7 +225,9 @@ class PulsarSessionManagerTest {
 
         val session = sessionManager.getOrCreateSession(mapOf("sessionId" to "team-e"))
 
-        assertEquals("team-e", session.sessionId)
+        // Named sessions get UUID-based IDs
+        assertNotEquals("team-e", session.sessionId, "Named session should use UUID, not raw name")
+        assertEquals(session.sessionId, session.capabilities?.get("sessionId"))
         assertEquals("stopped", session.status)
         assertSame(session, sessionManager.getAllSessions().single())
         verify(agenticContext, times(2)).createSession(Mockito.any(PulsarSettings::class.java) ?: PulsarSettings())

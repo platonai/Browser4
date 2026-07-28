@@ -10,6 +10,27 @@ tier: decision
 
 Browser automation CLI for AI agents — Chrome/Chromium via CDP with accessibility-tree snapshots.
 
+### Development Mode (Running from Source)
+
+When working from the repository (not using an installed `browser4-cli` binary), use the dev-mode
+wrappers in the repo root. All examples in this document use `browser4-cli` as the installed
+command — substitute accordingly for dev-mode work:
+
+| Platform | Command | Notes |
+|---|---|---|
+| **PowerShell** (Windows) | `./b4w.ps1 <command>` | Auto-builds from source when needed. Awaits `--` passthrough for flags that conflict with PowerShell parameters. |
+| **Git Bash / Linux / macOS** | `./b4w.sh <command>` | Bash wrapper, avoids PowerShell parameter binding issues entirely. |
+| **CMD** (Windows) | `./b4w.bat <command>` | Uses `--%` stop-parsing token to prevent PowerShell from consuming `-i`/`-v` flags. |
+| **Cargo (any platform)** | `cargo run --manifest-path cli/browser4-cli/Cargo.toml -- <command>` | Slower (compiles each run unless `--quiet` is added). Good for one-off debugging. |
+
+**Example:** The installed command `browser4-cli snapshot -v 0` becomes `./b4w.ps1 -- snapshot -v 0` (PowerShell)
+or `./b4w.sh snapshot -v 0` (Git Bash) when running from source.
+
+Note: PowerShell's parameter binder may intercept short flags (`-i`, `-v`) that happen to match
+common PowerShell parameters (`-InformationAction`, `-Verbose`). Use the `--` separator
+(`./b4w.ps1 -- snapshot -i`) or the long-form flags (`--interactive`, `--viewport`) to avoid this.
+When in doubt, `./b4w.sh` (Git Bash) avoids the issue entirely.
+
 ## 1. Core Loop
 
 Every browser4-cli session follows this pattern:
@@ -108,6 +129,7 @@ Tab commands scope to a session — all operations affect the session targeted v
 - **No auto-snapshot:** `tab-list` and `tab-close` do NOT trigger automatic snapshots. After `tab-select`, run `snapshot` explicitly to get fresh element refs for the new active tab.
 - **Re-snapshot after switches:** `tab-select` changes the active page context. Capture a fresh snapshot before interacting with page elements in the new tab.
 - **Extension sessions:** When closing tabs on extension-attached sessions, the backend may report an error even though the tab was successfully closed (Chrome's `chrome.tabs.remove` callback can fire an error after the tab is already gone). The CLI verifies that the tab was actually removed and treats the operation as successful in this case. Extension sessions may also show "Stale" in `list` output after all tabs are closed — the session can be reconnected with `attach --extension`.
+- **Extension re-attach creates a fresh tab scope:** Each `attach --extension` establishes a new WebSocket connection and creates its own tab tracking scope. After re-attaching (e.g., after navigating to `chrome://version/` which drops the connection), only tabs created through the *new* connection are visible in `tab-list`. Tabs from the previous connection are still open in Chrome but are not tracked by the new session. To work with those tabs, either re-open them via `tab-new` in the new session, or use `-s <name>` to preserve a named session that survives re-attach.
 
 #### Examples
 

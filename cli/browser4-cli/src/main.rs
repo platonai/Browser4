@@ -344,6 +344,7 @@ fn no_snapshot_commands() -> HashSet<&'static str> {
         "close",
         "disconnect",
         "close-all",
+        "session-default",
         "console",
         "delete-data",
         "kill-all",
@@ -1089,6 +1090,28 @@ async fn get_or_create_navigation_session(
 
             if healthy {
                 attached_id.clone()
+            } else if force_new_session {
+                // The attached session is stale, and the caller explicitly
+                // wants a new session (e.g., `open` command).  Auto-evict
+                // the stale attached session so the unnamed slot is freed
+                // for the new Browser4 session.
+                cli_println!(
+                    "Attached session {} is no longer healthy — auto-evicting it to create a new Browser4 session.",
+                    attached_id
+                );
+                cli_println!(
+                    "Use 'attach --extension' or 'attach --cdp' to reconnect the attached browser later."
+                );
+                invalidate_session(&state, base_url, session_name);
+                let capabilities = build_open_session_capabilities(tool_params);
+                let new_id =
+                    create_session(client, base_url, &state, session_name, Some(capabilities))
+                        .await?;
+                cli_println!(
+                    "{}",
+                    format_session_opened_message(session_name, &new_id)
+                );
+                new_id
             } else {
                 let attach_cmd = if state.attach_type.as_deref() == Some("extension") {
                     "attach --extension"
@@ -1319,16 +1342,33 @@ async fn handle_attach(
     session_name: Option<&str>,
     parsed_args: &HashMap<String, Value>,
 ) -> Result<(), String> {
-    // Block creation of a second unnamed session.
+    // Block creation of a second unnamed session, unless the existing unnamed
+    // session is stale — in that case auto-evict it so the user doesn't have
+    // to manually `close` a dead session just to reclaim the unnamed slot.
     if let Err(e) = check_unnamed_slot_free(None, session_name) {
-        let hint = if parsed_args.get("extension").is_some() {
-            "browser4-cli -s <name> attach --extension"
-        } else if parsed_args.get("cdp").is_some() {
-            "browser4-cli -s <name> attach --cdp <endpoint>"
+        let existing_state = read_state(None, None);
+        let existing_is_stale = if let Some(ref existing_id) = existing_state.session_id {
+            !session_is_active_in_state(client, base_url, existing_id).await
         } else {
-            "browser4-cli -s <name> attach ..."
+            false
         };
-        return Err(format!("{e}\nHint: {hint}"));
+        if existing_is_stale {
+            // Auto-evict the stale unnamed session so the new attach can proceed.
+            invalidate_session(&existing_state, base_url, None);
+            cli_println!(
+                "Replaced stale unnamed session {}. Creating new session.",
+                existing_state.session_id.as_deref().unwrap_or("?")
+            );
+        } else {
+            let hint = if parsed_args.get("extension").is_some() {
+                "browser4-cli -s <name> attach --extension"
+            } else if parsed_args.get("cdp").is_some() {
+                "browser4-cli -s <name> attach --cdp <endpoint>"
+            } else {
+                "browser4-cli -s <name> attach ..."
+            };
+            return Err(format!("{e}\nHint: {hint}"));
+        }
     }
 
     // --cdp value
@@ -2562,6 +2602,36 @@ async fn handle_close_all(client: &Client, base_url: &str) -> Result<(), String>
     Ok(())
 }
 
+async fn handle_session_default(tool_params: &Value) -> Result<(), String> {
+    let name = tool_params
+        .get("name")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "A session name is required: session-default <name>".to_string())?;
+
+    // Read the named session state.
+    let named_state = read_state(None, Some(name));
+    let named_id = named_state.session_id.as_deref().unwrap_or("?");
+    if named_state.session_id.is_none() {
+        return Err(format!(
+            "No session found with name '{}'. Use `list` to see all tracked sessions.",
+            name
+        ));
+    }
+
+    // Write the named session state to the default (unnamed) slot.
+    let mut default_state = named_state.clone();
+    default_state.session_name = None; // Clear the name — it's now the default
+    write_state(&default_state, None, None).map_err(|e| e.to_string())?;
+
+    cli_println!("Session '{}' ({}) is now the DEFAULT session.", name, named_id);
+    cli_println!("Subsequent commands will target this session without needing -s.");
+    json_field("session_name", json!(name));
+    json_field("session_id", json!(named_id));
+    Ok(())
+}
+
 async fn handle_kill_all() -> Result<(), String> {
     eprintln!("🔪 Stopping Browser4 backend and cleaning up browser processes ...");
     eprintln!();
@@ -3286,6 +3356,21 @@ fn session_is_active_in_records(records: &[BackendSessionRecord], session_id: &s
     records.iter().any(|record| {
         record.session_id == session_id && session_status_is_active(record.status.as_deref())
     })
+}
+
+/// Query the backend via `list_sessions` and check whether the given session
+/// is still active.  Returns `false` when the backend is unreachable (the
+/// session is effectively stale from the user's perspective) or when any
+/// error occurs.
+async fn session_is_active_in_state(
+    client: &Client,
+    base_url: &str,
+    session_id: &str,
+) -> bool {
+    match call_tool(client, base_url, "list_sessions", json!({})).await {
+        Ok(result) => session_is_active(&result, session_id),
+        Err(_) => false,
+    }
 }
 
 fn session_is_active(result: &str, session_id: &str) -> bool {
@@ -13263,6 +13348,7 @@ fn should_ensure_server_running(command: &str) -> bool {
         && command != "disconnect"
         && command != "close-all"
         && command != "kill-all"
+        && command != "session-default"
         && command != "list"
         && command != "install"
         && command != "uninstall"
@@ -14792,6 +14878,9 @@ async fn run(
         }
         "kill-all" => {
             handle_kill_all().await?;
+        }
+        "session-default" => {
+            handle_session_default(&tool_params).await?;
         }
         "list" => {
             let verbose = tool_params
