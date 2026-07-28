@@ -141,8 +141,30 @@ class PluginService(
             ?: throw IllegalArgumentException("No plugin found matching '$name'")
 
         val jarPath = Path.of(info.path)
-        Files.delete(jarPath)
-        logger.info("Plugin removed: {} (was {})", info.fileName, info.path)
+
+        // Close the enhanced classloader to release file handles.
+        // Required on Windows where the JVM locks JAR files on the classpath.
+        val wasEnhanced = PluginClasspathEnhancer.close()
+
+        try {
+            Files.delete(jarPath)
+            logger.info("Plugin removed: {} (was {})", info.fileName, info.path)
+        } catch (e: java.io.IOException) {
+            // Re-enhance with remaining JARs if we had closed a prior enhancement
+            if (wasEnhanced) {
+                PluginClasspathEnhancer.enhance(pluginDir)
+            }
+            throw IllegalStateException(
+                "Failed to delete plugin '${info.fileName}': ${e.message}. " +
+                    "The file may be locked by another process. " +
+                    "Stop the application, delete the file manually, then restart."
+            )
+        }
+
+        // Re-create the classloader with the remaining JARs (only if we closed one)
+        if (wasEnhanced) {
+            PluginClasspathEnhancer.enhance(pluginDir)
+        }
 
         if (info.loaded) {
             logger.info(

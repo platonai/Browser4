@@ -115,6 +115,9 @@ class PluginController(
         } catch (e: IllegalArgumentException) {
             logger.warn("Plugin not found for removal: {}", name)
             ResponseEntity.notFound().build()
+        } catch (e: IllegalStateException) {
+            logger.warn("Plugin removal failed (file locked or I/O error): {}", e.message)
+            ResponseEntity.status(409).body(null)
         }
     }
 }

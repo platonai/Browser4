@@ -24,6 +24,14 @@ object PluginClasspathEnhancer {
 
     private val logger = LoggerFactory.getLogger(PluginClasspathEnhancer::class.java)
 
+    /** The enhanced URLClassLoader, saved so it can be closed to release file handles. */
+    @Volatile
+    private var enhancedLoader: URLClassLoader? = null
+
+    /** The original thread-context classloader before enhancement. */
+    @Volatile
+    private var originalLoader: ClassLoader? = null
+
     /**
      * Scans [pluginDir] for .jar files, wraps the current thread-context
      * classloader in a new URLClassLoader that includes them, and installs
@@ -54,9 +62,47 @@ object PluginClasspathEnhancer {
         }
 
         val currentLoader = Thread.currentThread().contextClassLoader
-        val enhancedLoader = URLClassLoader(jarUrls.toTypedArray(), currentLoader)
-        Thread.currentThread().contextClassLoader = enhancedLoader
+        originalLoader = currentLoader
+        val loader = URLClassLoader(jarUrls.toTypedArray(), currentLoader)
+        enhancedLoader = loader
+        Thread.currentThread().contextClassLoader = loader
 
         logger.info("Plugin classpath enhanced ({} JARs)", jarUrls.size)
+    }
+
+    /**
+     * Closes the enhanced URLClassLoader and restores the original
+     * thread-context classloader.
+     *
+     * This releases file handles to all plugin JARs, which is necessary
+     * on Windows where the JVM locks files that are on the classpath.
+     * Call [enhance] afterwards to re-create the classloader with the
+     * remaining JARs.
+     *
+     * Safe to call multiple times — subsequent calls are no-ops if the
+     * loader is already closed.
+     *
+     * @return true if a classloader was actually closed, false if this
+     *         was a no-op (no prior enhancement)
+     */
+    fun close(): Boolean {
+        val loader = enhancedLoader
+        if (loader != null) {
+            try {
+                loader.close()
+                logger.info("Plugin classloader closed; file handles released")
+            } catch (e: Exception) {
+                logger.warn("Failed to close plugin classloader: {}", e.message)
+            }
+            enhancedLoader = null
+        }
+
+        val orig = originalLoader
+        if (orig != null) {
+            Thread.currentThread().contextClassLoader = orig
+            logger.debug("TCCL restored to original classloader")
+        }
+
+        return loader != null
     }
 }
