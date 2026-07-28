@@ -1,9 +1,9 @@
 package ai.platon.browser4.chrome
 
-import ai.platon.browser4.chrome.handler.transport.ChromeImpl
+import ai.platon.browser4.chrome.protocol.transport.ChromeImpl
 import ai.platon.browser4.chrome.util.ChromeLaunchException
-import ai.platon.browser4.chrome.util.ChromeOptions
-import ai.platon.browser4.chrome.util.LauncherOptions
+import ai.platon.browser4.api.ChromeOptions
+import ai.platon.browser4.api.LauncherOptions
 import ai.platon.pulsar.common.*
 import ai.platon.pulsar.common.browser.BrowserFiles
 import ai.platon.pulsar.common.browser.Browsers
@@ -94,13 +94,135 @@ class ChromeLauncher constructor(
             "/opt/microsoft/msedge/msedge",
         )
 
+        // ------------------------------------------------------------------
+        // Playwright browser discovery
+        // ------------------------------------------------------------------
+        // Playwright installs browsers under a platform-specific cache
+        // directory.  Each browser lives in a versioned subdirectory
+        // (e.g. chromium-1114/chrome-win/chrome.exe).  The
+        // PLAYWRIGHT_BROWSERS_PATH env var overrides the default root.
+
+        /** Root directories where Playwright browsers may be installed. */
+        private fun playwrightInstallRoots(): List<Path> {
+            val envOverride = System.getenv("PLAYWRIGHT_BROWSERS_PATH")
+            if (!envOverride.isNullOrBlank()) {
+                return envOverride.split(java.io.File.pathSeparator)
+                    .map(String::trim)
+                    .filter(String::isNotEmpty)
+                    .map { Path.of(it) }
+            }
+
+            val home = Path.of(System.getProperty("user.home"))
+            return if (SystemUtils.IS_OS_WINDOWS) {
+                listOf(home.resolve("AppData/Local/ms-playwright"))
+            } else if (SystemUtils.IS_OS_MAC) {
+                listOf(home.resolve("Library/Caches/ms-playwright"))
+            } else {
+                // Linux: XDG + legacy location
+                listOf(
+                    home.resolve(".cache/ms-playwright"),
+                    home.resolve("ms-playwright"),
+                )
+            }
+        }
+
+        /** Platform-specific relative path to the Chromium / Chrome binary. */
+        private fun playwrightChromiumRelativePaths(): List<String> {
+            return if (SystemUtils.IS_OS_WINDOWS) {
+                listOf(
+                    "chrome-win64\\chrome.exe",
+                    "chrome-win\\chrome.exe",
+                    "chrome-headless-shell-win64\\chrome-headless-shell.exe",
+                    "chrome-headless-shell-win\\chrome-headless-shell.exe",
+                )
+            } else if (SystemUtils.IS_OS_MAC) {
+                listOf("chrome-mac/Chromium.app/Contents/MacOS/Chromium")
+            } else {
+                listOf(
+                    "chrome-linux/chrome",
+                    "chrome-headless-shell-linux/chrome-headless-shell",
+                )
+            }
+        }
+
+        /** Platform-specific relative path to the Microsoft Edge binary. */
+        private fun playwrightEdgeRelativePaths(): List<String> {
+            return if (SystemUtils.IS_OS_WINDOWS) {
+                listOf("chrome-win64\\msedge.exe", "chrome-win\\msedge.exe")
+            } else if (SystemUtils.IS_OS_MAC) {
+                listOf("chrome-mac/Microsoft Edge.app/Contents/MacOS/Microsoft Edge")
+            } else {
+                listOf("chrome-linux/msedge")
+            }
+        }
+
+        /**
+         * Search Playwright install directories for a browser binary whose
+         * version-directory name starts with one of [browserPrefixes].
+         */
+        private fun findBrowserInPlaywright(
+            browserPrefixes: List<String>,
+            relativeExePaths: List<String>,
+        ): Path? {
+            for (root in playwrightInstallRoots()) {
+                if (!Files.isDirectory(root)) continue
+
+                val versionDirs = Files.list(root).use { stream ->
+                    stream
+                        .filter { Files.isDirectory(it) }
+                        .sorted { a, b -> // newest build number first
+                            val an = a.fileName.toString()
+                            val bn = b.fileName.toString()
+                            bn.compareTo(an)
+                        }
+                        .toList()
+                    // Errors (e.g. permission denied) are swallowed — try the
+                    // next root.
+                } ?: continue
+
+                for (versionDir in versionDirs) {
+                    val dirName = versionDir.fileName.toString()
+                    val matches = browserPrefixes.any { prefix ->
+                        dirName == prefix || dirName.startsWith("$prefix-")
+                    }
+                    if (!matches) continue
+
+                    for (rel in relativeExePaths) {
+                        val candidate = versionDir.resolve(rel)
+                        if (Files.isExecutable(candidate)) {
+                            return candidate.toAbsolutePath()
+                        }
+                    }
+                }
+            }
+            return null
+        }
+
+        /** Try to locate a Chromium / Chrome binary installed by Playwright. */
+        private fun findChromeInPlaywright(): Path? {
+            return findBrowserInPlaywright(
+                listOf("chromium", "chrome"),
+                playwrightChromiumRelativePaths(),
+            )
+        }
+
+        /** Try to locate a Microsoft Edge binary installed by Playwright. */
+        private fun findEdgeInPlaywright(): Path? {
+            return findBrowserInPlaywright(
+                listOf("msedge", "edge"),
+                playwrightEdgeRelativePaths(),
+            )
+        }
+
         /**
          * Searches for a browser binary, preferring Chrome/Chromium over Edge.
          *
          * Resolution order:
          * 1. System property `chrome.path` (explicit override)
          * 2. Built-in Chrome/Chromium paths
-         * 3. Microsoft Edge paths (fallback)
+         * 3. Playwright-installed Chromium / Chrome
+         * 4. Playwright-installed Microsoft Edge
+         * 5. System-installed Microsoft Edge paths (fallback)
          *
          * @throws RuntimeException if no executable browser binary is found.
          */
@@ -123,7 +245,13 @@ class ChromeLauncher constructor(
                 }
             }
 
-            // 3. Microsoft Edge paths (fallback)
+            // 3. Playwright-installed Chromium / Chrome
+            findChromeInPlaywright()?.let { return it }
+
+            // 4. Playwright-installed Microsoft Edge
+            findEdgeInPlaywright()?.let { return it }
+
+            // 5. System-installed Microsoft Edge paths (fallback)
             for (raw in EDGE_BINARY_SEARCH_PATHS) {
                 val path = Path.of(raw)
                 if (java.nio.file.Files.isExecutable(path)) {
@@ -138,9 +266,19 @@ class ChromeLauncher constructor(
         }
 
         init {
-            // Populate additional browser search paths so Microsoft Edge is
-            // discoverable by Browsers.searchChromeBinary() for non-ChromeLauncher callers.
+            // Populate additional browser search paths so Microsoft Edge and
+            // Playwright paths are discoverable by Browsers.searchChromeBinary()
+            // for non-ChromeLauncher callers.
             Browsers.ADDITIONAL_CHROME_BINARY_SEARCH_PATHS.addAll(EDGE_BINARY_SEARCH_PATHS)
+
+            // Also add any currently-installed Playwright browser binaries to
+            // the additional paths so they are discoverable by other callers.
+            findChromeInPlaywright()?.let { path ->
+                Browsers.ADDITIONAL_CHROME_BINARY_SEARCH_PATHS.add(path.toString())
+            }
+            findEdgeInPlaywright()?.let { path ->
+                Browsers.ADDITIONAL_CHROME_BINARY_SEARCH_PATHS.add(path.toString())
+            }
         }
     }
 

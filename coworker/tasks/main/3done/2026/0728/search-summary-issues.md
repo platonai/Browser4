@@ -1,0 +1,461 @@
+# Issues: search-summary
+
+> **Source:** `20260728-024827-search-summary.full.md` | **Date:** 20260728-024827 | **Mode:** dev
+
+## Scenario Background
+
+### Task
+
+The Wuhan Lobster Festival (武汉龙虾节) is officially branded as the **2026 Wuhan Crayfish Consumption Season (2026武汉小龙虾消费季)** — a city-wide, multi-month celebration of Wuhan's crayfish culture spanning April through August 2026. The main carnival is held at **Hankou Riverside (汉口江滩)** during the May Day holiday, with regional events at **Tianhe Airport T2** (May 27-29), **Qijiawan in Huangpi District** (50,000+ single-day visitors), **Optics Valley (光谷)**, and luxury hotels. Activities include massive crayfish feasts (6,000 jin consumed in a single night at Qijiawan), Shrimp King and Beer competitions, prize giveaways (250,000 RMB in on-site vouchers), and 3,000,000 RMB in consumption vouchers distributed via Meituan/Dianping/Douyin across 13 batches. Major brands featured include 肥肥虾庄, 靓靓蒸虾, and 巴厘龙虾. The festival reinforces Wuhan's identity as the "City of Crayfish," drives tourism, stimulates the nighttime economy, and supports Hubei's crayfish farming supply chain.
+
+The full summary is saved at `.test-sessions/task-summary.md`.
+
+### Execution Context
+
+**Key Commands:**
+
+1. `./b4w.ps1 help` — Discovered available commands
+2. `./b4w.ps1 goto "https://www.baidu.com"` — Successful navigation
+3. `./b4w.ps1 snapshot -v 0 --stdout` — **Failed** due to PowerShell parameter binding
+4. `./b4w.ps1 -- snapshot -v 0 --stdout` — Attempted workaround with `--` passthrough, also **failed**
+5. `./b4w.sh snapshot -v 0 --stdout` — Successful after switching wrappers
+6. `./b4w.sh fill e312 "武汉龙虾节" --submit` — Successful search
+7. `./b4w.sh snapshot -v 0 --stdout` — Viewed search results with AI summary
+8. `./b4w.sh snapshot -v 1 --stdout` — Scrolled to viewport 1 for more results
+9. `./b4w.sh click e5067` — Clicked a search result heading (did not navigate)
+10. `./b4w.sh click e5074` — Clicked the actual link (still stayed on search page)
+11. `./b4w.sh goto "http://www.baidu.com/link?url=..."` — Navigated via direct URL to article
+12. `./b4w.sh htmlsnapshot` — Captured HTML snapshot of the article
+13. `./b4w.sh htmlsnapshot get all text ...` — Extracted text (CSS selector discovery required trial/error)
+14. `./b4w.sh eval "document.body.innerText..."` — Extracted full article via JavaScript
+15. `./b4w.sh go-back` — Returned to search results
+
+**Key decisions & workarounds:**
+- Switched from `./b4w.ps1` to `./b4w.sh` after repeated flag-parsing failures (documented in SKILL.md but task instructions mandated `.ps1`)
+- Used `eval` with `innerText` as fallback when `htmlsnapshot get` CSS selectors didn't match
+- Used `goto` with direct Baidu redirect URLs when `click` on search result links didn't navigate
+- Read snapshot YAML directly to identify element refs rather than relying on interactive mode
+
+---
+
+---
+
+## Issues Found (8 issues)
+
+### Issue 1: b4w.ps1 cannot pass dash-prefixed flags from bash — -v, -i, --stdout are silently consumed by PowerShell
+
+**Severity:** Critical
+**Category:** Reliability
+
+#### Reproduction
+
+./b4w.ps1 snapshot -v 0 --stdout
+./b4w.ps1 -- snapshot -v 0 --stdout
+
+#### Expected Behavior
+
+CLI should capture a snapshot with viewport 0 and output to stdout.
+
+#### Actual Behavior
+
+First attempt: 'Unknown command: snapshot-0'. Second attempt: PowerShell parameter binding error about ambiguous parameter name. The -v and -i flags are consumed by PowerShell's common parameters before reaching the CLI binary.
+
+#### Root Cause Analysis
+
+PowerShell's param() block treats dash-prefixed tokens as PowerShell common parameters (-Verbose, -InformationAction) instead of literal arguments. The b4w.ps1 script's SafeArgs quoting logic (lines 442-446) runs inside pwsh, but by the time pwsh's own param() block processes the arguments from -File, -v is already consumed. The -- passthrough documented in SKILL.md only works inside an interactive pwsh session, not when calling pwsh -File from bash.
+
+#### Code Pointer
+
+`b4w.ps1:param() block (line 16-20) and SafeArgs construction (lines 442-446); b4w.sh:argument quoting loop (lines 33-39)`
+
+#### AI Suggested Improvement
+
+- Make b4w.sh the primary entry point on non-Windows platforms and update the SKILL.md to state this explicitly in the task template
+- Add a b4w (no extension) bash launcher that delegates to b4w.sh, installed via `./b4w.ps1 b4w install`
+- On Linux, detect when pwsh is the shell and print a clear warning: 'Flags like -v and -i may be misinterpreted. Use ./b4w.sh instead.'
+- Consider a Rust wrapper binary that bypasses PowerShell entirely on Linux/macOS
+
+#### Human Review
+
+- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [x] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+- [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
+- [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
+- **Notes:**
+[AI review unavailable — defaulted to DEFER]
+
+---
+
+### Issue 2: Click on Baidu search result links does not navigate away from the search page
+
+**Severity:** High
+**Category:** Product
+
+#### Reproduction
+
+1. Search on Baidu
+2. Take snapshot, get ref for a search result link
+3. `click <ref>` on the link
+4. Check page URL — still on the search results page
+
+#### Expected Behavior
+
+Clicking a search result link should navigate to the target article.
+
+#### Actual Behavior
+
+The click registers successfully (output says '✓ Clicked eXXXX') but the page URL and title do not change. The user stays on the Baidu search results page.
+
+#### Root Cause Analysis
+
+Baidu search result links use JavaScript onclick handlers for tracking/redirect rather than standard <a> navigation. The CDP click event fires, but the JS redirect is not completing with the current wait/load strategy. The Baidu link format uses /link?url= redirects that may require specific Referer headers or cookie context to resolve.
+
+#### AI Suggested Improvement
+
+- Investigate whether CDP click event triggers the Baidu JS onclick handler correctly
+- Consider adding a 'click and wait for navigation' mode that polls URL changes after click
+- Document this as a known limitation for search engine result pages with JS-based redirect
+- The workaround (extract href URL and use `goto` directly) works but requires extra steps
+
+#### Human Review
+
+- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [x] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+- [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
+- [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
+- **Notes:**
+[AI review unavailable — defaulted to DEFER]
+
+---
+
+### Issue 3: Every command prints noisy 'It is strongly recommended to launch pwsh' warning
+
+**Severity:** Medium
+**Category:** UX
+
+#### Reproduction
+
+Run any ./b4w.sh command.
+
+#### Expected Behavior
+
+Clean output without repeated warnings, after the user has already seen the recommendation once.
+
+#### Actual Behavior
+
+Every single invocation prints: 'It is strongly recommended to launch pwsh and run the .ps1 commands directly within the pwsh terminal.' This adds 2 lines of noise to every output.
+
+#### Root Cause Analysis
+
+b4w.sh line 17 unconditionally echoes the warning before every command execution. There is no mechanism to suppress it after the first display.
+
+#### Code Pointer
+
+`b4w.sh:17`
+
+#### AI Suggested Improvement
+
+- Only show the warning once per session (e.g., touch a sentinel file in /tmp)
+- Add a --no-warning flag or B4W_NO_WARNING env var to suppress it
+- Move the warning to stderr so it doesn't pollute machine-readable output
+
+#### Human Review
+
+- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [x] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+- [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
+- [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
+- **Notes:**
+[AI review unavailable — defaulted to DEFER]
+
+---
+
+### Issue 4: CSS selector discovery for htmlsnapshot requires trial and error
+
+**Severity:** Medium
+**Category:** UX
+
+#### Reproduction
+
+1. Navigate to any article page
+2. Run `htmlsnapshot` to capture
+3. Try `htmlsnapshot get text ".article-content p"`
+4. Get 'No elements matched'
+
+#### Expected Behavior
+
+Reasonable CSS selectors should work, or the tool should help discover valid selectors.
+
+#### Actual Behavior
+
+Common selectors like 'h1', '.article-content p', '#content-inner' all returned empty results or 'No elements matched'. The user must run `htmlsnapshot inspect` as a separate discovery step, which adds friction. Making matters worse, `get text 'h1'` returned empty even when h1 elements were clearly present in the page (the eval output showed the title).
+
+#### Root Cause Analysis
+
+The htmlsnapshot get command operates on the stored static HTML snapshot, which may have a different DOM structure than the live page (e.g., class names prefixed or modified during snapshot processing). The CSS selector engine may not support certain selectors, or the snapshot processing strips/modifies element attributes.
+
+#### AI Suggested Improvement
+
+- When 'No elements matched', automatically suggest `htmlsnapshot inspect` for the same selector with a note about how to run it
+- Document which CSS selector features are and aren't supported in the snapshot engine
+- Add a `--suggest-selectors` flag that prints a few relevant selectors automatically after capturing
+- Improve documentation with a troubleshooting section specifically for selector matching failures
+
+#### Human Review
+
+- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [x] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+- [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
+- [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
+- **Notes:**
+[AI review unavailable — defaulted to DEFER]
+
+---
+
+### Issue 5: Task template mandates $(./b4w.ps1) which is incompatible with actual bash/Linux usage
+
+**Severity:** Medium
+**Category:** Documentation
+
+#### Reproduction
+
+The evaluation task instructions say: 'Every browser4-cli command in this session MUST be invoked as: $(./b4w.ps1) <command>'
+
+#### Expected Behavior
+
+The mandated invocation method should work reliably on the evaluation platform (Linux/bash).
+
+#### Actual Behavior
+
+$(./b4w.ps1) causes dash-prefixed flags to be consumed by PowerShell's parameter binder, making commands like snapshot -v 0, click, and many others fail. The SKILL.md itself documents this issue and recommends using b4w.sh on bash. The task template contradicts the project's own best-practice documentation.
+
+#### Root Cause Analysis
+
+The evaluation template was likely written for Windows/PowerShell environments and was not updated for multi-platform usage. The b4w.ps1 script is designed to be called from within pwsh, not from bash via the shebang line.
+
+#### Code Pointer
+
+`b4w.ps1:param() block line 16-20; b4w.sh (the working bash wrapper)`
+
+#### AI Suggested Improvement
+
+- Update the evaluation template to recommend `./b4w.sh` on Linux/macOS and `./b4w.ps1` on Windows
+- Or add a b4w (no extension) launcher that auto-detects the platform and delegates correctly
+- Document the platform-specific invocation clearly in the SKILL.md's 'Installation' section with an 'Invocation by Platform' table
+
+#### Human Review
+
+- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [x] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+- [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
+- [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
+- **Notes:**
+[AI review unavailable — defaulted to DEFER]
+
+---
+
+### Issue 6: Snapshot YAML output is extremely verbose — 53KB+ for a single viewport of a search results page
+
+**Severity:** Medium
+**Category:** UX
+
+#### Reproduction
+
+1. Search on Baidu
+2. `snapshot -v 0 --stdout`
+
+#### Expected Behavior
+
+Snapshot output should prioritize interactive elements and key content, with non-interactive structural elements condensed or omitted by default.
+
+#### Actual Behavior
+
+The full accessibility tree YAML dump for a Baidu search results page was 53KB+ for just one viewport. Most of this is deeply nested generic containers, advertisement structures, and invisible elements. Finding the actual search result links requires wading through hundreds of lines of layout scaffolding.
+
+#### Root Cause Analysis
+
+The snapshot includes every element in the accessibility tree, including deeply nested generic divs, hidden elements, advertisement containers, and layout-only structures. While the SKILL.md warns against using interactive mode (-i) for shopping pages because it strips divs, the default output is the opposite extreme.
+
+#### AI Suggested Improvement
+
+- Add a `--content-only` or `--links-only` flag that filters to only links, headings, and text-bearing elements
+- Auto-collapse nested generic containers with no interactive children into a single summary line
+- Add a `--max-depth N` flag to limit tree nesting in output
+- Consider making interactive mode (-i) smarter: strip generic divs but preserve containers that have interactive descendants
+
+#### Human Review
+
+- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [x] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+- [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
+- [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
+- **Notes:**
+[AI review unavailable — defaulted to DEFER]
+
+---
+
+### Issue 7: Viewport pagination concept is unintuitive for first-time users
+
+**Severity:** Low
+**Category:** Discoverability
+
+#### Reproduction
+
+After first snapshot, user sees 'viewportsTotal: 3' in the header but may not immediately understand that -v 1 is needed to see subsequent content.
+
+#### Expected Behavior
+
+The concept should be immediately clear with a simple example in the first snapshot output.
+
+#### Actual Behavior
+
+The snapshot footer does explain -v flags, but the concept of 'viewports' as discrete page chunks (vs continuous scrolling) is unique to browser4-cli and takes mental adjustment. A new user might expect `scroll` or `snapshot --page 2` rather than `-v N`.
+
+#### Root Cause Analysis
+
+The viewport pagination model is different from how other browser automation tools work (typically scroll-based or full-page). The terminology 'viewport' isn't standard in this context.
+
+#### AI Suggested Improvement
+
+- In the snapshot output footer, add a quick-start example: 'To see more results, run: browser4-cli snapshot -v 1'
+- Add a `snapshot next` alias that auto-increments viewport
+- Consider a `--follow` flag that auto-captures all viewports and concatenates them
+
+#### Human Review
+
+- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [x] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+- [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
+- [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
+- **Notes:**
+[AI review unavailable — defaulted to DEFER]
+
+---
+
+### Issue 8: Element refs silently become stale without clear lifetime indication
+
+**Severity:** Low
+**Category:** UX
+
+#### Reproduction
+
+1. Take snapshot (get refs)
+2. Run `snapshot -v 1` (scroll viewport, does NOT change DOM)
+3. Try to click a ref from step 1
+4. Does it work? Depends on the page.
+
+#### Expected Behavior
+
+Either refs should survive non-mutating commands, or the tool should warn when refs have expired.
+
+#### Actual Behavior
+
+The SKILL.md documents a complex lifecycle (safe commands vs unsafe commands vs gray area), but the CLI itself does not actively track ref validity. Users must memorize which commands preserve refs and which invalidate them. Even `snapshot -v 1` (which scrolls) might technically change DOM state depending on lazy-loading.
+
+#### Root Cause Analysis
+
+Refs are CDP backend node IDs that become invalid when the DOM mutates. The CLI doesn't track DOM mutation events and can't proactively warn. The documentation covers this well, but the UX doesn't assist at runtime.
+
+#### AI Suggested Improvement
+
+- After any potentially-mutating command, print a subtle hint: 'Refs from the last snapshot may be stale. Re-run snapshot to get fresh refs.'
+- Track the 'last snapshot command' timestamp and warn if a ref is used from an old snapshot
+- Add a `--verify-refs` flag to click/fill that re-checks ref validity before executing
+
+#### Human Review
+
+- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [x] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+- [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
+- [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
+- **Notes:**
+[AI review unavailable — defaulted to DEFER]
+
+---
+
+## Overall Assessment
+
+**Completion Status:** Successful — the task to search for and summarize the Wuhan Lobster Festival was completed. Five relevant sources were consulted (Baidu AI summary, Ctrip article, 黄陂文旅 article, Qijiawan snippet, and related search results), and a comprehensive summary covering all five requested aspects was produced.
+
+**Success Rate:** 85% — navigation, search, form submission, and text extraction (via eval) all worked well. However, several planned steps failed and required workarounds: b4w.ps1 flag parsing (switched to b4w.sh), clicking search result links (used goto with direct URL instead), and CSS selector discovery for htmlsnapshot (fell back to eval/innerText).
+
+**Major Blockers:** b4w.ps1 flag parsing from bash required switching to b4w.sh. Without this workaround, no snapshot or click commands with flags would have worked. The b4w.sh wrapper itself prints a distracting warning on every invocation.
+
+**Most Confusing Aspects:** 1) The mandated $(./b4w.ps1) invocation format doesn't work from bash despite being the documented task requirement. 2) CSS selectors that look correct (h1, .article-content p) return empty results with no explanation. 3) Clicking links on search result pages silently fails to navigate. 4) The viewport pagination model (-v 0, -v 1) is unlike any other browser tool and takes time to understand.
+
+**Most Valuable Improvements:** 1) Fix or work around the PowerShell flag consumption so $(./b4w.ps1) works from bash as the task instructions expect. 2) When 'No elements matched', auto-suggest running htmlsnapshot inspect. 3) Make click work reliably on JS-redirect search engine links. 4) Suppress the repeated pwsh recommendation warning after the first display. 5) Add a --content-only snapshot mode that filters out deep layout scaffolding.
+
+**Usability Rating:** 6/10
+
+---
+
+## How to Reproduce
+
+### Common Setup
+
+1. Clone the repository and `cd` to the repo root.
+2. The CLI is invoked via `./b4w.ps1` which auto-builds from source when needed.
+3. The backend server starts automatically in dev mode.
+4. All commands from repo root: `./b4w.ps1 <command>`
+
+### Per-Issue Reproduction Steps
+
+#### Issue 1: b4w.ps1 cannot pass dash-prefixed flags from bash — -v, -i, --stdout are silently consumed by PowerShell
+
+./b4w.ps1 snapshot -v 0 --stdout
+./b4w.ps1 -- snapshot -v 0 --stdout
+
+#### Issue 2: Click on Baidu search result links does not navigate away from the search page
+
+1. Search on Baidu
+2. Take snapshot, get ref for a search result link
+3. `click <ref>` on the link
+4. Check page URL — still on the search results page
+
+#### Issue 3: Every command prints noisy 'It is strongly recommended to launch pwsh' warning
+
+Run any ./b4w.sh command.
+
+#### Issue 4: CSS selector discovery for htmlsnapshot requires trial and error
+
+1. Navigate to any article page
+2. Run `htmlsnapshot` to capture
+3. Try `htmlsnapshot get text ".article-content p"`
+4. Get 'No elements matched'
+
+#### Issue 5: Task template mandates $(./b4w.ps1) which is incompatible with actual bash/Linux usage
+
+The evaluation task instructions say: 'Every browser4-cli command in this session MUST be invoked as: $(./b4w.ps1) <command>'
+
+#### Issue 6: Snapshot YAML output is extremely verbose — 53KB+ for a single viewport of a search results page
+
+1. Search on Baidu
+2. `snapshot -v 0 --stdout`
+
+#### Issue 7: Viewport pagination concept is unintuitive for first-time users
+
+After first snapshot, user sees 'viewportsTotal: 3' in the header but may not immediately understand that -v 1 is needed to see subsequent content.
+
+#### Issue 8: Element refs silently become stale without clear lifetime indication
+
+1. Take snapshot (get refs)
+2. Run `snapshot -v 1` (scroll viewport, does NOT change DOM)
+3. Try to click a ref from step 1
+4. Does it work? Depends on the page.
+

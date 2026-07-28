@@ -4,7 +4,7 @@ import ai.platon.pulsar.persist.ProtocolStatus
 import ai.platon.pulsar.persist.ProtocolStatus.Companion.ARG_HTTP_CODE
 import ai.platon.pulsar.persist.metadata.ProtocolStatusCodes
 import ai.platon.pulsar.persist.metadata.ProtocolStatusCodes.REQUEST_TIMEOUT
-import org.apache.http.HttpStatus
+import org.apache.hc.core5.http.HttpStatus
 
 object ProtocolStatusTranslator {
 

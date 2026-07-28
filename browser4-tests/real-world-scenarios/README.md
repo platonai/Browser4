@@ -14,7 +14,8 @@ documentation, and reliability from a first-time user's perspective.
 
 Each task file describes the scenario in plain markdown. `run-task.ps1` reads the
 file, combines it with the shared evaluation template (`common.ps1`), and invokes
-`claude`.
+the configured agent CLI (`claude` or `kimi`, auto-detected in that order; force
+one by setting `$script:scenarioAgentCli` before calling `Invoke-Agent`).
 
 ## Anatomy of a task file
 
@@ -86,7 +87,7 @@ Valid categories: `generic`, `browser4`, `real-world`, `mock-site`, `all` (defau
 
 ## Available tasks
 
-25 task files covering all browser4-cli commands documented in the SKILL reference.
+32 task files covering all browser4-cli commands documented in the SKILL reference plus the 5 built-in Browser4 plugins.
 
 ### Real-World — Generic (`tasks/real-world/generic/`)
 
@@ -121,9 +122,21 @@ htmlsnapshot, attach, named sessions, auto-diff).
 | `loop-monitoring.md` | httpbin.org | Loop in plain-text/shell/subcommand modes, named loops, pause/resume/stop |
 | `attach-remote-debug.md` | Chrome/Edge CDP | Attach to running Chrome/Edge via CDP, capture state |
 
+### Real-World — Plugin Scenarios (`tasks/real-world/browser4/plugin-*.md`)
+
+5 scenarios exercising each of the 5 built-in Browser4 plugins against real websites.
+
+| Task file | Target | Plugin | Scenario |
+|-----------|--------|--------|----------|
+| `plugin-image-detection-download.md` | Wikipedia | browser4-images | Detect flag images, download single images, bulk download all |
+| `plugin-markdown-conversion.md` | Wikipedia, httpbin | browser4-markdown | Convert pages to Markdown, discover links, crawl, fetch via HTTP |
+| `plugin-media-video-detection.md` | W3Schools | browser4-media | Detect HTML5 video elements, download video, probe metadata |
+| `plugin-pptx-generation.md` | Wikipedia, httpbin | browser4-pptx | Generate PowerPoint from rich/dense/simple pages, verify structure |
+| `plugin-captcha-detection.md` | Google, hCaptcha, Cloudflare | browser4-captcha | Detect reCAPTCHA v2, hCaptcha, Turnstile; false-positive check |
+
 ### Mock Site (`tasks/mock-site/`)
 
-8 scenarios requiring the local MockSite server (`./bin/test.ps1 mock-site`).
+10 scenarios requiring the local MockSite server (`./bin/test.ps1 mock-site`).
 
 | Task file | Scenario |
 |-----------|----------|
@@ -132,6 +145,8 @@ htmlsnapshot, attach, named sessions, auto-diff).
 | `x-sql-extraction-functions.md` | X-SQL DOM/STR/ARRAY/LLM functions, PowerCSS :expr(), WHERE/ORDER BY/LIMIT |
 | `javascript-evaluation.md` | eval with --json, --file, --stdin, --ref on dynamic page |
 | `crawl-advanced-extraction.md` | Crawl with X-SQL, background mode, caching, priority, timeouts |
+| `crawl-link-options.md` | Crawl with depth control, out-link CSS selectors (`-ol`), URL patterns (`-olp`), and seed files |
+| `crawl-sql-formats.md` | Crawl with X-SQL via `--sql @file` and `--sql-stdin`, CSV and table output formats |
 | `swarm-parallel-scraping.md` | Swarm session, parallel X-SQL extraction, headless mode |
 | `storage-state-management.md` | Cookies (set with all flags), localStorage, sessionStorage, state-save/load |
 | `comprehensive-ecommerce-workflow.md` | End-to-end e-commerce research: 18 steps combining 15+ commands |

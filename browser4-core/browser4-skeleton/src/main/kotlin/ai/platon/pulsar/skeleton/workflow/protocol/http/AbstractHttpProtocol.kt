@@ -3,29 +3,23 @@ package ai.platon.pulsar.skeleton.workflow.protocol.http
 import ai.platon.pulsar.common.AppContext
 import ai.platon.pulsar.common.HttpHeaders
 import ai.platon.pulsar.common.config.ImmutableConfig
+import ai.platon.pulsar.core.api.WebPage
 import ai.platon.pulsar.persist.ProtocolStatus
 import ai.platon.pulsar.persist.RetryScope
-import ai.platon.pulsar.core.api.WebPage
 import ai.platon.pulsar.persist.metadata.FetchMode
-import ai.platon.pulsar.persist.metadata.MultiMetadata
 import ai.platon.pulsar.persist.metadata.Name
 import ai.platon.pulsar.persist.metadata.ProtocolStatusCodes
-import ai.platon.pulsar.skeleton.workflow.protocol.Protocol
 import ai.platon.pulsar.skeleton.workflow.common.MimeTypeResolver
+import ai.platon.pulsar.skeleton.workflow.protocol.Protocol
 import ai.platon.pulsar.skeleton.workflow.protocol.ProtocolOutput
 import ai.platon.pulsar.skeleton.workflow.protocol.Response
 import crawlercommons.robots.BaseRobotRules
-import org.slf4j.LoggerFactory
-import java.net.ConnectException
-import java.net.SocketTimeoutException
 import java.net.URI
-import java.net.UnknownHostException
 import java.time.Duration
 import java.time.Instant
 import java.util.concurrent.atomic.AtomicBoolean
 
 abstract class AbstractHttpProtocol : Protocol {
-    private val log = LoggerFactory.getLogger(AbstractHttpProtocol::class.java)
     protected val closed = AtomicBoolean()
 
     val isActive get() = !closed.get() && AppContext.isActive
@@ -89,20 +83,6 @@ abstract class AbstractHttpProtocol : Protocol {
         return ProtocolOutput(pageDatum, headers, finalProtocolStatus)
     }
 
-    private fun getFailedResponse(lastThrowable: Throwable?): ProtocolOutput {
-        val code = when (lastThrowable) {
-            is ConnectException -> ProtocolStatusCodes.REQUEST_TIMEOUT
-            is SocketTimeoutException -> ProtocolStatusCodes.REQUEST_TIMEOUT
-            is UnknownHostException -> ProtocolStatusCodes.UNKNOWN_HOST
-            else -> ProtocolStatusCodes.EXCEPTION
-        }
-        val protocolStatus = ProtocolStatus.failed(
-            code,
-            "exception", lastThrowable
-        )
-        return ProtocolOutput(null, MultiMetadata(), protocolStatus)
-    }
-
     private fun setResponseTime(startTime: Instant, page: WebPage, response: Response) {
         val pageFetchMode = page.fetchMode
         val elapsedTime = if (pageFetchMode == FetchMode.BROWSER) {
@@ -133,9 +113,5 @@ abstract class AbstractHttpProtocol : Protocol {
 
     override fun toString(): String {
         return javaClass.simpleName
-    }
-
-    companion object {
-        private const val MAX_REY_GUARD = 10
     }
 }

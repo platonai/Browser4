@@ -1,10 +1,13 @@
 package ai.platon.pulsar.browser
 
+import ai.platon.browser4.api.AbstractWebDriver
+import ai.platon.browser4.api.Browser
+import ai.platon.browser4.api.WebDriver
+
 import ai.platon.browser4.chrome.PulsarWebDriver
-import ai.platon.browser4.chrome.handler.RemoteChromeProtocol
+import ai.platon.browser4.chrome.protocol.DirectChromeProtocol
 import ai.platon.pulsar.WebDriverTestBase
 import ai.platon.pulsar.common.printlnPro
-import ai.platon.pulsar.browser.WebDriver
 import ch.qos.logback.classic.Level
 import ch.qos.logback.classic.Logger
 import kotlinx.coroutines.runBlocking
@@ -22,8 +25,8 @@ class PulsarWebDriverCDPTests : WebDriverTestBase() {
     }
 
     private val browserLoggerName = "ai.platon.pulsar.protocol.browser"
-    private val chromeLoggerName = "ai.platon.browser4.driver.chrome"
-    private val transportLoggerName = "ai.platon.browser4.driver.chrome.impl"
+    private val chromeLoggerName = "ai.platon.browser4.chrome"
+    private val transportLoggerName = "ai.platon.browser4.chrome.protocol"
     private val testURL get() = "$generatedAssetsBaseURL/interactive-4.html"
 
     fun increasesLogLevels() {
@@ -50,8 +53,8 @@ class PulsarWebDriverCDPTests : WebDriverTestBase() {
 
     @Test
     @Ignore("Disabled temporarily")
-    fun whenNavigateAHtmlPageThenTheNavigateStateAreCorrect() = runEnhancedWebDriverTest(browser) { driver ->
-        openEnhanced(interactiveUrl, driver, 1)
+    fun whenNavigateAHtmlPageThenTheNavigateStateAreCorrect() = runWebDriverTestAndCompute(browser) { driver ->
+        openAndCompute(interactiveUrl, driver, 1)
 
         val navigateEntry = driver.navigateEntry
         assertTrue("Expect mainFrameReceived") { navigateEntry.mainFrameReceived }
@@ -69,7 +72,7 @@ class PulsarWebDriverCDPTests : WebDriverTestBase() {
 
     @Test
     @DisplayName("test evaluate 1+1")
-    fun testEvaluate1Plus1() = runEnhancedWebDriverTest(testURL, browser) { driver ->
+    fun testEvaluate1Plus1() = runWebDriverTestAndCompute(testURL, browser) { driver ->
         val code = """1+1"""
 
         val result = driver.evaluate(code)
@@ -86,12 +89,59 @@ class PulsarWebDriverCDPTests : WebDriverTestBase() {
         assertEquals(2, result)
     }
 
+    // ── executeCdpCommand tests ───────────────────────────────────────
+
+    @Test
+    @DisplayName("executeCdpCommand Runtime.evaluate 1+1")
+    fun testExecuteCdpCommandRuntimeEvaluate() =
+        runWebDriverTestAndCompute(testURL, browser) { driver ->
+            val result = driver.executeCdpCommand(
+                "Runtime.evaluate",
+                mapOf("expression" to "1 + 1")
+            )
+            assertIs<Map<*, *>>(result)
+            val resultObj = result["result"] as Map<*, *>
+            assertEquals("number", resultObj["type"])
+            assertEquals(2, (resultObj["value"] as Number).toInt())
+        }
+
+    @Test
+    @DisplayName("executeCdpCommand DOM.getDocument")
+    fun testExecuteCdpCommandGetDocument() =
+        runWebDriverTestAndCompute(testURL, browser) { driver ->
+            val result = driver.executeCdpCommand("DOM.getDocument")
+            assertIs<Map<*, *>>(result)
+            assertNotNull(result["root"], "DOM.getDocument should return a root node")
+        }
+
+    @Test
+    @DisplayName("executeCdpCommand Page.getNavigationHistory")
+    fun testExecuteCdpCommandPageGetNavigationHistory() =
+        runWebDriverTestAndCompute(testURL, browser) { driver ->
+            val result = driver.executeCdpCommand("Page.getNavigationHistory")
+            assertIs<Map<*, *>>(result)
+            assertIs<List<*>>(result["entries"])
+            assertTrue((result["currentIndex"] as Number).toInt() >= 0)
+        }
+
+    @Test
+    @DisplayName("executeCdpCommand with invalid method throws")
+    fun testExecuteCdpCommandInvalidMethodThrows() =
+        runWebDriverTestAndCompute(testURL, browser) { driver ->
+            try {
+                driver.executeCdpCommand("NonExistent.Method")
+                fail("Expected exception for invalid CDP method")
+            } catch (e: Exception) {
+                // expected — CDP rejects unknown methods
+            }
+        }
+
     private fun runWebDriverDOMEventTest(url: String, browser: Browser, block: suspend (WebDriver) -> Unit) {
         runBlocking {
             browser.newDriver().use { driver ->
                 assertIs<PulsarWebDriver>(driver)
 
-                val protocol = driver.implementation as RemoteChromeProtocol
+                val protocol = driver.implementation as DirectChromeProtocol
 
                 protocol.dom.onAttributeModified { e ->
                     val message = MessageFormat.format("> {0}. node changed | {1} := {2}", e.nodeId, e.name, e.value)
@@ -103,7 +153,7 @@ class PulsarWebDriverCDPTests : WebDriverTestBase() {
                     printlnPro(e.message)
                 }
 
-                openEnhanced(url, driver)
+                openAndCompute(url, driver)
                 block(driver)
             }
         }

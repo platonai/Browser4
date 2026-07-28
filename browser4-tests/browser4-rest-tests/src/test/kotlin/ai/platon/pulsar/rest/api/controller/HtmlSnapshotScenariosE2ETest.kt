@@ -1,6 +1,6 @@
 package ai.platon.pulsar.rest.api.controller
 
-import ai.platon.pulsar.rest.mcp.controller.MCPToolCallResponse
+import ai.platon.pulsar.rest.mcp.controller.dto.MCPToolCallResponse
 import ai.platon.pulsar.test.TestUrls
 import com.fasterxml.jackson.databind.DeserializationFeature
 import com.fasterxml.jackson.databind.ObjectMapper
@@ -44,10 +44,7 @@ class HtmlSnapshotScenariosE2ETest : RestAPITestBase() {
         .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false)
         .configure(DeserializationFeature.FAIL_ON_NULL_FOR_PRIMITIVES, false)
 
-    @Autowired
-    private lateinit var sessionManager: ai.platon.pulsar.common.PulsarSessionManager
-
-    private val createdSessions = mutableListOf<String>()
+private val createdSessions = mutableListOf<String>()
 
     @AfterEach
     fun cleanUp() {

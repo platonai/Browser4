@@ -1,12 +1,12 @@
 package ai.platon.pulsar.skeleton.context
 
-import ai.platon.pulsar.browser.Browser
-import ai.platon.pulsar.browser.BrowserManager
-import ai.platon.pulsar.browser.common.BrowserLaunchException
+import ai.platon.browser4.api.Browser
+import ai.platon.browser4.api.BrowserManager
+import ai.platon.browser4.api.model.BrowserLaunchException
 import ai.platon.pulsar.common.CheckState
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.common.urls.UrlAware
-import ai.platon.pulsar.browser.WebDriver
+import ai.platon.browser4.api.WebDriver
 import ai.platon.pulsar.core.api.WebPage
 import ai.platon.pulsar.dom.FeaturedDocument
 import ai.platon.pulsar.external.ModelResponse
@@ -18,7 +18,7 @@ import ai.platon.pulsar.skeleton.common.urls.NormURL
 import ai.platon.pulsar.skeleton.session.PulsarSession
 import ai.platon.pulsar.skeleton.workflow.common.GlobalCache
 import ai.platon.pulsar.skeleton.workflow.filter.ChainedUrlNormalizer
-import com.google.common.annotations.Beta
+
 import org.springframework.beans.BeansException
 import java.net.URL
 import java.nio.ByteBuffer
@@ -271,7 +271,6 @@ interface PulsarContext : java.lang.AutoCloseable {
      * @param url The url of the page to retrieve
      * @return The page content in string format or null
      */
-    @Beta
     fun getContentAsString(url: String): String?
 
     /**

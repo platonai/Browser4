@@ -1,22 +1,27 @@
 package ai.platon.pulsar.rest.api.service
 
 import ai.platon.pulsar.agentic.GenericAgenticSession
+import ai.platon.pulsar.agentic.tools.advanced.common.JsonlPersistence
 import ai.platon.pulsar.agentic.tools.advanced.crawl.QueryRequest
 import ai.platon.pulsar.agentic.tools.advanced.crawl.ScrapeRequest
 import ai.platon.pulsar.agentic.tools.advanced.crawl.ScrapeResponse
-import ai.platon.pulsar.agentic.tools.advanced.crawl.common.DegenerateXSQLScrapeHyperlink
-import ai.platon.pulsar.agentic.tools.advanced.crawl.common.ScrapeAPIUtils
 import ai.platon.pulsar.agentic.tools.advanced.crawl.common.ScrapeHyperlink
-import ai.platon.pulsar.agentic.tools.advanced.crawl.common.XSQLScrapeHyperlink
-import ai.platon.pulsar.common.PulsarSessionManager
+import ai.platon.pulsar.agentic.tools.advanced.crawl.common.ScrapeAPIUtils
+import ai.platon.pulsar.rest.session.PulsarSessionManager
 import ai.platon.pulsar.common.ResourceStatus
+import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import ai.platon.pulsar.persist.metadata.ProtocolStatusCodes
 import ai.platon.pulsar.rest.api.entities.ScrapeStatusRequest
 import com.github.benmanes.caffeine.cache.Cache
 import com.github.benmanes.caffeine.cache.Caffeine
+import jakarta.annotation.PostConstruct
+import jakarta.annotation.PreDestroy
+import kotlinx.coroutines.*
 import org.apache.commons.collections4.MultiMapUtils
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Service
+import java.nio.file.Path
+import java.time.Instant
 
 @Service
 class SwarmService(
@@ -41,9 +46,10 @@ class SwarmService(
      *   Window TinyLFU policy.
      * - NOT_FOUND lookups are never cached — only real task responses go in.
      * - Evicted entries are removed from [responseStatusIndex] by the removal listener.
+     * - Persisted to a JSONL file so task statuses survive restarts.
      * */
     val responseCache: Cache<String, ScrapeResponse> = Caffeine.newBuilder()
-        .maximumSize(100_000)
+        .maximumSize(100)
         .removalListener<String, ScrapeResponse> { key, value, cause ->
             if (value != null && cause.wasEvicted()) {
                 responseStatusIndex[value.statusCode]?.remove(key)
@@ -56,6 +62,82 @@ class SwarmService(
         .recordStats()
         .build()
 
+    /** JSONL persistence for swarm task responses across restarts. */
+    internal val persistence = JsonlPersistence(
+        file = Path.of(
+            System.getProperty("browser4.data.dir", System.getProperty("user.home")),
+            ".browser4", "data", "swarm", "swarm-tasks.jsonl"
+        ),
+        clazz = ScrapeResponse::class,
+        objectMapper = pulsarObjectMapper()
+    )
+
+    /** Dedicated dispatcher for cleanup operations. */
+    private val cleanupDispatcher = Dispatchers.IO.limitedParallelism(2)
+
+    private val cleanupScope = CoroutineScope(
+        cleanupDispatcher + SupervisorJob() + CoroutineName("swarm-cleanup")
+    )
+
+    /** How long to keep terminal tasks before compacting them out of the JSONL file. */
+    @Volatile
+    var taskTtlMinutes: Int = 43200 // 30 days
+
+    init {
+        // Periodically compact the JSONL file so stale entries don't accumulate forever.
+        cleanupScope.launch {
+            while (isActive) {
+                delay(5 * 60 * 1000L) // every 5 minutes
+                compactPersistence()
+            }
+        }
+    }
+
+    @PreDestroy
+    fun shutdown() {
+        cleanupScope.cancel()
+    }
+
+    @PostConstruct
+    fun restoreFromDisk() {
+        val now = Instant.now()
+        val ttlCutoff = now.minusSeconds(taskTtlMinutes * 60L)
+
+        persistence.restore { response ->
+            response.id?.let { id ->
+                // Skip terminal entries whose TTL has expired — they were evicted
+                // from the cache before shutdown and should not be revived.
+                if (response.isDone && response.createdTime?.isBefore(ttlCutoff) == true) {
+                    logger.debug("Skipping expired swarm task {} during restore (created={})", id, response.createdTime)
+                    return@restore
+                }
+                responseCache.put(id, response)
+                responseStatusIndex[response.statusCode].add(id)
+            }
+        }
+    }
+
+    /** Compact the JSONL persistence file: remove stale terminal entries past TTL. */
+    private fun compactPersistence() {
+        val now = Instant.now()
+        val ttlCutoff = now.minusSeconds(taskTtlMinutes * 60L)
+
+        val stale = responseCache.asMap().entries.filter {
+            it.value.isDone && it.value.createdTime?.isBefore(ttlCutoff) == true
+        }
+        if (stale.isEmpty()) return
+
+        stale.forEach {
+            responseCache.invalidate(it.key)
+            responseStatusIndex[it.value.statusCode]?.remove(it.key)
+        }
+        logger.info("Compacted {} expired swarm tasks (TTL: {} min)", stale.size, taskTtlMinutes)
+
+        // Rewrite the persistence file so compacted tasks don't revive on restart.
+        persistence.clear()
+        responseCache.asMap().values.forEach { persistence.append(it) }
+    }
+
     /**
      * Submit a scraping task
      * */
@@ -63,6 +145,7 @@ class SwarmService(
         val hyperlink = createScrapeHyperlink(request)
         responseCache.put(hyperlink.uuid, hyperlink.response)
         hyperlink.response.id = hyperlink.uuid
+        persistence.append(hyperlink.response)
         val s = session
         require(s is GenericAgenticSession) {
             "Expected GenericAgenticSession but got ${s::class.simpleName} (uuid=${s.uuid})"
@@ -118,20 +201,10 @@ class SwarmService(
     }
 
     private fun createScrapeHyperlink(request: ScrapeRequest): ScrapeHyperlink {
-        val sql = request.sql
-        val link = if (ScrapeAPIUtils.isScrapeUDF(sql)) {
-            val xSQL = ScrapeAPIUtils.normalize(sql)
-            XSQLScrapeHyperlink(request, xSQL, session)
-        } else {
-            DegenerateXSQLScrapeHyperlink(request, session)
-        }
-
-        link.eventHandlers.crawlEventHandlers.onLoaded.addLast { _, _ ->
+        return ScrapeHyperlinkFactory.create(request, session) { link ->
             responseCache.put(link.uuid, link.response)
             responseStatusIndex[link.response.statusCode].add(link.uuid)
-            null
+            persistence.append(link.response)
         }
-
-        return link
     }
 }

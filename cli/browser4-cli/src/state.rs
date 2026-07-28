@@ -41,6 +41,27 @@ pub struct CliState {
     /// running after `close`.
     #[serde(rename = "isAttached", default, skip_serializing_if = "is_false")]
     pub is_attached: bool,
+    /// How this session connects to the browser: `"cdp"` for direct CDP
+    /// connections, `"extension"` for Browser4 Chrome Extension relay.
+    /// `None` (absent) for Browser4-launched sessions.
+    #[serde(rename = "attachType", skip_serializing_if = "Option::is_none")]
+    pub attach_type: Option<String>,
+    /// Resolved CDP HTTP endpoint URL for CDP-attached sessions, e.g.
+    /// `"http://localhost:9222"`.
+    #[serde(rename = "cdpEndpoint", skip_serializing_if = "Option::is_none")]
+    pub cdp_endpoint: Option<String>,
+    /// Browser channel name for extension-attached or channel-based CDP
+    /// sessions, e.g. `"chrome"`, `"msedge"`, `"chrome-canary"`.
+    #[serde(rename = "browserChannel", skip_serializing_if = "Option::is_none")]
+    pub browser_channel: Option<String>,
+    /// ISO-8601 timestamp when this session was first created (local recording).
+    /// Used as fallback for display when the backend is unreachable.
+    #[serde(rename = "createdAt", skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<String>,
+    /// ISO-8601 timestamp when this session was last accessed (local recording).
+    /// Used as fallback for display when the backend is unreachable.
+    #[serde(rename = "lastAccessedAt", skip_serializing_if = "Option::is_none")]
+    pub last_accessed_at: Option<String>,
 }
 
 fn is_false(b: &bool) -> bool {
@@ -56,6 +77,11 @@ impl Default for CliState {
             session_name: None,
             last_mouse_position: None,
             is_attached: false,
+            attach_type: None,
+            cdp_endpoint: None,
+            browser_channel: None,
+            created_at: None,
+            last_accessed_at: None,
         }
     }
 }
@@ -600,6 +626,9 @@ pub struct AsyncTaskEntry {
     /// Last known status (empty until first poll).
     #[serde(rename = "lastStatus", skip_serializing_if = "String::is_empty", default)]
     pub last_status: String,
+    /// ISO-8601 timestamp when the task was first observed as completed (None until done).
+    #[serde(rename = "completedAt", skip_serializing_if = "Option::is_none", default)]
+    pub completed_at: Option<String>,
 }
 
 /// Persisted list of tracked async tasks.
@@ -652,21 +681,25 @@ pub fn track_async_task(
         description: description.to_string(),
         submitted_at: chrono::Utc::now().to_rfc3339(),
         last_status: String::new(),
+        completed_at: None,
     });
     write_async_tasks(&list, state_dir)
 }
 
 /// Remove completed/failed tasks from the tracked list.
+#[allow(dead_code)]
 pub fn prune_async_tasks(
     state_dir: Option<&std::path::Path>,
 ) -> std::io::Result<usize> {
     let mut list = read_async_tasks(state_dir);
     let before = list.tasks.len();
     list.tasks.retain(|entry| {
-        !entry.last_status.contains("done")
-            && !entry.last_status.contains("error")
-            && !entry.last_status.contains("SC_OK")
-            && !entry.last_status.contains("OK")
+        let s = entry.last_status.as_str();
+        if s.is_empty() {
+            return true; // keep — not yet polled
+        }
+        // Standard lifecycle labels from friendly_agent_status / friendly_crawl_status
+        s != "completed" && !s.starts_with("failed")
     });
     let removed = before - list.tasks.len();
     if removed > 0 {
@@ -676,6 +709,7 @@ pub fn prune_async_tasks(
 }
 
 /// Update the last_status field for a tracked async task.
+/// When `completed_at` is provided, it also sets the completion timestamp.
 pub fn update_async_task_status(
     task_id: &str,
     status: &str,
@@ -684,41 +718,89 @@ pub fn update_async_task_status(
     let mut list = read_async_tasks(state_dir);
     if let Some(entry) = list.tasks.iter_mut().find(|t| t.task_id == task_id) {
         entry.last_status = status.to_string();
+        // Set completed_at when transitioning to a terminal state, but only
+        // if it hasn't been set yet (keep the first completion timestamp).
+        let is_terminal = status == "completed" || status.starts_with("failed");
+        if is_terminal && entry.completed_at.is_none() {
+            entry.completed_at = Some(chrono::Utc::now().to_rfc3339());
+        }
         write_async_tasks(&list, state_dir)?;
     }
     Ok(())
 }
 
 /// Format a list of tracked async tasks for CLI display.
-pub fn format_async_task_list(list: &AsyncTaskList) -> String {
+///
+/// Tasks are sorted by `submitted_at` descending (latest first).
+/// When `limit` is Some, only that many entries are shown (after offset),
+/// and a hint is appended if more entries exist.
+pub fn format_async_task_list(
+    list: &AsyncTaskList,
+    limit: Option<usize>,
+    offset: Option<usize>,
+) -> String {
     if list.tasks.is_empty() {
         return "No tracked async tasks.".to_string();
     }
 
+    let total = list.tasks.len();
+
+    // Sort by submitted_at descending (latest first)
+    let mut sorted: Vec<&AsyncTaskEntry> = list.tasks.iter().collect();
+    sorted.sort_by(|a, b| b.submitted_at.cmp(&a.submitted_at));
+
+    let offset = offset.unwrap_or(0);
+    let limit = limit.unwrap_or(usize::MAX);
+    let page: Vec<&&AsyncTaskEntry> = sorted.iter().skip(offset).take(limit).collect();
+
     let mut out = Vec::new();
-    out.push(format!("{} tracked task(s):\n", list.tasks.len()));
+    let showing = (offset + page.len()).min(total);
+    let from = if total > 0 { offset + 1 } else { 0 };
+    out.push(format!(
+        "{} tracked task(s) (showing {}-{}):\n",
+        total, from, showing
+    ));
+    let paginated = limit < total || offset > 0;
 
-    // Column widths
-    let id_w = list.tasks.iter().map(|t| t.task_id.len()).max().unwrap_or(8).max(8);
-    let cmd_w = 8;
-    let desc_w = 40;
+    // Column widths (capped for readability)
+    let id_w = page.iter().map(|t| t.task_id.len()).max().unwrap_or(8).max(8).min(12);
+    let cmd_w = page.iter().map(|t| t.command.len()).max().unwrap_or(7).max(7);
+    let desc_w = page.iter().map(|t| t.description.len()).max().unwrap_or(11).min(40);
+    let desc_w = desc_w.max(11);
+    let status_w = page
+        .iter()
+        .map(|t| {
+            if t.last_status.is_empty() {
+                7 // "pending"
+            } else {
+                t.last_status.len()
+            }
+        })
+        .max()
+        .unwrap_or(6)
+        .max(6);
+    let time_w = 19; // "2026-07-22 15:04:05"
 
     out.push(format!(
-        "  {:<id_w$}  {:<cmd_w$}  {:<desc_w$}  {}",
-        "TASK ID", "COMMAND", "DESCRIPTION", "STATUS",
+        "  {:<id_w$}  {:<cmd_w$}  {:<desc_w$}  {:<time_w$}  {:<time_w$}  {:<status_w$}",
+        "TASK ID", "COMMAND", "DESCRIPTION", "STARTED", "FINISHED", "STATUS",
         id_w = id_w,
         cmd_w = cmd_w,
         desc_w = desc_w,
+        time_w = time_w,
+        status_w = status_w,
     ));
     out.push(format!(
-        "  {:-<id_w$}  {:-<cmd_w$}  {:-<desc_w$}  {}",
-        "", "", "", "------",
+        "  {:-<id_w$}  {:-<cmd_w$}  {:-<desc_w$}  {:-<time_w$}  {:-<time_w$}  {:-<status_w$}",
+        "", "", "", "", "", "",
         id_w = id_w,
         cmd_w = cmd_w,
         desc_w = desc_w,
+        time_w = time_w,
+        status_w = status_w,
     ));
 
-    for entry in &list.tasks {
+    for entry in &page {
         let desc = if entry.description.len() > desc_w {
             format!("{}…", &entry.description[..desc_w - 1])
         } else {
@@ -729,18 +811,116 @@ pub fn format_async_task_list(list: &AsyncTaskList) -> String {
         } else {
             entry.last_status.clone()
         };
+        let started = format_timestamp_display(&entry.submitted_at);
+        let finished = entry
+            .completed_at
+            .as_ref()
+            .map(|s| format_timestamp_display(s))
+            .unwrap_or_else(|| "-".to_string());
         out.push(format!(
-            "  {:<id_w$}  {:<cmd_w$}  {:<desc_w$}  {}",
+            "  {:<id_w$}  {:<cmd_w$}  {:<desc_w$}  {:<time_w$}  {:<time_w$}  {:<status_w$}",
             entry.task_id,
             entry.command,
             desc,
+            started,
+            finished,
             status,
             id_w = id_w,
             cmd_w = cmd_w,
             desc_w = desc_w,
+            time_w = time_w,
+            status_w = status_w,
         ));
     }
+
+    if paginated {
+        let remaining = total.saturating_sub(showing);
+        if remaining > 0 {
+            out.push(format!(
+                "\n  ... {} more task(s). Use --offset {} to see the next page.",
+                remaining,
+                showing
+            ));
+        }
+    } else if total > 20 {
+        out.push(
+            "\n  Hint: Use --limit N to paginate large lists.".to_string(),
+        );
+    }
+
     out.join("\n")
+}
+
+/// Summarize the status distribution of a list of async tasks.
+///
+/// Uses the standard lifecycle labels (queued, processing, completed, failed)
+/// that are now shared across agent, crawl, and swarm.
+pub fn summarize_async_tasks(tasks: &[AsyncTaskEntry]) -> String {
+    let total = tasks.len();
+    if total == 0 {
+        return String::new();
+    }
+
+    let mut queued = 0usize;
+    let mut processing = 0usize;
+    let mut completed = 0usize;
+    let mut failed = 0usize;
+    let mut other = 0usize;
+
+    for t in tasks {
+        match t.last_status.as_str() {
+            "" => queued += 1, // empty = not yet checked
+            "queued" => queued += 1,
+            "processing" => processing += 1,
+            "completed" => completed += 1,
+            s if s.starts_with("failed") => failed += 1,
+            _ => other += 1,
+        }
+    }
+
+    let mut parts = Vec::new();
+    parts.push(format!("{} total", total));
+    if completed > 0 {
+        parts.push(format!("{} completed", completed));
+    }
+    if failed > 0 {
+        parts.push(format!("{} failed", failed));
+    }
+    if processing > 0 {
+        parts.push(format!("{} processing", processing));
+    }
+    if queued > 0 {
+        parts.push(format!("{} queued", queued));
+    }
+    if other > 0 {
+        parts.push(format!("{} other", other));
+    }
+    format!("Status: {}", parts.join(", "))
+}
+
+/// Format an ISO-8601 timestamp for display as local time "YYYY-MM-DD HH:MM:SS".
+///
+/// Timestamps are stored in UTC. They are converted to the system's local
+/// timezone for display.
+pub fn format_timestamp_display(iso: &str) -> String {
+    chrono::DateTime::parse_from_rfc3339(iso)
+        .or_else(|_| chrono::DateTime::parse_from_rfc3339(&format!("{}Z", iso)))
+        .map(|dt| dt.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M:%S").to_string())
+        .unwrap_or_else(|_| iso.chars().take(19).collect())
+}
+
+/// Convert epoch milliseconds to local display format "YYYY-MM-DD HH:MM:SS".
+///
+/// Returns `"-"` if the value is 0 or invalid.
+pub fn epoch_millis_to_display(millis: i64) -> String {
+    if millis <= 0 {
+        return "-".to_string();
+    }
+    let secs = millis / 1000;
+    let nanos = ((millis % 1000) * 1_000_000) as u32;
+    chrono::DateTime::from_timestamp(secs, nanos)
+        .map(|dt| dt.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M:%S").to_string())
+        .unwrap_or_else(|| "-".to_string())
 }
 
 /// Convert a CLI element ref into the selector format expected by Browser4.
@@ -757,6 +937,190 @@ pub fn resolve_ref(raw_ref: &str) -> String {
         return format!("backend:{}", &caps[1]);
     }
     trimmed.to_string()
+}
+
+// ---------------------------------------------------------------------------
+// Table formatting utility
+// ---------------------------------------------------------------------------
+
+/// A table renderer that auto-sizes columns from header and row content.
+///
+/// # Example
+///
+/// ```ignore
+/// let table = Table::new(&["Name", "Status", "URL"])
+///     .min_widths(&[4, 6, 3])
+///     .max_widths(&[30, 8, 80])
+///     .truncate(true)
+///     .add_rows(&rows);
+/// println!("{}", table.render());
+/// ```
+pub struct Table {
+    headers: Vec<String>,
+    rows: Vec<Vec<String>>,
+    min_widths: Vec<usize>,
+    /// Per-column maximum widths; a value of `0` means no cap.
+    max_widths: Vec<usize>,
+    truncate: bool,
+}
+
+impl Table {
+    /// Create a new table with the given headers.
+    /// Column widths will be at least as wide as each header.
+    pub fn new(headers: &[&str]) -> Self {
+        let n = headers.len();
+        Self {
+            headers: headers.iter().map(|h| h.to_string()).collect(),
+            rows: Vec::new(),
+            min_widths: vec![0; n],
+            max_widths: vec![0; n],
+            truncate: false,
+        }
+    }
+
+    /// Set minimum column widths.
+    ///
+    /// If the slice is shorter than the number of columns, remaining columns
+    /// keep their current minimum (0, meaning header length is the floor).
+    pub fn min_widths(mut self, widths: &[usize]) -> Self {
+        for (i, &w) in widths.iter().enumerate() {
+            if i < self.min_widths.len() {
+                self.min_widths[i] = w;
+            }
+        }
+        self
+    }
+
+    /// Set maximum column widths.
+    ///
+    /// A value of `0` means no cap. If the slice is shorter than the number
+    /// of columns, remaining columns keep their current maximum.
+    pub fn max_widths(mut self, widths: &[usize]) -> Self {
+        for (i, &w) in widths.iter().enumerate() {
+            if i < self.max_widths.len() {
+                self.max_widths[i] = w;
+            }
+        }
+        self
+    }
+
+    /// Enable or disable truncation of cell values that exceed their
+    /// computed column width (default: `false`).
+    ///
+    /// When enabled, overflowing cell values are cut to `width - 1` chars
+    /// and a `…` (U+2026) suffix is appended.
+    pub fn truncate(mut self, truncate: bool) -> Self {
+        self.truncate = truncate;
+        self
+    }
+
+    /// Add a single data row. The row must have the same number of cells as
+    /// there are headers; extra cells are ignored, missing cells are empty.
+    pub fn add_row(mut self, row: &[String]) -> Self {
+        let mut cells = row.to_vec();
+        cells.resize(self.headers.len(), String::new());
+        cells.truncate(self.headers.len());
+        self.rows.push(cells);
+        self
+    }
+
+    /// Add multiple data rows at once.
+    pub fn add_rows(mut self, rows: &[Vec<String>]) -> Self {
+        for row in rows {
+            self = self.add_row(row);
+        }
+        self
+    }
+
+    /// Compute final column widths from headers and data, respecting
+    /// min/max caps. Returns one width per column.
+    fn compute_widths(&self) -> Vec<usize> {
+        let n = self.headers.len();
+        let mut widths: Vec<usize> = self.headers.iter().map(|h| h.len()).collect();
+
+        for row in &self.rows {
+            for (i, cell) in row.iter().enumerate() {
+                if i < n {
+                    widths[i] = widths[i].max(cell.len());
+                }
+            }
+        }
+
+        for i in 0..n {
+            // Apply minimum
+            let min_w = if i < self.min_widths.len() {
+                self.min_widths[i]
+            } else {
+                0
+            };
+            widths[i] = widths[i].max(min_w);
+
+            // Apply maximum (0 = no cap)
+            let max_w = if i < self.max_widths.len() {
+                self.max_widths[i]
+            } else {
+                0
+            };
+            if max_w > 0 {
+                widths[i] = widths[i].min(max_w);
+            }
+        }
+
+        widths
+    }
+
+    /// Render the table to a `String`.
+    pub fn render(&self) -> String {
+        let widths = self.compute_widths();
+        let n = widths.len();
+        if n == 0 {
+            return String::new();
+        }
+
+        let (col_sep, dash_junction): (&str, &str) = (" | ", "-+-");
+
+        let mut out = String::new();
+
+        // Header row
+        for (i, h) in self.headers.iter().enumerate() {
+            if i > 0 {
+                out.push_str(col_sep);
+            }
+            out.push_str(&format!("{:<width$}", h, width = widths[i]));
+        }
+        out.push('\n');
+
+        // Separator row
+        for i in 0..n {
+            if i > 0 {
+                out.push_str(dash_junction);
+            }
+            let dash: String = std::iter::repeat('-').take(widths[i]).collect();
+            out.push_str(&dash);
+        }
+        out.push('\n');
+
+        // Data rows
+        for row in &self.rows {
+            for (i, cell) in row.iter().enumerate() {
+                if i >= n {
+                    break;
+                }
+                if i > 0 {
+                    out.push_str(col_sep);
+                }
+                let display = if self.truncate && cell.len() > widths[i] && widths[i] > 1 {
+                    format!("{}\u{2026}", &cell[..widths[i] - 1])
+                } else {
+                    cell.clone()
+                };
+                out.push_str(&format!("{:<width$}", display, width = widths[i]));
+            }
+            out.push('\n');
+        }
+
+        out
+    }
 }
 
 #[cfg(test)]
@@ -801,6 +1165,7 @@ mod tests {
             session_name: None,
             last_mouse_position: Some(MousePosition { x: 120.0, y: 240.0 }),
             is_attached: false,
+            ..Default::default()
         };
         write_state(&state, Some(tmp.path()), None).unwrap();
         let read = read_state(Some(tmp.path()), None);
@@ -840,6 +1205,7 @@ mod tests {
             session_name: Some("auth".to_string()),
             last_mouse_position: Some(MousePosition { x: 10.0, y: 20.0 }),
             is_attached: false,
+            ..Default::default()
         };
         let state_public = CliState {
             session_id: Some("public456".to_string()),
@@ -848,6 +1214,7 @@ mod tests {
             session_name: Some("public".to_string()),
             last_mouse_position: Some(MousePosition { x: 30.0, y: 40.0 }),
             is_attached: false,
+            ..Default::default()
         };
 
         write_state(&state_auth, Some(tmp.path()), Some("auth")).unwrap();
@@ -897,5 +1264,422 @@ mod tests {
         assert!(!state_file(tmp.path(), None).exists());
         assert!(!state_file(tmp.path(), Some("named")).exists());
         assert!(tmp.path().join("sessions").join("notes.txt").exists());
+    }
+
+    // -------------------------------------------------------------------
+    // Async task tracking tests (crawl, agent, swarm)
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn test_read_async_tasks_empty_when_no_file() {
+        let tmp = test_temp_dir();
+        let list = read_async_tasks(Some(tmp.path()));
+        assert!(list.tasks.is_empty());
+    }
+
+    #[test]
+    fn test_track_async_task_adds_entry() {
+        let tmp = test_temp_dir();
+        track_async_task("crawl-job-1", "crawl", "https://example.com", Some(tmp.path()))
+            .unwrap();
+
+        let list = read_async_tasks(Some(tmp.path()));
+        assert_eq!(list.tasks.len(), 1);
+        assert_eq!(list.tasks[0].task_id, "crawl-job-1");
+        assert_eq!(list.tasks[0].command, "crawl");
+        assert_eq!(list.tasks[0].description, "https://example.com");
+        assert!(!list.tasks[0].submitted_at.is_empty());
+        assert!(list.tasks[0].last_status.is_empty());
+    }
+
+    #[test]
+    fn test_track_multiple_async_tasks() {
+        let tmp = test_temp_dir();
+        track_async_task("task-1", "crawl", "https://a.com", Some(tmp.path())).unwrap();
+        track_async_task("task-2", "crawl", "https://b.com", Some(tmp.path())).unwrap();
+
+        let list = read_async_tasks(Some(tmp.path()));
+        assert_eq!(list.tasks.len(), 2);
+        assert_eq!(list.tasks[0].task_id, "task-1");
+        assert_eq!(list.tasks[1].task_id, "task-2");
+    }
+
+    #[test]
+    fn test_update_async_task_status() {
+        let tmp = test_temp_dir();
+        track_async_task("task-1", "crawl", "https://a.com", Some(tmp.path())).unwrap();
+
+        update_async_task_status("task-1", "OK (3 pages)", Some(tmp.path())).unwrap();
+
+        let list = read_async_tasks(Some(tmp.path()));
+        assert_eq!(list.tasks[0].last_status, "OK (3 pages)");
+    }
+
+    #[test]
+    fn test_update_async_task_status_non_existent_is_no_op() {
+        let tmp = test_temp_dir();
+        // Should not panic or create entries for missing task IDs
+        let result = update_async_task_status("nonexistent", "done", Some(tmp.path()));
+        assert!(result.is_ok());
+        let list = read_async_tasks(Some(tmp.path()));
+        assert!(list.tasks.is_empty());
+    }
+
+    #[test]
+    fn test_prune_async_tasks_removes_completed() {
+        let tmp = test_temp_dir();
+        track_async_task("t1", "crawl", "url1", Some(tmp.path())).unwrap();
+        track_async_task("t2", "crawl", "url2", Some(tmp.path())).unwrap();
+        track_async_task("t3", "crawl", "url3", Some(tmp.path())).unwrap();
+
+        // Mark t1 and t3 as completed
+        update_async_task_status("t1", "completed", Some(tmp.path())).unwrap();
+        update_async_task_status("t3", "completed", Some(tmp.path())).unwrap();
+
+        let removed = prune_async_tasks(Some(tmp.path())).unwrap();
+        assert_eq!(removed, 2, "should remove t1 and t3");
+
+        let list = read_async_tasks(Some(tmp.path()));
+        assert_eq!(list.tasks.len(), 1);
+        assert_eq!(list.tasks[0].task_id, "t2");
+    }
+
+    #[test]
+    fn test_prune_async_tasks_removes_error_tasks() {
+        let tmp = test_temp_dir();
+        track_async_task("t1", "crawl", "url1", Some(tmp.path())).unwrap();
+        track_async_task("t2", "crawl", "url2", Some(tmp.path())).unwrap();
+
+        update_async_task_status("t1", "failed (timeout)", Some(tmp.path())).unwrap();
+
+        let removed = prune_async_tasks(Some(tmp.path())).unwrap();
+        assert_eq!(removed, 1);
+
+        let list = read_async_tasks(Some(tmp.path()));
+        assert_eq!(list.tasks.len(), 1);
+        assert_eq!(list.tasks[0].task_id, "t2");
+    }
+
+    #[test]
+    fn test_prune_async_tasks_no_change_when_all_pending() {
+        let tmp = test_temp_dir();
+        track_async_task("t1", "crawl", "url1", Some(tmp.path())).unwrap();
+        track_async_task("t2", "swarm", "url2", Some(tmp.path())).unwrap();
+
+        let removed = prune_async_tasks(Some(tmp.path())).unwrap();
+        assert_eq!(removed, 0);
+
+        let list = read_async_tasks(Some(tmp.path()));
+        assert_eq!(list.tasks.len(), 2);
+    }
+
+    #[test]
+    fn test_prune_async_tasks_empty_list_returns_zero() {
+        let tmp = test_temp_dir();
+        let removed = prune_async_tasks(Some(tmp.path())).unwrap();
+        assert_eq!(removed, 0);
+    }
+
+    #[test]
+    fn test_format_async_task_list_empty() {
+        let list = AsyncTaskList { tasks: vec![] };
+        let output = format_async_task_list(&list, None, None);
+        assert!(output.contains("No tracked async tasks"));
+    }
+
+    #[test]
+    fn test_format_async_task_list_with_entries() {
+        let list = AsyncTaskList {
+            tasks: vec![AsyncTaskEntry {
+                task_id: "crawl-job-1".to_string(),
+                command: "crawl".to_string(),
+                description: "https://example.com".to_string(),
+                submitted_at: "2026-01-01T00:00:00+00:00".to_string(),
+                last_status: "running".to_string(),
+                completed_at: None,
+            }],
+        };
+        let output = format_async_task_list(&list, None, None);
+        assert!(output.contains("1 tracked task(s) (showing 1-1)"));
+        assert!(output.contains("crawl-job-1"));
+        assert!(output.contains("https://example.com"));
+        assert!(output.contains("STARTED"));
+        assert!(output.contains("FINISHED"));
+    }
+
+    #[test]
+    fn test_format_async_task_list_sorts_by_started_desc() {
+        // Latest submission should come first
+        let list = AsyncTaskList {
+            tasks: vec![
+                AsyncTaskEntry {
+                    task_id: "old".to_string(),
+                    command: "swarm-submit".to_string(),
+                    description: "older".to_string(),
+                    submitted_at: "2026-01-01T00:00:00+00:00".to_string(),
+                    last_status: "completed".to_string(),
+                    completed_at: Some("2026-01-01T00:01:00+00:00".to_string()),
+                },
+                AsyncTaskEntry {
+                    task_id: "new".to_string(),
+                    command: "swarm-query".to_string(),
+                    description: "newer".to_string(),
+                    submitted_at: "2026-07-22T15:00:00+00:00".to_string(),
+                    last_status: "pending".to_string(),
+                    completed_at: None,
+                },
+            ],
+        };
+        let output = format_async_task_list(&list, None, None);
+        // "new" must appear before "old" in the output
+        let new_pos = output.find("new").unwrap();
+        let old_pos = output.find("old").unwrap();
+        assert!(new_pos < old_pos, "latest task should appear first, but 'new' at {new_pos} is after 'old' at {old_pos}");
+    }
+
+    /// Helper: format a UTC RFC 3339 timestamp as it would appear in local time display.
+    fn local_display(utc_rfc3339: &str) -> String {
+        chrono::DateTime::parse_from_rfc3339(utc_rfc3339)
+            .map(|dt| dt.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M:%S").to_string())
+            .unwrap_or_else(|_| utc_rfc3339.chars().take(19).collect())
+    }
+
+    #[test]
+    fn test_format_async_task_list_shows_finish_time_when_completed() {
+        let list = AsyncTaskList {
+            tasks: vec![AsyncTaskEntry {
+                task_id: "done-1".to_string(),
+                command: "swarm-submit".to_string(),
+                description: "https://a.com".to_string(),
+                submitted_at: "2026-07-22T14:00:00+00:00".to_string(),
+                last_status: "completed".to_string(),
+                completed_at: Some("2026-07-22T14:05:30+00:00".to_string()),
+            }],
+        };
+        let output = format_async_task_list(&list, None, None);
+        // Started column — should show local time
+        let expected_started = local_display("2026-07-22T14:00:00+00:00");
+        assert!(output.contains(&expected_started), "expected started time '{}' in output:\n{}", expected_started, output);
+        // Finished column — should show the timestamp, not "-"
+        let expected_finished = local_display("2026-07-22T14:05:30+00:00");
+        assert!(output.contains(&expected_finished), "expected finished time '{}' in output:\n{}", expected_finished, output);
+    }
+
+    #[test]
+    fn test_format_async_task_list_shows_dash_for_unfinished() {
+        let list = AsyncTaskList {
+            tasks: vec![AsyncTaskEntry {
+                task_id: "pending-1".to_string(),
+                command: "swarm-query".to_string(),
+                description: "https://b.com".to_string(),
+                submitted_at: "2026-07-22T16:00:00+00:00".to_string(),
+                last_status: "queued".to_string(),
+                completed_at: None,
+            }],
+        };
+        let output = format_async_task_list(&list, None, None);
+        // Started should show local time
+        let expected_started = local_display("2026-07-22T16:00:00+00:00");
+        assert!(output.contains(&expected_started), "expected started time '{}' in output:\n{}", expected_started, output);
+        // Finished should show "-" for unfinished tasks
+        let needle = &expected_started;
+        let after_started = &output[output.find(needle).unwrap() + needle.len()..];
+        assert!(after_started.trim().starts_with("-") || after_started.contains("  -  "),
+                "unfinished task should show '-' in FINISHED column");
+    }
+
+    #[test]
+    fn test_format_async_task_list_limit() {
+        let mut tasks = Vec::new();
+        for i in 0..5 {
+            tasks.push(AsyncTaskEntry {
+                task_id: format!("task-{}", i),
+                command: "swarm-submit".to_string(),
+                description: format!("url-{}", i),
+                submitted_at: format!("2026-07-22T1{}:00:00+00:00", i),
+                last_status: "pending".to_string(),
+                completed_at: None,
+            });
+        }
+        let list = AsyncTaskList { tasks };
+        let output = format_async_task_list(&list, Some(3), None);
+        // Should show range hint
+        assert!(output.contains("showing 1-3"));
+        // Should show a "more" hint
+        assert!(output.contains("more task(s)"));
+        assert!(output.contains("--offset 3"));
+        // Should contain only 3 entries (not all 5)
+        assert!(output.contains("task-4")); // latest first: 4, 3, 2
+        assert!(output.contains("task-3"));
+        assert!(output.contains("task-2"));
+        assert!(!output.contains("task-1"));
+        assert!(!output.contains("task-0"));
+    }
+
+    #[test]
+    fn test_format_async_task_list_offset() {
+        let mut tasks = Vec::new();
+        for i in 0..5 {
+            tasks.push(AsyncTaskEntry {
+                task_id: format!("task-{}", i),
+                command: "swarm-submit".to_string(),
+                description: format!("url-{}", i),
+                submitted_at: format!("2026-07-22T1{}:00:00+00:00", i),
+                last_status: "pending".to_string(),
+                completed_at: None,
+            });
+        }
+        let list = AsyncTaskList { tasks };
+        let output = format_async_task_list(&list, Some(2), Some(2));
+        // Sorted desc: task-4, task-3, task-2, task-1, task-0
+        // Offset 2 skips task-4 and task-3
+        // Limit 2 shows task-2 and task-1
+        assert!(output.contains("showing 3-4"));
+        assert!(output.contains("task-2"));
+        assert!(output.contains("task-1"));
+        assert!(!output.contains("task-4"));
+        assert!(!output.contains("task-3"));
+        assert!(!output.contains("task-0"));
+        assert!(output.contains("more task(s)"));
+        assert!(output.contains("--offset 4"));
+    }
+
+    #[test]
+    fn test_format_async_task_list_no_pagination_hint_when_all_shown() {
+        let list = AsyncTaskList {
+            tasks: vec![AsyncTaskEntry {
+                task_id: "only".to_string(),
+                command: "swarm-submit".to_string(),
+                description: "url".to_string(),
+                submitted_at: "2026-07-22T12:00:00+00:00".to_string(),
+                last_status: "completed".to_string(),
+                completed_at: None,
+            }],
+        };
+        let output = format_async_task_list(&list, Some(10), None);
+        // Only 1 task, limit 10 — all shown, no "more" hint
+        assert!(output.contains("showing 1-1"));
+        assert!(!output.contains("more task"));
+    }
+
+    #[test]
+    fn test_format_async_task_list_suggests_limit_for_large_lists() {
+        let mut tasks = Vec::new();
+        for i in 0..25 {
+            tasks.push(AsyncTaskEntry {
+                task_id: format!("task-{:02}", i),
+                command: "swarm-submit".to_string(),
+                description: format!("url-{}", i),
+                submitted_at: format!("2026-07-22T{:02}:00:00+00:00", i),
+                last_status: "pending".to_string(),
+                completed_at: None,
+            });
+        }
+        let list = AsyncTaskList { tasks };
+        let output = format_async_task_list(&list, None, None);
+        assert!(output.contains("showing 1-25"));
+        assert!(output.contains("Hint: Use --limit N to paginate"));
+    }
+
+    #[test]
+    fn test_format_timestamp_display_handles_missing_tz() {
+        // Should handle ISO-8601 with just "Z" suffix, converting to local time
+        let output = format_async_task_list(
+            &AsyncTaskList {
+                tasks: vec![AsyncTaskEntry {
+                    task_id: "t1".to_string(),
+                    command: "swarm-submit".to_string(),
+                    description: "url".to_string(),
+                    submitted_at: "2026-07-22T12:00:00Z".to_string(),
+                    last_status: "pending".to_string(),
+                    completed_at: None,
+                }],
+            },
+            None,
+            None,
+        );
+        let expected = local_display("2026-07-22T12:00:00Z");
+        assert!(output.contains(&expected), "expected local time '{}' in output:\n{}", expected, output);
+    }
+
+    // -----------------------------------------------------------------------
+    // summarize_async_tasks tests
+    // -----------------------------------------------------------------------
+
+    fn entry(command: &str, status: &str) -> AsyncTaskEntry {
+        AsyncTaskEntry {
+            task_id: format!("id-{}", command),
+            command: command.to_string(),
+            description: "test".to_string(),
+            submitted_at: "2026-07-22T00:00:00+00:00".to_string(),
+            last_status: status.to_string(),
+            completed_at: None,
+        }
+    }
+
+    #[test]
+    fn test_summarize_empty_returns_empty_string() {
+        let result = summarize_async_tasks(&[]);
+        assert_eq!(result, "");
+    }
+
+    #[test]
+    fn test_summarize_all_queued() {
+        let tasks = vec![entry("swarm-submit", ""), entry("swarm-query", "queued")];
+        let result = summarize_async_tasks(&tasks);
+        assert!(result.contains("2 total"));
+        assert!(result.contains("2 queued"));
+    }
+
+    #[test]
+    fn test_summarize_all_completed() {
+        let tasks = vec![entry("agent", "completed"), entry("crawl", "completed"), entry("swarm", "completed")];
+        let result = summarize_async_tasks(&tasks);
+        assert!(result.contains("3 total"));
+        assert!(result.contains("3 completed"));
+        assert!(!result.contains("queued"));
+        assert!(!result.contains("processing"));
+    }
+
+    #[test]
+    fn test_summarize_mixed_distribution() {
+        let tasks = vec![
+            entry("swarm-submit", "completed"),
+            entry("swarm-submit", "completed"),
+            entry("swarm-query", "completed"),
+            entry("swarm-query", "completed"),
+            entry("swarm-query", "failed (timeout)"),
+            entry("swarm-query", "failed (timeout)"),
+            entry("swarm-submit", "processing"),
+            entry("swarm-submit", "processing"),
+            entry("swarm-submit", "processing"),
+            entry("swarm-query", "queued"),
+        ];
+        let result = summarize_async_tasks(&tasks);
+        assert!(result.contains("10 total"));
+        assert!(result.contains("4 completed"));
+        assert!(result.contains("2 failed"));
+        assert!(result.contains("3 processing"));
+        assert!(result.contains("1 queued"));
+    }
+
+    #[test]
+    fn test_summarize_unknown_labels_grouped_as_other() {
+        let tasks = vec![entry("crawl", "CREATED"), entry("crawl", "OK")];
+        let result = summarize_async_tasks(&tasks);
+        assert!(result.contains("2 total"));
+        assert!(result.contains("2 other"));
+    }
+
+    #[test]
+    fn test_summarize_failed_prefix_variations() {
+        let tasks = vec![
+            entry("agent", "failed (timeout)"),
+            entry("agent", "failed (error)"),
+            entry("agent", "failed (not found)"),
+        ];
+        let result = summarize_async_tasks(&tasks);
+        assert!(result.contains("3 total"));
+        assert!(result.contains("3 failed"));
     }
 }

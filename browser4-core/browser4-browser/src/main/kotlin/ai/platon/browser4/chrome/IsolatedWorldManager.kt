@@ -1,7 +1,9 @@
 package ai.platon.browser4.chrome
 
-import ai.platon.pulsar.browser.common.BrowserSettings
-import ai.platon.pulsar.browser.impl.BrowserProtocol
+import ai.platon.browser4.chrome.util.CDPReturnError
+import ai.platon.browser4.api.model.BrowserSettings
+import ai.platon.browser4.api.scripting.ScriptConfuser
+import ai.platon.browser4.api.BrowserProtocol
 import ai.platon.pulsar.common.getLogger
 import org.apache.commons.lang3.StringUtils
 
@@ -116,18 +118,51 @@ class IsolatedWorldManager constructor(
     /**
      * Evaluates JavaScript in the isolated world.
      *
+     * If the specified context no longer exists (e.g. because a concurrent frame navigation
+     * cleared it), this method retries once with a freshly-resolved context from the local cache,
+     * which may have been repopulated by [ensureRuntime] or [handleFrameNavigated].
+     *
      * @param script The JavaScript code to evaluate
      * @param contextId The execution context ID of the isolated world.
      *                  If null, evaluates in the default isolated world.
      * @return The result of the evaluation
      */
     suspend fun evaluateInIsolatedWorld(script: String, contextId: Int? = null): Any? {
-        val result = browserProtocol.evaluate(
-            expression = confuser.confuse(script),
-            contextId = contextId,
-            returnByValue = true,
-            awaitPromise = true,
-        )
+        var effectiveContextId = contextId
+
+        val result = try {
+            browserProtocol.evaluate(
+                expression = confuser.confuse(script),
+                contextId = effectiveContextId,
+                returnByValue = true,
+                awaitPromise = true,
+            )
+        } catch (e: CDPReturnError) {
+            // When an explicit context id was provided but the context is gone (e.g.
+            // destroyed by a concurrent frame navigation), try to recover by using the
+            // latest cached context id — clearContexts + ensureRuntime may have created
+            // a fresh one in the meantime.
+            if (effectiveContextId != null && e.errorMessage?.lowercase()?.contains("cannot find context") == true) {
+                val fresh = getContextId(null)
+                if (fresh != null && fresh > 0 && fresh != effectiveContextId) {
+                    logger.debug(
+                        "Context {} not found, retrying with fresh context {}",
+                        effectiveContextId, fresh
+                    )
+                    effectiveContextId = fresh
+                    browserProtocol.evaluate(
+                        expression = confuser.confuse(script),
+                        contextId = effectiveContextId,
+                        returnByValue = true,
+                        awaitPromise = true,
+                    )
+                } else {
+                    throw e
+                }
+            } else {
+                throw e
+            }
+        }
 
         val exception = result.exceptionDetails
         if (exception != null) {

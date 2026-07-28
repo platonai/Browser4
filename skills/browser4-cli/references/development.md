@@ -1,3 +1,9 @@
+---
+title: "Development"
+description: "Prerequisites and setup for building the browser4-cli from source. Read this when you need to compile or develop the CLI itself."
+tier: procedure
+---
+
 # Development
 
 ## Prerequisites for Development

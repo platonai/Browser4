@@ -67,6 +67,75 @@ jobs:
           timeout_minutes: '15'
           maven_profiles: 'all-main-modules'
 
+      # --- Fast feedback: run unit tests + script validation BEFORE the heavy
+      #     Docker build / E2E stages, so a broken unit test fails within minutes
+      #     instead of after 20+ minutes of image build + container startup. ---
+      - name: Validate PowerShell test scripts
+        id: validate-ps1
+        shell: pwsh
+        run: |
+          $scripts = @(
+            'browser4-tests/real-world-scenarios/scripts/common.ps1',
+            'browser4-tests/real-world-scenarios/scripts/common.tests.ps1',
+            'browser4-tests/real-world-scenarios/scripts/run-task.ps1',
+            'browser4-tests/real-world-scenarios/scripts/run-task-production.ps1',
+            'browser4-tests/real-world-scenarios/scripts/run-tests.ps1'
+          )
+          $failed = 0
+          foreach ($s in $scripts) {
+            $tokens = $null; $parseErrors = $null
+            $null = [System.Management.Automation.Language.Parser]::ParseFile(
+              $s, [ref]$tokens, [ref]$parseErrors
+            )
+            if ($parseErrors.Count -eq 0) {
+              Write-Host "  OK  $s" -ForegroundColor Green
+            } else {
+              Write-Host "  FAIL  $s" -ForegroundColor Red
+              foreach ($e in $parseErrors) {
+                Write-Host "    $($e.Message)" -ForegroundColor Red
+              }
+              $failed++
+            }
+          }
+          if ($failed -gt 0) {
+            Write-Host "`n$failed script(s) failed to parse." -ForegroundColor Red
+            exit 1
+          }
+          Write-Host "`nAll $($scripts.Count) scripts parsed successfully." -ForegroundColor Green
+
+      - name: Run Tests
+        id: run-tests
+        if: inputs.skip_tests != true
+        uses: ./.github/actions/run-tests
+        with:
+          maven_profiles: 'all-main-modules,all-test-modules'
+          excluded_groups: 'ManualOnly,RequiresAI,E2E,E2ETest,Slow,HeavyTest,TestInfraCheck'
+          timeout_minutes: '35'
+
+      - name: Check Test Status
+        if: inputs.skip_tests != true
+        run: |
+          if [ "${{ steps.run-tests.outputs.test_status }}" != "success" ]; then
+            echo "❌ Tests failed with status: ${{ steps.run-tests.outputs.test_status }}"
+            echo "📊 Test Results:"
+            echo "  - Total Tests: ${{ steps.run-tests.outputs.test_count }}"
+            echo "  - Failed Tests: ${{ steps.run-tests.outputs.failed_count }}"
+            echo "  - Passed Tests: ${{ steps.run-tests.outputs.passed_count }}"
+            echo "  - Skipped Tests: ${{ steps.run-tests.outputs.skipped_count }}"
+            FAILED_LIST="${{ steps.run-tests.outputs.failed_test_list }}"
+            if [ -n "$FAILED_LIST" ]; then
+              echo ""
+              echo "❌ Failed Tests:"
+              for test in $FAILED_LIST; do
+                echo "  - $test"
+              done
+            fi
+            exit 1
+          else
+            echo "✅ All tests passed successfully"
+            echo "📊 Test Results: ${{ steps.run-tests.outputs.passed_count }} tests passed"
+          fi
+
       - name: Setup Rust Toolchain
         id: rust-setup
         uses: dtolnay/rust-toolchain@stable
@@ -130,64 +199,6 @@ jobs:
           cd "$(git rev-parse --show-toplevel)"
 
           echo "::endgroup::"
-
-      - name: Validate PowerShell test scripts
-        id: validate-ps1
-        shell: pwsh
-        run: |
-          $scripts = @(
-            'browser4-tests/real-world-scenarios/scripts/common.ps1',
-            'browser4-tests/real-world-scenarios/scripts/common.tests.ps1',
-            'browser4-tests/real-world-scenarios/scripts/run-task.ps1',
-            'browser4-tests/real-world-scenarios/scripts/run-task-production.ps1',
-            'browser4-tests/real-world-scenarios/scripts/run-tests.ps1'
-          )
-          $failed = 0
-          foreach ($s in $scripts) {
-            $tokens = $null; $parseErrors = $null
-            $null = [System.Management.Automation.Language.Parser]::ParseFile(
-              $s, [ref]$tokens, [ref]$parseErrors
-            )
-            if ($parseErrors.Count -eq 0) {
-              Write-Host "  OK  $s" -ForegroundColor Green
-            } else {
-              Write-Host "  FAIL  $s" -ForegroundColor Red
-              foreach ($e in $parseErrors) {
-                Write-Host "    $($e.Message)" -ForegroundColor Red
-              }
-              $failed++
-            }
-          }
-          if ($failed -gt 0) {
-            Write-Host "`n$failed script(s) failed to parse." -ForegroundColor Red
-            exit 1
-          }
-          Write-Host "`nAll $($scripts.Count) scripts parsed successfully." -ForegroundColor Green
-
-      - name: Run Tests
-        id: run-tests
-        if: inputs.skip_tests != true
-        uses: ./.github/actions/run-tests
-        with:
-          maven_profiles: 'all-main-modules,all-test-modules'
-          excluded_groups: 'ManualOnly,RequiresAI,E2E,E2ETest,Slow,HeavyTest,SkippableLowerLevelTest,TestInfraCheck,OptionalTest'
-          timeout_minutes: '35'
-
-      - name: Check Test Status
-        if: inputs.skip_tests != true
-        run: |
-          if [ "${{ steps.run-tests.outputs.test_status }}" != "success" ]; then
-            echo "❌ Tests failed with status: ${{ steps.run-tests.outputs.test_status }}"
-            echo "📊 Test Results:"
-            echo "  - Total Tests: ${{ steps.run-tests.outputs.test_count }}"
-            echo "  - Failed Tests: ${{ steps.run-tests.outputs.failed_count }}"
-            echo "  - Passed Tests: ${{ steps.run-tests.outputs.passed_count }}"
-            echo "  - Skipped Tests: ${{ steps.run-tests.outputs.skipped_count }}"
-            exit 1
-          else
-            echo "✅ All tests passed successfully"
-            echo "📊 Test Results: ${{ steps.run-tests.outputs.passed_count }} tests passed"
-          fi
 
       - name: Pipeline Summary
         if: always()

@@ -1,4 +1,4 @@
-# ═══════════════════════════════════════════════════════════════════
+﻿# ═══════════════════════════════════════════════════════════════════
 # CROSS-PLATFORM: This script must run on Linux, macOS, and Windows.
 # - Use $IsWindows / $IsLinux / $IsMacOS for platform detection.
 # - Use "($IsWindows -or $env:OS -eq 'Windows_NT')" for PS 5.1 compat.
@@ -265,15 +265,28 @@ function Invoke-MaintenanceStep {
             Push-Location $WorkingDirectory
         }
 
-        # Execute directly to capture $LASTEXITCODE from external commands
-        $stdout = & $ScriptBlock 2>&1 | Out-String
+        # Execute directly to capture $LASTEXITCODE from external commands.
+        # Separate stdout from stderr: after 2>&1 merge, ErrorRecord objects
+        # come from the error stream while plain strings come from stdout.
+        $errCollector = New-Object System.Collections.ArrayList
+        $rawOutput = & $ScriptBlock 2>&1 | ForEach-Object {
+            if ($_ -is [System.Management.Automation.ErrorRecord]) {
+                [void]$errCollector.Add($_.Exception.Message)
+            } else {
+                $_
+            }
+        }
+        $stdout = if ($rawOutput) { ($rawOutput | Out-String) } else { "" }
+        $stderr = if ($errCollector.Count -gt 0) { ($errCollector -join "`n") } else { "" }
         $exitCode = $LASTEXITCODE
 
         if ($exitCode -eq 0) {
             Write-MaintenanceLog -Level "INFO" -Component $StepName -Message "Completed successfully"
         }
         else {
-            $outputSummary = if ($stdout) {
+            $outputSummary = if ($stderr) {
+                ($stderr -split "`n" | Where-Object { $_ -match '\S' } | Select-Object -Last 3) -join " | "
+            } elseif ($stdout) {
                 ($stdout -split "`n" | Where-Object { $_ -match '\S' } | Select-Object -Last 3) -join " | "
             } else { "(no output)" }
             Write-MaintenanceLog -Level "ERROR" -Component $StepName -Message "Failed with exit code $exitCode — $outputSummary"
@@ -334,8 +347,7 @@ function Get-MaintenanceThreshold {
         $thresholdsPath = Join-Path $PSScriptRoot "..\thresholds\thresholds.psd1"
         if (Test-Path $thresholdsPath) {
             try {
-                $raw = Get-Content $thresholdsPath -Raw -Encoding UTF8
-                $script:_Thresholds = Invoke-Expression $raw
+                $script:_Thresholds = Import-PowerShellDataFile -Path $thresholdsPath
             }
             catch {
                 Write-Warning "Failed to load thresholds: $($_.Exception.Message)"
@@ -459,6 +471,82 @@ function Get-MaintenanceLogDir {
         New-Item -ItemType Directory -Path $logDir -Force | Out-Null
     }
     return $logDir
+}
+
+# ═══════════════════════════════════════════════════════════════════
+# CI check invoker (used by invoke-ci-checks.ps1 and invoke-nightly-checks.ps1)
+# ═══════════════════════════════════════════════════════════════════
+
+function Invoke-MaintenanceCheck {
+    <#
+    .SYNOPSIS
+    Invokes a single maintenance check script and returns its result object.
+    Shared by CI and nightly entry points.
+
+    .PARAMETER ScriptPath
+    Full path to the check script.
+
+    .PARAMETER Label
+    Human-readable label for logging (e.g. "A1 Compilation").
+
+    .PARAMETER Arguments
+    Hashtable of named arguments to pass to the script.
+    Keys are prefixed with "-" automatically; values follow.
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ScriptPath,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Label,
+
+        [hashtable]$Arguments = @{}
+    )
+
+    if (-not (Test-Path $ScriptPath)) {
+        Write-Host "  [SKIP] $Label - script not found: $ScriptPath" -ForegroundColor Yellow
+        return $null
+    }
+
+    Write-Host ""
+    Write-Host "--- $Label ---" -ForegroundColor Cyan
+
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    try {
+        # Build argument list from hashtable: each key becomes "-Key Value"
+        $argsList = @()
+        foreach ($kv in $Arguments.GetEnumerator()) {
+            $argsList += "-$($kv.Key)"
+            if ($kv.Value -isnot [switch] -and $kv.Value) {
+                $argsList += $kv.Value
+            }
+        }
+        $checkResult = & $ScriptPath @argsList
+        $sw.Stop()
+        $checkResult.DurationMs = $sw.ElapsedMilliseconds
+
+        $icon = if ($checkResult.Status -eq "passed") { "✅" }
+                elseif ($checkResult.Status -eq "skipped") { "⚠️" }
+                else { "❌" }
+        Write-Host "$icon $Label - $($checkResult.Status) ($($checkResult.DurationMs)ms)" `
+            -ForegroundColor $(if ($checkResult.Status -eq "passed") { "Green" } else { "Red" })
+        return $checkResult
+    }
+    catch {
+        $sw.Stop()
+        Write-Host "❌ $Label - ERROR: $($_.Exception.Message)" -ForegroundColor Red
+        return [PSCustomObject]@{
+            CheckId    = "UNKNOWN"
+            Name       = $Label
+            Status     = "error"
+            DurationMs = $sw.ElapsedMilliseconds
+            ExitCode   = 1
+            Details    = $_.Exception.Message
+            Results    = @()
+            Artifacts  = @()
+            Timestamp  = (Get-Date -Format "yyyy-MM-ddTHH:mm:ssK")
+        }
+    }
 }
 
 Write-MaintenanceLog -Level "DEBUG" -Component "MaintenanceUtil" -Message "Module loaded"

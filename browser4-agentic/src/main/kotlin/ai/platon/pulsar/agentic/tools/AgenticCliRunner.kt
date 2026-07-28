@@ -600,9 +600,16 @@ class AgenticCliRunner(
 
         /**
          * Legacy / explicit tool name → domain+method mappings.
+         * Also includes essential tools whose specs are normally auto-generated from
+         * @MCP-annotated WebDriver methods — the explicit entries ensure they resolve
+         * even when ToolSpecGenerator cannot read WebDriver.kt from the classpath.
          * Mirrors [ai.platon.pulsar.rest.mcp.controller.MCPToolController.resolveMcpToolCall].
          */
         private val LEGACY_TOOL_MAPPINGS: Map<String, ToolCall> = mapOf(
+            "navigate" to ToolCall("tab", "navigate", mutableMapOf()),
+            "reload" to ToolCall("tab", "reload", mutableMapOf()),
+            "go_back" to ToolCall("tab", "goBack", mutableMapOf()),
+            "go_forward" to ToolCall("tab", "goForward", mutableMapOf()),
             "page_title" to ToolCall("tab", "title", mutableMapOf()),
             "page_url" to ToolCall("tab", "currentUrl", mutableMapOf()),
             "switch_tab" to ToolCall("browser", "switchTab", mutableMapOf()),
@@ -786,11 +793,13 @@ class AgenticCliRunner(
             "tab-close" to FixedCommandResolver("browser_tabs") { args ->
                 val params = mutableMapOf<String, Any?>("action" to "close")
                 args["index"]?.let { params["index"] = it }
+                args["tabId"]?.let { params["tabId"] = it }
                 params
             },
             "tab-select" to FixedCommandResolver("browser_tabs") { args ->
                 val params = mutableMapOf<String, Any?>("action" to "select")
                 args["index"]?.let { params["index"] = it }
+                args["tabId"]?.let { params["tabId"] = it }
                 params
             },
 
@@ -805,6 +814,14 @@ class AgenticCliRunner(
                 val params = mutableMapOf<String, Any?>()
                 args["instruction"]?.let { params["instruction"] = it }
                 args["selector"]?.let { params["selector"] = it }
+                params
+            },
+
+            // ---- WebDB ----
+            "webdb-export" to FixedCommandResolver("webdb_export") { args ->
+                val params = mutableMapOf<String, Any?>()
+                args["urls"]?.let { params["urls"] = it }
+                args["output-dir"]?.let { params["outputDir"] = it }
                 params
             },
 
@@ -862,13 +879,14 @@ class AgenticCliRunner(
             "dialog-dismiss" to CommandDef(emptyList()),
             "extract" to CommandDef(listOf("instruction")),
             "summarize" to CommandDef(listOf("instruction")),
+            "webdb-export" to CommandDef(listOf("urls", "output-dir")),
             "agent-run" to CommandDef(listOf("task")),
             "agent-status" to CommandDef(listOf("id")),
             "agent-result" to CommandDef(listOf("id")),
             "tab-list" to CommandDef(emptyList()),
             "tab-new" to CommandDef(listOf("url")),
-            "tab-close" to CommandDef(listOf("index")),
-            "tab-select" to CommandDef(listOf("index")),
+            "tab-close" to CommandDef(listOf("index", "tabId")),
+            "tab-select" to CommandDef(listOf("index", "tabId")),
         )
 
         /**
@@ -1047,10 +1065,21 @@ class AgenticCliRunner(
             args["targetSelector"] = endRef
         }
 
-        // modifiers (list) → modifier (first element as string)
+        // modifiers (list or string) → modifier (single string)
         val modifiers = args.remove("modifiers")
-        if (!args.containsKey("modifier") && modifiers is List<*> && modifiers.isNotEmpty()) {
-            args["modifier"] = modifiers.first()?.toString()
+        if (!args.containsKey("modifier") && modifiers != null) {
+            when (modifiers) {
+                is List<*> -> {
+                    if (modifiers.isNotEmpty()) {
+                        args["modifier"] = modifiers.first()?.toString()
+                    }
+                }
+                is String -> {
+                    if (modifiers.isNotBlank()) {
+                        args["modifier"] = modifiers
+                    }
+                }
+            }
         }
     }
 

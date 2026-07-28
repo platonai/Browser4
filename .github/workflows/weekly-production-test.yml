@@ -1,0 +1,57 @@
+name: Weekly Production Acceptance Test
+
+on:
+  schedule:
+    # Every Monday at 01:00 UTC (≈ 9:00 AM Beijing time)
+    - cron: '0 1 * * 1'
+  workflow_dispatch:
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  production-test:
+    name: Production test (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows x64
+            os: windows-latest
+          - name: Linux x64
+            os: ubuntu-latest
+          - name: macOS ARM64
+            os: macos-14
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Run production acceptance test
+        shell: pwsh
+        timeout-minutes: 40
+        run: |
+          ./bin/test-production.ps1 -Stress -RemoveWorkingDir
+
+      - name: Upload test artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: production-test-logs-${{ matrix.name }}
+          path: |
+            ${{ runner.temp }}/.browser4-acceptance/
+            ${{ runner.temp }}/b4cli-*.txt
+          retention-days: 7
+
+      - name: Test summary
+        if: always()
+        shell: pwsh
+        run: |
+          Write-Host "::group::📊 Production Acceptance Test Summary"
+          Write-Host "Platform: ${{ matrix.name }}"
+          Write-Host "Status: ${{ job.status }}"
+          Write-Host "::endgroup::"

@@ -1,4 +1,4 @@
-# Pulsar QL Functions Guide — AI Skills Reference
+# Pulsar QL Functions Guide
 
 > Detailed reference with practical SQL examples for the most commonly used H2 UDFs.
 > Covers: `load_and_select`, `DomFunctions`, `DomSelectFunctions`, `StringFunctions`, `ArrayFunctions`.

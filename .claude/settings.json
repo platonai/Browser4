@@ -38,12 +38,15 @@
       "Bash(cargo check *)",
       "Bash(rustup component *)",
       "Bash(ls -d \"coworker/tasks/1created\")",
-      "Bash(ls -d \"coworker/tasks/5approved\")",
-      "Bash(ls -d coworker/tasks/*/)",
+      "Bash(ls -d \"coworker/tasks/main/5approved\")",
+      "Bash(ls -d coworker/tasks/main/*/)",
       "Bash(ls -d coworker/logs)",
       "Bash(rustup toolchain *)",
       "Bash(chmod +x bin/release/download-release-assets.sh)",
       "Bash(bash -n bin/release/download-release-assets.sh)"
     ]
+  },
+  "worktree": {
+    "bgIsolation": "none"
   }
 }

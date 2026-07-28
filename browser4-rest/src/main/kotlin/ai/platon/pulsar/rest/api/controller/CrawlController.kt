@@ -1,9 +1,9 @@
 package ai.platon.pulsar.rest.api.controller
 
-import ai.platon.pulsar.common.PulsarSessionManager
 import ai.platon.pulsar.rest.api.service.CrawlRequest
 import ai.platon.pulsar.rest.api.service.CrawlResponse
 import ai.platon.pulsar.rest.api.service.CrawlService
+import ai.platon.pulsar.rest.session.PulsarSessionManager
 import org.slf4j.LoggerFactory
 import org.springframework.http.HttpStatus
 import org.springframework.http.MediaType
@@ -93,6 +93,18 @@ class CrawlController(
     @PostMapping("/clear", consumes = [MediaType.ALL_VALUE], produces = [MediaType.APPLICATION_JSON_VALUE])
     fun clearCrawls(): Map<String, Any> {
         val count = crawlService.clearTerminal()
+        return mapOf("cleared" to count)
+    }
+
+    /**
+     * Remove ALL tasks from the crawl task store, including actively-running ones.
+     * Cancels running jobs before clearing.  Use with caution.
+     *
+     * @return the number of tasks removed
+     */
+    @PostMapping("/clear-all", consumes = [MediaType.ALL_VALUE], produces = [MediaType.APPLICATION_JSON_VALUE])
+    fun clearAllCrawls(): Map<String, Any> {
+        val count = crawlService.clearAll()
         return mapOf("cleared" to count)
     }
 

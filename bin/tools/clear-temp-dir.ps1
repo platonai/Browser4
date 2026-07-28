@@ -184,7 +184,7 @@ $userTemp = $env:LOCALAPPDATA + "\Temp"
 
 # Define patterns to match
 $patterns = @('tomcat', 'chrome', 'test', 'pkg-', '.jar', 'koltin', '.tmp', '.ps', '.ps1',
-'tsServerCancellationPipes', 'pulsar-skill-', 'playwright-'
+'tsServerCancellationPipes', 'skills-', 'jetty-', 'playwright-', 'mockk', 'mockito', '.log'
 )
 
 Write-Host "Starting targeted temporary file cleanup..." -ForegroundColor Cyan

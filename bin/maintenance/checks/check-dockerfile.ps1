@@ -52,6 +52,16 @@ foreach ($df in $Dockerfiles) {
         continue
     }
 
+    # Dockerfile.fast requires a pre-built Browser4.jar — skip if missing
+    if ($df -eq "Dockerfile.fast" -and -not $SkipBuild) {
+        $fastJar = Join-Path $repoRoot "browser4-apps\browser4-standalone\target\Browser4.jar"
+        if (-not (Test-Path $fastJar)) {
+            Add-MaintenanceResult -Result $result -Item $df -Status "skipped" `
+                -Message "Browser4.jar not built — run 'mvn package -pl browser4-apps/browser4-standalone -am -DskipTests' first"
+            continue
+        }
+    }
+
     $timeoutSecs = Get-MaintenanceThreshold -Section "Performance" -Key "MaxDockerBuildMinutes" -Default 25
     $timeoutSecs = [int]$timeoutSecs * 60
 

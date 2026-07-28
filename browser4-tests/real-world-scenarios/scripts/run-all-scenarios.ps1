@@ -255,9 +255,10 @@ if (-not $script:State) {
 # Pre-flight checks
 # ═══════════════════════════════════════════════════════════════════════════════
 
-$claudeAvailable = $null -ne (Get-Command claude -ErrorAction SilentlyContinue)
-if (-not $claudeAvailable) {
-    Write-Host 'ERROR: claude CLI not found on PATH. Install Claude Code to run scenarios.' -ForegroundColor Red
+$scenarioAgentAvailable = $null -ne (Get-Command claude -ErrorAction SilentlyContinue) -or
+    $null -ne (Get-Command kimi -ErrorAction SilentlyContinue)
+if (-not $scenarioAgentAvailable) {
+    Write-Host 'ERROR: no agent CLI found on PATH. Install Claude Code or Kimi Code to run scenarios.' -ForegroundColor Red
     exit 1
 }
 

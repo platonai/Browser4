@@ -129,6 +129,8 @@ FROM DOM_LOAD_AND_SELECT('https://shop.example.com/product/42', 'body');
 
 ## Function Index by SQL Alias
 
+**Where to find detailed docs:** Functions in the "Element property", "Tree navigation", "Text", "Link/Image", "Regex", "HTML", "Feature", and "State check" categories are documented in [x-sql-dom-functions.md](x-sql-dom-functions.md). Functions in the "CSS select", "Attribute extraction", "Visual", and "DOM manipulation" categories are documented in [x-sql-dom-select-functions.md](x-sql-dom-select-functions.md). "Page loading" functions are in [x-sql-dom-load-select.md](x-sql-dom-load-select.md). String functions are in [x-sql-string-functions.md](x-sql-string-functions.md). Array functions are in [x-sql-array-functions.md](x-sql-array-functions.md).
+
 ### DOM Namespace
 
 | SQL Alias | Returns | Category |
@@ -138,7 +140,7 @@ FROM DOM_LOAD_AND_SELECT('https://shop.example.com/product/42', 'body');
 | `DOM_FETCH` | `ValueDom` | Page loading |
 | `DOM_IS_NIL` | `Boolean` | State check |
 | `DOM_IS_NOT_NIL` | `Boolean` | State check |
-| `DOM_ATTR` | `String` | Element property |
+| `DOM_ATTR` | `String` | Element property → DomFunctions |
 | `DOM_LABELS` | `String` | Element property |
 | `DOM_FEATURE` | `Double` | Element property |
 | `DOM_HAS_ATTR` | `Boolean` | Element property |

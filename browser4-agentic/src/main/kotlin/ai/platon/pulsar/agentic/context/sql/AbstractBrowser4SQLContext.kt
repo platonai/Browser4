@@ -1,19 +1,15 @@
 package ai.platon.pulsar.agentic.context.sql
 
-import ai.platon.pulsar.common.AppContext
-import ai.platon.pulsar.common.IllegalApplicationStateException
-import ai.platon.pulsar.common.Systems
+import ai.platon.pulsar.common.*
 import ai.platon.pulsar.common.config.AppConstants
 import ai.platon.pulsar.common.config.CapabilityTypes
 import ai.platon.pulsar.common.sql.SQLUtils
-import ai.platon.pulsar.common.warnForClose
-import ai.platon.pulsar.common.warnInterruptible
 import ai.platon.pulsar.core.api.LoadOptions
 import ai.platon.pulsar.core.api.PulsarSettings
-import ai.platon.pulsar.ql.AbstractSQLSession
 import ai.platon.pulsar.ql.SQLSession
-import ai.platon.pulsar.ql.SessionDelegate
 import ai.platon.pulsar.ql.context.SQLContext
+import ai.platon.pulsar.ql.session.AbstractSQLSession
+import ai.platon.pulsar.ql.session.SessionDelegate
 import ai.platon.pulsar.skeleton.common.urls.NormURL
 import ai.platon.pulsar.skeleton.context.support.AbstractPulsarContext
 import org.h2.api.ErrorCode
@@ -49,9 +45,10 @@ abstract class AbstractBrowser4SQLContext(
         System.setProperty("h2.sessionFactory", AppConstants.H2_SESSION_FACTORY)
     }
 
-    val randomConnectionOrNull: Connection? get() = kotlin.runCatching { randomConnection }
-        .onFailure { warnInterruptible(this, it) }
-        .getOrNull()
+    val randomConnectionOrNull: Connection?
+        get() = kotlin.runCatching { randomConnection }
+            .onFailure { warnInterruptible(this, it) }
+            .getOrNull()
 
     val connectionPool = ArrayBlockingQueue<Connection>(1000)
     private val resultSetType = ResultSet.TYPE_SCROLL_SENSITIVE
@@ -134,7 +131,8 @@ abstract class AbstractBrowser4SQLContext(
     @Throws(Exception::class)
     abstract override fun createSession(sessionDelegate: SessionDelegate): SQLSession
 
-    override fun createSession(settings: PulsarSettings) = createSession().also { settings.overrideConfiguration(it.sessionConfig)}
+    override fun createSession(settings: PulsarSettings) =
+        createSession().also { settings.overrideConfiguration(it.sessionConfig) }
 
     override fun sessionCount(): Int {
         ensureRunning()

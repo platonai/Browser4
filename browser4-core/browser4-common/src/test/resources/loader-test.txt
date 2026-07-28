@@ -1,0 +1,6 @@
+# This is a comment
+valid line 1
+-- also a comment
+
+valid line 2
+#nospacekept

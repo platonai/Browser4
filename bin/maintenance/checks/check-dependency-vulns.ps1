@@ -91,12 +91,7 @@ Add-MaintenanceResult -Result $result -Item "OWASP Maven" -Status $owaspStatus -
 # ── Cargo audit ──
 $cargoAuditAvailable = $null -ne (Get-Command cargo-audit -ErrorAction SilentlyContinue)
 if (-not $cargoAuditAvailable) {
-    # Try to install
-    try {
-        cargo install cargo-audit 2>&1 | Out-Null
-        $cargoAuditAvailable = $null -ne (Get-Command cargo-audit -ErrorAction SilentlyContinue)
-    }
-    catch { }
+    Write-MaintenanceLog -Level "WARN" -Component "A5" -Message "cargo-audit not installed. Run: cargo install cargo-audit"
 }
 
 if ($cargoAuditAvailable) {

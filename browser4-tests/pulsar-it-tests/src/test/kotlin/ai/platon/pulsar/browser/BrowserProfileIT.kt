@@ -1,5 +1,6 @@
 package ai.platon.pulsar.browser
 
+import ai.platon.browser4.api.BrowserProfile
 import ai.platon.pulsar.WebDriverTestBase
 import ai.platon.pulsar.common.browser.BrowserType
 import ai.platon.pulsar.common.browser.ProfileHealthMonitor
@@ -7,6 +8,8 @@ import ai.platon.pulsar.common.browser.fingerprint.BasicFingerprintGenerator
 import ai.platon.pulsar.common.browser.fingerprint.Fingerprint
 import ai.platon.pulsar.common.browser.fingerprint.FingerprintDriftDetector
 import ai.platon.pulsar.common.browser.fingerprint.FingerprintValidator
+import ai.platon.pulsar.common.serialize.json.prettyPulsarObjectMapper
+import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Disabled
 import org.junit.jupiter.api.DisplayName
@@ -64,7 +67,7 @@ class BrowserProfileIT : WebDriverTestBase() {
 
         // Save fingerprint
         val fingerprintPath = contextDir.resolve("fingerprint.json")
-        val json = ai.platon.pulsar.common.serialize.json.prettyPulsarObjectMapper()
+        val json = prettyPulsarObjectMapper()
             .writeValueAsString(originalFingerprint)
         Files.writeString(fingerprintPath, json)
 
@@ -72,7 +75,7 @@ class BrowserProfileIT : WebDriverTestBase() {
         assertTrue(Files.exists(fingerprintPath))
 
         // Load fingerprint from file
-        val loadedFingerprint = ai.platon.pulsar.common.serialize.json.pulsarObjectMapper()
+        val loadedFingerprint = pulsarObjectMapper()
             .readValue(fingerprintPath.toFile(), Fingerprint::class.java)
 
         // Verify loaded fingerprint matches original
@@ -99,13 +102,13 @@ class BrowserProfileIT : WebDriverTestBase() {
 
         // Save it
         val fingerprintPath = contextDir.resolve("fingerprint.json")
-        val json = ai.platon.pulsar.common.serialize.json.prettyPulsarObjectMapper()
+        val json = prettyPulsarObjectMapper()
             .writeValueAsString(fingerprint)
         Files.writeString(fingerprintPath, json)
 
         // Load and validate
         val validator = FingerprintValidator()
-        val loadedFingerprint = ai.platon.pulsar.common.serialize.json.pulsarObjectMapper()
+        val loadedFingerprint = pulsarObjectMapper()
             .readValue(fingerprintPath.toFile(), Fingerprint::class.java)
 
         val validationResult = validator.validate(loadedFingerprint)
@@ -191,14 +194,14 @@ class BrowserProfileIT : WebDriverTestBase() {
         )
 
         val fingerprintPath = contextDir.resolve("fingerprint.json")
-        val json = ai.platon.pulsar.common.serialize.json.prettyPulsarObjectMapper()
+        val json = prettyPulsarObjectMapper()
             .writeValueAsString(fingerprint)
         Files.writeString(fingerprintPath, json)
 
         // Simulate multiple session loads
         val loadedFingerprints = mutableListOf<Fingerprint>()
         repeat(3) {
-            val loaded = ai.platon.pulsar.common.serialize.json.pulsarObjectMapper()
+            val loaded = pulsarObjectMapper()
                 .readValue(fingerprintPath.toFile(), Fingerprint::class.java)
             loadedFingerprints.add(loaded)
         }

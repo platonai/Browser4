@@ -1,5 +1,7 @@
 package ai.platon.pulsar.apps
 
+import ai.platon.browser4.boot.autoconfigure.PulsarContextInitializer
+import ai.platon.browser4.boot.plugin.PluginClasspathEnhancer
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.external.ChatModelFactory
 import ai.platon.pulsar.rest.ApiApplication
@@ -11,6 +13,7 @@ import org.springframework.boot.context.event.ApplicationReadyEvent
 import org.springframework.boot.runApplication
 import org.springframework.context.annotation.Import
 import org.springframework.context.event.EventListener
+import java.nio.file.Path
 
 @SpringBootApplication
 @Import(ApiApplication::class)
@@ -76,8 +79,10 @@ class Browser4BundleApplication(
 }
 
 fun runBrowser4BundleApplication(args: Array<String>) {
+    PluginClasspathEnhancer.enhance(Path.of("plugins"))
     runApplication<Browser4BundleApplication>(*args) {
         setAdditionalProfiles("bundle", "private", "advanced")
+        addInitializers(PulsarContextInitializer())
         setLogStartupInfo(true)
     }
 }

@@ -1,7 +1,7 @@
 package ai.platon.pulsar.rest.api.service
 
 import ai.platon.browser4.common.B4Constants.SWARM_SESSION_ID
-import ai.platon.pulsar.common.PulsarSessionManager
+import ai.platon.pulsar.rest.session.PulsarSessionManager
 import ai.platon.pulsar.dom.FeaturedDocument
 import ai.platon.pulsar.persist.WebPage
 import ai.platon.pulsar.persist.model.GoraWebPage

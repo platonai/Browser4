@@ -47,7 +47,7 @@ if ($exitCode -eq 0) {
 $versionPath = Join-Path $repoRoot "VERSION"
 if (Test-Path $versionPath) {
     $versionFileVersion = (Get-Content $versionPath -Raw).Trim()
-    Add-MaintenanceResult -Result $result -Item "VERSION" -Status "info" -Message $versionFileVersion
+    Add-MaintenanceResult -Result $result -Item "VERSION" -Status "passed" -Message "VERSION file: $versionFileVersion"
 }
 
 Set-MaintenanceResultSummary -Result $result

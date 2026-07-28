@@ -207,16 +207,19 @@ finally {
     Write-Host "Working directory: $WorkingDirectory"
     Write-Host "Console transcript log: $stdOutPath"
 
-    $startProcessParams = @{
-        FilePath         = $PowerShellExecutable
-        ArgumentList     = $argumentList
-        WorkingDirectory = $WorkingDirectory
-        PassThru         = $true
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $PowerShellExecutable
+    $psi.WorkingDirectory = $WorkingDirectory
+    # UseShellExecute=$false + CreateNoWindow=$true = no console window, no focus steal
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+    foreach ($arg in $argumentList) {
+        [void]$psi.ArgumentList.Add($arg)
     }
-    if ($IsWindows -and $TaskState.WindowStyle) {
-        $startProcessParams['WindowStyle'] = $TaskState.WindowStyle
-    }
-    $process = Start-Process @startProcessParams
+
+    $process = New-Object System.Diagnostics.Process
+    $process.StartInfo = $psi
+    $process.Start() | Out-Null
 
     Register-ScheduledTaskProcessExitEvent -TaskState $TaskState -Process $process
 
@@ -540,15 +543,15 @@ foreach ($task in $config.Tasks) {
         )
     }
 
-    $windowStyle = [string](Get-CoworkerConfigValue -Map $task -Key 'WindowStyle' -DefaultValue 'Normal')
+    $windowStyle = [string](Get-CoworkerConfigValue -Map $task -Key 'WindowStyle' -DefaultValue 'Hidden')
     $validStyles = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
     [void]$validStyles.Add('Normal')
     [void]$validStyles.Add('Minimized')
     [void]$validStyles.Add('Maximized')
     [void]$validStyles.Add('Hidden')
     if (-not $validStyles.Contains($windowStyle)) {
-        Write-CoworkerLog -Component 'scheduler' -Level 'WARN' -Message "Task '$taskName' has invalid WindowStyle '$windowStyle'. Falling back to 'Normal'."
-        $windowStyle = 'Normal'
+        Write-CoworkerLog -Component 'scheduler' -Level 'WARN' -Message "Task '$taskName' has invalid WindowStyle '$windowStyle'. Falling back to 'Hidden'."
+        $windowStyle = 'Hidden'
     }
 
     $taskStates[$taskName] = @{

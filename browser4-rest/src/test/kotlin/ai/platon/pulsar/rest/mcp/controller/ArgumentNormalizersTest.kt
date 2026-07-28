@@ -75,8 +75,8 @@ class ArgumentNormalizersTest {
             )
             val result = normalizer.normalize("drag", args)
 
-            assertFalse(result.containsKey("start_ref"), "snake_case key should be removed")
-            assertFalse(result.containsKey("end_ref"), "snake_case key should be removed")
+            assertFalse(result.containsKey("start_ref"), "snake_case key 'start_ref' should be removed")
+            assertFalse(result.containsKey("end_ref"), "snake_case key 'end_ref' should be removed")
         }
     }
 
@@ -133,6 +133,18 @@ class ArgumentNormalizersTest {
             assertFalse(result.containsKey("modifier"))
             assertFalse(result.containsKey("modifiers"))
         }
+
+        @Test
+        @DisplayName("modifiers string becomes modifier string")
+        fun modifiersStringBecomesModifier() {
+            val args = mutableMapOf<String, Any?>(
+                "modifiers" to "Shift"
+            )
+            val result = normalizer.normalize("click", args)
+
+            assertEquals("Shift", result["modifier"], "string modifiers should become 'modifier'")
+            assertFalse(result.containsKey("modifiers"))
+        }
     }
 
     // =========================================================================
@@ -153,5 +165,74 @@ class ArgumentNormalizersTest {
         assertEquals("hello", result["text"])
         assertEquals(true, result["submit"])
         assertEquals(3, result.size)
+    }
+
+    // =========================================================================
+    // TabArgumentNormalizer — id → tabId mapping
+    // =========================================================================
+
+    @Nested
+    @DisplayName("TabArgumentNormalizer")
+    inner class TabArgumentNormalizerTests {
+
+        private val tabNormalizer = TabArgumentNormalizer()
+
+        @Test
+        @DisplayName("id is mapped to tabId when tabId is absent")
+        fun idIsMappedToTabIdWhenAbsent() {
+            val args = mutableMapOf<String, Any?>(
+                "id" to "DEADBEEF000000000000000000000000"
+            )
+            val result = tabNormalizer.normalize("tab_select", args)
+
+            assertFalse(result.containsKey("id"), "id key should be removed")
+            assertEquals(
+                "DEADBEEF000000000000000000000000",
+                result["tabId"],
+                "id value should become tabId"
+            )
+        }
+
+        @Test
+        @DisplayName("id is NOT mapped when tabId is already present")
+        fun idIsNotMappedWhenTabIdPresent() {
+            val args = mutableMapOf<String, Any?>(
+                "id" to "old-legacy-id",
+                "tabId" to "explicit-tab-id"
+            )
+            val result = tabNormalizer.normalize("tab_select", args)
+
+            assertFalse(result.containsKey("id"), "id key should be removed")
+            assertEquals(
+                "explicit-tab-id",
+                result["tabId"],
+                "existing tabId should be preserved"
+            )
+        }
+
+        @Test
+        @DisplayName("no-op when neither id nor tabId is present")
+        fun noOpWhenNeitherIdNorTabIdPresent() {
+            val args = mutableMapOf<String, Any?>(
+                "index" to 0
+            )
+            val result = tabNormalizer.normalize("tab_select", args)
+
+            assertEquals(0, result["index"])
+            assertFalse(result.containsKey("id"))
+            assertFalse(result.containsKey("tabId"))
+        }
+
+        @Test
+        @DisplayName("tabId is preserved without id present")
+        fun tabIdPreservedWithoutId() {
+            val args = mutableMapOf<String, Any?>(
+                "tabId" to "some-guid-here"
+            )
+            val result = tabNormalizer.normalize("tab_close", args)
+
+            assertEquals("some-guid-here", result["tabId"])
+            assertFalse(result.containsKey("id"))
+        }
     }
 }

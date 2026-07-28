@@ -30,7 +30,7 @@ class SequentialBrowserProfileGeneratorTest {
         mockFingerprint = Fingerprint.EXAMPLE
         contextBaseDir = AppPaths.CONTEXT_GROUP_BASE_DIR.resolve("test/PULSAR_CHROME")
         IntRange(1, 10).forEach { i ->
-            val contextDir = contextBaseDir.resolve("cx.$i")
+            val contextDir = contextBaseDir.resolve("cx.%03d".format(i))
             contextDirs.add(contextDir)
             Files.createDirectories(contextDir)
         }

@@ -20,6 +20,12 @@
     #     '--allow-all'
     # )
 
+    # kimi -p runs non-interactively with auto permission (no approvals), so no
+    # extra flags are needed. Do NOT add --yolo/--auto here: they conflict with -p.
+    # KIMI = @(
+    #     'kimi'
+    # )
+
     CLAUDE = @(
         'claude'
         '--dangerously-skip-permissions'

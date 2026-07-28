@@ -13,7 +13,7 @@
 
     <groupId>ai.platon.pulsar</groupId>
     <artifactId>browser4-dependencies</artifactId>
-    <version>4.11.22-SNAPSHOT</version>
+    <version>4.12.1-SNAPSHOT</version>
     <name>Browser4 Dependencies</name>
 
     <packaging>pom</packaging>
@@ -150,11 +150,6 @@
             </dependency>
             <dependency>
                 <groupId>org.apache.commons</groupId>
-                <artifactId>commons-math3</artifactId>
-                <version>${commons-math3.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>org.apache.commons</groupId>
                 <artifactId>commons-collections4</artifactId>
                 <version>${commons-collections4.version}</version>
             </dependency>
@@ -190,16 +185,11 @@
                 <version>${poi-ooxml.version}</version>
             </dependency>
 
-            <dependency>
-                <groupId>com.google.guava</groupId>
-                <artifactId>guava</artifactId>
-                <version>${guava.version}</version>
-            </dependency>
 
             <dependency>
                 <groupId>org.apache.httpcomponents</groupId>
                 <artifactId>httpcore</artifactId>
-                <version>${httptrove4j-core.version}</version>
+                <version>${httpcore.version}</version>
             </dependency>
             <dependency>
                 <groupId>org.apache.httpcomponents</groupId>
@@ -212,6 +202,10 @@
                     </exclusion>
                 </exclusions>
             </dependency>
+
+
+
+
 
             <dependency>
                 <groupId>io.ktor</groupId>
@@ -309,7 +303,7 @@
             <dependency>
                 <groupId>com.github.oshi</groupId>
                 <artifactId>oshi-core</artifactId>
-                <version>${oshi-trove4j-core.version}</version>
+                <version>${oshi-core.version}</version>
             </dependency>
             <dependency>
                 <groupId>io.dropwizard.metrics</groupId>
@@ -358,6 +352,12 @@
                 <scope>test</scope>
             </dependency>
 
+            <dependency>
+                <groupId>com.google.code.crawler-commons</groupId>
+                <artifactId>crawler-commons</artifactId>
+                <version>${crawler-commons.version}</version>
+            </dependency>
+
             <!-- MockBean and SpyBean, but for MockK instead of Mockito -->
             <!-- Be careful to keep consistent with spring-boot -->
             <!-- MockK for Kotlin-friendly mocking -->
@@ -390,6 +390,12 @@
                 <groupId>ai.platon.pulsar</groupId>
                 <artifactId>pulsar-jsoup</artifactId>
                 <version>${pulsar-jsoup.version}</version>
+                <exclusions>
+                    <exclusion>
+                        <groupId>*</groupId>
+                        <artifactId>*</artifactId>
+                    </exclusion>
+                </exclusions>
             </dependency>
             <dependency>
                 <groupId>ai.platon.cdt</groupId>
@@ -449,17 +455,15 @@
         <commons-io.version>2.16.1</commons-io.version>
         <commons-codec.version>1.17.0</commons-codec.version>
         <commons-text.version>1.11.0</commons-text.version>
-        <!-- managed by spring-boot-dependencies -->
-        <commons-math3.version>3.6.1</commons-math3.version>
         <commons-numbers-bom.version>1.1</commons-numbers-bom.version>
         <commons-collections4.version>4.4</commons-collections4.version>
         <commons-logging.version>1.3.2</commons-logging.version>
         <commons-compress.version>1.26.2</commons-compress.version>
 
         <poi-ooxml.version>5.4.0</poi-ooxml.version>
-        <poi.version>5.3.0</poi.version>
+        <poi.version>5.4.0</poi.version>
 
-        <oshi-trove4j-core.version>6.6.6</oshi-trove4j-core.version>
+        <oshi-core.version>6.6.6</oshi-core.version>
 
         <xercesImpl.version>2.12.2</xercesImpl.version>
         <trove4j-core.version>3.3.1</trove4j-core.version>
@@ -475,7 +479,7 @@
         <javax.persistence-api.version>2.2</javax.persistence-api.version>
 
         <!-- Web server -->
-        <httptrove4j-core.version>4.4.15</httptrove4j-core.version>
+        <httpcore.version>4.4.15</httpcore.version>
         <httpclient.version>4.5.13</httpclient.version>
         <!-- Java Servlet is the foundation web specification in the Java Enterprise Platform. Developers can build
         web applications using the Servlet API to interact with the request/response workflow. -->
@@ -492,7 +496,7 @@
         <EvalEx.version>2.0</EvalEx.version>
         <jcommander.version>1.82</jcommander.version>
 
-        <guava.version>33.2.1-jre</guava.version>
+
         <dataframe.version>0.13.1</dataframe.version>
         <jgrapht.version>1.0.1</jgrapht.version>
 
@@ -522,8 +526,7 @@
         <!-- managed by spring-boot-dependencies -->
         <!--        <mockito.version>5.12.0</mockito.version>-->
         <mockito-kotlin.version>5.4.0</mockito-kotlin.version>
-        <!-- MockK is a powerful and flexible mocking library designed specifically for Kotlin. -->
-
+        <crawler-commons.version>0.5</crawler-commons.version>
         <junit5.version>5.12.1</junit5.version>
         <mockk.version>1.14.6</mockk.version>
         <springmockk.version>4.0.2</springmockk.version>
@@ -547,7 +550,7 @@
         <!-- Pulsar dependency -->
         <pulsar-h2.version>1.4.197</pulsar-h2.version>
         <pulsar-jsoup.version>1.14.3</pulsar-jsoup.version>
-        <browser4-base.version>4.8.5</browser4-base.version>
+        <browser4-base.version>4.10.1</browser4-base.version>
         <cdt-kotlin-client.version>4.8.0</cdt-kotlin-client.version>
     </properties>
 

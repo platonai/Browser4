@@ -48,8 +48,13 @@ abstract class AbstractScrapeHyperlink(
 
     open fun complete(page: WebPage) {
         response.id = uuid
+        val now = Instant.now()
         response.isDone = true
-        response.finishTime = Instant.now()
+        response.lastModifiedTime = now
+        response.finishTime = now
+        if (response.startedTime == null) {
+            response.startedTime = now
+        }
 
         if (isCompleted.compareAndSet(false, true)) {
             super.complete(response)

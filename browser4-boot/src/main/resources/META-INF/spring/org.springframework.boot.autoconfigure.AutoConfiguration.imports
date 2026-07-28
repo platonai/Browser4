@@ -1,0 +1,3 @@
+ai.platon.browser4.boot.autoconfigure.Browser4AutoConfiguration
+ai.platon.browser4.boot.plugin.PluginAutoConfiguration
+ai.platon.browser4.boot.skill.SkillAutoConfiguration

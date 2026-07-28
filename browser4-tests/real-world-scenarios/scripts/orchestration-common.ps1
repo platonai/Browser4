@@ -56,12 +56,12 @@ $ErrorActionPreference = 'Stop'
 $script:RepoRoot = (Resolve-Path "$PSScriptRoot/../../..").Path
 
 $script:UseCasesDir = Join-Path $script:RepoRoot `
-    'browser4-tests\browser4-tests-common\src\main\resources\e2e\scenarios\happy_path\use-cases'
+    'browser4-tests/pulsar-tests-common/src/main/resources/e2e/scenarios/happy_path/use-cases'
 
 $script:TasksDir = Join-Path $script:RepoRoot `
-    'browser4-tests\real-world-scenarios\tasks'
+    'browser4-tests/real-world-scenarios/tasks'
 
-$script:ReportsRoot = Join-Path $script:RepoRoot 'target\test-reports'
+$script:ReportsRoot = Join-Path $script:RepoRoot 'target/test-reports'
 $script:StateDir = Join-Path $script:ReportsRoot 'state'
 $script:ReportsOutputDir = Join-Path $script:ReportsRoot 'reports'
 $script:ScenariosOutputDir = Join-Path $script:ReportsRoot 'scenarios'

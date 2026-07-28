@@ -15,8 +15,8 @@ import ai.platon.pulsar.common.serialize.json.FlatJSONExtractor
 import ai.platon.pulsar.common.sql.SQLTemplate
 import ai.platon.pulsar.common.urls.URLUtils
 import ai.platon.pulsar.dom.FeaturedDocument
-import ai.platon.pulsar.dom.UriExtractor
 import ai.platon.pulsar.dom.nodes.node.ext.numChars
+import ai.platon.pulsar.dom.util.UriExtractor
 import ai.platon.pulsar.persist.WebPage
 import ai.platon.pulsar.skeleton.event.DefaultServerSideEventHandlers
 import ai.platon.pulsar.skeleton.event.PageEventHandlers

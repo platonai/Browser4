@@ -41,7 +41,7 @@ bin/maintenance/
 │   ├── MaintenanceUtil.ps1            # Shared utilities (logging, results, thresholds)
 │   └── MaintenanceState.ps1           # Persistent state I/O with file locking
 │
-├── checks/                            # 28 individual check scripts
+├── checks/                            # 30 scripts (28 check-*.ps1 + 2 clean-*.ps1)
 │   ├── check-*.ps1                    # Read-only checks
 │   └── clean-*.ps1                    # Cleanup operations
 │
@@ -57,6 +57,9 @@ bin/maintenance/
 │
 ├── state/
 │   └── maintenance-state.json         # Shared run history (git-tracked, team-wide)
+│
+├── tests/                             # PowerShell test suite
+│   └── maintenance.tests.ps1          # Tests for all maintenance scripts
 │
 └── thresholds/
     └── thresholds.psd1                # All numeric thresholds
@@ -136,7 +139,7 @@ All numeric thresholds live in `thresholds/thresholds.psd1`.
 Override any value via environment variable:
 
 ```powershell
-$env:MAINTENANCE_Coverage_Global = "0.75"
+$env:MAINTENANCE_Coverage_Global = "0.70"
 $env:MAINTENANCE_LogHealth_MaxTotalMB = "200"
 ```
 

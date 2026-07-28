@@ -5,7 +5,8 @@ Run an agent-scenario task defined in a markdown file.
 
 .DESCRIPTION
 Reads a task description from a .md file, combines it with the shared
-usability-evaluation prompt (common.ps1), and invokes the Claude Code agent.
+usability-evaluation prompt (common.ps1), and invokes the configured agent CLI
+(claude or kimi).
 
 The first "# Heading" in the markdown file becomes the scenario name; the
 remaining body becomes the task-specific prompt.
@@ -43,105 +44,109 @@ param(
     # an older version or when the check cannot resolve the version).
     [switch] $SkipVersionCheck,
 
-    # Maximum minutes to wait for the agent to complete.
-    # 0 (default) means no timeout.  On timeout the process is killed and
-    # exit code 124 is returned (matching the Unix `timeout` convention).
-    [int] $TimeoutMinutes = 0
+    # Run in production mode (browser4-cli instead of cargo run).
+    [switch] $Production,
+
+    # Maximum minutes to wait for the agent to complete (default 60 = 1 hour).
+    # On timeout the process is killed and exit code 124 is returned
+    # (matching the Unix `timeout` convention).  Set to 0 to disable.
+    [int] $TimeoutMinutes = 60,
+
+    # Override the agent CLI to use (claude, kimi, or opencode).
+    # When empty, auto-detects with priority claude > kimi > opencode.
+    [ValidateSet('', 'claude', 'kimi', 'opencode')]
+    [string] $Agent = ''
 )
 
 $ErrorActionPreference = 'Stop'
 
-# ── Resolve task file path ────────────────────────────────────────────────────
-# Try the caller's CWD first (backward-compatible), then fall back to the
-# real-world-scenarios/ directory next to this script.
-$cwdPath = [System.IO.Path]::GetFullPath(
-    [System.IO.Path]::Combine((Get-Location).Path, $TaskFile)
-)
-if (Test-Path -LiteralPath $cwdPath -PathType Leaf) {
-    $resolvedPath = $cwdPath
-} else {
-    $scenariosDir = Join-Path $PSScriptRoot '..'
-    $resolvedPath = [System.IO.Path]::GetFullPath(
-        [System.IO.Path]::Combine($scenariosDir, $TaskFile)
-    )
-}
-
-if (-not (Test-Path -LiteralPath $resolvedPath -PathType Leaf)) {
-    Write-Host "ERROR: Task file not found: $resolvedPath" -ForegroundColor Red
-    Write-Host "  Tried CWD:  $cwdPath" -ForegroundColor DarkGray
-    Write-Host "  Tried scenarios/: $resolvedPath" -ForegroundColor DarkGray
-    exit 1
-}
-
-# ── Parse the task file ───────────────────────────────────────────────────────
-$rawContent = Get-Content -Path $resolvedPath -Raw -Encoding UTF8
-
-if ([string]::IsNullOrWhiteSpace($rawContent)) {
-    Write-Host "ERROR: Task file is empty: $resolvedPath" -ForegroundColor Red
-    exit 1
-}
-
-# Extract scenario name from the first "# Heading".
-# Match the first line that starts with "# " (optionally preceded by whitespace).
-$scenarioName = ''
-$taskBody = $rawContent
-
-if ($rawContent -match '(?m)^\s*#\s+(.+?)\s*$') {
-    $scenarioName = $Matches[1].Trim()
-    # Remove the heading line and any following blank lines from the task body.
-    $taskBody = $rawContent -replace '^\s*#\s+.+?\s*\r?\n\s*\r?\n?', ''
-}
-
-if ([string]::IsNullOrWhiteSpace($taskBody)) {
-    Write-Host "ERROR: No task body found after heading in: $resolvedPath" -ForegroundColor Red
-    exit 1
-}
-
-if (-not $Silent) {
-    Write-Host "Task file:  $resolvedPath" -ForegroundColor DarkGray
-    if ($scenarioName) {
-        Write-Host "Scenario:   $scenarioName" -ForegroundColor DarkGray
-    }
-    Write-Host ''
+# ── Set mode before loading common.ps1 ────────────────────────────────────────
+# Guard against overwriting pre-set values from run-task-production.ps1.
+# Must be set before dot-sourcing common.ps1 so $generalPrompt picks it up.
+if ($Production -and -not $browser4cliMode -and -not $env:BROWSER4CLI_MODE) {
+    $browser4cliMode = 'production'
 }
 
 # ── Dot-source the shared helpers ─────────────────────────────────────────────
-# common.ps1 defines $generalPrompt and Invoke-Agent.
-# $browser4cliMode may already be set by a production wrapper.
+# common.ps1 defines Read-TaskFile, Resolve-TaskFilePath, $generalPrompt,
+# Invoke-Agent, Assert-Browser4CliLatest, and $script:RepoRoot.
 . "$PSScriptRoot/common.ps1"
 
-# ── Verify the CLI is up to date ─────────────────────────────────────────────
-if (-not $SkipVersionCheck) {
-    $versionStatus = Assert-Browser4CliLatest -Silent:$Silent
-    if ($versionStatus -ne 0) {
-        Write-Host 'Run with -SkipVersionCheck to bypass this check.' -ForegroundColor DarkGray
-        exit $versionStatus
+# ── Agent override ────────────────────────────────────────────────────────────
+# Must be set after dot-sourcing so $script:scenarioAgentCli targets the
+# same script scope that Get-ScenarioAgent reads from.
+if ($Agent) {
+    $script:scenarioAgentCli = $Agent
+}
+
+# ── Resolve task file path ────────────────────────────────────────────────────
+# Uses the three-tier lookup from Resolve-TaskFilePath:
+#   1. As-given (handles absolute paths passed by run-tests.ps1)
+#   2. Relative to CWD (backward-compatible for manual invocation)
+#   3. Relative to scenarios/ dir (parent of this scripts/ directory)
+$resolvedPath = Resolve-TaskFilePath -TaskFile $TaskFile -ScriptsDir $PSScriptRoot
+
+if (-not $resolvedPath) {
+    Write-Host "ERROR: Task file not found: $TaskFile" -ForegroundColor Red
+    Write-Host "  Tried as-given, CWD, and scenarios/ directory." -ForegroundColor DarkGray
+    exit 1
+}
+
+try {
+    # ── Parse the task file ───────────────────────────────────────────────────
+    $task = Read-TaskFile -Path $resolvedPath
+    $scenarioName = $task.Name
+    $taskBody = $task.Body
+
+    if (-not $Silent) {
+        Write-Host "Task file:  $resolvedPath" -ForegroundColor DarkGray
+        if ($scenarioName) {
+            Write-Host "Scenario:   $scenarioName" -ForegroundColor DarkGray
+        }
+        Write-Host ''
     }
-}
 
-# ── Build the full prompt and invoke ──────────────────────────────────────────
-$prompt = $generalPrompt + $taskBody
+    # ── Verify the CLI is up to date ──────────────────────────────────────────
+    if (-not $SkipVersionCheck) {
+        $versionStatus = Assert-Browser4CliLatest -Silent:$Silent
+        if ($versionStatus -ne 0) {
+            Write-Host 'Run with -SkipVersionCheck to bypass this check.' -ForegroundColor DarkGray
+            exit $versionStatus
+        }
+    }
 
-# ── Compute raw output file path in ./target ─────────────────────────────────
-$repoRoot = (Resolve-Path "$PSScriptRoot/../../..").Path
-$targetDir = Join-Path $repoRoot 'target'
-if (-not (Test-Path -LiteralPath $targetDir)) {
-    New-Item -ItemType Directory -Path $targetDir -Force | Out-Null
-}
-$timestamp = (Get-Date).ToUniversalTime().ToString('yyyyMMdd-HHmmss')
-$safeName = if ($scenarioName) { $scenarioName -replace '[\\/:*?"<>|]', '_' } else { 'unknown' }
-$rawOutputFile = Join-Path $targetDir "$timestamp-$safeName.raw.md"
+    # ── Build the full prompt and invoke ──────────────────────────────────────
+    $prompt = $generalPrompt + $taskBody
 
-$invokeParams = @{
-    Prompt       = $prompt
-    ScenarioName = $scenarioName
-    OutputFile   = $rawOutputFile
-}
-if ($Silent) {
-    $invokeParams['Silent'] = $true
-}
-if ($TimeoutMinutes -gt 0) {
+    # ── Compute raw output file path in ./target ──────────────────────────────
+    $targetDir = Join-Path $script:RepoRoot 'target'
+    if (-not (Test-Path -LiteralPath $targetDir)) {
+        New-Item -ItemType Directory -Path $targetDir -Force | Out-Null
+    }
+    $timestamp = (Get-Date).ToUniversalTime().ToString('yyyyMMdd-HHmmss')
+    $safeName = if ($scenarioName) { $scenarioName -replace '[\\/:*?"<>|]', '_' } else { 'unknown' }
+    $rawOutputFile = Join-Path $targetDir "$timestamp-$safeName.raw.md"
+
+    # Write capture file path to a marker so parent processes can
+    # discover and display the agent output after the run completes.
+    $markerFile = Join-Path $targetDir '.current-capture-path'
+    $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+    [System.IO.File]::WriteAllText($markerFile, $rawOutputFile, $utf8NoBom)
+
+    $invokeParams = @{
+        Prompt       = $prompt
+        ScenarioName = $scenarioName
+        OutputFile   = $rawOutputFile
+    }
+    if ($Silent) {
+        $invokeParams['Silent'] = $true
+    }
+    # Always forward the timeout (even 0 = disabled) so Invoke-Agent
+    # receives the caller's intent.
     $invokeParams['TimeoutSeconds'] = $TimeoutMinutes * 60
-}
 
-Invoke-Agent @invokeParams
+    Invoke-Agent @invokeParams
+} catch {
+    Write-Host "ERROR: run-task.ps1 failed: $_" -ForegroundColor Red
+    exit 1
+}

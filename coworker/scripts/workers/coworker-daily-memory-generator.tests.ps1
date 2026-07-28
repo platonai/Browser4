@@ -1,4 +1,16 @@
 #!/usr/bin/env pwsh
+
+# ═══════════════════════════════════════════════════════════════════
+# CROSS-PLATFORM: This script must run on Linux, macOS, and Windows.
+# - Use $IsWindows / $IsLinux / $IsMacOS for platform detection.
+# - Use "($IsWindows -or $env:OS -eq 'Windows_NT')" for PS 5.1 compat.
+# - Avoid Windows-only env vars ($env:TEMP) — use $env:TMPDIR fallback.
+# - Guard "chcp" and other Windows-only commands behind platform checks.
+# - Paths: use Join-Path / Split-Path; never bake \ or / as literal.
+# - [System.IO.Path]::IsPathRooted is platform-aware — C:\foo is NOT
+#   rooted on Linux; test with platform-appropriate absolute paths.
+# ═══════════════════════════════════════════════════════════════════
+
 <#
 .SYNOPSIS
     Pester tests for coworker-daily-memory-generator.ps1.
@@ -20,24 +32,26 @@ $ErrorActionPreference = 'Stop'
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Test fixture management
+# Global scope: Pester 5+ isolates BeforeEach/AfterEach from script-scoped
+# functions, so we use global: scope to make fixtures visible everywhere.
 # ═══════════════════════════════════════════════════════════════════════════════
 
 $script:TestRoot = $null
 
-function Initialize-TestFixture {
+function global:Initialize-TestFixture {
     $script:TestRoot = Join-Path ([System.IO.Path]::GetTempPath()) "DMG_Tests_$(Get-Random -Minimum 1000 -Maximum 9999)"
     New-Item -ItemType Directory -Path $script:TestRoot -Force | Out-Null
     $script:LogDir = Join-Path $script:TestRoot '300logs\2026\06\16'
     New-Item -ItemType Directory -Path $script:LogDir -Force | Out-Null
 }
 
-function Remove-TestFixture {
+function global:Remove-TestFixture {
     if ($script:TestRoot -and (Test-Path $script:TestRoot)) {
         Remove-Item -Path $script:TestRoot -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
 
-function New-TaskLogFile {
+function global:New-TaskLogFile {
     param(
         [string]$Directory,
         [string]$BaseName,
@@ -60,7 +74,7 @@ More execution details...
     return $taskLogPath
 }
 
-function New-AgentLogFile {
+function global:New-AgentLogFile {
     param(
         [string]$Directory,
         [string]$BaseName,
@@ -90,19 +104,19 @@ function New-AgentLogFile {
 # ═══════════════════════════════════════════════════════════════════════════════
 
 # From original daily memory generator lines 47-56
-function Get-CleanPrompt {
+function global:Get-CleanPrompt {
     param($TaskLogPath)
     $content = Get-Content $TaskLogPath -Raw
     if ($content -match "(?s)Prompt:(.*?)\*\*\* MEMORY UPDATE INSTRUCTIONS \*\*\*") {
-        return $Matches[1].Trim()
+        return ($Matches[1].Trim() -replace "`r`n", "`n")
     } elseif ($content -match "(?s)Prompt:(.*)") {
-        return $Matches[1].Trim()
+        return ($Matches[1].Trim() -replace "`r`n", "`n")
     }
     return ""
 }
 
 # From daily memory generator lines 71-151
-function Get-DailyTaskLogs {
+function global:Get-DailyTaskLogs {
     param(
         [string]$LogDirectory,
         [scriptblock]$LogCallback = $null
@@ -183,7 +197,7 @@ function Get-DailyTaskLogs {
 }
 
 # From daily memory generator lines 155-181
-function Split-LogsIntoBatches {
+function global:Split-LogsIntoBatches {
     param(
         [string]$LogContent,
         [int]$BatchSize = 15000
@@ -240,7 +254,7 @@ These instructions should not be included.
 
         $result = Get-CleanPrompt -TaskLogPath $taskFile
         $expected = "This is the extracted prompt content.`nIt spans multiple lines."
-        $result | Should BeExactly $expected
+        $result | Should -BeExactly $expected
     }
 
     It 'extracts entire prompt when no MEMORY marker is present' {
@@ -253,7 +267,7 @@ It still spans multiple lines.
 
         $result = Get-CleanPrompt -TaskLogPath $taskFile
         $expected = "This is a simple prompt without memory markers.`nIt still spans multiple lines."
-        $result | Should BeExactly $expected
+        $result | Should -BeExactly $expected
     }
 
     It 'returns empty string when no Prompt: line exists' {
@@ -265,7 +279,7 @@ Some other content without a prompt line.
 "@ | Set-Content -Path $taskFile -Encoding UTF8
 
         $result = Get-CleanPrompt -TaskLogPath $taskFile
-        $result | Should BeExactly ''
+        $result | Should -BeExactly ''
     }
 
     It 'returns empty string for an empty file' {
@@ -273,7 +287,7 @@ Some other content without a prompt line.
         '' | Set-Content -Path $taskFile -Encoding UTF8
 
         $result = Get-CleanPrompt -TaskLogPath $taskFile
-        $result | Should BeExactly ''
+        $result | Should -BeExactly ''
     }
 
     It 'handles Prompt: at end of file with no content after' {
@@ -281,7 +295,7 @@ Some other content without a prompt line.
         "Prompt:" | Set-Content -Path $taskFile -Encoding UTF8
 
         $result = Get-CleanPrompt -TaskLogPath $taskFile
-        $result | Should BeExactly ''
+        $result | Should -BeExactly ''
     }
 
     It 'handles MEMORY marker immediately after Prompt:' {
@@ -289,7 +303,7 @@ Some other content without a prompt line.
         "Prompt:*** MEMORY UPDATE INSTRUCTIONS ***`nrest" | Set-Content -Path $taskFile -Encoding UTF8
 
         $result = Get-CleanPrompt -TaskLogPath $taskFile
-        $result | Should BeExactly ''
+        $result | Should -BeExactly ''
     }
 
     It 'trims whitespace from extracted prompt' {
@@ -302,7 +316,7 @@ Some trailing content
 
         $result = Get-CleanPrompt -TaskLogPath $taskFile
         $expected = "content with surrounding spaces`n`nSome trailing content"
-        $result | Should BeExactly $expected
+        $result | Should -BeExactly $expected
     }
 }
 
@@ -324,14 +338,14 @@ Describe 'Get-DailyTaskLogs' {
 
         It 'returns empty string when directory has no task log files' {
             $result = Get-DailyTaskLogs -LogDirectory $script:LogDir
-            $result | Should BeExactly ''
+            $result | Should -BeExactly ''
         }
 
         It 'returns empty string when directory only has non-task-log files' {
             $otherFile = Join-Path $script:LogDir 'something.agent.log'
             'content' | Set-Content -Path $otherFile -Encoding UTF8
             $result = Get-DailyTaskLogs -LogDirectory $script:LogDir
-            $result | Should BeExactly ''
+            $result | Should -BeExactly ''
         }
     }
 
@@ -343,7 +357,7 @@ Describe 'Get-DailyTaskLogs' {
                 -PromptContent 'Fix the login flow.'
 
             $result = Get-DailyTaskLogs -LogDirectory $script:LogDir
-            $result | Should Match '=== TASK: 123456-test-task ==='
+            $result | Should -Match '=== TASK: 123456-test-task ==='
         }
 
         It 'includes task title line when present' {
@@ -352,7 +366,7 @@ Describe 'Get-DailyTaskLogs' {
                 -PromptContent 'Fix the login flow.'
 
             $result = Get-DailyTaskLogs -LogDirectory $script:LogDir
-            $result | Should Match 'Task: Fix authentication bug'
+            $result | Should -Match 'Task: Fix authentication bug'
         }
 
         It 'includes PROMPT and RESULT section headers' {
@@ -360,8 +374,8 @@ Describe 'Get-DailyTaskLogs' {
             New-AgentLogFile -Directory $script:LogDir -BaseName '123456-test-task'
 
             $result = Get-DailyTaskLogs -LogDirectory $script:LogDir
-            $result | Should Match '--- PROMPT \(Snippet\) ---'
-            $result | Should Match '--- RESULT \(Snippet\) ---'
+            $result | Should -Match '--- PROMPT \(Snippet\) ---'
+            $result | Should -Match '--- RESULT \(Snippet\) ---'
         }
 
         It 'extracts prompt content before MEMORY marker' {
@@ -370,9 +384,9 @@ Describe 'Get-DailyTaskLogs' {
                 -HasMemoryMarker $true
 
             $result = Get-DailyTaskLogs -LogDirectory $script:LogDir
-            $result | Should Match 'Fix the login flow with proper error handling\.'
+            $result | Should -Match 'Fix the login flow with proper error handling\.'
             $hasMarker = $result -match 'MEMORY UPDATE INSTRUCTIONS'
-            $hasMarker | Should Be $false
+            $hasMarker | Should -Be $false
         }
 
         It 'extracts prompt content when no MEMORY marker exists' {
@@ -380,7 +394,7 @@ Describe 'Get-DailyTaskLogs' {
                 -PromptContent 'Fix the login flow.' -HasMemoryMarker $false
 
             $result = Get-DailyTaskLogs -LogDirectory $script:LogDir
-            $result | Should Match 'Fix the login flow\.'
+            $result | Should -Match 'Fix the login flow\.'
         }
 
         It 'falls back to raw first 500 chars when no Prompt: line exists' {
@@ -392,15 +406,15 @@ Describe 'Get-DailyTaskLogs' {
 
             $result = Get-DailyTaskLogs -LogDirectory $script:LogDir
             # The fallback uses first 500 chars of raw content, which includes the title line
-            $result | Should Match 'Task: No prompt task'
-            $result | Should Match 'A{400}'  # Roughly 500-22=478 As should be there
+            $result | Should -Match 'Task: No prompt task'
+            $result | Should -Match 'A{400}'  # Roughly 500-22=478 As should be there
         }
 
         It 'shows agent log not found when agent log is missing' {
             New-TaskLogFile -Directory $script:LogDir -BaseName '123456-test-task' -PromptContent 'Test.'
 
             $result = Get-DailyTaskLogs -LogDirectory $script:LogDir
-            $result | Should Match '\[Agent log not found\]'
+            $result | Should -Match '\[Agent log not found\]'
         }
 
         It 'includes head and tail of agent output with intermediate skip marker' {
@@ -408,9 +422,9 @@ Describe 'Get-DailyTaskLogs' {
             New-AgentLogFile -Directory $script:LogDir -BaseName '123456-test-task'
 
             $result = Get-DailyTaskLogs -LogDirectory $script:LogDir
-            $result | Should Match 'Starting agent execution'
-            $result | Should Match '\[Intermediate logs skipped\]'
-            $result | Should Match 'Task completed successfully'
+            $result | Should -Match 'Starting agent execution'
+            $result | Should -Match '\[Intermediate logs skipped\]'
+            $result | Should -Match 'Task completed successfully'
         }
     }
 
@@ -434,16 +448,16 @@ Describe 'Get-DailyTaskLogs' {
             $result = Get-DailyTaskLogs -LogDirectory $script:LogDir
 
             # Head: first 10 lines
-            $result | Should Match 'Line 1 - beginning'
-            $result | Should Match 'Line 10'
+            $result | Should -Match 'Line 1 - beginning'
+            $result | Should -Match 'Line 10'
             # Tail: from last tool line onward
-            $result | Should Match '● Read config.json'
-            $result | Should Match 'After tool line 1'
-            $result | Should Match 'After tool line 2'
+            $result | Should -Match '● Read config.json'
+            $result | Should -Match 'After tool line 1'
+            $result | Should -Match 'After tool line 2'
             # Middle should be skipped
-            $result | Should Match '\[Intermediate logs skipped\]'
+            $result | Should -Match '\[Intermediate logs skipped\]'
             $hasMiddle = $result -match 'Line 11 - middle'
-            $hasMiddle | Should Be $false
+            $hasMiddle | Should -Be $false
         }
 
         It 'falls back to last 100 lines when no tool execution markers found' {
@@ -455,8 +469,8 @@ Describe 'Get-DailyTaskLogs' {
             $result = Get-DailyTaskLogs -LogDirectory $script:LogDir
 
             # Should have last 100 lines
-            $result | Should Match 'Log line 120'
-            $result | Should Match 'Log line 21'
+            $result | Should -Match 'Log line 120'
+            $result | Should -Match 'Log line 21'
         }
 
         It 'handles agent log with fewer than 10 total lines' {
@@ -466,8 +480,8 @@ Describe 'Get-DailyTaskLogs' {
                 Set-Content -Path $agentLog -Encoding UTF8
 
             $result = Get-DailyTaskLogs -LogDirectory $script:LogDir
-            $result | Should Match 'Only line 1'
-            $result | Should Match 'Only line 3'
+            $result | Should -Match 'Only line 1'
+            $result | Should -Match 'Only line 3'
         }
     }
 
@@ -479,8 +493,8 @@ Describe 'Get-DailyTaskLogs' {
                 -PromptContent $longPrompt -HasMemoryMarker $false
 
             $result = Get-DailyTaskLogs -LogDirectory $script:LogDir
-            $result | Should Match '\[Truncated\]'
-            $result | Should Match 'P{2000}\.\.\. \[Truncated\]'
+            $result | Should -Match '\[Truncated\]'
+            $result | Should -Match 'P{2000}\.\.\. \[Truncated\]'
         }
 
         It 'does NOT truncate prompt of exactly 2000 characters' {
@@ -493,7 +507,7 @@ Describe 'Get-DailyTaskLogs' {
 
             $result = Get-DailyTaskLogs -LogDirectory $script:LogDir
             $hasTruncated = $result -match '\[Truncated\]'
-            $hasTruncated | Should Be $false
+            $hasTruncated | Should -Be $false
         }
 
         It 'does NOT truncate prompt shorter than 2000 characters' {
@@ -502,7 +516,7 @@ Describe 'Get-DailyTaskLogs' {
 
             $result = Get-DailyTaskLogs -LogDirectory $script:LogDir
             $hasTruncated = $result -match '\[Truncated\]'
-            $hasTruncated | Should Be $false
+            $hasTruncated | Should -Be $false
         }
 
         It 'truncates agent output longer than 20000 characters' {
@@ -512,7 +526,7 @@ Describe 'Get-DailyTaskLogs' {
             $longLine | Set-Content -Path $agentLog -Encoding UTF8
 
             $result = Get-DailyTaskLogs -LogDirectory $script:LogDir
-            $result | Should Match '\[Truncated\]'
+            $result | Should -Match '\[Truncated\]'
         }
     }
 
@@ -533,11 +547,11 @@ Describe 'Get-DailyTaskLogs' {
             $matchC = $result.IndexOf('=== TASK: 150000-task-c ===')
             $matchB = $result.IndexOf('=== TASK: 200000-task-b ===')
 
-            ($matchA -ge 0) | Should Be $true
-            ($matchC -ge 0) | Should Be $true
-            ($matchB -ge 0) | Should Be $true
-            ($matchA -lt $matchC) | Should Be $true
-            ($matchC -lt $matchB) | Should Be $true
+            ($matchA -ge 0) | Should -Be $true
+            ($matchC -ge 0) | Should -Be $true
+            ($matchB -ge 0) | Should -Be $true
+            ($matchA -lt $matchC) | Should -Be $true
+            ($matchC -lt $matchB) | Should -Be $true
         }
 
         It 'handles mix of tasks with and without agent logs' {
@@ -550,10 +564,10 @@ Describe 'Get-DailyTaskLogs' {
 
             $result = Get-DailyTaskLogs -LogDirectory $script:LogDir
 
-            $result | Should Match '=== TASK: task-with-agent ==='
-            $result | Should Match '=== TASK: task-without-agent ==='
-            $result | Should Match 'Starting agent execution'
-            $result | Should Match '\[Agent log not found\]'
+            $result | Should -Match '=== TASK: task-with-agent ==='
+            $result | Should -Match '=== TASK: task-without-agent ==='
+            $result | Should -Match 'Starting agent execution'
+            $result | Should -Match '\[Agent log not found\]'
         }
     }
 }
@@ -568,12 +582,12 @@ Describe 'Split-LogsIntoBatches' {
 
         It 'returns empty array for empty content' {
             $result = Split-LogsIntoBatches -LogContent ''
-            $result.Count | Should Be 0
+            $result.Count | Should -Be 0
         }
 
         It 'returns empty array for whitespace-only content' {
             $result = Split-LogsIntoBatches -LogContent "`n`n   `n"
-            $result.Count | Should Be 0
+            $result.Count | Should -Be 0
         }
     }
 
@@ -583,9 +597,9 @@ Describe 'Split-LogsIntoBatches' {
             $content = "=== TASK: test-task ===`nSome log content here."
             $result = Split-LogsIntoBatches -LogContent $content -BatchSize 1000
 
-            $result.Count | Should Be 1
-            ($result[0] -match 'test-task') | Should Be $true
-            ($result[0] -match 'Some log content here') | Should Be $true
+            $result.Count | Should -Be 1
+            ($result[0] -match 'test-task') | Should -Be $true
+            ($result[0] -match 'Some log content here') | Should -Be $true
         }
 
         It 'keeps a task in one batch even if it exceeds batch size (cannot split mid-task)' {
@@ -593,11 +607,11 @@ Describe 'Split-LogsIntoBatches' {
             $content = "=== TASK: large-task ===`n$taskContent"
             $result = Split-LogsIntoBatches -LogContent $content -BatchSize 1000
 
-            $result.Count | Should Be 1
-            ($result[0] -match 'large-task') | Should Be $true
+            $result.Count | Should -Be 1
+            ($result[0] -match 'large-task') | Should -Be $true
             # Verify the full content is present (length comparison is flaky with
             # newlines across Pester versions, so check that X's are preserved)
-            ($result[0] -match 'X{19000}') | Should Be $true
+            ($result[0] -match 'X{19000}') | Should -Be $true
         }
     }
 
@@ -607,7 +621,7 @@ Describe 'Split-LogsIntoBatches' {
             $content = "=== TASK: task-a ===`nAAA`n`n=== TASK: task-b ===`nBBB`n`n=== TASK: task-c ===`nCCC"
             $result = Split-LogsIntoBatches -LogContent $content -BatchSize 10000
 
-            $result.Count | Should Be 1
+            $result.Count | Should -Be 1
         }
 
         It 'splits into multiple batches when combined size exceeds limit' {
@@ -623,7 +637,7 @@ Describe 'Split-LogsIntoBatches' {
             $result = Split-LogsIntoBatches -LogContent $content -BatchSize 15000
 
             # 4 tasks * ~4925 chars each = ~19700 chars -> should be 2+ batches
-            ($result.Count -ge 2) | Should Be $true
+            ($result.Count -ge 2) | Should -Be $true
         }
 
         It 'preserves all task content across batch boundaries' {
@@ -631,12 +645,12 @@ Describe 'Split-LogsIntoBatches' {
             $result = Split-LogsIntoBatches -LogContent $content -BatchSize 50
 
             $reassembled = $result -join ''
-            $reassembled | Should Match '=== TASK: task-a ==='
-            $reassembled | Should Match '=== TASK: task-b ==='
-            $reassembled | Should Match '=== TASK: task-c ==='
-            $reassembled | Should Match 'Content for task A'
-            $reassembled | Should Match 'Content for task B'
-            $reassembled | Should Match 'Content for task C'
+            $reassembled | Should -Match '=== TASK: task-a ==='
+            $reassembled | Should -Match '=== TASK: task-b ==='
+            $reassembled | Should -Match '=== TASK: task-c ==='
+            $reassembled | Should -Match 'Content for task A'
+            $reassembled | Should -Match 'Content for task B'
+            $reassembled | Should -Match 'Content for task C'
         }
 
         It 'each batch starts with === TASK: prefix' {
@@ -653,7 +667,7 @@ Describe 'Split-LogsIntoBatches' {
             foreach ($batch in $result) {
                 if ($batch -notmatch '^=== TASK: ') { $allStartCorrect = $false }
             }
-            $allStartCorrect | Should Be $true
+            $allStartCorrect | Should -Be $true
         }
     }
 
@@ -667,16 +681,16 @@ Describe 'Split-LogsIntoBatches' {
             $content = $first + "`n`n" + $second
             $result = Split-LogsIntoBatches -LogContent $content -BatchSize 200
 
-            $result.Count | Should Be 2
-            ($result[0] -match 'task-a') | Should Be $true
-            ($result[0] -notmatch 'task-b') | Should Be $true
-            ($result[1] -match 'task-b') | Should Be $true
+            $result.Count | Should -Be 2
+            ($result[0] -match 'task-a') | Should -Be $true
+            ($result[0] -notmatch 'task-b') | Should -Be $true
+            ($result[1] -match 'task-b') | Should -Be $true
         }
 
         It 'uses default batch size of 15000 when not specified' {
             $smallContent = "=== TASK: task ===`nSmall content."
             $result = Split-LogsIntoBatches -LogContent $smallContent
-            $result.Count | Should Be 1
+            $result.Count | Should -Be 1
         }
 
         It 'fits tasks at exact boundary (current + task == BatchSize)' {
@@ -686,7 +700,7 @@ Describe 'Split-LogsIntoBatches' {
             $content = $firstTask + $secondTask
             $result = Split-LogsIntoBatches -LogContent $content -BatchSize 200
 
-            $result.Count | Should Be 1
+            $result.Count | Should -Be 1
         }
     }
 
@@ -697,11 +711,11 @@ Describe 'Split-LogsIntoBatches' {
             $result = Split-LogsIntoBatches -LogContent $content -BatchSize 10000
 
             # Verify each line is preserved in the batch
-            ($result[0].Contains('Line1')) | Should Be $true
-            ($result[0].Contains('Line2')) | Should Be $true
-            ($result[0].Contains('Line3')) | Should Be $true
+            ($result[0].Contains('Line1')) | Should -Be $true
+            ($result[0].Contains('Line2')) | Should -Be $true
+            ($result[0].Contains('Line3')) | Should -Be $true
             # Verify the batch starts correctly
-            ($result[0].StartsWith('=== TASK: task-a ===')) | Should Be $true
+            ($result[0].StartsWith('=== TASK: task-a ===')) | Should -Be $true
         }
     }
 }
@@ -720,17 +734,17 @@ Describe 'Date parsing and path construction' {
         $day   = $date.ToString('dd')
         $compactDate = $date.ToString('yyyyMMdd')
 
-        $year  | Should Be '2026'
-        $month | Should Be '06'
-        $day   | Should Be '16'
-        $compactDate | Should Be '20260616'
+        $year  | Should -Be '2026'
+        $month | Should -Be '06'
+        $day   | Should -Be '16'
+        $compactDate | Should -Be '20260616'
     }
 
     It 'correctly distinguishes MM (month) from mm (minutes) - regression test for month formatting bug' {
         $date = Get-Date '2026-01-02'
         $monthMM = $date.ToString('MM')
 
-        $monthMM | Should Be '01'
+        $monthMM | Should -Be '01'
         # v1 bug on line 28 was: $month = $parsedDate.ToString("mm") — this would
         # return the current minute, NOT the month "01"
     }
@@ -740,23 +754,23 @@ Describe 'Date parsing and path construction' {
         $longFile  = "MEMORY.${compactDate}.long.md"
         $shortFile = "MEMORY.${compactDate}.md"
 
-        $longFile  | Should Be 'MEMORY.20260616.long.md'
-        $shortFile | Should Be 'MEMORY.20260616.md'
+        $longFile  | Should -Be 'MEMORY.20260616.long.md'
+        $shortFile | Should -Be 'MEMORY.20260616.md'
     }
 
     It 'handles date format YYYY-MM-DD input parameter' {
         $inputDate = '2026-12-31'
         $parsed = Get-Date $inputDate
 
-        $parsed.ToString('yyyy-MM-dd') | Should Be '2026-12-31'
-        $parsed.ToString('yyyyMMdd')   | Should Be '20261231'
+        $parsed.ToString('yyyy-MM-dd') | Should -Be '2026-12-31'
+        $parsed.ToString('yyyyMMdd')   | Should -Be '20261231'
     }
 
     It 'handles single-digit month and day with zero-padding' {
         $date = Get-Date '2026-01-05'
-        $date.ToString('MM') | Should Be '01'
-        $date.ToString('dd') | Should Be '05'
-        $date.ToString('yyyyMMdd') | Should Be '20260105'
+        $date.ToString('MM') | Should -Be '01'
+        $date.ToString('dd') | Should -Be '05'
+        $date.ToString('yyyyMMdd') | Should -Be '20260105'
     }
 }
 
@@ -769,27 +783,27 @@ Describe 'Agent log tool detection' {
     It 'v1 pattern matches Read, Edit, Run tools' {
         $v1Pattern = '^● (Read|Edit|Run)'
 
-        ('● Read config.json'    -match $v1Pattern) | Should Be $true
-        ('● Edit file.txt'      -match $v1Pattern) | Should Be $true
-        ('● Run tests'          -match $v1Pattern) | Should Be $true
-        ('● Write output'       -match $v1Pattern) | Should Be $false
-        ('● Create file'        -match $v1Pattern) | Should Be $false
-        ('● Bash command'       -match $v1Pattern) | Should Be $false
-        ('  ● Read (indented)'  -match $v1Pattern) | Should Be $false
-        ('Normal log line'      -match $v1Pattern) | Should Be $false
+        ('● Read config.json'    -match $v1Pattern) | Should -Be $true
+        ('● Edit file.txt'      -match $v1Pattern) | Should -Be $true
+        ('● Run tests'          -match $v1Pattern) | Should -Be $true
+        ('● Write output'       -match $v1Pattern) | Should -Be $false
+        ('● Create file'        -match $v1Pattern) | Should -Be $false
+        ('● Bash command'       -match $v1Pattern) | Should -Be $false
+        ('  ● Read (indented)'  -match $v1Pattern) | Should -Be $false
+        ('Normal log line'      -match $v1Pattern) | Should -Be $false
     }
 
     It 'v2 pattern matches Read, Edit, Write, Run, Create, Bash tools' {
         $v2Pattern = '^● (Read|Edit|Write|Run|Create|Bash)'
 
-        ('● Read config.json'   -match $v2Pattern) | Should Be $true
-        ('● Edit file.txt'      -match $v2Pattern) | Should Be $true
-        ('● Write output'       -match $v2Pattern) | Should Be $true
-        ('● Run tests'          -match $v2Pattern) | Should Be $true
-        ('● Create file'        -match $v2Pattern) | Should Be $true
-        ('● Bash command'       -match $v2Pattern) | Should Be $true
-        ('  ● Read (indented)'  -match $v2Pattern) | Should Be $false
-        ('Normal log line'      -match $v2Pattern) | Should Be $false
+        ('● Read config.json'   -match $v2Pattern) | Should -Be $true
+        ('● Edit file.txt'      -match $v2Pattern) | Should -Be $true
+        ('● Write output'       -match $v2Pattern) | Should -Be $true
+        ('● Run tests'          -match $v2Pattern) | Should -Be $true
+        ('● Create file'        -match $v2Pattern) | Should -Be $true
+        ('● Bash command'       -match $v2Pattern) | Should -Be $true
+        ('  ● Read (indented)'  -match $v2Pattern) | Should -Be $false
+        ('Normal log line'      -match $v2Pattern) | Should -Be $false
     }
 
     It 'finds the LAST tool in agent output' {
@@ -811,8 +825,8 @@ Describe 'Agent log tool detection' {
             }
         }
 
-        $lastToolIndex | Should Be 5
-        $lines[$lastToolIndex] | Should BeExactly '● Write output.txt'
+        $lastToolIndex | Should -Be 5
+        $lines[$lastToolIndex] | Should -BeExactly '● Write output.txt'
     }
 
     It 'returns -1 when no tool markers exist' {
@@ -826,7 +840,7 @@ Describe 'Agent log tool detection' {
             }
         }
 
-        $lastToolIndex | Should Be -1
+        $lastToolIndex | Should -Be -1
     }
 }
 
@@ -845,8 +859,8 @@ Describe 'Content truncation limits' {
         } else { $longText }
 
         $expectedLen = $promptLimit + '... [Truncated]'.Length
-        $truncated.Length | Should Be $expectedLen
-        ($truncated -match '\[Truncated\]$') | Should Be $true
+        $truncated.Length | Should -Be $expectedLen
+        ($truncated -match '\[Truncated\]$') | Should -Be $true
     }
 
     It 'agent output truncation limit is 20000 characters' {
@@ -858,17 +872,17 @@ Describe 'Content truncation limits' {
         } else { $longText }
 
         $expectedLen = $outputLimit + '... [Truncated]'.Length
-        $truncated.Length | Should Be $expectedLen
+        $truncated.Length | Should -Be $expectedLen
     }
 
     It 'default batch size is 15000 characters' {
         $defaultBatchSize = 15000
-        $defaultBatchSize | Should Be 15000
+        $defaultBatchSize | Should -Be 15000
     }
 
     It 'v2 short memory limit is 3000 characters' {
         $shortMemoryLimit = 3000
-        $shortMemoryLimit | Should Be 3000
+        $shortMemoryLimit | Should -Be 3000
     }
 }
 
@@ -886,17 +900,17 @@ Describe 'Prompt construction' {
             'Root Cause Analysis',
             'Process Improvement Insight'
         )
-        $sections.Count | Should Be 5
+        $sections.Count | Should -Be 5
     }
 
     It 'includes absolute path instructions' {
         $keywords = @('ABSOLUTE path', 'absolute path', 'ABSOLUTE PATH')
-        ($keywords.Count -gt 0) | Should Be $true
+        ($keywords.Count -gt 0) | Should -Be $true
     }
 
     It 'includes English-only constraint' {
         $english = 'Use English only.'
-        ($english.Length -gt 0) | Should Be $true
+        ($english.Length -gt 0) | Should -Be $true
     }
 }
 
@@ -909,25 +923,25 @@ Describe 'Error handling behavior' {
     It 'first batch failure should be fatal (exit 1 in v2)' {
         $isFirstBatch = $true
         $failureIsFatal = $isFirstBatch
-        $failureIsFatal | Should Be $true
+        $failureIsFatal | Should -Be $true
     }
 
     It 'subsequent batch failure should warn and continue (v2)' {
         $isFirstBatch = $false
         $failureIsFatal = $isFirstBatch
-        $failureIsFatal | Should Be $false
+        $failureIsFatal | Should -Be $false
     }
 
     It 'should exit 0 when no logs are found' {
         $noLogsFound = [string]::IsNullOrWhiteSpace('')
-        $noLogsFound | Should Be $true
+        $noLogsFound | Should -Be $true
     }
 
     It 'should exit 1 when both output files are missing after processing' {
         $bothMissing = $false -and $false  # neither long nor short exists
-        $bothMissing | Should Be $false
+        $bothMissing | Should -Be $false
         $shouldFail = (-not $false -and -not $false)
-        $shouldFail | Should Be $true
+        $shouldFail | Should -Be $true
     }
 
     It 'should succeed when at least one output file exists' {
@@ -936,15 +950,15 @@ Describe 'Error handling behavior' {
 
         # long exists, short missing → should succeed
         $failWhenLongMissing = (-not $true -and -not $false)   # $false -and $true = $false
-        $failWhenLongMissing | Should Be $false
+        $failWhenLongMissing | Should -Be $false
 
         # both exist → should succeed
         $failWhenBothExist = (-not $true -and -not $true)       # $false -and $false = $false
-        $failWhenBothExist | Should Be $false
+        $failWhenBothExist | Should -Be $false
 
         # both missing → should fail
         $failWhenBothMissing = (-not $false -and -not $false)    # $true -and $true = $true
-        $failWhenBothMissing | Should Be $true
+        $failWhenBothMissing | Should -Be $true
     }
 }
 
@@ -960,8 +974,8 @@ Describe 'v1 vs v2 differences' {
         $v1Files = @("MEMORY.${compactDate}.md")
         $v2Files = @("MEMORY.${compactDate}.long.md", "MEMORY.${compactDate}.md")
 
-        $v1Files.Count | Should Be 1
-        $v2Files.Count | Should Be 2
+        $v1Files.Count | Should -Be 1
+        $v2Files.Count | Should -Be 2
     }
 
     It 'v2 tool pattern is a superset of v1 tool pattern' {
@@ -972,8 +986,8 @@ Describe 'v1 vs v2 differences' {
         foreach ($tool in $v1Tools) {
             if ($tool -notin $v2Tools) { $allInV2 = $false }
         }
-        $allInV2 | Should Be $true
-        ($v2Tools.Count -gt $v1Tools.Count) | Should Be $true
+        $allInV2 | Should -Be $true
+        ($v2Tools.Count -gt $v1Tools.Count) | Should -Be $true
     }
 
     It 'both scripts split by the same === TASK: delimiter' {
@@ -981,7 +995,7 @@ Describe 'v1 vs v2 differences' {
         $sampleContent = "=== TASK: task-a ===`ncontent`n=== TASK: task-b ===`nmore"
         $tasks = $sampleContent -split $delimiter | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
 
-        $tasks.Count | Should Be 2
+        $tasks.Count | Should -Be 2
     }
 }
 
@@ -1018,27 +1032,27 @@ Describe 'Integration - Full pipeline' {
 
         # Verify all tasks are present
         foreach ($task in $tasks) {
-            ($logContent -match "=== TASK: $($task.Name) ===") | Should Be $true
-            ($logContent -match $task.Title) | Should Be $true
+            ($logContent -match "=== TASK: $($task.Name) ===") | Should -Be $true
+            ($logContent -match $task.Title) | Should -Be $true
         }
 
         # Verify PROMPT and RESULT sections exist for each task
         $promptCount = ([regex]::Matches($logContent, '--- PROMPT \(Snippet\) ---')).Count
         $resultCount = ([regex]::Matches($logContent, '--- RESULT \(Snippet\) ---')).Count
 
-        $promptCount | Should Be $tasks.Count
-        $resultCount | Should Be $tasks.Count
+        $promptCount | Should -Be $tasks.Count
+        $resultCount | Should -Be $tasks.Count
 
         # Split into batches
         $batches = Split-LogsIntoBatches -LogContent $logContent -BatchSize 15000
 
         # Verify batching
-        ($batches.Count -ge 1) | Should Be $true
+        ($batches.Count -ge 1) | Should -Be $true
 
         # Verify all tasks are preserved across batches
         $reassembled = $batches -join ''
         foreach ($task in $tasks) {
-            ($reassembled -match "=== TASK: $($task.Name) ===") | Should Be $true
+            ($reassembled -match "=== TASK: $($task.Name) ===") | Should -Be $true
         }
     }
 
@@ -1056,18 +1070,18 @@ Describe 'Integration - Full pipeline' {
 
         # Should have 50 TASK headers
         $taskCount = ([regex]::Matches($logContent, '=== TASK:')).Count
-        $taskCount | Should Be 50
+        $taskCount | Should -Be 50
 
         # Split into small batches
         $batches = Split-LogsIntoBatches -LogContent $logContent -BatchSize 5000
-        ($batches.Count -gt 1) | Should Be $true
+        ($batches.Count -gt 1) | Should -Be $true
 
         # Every task should be in exactly one batch
         $allTasksInBatches = 0
         foreach ($batch in $batches) {
             $allTasksInBatches += ([regex]::Matches($batch, '=== TASK:')).Count
         }
-        $allTasksInBatches | Should Be 50
+        $allTasksInBatches | Should -Be 50
     }
 
     It 'handles task logs with special characters in content' {
@@ -1078,11 +1092,11 @@ Describe 'Integration - Full pipeline' {
 
         $logContent = Get-DailyTaskLogs -LogDirectory $script:LogDir
 
-        ($logContent -match '\$pecial') | Should Be $true
-        ($logContent -match '& <characters>') | Should Be $true
-        ($logContent -match '\$dollar') | Should Be $true
-        ($logContent -match '& ampersand') | Should Be $true
-        ($logContent -match '<angle>') | Should Be $true
+        ($logContent -match '\$pecial') | Should -Be $true
+        ($logContent -match '& <characters>') | Should -Be $true
+        ($logContent -match '\$dollar') | Should -Be $true
+        ($logContent -match '& ampersand') | Should -Be $true
+        ($logContent -match '<angle>') | Should -Be $true
     }
 
     It 'handles tasks with long prompts requiring truncation' {
@@ -1092,8 +1106,8 @@ Describe 'Integration - Full pipeline' {
 
         $logContent = Get-DailyTaskLogs -LogDirectory $script:LogDir
 
-        ($logContent -match '\[Truncated\]') | Should Be $true
-        ($logContent -match 'L{2000}\.\.\. \[Truncated\]') | Should Be $true
+        ($logContent -match '\[Truncated\]') | Should -Be $true
+        ($logContent -match 'L{2000}\.\.\. \[Truncated\]') | Should -Be $true
     }
 }
 

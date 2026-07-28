@@ -1,6 +1,6 @@
 [package]
 name = "browser4-cli"
-version = "0.1.32"
+version = "4.12.0"
 edition = "2021"
 autotests = false
 description = "Browser4 CLI — control a Browser4 server from the command line"
@@ -17,11 +17,11 @@ path = "src/lib.rs"
 
 [[test]]
 name = "e2e"
-path = "tests/e2e.rs"
+path = "tests/e2e/mod.rs"
 harness = false
 
 [dependencies]
-reqwest = { version = "0.13.2", default-features = false, features = ["blocking", "json", "rustls"] }
+reqwest = { version = "0.13.2", default-features = false, features = ["blocking", "json", "rustls", "multipart"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1.13.1", features = ["macros", "rt", "rt-multi-thread", "signal", "time"] }

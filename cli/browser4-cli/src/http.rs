@@ -190,39 +190,6 @@ fn extract_mcp_text_payload(data: &Value) -> Option<String> {
     None
 }
 
-fn extract_http_text_payload(response_text: &str) -> String {
-    let trimmed = response_text.trim();
-    if trimmed.is_empty() {
-        return String::new();
-    }
-
-    match serde_json::from_str::<Value>(trimmed) {
-        Ok(Value::String(text)) => text,
-        Ok(value) => value.to_string(),
-        Err(_) => trimmed.to_string(),
-    }
-}
-
-fn build_endpoint_url(base_url: &str, path: &str) -> String {
-    format!(
-        "{}/{}",
-        base_url.trim_end_matches('/'),
-        path.trim_start_matches('/')
-    )
-}
-
-fn format_http_error(status: reqwest::StatusCode, response_text: &str) -> String {
-    let message = response_text.trim();
-    if message.is_empty() {
-        format!(
-            "HTTP request failed with status {} and an empty response body.",
-            status
-        )
-    } else {
-        format!("HTTP request failed with status {}: {}", status, message)
-    }
-}
-
 fn summarize_mcp_request(
     tool: &str,
     endpoint: &str,
@@ -280,25 +247,6 @@ fn format_mcp_transport_error(
     } else {
         format!("HTTP request failed {context}: {error}")
     }
-}
-
-async fn send_rest_request(request: reqwest::RequestBuilder) -> Result<String, String> {
-    let response = request
-        .send()
-        .await
-        .map_err(|e| format!("HTTP request failed: {e}"))?;
-
-    let status = response.status();
-    let response_text = response
-        .text()
-        .await
-        .map_err(|e| format!("Failed to read response body: {e}"))?;
-
-    if !status.is_success() {
-        return Err(format_http_error(status, &response_text));
-    }
-
-    Ok(extract_http_text_payload(&response_text))
 }
 
 /// Call an MCP tool on the Browser4 server.
@@ -444,6 +392,14 @@ async fn call_tool_with_timeout(
     let text = extract_mcp_text_payload(&data)
         .ok_or_else(|| "MCP response did not contain a readable payload.".to_string())?;
 
+    // Defensive check: some backend errors may arrive as text content without
+    // `isError: true` (e.g. error messages from legacy tool executors).  Treat
+    // a leading "ERROR:" prefix as a hard error so the CLI exits non-zero and
+    // scripts can detect failure reliably.
+    if text.starts_with("ERROR:") {
+        return Err(text.trim_start_matches("ERROR: ").to_string());
+    }
+
     let pagination = data
         .get("_pagination")
         .and_then(ServerPaginationMeta::from_json);
@@ -581,13 +537,22 @@ pub async fn submit_swarm_query(
 }
 
 /// Read swarm task status through `SwarmController.getStatus(id)`.
+///
+/// Uses a short timeout (5 s) so that a single unreachable task does not block
+/// the caller for the client-wide default of 30 s, which matters most in loops
+/// like `swarm list` that query many tasks sequentially.
 pub async fn get_swarm_status(
     client: &Client,
     base_url: &str,
     task_id: &str,
 ) -> Result<String, String> {
     let url = build_endpoint_url(base_url, &format!("/api/swarm/{task_id}/status"));
-    send_rest_request(client.get(url)).await
+    send_rest_request(
+        client
+            .get(url)
+            .timeout(std::time::Duration::from_secs(5)),
+    )
+    .await
 }
 
 /// Read swarm task result through `SwarmController.getResult(id)`.
@@ -600,48 +565,111 @@ pub async fn get_swarm_result(
     send_rest_request(client.get(url)).await
 }
 
-pub fn crawl_request_timeout() -> std::time::Duration {
-    std::time::Duration::from_secs(timeout_secs_from_env(
-        CRAWL_REQUEST_TIMEOUT_ENV,
-        CRAWL_REQUEST_TIMEOUT_SECS,
-    ))
+
+fn build_endpoint_url(base_url: &str, path: &str) -> String {
+    format!("{}{}", base_url.trim_end_matches('/'), path)
 }
 
-/// Submit a crawl task through `CrawlController.startCrawl(request)`.
+fn format_http_error(status: reqwest::StatusCode, response_text: &str) -> String {
+    let message = response_text.trim();
+    if message.is_empty() {
+        format!(
+            "HTTP request failed with status {} and an empty response body.",
+            status
+        )
+    } else {
+        format!("HTTP request failed with status {}: {}", status, message)
+    }
+}
+
+async fn send_rest_request(
+    request: reqwest::RequestBuilder,
+) -> Result<String, String> {
+    let response = request
+        .send()
+        .await
+        .map_err(|e| format!("HTTP request failed: {e}"))?;
+
+    let status = response.status();
+    let response_text = response
+        .text()
+        .await
+        .map_err(|e| format!("Failed to read response body: {e}"))?;
+
+    if !status.is_success() {
+        return Err(format_http_error(status, &response_text));
+    }
+
+    Ok(response_text)
+}
+
+// ---------------------------------------------------------------------------
+// Plugin REST API helpers
+// ---------------------------------------------------------------------------
+
+/// List all installed plugins via `GET /api/plugins`.
+pub async fn list_plugins(client: &Client, base_url: &str) -> Result<String, String> {
+    let url = build_endpoint_url(base_url, "/api/plugins");
+    send_rest_request(client.get(url)).await
+}
+
+/// Get a single plugin by name via `GET /api/plugins/{name}`.
+pub async fn get_plugin(client: &Client, base_url: &str, name: &str) -> Result<String, String> {
+    let url = build_endpoint_url(base_url, &format!("/api/plugins/{}", name));
+    send_rest_request(client.get(url)).await
+}
+
+/// Install a plugin JAR via `POST /api/plugins/install` (multipart upload).
+pub async fn install_plugin(
+    client: &Client,
+    base_url: &str,
+    file_path: &str,
+    replace: bool,
+) -> Result<String, String> {
+    let url = build_endpoint_url(base_url, "/api/plugins/install");
+    let file_bytes = std::fs::read(file_path)
+        .map_err(|e| format!("Failed to read plugin file '{}': {}", file_path, e))?;
+    let file_name = std::path::Path::new(file_path)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("plugin.jar");
+
+    let part = reqwest::multipart::Part::bytes(file_bytes)
+        .file_name(file_name.to_string())
+        .mime_str("application/java-archive")
+        .map_err(|e| format!("Failed to set MIME type: {}", e))?;
+
+    let form = reqwest::multipart::Form::new()
+        .part("file", part)
+        .text("replace", replace.to_string());
+
+    send_rest_request(client.post(url).multipart(form)).await
+}
+
+/// Remove a plugin by name via `DELETE /api/plugins/{name}`.
+pub async fn remove_plugin(
+    client: &Client,
+    base_url: &str,
+    name: &str,
+) -> Result<String, String> {
+    let url = build_endpoint_url(base_url, &format!("/api/plugins/{}", name));
+    send_rest_request(client.delete(url)).await
+}
+
+/// Submit a crawl task via the MCP `crawl_submit` tool.
 pub async fn submit_crawl(
     client: &Client,
     base_url: &str,
     params: &Value,
 ) -> Result<String, String> {
-    let url = build_endpoint_url(base_url, "/api/crawl");
-    send_rest_request(
-        client
-            .post(url)
-            .header("Content-Type", "application/json; charset=utf-8")
-            .json(params),
-    )
-    .await
+    call_tool(client, base_url, "crawl_submit", params.clone()).await
 }
 
-/// Read crawl task status through `CrawlController.getStatus(id)`.
-#[allow(dead_code)]
-pub async fn get_crawl_status(
-    client: &Client,
-    base_url: &str,
-    task_id: &str,
-) -> Result<String, String> {
-    let url = build_endpoint_url(base_url, &format!("/api/crawl/{task_id}/status"));
-    send_rest_request(client.get(url)).await
-}
-
-/// Read crawl task result through `CrawlController.getResult(id)`.
-pub async fn get_crawl_result(
-    client: &Client,
-    base_url: &str,
-    task_id: &str,
-) -> Result<String, String> {
-    let url = build_endpoint_url(base_url, &format!("/api/crawl/{task_id}/result"));
-    send_rest_request(client.get(url)).await
+pub fn crawl_request_timeout() -> std::time::Duration {
+    std::time::Duration::from_secs(timeout_secs_from_env(
+        CRAWL_REQUEST_TIMEOUT_ENV,
+        CRAWL_REQUEST_TIMEOUT_SECS,
+    ))
 }
 
 /// Cancel a running crawl task via `CrawlController.cancelCrawl(id)`.
@@ -661,6 +689,35 @@ pub async fn clear_crawls(
 ) -> Result<String, String> {
     let url = build_endpoint_url(base_url, "/api/crawl/clear");
     send_rest_request(client.post(url)).await
+}
+
+/// Clear ALL crawl tasks (including active ones) via `CrawlController.clearAllCrawls()`.
+pub async fn clear_all_crawls(
+    client: &Client,
+    base_url: &str,
+) -> Result<String, String> {
+    let url = build_endpoint_url(base_url, "/api/crawl/clear-all");
+    send_rest_request(client.post(url)).await
+}
+
+/// Get the status of a crawl task via `CrawlController.getStatus(id)`.
+pub async fn get_crawl_status(
+    client: &Client,
+    base_url: &str,
+    task_id: &str,
+) -> Result<String, String> {
+    let url = build_endpoint_url(base_url, &format!("/api/crawl/{task_id}/status"));
+    send_rest_request(client.get(url)).await
+}
+
+/// Get the result of a crawl task via `CrawlController.getResult(id)`.
+pub async fn get_crawl_result(
+    client: &Client,
+    base_url: &str,
+    task_id: &str,
+) -> Result<String, String> {
+    let url = build_endpoint_url(base_url, &format!("/api/crawl/{task_id}/result"));
+    send_rest_request(client.get(url)).await
 }
 
 /// Get the status of a command by its task ID via the MCP endpoint.
@@ -897,43 +954,6 @@ mod tests {
         assert_eq!(
             extract_mcp_text_payload(&payload).as_deref(),
             Some("{\"results\":[],\"sessionId\":\"s-1\"}")
-        );
-    }
-
-    #[test]
-    fn test_extract_http_text_payload_unquotes_json_string() {
-        assert_eq!(
-            extract_http_text_payload("\"swarm-task-1\""),
-            "swarm-task-1"
-        );
-    }
-
-    #[test]
-    fn test_extract_http_text_payload_preserves_plain_text() {
-        assert_eq!(extract_http_text_payload("swarm-task-1\n"), "swarm-task-1");
-    }
-
-    #[test]
-    fn test_extract_http_text_payload_minifies_json_object() {
-        let payload = r#"{
-            "id": "swarm-task-1",
-            "isDone": false
-        }"#;
-        assert_eq!(
-            extract_http_text_payload(payload),
-            "{\"id\":\"swarm-task-1\",\"isDone\":false}"
-        );
-    }
-
-    #[test]
-    fn test_format_http_error_handles_empty_and_non_empty_bodies() {
-        assert_eq!(
-            format_http_error(reqwest::StatusCode::NOT_FOUND, ""),
-            "HTTP request failed with status 404 Not Found and an empty response body."
-        );
-        assert_eq!(
-            format_http_error(reqwest::StatusCode::BAD_REQUEST, "bad request"),
-            "HTTP request failed with status 400 Bad Request: bad request"
         );
     }
 
@@ -1238,6 +1258,189 @@ mod tests {
         assert!(
             error.contains("url=https://www.amazon.com/"),
             "Expected URL diagnostics, got: {error}"
+        );
+    }
+
+    // -------------------------------------------------------------------
+    // build_endpoint_url tests (used by crawl REST endpoints)
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn build_endpoint_url_no_trailing_slash() {
+        let url = build_endpoint_url("http://localhost:8182", "/api/crawl/task-1/status");
+        assert_eq!(url, "http://localhost:8182/api/crawl/task-1/status");
+    }
+
+    #[test]
+    fn build_endpoint_url_with_trailing_slash() {
+        let url = build_endpoint_url("http://localhost:8182/", "/api/crawl/task-1/result");
+        assert_eq!(url, "http://localhost:8182/api/crawl/task-1/result");
+    }
+
+    #[test]
+    fn build_endpoint_url_multiple_slashes() {
+        let url = build_endpoint_url("http://localhost:8182///", "/api/crawl/clear");
+        assert_eq!(url, "http://localhost:8182/api/crawl/clear");
+    }
+
+    // -------------------------------------------------------------------
+    // format_http_error tests
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn format_http_error_with_body() {
+        let status = reqwest::StatusCode::INTERNAL_SERVER_ERROR;
+        let msg = format_http_error(status, "something broke");
+        assert!(msg.contains("500"), "should contain status code");
+        assert!(msg.contains("something broke"), "should contain message");
+    }
+
+    #[test]
+    fn format_http_error_empty_body() {
+        let status = reqwest::StatusCode::NOT_FOUND;
+        let msg = format_http_error(status, "");
+        assert!(msg.contains("404"), "should contain status code");
+        assert!(msg.contains("empty response body"), "should mention empty body");
+    }
+
+    // -------------------------------------------------------------------
+    // crawl timeout constants
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn crawl_request_timeout_uses_correct_env_var_name() {
+        // Verify the constant is exactly what the docs tell users
+        assert_eq!(CRAWL_REQUEST_TIMEOUT_ENV, "BROWSER4_CLI_CRAWL_TIMEOUT_SECS");
+    }
+
+    #[test]
+    fn crawl_request_timeout_default_10_minutes() {
+        assert_eq!(CRAWL_REQUEST_TIMEOUT_SECS, 600);
+    }
+
+    // -------------------------------------------------------------------
+    // swarm REST endpoint tests
+    // -------------------------------------------------------------------
+
+    /// Spawn a TCP server that doubles as a lightweight swarm REST mock.
+    /// Returns the base URL to use.
+    fn spawn_swarm_mock_server(expected_path: &'static str, response_body: &'static str) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind swarm mock server");
+        let addr = listener.local_addr().expect("read swarm mock server addr");
+
+        thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept swarm test connection");
+            stream
+                .set_read_timeout(Some(std::time::Duration::from_secs(2)))
+                .ok();
+
+            let mut buffer = [0_u8; 8192];
+            let n = stream.read(&mut buffer).unwrap_or(0);
+            let request = String::from_utf8_lossy(&buffer[..n]);
+
+            // Only respond if the request targets the expected path
+            if request.contains(expected_path) {
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    response_body.len(),
+                    response_body
+                );
+                let _ = stream.write_all(response.as_bytes());
+                let _ = stream.flush();
+            } else {
+                // Return 404 for unexpected paths
+                let body = r#"{"error":"not found"}"#;
+                let response = format!(
+                    "HTTP/1.1 404 Not Found\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = stream.write_all(response.as_bytes());
+                let _ = stream.flush();
+            }
+        });
+
+        format!("http://{}", addr)
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn test_submit_swarm_payload_returns_task_id() {
+        let base_url = spawn_swarm_mock_server("/api/swarm/submit", r#""swarm-task-42""#);
+        let client = make_client();
+
+        let result = submit_swarm_payload(&client, &base_url, "https://example.com -parse")
+            .await
+            .expect("submit_swarm_payload should succeed");
+
+        assert_eq!(result, r#""swarm-task-42""#);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn test_submit_swarm_query_returns_task_id() {
+        let base_url = spawn_swarm_mock_server("/api/swarm/query", r#""swarm-task-99""#);
+        let client = make_client();
+
+        let result = submit_swarm_query(
+            &client,
+            &base_url,
+            json!({"url": "https://example.com", "args": "-parse", "query": "SELECT 1"}),
+        )
+        .await
+        .expect("submit_swarm_query should succeed");
+
+        assert_eq!(result, r#""swarm-task-99""#);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn test_get_swarm_status_returns_status_json() {
+        let status_json = r#"{"id":"swarm-task-1","statusCode":102,"isDone":false,"status":"Processing"}"#;
+        let base_url = spawn_swarm_mock_server("/api/swarm/swarm-task-1/status", status_json);
+        let client = make_client();
+
+        let result = get_swarm_status(&client, &base_url, "swarm-task-1")
+            .await
+            .expect("get_swarm_status should succeed");
+
+        let parsed: Value = serde_json::from_str(&result).expect("should be valid JSON");
+        assert_eq!(parsed["id"], "swarm-task-1");
+        assert_eq!(parsed["isDone"], false);
+        assert_eq!(parsed["status"], "Processing");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn test_get_swarm_result_returns_result_json() {
+        let result_json = r#"{"id":"swarm-task-7","statusCode":200,"isDone":true,"resultSet":[{"url":"https://example.com"}],"status":"OK"}"#;
+        let base_url = spawn_swarm_mock_server("/api/swarm/swarm-task-7/result", result_json);
+        let client = make_client();
+
+        let result = get_swarm_result(&client, &base_url, "swarm-task-7")
+            .await
+            .expect("get_swarm_result should succeed");
+
+        let parsed: Value = serde_json::from_str(&result).expect("should be valid JSON");
+        assert_eq!(parsed["id"], "swarm-task-7");
+        assert_eq!(parsed["isDone"], true);
+        assert!(
+            parsed["resultSet"].as_array().is_some_and(|a| a.len() == 1),
+            "expected resultSet with 1 entry, got: {:?}",
+            parsed["resultSet"]
+        );
+    }
+
+    #[test]
+    fn test_swarm_endpoint_url_construction() {
+        // Verify that build_endpoint_url handles the swarm API paths correctly
+        assert_eq!(
+            build_endpoint_url("http://127.0.0.1:8080", "/api/swarm/submit"),
+            "http://127.0.0.1:8080/api/swarm/submit"
+        );
+        assert_eq!(
+            build_endpoint_url("http://127.0.0.1:8080/", "/api/swarm/swarm-task-1/status"),
+            "http://127.0.0.1:8080/api/swarm/swarm-task-1/status"
+        );
+        assert_eq!(
+            build_endpoint_url("http://127.0.0.1:8080", "/api/swarm/swarm-task-1/result"),
+            "http://127.0.0.1:8080/api/swarm/swarm-task-1/result"
         );
     }
 }

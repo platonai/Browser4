@@ -82,7 +82,7 @@ function Invoke-CoworkerPeriodicCheck {
         return [pscustomobject]@{ ExitCode = 0; Action = 'AlreadyRunning' }
     }
 
-    $process = Start-Process -FilePath $PowerShellExecutable -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $ScriptPath) -WorkingDirectory $WorkingDirectory -PassThru
+    $process = Start-Process -FilePath $PowerShellExecutable -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $ScriptPath) -WorkingDirectory $WorkingDirectory -PassThru -WindowStyle Hidden
     Write-CoworkerLog -Component 'process-coworker-queue' -Message ("Started {0} with PID {1}." -f $ScriptName, $process.Id)
     return [pscustomobject]@{ ExitCode = 0; Action = 'Started' }
 }
@@ -111,8 +111,8 @@ function Wait-ForCoworkerQueueSignal {
 $repoRoot = Get-WorkspaceRoot
 $workingDirectory = Get-SchedulerWorkingDirectory
 $powerShellExecutable = Get-CurrentPowerShellExecutable
-$scriptPath = Join-Path $PSScriptRoot 'coworker.ps1'
-$scriptName = 'coworker.ps1'
+$scriptPath = Join-Path $PSScriptRoot 'engineer.ps1'
+$scriptName = 'engineer.ps1'
 $wrapperName = 'process-coworker-queue.ps1'
 $watchPaths = @(
     (Join-Path $repoRoot 'coworker\tasks\main\1ready')

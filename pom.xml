@@ -21,7 +21,7 @@
 
     <groupId>ai.platon.pulsar</groupId>
     <artifactId>browser4</artifactId>
-    <version>4.11.22-SNAPSHOT</version>
+    <version>4.12.1-SNAPSHOT</version>
     <packaging>pom</packaging>
 
     <name>Browser4</name>
@@ -74,24 +74,17 @@
         </repository>
     </repositories>
 
-    <!-- Required by dokka-maven-plugin -->
-    <pluginRepositories>
-        <pluginRepository>
-            <id>jcenter</id>
-            <name>JCenter</name>
-            <url>https://jcenter.bintray.com/</url>
-        </pluginRepository>
-    </pluginRepositories>
-
     <!-- Default active modules. The main goal is to allow the user to run PulsarApplication
      with a single click in the IDE right after opening the project. -->
     <modules>
         <module>browser4-dependencies</module>
-        <module>browser4-tests/browser4-tests-common</module>
+        <module>browser4-tests/pulsar-tests-common</module>
         <module>browser4-core</module>
+        <module>browser4-plugins</module>
         <module>browser4-agent-tools</module>
         <module>browser4-agentic</module>
         <module>browser4-boot</module>
+        <module>browser4-pdk</module>
         <module>browser4-rest</module>
     </modules>
 
@@ -108,6 +101,8 @@
             </activation>
             <modules>
                 <module>browser4-apps</module>
+                <module>browser4-apps/browser4-standalone</module>
+                <module>browser4-apps/browser4-bundle</module>
             </modules>
         </profile>
 
@@ -122,6 +117,7 @@
             <modules>
                 <module>browser4-tests</module>
                 <module>browser4-tests/browser4-rest-tests</module>
+                <module>browser4-tests/browser4-e2e-tests</module>
                 <module>browser4-tests/pulsar-it-tests</module>
                 <module>browser4-tests/pulsar-e2e-tests</module>
             </modules>
@@ -134,9 +130,17 @@
                 <allTestModules>true</allTestModules>
             </properties>
             <modules>
-                <module>examples</module>
+                <module>browser4-tests</module>
+                <module>browser4-tests/browser4-rest-tests</module>
+                <module>browser4-tests/browser4-e2e-tests</module>
+                <module>browser4-tests/pulsar-it-tests</module>
+                <module>browser4-tests/pulsar-e2e-tests</module>
+
+                <module>browser4-apps</module>
                 <module>browser4-apps/browser4-standalone</module>
                 <module>browser4-apps/browser4-bundle</module>
+
+                <module>examples</module>
             </modules>
         </profile>
 
@@ -274,6 +278,65 @@
             </build>
         </profile>
 
+        <!-- Quality gate: enforce a minimum JaCoCo coverage floor on the fast
+             unit-test subset. Activate with -Pquality-gate (used by pr.yml).
+             The instruction floor is a conservative STARTING point; raise it
+             toward 0.50 and then 0.70 as coverage improves (see docs/TESTING.md).
+             Modules with no tests produce no exec file and will fail the gate,
+             which is the intended pressure to add coverage. -->
+        <profile>
+            <id>quality-gate</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.jacoco</groupId>
+                        <artifactId>jacoco-maven-plugin</artifactId>
+                        <version>${jacoco-maven-plugin.version}</version>
+                        <executions>
+                            <execution>
+                                <id>prepare-agent</id>
+                                <goals>
+                                    <goal>prepare-agent</goal>
+                                </goals>
+                                <configuration>
+                                    <propertyName>jacocoArgLine</propertyName>
+                                </configuration>
+                            </execution>
+                            <execution>
+                                <id>report</id>
+                                <phase>test</phase>
+                                <goals>
+                                    <goal>report</goal>
+                                </goals>
+                            </execution>
+                            <execution>
+                                <id>check</id>
+                                <phase>test</phase>
+                                <goals>
+                                    <goal>check</goal>
+                                </goals>
+                                <configuration>
+                                    <haltOnFailure>true</haltOnFailure>
+                                    <rules>
+                                        <rule>
+                                            <element>BUNDLE</element>
+                                            <limits>
+                                                <limit>
+                                                    <counter>INSTRUCTION</counter>
+                                                    <value>COVEREDRATIO</value>
+                                                    <minimum>0.20</minimum>
+                                                </limit>
+                                            </limits>
+                                        </rule>
+                                    </rules>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+
     </profiles>
 
     <build>
@@ -367,37 +430,10 @@
                     <!-- All tests are in the same JVM process -->
                     <forkCount>1</forkCount>
                     <reuseForks>true</reuseForks>
-                    <!-- Enable byte-buddy-agent -->
-                    <argLine>-XX:+EnableDynamicAgentLoading</argLine>
+                    <!-- Enable byte-buddy-agent. ${jacocoArgLine} is injected by the
+                         quality-gate profile's prepare-agent; empty otherwise. -->
+                    <argLine>${jacocoArgLine} -XX:+EnableDynamicAgentLoading</argLine>
                     <useModulePath>false</useModulePath>
-                </configuration>
-            </plugin>
-            <plugin>
-                <groupId>io.github.git-commit-id</groupId>
-                <artifactId>git-commit-id-maven-plugin</artifactId>
-                <version>${git-commit-id-maven-plugin.version}</version>
-                <executions>
-                    <execution>
-                        <id>get-the-git-infos</id>
-                        <goals>
-                            <goal>revision</goal>
-                        </goals>
-                        <phase>initialize</phase>
-                    </execution>
-                </executions>
-                <configuration>
-                    <failOnNoGitDirectory>false</failOnNoGitDirectory>
-                    <generateGitPropertiesFile>true</generateGitPropertiesFile>
-                    <generateGitPropertiesFilename>${project.build.outputDirectory}/git.properties</generateGitPropertiesFilename>
-                    <includeOnlyProperties>
-                        <includeOnlyProperty>^git.branch$</includeOnlyProperty>
-                        <includeOnlyProperty>^git.commit.id$</includeOnlyProperty>
-                        <includeOnlyProperty>^git.commit.id.abbrev$</includeOnlyProperty>
-                        <includeOnlyProperty>^git.commit.time$</includeOnlyProperty>
-                        <includeOnlyProperty>^git.build.time$</includeOnlyProperty>
-                        <includeOnlyProperty>^git.build.version$</includeOnlyProperty>
-                    </includeOnlyProperties>
-                    <commitIdGenerationMode>full</commitIdGenerationMode>
                 </configuration>
             </plugin>
         </plugins>
@@ -493,12 +529,12 @@
 
             <dependency>
                 <groupId>ai.platon.pulsar</groupId>
-                <artifactId>browser4-tests-common</artifactId>
+                <artifactId>pulsar-tests-common</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
                 <groupId>ai.platon.pulsar</groupId>
-                <artifactId>browser4-tests-common</artifactId>
+                <artifactId>pulsar-tests-common</artifactId>
                 <classifier>tests</classifier>
                 <scope>test</scope>
                 <version>${project.version}</version>
@@ -526,10 +562,6 @@
             <artifactId>kotlin-stdlib</artifactId>
         </dependency>
         <dependency>
-            <groupId>org.jetbrains.kotlin</groupId>
-            <artifactId>kotlin-reflect</artifactId>
-        </dependency>
-        <dependency>
             <groupId>org.jetbrains.kotlinx</groupId>
             <artifactId>kotlinx-coroutines-core</artifactId>
         </dependency>
@@ -547,42 +579,25 @@
 
         <dokka.version>1.9.10</dokka.version>
 
-        <surefire.version>3.5.4</surefire.version>
-
-        <jacoco-maven-plugin.version>0.8.11</jacoco-maven-plugin.version>
+        <jacoco-maven-plugin.version>0.8.15</jacoco-maven-plugin.version>
         <central-publishing-maven-plugin.version>0.9.0</central-publishing-maven-plugin.version>
 
-        <version.apache-rat-plugin>0.16.1</version.apache-rat-plugin>
-        <version.apache-resource-bundles>1.7</version.apache-resource-bundles>
-        <version.checksum-maven-plugin>1.11</version.checksum-maven-plugin>
-        <version.maven-antrun-plugin>3.2.0</version.maven-antrun-plugin>
         <version.maven-assembly-plugin>3.8.0</version.maven-assembly-plugin>
         <version.maven-clean-plugin>3.5.0</version.maven-clean-plugin>
-        <version.maven-checkstyle-plugin>3.6.0</version.maven-checkstyle-plugin>
         <version.maven-compiler-plugin>3.14.1</version.maven-compiler-plugin>
         <version.maven-dependency-plugin>3.9.0</version.maven-dependency-plugin>
         <version.maven-deploy-plugin>3.1.4</version.maven-deploy-plugin>
-        <version.maven-ear-plugin>3.4.0</version.maven-ear-plugin>
         <version.maven-enforcer-plugin>3.6.2</version.maven-enforcer-plugin>
-        <version.maven-fluido-skin>2.1.0</version.maven-fluido-skin>
         <version.maven-gpg-plugin>3.2.8</version.maven-gpg-plugin>
-        <version.maven-help-plugin>3.5.1</version.maven-help-plugin>
         <version.maven-install-plugin>3.1.4</version.maven-install-plugin>
-        <version.maven-invoker-plugin>3.9.1</version.maven-invoker-plugin>
         <version.maven-jar-plugin>3.5.0</version.maven-jar-plugin>
         <version.maven-javadoc-plugin>3.12.0</version.maven-javadoc-plugin>
-        <version.maven-plugin-tools>3.15.2</version.maven-plugin-tools>
-        <version.maven-project-info-reports-plugin>3.9.0</version.maven-project-info-reports-plugin>
-        <version.maven-release-plugin>3.3.1</version.maven-release-plugin>
         <version.maven-remote-resources-plugin>3.3.0</version.maven-remote-resources-plugin>
         <version.maven-resources-plugin>3.4.0</version.maven-resources-plugin>
         <version.maven-scm-plugin>2.2.1</version.maven-scm-plugin>
-        <version.maven-scm-publish-plugin>3.3.0</version.maven-scm-publish-plugin>
         <version.maven-shade-plugin>3.6.1</version.maven-shade-plugin>
-        <version.maven-site-plugin>3.21.0</version.maven-site-plugin>
         <version.maven-source-plugin>3.4.0</version.maven-source-plugin>
-        <version.maven-surefire>${surefire.version}</version.maven-surefire>
-        <version.maven-war-plugin>3.5.1</version.maven-war-plugin>
+        <version.maven-surefire>3.5.4</version.maven-surefire>
 
         <!-- Test execution control properties -->
         <runITs>false</runITs>
@@ -590,35 +605,38 @@
         <runCoreTests>false</runCoreTests>
         <runRestTests>false</runRestTests>
 
-        <!-- Default excludedGroups: exclude all non-Fast tests
-             Includes both new taxonomy tags and legacy tags for backward compatibility:
-             - New tags: Slow, Heavy, Integration, E2E, RequiresXYZ, ManualOnly
-             - Legacy tags: IntegrationTest, E2ETest, HeavyTest, SkippableLowerLevelTest, TestInfraCheck, OptionalTest
-             Migration: Gradually migrate tests from legacy tags to new taxonomy -->
+        <!-- Default excludedGroups: exclude all non-Fast tests.
+             New taxonomy tags are preferred; the legacy tags below are still in
+             use by existing tests and must stay excluded until those tests are
+             migrated (see docs/TESTING.md). Unused legacy tags
+             (SkippableLowerLevelTest, OptionalTest) were removed because no test
+             references them anymore. -->
         <surefire.excludedGroups>
             Slow,Heavy,RequiresServer,RequiresBrowser,RequiresAI,RequiresDocker,
             Integration,E2E,ManualOnly,
-            SkippableLowerLevelTest,TestInfraCheck,OptionalTest,
+            TestInfraCheck,
             IntegrationTest,E2ETest,HeavyTest
         </surefire.excludedGroups>
 
+        <!-- Populated by the quality-gate profile's JaCoCo prepare-agent; empty
+             by default so Surefire's argLine is unaffected when coverage is off. -->
+        <jacocoArgLine></jacocoArgLine>
+
         <!--  Language  -->
         <javaVersion>17</javaVersion>
-        <kotlinVersion>2.3.21</kotlinVersion>
         <kotlin.coroutine.version>1.10.2</kotlin.coroutine.version>
 
         <!--  Kotlin  -->
-        <kotlin.version>${kotlinVersion}</kotlin.version>
+        <kotlin.version>2.3.21</kotlin.version>
         <maven.compiler.release>${javaVersion}</maven.compiler.release>
         <kotlin.compiler.jvmTarget>${javaVersion}</kotlin.compiler.jvmTarget>
 
         <spring-boot.version>4.0.6</spring-boot.version>
-        <browser4-base.version>4.8.5</browser4-base.version>
+        <browser4-base.version>4.10.1</browser4-base.version>
 
+        <mcp-sdk.version>0.8.1</mcp-sdk.version>
         <git-commit-id-maven-plugin.version>9.0.1</git-commit-id-maven-plugin.version>
     </properties>
 
 </project>
-
-
 

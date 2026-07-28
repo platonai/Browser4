@@ -2,7 +2,7 @@
 
 Browser4 includes a lightweight **MockSite** server that serves static HTML pages for testing and demos — search boxes, forms, link lists, interactive pages, and more. When you see references to `http://localhost:18080/...` in task instructions, test scripts, or examples, they expect MockSite to be running.
 
-MockSite is a Spring Boot application (`MockSiteApplication`) that serves static deterministic pages from `browser4-tests/browser4-tests-common/src/main/resources/static/`. Pages emulate: search box, link list, infinite scroll, comment threads, and predictable anchors for agent action instructions.
+MockSite is a Spring Boot application (`MockSiteApplication`) that serves static deterministic pages from `browser4-tests/pulsar-tests-common/src/main/resources/static/`. Pages emulate: search box, link list, infinite scroll, comment threads, and predictable anchors for agent action instructions.
 
 ## Starting MockSite
 
@@ -47,7 +47,7 @@ The launcher tries the health endpoint first (default `/actuator/health`, overri
 If you only need the static HTML fixtures without the full MockSite, serve the fixture directory directly:
 
 ```bash
-cd browser4-tests/browser4-tests-common/src/main/resources/static
+cd browser4-tests/pulsar-tests-common/src/main/resources/static
 python3 -m http.server 18080
 ```
 

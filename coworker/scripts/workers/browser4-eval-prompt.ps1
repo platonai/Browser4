@@ -30,15 +30,10 @@
     $prompt = New-Browser4EvalPrompt
 #>
 
-# ── Backend detection (consistent with prompt-utils.ps1) ───────────────────
+# ── Backend detection (shared Get-AgentBackend comes from config.ps1) ────────
 $workerDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $configPath = Join-Path (Split-Path -Parent $workerDir) 'config.ps1'
 if (Test-Path $configPath) { . $configPath }
-
-function Get-AgentBackend {
-    if ($CLAUDE) { return 'claude' }
-    return 'copilot'
-}
 
 # ── Shared evaluation prompt ────────────────────────────────────────────────
 

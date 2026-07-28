@@ -1,8 +1,8 @@
 package ai.platon.pulsar.browser.privacy
 
-import ai.platon.pulsar.browser.BrowserProfile
-import ai.platon.pulsar.browser.WebDriver
-import ai.platon.pulsar.browser.common.BrowserErrorPageException
+import ai.platon.browser4.api.BrowserProfile
+import ai.platon.browser4.api.WebDriver
+import ai.platon.browser4.api.model.BrowserErrorPageException
 import ai.platon.pulsar.common.HtmlIntegrity
 import ai.platon.pulsar.common.config.AppConstants
 import ai.platon.pulsar.common.config.CapabilityTypes
@@ -17,7 +17,7 @@ import ai.platon.pulsar.skeleton.common.options.LoadOptions
 import ai.platon.pulsar.skeleton.workflow.fetch.FetchResult
 import ai.platon.pulsar.skeleton.workflow.fetch.FetchTask
 import ai.platon.pulsar.skeleton.workflow.fetch.WebDriverFetcher
-import com.google.common.annotations.Beta
+
 import org.slf4j.LoggerFactory
 import java.time.Duration
 import java.time.Instant
@@ -134,7 +134,7 @@ abstract class AbstractPrivacyContext(
         get() {
             val leaked = isLeaked0
             if (leaked) {
-                throttlingLogger.warn("Privacy context is leaked | {}", state)
+                throttlingLogger.warn("Privacy context is leaked | id={}, display={}", id, display)
             }
             return leaked
         }
@@ -184,7 +184,6 @@ abstract class AbstractPrivacyContext(
      * */
     override fun hasWebDriverPromise() = promisedWebDriverCount() > 0
 
-    @Beta
     abstract fun subscribeWebDriver(): WebDriver?
 
     /**

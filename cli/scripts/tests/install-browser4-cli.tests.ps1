@@ -1,3 +1,16 @@
+#!/usr/bin/env pwsh
+
+# ═══════════════════════════════════════════════════════════════════
+# CROSS-PLATFORM: This script must run on Linux, macOS, and Windows.
+# - Use $IsWindows / $IsLinux / $IsMacOS for platform detection.
+# - Use "($IsWindows -or $env:OS -eq 'Windows_NT')" for PS 5.1 compat.
+# - Avoid Windows-only env vars ($env:TEMP) — use $env:TMPDIR fallback.
+# - Guard "chcp" and other Windows-only commands behind platform checks.
+# - Paths: use Join-Path / Split-Path; never bake \ or / as literal.
+# - [System.IO.Path]::IsPathRooted is platform-aware — C:\foo is NOT
+#   rooted on Linux; test with platform-appropriate absolute paths.
+# ═══════════════════════════════════════════════════════════════════
+
 <#
 .SYNOPSIS
   Tests for install-browser4-cli.ps1
@@ -30,7 +43,7 @@ function RunScript([string]$scriptArgs, [ref]$exitCode) {
     $tmpErr = [System.IO.Path]::GetTempFileName()
     $cmd = "& '$installScript' $scriptArgs 2>'$tmpErr'"
     $psi = New-Object System.Diagnostics.ProcessStartInfo
-    $psi.FileName = "powershell.exe"
+    $psi.FileName = if ($IsWindows -or ($env:OS -eq 'Windows_NT')) { "powershell.exe" } else { "pwsh" }
     $psi.Arguments = "-NoProfile -ExecutionPolicy Bypass -Command `"$cmd`""
     $psi.RedirectStandardOutput = $true
     $psi.UseShellExecute = $false
@@ -284,73 +297,156 @@ $sb = [ScriptBlock]::Create($scriptContent)
     Test "Test-LocalBinary returns false for null" {
         if (Test-LocalBinary -Path $null) { throw "Should be false" }
     }
+}
 
-    # ── Set-BinaryFile (locked-binary-safe replacement) ──
-    Test "Set-BinaryFile creates new file (Copy)" {
-        $tmpDir = Join-Path $env:TEMP "b4-test-$(New-Guid)"
-        New-Item -ItemType Directory $tmpDir -Force | Out-Null
-        try {
-            $src = Join-Path $tmpDir "source.exe"
-            $dst = Join-Path $tmpDir "target.exe"
-            "new-content" | Out-File $src -Encoding ASCII
-            Set-BinaryFile -TargetPath $dst -SourcePath $src
-            if (-not (Test-Path $dst)) { throw "Target was not created" }
-            $actual = (Get-Content $dst -Raw).Trim()
-            if ($actual -ne "new-content") { throw "Wrong content: '$actual'" }
-            # Source still exists (Copy mode)
-            if (-not (Test-Path $src)) { throw "Source should still exist after copy" }
-        } finally {
-            Remove-Item $tmpDir -Recurse -Force -ErrorAction SilentlyContinue
-        }
-    }
+Write-Host ""
 
-    Test "Set-BinaryFile creates new file (Move)" {
-        $tmpDir = Join-Path $env:TEMP "b4-test-$(New-Guid)"
-        New-Item -ItemType Directory $tmpDir -Force | Out-Null
-        try {
-            $src = Join-Path $tmpDir "source.exe"
-            $dst = Join-Path $tmpDir "target.exe"
-            "moved-content" | Out-File $src -Encoding ASCII
-            Set-BinaryFile -TargetPath $dst -SourcePath $src -Move
-            if (-not (Test-Path $dst)) { throw "Target was not created" }
-            $actual = (Get-Content $dst -Raw).Trim()
-            if ($actual -ne "moved-content") { throw "Wrong content: '$actual'" }
-            # Source should be gone (Move mode)
-            if (Test-Path $src) { throw "Source should not exist after move" }
-        } finally {
-            Remove-Item $tmpDir -Recurse -Force -ErrorAction SilentlyContinue
-        }
-    }
+# ── New-Symlinks (b4 link logic) ──
+Write-Host "--- New-Symlinks ---" -ForegroundColor Cyan
 
-    Test "Set-BinaryFile replaces existing file (Copy)" {
-        $tmpDir = Join-Path $env:TEMP "b4-test-$(New-Guid)"
-        New-Item -ItemType Directory $tmpDir -Force | Out-Null
-        try {
-            $src = Join-Path $tmpDir "source.exe"
-            $dst = Join-Path $tmpDir "target.exe"
-            "old" | Out-File $dst -Encoding ASCII
-            "new" | Out-File $src -Encoding ASCII
-            Set-BinaryFile -TargetPath $dst -SourcePath $src
-            if ((Get-Content $dst -Raw).Trim() -ne "new") { throw "Content not replaced" }
-        } finally {
-            Remove-Item $tmpDir -Recurse -Force -ErrorAction SilentlyContinue
-        }
-    }
+& {
+    $Silent = $true
+    $DryRun = $false
+    $SkipLocal = $false
+    $Locate = $false
+    $Source = ""
+    $Version = ""
+    $InstallDir = ""
+    $AddToPath = $true
 
-    Test "Set-BinaryFile replaces existing file (Move)" {
-        $tmpDir = Join-Path $env:TEMP "b4-test-$(New-Guid)"
-        New-Item -ItemType Directory $tmpDir -Force | Out-Null
-        try {
-            $src = Join-Path $tmpDir "source.exe"
-            $dst = Join-Path $tmpDir "target.exe"
-            "old" | Out-File $dst -Encoding ASCII
-            "moved" | Out-File $src -Encoding ASCII
-            Set-BinaryFile -TargetPath $dst -SourcePath $src -Move
-            if ((Get-Content $dst -Raw).Trim() -ne "moved") { throw "Content not replaced" }
-            if (Test-Path $src) { throw "Source should not exist after move" }
-        } finally {
-            Remove-Item $tmpDir -Recurse -Force -ErrorAction SilentlyContinue
+    . $sb
+
+    $testPlatformKey = if ($script:OSWin) { "win32-x64" } else { "linux-x64" }
+    $testExt = if ($testPlatformKey.StartsWith("win32")) { ".exe" } else { "" }
+    $testBinaryName = "browser4-cli-$testPlatformKey$testExt"
+    $testShortName = "b4$testExt"
+
+    $tempDir = Join-Path ([System.IO.Path]::GetTempPath()) "b4-install-test-$(Get-Random)"
+    New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
+
+    try {
+        # Create the dummy platform binary that New-PlatformLink needs
+        $dummyBinary = Join-Path $tempDir $testBinaryName
+        "dummy" | Out-File $dummyBinary
+
+        $testShortPath = Join-Path $tempDir $testShortName
+        $testCmdPath = Join-Path $tempDir "b4.cmd"
+
+        function Clear-B4Links {
+            if (Test-Path $testShortPath) { Remove-Item $testShortPath -Force -ErrorAction SilentlyContinue }
+            if (Test-Path $testCmdPath) { Remove-Item $testCmdPath -Force -ErrorAction SilentlyContinue }
         }
+
+        # ── Scenario 1: b4 does not exist → should create ──
+        Clear-B4Links
+
+        New-Symlinks -BinaryName $testBinaryName -InstallDir $tempDir -PlatformKey $testPlatformKey
+
+        Test "New-Symlinks creates b4 when it does not exist" {
+            if (-not ((Test-Path $testShortPath) -or (Test-Path $testCmdPath))) {
+                throw "b4 link was not created (neither symlink nor .cmd wrapper found in $tempDir)"
+            }
+        }
+
+        # ── Scenario 2: b4 exists in install dir → should update ──
+        Clear-B4Links
+
+        # Create initial link
+        New-Symlinks -BinaryName $testBinaryName -InstallDir $tempDir -PlatformKey $testPlatformKey
+
+        $existingPath = if (Test-Path $testShortPath) { $testShortPath }
+                        elseif (Test-Path $testCmdPath) { $testCmdPath }
+                        else { $null }
+
+        if ($existingPath) {
+            $beforeTime = (Get-Item $existingPath).LastWriteTime
+            Start-Sleep -Milliseconds 200
+
+            New-Symlinks -BinaryName $testBinaryName -InstallDir $tempDir -PlatformKey $testPlatformKey
+
+            $afterPath = if (Test-Path $testShortPath) { $testShortPath }
+                         elseif (Test-Path $testCmdPath) { $testCmdPath }
+                         else { $null }
+
+            Test "New-Symlinks updates b4 when it already exists in install dir" {
+                if (-not $afterPath) {
+                    throw "b4 link disappeared after update"
+                }
+                if ((Get-Item $afterPath).LastWriteTime -le $beforeTime) {
+                    throw "b4 link was not updated (timestamp unchanged)"
+                }
+            }
+        } else {
+            Write-Host "  SKIP  New-Symlinks updates b4 (precondition: initial link creation failed)" -ForegroundColor Yellow
+        }
+
+        # ── Scenario 3: foreign b4 on PATH → should NOT create b4 in install dir ──
+        Clear-B4Links
+
+        $foreignDir = Join-Path ([System.IO.Path]::GetTempPath()) "b4-foreign-test-$(Get-Random)"
+        New-Item -ItemType Directory -Path $foreignDir -Force | Out-Null
+        try {
+            # Create fake b4 that is NOT browser4-cli
+            $foreignB4 = Join-Path $foreignDir $testShortName
+            if ($script:OSWin) {
+                # Use .cmd so Get-Command finds it via PATHEXT
+                $foreignCmd = Join-Path $foreignDir "b4.cmd"
+                "@echo off`r`necho NotBrowser4" | Out-File $foreignCmd -Encoding ASCII
+            } else {
+                "#!/bin/sh`necho NotBrowser4" | Out-File $foreignB4 -Encoding ASCII
+                & { chmod +x $foreignB4 2>$null } | Out-Null
+            }
+
+            $oldPath = $env:Path
+            $env:Path = "$foreignDir$([System.IO.Path]::PathSeparator)$oldPath"
+            try {
+                New-Symlinks -BinaryName $testBinaryName -InstallDir $tempDir -PlatformKey $testPlatformKey
+
+                Test "New-Symlinks skips b4 when foreign b4 is on PATH" {
+                    if ((Test-Path $testShortPath) -or (Test-Path $testCmdPath)) {
+                        throw "b4 link was created even though a non-browser4-cli b4 is on PATH"
+                    }
+                }
+            } finally {
+                $env:Path = $oldPath
+            }
+        } finally {
+            Remove-Item $foreignDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+
+        # ── Scenario 4: b4 on PATH is browser4-cli → should create b4 link ──
+        Clear-B4Links
+
+        $oursDir = Join-Path ([System.IO.Path]::GetTempPath()) "b4-ours-test-$(Get-Random)"
+        New-Item -ItemType Directory -Path $oursDir -Force | Out-Null
+        try {
+            $oursB4 = Join-Path $oursDir $testShortName
+            if ($script:OSWin) {
+                $oursCmd = Join-Path $oursDir "b4.cmd"
+                "@echo off`r`necho browser4-cli v4.12.0" | Out-File $oursCmd -Encoding ASCII
+            } else {
+                "#!/bin/sh`necho browser4-cli v4.12.0" | Out-File $oursB4 -Encoding ASCII
+                & { chmod +x $oursB4 2>$null } | Out-Null
+            }
+
+            $oldPath = $env:Path
+            $env:Path = "$oursDir$([System.IO.Path]::PathSeparator)$oldPath"
+            try {
+                New-Symlinks -BinaryName $testBinaryName -InstallDir $tempDir -PlatformKey $testPlatformKey
+
+                Test "New-Symlinks creates b4 when b4 on PATH is browser4-cli" {
+                    if (-not ((Test-Path $testShortPath) -or (Test-Path $testCmdPath))) {
+                        throw "b4 link was not created even though PATH b4 is browser4-cli"
+                    }
+                }
+            } finally {
+                $env:Path = $oldPath
+            }
+        } finally {
+            Remove-Item $oursDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    } finally {
+        Remove-Item $tempDir -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
 

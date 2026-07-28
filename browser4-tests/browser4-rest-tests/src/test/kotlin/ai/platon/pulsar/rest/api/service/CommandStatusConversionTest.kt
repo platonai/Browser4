@@ -64,8 +64,8 @@ class CommandStatusConversionTest {
         // Convert using extension function
         val commandStatus = pageVisitStatus.toCommandStatus()
 
-        // Verify processState is preserved
-        assertEquals("done", commandStatus.processState)
+        // Verify processState is mapped from internal "done" to user-facing "completed"
+        assertEquals("completed", commandStatus.processState)
         assertEquals(true, commandStatus.isDone)
     }
 
@@ -131,8 +131,8 @@ class CommandStatusConversionTest {
         // Convert using extension function
         val commandStatus = agentTaskStatus.toCommandStatus()
 
-        // Verify processState is preserved
-        assertEquals("done", commandStatus.processState)
+        // Verify processState is mapped from internal "done" to user-facing "completed"
+        assertEquals("completed", commandStatus.processState)
         assertEquals(true, commandStatus.isDone)
     }
 }

@@ -1,10 +1,10 @@
 package ai.platon.pulsar.agentic.tools.builtin
 
 import ai.platon.pulsar.agentic.model.ToolSpec
-import ai.platon.pulsar.browser.AbstractBrowser
-import ai.platon.pulsar.browser.AbstractWebDriver
+import ai.platon.browser4.api.AbstractBrowser
+import ai.platon.browser4.api.AbstractWebDriver
 import ai.platon.pulsar.common.getLogger
-import ai.platon.pulsar.browser.Browser
+import ai.platon.browser4.api.Browser
 import kotlin.reflect.KClass
 
 class BrowserToolExecutor : AbstractToolExecutor() {

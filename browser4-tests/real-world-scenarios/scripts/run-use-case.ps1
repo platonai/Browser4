@@ -6,7 +6,7 @@ Run an agent-scenario use case defined in a .txt file.
 .DESCRIPTION
 Reads a use-case description from a .txt file (comment-based metadata +
 numbered task steps), combines it with the shared usability-evaluation
-prompt (common.ps1), and invokes the Claude Code agent.
+prompt (common.ps1), and invokes the configured agent CLI (claude or kimi).
 
 The use-case file format:
   # Use Case N: Title
@@ -18,7 +18,7 @@ The use-case file format:
   2. Second step.
 
 .EXAMPLE
-./run-use-case.ps1 -TaskFile "../browser4-tests-common/src/main/resources/e2e/scenarios/happy_path/use-cases/01-ecommerce-product-comparison.txt"
+./run-use-case.ps1 -TaskFile "../pulsar-tests-common/src/main/resources/e2e/scenarios/happy_path/use-cases/01-ecommerce-product-comparison.txt"
 
     Run the ecommerce comparison use case in dev mode.
 

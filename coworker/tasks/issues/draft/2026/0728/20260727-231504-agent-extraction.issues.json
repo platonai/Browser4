@@ -1,0 +1,442 @@
+{
+  "meta": {
+    "source": "20260727-231504-agent-extraction.full.md",
+    "scenario": "agent-extraction",
+    "mode": "dev",
+    "date": "20260727-231504"
+  },
+  "background": {
+    "task": "The task was **partially successful**. Synchronous commands (`extract`, `summarize`) worked well, but the async `agent run` returned empty results despite completing successfully. Below is a summary of each step.\n\n### Extracted Python Programming Language Details\n\n| Field | Value |\n|---|---|\n| Language Name | Python |\n| First Release Year | 1991 |\n| Developer | Python Software Foundation |\n| Typing Discipline | Duck, dynamic, strong; optional type annotations |\n| License | Python Software Foundation License |\n\n### Guido van Rossum Biographical Details\n\n| Field | Value |\n|---|---|\n| Full Name | Guido van Rossum |\n| Birth Date | 31 January 1956 |\n| Birth Place | The Hague, Netherlands |\n| Nationality | Dutch |\n| Known For | Creating the Python programming language |\n| Education | Master's in mathematics and computer science, University of Amsterdam (1982) |\n| Current Employer | Microsoft |\n| Notable Achievements | 2001 Award for the Advancement of Free Software |\n| Children | 1 son |\n\n**Agent task (step 6–8):** Task `3b27930e-48bc-4460-aae7-be521f0a9194` completed with status 200, but `agent result` returned `{}` — the extracted data was present in `instructResults` metadata but not surfaced through the result endpoint.\n\n---",
+    "executionContext": "1. **`./b4w.ps1 help`** — Displayed comprehensive help successfully (after fixing CRLF line endings in the script).\n2. **`./b4w.ps1 goto \"https://en.wikipedia.org/wiki/Python_(programming_language)\"`** — Server auto-started (first run: 12s build + 12s JVM startup). Navigation succeeded.\n3. **`./b4w.sh snapshot -v 0 --stdout`** — Captured the page accessibility tree. Worked via `b4w.sh` wrapper. Direct `./b4w.ps1 snapshot -v 0` failed because `-v` was consumed by PowerShell.\n4. **`./b4w.sh extract \"...\" --stdout`** — Synchronous extraction worked, returned structured data.\n5. **`./b4w.sh extract \"...\" --schema \"...\" --stdout`** — Failed through `b4w.sh` due to JSON quoting. **Workaround:** Used `pwsh -Command` directly with a pwsh variable to pass the schema correctly. Discovered `--schema` uses a custom `{fields: [...]}` format, not JSON Schema. No `@file` support.\n6. **`./b4w.sh summarize --stdout`** — Worked, returned a concise full-page summary.\n7. **`./b4w.sh summarize \"...\" --selector \"#History\" --stdout`** — Worked, returned a focused History summary.\n8. **`./b4w.sh agent run \"...\"`** — Submitted async task, returned UUID task ID (not the `agent-task-1` format documented).\n9. **`./b4w.sh agent status <id>`** — Polled task lifecycle: Created → Loading → Navigating → Scrolling → Parsing → Extracting → Done.\n10. **`./b4w.sh agent result <id>`** — Returned `{}` despite task showing `status: OK, statusCode: 200, instructResults: [{name: \"fields\", ...}]`.\n11. **`./b4w.sh goto \"https://en.wikipedia.org/wiki/Guido_van_Rossum\"`** — Page already loaded by agent. Used synchronous `extract` to get the biographical data manually.\n12. **Comparison analysis** — Synchronous `extract`/`summarize` are fast, reliable, and return results directly. Async `agent run` supports multi-step autonomous navigation but has result surface issues and adds significant latency.\n\n---\n\n## C & D. Issues Found and Overall Assessment\n\n```json\n{\n  \"issues\": [\n    {\n      \"title\": \"b4w.ps1 has CRLF line endings, breaking Linux execution\",\n      \"severity\": \"High\",\n      \"category\": \"Product\",\n      \"reproduction\": \"./b4w.ps1 help  # on Linux with pwsh installed\",\n      \"expected\": \"Help output displays.\",\n      \"actual\": \"/usr/bin/env: 'pwsh\\\\r': No such file or directory\",\n      \"rootCause\": \"The b4w.ps1 script is committed with Windows CRLF line endings. On Linux, the shebang line '#!/usr/bin/env pwsh\\\\r' includes a carriage return in the interpreter name, causing 'pwsh\\\\r' (not 'pwsh') to be looked up.\",\n      \"codePointer\": \"b4w.ps1:1 — line endings; CI should enforce LF or the repo should use .gitattributes\",\n      \"suggestion\": \"- Add a .gitattributes file with `*.ps1 text eol=lf` or `b4w.ps1 text eol=lf`\\n- In CI, run `dos2unix` or equivalent on .ps1 files before packaging\\n- Consider shipping a separate b4w.sh for Linux (already exists but needs to be primary for Linux users)\"\n    },\n    {\n      \"title\": \"PowerShell wrapper silently consumes -v and -i flags\",\n      \"severity\": \"Medium\",\n      \"category\": \"UX\",\n      \"reproduction\": \"./b4w.ps1 snapshot -v 0 --stdout  # from bash, not pwsh\",\n      \"expected\": \"Snapshot captured with viewport 0.\",\n      \"actual\": \"Error: Unknown command: 'snapshot-0'. Did you mean: 'snapshot'?\",\n      \"rootCause\": \"When b4w.ps1 is invoked via pwsh -File from bash, short flags like -v and -i are intercepted by PowerShell's parameter binder (matching -Verbose and -InformationAction). The flag value '0' gets appended to the preceding argument. The SKILL.md documents this for direct pwsh users but mentions using b4w.sh or -- as workarounds. However, the `--` workaround does not work from bash (produces ambiguous parameter error).\",\n      \"codePointer\": \"b4w.ps1: param() block — PowerShell parameter binding\",\n      \"suggestion\": \"- Make b4w.sh the recommended invocation for Linux/macOS users (update SKILL.md)\\n- Add a `--` passthrough handler in b4w.ps1 that works from both pwsh and bash\\n- Document the b4w.sh wrapper prominently near the top of SKILL.md for non-Windows users\\n- Consider detecting the calling shell and auto-switching behavior\"\n    },\n    {\n      \"title\": \"b4w.sh shows distracting nag message on every command\",\n      \"severity\": \"Low\",\n      \"category\": \"UX\",\n      \"reproduction\": \"Run any command via ./b4w.sh\",\n      \"expected\": \"Clean command output without warnings.\",\n      \"actual\": \"Every command is prefixed with: 'It is strongly recommended to launch `pwsh` and run the .ps1 commands directly within the `pwsh` terminal.'\",\n      \"rootCause\": \"b4w.sh has a hardcoded echo statement on line 17 that prints this message unconditionally.\",\n      \"codePointer\": \"b4w.sh:17 — unconditional echo statement\",\n      \"suggestion\": \"- Remove the nag message or show it only once by checking an environment variable or state file\\n- If pwsh is the recommended way, reconsider whether b4w.sh should exist at all; if it exists, it should work silently\"\n    },\n    {\n      \"title\": \"b4w.sh fails to pass JSON arguments containing double quotes to pwsh\",\n      \"severity\": \"High\",\n      \"category\": \"Reliability\",\n      \"reproduction\": \"SCHEMA='{\\\"fields\\\":[{\\\"name\\\":\\\"x\\\",\\\"type\\\":\\\"string\\\"}]}' && ./b4w.sh extract \\\"test\\\" --schema \\\"$SCHEMA\\\" --stdout\",\n      \"expected\": \"Schema is passed as a single JSON argument.\",\n      \"actual\": \"The JSON is split at spaces and passed as ~12+ separate arguments. pwsh receives garbled text with escaped quotes misinterpreted.\",\n      \"rootCause\": \"b4w.sh's escaping logic replaces `\\\"` with `\\\\\\\"` inside each argument, then wraps in double quotes. When pwsh's -Command parser receives this, the backslash-escaped quotes are parsed differently than expected (pwsh uses backtick for escaping, not backslash). Additionally, bash expands the variable before b4w.sh sees it, causing space-splitting before the wrapper's argument-loop runs.\",\n      \"codePointer\": \"b4w.sh:35-38 — argument escaping logic\",\n      \"suggestion\": \"- Pass arguments through stdin or a temp file instead of command-line for JSON payloads\\n- Use base64 encoding for JSON arguments (add --schema-base64 flag)\\n- Support `--schema @file.json` syntax to avoid inline JSON entirely\\n- Rewrite b4w.sh to use pwsh -File with quoted arguments passed through an env var\"\n    },\n    {\n      \"title\": \"extract --schema uses a custom ExtractionField format, not JSON Schema as documented\",\n      \"severity\": \"High\",\n      \"category\": \"Documentation\",\n      \"reproduction\": \"cat the extract --help output and attempt to use a standard JSON Schema: ./b4w.sh extract 'test' --schema '{\\\"type\\\":\\\"object\\\",\\\"properties\\\":{\\\"name\\\":{\\\"type\\\":\\\"string\\\"}}}' --stdout\",\n      \"expected\": \"Standard JSON Schema is accepted.\",\n      \"actual\": \"The standard JSON Schema is rejected. The actual format requires `{\\\"fields\\\": [{\\\"name\\\": \\\"...\\\", \\\"type\\\": \\\"...\\\", \\\"description\\\": \\\"...\\\", \\\"required\\\": true/false}]}` using a custom ExtractionField model. This is NOT JSON Schema — it's a bespoke format with no industry standard.\",\n      \"rootCause\": \"The --schema flag name and help text say 'JSON schema' but the backend expects a custom `ExtractionSchema` Java/Kotlin class serialization format. The correct format is only described in the error message (partially in Chinese), not in the help text.\",\n      \"codePointer\": \"cli/browser4-cli/src/ and browser4-rest/src/ — the --schema help text and the ExtractionSchema class\",\n      \"suggestion\": \"- Rename the flag to `--fields` or `--extraction-template` to avoid confusion with JSON Schema\\n- OR accept both standard JSON Schema (with $schema, type, properties) AND the custom fields format\\n- Update --help to show the actual format with a working example\\n- Add a link from --help to a reference doc explaining the ExtractionField format\"\n    },\n    {\n      \"title\": \"extract --schema does not support @file references unlike --sql\",\n      \"severity\": \"Medium\",\n      \"category\": \"Product\",\n      \"reproduction\": \"Create a schema JSON file, attempt: ./b4w.sh extract 'test' --schema @schema.json --stdout\",\n      \"expected\": \"Schema is read from the file.\",\n      \"actual\": \"The literal string '@schema.json' is parsed as JSON by the backend, which fails.\",\n      \"rootCause\": \"The --sql flag supports @file.sql references but the --schema flag parser does not implement the same file-reference logic. Combined with the shell quoting issues, this makes passing complex schemas extremely difficult.\",\n      \"codePointer\": \"cli/browser4-cli/src/ — argument parsing for --schema, and browser4-rest/src/ — ExtractionSchema parser\",\n      \"suggestion\": \"- Add @file support to --schema, mirroring --sql's behavior\\n- Add --schema-file as an explicit alternative flag\\n- Document @file support in --help once implemented\"\n    },\n    {\n      \"title\": \"agent result returns empty {} despite successful extraction (critical data loss)\",\n      \"severity\": \"Critical\",\n      \"category\": \"Reliability\",\n      \"reproduction\": \"1. ./b4w.sh agent run 'Navigate to https://en.wikipedia.org/wiki/Guido_van_Rossum, extract key biographical details'\\n2. Wait for completion\\n3. ./b4w.sh agent result <task-id>\",\n      \"expected\": \"The extracted biographical details are returned as structured data.\",\n      \"actual\": \"agent result returns {}. The agent status --json shows instructResults: [{name: 'fields', resultType: 'map', statusCode: 200}] confirming extraction occurred, but commandResult is {}.\",\n      \"rootCause\": \"The agent task's LLM-extracted data is stored in instructResults but the agent result CLI endpoint reads from commandResult, which is empty. There appears to be a disconnect between where the agent writes results and where agent result reads them. Investigation needed: check whether this is a serialization issue in the agent pipeline or a result-merging bug.\",\n      \"codePointer\": \"\",\n      \"suggestion\": \"- Investigate the agent result pipeline: trace how instructResults data flows into commandResult\\n- Add a test that verifies agent run → agent result round-trips extracted data correctly\\n- If instructResults is the correct data source, update agent result to surface it\\n- Document the result output format and where extracted data appears\"\n    },\n    {\n      \"title\": \"agent.md documentation shows sequential task IDs but actual IDs are UUIDs\",\n      \"severity\": \"Low\",\n      \"category\": \"Documentation\",\n      \"reproduction\": \"Run agent run, observe returned task ID format.\",\n      \"expected\": \"Task IDs like 'agent-task-1' as shown in agent.md examples.\",\n      \"actual\": \"Task IDs are UUIDs like '3b27930e-48bc-4460-aae7-be521f0a9194'.\",\n      \"rootCause\": \"The agent.md reference was written for an older version that used sequential IDs. The current implementation uses UUIDs but the docs were not updated.\",\n      \"codePointer\": \"skills/browser4-cli/references/agent.md:26-28 — example commands using agent-task-1\",\n      \"suggestion\": \"- Update all agent.md examples to use UUID-format task IDs\\n- Or add a note that task IDs take the UUID format shown in the actual output\"\n    },\n    {\n      \"title\": \"Error messages contain mixed-language content (Chinese + English)\",\n      \"severity\": \"Medium\",\n      \"category\": \"Documentation\",\n      \"reproduction\": \"Trigger an extract --schema error.\",\n      \"expected\": \"Error messages in English consistent with the CLI language.\",\n      \"actual\": \"Error starts with '帮助: 使用 agent.extract 满足高级数据提取要求：' (Chinese), followed by English code examples and JSON snippets.\",\n      \"rootCause\": \"The error message template in the backend contains hardcoded Chinese text for the help prefix, but the technical description is in English. This appears to be a localization gap.\",\n      \"codePointer\": \"browser4-rest/src/ or browser4-agentic/src/ — error message templates for extract/agent failures\",\n      \"suggestion\": \"- Localize all error messages to English (match the CLI language) or implement proper i18n\\n- Ensure error message language is consistent end-to-end\"\n    },\n    {\n      \"title\": \"Server auto-start requires Maven build on first command, causing ~24s cold start latency\",\n      \"severity\": \"Low\",\n      \"category\": \"UX\",\n      \"reproduction\": \"Run the first b4w command in a fresh checkout.\",\n      \"expected\": \"Quick startup within a few seconds.\",\n      \"actual\": \"12s Maven bundle build + 12s JVM startup = ~24s before first command completes.\",\n      \"rootCause\": \"The dev-mode auto-start builds the runtime bundle from source using Maven, then starts the JVM. Both steps add significant latency for first-time users who expect a CLI tool to respond quickly.\",\n      \"codePointer\": \"b4w.ps1 / b4w.sh — server startup logic\",\n      \"suggestion\": \"- Display a loading spinner or progress bar during the first startup rather than silent waiting\\n- Pre-build the bundle during `cargo build`/`cargo run` so it's ready\\n- Cache the built bundle and only rebuild when source files change\\n- Show estimated time remaining for the first build\"\n    },\n    {\n      \"title\": \"CLI version mismatch between source build and installed runtime creates confusion\",\n      \"severity\": \"Medium\",\n      \"category\": \"Product\",\n      \"reproduction\": \"Run ./b4w.ps1 status or ./b4w.ps1 doctor\",\n      \"expected\": \"Consistent version information.\",\n      \"actual\": \"CLI version 4.12.1 vs installed version v4.11.15 with warning about possible behavioral differences. The message says to 'run cd browser4-rest && mvn spring-boot:run' but the auto-start already builds from source.\",\n      \"rootCause\": \"The CLI is built from the local source tree (4.12.x branch), while a pre-installed runtime (v4.11.15) exists from a previous installation. The auto-start builds a new bundle from source, but the status/doctor commands report the stale installed version.\",\n      \"codePointer\": \"cli/browser4-cli/src/ — version/status reporting\",\n      \"suggestion\": \"- When running from a local build, report only the local source version\\n- Suppress the version mismatch warning when in dev mode (auto-starting from local source)\\n- Clarify the advice: 'cd browser4-rest && mvn spring-boot:run' contradicts the auto-start behavior\"\n    },\n    {\n      \"title\": \"agent list table formatting breaks on narrow terminals\",\n      \"severity\": \"Low\",\n      \"category\": \"UX\",\n      \"reproduction\": \"Run agent list after submitting a task with a long description.\",\n      \"expected\": \"Readable table output.\",\n      \"actual\": \"The DESCRIPTION column has very long text that causes the table to wrap badly. Columns are misaligned and the STATUS column value appears on a separate row for the queued task.\",\n      \"rootCause\": \"The agent list output formatter doesn't truncate long field values or adapt to terminal width.\",\n      \"codePointer\": \"cli/browser4-cli/src/ — agent list output formatting\",\n      \"suggestion\": \"- Truncate the DESCRIPTION column to a reasonable width (e.g., 60 chars) with '...'\\n- Auto-detect terminal width and adjust column widths\\n- Use --json flag for programmatic access (already works); improve the human-readable default\"\n    }\n  ],\n  \"assessment\": {\n    \"completionStatus\": \"Partially Successful — Steps 1-5 (sync commands) all succeeded. Steps 6-8 (async agent) failed due to empty result. Step 9 (comparison) completed with analysis.\",\n    \"successRate\": \"78% — 7 of 9 major steps succeeded; 2 steps (agent result retrieval + schema file passing) required workarounds or partially failed.\",\n    \"issuesFound\": 12,\n    \"majorBlockers\": \"Critical: agent run returns empty result {} despite successful extraction, making the async agent approach unreliable for data extraction. High: b4w.ps1 CRLF breaks Linux; b4w.sh cannot pass JSON arguments; --schema format is undocumented custom format rather than JSON Schema.\",\n    \"mostConfusingAspects\": \"1. Which wrapper to use (b4w.ps1 vs b4w.sh) is unclear for Linux users. 2. The --schema flag says 'JSON schema' but uses a custom {fields: [...]} format that isn't documented in --help. 3. Shell quoting through bash→pwsh requires trial and error. 4. agent result returning {} without any error is silent data loss.\",\n    \"mostValuableImprovements\": \"1. Fix agent result to surface extracted data (Critical). 2. Add @file support to --schema and document the ExtractionField format. 3. Fix b4w.ps1 CRLF for cross-platform use. 4. Unify b4w.sh/b4w.ps1 behavior or make b4w.sh the primary Linux entry point. 5. Support standard JSON Schema in --schema.\",\n    \"usabilityRating\": 5\n  }\n}\n```"
+  },
+  "issues": [
+    {
+      "number": 1,
+      "title": "agent result returns empty {} despite successful extraction (critical data loss)",
+      "severity": "Critical",
+      "category": "Reliability",
+      "sections": [
+        {
+          "body": "1. ./b4w.sh agent run 'Navigate to https://en.wikipedia.org/wiki/Guido_van_Rossum, extract key biographical details'\n2. Wait for completion\n3. ./b4w.sh agent result <task-id>",
+          "label": "Reproduction"
+        },
+        {
+          "body": "The extracted biographical details are returned as structured data.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "agent result returns {}. The agent status --json shows instructResults: [{name: 'fields', resultType: 'map', statusCode: 200}] confirming extraction occurred, but commandResult is {}.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The agent task's LLM-extracted data is stored in instructResults but the agent result CLI endpoint reads from commandResult, which is empty. There appears to be a disconnect between where the agent writes results and where agent result reads them. Investigation needed: check whether this is a serialization issue in the agent pipeline or a result-merging bug.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "- Investigate the agent result pipeline: trace how instructResults data flows into commandResult\n- Add a test that verifies agent run → agent result round-trips extracted data correctly\n- If instructResults is the correct data source, update agent result to surface it\n- Document the result output format and where extracted data appears",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 2,
+      "title": "b4w.ps1 has CRLF line endings, breaking Linux execution",
+      "severity": "High",
+      "category": "Product",
+      "sections": [
+        {
+          "body": "./b4w.ps1 help  # on Linux with pwsh installed",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Help output displays.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "/usr/bin/env: 'pwsh\\r': No such file or directory",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The b4w.ps1 script is committed with Windows CRLF line endings. On Linux, the shebang line '#!/usr/bin/env pwsh\\r' includes a carriage return in the interpreter name, causing 'pwsh\\r' (not 'pwsh') to be looked up.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "b4w.ps1:1 — line endings; CI should enforce LF or the repo should use .gitattributes",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Add a .gitattributes file with `*.ps1 text eol=lf` or `b4w.ps1 text eol=lf`\n- In CI, run `dos2unix` or equivalent on .ps1 files before packaging\n- Consider shipping a separate b4w.sh for Linux (already exists but needs to be primary for Linux users)",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 3,
+      "title": "b4w.sh fails to pass JSON arguments containing double quotes to pwsh",
+      "severity": "High",
+      "category": "Reliability",
+      "sections": [
+        {
+          "body": "SCHEMA='{\"fields\":[{\"name\":\"x\",\"type\":\"string\"}]}' && ./b4w.sh extract \"test\" --schema \"$SCHEMA\" --stdout",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Schema is passed as a single JSON argument.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "The JSON is split at spaces and passed as ~12+ separate arguments. pwsh receives garbled text with escaped quotes misinterpreted.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "b4w.sh's escaping logic replaces `\"` with `\\\"` inside each argument, then wraps in double quotes. When pwsh's -Command parser receives this, the backslash-escaped quotes are parsed differently than expected (pwsh uses backtick for escaping, not backslash). Additionally, bash expands the variable before b4w.sh sees it, causing space-splitting before the wrapper's argument-loop runs.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "b4w.sh:35-38 — argument escaping logic",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Pass arguments through stdin or a temp file instead of command-line for JSON payloads\n- Use base64 encoding for JSON arguments (add --schema-base64 flag)\n- Support `--schema @file.json` syntax to avoid inline JSON entirely\n- Rewrite b4w.sh to use pwsh -File with quoted arguments passed through an env var",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 4,
+      "title": "extract --schema uses a custom ExtractionField format, not JSON Schema as documented",
+      "severity": "High",
+      "category": "Documentation",
+      "sections": [
+        {
+          "body": "cat the extract --help output and attempt to use a standard JSON Schema: ./b4w.sh extract 'test' --schema '{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\"}}}' --stdout",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Standard JSON Schema is accepted.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "The standard JSON Schema is rejected. The actual format requires `{\"fields\": [{\"name\": \"...\", \"type\": \"...\", \"description\": \"...\", \"required\": true/false}]}` using a custom ExtractionField model. This is NOT JSON Schema — it's a bespoke format with no industry standard.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The --schema flag name and help text say 'JSON schema' but the backend expects a custom `ExtractionSchema` Java/Kotlin class serialization format. The correct format is only described in the error message (partially in Chinese), not in the help text.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "cli/browser4-cli/src/ and browser4-rest/src/ — the --schema help text and the ExtractionSchema class",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Rename the flag to `--fields` or `--extraction-template` to avoid confusion with JSON Schema\n- OR accept both standard JSON Schema (with $schema, type, properties) AND the custom fields format\n- Update --help to show the actual format with a working example\n- Add a link from --help to a reference doc explaining the ExtractionField format",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 5,
+      "title": "PowerShell wrapper silently consumes -v and -i flags",
+      "severity": "Medium",
+      "category": "UX",
+      "sections": [
+        {
+          "body": "./b4w.ps1 snapshot -v 0 --stdout  # from bash, not pwsh",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Snapshot captured with viewport 0.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "Error: Unknown command: 'snapshot-0'. Did you mean: 'snapshot'?",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "When b4w.ps1 is invoked via pwsh -File from bash, short flags like -v and -i are intercepted by PowerShell's parameter binder (matching -Verbose and -InformationAction). The flag value '0' gets appended to the preceding argument. The SKILL.md documents this for direct pwsh users but mentions using b4w.sh or -- as workarounds. However, the `--` workaround does not work from bash (produces ambiguous parameter error).",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "b4w.ps1: param() block — PowerShell parameter binding",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Make b4w.sh the recommended invocation for Linux/macOS users (update SKILL.md)\n- Add a `--` passthrough handler in b4w.ps1 that works from both pwsh and bash\n- Document the b4w.sh wrapper prominently near the top of SKILL.md for non-Windows users\n- Consider detecting the calling shell and auto-switching behavior",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 6,
+      "title": "extract --schema does not support @file references unlike --sql",
+      "severity": "Medium",
+      "category": "Product",
+      "sections": [
+        {
+          "body": "Create a schema JSON file, attempt: ./b4w.sh extract 'test' --schema @schema.json --stdout",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Schema is read from the file.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "The literal string '@schema.json' is parsed as JSON by the backend, which fails.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The --sql flag supports @file.sql references but the --schema flag parser does not implement the same file-reference logic. Combined with the shell quoting issues, this makes passing complex schemas extremely difficult.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "cli/browser4-cli/src/ — argument parsing for --schema, and browser4-rest/src/ — ExtractionSchema parser",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Add @file support to --schema, mirroring --sql's behavior\n- Add --schema-file as an explicit alternative flag\n- Document @file support in --help once implemented",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 7,
+      "title": "Error messages contain mixed-language content (Chinese + English)",
+      "severity": "Medium",
+      "category": "Documentation",
+      "sections": [
+        {
+          "body": "Trigger an extract --schema error.",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Error messages in English consistent with the CLI language.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "Error starts with '帮助: 使用 agent.extract 满足高级数据提取要求：' (Chinese), followed by English code examples and JSON snippets.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The error message template in the backend contains hardcoded Chinese text for the help prefix, but the technical description is in English. This appears to be a localization gap.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "browser4-rest/src/ or browser4-agentic/src/ — error message templates for extract/agent failures",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Localize all error messages to English (match the CLI language) or implement proper i18n\n- Ensure error message language is consistent end-to-end",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 8,
+      "title": "CLI version mismatch between source build and installed runtime creates confusion",
+      "severity": "Medium",
+      "category": "Product",
+      "sections": [
+        {
+          "body": "Run ./b4w.ps1 status or ./b4w.ps1 doctor",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Consistent version information.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "CLI version 4.12.1 vs installed version v4.11.15 with warning about possible behavioral differences. The message says to 'run cd browser4-rest && mvn spring-boot:run' but the auto-start already builds from source.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The CLI is built from the local source tree (4.12.x branch), while a pre-installed runtime (v4.11.15) exists from a previous installation. The auto-start builds a new bundle from source, but the status/doctor commands report the stale installed version.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "cli/browser4-cli/src/ — version/status reporting",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- When running from a local build, report only the local source version\n- Suppress the version mismatch warning when in dev mode (auto-starting from local source)\n- Clarify the advice: 'cd browser4-rest && mvn spring-boot:run' contradicts the auto-start behavior",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 9,
+      "title": "b4w.sh shows distracting nag message on every command",
+      "severity": "Low",
+      "category": "UX",
+      "sections": [
+        {
+          "body": "Run any command via ./b4w.sh",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Clean command output without warnings.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "Every command is prefixed with: 'It is strongly recommended to launch `pwsh` and run the .ps1 commands directly within the `pwsh` terminal.'",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "b4w.sh has a hardcoded echo statement on line 17 that prints this message unconditionally.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "b4w.sh:17 — unconditional echo statement",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Remove the nag message or show it only once by checking an environment variable or state file\n- If pwsh is the recommended way, reconsider whether b4w.sh should exist at all; if it exists, it should work silently",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 10,
+      "title": "agent.md documentation shows sequential task IDs but actual IDs are UUIDs",
+      "severity": "Low",
+      "category": "Documentation",
+      "sections": [
+        {
+          "body": "Run agent run, observe returned task ID format.",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Task IDs like 'agent-task-1' as shown in agent.md examples.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "Task IDs are UUIDs like '3b27930e-48bc-4460-aae7-be521f0a9194'.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The agent.md reference was written for an older version that used sequential IDs. The current implementation uses UUIDs but the docs were not updated.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "skills/browser4-cli/references/agent.md:26-28 — example commands using agent-task-1",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Update all agent.md examples to use UUID-format task IDs\n- Or add a note that task IDs take the UUID format shown in the actual output",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 11,
+      "title": "Server auto-start requires Maven build on first command, causing ~24s cold start latency",
+      "severity": "Low",
+      "category": "UX",
+      "sections": [
+        {
+          "body": "Run the first b4w command in a fresh checkout.",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Quick startup within a few seconds.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "12s Maven bundle build + 12s JVM startup = ~24s before first command completes.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The dev-mode auto-start builds the runtime bundle from source using Maven, then starts the JVM. Both steps add significant latency for first-time users who expect a CLI tool to respond quickly.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "b4w.ps1 / b4w.sh — server startup logic",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Display a loading spinner or progress bar during the first startup rather than silent waiting\n- Pre-build the bundle during `cargo build`/`cargo run` so it's ready\n- Cache the built bundle and only rebuild when source files change\n- Show estimated time remaining for the first build",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    },
+    {
+      "number": 12,
+      "title": "agent list table formatting breaks on narrow terminals",
+      "severity": "Low",
+      "category": "UX",
+      "sections": [
+        {
+          "body": "Run agent list after submitting a task with a long description.",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Readable table output.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "The DESCRIPTION column has very long text that causes the table to wrap badly. Columns are misaligned and the STATUS column value appears on a separate row for the queued task.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The agent list output formatter doesn't truncate long field values or adapt to terminal width.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "cli/browser4-cli/src/ — agent list output formatting",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Truncate the DESCRIPTION column to a reasonable width (e.g., 60 chars) with '...'\n- Auto-detect terminal width and adjust column widths\n- Use --json flag for programmatic access (already works); improve the human-readable default",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "decision": null,
+        "notes": ""
+      }
+    }
+  ]
+}

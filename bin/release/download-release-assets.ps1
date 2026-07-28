@@ -6,7 +6,7 @@
 # - Guard "chcp" and other Windows-only commands behind platform checks.
 # ═══════════════════════════════════════════════════════════════════
 
-<![CDATA[#!/usr/bin/env pwsh
+#!/usr/bin/env pwsh
 <#
 .SYNOPSIS
     Download all assets from a GitHub release for platonai/Browser4.
@@ -235,4 +235,3 @@ if ($failCount -gt 0) {
 }
 
 exit 0
-]]>

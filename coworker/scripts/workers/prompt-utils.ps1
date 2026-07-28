@@ -10,14 +10,10 @@
 #>
 
 # ── Backend detection ────────────────────────────────────────────────────────
+# Get-AgentBackend is defined in config.ps1 (single source of truth).
 $workerDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $configPath = Join-Path (Split-Path -Parent $workerDir) 'config.ps1'
 if (Test-Path $configPath) { . $configPath }
-
-function Get-AgentBackend {
-    if ($CLAUDE) { return 'claude' }
-    return 'copilot'
-}
 
 # ── Prompt fragments ─────────────────────────────────────────────────────────
 

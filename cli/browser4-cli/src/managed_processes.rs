@@ -334,8 +334,17 @@ where
     );
     let browser_kill = merge_browser_kill_results(pre_browser_kill, post_browser_kill);
 
-    eprintln!("  [5/5] Waiting for processes to exit ...");
-    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(sleep_after));
+    let has_activity = !shutdown.stopped_pids.is_empty()
+        || !shutdown.forced_pids.is_empty()
+        || !shutdown.remaining_pids.is_empty()
+        || !browser_kill.killed_pids.is_empty()
+        || !browser_kill.remaining_pids.is_empty();
+    if has_activity {
+        eprintln!("  [5/5] Waiting for processes to exit ...");
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(sleep_after));
+    } else {
+        eprintln!("  [5/5] No processes to wait for, skipping.");
+    }
 
     ForceStopBrowser4ServerResult {
         shutdown,
@@ -716,6 +725,7 @@ fn command_line_matches_browser4_server(command_line: &str) -> bool {
     normalized.contains("browser4.jar")
         || normalized.contains("browser4launcherkt")
         || normalized.contains("browser4bundleapplicationkt")
+        || normalized.contains("browser4standaloneapplicationkt")
 }
 
 fn find_browser4_server_processes() -> Vec<u32> {
@@ -727,7 +737,7 @@ fn find_browser4_server_processes() -> Vec<u32> {
         if let Ok(output) = Command::new("pgrep")
             .args([
                 "-f",
-                r"browser4\.jar|browser4launcherkt|browser4bundleapplicationkt",
+                r"browser4\.jar|browser4launcherkt|browser4bundleapplicationkt|browser4standaloneapplicationkt",
             ])
             .output()
         {
@@ -743,7 +753,7 @@ fn find_browser4_server_processes() -> Vec<u32> {
                 Where-Object {
                     $_.Name -match '^(java|javaw)\.exe$' -and
                     -not [string]::IsNullOrWhiteSpace($_.CommandLine) -and
-                    $_.CommandLine -match '(?i)(Browser4\.jar|\bBrowser4LauncherKt\b|\bBrowser4BundleApplicationKt\b)'
+                    $_.CommandLine -match '(?i)(Browser4\.jar|\bBrowser4LauncherKt\b|\bBrowser4BundleApplicationKt\b|\bBrowser4StandaloneApplicationKt\b)'
                 } |
                 Select-Object -ExpandProperty ProcessId
         "#;
@@ -1256,10 +1266,12 @@ mod tests {
         let jar = r#""C:/Java/bin/java.exe" -jar D:/browser4/Browser4.jar --server.port=8182"#;
         let launcher = r#""C:/Java/bin/java.exe" -cp @C:/Temp/spring-boot.argfile Browser4LauncherKt --server.port=8182"#;
         let bundle = r#""D:/runtime/bin/java.exe" -cp D:/lib/* ai.platon.pulsar.apps.Browser4BundleApplicationKt --server.port=8182"#;
+        let standalone = r#""C:/Java/bin/java.exe" -cp D:/workspace/target/classes ai.platon.pulsar.apps.Browser4StandaloneApplicationKt"#;
 
         assert!(command_line_matches_browser4_server(jar));
         assert!(command_line_matches_browser4_server(launcher));
         assert!(command_line_matches_browser4_server(bundle));
+        assert!(command_line_matches_browser4_server(standalone));
     }
 
     #[test]
@@ -1327,6 +1339,8 @@ mod tests {
 
         assert!(result.shutdown.stopped_pids.is_empty());
         assert!(result.browser_kill.killed_pids.is_empty());
+        // When there is no process activity (all results empty), step 5
+        // sleep is skipped — so "sleep" must NOT appear in the event list.
         assert_eq!(
             events.lock().unwrap().as_slice(),
             [
@@ -1334,7 +1348,6 @@ mod tests {
                 "browser-kill",
                 "shutdown",
                 "browser-kill",
-                "sleep",
             ]
         );
     }

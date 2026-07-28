@@ -51,7 +51,7 @@ what would run, or name one or more tasks to run a subset.
     Stop after the first failing task.
 
 .NOTES
-Each task invokes claude (Claude Code), requires an active LLM subscription,
+Each task invokes an agent CLI (claude or kimi), requires an active LLM subscription,
 and may take several minutes.  Run them selectively during development.
 #>
 
@@ -81,24 +81,36 @@ param(
     # Skip the browser4-cli version check (forwarded to run-task.ps1).
     [switch] $SkipVersionCheck,
 
-    # Maximum minutes to wait for each individual task.
-    # 0 (default) means no timeout.  On timeout the task process is killed
-    # and the task is marked as TIMEOUT (exit code 124).
-    [int] $TimeoutMinutes = 0
+    # Maximum minutes to wait for each individual task (default 60 = 1 hour).
+    # On timeout the task process is killed and the task is marked as
+    # TIMEOUT (exit code 124).  Set to 0 to disable the timeout.
+    [int] $TimeoutMinutes = 60,
+
+    # Override the agent CLI to use (claude, kimi, or opencode).
+    # When empty, auto-detects. Forwarded to run-task.ps1.
+    [string] $Agent = '',
+
+    # Custom tasks directory. When set, overrides the default tasks/ directory.
+    # Used by test.ps1 rws --dir to run tasks from an arbitrary directory.
+    [string] $TasksDir = ''
 )
 
 $ErrorActionPreference = 'Stop'
 $script:StartTime = Get-Date
+
+# Dot-source shared helpers for Read-TaskFile (used in -List mode).
+# Safe: this script already sets ErrorActionPreference=Stop; default dev mode is harmless.
+. "$PSScriptRoot/common.ps1"
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Discovery — every .md in tasks/ (recursive into subdirectories)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 $script:ScriptsDir = $PSScriptRoot
-$script:TasksDir   = Join-Path $ScriptsDir '..\tasks'
+$script:TasksDir   = if ($TasksDir) { $TasksDir } else { Join-Path $ScriptsDir '..' 'tasks' }
 $script:RunnerPath = Join-Path $ScriptsDir 'run-task.ps1'
-# Repo root is 3 levels up from scripts/ (scripts -> tests -> browser4-cli -> repo root)
-$script:RepoRoot   = (Resolve-Path "$ScriptsDir/../../..").Path
+# Repo root is set by common.ps1 (dot-sourced above at line 103).
+# $script:RepoRoot is already available — no need to recompute.
 
 $script:DiscoveredFiles = Get-ChildItem -Path $TasksDir -Filter '*.md' -Recurse `
     | Sort-Object Name
@@ -113,14 +125,9 @@ if ($Discovered.Count -eq 0) {
 
 # ── Category filter ──────────────────────────────────────────────────────────
 if ($Category -ne 'all') {
-    $categoryPathMap = @{
-        'generic'    = '\real-world\generic\'
-        'browser4'   = '\real-world\browser4\'
-        'real-world' = '\real-world\'
-        'mock-site'  = '\mock-site\'
+    $script:DiscoveredFiles = $DiscoveredFiles | Where-Object {
+        Test-TaskCategory -FilePath $_.FullName -Category $Category
     }
-    $segment = $categoryPathMap[$Category]
-    $script:DiscoveredFiles = $DiscoveredFiles | Where-Object { $_.FullName.Contains($segment) }
     $script:Discovered = $DiscoveredFiles | ForEach-Object { $_.Name }
     $script:TaskPathMap = @{}
     $DiscoveredFiles | ForEach-Object { $TaskPathMap[$_.Name] = $_.FullName }
@@ -133,17 +140,7 @@ if ($Category -ne 'all') {
 
 # Resolve which tasks to run — accept names with or without .md extension
 if ($Tasks -and $Tasks.Count -gt 0) {
-    $script:Selected = foreach ($name in $Tasks) {
-        $base = [System.IO.Path]::GetFileNameWithoutExtension($name)
-        $mdName = "$base.md"
-        if ($mdName -in $Discovered) {
-            $mdName
-        } elseif ($name -in $Discovered) {
-            $name
-        } else {
-            Write-Host "WARNING: '$name' not found among discovered tasks, skipping." -ForegroundColor Yellow
-        }
-    }
+    $script:Selected = Resolve-TaskNames -Requested $Tasks -Discovered $Discovered
 
     if ($Selected.Count -eq 0) {
         Write-Host 'No matching tasks to run.' -ForegroundColor Yellow
@@ -177,18 +174,14 @@ if ($List) {
 
         # Extract the heading and first content line as a quick description.
         $desc = ''
-        $content = Get-Content $taskPath -Raw -ErrorAction SilentlyContinue
-        if ($content -match '(?m)^\s*#\s+(.+?)\s*$') {
-            $heading = $Matches[1].Trim()
-            # Get the first non-blank, non-heading line after the heading
-            $afterHeading = $content -replace '^\s*#\s+.+?\s*\r?\n', ''
-            if ($afterHeading -match '(?m)^\s*\r?\n?\s*(.+?)\s*$' -or
-                $afterHeading -match '(?m)^(.+?)\s*$') {
-                $firstLine = $Matches[1].Trim()
-                if ($firstLine -and -not $firstLine.StartsWith('#')) {
-                    $desc = " -- $firstLine"
-                }
+        try {
+            $task = Read-TaskFile -Path $taskPath
+            $firstLine = ($task.Body -split "`n" | Where-Object { $_ -match '\S' } | Select-Object -First 1)
+            if ($firstLine) {
+                $desc = " -- $($firstLine.Trim())"
             }
+        } catch {
+            # Silently skip unparseable files in list mode
         }
 
         Write-Host "  $catTag $name$marker$desc"
@@ -217,26 +210,29 @@ function Write-Section {
     Write-Host "-- $Text --" -ForegroundColor Yellow
 }
 
-function Format-Duration {
-    param([TimeSpan] $Duration)
-    if ($Duration.TotalSeconds -lt 1) { return '<1s' }
-    if ($Duration.TotalMinutes -lt 1) {
-        return '{0:F1}s' -f $Duration.TotalSeconds
+# ═══════════════════════════════════════════════════════════════════════════════
+# Pre-flight: check that an agent CLI (claude, kimi, or opencode) and run-task.ps1 are available
+# ═══════════════════════════════════════════════════════════════════════════════
+
+$knownAgents = @('claude', 'kimi', 'opencode')
+$agentAvailable = $false
+if ($Agent) {
+    $agentAvailable = $null -ne (Get-Command $Agent -ErrorAction SilentlyContinue)
+    if (-not $agentAvailable) {
+        Write-Host "ERROR: Specified agent '$Agent' not found on PATH." -ForegroundColor Red
+        exit 1
     }
-    if ($Duration.TotalHours -lt 1) {
-        return '{0}m {1}s' -f $Duration.Minutes, $Duration.Seconds
+} else {
+    foreach ($a in $knownAgents) {
+        if ($null -ne (Get-Command $a -ErrorAction SilentlyContinue)) {
+            $agentAvailable = $true
+            break
+        }
     }
-    return '{0}h {1}m {2}s' -f $Duration.Hours, $Duration.Minutes, $Duration.Seconds
 }
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# Pre-flight: check that claude and run-task.ps1 are available
-# ═══════════════════════════════════════════════════════════════════════════════
-
-$claudeAvailable = $null -ne (Get-Command claude -ErrorAction SilentlyContinue)
-if (-not $claudeAvailable) {
-    Write-Host 'WARNING: claude CLI not found on PATH.' -ForegroundColor Yellow
-    Write-Host 'Each task invokes claude.  Without it, every task will fail.'
+if (-not $agentAvailable) {
+    Write-Host 'WARNING: no agent CLI (claude, kimi, or opencode) found on PATH.' -ForegroundColor Yellow
+    Write-Host 'Each task invokes an agent CLI.  Without one, every task will fail.'
     Write-Host ''
 }
 
@@ -266,7 +262,7 @@ foreach ($name in $Selected) {
 
     try {
         # Run the task via run-task.ps1.
-        # Working directory is the repo root so claude finds the project.
+        # Working directory is the repo root so the agent CLI finds the project.
         Push-Location $RepoRoot
         try {
             if ($Production) {
@@ -283,8 +279,11 @@ foreach ($name in $Selected) {
             if ($SkipVersionCheck) {
                 $pwshArgs += '-SkipVersionCheck'
             }
-            if ($TimeoutMinutes -gt 0) {
-                $pwshArgs += '-TimeoutMinutes', $TimeoutMinutes
+            # Always forward the timeout value (even 0) so run-task.ps1
+            # receives the caller's intent rather than its own default.
+            $pwshArgs += '-TimeoutMinutes', $TimeoutMinutes
+            if ($Agent) {
+                $pwshArgs += '-Agent', $Agent
             }
             & pwsh @pwshArgs
             $exitCode = $LASTEXITCODE

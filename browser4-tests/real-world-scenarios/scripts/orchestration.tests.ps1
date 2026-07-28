@@ -1,4 +1,16 @@
 #!/usr/bin/env pwsh
+
+# ═══════════════════════════════════════════════════════════════════
+# CROSS-PLATFORM: This script must run on Linux, macOS, and Windows.
+# - Use $IsWindows / $IsLinux / $IsMacOS for platform detection.
+# - Use "($IsWindows -or $env:OS -eq 'Windows_NT')" for PS 5.1 compat.
+# - Avoid Windows-only env vars ($env:TEMP) — use $env:TMPDIR fallback.
+# - Guard "chcp" and other Windows-only commands behind platform checks.
+# - Paths: use Join-Path / Split-Path; never bake \ or / as literal.
+# - [System.IO.Path]::IsPathRooted is platform-aware — C:\foo is NOT
+#   rooted on Linux; test with platform-appropriate absolute paths.
+# ═══════════════════════════════════════════════════════════════════
+
 <#
 .SYNOPSIS
 Unit tests for orchestration-common.ps1 helpers.
@@ -217,7 +229,7 @@ Write-Host ''
 Write-Host '--- ConvertFrom-UseCaseFile ---' -ForegroundColor Yellow
 
 # Create a temporary use-case file
-$tempDir = Join-Path $env:TEMP "orchestration-tests-$pid"
+$tempDir = Join-Path ([System.IO.Path]::GetTempPath()) "orchestration-tests-$pid"
 New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
 
 $sampleUseCase = @"
@@ -359,7 +371,7 @@ Write-Host ''
 Write-Host '--- State JSON round-trip ---' -ForegroundColor Yellow
 
 # Use a temporary state directory so we don't interfere with real state
-$tempStateDir = Join-Path $env:TEMP "orchestration-test-state-$pid"
+$tempStateDir = Join-Path ([System.IO.Path]::GetTempPath()) "orchestration-test-state-$pid"
 $tempStateFile = Join-Path $tempStateDir 'state.json'
 
 # Override the state path functions for this test

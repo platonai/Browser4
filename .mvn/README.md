@@ -13,6 +13,11 @@ JVM options passed to the Maven launcher. Currently enables native access for al
 
 This flag is required for Java native interoperability features used by the project.
 
+### `maven.config`
+Default Maven CLI options applied to every `mvnw` invocation. Currently contains commented-out settings for parallel builds (`-T 1C`) and Kotlin incremental compilation. These are disabled because kapt (Spring/JPA annotation processing) forces non-incremental mode and some plugins (kapt, remote-resources) are not marked thread-safe.
+
+See: https://maven.apache.org/configure.html#maven-config-file
+
 ### `wrapper/maven-wrapper.properties`
 Maven Wrapper version and distribution settings:
 
@@ -21,7 +26,7 @@ Maven Wrapper version and distribution settings:
 | Wrapper version | 3.3.4 |
 | Distribution type | `only-script` (scripts only, no bundled JAR) |
 | Maven version | 3.9.16 |
-| Distribution URL | `https://repo.maven.apache.org/maven2/org/apache/maven/apache-maven/3.9.16/apache-maven-3.9.16-bin.zip` |
+| Distribution URL | Apache Maven Central |
 
 ## Usage
 
@@ -31,7 +36,3 @@ Use the wrapper scripts at the project root instead of a system-installed Maven:
 - **Unix/macOS:** `./mvnw <goals>`
 
 The wrapper automatically downloads the configured Maven distribution on first use.
-
-## Version
-
-Current for Browser4 4.11.x.

@@ -1,0 +1,42 @@
+{
+  "files": {
+    "2026/0621/448.md": {
+      "checkedAt": "2026-06-23T07:48:00.000Z",
+      "verdict": "defer",
+      "relevance": "high",
+      "risk": "medium",
+      "summary": "Bug in press Enter command showing stale URL — fix touches navigation/wait subsystem, not a trivial isolated change."
+    },
+    "2026/0621/449.md": {
+      "checkedAt": "2026-06-23T07:48:00.000Z",
+      "verdict": "defer",
+      "relevance": "medium",
+      "risk": "medium",
+      "summary": "Amazon geo-detects locale and shows HKD — primarily upstream behavior; adding locale override would be a new feature requiring design decisions."
+    },
+    "2026/0621/450.md": {
+      "checkedAt": "2026-06-23T07:48:00.000Z",
+      "verdict": "approve",
+      "relevance": "high",
+      "risk": "low",
+      "summary": "scroll down command falls through to help output — likely a command parsing or registration bug, isolated fix in one area."
+    },
+    "2026/0621/451.md": {
+      "checkedAt": "2026-06-23T07:48:00.000Z",
+      "verdict": "defer",
+      "relevance": "high",
+      "risk": "medium",
+      "summary": "type command duplicates query when it times out silently — fix touches timeout mechanism, verification, and defensive layers across multiple areas."
+    },
+    "2026/0621/452.md": {
+      "checkedAt": "2026-06-23T07:48:00.000Z",
+      "verdict": "approve",
+      "relevance": "high",
+      "risk": "low",
+      "summary": "SKILL.md has confusing Cargo path references — pure documentation fix with no code side effects."
+    }
+  },
+  "lastRunAt": "2026-06-23T07:48:00.000Z",
+  "totalChecked": 5,
+  "totalApproved": 2
+}

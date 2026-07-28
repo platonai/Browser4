@@ -59,7 +59,9 @@ function main() {
     return;
   }
 
-  runCommand('npm publish');
+  const isPrerelease = prePublishDecision.cliVersion.includes('-');
+  const tagFlag = isPrerelease ? '--tag next' : '';
+  runCommand(`npm publish ${tagFlag}`);
 }
 
 main();

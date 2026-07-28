@@ -4,7 +4,7 @@
     <parent>
         <groupId>ai.platon.pulsar</groupId>
         <artifactId>browser4</artifactId>
-        <version>4.11.22-SNAPSHOT</version>
+        <version>4.12.1-SNAPSHOT</version>
         <relativePath>../../pom.xml</relativePath>
     </parent>
 
@@ -31,11 +31,27 @@
                     <groupId>org.jetbrains.kotlin</groupId>
                     <artifactId>kotlin-gradle-plugin-api</artifactId>
                 </exclusion>
+                <!-- log4j-core (~2.5 MB) is redundant: log4j-to-slf4j (also on
+                     classpath) already routes log4j API calls to SLF4J → logback. -->
+                <exclusion>
+                    <groupId>org.apache.logging.log4j</groupId>
+                    <artifactId>log4j-core</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>com.google.guava</groupId>
+                    <artifactId>guava</artifactId>
+                </exclusion>
             </exclusions>
         </dependency>
         <dependency>
             <groupId>ai.platon.pulsar</groupId>
             <artifactId>pulsar-jsoup</artifactId>
+            <exclusions>
+                <exclusion>
+                    <groupId>com.google.guava</groupId>
+                    <artifactId>guava</artifactId>
+                </exclusion>
+            </exclusions>
         </dependency>
         <dependency>
             <groupId>ai.platon.cdt</groupId>
@@ -81,16 +97,6 @@
         <dependency>
             <groupId>io.ktor</groupId>
             <artifactId>ktor-client-websockets</artifactId>
-        </dependency>
-
-
-        <!-- javassist is deprecated since we will remove reflects from this project -->
-        <!-- Source: https://mvnrepository.com/artifact/org.javassist/javassist -->
-        <dependency>
-            <groupId>org.javassist</groupId>
-            <artifactId>javassist</artifactId>
-            <version>3.31.0-GA</version>
-            <scope>compile</scope>
         </dependency>
 
 

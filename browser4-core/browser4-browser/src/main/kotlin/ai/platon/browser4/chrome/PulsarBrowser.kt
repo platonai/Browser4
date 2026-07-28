@@ -1,20 +1,20 @@
 package ai.platon.browser4.chrome
 
-import ai.platon.browser4.chrome.handler.RemoteChromeProtocol
-import ai.platon.browser4.chrome.handler.transport.ChromeImpl
-import ai.platon.browser4.chrome.handler.transport.ChromeImpl.Companion.ABOUT_BLANK_PAGE
+import ai.platon.browser4.chrome.protocol.transport.ChromeImpl
+import ai.platon.browser4.api.BrowserProtocol
+import ai.platon.browser4.chrome.protocol.transport.ChromeImpl.Companion.ABOUT_BLANK_PAGE
 import ai.platon.browser4.chrome.util.ChromeDriverException
 import ai.platon.browser4.chrome.util.ChromeIOException
 import ai.platon.browser4.chrome.util.ChromeServiceException
-import ai.platon.pulsar.browser.AbstractBrowser
-import ai.platon.pulsar.browser.AbstractWebDriver
-import ai.platon.pulsar.browser.BrowserId
-import ai.platon.pulsar.browser.WebDriver
-import ai.platon.pulsar.browser.common.BrowserSettings
-import ai.platon.pulsar.browser.common.BrowserUnavailableException
-import ai.platon.pulsar.browser.common.WebDriverException
-import ai.platon.pulsar.browser.impl.BrowserTab
-import ai.platon.pulsar.browser.impl.DevToolsConfig
+import ai.platon.browser4.api.AbstractBrowser
+import ai.platon.browser4.api.AbstractWebDriver
+import ai.platon.browser4.api.BrowserId
+import ai.platon.browser4.api.WebDriver
+import ai.platon.browser4.api.model.BrowserSettings
+import ai.platon.browser4.api.model.BrowserUnavailableException
+import ai.platon.browser4.api.model.WebDriverException
+import ai.platon.browser4.api.model.BrowserTab
+import ai.platon.browser4.api.model.DevToolsConfig
 import ai.platon.pulsar.common.CheckState
 import ai.platon.pulsar.common.ResourceStatus
 import ai.platon.pulsar.common.config.CapabilityTypes.BROWSER_REUSE_RECOVERED_DRIVERS
@@ -140,6 +140,16 @@ class PulsarBrowser(
     @Throws(WebDriverException::class)
     override fun newDriver() = newDriver(ABOUT_BLANK_PAGE)
 
+    /**
+     * Creates a [PulsarWebDriver] for an existing [BrowserTab] without
+     * creating a new tab.  This is the low-level entry point that backs
+     * [newDriver] — useful when a tab already exists (e.g. from an
+     * extension-attached browser) and only the driver scaffolding is needed.
+     */
+    fun newDriverForTab(tab: BrowserTab): PulsarWebDriver {
+        return newDriverIfAbsent(tab, false)
+    }
+
     @Synchronized
     @Throws(WebDriverException::class)
     override fun newDriver(url: String): PulsarWebDriver {
@@ -241,7 +251,7 @@ class PulsarBrowser(
 
         val uniqueID = chromeTab.id
         val devTools = createDevTools(chromeTab, toolsConfig)
-        val browserProtocol = RemoteChromeProtocol(devTools)
+        val browserProtocol = BrowserProtocol.create(devTools)
         val driver = PulsarWebDriver(uniqueID, chromeTab, browserProtocol, this)
         mutableDrivers[chromeTab.id] = driver
 

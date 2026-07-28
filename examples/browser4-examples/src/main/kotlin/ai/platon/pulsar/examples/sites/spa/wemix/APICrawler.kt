@@ -1,16 +1,17 @@
 package ai.platon.pulsar.examples.sites.spa.wemix
 
-import ai.platon.pulsar.browser.WebDriver
+import ai.platon.pulsar.core.api.WebDriver
 import ai.platon.pulsar.persist.WebPage
 import ai.platon.pulsar.skeleton.context.PulsarContexts
 import ai.platon.pulsar.skeleton.event.WebPageWebDriverEventHandler
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
+import kotlin.time.Duration.Companion.milliseconds
 
 private class InitBrowserHandler(val initUrl: String): WebPageWebDriverEventHandler() {
     override suspend fun invoke(page: WebPage, driver: WebDriver): Any? {
         driver.navigate(initUrl)
-        delay(10_000)
+        delay(10_000.milliseconds)
         return null
     }
 }

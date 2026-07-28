@@ -135,3 +135,112 @@ pub(super) fn test_swarm_submission_commands_live(ctx: &mut E2ECtx) {
 
     run_command(ctx, &["close"]);
 }
+
+pub(super) fn test_crawl_submission_live(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    // Open a session first (crawl needs a browser session on the backend).
+    let open_result = run_command(
+        ctx,
+        &[
+            "open",
+            "--profile-mode=TEMPORARY",
+            "--max-open-tabs=4",
+            "--display-mode=HEADLESS",
+        ],
+    );
+    let open_output = strip_snapshot_output(&open_result.stdout);
+    assert!(
+        open_output.contains("Session opened:"),
+        "Expected session open output in:\n{}",
+        open_result.stdout
+    );
+
+    let session_id = read_persisted_session_id(&ctx.state_dir);
+    assert!(
+        !session_id.trim().is_empty(),
+        "Expected open to persist a non-empty session id"
+    );
+
+    let expected_url = ctx.interactive_url();
+
+    // Submit a crawl in background mode
+    let crawl_submit_result = run_command(
+        ctx,
+        &[
+            "crawl",
+            &expected_url,
+            "--background",
+            "--depth=0",
+            "--parse",
+        ],
+    );
+    let crawl_submit_output = strip_snapshot_output(&crawl_submit_result.stdout);
+    assert!(
+        crawl_submit_output.contains("Crawl task submitted:"),
+        "Expected crawl task submission output in:\n{}",
+        crawl_submit_result.stdout
+    );
+
+    // Extract task ID from output: "Crawl task submitted: <id>"
+    let task_id = crawl_submit_output
+        .lines()
+        .find_map(|line| {
+            line.trim()
+                .strip_prefix("Crawl task submitted: ")
+                .map(|s| s.trim().to_string())
+        })
+        .expect("Expected crawl task ID in submission output");
+
+    assert!(
+        !task_id.is_empty(),
+        "Expected non-empty crawl task ID in:\n{}",
+        crawl_submit_result.stdout
+    );
+
+    // Check status
+    let crawl_status_result = run_command(ctx, &["crawl", "status", &task_id]);
+    let crawl_status = parse_json_output(&crawl_status_result.stdout, "crawl status");
+    assert_eq!(
+        crawl_status["id"].as_str(),
+        Some(task_id.as_str()),
+        "Expected crawl status payload to reference task id '{task_id}', got:\n{}",
+        crawl_status_result.stdout
+    );
+
+    // Wait for result (with timeout)
+    match wait_for_crawl_result(ctx, &task_id, 60_000) {
+        Ok(crawl_result) => {
+            assert_eq!(
+                crawl_result["id"].as_str(),
+                Some(task_id.as_str()),
+                "Expected crawl result payload to reference task id '{task_id}', got:\n{crawl_result}"
+            );
+            if crawl_result["statusCode"]
+                .as_i64()
+                .is_some_and(|status| (200..400).contains(&status))
+            {
+                let pages = crawl_result["pages"].as_array();
+                // With depth=0, at least the starting URL should be crawled
+                if let Some(pages) = pages {
+                    assert!(
+                        !pages.is_empty(),
+                        "Expected crawl result pages to be non-empty for task '{task_id}', got:\n{crawl_result}"
+                    );
+                }
+            } else {
+                eprintln!(
+                    "[crawl live] Task {task_id} completed with non-success status: {:?}",
+                    crawl_result
+                );
+            }
+        }
+        Err(last_payload) => {
+            eprintln!(
+                "[crawl live] Task {task_id} timed out waiting for completion. Last payload:\n{last_payload}"
+            );
+        }
+    }
+
+    run_command(ctx, &["close"]);
+}

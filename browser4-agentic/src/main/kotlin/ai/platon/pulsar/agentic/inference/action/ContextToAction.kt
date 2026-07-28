@@ -16,6 +16,7 @@ import ai.platon.pulsar.external.ChatModelFactory
 import ai.platon.pulsar.external.ModelResponse
 import ai.platon.pulsar.external.ResponseState
 import java.nio.file.Files
+import java.util.concurrent.atomic.AtomicBoolean
 
 open class ContextToAction(
     val conf: ImmutableConfig
@@ -27,6 +28,26 @@ open class ContextToAction(
     val chatModel: BrowserChatModel get() = ChatModelFactory.getOrCreate(conf)
 
     val tta = TextToAction(conf)
+
+    /**
+     * Tracks whether the configured chat model supports vision (image) input.
+     * null = unknown, true = supports images, false = text-only.
+     * Lazily determined on first image-bearing request; cached thereafter to avoid
+     * wasted retries against text-only models (e.g., DeepSeek).
+     */
+    private val modelSupportsVision = AtomicBoolean(true)
+
+    /**
+     * Set to true once we have made an actual image-bearing call and got a definitive
+     * answer; before that, modelSupportsVision is an optimistic default.
+     */
+    private var visionCapabilityResolved = false
+
+    /**
+     * Returns true if the model is known or assumed to support vision (image) input.
+     * Optimistically returns true until proven otherwise by a failed image-bearing call.
+     */
+    val isVisionSupported: Boolean get() = modelSupportsVision.get()
 
     init {
         Files.createDirectories(baseDir)
@@ -71,19 +92,60 @@ open class ContextToAction(
         val userMessage = messages.userMessages().joinToString("\n")
 
         val category = "cta"
-        val response = if (screenshotB64 != null) {
-            chatModel.call(
-                systemMessage,
-                userMessage,
-                imageUrl = null,
-                b64Image = screenshotB64,
-                mediaType = "image/jpeg", category = category
-            )
+        val response = if (screenshotB64 != null && modelSupportsVision.get()) {
+            try {
+                chatModel.call(
+                    systemMessage,
+                    userMessage,
+                    imageUrl = null,
+                    b64Image = screenshotB64,
+                    mediaType = "image/jpeg", category = category
+                ).also {
+                    // Success — model definitely supports vision
+                    if (!visionCapabilityResolved) {
+                        visionCapabilityResolved = true
+                        logger.info("Model supports vision input (image-bearing call succeeded)")
+                    }
+                }
+            } catch (e: Exception) {
+                if (isImageNotSupportedError(e)) {
+                    logger.warn(
+                        "Model does not support image input (image_url rejected); " +
+                            "disabling screenshots for this session. " +
+                            "Consider using a vision-capable model or setting openai.model.name to a multimodal model."
+                    )
+                    modelSupportsVision.set(false)
+                    visionCapabilityResolved = true
+                    // Retry without the screenshot
+                    chatModel.call(systemMessage, userMessage, category = category)
+                } else {
+                    throw e
+                }
+            }
         } else {
             chatModel.call(systemMessage, userMessage, category = category)
         }
 
         return response
+    }
+
+    /**
+     * Checks whether the given exception was caused by the LLM API rejecting
+     * `image_url` content blocks (typical of text-only models like DeepSeek).
+     */
+    private fun isImageNotSupportedError(e: Exception): Boolean {
+        var cause: Throwable? = e
+        while (cause != null) {
+            val msg = cause.message ?: ""
+            if ((msg.contains("image_url") || msg.contains("image_url")) &&
+                msg.contains("expected") &&
+                (msg.contains("text") || msg.contains("unknown variant"))
+            ) {
+                return true
+            }
+            cause = cause.cause
+        }
+        return false
     }
 
     private fun onWillGenerate(context: ExecutionContext, messages: AgentMessageList) {

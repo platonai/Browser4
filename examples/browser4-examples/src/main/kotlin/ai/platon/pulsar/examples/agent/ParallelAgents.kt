@@ -2,7 +2,6 @@ package ai.platon.pulsar.examples.agent
 
 import ai.platon.pulsar.agentic.context.AgenticContexts
 import ai.platon.pulsar.common.browser.BrowserProfileMode
-import com.google.common.collect.Iterators
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.joinAll
@@ -23,7 +22,7 @@ go to https://news.ycombinator.com/news , search for browser and read top 5 arti
 go to https://news.ycombinator.com/news , open the 4-th articles in new tab
         """.lines().filter { it.isNotBlank() }
 
-    val iterator = Iterators.cycle(tasks)
+    val iterator = generateSequence(0) { it + 1 }.map { tasks[it % tasks.size] }.iterator()
     agents.map { it to iterator.next() }
         .map { (agent, task) -> scope.launch { agent.run(task) } }
         .joinAll()

@@ -26,7 +26,9 @@ import kotlin.reflect.KClass
  *
  * @see UserCommandExecutor
  */
-class CommandToolExecutor : AbstractToolExecutor() {
+class CommandToolExecutor(
+    private val commandRunner: UserCommandExecutor? = null,
+) : AbstractToolExecutor() {
 
     override val domain: String = "command"
 
@@ -73,9 +75,11 @@ class CommandToolExecutor : AbstractToolExecutor() {
         domain: String, functionName: String, args: Map<String, Any?>, receiver: Any
     ): Any? {
         require(domain == this.domain) { "Unsupported domain: $domain" }
-        require(receiver is UserCommandExecutor) { "Receiver must be a CommandRunner" }
-
-        val service = receiver
+        val service = when {
+            receiver is UserCommandExecutor -> receiver
+            commandRunner != null -> commandRunner
+            else -> throw IllegalArgumentException("Receiver must be a CommandRunner")
+        }
 
         return when (functionName) {
             // command.run(command: String, async?: Boolean = true)

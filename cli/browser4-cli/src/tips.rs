@@ -62,6 +62,9 @@ const TIPS_HTMLSNAPSHOT_GET: &[Tip] = &[
     Tip {
         text: "Use `--page N --page-size 500` for paginated results when extracting many elements",
     },
+    Tip {
+        text: "Use `htmlsnapshot export --clean` to strip scripts, styles, and non-standard attributes — produces minimal HTML ideal for LLM consumption",
+    },
 ];
 
 const TIPS_HTMLSNAPSHOT_QUERY: &[Tip] = &[
@@ -279,10 +282,16 @@ const TIPS_INSPECT: &[Tip] = &[
 
 const TIPS_TABS: &[Tip] = &[
     Tip {
-        text: "Use `tab-select <index>` to switch between tabs — then re-snapshot to get fresh refs for the new tab",
+        text: "Use `tab-select <index>` or `tab-select --guid <guid>` to switch between tabs — then re-snapshot to get fresh refs for the new tab",
     },
     Tip {
         text: "Use `tab-new [url]` to open a page in a new tab without losing the current page state",
+    },
+    Tip {
+        text: "Use `tab-close [index]` or `tab-close --guid <guid>` to close a tab by its index or stable GUID from tab-list output",
+    },
+    Tip {
+        text: "Use `tab-list` to see all tabs with their index, GUID, title, and URL — the GUID is stable even when tabs are reordered",
     },
 ];
 
@@ -356,7 +365,7 @@ thread_local! {
 fn tips_for_command(command: &str) -> &'static [Tip] {
     match command {
         "snapshot" | "snapshot-grep" => TIPS_SNAPSHOT,
-        "htmlsnapshot" => TIPS_HTMLSNAPSHOT_GET,
+        "htmlsnapshot" | "htmlsnapshot-export" => TIPS_HTMLSNAPSHOT_GET,
         "htmlsnapshot-get" => TIPS_HTMLSNAPSHOT_GET,
         "htmlsnapshot-query" => TIPS_HTMLSNAPSHOT_QUERY,
         "htmlsnapshot-grep" => TIPS_HTMLSNAPSHOT_GREP,
@@ -370,7 +379,8 @@ fn tips_for_command(command: &str) -> &'static [Tip] {
         "scroll" | "scroll-to" => TIPS_SCROLL,
         "wait" => TIPS_WAIT,
         "screenshot" | "pdf" => TIPS_SCREENSHOT,
-        "crawl" | "crawl-list" => TIPS_CRAWL,
+        "crawl" | "crawl-status" | "crawl-result" | "crawl-cancel" | "crawl-clear"
+        | "crawl-list" => TIPS_CRAWL,
         "swarm-create" | "swarm-submit" | "swarm-query" | "swarm-status" | "swarm-result"
         | "swarm-list" | "swarm-close" => TIPS_SWARM,
         "agent-run" | "agent-status" | "agent-result" | "agent-list" => TIPS_AGENT,
@@ -403,6 +413,8 @@ fn is_suppressed_command(command: &str) -> bool {
             | "uninstall"
             | "upgrade"
             | "doctor"
+            | "doctor-log"
+            | "doctor-metrics"
             | "stop"
             | "status"
             | "kill-all"
@@ -483,6 +495,7 @@ mod tests {
         assert!(!tips_for_command("htmlsnapshot-get").is_empty());
         assert!(!tips_for_command("htmlsnapshot-query").is_empty());
         assert!(!tips_for_command("htmlsnapshot-grep").is_empty());
+        assert!(!tips_for_command("htmlsnapshot-export").is_empty());
         assert!(!tips_for_command("htmlsnapshot-inspect").is_empty());
         // Eval
         assert!(!tips_for_command("eval").is_empty());

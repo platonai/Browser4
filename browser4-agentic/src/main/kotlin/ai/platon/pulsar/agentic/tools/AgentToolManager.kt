@@ -11,7 +11,7 @@ import ai.platon.pulsar.agentic.skills.tools.SkillToolExecutor
 import ai.platon.pulsar.agentic.skills.tools.SkillToolTarget
 import ai.platon.pulsar.agentic.tools.builtin.*
 import ai.platon.pulsar.common.getLogger
-import ai.platon.pulsar.browser.WebDriver
+import ai.platon.browser4.api.WebDriver
 import kotlinx.coroutines.delay
 import java.nio.file.Path
 import kotlin.time.Duration.Companion.milliseconds
@@ -63,6 +63,9 @@ class AgentToolManager constructor(
 
         "shell" to "shell",
         "AgentShell" to "shell",
+
+        "captcha" to "captcha",
+        "Captcha" to "captcha",
     )
 
     private val _concreteExecutors: MutableMap<String, ToolExecutor> by lazy {
@@ -215,6 +218,11 @@ class AgentToolManager constructor(
             }
             "system" -> executor.callFunctionOn(normalized, system)
             "skill" -> executor.callFunctionOn(normalized, skillTarget)
+            "captcha" -> {
+                val captchaExecutor = CustomToolRegistry.instance.get(normalized.domain)
+                    ?: throw UnsupportedOperationException("Captcha domain is active but no CaptchaToolExecutor registered in CustomToolRegistry")
+                captchaExecutor.callFunctionOn(normalized, driver)
+            }
             else -> {
                 val customExecutor = CustomToolRegistry.instance.get(normalized.domain)
                 if (customExecutor != null) {

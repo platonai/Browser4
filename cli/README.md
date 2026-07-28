@@ -79,7 +79,7 @@ browser4-cli htmlsnapshot get text "#main-content"
 browser4-cli htmlsnapshot query --sql @query.sql
 browser4-cli htmlsnapshot grep -i "error"
 
-# AI-powered extraction and summarization (requires LLM key — see LLM Configuration above)
+# AI-powered extraction and summarization (requires LLM key — see LLM Configuration below)
 browser4-cli extract "product name, price, and rating as JSON"
 browser4-cli summarize "key points in 3 bullets"
 
@@ -88,7 +88,7 @@ browser4-cli agent run "Search amazon for mechanical keyboards, compare the top 
 
 # Parallel scraping with swarm
 browser4-cli swarm create --max-open-tabs 12 --display-mode HEADLESS
-browser4-cli swarm submit --seed-file ./urls.txt --refresh --store-content
+browser4-cli swarm submit --seed-file ./urls.txt --refresh
 browser4-cli swarm result scrape-task-1
 
 # Batch multiple commands
@@ -234,11 +234,12 @@ All modes accept `--timeout <ms>` (default: 30000). Load states: `networkidle`,
 
 | Command | Description |
 |---|---|
-| `screenshot [ref]` | Take a screenshot. `--filename <path>`, `--full-page`. Optionally of a specific element. |
+| `screenshot [ref]` | Take a screenshot. `--filename <path>`, `--full-page`, `--viewport <n>`. Optionally of a specific element. |
 | `pdf` | Save page as PDF. `--filename <path>`. |
 
 ```bash
 browser4-cli screenshot --full-page --filename page.png
+browser4-cli screenshot --viewport 0 --filename top.png
 browser4-cli pdf --filename page.pdf
 ```
 
@@ -246,16 +247,19 @@ browser4-cli pdf --filename page.pdf
 
 | Command | Description |
 |---|---|
-| `tab-list` | List all tabs with their zero-based index. |
+| `tab-list` | List all tabs with their zero-based index and stable GUID. Use `--json` for full GUIDs. |
 | `tab-new [url]` | Open a new tab. |
-| `tab-close [index]` | Close a tab (current tab if no index). |
-| `tab-select <index>` | Switch to a tab by index. |
+| `tab-close [index]` | Close a tab (current tab if no index). Use `--guid <guid>` for GUID-based close. |
+| `tab-select <index>` | Switch to a tab by index. Use `--guid <guid>` for GUID-based select. |
 
 ```bash
 browser4-cli tab-list
+browser4-cli tab-list --json            # JSON output with full GUIDs
 browser4-cli tab-select 1
+browser4-cli tab-select --guid 1B46D74FB  # select by stable GUID
 browser4-cli tab-new https://example.com
 browser4-cli tab-close 1
+browser4-cli tab-close --guid 1B46D74FB  # close by stable GUID
 ```
 
 ### Element inspection
@@ -370,6 +374,34 @@ browser4-cli uninstall --dry-run
 browser4-cli uninstall -y
 ```
 
+### Skills
+
+Manage bundled skill files embedded in the browser4-cli binary. Skill files are AI agent
+instructions that always match the installed CLI version.
+
+| Command | Description |
+|---|---|
+| `skills` | List all bundled skill names. Same as `skills list`. |
+| `skills list` | List available bundled skills with file counts. |
+| `skills get <name>` | Output a skill's SKILL.md content. `--full` includes references and templates. `--all` outputs every skill. |
+| `skills path [name]` | Print the skills directory path. With a name, prints the path to that skill's subdirectory. |
+| `skills unpack [dest]` | Unpack bundled skill files to a directory (defaults to the skills directory). |
+
+Skill files are unpacked to the versioned installation directory during `browser4-cli install`.
+Use `skills unpack` to refresh or relocate skill files without reinstalling.
+Set `BROWSER4_SKILLS_DIR` to override the skills directory path.
+
+```bash
+browser4-cli skills                         # List bundled skills
+browser4-cli skills get browser4-cli        # Get the CLI skill's main content
+browser4-cli skills get browser4-cli --full # Include references and templates
+browser4-cli skills get --all               # Output every skill
+browser4-cli skills path                    # Print skills root directory
+browser4-cli skills path browser4-cli       # Print path to a specific skill
+browser4-cli skills unpack                  # Unpack to default skills directory
+browser4-cli skills unpack /custom/path     # Unpack to a custom directory
+```
+
 ### Other
 
 | Command | Description |
@@ -464,7 +496,7 @@ browser4-cli htmlsnapshot
 browser4-cli htmlsnapshot get <field> [selector] [name]
 browser4-cli htmlsnapshot get all <field> [selector] [name]
 browser4-cli htmlsnapshot query [url] --sql <query>
-browser4-cli htmlsnapshot export [--file <path>]
+browser4-cli htmlsnapshot export [--file <path>] [--clean]
 browser4-cli htmlsnapshot summary
 browser4-cli htmlsnapshot grep [OPTIONS] <pattern>
 browser4-cli htmlsnapshot inspect [selector] [--max N] [--depth D]
@@ -556,10 +588,11 @@ browser4-cli htmlsnapshot query --sql "
 
 #### htmlsnapshot export
 
-Save the full snapshot HTML to a local file.
+Save the full snapshot HTML to a local file. Use `--clean` to strip `<script>`, `<style>`, comments, and non-standard attributes — producing minimal HTML ideal for LLM consumption.
 
 ```bash
 browser4-cli htmlsnapshot export --file snapshot.html
+browser4-cli htmlsnapshot export --file page.html --clean
 ```
 
 #### htmlsnapshot summary
@@ -597,6 +630,29 @@ browser4-cli htmlsnapshot inspect                        # auto-discover repeati
 browser4-cli htmlsnapshot inspect ".product_pod"         # inspect a specific container
 browser4-cli htmlsnapshot inspect ".s-result-item" --depth 6 --max 20
 ```
+
+---
+
+### LLM Configuration
+
+AI-powered commands (`agent`, `extract`, `summarize`) and X-SQL `llm_*` functions
+require an LLM API key. Configure one provider via environment variables:
+
+| Provider | Environment Variables |
+|---|---|
+| DeepSeek | `DEEPSEEK_API_KEY` |
+| OpenRouter | `OPENROUTER_API_KEY`, `OPENROUTER_MODEL_NAME`, `OPENROUTER_BASE_URL` |
+| Volcengine (ByteDance) | `VOLCENGINE_API_KEY`, `VOLCENGINE_MODEL_NAME`, `VOLCENGINE_BASE_URL` |
+| OpenAI-compatible | `OPENAI_API_KEY`, `OPENAI_MODEL_NAME`, `OPENAI_BASE_URL` |
+| Aliyun Qwen (DashScope) | `OPENAI_API_KEY`, `OPENAI_MODEL_NAME`, `OPENAI_BASE_URL` |
+
+Example:
+
+```bash
+export DEEPSEEK_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxx
+```
+
+If no valid LLM key is configured, AI commands fail fast with a clear error at startup.
 
 ---
 
@@ -687,13 +743,12 @@ line; `#` comments and blank lines ignored), or both.
 | `--expires <duration>` | Cache expiration (e.g. `1d`, `1h`) |
 | `--refresh` | Force fresh fetch, ignore cache |
 | `--parse` | Parse page immediately after fetching |
-| `--store-content` | Persist page content to storage |
 
 ```bash
 # Submit URLs from a file
 browser4-cli swarm submit --seed-file ./urls.txt \
   --deadline 2026-03-30T00:00:00Z \
-  --expires 1d --refresh --store-content
+  --expires 1d --refresh
 
 # Submit with inline X-SQL
 browser4-cli swarm submit "https://www.amazon.com/dp/B08PP5MSVB" --sql "
@@ -752,7 +807,6 @@ browser4-cli crawl <url> [options]
 | `-a`, `--args` | — | Additional LoadOptions passthrough (e.g. `-a "-nMaxRetry 5"`) |
 | `--refresh` | — | Force fresh fetch |
 | `--parse` | — | Parse pages immediately after fetching |
-| `--store-content` | — | Persist page content |
 | `--expires` | — | Cache expiration (e.g. `1d`, `1h`, `30m`) |
 | `-p`, `--priority` | — | Queue priority (lower = higher) |
 | `--ignore-url-query` | — | Strip query params during URL normalization |
@@ -773,7 +827,7 @@ browser4-cli crawl "https://shop.example.com" \
   --top-links 10
 
 # Deep crawl with refresh and content storage
-browser4-cli crawl "https://example.com" --depth 3 --refresh --store-content
+browser4-cli crawl "https://example.com" --depth 3 --refresh
 
 # Background crawl — submit and return immediately
 browser4-cli crawl "https://example.com" -ol "a[href]" --background

@@ -1,8 +1,8 @@
 package ai.platon.pulsar.integration.proxy
 
 import ai.platon.pulsar.WebDriverTestBase
-import ai.platon.pulsar.browser.AbstractWebDriver
-import ai.platon.pulsar.browser.BrowserId
+import ai.platon.browser4.api.AbstractWebDriver
+import ai.platon.browser4.api.BrowserId
 import ai.platon.pulsar.common.NetUtil
 import ai.platon.pulsar.common.brief
 import ai.platon.pulsar.common.printlnPro
@@ -59,7 +59,7 @@ class PulsarWebDriverProxyTests : WebDriverTestBase() {
     fun whenNavigateAHtmlPageWithProxyThenSuccess() = runWebDriverTest(browserId) { driver ->
         Assumptions.assumeTrue(proxies.isNotEmpty())
 
-        openEnhanced(ipTestUrl, driver, 1)
+        openAndCompute(ipTestUrl, driver, 1)
 
         val navigateEntry = driver.navigateEntry
         assertTrue { navigateEntry.mainFrameReceived }

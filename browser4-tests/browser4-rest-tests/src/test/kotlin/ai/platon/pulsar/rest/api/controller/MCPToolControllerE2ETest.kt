@@ -1,11 +1,11 @@
 package ai.platon.pulsar.rest.api.controller
 
-import ai.platon.pulsar.common.PulsarSessionManager
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.external.ChatModelFactory
 import ai.platon.pulsar.rest.api.TestHelper.MOCK_PRODUCT_DETAIL_URL
-import ai.platon.pulsar.rest.mcp.controller.MCPToolCallResponse
 import ai.platon.pulsar.rest.mcp.controller.MCPToolController
+import ai.platon.pulsar.rest.mcp.controller.dto.MCPToolCallResponse
+import ai.platon.pulsar.rest.session.PulsarSessionManager
 import com.fasterxml.jackson.databind.DeserializationFeature
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.node.ArrayNode
@@ -32,7 +32,7 @@ import kotlin.test.assertTrue
 
 /**
  * Scenario-level E2E tests for [MCPToolController] that mirror the browser
- * behaviors covered by `cli/browser4-cli/tests/e2e.rs`.
+ * behaviors covered by `cli/browser4-cli/tests/e2e/mod.rs`.
  */
 @Tag("E2ETest")
 class MCPToolControllerE2ETest : RestAPITestBase() {
@@ -320,7 +320,7 @@ class MCPToolControllerE2ETest : RestAPITestBase() {
         assertTrue(
             savedState["origins"].any { origin ->
                 origin["origin"].asText() == fixtureServer.baseUrl &&
-                    origin["localStorage"].any { it["name"].asText() == "savedKey" && it["value"].asText() == "saved-value" }
+                        origin["localStorage"].any { it["name"].asText() == "savedKey" && it["value"].asText() == "saved-value" }
             }
         )
 
@@ -363,12 +363,22 @@ class MCPToolControllerE2ETest : RestAPITestBase() {
     fun testInteractionCommands() {
         val sessionId = openResizedInteractiveSession()
 
-        assertNotError(callTool("type", mapOf("sessionId" to sessionId, "selector" to "#type-target", "text" to "hello world")))
+        assertNotError(
+            callTool(
+                "type",
+                mapOf("sessionId" to sessionId, "selector" to "#type-target", "text" to "hello world")
+            )
+        )
         waitForState(sessionId, "Expected type to update typeValue") {
             it["typeValue"].asText() == "hello world"
         }
 
-        assertNotError(callTool("fill", mapOf("sessionId" to sessionId, "selector" to "#fill-target", "text" to "filled text")))
+        assertNotError(
+            callTool(
+                "fill",
+                mapOf("sessionId" to sessionId, "selector" to "#fill-target", "text" to "filled text")
+            )
+        )
         waitForState(sessionId, "Expected fill to update fillValue") {
             it["fillValue"].asText() == "filled text"
         }
@@ -381,7 +391,12 @@ class MCPToolControllerE2ETest : RestAPITestBase() {
             ")" to "hello world!?:+)"
         ).forEach { (key, expectedValue) ->
             val pressBeforeEvents = keyEventCount(readState(sessionId))
-            assertNotError(callTool("press", mapOf("sessionId" to sessionId, "selector" to "#type-target", "key" to key)))
+            assertNotError(
+                callTool(
+                    "press",
+                    mapOf("sessionId" to sessionId, "selector" to "#type-target", "key" to key)
+                )
+            )
             waitForState(sessionId, "Expected press to append $key and emit down/up key events") {
                 val newEvents = keyEventsSince(it, pressBeforeEvents)
                 it["typeValue"].asText() == expectedValue && "down:$key" in newEvents && "up:$key" in newEvents
@@ -406,7 +421,12 @@ class MCPToolControllerE2ETest : RestAPITestBase() {
             it["clickCount"].asInt() == 1
         }
 
-        assertNotError(callTool("browser_click", mapOf("sessionId" to sessionId, "selector" to "#dblclick-target", "doubleClick" to true)))
+        assertNotError(
+            callTool(
+                "browser_click",
+                mapOf("sessionId" to sessionId, "selector" to "#dblclick-target", "doubleClick" to true)
+            )
+        )
         waitForState(sessionId, "Expected dblclick to increment doubleClickCount") {
             it["doubleClickCount"].asInt() == 1
         }
@@ -436,7 +456,12 @@ class MCPToolControllerE2ETest : RestAPITestBase() {
     fun testFormControlsAndExports() {
         val sessionId = openAndNavigate(fixtureServer.interactiveUrl())
 
-        assertNotError(callTool("select_option", mapOf("sessionId" to sessionId, "selector" to "#select-target", "values" to listOf("green"))))
+        assertNotError(
+            callTool(
+                "select_option",
+                mapOf("sessionId" to sessionId, "selector" to "#select-target", "values" to listOf("green"))
+            )
+        )
         waitForState(sessionId, "Expected select to update selectValue") {
             it["selectValue"].asText() == "green"
         }
@@ -619,8 +644,16 @@ class MCPToolControllerE2ETest : RestAPITestBase() {
                 batchToolStep("browser_keydown", mapOf("key" to "Shift"), preFocusSelector = "#type-target"),
                 batchToolStep("browser_keyup", mapOf("key" to "Shift"), preFocusSelector = "#type-target"),
                 batchToolStep("browser_mouse_move_xy", mapOf("x" to 120, "y" to 120)),
-                batchToolStep("browser_mouse_down", mapOf("button" to "left"), preMousePosition = batchMousePosition(120, 120)),
-                batchToolStep("browser_mouse_up", mapOf("button" to "left"), preMousePosition = batchMousePosition(120, 120))
+                batchToolStep(
+                    "browser_mouse_down",
+                    mapOf("button" to "left"),
+                    preMousePosition = batchMousePosition(120, 120)
+                ),
+                batchToolStep(
+                    "browser_mouse_up",
+                    mapOf("button" to "left"),
+                    preMousePosition = batchMousePosition(120, 120)
+                )
             ),
             sessionId = sessionId,
             batchLabel = "stateful focus and mouse flow"
@@ -787,8 +820,18 @@ class MCPToolControllerE2ETest : RestAPITestBase() {
         assertTrue(updatedOutput.contains(fixtureServer.otherUrl()))
 
         val otherTabGuid = extractTabGuid(updatedOutput, fixtureServer.otherUrl())
-        assertNotError(callTool("browser_tabs", mapOf("sessionId" to sessionId, "action" to "select", "tabId" to otherTabGuid)))
-        assertNotError(callTool("browser_tabs", mapOf("sessionId" to sessionId, "action" to "close", "tabId" to otherTabGuid)))
+        assertNotError(
+            callTool(
+                "browser_tabs",
+                mapOf("sessionId" to sessionId, "action" to "select", "tabId" to otherTabGuid)
+            )
+        )
+        assertNotError(
+            callTool(
+                "browser_tabs",
+                mapOf("sessionId" to sessionId, "action" to "close", "tabId" to otherTabGuid)
+            )
+        )
     }
 
     @Test
@@ -801,7 +844,11 @@ class MCPToolControllerE2ETest : RestAPITestBase() {
 
         val summarizeResponse = callTool(
             "agent_summarize",
-            mapOf("sessionId" to sessionId, "instruction" to "Summarize the product page", "selector" to "#productTitle")
+            mapOf(
+                "sessionId" to sessionId,
+                "instruction" to "Summarize the product page",
+                "selector" to "#productTitle"
+            )
         )
         assertNotError(summarizeResponse)
         assertTrue(textContent(summarizeResponse).isNotBlank(), "Expected agent_summarize to return text")
@@ -904,11 +951,13 @@ class MCPToolControllerE2ETest : RestAPITestBase() {
         return sessionId
     }
 
-    private fun openTemporarySession(): String = openSession(mapOf(
-        "sessionId" to "test",
-        "profileMode" to OPEN_PROFILE_MODE,
-        "interactLevel" to "FASTEST"
-    ))
+    private fun openTemporarySession(): String = openSession(
+        mapOf(
+            "sessionId" to "test",
+            "profileMode" to OPEN_PROFILE_MODE,
+            "interactLevel" to "FASTEST"
+        )
+    )
 
     private fun navigate(sessionId: String, url: String) {
         val response = callTool("browser_navigate", mapOf("sessionId" to sessionId, "url" to url))

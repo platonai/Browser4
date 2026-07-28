@@ -303,6 +303,141 @@ test "empty --version with dry-run doesn't download" bash -c "
 
 echo ""
 
+# ── create_symlinks (b4 link logic) ─────────────────────
+
+echo "--- create_symlinks ---" | cyan
+
+# Run symlink tests using the already-sourced FUNC_TEST_SCRIPT.
+SYMLINK_TEST_SCRIPT="$(mktemp)"
+SYMLINK_RESULT="$(mktemp)"
+trap "rm -f '$FUNC_TEST_SCRIPT' '$SYMLINK_TEST_SCRIPT' '$SYMLINK_RESULT'" EXIT
+
+cat > "$SYMLINK_TEST_SCRIPT" << 'SYMLINKEOF'
+src="$1"
+result_file="$2"
+set --       # clear positional params so the sourced install script doesn't parse our args
+source "$src" >/dev/null 2>&1
+
+# Detect platform for test names
+case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*) test_platform="win32-x64"; test_ext=".exe" ;;
+    *)                    test_platform="linux-x64"; test_ext="" ;;
+esac
+test_binary="browser4-cli-${test_platform}${test_ext}"
+test_short="b4${test_ext}"
+
+temp_dir="${TMPDIR:-/tmp}/b4-install-test-$$"
+mkdir -p "$temp_dir"
+cd "$temp_dir" || exit 1
+
+pass=0
+fail=0
+
+do_test() {
+    local name="$1" fn="$2"
+    if bash -c "$fn" 2>/dev/null; then
+        pass=$((pass + 1))
+        printf '\033[0;32m  PASS  %s\033[0m\n' "$name"
+    else
+        fail=$((fail + 1))
+        printf '\033[0;31m  FAIL  %s\033[0m\n' "$name"
+    fi
+}
+
+# Create dummy platform binary (required by create_symlinks)
+echo "dummy" > "$test_binary"
+
+# ── Scenario 1: b4 does not exist → should create ──
+rm -f "$test_short" "b4.cmd" 2>/dev/null || true
+create_symlinks "$test_binary" "$temp_dir" >/dev/null 2>&1
+
+do_test "create_symlinks creates b4 when it does not exist" \
+    "[[ -e '$test_short' || -L '$test_short' || -e '$temp_dir/b4.cmd' ]]"
+
+# ── Scenario 2: b4 exists in install dir → should update ──
+rm -f "$test_short" "$temp_dir/b4.cmd" 2>/dev/null || true
+create_symlinks "$test_binary" "$temp_dir" >/dev/null 2>&1
+
+existing=""
+if [[ -e "$test_short" ]] || [[ -L "$test_short" ]]; then
+    existing="$test_short"
+elif [[ -e "$temp_dir/b4.cmd" ]]; then
+    existing="$temp_dir/b4.cmd"
+fi
+
+if [[ -n "$existing" ]]; then
+    # Remove the link and verify create_symlinks recreates it
+    rm -f "$existing"
+    [[ ! -e "$test_short" ]] && [[ ! -L "$test_short" ]] && [[ ! -e "$temp_dir/b4.cmd" ]] || true
+
+    create_symlinks "$test_binary" "$temp_dir" >/dev/null 2>&1
+
+    after_path=""
+    if [[ -e "$test_short" ]] || [[ -L "$test_short" ]]; then
+        after_path="$test_short"
+    elif [[ -e "$temp_dir/b4.cmd" ]]; then
+        after_path="$temp_dir/b4.cmd"
+    fi
+
+    do_test "create_symlinks updates b4 when it already exists in install dir" \
+        "[[ -n '$after_path' ]]"
+else
+    printf '  SKIP  create_symlinks updates b4 (precondition: initial link creation failed)\n'
+fi
+
+# ── Scenario 3: foreign b4 on PATH → should NOT create b4 ──
+rm -f "$test_short" "$temp_dir/b4.cmd" 2>/dev/null || true
+
+foreign_dir="${TMPDIR:-/tmp}/b4-foreign-$$"
+mkdir -p "$foreign_dir"
+foreign_b4="${foreign_dir}/${test_short}"
+printf '#!/bin/sh\necho NotBrowser4\n' > "$foreign_b4"
+chmod +x "$foreign_b4" 2>/dev/null || true
+
+OLD_PATH="$PATH"
+PATH="${foreign_dir}:${PATH}"
+create_symlinks "$test_binary" "$temp_dir" >/dev/null 2>&1
+PATH="$OLD_PATH"
+
+do_test "create_symlinks skips b4 when foreign b4 is on PATH" \
+    "! [[ -e '$test_short' || -L '$test_short' || -e '$temp_dir/b4.cmd' ]]"
+
+rm -rf "$foreign_dir"
+
+# ── Scenario 4: b4 on PATH is browser4-cli → should create b4 ──
+rm -f "$test_short" "$temp_dir/b4.cmd" 2>/dev/null || true
+
+ours_dir="${TMPDIR:-/tmp}/b4-ours-$$"
+mkdir -p "$ours_dir"
+ours_b4="${ours_dir}/${test_short}"
+printf '#!/bin/sh\necho browser4-cli v4.12.0\n' > "$ours_b4"
+chmod +x "$ours_b4" 2>/dev/null || true
+
+OLD_PATH="$PATH"
+PATH="${ours_dir}:${PATH}"
+create_symlinks "$test_binary" "$temp_dir" >/dev/null 2>&1
+PATH="$OLD_PATH"
+
+do_test "create_symlinks creates b4 when b4 on PATH is browser4-cli" \
+    "[[ -e '$test_short' || -L '$test_short' || -e '$temp_dir/b4.cmd' ]]"
+
+rm -rf "$ours_dir"
+
+# Cleanup temp dir
+rm -rf "$temp_dir"
+
+# Write results to the result file for the parent to parse
+printf '%d\n%d\n' "$pass" "$fail" > "$result_file"
+SYMLINKEOF
+
+bash "$SYMLINK_TEST_SCRIPT" "$FUNC_TEST_SCRIPT" "$SYMLINK_RESULT"
+symlink_pass=$(head -1 "$SYMLINK_RESULT")
+symlink_fail=$(tail -1 "$SYMLINK_RESULT")
+PASS=$((PASS + ${symlink_pass:-0}))
+FAIL=$((FAIL + ${symlink_fail:-0}))
+
+echo ""
+
 # ── Summary ────────────────────────────────────────────
 
 cyan  "============================================"

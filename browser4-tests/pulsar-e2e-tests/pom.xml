@@ -14,12 +14,12 @@
     <parent>
         <groupId>ai.platon.pulsar</groupId>
         <artifactId>browser4</artifactId>
-        <version>4.11.22-SNAPSHOT</version>
+        <version>4.12.1-SNAPSHOT</version>
         <relativePath>../../pom.xml</relativePath>
     </parent>
 
     <artifactId>pulsar-e2e-tests</artifactId>
-    <name>Browser4 E2E Tests</name>
+    <name>Pulsar E2E Tests</name>
 
     <build>
         <defaultGoal>verify</defaultGoal>
@@ -39,13 +39,6 @@
             <scope>test</scope>
         </dependency>
 
-        <!-- MCP functionality for testing -->
-        <dependency>
-            <groupId>ai.platon.pulsar</groupId>
-            <artifactId>browser4-agentic</artifactId>
-            <scope>test</scope>
-        </dependency>
-
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-web</artifactId>
@@ -58,7 +51,16 @@
 
         <dependency>
             <groupId>ai.platon.pulsar</groupId>
-            <artifactId>browser4-tests-common</artifactId>
+            <artifactId>pulsar-tests-common</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- Shared test base classes (WebDriverTestBase, MockSiteAccess, etc.) -->
+        <dependency>
+            <groupId>ai.platon.pulsar</groupId>
+            <artifactId>pulsar-it-tests</artifactId>
+            <version>${project.version}</version>
+            <type>test-jar</type>
             <scope>test</scope>
         </dependency>
         <!--

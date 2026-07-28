@@ -2,17 +2,20 @@ package ai.platon.pulsar.agentic.tools.specs
 
 import ai.platon.browser4.common.B4LLMUtils
 import ai.platon.browser4.common.B4ProjectUtils
+import ai.platon.browser4.common.B4ResourceLoader
 import ai.platon.pulsar.agentic.model.ToolSpec
 import ai.platon.pulsar.common.ExperimentalApi
 import ai.platon.pulsar.common.Strings
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.common.serialize.json.prettyPulsarObjectMapper
+import com.fasterxml.jackson.module.kotlin.readValue
 import java.util.concurrent.atomic.AtomicBoolean
 
 @ExperimentalApi
 object ToolSpecGenerator {
     private val logger = getLogger(this)
     private val isGenerated: AtomicBoolean = AtomicBoolean()
+    private const val CODE_MIRROR_DIR = B4ProjectUtils.CODE_MIRROR_DIR
 
     val webDriverToolSpecs = mutableListOf<ToolSpec>()
     val agentToolSpecs = mutableListOf<ToolSpec>()
@@ -41,8 +44,12 @@ object ToolSpecGenerator {
         if (webDriverSource.isNotBlank()) {
             extractInterface("tab", webDriverSource, "WebDriver").toCollection(webDriverToolSpecs)
         }
+
+        // Fallback: when the source file cannot be read at runtime (e.g. running from a
+        // JAR where code-mirror resources were not copied), load pre-generated specs from
+        // the bundled JSON resource so the tool resolution and CLI e2e tests still work.
         if (webDriverToolSpecs.isEmpty()) {
-            logger.warn("WebDriver tool call list is empty")
+            loadWebDriverToolSpecsFromJson()
         }
 
         val agentSource = try {
@@ -55,7 +62,7 @@ object ToolSpecGenerator {
             extractInterface("agent", agentSource, "PerceptiveAgent").toCollection(agentToolSpecs)
         }
         if (agentToolSpecs.isEmpty()) {
-            logger.warn("PerceptiveAgent tool call list is empty")
+            loadAgentToolSpecsFromJson()
         }
 
         if (!B4ProjectUtils.isInJar()) {
@@ -75,6 +82,49 @@ object ToolSpecGenerator {
         // If both lists are still empty, allow future retries
         if (webDriverToolSpecs.isEmpty() && agentToolSpecs.isEmpty()) {
             isGenerated.set(false)
+        }
+    }
+
+    /**
+     * Fallback: load WebDriver tool specs from the pre-generated JSON resource bundle.
+     *
+     * The JSON file is written by [loadToolSpecs] during non-JAR runs and committed to
+     * `browser4-resources/src/main/resources/code-mirror/`.  When the source-code-based
+     * extraction path fails (e.g. in a JAR without mirrored source), this ensures the
+     * tool registry is still populated.
+     */
+    private fun loadWebDriverToolSpecsFromJson() {
+        try {
+            val json = B4ResourceLoader.readString("$CODE_MIRROR_DIR/driver-tool-call-specs.json")
+            if (json.isNotBlank()) {
+                val specs: List<ToolSpec> = prettyPulsarObjectMapper().readValue(json)
+                webDriverToolSpecs.addAll(specs)
+                logger.info("Loaded {} WebDriver tool specs from bundled JSON fallback", specs.size)
+            }
+        } catch (e: Exception) {
+            logger.warn("Failed to load WebDriver tool specs from JSON fallback: {}", e.message)
+        }
+        if (webDriverToolSpecs.isEmpty()) {
+            logger.warn("WebDriver tool call list is empty (source + JSON fallback both failed)")
+        }
+    }
+
+    /**
+     * Fallback: load agent tool specs from the pre-generated JSON resource bundle.
+     */
+    private fun loadAgentToolSpecsFromJson() {
+        try {
+            val json = B4ResourceLoader.readString("$CODE_MIRROR_DIR/agent-tool-call-specs.json")
+            if (json.isNotBlank()) {
+                val specs: List<ToolSpec> = prettyPulsarObjectMapper().readValue(json)
+                agentToolSpecs.addAll(specs)
+                logger.info("Loaded {} agent tool specs from bundled JSON fallback", specs.size)
+            }
+        } catch (e: Exception) {
+            logger.warn("Failed to load agent tool specs from JSON fallback: {}", e.message)
+        }
+        if (agentToolSpecs.isEmpty()) {
+            logger.warn("PerceptiveAgent tool call list is empty (source + JSON fallback both failed)")
         }
     }
 

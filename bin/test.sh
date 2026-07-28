@@ -1,21 +1,11 @@
 #!/bin/bash
 set -e
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+bin=$(dirname "$0")
 
-# Ensure PowerShell is available; install it if missing
-if ! command -v pwsh &> /dev/null; then
-    echo "PowerShell (pwsh) not found. Installing..."
-    if [ -f "${SCRIPT_DIR}/tools/install-powershell.sh" ]; then
-        bash "${SCRIPT_DIR}/tools/install-powershell.sh" || {
-            echo "ERROR: Failed to install PowerShell. Please install it manually."
-            exit 1
-        }
-    else
-        echo "ERROR: install-powershell.sh not found at ${SCRIPT_DIR}/tools/"
-        exit 1
-    fi
-fi
+. "$bin/tools/install-powershell.sh"
+
+echo "It is strongly recommended to launch `pwsh` and run the .ps1commands directly within the `pwsh` terminal."
 
 # Forward all arguments to the PowerShell test script
-exec pwsh "${SCRIPT_DIR}/test.ps1" "$@"
+exec pwsh "$bin/test.ps1" "$@"

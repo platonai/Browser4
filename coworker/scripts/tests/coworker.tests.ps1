@@ -1,4 +1,16 @@
 #!/usr/bin/env pwsh
+
+# ═══════════════════════════════════════════════════════════════════
+# CROSS-PLATFORM: This script must run on Linux, macOS, and Windows.
+# - Use $IsWindows / $IsLinux / $IsMacOS for platform detection.
+# - Use "($IsWindows -or $env:OS -eq 'Windows_NT')" for PS 5.1 compat.
+# - Avoid Windows-only env vars ($env:TEMP) — use $env:TMPDIR fallback.
+# - Guard "chcp" and other Windows-only commands behind platform checks.
+# - Paths: use Join-Path / Split-Path; never bake \ or / as literal.
+# - [System.IO.Path]::IsPathRooted is platform-aware — C:\foo is NOT
+#   rooted on Linux; test with platform-appropriate absolute paths.
+# ═══════════════════════════════════════════════════════════════════
+
 <#
 .SYNOPSIS
     Unit and integration tests for coworker.ps1 — the Coworker Task Runner.
@@ -54,27 +66,14 @@ function global:New-TempFile {
 Describe 'Write-LogMessage' {
 
     BeforeAll {
-        # Inline replicas for isolated testing
+        # Inline replicas for isolated testing.
+        # Write-ConsoleLine is silenced during tests — the tests assert on what
+        # Write-LogMessage writes to the log file, not on console output.
+        # Without this, every log-level test echoes fake WARN/ERROR lines that
+        # look like real failures in the Pester output.
         function Write-ConsoleLine {
             param([Parameter(Mandatory=$true)][string]$Message, [System.ConsoleColor]$ForegroundColor, [switch]$ErrorStream)
-            try {
-                $canUseHost = [Environment]::UserInteractive -and $null -ne $Host -and $null -ne $Host.UI -and $null -ne $Host.UI.RawUI
-            } catch { $canUseHost = $false }
-            if ($canUseHost) {
-                if ($PSBoundParameters.ContainsKey('ForegroundColor')) { Write-Host $Message -ForegroundColor $ForegroundColor }
-                else { Write-Host $Message }
-                return
-            }
-            $isRedirected = if ($ErrorStream) { [Console]::IsErrorRedirected } else { [Console]::IsOutputRedirected }
-            if ($isRedirected) {
-                $bytes = [System.Text.Encoding]::UTF8.GetBytes($Message + [Environment]::NewLine)
-                $stream = if ($ErrorStream) { [Console]::OpenStandardError() } else { [Console]::OpenStandardOutput() }
-                $stream.Write($bytes, 0, $bytes.Length)
-                $stream.Flush()
-                return
-            }
-            if ($PSBoundParameters.ContainsKey('ForegroundColor')) { Write-Host $Message -ForegroundColor $ForegroundColor }
-            else { Write-Host $Message }
+            # intentionally silent during tests
         }
 
         function Write-LogMessage {
@@ -149,7 +148,7 @@ Describe 'Write-LogMessage' {
         Write-LogMessage -Message 'Timestamp test' -Level 'INFO' -ScriptLogPath $logFile
 
         $content = Get-Content -Path $logFile -Raw -Encoding UTF8
-        $content | Should -Match '\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\]'
+        $content | Should -Match '\[\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}\]'
     }
 
     It 'appends to an existing log file instead of overwriting' {
@@ -226,7 +225,7 @@ Describe 'Write-LogVerbose' {
         Write-LogVerbose -Message 'Verbose test' -ScriptLogPath $logFile
 
         $content = Get-Content -Path $logFile -Raw -Encoding UTF8
-        $content | Should -Match '\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\] \[DEBUG\]'
+        $content | Should -Match '\[\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}\] \[DEBUG\]'
     }
 
     It 'appends to existing log file' {
@@ -317,10 +316,12 @@ Describe 'Ensure-DraftPlaceholders' {
         $null = Ensure-DraftPlaceholders -DraftDirectory $draftDir
 
         $file = Get-Item (Join-Path $draftDir '3.md')
-        # Set-Content with empty value writes a CRLF (2 bytes on Windows).
-        # The actual coworker.ps1 uses Set-Content -Value '' which produces 2 bytes on Windows.
-        # Accept 0 (Unix) or 2 (Windows CRLF).
-        ($file.Length -eq 0 -or $file.Length -eq 2) | Should -BeTrue
+        # Set-Content -Value '' encodes as BOM + platform newline.
+        # Exact byte count varies: PS 5.1 UTF-8 BOM (3) + CRLF (2) = 5,
+        # PS Core utf8NoBOM + LF = 1, etc.
+        # Verify the file has no user content (whitespace-only after decoding).
+        $content = Get-Content -Path $file.FullName -Raw -Encoding UTF8
+        [string]::IsNullOrWhiteSpace($content) | Should -BeTrue
     }
 
     It 'handles a mix of existing and missing placeholders' {
@@ -584,7 +585,7 @@ Describe 'Get-TaskTargetDirectory' {
             return @{ Path = $FinishedDir; Message = "Task moved to finished" }
         }
 
-        $script:finishedDir = 'D:\repo\coworker\tasks\main\3complete'
+        $script:finishedDir = 'D:\repo\coworker\tasks\main\3done'
         $script:approvedDir = 'D:\repo\coworker\tasks\main\5approved'
     }
 
@@ -659,7 +660,7 @@ Describe 'Move-TaskFromWorking' {
                 [string]$Extension,
                 [string]$Message
             )
-            $targetSubDir = Join-Path $TargetDir "$CurrentYear\$CurrentDate"
+            $targetSubDir = Join-Path (Join-Path $TargetDir $CurrentYear) $CurrentDate
             if (!(Test-Path $targetSubDir)) { New-Item -ItemType Directory -Path $targetSubDir -Force | Out-Null }
             $targetInfo = Resolve-UniquePath -Directory $targetSubDir -BaseName $BaseName -Extension $Extension
             if (Test-Path $WorkingPath) {
@@ -703,7 +704,7 @@ Describe 'Move-TaskFromWorking' {
     It 'returns Success=$false and a warning when the file does not exist' {
         $targetDir = Join-Path $script:TestRoot 'finished'
         New-Item -ItemType Directory -Path $targetDir -Force | Out-Null
-        $nonexistentPath = Join-Path $script:TestRoot 'working\ghost-task.md'
+        $nonexistentPath = Join-Path (Join-Path $script:TestRoot 'working') 'ghost-task.md'
 
         $result = Move-TaskFromWorking `
             -WorkingPath $nonexistentPath -TargetDir $targetDir `
@@ -730,15 +731,15 @@ Describe 'Move-TaskFromWorking' {
             -CurrentYear '2026' -CurrentDate '0619' `
             -BaseName 'task' -Extension '.md' -Message 'Task moved to finished'
 
-        $result.Path | Should -Match ([regex]::Escape('\2026\0619\task.md'))
-        Test-Path (Join-Path $targetDir '2026\0619\task.md') | Should -BeTrue
+        $result.Path | Should -Match '[\\/]2026[\\/]0619[\\/]task\.md$'
+        Test-Path (Join-Path (Join-Path (Join-Path $targetDir '2026') '0619') 'task.md') | Should -BeTrue
     }
 
     It 'handles filename collisions in the target directory' {
         $workingDir = Join-Path $script:TestRoot 'working'
         $targetDir  = Join-Path $script:TestRoot 'finished'
         New-Item -ItemType Directory -Path $workingDir -Force | Out-Null
-        $targetSubDir = Join-Path $targetDir '2026\0620'
+        $targetSubDir = Join-Path (Join-Path $targetDir '2026') '0620'
         New-Item -ItemType Directory -Path $targetSubDir -Force | Out-Null
         '' | Set-Content -Path (Join-Path $targetSubDir 'collision.md') -Encoding UTF8
 
@@ -757,7 +758,7 @@ Describe 'Move-TaskFromWorking' {
     It 'does not throw when the working file is missing (regression test for the fix)' {
         $targetDir = Join-Path $script:TestRoot 'finished'
         New-Item -ItemType Directory -Path $targetDir -Force | Out-Null
-        $missingPath = Join-Path $script:TestRoot 'working\nonexistent.md'
+        $missingPath = Join-Path (Join-Path $script:TestRoot 'working') 'nonexistent.md'
 
         $result = $null
         $threw = $false
@@ -892,8 +893,8 @@ Describe 'Date-based directory construction' {
     }
 
     It 'constructs a valid date subdirectory path' {
-        $subDir = Join-Path 'D:\repo\coworker\tasks\main\3complete' '2026\0619'
-        $subDir | Should -BeExactly 'D:\repo\coworker\tasks\main\3complete\2026\0619'
+        $subDir = [System.IO.Path]::Combine('D:\repo\coworker\tasks\main\3done', '2026\0619')
+        $subDir | Should -Match 'D:[\\/]repo[\\/]coworker[\\/]tasks[\\/]main[\\/]3done[\\/]2026[\\/]0619$'
     }
 }
 
@@ -904,26 +905,12 @@ Describe 'Date-based directory construction' {
 Describe 'Write-ConsoleLine' {
 
     BeforeAll {
+        # Silenced during tests — these tests only verify the function doesn't
+        # throw, not what it writes. The real implementation's console output
+        # (Write-Host, stdout, stderr) pollutes the Pester result display.
         function Write-ConsoleLine {
             param([Parameter(Mandatory=$true)][string]$Message, [System.ConsoleColor]$ForegroundColor, [switch]$ErrorStream)
-            try {
-                $canUseHost = [Environment]::UserInteractive -and $null -ne $Host -and $null -ne $Host.UI -and $null -ne $Host.UI.RawUI
-            } catch { $canUseHost = $false }
-            if ($canUseHost) {
-                if ($PSBoundParameters.ContainsKey('ForegroundColor')) { Write-Host $Message -ForegroundColor $ForegroundColor }
-                else { Write-Host $Message }
-                return
-            }
-            $isRedirected = if ($ErrorStream) { [Console]::IsErrorRedirected } else { [Console]::IsOutputRedirected }
-            if ($isRedirected) {
-                $bytes = [System.Text.Encoding]::UTF8.GetBytes($Message + [Environment]::NewLine)
-                $stream = if ($ErrorStream) { [Console]::OpenStandardError() } else { [Console]::OpenStandardOutput() }
-                $stream.Write($bytes, 0, $bytes.Length)
-                $stream.Flush()
-                return
-            }
-            if ($PSBoundParameters.ContainsKey('ForegroundColor')) { Write-Host $Message -ForegroundColor $ForegroundColor }
-            else { Write-Host $Message }
+            # intentionally silent during tests
         }
     }
 
@@ -973,8 +960,8 @@ Describe 'Memory context integration' {
 
     It 'builds generator script path relative to PSScriptRoot' {
         $PSScriptRoot = 'D:\repo\coworker\scripts'
-        $expected = Join-Path $PSScriptRoot 'workers\coworker-memory-generator.ps1'
-        $expected | Should -BeExactly 'D:\repo\coworker\scripts\workers\coworker-memory-generator.ps1'
+        $expected = [System.IO.Path]::Combine($PSScriptRoot, 'workers\coworker-memory-generator.ps1')
+        $expected | Should -Match 'D:[\\/]repo[\\/]coworker[\\/]scripts[\\/]workers[\\/]coworker-memory-generator\.ps1$'
     }
 
     It 'memory context and instructions are empty strings on failure' {
@@ -1002,18 +989,18 @@ Describe 'Memory context integration' {
 Describe 'Task log file naming' {
 
     It 'constructs task log path correctly' {
-        $taskLogPath = Join-Path 'D:\repo\coworker\tasks\300logs\2026\06\19' '223539-fix-login-bug.task.log'
-        $taskLogPath | Should -BeExactly 'D:\repo\coworker\tasks\300logs\2026\06\19\223539-fix-login-bug.task.log'
+        $taskLogPath = [System.IO.Path]::Combine('D:\repo\coworker\tasks\300logs\2026\06\19', '223539-fix-login-bug.task.log')
+        $taskLogPath | Should -Match 'D:[\\/]repo[\\/]coworker[\\/]tasks[\\/]300logs[\\/]2026[\\/]06[\\/]19[\\/]223539-fix-login-bug\.task\.log$'
     }
 
     It 'constructs agent log path correctly' {
-        $agentLogPath = Join-Path 'D:\repo\coworker\tasks\300logs\2026\06\19' '223539-fix-login-bug.agent.log'
-        $agentLogPath | Should -BeExactly 'D:\repo\coworker\tasks\300logs\2026\06\19\223539-fix-login-bug.agent.log'
+        $agentLogPath = [System.IO.Path]::Combine('D:\repo\coworker\tasks\300logs\2026\06\19', '223539-fix-login-bug.agent.log')
+        $agentLogPath | Should -Match 'D:[\\/]repo[\\/]coworker[\\/]tasks[\\/]300logs[\\/]2026[\\/]06[\\/]19[\\/]223539-fix-login-bug\.agent\.log$'
     }
 
     It 'handles base names with dots' {
-        $taskLogPath = Join-Path 'D:\repo\logs\2026\06\19' '120000-v1.2.3-fix.task.log'
-        $taskLogPath | Should -BeExactly 'D:\repo\logs\2026\06\19\120000-v1.2.3-fix.task.log'
+        $taskLogPath = [System.IO.Path]::Combine('D:\repo\logs\2026\06\19', '120000-v1.2.3-fix.task.log')
+        $taskLogPath | Should -Match 'D:[\\/]repo[\\/]logs[\\/]2026[\\/]06[\\/]19[\\/]120000-v1\.2\.3-fix\.task\.log$'
     }
 
     It 'temporary stdout and stderr paths are derived from agent log path' {
@@ -1037,7 +1024,7 @@ Describe 'Task workflow state transitions' {
             Prepare  = '0draft'
             Created  = '1ready'
             Working  = '2working'
-            Finished = 'main/3complete'
+            Finished = 'main/3done'
             Review   = '4review'
             Approved = '5approved'
             Pushed   = '6git-pushed'
@@ -1047,7 +1034,7 @@ Describe 'Task workflow state transitions' {
         $dirs.Prepare  | Should -BeExactly '0draft'
         $dirs.Created  | Should -BeExactly '1ready'
         $dirs.Working  | Should -BeExactly '2working'
-        $dirs.Finished | Should -BeExactly 'main/3complete'
+        $dirs.Finished | Should -BeExactly 'main/3done'
         $dirs.Review   | Should -BeExactly '4review'
         $dirs.Approved | Should -BeExactly '5approved'
         $dirs.Pushed   | Should -BeExactly '6git-pushed'
@@ -1055,7 +1042,7 @@ Describe 'Task workflow state transitions' {
     }
 
     It 'workflow flows left-to-right: 0 -> 1 -> 2 -> 3 -> 5 -> 6' {
-        $pipeline = @('0draft', '1ready', '2working', 'main/3complete', '5approved', '6git-pushed')
+        $pipeline = @('0draft', '1ready', '2working', 'main/3done', '5approved', '6git-pushed')
         $pipeline.Count | Should -Be 6
         $pipeline[0] | Should -BeExactly '0draft'
         $pipeline[5] | Should -BeExactly '6git-pushed'

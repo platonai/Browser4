@@ -3,17 +3,19 @@ package ai.platon.pulsar.agentic.tools.advanced.agent
 import ai.platon.pulsar.agentic.AgenticSession
 import ai.platon.pulsar.agentic.event.AgentEventBus
 import ai.platon.pulsar.agentic.event.detail.DefaultServerSideAgentEventHandlers
+import ai.platon.pulsar.agentic.tools.advanced.common.JsonlPersistence
 import ai.platon.pulsar.common.ResourceStatus
 import ai.platon.pulsar.common.getLogger
+import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import com.github.benmanes.caffeine.cache.Cache
 import com.github.benmanes.caffeine.cache.Caffeine
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.supervisorScope
+import kotlinx.coroutines.*
 import java.io.Closeable
+import java.nio.file.Path
+import java.time.Instant
 import java.util.concurrent.TimeUnit
 
-class StatefulAgentRunner(
+open class StatefulAgentRunner(
     val session: AgenticSession
 ) : Closeable {
     private val logger = getLogger(StatefulAgentRunner::class)
@@ -23,19 +25,91 @@ class StatefulAgentRunner(
      *
      * - Entries live at most 2 hours after last write.
      * - At most 10 000 entries; Window TinyLFU eviction beyond that.
+     * - Persisted to JSONL so task statuses survive restarts.
      * */
     private val statusCache: Cache<String, AgentTaskStatus> = Caffeine.newBuilder()
-        .maximumSize(10_000)
+        .maximumSize(100)
         .expireAfterWrite(2, TimeUnit.HOURS)
         .recordStats()
         .build()
 
+    internal val persistence = JsonlPersistence(
+        file = agentPersistencePath(),
+        clazz = AgentTaskStatus::class,
+        objectMapper = pulsarObjectMapper()
+    )
+
+    /** Dedicated dispatcher for cleanup operations. */
+    private val cleanupDispatcher = Dispatchers.IO.limitedParallelism(2)
+
+    private val cleanupScope = CoroutineScope(
+        cleanupDispatcher + SupervisorJob() + CoroutineName("agent-cleanup")
+    )
+
+    /** How long to keep terminal tasks before compacting them out of the JSONL file. */
+    @Volatile
+    var taskTtlMinutes: Int = 120
+
+    init {
+        restoreFromDisk()
+        // Periodically compact the JSONL file so evicted entries don't accumulate forever.
+        cleanupScope.launch {
+            while (isActive) {
+                delay(5 * 60 * 1000L) // every 5 minutes
+                compactPersistence()
+            }
+        }
+    }
+
+    fun restoreFromDisk() {
+        val now = Instant.now()
+        val ttlCutoff = now.minusSeconds(taskTtlMinutes * 60L)
+        val terminalState = "done"
+
+        persistence.restore { entry ->
+            // Skip terminal entries whose TTL has expired — they were evicted
+            // from the cache before shutdown and should not be revived.
+            if (entry.processState == terminalState &&
+                entry.createdTime.isBefore(ttlCutoff)
+            ) {
+                logger.debug("Skipping expired agent task {} during restore (created={})", entry.id, entry.createdTime)
+                return@restore
+            }
+            statusCache.put(entry.id, entry)
+            logger.debug("Restored agent task {}", entry.id)
+        }
+    }
+
+    /** Compact the JSONL persistence file: remove stale entries that are past TTL. */
+    private fun compactPersistence() {
+        val now = Instant.now()
+        val ttlCutoff = now.minusSeconds(taskTtlMinutes * 60L)
+        val terminalState = "done"
+
+        val stale = statusCache.asMap().entries.filter {
+            it.value.processState == terminalState && it.value.createdTime.isBefore(ttlCutoff)
+        }
+        if (stale.isEmpty()) return
+
+        stale.forEach { statusCache.invalidate(it.key) }
+        logger.info("Compacted {} expired agent tasks (TTL: {} min)", stale.size, taskTtlMinutes)
+
+        // Rewrite the persistence file so compacted tasks don't revive on restart.
+        persistence.clear()
+        statusCache.asMap().values.forEach { persistence.append(it) }
+    }
+
     fun create(): AgentTaskStatus {
         val status = AgentTaskStatus()
         statusCache.put(status.id, status)
+        persistence.append(status)
         status.emitEvent("StatefulAgentRunner.created")
         logger.debug("Created agent task status {} (session={})", status.id, session.uuid)
         return status
+    }
+
+    private fun onStatusChanged(status: AgentTaskStatus) {
+        persistence.append(status)
     }
 
     /**
@@ -100,13 +174,19 @@ class StatefulAgentRunner(
                 }
             }
         } catch (e: CancellationException) {
+            logger.warn("Agent task {} cancelled: {}", status.id, e.message)
+            status.failed(ResourceStatus.SC_EXPECTATION_FAILED)
+            status.failureReason = e.message ?: "Task cancelled"
+            status.message = e.message
             throw e
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             logger.error("Failed to execute agent command: {} (session={})", plainCommand, session.uuid, e)
             status.failed(ResourceStatus.SC_EXPECTATION_FAILED)
+            status.failureReason = "${e.javaClass.simpleName}: ${e.message}"
             status.message = e.message
         } finally {
             status.done()
+            onStatusChanged(status)
         }
     }
 
@@ -206,7 +286,15 @@ class StatefulAgentRunner(
     }
 
     override fun close() {
+        cleanupScope.cancel()
         statusCache.invalidateAll()
         logger.info("StatefulAgentRunner closed (session={})", session.uuid)
+    }
+
+    companion object {
+        fun agentPersistencePath(): Path = Path.of(
+            System.getProperty("browser4.data.dir", System.getProperty("user.home")),
+            ".browser4", "data", "agent", "agent-tasks.jsonl"
+        )
     }
 }

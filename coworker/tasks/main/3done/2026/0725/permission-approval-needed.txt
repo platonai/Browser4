@@ -1,0 +1,32 @@
+The edits are blocked pending permission approval from you. Let me present the complete fix clearly for your review:
+
+### Three edits needed in `bin/tests/test.ps1.tests.ps1`:
+
+**Fix 1 — Line 432** (add `'session'` to the hardcoded `$testTypeMap` copy):
+
+```powershell
+    'resume'        = 'resume'
+    'session'       = 'session'
+}
+```
+
+**Fix 2 — Line ~573** (add `'session'` to `$expectedTypes`):
+
+```powershell
+    'rws', 'ps', 'resume', 'session'
+)
+```
+
+**Fix 3 — Line ~593** (add `'session'` to `$expectedCategories`):
+
+```powershell
+$expectedCategories = @('cli', 'maven', 'maven-expand', 'ps', 'resume', 'rws', 'server', 'session')
+```
+
+### Explanation
+
+When the `session` subcommand was added to `bin/test.ps1` (for `test.ps1 session list/view`), the `$testTypeMap` in the live script got `'session' = 'session'` at line 1366. The test file at `bin/tests/test.ps1.tests.ps1` has anti-drift checks that parse the live map and compare it against a hardcoded copy — but that copy was never updated, so the test sees `session` as a "missing" key and fails.
+
+The `session` type is dispatched via a **special early-return path** (lines 1476-1484 in `test.ps1`) before the bucket dispatch, so the dispatch logic tests don't need updating — `session` never reaches the bucket stage.
+
+Shall I apply these three fixes?

@@ -633,7 +633,7 @@ class AgenticCliRunnerTest {
             assertEquals("navigated to https://example.com", result.value)
             assertNotNull(result.toolCall)
             assertEquals("tab", result.toolCall!!.domain)
-            assertEquals("navigate", result.toolCall!!.method)
+            assertEquals("navigate", result.toolCall.method)
 
             coVerify(exactly = 1) {
                 toolManager.execute(match { tc ->
@@ -653,8 +653,8 @@ class AgenticCliRunnerTest {
             assertTrue(result.success)
             assertNotNull(result.toolCall)
             assertEquals("tab", result.toolCall!!.domain)
-            assertEquals("click", result.toolCall!!.method)
-            assertEquals("e15", result.toolCall!!.arguments["selector"])
+            assertEquals("click", result.toolCall.method)
+            assertEquals("e15", result.toolCall.arguments["selector"])
 
             coVerify(exactly = 1) {
                 toolManager.execute(match { tc ->
@@ -674,8 +674,8 @@ class AgenticCliRunnerTest {
             assertTrue(result.success)
             assertNotNull(result.toolCall)
             assertEquals("tab", result.toolCall!!.domain)
-            assertEquals("dblclick", result.toolCall!!.method)
-            assertEquals("e15", result.toolCall!!.arguments["selector"])
+            assertEquals("dblclick", result.toolCall.method)
+            assertEquals("e15", result.toolCall.arguments["selector"])
         }
 
         @Test
@@ -688,9 +688,9 @@ class AgenticCliRunnerTest {
             assertTrue(result.success)
             assertNotNull(result.toolCall)
             assertEquals("tab", result.toolCall!!.domain)
-            assertEquals("type", result.toolCall!!.method)
-            assertEquals("hello world", result.toolCall!!.arguments["text"])
-            assertEquals("#search", result.toolCall!!.arguments["selector"])
+            assertEquals("type", result.toolCall.method)
+            assertEquals("hello world", result.toolCall.arguments["text"])
+            assertEquals("#search", result.toolCall.arguments["selector"])
         }
 
         @Test
@@ -703,7 +703,7 @@ class AgenticCliRunnerTest {
             assertTrue(result.success)
             assertNotNull(result.toolCall)
             assertEquals("tab", result.toolCall!!.domain)
-            assertEquals("ariaSnapshot", result.toolCall!!.method)
+            assertEquals("ariaSnapshot", result.toolCall.method)
         }
 
         @Test
@@ -716,8 +716,8 @@ class AgenticCliRunnerTest {
             assertTrue(result.success)
             assertNotNull(result.toolCall)
             assertEquals("tab", result.toolCall!!.domain)
-            assertEquals("ariaSnapshot", result.toolCall!!.method)
-            assertEquals(true, result.toolCall!!.arguments["boxes"])
+            assertEquals("ariaSnapshot", result.toolCall.method)
+            assertEquals(true, result.toolCall.arguments["boxes"])
         }
 
         @Test
@@ -730,7 +730,7 @@ class AgenticCliRunnerTest {
             assertTrue(result.success)
             assertNotNull(result.toolCall)
             assertEquals("browser", result.toolCall!!.domain)
-            assertEquals("listTabs", result.toolCall!!.method)
+            assertEquals("listTabs", result.toolCall.method)
         }
 
         @Test
@@ -743,8 +743,8 @@ class AgenticCliRunnerTest {
             assertTrue(result.success)
             assertNotNull(result.toolCall)
             assertEquals("agent", result.toolCall!!.domain)
-            assertEquals("extract", result.toolCall!!.method)
-            assertEquals("product name and price", result.toolCall!!.arguments["instruction"])
+            assertEquals("extract", result.toolCall.method)
+            assertEquals("product name and price", result.toolCall.arguments["instruction"])
         }
 
         @Test
@@ -757,7 +757,7 @@ class AgenticCliRunnerTest {
             assertTrue(result.success)
             assertNotNull(result.toolCall)
             assertEquals("tab", result.toolCall!!.domain)
-            assertEquals("goBack", result.toolCall!!.method)
+            assertEquals("goBack", result.toolCall.method)
         }
 
         @Test

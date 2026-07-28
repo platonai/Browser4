@@ -243,4 +243,3 @@ override suspend fun onBeforeExecute(
 
 - [Web Scraping Skill](../web-scraping/SKILL.md)
 - [Data Validation Skill](../data-validation/SKILL.md)
-- [Skills Framework Documentation](/docs/skills-framework.md)

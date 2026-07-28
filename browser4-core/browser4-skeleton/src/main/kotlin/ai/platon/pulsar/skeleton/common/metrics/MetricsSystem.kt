@@ -8,7 +8,6 @@ import ai.platon.pulsar.skeleton.common.AppSystemInfo
 import com.codahale.metrics.*
 import com.codahale.metrics.graphite.GraphiteReporter
 import com.codahale.metrics.graphite.PickledGraphite
-import com.google.common.util.concurrent.ThreadFactoryBuilder
 import org.slf4j.LoggerFactory
 import java.net.InetSocketAddress
 import java.nio.file.Files
@@ -17,8 +16,10 @@ import java.time.LocalDateTime
 import java.time.temporal.ChronoUnit
 import java.util.Timer
 import java.util.concurrent.Executors
+import java.util.concurrent.ThreadFactory
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 
 object MetricFilters {
 
@@ -134,7 +135,10 @@ open class MetricsSystem(
 
     private val metricRegistry = defaultMetricRegistry
 
-    private val threadFactory = ThreadFactoryBuilder().setNameFormat("reporter-%d").build()
+    private val reporterThreadNum = AtomicInteger()
+    private val threadFactory = ThreadFactory { r ->
+        Thread(r, "reporter-" + reporterThreadNum.getAndIncrement()).apply { isDaemon = true }
+    }
     private val executor = Executors.newSingleThreadScheduledExecutor(threadFactory)
 
     //    private val jmxReporter: JmxReporter = JmxReporter.forRegistry(metricRegistry)

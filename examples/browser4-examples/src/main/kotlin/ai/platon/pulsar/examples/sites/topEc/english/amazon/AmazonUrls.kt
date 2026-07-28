@@ -3,7 +3,7 @@ package ai.platon.pulsar.examples.sites.topEc.english.amazon
 import ai.platon.pulsar.common.config.AppConstants
 import ai.platon.pulsar.common.urls.URLUtils
 import ai.platon.pulsar.common.urls.preprocess.AbstractUrlNormalizer
-import org.apache.http.client.utils.URIBuilder
+import org.apache.hc.core5.net.URIBuilder
 import java.nio.charset.Charset
 
 object AmazonUrls {

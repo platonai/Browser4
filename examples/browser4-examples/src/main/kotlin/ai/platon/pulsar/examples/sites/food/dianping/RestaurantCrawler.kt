@@ -4,17 +4,18 @@ import ai.platon.pulsar.common.AppFiles
 import ai.platon.pulsar.common.AppPaths
 import ai.platon.pulsar.common.brief
 import ai.platon.pulsar.common.getLogger
-import ai.platon.pulsar.browser.WebDriver
+import ai.platon.pulsar.core.api.WebDriver
 import ai.platon.pulsar.persist.WebPage
 import ai.platon.pulsar.skeleton.common.options.LoadOptions
 import ai.platon.pulsar.skeleton.context.PulsarContexts
 import ai.platon.pulsar.skeleton.session.PulsarSession
-import com.google.gson.GsonBuilder
+import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.asFlow
 import kotlinx.coroutines.flow.flowOn
 import java.util.*
+import kotlin.time.Duration.Companion.milliseconds
 
 class Screenshot(
     val page: WebPage,
@@ -84,7 +85,7 @@ class RestaurantCrawler(
             fieldSelectors.entries.asFlow().flowOn(Dispatchers.IO).collect { (name, selector) ->
                 if (driver.exists(selector)) {
                     Screenshot(page, driver).screenshot(name, selector)
-                    delay(1500)
+                    delay(1500.milliseconds)
                 }
             }
         }
@@ -101,5 +102,5 @@ suspend fun main() {
     val crawler = RestaurantCrawler(session)
 
     val fields = session.scrape(url, crawler.options(args), crawler.fieldSelectors)
-    println(GsonBuilder().setPrettyPrinting().create().toJson(fields))
+    println(pulsarObjectMapper().writerWithDefaultPrettyPrinter().writeValueAsString(fields))
 }

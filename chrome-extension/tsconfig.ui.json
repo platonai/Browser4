@@ -1,0 +1,21 @@
+{
+  "compilerOptions": {
+    "target": "ESNext",
+    "esModuleInterop": true,
+    "moduleResolution": "node",
+    "strict": true,
+    "module": "ESNext",
+    "rootDir": "src",
+    "outDir": "./lib",
+    "resolveJsonModule": true,
+    "types": ["chrome"],
+    "jsx": "react-jsx",
+    "jsxImportSource": "react",
+    "noEmit": true,
+    "ignoreDeprecations": "6.0",
+    "noUncheckedSideEffectImports": false,
+  },
+  "include": [
+    "src/ui",
+  ],
+}

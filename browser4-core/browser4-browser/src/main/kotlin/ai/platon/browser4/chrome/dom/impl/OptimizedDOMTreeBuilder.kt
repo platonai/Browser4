@@ -1,9 +1,9 @@
 package ai.platon.browser4.chrome.dom.impl
 
-import ai.platon.pulsar.chrome.dom.model.DOMRect
-import ai.platon.pulsar.chrome.dom.model.MergedDOMTreeNode
-import ai.platon.pulsar.chrome.dom.model.NodeType
-import ai.platon.pulsar.chrome.dom.model.OptimizedDOMTreeNode
+import ai.platon.browser4.api.model.DOMRect
+import ai.platon.browser4.api.model.MergedDOMTreeNode
+import ai.platon.browser4.api.model.NodeType
+import ai.platon.browser4.api.model.OptimizedDOMTreeNode
 import kotlin.math.max
 import kotlin.math.min
 

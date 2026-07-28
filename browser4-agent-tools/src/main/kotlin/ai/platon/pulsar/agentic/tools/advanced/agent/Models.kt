@@ -36,13 +36,26 @@ data class AgentTaskStatus(
      * */
     var processState: String = "created",
 
-    var message: String? = null, // additional message, e.g. the action flow
+    var message: String? = null, // human-readable status description
+
+    /** Internal event trace for debugging — concatenated lifecycle event names. */
+    var eventTrace: String? = null,
 
     var request: PageVisitRequest? = null,
     var instructResults: MutableList<PGInstructResult> = mutableListOf()
 ) {
     val status: String get() = ResourceStatus.getStatusText(statusCode)
+
+    /** Set when the task is first created. */
+    var createdTime: Instant = Instant.now()
+
+    /** Set when a worker first picks up the task (first refresh away from CREATED). */
+    var startedTime: Instant? = null
+
+    /** Set on every status change. */
     var lastModifiedTime: Instant? = null
+
+    /** Set when the task reaches a terminal state (done or failed). */
     var finishTime: Instant? = null
 
     val isDone: Boolean get() = processState == "done"
@@ -103,32 +116,52 @@ data class AgentTaskStatus(
 }
 
 fun AgentTaskStatus.refresh(isDone: Boolean = false) {
-    lastModifiedTime = Instant.now()
+    val now = Instant.now()
+    lastModifiedTime = now
+    if (startedTime == null) { startedTime = now }
     processState = "done".takeIf { isDone } ?: "in_progress"
 }
 
 fun AgentTaskStatus.refresh(statusCode: Int) = refresh(statusCode, false)
 
 fun AgentTaskStatus.refresh(statusCode: Int, isDone: Boolean) {
-    lastModifiedTime = Instant.now()
+    val now = Instant.now()
+    lastModifiedTime = now
     this.statusCode = statusCode
+    if (startedTime == null) { startedTime = now }
     processState = "done".takeIf { isDone } ?: "in_progress"
 }
 
 fun AgentTaskStatus.failed(statusCode: Int): AgentTaskStatus {
-    // do not change pageStatusCode
     refresh(statusCode, isDone = true)
     return this
 }
 
 fun AgentTaskStatus.emitEvent(event: String) {
     this.event = event
-    message = if (message != null) "$message,$event" else event
+    // Keep the internal event trace for debugging separate from the user-facing message.
+    eventTrace = if (eventTrace != null) "$eventTrace,$event" else event
+    // Generate a concise human-readable status description instead of the raw event chain.
+    message = when {
+        "created" in event -> "Task created, waiting to start"
+        "onWillRun" in event -> "Agent starting up"
+        "onWillAct" in event -> "Agent planning next action"
+        "onDidAct" in event -> "Agent completed an action"
+        "onWillGenerate" in event -> "Agent generating response"
+        "onDidGenerate" in event -> "Agent response generated"
+        "onError" in event -> "Agent encountered an error"
+        "onDidRun" in event -> "Agent run completed, finalizing"
+        "onWillFail" in event -> "Agent task failing"
+        "onDidFail" in event -> "Agent task failed"
+        else -> "Agent is working"
+    }
 }
 
 fun AgentTaskStatus.done() {
+    val now = Instant.now()
+    if (startedTime == null) { startedTime = now }
     refresh(isDone = true)
-    finishTime = Instant.now()
+    finishTime = now
 }
 
 fun AgentTaskStatus.refreshed(lastModifiedTime: Instant): Boolean {

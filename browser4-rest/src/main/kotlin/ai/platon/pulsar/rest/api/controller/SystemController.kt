@@ -12,8 +12,8 @@ import java.time.Instant
 import java.util.Properties
 
 /**
- * The controller to handle www resources
- * */
+ * System-level endpoints — health checks, diagnostics, and greetings.
+ */
 @RestController
 @CrossOrigin
 @RequestMapping("api/system")
@@ -26,13 +26,9 @@ class SystemController(
     @GetMapping("health")
     fun health(): Map<String, String> {
         return if (session.context.isActive) {
-            mapOf(
-                "status" to "healthy"
-            )
+            mapOf("status" to "healthy")
         } else {
-            mapOf(
-                "status" to "unhealthy"
-            )
+            mapOf("status" to "unhealthy")
         }
     }
 

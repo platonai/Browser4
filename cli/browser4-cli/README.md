@@ -6,14 +6,14 @@ See [`cli/README.md`](../README.md) for the user-facing documentation.
 ## Running from source
 
 ```bash
-# From the repo root:
-cargo run --manifest-path cli/browser4-cli/Cargo.toml -- <command>
+# From the repo root (omit --quiet to see build status):
+cargo run --quiet --manifest-path cli/browser4-cli/Cargo.toml -- <command>
 
 # From this directory:
-cd cli/browser4-cli && cargo run -- <command>
+cd cli/browser4-cli && cargo run --quiet -- <command>
 ```
 
-The backend server starts automatically in dev mode. Build the CLI with `cargo build` (debug) or `cargo build --release` (optimized).
+The backend server starts automatically in dev mode. Build the CLI with `cargo build` (debug) or `cargo build --release` (optimized). Add `--quiet` to `cargo run` to suppress "Finished" / "Running" build-status lines.
 
 ## Commands
 
@@ -90,10 +90,10 @@ The backend server starts automatically in dev mode. Build the CLI with `cargo b
 
 | Command | Description |
 |---|---|
-| `tab-list` | List all tabs |
+| `tab-list` | List all tabs with index, GUID, title, and URL |
 | `tab-new [url]` | Create a new tab |
-| `tab-close [index]` | Close a browser tab |
-| `tab-select <index>` | Select a browser tab |
+| `tab-close [index]` | Close a browser tab. Use `--guid <guid>` for GUID-based close |
+| `tab-select <index>` | Select a browser tab. Use `--guid <guid>` for GUID-based select |
 
 ### Storage
 
@@ -151,10 +151,23 @@ The backend server starts automatically in dev mode. Build the CLI with `cargo b
 | `htmlsnapshot capture` | Capture a static HTML snapshot and return metadata |
 | `htmlsnapshot get <field> [selector] [name]` | Extract elements from the stored HTML snapshot (text, html, attr) |
 | `htmlsnapshot query [url]` | Run X-SQL against the stored HTML snapshot |
-| `htmlsnapshot export` | Export snapshot HTML to a local file |
+| `htmlsnapshot export` | Export snapshot HTML to a local file (--clean strips scripts/styles/non-standard attrs) |
 | `htmlsnapshot summary` | Generate a compressed Web Page Summary Index (WPSI) from the stored HTML snapshot |
 | `htmlsnapshot grep [OPTIONS] <pattern>` | Search snapshot HTML with regex patterns and grep-style output |
 | `generate-locator <ref>` | Generate a unique CSS selector path for an element |
+
+### Skills
+
+| Command | Description |
+|---|---|
+| `skills` | List all bundled skill names with file counts |
+| `skills list` | Same as `skills` — list all bundled skill names |
+| `skills get <name>` | Output a skill's SKILL.md content |
+| `skills get <name> --full` | Include all reference files and extra documentation |
+| `skills get --all` | Output every bundled skill concatenated |
+| `skills path [name]` | Print the skills directory path (or path to a specific skill) |
+
+Skills are AI agent instruction files bundled into the CLI binary at compile time. The bundled content always matches the installed CLI version. Set `BROWSER4_SKILLS_DIR` to override the skills directory path. Skill files are unpacked to the versioned installation directory during `browser4-cli install`.
 
 ### Install / Admin
 
@@ -208,7 +221,7 @@ cargo install --path .
 | `cargo test` | All 3 targets |
 | `cargo test --lib` | Only `#[cfg(test)] mod tests` in `src/lib.rs` |
 | `cargo test --bin browser4-cli` | Only `#[cfg(test)]` blocks in `src/main.rs` and other `src/*.rs` files |
-| `cargo test --test e2e` | Only `tests/e2e.rs` (uses a custom harness) |
+| `cargo test --test e2e` | Only `tests/e2e/mod.rs` (uses a custom harness) |
 
 `--lib` and `--bin` can be combined:
 ```bash
@@ -269,7 +282,7 @@ cargo test -- --test-threads 1
 ### e2e-specific
 
 e2e uses a custom harness (`harness = false`). Arguments after `--` are forwarded to
-`tests/e2e.rs`'s `main()`:
+`tests/e2e/mod.rs`'s `main()`:
 
 ```bash
 # Basics

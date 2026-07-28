@@ -2,251 +2,198 @@
 
 Repo: https://github.com/platonai/Browser4
 
-<!-- TOC -->
-**Table of Contents**
-- [Project Overview](#project-overview)
-- [Quick Start](#quick-start)
-- [Project Structure](#project-structure)
-- [Key APIs and Concepts](#key-apis-and-concepts)
-- [Code Style Guidelines](#code-style-guidelines)
-- [Testing Guidelines](#testing-guidelines)
-- [Configuration](#configuration)
-- [Development Principles](#development-principles)
-- [Definition of Done](#definition-of-done-pr-checklist)
-- [Common Issues & Troubleshooting](#common-issues--troubleshooting)
-- [Documentation References](#documentation-references)
-- [Claude-Specific Guidance](#claude-specific-guidance)
-<!-- /TOC -->
+## Architecture
 
----
-
-## Project Overview
-
-**Browser4** is a lightning-fast, coroutine-safe browser engine for AI agents. It provides:
-
-- **Browser Agents** — Fully autonomous browser agents that reason, plan, and execute end-to-end tasks
-- **Browser Automation** — High-performance automation for workflows, navigation, and data extraction
-- **Machine Learning Agent** — Learns field structures across complex pages without consuming tokens
-- **Extreme Performance** — Fully coroutine-safe; supports 100k ~ 200k complex page visits per machine per day
-- **Data Extraction** — Hybrid of LLM, ML, and selectors for clean data across chaotic pages
-
-## Quick Start
-
-### Prerequisites
-- Java 17+
-- Latest Google Chrome
-
-### Build Commands
-
-**Linux/macOS:**
-```bash
-chmod +x mvnw
-./mvnw -q -DskipTests
+```
+browser4-cli (Rust)  ──MCP over HTTP──▶  browser4-rest (Kotlin/Spring)  ──▶  PulsarWebDriver (Kotlin/CDP)
+     ▲                                           │
+     │                                           ▼
+     └──── e2e tests ────▶  Fixture HTTP server (Rust test harness)
 ```
 
-**Windows (PowerShell):**
-```powershell
-.\mvnw.cmd -q -D"skipTests"
-```
+- **CLI:** `cli/browser4-cli/` — Rust binary, MCP tool calls over HTTP
+- **Backend:** `browser4-rest/` — Spring Boot, `MCPToolController` dispatches tools
+- **Browser driver:** `browser4-core/browser4-browser/` — `PulsarWebDriver` wraps CDP
+- **Agent tools:** `browser4-agentic/` — `AgentToolManager` maps MCP tool names → driver methods
 
-**Windows (cmd):**
-```cmd
-mvnw.cmd -q -DskipTests
-```
+### Dispatch chain (CLI → browser)
 
-### Run Tests
+1. CLI builds MCP tool call: `{tool: "browser_type", arguments: {ref: "#el", text: "hi"}}`
+2. `MCPToolController.callTool()` → `dispatchToToolExecutor()`
+3. `normalizeFrontendToolCall()` applies `FRONTEND_TOOL_NAME_ALIASES` (e.g., `browser_type` → `fill`)
+4. `DefaultArgumentNormalizer` maps `ref` → `selector`, strips `sessionId`, converts snake_case
+5. `resolveMcpToolCall()` → `ToolCall("tab", "fill", args)`
+6. `AgentToolManager.execute()` → `executor.callFunctionOn(toolCall, driver)` → `PulsarWebDriver.fill()`
 
-**Core module tests (Linux/macOS):**
-```bash
-./mvnw -pl browser4-core -am test -Dsurefire.failIfNoSpecifiedTests=false
-```
+### Batch commands
 
-**Core module tests (Windows PowerShell):**
-```powershell
-.\mvnw.cmd -pl browser4-core -am test -D"surefire.failIfNoSpecifiedTests=false"
-```
+`handleCommandBatch()` → `handleBatchTool()` in `MCPToolController`. CLI's `compile_batch_request()` builds step arrays with `op: "tool"`. `preFocusSelector` only added for `keydown`/`keyup` (not fill/type/press).
 
-### Recommended Build Scripts
-- Windows: `bin/build.ps1 [-test]`
-- Linux/macOS: `bin/build.sh [-test]`
+### Known CDP pitfalls
 
-> **Note for Linux/macOS:** Many scripts in this repo are PowerShell (`.ps1`) files (e.g., `bin/test.ps1`, `bin/build.ps1`). To run them on Linux/macOS, install PowerShell if not already installed, then use `pwsh`:
-> ```bash
-> # Install PowerShell (Ubuntu/Debian)
-> sudo apt-get install -y powershell
-> # Or via snap
-> sudo snap install powershell --classic
->
-> # Run a PowerShell script
-> pwsh bin/test.ps1 fast
-> pwsh bin/build.ps1 -test
-> ```
+- **crbug.com/444929150:** `Input.dispatchMouseEvent` type `mouseWheel` race condition in headless Chrome. Fix: dispatch to `{passive: false}` wheel listener.
+- **Cursor positioning:** `DOM.focus()` + `Input.dispatchMouseEvent` (click) may leave cursor at 0. Fix: `setSelectionRange(99999, 99999)` after focus+click.
+- **`Input.insertText` racing:** 0ms delay between chars drops `input` events. Fix: use same inter-char delay as `type()` via `randomDelayMillis("type")` (90-240ms).
 
 ## Project Structure
 
-| Module                                 | Description |
-|----------------------------------------|-------------|
-| `browser4-core`                        | Core engine: sessions, scheduling, DOM, browser control |
-| `browser4-dependencies`                | BOM and dependency alignment |
-| `browser4-tools`                       | Operational tools and launch helpers |
-| `browser4-agentic`                     | AI agents implementation, MCP, skills registration |
-| `browser4-agent-tools`                 | High-level agent tools: scraping, crawling, stateful page interaction |
-| `browser4-rest`                        | Spring Boot REST layer & command endpoints |
-| `cli/*`                                | Browser4 CLI + skill assets (`cli/browser4-cli`, `cli/skill`) |
-| `browser4-apps/*`                      | Product packaging and the unified launcher (`browser4-apps/browser4-standalone`, `target/Browser4.jar`) |
-| `examples/*`                           | Runnable examples (`examples/browser4-examples`) |
-| `browser4-tests`                       | E2E & heavy integration & scenario tests |
-| `browser4-tests/browser4-tests-common` | Shared test base classes and utilities |
-| `cdp-protocol`                         | Chrome DevTools Protocol JSON definitions (`browser_protocol.json`, `js_protocol.json`) |
-| `coworker/`                            | File-queue automation system for task-driven AI workflows |
+| Module | Description |
+|---|---|
+| `browser4-core` | Core engine: sessions, scheduling, DOM, browser control |
+| `browser4-dependencies` | BOM and dependency alignment |
+| `browser4-tools` | Operational tools and launch helpers |
+| `browser4-agentic` | AI agents, MCP, skill registration |
+| `browser4-agent-tools` | High-level agent tools: scraping, crawling, stateful page interaction |
+| `browser4-rest` | Spring Boot REST layer & command endpoints |
+| `cli/browser4-cli` | Rust CLI binary |
+| `skills/browser4-cli` | AI agent skill definitions |
+| `browser4-apps/browser4-standalone` | Product packaging, unified launcher (`target/Browser4.jar`) |
+| `examples/browser4-examples` | Runnable examples |
+| `browser4-tests` | E2E, integration, scenario tests |
+| `browser4-tests/pulsar-tests-common` | Shared test base classes and utilities |
+| `cdp-protocol` | Chrome DevTools Protocol JSON definitions |
+| `coworker/` | File-queue automation for task-driven AI workflows |
 
-## Key APIs and Concepts
+## Build & Test
 
-### Sessions
-```kotlin
-// Create a session
-val session = AgenticContexts.createSession()
+### Quick commands
 
-// Create an agent
-val agent = AgenticContexts.getOrCreateAgent()
+```bash
+# Build (skip tests)
+./mvnw -DskipTests                           # Linux/macOS
+.\mvnw.cmd -q -D"skipTests"                  # Windows PowerShell
+
+# Rust unit tests (fast, no backend needed)
+cd cli/browser4-cli && cargo test --bin browser4-cli
+
+# Kotlin tests
+mvn test -pl browser4-rest -am
+mvn test -pl browser4-rest -am -Dtest=MCPToolControllerTest
+
+# E2E tests (needs running backend or mock server)
+cargo test --test e2e -- --nocapture
+cargo test --test e2e -- --nocapture --scenario=test_e2e_batch_*
+
+# Scoped test runs (Windows)
+bin/test.ps1 fast|it|e2e|rest|skills|mcp|cli|browser4|mock-site
 ```
 
-### Core API Classes
-- `WebDriver` — Browser control interface with human-like behaviors
-- `PulsarSession` → `AgenticSession` — Page loading, parsing, and extraction
-- `LoadOptions` — CLI-style URL parameters for page loading
-- `BrowserPerceptiveAgent` — AI agent implementation
+Maven profile switches in root `pom.xml`: `-DrunITs=true`, `-DrunE2ETests=true`, `-DrunCoreTests=true`, `-DrunRestTests=true`.
 
-### Load Options
-URL parameters control page loading behavior:
-```kotlin
-val page = session.load(url, "-expires 1d -refresh -parse")
+### E2E test filtering
+
+```
+cargo test --test e2e -- --help           # All options
+--scenario <pattern>                      # Glob filter
+--group <name>                            # Group filter (repeatable)
+--level BASIC|EXTENDED|ALL                # Test depth
+--fail-fast / --failed                    # Stop early / rerun failures
+--list / --list-groups                    # Discover without running
+--enable-install-scenario                 # Opt into install tests
+--enable-batch-scenario                   # Opt into batch tests
+--force-rebuild-bundle                    # Force local Maven + runtime rebuild
+--force-remote-bundle                     # Download pre-built bundle instead
 ```
 
-Key options:
-- `-expires <duration>` — Page expiration time
-- `-refresh` — Force page refresh
-- `-parse` — Activate parsing subsystem
-- `-outLink <selector>` — Extract links matching selector
+### Test locations
 
-## Code Style Guidelines
+| Scope | Path |
+|---|---|
+| Unit tests | `src/test/kotlin/...` |
+| Integration | `browser4-tests/pulsar-it-tests/` |
+| E2E | `browser4-tests/pulsar-e2e-tests/` |
+| REST integration/E2E | `browser4-tests/browser4-rest-tests/` |
+| Shared utilities | `browser4-tests/pulsar-tests-common/` |
+| Rust E2E | `cli/browser4-cli/tests/e2e/` |
 
-### Kotlin Conventions
-- Prefer immutable `data class`
-- Use explicit return types
-- Apply null-safety patterns (`require`/`check`/`?:`)
-- Public APIs require KDoc documentation
-- Store AI generated task docs in `docs-dev/copilot/`
+## Code Style
 
-**KDoc Template:**
-```kotlin
-/**
- * Brief description of what the function does.
- *
- * @param paramName Description of the parameter.
- * @return Description of the return value.
- * @throws ExceptionType When this exception is thrown.
- */
-fun functionName(paramName: Type): ReturnType {
-    require(paramName.isValid) { "paramName must be valid" }
-    // implementation
-}
-```
+### Kotlin
+- Immutable `data class`; explicit return types; null-safety (`require`/`check`/`?:`)
+- Public APIs require KDoc
+- Store AI-generated task docs in `docs-dev/copilot/`
 
 ### Logging
-Use placeholder-style logging (avoid string concatenation):
 ```kotlin
-logger.info("Task {} finished in {} ms", taskId, cost)
+logger.info("Task {} finished in {} ms", taskId, cost)  // placeholders, never concatenation
 ```
+
+### Naming
+- Test methods: camelCase + `@DisplayName("...")` — **NOT** backtick naming
+- Test classes: `<Name>Test.kt` (unit), `<Name>IT.kt` (integration), `<Name>E2ETest.kt` (e2e)
 
 ## Testing Guidelines
 
-### Minimal Test Policy (default)
+**Default policy:** Don't run full suites. Compile with tests skipped, run smallest relevant scope. Upgrade scope when risk increases (cross-module, public API/DTO/serialization, Spring wiring, dependency bumps, concurrency/I/O, browser lifecycle).
 
-To keep iteration fast, **don’t run full test suites by default**.
+**Tag-driven scheduling** — use tags from `docs/TESTING.md`:
+- Scope: `Unit`, `Integration`, `E2E`, `SDK`
+- Speed: `Fast` (<5s), `Slow` (5–30s), `Heavy` (>30s)
+- Gates: `Requires*`, `ManualOnly`
 
-- Default: `./mvnw` compile with tests skipped
-- Then: run the **smallest relevant** test scope (module/class) when logic changes
-- Upgrade scope when risk increases (cross-module, public API/DTO/serialization, Spring wiring, dependency bumps,
-  concurrency/I/O, browser/BrowserProtocol lifecycle)
-- Test scheduling is tag-driven; reuse the dimensions in `docs/TESTING.md` (`Unit`/`Integration`/`E2E`/`SDK`, `Fast`/`Slow`/`Heavy`, `Requires*`, `ManualOnly`) instead of inventing new tags
+**Coverage targets:** Global ≥70%, Core ≥80%, Utilities ≥90%, Controllers ≥85%
 
-See [TESTING.md](docs/TESTING.md) for details and trade-offs.
-
-### Test Commands in This Repository
-- Use `bin/test.ps1` on Windows for scoped runs: `fast`, `it`, `e2e`, `rest`, `skills`, `mcp`, `cli`, `browser4`, `mock-site` (`mocksite` and `mocksiteboot` remain accepted aliases)
-- Maven profile switches in root `pom.xml` are property-driven: `-DrunITs=true`, `-DrunE2ETests=true`, `-DrunCoreTests=true`, `-DrunRestTests=true`
-- Use `bin/test.ps1 mock-site -Dmock.site.port=18080` to launch `MockSiteBoot` from `browser4-tests/browser4-rest-tests`; use `MockSiteLauncher` from `browser4-tests/browser4-tests-common` for in-process startup
-- `cli/browser4-cli/tests/e2e.rs`: all e2e scenarios must start and depend on Browser4.jar; this includes single-scenario runs via `--scenario`.
-- **E2E Test Efficiency:** Run `cargo test --test e2e -- --help` to see all filtering options for running e2e tests efficiently. Key flags:
-    - `--scenario <pattern>` — run only matching scenarios (supports `*` and `?` globs)
-    - `--group <name>` — run scenarios in a specific group (repeatable)
-    - `--level BASIC` — default; use `EXTENDED` or `all` for longer edge-case tests
-    - `--fail-fast` — stop after the first failure
-    - `--failed` — rerun only scenarios that failed in the previous run
-    - `--list` / `--list-groups` — discover available scenarios and groups without running anything
-    - `--enable-install-scenario` / `--enable-batch-scenario` — opt into heavier install/batch tests
-    - `--force-rebuild-bundle` — force local Maven + runtime bundle rebuild (skip cached artifacts)
-    - `--force-remote-bundle` — download a pre-built bundle from remote releases instead of building locally
-- `.github/workflows/ci.yml` builds with `all-main-modules`, starts the Dockerized app on port `8182`, runs `cargo test` in `cli/browser4-cli`, and keeps the main Maven test pass limited to fast/unit-style tags by excluding `Slow`, `Heavy`, `Integration`, `E2E`, `SDK`, `Requires*`, and `ManualOnly`.
-
-### Test Location
-- Module unit tests: `src/test/kotlin/...`
-- Integration-heavy suites: `browser4-tests/pulsar-it-tests/`
-- E2E suites: `browser4-tests/pulsar-e2e-tests/`
-- REST integration/E2E tests and standalone mock site: `browser4-tests/browser4-rest-tests/`
-- Shared utilities and the programmatic mock site launcher: `browser4-tests/browser4-tests-common/`
-
-### Naming Conventions
-- Unit tests: `<ClassName>Test.kt`
-- Integration tests: `<ClassName>IT.kt`
-- E2E tests: `<ClassName>E2ETest.kt`
-- **Method names: Use camelCase (NOT backtick naming)**
-    - ✅ `testUserLoginWithValidCredentials()` + `@DisplayName("test user login with valid credentials")`
-    - ❌ `` `test user login with valid credentials` ``
-
-### Test Performance Targets
-- `Fast`: <5s
-- `Slow`: 5–30s
-- `Heavy`: >30s or high-resource/browser-dependent
-
-### Coverage Targets
-- Global: ≥70%
-- Core logic: ≥80%
-- Utilities: ≥90%
-- Controllers: ≥85%
+**CI:** `.github/workflows/ci.yml` builds all-main-modules, starts Dockerized app on port 8182, runs `cargo test` in `cli/browser4-cli`, limits Maven tests to fast/unit tags by excluding `Slow`, `Heavy`, `Integration`, `E2E`, `SDK`, `Requires*`, `ManualOnly`.
 
 ## Configuration
 
-### Application Port
-Default: 8182
+- Default port: **8182**
+- Config files: `application.properties` → `application-*.properties` → `application-private.properties` (git-ignored, secrets here or env vars)
+- Key properties: `openrouter.api.key`, `browser.profile.mode` (DEFAULT|SYSTEM_DEFAULT|SEQUENTIAL|TEMPORARY), `browser.display.mode` (GUI|HEADLESS|SUPERVISED)
+- LLM providers configured via env vars: `DEEPSEEK_API_KEY`, `OPENROUTER_API_KEY`, `VOLCENGINE_API_KEY`, `OPENAI_API_KEY`
 
-### Configuration Files
-- `application.properties` — Main configuration
-- `application-*.properties` — Profile-specific overrides
-- `application-private.properties` — Private overrides (ignored by Git), secrets should be set here or via environment variables
+## Development Patterns
 
-### Key Configuration Properties
-```properties
-# LLM API Key
-openrouter.api.key=your-api-key
+### Adding a `browser4-cli` command
 
-# Browser context mode
-browser.profile.mode=DEFAULT  # DEFAULT | SYSTEM_DEFAULT | SEQUENTIAL | TEMPORARY
+1. **`commands.rs`** — Add `CommandDef`: CLI name kebab-case, MCP tool `browser_`-prefixed snake_case, map args in `tool_params_fn`
+2. **`MCPToolController.kt`** — Add frontend alias so `browser_my_tool` resolves to internal name `my_tool`
+3. **Backend tool** — Reuse existing when possible; if new capability needed add `@MCP` method in `WebDriver.kt`, implement in concrete driver. Add explicit `BrowserTabToolExecutor` case only for non-trivial parameter mapping
+4. **`main.rs`** — Update only for: custom dispatch, dynamic tool-name selection, stale-session recovery, `no_snapshot_commands()`, or custom batch handling in `compile_batch_request()`
+5. **Docs** — Update `skills/browser4-cli/SKILL.md`; extensive docs → `skills/browser4-cli/references/<topic>.md`
+6. **Tests** — `commands.rs` unit tests → controller mapping tests → `e2e.rs` → `MCPToolControllerE2ETest.kt`
+7. **Common failures:** missing backend alias, omitted `sessionId`, forgetting `no_snapshot_commands()`/`batch_supported`, element-ref parameter name mismatches, snake_case/camelCase normalization
 
-# Display mode
-browser.display.mode=GUI  # GUI | HEADLESS | SUPERVISED
+### REST-based commands (swarm, crawl)
+
+- `tool_name_fn` returns `""`; dispatch entirely in `main.rs` via custom `handle_*`
+- HTTP in `http.rs`: `submit_*` → POST `/api/<resource>`, `get_*_result` → GET `/api/<resource>/{id}/result`
+- Backend: `@RestController` + `@Service` + `ConcurrentHashMap` task store + `CoroutineScope`
+- Return task UUID from POST; CLI polls for completion. No MCP alias needed.
+
+### Snapshot-related commands
+
+Category `Category::Snapshot`:
+- `htmlsnapshot get` / `query` — HTML retrieval with pagination (`-limit`, `-offset`)
+- `htmlsnapshot grep` — regex search (`-i`, `-v`, `-F`, `-w`, `-A/B/C`, `--selector`)
+- `htmlsnapshot inspect` — CSS selector discovery for recurring patterns
+- `htmlsnapshot summary` — compressed Web Page Summary Index
+- `snapshot` — live a11y snapshot with `--boxes`, `--stdout`, `--limit`
+
+### Modifying install/uninstall/upgrade code
+
+After changing `cli/browser4-cli/src/daemon.rs`, run install-scenario e2e tests:
+```bash
+cargo test --test e2e -- --nocapture --level ALL --enable-install-scenario --scenario '*install*'
 ```
 
-## Development Principles
+## PowerShell Cross-Platform Compatibility
 
-1. **Minimal Changes** — Make the smallest possible modifications
-2. **Preserve Style** — Match existing code patterns
-3. **Clear Logging** — Use structured, placeholder-based logging
-4. **Test Coverage** — Include tests for new/changed logic
-5. **Documentation** — Update docs for public API changes
+- Use `$IsWindows`, `$IsLinux`, `$IsMacOS` for platform branching
+- Avoid Windows-only cmdlets; use `Join-Path` / `[System.IO.Path]::Combine()`
+- Prefer `$env:HOME` over `$env:USERPROFILE`
+- Shebang: `#!/usr/bin/env pwsh`
+- **When fixing one `.ps1`, check siblings for the same issue**
 
-## Definition of Done (PR Checklist)
+## Test Script Portability
+
+Scripts under `browser4-tests/tests-production/` and `bin/test-production.ps1` test globally-installed `browser4-cli`. They must **never** depend on: git, repo root, source code, Maven/Cargo build outputs. Use `$PSScriptRoot` for sibling references. Repo-awareness must be opt-in with clear error messages when absent.
+
+## Coworker Automation
+
+File-queue system for task-driven AI workflows (`coworker/`). Task files (Markdown with optional `Title:`/`Prompt:` headers) route through state directories: `0draft/` → `1ready/` → `2working/` → `3complete/` (or `3aborted/`, `4review/`, `5approved/`). See [Coworker SKILL.md](coworker/SKILL.md).
+
+## Definition of Done
 
 - [ ] Build and related tests pass
 - [ ] No new high-noise logs or warnings
@@ -254,337 +201,47 @@ browser.display.mode=GUI  # GUI | HEADLESS | SUPERVISED
 - [ ] No secrets or private endpoints committed
 - [ ] No arbitrary version changes (follow parent BOM)
 - [ ] Documentation updated for public behavior changes
-- [ ] Performance impact assessed if significant (>5%)
+- [ ] Performance impact assessed if >5%
 
-## Common Issues & Troubleshooting
+## Common Issues
 
-| Issue | Solution                                                    |
-|-------|-------------------------------------------------------------|
-| `.ps1` scripts don't run on Linux | Install PowerShell: `sudo apt-get install -y powershell`, then `pwsh script.ps1` |
-| `mvnw` no execute permission | `chmod +x mvnw`                                             |
-| JDK version mismatch | Ensure JDK 17+ in `JAVA_HOME`                               |
-| Windows parameter escaping | Use `-D"key.with.dots=value"`                               |
-| Port 8182 in use | Override `server.port` or use root `application.properties` |
-| BrowserProtocol retry log storms | Use existing retry utilities, lower log level               |
+| Issue | Solution |
+|---|---|
+| `.ps1` scripts don't run on Linux | `sudo apt-get install -y powershell`, then `pwsh script.ps1` |
+| `mvnw` no execute permission | `chmod +x mvnw` |
+| JDK version mismatch | JDK 17+ in `JAVA_HOME` |
+| Windows parameter escaping | `-D"key.with.dots=value"` |
+| Port 8182 in use | Override `server.port` in root `application.properties` |
+| BrowserProtocol retry log storms | Use existing retry utilities, lower log level |
+
+## Documentation Update Rule
+
+When a user says **"update documents"** (or "update docs", "refresh documentation"), update ALL of the following that reference the changed feature:
+
+1. **`README.md`** and **`README.zh.md`** — root-level project readmes
+2. **`skills/browser4-cli/SKILL.md`** — primary CLI skill document
+3. **`skills/browser4-cli/references/*.md`** — reference docs (htmlsnapshot.md, x-sql.md, etc.)
+4. **`cli/browser4-cli/README.md`** — CLI-specific README
+5. **`cli/browser4-cli/src/help.rs`** — CLI help text generation
+6. **`cli/browser4-cli/src/tips.rs`** — CLI tips/hints shown to users
+7. **Any other `.md` files** in `docs/`, `skills/`, or project root that reference the changed command or feature
+
+When adding a new CLI option or changing command behavior, always check these locations.
 
 ## Documentation References
 
-- [Configuration Guide](docs/config.md)
 - [Testing Taxonomy](docs/TESTING.md)
-- [Test Strategy](docs/test-strategy.md)
-- [Browser4 CLI Skill Guide](skills/browser4-cli/SKILL.md)
-- [ARIA Snapshots](docs/aria-snapshots.md)
 - [Build from Source](docs/build-from-source.md)
-- [CLI Install & Upgrade](docs/cli-install-upgrade.md)
-- [CLI Standalone Install](docs/cli-standalone-install.md)
-- [HTML Snapshot Inspect & Summary](docs/htmlsnapshot-inspect-summary.md)
+- [Configuration Guide](docs/config.md)
+- [CLI Skill Guide](skills/browser4-cli/SKILL.md)
+- [ARIA Snapshots](docs/aria-snapshots.md)
+- [HTML Snapshot](docs/htmlsnapshot-inspect-summary.md)
 - [Eval Command Output](docs/eval-command-output.md)
 - [Load Options Guide](docs/load-options-guide.md)
 - [Mock Site](docs/mocksite.md)
-- [Metadata Files](docs/metadata-files.md)
 - [QL Functions Guide](docs/ql-functions-guide.md)
-- [QL H2 UDFs Reference](docs/ql-h2-udfs-reference.md)
 - [Coworker Automation](coworker/SKILL.md)
-
-## Claude-Specific Guidance
-
-### Harness Configuration
-
-The `.claude/settings.json` file contains pre-approved permissions for common operations:
-- Build commands: `./mvnw`, `cargo`, `npm`, `rust`
-- Shell commands: `pwsh`, `powershell`, `bash`
-- Git operations: `pull`, `push`, `stash`, `checkout`, `restore`, `add`, `commit`
-- Helper tools: `browser4-cli`, `gh`, `java`, `jar`
-- Skills: `code-review`
-
-Add new permissions here when you encounter repeated prompts for the same operation. See [Skill: fewer-permission-prompts] for automated scanning.
-
-### Understanding Browser4 Architecture
-
-Browser4 is built around three core concepts:
-
-1. **Sessions** - Main interface to manage page loading, fetching, parsing, extracting, AI chatting, page state, persistence, and more
-2. **Agents** - Autonomous browser agents with reasoning capabilities
-3. **WebDrivers** - Low-level browser control with human-like behaviors
-
-### Task Planning and Execution
-
-When given a task, Claude should:
-
-1. **Analyze Requirements** - Break down the task into minimal changes
-2. **Explore First** - Use grep/glob or explore agent to understand relevant code
-3. **Make Minimal Changes** - Preserve existing style and patterns
-4. **Test Incrementally** - Run targeted tests after each change
-5. **Document Changes** - Update relevant documentation
-
-### Coworker Integration
-
-For task-driven batch work, use the `coworker/` file-queue system instead of inline execution:
-1. Create a task `.md` file under `coworker/tasks/main/0draft/` with a `Title:` and `Prompt:` header
-2. Run `./coworker/scripts/coworker.ps1` or let the scheduler pick it up
-3. Results appear in `coworker/tasks/main/3complete/` or `5approved/`
-4. For recurring work, configure entries in `coworker/scripts/coworker-scheduler.config.psd1`
-
-### PowerShell (.ps1) Cross-Platform Compatibility
-
-When creating or modifying a `.ps1` file, ensure the script is compatible with multiple platforms (Windows, Linux, macOS). Follow these guidelines:
-
-- Use `$IsWindows`, `$IsLinux`, `$IsMacOS` (PowerShell Core 6+) for platform-specific branching instead of relying on `[Environment]::OSVersion`
-- Avoid Windows-only cmdlets (e.g., `Set-Win*`, `Get-WmiObject`, `netstat`-specific flags). Use cross-platform alternatives where available
-- Use forward slashes in paths where possible, or construct paths with `Join-Path` / `[System.IO.Path]::Combine()`
-- Avoid case-sensitive file-system assumptions (e.g., don't rely on `$env:USERPROFILE` — use `$env:HOME` or `[Environment]::GetFolderPath()`)
-- Prefer `#!/usr/bin/env pwsh` shebang for scripts intended to run on Unix
-- Test scripts on at least one non-Windows platform before finalizing
-- **When fixing a `.ps1` file**, also check other scripts in the same directory for the same issues and fix them proactively
-
-### Test Script Portability (bin/tests-production/ and bin/test-production.ps1)
-
-All `.ps1` and `.sh` scripts under `bin/tests-production/` and `bin/test-production.ps1` are **production test scripts** — they test a globally-installed `browser4-cli` binary, not the source tree.  They are designed to be run from **any location** (CI, a user's machine, a downloaded bundle) and must **never** depend on:
-
-- `git` — no `git rev-parse`, `git show-toplevel`, or any git command
-- The repository root — no traversing up the tree looking for `pom.xml` or similar markers
-- Source code — no references to `cli/`, `browser4-core/`, `browser4-apps/`, or any source module path
-- Maven / Cargo build outputs — no dependency on `target/` directories
-
-**What IS allowed:**
-- Sibling references via `$PSScriptRoot` / `$MyInvocation.MyCommand.Path` / `$BASH_SOURCE` — these work when the `bin/` directory structure is preserved
-- `$env:BROWSER4_CLI_BIN` to override the CLI binary path
-- Globally-installed tools on PATH (`browser4-cli`, `pwsh`, `bash`, optional AI CLIs like `claude` / `copilot`)
-- Remote URLs (OSS install scripts, release downloads)
-- **Conditional** repo-awareness: scripts may optionally use repo paths *when available*, but must degrade gracefully when they are not (e.g., `-BuildCli` / `-BuildServer` flags in `multi-scenarios.ps1` throw a clear error when run outside a repo checkout)
-
-**When adding new test scripts or modifying existing ones:**
-- Resolve sibling scripts and modules relative to the script's own directory, not the repo root
-- Use `$ScriptDir` / `$PSScriptRoot` (PowerShell) or `SCRIPT_DIR` (bash) for all internal path resolution
-- If a feature genuinely requires the source repo (e.g., building from source), guard it behind an explicit parameter and fail with a helpful message when the repo is absent
-- After making changes, verify the script parses correctly with `pwsh -NoProfile -Command "[Parser]::ParseFile('<path>', [ref]$null, [ref]$null)"`
-
-### Common Task Patterns
-
-#### Adding a New Feature
-
-1. Identify the relevant module (browser4-core, browser4-agentic, browser4-rest)
-2. Check existing similar features for patterns
-3. Add interface/API in appropriate package
-4. Implement with proper error handling and logging
-5. Add tests (unit + integration if needed)
-6. Update documentation
-
-#### Fixing a Bug
-
-1. Reproduce the issue with a test
-2. Use grep to find related code
-3. Make minimal fix
-4. Verify test passes
-5. Check for similar patterns elsewhere
-
-#### Refactoring Code
-
-1. Ensure tests exist for current behavior
-2. Make incremental changes
-3. Run tests after each step
-4. Preserve public API contracts
-5. Update KDoc if API changes
-
-#### Adding a `browser4-cli` Command
-
-1. Add a `CommandDef` in `cli/browser4-cli/src/commands.rs`; keep the CLI command name kebab-case, use a `browser_`-prefixed snake_case MCP tool name, and map args/options to JSON in `tool_params_fn`
-2. Add the frontend alias in `browser4-rest/.../MCPToolController.kt` so names like `browser_my_tool` resolve to the internal tool name such as `my_tool`
-3. Reuse existing backend tools when possible; if a new browser capability is required, add an `@MCP` method in `WebDriver.kt`, implement it in the concrete driver, and only add an explicit `BrowserTabToolExecutor` case when parameter mapping is non-trivial
-4. Update `cli/browser4-cli/src/main.rs` only when the command needs custom dispatch, dynamic tool-name selection, stale-session recovery, inclusion in `no_snapshot_commands()` for read-only behavior, or custom batch handling in `compile_batch_request()`
-5. Update `skills/browser4-cli/SKILL.md` for user-facing command documentation; CLI help is generated from `CommandDef`, so avoid hand-editing help infrastructure. For commands with extensive documentation, add a dedicated reference file under `skills/browser4-cli/references/` (e.g. `crawl.md`, `loop.md`, `htmlsnapshot.md`)
-6. Cover the change with the smallest relevant tests: `cli/browser4-cli/src/commands.rs` unit tests, `browser4-rest` controller mapping tests, `cli/browser4-cli/tests/e2e.rs`, and `browser4-tests/browser4-rest-tests/.../MCPToolControllerE2ETest.kt` when the command changes the end-to-end flow
-7. Watch the common failure points: missing backend alias, omitted `sessionId` in custom handlers, forgetting `no_snapshot_commands()` for read-only commands, forgetting `batch_supported`/`compile_batch_request()` for batch-safe DOM commands, mismatched element-ref parameter names, broken `activeSelector` / `lastMousePosition` persistence in `cli/browser4-cli/src/state.rs`, and snake_case/camelCase argument normalization
-
-**REST-based commands** (like `swarm-submit`, `crawl`) follow a different pattern from MCP tools:
-- Set `tool_name_fn` to return `""` and handle dispatch entirely in `main.rs` via a custom `handle_*` function.
-- Add HTTP functions in `http.rs` following the `submit_*/get_*_result` pattern (e.g. `submit_crawl` → `POST /api/crawl`, `get_crawl_result` → `GET /api/crawl/{id}/result`).
-- Create a backend `@RestController` + `@Service` pair (e.g. `CrawlController.kt` + `CrawlService.kt`) with an async task store (`ConcurrentHashMap`) and a `CoroutineScope` for background execution.
-- Return a task UUID from the POST endpoint; the CLI polls for completion.
-- No MCP alias needed — these commands bypass `MCPToolController` entirely.
-
-**Snapshot-related commands** (`htmlsnapshot`, `snapshot`) use the `Category::Snapshot` category:
-- `htmlsnapshot get` / `htmlsnapshot query` — retrieve HTML snapshots with optional pagination (`-limit`, `-offset`)
-- `htmlsnapshot grep` — search HTML with regex support (`-i`, `-v`, `-fixed-strings`, `-word-regexp`, `-files-with-matches`, `-count`, `-no-line-number`)
-- `htmlsnapshot inspect` — discover CSS selectors for recurring patterns; run without args for auto-discovery
-- `htmlsnapshot summary` — generate a summary view of the DOM
-- `snapshot` — capture live page snapshot with `--boxes` for element bounding boxes, `--stdout` for direct output, `--limit`/`--no-compact` for size control
-- `snapshot grep` — grep over a live page snapshot
-
-**Scheduled/loop commands:**
-- `loop` — periodically execute a subcommand; configure via `--interval` and `--times`
-- The loop command is excluded from batch mode and e2e test runs
-
-**System commands:**
-- `doctor` — system diagnosis: checks Chrome, Java, network connectivity, and configuration
-- `install` / `uninstall` / `upgrade` — CLI lifecycle management (see [CLI Install & Upgrade](docs/cli-install-upgrade.md))
-
-#### Modifying Install / Uninstall / Upgrade Rust Code
-
-**Rule:** Whenever you change Rust code related to `install`, `uninstall`, or `upgrade` (primarily in `cli/browser4-cli/src/daemon.rs`), you **must** run the install-scenario e2e tests before considering the change complete:
-
-```bash
-# Run all install-related scenarios:
-cargo test --test e2e -- --nocapture --level ALL --enable-install-scenario --scenario '*install*'
-
-# Or run the full install-enabled suite (broader, catches regressions in other scenarios):
-cargo test --test e2e -- --nocapture --level ALL --enable-install-scenario
-```
-
-These tests exercise the full download / extract / install / uninstall / upgrade lifecycle against a local mock release server and catch regressions that unit tests miss (lock acquisition failures, path handling, disk-space checks, mirror selection, download-cache behavior, and current-tag management).
-
-### Browser Automation Specifics
-
-**Key Classes to Know:**
-- `WebDriver` - Main browser control interface
-- `PageHandler` - Page lifecycle management
-- `ClickableDOM` - DOM interaction utilities
-- `LoadOptions` - Page loading parameters
-
-**Common Patterns:**
-```kotlin
-val session = AgenticContexts.getOrCreateSession()
-val agent = session.companionAgent
-val driver = session.getOrCreateBoundDriver()
-var page = session.open(url)
-var document = session.parse(page)
-var fields = session.extract(document, mapOf("title" to "#title"))
-var result = agent.act("scroll to the bottom")
-result = agent.act("scroll to the top")
-result = agent.act("enter 'pulsar' into the search box and submit the form (RESULTS will display in the same page)")
-result = agent.act("click search button")
-var content = driver.selectFirstTextOrNull("body")
-content = driver.selectFirstTextOrNull("body")
-var history = agent.run("find the search box, type 'web scraping' and submit the form (RESULTS will display in the same page)")
-page = session.capture(driver)
-document = session.parse(page)
-fields = session.extract(document, mapOf("title" to "#title"))
-```
-
-### MCP (Model Context Protocol) Integration
-
-Browser4 integrates with MCP for tool calling:
-
-```kotlin
-// Define a tool
-class CustomTool : MCPTool {
-    override val name = "custom_action"
-    override val description = "Performs a custom action"
-
-    override fun execute(params: Map<String, Any>): ToolResult {
-        // Implementation
-    }
-}
-
-// Register the tool
-skillRegistry.register(CustomTool())
-```
-
-### Performance Considerations
-
-- **Coroutine Safety** - All operations must be coroutine-safe
-- **Resource Cleanup** - Always close sessions/drivers in finally blocks
-- **Batch Operations** - Use parallel processing for multiple pages
-- **Caching** - Respect page expiration settings
-
-### Security Best Practices
-
-- **Input Validation** - Always validate URLs and user inputs
-- **API Keys** - Never hardcode, use configuration
-- **XSS Prevention** - Sanitize extracted content
-- **BrowserProtocol Security** - Handle Chrome DevTools Protocol errors gracefully
-
-### Debugging with Claude
-
-**For Build Issues:**
-```bash
-# Check Maven output
-./mvnw clean compile -X
-
-# Verify dependencies
-./mvnw dependency:tree
-```
-
-**For Test Failures:**
-```bash
-# Run specific test
-./mvnw -pl browser4-core test -Dtest=SpecificTest
-
-# With debug output
-./mvnw -pl browser4-core test -Dtest=SpecificTest -X
-```
-
-**For Runtime Issues:**
-- Check logs in `logs/` directory
-- Enable trace logging for specific packages
-- Use `-diagnose` LoadOption for page loading issues
-
-### Working with Agents
-
-Browser4's agentic capabilities allow autonomous task execution:
-
-```kotlin
-val agent = AgenticContexts.getOrCreateAgent()
-
-// Simple task
-val result = agent.run("Go to example.com and find the latest news")
-
-// Complex multi-step task
-val result = agent.run("""
-    1. Navigate to shopping site
-    2. Search for 'laptops under $1000'
-    3. Filter by rating > 4 stars
-    4. Extract top 5 products with specs
-    5. Return as JSON
-""")
-```
-
-**Agent Best Practices:**
-- Provide clear, step-by-step instructions
-- Use structured output formats (JSON, tables)
-- Handle errors gracefully
-- Set appropriate timeouts
-
-### Code Review Checklist
-
-Before submitting changes, verify:
-
-- [ ] Code follows Kotlin conventions (immutable, explicit types)
-- [ ] Public APIs have KDoc documentation
-- [ ] Logging uses placeholders, not concatenation
-- [ ] Tests cover main path and at least one edge case
-- [ ] No hardcoded values (use configuration)
-- [ ] Changes are minimal and focused
-- [ ] Existing tests still pass
-- [ ] No new warnings or deprecations
-
-### Getting Help
-
-- Check `docs/` for detailed guides
-- Review `examples/` for usage patterns
-- Look in `browser4-tests/` for test examples
-
-### Coworker Automation
-
-The `coworker/` directory contains a file-queue automation system for task-driven AI workflows. Tasks are plain Markdown files routed through a state-machine pipeline.
-
-**Main entrypoints:**
-- `./coworker/scripts/coworker.ps1` — Primary worker: picks up a task file, runs Copilot, logs the run, and routes the result
-- `./coworker/scripts/process-coworker-queue.ps1` — One-shot queue processor
-- `./coworker/scripts/coworker-scheduler.ps1` — Long-running scheduler with periodic checks
-
-**Task lifecycle directories** (under `coworker/tasks/`):
-- `main/0draft/` → `main/1ready/` → `main/2working/` → `main/3complete/` (or `3aborted/`, `4review/`, `5approved/`)
-- `issues/` — GitHub issues pipeline with draft + commit + post stages
-
-**Key conventions:**
-- Task files use optional `Title:`, `Description:`, `Prompt:` headers; if absent, the full file is the prompt
-- The worker moves the file through state directories — never modify the task file from the AI side
-- Scheduler config lives in `coworker/scripts/coworker-scheduler.config.psd1`
-- Worker helper (Copilot, Claude, etc.) is configured in `coworker/scripts/config.psd1`
-
-See [Coworker SKILL.md](coworker/SKILL.md) for full documentation.
 
 ---
 
-*Last updated: 2026-06-30*
+*Last updated: 2026-07-14*

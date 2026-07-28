@@ -265,6 +265,6 @@
     <logger name="org.mongodb" level="WARN"/>
 
     <logger name="org.apache.hadoop.conf.Configuration" level="WARN"/>
-    <logger name="org.apache.gora" level="ERROR"/>
+    <logger name="ai.platon.gora" level="ERROR"/>
 
 </configuration>

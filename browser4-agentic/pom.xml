@@ -14,7 +14,7 @@
     <parent>
         <groupId>ai.platon.pulsar</groupId>
         <artifactId>browser4</artifactId>
-        <version>4.11.22-SNAPSHOT</version>
+        <version>4.12.1-SNAPSHOT</version>
         <relativePath>../pom.xml</relativePath>
     </parent>
 
@@ -71,49 +71,60 @@
             </exclusions>
         </dependency>
 
+        <dependency>
+            <groupId>dev.langchain4j</groupId>
+            <artifactId>langchain4j-open-ai</artifactId>
+        </dependency>
+
         <!-- MCP SDK for Browser4 MCP server support -->
         <dependency>
             <groupId>io.modelcontextprotocol</groupId>
             <artifactId>kotlin-sdk-core-jvm</artifactId>
-            <version>0.8.1</version>
+            <version>${mcp-sdk.version}</version>
         </dependency>
         <dependency>
             <groupId>io.modelcontextprotocol</groupId>
             <artifactId>kotlin-sdk-server-jvm</artifactId>
-            <version>0.8.1</version>
+            <version>${mcp-sdk.version}</version>
         </dependency>
         <dependency>
             <groupId>io.modelcontextprotocol</groupId>
             <artifactId>kotlin-sdk-client-jvm</artifactId>
-            <version>0.8.1</version>
+            <version>${mcp-sdk.version}</version>
             <scope>test</scope>
         </dependency>
-        <!-- Observability: OpenTelemetry for distributed tracing -->
+        <!-- Observability: OpenTelemetry for distributed tracing (optional) -->
         <dependency>
             <groupId>io.opentelemetry</groupId>
             <artifactId>opentelemetry-api</artifactId>
+            <optional>true</optional>
         </dependency>
         <dependency>
             <groupId>io.opentelemetry</groupId>
             <artifactId>opentelemetry-sdk</artifactId>
+            <optional>true</optional>
         </dependency>
         <dependency>
             <groupId>io.opentelemetry</groupId>
             <artifactId>opentelemetry-exporter-otlp</artifactId>
+            <optional>true</optional>
         </dependency>
         <dependency>
             <groupId>io.opentelemetry.semconv</groupId>
             <artifactId>opentelemetry-semconv</artifactId>
+            <optional>true</optional>
         </dependency>
 
-        <!-- Observability: Micrometer for metrics with Prometheus support -->
+        <!-- Observability: Micrometer for metrics with Prometheus support (optional) -->
         <dependency>
             <groupId>io.micrometer</groupId>
             <artifactId>micrometer-core</artifactId>
+            <optional>true</optional>
         </dependency>
         <dependency>
             <groupId>io.micrometer</groupId>
             <artifactId>micrometer-registry-prometheus</artifactId>
+            <optional>true</optional>
         </dependency>
 
         <dependency>
@@ -140,7 +151,6 @@
         <dependency>
             <groupId>org.yaml</groupId>
             <artifactId>snakeyaml</artifactId>
-            <version>2.2</version>
         </dependency>
     </dependencies>
 </project>

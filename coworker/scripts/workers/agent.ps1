@@ -43,19 +43,6 @@ function Assert-AgentDirectory {
     return [System.IO.Path]::GetFullPath($Path)
 }
 
-function Get-BackendType {
-    if ($CLAUDE) {
-        if ($CLAUDE -is [string]) {
-            throw "CLAUDE must be defined as a PowerShell array in $configPath"
-        }
-        if ($CLAUDE.Count -lt 1) {
-            throw 'CLAUDE must include at least an executable'
-        }
-        return 'claude'
-    }
-    return 'copilot'
-}
-
 function Get-AgentCommand {
     param(
         [string]$RepoRoot,
@@ -73,45 +60,62 @@ function Get-AgentCommand {
     }
     $WorkingDirectory = Assert-AgentDirectory -Path $WorkingDirectory -ParameterName 'WorkingDirectory'
 
-    $backend = Get-BackendType
+    # Get-AgentBackend comes from config.ps1 (dot-sourced above): claude > kimi > copilot.
+    $backend = Get-AgentBackend
 
-    if ($backend -eq 'claude') {
-        return [pscustomobject]@{
-            RepoRoot         = $RepoRoot
-            WorkingDirectory = $WorkingDirectory
-            ConfigPath       = $configPath
-            Executable       = $CLAUDE[0]
-            BaseArgs         = @($CLAUDE | Select-Object -Skip 1)
-            Backend          = 'claude'
+    switch ($backend) {
+        'claude' {
+            if ($CLAUDE -is [string]) {
+                throw "CLAUDE must be defined as a PowerShell array in $configPath"
+            }
+            if ($CLAUDE.Count -lt 1) {
+                throw 'CLAUDE must include at least an executable'
+            }
+            $command = $CLAUDE
+            break
         }
-    }
+        'kimi' {
+            if ($KIMI -is [string]) {
+                throw "KIMI must be defined as a PowerShell array in $configPath"
+            }
+            if ($KIMI.Count -lt 1) {
+                throw 'KIMI must include at least an executable'
+            }
+            $command = $KIMI
+            break
+        }
+        default {
+            if (-not $COPILOT) {
+                $COPILOT = @('gh', 'copilot')
+            }
 
-    if (-not $COPILOT) {
-        $COPILOT = @('gh', 'copilot')
-    }
+            if ($COPILOT -is [string]) {
+                throw "COPILOT must be defined as a PowerShell array in $configPath"
+            }
 
-    if ($COPILOT -is [string]) {
-        throw "COPILOT must be defined as a PowerShell array in $configPath"
-    }
-
-    if ($COPILOT.Count -lt 2) {
-        throw 'COPILOT must include an executable and at least one argument'
+            if ($COPILOT.Count -lt 2) {
+                throw 'COPILOT must include an executable and at least one argument'
+            }
+            $command = $COPILOT
+        }
     }
 
     return [pscustomobject]@{
         RepoRoot         = $RepoRoot
         WorkingDirectory = $WorkingDirectory
         ConfigPath       = $configPath
-        Executable       = $COPILOT[0]
-        BaseArgs         = @($COPILOT | Select-Object -Skip 1)
-        Backend          = 'copilot'
+        Executable       = $command[0]
+        BaseArgs         = @($command | Select-Object -Skip 1)
+        Backend          = $backend
     }
 }
 
 function New-AgentArguments {
     param(
-        [Parameter(Mandatory = $true)]
-        [string[]]$BaseArgs,
+        # Not Mandatory: a backend configured without extra flags (e.g. KIMI =
+        # @('kimi')) legitimately produces an empty BaseArgs array, and empty
+        # arrays cannot bind to a Mandatory parameter.
+        [string[]]$BaseArgs = @(),
         [string]$Prompt,
         [string[]]$AdditionalArguments = @(),
         [string]$Backend = 'copilot'
@@ -119,19 +123,25 @@ function New-AgentArguments {
 
     $arguments = @($BaseArgs)
     if ($PSBoundParameters.ContainsKey('Prompt') -and $Prompt) {
-        if ($Backend -eq 'claude') {
+        if ($Backend -eq 'copilot') {
+            $arguments += '--'
             $arguments += '-p'
             $arguments += $Prompt
         }
         else {
-            $arguments += '--'
+            # claude and kimi both accept -p <prompt> directly, without a separator.
             $arguments += '-p'
             $arguments += $Prompt
         }
     }
 
     if ($AdditionalArguments) {
-        if ($Backend -eq 'claude') {
+        if ($Backend -eq 'copilot') {
+            $arguments += $AdditionalArguments
+        }
+        else {
+            # --allow-all-tools/--allow-all-paths are copilot-only flags; claude and
+            # kimi manage permissions themselves (kimi -p runs with auto permission).
             $copilotOnlyFlags = @('--allow-all-tools', '--allow-all-paths')
             $filtered = foreach ($arg in $AdditionalArguments) {
                 if ($arg -notin $copilotOnlyFlags) {
@@ -139,9 +149,6 @@ function New-AgentArguments {
                 }
             }
             $arguments += $filtered
-        }
-        else {
-            $arguments += $AdditionalArguments
         }
     }
 
@@ -224,8 +231,10 @@ function Start-AgentProcess {
     param(
         [Parameter(Mandatory = $true)]
         [string]$Executable,
-        [Parameter(Mandatory = $true)]
-        [string[]]$BaseArgs,
+        # Not Mandatory: a backend configured without extra flags (e.g. KIMI =
+        # @('kimi')) legitimately produces an empty BaseArgs array, and empty
+        # arrays cannot bind to a Mandatory parameter.
+        [string[]]$BaseArgs = @(),
         [string]$Prompt,
         [string[]]$AdditionalArguments = @(),
         [string]$WorkingDirectory,

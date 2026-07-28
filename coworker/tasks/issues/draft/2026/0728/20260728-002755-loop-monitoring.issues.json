@@ -1,0 +1,302 @@
+{
+  "meta": {
+    "source": "20260728-002755-loop-monitoring.full.md",
+    "scenario": "loop-monitoring",
+    "mode": "dev",
+    "date": "20260728-002755"
+  },
+  "background": {
+    "executionContext": "**Commands used:**\n- `./b4w.ps1 help` — read documentation\n- `./b4w.ps1 loop \"navigate to...\" --count 2 --interval 10 --name health-check` — plain-text loop (errors)\n- `./b4w.ps1 loop --list` — list active loops\n- `./b4w.ps1 loop --status --name health-check` — inspect a loop\n- `./b4w.ps1 loop --shell \"date\" --count 2 --interval 5 --name shell-test` — shell mode\n- `./b4w.sh loop --count 2 --name cli-test --interval 5 -- status` — CLI subcommand mode (workaround: b4w.sh)\n- `./b4w.ps1 loop --pause --shell \"...\" --count 10 --interval 10 --name paused-test` — paused creation\n- `./b4w.ps1 loop --resume --name paused-test` → `./b4w.ps1 loop --pause --name paused-test` — pause/resume\n- `./b4w.ps1 loop --stop --name paused-test` — stop a loop\n- `./b4w.ps1 loop --shell \"date\" --count 100 --interval 2 --timeout 30 --name timeout-test` — timeout\n- `./b4w.ps1 loop --stop-all` — cleanup\n- `./b4w.ps1 loop --history` — history verification\n\n**Workarounds required:**\n1. Used `b4w.sh` instead of `b4w.ps1` for `--` subcommand mode (2 failures with b4w.ps1)\n2. Increased count from 2 to 10 for pause/resume testing (timing)\n3. Accepted plain-text mode errors as a documented finding\n\n## C & D: Issues and Assessment\n\n```json\n{\n  \"issues\": [\n    {\n      \"title\": \"Plain-text loop tasks fail server-side with HTTP timeout\",\n      \"severity\": \"High\",\n      \"category\": \"Reliability\",\n      \"reproduction\": \"./b4w.ps1 loop \\\"navigate to https://httpbin.org/get, take a snapshot, and report the page status\\\" --count 2 --interval 10 --name health-check\",\n      \"expected\": \"Each iteration executes the natural language task via the Browser4 server's command_run MCP tool and returns results.\",\n      \"actual\": \"Iteration 1: HTTP request timed out [tool=command_run, timeout=30s]. Iteration 2: returned HTTP 417 Expectation Failed with 'Ping timeout'. Both failures were counted as completed iterations.\",\n      \"rootCause\": \"The plain-text mode submits tasks to the server's LLM-powered command_run tool, which has a 30-second timeout. For tasks involving page navigation, this timeout is insufficient. The server also returned a 417 status for the second iteration, suggesting the server-side task execution is unreliable.\",\n      \"codePointer\": \"browser4-rest MCPToolController — command_run tool timeout configuration; cli/browser4-cli/src/loop.rs — iteration error handling\",\n      \"suggestion\": \"- Increase the command_run MCP tool timeout for loop contexts, or make it configurable via a loop flag\\n- Distinguish between 'completed with errors' and 'completed successfully' in loop output and history\\n- Consider providing a --retry flag for failed iterations\\n- Add a warning when all iterations failed, rather than printing 'Loop finished ✓'\"\n    },\n    {\n      \"title\": \"b4w.ps1 fails with PowerShell parameter ambiguity when using -- for loop subcommand mode\",\n      \"severity\": \"High\",\n      \"category\": \"UX\",\n      \"reproduction\": \"./b4w.ps1 loop --count 2 --name cli-test --interval 5 -- status\",\n      \"expected\": \"Loop executes the status subcommand twice at 5-second intervals.\",\n      \"actual\": \"PowerShell error: 'Parameter cannot be processed because the parameter name '' is ambiguous. Possible matches include: -Rebuild -RemainingArgs -Verbose -Debug...'\",\n      \"rootCause\": \"The b4w.ps1 PowerShell script has its own parameters (-Rebuild, -RemainingArgs, etc.). When `--` is passed as an argument, PowerShell's parameter binder tries to match it against the script's own parameter set. Even wrapping with `b4w.ps1 -- loop ... -- status` doesn't help — the inner `--` still hits PowerShell's binder.\",\n      \"codePointer\": \"b4w.ps1 — parameter declaration block; the script needs to consume `--` as a separator before passing remaining args through\",\n      \"suggestion\": \"- Fix b4w.ps1 to properly handle `--` as a passthrough separator (consume it and pass remaining args verbatim to the CLI)\\n- If PowerShell limits prevent this, document the limitation prominently in loop --help output and the loop.md reference\\n- Recommend b4w.sh explicitly in the loop subcommand documentation\\n- Add a self-diagnostic: if the CLI detects loop flags after --, emit a clearer error message suggesting b4w.sh\"\n    },\n    {\n      \"title\": \"Completed loops silently disappear from --list (auto-clean behavior is confusing)\",\n      \"severity\": \"Low\",\n      \"category\": \"UX\",\n      \"reproduction\": \"1. Run a loop with --count 2 2. Wait for completion 3. Run --list\",\n      \"expected\": \"The loop appears in the list with a 'completed' or 'finished' status, at least for a short grace period.\",\n      \"actual\": \"The loop is immediately removed from --list upon completion. Users who want to see what happened must know to use --history instead.\",\n      \"rootCause\": \"Intended design: completed loops auto-clean their state file. The --list command only queries persisted state files, not history. The --history command exists but isn't hinted at in the --list output when no loops are found.\",\n      \"codePointer\": \"cli/browser4-cli/src/loop.rs — loop list and state cleanup logic\",\n      \"suggestion\": \"- Add a hint to the 'No persisted loops' message: 'No persisted loops. Check --history for recently completed loops.'\\n- Consider keeping completed loops visible in --list for a short grace period (e.g., 5 minutes) before auto-cleaning\\n- Add a 'Last completed' line to --list output showing the most recent history entry\"\n    },\n    {\n      \"title\": \"Failed iterations count as 'completed' in loop progress\",\n      \"severity\": \"Medium\",\n      \"category\": \"Product\",\n      \"reproduction\": \"Run a plain-text loop where every iteration fails (e.g., health-check loop above).\",\n      \"expected\": \"Failed iterations are tracked separately from successful ones; loop output reflects partial failure.\",\n      \"actual\": \"Both iterations that errored were counted as 'completed': '✓ Loop finished — 2 iteration(s) completed.'\",\n      \"rootCause\": \"The loop increments iterationsCompleted for every iteration regardless of success/failure. Error handling logs to stderr but doesn't differentiate successful vs failed iterations in the count.\",\n      \"codePointer\": \"cli/browser4-cli/src/loop.rs — iteration counting and completion summary logic\",\n      \"suggestion\": \"- Track successful and failed iterations separately in the state file\\n- Report 'X successful, Y failed' in the completion summary\\n- Add a --fail-fast flag to stop the loop on first error\\n- Include error/failure count in --status and --list output\"\n    },\n    {\n      \"title\": \"b4w wrapper outputs redundant help text before every command\",\n      \"severity\": \"Low\",\n      \"category\": \"UX\",\n      \"reproduction\": \"./b4w.ps1 loop --help\",\n      \"expected\": \"Only the loop command's help text is shown.\",\n      \"actual\": \"The b4w wrapper's own usage text ('b4w — browser4-cli wrapper...') is printed before every CLI command output, adding noise to the output. The wrapper also prints warnings like 'It is strongly recommended to launch pwsh...' on every invocation.\",\n      \"rootCause\": \"The b4w.ps1 script always outputs its own usage/warning text in addition to forwarding to the CLI. The em-dash character '—' in 'b4w — browser4-cli wrapper' also triggers 'Unknown command: —' in the CLI's parser.\",\n      \"codePointer\": \"b4w.ps1 — wrapper banner/warning output logic\",\n      \"suggestion\": \"- Suppress the wrapper banner when forwarding to CLI commands (keep it only for 'b4w' with no arguments)\\n- Suppress the 'strongly recommended' warning after the first invocation per session, or make it a one-time message\\n- Replace the em-dash '—' with a hyphen '-' to avoid CLI parser false positives\"\n    },\n    {\n      \"title\": \"b4w.sh is under-documented for Linux users who hit PowerShell issues\",\n      \"severity\": \"Medium\",\n      \"category\": \"Discoverability\",\n      \"reproduction\": \"1. Run ./b4w.ps1 loop --help 2. Try to use -- subcommand mode 3. Hit PowerShell parameter errors\",\n      \"expected\": \"Quickly discover b4w.sh as the Linux-native alternative wrapper.\",\n      \"actual\": \"b4w.sh is mentioned once in the SKILL.md (under installation/tips), never in loop --help output, and never in the loop.md reference. Users on Linux must discover it through trial and error or by reading the full SKILL.md.\",\n      \"rootCause\": \"The documentation focus is on b4w.ps1 (PowerShell) as the primary wrapper. While b4w.sh exists, it's not cross-referenced from error messages or command-specific help.\",\n      \"codePointer\": \"cli/browser4-cli/src/loop.rs — help text generation; skills/browser4-cli/references/loop.md\",\n      \"suggestion\": \"- Add a note to loop --help output: 'Tip: On Linux/macOS, use b4w.sh to avoid PowerShell parameter binding issues with --'\\n- Detect the OS in b4w.ps1 and print a hint about b4w.sh on non-Windows platforms\\n- Cross-reference b4w.sh in the loop.md reference under the subcommand mode section\"\n    },\n    {\n      \"title\": \"Loop name restrictions not clearly documented in help output\",\n      \"severity\": \"Low\",\n      \"category\": \"Discoverability\",\n      \"reproduction\": \"./b4w.ps1 loop --help (check for name restrictions)\",\n      \"expected\": \"Help output mentions that names only allow letters, digits, dots, hyphens, and underscores.\",\n      \"actual\": \"The loop --help description mentions --name but does not specify the character restrictions. The restrictions are documented in loop.md's flags table.\",\n      \"rootCause\": \"The help text is a condensed version of the full documentation; name restrictions exist in the reference but not in the inline help.\",\n      \"codePointer\": \"cli/browser4-cli/src/loop.rs — help text for --name flag\",\n      \"suggestion\": \"- Add character restrictions to the --name flag help text: '[a-zA-Z0-9._-] only'\\n- Validate and reject invalid names with a clear error message mentioning valid characters\"\n    },\n    {\n      \"title\": \"Version mismatch warning is noisy for local development\",\n      \"severity\": \"Low\",\n      \"category\": \"UX\",\n      \"reproduction\": \"Run any command from a source checkout where the installed backend differs from the locally-built CLI.\",\n      \"expected\": \"A quiet dev-mode experience where local source code is used transparently.\",\n      \"actual\": \"Every status check prints a 5-line version mismatch warning. The warning is accurate but repetitive.\",\n      \"rootCause\": \"The b4w.ps1 wrapper builds from local source (CLI 4.12.1) but the dev daemon auto-starts the installed backend (v4.11.15). The mismatch is expected in dev mode but the warning is printed on every invocation.\",\n      \"codePointer\": \"b4w.ps1 or cli/browser4-cli/src — version check and warning logic\",\n      \"suggestion\": \"- Suppress the version mismatch warning when running in dev mode (detected by the b4w wrapper or BROWSER4_DEV environment variable)\\n- Print the warning once per session rather than on every command\\n- Add a --quiet-version flag or env var to suppress\"\n    }\n  ],\n  \"assessment\": {\n    \"completionStatus\": \"Successful — All 12 task steps completed. Two steps required workarounds: plain-text mode tasks failed server-side (the loop framework itself worked), and CLI subcommand mode required switching from b4w.ps1 to b4w.sh.\",\n    \"successRate\": \"83% — 10 of 12 steps worked on first attempt; 2 steps required workaround or had degraded results.\",\n    \"issuesFound\": 8,\n    \"majorBlockers\": \"1) Plain-text/natural-language loop mode is unreliable — the server-side command_run MCP tool times out for tasks involving page navigation. This makes one of the three loop modes effectively non-functional for browser automation tasks. 2) b4w.ps1 cannot be used with -- subcommand mode due to PowerShell parameter binding conflicts — a primary documented feature is broken in the primary wrapper.\",\n    \"mostConfusingAspects\": \"1) The $(./b4w.ps1) invocation pattern in the evaluation instructions — in bash this is command substitution and would fail. 2) Completed loops disappearing from --list — users need to know about --history as a separate command. 3) The b4w.ps1 vs b4w.sh distinction — it's unclear which wrapper to use on which platform for which mode. 4) Failed iterations being counted as 'completed' — the loop says '✓ Finished' even when all iterations errored.\",\n    \"mostValuableImprovements\": \"1) Fix the b4w.ps1 -- passthrough to support loop subcommand mode — this is a documented feature that fails in the primary wrapper. 2) Distinguish successful from failed iterations in loop counts and summaries. 3) Add a hint about --history when --list shows no persisted loops. 4) Increase or make configurable the command_run timeout for plain-text loop tasks. 5) Document b4w.sh prominently as the Linux/macOS alternative for -- subcommand mode.\",\n    \"usabilityRating\": 6\n  }\n}\n```\n\n---\n\n## Summary\n\nThe browser4-cli `loop` command is well-designed: pause/resume/stop lifecycle is clean, state persistence works reliably, timeout enforcement is accurate, and the named-loop system supports concurrent loops. The core mechanisms (shell mode, subcommand mode with `b4w.sh`) work as documented.\n\nThe primary pain points are **(a)** the `b4w.ps1` wrapper's inability to handle `--` for subcommand mode (a documented feature broken in the primary wrapper), and **(b)** unreliable plain-text mode execution due to server-side timeouts. These two issues affect first-time user experience significantly — one of three loop modes is broken in the default wrapper, and another is unreliable at runtime.\n\nThe loop framework itself earns a rating of **8/10** for its design. The wrapper and documentation issues bring the overall first-time user experience down to **6/10**.",
+    "task": "All 12 task steps were completed. The loop framework is functional and well-designed, but two significant issues were encountered: (1) plain-text/natural-language loop tasks fail server-side due to `command_run` MCP tool timeouts, and (2) the primary `b4w.ps1` wrapper cannot be used with `--` subcommand mode due to PowerShell parameter binding conflicts. Both have workarounds (use shell mode instead of plain-text; use `b4w.sh` instead of `b4w.ps1`), but these are non-obvious to a first-time user. The pause/resume/stop lifecycle, timeout enforcement, named loops, and list/status/history commands all worked correctly."
+  },
+  "issues": [
+    {
+      "number": 1,
+      "title": "Plain-text loop tasks fail server-side with HTTP timeout",
+      "severity": "High",
+      "category": "Reliability",
+      "sections": [
+        {
+          "body": "./b4w.ps1 loop \"navigate to https://httpbin.org/get, take a snapshot, and report the page status\" --count 2 --interval 10 --name health-check",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Each iteration executes the natural language task via the Browser4 server's command_run MCP tool and returns results.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "Iteration 1: HTTP request timed out [tool=command_run, timeout=30s]. Iteration 2: returned HTTP 417 Expectation Failed with 'Ping timeout'. Both failures were counted as completed iterations.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The plain-text mode submits tasks to the server's LLM-powered command_run tool, which has a 30-second timeout. For tasks involving page navigation, this timeout is insufficient. The server also returned a 417 status for the second iteration, suggesting the server-side task execution is unreliable.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "browser4-rest MCPToolController — command_run tool timeout configuration; cli/browser4-cli/src/loop.rs — iteration error handling",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Increase the command_run MCP tool timeout for loop contexts, or make it configurable via a loop flag\n- Distinguish between 'completed with errors' and 'completed successfully' in loop output and history\n- Consider providing a --retry flag for failed iterations\n- Add a warning when all iterations failed, rather than printing 'Loop finished ✓'",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 2,
+      "title": "b4w.ps1 fails with PowerShell parameter ambiguity when using -- for loop subcommand mode",
+      "severity": "High",
+      "category": "UX",
+      "sections": [
+        {
+          "body": "./b4w.ps1 loop --count 2 --name cli-test --interval 5 -- status",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Loop executes the status subcommand twice at 5-second intervals.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "PowerShell error: 'Parameter cannot be processed because the parameter name '' is ambiguous. Possible matches include: -Rebuild -RemainingArgs -Verbose -Debug...'",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The b4w.ps1 PowerShell script has its own parameters (-Rebuild, -RemainingArgs, etc.). When `--` is passed as an argument, PowerShell's parameter binder tries to match it against the script's own parameter set. Even wrapping with `b4w.ps1 -- loop ... -- status` doesn't help — the inner `--` still hits PowerShell's binder.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "b4w.ps1 — parameter declaration block; the script needs to consume `--` as a separator before passing remaining args through",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Fix b4w.ps1 to properly handle `--` as a passthrough separator (consume it and pass remaining args verbatim to the CLI)\n- If PowerShell limits prevent this, document the limitation prominently in loop --help output and the loop.md reference\n- Recommend b4w.sh explicitly in the loop subcommand documentation\n- Add a self-diagnostic: if the CLI detects loop flags after --, emit a clearer error message suggesting b4w.sh",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 3,
+      "title": "Failed iterations count as 'completed' in loop progress",
+      "severity": "Medium",
+      "category": "Product",
+      "sections": [
+        {
+          "body": "Run a plain-text loop where every iteration fails (e.g., health-check loop above).",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Failed iterations are tracked separately from successful ones; loop output reflects partial failure.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "Both iterations that errored were counted as 'completed': '✓ Loop finished — 2 iteration(s) completed.'",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The loop increments iterationsCompleted for every iteration regardless of success/failure. Error handling logs to stderr but doesn't differentiate successful vs failed iterations in the count.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "cli/browser4-cli/src/loop.rs — iteration counting and completion summary logic",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Track successful and failed iterations separately in the state file\n- Report 'X successful, Y failed' in the completion summary\n- Add a --fail-fast flag to stop the loop on first error\n- Include error/failure count in --status and --list output",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 4,
+      "title": "b4w.sh is under-documented for Linux users who hit PowerShell issues",
+      "severity": "Medium",
+      "category": "Discoverability",
+      "sections": [
+        {
+          "body": "1. Run ./b4w.ps1 loop --help 2. Try to use -- subcommand mode 3. Hit PowerShell parameter errors",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Quickly discover b4w.sh as the Linux-native alternative wrapper.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "b4w.sh is mentioned once in the SKILL.md (under installation/tips), never in loop --help output, and never in the loop.md reference. Users on Linux must discover it through trial and error or by reading the full SKILL.md.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The documentation focus is on b4w.ps1 (PowerShell) as the primary wrapper. While b4w.sh exists, it's not cross-referenced from error messages or command-specific help.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "cli/browser4-cli/src/loop.rs — help text generation; skills/browser4-cli/references/loop.md",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Add a note to loop --help output: 'Tip: On Linux/macOS, use b4w.sh to avoid PowerShell parameter binding issues with --'\n- Detect the OS in b4w.ps1 and print a hint about b4w.sh on non-Windows platforms\n- Cross-reference b4w.sh in the loop.md reference under the subcommand mode section",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 5,
+      "title": "Completed loops silently disappear from --list (auto-clean behavior is confusing)",
+      "severity": "Low",
+      "category": "UX",
+      "sections": [
+        {
+          "body": "1. Run a loop with --count 2 2. Wait for completion 3. Run --list",
+          "label": "Reproduction"
+        },
+        {
+          "body": "The loop appears in the list with a 'completed' or 'finished' status, at least for a short grace period.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "The loop is immediately removed from --list upon completion. Users who want to see what happened must know to use --history instead.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "Intended design: completed loops auto-clean their state file. The --list command only queries persisted state files, not history. The --history command exists but isn't hinted at in the --list output when no loops are found.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "cli/browser4-cli/src/loop.rs — loop list and state cleanup logic",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Add a hint to the 'No persisted loops' message: 'No persisted loops. Check --history for recently completed loops.'\n- Consider keeping completed loops visible in --list for a short grace period (e.g., 5 minutes) before auto-cleaning\n- Add a 'Last completed' line to --list output showing the most recent history entry",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 6,
+      "title": "b4w wrapper outputs redundant help text before every command",
+      "severity": "Low",
+      "category": "UX",
+      "sections": [
+        {
+          "body": "./b4w.ps1 loop --help",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Only the loop command's help text is shown.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "The b4w wrapper's own usage text ('b4w — browser4-cli wrapper...') is printed before every CLI command output, adding noise to the output. The wrapper also prints warnings like 'It is strongly recommended to launch pwsh...' on every invocation.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The b4w.ps1 script always outputs its own usage/warning text in addition to forwarding to the CLI. The em-dash character '—' in 'b4w — browser4-cli wrapper' also triggers 'Unknown command: —' in the CLI's parser.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "b4w.ps1 — wrapper banner/warning output logic",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Suppress the wrapper banner when forwarding to CLI commands (keep it only for 'b4w' with no arguments)\n- Suppress the 'strongly recommended' warning after the first invocation per session, or make it a one-time message\n- Replace the em-dash '—' with a hyphen '-' to avoid CLI parser false positives",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 7,
+      "title": "Loop name restrictions not clearly documented in help output",
+      "severity": "Low",
+      "category": "Discoverability",
+      "sections": [
+        {
+          "body": "./b4w.ps1 loop --help (check for name restrictions)",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Help output mentions that names only allow letters, digits, dots, hyphens, and underscores.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "The loop --help description mentions --name but does not specify the character restrictions. The restrictions are documented in loop.md's flags table.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The help text is a condensed version of the full documentation; name restrictions exist in the reference but not in the inline help.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "cli/browser4-cli/src/loop.rs — help text for --name flag",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Add character restrictions to the --name flag help text: '[a-zA-Z0-9._-] only'\n- Validate and reject invalid names with a clear error message mentioning valid characters",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 8,
+      "title": "Version mismatch warning is noisy for local development",
+      "severity": "Low",
+      "category": "UX",
+      "sections": [
+        {
+          "body": "Run any command from a source checkout where the installed backend differs from the locally-built CLI.",
+          "label": "Reproduction"
+        },
+        {
+          "body": "A quiet dev-mode experience where local source code is used transparently.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "Every status check prints a 5-line version mismatch warning. The warning is accurate but repetitive.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The b4w.ps1 wrapper builds from local source (CLI 4.12.1) but the dev daemon auto-starts the installed backend (v4.11.15). The mismatch is expected in dev mode but the warning is printed on every invocation.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "b4w.ps1 or cli/browser4-cli/src — version check and warning logic",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Suppress the version mismatch warning when running in dev mode (detected by the b4w wrapper or BROWSER4_DEV environment variable)\n- Print the warning once per session rather than on every command\n- Add a --quiet-version flag or env var to suppress",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    }
+  ]
+}

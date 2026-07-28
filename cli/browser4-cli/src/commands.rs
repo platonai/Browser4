@@ -22,8 +22,10 @@ pub enum Category {
     Agent,
     Swarm,
     Snapshot,
+    Skill,
     Act,
     Skills,
+    Plugins,
 }
 
 impl Category {
@@ -44,10 +46,21 @@ impl Category {
             Category::Agent => "agent",
             Category::Swarm => "swarm",
             Category::Snapshot => "snapshot",
+            Category::Skill => "skill",
             Category::Act => "act",
             Category::Skills => "skills",
+            Category::Plugins => "plugins",
         }
     }
+}
+
+/// Indicates whether a CLI command has end-to-end test coverage.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum E2eCoverage {
+    /// Command has one or more e2e test scenarios exercising it.
+    Tested,
+    /// Command is deliberately excluded from e2e testing.
+    Excluded,
 }
 
 /// Describes a single positional argument for a command.
@@ -83,6 +96,9 @@ pub struct CommandDef {
     pub args: &'static [ArgDef],
     /// Named option definitions.
     pub options: &'static [OptionDef],
+    /// Whether this command has end-to-end test coverage.
+    #[allow(dead_code)]
+    pub e2e_coverage: E2eCoverage,
     /// Function that resolves the MCP tool name given parsed args+options.
     pub tool_name_fn: fn(&HashMap<String, Value>) -> String,
     /// Function that builds the JSON parameters for the MCP call.
@@ -154,6 +170,10 @@ pub fn is_element_reference(value: &str) -> bool {
         || trimmed.starts_with("backend:")
 }
 
+/// Returns true if the value is a bare CSS selector (e.g. "#id", ".class", "[attr]")
+/// that does not already have a known prefix (`css:`, `backend:`, `xpath:`, `text=`).
+/// These selectors need a `css:` prefix so the backend can distinguish them from
+/// backend node references.
 fn resolve_key_and_ref(map: &HashMap<String, Value>) -> (String, Option<String>) {
     let positionals = raw_positionals(map);
     match positionals.as_slice() {
@@ -270,7 +290,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         // ---- Core ----
         CommandDef {
             name: "open",
-            description: "Open a browser session or refresh the saved one if it is no longer active",
+            description: "Open a browser session or reconnect to an existing one",
             category: Category::Browsers,
             hidden: false,
             batch_supported: false,
@@ -282,6 +302,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "profile-mode", description: "Browser profile mode (temporary, sequential, default)", is_bool: false, short: None },
                 OptionDef { name: "interact-level", description: "Interaction level for the new session (for example FASTEST, FAST, DEFAULT)", is_bool: false, short: None },
             ],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |args| {
                 if args.get("url").and_then(|v| v.as_str()).map(|u| !u.is_empty()).unwrap_or(false) {
                     "browser_navigate".to_string()
@@ -312,7 +333,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "attach",
-            description: "Attach to an existing browser via CDP endpoint or channel name",
+            description: "Attach to an existing browser via CDP endpoint, channel name, or Browser4 Extension",
             category: Category::Browsers,
             hidden: false,
             batch_supported: false,
@@ -330,7 +351,14 @@ pub fn all_commands() -> Vec<CommandDef> {
                     is_bool: false,
                     short: None,
                 },
+                OptionDef {
+                    name: "extension",
+                    description: "Connect via the Browser4 Chrome Extension. Optionally specify a channel: chrome (default), chrome-canary, msedge, msedge-dev, etc.",
+                    is_bool: false,
+                    short: None,
+                },
             ],
+            e2e_coverage: E2eCoverage::Excluded,
             tool_name_fn: |_| "attach_browser".to_string(),
             tool_params_fn: |args| {
                 let mut params = json!({});
@@ -339,6 +367,13 @@ pub fn all_commands() -> Vec<CommandDef> {
                 }
                 if let Some(ep) = get_opt_str(args, "endpoint") {
                     params["endpoint"] = json!(ep);
+                }
+                if let Some(ext) = get_opt_str(args, "extension") {
+                    params["extension"] = json!(true);
+                    // If the value is not "true", treat it as a channel name
+                    if ext != "true" {
+                        params["channel"] = json!(ext);
+                    }
                 }
                 params
             },
@@ -351,6 +386,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: false,
             args: &[],
             options: &[],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| String::new(),
             tool_params_fn: |_| json!({}),
         },
@@ -375,6 +411,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                     short: None,
                 },
             ],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| String::new(),
             tool_params_fn: |args| {
                 let mut params = json!({});
@@ -408,6 +445,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                     short: None,
                 },
             ],
+            e2e_coverage: E2eCoverage::Excluded,
             tool_name_fn: |_| String::new(),
             tool_params_fn: |args| {
                 let mut params = json!({});
@@ -429,6 +467,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: false,
             args: &[],
             options: &[],
+            e2e_coverage: E2eCoverage::Excluded,
             tool_name_fn: |_| String::new(),
             tool_params_fn: |_| json!({}),
         },
@@ -440,6 +479,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: false,
             args: &[],
             options: &[],
+            e2e_coverage: E2eCoverage::Excluded,
             tool_name_fn: |_| String::new(),
             tool_params_fn: |_| json!({}),
         },
@@ -466,6 +506,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                     short: None,
                 },
             ],
+            e2e_coverage: E2eCoverage::Excluded,
             tool_name_fn: |_| String::new(),
             tool_params_fn: |args| {
                 let mut params = json!({});
@@ -491,11 +532,36 @@ pub fn all_commands() -> Vec<CommandDef> {
                 ArgDef { name: "name", description: "Skill name (if given, prints path to that skill's directory)", optional: true },
             ],
             options: &[],
+            e2e_coverage: E2eCoverage::Excluded,
             tool_name_fn: |_| String::new(),
             tool_params_fn: |args| {
                 let mut params = json!({});
                 if let Some(name) = get_opt_str(args, "name") {
                     params["name"] = json!(name);
+                }
+                params
+            },
+        },
+        CommandDef {
+            name: "skills-unpack",
+            description: "Unpack bundled skill files to a directory",
+            category: Category::Skills,
+            hidden: true,
+            batch_supported: false,
+            args: &[
+                ArgDef {
+                    name: "dest",
+                    description: "Destination directory (defaults to the skills directory)",
+                    optional: true,
+                },
+            ],
+            options: &[],
+            e2e_coverage: E2eCoverage::Excluded,
+            tool_name_fn: |_| String::new(),
+            tool_params_fn: |args| {
+                let mut params = json!({});
+                if let Some(dest) = get_opt_str(args, "dest") {
+                    params["dest"] = json!(dest);
                 }
                 params
             },
@@ -525,6 +591,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                     short: None,
                 },
             ],
+            e2e_coverage: E2eCoverage::Excluded,
             tool_name_fn: |_| String::new(),
             tool_params_fn: |_| json!({}),
         },
@@ -650,6 +717,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                     short: None,
                 },
             ],
+            e2e_coverage: E2eCoverage::Excluded,
             tool_name_fn: |_| String::new(),
             tool_params_fn: |args| {
                 json!({ "task": get_str(args, "task").unwrap_or_default() })
@@ -663,6 +731,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: true,
             args: &[ArgDef { name: "url", description: "The URL to navigate to", optional: false }],
             options: &[],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_navigate".to_string(),
             tool_params_fn: |args| {
                 let url = get_str(args, "url").unwrap_or_default();
@@ -677,6 +746,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: true,
             args: &[],
             options: &[],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_navigate_back".to_string(),
             tool_params_fn: |_| json!({}),
         },
@@ -688,6 +758,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: true,
             args: &[],
             options: &[],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_navigate_forward".to_string(),
             tool_params_fn: |_| json!({}),
         },
@@ -699,6 +770,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: true,
             args: &[],
             options: &[],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_reload".to_string(),
             tool_params_fn: |_| json!({}),
         },
@@ -718,6 +790,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "follow", description: "After pressing, detect and follow navigation to new tabs", is_bool: true, short: None },
                 OptionDef { name: "no-snapshot", description: "Skip the automatic post-command accessibility tree snapshot", is_bool: true, short: None },
             ],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_press_key".to_string(),
             tool_params_fn: |args| {
                 let (key, reference) = resolve_key_and_ref(args);
@@ -744,6 +817,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "focus", description: "Click the target element to focus it before typing, ensuring the element is in an interactive state", is_bool: true, short: None },
                 OptionDef { name: "no-snapshot", description: "Skip the automatic post-command accessibility tree snapshot", is_bool: true, short: None },
             ],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_press_sequentially".to_string(),
             tool_params_fn: |args| {
                 let (text, reference) = resolve_text_and_ref(args);
@@ -765,6 +839,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: true,
             args: &[ArgDef { name: "key", description: "Name of the key to press", optional: false }],
             options: &[],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_keydown".to_string(),
             tool_params_fn: |args| json!({ "key": get_str(args, "key").unwrap_or_default() }),
         },
@@ -776,6 +851,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: true,
             args: &[ArgDef { name: "key", description: "Name of the key to press", optional: false }],
             options: &[],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_keyup".to_string(),
             tool_params_fn: |args| json!({ "key": get_str(args, "key").unwrap_or_default() }),
         },
@@ -791,6 +867,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 ArgDef { name: "y", description: "Y coordinate", optional: false },
             ],
             options: &[],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_mouse_move_xy".to_string(),
             tool_params_fn: |args| {
                 json!({
@@ -807,6 +884,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: true,
             args: &[ArgDef { name: "button", description: "Button to press, defaults to left", optional: true }],
             options: &[],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_mouse_down".to_string(),
             tool_params_fn: |args| {
                 let mut p = json!({});
@@ -822,6 +900,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: true,
             args: &[ArgDef { name: "button", description: "Button to press, defaults to left", optional: true }],
             options: &[],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_mouse_up".to_string(),
             tool_params_fn: |args| {
                 let mut p = json!({});
@@ -840,6 +919,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 ArgDef { name: "dy", description: "Vertical scroll delta (deltaY)", optional: false },
             ],
             options: &[],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_mouse_wheel".to_string(),
             tool_params_fn: |args| {
                 json!({
@@ -859,6 +939,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 ArgDef { name: "pixels", description: "Number of pixels to scroll", optional: false },
             ],
             options: &[],
+            e2e_coverage: E2eCoverage::Excluded,
             tool_name_fn: |args| {
                 let direction = get_str(args, "direction").unwrap_or_default().to_ascii_lowercase();
                 match direction.as_str() {
@@ -895,12 +976,15 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "modifiers", description: "Modifier keys to press", is_bool: false, short: None },
                 OptionDef { name: "follow", description: "After clicking, detect and follow navigation to new tabs", is_bool: true, short: None },
                 OptionDef { name: "no-snapshot", description: "Skip the automatic post-command accessibility tree snapshot", is_bool: true, short: None },
+                OptionDef { name: "auto-dismiss-dialogs", description: "Auto-accept any native JavaScript dialog (alert/confirm/prompt) triggered by the click", is_bool: true, short: None },
             ],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_click".to_string(),
             tool_params_fn: |args| {
                 let mut p = json!({ "ref": get_str(args, "ref").unwrap_or_default() });
                 if let Some(b) = get_opt_str(args, "button") { p["button"] = json!(b); }
                 if let Some(m) = args.get("modifiers") { p["modifiers"] = m.clone(); }
+                if args.contains_key("auto-dismiss-dialogs") { p["autoDismissDialogs"] = json!(true); }
                 p
             },
         },
@@ -918,7 +1002,9 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "modifiers", description: "Modifier keys to press", is_bool: false, short: None },
                 OptionDef { name: "follow", description: "After clicking, detect and follow navigation to new tabs", is_bool: true, short: None },
                 OptionDef { name: "no-snapshot", description: "Skip the automatic post-command accessibility tree snapshot", is_bool: true, short: None },
+                OptionDef { name: "auto-dismiss-dialogs", description: "Auto-accept any native JavaScript dialog (alert/confirm/prompt) triggered by the double-click", is_bool: true, short: None },
             ],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_click".to_string(),
             tool_params_fn: |args| {
                 let mut p = json!({
@@ -927,6 +1013,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 });
                 if let Some(b) = get_opt_str(args, "button") { p["button"] = json!(b); }
                 if let Some(m) = args.get("modifiers") { p["modifiers"] = m.clone(); }
+                if args.contains_key("auto-dismiss-dialogs") { p["autoDismissDialogs"] = json!(true); }
                 p
             },
         },
@@ -943,6 +1030,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             options: &[
                 OptionDef { name: "no-snapshot", description: "Skip the automatic post-command accessibility tree snapshot", is_bool: true, short: None },
             ],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_drag".to_string(),
             tool_params_fn: |args| {
                 json!({
@@ -966,6 +1054,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "verify", description: "Verify text was correctly typed after completion", is_bool: true, short: None },
                 OptionDef { name: "no-snapshot", description: "Skip the automatic post-command accessibility tree snapshot", is_bool: true, short: None },
             ],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_type".to_string(),
             tool_params_fn: |args| {
                 let mut p = json!({
@@ -988,6 +1077,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             options: &[
                 OptionDef { name: "no-snapshot", description: "Skip the automatic post-command accessibility tree snapshot", is_bool: true, short: None },
             ],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_hover".to_string(),
             tool_params_fn: |args| json!({ "ref": get_str(args, "ref").unwrap_or_default() }),
         },
@@ -1005,6 +1095,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "verify", description: "Verify the correct option was selected by reading the element value", is_bool: true, short: None },
                 OptionDef { name: "no-snapshot", description: "Skip the automatic post-command accessibility tree snapshot", is_bool: true, short: None },
             ],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_select_option".to_string(),
             tool_params_fn: |args| {
                 let value = get_str(args, "val").unwrap_or_default();
@@ -1022,6 +1113,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 ArgDef { name: "file", description: "The absolute paths to the files to upload", optional: false },
             ],
             options: &[],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_file_upload".to_string(),
             tool_params_fn: |args| {
                 let file = get_str(args, "file").unwrap_or_default();
@@ -1038,6 +1130,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             options: &[
                 OptionDef { name: "no-snapshot", description: "Skip the automatic post-command accessibility tree snapshot", is_bool: true, short: None },
             ],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_check".to_string(),
             tool_params_fn: |args| json!({ "ref": get_str(args, "ref").unwrap_or_default() }),
         },
@@ -1051,6 +1144,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             options: &[
                 OptionDef { name: "no-snapshot", description: "Skip the automatic post-command accessibility tree snapshot", is_bool: true, short: None },
             ],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_uncheck".to_string(),
             tool_params_fn: |args| json!({ "ref": get_str(args, "ref").unwrap_or_default() }),
         },
@@ -1070,6 +1164,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "fn", description: "Wait until this JavaScript expression returns true", is_bool: false, short: None },
                 OptionDef { name: "timeout", description: "Maximum time to wait in milliseconds (default: 30000)", is_bool: false, short: None },
             ],
+            e2e_coverage: E2eCoverage::Excluded,
             tool_name_fn: |args| {
                 if get_opt_str(args, "text").is_some() || get_opt_str(args, "fn").is_some() || get_opt_str(args, "load").is_some() {
                     "wait_for_function".to_string()
@@ -1119,6 +1214,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 ArgDef { name: "name", description: "Property or attribute name (required for property and attr modes)", optional: true },
             ],
             options: &[],
+            e2e_coverage: E2eCoverage::Excluded,
             tool_name_fn: |args| {
                 let mode = get_str(args, "mode").unwrap_or_default().to_ascii_lowercase();
                 match mode.as_str() {
@@ -1148,7 +1244,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "snapshot",
-            description: "Capture page snapshot to obtain element refs. Use -v N to capture a specific screen-height chunk of the page (viewport pagination), -i for interactive, --auto-diff for change detection. Run `snapshot --help` for all flags.",
+            description: "Capture page snapshot to obtain element refs. See flags below for filtering, scoping, and output options.",
             category: Category::Core,
             hidden: false,
             batch_supported: true,
@@ -1162,15 +1258,16 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "compact", description: "Remove empty structural elements (enabled by default)", is_bool: true, short: Some("c") },
                 OptionDef { name: "no-compact", description: "Disable compact mode; include all structural nodes", is_bool: true, short: None },
                 OptionDef { name: "depth", description: "Limit tree depth to n levels", is_bool: false, short: Some("d") },
-                OptionDef { name: "selector", description: "Scope snapshot to a CSS selector", is_bool: false, short: Some("s") },
+                OptionDef { name: "selector", description: "Scope snapshot to a CSS selector (use --selector; -s is reserved for --session globally). Note: root-to-leaf ancestor elements outside the matched scope are included for tree-path context.", is_bool: false, short: None },
                 OptionDef { name: "raw", description: "Strip page info and return only snapshot content (alias for --stdout)", is_bool: true, short: None },
                 OptionDef { name: "stdout", description: "Print snapshot content to stdout instead of saving to file", is_bool: true, short: None },
                 OptionDef { name: "viewport", description: "Capture specific screen-height page chunks (viewports). Each chunk = one screen height (~viewport height px). Formats: single index (3), comma list (0,2,4), range (1-3), or mixed (0,2-4,7). Example: -v 1-3 captures the 2nd through 4th screen-heights.", is_bool: false, short: Some("v") },
-                OptionDef { name: "auto-diff", description: "Diff against the previous snapshot — show only what changed since the last capture", is_bool: true, short: None },
+                OptionDef { name: "auto-diff", description: "Diff against the previous snapshot — show only what changed since the last capture. Note: after page navigation (goto/open), all elements appear as changed because the entire DOM is new.", is_bool: true, short: None },
                 OptionDef { name: "page", short: None, is_bool: false, description: "Page number for paginated snapshot output (1-based, default: 1)" },
                 OptionDef { name: "page-size", short: None, is_bool: false, description: "Lines per page for snapshot output (default: 2000)" },
                 OptionDef { name: "all", short: None, is_bool: true, description: "Show all output, disabling pagination" },
             ],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_snapshot".to_string(),
             tool_params_fn: |args| {
                 let mut p = json!({});
@@ -1225,6 +1322,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "page-size", short: None, is_bool: false, description: "Lines per page (default: 2000)" },
                 OptionDef { name: "all", short: None, is_bool: true, description: "Show all output, disabling pagination" },
             ],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_snapshot".to_string(),
             tool_params_fn: |args| {
                 let mut p = json!({});
@@ -1232,6 +1330,49 @@ pub fn all_commands() -> Vec<CommandDef> {
                     if k != "_" {
                         p[k] = v.clone();
                     }
+                }
+                p
+            },
+        },
+        CommandDef {
+            name: "snapshot-list",
+            description: "List saved snapshot files with timestamps and sizes",
+            category: Category::Core,
+            hidden: false,
+            batch_supported: false,
+            args: &[],
+            options: &[
+                OptionDef { name: "count", short: Some("n"), is_bool: false, description: "Show only the most recent N snapshots (default: 20)" },
+                OptionDef { name: "all", short: None, is_bool: true, description: "Show all snapshots including archived ones" },
+            ],
+            e2e_coverage: E2eCoverage::Excluded, // filesystem-only, no backend
+            tool_name_fn: |_| "snapshot_list".to_string(),
+            tool_params_fn: |args| {
+                let mut p = json!({});
+                for (k, v) in args {
+                    if k != "_" { p[k] = v.clone(); }
+                }
+                p
+            },
+        },
+        CommandDef {
+            name: "snapshot-clean",
+            description: "Remove old snapshot files from the snapshot directory",
+            category: Category::Core,
+            hidden: false,
+            batch_supported: false,
+            args: &[],
+            options: &[
+                OptionDef { name: "keep", short: Some("k"), is_bool: false, description: "Keep the most recent N snapshots, delete the rest (default: 100)" },
+                OptionDef { name: "all", short: None, is_bool: true, description: "Remove all snapshot files (including archive)" },
+                OptionDef { name: "dry-run", short: None, is_bool: true, description: "Show what would be deleted without actually deleting" },
+            ],
+            e2e_coverage: E2eCoverage::Excluded, // filesystem-only, no backend
+            tool_name_fn: |_| "snapshot_clean".to_string(),
+            tool_params_fn: |args| {
+                let mut p = json!({});
+                for (k, v) in args {
+                    if k != "_" { p[k] = v.clone(); }
                 }
                 p
             },
@@ -1256,6 +1397,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "wait-selector", description: "Wait for a CSS selector to appear in the DOM before evaluating (use for async-rendered content like React/SPA pages)", is_bool: false, short: None },
                 OptionDef { name: "wait-timeout", description: "Max time in ms to wait for --wait-selector (default: 30000)", is_bool: false, short: None },
             ],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_evaluate".to_string(),
             tool_params_fn: |args| {
                 let mut p = json!({ "expression": get_str(args, "expression").unwrap_or_default() });
@@ -1277,7 +1419,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             name: "console",
             description: "List console messages",
             category: Category::DevTools,
-            hidden: true,
+            hidden: false,
             batch_supported: false,
             args: &[
                 ArgDef { name: "min-level", description: "Level of the console messages to return. Defaults to \"info\"", optional: true },
@@ -1285,6 +1427,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             options: &[
                 OptionDef { name: "clear", description: "Whether to clear the console list", is_bool: true, short: None },
             ],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |args| {
                 if get_bool(args, "clear").unwrap_or(false) {
                     "browser_console_clear".to_string()
@@ -1316,6 +1459,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "file", description: "Read params from a JSON file instead of --json", is_bool: false, short: None },
                 OptionDef { name: "stdin", description: "Read params as JSON from stdin", is_bool: true, short: None },
             ],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "execute_cdp_command".to_string(),
             tool_params_fn: |args| {
                 let mut p = json!({ "method": get_str(args, "method").unwrap_or_default() });
@@ -1333,6 +1477,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: true,
             args: &[ArgDef { name: "prompt", description: "The text of the prompt in case of a prompt dialog", optional: true }],
             options: &[],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_handle_dialog".to_string(),
             tool_params_fn: |args| {
                 let mut p = json!({ "accept": true });
@@ -1348,6 +1493,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: true,
             args: &[],
             options: &[],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_handle_dialog".to_string(),
             tool_params_fn: |_| json!({ "accept": false }),
         },
@@ -1362,6 +1508,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 ArgDef { name: "h", description: "Height of the browser window", optional: false },
             ],
             options: &[],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_resize".to_string(),
             tool_params_fn: |args| {
                 json!({
@@ -1378,6 +1525,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: false,
             args: &[],
             options: &[],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| String::new(),
             tool_params_fn: |_| json!({}),
         },
@@ -1394,6 +1542,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 optional: true,
             }],
             options: &[],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_save_storage_state".to_string(),
             tool_params_fn: |args| {
                 let mut p = json!({});
@@ -1415,6 +1564,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 optional: false,
             }],
             options: &[],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_load_storage_state".to_string(),
             tool_params_fn: |args| {
                 json!({
@@ -1433,6 +1583,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "domain", description: "Only include cookies with the exact domain", is_bool: false, short: None },
                 OptionDef { name: "path", description: "Only include cookies with the exact path", is_bool: false, short: None },
             ],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_save_storage_state".to_string(),
             tool_params_fn: |args| {
                 let mut p = json!({});
@@ -1457,6 +1608,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 optional: false,
             }],
             options: &[],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_save_storage_state".to_string(),
             tool_params_fn: |args| {
                 json!({
@@ -1482,6 +1634,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "secure", description: "Mark the cookie as Secure", is_bool: true, short: None },
                 OptionDef { name: "sameSite", description: "Cookie SameSite policy (Strict, Lax, None)", is_bool: false, short: None },
             ],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_load_storage_state".to_string(),
             tool_params_fn: |args| {
                 let mut p = json!({
@@ -1524,6 +1677,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "domain", description: "Cookie domain override", is_bool: false, short: None },
                 OptionDef { name: "path", description: "Cookie path override", is_bool: false, short: None },
             ],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "delete_cookies".to_string(),
             tool_params_fn: |args| {
                 let mut p = json!({
@@ -1546,6 +1700,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: false,
             args: &[],
             options: &[],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "clear_browser_cookies".to_string(),
             tool_params_fn: |_| json!({}),
         },
@@ -1557,6 +1712,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: false,
             args: &[],
             options: &[],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_evaluate".to_string(),
             tool_params_fn: |_| json!({}),
         },
@@ -1572,6 +1728,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 optional: false,
             }],
             options: &[],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_evaluate".to_string(),
             tool_params_fn: |args| {
                 json!({
@@ -1590,6 +1747,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 ArgDef { name: "value", description: "Value to store", optional: false },
             ],
             options: &[],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_evaluate".to_string(),
             tool_params_fn: |args| {
                 json!({
@@ -1610,6 +1768,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 optional: false,
             }],
             options: &[],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_evaluate".to_string(),
             tool_params_fn: |args| {
                 json!({
@@ -1625,6 +1784,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: false,
             args: &[],
             options: &[],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_evaluate".to_string(),
             tool_params_fn: |_| json!({}),
         },
@@ -1636,6 +1796,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: false,
             args: &[],
             options: &[],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_evaluate".to_string(),
             tool_params_fn: |_| json!({}),
         },
@@ -1651,6 +1812,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 optional: false,
             }],
             options: &[],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_evaluate".to_string(),
             tool_params_fn: |args| {
                 json!({
@@ -1669,6 +1831,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 ArgDef { name: "value", description: "Value to store", optional: false },
             ],
             options: &[],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_evaluate".to_string(),
             tool_params_fn: |args| {
                 json!({
@@ -1689,6 +1852,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 optional: false,
             }],
             options: &[],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_evaluate".to_string(),
             tool_params_fn: |args| {
                 json!({
@@ -1704,8 +1868,61 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: false,
             args: &[],
             options: &[],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_evaluate".to_string(),
             tool_params_fn: |_| json!({}),
+        },
+        // ---- Export ----
+        CommandDef {
+            name: "webdb-export",
+            description: "Export pages from the web database to a local directory",
+            category: Category::Storage,
+            hidden: false,
+            batch_supported: false,
+            args: &[
+                ArgDef {
+                    name: "urls",
+                    description: "Comma-separated URLs to export, or \"*\" for all pages in the database",
+                    optional: false,
+                },
+                ArgDef {
+                    name: "output-dir",
+                    description: "Directory to save the exported page content",
+                    optional: false,
+                },
+            ],
+            options: &[],
+            e2e_coverage: E2eCoverage::Tested,
+            tool_name_fn: |_| "webdb_export".to_string(),
+            tool_params_fn: |args| {
+                let mut p = json!({});
+                if let Some(urls) = get_str(args, "urls") { p["urls"] = json!(urls); }
+                if let Some(dir) = get_str(args, "output-dir") { p["outputDir"] = json!(dir); }
+                p
+            },
+        },
+        // ---- Normalize ----
+        CommandDef {
+            name: "webdb-normalize",
+            description: "Normalize a URL for use as a web database key",
+            category: Category::Storage,
+            hidden: false,
+            batch_supported: false,
+            args: &[
+                ArgDef {
+                    name: "url",
+                    description: "URL to normalize",
+                    optional: false,
+                },
+            ],
+            options: &[],
+            e2e_coverage: E2eCoverage::Tested,
+            tool_name_fn: |_| "webdb_normalize".to_string(),
+            tool_params_fn: |args| {
+                let mut p = json!({});
+                if let Some(url) = get_str(args, "url") { p["url"] = json!(url); }
+                p
+            },
         },
         // ---- Export ----
         CommandDef {
@@ -1720,6 +1937,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "full-page", description: "When true, takes a screenshot of the full scrollable page", is_bool: true, short: None },
                 OptionDef { name: "viewport", description: "Capture a specific viewport by index (0 = top). Same semantics as snapshot -v.", is_bool: false, short: Some("v") },
             ],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_take_screenshot".to_string(),
             tool_params_fn: |args| {
                 let mut p = json!({});
@@ -1727,7 +1945,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 if let Some(f) = get_opt_str(args, "filename") { p["filename"] = json!(f); }
                 if let Some(fp) = get_bool(args, "full-page") { p["fullPage"] = json!(fp); }
                 if let Some(v) = get_opt_str(args, "viewport") {
-                    if let Ok(n) = v.parse::<i32>() { p["viewport"] = json!(n); }
+                    if let Ok(n) = v.parse::<i32>() { p["viewport"] = json!(n.max(0)); }
                 }
                 p
             },
@@ -1742,6 +1960,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             options: &[
                 OptionDef { name: "filename", description: "File name or path to save the PDF to. Bare filenames are saved to the snapshot directory; paths (containing / or \\) are resolved relative to the current directory.", is_bool: false, short: None },
             ],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_pdf_save".to_string(),
             tool_params_fn: |args| {
                 let mut p = json!({});
@@ -1758,6 +1977,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: true,
             args: &[],
             options: &[],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_tabs".to_string(),
             tool_params_fn: |_| json!({ "action": "list" }),
         },
@@ -1769,10 +1989,14 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: true,
             args: &[ArgDef { name: "url", description: "The URL to navigate to in the new tab", optional: true }],
             options: &[],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_tabs".to_string(),
             tool_params_fn: |args| {
                 let mut p = json!({ "action": "new" });
-                if let Some(u) = get_opt_str(args, "url") { p["url"] = json!(u); }
+                // Always include url — default to about:blank when omitted so the
+                // backend's paramString default-value path is exercised correctly.
+                let url = get_opt_str(args, "url").unwrap_or("about:blank");
+                p["url"] = json!(url);
                 p
             },
         },
@@ -1783,11 +2007,18 @@ pub fn all_commands() -> Vec<CommandDef> {
             hidden: false,
             batch_supported: true,
             args: &[ArgDef { name: "index", description: "Zero-based tab index from tab-list output. If omitted, current tab is closed.", optional: true }],
-            options: &[],
+            options: &[
+                OptionDef { name: "guid", description: "Close by GUID instead of index (from tab-list output)", is_bool: false, short: None },
+            ],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_tabs".to_string(),
             tool_params_fn: |args| {
                 let mut p = json!({ "action": "close" });
                 if let Some(index) = args.get("index") { p["index"] = index.clone(); }
+                if let Some(guid) = args.get("guid") {
+                    let raw = guid.as_str().unwrap_or("");
+                    p["tabId"] = json!(raw.strip_prefix("chrome:").unwrap_or(raw));
+                }
                 p
             },
         },
@@ -1797,14 +2028,20 @@ pub fn all_commands() -> Vec<CommandDef> {
             category: Category::Tabs,
             hidden: false,
             batch_supported: true,
-            args: &[ArgDef { name: "index", description: "Zero-based tab index", optional: false }],
-            options: &[],
+            args: &[ArgDef { name: "index", description: "Zero-based tab index", optional: true }],
+            options: &[
+                OptionDef { name: "guid", description: "Select by GUID instead of index (from tab-list output)", is_bool: false, short: None },
+            ],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "browser_tabs".to_string(),
             tool_params_fn: |args| {
-                json!({
-                    "action": "select",
-                    "index": args.get("index").cloned().unwrap_or_default(),
-                })
+                let mut p = json!({ "action": "select" });
+                if let Some(index) = args.get("index") { p["index"] = index.clone(); }
+                if let Some(guid) = args.get("guid") {
+                    let raw = guid.as_str().unwrap_or("");
+                    p["tabId"] = json!(raw.strip_prefix("chrome:").unwrap_or(raw));
+                }
+                p
             },
         },
         // ---- Browsers / Sessions ----
@@ -1817,9 +2054,32 @@ pub fn all_commands() -> Vec<CommandDef> {
             args: &[],
             options: &[
                 OptionDef { name: "all", description: "List all browser sessions across all workspaces", is_bool: true, short: None },
+                OptionDef { name: "verbose", description: "Show full session IDs without truncation", is_bool: true, short: None },
             ],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| String::new(),
             tool_params_fn: |_| json!({}),
+        },
+        CommandDef {
+            name: "session-default",
+            description: "Set a named session as the DEFAULT (unnamed) session so it can be targeted without -s",
+            category: Category::Browsers,
+            hidden: false,
+            batch_supported: false,
+            args: &[
+                ArgDef {
+                    name: "name",
+                    optional: false,
+                    description: "The name of the session to make the default",
+                },
+            ],
+            options: &[],
+            e2e_coverage: E2eCoverage::Excluded,
+            tool_name_fn: |_| String::new(),
+            tool_params_fn: |args| {
+                let name = args.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                json!({ "name": name })
+            },
         },
         CommandDef {
             name: "close-all",
@@ -1829,6 +2089,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: false,
             args: &[],
             options: &[],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| String::new(),
             tool_params_fn: |_| json!({}),
         },
@@ -1840,6 +2101,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: false,
             args: &[],
             options: &[],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| String::new(),
             tool_params_fn: |_| json!({}),
         },
@@ -1865,6 +2127,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                     short: None,
                 },
             ],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| String::new(),
             tool_params_fn: |args| {
                 let mut params = json!({});
@@ -1885,6 +2148,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: false,
             args: &[],
             options: &[],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| String::new(),
             tool_params_fn: |_| json!({}),
         },
@@ -1903,6 +2167,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                     short: None,
                 },
             ],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| String::new(),
             tool_params_fn: |args| {
                 let mut params = json!({});
@@ -1914,7 +2179,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "doctor",
-            description: "Run system diagnostics: build info, logs, and metrics. Also auto-cleans stale daemon files. Use --fix for destructive repairs.",
+            description: "Run system diagnostics: build info, LLM status, and auto-clean stale daemon files. Use --verbose to include logs and metrics, --fix for destructive repairs.",
             category: Category::Browsers,
             hidden: false,
             batch_supported: false,
@@ -1925,6 +2190,12 @@ pub fn all_commands() -> Vec<CommandDef> {
                     short: None,
                     is_bool: true,
                     description: "Run destructive repairs: reinstall Chrome, purge old state, clean temp files",
+                },
+                OptionDef {
+                    name: "verbose",
+                    short: Some("v"),
+                    is_bool: true,
+                    description: "Show backend logs and metrics inline (hidden by default — use 'doctor log' and 'doctor metrics' subcommands for more control)",
                 },
                 OptionDef {
                     name: "server",
@@ -1957,10 +2228,12 @@ pub fn all_commands() -> Vec<CommandDef> {
                     short: None,
                 },
             ],
+            e2e_coverage: E2eCoverage::Excluded,
             tool_name_fn: |_| String::new(),
             tool_params_fn: |args| {
                 let mut params = json!({});
                 if let Some(true) = get_bool(args, "fix") { params["fix"] = json!(true); }
+                if let Some(true) = get_bool(args, "verbose") { params["verbose"] = json!(true); }
                 if let Some(server) = get_opt_str(args, "server") {
                     params["server"] = json!(server);
                 }
@@ -2007,12 +2280,59 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "word-regexp", short: Some("w"), is_bool: true, description: "Match only whole words (grep mode)" },
                 OptionDef { name: "extended-regexp", short: Some("E"), is_bool: true, description: "Extended regex (ERE) — already the default. Accepted for compatibility with grep -E." },
             ],
+            e2e_coverage: E2eCoverage::Excluded,
             tool_name_fn: |_| String::new(),
             tool_params_fn: |args| {
                 let mut params = json!({});
                 if let Some(name) = get_opt_str(args, "name") { params["name"] = json!(name); }
                 if let Some(true) = get_bool(args, "tail") { params["tail"] = json!(true); }
                 if let Some(lines) = get_opt_str(args, "lines") { params["lines"] = json!(lines); }
+                if let Some(grep) = get_opt_str(args, "grep") { params["grep"] = json!(grep); }
+                // Pass through grep-related options
+                for grep_key in &[
+                    "ignore-case", "regexp", "no-line-number",
+                    "after-context", "before-context", "context",
+                    "invert-match", "count", "files-with-matches",
+                    "fixed-strings", "word-regexp", "extended-regexp",
+                ] {
+                    if let Some(val) = args.get(*grep_key) {
+                        params[grep_key] = val.clone();
+                    }
+                }
+                params
+            },
+        },
+        // ---- doctor-metrics ----
+        CommandDef {
+            name: "doctor-metrics",
+            description: "List, view, or search backend metrics. Use 'doctor metrics' for overview, 'doctor metrics <filter>' to filter by name, 'doctor metrics grep <pattern>' to search.",
+            category: Category::Browsers,
+            hidden: false,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "filter", description: "Filter metric names by substring or regex (server-side). Omit to show overview, or use 'grep' keyword for client-side grep.", optional: true },
+            ],
+            options: &[
+                OptionDef { name: "grep", short: None, is_bool: false, description: "Search pattern for grep mode. Use 'doctor metrics grep <pattern>' syntax for compatibility with snapshot grep / htmlsnapshot grep." },
+                // grep options (compatible with snapshot grep / htmlsnapshot grep / doctor log)
+                OptionDef { name: "ignore-case", short: Some("i"), is_bool: true, description: "Case-insensitive matching (grep mode)" },
+                OptionDef { name: "regexp", short: Some("e"), is_bool: false, description: "Additional regex pattern — repeatable (grep mode)" },
+                OptionDef { name: "no-line-number", short: None, is_bool: true, description: "Suppress line numbers in output (grep mode)" },
+                OptionDef { name: "after-context", short: Some("A"), is_bool: false, description: "Show N lines after each match (grep mode)" },
+                OptionDef { name: "before-context", short: Some("B"), is_bool: false, description: "Show N lines before each match (grep mode)" },
+                OptionDef { name: "context", short: Some("C"), is_bool: false, description: "Show N lines before and after each match (grep mode)" },
+                OptionDef { name: "invert-match", short: Some("v"), is_bool: true, description: "Select non-matching lines (grep mode)" },
+                OptionDef { name: "count", short: Some("c"), is_bool: true, description: "Print only the count of matching lines (grep mode)" },
+                OptionDef { name: "files-with-matches", short: Some("l"), is_bool: true, description: "Print only whether matches exist (grep mode)" },
+                OptionDef { name: "fixed-strings", short: Some("F"), is_bool: true, description: "Treat pattern as a literal string, not regex (grep mode)" },
+                OptionDef { name: "word-regexp", short: Some("w"), is_bool: true, description: "Match only whole words (grep mode)" },
+                OptionDef { name: "extended-regexp", short: Some("E"), is_bool: true, description: "Extended regex (ERE) — already the default. Accepted for compatibility with grep -E." },
+            ],
+            e2e_coverage: E2eCoverage::Excluded,
+            tool_name_fn: |_| String::new(),
+            tool_params_fn: |args| {
+                let mut params = json!({});
+                if let Some(filter) = get_opt_str(args, "filter") { params["filter"] = json!(filter); }
                 if let Some(grep) = get_opt_str(args, "grep") { params["grep"] = json!(grep); }
                 // Pass through grep-related options
                 for grep_key in &[
@@ -2042,6 +2362,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "raw", description: "Print extracted content directly to stdout (alias for --stdout)", is_bool: true, short: None },
                 OptionDef { name: "stdout", description: "Print extracted content directly to stdout", is_bool: true, short: None },
             ],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "agent_extract".to_string(),
             tool_params_fn: |args| {
                 let mut p = json!({ "instruction": get_str(args, "instruction").unwrap_or_default() });
@@ -2056,7 +2377,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             name: "summarize",
             description: "Summarize page content using AI",
             category: Category::Agent,
-            hidden: true,
+            hidden: false,
             batch_supported: false,
             args: &[ArgDef { name: "instruction", description: "Summarization instruction, e.g. 'summarize the product reviews'", optional: true }],
             options: &[
@@ -2065,6 +2386,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "raw", description: "Print summary directly to stdout (alias for --stdout)", is_bool: true, short: None },
                 OptionDef { name: "stdout", description: "Print summary directly to stdout", is_bool: true, short: None },
             ],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "agent_summarize".to_string(),
             tool_params_fn: |args| {
                 let mut p = json!({});
@@ -2080,10 +2402,11 @@ pub fn all_commands() -> Vec<CommandDef> {
             name: "agent-run",
             description: "Run an autonomous agent task (async, returns task ID)",
             category: Category::Agent,
-            hidden: true,
+            hidden: false,
             batch_supported: false,
             args: &[ArgDef { name: "task", description: "Natural language task for the agent to execute", optional: false }],
             options: &[],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "command_run".to_string(),
             tool_params_fn: |args| {
                 json!({ "task": get_str(args, "task").unwrap_or_default() })
@@ -2093,10 +2416,11 @@ pub fn all_commands() -> Vec<CommandDef> {
             name: "agent-status",
             description: "Check the status of a running agent task",
             category: Category::Agent,
-            hidden: true,
+            hidden: false,
             batch_supported: false,
             args: &[ArgDef { name: "id", description: "Task ID returned by agent run", optional: false }],
             options: &[],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "command_status".to_string(),
             tool_params_fn: |args| {
                 json!({ "id": get_str(args, "id").unwrap_or_default() })
@@ -2106,10 +2430,11 @@ pub fn all_commands() -> Vec<CommandDef> {
             name: "agent-result",
             description: "Get the result of a completed agent task",
             category: Category::Agent,
-            hidden: true,
+            hidden: false,
             batch_supported: false,
             args: &[ArgDef { name: "id", description: "Task ID returned by agent run", optional: false }],
             options: &[],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "command_result".to_string(),
             tool_params_fn: |args| {
                 json!({ "id": get_str(args, "id").unwrap_or_default() })
@@ -2122,11 +2447,21 @@ pub fn all_commands() -> Vec<CommandDef> {
             hidden: false,
             batch_supported: false,
             args: &[],
-            options: &[],
+            options: &[
+                OptionDef { name: "clear", description: "Remove all tracked agent tasks from the list", is_bool: true, short: None },
+                OptionDef { name: "limit", description: "Show at most N tasks (default: all)", is_bool: false, short: None },
+                OptionDef { name: "offset", description: "Skip the first N tasks (useful for pagination)", is_bool: false, short: None },
+            ],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| String::new(),
-            tool_params_fn: |_| json!({}),
+            tool_params_fn: |args| {
+                let mut p = json!({});
+                if let Some(b) = get_bool(args, "clear") { p["clear"] = json!(b); }
+                if let Some(v) = get_str(args, "limit").and_then(|s| s.parse::<usize>().ok()) { p["limit"] = json!(v); }
+                if let Some(v) = get_str(args, "offset").and_then(|s| s.parse::<usize>().ok()) { p["offset"] = json!(v); }
+                p
+            },
         },
-        // ---- Swarm ----
         CommandDef {
             name: "swarm-create",
             description: "Create a swarm scrape session with parallel browser contexts",
@@ -2140,6 +2475,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "max-browser-contexts", description: "Number of isolated browser environments (default: 2)", is_bool: false, short: None },
                 OptionDef { name: "display-mode", description: "Display mode: GUI, HEADLESS, SUPERVISED", is_bool: false, short: None },
             ],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "open_session".to_string(),
             tool_params_fn: |args| {
                 let mut p = json!({});
@@ -2156,7 +2492,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "swarm-submit",
-            description: "Submit URL(s) or X-SQL payloads as scrape jobs",
+            description: "Submit URL(s) or X-SQL payloads as scrape jobs. Without --sql, each URL is fetched but no data is extracted — the resultSet will be empty. Use swarm query for structured extraction.",
             category: Category::Swarm,
             hidden: false,
             batch_supported: false,
@@ -2168,10 +2504,10 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "expires", description: "Cache expiration duration (e.g. 1d, 1h)", is_bool: false, short: None },
                 OptionDef { name: "refresh", description: "Force a fresh fetch, ignoring cache", is_bool: true, short: None },
                 OptionDef { name: "parse", description: "Parse page immediately after fetching", is_bool: true, short: None },
-                OptionDef { name: "store-content", description: "Persist page content to storage", is_bool: true, short: None },
                 OptionDef { name: "wait", description: "Block until all submitted jobs complete", is_bool: true, short: None },
             ],
-            tool_name_fn: |_| "command_run".to_string(),
+            e2e_coverage: E2eCoverage::Tested,
+            tool_name_fn: |_| "swarm_submit".to_string(),
             tool_params_fn: |args| {
                 let mut p = json!({});
                 if let Some(v) = get_opt_str(args, "url") { p["url"] = json!(v); }
@@ -2181,7 +2517,6 @@ pub fn all_commands() -> Vec<CommandDef> {
                 if let Some(v) = get_opt_str(args, "expires") { p["expires"] = json!(v); }
                 if let Some(b) = get_bool(args, "refresh") { p["refresh"] = json!(b); }
                 if let Some(b) = get_bool(args, "parse") { p["parse"] = json!(b); }
-                if let Some(b) = get_bool(args, "store-content") { p["storeContent"] = json!(b); }
                 if let Some(b) = get_bool(args, "wait") { p["wait"] = json!(b); }
                 p
             },
@@ -2192,17 +2527,18 @@ pub fn all_commands() -> Vec<CommandDef> {
             category: Category::Swarm,
             hidden: false,
             batch_supported: false,
-            args: &[ArgDef { name: "url", description: "Target page URL to load and run the query against", optional: false }],
+            args: &[ArgDef { name: "url", description: "Target page URL to load and run the query against (optional when --seed-file is used)", optional: true }],
             options: &[
                 OptionDef { name: "sql", description: "X-SQL query to execute. Use @url as placeholder for the target URL. Prefix with @ to read from file (e.g. --sql @query.sql)", is_bool: false, short: None },
                 OptionDef { name: "sql-stdin", description: "Read X-SQL query from stdin (avoids shell quoting issues on Windows)", is_bool: true, short: None },
                 OptionDef { name: "sql-base64", description: "Base64-encoded X-SQL query (avoid shell quoting issues on Windows)", is_bool: false, short: None },
-                OptionDef { name: "seed-file", description: "File containing URLs to submit, one per line (direct path, no @ prefix)", is_bool: false, short: None },
+                OptionDef { name: "seed-file", description: "File containing URLs to submit, one per line (direct path, no @ prefix). When provided, the URL positional arg can be omitted", is_bool: false, short: None },
                 OptionDef { name: "deadline", description: "Deadline for task completion (ISO 8601, e.g. 2026-02-24T23:59:59Z)", is_bool: false, short: None },
                 OptionDef { name: "expires", description: "Cache expiration duration (e.g. 1d, 1h)", is_bool: false, short: None },
                 OptionDef { name: "refresh", description: "Force a fresh fetch, ignoring cache", is_bool: true, short: None },
                 OptionDef { name: "wait", description: "Block until all submitted jobs complete", is_bool: true, short: None },
             ],
+            e2e_coverage: E2eCoverage::Excluded,
             tool_name_fn: |_| "swarm_query".to_string(),
             tool_params_fn: |args| {
                 let mut p = json!({});
@@ -2228,7 +2564,8 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: false,
             args: &[ArgDef { name: "id", description: "Task ID returned by swarm submit", optional: false }],
             options: &[],
-            tool_name_fn: |_| "command_status".to_string(),
+            e2e_coverage: E2eCoverage::Tested,
+            tool_name_fn: |_| "swarm_status".to_string(),
             tool_params_fn: |args| {
                 json!({ "id": get_str(args, "id").unwrap_or_default() })
             },
@@ -2241,7 +2578,8 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: false,
             args: &[ArgDef { name: "id", description: "Task ID returned by swarm submit", optional: false }],
             options: &[],
-            tool_name_fn: |_| "command_result".to_string(),
+            e2e_coverage: E2eCoverage::Tested,
+            tool_name_fn: |_| "swarm_result".to_string(),
             tool_params_fn: |args| {
                 json!({ "id": get_str(args, "id").unwrap_or_default() })
             },
@@ -2255,11 +2593,16 @@ pub fn all_commands() -> Vec<CommandDef> {
             args: &[],
             options: &[
                 OptionDef { name: "clear", description: "Remove all tracked swarm tasks from the list", is_bool: true, short: None },
+                OptionDef { name: "limit", description: "Show at most N tasks (default: all)", is_bool: false, short: None },
+                OptionDef { name: "offset", description: "Skip the first N tasks (useful for pagination)", is_bool: false, short: None },
             ],
+            e2e_coverage: E2eCoverage::Excluded,
             tool_name_fn: |_| String::new(),
             tool_params_fn: |args| {
                 let mut p = json!({});
                 if let Some(b) = get_bool(args, "clear") { p["clear"] = json!(b); }
+                if let Some(v) = get_str(args, "limit").and_then(|s| s.parse::<usize>().ok()) { p["limit"] = json!(v); }
+                if let Some(v) = get_str(args, "offset").and_then(|s| s.parse::<usize>().ok()) { p["offset"] = json!(v); }
                 p
             },
         },
@@ -2271,6 +2614,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: false,
             args: &[],
             options: &[],
+            e2e_coverage: E2eCoverage::Excluded,
             tool_name_fn: |_| String::new(),
             tool_params_fn: |_| json!({}),
         },
@@ -2301,15 +2645,16 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "refresh", description: "Force a fresh fetch, ignoring cache", is_bool: true, short: None },
                 OptionDef { name: "parse", description: "Parse each page immediately after fetching", is_bool: true, short: None },
                 OptionDef { name: "expires", description: "Cache expiration duration (e.g. 1d, 1h, 30m)", is_bool: false, short: None },
-                OptionDef { name: "store-content", description: "Persist page content to storage", is_bool: true, short: None },
                 OptionDef { name: "priority", description: "Queue priority (lower = higher priority)", is_bool: false, short: Some("p") },
                 OptionDef { name: "page-load-timeout", description: "Maximum time to wait for page load", is_bool: false, short: None },
                 OptionDef { name: "ignore-url-query", description: "Remove query parameters from URLs during normalization", is_bool: true, short: None },
                 OptionDef { name: "no-norm", description: "Disable URL normalization", is_bool: true, short: None },
                 OptionDef { name: "readonly", description: "Non-destructive mode (no page modifications)", is_bool: true, short: None },
                 OptionDef { name: "background", description: "Submit crawl and return immediately; use 'crawl list' to track progress", is_bool: true, short: Some("bg") },
+                OptionDef { name: "verbose", description: "Show per-URL processing status in crawl results", is_bool: true, short: None },
             ],
-            tool_name_fn: |_| String::new(),
+            e2e_coverage: E2eCoverage::Tested,
+            tool_name_fn: |_| "crawl_submit".to_string(),
             tool_params_fn: |args| {
                 let mut p = json!({});
                 if let Some(v) = get_opt_str(args, "url") { p["url"] = json!(v); }
@@ -2362,9 +2707,6 @@ pub fn all_commands() -> Vec<CommandDef> {
                 if let Some(true) = get_bool(args, "parse") {
                     load_opts.push("-parse".to_string());
                 }
-                if let Some(true) = get_bool(args, "store-content") {
-                    load_opts.push("-storeContent".to_string());
-                }
                 if let Some(true) = get_bool(args, "ignore-url-query") {
                     load_opts.push("-ignoreUrlQuery".to_string());
                 }
@@ -2406,6 +2748,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 ArgDef { name: "id", description: "Task ID", optional: false },
             ],
             options: &[],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| String::new(),
             tool_params_fn: |args| {
                 let mut p = json!({});
@@ -2423,6 +2766,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 ArgDef { name: "id", description: "Task ID", optional: false },
             ],
             options: &[],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| String::new(),
             tool_params_fn: |args| {
                 let mut p = json!({});
@@ -2440,6 +2784,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 ArgDef { name: "id", description: "Task ID", optional: false },
             ],
             options: &[],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| String::new(),
             tool_params_fn: |args| {
                 let mut p = json!({});
@@ -2454,7 +2799,10 @@ pub fn all_commands() -> Vec<CommandDef> {
             hidden: false,
             batch_supported: false,
             args: &[],
-            options: &[],
+            options: &[
+                OptionDef { name: "all", description: "Also cancel and clear actively-running crawl tasks", is_bool: true, short: None },
+            ],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| String::new(),
             tool_params_fn: |_| json!({}),
         },
@@ -2465,9 +2813,24 @@ pub fn all_commands() -> Vec<CommandDef> {
             hidden: false,
             batch_supported: false,
             args: &[],
-            options: &[],
+            options: &[
+                OptionDef { name: "clear", description: "Remove all tracked crawl tasks from the list", is_bool: true, short: None },
+                OptionDef { name: "limit", description: "Show at most N tasks (default: 20)", is_bool: false, short: None },
+                OptionDef { name: "offset", description: "Skip the first N tasks (useful for pagination)", is_bool: false, short: None },
+                OptionDef { name: "status", description: "Filter by status: completed, running, failed, queued, or 'not found'", is_bool: false, short: None },
+                OptionDef { name: "since", description: "Show only tasks submitted since a relative time (e.g. 1h, 30m, 1d)", is_bool: false, short: None },
+            ],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| String::new(),
-            tool_params_fn: |_| json!({}),
+            tool_params_fn: |args| {
+                let mut p = json!({});
+                if let Some(b) = get_bool(args, "clear") { p["clear"] = json!(b); }
+                if let Some(v) = get_str(args, "limit").and_then(|s| s.parse::<usize>().ok()) { p["limit"] = json!(v); }
+                if let Some(v) = get_str(args, "offset").and_then(|s| s.parse::<usize>().ok()) { p["offset"] = json!(v); }
+                if let Some(v) = get_str(args, "status") { p["status"] = json!(v); }
+                if let Some(v) = get_str(args, "since") { p["since"] = json!(v); }
+                p
+            },
         },
         // ---- HtmlSnapshot ----
         CommandDef {
@@ -2478,6 +2841,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: true,
             args: &[],
             options: &[],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "html_snapshot_capture".to_string(),
             tool_params_fn: |_| json!({}),
         },
@@ -2489,6 +2853,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: true,
             args: &[],
             options: &[],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "html_snapshot_capture".to_string(),
             tool_params_fn: |_| json!({}),
         },
@@ -2508,6 +2873,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "page-size", short: None, is_bool: false, description: "Lines per page (default: 2000)" },
                 OptionDef { name: "all", short: None, is_bool: true, description: "Show all output, disabling pagination" },
             ],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "html_snapshot_scrape".to_string(),
             tool_params_fn: |args| {
                 let field = get_str(args, "field").unwrap_or_default();
@@ -2535,6 +2901,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "page-size", short: None, is_bool: false, description: "Lines per page (default: 2000)" },
                 OptionDef { name: "all", short: None, is_bool: true, description: "Show all output, disabling pagination" },
             ],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "html_snapshot_scrape_all".to_string(),
             tool_params_fn: |args| {
                 let field = get_str(args, "field").unwrap_or_default();
@@ -2552,7 +2919,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "htmlsnapshot-query",
-            description: "Run X-SQL against the HTML snapshot stored in Browser4's page storage via the scrape API",
+            description: "Run X-SQL. DOM_LOAD_AND_SELECT(@url, ...) re-fetches the page fresh via the scrape API (independent of the stored snapshot). htmlsnapshot capture is only needed for inspect/get/summary, not for query with @url.",
             category: Category::Snapshot,
             hidden: false,
             batch_supported: false,
@@ -2597,6 +2964,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                     short: None,
                 },
             ],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "html_snapshot_query".to_string(),
             tool_params_fn: |args| {
                 let sql = get_opt_str(args, "sql").unwrap_or_default();
@@ -2626,11 +2994,19 @@ pub fn all_commands() -> Vec<CommandDef> {
                     is_bool: false,
                     short: None,
                 },
+                OptionDef {
+                    name: "clean",
+                    description: "Strip <script>, <style>, comments, and non-standard attributes (keeps 'vi', aria-*, data-*, role, and standard HTML5 attrs)",
+                    is_bool: true,
+                    short: None,
+                },
             ],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "html_snapshot_export".to_string(),
             tool_params_fn: |args| {
                 let mut p = json!({});
                 if let Some(f) = get_opt_str(args, "file") { p["file"] = json!(f); }
+                if let Some(true) = get_bool(args, "clean") { p["clean"] = json!(true); }
                 p
             },
         },
@@ -2646,6 +3022,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "stdout", description: "Print summary content directly to stdout", is_bool: true, short: None },
                 OptionDef { name: "verbose", short: Some("v"), description: "Show internal scoring details and score legend", is_bool: true },
             ],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "html_snapshot_summary".to_string(),
             tool_params_fn: |args| {
                 let mut p = json!({});
@@ -2683,6 +3060,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "all", short: None, is_bool: true, description: "Show all output, disabling pagination" },
                 OptionDef { name: "raw-html", short: None, is_bool: true, description: "Search the raw HTML including <script> and <style> content. By default, script/style tags are stripped to avoid false positives from JavaScript code." },
             ],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "html_snapshot_export".to_string(),
             tool_params_fn: |args| {
                 let mut p = json!({});
@@ -2691,6 +3069,159 @@ pub fn all_commands() -> Vec<CommandDef> {
                         p[k] = v.clone();
                     }
                 }
+                p
+            },
+        },
+        // ---- Skill Management ----
+        CommandDef {
+            name: "skill-list",
+            description: "List all installed skills",
+            category: Category::Skill,
+            hidden: false,
+            batch_supported: false,
+            args: &[],
+            options: &[],
+            e2e_coverage: E2eCoverage::Excluded,
+            tool_name_fn: |_| "skill_list".to_string(),
+            tool_params_fn: |_| json!({}),
+        },
+        CommandDef {
+            name: "skill-info",
+            description: "Show detailed information about a skill",
+            category: Category::Skill,
+            hidden: false,
+            batch_supported: false,
+            args: &[ArgDef { name: "id", description: "Skill identifier", optional: false }],
+            options: &[],
+            e2e_coverage: E2eCoverage::Excluded,
+            tool_name_fn: |_| "skill_info".to_string(),
+            tool_params_fn: |args| {
+                let id = get_str(args, "id").unwrap_or_default();
+                json!({ "id": id })
+            },
+        },
+        CommandDef {
+            name: "skill-install",
+            description: "Install a skill from a directory containing SKILL.md",
+            category: Category::Skill,
+            hidden: false,
+            batch_supported: false,
+            args: &[ArgDef { name: "path", description: "Path to skill directory", optional: false }],
+            options: &[
+                OptionDef {
+                    name: "overwrite",
+                    description: "Overwrite existing skill with the same ID",
+                    is_bool: true,
+                    short: None,
+                },
+            ],
+            e2e_coverage: E2eCoverage::Excluded,
+            tool_name_fn: |_| "skill_install".to_string(),
+            tool_params_fn: |args| {
+                let path = get_str(args, "path").unwrap_or_default();
+                let mut p = json!({ "path": path });
+                if let Some(ow) = get_bool(args, "overwrite") {
+                    p["overwrite"] = json!(ow.to_string());
+                }
+                p
+            },
+        },
+        CommandDef {
+            name: "skill-uninstall",
+            description: "Uninstall a skill by ID",
+            category: Category::Skill,
+            hidden: false,
+            batch_supported: false,
+            args: &[ArgDef { name: "id", description: "Skill identifier", optional: false }],
+            options: &[],
+            e2e_coverage: E2eCoverage::Excluded,
+            tool_name_fn: |_| "skill_uninstall".to_string(),
+            tool_params_fn: |args| {
+                let id = get_str(args, "id").unwrap_or_default();
+                json!({ "id": id })
+            },
+        },
+        CommandDef {
+            name: "skill-reload",
+            description: "Reload a skill from its source directory",
+            category: Category::Skill,
+            hidden: false,
+            batch_supported: false,
+            args: &[ArgDef { name: "id", description: "Skill identifier", optional: false }],
+            options: &[],
+            e2e_coverage: E2eCoverage::Excluded,
+            tool_name_fn: |_| "skill_reload".to_string(),
+            tool_params_fn: |args| {
+                let id = get_str(args, "id").unwrap_or_default();
+                json!({ "id": id })
+            },
+        },
+        // ---- Plugins ----
+        CommandDef {
+            name: "plugin-list",
+            description: "List all installed Browser4 plugins in the server's plugins directory",
+            category: Category::Plugins,
+            hidden: false,
+            batch_supported: false,
+            args: &[],
+            options: &[],
+            e2e_coverage: E2eCoverage::Excluded,
+            tool_name_fn: |_| String::new(),
+            tool_params_fn: |_| json!({}),
+        },
+        CommandDef {
+            name: "plugin-info",
+            description: "Show details for a single installed plugin (manifest name or JAR file name)",
+            category: Category::Plugins,
+            hidden: false,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "name", description: "Plugin name (manifest name or JAR file name)", optional: false },
+            ],
+            options: &[],
+            e2e_coverage: E2eCoverage::Excluded,
+            tool_name_fn: |_| String::new(),
+            tool_params_fn: |args| {
+                json!({ "name": get_str(args, "name").unwrap_or_default() })
+            },
+        },
+        CommandDef {
+            name: "plugin-install",
+            description: "Install a Browser4 plugin from a local JAR file (requires server restart to activate)",
+            category: Category::Plugins,
+            hidden: false,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "file", description: "Path to the plugin JAR file", optional: false },
+            ],
+            options: &[
+                OptionDef { name: "replace", description: "Overwrite an existing plugin with the same name", is_bool: true, short: None },
+            ],
+            e2e_coverage: E2eCoverage::Excluded,
+            tool_name_fn: |_| String::new(),
+            tool_params_fn: |args| {
+                let mut p = json!({ "file": get_str(args, "file").unwrap_or_default() });
+                if let Some(r) = get_bool(args, "replace") { p["replace"] = json!(r); }
+                p
+            },
+        },
+        CommandDef {
+            name: "plugin-remove",
+            description: "Remove a Browser4 plugin by name (beans remain in context until next restart)",
+            category: Category::Plugins,
+            hidden: false,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "name", description: "Plugin name (manifest name or JAR file name)", optional: false },
+            ],
+            options: &[
+                OptionDef { name: "yes", description: "Skip confirmation prompt", is_bool: true, short: Some("y") },
+            ],
+            e2e_coverage: E2eCoverage::Excluded,
+            tool_name_fn: |_| String::new(),
+            tool_params_fn: |args| {
+                let mut p = json!({ "name": get_str(args, "name").unwrap_or_default() });
+                if let Some(y) = get_bool(args, "yes") { p["yes"] = json!(y); }
                 p
             },
         },
@@ -2709,6 +3240,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "stdin", description: "Read the CSS selector from stdin instead of an inline argument (avoids shell quoting issues on Windows)", is_bool: true, short: None },
                 OptionDef { name: "selector-base64", description: "Base64-encoded CSS selector (avoids shell quoting issues on Windows)", is_bool: false, short: None },
             ],
+            e2e_coverage: E2eCoverage::Tested,
             tool_name_fn: |_| "html_snapshot_inspect".to_string(),
             tool_params_fn: |args| {
                 let mut p = json!({});
@@ -2733,6 +3265,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: false,
             args: &[ArgDef { name: "ref", description: "Element reference (e5, backend:15) or CSS selector", optional: false }],
             options: &[],
+            e2e_coverage: E2eCoverage::Excluded,
             tool_name_fn: |_| "browser_generate_locator".to_string(),
             tool_params_fn: |args| {
                 let r = get_str(args, "ref").unwrap_or_default();
@@ -2752,9 +3285,105 @@ pub fn all_commands() -> Vec<CommandDef> {
                 optional: false,
             }],
             options: &[],
+            e2e_coverage: E2eCoverage::Excluded,
             tool_name_fn: |_| String::new(),
             tool_params_fn: |args| {
                 json!({ "description": get_str(args, "description").unwrap_or_default() })
+            },
+        },
+        // ---- Experience ----
+        CommandDef {
+            name: "experience-save",
+            description: "Save a task execution trace to the progressive experience memory. Records the steps taken, selectors used, and outcome so future tasks on the same domain can replay them.",
+            category: Category::Skills,
+            hidden: false,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "url", description: "The URL the task operated on", optional: false },
+                ArgDef { name: "trace", description: "JSON-encoded execution trace (steps, selectors, extraction results)", optional: false },
+            ],
+            options: &[
+                OptionDef { name: "outcome", description: "Task outcome: success (default) or failure", is_bool: false, short: None },
+                OptionDef { name: "intent", description: "Free-text description of what the task was trying to do", is_bool: false, short: None },
+                OptionDef { name: "task-type", description: "Canonical task type (e.g. extract_product_detail, search, navigate)", is_bool: false, short: None },
+            ],
+            e2e_coverage: E2eCoverage::Excluded,
+            tool_name_fn: |_| "experience_save".to_string(),
+            tool_params_fn: |args| {
+                let trace_str = get_str(args, "trace").unwrap_or_default();
+                let mut params = json!({ "url": get_str(args, "url").unwrap_or_default(), "trace": trace_str });
+                if let Some(outcome) = get_opt_str(args, "outcome") { params["outcome"] = json!(outcome); }
+                if let Some(intent) = get_opt_str(args, "intent") { params["intent"] = json!(intent); }
+                if let Some(task_type) = get_opt_str(args, "task-type") { params["task_type"] = json!(task_type); }
+                params
+            },
+        },
+        CommandDef {
+            name: "experience-query",
+            description: "Query the progressive experience memory for stored knowledge about a domain. Returns selectors, blockers, interaction hints, and confidence tier. Called automatically before every agent task.",
+            category: Category::Skills,
+            hidden: false,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "url", description: "The target URL to query knowledge for", optional: false },
+            ],
+            options: &[
+                OptionDef { name: "intent", description: "Free-text intent description for classification", is_bool: false, short: None },
+            ],
+            e2e_coverage: E2eCoverage::Excluded,
+            tool_name_fn: |_| "experience_query".to_string(),
+            tool_params_fn: |args| {
+                let mut params = json!({ "url": get_str(args, "url").unwrap_or_default() });
+                if let Some(intent) = get_opt_str(args, "intent") { params["intent"] = json!(intent); }
+                params
+            },
+        },
+        CommandDef {
+            name: "experience-list",
+            description: "List stored knowledge entries from the progressive experience memory. Filter by domain or intent to inspect what the system has learned.",
+            category: Category::Skills,
+            hidden: false,
+            batch_supported: false,
+            args: &[],
+            options: &[
+                OptionDef { name: "filter", description: "Filter by domain (partial case-insensitive match)", is_bool: false, short: None },
+                OptionDef { name: "intent-filter", description: "Filter by intent (partial case-insensitive match)", is_bool: false, short: None },
+                OptionDef { name: "page", description: "Page number (default: 1)", is_bool: false, short: None },
+                OptionDef { name: "page-size", description: "Results per page (default: 20, max: 100)", is_bool: false, short: None },
+            ],
+            e2e_coverage: E2eCoverage::Excluded,
+            tool_name_fn: |_| "experience_list".to_string(),
+            tool_params_fn: |args| {
+                let mut params = json!({});
+                if let Some(filter) = get_opt_str(args, "filter") { params["filter"] = json!(filter); }
+                if let Some(intent_filter) = get_opt_str(args, "intent-filter") { params["intent_filter"] = json!(intent_filter); }
+                if let Some(page) = get_opt_str(args, "page") { params["page"] = json!(page); }
+                if let Some(page_size) = get_opt_str(args, "page-size") { params["page_size"] = json!(page_size); }
+                params
+            },
+        },
+        CommandDef {
+            name: "experience-deep-learn",
+            description: "Run deep learning analysis on stored experience traces. Builds or updates verified knowledge facts (selectors, blockers, page structure). Promotes knowledge from hypothesis to verified when confidence thresholds are met.",
+            category: Category::Skills,
+            hidden: false,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "url", description: "The target URL to analyze", optional: false },
+                ArgDef { name: "intent", description: "Free-text intent description for classification", optional: false },
+            ],
+            options: &[
+                OptionDef { name: "force", description: "Force deep learning even if confidence is already high", is_bool: true, short: None },
+            ],
+            e2e_coverage: E2eCoverage::Excluded,
+            tool_name_fn: |_| "experience_deep_learn".to_string(),
+            tool_params_fn: |args| {
+                let mut params = json!({
+                    "url": get_str(args, "url").unwrap_or_default(),
+                    "intent": get_str(args, "intent").unwrap_or_default(),
+                });
+                if let Some(force) = get_bool(args, "force") { params["force"] = json!(force); }
+                params
             },
         },
     ]
@@ -2817,10 +3446,14 @@ mod tests {
             "sessionstorage-set",
             "sessionstorage-delete",
             "sessionstorage-clear",
+            "webdb-export",
+            "webdb-normalize",
             "snapshot",
             "screenshot",
             "extract",
             "summarize",
+            "scroll",
+            "wait",
             "agent-run",
             "agent-status",
             "agent-result",
@@ -2830,7 +3463,20 @@ mod tests {
             "swarm-status",
             "swarm-result",
             "crawl",
+            "skill-list",
+            "skill-info",
+            "skill-install",
+            "skill-uninstall",
+            "skill-reload",
+            "plugin-list",
+            "plugin-info",
+            "plugin-install",
+            "plugin-remove",
             "act",
+            "experience-save",
+            "experience-query",
+            "experience-list",
+            "experience-deep-learn",
         ] {
             assert!(map.contains_key(*expected), "Missing command: {}", expected);
         }
@@ -3276,7 +3922,7 @@ mod tests {
             json!("https://www.amazon.com/dp/B08PP5MSVB"),
         );
         args.insert("deadline".to_string(), json!("2026-02-24T23:59:59Z"));
-        assert_eq!((cmd.tool_name_fn)(&args), "command_run");
+        assert_eq!((cmd.tool_name_fn)(&args), "swarm_submit");
         let params = (cmd.tool_params_fn)(&args);
         assert_eq!(params["url"], "https://www.amazon.com/dp/B08PP5MSVB");
         assert_eq!(params["deadline"], "2026-02-24T23:59:59Z");
@@ -3300,12 +3946,10 @@ mod tests {
         args.insert("url".to_string(), json!("https://example.com"));
         args.insert("refresh".to_string(), json!(true));
         args.insert("parse".to_string(), json!(true));
-        args.insert("store-content".to_string(), json!(true));
         args.insert("expires".to_string(), json!("1d"));
         let params = (cmd.tool_params_fn)(&args);
         assert_eq!(params["refresh"], true);
         assert_eq!(params["parse"], true);
-        assert_eq!(params["storeContent"], true);
         assert_eq!(params["expires"], "1d");
     }
 
@@ -3315,7 +3959,7 @@ mod tests {
         let cmd = map.get("swarm-status").unwrap();
         let mut args = HashMap::new();
         args.insert("id".to_string(), json!("abc-123"));
-        assert_eq!((cmd.tool_name_fn)(&args), "command_status");
+        assert_eq!((cmd.tool_name_fn)(&args), "swarm_status");
         let params = (cmd.tool_params_fn)(&args);
         assert_eq!(params["id"], "abc-123");
     }
@@ -3326,7 +3970,141 @@ mod tests {
         let cmd = map.get("swarm-result").unwrap();
         let mut args = HashMap::new();
         args.insert("id".to_string(), json!("abc-123"));
-        assert_eq!((cmd.tool_name_fn)(&args), "command_result");
+        assert_eq!((cmd.tool_name_fn)(&args), "swarm_result");
+    }
+
+    #[test]
+    fn test_swarm_query_tool_name_and_params() {
+        let map = commands_map();
+        let cmd = map.get("swarm-query").unwrap();
+        let mut args = HashMap::new();
+        args.insert("url".to_string(), json!("https://example.com"));
+        args.insert("sql".to_string(), json!("SELECT * FROM page"));
+        args.insert("deadline".to_string(), json!("2026-02-24T23:59:59Z"));
+        args.insert("expires".to_string(), json!("1d"));
+        args.insert("refresh".to_string(), json!(true));
+        assert_eq!((cmd.tool_name_fn)(&args), "swarm_query");
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["url"], "https://example.com");
+        assert_eq!(params["sql"], "SELECT * FROM page");
+        assert_eq!(params["deadline"], "2026-02-24T23:59:59Z");
+        assert_eq!(params["expires"], "1d");
+        assert_eq!(params["refresh"], true);
+    }
+
+    #[test]
+    fn test_swarm_query_with_sql_stdin_and_base64() {
+        let map = commands_map();
+        let cmd = map.get("swarm-query").unwrap();
+        let mut args = HashMap::new();
+        args.insert("url".to_string(), json!("https://example.com"));
+        args.insert("sql-stdin".to_string(), json!(true));
+        args.insert("sql-base64".to_string(), json!("U0VMRUNUICogRlJPTSBwYWdl"));
+        args.insert("seed-file".to_string(), json!("urls.txt"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["url"], "https://example.com");
+        assert_eq!(params["sqlStdin"], true);
+        assert_eq!(params["sqlBase64"], "U0VMRUNUICogRlJPTSBwYWdl");
+        assert_eq!(params["seedFile"], "urls.txt");
+    }
+
+    #[test]
+    fn test_swarm_query_sql_base64_bool_true() {
+        let map = commands_map();
+        let cmd = map.get("swarm-query").unwrap();
+        let mut args = HashMap::new();
+        args.insert("url".to_string(), json!("https://example.com"));
+        args.insert("sql-base64".to_string(), json!(true));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["sqlBase64"], true);
+    }
+
+    #[test]
+    fn test_swarm_query_with_wait_flag() {
+        let map = commands_map();
+        let cmd = map.get("swarm-query").unwrap();
+        let mut args = HashMap::new();
+        args.insert("url".to_string(), json!("https://example.com"));
+        args.insert("sql".to_string(), json!("SELECT * FROM page"));
+        args.insert("wait".to_string(), json!(true));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["wait"], true);
+    }
+
+    #[test]
+    fn test_swarm_list_tool_name_and_clear_flag() {
+        let map = commands_map();
+        let cmd = map.get("swarm-list").unwrap();
+        let args: HashMap<String, Value> = HashMap::new();
+        assert_eq!((cmd.tool_name_fn)(&args), ""); // handled locally, no MCP tool
+        // With --clear flag
+        let mut args = HashMap::new();
+        args.insert("clear".to_string(), json!(true));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["clear"], true);
+    }
+
+    #[test]
+    fn test_swarm_list_params_default_empty() {
+        let map = commands_map();
+        let cmd = map.get("swarm-list").unwrap();
+        let args: HashMap<String, Value> = HashMap::new();
+        let params = (cmd.tool_params_fn)(&args);
+        assert!(params.as_object().unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_swarm_list_limit_and_offset_parsed_as_u64() {
+        let map = commands_map();
+        let cmd = map.get("swarm-list").unwrap();
+        let mut args = HashMap::new();
+        args.insert("limit".to_string(), json!("20"));
+        args.insert("offset".to_string(), json!("40"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["limit"], json!(20));
+        assert_eq!(params["offset"], json!(40));
+    }
+
+    #[test]
+    fn test_swarm_list_limit_and_offset_ignored_when_not_numbers() {
+        let map = commands_map();
+        let cmd = map.get("swarm-list").unwrap();
+        let mut args = HashMap::new();
+        args.insert("limit".to_string(), json!("abc"));
+        args.insert("offset".to_string(), json!("xyz"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert!(params.as_object().unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_swarm_list_clear_with_limit_only_clear_is_set() {
+        let map = commands_map();
+        let cmd = map.get("swarm-list").unwrap();
+        let mut args = HashMap::new();
+        args.insert("clear".to_string(), json!(true));
+        args.insert("limit".to_string(), json!("10"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["clear"], json!(true));
+        assert_eq!(params["limit"], json!(10));
+    }
+
+    #[test]
+    fn test_swarm_close_tool_name_and_category() {
+        let map = commands_map();
+        let cmd = map.get("swarm-close").unwrap();
+        let args: HashMap<String, Value> = HashMap::new();
+        assert_eq!((cmd.tool_name_fn)(&args), ""); // delegates to handle_close
+        assert_eq!(cmd.category, Category::Swarm);
+        assert!(!cmd.hidden, "swarm-close should not be hidden");
+    }
+
+    #[test]
+    fn test_swarm_close_params_empty() {
+        let map = commands_map();
+        let cmd = map.get("swarm-close").unwrap();
+        let args: HashMap<String, Value> = HashMap::new();
+        let params = (cmd.tool_params_fn)(&args);
+        assert!(params.as_object().unwrap().is_empty());
     }
 
     #[test]
@@ -3531,6 +4309,30 @@ mod tests {
     }
 
     #[test]
+    fn test_tab_select_guid_maps_to_tab_id() {
+        let map = commands_map();
+        let cmd = map.get("tab-select").unwrap();
+        let mut args = HashMap::new();
+        args.insert("guid".to_string(), json!("1B46D74FB…"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["action"], json!("select"));
+        assert_eq!(params["tabId"], json!("1B46D74FB…"));
+        assert!(params.get("guid").is_none());
+    }
+
+    #[test]
+    fn test_tab_close_guid_maps_to_tab_id() {
+        let map = commands_map();
+        let cmd = map.get("tab-close").unwrap();
+        let mut args = HashMap::new();
+        args.insert("guid".to_string(), json!("1B46D74FB…"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["action"], json!("close"));
+        assert_eq!(params["tabId"], json!("1B46D74FB…"));
+        assert!(params.get("guid").is_none());
+    }
+
+    #[test]
     fn test_swarm_commands_in_swarm_category() {
         let cmds = all_commands();
         let swarm_cmds: Vec<&str> = cmds
@@ -3548,7 +4350,7 @@ mod tests {
     }
 
     #[test]
-    fn test_advanced_commands_are_hidden_from_global_help() {
+    fn test_advanced_commands_are_visible_in_global_help() {
         let map = commands_map();
         for name in [
             "console",
@@ -3556,8 +4358,9 @@ mod tests {
             "agent-status",
             "agent-result",
             "summarize",
+            "pdf",
         ] {
-            assert!(map.get(name).unwrap().hidden, "{name} should stay hidden");
+            assert!(!map.get(name).unwrap().hidden, "{name} should be visible in global help");
         }
     }
 
@@ -3630,9 +4433,10 @@ mod tests {
         assert_eq!(cmd.category, Category::Browsers);
         assert!(!cmd.batch_supported);
         assert_eq!(cmd.args.len(), 0);
-        assert_eq!(cmd.options.len(), 6);
+        assert_eq!(cmd.options.len(), 7);
         let option_names: Vec<&str> = cmd.options.iter().map(|o| o.name).collect();
         assert!(option_names.contains(&"fix"));
+        assert!(option_names.contains(&"verbose"));
         assert!(option_names.contains(&"server"));
         assert!(option_names.contains(&"file"));
         assert!(option_names.contains(&"lines"));
@@ -3666,9 +4470,11 @@ mod tests {
         let cmd = map.get("list").expect("list command must exist");
         assert!(!cmd.hidden);
         assert_eq!(cmd.args.len(), 0);
-        assert_eq!(cmd.options.len(), 1);
+        assert_eq!(cmd.options.len(), 2);
         assert_eq!(cmd.options[0].name, "all");
         assert!(cmd.options[0].is_bool);
+        assert_eq!(cmd.options[1].name, "verbose");
+        assert!(cmd.options[1].is_bool);
     }
 
     // -----------------------------------------------------------------------
@@ -4191,7 +4997,7 @@ mod tests {
         args.insert("url".to_string(), json!("https://example.com"));
         args.insert(
             "sql".to_string(),
-            json!("SELECT dom_base_uri(dom) AS url FROM load_and_select('@url', ':root')"),
+            json!("SELECT DOM_BASE_URI(DOM) AS url FROM DOM_LOAD_AND_SELECT('@url', ':root')"),
         );
         assert_eq!((cmd.tool_name_fn)(&args), "html_snapshot_query");
         let params = (cmd.tool_params_fn)(&args);
@@ -4207,6 +5013,19 @@ mod tests {
         args.insert("file".to_string(), json!("snapshot.html"));
         let params = (cmd.tool_params_fn)(&args);
         assert_eq!(params["file"], "snapshot.html");
+        assert!(params.get("clean").is_none());
+    }
+
+    #[test]
+    fn test_html_snapshot_export_clean_params() {
+        let map = commands_map();
+        let cmd = map.get("htmlsnapshot-export").unwrap();
+        let mut args = HashMap::new();
+        args.insert("file".to_string(), json!("snapshot.html"));
+        args.insert("clean".to_string(), json!(true));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["file"], "snapshot.html");
+        assert_eq!(params["clean"], true);
     }
 
     #[test]
@@ -4601,6 +5420,20 @@ mod tests {
     }
 
     #[test]
+    fn test_screenshot_viewport_negative_clamped_to_zero() {
+        let map = commands_map();
+        let cmd = map.get("screenshot").unwrap();
+        let mut args = HashMap::new();
+        args.insert("viewport".to_string(), json!("-1"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(
+            params.get("viewport").and_then(|v| v.as_i64()),
+            Some(0),
+            "negative viewport should be clamped to 0"
+        );
+    }
+
+    #[test]
     fn test_screenshot_viewport_composes_with_ref() {
         let map = commands_map();
         let cmd = map.get("screenshot").unwrap();
@@ -4673,14 +5506,12 @@ mod tests {
         args.insert("url".to_string(), json!("https://example.com"));
         args.insert("refresh".to_string(), json!(true));
         args.insert("parse".to_string(), json!(true));
-        args.insert("store-content".to_string(), json!(true));
         args.insert("ignore-url-query".to_string(), json!(true));
         args.insert("readonly".to_string(), json!(true));
         let params = (cmd.tool_params_fn)(&args);
         let args_str = params["args"].as_str().unwrap_or("");
         assert!(args_str.contains("-refresh"));
         assert!(args_str.contains("-parse"));
-        assert!(args_str.contains("-storeContent"));
         assert!(args_str.contains("-ignoreUrlQuery"));
         assert!(args_str.contains("-readonly"));
     }
@@ -4709,11 +5540,11 @@ mod tests {
     }
 
     #[test]
-    fn test_crawl_tool_name_empty() {
+    fn test_crawl_tool_name() {
         let map = commands_map();
         let cmd = map.get("crawl").unwrap();
         let args = HashMap::new();
-        assert_eq!((cmd.tool_name_fn)(&args), "");
+        assert_eq!((cmd.tool_name_fn)(&args), "crawl_submit");
     }
 
     #[test]
@@ -4748,11 +5579,11 @@ mod tests {
         let cmd = map.get("crawl").unwrap();
         let mut args = HashMap::new();
         args.insert("url".to_string(), json!("https://example.com"));
-        args.insert("sql".to_string(), json!("SELECT dom_first_text(dom, 'h1') FROM load_and_select(@url, ':root')"));
+        args.insert("sql".to_string(), json!("SELECT DOM_FIRST_TEXT(DOM, 'h1') FROM DOM_LOAD_AND_SELECT(@url, ':root')"));
         let params = (cmd.tool_params_fn)(&args);
         assert_eq!(
             params["sql"].as_str().unwrap(),
-            "SELECT dom_first_text(dom, 'h1') FROM load_and_select(@url, ':root')"
+            "SELECT DOM_FIRST_TEXT(DOM, 'h1') FROM DOM_LOAD_AND_SELECT(@url, ':root')"
         );
     }
 
@@ -4810,6 +5641,125 @@ mod tests {
         assert!(args_str.contains("-refresh"));
         assert!(args_str.contains("-parse"));
         assert!(args_str.contains("-expires 2h"));
+    }
+
+    // ---- crawl subcommand tests ----
+
+    #[test]
+    fn test_crawl_status_command_exists() {
+        let map = commands_map();
+        let cmd = map.get("crawl-status").expect("crawl-status command should exist");
+        assert!(!cmd.hidden);
+        assert_eq!(cmd.args.len(), 1);
+        assert_eq!(cmd.args[0].name, "id");
+        assert!(!cmd.args[0].optional);
+        assert_eq!(cmd.category, Category::Swarm);
+    }
+
+    #[test]
+    fn test_crawl_result_command_exists() {
+        let map = commands_map();
+        let cmd = map.get("crawl-result").expect("crawl-result command should exist");
+        assert!(!cmd.hidden);
+        assert_eq!(cmd.args.len(), 1);
+        assert_eq!(cmd.args[0].name, "id");
+        assert!(!cmd.args[0].optional);
+        assert_eq!(cmd.category, Category::Swarm);
+    }
+
+    #[test]
+    fn test_crawl_cancel_command_exists() {
+        let map = commands_map();
+        let cmd = map.get("crawl-cancel").expect("crawl-cancel command should exist");
+        assert!(!cmd.hidden);
+        assert_eq!(cmd.args.len(), 1);
+        assert_eq!(cmd.args[0].name, "id");
+        assert!(!cmd.args[0].optional);
+        assert_eq!(cmd.category, Category::Swarm);
+    }
+
+    #[test]
+    fn test_crawl_clear_command_exists() {
+        let map = commands_map();
+        let cmd = map.get("crawl-clear").expect("crawl-clear command should exist");
+        assert!(!cmd.hidden);
+        assert!(cmd.args.is_empty());
+        assert_eq!(cmd.options.len(), 1);
+        assert_eq!(cmd.options[0].name, "all");
+        assert_eq!(cmd.category, Category::Swarm);
+    }
+
+    #[test]
+    fn test_crawl_list_command_exists() {
+        let map = commands_map();
+        let cmd = map.get("crawl-list").expect("crawl-list command should exist");
+        assert!(!cmd.hidden);
+        assert!(cmd.args.is_empty());
+        assert_eq!(cmd.category, Category::Swarm);
+    }
+
+    #[test]
+    fn test_agent_list_limit_and_offset_parsed() {
+        let map = commands_map();
+        let cmd = map.get("agent-list").unwrap();
+        let mut args = HashMap::new();
+        args.insert("limit".to_string(), json!("5"));
+        args.insert("offset".to_string(), json!("10"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["limit"], json!(5));
+        assert_eq!(params["offset"], json!(10));
+    }
+
+    #[test]
+    fn test_agent_list_clear_flag() {
+        let map = commands_map();
+        let cmd = map.get("agent-list").unwrap();
+        let mut args = HashMap::new();
+        args.insert("clear".to_string(), json!(true));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["clear"], json!(true));
+    }
+
+    #[test]
+    fn test_crawl_list_limit_and_offset_parsed() {
+        let map = commands_map();
+        let cmd = map.get("crawl-list").unwrap();
+        let mut args = HashMap::new();
+        args.insert("limit".to_string(), json!("5"));
+        args.insert("offset".to_string(), json!("10"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["limit"], json!(5));
+        assert_eq!(params["offset"], json!(10));
+    }
+
+    #[test]
+    fn test_crawl_list_clear_flag() {
+        let map = commands_map();
+        let cmd = map.get("crawl-list").unwrap();
+        let mut args = HashMap::new();
+        args.insert("clear".to_string(), json!(true));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["clear"], json!(true));
+    }
+
+    #[test]
+    fn test_crawl_status_params() {
+        let map = commands_map();
+        let cmd = map.get("crawl-status").unwrap();
+        let mut args = HashMap::new();
+        args.insert("id".to_string(), json!("task-123"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["id"].as_str().unwrap(), "task-123");
+    }
+
+    #[test]
+    fn test_crawl_result_params() {
+        let map = commands_map();
+        let cmd = map.get("crawl-result").unwrap();
+        let mut args = HashMap::new();
+        args.insert("id".to_string(), json!("task-456"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["id"].as_str().unwrap(), "task-456");
     }
 
     // -------------------------------------------------------------------
@@ -4974,6 +5924,292 @@ mod tests {
     }
 
     // =========================================================================
+    // attach --extension
+    // =========================================================================
+
+    #[test]
+    fn test_attach_extension_default() {
+        let cmds = commands_map();
+        let cmd = cmds.get("attach").unwrap();
+        let mut args = HashMap::new();
+        args.insert("extension".to_string(), json!("true"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["extension"], json!(true));
+        // When "true", no channel key is added
+        assert!(params.get("channel").is_none());
+    }
+
+    #[test]
+    fn test_attach_extension_with_channel() {
+        let cmds = commands_map();
+        let cmd = cmds.get("attach").unwrap();
+        let mut args = HashMap::new();
+        args.insert("extension".to_string(), json!("msedge"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["extension"], json!(true));
+        assert_eq!(params["channel"], json!("msedge"));
+    }
+
+    #[test]
+    fn test_attach_extension_combined_with_cdp() {
+        // --extension and --cdp can be specified together (the tool_params_fn
+        // includes both; handle_attach enforces mutual exclusivity at runtime)
+        let cmds = commands_map();
+        let cmd = cmds.get("attach").unwrap();
+        let mut args = HashMap::new();
+        args.insert("extension".to_string(), json!("chrome-canary"));
+        args.insert("cdp".to_string(), json!("http://localhost:9222"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["extension"], json!(true));
+        assert_eq!(params["channel"], json!("chrome-canary"));
+        assert_eq!(params["cdp"], json!("http://localhost:9222"));
+    }
+
+    #[test]
+    fn test_attach_command_has_extension_option() {
+        let cmds = commands_map();
+        let cmd = cmds.get("attach").unwrap();
+        let has_extension = cmd.options.iter().any(|o| o.name == "extension");
+        assert!(has_extension, "attach command should have --extension option");
+    }
+
+    // ---- CDP command tests ----
+
+    #[test]
+    fn test_cdp_tool_name_fn() {
+        let cmds = commands_map();
+        let cmd = cmds.get("cdp").unwrap();
+        let args = HashMap::new();
+        assert_eq!((cmd.tool_name_fn)(&args), "execute_cdp_command");
+    }
+
+    #[test]
+    fn test_cdp_tool_params_fn_method_only() {
+        let cmds = commands_map();
+        let cmd = cmds.get("cdp").unwrap();
+        let mut args = HashMap::new();
+        args.insert("method".to_string(), json!("Page.captureScreenshot"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["method"], json!("Page.captureScreenshot"));
+        assert!(params.get("json").is_none());
+        assert!(params.get("file").is_none());
+        // stdin not set, so key is absent (not false)
+        assert!(params.get("stdin").is_none());
+    }
+
+    #[test]
+    fn test_cdp_tool_params_fn_with_json() {
+        let cmds = commands_map();
+        let cmd = cmds.get("cdp").unwrap();
+        let mut args = HashMap::new();
+        args.insert("method".to_string(), json!("Runtime.evaluate"));
+        args.insert("json".to_string(), json!("{\"expression\": \"1+1\"}"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["method"], json!("Runtime.evaluate"));
+        assert_eq!(params["json"], json!("{\"expression\": \"1+1\"}"));
+        assert!(params.get("file").is_none());
+        assert!(params.get("stdin").is_none());
+    }
+
+    #[test]
+    fn test_cdp_tool_params_fn_with_file() {
+        let cmds = commands_map();
+        let cmd = cmds.get("cdp").unwrap();
+        let mut args = HashMap::new();
+        args.insert("method".to_string(), json!("Page.captureScreenshot"));
+        args.insert("file".to_string(), json!("params.json"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["method"], json!("Page.captureScreenshot"));
+        assert_eq!(params["file"], json!("params.json"));
+        assert!(params.get("json").is_none());
+        assert!(params.get("stdin").is_none());
+    }
+
+    #[test]
+    fn test_cdp_tool_params_fn_with_stdin() {
+        let cmds = commands_map();
+        let cmd = cmds.get("cdp").unwrap();
+        let mut args = HashMap::new();
+        args.insert("method".to_string(), json!("DOM.getDocument"));
+        args.insert("stdin".to_string(), json!(true));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["method"], json!("DOM.getDocument"));
+        assert_eq!(params["stdin"], json!(true));
+        assert!(params.get("json").is_none());
+        assert!(params.get("file").is_none());
+    }
+
+    #[test]
+    fn test_cdp_tool_params_fn_all_options() {
+        let cmds = commands_map();
+        let cmd = cmds.get("cdp").unwrap();
+        let mut args = HashMap::new();
+        args.insert("method".to_string(), json!("Page.navigate"));
+        args.insert("json".to_string(), json!("{\"url\": \"about:blank\"}"));
+        args.insert("file".to_string(), json!("cdp-params.json"));
+        args.insert("stdin".to_string(), json!(true));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["method"], json!("Page.navigate"));
+        assert_eq!(params["json"], json!("{\"url\": \"about:blank\"}"));
+        assert_eq!(params["file"], json!("cdp-params.json"));
+        assert_eq!(params["stdin"], json!(true));
+    }
+
+    #[test]
+    fn test_cdp_tool_params_fn_empty_method() {
+        let cmds = commands_map();
+        let cmd = cmds.get("cdp").unwrap();
+        let mut args = HashMap::new();
+        args.insert("method".to_string(), json!(""));
+        let params = (cmd.tool_params_fn)(&args);
+        // Empty method is passed through; validation happens in main.rs
+        assert_eq!(params["method"], json!(""));
+        assert!(params.get("stdin").is_none());
+    }
+
+    // ---- Skill management command tests ----
+
+    #[test]
+    fn test_skill_list_tool_name_and_params() {
+        let cmds = commands_map();
+        let cmd = cmds.get("skill-list").unwrap();
+        let args = HashMap::new();
+        assert_eq!((cmd.tool_name_fn)(&args), "skill_list");
+        assert_eq!((cmd.tool_params_fn)(&args), json!({}));
+        assert_eq!(cmd.category.as_str(), "skill");
+        assert!(!cmd.hidden);
+        assert!(!cmd.batch_supported);
+    }
+
+    #[test]
+    fn test_skill_info_tool_name_and_params() {
+        let cmds = commands_map();
+        let cmd = cmds.get("skill-info").unwrap();
+        let mut args = HashMap::new();
+        args.insert("id".to_string(), json!("web-scraping"));
+        assert_eq!((cmd.tool_name_fn)(&args), "skill_info");
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["id"], "web-scraping");
+    }
+
+    #[test]
+    fn test_skill_info_requires_id_arg() {
+        let cmds = commands_map();
+        let cmd = cmds.get("skill-info").unwrap();
+        assert_eq!(cmd.args.len(), 1);
+        assert_eq!(cmd.args[0].name, "id");
+        assert!(!cmd.args[0].optional, "id arg should be required");
+    }
+
+    #[test]
+    fn test_skill_install_tool_name_and_params() {
+        let cmds = commands_map();
+        let cmd = cmds.get("skill-install").unwrap();
+        let mut args = HashMap::new();
+        args.insert("path".to_string(), json!("/path/to/skill"));
+        assert_eq!((cmd.tool_name_fn)(&args), "skill_install");
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["path"], "/path/to/skill");
+        assert!(params.get("overwrite").is_none());
+    }
+
+    #[test]
+    fn test_skill_install_with_overwrite_option() {
+        let cmds = commands_map();
+        let cmd = cmds.get("skill-install").unwrap();
+        let mut args = HashMap::new();
+        args.insert("path".to_string(), json!("/path/to/skill"));
+        args.insert("overwrite".to_string(), json!(true));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["path"], "/path/to/skill");
+        assert_eq!(params["overwrite"], "true");
+    }
+
+    #[test]
+    fn test_skill_uninstall_tool_name_and_params() {
+        let cmds = commands_map();
+        let cmd = cmds.get("skill-uninstall").unwrap();
+        let mut args = HashMap::new();
+        args.insert("id".to_string(), json!("web-scraping"));
+        assert_eq!((cmd.tool_name_fn)(&args), "skill_uninstall");
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["id"], "web-scraping");
+    }
+
+    #[test]
+    fn test_skill_reload_tool_name_and_params() {
+        let cmds = commands_map();
+        let cmd = cmds.get("skill-reload").unwrap();
+        let mut args = HashMap::new();
+        args.insert("id".to_string(), json!("web-scraping"));
+        assert_eq!((cmd.tool_name_fn)(&args), "skill_reload");
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["id"], "web-scraping");
+    }
+
+    #[test]
+    fn test_skill_commands_all_have_skill_category() {
+        let cmds = commands_map();
+        for name in &["skill-list", "skill-info", "skill-install", "skill-uninstall", "skill-reload"] {
+            let cmd = cmds.get(*name).unwrap();
+            assert_eq!(
+                cmd.category.as_str(),
+                "skill",
+                "Command '{}' should have skill category, got '{}'",
+                name,
+                cmd.category.as_str()
+            );
+        }
+    }
+
+    #[test]
+    fn test_skills_unpack_tool_name_and_params() {
+        let cmds = commands_map();
+        let cmd = cmds.get("skills-unpack").unwrap();
+        let args = HashMap::new();
+        assert_eq!((cmd.tool_name_fn)(&args), "");
+        assert_eq!((cmd.tool_params_fn)(&args), json!({}));
+        assert_eq!(cmd.category.as_str(), "skills");
+        assert!(cmd.hidden);
+        assert!(!cmd.batch_supported);
+    }
+
+    #[test]
+    fn test_skills_unpack_with_dest() {
+        let cmds = commands_map();
+        let cmd = cmds.get("skills-unpack").unwrap();
+        let mut args = HashMap::new();
+        args.insert("dest".to_string(), json!("/custom/skills"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["dest"], "/custom/skills");
+    }
+
+    #[test]
+    fn test_all_commands_have_e2e_coverage() {
+        // Every command must explicitly declare its e2e status.
+        // The compiler enforces this (no Default impl), but this test
+        // guards against future refactors that might add a Default or
+        // new variants.
+        let cmds = all_commands();
+        assert!(!cmds.is_empty(), "all_commands() returned no commands");
+        let mut tested_count = 0usize;
+        let mut excluded_count = 0usize;
+        for cmd in &cmds {
+            match cmd.e2e_coverage {
+                E2eCoverage::Tested => tested_count += 1,
+                E2eCoverage::Excluded => excluded_count += 1,
+            }
+        }
+        assert!(tested_count > 0, "Expected some commands to be e2e tested");
+        assert!(excluded_count > 0, "Expected some commands to be e2e excluded");
+        assert_eq!(
+            tested_count + excluded_count,
+            cmds.len(),
+            "Every command must have an explicit e2e coverage status"
+        );
+    }
+
+    // =========================================================================
     // fill command tests
     // =========================================================================
 
@@ -5032,19 +6268,6 @@ mod tests {
         assert!(cmd.batch_supported);
     }
 
-    #[test]
-    fn test_fill_tool_params_preserve_ref_and_text_for_batch() {
-        let map = commands_map();
-        let cmd = map.get("fill").unwrap();
-        let mut args = HashMap::new();
-        args.insert("ref".to_string(), json!("#my-input"));
-        args.insert("text".to_string(), json!("batch fill text"));
-
-        let params = (cmd.tool_params_fn)(&args);
-        assert_eq!(params["ref"], "#my-input");
-        assert_eq!(params["text"], "batch fill text");
-    }
-
     // =========================================================================
     // mousewheel command tests
     // =========================================================================
@@ -5087,7 +6310,29 @@ mod tests {
     }
 
     // =========================================================================
-    // type command tests
+    // fill command — batch step building (tool name, args normalisation)
+    // =========================================================================
+
+    #[test]
+    fn test_fill_tool_params_preserve_ref_and_text_for_batch() {
+        // The fill command's tool_params_fn produces a JSON object that the batch
+        // compiler normalises via normalize_batch_step_args.  Verify that the raw
+        // output contains "ref" (not "selector") so the batch step carries the
+        // correct argument names through to the backend's DefaultArgumentNormalizer
+        // which converts ref → selector.
+        let map = commands_map();
+        let cmd = map.get("fill").unwrap();
+        let mut args = HashMap::new();
+        args.insert("ref".to_string(), json!("#my-input"));
+        args.insert("text".to_string(), json!("batch fill text"));
+
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["ref"], "#my-input", "fill tool_params must keep 'ref' key for batch normalisation");
+        assert_eq!(params["text"], "batch fill text");
+    }
+
+    // =========================================================================
+    // type command — tool name and params
     // =========================================================================
 
     #[test]
@@ -5096,5 +6341,263 @@ mod tests {
         let cmd = map.get("type").unwrap();
         let tool_name = (cmd.tool_name_fn)(&HashMap::new());
         assert_eq!(tool_name, "browser_press_sequentially");
+    }
+
+    #[test]
+    fn test_type_focus_option_is_present() {
+        let map = commands_map();
+        let cmd = map.get("type").unwrap();
+        // The --focus option tells the server to click the target element to
+        // focus it before typing, ensuring the element is interactive.  It was
+        // added alongside the press/fill cursor-positioning fixes.
+        assert!(
+            cmd.options.iter().any(|opt| opt.name == "focus"),
+            "type command should support --focus option"
+        );
+    }
+
+    // =========================================================================
+    // webdb-export command — tool name and params
+    // =========================================================================
+
+    #[test]
+    fn test_webdb_export_tool_name_is_webdb_export() {
+        let map = commands_map();
+        let cmd = map.get("webdb-export").unwrap();
+        let tool_name = (cmd.tool_name_fn)(&HashMap::new());
+        assert_eq!(tool_name, "webdb_export");
+    }
+
+    #[test]
+    fn test_webdb_export_params_maps_urls_and_output_dir() {
+        let map = commands_map();
+        let cmd = map.get("webdb-export").unwrap();
+        let mut args = HashMap::new();
+        args.insert("urls".to_string(), json!("http://a.com,http://b.com"));
+        args.insert("output-dir".to_string(), json!("/tmp/export"));
+
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["urls"], "http://a.com,http://b.com");
+        assert_eq!(params["outputDir"], "/tmp/export");
+    }
+
+    #[test]
+    fn test_webdb_export_has_two_positional_args() {
+        let map = commands_map();
+        let cmd = map.get("webdb-export").unwrap();
+        assert_eq!(cmd.args.len(), 2);
+        assert_eq!(cmd.args[0].name, "urls");
+        assert_eq!(cmd.args[1].name, "output-dir");
+    }
+
+    // =========================================================================
+    // webdb-normalize command — tool name and params
+    // =========================================================================
+
+    #[test]
+    fn test_webdb_normalize_tool_name_is_webdb_normalize() {
+        let map = commands_map();
+        let cmd = map.get("webdb-normalize").unwrap();
+        let tool_name = (cmd.tool_name_fn)(&HashMap::new());
+        assert_eq!(tool_name, "webdb_normalize");
+    }
+
+    #[test]
+    fn test_webdb_normalize_params_maps_url() {
+        let map = commands_map();
+        let cmd = map.get("webdb-normalize").unwrap();
+        let mut args = HashMap::new();
+        args.insert("url".to_string(), json!("http://example.com"));
+
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["url"], "http://example.com");
+    }
+
+    #[test]
+    fn test_webdb_normalize_has_one_positional_arg() {
+        let map = commands_map();
+        let cmd = map.get("webdb-normalize").unwrap();
+        assert_eq!(cmd.args.len(), 1);
+        assert_eq!(cmd.args[0].name, "url");
+    }
+
+    // =========================================================================
+    // experience command tests
+    // =========================================================================
+
+    #[test]
+    fn test_experience_save_tool_name() {
+        let map = commands_map();
+        let cmd = map.get("experience-save").unwrap();
+        assert_eq!((cmd.tool_name_fn)(&HashMap::new()), "experience_save");
+    }
+
+    #[test]
+    fn test_experience_save_params_with_all_options() {
+        let map = commands_map();
+        let cmd = map.get("experience-save").unwrap();
+        let mut args = HashMap::new();
+        args.insert("url".to_string(), json!("https://amazon.com/dp/test"));
+        args.insert("trace".to_string(), json!(r#"{"steps":[],"outcome":"success"}"#));
+        args.insert("outcome".to_string(), json!("failure"));
+        args.insert("intent".to_string(), json!("buy product"));
+        args.insert("task-type".to_string(), json!("extract_product_detail"));
+
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["url"], "https://amazon.com/dp/test");
+        assert_eq!(params["trace"], r#"{"steps":[],"outcome":"success"}"#);
+        assert_eq!(params["outcome"], "failure");
+        assert_eq!(params["intent"], "buy product");
+        assert_eq!(params["task_type"], "extract_product_detail");
+    }
+
+    #[test]
+    fn test_experience_save_params_minimal() {
+        let map = commands_map();
+        let cmd = map.get("experience-save").unwrap();
+        let mut args = HashMap::new();
+        args.insert("url".to_string(), json!("https://example.com"));
+        args.insert("trace".to_string(), json!("{}"));
+
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["url"], "https://example.com");
+        assert_eq!(params["trace"], "{}");
+        assert!(params.get("outcome").is_none());
+    }
+
+    #[test]
+    fn test_experience_query_tool_name() {
+        let map = commands_map();
+        let cmd = map.get("experience-query").unwrap();
+        assert_eq!((cmd.tool_name_fn)(&HashMap::new()), "experience_query");
+    }
+
+    #[test]
+    fn test_experience_query_params_with_intent() {
+        let map = commands_map();
+        let cmd = map.get("experience-query").unwrap();
+        let mut args = HashMap::new();
+        args.insert("url".to_string(), json!("https://amazon.com/dp/test"));
+        args.insert("intent".to_string(), json!("extract product details"));
+
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["url"], "https://amazon.com/dp/test");
+        assert_eq!(params["intent"], "extract product details");
+    }
+
+    #[test]
+    fn test_experience_query_params_without_intent() {
+        let map = commands_map();
+        let cmd = map.get("experience-query").unwrap();
+        let mut args = HashMap::new();
+        args.insert("url".to_string(), json!("https://example.com"));
+
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["url"], "https://example.com");
+        assert!(params.get("intent").is_none());
+    }
+
+    #[test]
+    fn test_experience_list_tool_name() {
+        let map = commands_map();
+        let cmd = map.get("experience-list").unwrap();
+        assert_eq!((cmd.tool_name_fn)(&HashMap::new()), "experience_list");
+    }
+
+    #[test]
+    fn test_experience_list_params_empty() {
+        let map = commands_map();
+        let cmd = map.get("experience-list").unwrap();
+        let params = (cmd.tool_params_fn)(&HashMap::new());
+        assert_eq!(params, json!({}));
+    }
+
+    #[test]
+    fn test_experience_list_params_with_filters() {
+        let map = commands_map();
+        let cmd = map.get("experience-list").unwrap();
+        let mut args = HashMap::new();
+        args.insert("filter".to_string(), json!("amazon"));
+        args.insert("intent-filter".to_string(), json!("buy"));
+        args.insert("page".to_string(), json!("3"));
+        args.insert("page-size".to_string(), json!("50"));
+
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["filter"], "amazon");
+        assert_eq!(params["intent_filter"], "buy");
+        assert_eq!(params["page"], "3");
+        assert_eq!(params["page_size"], "50");
+    }
+
+    #[test]
+    fn test_experience_deep_learn_tool_name() {
+        let map = commands_map();
+        let cmd = map.get("experience-deep-learn").unwrap();
+        assert_eq!((cmd.tool_name_fn)(&HashMap::new()), "experience_deep_learn");
+    }
+
+    #[test]
+    fn test_experience_deep_learn_params_required_only() {
+        let map = commands_map();
+        let cmd = map.get("experience-deep-learn").unwrap();
+        let mut args = HashMap::new();
+        args.insert("url".to_string(), json!("https://amazon.com/dp/test"));
+        args.insert("intent".to_string(), json!("buy product"));
+
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["url"], "https://amazon.com/dp/test");
+        assert_eq!(params["intent"], "buy product");
+        assert!(params.get("force").is_none());
+    }
+
+    #[test]
+    fn test_experience_deep_learn_params_with_force() {
+        let map = commands_map();
+        let cmd = map.get("experience-deep-learn").unwrap();
+        let mut args = HashMap::new();
+        args.insert("url".to_string(), json!("https://amazon.com"));
+        args.insert("intent".to_string(), json!("extract"));
+        args.insert("force".to_string(), json!(true));
+
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["force"], true);
+    }
+
+    #[test]
+    fn test_experience_commands_have_correct_category() {
+        let map = commands_map();
+        for name in &[
+            "experience-save",
+            "experience-query",
+            "experience-list",
+            "experience-deep-learn",
+        ] {
+            let cmd = map.get(*name).unwrap();
+            assert_eq!(cmd.category.as_str(), "skills", "{} should be in Skills category", name);
+        }
+    }
+
+    #[test]
+    fn test_experience_commands_have_required_args_defined() {
+        let map = commands_map();
+
+        let save = map.get("experience-save").unwrap();
+        assert_eq!(save.args.len(), 2);
+        assert!(!save.args[0].optional, "url should be required");
+        assert_eq!(save.args[0].name, "url");
+        assert!(!save.args[1].optional, "trace should be required");
+        assert_eq!(save.args[1].name, "trace");
+
+        let query = map.get("experience-query").unwrap();
+        assert_eq!(query.args.len(), 1);
+        assert!(!query.args[0].optional, "url should be required");
+
+        let list = map.get("experience-list").unwrap();
+        assert!(list.args.is_empty());
+
+        let dl = map.get("experience-deep-learn").unwrap();
+        assert_eq!(dl.args.len(), 2);
+        assert!(!dl.args[0].optional, "url should be required");
+        assert!(!dl.args[1].optional, "intent should be required");
     }
 }

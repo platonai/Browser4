@@ -1,0 +1,97 @@
+# Stage 1: Build native image with GraalVM
+FROM ghcr.io/graalvm/graalvm-community:25 AS builder
+
+# Install Maven (GraalVM images don't include it by default).
+# The GraalVM community image is Oracle Linux based — use microdnf.
+RUN microdnf install -y maven && microdnf clean all
+
+# Set working directory
+WORKDIR /build
+
+# Copy project files (use .dockerignore to control which files to copy)
+COPY pom.xml ./
+COPY VERSION ./
+COPY .gitignore .
+COPY bin ./bin
+COPY .mvn ./.mvn
+COPY . .
+
+# Build the native image.
+# The asset-standalone profile adds only browser4-apps/browser4-standalone to
+# the default reactor.  The native profile activates GraalVM native-image
+# compilation via the native-maven-plugin.
+#
+# The build may take 10-20 minutes and requires 8+ GB of RAM.
+ARG STANDALONE_MODULE=browser4-apps/browser4-standalone
+RUN --mount=type=cache,target=/root/.m2 \
+    mvn -Pnative -Passet-standalone clean package -DskipTests -B -V && \
+    echo "Native image build completed successfully"
+
+# Validate the native binary exists before proceeding.
+RUN test -f ${STANDALONE_MODULE}/target/browser4-standalone && \
+    echo "Native binary validated: $(ls -lh ${STANDALONE_MODULE}/target/browser4-standalone | awk '{print $5}')"
+
+# Stage 2: Minimal runtime
+FROM alpine:3.21 AS runner
+
+# Set working directory
+WORKDIR /app
+
+# Set timezone
+ENV TZ=Asia/Shanghai
+RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
+
+# Install Chromium and necessary dependencies with security updates.
+# The native image still needs Chromium for browser automation and
+# basic system libraries (glibc, nss, etc.) for the native binary itself.
+RUN apk update && apk upgrade && \
+    apk add --no-cache \
+    curl \
+    chromium \
+    nss \
+    freetype \
+    freetype-dev \
+    harfbuzz \
+    ca-certificates \
+    ttf-freefont \
+    dbus && \
+    rm -rf /var/cache/apk/*
+
+# Set Chromium environment variables.
+# Ignore BROWSER_CONTEXT_NUMBER, BROWSER_MAX_OPEN_TABS if BROWSER_CONTEXT_MODE is set to DEFAULT.
+# Note: JAVA_OPTS does not apply to native images.  Heap size is set at build time
+# via the native-image -R:MaxHeapSize option.  To override at runtime, use
+# -Xmx (the native image supports a subset of JVM flags).
+ENV JAVA_OPTS="-Xms2G -Xmx10G -XX:+UseG1GC" \
+    OPENROUTER_API_KEY=${OPENROUTER_API_KEY} \
+    PROXY_ROTATION_URL=${PROXY_ROTATION_URL} \
+    BROWSER_CONTEXT_MODE=DEFAULT \
+    BROWSER_CONTEXT_NUMBER=2 \
+    BROWSER_MAX_OPEN_TABS=8 \
+    BROWSER_DISPLAY_MODE=HEADLESS
+
+# Copy the native image from the builder stage
+COPY --from=builder /build/browser4-apps/browser4-standalone/target/browser4-standalone /app/browser4-standalone
+
+# Make the native binary executable
+RUN chmod +x /app/browser4-standalone
+
+# Expose port (documentation only)
+EXPOSE 8182
+
+# Create app data directory
+RUN mkdir -p ~/.browser4/
+
+# Create non-root user and set directory permissions
+RUN addgroup --system --gid 1001 appuser && \
+    adduser --system --uid 1001 --ingroup appuser appuser && \
+    chown -R appuser:appuser /app
+
+# Switch to non-root user
+USER appuser
+
+# Add build arguments
+LABEL maintainer="Vincent Zhang <ivincent.zhang@gmail.com>" \
+      description="Browser4 Native Image: An AI-Enabled, Super-Fast, Thread-Safe Browser Automation Solution!"
+
+ENTRYPOINT ["/app/browser4-standalone"]

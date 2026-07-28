@@ -1,11 +1,11 @@
 package ai.platon.pulsar.skeleton.session
 
-import ai.platon.pulsar.browser.Browser
+import ai.platon.browser4.api.Browser
 import ai.platon.pulsar.common.CheckState
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.common.config.VolatileConfig
 import ai.platon.pulsar.common.urls.UrlAware
-import ai.platon.pulsar.browser.WebDriver
+import ai.platon.browser4.api.WebDriver
 import ai.platon.pulsar.core.api.WebPage
 import ai.platon.pulsar.dom.FeaturedDocument
 import ai.platon.pulsar.external.ModelResponse
@@ -16,7 +16,7 @@ import ai.platon.pulsar.skeleton.event.PageEventHandlers
 import ai.platon.pulsar.skeleton.workflow.common.DocumentCatch
 import ai.platon.pulsar.skeleton.workflow.common.GlobalCache
 import ai.platon.pulsar.skeleton.workflow.common.PageCatch
-import com.google.common.annotations.Beta
+
 import org.jsoup.nodes.Element
 import java.nio.ByteBuffer
 import java.nio.file.Path
@@ -493,7 +493,6 @@ interface PulsarSession : AutoCloseable {
      * @param url The url of the page to retrieve
      * @return The page content in string format or null
      */
-    @Beta
     fun getContentAsString(url: String): String?
 
     /**

@@ -26,9 +26,9 @@
     Scheduler = @{
         TickSeconds          = 10
         PowerShellExecutable = 'pwsh'
-        WorkingDirectory     = '..\..'
-        LogDirectory         = 'bin\maintenance\logs'
-        StatusFile           = 'bin\maintenance\state\maintenance-state.json'
+        WorkingDirectory     = '../..'
+        LogDirectory         = 'bin/maintenance/logs'
+        StatusFile           = 'bin/maintenance/state/maintenance-state.json'
     }
 
     Tasks = @(
@@ -40,7 +40,7 @@
             Description     = 'Verify Maven + Cargo compilation'
             Enabled         = $true
             IntervalSeconds = 300
-            ScriptPath      = 'bin\maintenance\checks\check-compilation.ps1'
+            ScriptPath      = 'bin/maintenance/checks/check-compilation.ps1'
             Arguments       = @()
         }
         @{
@@ -49,7 +49,7 @@
             Enabled         = $true
             IntervalSeconds = 600
             DependsOn       = @('check-compilation')
-            ScriptPath      = 'bin\maintenance\checks\check-fast-tests.ps1'
+            ScriptPath      = 'bin/maintenance/checks/check-fast-tests.ps1'
             Arguments       = @()
         }
         @{
@@ -57,7 +57,7 @@
             Description     = 'Run cargo test + cargo clippy'
             Enabled         = $true
             IntervalSeconds = 3600
-            ScriptPath      = 'bin\maintenance\checks\check-rust-cli.ps1'
+            ScriptPath      = 'bin/maintenance/checks/check-rust-cli.ps1'
             Arguments       = @()
         }
         @{
@@ -65,7 +65,7 @@
             Description     = 'Validate internal documentation links'
             Enabled         = $true
             IntervalSeconds = 3600
-            ScriptPath      = 'bin\maintenance\checks\check-doc-links-internal.ps1'
+            ScriptPath      = 'bin/maintenance/checks/check-doc-links-internal.ps1'
             Arguments       = @()
         }
         @{
@@ -73,7 +73,7 @@
             Description     = 'Validate SKILL.md YAML frontmatter'
             Enabled         = $true
             IntervalSeconds = 3600
-            ScriptPath      = 'bin\maintenance\checks\check-skill-frontmatter.ps1'
+            ScriptPath      = 'bin/maintenance/checks/check-skill-frontmatter.ps1'
             Arguments       = @()
         }
         @{
@@ -81,7 +81,7 @@
             Description     = 'Verify version alignment across files'
             Enabled         = $true
             IntervalSeconds = 3600
-            ScriptPath      = 'bin\maintenance\checks\check-version-consistency.ps1'
+            ScriptPath      = 'bin/maintenance/checks/check-version-consistency.ps1'
             Arguments       = @()
         }
         @{
@@ -89,7 +89,7 @@
             Description     = 'Parse all PS1 scripts for syntax errors'
             Enabled         = $true
             IntervalSeconds = 3600
-            ScriptPath      = 'bin\maintenance\checks\check-ps1-syntax.ps1'
+            ScriptPath      = 'bin/maintenance/checks/check-ps1-syntax.ps1'
             Arguments       = @()
         }
         @{
@@ -97,7 +97,7 @@
             Description     = 'Verify Docker images build cleanly'
             Enabled         = $true
             IntervalSeconds = 3600
-            ScriptPath      = 'bin\maintenance\checks\check-dockerfile.ps1'
+            ScriptPath      = 'bin/maintenance/checks/check-dockerfile.ps1'
             Arguments       = @()
         }
 
@@ -110,7 +110,7 @@
             Enabled         = $true
             IntervalSeconds = 86400
             DependsOn       = @('check-compilation')
-            ScriptPath      = 'bin\maintenance\checks\check-coverage.ps1'
+            ScriptPath      = 'bin/maintenance/checks/check-coverage.ps1'
             Arguments       = @()
         }
         @{
@@ -118,7 +118,7 @@
             Description     = 'Audit JUnit test tag taxonomy'
             Enabled         = $true
             IntervalSeconds = 86400
-            ScriptPath      = 'bin\maintenance\checks\check-test-tags.ps1'
+            ScriptPath      = 'bin/maintenance/checks/check-test-tags.ps1'
             Arguments       = @()
         }
         @{
@@ -126,7 +126,7 @@
             Description     = 'Validate SKILL.md section structure'
             Enabled         = $true
             IntervalSeconds = 86400
-            ScriptPath      = 'bin\maintenance\checks\check-skill-structure.ps1'
+            ScriptPath      = 'bin/maintenance/checks/check-skill-structure.ps1'
             Arguments       = @()
         }
         @{
@@ -135,7 +135,7 @@
             Enabled         = $true
             IntervalSeconds = 86400
             DependsOn       = @('check-compilation')
-            ScriptPath      = 'bin\maintenance\checks\check-dependency-vulns.ps1'
+            ScriptPath      = 'bin/maintenance/checks/check-dependency-vulns.ps1'
             Arguments       = @()
         }
         @{
@@ -143,7 +143,7 @@
             Description     = 'Verify Maven dependency tree convergence'
             Enabled         = $true
             IntervalSeconds = 86400
-            ScriptPath      = 'bin\maintenance\checks\check-maven-deps.ps1'
+            ScriptPath      = 'bin/maintenance/checks/check-maven-deps.ps1'
             Arguments       = @()
         }
         @{
@@ -151,7 +151,7 @@
             Description     = 'Run cargo audit for Rust vulns'
             Enabled         = $true
             IntervalSeconds = 86400
-            ScriptPath      = 'bin\maintenance\checks\check-cargo-audit.ps1'
+            ScriptPath      = 'bin/maintenance/checks/check-cargo-audit.ps1'
             Arguments       = @()
         }
         @{
@@ -159,7 +159,7 @@
             Description     = 'Validate external URLs in documentation'
             Enabled         = $true
             IntervalSeconds = 86400
-            ScriptPath      = 'bin\maintenance\checks\check-doc-links-external.ps1'
+            ScriptPath      = 'bin/maintenance/checks/check-doc-links-external.ps1'
             Arguments       = @()
         }
         @{
@@ -167,7 +167,7 @@
             Description     = 'Check README.md ↔ README.zh.md consistency'
             Enabled         = $true
             IntervalSeconds = 86400
-            ScriptPath      = 'bin\maintenance\checks\check-bilingual-readme.ps1'
+            ScriptPath      = 'bin/maintenance/checks/check-bilingual-readme.ps1'
             Arguments       = @()
         }
         @{
@@ -175,7 +175,7 @@
             Description     = 'Audit log directory sizes'
             Enabled         = $true
             IntervalSeconds = 86400
-            ScriptPath      = 'bin\maintenance\checks\check-log-sizes.ps1'
+            ScriptPath      = 'bin/maintenance/checks/check-log-sizes.ps1'
             Arguments       = @()
         }
 
@@ -187,7 +187,7 @@
             Description     = 'Detect deprecated API usage'
             Enabled         = $true
             IntervalSeconds = 604800
-            ScriptPath      = 'bin\maintenance\checks\check-deprecated-apis.ps1'
+            ScriptPath      = 'bin/maintenance/checks/check-deprecated-apis.ps1'
             Arguments       = @()
         }
         @{
@@ -195,7 +195,7 @@
             Description     = 'Detect dead code and unused imports'
             Enabled         = $true
             IntervalSeconds = 604800
-            ScriptPath      = 'bin\maintenance\checks\check-dead-code.ps1'
+            ScriptPath      = 'bin/maintenance/checks/check-dead-code.ps1'
             Arguments       = @()
         }
         @{
@@ -203,7 +203,7 @@
             Description     = 'Assess SKILL.md AI instruction quality'
             Enabled         = $true
             IntervalSeconds = 604800
-            ScriptPath      = 'bin\maintenance\checks\check-skill-ai-quality.ps1'
+            ScriptPath      = 'bin/maintenance/checks/check-skill-ai-quality.ps1'
             Arguments       = @()
         }
         @{
@@ -211,7 +211,7 @@
             Description     = 'Verify dependency license compatibility'
             Enabled         = $true
             IntervalSeconds = 604800
-            ScriptPath      = 'bin\maintenance\checks\check-license-compliance.ps1'
+            ScriptPath      = 'bin/maintenance/checks/check-license-compliance.ps1'
             Arguments       = @()
         }
         @{
@@ -219,7 +219,7 @@
             Description     = 'Remove stale build artifacts'
             Enabled         = $true
             IntervalSeconds = 604800
-            ScriptPath      = 'bin\maintenance\checks\clean-build-artifacts.ps1'
+            ScriptPath      = 'bin/maintenance/checks/clean-build-artifacts.ps1'
             Arguments       = @()
         }
         @{
@@ -227,7 +227,7 @@
             Description     = 'Remove stale temp and lock files'
             Enabled         = $true
             IntervalSeconds = 604800
-            ScriptPath      = 'bin\maintenance\checks\clean-temp-files.ps1'
+            ScriptPath      = 'bin/maintenance/checks/clean-temp-files.ps1'
             Arguments       = @()
         }
     )

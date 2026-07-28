@@ -68,37 +68,67 @@ Comprehensive test runner for the current Maven reactors plus the Browser4 CLI p
 Acceptance test for the latest production release of `browser4-cli`.
 
 Downloads, installs, exercises, uninstalls, and re-installs the global `browser4-cli`
-from the public distribution channel, then runs the multi-scenario stress suite against it.
+from the public distribution channel. Shows help when called with no arguments
+(safe default). The multi-scenario stress suite is opt-in via `-Stress`.
 
-Tests the full lifecycle: install → smoke-test → uninstall → re-install → multi-scenario stress.
+Tests the full lifecycle: install → smoke-test → uninstall → re-install → (with `-Stress`) multi-scenario stress.
 
 | Parameter | Description |
 |---|---|
+| `-Stress` | Enable the multi-scenario stress suite (opt-in) |
 | `-SkipMultiScenarios` | Skip the final `multi-scenarios.ps1` run |
 | `-MultiScenariosIterations N` | Number of iterations (default: 1) |
 | `-KeepWorkingDir` | Do not delete the working directory on exit |
+| `-RemoveWorkingDir` | Delete the working directory on exit |
 | `-WorkingDir <path>` | Override the working directory |
+| `-Help` | Show help message |
+
+### `verify-plugin.ps1`, `verify-plugin.sh`
+
+Validate that a built plugin JAR has the correct structure for deployment.
+
+Checks that the JAR contains:
+- `META-INF/browser4-plugin.json` — plugin manifest
+- `META-INF/spring/…AutoConfiguration.imports` — Spring auto-configuration entry
+- Compiled `.class` files
+- No embedded dependency JARs (thin-JAR requirement)
+
+```powershell
+.\bin\verify-plugin.ps1 path\to\plugin.jar
+```
+
+### `start-runtime.ps1`
+
+Launch the Browser4 runtime bundle server using the bundled Java runtime and application JARs.
+Resolves paths relative to the project root automatically.
+
+```powershell
+.\bin\start-runtime.ps1
+.\bin\start-runtime.ps1 --debug
+```
+
+Requires the runtime bundle to be built first: `.\bin\build.ps1 runtimeBundle`
 
 ### `version.mjs`
 
 Unified version maintenance tool — single entry point for all version operations.
-Browser4 has two independent version tracks.
+Browser4 uses a single VERSION file as the source of truth across all modules.
 
-**Backend version** (source: `VERSION` file → pom.xml, READMEs):
-- `node bin/version.mjs show`: Print backend version.
+**Version queries** (source: `VERSION` file):
+- `node bin/version.mjs show`: Print project version.
 - `node bin/version.mjs show -v`: Print version + git hash, branch, date.
+
+**Version changes:**
 - `node bin/version.mjs release`: Strip `-SNAPSHOT` for release deployment.
 - `node bin/version.mjs bump <part>`: Bump version (major/minor/patch) with precheck.
-- `node bin/version.mjs auto`: Bump backend to next patch; bump CLI if cli/ changed. Shows release info, change summary, and asks for confirmation.
+- `node bin/version.mjs auto`: Bump to next patch if changes detected. Shows release info, change summary, and asks for confirmation.
 - `node bin/version.mjs auto --dry-run`: Preview the bump plan without applying.
-- `node bin/version.mjs auto --commit`: Apply the bump and commit+push.
+- `node bin/version.mjs auto --commit`: Apply and commit+push.
 
-**CLI version** (source: `cli/VERSION-CLI` → package.json, Cargo.toml):
+**CLI version** (source: `VERSION` → package.json, Cargo.toml):
 - `node bin/version.mjs cli show`: Print CLI version.
 - `node bin/version.mjs cli sync`: Sync to dependent files.
 - `node bin/version.mjs cli sync --check`: Check-only mode (CI lint).
-- `node bin/version.mjs cli auto`: Bump CLI to next patch if changes detected in cli/.
-- `node bin/version.mjs cli auto --dry-run`: Preview the CLI bump plan.
 
 **Cross-cutting:**
 - `node bin/version.mjs check`: Full consistency check across all version files.
@@ -134,6 +164,7 @@ Shared PowerShell utility modules imported by other scripts.
 
 - **`Util.ps1`**: Common utilities including `Fix-Encoding-UTF8` — sets the console code page and output encoding to UTF-8 to prevent mojibake in Windows PowerShell.
 - **`agent-utils.psm1`**: AI agent utilities — resolve and invoke AI assistants (`claude`, `copilot`, etc.) on PATH. Provides `Get-AiAnalyzer`, `Test-AiAvailable`, and `Invoke-AiAnalysis` for AI-powered log analysis in test runners.
+- **`test-session.psm1`**: Cross-run persistable test-session state module. Maintains a single JSON session file (`target/test-session.json`) recording the last result, log paths, aggregate pass/fail counts, and rolling history for each test type. Imported by test runners; soft dependency — tests still run if the module is absent.
 
 ### `git/`
 
@@ -154,24 +185,26 @@ document correctness, and SKILL documentation AI-friendliness. See also [mainten
 - **`orchestrator.ps1`**: Master scheduler/orchestrator. Continuously cycles through configured checks, skipping tasks that ran recently (state tracked in `state/maintenance-state.json`). Supports `-Once` (single pass), `-Force` (ignore last-run state), and CI mode (`$env:MAINTENANCE_MODE=ci`).
 - **`config.psd1`**: Scheduler task configuration — which checks run and at what intervals.
 
-**Checks** (`checks/` — 28 scripts across 9 categories):
+**Checks** (`checks/` — 30 scripts across 10 categories):
 
 | Category | Scope | Example Scripts |
 |---|---|---|
-| Code Quality | CI + Nightly + Weekly | `check-compilation.ps1`, `check-dead-code.ps1`, `check-deprecated-apis.ps1` |
-| Test Health | CI + Nightly + Weekly | `check-fast-tests.ps1`, `check-e2e-tests.ps1`, `check-test-tags.ps1` |
-| Documentation | CI + Nightly + Hourly | `check-doc-links-internal.ps1`, `check-doc-links-external.ps1`, `check-bilingual-readme.ps1` |
+| Code Quality | CI + Nightly + Weekly | `check-compilation.ps1`, `check-dead-code.ps1`, `check-deprecated-apis.ps1`, `check-qodana.ps1`, `check-rust-cli.ps1` |
+| Test Health | CI + Nightly + Weekly | `check-fast-tests.ps1`, `check-e2e-tests.ps1`, `check-integration-tests.ps1`, `check-test-tags.ps1` |
+| Documentation | CI + Nightly + Hourly | `check-doc-links-internal.ps1`, `check-doc-links-external.ps1`, `check-bilingual-readme.ps1`, `check-readme-staleness.ps1` |
 | SKILL Docs | CI + Nightly + Weekly | `check-skill-structure.ps1`, `check-skill-frontmatter.ps1`, `check-skill-ai-quality.ps1` |
-| Version & Release | CI + Nightly + Release | `check-version-consistency.ps1`, `check-changelog-staleness.ps1` |
-| Dependencies | Nightly + Weekly | `check-dependency-vulns.ps1`, `check-maven-deps.ps1`, `check-cargo-audit.ps1` |
+| Version & Release | CI + Nightly + Release | `check-version-consistency.ps1`, `check-changelog-staleness.ps1`, `check-release-assets.ps1` |
+| Dependencies | Nightly + Weekly | `check-dependency-vulns.ps1`, `check-maven-deps.ps1`, `check-cargo-audit.ps1`, `check-license-compliance.ps1` |
 | Infrastructure | CI + Nightly | `check-dockerfile.ps1`, `check-ps1-syntax.ps1`, `check-ci-workflows.ps1` |
 | Operational | Nightly + Weekly | `check-log-sizes.ps1`, `check-coverage.ps1` |
-| AI-Assisted | On-demand + Scheduled | `check-skill-ai-quality.ps1` |
 | Cleanup | On-demand | `clean-build-artifacts.ps1`, `clean-temp-files.ps1` |
 
 **CI entry points** (`ci/`):
 - **`invoke-ci-checks.ps1`**: Per-commit CI checks (fast, strict — fails on first issue).
 - **`invoke-nightly-checks.ps1`**: Nightly full suite (relaxed — collects all failures, reports at end).
+
+**Tests** (`tests/`):
+- **`maintenance.tests.ps1`**: Pester unit tests for the maintenance system itself — covers CI checks, nightly checks, helper functions, and the maintenance state module.
 
 **Reporters** (`reporters/`): `report-console.ps1` (colorized terminal), `report-json.ps1`, `report-github-annotations.ps1`, `report-summary.ps1` (markdown).
 
@@ -215,31 +248,40 @@ Test infrastructure and Docker verification scripts.
 - **`test-docker-local.ps1`**: Build and smoke-test the Browser4 Docker image locally, mirroring the CI `build-core-and-docker` job. Runs Maven build, Docker build, health check, and JAR inspection.
 - **`test.ps1.tests.ps1`**: Unit tests for the root `test.ps1` test runner (Pester-based).
 
-### `tests-production/`
+### `browser4-tests/tests-production/`
 
 Production acceptance and stress tests for the globally-installed `browser4-cli`.
 All tests use the globally-installed CLI by default (override with `$env:BROWSER4_CLI_BIN`).
-These scripts are self-contained and portable — they never depend on git, the repo root, or local build outputs. See also [tests-production/README.md](tests-production/README.md).
+These scripts are self-contained and portable — they never depend on git, the repo root, or local build outputs. See also [tests-production/README.md](../../browser4-tests/tests-production/README.md).
 
 **Test Runner:**
 - **`run-tests.ps1`**, **`run-tests.sh`**: Discover and run test scripts. Supports categories (`smoke`, `agent`, `swarm`, `stress`, `all`) or individual tests. `run-tests.sh` is a bash wrapper that auto-detects locale and invokes `run-tests.ps1` via `pwsh`. On failure, attempts AI-powered log analysis via `claude` or `copilot` if available.
 
-**Test Scripts:**
+**Acceptance Tests:**
 - **`cli-basics.ps1`**: Smoke test — verifies `--version`, `--help`, and basic session operations (open, list, close).
 - **`agent-run-page-visit.ps1`**: Agent page-visit task lifecycle test.
 - **`agent-run-page-visit-interact.ps1`**: Agent page-visit with interaction task test.
 - **`agent-run-free-command.ps1`**: Agent free-command task lifecycle test (goto → extract).
 - **`swarm-agents.ps1`**, **`swarm-agents.sh`**: Swarm create / submit / status lifecycle test.
+
+**Stress Tests:**
 - **`multi-scenarios.ps1`**: Multi-scenario stress-test orchestrator. Runs the scenario suite in a loop with isolated sub-processes.
 - **`stress-install.ps1`**: Stress-test the install/uninstall lifecycle.
 - **`stress-session.ps1`**: Stress-test session open/close lifecycle.
 - **`stress-swarm-agents.ps1`**: Stress-test swarm agent operations at scale.
-- **`bundle-download-speed.ps1`**: Measure browser bundle download speed.
-- **`test-and-fix.ps1`**: Run tests and attempt automatic fixes on failure.
+
+**Performance:**
+- **`bundle-download-speed.ps1`**: Measure runtime bundle download speed from each available source (GitHub Releases, Alibaba Cloud OSS, proxy on/off). Downloads the first 10 MB via HTTP Range request to keep probes small.
+
+**Test & Fix:**
+- **`test-and-fix.ps1`**: Two-phase workflow: (1) run the full acceptance test suite via `test-production.ps1`, then (2) collect AI analysis files from failing tests and invoke the best available AI CLI to produce a fix plan. Optionally applies fixes automatically. Designed for CI and local "test → fix → retest" loops.
+
+**Unit Tests (for test infrastructure):**
+- **`test-production-helpers.ps1`**: Unit tests for helper functions defined in `test-production.ps1` (assertions, result writing, path resolution). Extracts functions via AST parser and tests in isolation.
+- **`test-utils-helpers.ps1`**: Unit tests for `ConvertTo-WindowsCmdArg` in `test-utils.psm1`. Validates Windows command-line argument escaping against the MSDN CommandLineToArgvW specification.
 
 **Support Files:**
 - **`test-utils.psm1`**: Shared PowerShell module providing CLI invocation tracking, logging, failure reporting, and AI analysis.
-- **`test-production-helpers.ps1`**, **`test-utils-helpers.ps1`**: Helper functions for production test workflows.
 - **`seeds.txt`**, **`seeds-stress.txt`**: Seed URL lists for test scenarios.
 - **`logs/`**: Per-run log directories with full command output.
 

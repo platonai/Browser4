@@ -1,8 +1,8 @@
 package ai.platon.pulsar.agentic.tools.builtin
 
+import ai.platon.browser4.api.model.JsEvaluation
 import ai.platon.pulsar.agentic.model.ToolCall
-import ai.platon.pulsar.browser.common.JsEvaluation
-import ai.platon.pulsar.browser.WebDriver
+import ai.platon.pulsar.core.api.WebDriver
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -12,245 +12,280 @@ import org.mockito.Mockito.verify
 import org.mockito.Mockito.`when`
 
 class BrowserTabToolExecutorTest {
-	private val executor = BrowserTabToolExecutor()
+    private val executor = BrowserTabToolExecutor()
 
-	@Test
-	fun `type accepts focused element text only`() {
-		runBlocking {
-			val driver = Mockito.mock(WebDriver::class.java)
+    @Test
+    fun `type accepts focused element text only`() {
+        runBlocking {
+            val driver = Mockito.mock(WebDriver::class.java)
 
-			executor.callFunctionOn(
-				ToolCall("tab", "type", mutableMapOf<String, Any?>("text" to "hello")),
-				driver
-			)
+            executor.callFunctionOn(
+                ToolCall("tab", "type", mutableMapOf<String, Any?>("text" to "hello")),
+                driver
+            )
 
-			verify(driver).type("hello", null)
-		}
-	}
+            verify(driver).type("hello", null)
+        }
+    }
 
-	@Test
-	fun `type still accepts selector and text`() {
-		runBlocking {
-			val driver = Mockito.mock(WebDriver::class.java)
+    @Test
+    fun `type still accepts selector and text`() {
+        runBlocking {
+            val driver = Mockito.mock(WebDriver::class.java)
 
-			executor.callFunctionOn(
-				ToolCall("tab", "type", mutableMapOf<String, Any?>("selector" to "#q", "text" to "hello")),
-				driver
-			)
+            executor.callFunctionOn(
+                ToolCall("tab", "type", mutableMapOf<String, Any?>("selector" to "#q", "text" to "hello")),
+                driver
+            )
 
-			verify(driver).type("hello", "#q")
-		}
-	}
+            verify(driver).type("hello", "#q")
+        }
+    }
 
-	@Test
-	fun `press accepts focused element key only`() {
-		runBlocking {
-			val driver = Mockito.mock(WebDriver::class.java)
+    @Test
+    fun `press accepts focused element key only`() {
+        runBlocking {
+            val driver = Mockito.mock(WebDriver::class.java)
 
-			executor.callFunctionOn(
-				ToolCall("tab", "press", mutableMapOf<String, Any?>("key" to "Enter")),
-				driver
-			)
+            executor.callFunctionOn(
+                ToolCall("tab", "press", mutableMapOf<String, Any?>("key" to "Enter")),
+                driver
+            )
 
-			verify(driver).press("Enter", null)
-		}
-	}
+            verify(driver).press("Enter", null)
+        }
+    }
 
-	@Test
-	fun `press still accepts selector and key`() {
-		runBlocking {
-			val driver = Mockito.mock(WebDriver::class.java)
+    @Test
+    fun `press still accepts selector and key`() {
+        runBlocking {
+            val driver = Mockito.mock(WebDriver::class.java)
 
-			executor.callFunctionOn(
-				ToolCall("tab", "press", mutableMapOf<String, Any?>("selector" to "#q", "key" to "Enter")),
-				driver
-			)
+            executor.callFunctionOn(
+                ToolCall("tab", "press", mutableMapOf<String, Any?>("selector" to "#q", "key" to "Enter")),
+                driver
+            )
 
-			verify(driver).press("Enter", "#q")
-		}
-	}
+            verify(driver).press("Enter", "#q")
+        }
+    }
 
-	@Test
-	fun `help advertises selector optional type and press`() {
-		val typeHelp = executor.help("type")
-		val pressHelp = executor.help("press")
+    @Test
+    fun `help advertises selector optional type and press`() {
+        val typeHelp = executor.help("type")
+        val pressHelp = executor.help("press")
 
-		assertTrue(typeHelp.contains("tab.type(text: String)"))
-		assertTrue(typeHelp.contains("selector: String?"))
-		assertTrue(pressHelp.contains("tab.press(key: String)"))
-		assertTrue(pressHelp.contains("selector: String?"))
-	}
+        assertTrue(typeHelp.contains("tab.type(text: String)"))
+        assertTrue(typeHelp.contains("selector: String?"))
+        assertTrue(pressHelp.contains("tab.press(key: String)"))
+        assertTrue(pressHelp.contains("selector: String?"))
+    }
 
-	@Test
-	fun `evaluateValue accepts page expression`() {
-		runBlocking {
-			val driver = Mockito.mock(WebDriver::class.java)
-			`when`(driver.evaluateValueDetail("document.title"))
-				.thenReturn(JsEvaluation(value = "Browser4 CLI Other Fixture"))
+    @Test
+    fun `evaluateValue accepts page expression`() {
+        runBlocking {
+            val driver = Mockito.mock(WebDriver::class.java)
+            `when`(driver.evaluateValueDetail("document.title"))
+                .thenReturn(JsEvaluation(value = "Browser4 CLI Other Fixture"))
 
-			val result = executor.callFunctionOn(
-				ToolCall("tab", "evaluateValue", mutableMapOf<String, Any?>("expression" to "document.title")),
-				driver
-			)
+            val result = executor.callFunctionOn(
+                ToolCall("tab", "evaluateValue", mutableMapOf<String, Any?>("expression" to "document.title")),
+                driver
+            )
 
-			assertEquals("Browser4 CLI Other Fixture", result.value)
-			verify(driver).evaluateValueDetail("document.title")
-		}
-	}
+            assertEquals("Browser4 CLI Other Fixture", result.value)
+            verify(driver).evaluateValueDetail("document.title")
+        }
+    }
 
-	@Test
-	fun `evaluateValue accepts element selector and function declaration`() {
-		runBlocking {
-			val driver = Mockito.mock(WebDriver::class.java)
-			`when`(driver.evaluateValueDetail("#page-marker", "(element) => element.textContent"))
-				.thenReturn(JsEvaluation(value = "other page"))
+    @Test
+    fun `evaluateValue accepts element selector and function declaration`() {
+        runBlocking {
+            val driver = Mockito.mock(WebDriver::class.java)
+            `when`(driver.evaluateValueDetail("#page-marker", "(element) => element.textContent"))
+                .thenReturn(JsEvaluation(value = "other page"))
 
-			val result = executor.callFunctionOn(
-				ToolCall(
-					"tab",
-					"evaluateValue",
-					mutableMapOf<String, Any?>(
-						"selector" to "#page-marker",
-						"functionDeclaration" to "(element) => element.textContent"
-					)
-				),
-				driver
-			)
+            val result = executor.callFunctionOn(
+                ToolCall(
+                    "tab",
+                    "evaluateValue",
+                    mutableMapOf<String, Any?>(
+                        "selector" to "#page-marker",
+                        "functionDeclaration" to "(element) => element.textContent"
+                    )
+                ),
+                driver
+            )
 
-			assertEquals("other page", result.value)
-			verify(driver).evaluateValueDetail("#page-marker", "(element) => element.textContent")
-		}
-	}
+            assertEquals("other page", result.value)
+            verify(driver).evaluateValueDetail("#page-marker", "(element) => element.textContent")
+        }
+    }
 
-	@Test
-	fun `evaluateValue accepts element selector and expression`() {
-		runBlocking {
-			val driver = Mockito.mock(WebDriver::class.java)
-			`when`(driver.evaluateValueDetail("#page-marker", "(element) => element.textContent"))
-				.thenReturn(JsEvaluation(value = "other page"))
+    @Test
+    fun `evaluateValue accepts element selector and expression`() {
+        runBlocking {
+            val driver = Mockito.mock(WebDriver::class.java)
+            `when`(driver.evaluateValueDetail("#page-marker", "(element) => element.textContent"))
+                .thenReturn(JsEvaluation(value = "other page"))
 
-			val result = executor.callFunctionOn(
-				ToolCall(
-					"tab",
-					"evaluateValue",
-					mutableMapOf<String, Any?>(
-						"selector" to "#page-marker",
-						"expression" to "(element) => element.textContent"
-					)
-				),
-				driver
-			)
+            val result = executor.callFunctionOn(
+                ToolCall(
+                    "tab",
+                    "evaluateValue",
+                    mutableMapOf<String, Any?>(
+                        "selector" to "#page-marker",
+                        "expression" to "(element) => element.textContent"
+                    )
+                ),
+                driver
+            )
 
-			assertEquals("other page", result.value)
-			verify(driver).evaluateValueDetail("#page-marker", "(element) => element.textContent")
-		}
-	}
+            assertEquals("other page", result.value)
+            verify(driver).evaluateValueDetail("#page-marker", "(element) => element.textContent")
+        }
+    }
 
-	@Test
-	fun `eval accepts page expression`() {
-		runBlocking {
-			val driver = Mockito.mock(WebDriver::class.java)
-			`when`(driver.evaluateValueDetail("document.title"))
-				.thenReturn(JsEvaluation(value = "Browser4 CLI Other Fixture"))
+    @Test
+    fun `eval accepts page expression`() {
+        runBlocking {
+            val driver = Mockito.mock(WebDriver::class.java)
+            `when`(driver.evaluateValueDetail("document.title"))
+                .thenReturn(JsEvaluation(value = "Browser4 CLI Other Fixture"))
 
-			val result = executor.callFunctionOn(
-				ToolCall("tab", "eval", mutableMapOf<String, Any?>("expression" to "document.title")),
-				driver
-			)
+            val result = executor.callFunctionOn(
+                ToolCall("tab", "eval", mutableMapOf<String, Any?>("expression" to "document.title")),
+                driver
+            )
 
-			assertEquals("Browser4 CLI Other Fixture", result.value)
-			verify(driver).evaluateValueDetail("document.title")
-		}
-	}
+            assertEquals("Browser4 CLI Other Fixture", result.value)
+            verify(driver).evaluateValueDetail("document.title")
+        }
+    }
 
-	@Test
-	fun `eval accepts element selector and expression`() {
-		runBlocking {
-			val driver = Mockito.mock(WebDriver::class.java)
-			`when`(driver.evaluateValueDetail("#page-marker", "(element) => element.textContent"))
-				.thenReturn(JsEvaluation(value = "other page"))
+    @Test
+    fun `eval accepts element selector and expression`() {
+        runBlocking {
+            val driver = Mockito.mock(WebDriver::class.java)
+            `when`(driver.evaluateValueDetail("#page-marker", "(element) => element.textContent"))
+                .thenReturn(JsEvaluation(value = "other page"))
 
-			val result = executor.callFunctionOn(
-				ToolCall(
-					"tab",
-					"eval",
-					mutableMapOf<String, Any?>(
-						"selector" to "#page-marker",
-						"expression" to "(element) => element.textContent"
-					)
-				),
-				driver
-			)
+            val result = executor.callFunctionOn(
+                ToolCall(
+                    "tab",
+                    "eval",
+                    mutableMapOf<String, Any?>(
+                        "selector" to "#page-marker",
+                        "expression" to "(element) => element.textContent"
+                    )
+                ),
+                driver
+            )
 
-			assertEquals("other page", result.value)
-			verify(driver).evaluateValueDetail("#page-marker", "(element) => element.textContent")
-		}
-	}
+            assertEquals("other page", result.value)
+            verify(driver).evaluateValueDetail("#page-marker", "(element) => element.textContent")
+        }
+    }
 
-	// ── awaitPromise tests ──────────────────────────────────────────────
+    @Test
+    fun `screenshot viewport scrolls before capture`() {
+        runBlocking {
+            val driver = Mockito.mock(WebDriver::class.java)
+            `when`(driver.evaluateValue("window.innerWidth")).thenReturn(1920)
+            `when`(driver.evaluateValue("window.innerHeight")).thenReturn(1080)
 
-	@Test
-	fun `eval with awaitPromise calls two-arg evaluateValueDetail`() {
-		runBlocking {
-			val driver = Mockito.mock(WebDriver::class.java)
-			`when`(driver.evaluateValueDetail("fetch('/api/data')", true))
-				.thenReturn(JsEvaluation(value = mapOf("status" to 200)))
+            executor.callFunctionOn(
+                ToolCall("tab", "screenshot", mutableMapOf<String, Any?>("viewport" to 2)),
+                driver
+            )
 
-			val result = executor.callFunctionOn(
-				ToolCall(
-					"tab",
-					"eval",
-					mutableMapOf<String, Any?>(
-						"expression" to "fetch('/api/data')",
-						"awaitPromise" to true
-					)
-				),
-				driver
-			)
+            verify(driver).scrollToViewport(2.0)
+            verify(driver).screenshot(ai.platon.pulsar.common.math.geometric.RectD(0.0, 2160.0, 1920.0, 1080.0))
+        }
+    }
 
-			assertEquals(mapOf("status" to 200), result.value)
-			verify(driver).evaluateValueDetail("fetch('/api/data')", true)
-		}
-	}
+    @Test
+    fun `screenshot viewport clamps negative index to zero`() {
+        runBlocking {
+            val driver = Mockito.mock(WebDriver::class.java)
+            `when`(driver.evaluateValue("window.innerWidth")).thenReturn(1920)
+            `when`(driver.evaluateValue("window.innerHeight")).thenReturn(1080)
 
-	@Test
-	fun `eval without awaitPromise defaults to one-arg overload`() {
-		runBlocking {
-			val driver = Mockito.mock(WebDriver::class.java)
-			`when`(driver.evaluateValueDetail("document.title"))
-				.thenReturn(JsEvaluation(value = "Browser4 CLI Other Fixture"))
+            executor.callFunctionOn(
+                ToolCall("tab", "screenshot", mutableMapOf<String, Any?>("viewport" to -1)),
+                driver
+            )
 
-			val result = executor.callFunctionOn(
-				ToolCall("tab", "eval", mutableMapOf<String, Any?>("expression" to "document.title")),
-				driver
-			)
+            verify(driver).scrollToViewport(0.0)
+            verify(driver).screenshot(ai.platon.pulsar.common.math.geometric.RectD(0.0, 0.0, 1920.0, 1080.0))
 
-			assertEquals("Browser4 CLI Other Fixture", result.value)
-			verify(driver).evaluateValueDetail("document.title")
-		}
-	}
+            // ── awaitPromise tests ──────────────────────────────────────────────
 
-	@Test
-	fun `evaluateValue with awaitPromise calls two-arg evaluateValueDetail`() {
-		runBlocking {
-			val driver = Mockito.mock(WebDriver::class.java)
-			`when`(driver.evaluateValueDetail("new Promise(r => setTimeout(() => r(42), 100))", true))
-				.thenReturn(JsEvaluation(value = 42))
+            @Test
+            fun `eval with awaitPromise calls two-arg evaluateValueDetail`() {
+                runBlocking {
+                    val driver = Mockito.mock(WebDriver::class.java)
+                    `when`(driver.evaluateValueDetail("fetch('/api/data')", true))
+                        .thenReturn(JsEvaluation(value = mapOf("status" to 200)))
 
-			val result = executor.callFunctionOn(
-				ToolCall(
-					"tab",
-					"evaluateValue",
-					mutableMapOf<String, Any?>(
-						"expression" to "new Promise(r => setTimeout(() => r(42), 100))",
-						"awaitPromise" to true
-					)
-				),
-				driver
-			)
+                    val result = executor.callFunctionOn(
+                        ToolCall(
+                            "tab",
+                            "eval",
+                            mutableMapOf<String, Any?>(
+                                "expression" to "fetch('/api/data')",
+                                "awaitPromise" to true
+                            )
+                        ),
+                        driver
+                    )
 
-			assertEquals(42, result.value)
-			verify(driver).evaluateValueDetail("new Promise(r => setTimeout(() => r(42), 100))", true)
-		}
-	}
+                    assertEquals(mapOf("status" to 200), result.value)
+                    verify(driver).evaluateValueDetail("fetch('/api/data')", true)
+                }
+            }
+
+            @Test
+            fun `eval without awaitPromise defaults to one-arg overload`() {
+                runBlocking {
+                    val driver = Mockito.mock(WebDriver::class.java)
+                    `when`(driver.evaluateValueDetail("document.title"))
+                        .thenReturn(JsEvaluation(value = "Browser4 CLI Other Fixture"))
+
+                    val result = executor.callFunctionOn(
+                        ToolCall("tab", "eval", mutableMapOf<String, Any?>("expression" to "document.title")),
+                        driver
+                    )
+
+                    assertEquals("Browser4 CLI Other Fixture", result.value)
+                    verify(driver).evaluateValueDetail("document.title")
+                }
+            }
+
+            @Test
+            fun `evaluateValue with awaitPromise calls two-arg evaluateValueDetail`() {
+                runBlocking {
+                    val driver = Mockito.mock(WebDriver::class.java)
+                    `when`(driver.evaluateValueDetail("new Promise(r => setTimeout(() => r(42), 100))", true))
+                        .thenReturn(JsEvaluation(value = 42))
+
+                    val result = executor.callFunctionOn(
+                        ToolCall(
+                            "tab",
+                            "evaluateValue",
+                            mutableMapOf<String, Any?>(
+                                "expression" to "new Promise(r => setTimeout(() => r(42), 100))",
+                                "awaitPromise" to true
+                            )
+                        ),
+                        driver
+                    )
+
+                    assertEquals(42, result.value)
+                    verify(driver).evaluateValueDetail("new Promise(r => setTimeout(() => r(42), 100))", true)
+                }
+            }
+
+        }
+    }
 }

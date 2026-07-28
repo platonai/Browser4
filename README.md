@@ -188,7 +188,7 @@ htmlsnapshot capture                        Capture a static HTML snapshot and s
 htmlsnapshot                                Short form of `htmlsnapshot capture`
 htmlsnapshot get <field> [selector] [name]  Extract text, html, or attr from the stored HTML snapshot
 htmlsnapshot query [url]                    Run X-SQL against the stored HTML snapshot (--sql <query|@file>)
-htmlsnapshot export                         Export snapshot HTML to a local file (--file <path>)
+htmlsnapshot export                         Export snapshot HTML to a local file (--file <path>, --clean)
 htmlsnapshot summary                        Generate a compressed Web Page Summary Index (WPSI)
 htmlsnapshot grep <pattern>                 Search snapshot HTML with regex
                                            -i, -v, -c, -l, -F, -w, -A, -B, -C, --selector
@@ -206,10 +206,10 @@ pdf                 Save the page as PDF. --filename
 #### Tabs
 
 ```
-tab-list            List all open tabs
+tab-list            List all open tabs (use --json to get full GUIDs)
 tab-new [url]       Create a new tab, optionally navigating to a URL
-tab-close [index]   Close a tab by zero-based index (omit for current tab)
-tab-select <index>  Select a tab by zero-based index
+tab-close [index]   Close a tab by zero-based index (omit for current tab). Use --guid for GUID-based close.
+tab-select <index>  Select a tab by zero-based index. Use --guid for GUID-based select.
 ```
 
 #### Dialogs
@@ -303,7 +303,7 @@ Orchestrate parallel scraping across multiple browser contexts. The `co` prefix 
 swarm create          Create a swarm scrape session
                       --profile-mode, --max-open-tabs, --max-browser-contexts, --display-mode
 swarm submit [url]    Submit URLs or X-SQL payloads as scrape jobs
-                      --seed-file, --sql, --deadline, --expires, --refresh, --parse, --store-content
+                      --seed-file, --sql, --deadline, --expires, --refresh, --parse
 swarm query <url>     Submit an X-SQL query to extract data from a loaded webpage
                       --sql, --seed-file, --deadline, --expires, --refresh
 swarm status <id>     Check the status of a scrape job
@@ -321,7 +321,7 @@ crawl [url]     Crawl a website from a URL or seed file, with optional X-SQL ext
                 --format json|csv|table (default: table), --output (-o) file
                 --depth (-d, default 1; 0 = no link discovery), --out-link-selector (-ol),
                 --out-link-pattern (-olp), --top-links (-tl), --args (-a),
-                --refresh, --parse, --expires, --store-content, --priority (-p),
+                --refresh, --parse, --expires, --priority (-p),
                 --page-load-timeout, --ignore-url-query, --no-norm, --readonly
 ```
 
@@ -401,6 +401,7 @@ browser4-cli htmlsnapshot capture
 browser4-cli htmlsnapshot
 browser4-cli htmlsnapshot get text "#main-content"
 browser4-cli htmlsnapshot query --sql @query.sql
+browser4-cli htmlsnapshot export --file page.html --clean
 browser4-cli htmlsnapshot grep -i "error"
 
 # AI-powered extraction and summarization (requires LLM key — see LLM Configuration above)
@@ -412,7 +413,7 @@ browser4-cli agent run "Search amazon for mechanical keyboards, compare the top 
 
 # Parallel scraping with swarm
 browser4-cli swarm create --max-open-tabs 12 --display-mode HEADLESS
-browser4-cli swarm submit --seed-file ./urls.txt --refresh --store-content
+browser4-cli swarm submit --seed-file ./urls.txt --refresh
 browser4-cli swarm result scrape-task-1
 
 # Batch multiple commands
@@ -449,6 +450,23 @@ browser4-cli close
    ```shell
    ./mvnw -DskipTests
    ```
+
+4. **Build and run the CLI (from source)**
+   ```shell
+   # Build the Rust CLI (requires Rust toolchain)
+   cd cli/browser4-cli && cargo build --release
+
+   # Or run directly without installing:
+   cargo run --manifest-path cli/browser4-cli/Cargo.toml -- --help
+
+   # Add --quiet to suppress Cargo build-status output:
+   cargo run --quiet --manifest-path cli/browser4-cli/Cargo.toml -- <command>
+
+   # Or install globally:
+   cd cli/browser4-cli && cargo install --path .
+   ```
+   > On Windows, prefix the command with `chcp 65001 >nul &&` for proper UTF-8 output.
+   > See [Build from Source](docs/build-from-source.md) for full platform-specific instructions.
 
 ---
 
@@ -497,17 +515,34 @@ curl -L -o PulsarRPAPro.jar https://github.com/platonai/PulsarRPAPro/releases/do
 
 ---
 
-## 📦 Modules Overview
+## 🏗️ Architecture
 
 ```
-cli                     CLI in Rust that supports SKILLS
-browser4-core           Core engine: sessions, scheduling, DOM, browser control
-browser4-agentic        Agent implementation, MCP, and skill registration
-browser4-rest           Spring Boot REST layer & command endpoints
-browser4-standalone     Agent & crawler orchestration with product packaging
-examples                Runnable examples and demos
-browser4-tests          E2E & heavy integration & scenario tests
+browser4-cli (Rust) ──MCP over HTTP──▶ browser4-rest (Kotlin/Spring) ──▶ PulsarWebDriver (Kotlin/CDP)
 ```
+
+- **CLI** (`cli/browser4-cli`) — native Rust binary, talks to the backend via MCP tool calls
+- **Backend** (`browser4-rest`) — Spring Boot server, dispatches MCP tools to browser drivers
+- **Browser driver** (`browser4-core/browser4-browser`) — wraps Chrome DevTools Protocol
+- **Agent tools** (`browser4-agentic`) — maps MCP tool names to browser automation methods
+
+## 📦 Modules Overview
+
+| Module | Description |
+|---|---|
+| `cli/browser4-cli` | Rust CLI — fast, native binary for browser automation |
+| `skills/browser4-cli` | AI agent skill definitions (SKILL.md) |
+| `browser4-core` | Core engine: sessions, scheduling, DOM, browser control |
+| `browser4-dependencies` | BOM and dependency version alignment |
+| `browser4-tools` | Operational tools and launch helpers |
+| `browser4-agentic` | AI agents, MCP integration, skill registration |
+| `browser4-agent-tools` | High-level agent tools: scraping, crawling, stateful page interaction |
+| `browser4-rest` | Spring Boot REST layer & command endpoints |
+| `browser4-apps/browser4-standalone` | Product packaging — unified launcher (`target/Browser4.jar`) |
+| `examples/browser4-examples` | Runnable examples and demos |
+| `browser4-tests` | E2E, integration, and scenario test suites |
+| `cdp-protocol` | Chrome DevTools Protocol JSON definitions |
+| `coworker/` | File-queue automation for task-driven AI workflows |
 
 ---
 

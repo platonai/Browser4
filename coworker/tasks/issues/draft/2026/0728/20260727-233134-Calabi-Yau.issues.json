@@ -1,0 +1,426 @@
+{
+  "meta": {
+    "source": "20260727-233134-Calabi-Yau.full.md",
+    "mode": "dev",
+    "date": "20260727-233134",
+    "scenario": "Calabi-Yau"
+  },
+  "background": {
+    "executionContext": "### Commands Used (27 invocations)\n`help`, `goto` (×6), `snapshot -v 0 --stdout` (×5), `click` (×5), `htmlsnapshot` (×3), `htmlsnapshot query`, `htmlsnapshot get all text`, `htmlsnapshot get all attr`, `htmlsnapshot get text` (×3), `htmlsnapshot inspect`, `htmlsnapshot summary`, `fill`, `press Enter`, `go-back` (×2)\n\n### Major Steps\n1. Read SKILL.md and help output to learn commands\n2. Navigated to Amazon.com → hit bot detection captcha\n3. Workaround: Used direct search URL `https://www.amazon.com/s?k=Calabi-Yau`\n4. Extracted 16 results using htmlsnapshot get all (titles, prices, links, ratings)\n5. Visited 3 product detail pages via click from search results (the only reliable method)\n6. Identified \"The Shape of a Life\" as the only child-appropriate item\n\n### Key Decisions\n- Switched from `./b4w.ps1` to `./b4w.sh` after discovering PowerShell flag interception\n- Used direct search URL to bypass Amazon homepage captcha\n- Clicked product links from search results page instead of navigating directly to detail pages (avoids bot detection)\n- Used htmlsnapshot get commands instead of X-SQL after selectors failed\n\n### Workarounds Required\n1. **`-v` flag interception**: Used `./b4w.sh` instead of `./b4w.ps1`\n2. **Amazon captcha**: Used direct search URL instead of homepage navigation\n3. **Bot detection on detail pages**: Clicked product links from search results rather than direct navigation\n4. **X-SQL selector mismatch**: Used multiple `htmlsnapshot get all` commands instead\n\n---",
+    "task": "### Search \"Calabi-Yau\" on Amazon — Results\n\nThe search returned **103 results** (16 shown on page 1), falling into two categories:\n\n**Books (5 — all graduate-level mathematics):**\n\n| # | Title | Author | Format | Price (JPY) | Rating |\n|---|-------|--------|--------|-------------|--------|\n| 1 | The Shape of a Life: One Mathematician's Search for the Universe's Hidden Geometry | Shing-Tung Yau | Audiobook/Hardcover/Kindle | 0–3,150 | 4.3★ |\n| 2 | The Calabi–Yau Landscape: From Geometry, to Physics, to Machine Learning | Yang-Hui He | Kindle | 7,300 | 4.0★ |\n| 3 | Calabi–Yau Manifolds: A Bestiary for Physicists | Tristan Hübsch | Kindle | 7,685 | — |\n| 4 | Calabi-Yau Manifolds and Related Geometries | Mark Gross et al. | Paperback | 9,004 | 4.6★ |\n| 5 | Calabi-Yau Manifolds: A Bestiary For Physicists | T. Hübsch | Hardcover | 11,149 | 5.0★ |\n\n**Music (11 — MP3 tracks/albums):** TesseracT, Animal Shapes, Rat King, Robert Vincs, Mister Space Cool, graham yungtum, Martin Davies, and untitled tracks.\n\n### Best Pick\n\n**\"The Shape of a Life: One Mathematician's Search for the Universe's Hidden Geometry\"** by Shing-Tung Yau — **4.3★, available as audiobook, hardcover (JPY 3,150~), or Kindle.**\n\nThis is the **only** result accessible to a non-specialist. Written by Fields Medalist Shing-Tung Yau, it's a popular science narrative about geometry, the universe, and one mathematician's intellectual journey. The other books are PhD-level algebraic geometry textbooks. The music tracks are obscure electronic/ambient with no educational value. For a bright 12-year-old interested in math, science, or space, this book is the clear winner.\n\n---"
+  },
+  "issues": [
+    {
+      "number": 1,
+      "title": "PowerShell -v/-i flags silently consumed by b4w.ps1 parameter binder",
+      "severity": "Critical",
+      "category": "Reliability",
+      "sections": [
+        {
+          "body": "./b4w.ps1 -- snapshot -v 0 --stdout\n./b4w.ps1 snapshot -v 0 --stdout\n./b4w.ps1 \"snapshot\" \"-v\" \"0\" \"--stdout\"",
+          "label": "Reproduction"
+        },
+        {
+          "body": "The snapshot command should execute with -v 0 flag, showing viewport 0 of the accessibility tree.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "The -v flag is consumed by PowerShell's parameter binder (matching -Verbose). The CLI receives 'snapshot 0' or 'snapshot-0' as the command, producing 'Unknown command: snapshot-0' or help text. Even quoting each argument individually does not prevent the issue when running via bash → pwsh -File.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "When bash invokes ./b4w.ps1 (shebang: #!/usr/bin/env pwsh), pwsh receives arguments via -File mode. Despite b4w.ps1's param() block using ValueFromRemainingArguments, pwsh's own parameter binder processes -v and -i before the script's param() runs. The b4w.ps1 script's $SafeArgs quoting (lines 442-447) runs inside the script, which is too late — the flags are already consumed. The SKILL.md documents this but the workaround (-- separator) fails with pwsh -File. The b4w.sh wrapper solves this by using -Command mode with individually-quoted args.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "b4w.ps1: line 16-19 (param block), lines 442-460 (SafeArgs construction). The fix likely requires changes to how the script receives or forwards arguments, potentially using --% (stop-parsing) or $args instead of param().",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Document that b4w.ps1 should ONLY be used from within a pwsh terminal, not from bash\n- Update b4w.ps1 to detect when -v/-i are being consumed and emit a clear error: 'Flag -v was intercepted by PowerShell. Use b4w.sh from bash, or run snapshot -v 0 from within pwsh.'\n- Consider rewriting b4w.ps1 param() to not use ValueFromRemainingArguments and instead use $args directly\n- Make the -- passthrough work reliably from bash: the script should strip -- but preserve all subsequent args as literals",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 2,
+      "title": "CLI requires ./b4w.sh from bash but task instructions say use ./b4w.ps1",
+      "severity": "High",
+      "category": "Documentation",
+      "sections": [
+        {
+          "body": "Read the task instructions: 'Every browser4-cli command MUST be invoked as: $(./b4w.ps1) <command>'. Then try to use ./b4w.ps1 with short flags from bash.",
+          "label": "Reproduction"
+        },
+        {
+          "body": "The documented invocation method should work for all commands.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "Short flags (-v, -i) fail with ./b4w.ps1 from bash. The user must discover b4w.sh on their own. The task instructions contradict SKILL.md which says to use b4w.sh from Git Bash.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The b4w.ps1 script is designed for direct pwsh usage. From bash, pwsh -File doesn't protect short flags. b4w.sh is the bash-compatible wrapper. The discrepancy between task instructions and SKILL.md documentation creates confusion.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "skills/browser4-cli/SKILL.md: lines 420-421 (PowerShell wrapper tip section). Also the task evaluation template hardcodes $(./b4w.ps1).",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Update SKILL.md to clearly state: 'From bash/Git Bash, use ./b4w.sh. From pwsh, use ./b4w.ps1.' as the FIRST instruction in the invocation section\n- Add an auto-detection mechanism in b4w.ps1 that detects it's being called from bash and warns the user to use b4w.sh instead\n- Consider making b4w.sh the primary documented entry point for all non-Windows platforms",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 3,
+      "title": "Amazon bot detection blocks browser4-cli — captcha loop on homepage",
+      "severity": "High",
+      "category": "Reliability",
+      "sections": [
+        {
+          "body": "./b4w.sh goto \"https://www.amazon.com\" — the page shows 'Click the button below to continue shopping' captcha challenge. Clicking 'Continue shopping' redirects to /errors/validateCaptcha.",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Amazon homepage should load normally, showing product categories and search bar.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "Amazon's bot detection identifies the automated Chrome instance and presents a captcha challenge. Direct navigation to product pages intermittently works but is unreliable. The session degrades over time, eventually showing 'Sorry! Something went wrong!' (503 error).",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "Amazon uses sophisticated bot detection (likely checking for automation flags, missing WebGL fingerprint, headless Chrome markers, etc.). Browser4's Chrome instance is detected as automated. The direct-search-URL workaround (goto 'https://www.amazon.com/s?k=...') bypasses the homepage captcha but product detail pages still trigger detection occasionally.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "- Document common anti-bot challenges and workarounds for major sites (Amazon, Google, etc.)\n- Provide a 'stealth mode' or user-agent/profile configuration to reduce bot detection\n- Add support for loading browser profiles with existing cookies/sessions to bypass detection\n- Document the 'prefer direct search URLs over homepage navigation' pattern as a workaround",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 4,
+      "title": "Session silently degrades to about:blank, losing page context",
+      "severity": "High",
+      "category": "Reliability",
+      "sections": [
+        {
+          "body": "After navigating multiple times within a session, goto reports 'Using existing session DEFAULT (current page: about:blank)' — the session lost its page context.",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Session should maintain its current page across commands unless explicitly navigated away.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "Session page context is lost, showing 'about:blank'. This caused bot detection to re-trigger on subsequent navigation.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "Unclear — possibly a timeout on the backend, a tab being closed by Chrome's automation detection, or the captcha page redirecting to about:blank. The session management in the backend may not preserve tab state across certain error conditions.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "browser4-rest/ — session management, likely in the session reconnect logic or tab lifecycle handling.",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Log a warning when session page context changes unexpectedly (e.g., 'Session page changed from X to about:blank — this may indicate bot detection or a tab being closed')\n- Persist session page state more aggressively\n- Add a 'session info' command showing session health, current URL, tab count, and any error state",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 5,
+      "title": "htmlsnapshot summary times out on large product pages (1188 KB)",
+      "severity": "Medium",
+      "category": "Reliability",
+      "sections": [
+        {
+          "body": "Navigate to Amazon product detail page, capture htmlsnapshot, then run htmlsnapshot summary.",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Summary should complete within the default timeout, producing a compressed page summary.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "HTTP request timed out after 60 seconds: 'error sending request for url (http://localhost:8182/mcp/call-tool)'.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "Amazon product pages are large (~1.2 MB HTML). The summary operation (which uses visual clustering) may be O(n²) or otherwise scale poorly with page size. The default 60-second timeout is insufficient for complex pages.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "browser4-rest — html_snapshot_summary tool endpoint, likely in the snapshot processing service.",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Increase the default timeout for summary operations on large pages, or make the timeout configurable\n- Add a size warning if the page exceeds a threshold: 'Page is 1.2 MB — summary may take >60 seconds. Use --timeout 120 or try htmlsnapshot inspect for faster discovery.'\n- Optimize the summary algorithm for large pages, or add a --quick flag that samples rather than analyzing the full DOM",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 6,
+      "title": "X-SQL query returns empty title/url fields due to CSS selector mismatch",
+      "severity": "Medium",
+      "category": "UX",
+      "sections": [
+        {
+          "body": "Write an X-SQL query using div[data-component-type=\"s-search-result\"] as the container selector and h2 a for title extraction on Amazon search results.",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Product titles and URLs should be extracted from each search result card.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "Titles and URLs are empty strings in the result set. The container selector matched items (16 rows returned) but inner selectors didn't match Amazon's actual DOM structure.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "Amazon's HTML structure is complex and doesn't use simple h2 a nesting for product titles. The selectors that work for the container don't work for child elements. The disconnect between htmlsnapshot summary (which shows h2 titles) and X-SQL selectors suggests different DOM parsing paths.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "- After a failed X-SQL query (all nulls in title column), suggest running htmlsnapshot inspect to discover correct selectors\n- Add an 'htmlsnapshot query --discover' flag that auto-discovers selectors for common e-commerce patterns on the target page\n- Provide more e-commerce-specific recipes in the reference docs for Amazon, eBay, etc.",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 7,
+      "title": "Ref lifecycle confusion: refs from snapshot valid only until next interaction",
+      "severity": "Medium",
+      "category": "UX",
+      "sections": [
+        {
+          "body": "Take a snapshot, note a ref, and try to use it after a navigation or page mutation.",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Either the ref should work, or the error should clearly indicate the ref is stale and needs re-snapshot.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "The error message ('element not found or driver unavailable') mentions the selector but doesn't clearly state that the ref is stale due to page mutation. The user needs to understand the ref lifecycle model from documentation.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The error message is generic and doesn't distinguish between 'ref never existed', 'ref is stale due to DOM mutation', and 'driver is unavailable'. The ref lifecycle model (safe/unsafe commands) is documented but the error messages don't reinforce it.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "cli/browser4-cli/src/ — interaction command error handling.",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- When an element is not found, check if the user recently performed a DOM-mutating operation and suggest re-snapshotting: 'Ref e123 not found. If you navigated or clicked a link since your last snapshot, re-run snapshot -v 0 first.'\n- Add a 'ref age' concept — the CLI could track when the last snapshot was taken and warn if refs are being used after a mutation\n- Color-code refs in snapshot output: green for safe (after fill/type), yellow for caution (after click on non-navigating element), red for stale (after goto/navigation)",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 8,
+      "title": "htmlsnapshot get with wrong URL state gives confusing 'Nil url' error",
+      "severity": "Medium",
+      "category": "UX",
+      "sections": [
+        {
+          "body": "After a navigation, run htmlsnapshot get text \".selector\" without first running htmlsnapshot capture.",
+          "label": "Reproduction"
+        },
+        {
+          "body": "A clear message: 'No HTML snapshot captured yet. Run htmlsnapshot first to capture the page.'",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "ERROR: html_snapshot_scrape failed: Nil url is not allowed. Help text shows Java method signature, not user-oriented guidance.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The underlying Java/Scala method requires a URL but receives null when no snapshot has been captured. The error propagates a programming-level error message (method signature with Arg types) rather than a user-friendly message.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "browser4-rest/ — html_snapshot_scrape endpoint or the argument validation layer.",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Check for nil URL at the command level and emit: 'No page snapshot found. Run: browser4-cli htmlsnapshot'\n- The raw Java error signature should never be shown to end users — catch and translate to user-friendly messages\n- Add automatic htmlsnapshot capture before get operations when no snapshot exists",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 9,
+      "title": "No built-in shopping/e-commerce comparison workflow",
+      "severity": "Medium",
+      "category": "Discoverability",
+      "sections": [
+        {
+          "body": "Attempt to compare products across multiple Amazon detail pages using basic goto/click/go-back/snapshot commands.",
+          "label": "Reproduction"
+        },
+        {
+          "body": "A built-in command or workflow for product comparison shopping: search, extract results, visit detail pages, compile comparison.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "The user must manually orchestrate: navigate, snapshot, extract, click, go-back, re-snapshot, click next product, repeat. This is tedious for tasks like 'compare 10 products'.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "Browser4-cli provides low-level primitives (goto, click, snapshot, extract) but no higher-level shopping/comparison workflow. The crawl command could be used but requires URL lists and X-SQL queries that are difficult to construct for dynamic e-commerce sites.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "- Create a 'shop' or 'compare' subcommand that automates the search → extract → visit detail pages → compare workflow\n- Provide e-commerce specific templates: 'browser4-cli shop compare \"search term\" --site amazon --max 10'\n- Add to htmlsnapshot-scenarios.md a step-by-step e-commerce product comparison recipe with working selectors",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 10,
+      "title": "No session state visibility — hard to know if browser is in captcha/error state",
+      "severity": "Medium",
+      "category": "Discoverability",
+      "sections": [
+        {
+          "body": "Navigate to Amazon, encounter captcha, then navigate to a product page that silently shows an empty page.",
+          "label": "Reproduction"
+        },
+        {
+          "body": "The CLI should surface session health information: current URL, page title, any detected error states (captcha, 503, blocked).",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "The user discovers the captcha/error state only by reading the snapshot output. The goto command shows the page title and URL, but doesn't flag error states (e.g., 'Amazon.com' title on a captcha page vs the real homepage).",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "There's no session health monitoring or error detection. The CLI passes through whatever the browser renders without analyzing it for error patterns.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "- Add automatic error page detection: check for common patterns (captcha, 403, 503, 'Sorry! Something went wrong') and warn the user\n- Add a 'session status' command showing: current URL, page title, console errors, detected bot/captcha state\n- After goto, add a one-line health assessment: 'Page loaded normally' / '⚠ Captcha detected' / '⚠ Error page'",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 11,
+      "title": "go-back to search results changes element refs, requires re-snapshot",
+      "severity": "Low",
+      "category": "UX",
+      "sections": [
+        {
+          "body": "Click a product from search results, then go-back to results, then try to click another product using previously noted refs.",
+          "label": "Reproduction"
+        },
+        {
+          "body": "The page is the same search results page — refs should ideally be consistent or the user should be warned.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "Refs change after go-back (though sometimes they happen to match). The user must re-snapshot and re-discover refs, adding friction to the comparison shopping workflow.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "go-back triggers a page load which re-renders the DOM, generating new backend node IDs. This is inherent to CDP behavior, but the UX could be smoother.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "- Consider a 'snapshot cache' that remembers ref-to-element mapping across go-back/forward when the page content hasn't changed\n- After go-back, automatically capture a snapshot and diff against the previous snapshot of the same URL to surface ref changes\n- Add a 'compare N products' workflow: 'browser4-cli compare e1 e2 e3' that visits each product and produces a comparison table",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 12,
+      "title": "b4w.sh always prints nag message to use pwsh directly",
+      "severity": "Low",
+      "category": "UX",
+      "sections": [
+        {
+          "body": "Run any command via ./b4w.sh.",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Clean output without boilerplate nag messages.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "Every invocation prints: 'It is strongly recommended to launch `pwsh` and run the .ps1 commands directly within the `pwsh` terminal.' This adds noise to every command output.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The b4w.sh script (line 17) unconditionally prints this message. It's intended to guide users toward the 'correct' usage but becomes repetitive noise when b4w.sh is the only working option from bash.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "b4w.sh: line 17.",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Only show the message once per session (e.g., check for an env var B4W_SH_WARNED)\n- Suppress the message entirely when b4w.sh is the only working option from the current shell\n- Add a --quiet flag or B4W_NO_NAG env var to suppress it",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    }
+  ]
+}

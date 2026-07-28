@@ -125,7 +125,7 @@ function Assert-Match {
 # ============================================================================
 # Resolve paths to the scripts under test
 # ============================================================================
-$scriptsDir = Join-Path $PSScriptRoot '..\..\coworker\scripts'
+$scriptsDir = Join-Path $PSScriptRoot '..'
 
 # Load config.ps1 — it will use $PSScriptRoot relative paths for
 # config.psd1 and common\Util.ps1, both of which exist alongside it.
@@ -667,6 +667,54 @@ if (Get-Command New-AgentArguments -ErrorAction SilentlyContinue) {
 }
 
 # ============================================================================
+# PART 13b: agent.ps1 - New-AgentArguments (kimi backend) + Get-AgentBackend
+# ============================================================================
+Write-Host "━━━ PART 13b: agent.ps1 :: New-AgentArguments (kimi) ━━━" -ForegroundColor Cyan
+
+if (Get-Command New-AgentArguments -ErrorAction SilentlyContinue) {
+    $args = New-AgentArguments -BaseArgs @('kimi') -Prompt 'test' -Backend 'kimi'
+    Assert-True -Label 'New-AgentArguments kimi: includes -p' `
+        -Condition ($args -contains '-p')
+    Assert-True -Label 'New-AgentArguments kimi: no -- separator' `
+        -Condition ($args -notcontains '--')
+    Assert-True -Label 'New-AgentArguments kimi: includes prompt' `
+        -Condition ($args -contains 'test')
+
+    $args = New-AgentArguments -BaseArgs @('kimi') -Prompt 'test' `
+        -AdditionalArguments @('--allow-all-tools', '--allow-all-paths', '--verbose') `
+        -Backend 'kimi'
+    Assert-False -Label 'New-AgentArguments kimi: filters --allow-all-tools' `
+        -Condition ($args -contains '--allow-all-tools')
+    Assert-False -Label 'New-AgentArguments kimi: filters --allow-all-paths' `
+        -Condition ($args -contains '--allow-all-paths')
+    Assert-True -Label 'New-AgentArguments kimi: keeps --verbose' `
+        -Condition ($args -contains '--verbose')
+}
+
+if (Get-Command Get-AgentBackend -ErrorAction SilentlyContinue) {
+    # Save/restore: config.ps1 (dot-sourced via agent.ps1) sets $CLAUDE/$KIMI.
+    $savedClaude = $CLAUDE
+    $savedKimi = $KIMI
+    try {
+        $CLAUDE = @('claude'); $KIMI = @('kimi')
+        Assert-Equal -Label 'Get-AgentBackend: claude wins over kimi' `
+            -Actual (Get-AgentBackend) -Expected 'claude'
+
+        $CLAUDE = $null; $KIMI = @('kimi')
+        Assert-Equal -Label 'Get-AgentBackend: kimi when no claude' `
+            -Actual (Get-AgentBackend) -Expected 'kimi'
+
+        $CLAUDE = $null; $KIMI = $null
+        Assert-Equal -Label 'Get-AgentBackend: copilot fallback' `
+            -Actual (Get-AgentBackend) -Expected 'copilot'
+    }
+    finally {
+        $CLAUDE = $savedClaude
+        $KIMI = $savedKimi
+    }
+}
+
+# ============================================================================
 # PART 14: agent.ps1 - Assert-AgentDirectory
 # ============================================================================
 Write-Host "━━━ PART 14: agent.ps1 :: Assert-AgentDirectory ━━━" -ForegroundColor Cyan
@@ -745,8 +793,8 @@ if (Get-Command Get-CoworkerConfigData -ErrorAction SilentlyContinue) {
     Assert-NotNull -Label 'Get-CoworkerConfigData: returns config data' -Value $configData
     Assert-True -Label 'Get-CoworkerConfigData: has Paths key' `
         -Condition ($configData.ContainsKey('Paths'))
-    Assert-True -Label 'Get-CoworkerConfigData: has COPILOT key' `
-        -Condition ($configData.ContainsKey('COPILOT'))
+    Assert-True -Label 'Get-CoworkerConfigData: has a backend key (CLAUDE/KIMI/COPILOT)' `
+        -Condition ($configData.ContainsKey('CLAUDE') -or $configData.ContainsKey('KIMI') -or $configData.ContainsKey('COPILOT'))
 }
 
 # ============================================================================
@@ -1423,10 +1471,16 @@ Write-Host "━━━ PART 33: $COPILOT variable ━━━" -ForegroundColor Cya
 
 Assert-True -Label '$COPILOT: is an array' `
     -Condition ($COPILOT -is [array] -or $COPILOT -is [System.Collections.ObjectModel.Collection`1[System.Object]])
-Assert-True -Label '$COPILOT: has at least 2 elements' `
-    -Condition ($COPILOT.Count -ge 2)
-Assert-Equal -Label '$COPILOT: first element is gh' `
-    -Actual $COPILOT[0] -Expected 'gh'
+
+# COPILOT is optional; if it is not configured (commented out in config.psd1),
+# config.ps1 leaves $COPILOT as @($null). Only validate shape when a real config
+# value was provided.
+if ($COPILOT -and $COPILOT[0]) {
+    Assert-True -Label '$COPILOT: has at least 2 elements' `
+        -Condition ($COPILOT.Count -ge 2)
+    Assert-Equal -Label '$COPILOT: first element is gh' `
+        -Actual $COPILOT[0] -Expected 'gh'
+}
 
 # ============================================================================
 # PART 34: Script file presence validation
@@ -1438,11 +1492,9 @@ $expectedScripts = @(
     'config.psd1',
     'coworker-scheduler.ps1',
     'coworker-scheduler.config.psd1',
-    'coworker-scheduler.sh',
     'coworker.ps1',
     'process-coworker-queue.ps1',
     'process-draft-refinement-queue.ps1',
-    'process-task-source.ps1',
     'common\Util.ps1',
     'workers\agent.ps1',
     'workers\git-sync.ps1',
@@ -1512,7 +1564,8 @@ $configPsd1Path = Join-Path $scriptsDir 'config.psd1'
 if (Test-Path $configPsd1Path) {
     $configData = Import-PowerShellDataFile -Path $configPsd1Path
     Assert-True -Label 'config.psd1: has Paths' -Condition $configData.ContainsKey('Paths')
-    Assert-True -Label 'config.psd1: has COPILOT' -Condition $configData.ContainsKey('COPILOT')
+    Assert-True -Label 'config.psd1: has at least one backend key (CLAUDE/KIMI/COPILOT)' `
+        -Condition ($configData.ContainsKey('CLAUDE') -or $configData.ContainsKey('KIMI') -or $configData.ContainsKey('COPILOT'))
     Assert-True -Label 'config.psd1: has Scheduler' -Condition $configData.ContainsKey('Scheduler')
 
     $paths = $configData['Paths']
@@ -1578,7 +1631,6 @@ if (Test-Path $agentPs1) {
         $expectedFunctions = @(
             'Get-AgentRepoRoot',
             'Assert-AgentDirectory',
-            'Get-BackendType',
             'Get-AgentCommand',
             'New-AgentArguments',
             'Format-AgentCommand',

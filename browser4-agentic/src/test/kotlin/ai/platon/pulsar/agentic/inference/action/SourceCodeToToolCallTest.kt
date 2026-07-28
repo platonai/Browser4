@@ -149,7 +149,7 @@ class SourceCodeToToolCallTest {
     @Test
     @DisplayName("WebDriver snapshot json is stable across repeated generation")
     fun webDriverSnapshotJsonIsStableAcrossRepeatedGeneration() {
-        assertSnapshotJsonDeterministic("tab", "browser4-core", "WebDriver.kt", "WebDriver")
+        assertSnapshotJsonDeterministic("tab", "browser4-browser", "WebDriver.kt", "WebDriver")
     }
 
     @Test
@@ -162,7 +162,7 @@ class SourceCodeToToolCallTest {
     @DisplayName("extract methods from WebDriver resource")
     fun extractMethodsFromWebdriverResource() {
         val sourceCode =
-            B4LLMUtils.readSourceFileFromResource("browser4-core", "WebDriver.kt")
+            B4LLMUtils.readSourceFileFromResource("browser4-browser", "WebDriver.kt")
         val tools = ToolSpecGenerator.extractInterface("tab", sourceCode, "WebDriver")
         assertTrue(tools.isNotEmpty(), "Tool list should not be empty")
         val click = tools.firstOrNull { it.domain == "tab" && it.method == "click" }
@@ -174,7 +174,7 @@ class SourceCodeToToolCallTest {
     @DisplayName("extract KDoc full comment as help")
     fun extractKDocFullCommentAsHelp() {
         val sourceCode =
-            B4LLMUtils.readSourceFileFromResource("browser4-core", "WebDriver.kt")
+            B4LLMUtils.readSourceFileFromResource("browser4-browser", "WebDriver.kt")
         val tools = ToolSpecGenerator.extractInterface("tab", sourceCode, "WebDriver")
         assertTrue(tools.isNotEmpty(), "Tool list should not be empty")
 

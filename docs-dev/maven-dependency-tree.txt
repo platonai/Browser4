@@ -1,0 +1,2778 @@
+[INFO] Scanning for projects...
+[INFO] Loaded 23236 auto-discovered prefixes for remote repository repo (prefixes-repo-0ac8f358eb30d7fb5531be42457eff13fd04961f.txt)
+[INFO] Loaded 23236 auto-discovered prefixes for remote repository repo (prefixes-repo-288c21a1ed5973ad5770cd4e29fc60d8b063d895.txt)
+[INFO] Loaded 74 auto-discovered prefixes for remote repository apache.snapshots (prefixes-apache.snapshots-c1d4c55f9308e5ac18a4069bed41dca64d85c515.txt)
+[INFO] Loaded 23236 auto-discovered prefixes for remote repository repo (prefixes-repo-0ac8f358eb30d7fb5531be42457eff13fd04961f.txt)
+[WARNING]
+[WARNING] 803 problems were encountered while building the effective model for 'ai.platon.pulsar:browser4-dependencies:pom:4.12.0-rc.1-SNAPSHOT' (use -e to see details)
+[WARNING]
+[WARNING] 1 problem was encountered while building the effective model for 'ai.platon.pulsar:browser4-captcha:jar:4.12.0-rc.1-SNAPSHOT' (use -e to see details)
+[WARNING]
+[WARNING] 803 problems were encountered while building the effective model for 'ai.platon.pulsar:browser4-pdk-bom:pom:4.12.0-rc.1-SNAPSHOT' (use -e to see details)
+[WARNING]
+[WARNING] 1 problem was encountered while building the effective model for 'ai.platon.pulsar:browser4:pom:4.12.0-rc.1-SNAPSHOT' (use -e to see details)
+[WARNING]
+[WARNING] Total model problems reported: 1608
+[WARNING]
+[WARNING] It is highly recommended to fix these problems because they threaten the stability of your build.
+[WARNING]
+[WARNING] For this reason, future Maven versions might no longer support building such malformed projects.
+[WARNING]
+[INFO] Kotlin smart defaults are enabled for browser4
+[INFO] Kotlin smart defaults are enabled for browser4-common
+[INFO] Kotlin smart defaults are enabled for pulsar-tests-common
+[INFO] Kotlin smart defaults are enabled for browser4-resources
+[INFO] Kotlin smart defaults are enabled for browser4-browser
+[INFO] Kotlin smart defaults are enabled for browser4-skeleton
+[INFO] Kotlin smart defaults are enabled for browser4-core
+[INFO] Kotlin smart defaults are enabled for browser4-protocol
+[INFO] Kotlin smart defaults are enabled for browser4-parse
+[INFO] Kotlin smart defaults are enabled for browser4-agentic
+[INFO] Kotlin smart defaults are enabled for browser4-pdk
+[INFO] Added kotlin-stdlib dependency, version 2.3.21
+[INFO] Kotlin smart defaults are enabled for browser4-captcha
+[INFO] Kotlin smart defaults are enabled for browser4-media
+[INFO] Kotlin smart defaults are enabled for browser4-images
+[INFO] Kotlin smart defaults are enabled for browser4-pptx
+[INFO] Kotlin smart defaults are enabled for browser4-markdown
+[INFO] Kotlin smart defaults are enabled for browser4-plugins
+[INFO] Kotlin smart defaults are enabled for browser4-agent-tools
+[INFO] Kotlin smart defaults are enabled for browser4-boot
+[INFO] Kotlin smart defaults are enabled for browser4-plugin-archetype
+[INFO] Added kotlin-stdlib dependency, version 2.3.21
+[INFO] Kotlin smart defaults are enabled for browser4-pdk-test-plugin
+[INFO] Kotlin smart defaults are enabled for browser4-rest
+[INFO] ------------------------------------------------------------------------
+[INFO] Reactor Build Order:
+[INFO]
+[INFO] Browser4 Dependencies                                              [pom]
+[INFO] Browser4                                                           [pom]
+[INFO] Browser4 Common                                                    [jar]
+[INFO] Browser4 Tests Common                                              [jar]
+[INFO] Browser4 Resources                                                 [jar]
+[INFO] Browser4 Browser                                                   [jar]
+[INFO] Browser4 Skeleton                                                  [jar]
+[INFO] Browser4 Core                                                      [pom]
+[INFO] Browser4 Protocol                                                  [jar]
+[INFO] Browser4 Parse                                                     [jar]
+[INFO] Browser4 Agentic                                                   [jar]
+[INFO] Browser4 Plugin Development Kit                                    [pom]
+[INFO] Browser4 Captcha                                                   [jar]
+[INFO] Browser4 Media                                                     [jar]
+[INFO] Browser4 Images                                                    [jar]
+[INFO] Browser4 PPTX                                                      [jar]
+[INFO] Browser4 Markdown                                                  [jar]
+[INFO] Browser4 Plugins                                                   [pom]
+[INFO] Browser4 Agent Tools                                               [jar]
+[INFO] Browser4 Boot                                                      [jar]
+[INFO] Browser4 PDK BOM                                                   [pom]
+[INFO] Browser4 Plugin Archetype                              [maven-archetype]
+[INFO] Browser4 PDK Test Plugin                                           [jar]
+[INFO] Browser4 Rest                                                      [jar]
+[INFO]
+[INFO] ---------------< ai.platon.pulsar:browser4-dependencies >---------------
+[INFO] Building Browser4 Dependencies 4.12.0-rc.1-SNAPSHOT               [1/24]
+[INFO]   from browser4-dependencies\pom.xml
+[INFO] --------------------------------[ pom ]---------------------------------
+[INFO]
+[INFO] --- dependency:3.11.0:tree (default-cli) @ browser4-dependencies ---
+[INFO] ai.platon.pulsar:browser4-dependencies:pom:4.12.0-rc.1-SNAPSHOT
+[INFO] Copying ai.platon.pulsar:browser4-dependencies:pom:4.12.0-rc.1-SNAPSHOT to project local repository
+[INFO] Copying ai.platon.pulsar:browser4-dependencies:pom:consumer:4.12.0-rc.1-SNAPSHOT to project local repository
+[INFO]
+[INFO] ---------------------< ai.platon.pulsar:browser4 >----------------------
+[INFO] Building Browser4 4.12.0-rc.1-SNAPSHOT                            [2/24]
+[INFO]   from pom.xml
+[INFO] --------------------------------[ pom ]---------------------------------
+[INFO]
+[INFO] --- dependency:3.9.0:tree (default-cli) @ browser4 ---
+[INFO] ai.platon.pulsar:browser4:pom:4.12.0-rc.1-SNAPSHOT
+[INFO] +- org.jetbrains.kotlin:kotlin-stdlib:jar:2.2.21:compile
+[INFO] |  \- org.jetbrains:annotations:jar:13.0:compile
+[INFO] +- org.jetbrains.kotlin:kotlin-reflect:jar:2.2.21:compile
+[INFO] +- org.jetbrains.kotlinx:kotlinx-coroutines-core:jar:1.10.2:compile
+[INFO] |  \- org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm:jar:1.10.2:compile
+[INFO] \- org.jetbrains.kotlin:kotlin-test-junit5:jar:2.2.21:test
+[INFO]    +- org.jetbrains.kotlin:kotlin-test:jar:2.2.21:test
+[INFO]    +- org.junit.jupiter:junit-jupiter-api:jar:6.0.3:test
+[INFO]    |  +- org.opentest4j:opentest4j:jar:1.3.0:test
+[INFO]    |  +- org.junit.platform:junit-platform-commons:jar:6.0.3:test
+[INFO]    |  +- org.apiguardian:apiguardian-api:jar:1.1.2:test
+[INFO]    |  \- org.jspecify:jspecify:jar:1.0.0:test
+[INFO]    +- org.junit.jupiter:junit-jupiter-engine:jar:6.0.3:test
+[INFO]    |  \- org.junit.platform:junit-platform-engine:jar:6.0.3:test
+[INFO]    \- org.junit.platform:junit-platform-launcher:jar:6.0.3:test
+[INFO] Copying ai.platon.pulsar:browser4:pom:4.12.0-rc.1-SNAPSHOT to project local repository
+[INFO] Copying ai.platon.pulsar:browser4:pom:consumer:4.12.0-rc.1-SNAPSHOT to project local repository
+[INFO]
+[INFO] ------------------< ai.platon.pulsar:browser4-common >------------------
+[INFO] Building Browser4 Common 4.12.0-rc.1-SNAPSHOT                     [3/24]
+[INFO]   from browser4-core\browser4-common\pom.xml
+[INFO] --------------------------------[ jar ]---------------------------------
+[INFO]
+[INFO] --- dependency:3.9.0:tree (default-cli) @ browser4-common ---
+[INFO] ai.platon.pulsar:browser4-common:jar:4.12.0-rc.1-SNAPSHOT
+[INFO] +- org.springframework:spring-core:jar:7.0.7:compile
+[INFO] |  +- commons-logging:commons-logging:jar:1.3.2:compile
+[INFO] |  \- org.jspecify:jspecify:jar:1.0.0:compile
+[INFO] +- org.apache.httpcomponents.client5:httpclient5:jar:5.5.2:compile
+[INFO] |  +- org.apache.httpcomponents.core5:httpcore5:jar:5.3.6:compile
+[INFO] |  \- org.apache.httpcomponents.core5:httpcore5-h2:jar:5.3.6:compile
+[INFO] +- commons-codec:commons-codec:jar:1.19.0:compile
+[INFO] +- org.apache.commons:commons-lang3:jar:3.19.0:compile
+[INFO] +- org.apache.commons:commons-math3:jar:3.6.1:compile
+[INFO] +- org.apache.commons:commons-collections4:jar:4.4:compile
+[INFO] +- org.slf4j:slf4j-api:jar:2.0.17:compile
+[INFO] +- ch.qos.logback:logback-classic:jar:1.5.32:compile
+[INFO] |  \- ch.qos.logback:logback-core:jar:1.5.32:compile
+[INFO] +- org.junit.jupiter:junit-jupiter-api:jar:6.0.3:test
+[INFO] |  +- org.opentest4j:opentest4j:jar:1.3.0:test
+[INFO] |  +- org.junit.platform:junit-platform-commons:jar:6.0.3:test
+[INFO] |  \- org.apiguardian:apiguardian-api:jar:1.1.2:test
+[INFO] +- org.junit.jupiter:junit-jupiter-engine:jar:6.0.3:test
+[INFO] |  \- org.junit.platform:junit-platform-engine:jar:6.0.3:test
+[INFO] +- org.junit.jupiter:junit-jupiter-params:jar:6.0.3:test
+[INFO] +- org.mockito:mockito-junit-jupiter:jar:5.20.0:test
+[INFO] |  \- org.mockito:mockito-core:jar:5.20.0:test
+[INFO] |     +- net.bytebuddy:byte-buddy:jar:1.17.8:test
+[INFO] |     +- net.bytebuddy:byte-buddy-agent:jar:1.17.8:test
+[INFO] |     \- org.objenesis:objenesis:jar:3.3:test
+[INFO] +- org.jetbrains.kotlin:kotlin-stdlib:jar:2.2.21:compile
+[INFO] |  \- org.jetbrains:annotations:jar:13.0:compile
+[INFO] +- org.jetbrains.kotlin:kotlin-reflect:jar:2.2.21:compile
+[INFO] +- org.jetbrains.kotlinx:kotlinx-coroutines-core:jar:1.10.2:compile
+[INFO] |  \- org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm:jar:1.10.2:compile
+[INFO] \- org.jetbrains.kotlin:kotlin-test-junit5:jar:2.2.21:test
+[INFO]    +- org.jetbrains.kotlin:kotlin-test:jar:2.2.21:test
+[INFO]    \- org.junit.platform:junit-platform-launcher:jar:6.0.3:test
+[INFO]
+[INFO] ---------------< ai.platon.pulsar:pulsar-tests-common >---------------
+[INFO] Building Browser4 Tests Common 4.12.0-rc.1-SNAPSHOT               [4/24]
+[INFO]   from browser4-tests\pulsar-tests-common\pom.xml
+[INFO] --------------------------------[ jar ]---------------------------------
+[INFO]
+[INFO] --- dependency:3.9.0:tree (default-cli) @ pulsar-tests-common ---
+[INFO] ai.platon.pulsar:pulsar-tests-common:jar:4.12.0-rc.1-SNAPSHOT
+[INFO] +- ai.platon.pulsar:browser4-common:jar:4.12.0-rc.1-SNAPSHOT:compile
+[INFO] |  +- org.springframework:spring-core:jar:7.0.7:compile
+[INFO] |  |  +- commons-logging:commons-logging:jar:1.3.2:compile
+[INFO] |  |  \- org.jspecify:jspecify:jar:1.0.0:compile
+[INFO] |  +- org.apache.httpcomponents.client5:httpclient5:jar:5.5.2:compile
+[INFO] |  |  +- org.apache.httpcomponents.core5:httpcore5:jar:5.3.6:compile
+[INFO] |  |  \- org.apache.httpcomponents.core5:httpcore5-h2:jar:5.3.6:compile
+[INFO] |  +- commons-codec:commons-codec:jar:1.19.0:compile
+[INFO] |  +- org.apache.commons:commons-lang3:jar:3.19.0:compile
+[INFO] |  +- org.apache.commons:commons-math3:jar:3.6.1:compile
+[INFO] |  +- org.apache.commons:commons-collections4:jar:4.4:compile
+[INFO] |  +- org.slf4j:slf4j-api:jar:2.0.17:compile
+[INFO] |  \- ch.qos.logback:logback-classic:jar:1.5.32:compile
+[INFO] |     \- ch.qos.logback:logback-core:jar:1.5.32:compile
+[INFO] +- ai.platon.pulsar:pulsar-common:jar:4.9.5:compile
+[INFO] |  +- commons-io:commons-io:jar:2.16.1:compile
+[INFO] |  +- com.squareup.okhttp3:okhttp:jar:4.12.0:compile
+[INFO] |  |  +- com.squareup.okio:okio:jar:3.6.0:compile
+[INFO] |  |  |  \- com.squareup.okio:okio-jvm:jar:3.6.0:compile
+[INFO] |  |  |     \- org.jetbrains.kotlin:kotlin-stdlib-common:jar:1.9.10:compile
+[INFO] |  |  \- org.jetbrains.kotlin:kotlin-stdlib-jdk8:jar:2.2.21:compile
+[INFO] |  |     \- org.jetbrains.kotlin:kotlin-stdlib-jdk7:jar:2.2.21:compile
+[INFO] |  +- com.fasterxml.jackson.dataformat:jackson-dataformat-properties:jar:2.21.2:compile
+[INFO] |  |  \- com.fasterxml.jackson.core:jackson-core:jar:2.21.2:compile
+[INFO] |  +- com.fasterxml.jackson.dataformat:jackson-dataformat-yaml:jar:2.21.2:compile
+[INFO] |  |  \- org.yaml:snakeyaml:jar:2.5:compile
+[INFO] |  +- com.fasterxml.jackson.datatype:jackson-datatype-jsr310:jar:2.21.2:compile
+[INFO] |  +- org.jetbrains.kotlin:kotlin-serialization:jar:2.3.21:compile
+[INFO] |  |  \- org.jetbrains.kotlin:kotlin-gradle-plugin-api:jar:2.3.21:compile
+[INFO] |  |     +- org.jetbrains.kotlin:kotlin-gradle-plugin-annotations:jar:2.3.21:compile
+[INFO] |  |     +- org.jetbrains.kotlin:kotlin-native-utils:jar:2.3.21:compile
+[INFO] |  |     |  \- org.jetbrains.kotlin:kotlin-util-io:jar:2.3.21:compile
+[INFO] |  |     +- org.jetbrains.kotlin:kotlin-tooling-core:jar:2.3.21:compile
+[INFO] |  |     \- org.jetbrains.kotlin:kotlin-build-tools-api:jar:2.3.21:compile
+[INFO] |  +- org.nibor.autolink:autolink:jar:0.11.0:compile
+[INFO] |  \- org.apache.logging.log4j:log4j-core:jar:2.25.4:compile
+[INFO] |     \- org.apache.logging.log4j:log4j-api:jar:2.25.4:compile
+[INFO] +- ai.platon.pulsar:pulsar-h2:jar:1.4.197:compile
+[INFO] |  +- javax.servlet:javax.servlet-api:jar:3.1.0:compile
+[INFO] |  +- org.apache.lucene:lucene-core:jar:7.3.1:compile
+[INFO] |  +- org.osgi:org.osgi.core:jar:4.2.0:compile
+[INFO] |  +- org.osgi:org.osgi.enterprise:jar:4.2.0:compile
+[INFO] |  \- org.locationtech.jts:jts-core:jar:1.15.0:compile
+[INFO] +- org.jetbrains.kotlinx:kotlinx-serialization-json:jar:1.9.0:compile
+[INFO] |  \- org.jetbrains.kotlinx:kotlinx-serialization-json-jvm:jar:1.9.0:compile
+[INFO] |     \- org.jetbrains.kotlinx:kotlinx-serialization-core-jvm:jar:1.9.0:compile
+[INFO] +- org.springframework.boot:spring-boot-starter-web:jar:4.0.6:compile
+[INFO] |  +- org.springframework.boot:spring-boot-starter-jackson:jar:4.0.6:compile
+[INFO] |  |  \- org.springframework.boot:spring-boot-jackson:jar:4.0.6:compile
+[INFO] |  |     \- tools.jackson.core:jackson-databind:jar:3.1.2:compile
+[INFO] |  |        \- tools.jackson.core:jackson-core:jar:3.1.2:compile
+[INFO] |  +- org.springframework.boot:spring-boot-starter-tomcat:jar:4.0.6:compile
+[INFO] |  |  +- org.springframework.boot:spring-boot-starter-tomcat-runtime:jar:4.0.6:compile
+[INFO] |  |  |  +- org.springframework.boot:spring-boot-web-server:jar:4.0.6:compile
+[INFO] |  |  |  +- org.apache.tomcat.embed:tomcat-embed-core:jar:11.0.21:compile
+[INFO] |  |  |  +- org.apache.tomcat.embed:tomcat-embed-el:jar:11.0.21:compile
+[INFO] |  |  |  \- org.apache.tomcat.embed:tomcat-embed-websocket:jar:11.0.21:compile
+[INFO] |  |  \- org.springframework.boot:spring-boot-tomcat:jar:4.0.6:compile
+[INFO] |  +- org.springframework.boot:spring-boot-http-converter:jar:4.0.6:compile
+[INFO] |  |  +- org.springframework.boot:spring-boot:jar:4.0.6:compile
+[INFO] |  |  |  \- org.springframework:spring-context:jar:7.0.7:compile
+[INFO] |  |  \- org.springframework:spring-web:jar:7.0.7:compile
+[INFO] |  |     \- org.springframework:spring-beans:jar:7.0.7:compile
+[INFO] |  \- org.springframework.boot:spring-boot-webmvc:jar:4.0.6:compile
+[INFO] |     +- org.springframework.boot:spring-boot-servlet:jar:4.0.6:compile
+[INFO] |     \- org.springframework:spring-webmvc:jar:7.0.7:compile
+[INFO] |        +- org.springframework:spring-aop:jar:7.0.7:compile
+[INFO] |        \- org.springframework:spring-expression:jar:7.0.7:compile
+[INFO] +- org.springframework.boot:spring-boot-starter-actuator:jar:4.0.6:compile
+[INFO] |  +- org.springframework.boot:spring-boot-starter:jar:4.0.6:compile
+[INFO] |  |  +- org.springframework.boot:spring-boot-starter-logging:jar:4.0.6:compile
+[INFO] |  |  |  +- org.apache.logging.log4j:log4j-to-slf4j:jar:2.25.4:compile
+[INFO] |  |  |  \- org.slf4j:jul-to-slf4j:jar:2.0.17:compile
+[INFO] |  |  +- org.springframework.boot:spring-boot-autoconfigure:jar:4.0.6:compile
+[INFO] |  |  \- jakarta.annotation:jakarta.annotation-api:jar:3.0.0:compile
+[INFO] |  +- org.springframework.boot:spring-boot-starter-micrometer-metrics:jar:4.0.6:compile
+[INFO] |  |  \- org.springframework.boot:spring-boot-micrometer-metrics:jar:4.0.6:compile
+[INFO] |  |     \- org.springframework.boot:spring-boot-micrometer-observation:jar:4.0.6:compile
+[INFO] |  +- org.springframework.boot:spring-boot-actuator-autoconfigure:jar:4.0.6:compile
+[INFO] |  |  \- org.springframework.boot:spring-boot-actuator:jar:4.0.6:compile
+[INFO] |  +- org.springframework.boot:spring-boot-health:jar:4.0.6:compile
+[INFO] |  +- io.micrometer:micrometer-observation:jar:1.16.5:compile
+[INFO] |  |  \- io.micrometer:micrometer-commons:jar:1.16.5:compile
+[INFO] |  \- io.micrometer:micrometer-jakarta9:jar:1.16.5:compile
+[INFO] |     \- io.micrometer:micrometer-core:jar:1.16.5:compile
+[INFO] |        +- org.hdrhistogram:HdrHistogram:jar:2.2.2:runtime
+[INFO] |        \- org.latencyutils:LatencyUtils:jar:2.0.3:runtime
+[INFO] +- com.fasterxml.jackson.module:jackson-module-kotlin:jar:2.21.2:compile
+[INFO] |  +- com.fasterxml.jackson.core:jackson-databind:jar:2.21.2:compile
+[INFO] |  \- com.fasterxml.jackson.core:jackson-annotations:jar:2.21:compile
+[INFO] +- org.springframework.boot:spring-boot-starter-test:jar:4.0.6:test
+[INFO] |  +- org.springframework.boot:spring-boot-test:jar:4.0.6:test
+[INFO] |  +- org.springframework.boot:spring-boot-test-autoconfigure:jar:4.0.6:test
+[INFO] |  +- com.jayway.jsonpath:json-path:jar:2.10.0:test
+[INFO] |  +- jakarta.xml.bind:jakarta.xml.bind-api:jar:4.0.4:test
+[INFO] |  |  \- jakarta.activation:jakarta.activation-api:jar:2.1.4:test
+[INFO] |  +- net.minidev:json-smart:jar:2.6.0:test
+[INFO] |  |  \- net.minidev:accessors-smart:jar:2.6.0:test
+[INFO] |  |     \- org.ow2.asm:asm:jar:9.7.1:test
+[INFO] |  +- org.assertj:assertj-core:jar:3.27.7:test
+[INFO] |  |  \- net.bytebuddy:byte-buddy:jar:1.17.8:test
+[INFO] |  +- org.awaitility:awaitility:jar:4.3.0:test
+[INFO] |  +- org.hamcrest:hamcrest:jar:3.0:test
+[INFO] |  +- org.junit.jupiter:junit-jupiter:jar:6.0.3:test
+[INFO] |  |  \- org.junit.jupiter:junit-jupiter-params:jar:6.0.3:test
+[INFO] |  +- org.mockito:mockito-core:jar:5.20.0:test
+[INFO] |  |  +- net.bytebuddy:byte-buddy-agent:jar:1.17.8:test
+[INFO] |  |  \- org.objenesis:objenesis:jar:3.3:test
+[INFO] |  +- org.mockito:mockito-junit-jupiter:jar:5.20.0:test
+[INFO] |  +- org.skyscreamer:jsonassert:jar:1.5.3:test
+[INFO] |  |  \- com.vaadin.external.google:android-json:jar:0.0.20131108.vaadin1:test
+[INFO] |  +- org.springframework:spring-test:jar:7.0.7:test
+[INFO] |  \- org.xmlunit:xmlunit-core:jar:2.10.4:test
+[INFO] +- org.springframework.boot:spring-boot-starter-restclient-test:jar:4.0.6:test
+[INFO] |  +- org.springframework.boot:spring-boot-starter-restclient:jar:4.0.6:test
+[INFO] |  |  \- org.springframework.boot:spring-boot-restclient:jar:4.0.6:test
+[INFO] |  |     \- org.springframework.boot:spring-boot-http-client:jar:4.0.6:test
+[INFO] |  +- org.springframework.boot:spring-boot-starter-jackson-test:jar:4.0.6:test
+[INFO] |  \- org.springframework.boot:spring-boot-restclient-test:jar:4.0.6:test
+[INFO] +- org.jetbrains.kotlin:kotlin-stdlib:jar:2.2.21:compile
+[INFO] |  \- org.jetbrains:annotations:jar:13.0:compile
+[INFO] +- org.jetbrains.kotlin:kotlin-reflect:jar:2.2.21:compile
+[INFO] +- org.jetbrains.kotlinx:kotlinx-coroutines-core:jar:1.10.2:compile
+[INFO] |  \- org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm:jar:1.10.2:compile
+[INFO] \- org.jetbrains.kotlin:kotlin-test-junit5:jar:2.2.21:test
+[INFO]    +- org.jetbrains.kotlin:kotlin-test:jar:2.2.21:test
+[INFO]    +- org.junit.jupiter:junit-jupiter-api:jar:6.0.3:test
+[INFO]    |  +- org.opentest4j:opentest4j:jar:1.3.0:test
+[INFO]    |  +- org.junit.platform:junit-platform-commons:jar:6.0.3:test
+[INFO]    |  \- org.apiguardian:apiguardian-api:jar:1.1.2:test
+[INFO]    +- org.junit.jupiter:junit-jupiter-engine:jar:6.0.3:test
+[INFO]    |  \- org.junit.platform:junit-platform-engine:jar:6.0.3:test
+[INFO]    \- org.junit.platform:junit-platform-launcher:jar:6.0.3:test
+[INFO]
+[INFO] ----------------< ai.platon.pulsar:browser4-resources >-----------------
+[INFO] Building Browser4 Resources 4.12.0-rc.1-SNAPSHOT                  [5/24]
+[INFO]   from browser4-core\browser4-resources\pom.xml
+[INFO] --------------------------------[ jar ]---------------------------------
+[INFO]
+[INFO] --- dependency:3.9.0:tree (default-cli) @ browser4-resources ---
+[INFO] ai.platon.pulsar:browser4-resources:jar:4.12.0-rc.1-SNAPSHOT
+[INFO] +- org.jetbrains.kotlin:kotlin-stdlib:jar:2.2.21:compile
+[INFO] |  \- org.jetbrains:annotations:jar:13.0:compile
+[INFO] +- org.jetbrains.kotlin:kotlin-reflect:jar:2.2.21:compile
+[INFO] +- org.jetbrains.kotlinx:kotlinx-coroutines-core:jar:1.10.2:compile
+[INFO] |  \- org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm:jar:1.10.2:compile
+[INFO] \- org.jetbrains.kotlin:kotlin-test-junit5:jar:2.2.21:test
+[INFO]    +- org.jetbrains.kotlin:kotlin-test:jar:2.2.21:test
+[INFO]    +- org.junit.jupiter:junit-jupiter-api:jar:6.0.3:test
+[INFO]    |  +- org.opentest4j:opentest4j:jar:1.3.0:test
+[INFO]    |  +- org.junit.platform:junit-platform-commons:jar:6.0.3:test
+[INFO]    |  +- org.apiguardian:apiguardian-api:jar:1.1.2:test
+[INFO]    |  \- org.jspecify:jspecify:jar:1.0.0:test
+[INFO]    +- org.junit.jupiter:junit-jupiter-engine:jar:6.0.3:test
+[INFO]    |  \- org.junit.platform:junit-platform-engine:jar:6.0.3:test
+[INFO]    \- org.junit.platform:junit-platform-launcher:jar:6.0.3:test
+[INFO]
+[INFO] -----------------< ai.platon.pulsar:browser4-browser >------------------
+[INFO] Building Browser4 Browser 4.12.0-rc.1-SNAPSHOT                    [6/24]
+[INFO]   from browser4-core\browser4-browser\pom.xml
+[INFO] --------------------------------[ jar ]---------------------------------
+[INFO]
+[INFO] --- dependency:3.9.0:tree (default-cli) @ browser4-browser ---
+[INFO] ai.platon.pulsar:browser4-browser:jar:4.12.0-rc.1-SNAPSHOT
+[INFO] +- ai.platon.pulsar:browser4-common:jar:4.12.0-rc.1-SNAPSHOT:compile
+[INFO] |  +- org.springframework:spring-core:jar:7.0.7:compile
+[INFO] |  |  \- commons-logging:commons-logging:jar:1.3.2:compile
+[INFO] |  +- org.apache.httpcomponents.client5:httpclient5:jar:5.5.2:compile
+[INFO] |  |  +- org.apache.httpcomponents.core5:httpcore5:jar:5.3.6:compile
+[INFO] |  |  \- org.apache.httpcomponents.core5:httpcore5-h2:jar:5.3.6:compile
+[INFO] |  +- commons-codec:commons-codec:jar:1.19.0:compile
+[INFO] |  +- org.apache.commons:commons-lang3:jar:3.19.0:compile
+[INFO] |  +- org.apache.commons:commons-math3:jar:3.6.1:compile
+[INFO] |  +- org.apache.commons:commons-collections4:jar:4.4:compile
+[INFO] |  +- org.slf4j:slf4j-api:jar:2.0.17:compile
+[INFO] |  \- ch.qos.logback:logback-classic:jar:1.5.32:compile
+[INFO] |     \- ch.qos.logback:logback-core:jar:1.5.32:compile
+[INFO] +- ai.platon.pulsar:pulsar-common:jar:4.9.5:compile
+[INFO] |  +- commons-io:commons-io:jar:2.16.1:compile
+[INFO] |  +- com.squareup.okhttp3:okhttp:jar:4.12.0:compile
+[INFO] |  |  \- com.squareup.okio:okio:jar:3.6.0:compile
+[INFO] |  |     \- com.squareup.okio:okio-jvm:jar:3.6.0:compile
+[INFO] |  |        \- org.jetbrains.kotlin:kotlin-stdlib-common:jar:1.9.10:compile
+[INFO] |  +- com.fasterxml.jackson.module:jackson-module-kotlin:jar:2.21.2:compile
+[INFO] |  +- com.fasterxml.jackson.dataformat:jackson-dataformat-properties:jar:2.21.2:compile
+[INFO] |  +- com.fasterxml.jackson.datatype:jackson-datatype-jsr310:jar:2.21.2:compile
+[INFO] |  \- org.nibor.autolink:autolink:jar:0.11.0:compile
+[INFO] +- ai.platon.pulsar:pulsar-jsoup:jar:1.14.3:compile
+[INFO] +- ai.platon.cdt:cdt-kotlin-client:jar:4.8.0:compile
+[INFO] |  +- org.jetbrains.kotlin:kotlin-stdlib-jdk8:jar:2.2.21:compile
+[INFO] |  |  \- org.jetbrains.kotlin:kotlin-stdlib-jdk7:jar:2.2.21:compile
+[INFO] |  \- com.fasterxml.jackson.core:jackson-annotations:jar:2.21:compile
+[INFO] +- com.fasterxml.jackson.dataformat:jackson-dataformat-yaml:jar:2.21.2:compile
+[INFO] |  +- com.fasterxml.jackson.core:jackson-databind:jar:2.21.2:compile
+[INFO] |  +- org.yaml:snakeyaml:jar:2.5:compile
+[INFO] |  \- com.fasterxml.jackson.core:jackson-core:jar:2.21.2:compile
+[INFO] +- io.dropwizard.metrics:metrics-core:jar:4.2.12:compile
+[INFO] +- io.ktor:ktor-client-core:jar:3.2.3:compile
+[INFO] |  +- io.ktor:ktor-http:jar:3.2.3:runtime
+[INFO] |  |  +- io.ktor:ktor-utils:jar:3.2.3:runtime
+[INFO] |  |  \- org.jetbrains.kotlinx:kotlinx-serialization-core:jar:1.9.0:runtime
+[INFO] |  +- io.ktor:ktor-http-cio:jar:3.2.3:runtime
+[INFO] |  |  \- io.ktor:ktor-io:jar:3.2.3:runtime
+[INFO] |  |     \- org.jetbrains.kotlinx:kotlinx-io-core:jar:0.7.0:runtime
+[INFO] |  |        \- org.jetbrains.kotlinx:kotlinx-io-bytestring:jar:0.7.0:runtime
+[INFO] |  +- io.ktor:ktor-events:jar:3.2.3:runtime
+[INFO] |  +- io.ktor:ktor-websocket-serialization:jar:3.2.3:runtime
+[INFO] |  |  \- io.ktor:ktor-serialization:jar:3.2.3:runtime
+[INFO] |  \- io.ktor:ktor-sse:jar:3.2.3:runtime
+[INFO] +- io.ktor:ktor-client-core-jvm:jar:3.2.3:compile
+[INFO] |  +- org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm:jar:1.10.2:compile
+[INFO] |  +- io.ktor:ktor-http-jvm:jar:3.2.3:compile
+[INFO] |  |  +- io.ktor:ktor-utils-jvm:jar:3.2.3:compile
+[INFO] |  |  \- org.jetbrains.kotlinx:kotlinx-serialization-core-jvm:jar:1.9.0:compile
+[INFO] |  +- io.ktor:ktor-http-cio-jvm:jar:3.2.3:compile
+[INFO] |  |  +- io.ktor:ktor-network-jvm:jar:3.2.3:compile
+[INFO] |  |  \- io.ktor:ktor-io-jvm:jar:3.2.3:compile
+[INFO] |  |     \- org.jetbrains.kotlinx:kotlinx-io-core-jvm:jar:0.7.0:compile
+[INFO] |  |        \- org.jetbrains.kotlinx:kotlinx-io-bytestring-jvm:jar:0.7.0:compile
+[INFO] |  +- io.ktor:ktor-events-jvm:jar:3.2.3:compile
+[INFO] |  +- io.ktor:ktor-websocket-serialization-jvm:jar:3.2.3:compile
+[INFO] |  |  \- io.ktor:ktor-serialization-jvm:jar:3.2.3:compile
+[INFO] |  +- io.ktor:ktor-sse-jvm:jar:3.2.3:compile
+[INFO] |  \- org.jetbrains.kotlinx:kotlinx-coroutines-slf4j:jar:1.10.2:runtime
+[INFO] +- io.ktor:ktor-client-cio:jar:3.2.3:compile
+[INFO] |  +- io.ktor:ktor-websockets:jar:3.2.3:runtime
+[INFO] |  \- io.ktor:ktor-network-tls:jar:3.2.3:runtime
+[INFO] |     \- io.ktor:ktor-network:jar:3.2.3:runtime
+[INFO] +- io.ktor:ktor-client-cio-jvm:jar:3.2.3:compile
+[INFO] |  +- io.ktor:ktor-websockets-jvm:jar:3.2.3:compile
+[INFO] |  \- io.ktor:ktor-network-tls-jvm:jar:3.2.3:compile
+[INFO] +- io.ktor:ktor-client-websockets:jar:3.2.3:compile
+[INFO] +- org.junit.jupiter:junit-jupiter-api:jar:6.0.3:test
+[INFO] |  +- org.opentest4j:opentest4j:jar:1.3.0:test
+[INFO] |  +- org.junit.platform:junit-platform-commons:jar:6.0.3:test
+[INFO] |  +- org.apiguardian:apiguardian-api:jar:1.1.2:test
+[INFO] |  \- org.jspecify:jspecify:jar:1.0.0:compile
+[INFO] +- org.junit.jupiter:junit-jupiter-engine:jar:6.0.3:test
+[INFO] |  \- org.junit.platform:junit-platform-engine:jar:6.0.3:test
+[INFO] +- org.junit.jupiter:junit-jupiter-params:jar:6.0.3:test
+[INFO] +- org.mockito:mockito-core:jar:5.20.0:test
+[INFO] |  +- net.bytebuddy:byte-buddy:jar:1.17.8:test
+[INFO] |  +- net.bytebuddy:byte-buddy-agent:jar:1.17.8:test
+[INFO] |  \- org.objenesis:objenesis:jar:3.3:test
+[INFO] +- org.mockito.kotlin:mockito-kotlin:jar:5.4.0:test
+[INFO] +- org.mockito:mockito-junit-jupiter:jar:5.20.0:test
+[INFO] +- org.jetbrains.kotlin:kotlin-stdlib:jar:2.2.21:compile
+[INFO] |  \- org.jetbrains:annotations:jar:13.0:compile
+[INFO] +- org.jetbrains.kotlin:kotlin-reflect:jar:2.2.21:compile
+[INFO] +- org.jetbrains.kotlinx:kotlinx-coroutines-core:jar:1.10.2:compile
+[INFO] \- org.jetbrains.kotlin:kotlin-test-junit5:jar:2.2.21:test
+[INFO]    +- org.jetbrains.kotlin:kotlin-test:jar:2.2.21:test
+[INFO]    \- org.junit.platform:junit-platform-launcher:jar:6.0.3:test
+[INFO]
+[INFO] -----------------< ai.platon.pulsar:browser4-skeleton >-----------------
+[INFO] Building Browser4 Skeleton 4.12.0-rc.1-SNAPSHOT                   [7/24]
+[INFO]   from browser4-core\browser4-skeleton\pom.xml
+[INFO] --------------------------------[ jar ]---------------------------------
+[INFO]
+[INFO] --- dependency:3.9.0:tree (default-cli) @ browser4-skeleton ---
+[INFO] ai.platon.pulsar:browser4-skeleton:jar:4.12.0-rc.1-SNAPSHOT
+[INFO] +- ai.platon.pulsar:browser4-common:jar:4.12.0-rc.1-SNAPSHOT:compile
+[INFO] |  +- org.springframework:spring-core:jar:7.0.7:compile
+[INFO] |  |  \- commons-logging:commons-logging:jar:1.3.2:compile
+[INFO] |  +- org.apache.httpcomponents.client5:httpclient5:jar:5.5.2:compile
+[INFO] |  |  +- org.apache.httpcomponents.core5:httpcore5:jar:5.3.6:compile
+[INFO] |  |  \- org.apache.httpcomponents.core5:httpcore5-h2:jar:5.3.6:compile
+[INFO] |  +- commons-codec:commons-codec:jar:1.19.0:compile
+[INFO] |  +- org.apache.commons:commons-lang3:jar:3.19.0:compile
+[INFO] |  +- org.apache.commons:commons-math3:jar:3.6.1:compile
+[INFO] |  +- org.slf4j:slf4j-api:jar:2.0.17:compile
+[INFO] |  \- ch.qos.logback:logback-classic:jar:1.5.32:compile
+[INFO] |     \- ch.qos.logback:logback-core:jar:1.5.32:compile
+[INFO] +- ai.platon.pulsar:browser4-browser:jar:4.12.0-rc.1-SNAPSHOT:compile
+[INFO] |  +- ai.platon.pulsar:pulsar-jsoup:jar:1.14.3:compile
+[INFO] |  +- ai.platon.cdt:cdt-kotlin-client:jar:4.8.0:compile
+[INFO] |  |  \- org.jetbrains.kotlin:kotlin-stdlib-jdk8:jar:2.2.21:compile
+[INFO] |  |     \- org.jetbrains.kotlin:kotlin-stdlib-jdk7:jar:2.2.21:compile
+[INFO] |  +- com.fasterxml.jackson.dataformat:jackson-dataformat-yaml:jar:2.21.2:compile
+[INFO] |  |  \- org.yaml:snakeyaml:jar:2.5:compile
+[INFO] |  +- io.dropwizard.metrics:metrics-core:jar:4.2.12:compile
+[INFO] |  +- io.ktor:ktor-client-core:jar:3.2.3:compile
+[INFO] |  |  +- io.ktor:ktor-http:jar:3.2.3:runtime
+[INFO] |  |  |  +- io.ktor:ktor-utils:jar:3.2.3:runtime
+[INFO] |  |  |  \- org.jetbrains.kotlinx:kotlinx-serialization-core:jar:1.9.0:runtime
+[INFO] |  |  +- io.ktor:ktor-http-cio:jar:3.2.3:runtime
+[INFO] |  |  |  \- io.ktor:ktor-io:jar:3.2.3:runtime
+[INFO] |  |  |     \- org.jetbrains.kotlinx:kotlinx-io-core:jar:0.7.0:runtime
+[INFO] |  |  |        \- org.jetbrains.kotlinx:kotlinx-io-bytestring:jar:0.7.0:runtime
+[INFO] |  |  +- io.ktor:ktor-events:jar:3.2.3:runtime
+[INFO] |  |  +- io.ktor:ktor-websocket-serialization:jar:3.2.3:runtime
+[INFO] |  |  |  \- io.ktor:ktor-serialization:jar:3.2.3:runtime
+[INFO] |  |  \- io.ktor:ktor-sse:jar:3.2.3:runtime
+[INFO] |  +- io.ktor:ktor-client-core-jvm:jar:3.2.3:compile
+[INFO] |  |  +- io.ktor:ktor-http-jvm:jar:3.2.3:compile
+[INFO] |  |  |  +- io.ktor:ktor-utils-jvm:jar:3.2.3:compile
+[INFO] |  |  |  \- org.jetbrains.kotlinx:kotlinx-serialization-core-jvm:jar:1.9.0:compile
+[INFO] |  |  +- io.ktor:ktor-http-cio-jvm:jar:3.2.3:compile
+[INFO] |  |  |  +- io.ktor:ktor-network-jvm:jar:3.2.3:compile
+[INFO] |  |  |  \- io.ktor:ktor-io-jvm:jar:3.2.3:compile
+[INFO] |  |  |     \- org.jetbrains.kotlinx:kotlinx-io-core-jvm:jar:0.7.0:compile
+[INFO] |  |  |        \- org.jetbrains.kotlinx:kotlinx-io-bytestring-jvm:jar:0.7.0:compile
+[INFO] |  |  +- io.ktor:ktor-events-jvm:jar:3.2.3:compile
+[INFO] |  |  +- io.ktor:ktor-websocket-serialization-jvm:jar:3.2.3:compile
+[INFO] |  |  |  \- io.ktor:ktor-serialization-jvm:jar:3.2.3:compile
+[INFO] |  |  +- io.ktor:ktor-sse-jvm:jar:3.2.3:compile
+[INFO] |  |  \- org.jetbrains.kotlinx:kotlinx-coroutines-slf4j:jar:1.10.2:runtime
+[INFO] |  +- io.ktor:ktor-client-cio:jar:3.2.3:compile
+[INFO] |  |  +- io.ktor:ktor-websockets:jar:3.2.3:runtime
+[INFO] |  |  \- io.ktor:ktor-network-tls:jar:3.2.3:runtime
+[INFO] |  |     \- io.ktor:ktor-network:jar:3.2.3:runtime
+[INFO] |  +- io.ktor:ktor-client-cio-jvm:jar:3.2.3:compile
+[INFO] |  |  +- io.ktor:ktor-websockets-jvm:jar:3.2.3:compile
+[INFO] |  |  \- io.ktor:ktor-network-tls-jvm:jar:3.2.3:compile
+[INFO] |  \- io.ktor:ktor-client-websockets:jar:3.2.3:compile
+[INFO] +- ai.platon.pulsar:pulsar-common:jar:4.9.5:compile
+[INFO] |  +- commons-io:commons-io:jar:2.16.1:compile
+[INFO] |  +- com.squareup.okhttp3:okhttp:jar:4.12.0:compile
+[INFO] |  |  \- com.squareup.okio:okio:jar:3.6.0:compile
+[INFO] |  |     \- com.squareup.okio:okio-jvm:jar:3.6.0:compile
+[INFO] |  |        \- org.jetbrains.kotlin:kotlin-stdlib-common:jar:1.9.10:compile
+[INFO] |  +- com.fasterxml.jackson.module:jackson-module-kotlin:jar:2.21.2:compile
+[INFO] |  +- com.fasterxml.jackson.dataformat:jackson-dataformat-properties:jar:2.21.2:compile
+[INFO] |  +- com.fasterxml.jackson.datatype:jackson-datatype-jsr310:jar:2.21.2:compile
+[INFO] |  \- org.nibor.autolink:autolink:jar:0.11.0:compile
+[INFO] +- ai.platon.pulsar:pulsar-persist:jar:4.9.5:compile
+[INFO] |  \- ai.platon.gora:gora-core-shaded:jar:1.0.9-slim:compile
+[INFO] +- ai.platon.pulsar:pulsar-dom:jar:4.9.5:compile
+[INFO] |  \- com.udojava:EvalEx:jar:2.0:compile
+[INFO] +- ai.platon.pulsar:pulsar-ql-common:jar:4.9.5:compile
+[INFO] |  \- com.fasterxml.jackson.core:jackson-databind:jar:2.21.2:compile
+[INFO] +- ai.platon.pulsar:pulsar-h2:jar:1.4.197:compile
+[INFO] |  +- javax.servlet:javax.servlet-api:jar:3.1.0:compile
+[INFO] |  +- org.osgi:org.osgi.core:jar:4.2.0:compile
+[INFO] |  +- org.osgi:org.osgi.enterprise:jar:4.2.0:compile
+[INFO] |  \- org.locationtech.jts:jts-core:jar:1.15.0:compile
+[INFO] +- ai.platon.pulsar:pulsar-llm:jar:4.9.5:compile
+[INFO] |  \- dev.langchain4j:langchain4j-core:jar:1.5.0:compile
+[INFO] +- dev.langchain4j:langchain4j-open-ai:jar:1.5.0:compile (optional)
+[INFO] |  +- dev.langchain4j:langchain4j-http-client:jar:1.5.0:compile (optional)
+[INFO] |  +- dev.langchain4j:langchain4j-http-client-jdk:jar:1.5.0:runtime (optional)
+[INFO] |  +- com.fasterxml.jackson.core:jackson-annotations:jar:2.21:compile
+[INFO] |  +- com.fasterxml.jackson.core:jackson-core:jar:2.21.2:compile
+[INFO] |  \- com.knuddels:jtokkit:jar:1.1.0:compile (optional)
+[INFO] +- org.springframework:spring-context:jar:7.0.7:compile
+[INFO] |  +- org.springframework:spring-aop:jar:7.0.7:compile
+[INFO] |  +- org.springframework:spring-beans:jar:7.0.7:compile
+[INFO] |  +- org.springframework:spring-expression:jar:7.0.7:compile
+[INFO] |  \- io.micrometer:micrometer-observation:jar:1.16.5:compile
+[INFO] |     \- io.micrometer:micrometer-commons:jar:1.16.5:compile
+[INFO] +- org.apache.commons:commons-collections4:jar:4.4:compile
+[INFO] +- com.github.ben-manes.caffeine:caffeine:jar:3.2.3:compile
+[INFO] |  +- org.jspecify:jspecify:jar:1.0.0:compile
+[INFO] |  \- com.google.errorprone:error_prone_annotations:jar:2.43.0:compile
+[INFO] +- com.google.code.crawler-commons:crawler-commons:jar:0.5:compile
+[INFO] |  \- org.apache.tika:tika-core:jar:3.2.2:compile
+[INFO] +- com.beust:jcommander:jar:1.82:compile
+[INFO] +- com.github.oshi:oshi-core:jar:6.6.6:compile
+[INFO] |  +- net.java.dev.jna:jna:jar:5.16.0:compile
+[INFO] |  \- net.java.dev.jna:jna-platform:jar:5.16.0:compile
+[INFO] +- io.dropwizard.metrics:metrics-graphite:jar:4.2.12:compile
+[INFO] |  \- com.rabbitmq:amqp-client:jar:5.27.1:compile
+[INFO] |     +- io.netty:netty-transport:jar:4.2.12.Final:compile
+[INFO] |     |  +- io.netty:netty-common:jar:4.2.12.Final:compile
+[INFO] |     |  +- io.netty:netty-buffer:jar:4.2.12.Final:compile
+[INFO] |     |  \- io.netty:netty-resolver:jar:4.2.12.Final:compile
+[INFO] |     +- io.netty:netty-codec:jar:4.2.12.Final:compile
+[INFO] |     |  +- io.netty:netty-codec-base:jar:4.2.12.Final:compile
+[INFO] |     |  +- io.netty:netty-codec-compression:jar:4.2.12.Final:compile
+[INFO] |     |  +- io.netty:netty-codec-protobuf:jar:4.2.12.Final:compile
+[INFO] |     |  \- io.netty:netty-codec-marshalling:jar:4.2.12.Final:compile
+[INFO] |     \- io.netty:netty-handler:jar:4.2.12.Final:compile
+[INFO] |        \- io.netty:netty-transport-native-unix-common:jar:4.2.12.Final:compile
+[INFO] +- org.jetbrains.kotlinx:kotlinx-coroutines-jdk8:jar:1.10.2:compile
+[INFO] |  \- org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm:jar:1.10.2:compile
+[INFO] +- ai.platon.pulsar:browser4-resources:test-jar:tests:4.12.0-rc.1-SNAPSHOT:test
+[INFO] +- org.springframework:spring-test:jar:7.0.7:test
+[INFO] +- org.junit.jupiter:junit-jupiter-api:jar:6.0.3:test
+[INFO] |  +- org.opentest4j:opentest4j:jar:1.3.0:test
+[INFO] |  +- org.junit.platform:junit-platform-commons:jar:6.0.3:test
+[INFO] |  \- org.apiguardian:apiguardian-api:jar:1.1.2:test
+[INFO] +- org.junit.jupiter:junit-jupiter-engine:jar:6.0.3:test
+[INFO] |  \- org.junit.platform:junit-platform-engine:jar:6.0.3:test
+[INFO] +- org.mockito:mockito-core:jar:5.20.0:test
+[INFO] |  +- net.bytebuddy:byte-buddy:jar:1.17.8:test
+[INFO] |  +- net.bytebuddy:byte-buddy-agent:jar:1.17.8:test
+[INFO] |  \- org.objenesis:objenesis:jar:3.3:test
+[INFO] +- io.mockk:mockk:jar:1.14.6:test
+[INFO] |  +- io.mockk:mockk-dsl:jar:1.14.6:test
+[INFO] |  +- io.mockk:mockk-agent:jar:1.14.6:test
+[INFO] |  +- io.mockk:mockk-agent-api:jar:1.14.6:test
+[INFO] |  \- io.mockk:mockk-core:jar:1.14.6:test
+[INFO] +- io.mockk:mockk-jvm:jar:1.14.6:test
+[INFO] |  +- io.mockk:mockk-dsl-jvm:jar:1.14.6:test
+[INFO] |  +- io.mockk:mockk-agent-jvm:jar:1.14.6:test
+[INFO] |  +- io.mockk:mockk-agent-api-jvm:jar:1.14.6:test
+[INFO] |  +- io.mockk:mockk-core-jvm:jar:1.14.6:test
+[INFO] |  +- junit:junit:jar:4.13.2:test
+[INFO] |  |  \- org.hamcrest:hamcrest-core:jar:3.0:test
+[INFO] |  |     \- org.hamcrest:hamcrest:jar:3.0:test
+[INFO] |  \- org.junit.jupiter:junit-jupiter:jar:6.0.3:test
+[INFO] |     \- org.junit.jupiter:junit-jupiter-params:jar:6.0.3:test
+[INFO] +- ai.platon.pulsar:pulsar-tests-common:jar:4.12.0-rc.1-SNAPSHOT:test
+[INFO] |  +- org.jetbrains.kotlinx:kotlinx-serialization-json:jar:1.9.0:test
+[INFO] |  |  \- org.jetbrains.kotlinx:kotlinx-serialization-json-jvm:jar:1.9.0:test
+[INFO] |  +- org.springframework.boot:spring-boot-starter-web:jar:4.0.6:test
+[INFO] |  |  +- org.springframework.boot:spring-boot-starter-jackson:jar:4.0.6:test
+[INFO] |  |  |  \- org.springframework.boot:spring-boot-jackson:jar:4.0.6:test
+[INFO] |  |  |     \- tools.jackson.core:jackson-databind:jar:3.1.2:test
+[INFO] |  |  |        \- tools.jackson.core:jackson-core:jar:3.1.2:test
+[INFO] |  |  +- org.springframework.boot:spring-boot-starter-tomcat:jar:4.0.6:test
+[INFO] |  |  |  +- org.springframework.boot:spring-boot-starter-tomcat-runtime:jar:4.0.6:test
+[INFO] |  |  |  |  +- org.springframework.boot:spring-boot-web-server:jar:4.0.6:test
+[INFO] |  |  |  |  +- org.apache.tomcat.embed:tomcat-embed-core:jar:11.0.21:test
+[INFO] |  |  |  |  +- org.apache.tomcat.embed:tomcat-embed-el:jar:11.0.21:test
+[INFO] |  |  |  |  \- org.apache.tomcat.embed:tomcat-embed-websocket:jar:11.0.21:test
+[INFO] |  |  |  \- org.springframework.boot:spring-boot-tomcat:jar:4.0.6:test
+[INFO] |  |  +- org.springframework.boot:spring-boot-http-converter:jar:4.0.6:test
+[INFO] |  |  |  +- org.springframework.boot:spring-boot:jar:4.0.6:test
+[INFO] |  |  |  \- org.springframework:spring-web:jar:7.0.7:test
+[INFO] |  |  \- org.springframework.boot:spring-boot-webmvc:jar:4.0.6:test
+[INFO] |  |     +- org.springframework.boot:spring-boot-servlet:jar:4.0.6:test
+[INFO] |  |     \- org.springframework:spring-webmvc:jar:7.0.7:test
+[INFO] |  \- org.springframework.boot:spring-boot-starter-actuator:jar:4.0.6:test
+[INFO] |     +- org.springframework.boot:spring-boot-starter:jar:4.0.6:test
+[INFO] |     |  +- org.springframework.boot:spring-boot-starter-logging:jar:4.0.6:test
+[INFO] |     |  |  +- org.apache.logging.log4j:log4j-to-slf4j:jar:2.25.4:test
+[INFO] |     |  |  |  \- org.apache.logging.log4j:log4j-api:jar:2.25.4:test
+[INFO] |     |  |  \- org.slf4j:jul-to-slf4j:jar:2.0.17:test
+[INFO] |     |  +- org.springframework.boot:spring-boot-autoconfigure:jar:4.0.6:test
+[INFO] |     |  \- jakarta.annotation:jakarta.annotation-api:jar:3.0.0:test
+[INFO] |     +- org.springframework.boot:spring-boot-starter-micrometer-metrics:jar:4.0.6:test
+[INFO] |     |  \- org.springframework.boot:spring-boot-micrometer-metrics:jar:4.0.6:test
+[INFO] |     |     \- org.springframework.boot:spring-boot-micrometer-observation:jar:4.0.6:test
+[INFO] |     +- org.springframework.boot:spring-boot-actuator-autoconfigure:jar:4.0.6:test
+[INFO] |     |  \- org.springframework.boot:spring-boot-actuator:jar:4.0.6:test
+[INFO] |     +- org.springframework.boot:spring-boot-health:jar:4.0.6:test
+[INFO] |     \- io.micrometer:micrometer-jakarta9:jar:1.16.5:test
+[INFO] |        \- io.micrometer:micrometer-core:jar:1.16.5:test
+[INFO] |           +- org.hdrhistogram:HdrHistogram:jar:2.2.2:test
+[INFO] |           \- org.latencyutils:LatencyUtils:jar:2.0.3:test
+[INFO] +- org.jetbrains.kotlin:kotlin-stdlib:jar:2.2.21:compile
+[INFO] |  \- org.jetbrains:annotations:jar:13.0:compile
+[INFO] +- org.jetbrains.kotlin:kotlin-reflect:jar:2.2.21:compile
+[INFO] +- org.jetbrains.kotlinx:kotlinx-coroutines-core:jar:1.10.2:compile
+[INFO] \- org.jetbrains.kotlin:kotlin-test-junit5:jar:2.2.21:test
+[INFO]    +- org.jetbrains.kotlin:kotlin-test:jar:2.2.21:test
+[INFO]    \- org.junit.platform:junit-platform-launcher:jar:6.0.3:test
+[INFO]
+[INFO] -------------------< ai.platon.pulsar:browser4-core >-------------------
+[INFO] Building Browser4 Core 4.12.0-rc.1-SNAPSHOT                       [8/24]
+[INFO]   from browser4-core\pom.xml
+[INFO] --------------------------------[ pom ]---------------------------------
+[INFO]
+[INFO] --- dependency:3.9.0:tree (default-cli) @ browser4-core ---
+[INFO] ai.platon.pulsar:browser4-core:pom:4.12.0-rc.1-SNAPSHOT
+[INFO] +- org.jetbrains.kotlin:kotlin-stdlib:jar:2.2.21:compile
+[INFO] |  \- org.jetbrains:annotations:jar:13.0:compile
+[INFO] +- org.jetbrains.kotlin:kotlin-reflect:jar:2.2.21:compile
+[INFO] +- org.jetbrains.kotlinx:kotlinx-coroutines-core:jar:1.10.2:compile
+[INFO] |  \- org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm:jar:1.10.2:compile
+[INFO] \- org.jetbrains.kotlin:kotlin-test-junit5:jar:2.2.21:test
+[INFO]    +- org.jetbrains.kotlin:kotlin-test:jar:2.2.21:test
+[INFO]    +- org.junit.jupiter:junit-jupiter-api:jar:6.0.3:test
+[INFO]    |  +- org.opentest4j:opentest4j:jar:1.3.0:test
+[INFO]    |  +- org.junit.platform:junit-platform-commons:jar:6.0.3:test
+[INFO]    |  +- org.apiguardian:apiguardian-api:jar:1.1.2:test
+[INFO]    |  \- org.jspecify:jspecify:jar:1.0.0:test
+[INFO]    +- org.junit.jupiter:junit-jupiter-engine:jar:6.0.3:test
+[INFO]    |  \- org.junit.platform:junit-platform-engine:jar:6.0.3:test
+[INFO]    \- org.junit.platform:junit-platform-launcher:jar:6.0.3:test
+[INFO] Copying ai.platon.pulsar:browser4-core:pom:4.12.0-rc.1-SNAPSHOT to project local repository
+[INFO] Copying ai.platon.pulsar:browser4-core:pom:consumer:4.12.0-rc.1-SNAPSHOT to project local repository
+[INFO]
+[INFO] -----------------< ai.platon.pulsar:browser4-protocol >-----------------
+[INFO] Building Browser4 Protocol 4.12.0-rc.1-SNAPSHOT                   [9/24]
+[INFO]   from browser4-core\browser4-protocol\pom.xml
+[INFO] --------------------------------[ jar ]---------------------------------
+[INFO]
+[INFO] --- dependency:3.9.0:tree (default-cli) @ browser4-protocol ---
+[INFO] ai.platon.pulsar:browser4-protocol:jar:4.12.0-rc.1-SNAPSHOT
+[INFO] +- ai.platon.pulsar:browser4-browser:jar:4.12.0-rc.1-SNAPSHOT:compile
+[INFO] |  +- ai.platon.pulsar:browser4-common:jar:4.12.0-rc.1-SNAPSHOT:compile
+[INFO] |  |  +- org.springframework:spring-core:jar:7.0.7:compile
+[INFO] |  |  |  \- commons-logging:commons-logging:jar:1.3.2:compile
+[INFO] |  |  +- org.apache.httpcomponents.client5:httpclient5:jar:5.5.2:compile
+[INFO] |  |  |  +- org.apache.httpcomponents.core5:httpcore5:jar:5.3.6:compile
+[INFO] |  |  |  \- org.apache.httpcomponents.core5:httpcore5-h2:jar:5.3.6:compile
+[INFO] |  |  +- commons-codec:commons-codec:jar:1.19.0:compile
+[INFO] |  |  +- org.apache.commons:commons-lang3:jar:3.19.0:compile
+[INFO] |  |  +- org.apache.commons:commons-math3:jar:3.6.1:compile
+[INFO] |  |  +- org.slf4j:slf4j-api:jar:2.0.17:compile
+[INFO] |  |  \- ch.qos.logback:logback-classic:jar:1.5.32:compile
+[INFO] |  |     \- ch.qos.logback:logback-core:jar:1.5.32:compile
+[INFO] |  +- ai.platon.pulsar:pulsar-common:jar:4.9.5:compile
+[INFO] |  |  +- commons-io:commons-io:jar:2.16.1:compile
+[INFO] |  |  +- com.squareup.okhttp3:okhttp:jar:4.12.0:compile
+[INFO] |  |  |  \- com.squareup.okio:okio:jar:3.6.0:compile
+[INFO] |  |  |     \- com.squareup.okio:okio-jvm:jar:3.6.0:compile
+[INFO] |  |  |        \- org.jetbrains.kotlin:kotlin-stdlib-common:jar:1.9.10:compile
+[INFO] |  |  +- com.fasterxml.jackson.module:jackson-module-kotlin:jar:2.21.2:compile
+[INFO] |  |  +- com.fasterxml.jackson.dataformat:jackson-dataformat-properties:jar:2.21.2:compile
+[INFO] |  |  +- com.fasterxml.jackson.datatype:jackson-datatype-jsr310:jar:2.21.2:compile
+[INFO] |  |  \- org.nibor.autolink:autolink:jar:0.11.0:compile
+[INFO] |  +- ai.platon.pulsar:pulsar-jsoup:jar:1.14.3:compile
+[INFO] |  +- ai.platon.cdt:cdt-kotlin-client:jar:4.8.0:compile
+[INFO] |  |  +- org.jetbrains.kotlin:kotlin-stdlib-jdk8:jar:2.2.21:compile
+[INFO] |  |  |  \- org.jetbrains.kotlin:kotlin-stdlib-jdk7:jar:2.2.21:compile
+[INFO] |  |  \- com.fasterxml.jackson.core:jackson-annotations:jar:2.21:compile
+[INFO] |  +- com.fasterxml.jackson.dataformat:jackson-dataformat-yaml:jar:2.21.2:compile
+[INFO] |  |  +- com.fasterxml.jackson.core:jackson-databind:jar:2.21.2:compile
+[INFO] |  |  +- org.yaml:snakeyaml:jar:2.5:compile
+[INFO] |  |  \- com.fasterxml.jackson.core:jackson-core:jar:2.21.2:compile
+[INFO] |  +- io.dropwizard.metrics:metrics-core:jar:4.2.12:compile
+[INFO] |  +- io.ktor:ktor-client-core:jar:3.2.3:compile
+[INFO] |  |  +- io.ktor:ktor-http:jar:3.2.3:runtime
+[INFO] |  |  |  +- io.ktor:ktor-utils:jar:3.2.3:runtime
+[INFO] |  |  |  \- org.jetbrains.kotlinx:kotlinx-serialization-core:jar:1.9.0:runtime
+[INFO] |  |  +- io.ktor:ktor-http-cio:jar:3.2.3:runtime
+[INFO] |  |  |  \- io.ktor:ktor-io:jar:3.2.3:runtime
+[INFO] |  |  |     \- org.jetbrains.kotlinx:kotlinx-io-core:jar:0.7.0:runtime
+[INFO] |  |  |        \- org.jetbrains.kotlinx:kotlinx-io-bytestring:jar:0.7.0:runtime
+[INFO] |  |  +- io.ktor:ktor-events:jar:3.2.3:runtime
+[INFO] |  |  +- io.ktor:ktor-websocket-serialization:jar:3.2.3:runtime
+[INFO] |  |  |  \- io.ktor:ktor-serialization:jar:3.2.3:runtime
+[INFO] |  |  \- io.ktor:ktor-sse:jar:3.2.3:runtime
+[INFO] |  +- io.ktor:ktor-client-core-jvm:jar:3.2.3:compile
+[INFO] |  |  +- io.ktor:ktor-http-jvm:jar:3.2.3:compile
+[INFO] |  |  |  +- io.ktor:ktor-utils-jvm:jar:3.2.3:compile
+[INFO] |  |  |  \- org.jetbrains.kotlinx:kotlinx-serialization-core-jvm:jar:1.9.0:compile
+[INFO] |  |  +- io.ktor:ktor-http-cio-jvm:jar:3.2.3:compile
+[INFO] |  |  |  +- io.ktor:ktor-network-jvm:jar:3.2.3:compile
+[INFO] |  |  |  \- io.ktor:ktor-io-jvm:jar:3.2.3:compile
+[INFO] |  |  |     \- org.jetbrains.kotlinx:kotlinx-io-core-jvm:jar:0.7.0:compile
+[INFO] |  |  |        \- org.jetbrains.kotlinx:kotlinx-io-bytestring-jvm:jar:0.7.0:compile
+[INFO] |  |  +- io.ktor:ktor-events-jvm:jar:3.2.3:compile
+[INFO] |  |  +- io.ktor:ktor-websocket-serialization-jvm:jar:3.2.3:compile
+[INFO] |  |  |  \- io.ktor:ktor-serialization-jvm:jar:3.2.3:compile
+[INFO] |  |  +- io.ktor:ktor-sse-jvm:jar:3.2.3:compile
+[INFO] |  |  \- org.jetbrains.kotlinx:kotlinx-coroutines-slf4j:jar:1.10.2:runtime
+[INFO] |  +- io.ktor:ktor-client-cio:jar:3.2.3:compile
+[INFO] |  |  +- io.ktor:ktor-websockets:jar:3.2.3:runtime
+[INFO] |  |  \- io.ktor:ktor-network-tls:jar:3.2.3:runtime
+[INFO] |  |     \- io.ktor:ktor-network:jar:3.2.3:runtime
+[INFO] |  +- io.ktor:ktor-client-cio-jvm:jar:3.2.3:compile
+[INFO] |  |  +- io.ktor:ktor-websockets-jvm:jar:3.2.3:compile
+[INFO] |  |  \- io.ktor:ktor-network-tls-jvm:jar:3.2.3:compile
+[INFO] |  \- io.ktor:ktor-client-websockets:jar:3.2.3:compile
+[INFO] +- ai.platon.pulsar:browser4-skeleton:jar:4.12.0-rc.1-SNAPSHOT:compile
+[INFO] |  +- ai.platon.pulsar:pulsar-persist:jar:4.9.5:compile
+[INFO] |  |  \- ai.platon.gora:gora-core-shaded:jar:1.0.9-slim:compile
+[INFO] |  +- ai.platon.pulsar:pulsar-dom:jar:4.9.5:compile
+[INFO] |  |  \- com.udojava:EvalEx:jar:2.0:compile
+[INFO] |  +- ai.platon.pulsar:pulsar-ql-common:jar:4.9.5:compile
+[INFO] |  +- ai.platon.pulsar:pulsar-h2:jar:1.4.197:compile
+[INFO] |  |  +- javax.servlet:javax.servlet-api:jar:3.1.0:compile
+[INFO] |  |  +- org.osgi:org.osgi.core:jar:4.2.0:compile
+[INFO] |  |  +- org.osgi:org.osgi.enterprise:jar:4.2.0:compile
+[INFO] |  |  \- org.locationtech.jts:jts-core:jar:1.15.0:compile
+[INFO] |  +- ai.platon.pulsar:pulsar-llm:jar:4.9.5:compile
+[INFO] |  |  \- dev.langchain4j:langchain4j-core:jar:1.5.0:compile
+[INFO] |  +- org.springframework:spring-context:jar:7.0.7:compile
+[INFO] |  |  +- org.springframework:spring-aop:jar:7.0.7:compile
+[INFO] |  |  +- org.springframework:spring-beans:jar:7.0.7:compile
+[INFO] |  |  +- org.springframework:spring-expression:jar:7.0.7:compile
+[INFO] |  |  \- io.micrometer:micrometer-observation:jar:1.16.5:compile
+[INFO] |  |     \- io.micrometer:micrometer-commons:jar:1.16.5:compile
+[INFO] |  +- org.apache.commons:commons-collections4:jar:4.4:compile
+[INFO] |  +- com.github.ben-manes.caffeine:caffeine:jar:3.2.3:compile
+[INFO] |  |  \- com.google.errorprone:error_prone_annotations:jar:2.43.0:compile
+[INFO] |  +- com.google.code.crawler-commons:crawler-commons:jar:0.5:compile
+[INFO] |  |  \- org.apache.tika:tika-core:jar:3.2.2:compile
+[INFO] |  +- com.beust:jcommander:jar:1.82:compile
+[INFO] |  +- com.github.oshi:oshi-core:jar:6.6.6:compile
+[INFO] |  |  +- net.java.dev.jna:jna:jar:5.16.0:compile
+[INFO] |  |  \- net.java.dev.jna:jna-platform:jar:5.16.0:compile
+[INFO] |  +- io.dropwizard.metrics:metrics-graphite:jar:4.2.12:compile
+[INFO] |  |  \- com.rabbitmq:amqp-client:jar:5.27.1:compile
+[INFO] |  |     +- io.netty:netty-transport:jar:4.2.12.Final:compile
+[INFO] |  |     |  +- io.netty:netty-common:jar:4.2.12.Final:compile
+[INFO] |  |     |  +- io.netty:netty-buffer:jar:4.2.12.Final:compile
+[INFO] |  |     |  \- io.netty:netty-resolver:jar:4.2.12.Final:compile
+[INFO] |  |     +- io.netty:netty-codec:jar:4.2.12.Final:compile
+[INFO] |  |     |  +- io.netty:netty-codec-base:jar:4.2.12.Final:compile
+[INFO] |  |     |  +- io.netty:netty-codec-compression:jar:4.2.12.Final:compile
+[INFO] |  |     |  +- io.netty:netty-codec-protobuf:jar:4.2.12.Final:compile
+[INFO] |  |     |  \- io.netty:netty-codec-marshalling:jar:4.2.12.Final:compile
+[INFO] |  |     \- io.netty:netty-handler:jar:4.2.12.Final:compile
+[INFO] |  |        \- io.netty:netty-transport-native-unix-common:jar:4.2.12.Final:compile
+[INFO] |  \- org.jetbrains.kotlinx:kotlinx-coroutines-jdk8:jar:1.10.2:compile
+[INFO] +- ai.platon.pulsar:browser4-resources:test-jar:tests:4.12.0-rc.1-SNAPSHOT:test
+[INFO] +- org.junit.jupiter:junit-jupiter-api:jar:6.0.3:test
+[INFO] |  +- org.opentest4j:opentest4j:jar:1.3.0:test
+[INFO] |  +- org.junit.platform:junit-platform-commons:jar:6.0.3:test
+[INFO] |  +- org.apiguardian:apiguardian-api:jar:1.1.2:test
+[INFO] |  \- org.jspecify:jspecify:jar:1.0.0:compile
+[INFO] +- org.junit.jupiter:junit-jupiter-engine:jar:6.0.3:test
+[INFO] |  \- org.junit.platform:junit-platform-engine:jar:6.0.3:test
+[INFO] +- org.junit.jupiter:junit-jupiter-params:jar:6.0.3:test
+[INFO] +- org.mockito:mockito-core:jar:5.20.0:test
+[INFO] |  +- net.bytebuddy:byte-buddy:jar:1.17.8:test
+[INFO] |  +- net.bytebuddy:byte-buddy-agent:jar:1.17.8:test
+[INFO] |  \- org.objenesis:objenesis:jar:3.3:test
+[INFO] +- org.mockito.kotlin:mockito-kotlin:jar:5.4.0:test
+[INFO] +- org.jetbrains.kotlin:kotlin-stdlib:jar:2.2.21:compile
+[INFO] |  \- org.jetbrains:annotations:jar:13.0:compile
+[INFO] +- org.jetbrains.kotlin:kotlin-reflect:jar:2.2.21:compile
+[INFO] +- org.jetbrains.kotlinx:kotlinx-coroutines-core:jar:1.10.2:compile
+[INFO] |  \- org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm:jar:1.10.2:compile
+[INFO] \- org.jetbrains.kotlin:kotlin-test-junit5:jar:2.2.21:test
+[INFO]    +- org.jetbrains.kotlin:kotlin-test:jar:2.2.21:test
+[INFO]    \- org.junit.platform:junit-platform-launcher:jar:6.0.3:test
+[INFO]
+[INFO] ------------------< ai.platon.pulsar:browser4-parse >-------------------
+[INFO] Building Browser4 Parse 4.12.0-rc.1-SNAPSHOT                     [10/24]
+[INFO]   from browser4-core\browser4-parse\pom.xml
+[INFO] --------------------------------[ jar ]---------------------------------
+[INFO]
+[INFO] --- dependency:3.9.0:tree (default-cli) @ browser4-parse ---
+[INFO] ai.platon.pulsar:browser4-parse:jar:4.12.0-rc.1-SNAPSHOT
+[INFO] +- ai.platon.pulsar:browser4-resources:jar:4.12.0-rc.1-SNAPSHOT:compile
+[INFO] +- ai.platon.pulsar:browser4-skeleton:jar:4.12.0-rc.1-SNAPSHOT:compile
+[INFO] |  +- ai.platon.pulsar:browser4-common:jar:4.12.0-rc.1-SNAPSHOT:compile
+[INFO] |  |  +- org.springframework:spring-core:jar:7.0.7:compile
+[INFO] |  |  |  \- commons-logging:commons-logging:jar:1.3.2:compile
+[INFO] |  |  +- org.apache.httpcomponents.client5:httpclient5:jar:5.5.2:compile
+[INFO] |  |  |  +- org.apache.httpcomponents.core5:httpcore5:jar:5.3.6:compile
+[INFO] |  |  |  \- org.apache.httpcomponents.core5:httpcore5-h2:jar:5.3.6:compile
+[INFO] |  |  +- org.apache.commons:commons-lang3:jar:3.19.0:compile
+[INFO] |  |  +- org.apache.commons:commons-math3:jar:3.6.1:compile
+[INFO] |  |  \- ch.qos.logback:logback-classic:jar:1.5.32:compile
+[INFO] |  |     \- ch.qos.logback:logback-core:jar:1.5.32:compile
+[INFO] |  +- ai.platon.pulsar:browser4-browser:jar:4.12.0-rc.1-SNAPSHOT:compile
+[INFO] |  |  +- ai.platon.cdt:cdt-kotlin-client:jar:4.8.0:compile
+[INFO] |  |  |  \- org.jetbrains.kotlin:kotlin-stdlib-jdk8:jar:2.2.21:compile
+[INFO] |  |  |     \- org.jetbrains.kotlin:kotlin-stdlib-jdk7:jar:2.2.21:compile
+[INFO] |  |  +- com.fasterxml.jackson.dataformat:jackson-dataformat-yaml:jar:2.21.2:compile
+[INFO] |  |  |  \- org.yaml:snakeyaml:jar:2.5:compile
+[INFO] |  |  +- io.dropwizard.metrics:metrics-core:jar:4.2.12:compile
+[INFO] |  |  +- io.ktor:ktor-client-core:jar:3.2.3:compile
+[INFO] |  |  |  +- io.ktor:ktor-http:jar:3.2.3:runtime
+[INFO] |  |  |  |  +- io.ktor:ktor-utils:jar:3.2.3:runtime
+[INFO] |  |  |  |  \- org.jetbrains.kotlinx:kotlinx-serialization-core:jar:1.9.0:runtime
+[INFO] |  |  |  +- io.ktor:ktor-http-cio:jar:3.2.3:runtime
+[INFO] |  |  |  |  \- io.ktor:ktor-io:jar:3.2.3:runtime
+[INFO] |  |  |  |     \- org.jetbrains.kotlinx:kotlinx-io-core:jar:0.7.0:runtime
+[INFO] |  |  |  |        \- org.jetbrains.kotlinx:kotlinx-io-bytestring:jar:0.7.0:runtime
+[INFO] |  |  |  +- io.ktor:ktor-events:jar:3.2.3:runtime
+[INFO] |  |  |  +- io.ktor:ktor-websocket-serialization:jar:3.2.3:runtime
+[INFO] |  |  |  |  \- io.ktor:ktor-serialization:jar:3.2.3:runtime
+[INFO] |  |  |  \- io.ktor:ktor-sse:jar:3.2.3:runtime
+[INFO] |  |  +- io.ktor:ktor-client-core-jvm:jar:3.2.3:compile
+[INFO] |  |  |  +- io.ktor:ktor-http-jvm:jar:3.2.3:compile
+[INFO] |  |  |  |  +- io.ktor:ktor-utils-jvm:jar:3.2.3:compile
+[INFO] |  |  |  |  \- org.jetbrains.kotlinx:kotlinx-serialization-core-jvm:jar:1.9.0:compile
+[INFO] |  |  |  +- io.ktor:ktor-http-cio-jvm:jar:3.2.3:compile
+[INFO] |  |  |  |  +- io.ktor:ktor-network-jvm:jar:3.2.3:compile
+[INFO] |  |  |  |  \- io.ktor:ktor-io-jvm:jar:3.2.3:compile
+[INFO] |  |  |  |     \- org.jetbrains.kotlinx:kotlinx-io-core-jvm:jar:0.7.0:compile
+[INFO] |  |  |  |        \- org.jetbrains.kotlinx:kotlinx-io-bytestring-jvm:jar:0.7.0:compile
+[INFO] |  |  |  +- io.ktor:ktor-events-jvm:jar:3.2.3:compile
+[INFO] |  |  |  +- io.ktor:ktor-websocket-serialization-jvm:jar:3.2.3:compile
+[INFO] |  |  |  |  \- io.ktor:ktor-serialization-jvm:jar:3.2.3:compile
+[INFO] |  |  |  +- io.ktor:ktor-sse-jvm:jar:3.2.3:compile
+[INFO] |  |  |  \- org.jetbrains.kotlinx:kotlinx-coroutines-slf4j:jar:1.10.2:runtime
+[INFO] |  |  +- io.ktor:ktor-client-cio:jar:3.2.3:compile
+[INFO] |  |  |  +- io.ktor:ktor-websockets:jar:3.2.3:runtime
+[INFO] |  |  |  \- io.ktor:ktor-network-tls:jar:3.2.3:runtime
+[INFO] |  |  |     \- io.ktor:ktor-network:jar:3.2.3:runtime
+[INFO] |  |  +- io.ktor:ktor-client-cio-jvm:jar:3.2.3:compile
+[INFO] |  |  |  +- io.ktor:ktor-websockets-jvm:jar:3.2.3:compile
+[INFO] |  |  |  \- io.ktor:ktor-network-tls-jvm:jar:3.2.3:compile
+[INFO] |  |  \- io.ktor:ktor-client-websockets:jar:3.2.3:compile
+[INFO] |  +- ai.platon.pulsar:pulsar-common:jar:4.9.5:compile
+[INFO] |  |  +- com.squareup.okhttp3:okhttp:jar:4.12.0:compile
+[INFO] |  |  |  \- com.squareup.okio:okio:jar:3.6.0:compile
+[INFO] |  |  |     \- com.squareup.okio:okio-jvm:jar:3.6.0:compile
+[INFO] |  |  |        \- org.jetbrains.kotlin:kotlin-stdlib-common:jar:1.9.10:compile
+[INFO] |  |  \- org.nibor.autolink:autolink:jar:0.11.0:compile
+[INFO] |  +- ai.platon.pulsar:pulsar-dom:jar:4.9.5:compile
+[INFO] |  |  \- com.udojava:EvalEx:jar:2.0:compile
+[INFO] |  +- ai.platon.pulsar:pulsar-ql-common:jar:4.9.5:compile
+[INFO] |  |  \- com.fasterxml.jackson.core:jackson-databind:jar:2.21.2:compile
+[INFO] |  +- ai.platon.pulsar:pulsar-h2:jar:1.4.197:compile
+[INFO] |  |  +- javax.servlet:javax.servlet-api:jar:3.1.0:compile
+[INFO] |  |  +- org.osgi:org.osgi.core:jar:4.2.0:compile
+[INFO] |  |  +- org.osgi:org.osgi.enterprise:jar:4.2.0:compile
+[INFO] |  |  \- org.locationtech.jts:jts-core:jar:1.15.0:compile
+[INFO] |  +- ai.platon.pulsar:pulsar-llm:jar:4.9.5:compile
+[INFO] |  |  \- dev.langchain4j:langchain4j-core:jar:1.5.0:compile
+[INFO] |  +- org.springframework:spring-context:jar:7.0.7:compile
+[INFO] |  |  +- org.springframework:spring-aop:jar:7.0.7:compile
+[INFO] |  |  +- org.springframework:spring-beans:jar:7.0.7:compile
+[INFO] |  |  +- org.springframework:spring-expression:jar:7.0.7:compile
+[INFO] |  |  \- io.micrometer:micrometer-observation:jar:1.16.5:compile
+[INFO] |  |     \- io.micrometer:micrometer-commons:jar:1.16.5:compile
+[INFO] |  +- org.apache.commons:commons-collections4:jar:4.4:compile
+[INFO] |  +- com.github.ben-manes.caffeine:caffeine:jar:3.2.3:compile
+[INFO] |  |  +- org.jspecify:jspecify:jar:1.0.0:compile
+[INFO] |  |  \- com.google.errorprone:error_prone_annotations:jar:2.43.0:compile
+[INFO] |  +- com.google.code.crawler-commons:crawler-commons:jar:0.5:compile
+[INFO] |  +- com.beust:jcommander:jar:1.82:compile
+[INFO] |  +- com.github.oshi:oshi-core:jar:6.6.6:compile
+[INFO] |  |  +- net.java.dev.jna:jna:jar:5.16.0:compile
+[INFO] |  |  \- net.java.dev.jna:jna-platform:jar:5.16.0:compile
+[INFO] |  +- io.dropwizard.metrics:metrics-graphite:jar:4.2.12:compile
+[INFO] |  |  \- com.rabbitmq:amqp-client:jar:5.27.1:compile
+[INFO] |  |     +- io.netty:netty-transport:jar:4.2.12.Final:compile
+[INFO] |  |     |  +- io.netty:netty-common:jar:4.2.12.Final:compile
+[INFO] |  |     |  +- io.netty:netty-buffer:jar:4.2.12.Final:compile
+[INFO] |  |     |  \- io.netty:netty-resolver:jar:4.2.12.Final:compile
+[INFO] |  |     +- io.netty:netty-codec:jar:4.2.12.Final:compile
+[INFO] |  |     |  +- io.netty:netty-codec-base:jar:4.2.12.Final:compile
+[INFO] |  |     |  +- io.netty:netty-codec-compression:jar:4.2.12.Final:compile
+[INFO] |  |     |  +- io.netty:netty-codec-protobuf:jar:4.2.12.Final:compile
+[INFO] |  |     |  \- io.netty:netty-codec-marshalling:jar:4.2.12.Final:compile
+[INFO] |  |     \- io.netty:netty-handler:jar:4.2.12.Final:compile
+[INFO] |  |        \- io.netty:netty-transport-native-unix-common:jar:4.2.12.Final:compile
+[INFO] |  \- org.jetbrains.kotlinx:kotlinx-coroutines-jdk8:jar:1.10.2:compile
+[INFO] +- ai.platon.pulsar:pulsar-jsoup:jar:1.14.3:compile
+[INFO] +- ai.platon.pulsar:pulsar-persist:jar:4.9.5:compile
+[INFO] |  +- ai.platon.gora:gora-core-shaded:jar:1.0.9-slim:compile
+[INFO] |  +- com.fasterxml.jackson.dataformat:jackson-dataformat-properties:jar:2.21.2:compile
+[INFO] |  |  \- com.fasterxml.jackson.core:jackson-core:jar:2.21.2:compile
+[INFO] |  +- com.fasterxml.jackson.datatype:jackson-datatype-jsr310:jar:2.21.2:compile
+[INFO] |  |  \- com.fasterxml.jackson.core:jackson-annotations:jar:2.21:compile
+[INFO] |  \- com.fasterxml.jackson.module:jackson-module-kotlin:jar:2.21.2:compile
+[INFO] +- net.sourceforge.nekohtml:nekohtml:jar:1.9.22:compile
+[INFO] |  \- xerces:xercesImpl:jar:2.11.0:compile
+[INFO] |     \- xml-apis:xml-apis:jar:1.4.01:compile
+[INFO] +- org.apache.tika:tika-core:jar:3.2.2:compile
+[INFO] |  +- org.slf4j:slf4j-api:jar:2.0.17:compile
+[INFO] |  \- commons-io:commons-io:jar:2.16.1:compile
+[INFO] +- org.apache.tika:tika-parser-html-module:jar:3.2.2:compile
+[INFO] |  \- commons-codec:commons-codec:jar:1.19.0:compile
+[INFO] +- org.springframework.boot:spring-boot-test:jar:4.0.6:test
+[INFO] |  +- org.springframework.boot:spring-boot:jar:4.0.6:test
+[INFO] |  \- org.springframework:spring-test:jar:7.0.7:test
+[INFO] +- org.jetbrains.kotlin:kotlin-stdlib:jar:2.2.21:compile
+[INFO] |  \- org.jetbrains:annotations:jar:13.0:compile
+[INFO] +- org.jetbrains.kotlin:kotlin-reflect:jar:2.2.21:compile
+[INFO] +- org.jetbrains.kotlinx:kotlinx-coroutines-core:jar:1.10.2:compile
+[INFO] |  \- org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm:jar:1.10.2:compile
+[INFO] \- org.jetbrains.kotlin:kotlin-test-junit5:jar:2.2.21:test
+[INFO]    +- org.jetbrains.kotlin:kotlin-test:jar:2.2.21:test
+[INFO]    +- org.junit.jupiter:junit-jupiter-api:jar:6.0.3:test
+[INFO]    |  +- org.opentest4j:opentest4j:jar:1.3.0:test
+[INFO]    |  +- org.junit.platform:junit-platform-commons:jar:6.0.3:test
+[INFO]    |  \- org.apiguardian:apiguardian-api:jar:1.1.2:test
+[INFO]    +- org.junit.jupiter:junit-jupiter-engine:jar:6.0.3:test
+[INFO]    |  \- org.junit.platform:junit-platform-engine:jar:6.0.3:test
+[INFO]    \- org.junit.platform:junit-platform-launcher:jar:6.0.3:test
+[INFO]
+[INFO] -----------------< ai.platon.pulsar:browser4-agentic >------------------
+[INFO] Building Browser4 Agentic 4.12.0-rc.1-SNAPSHOT                   [11/24]
+[INFO]   from browser4-agentic\pom.xml
+[INFO] --------------------------------[ jar ]---------------------------------
+[INFO]
+[INFO] --- dependency:3.9.0:tree (default-cli) @ browser4-agentic ---
+[INFO] ai.platon.pulsar:browser4-agentic:jar:4.12.0-rc.1-SNAPSHOT
+[INFO] +- ai.platon.pulsar:browser4-common:jar:4.12.0-rc.1-SNAPSHOT:compile
+[INFO] |  +- org.springframework:spring-core:jar:7.0.7:compile
+[INFO] |  |  \- commons-logging:commons-logging:jar:1.3.2:compile
+[INFO] |  +- org.apache.httpcomponents.client5:httpclient5:jar:5.5.2:compile
+[INFO] |  |  +- org.apache.httpcomponents.core5:httpcore5:jar:5.3.6:compile
+[INFO] |  |  \- org.apache.httpcomponents.core5:httpcore5-h2:jar:5.3.6:compile
+[INFO] |  +- commons-codec:commons-codec:jar:1.19.0:compile
+[INFO] |  +- org.apache.commons:commons-lang3:jar:3.19.0:compile
+[INFO] |  +- org.apache.commons:commons-math3:jar:3.6.1:compile
+[INFO] |  +- org.apache.commons:commons-collections4:jar:4.4:compile
+[INFO] |  +- org.slf4j:slf4j-api:jar:2.0.17:compile
+[INFO] |  \- ch.qos.logback:logback-classic:jar:1.5.32:compile
+[INFO] |     \- ch.qos.logback:logback-core:jar:1.5.32:compile
+[INFO] +- ai.platon.pulsar:browser4-protocol:jar:4.12.0-rc.1-SNAPSHOT:compile
+[INFO] +- ai.platon.pulsar:browser4-browser:jar:4.12.0-rc.1-SNAPSHOT:compile
+[INFO] |  +- ai.platon.pulsar:pulsar-common:jar:4.9.5:compile
+[INFO] |  |  +- commons-io:commons-io:jar:2.16.1:compile
+[INFO] |  |  +- com.squareup.okhttp3:okhttp:jar:4.12.0:compile
+[INFO] |  |  |  \- com.squareup.okio:okio:jar:3.6.0:compile
+[INFO] |  |  +- com.fasterxml.jackson.module:jackson-module-kotlin:jar:2.21.2:compile
+[INFO] |  |  +- com.fasterxml.jackson.dataformat:jackson-dataformat-properties:jar:2.21.2:compile
+[INFO] |  |  +- com.fasterxml.jackson.datatype:jackson-datatype-jsr310:jar:2.21.2:compile
+[INFO] |  |  \- org.nibor.autolink:autolink:jar:0.11.0:compile
+[INFO] |  +- ai.platon.pulsar:pulsar-jsoup:jar:1.14.3:compile
+[INFO] |  +- ai.platon.cdt:cdt-kotlin-client:jar:4.8.0:compile
+[INFO] |  |  +- org.jetbrains.kotlin:kotlin-stdlib-jdk8:jar:2.2.21:compile
+[INFO] |  |  |  \- org.jetbrains.kotlin:kotlin-stdlib-jdk7:jar:2.2.21:compile
+[INFO] |  |  \- com.fasterxml.jackson.core:jackson-annotations:jar:2.21:compile
+[INFO] |  +- com.fasterxml.jackson.dataformat:jackson-dataformat-yaml:jar:2.21.2:compile
+[INFO] |  |  \- com.fasterxml.jackson.core:jackson-core:jar:2.21.2:compile
+[INFO] |  +- io.dropwizard.metrics:metrics-core:jar:4.2.12:compile
+[INFO] |  +- io.ktor:ktor-client-core:jar:3.2.3:compile
+[INFO] |  |  +- io.ktor:ktor-http:jar:3.2.3:runtime
+[INFO] |  |  |  +- io.ktor:ktor-utils:jar:3.2.3:runtime
+[INFO] |  |  |  \- org.jetbrains.kotlinx:kotlinx-serialization-core:jar:1.9.0:runtime
+[INFO] |  |  +- io.ktor:ktor-http-cio:jar:3.2.3:runtime
+[INFO] |  |  |  \- io.ktor:ktor-io:jar:3.2.3:runtime
+[INFO] |  |  |     \- org.jetbrains.kotlinx:kotlinx-io-core:jar:0.7.0:runtime
+[INFO] |  |  |        \- org.jetbrains.kotlinx:kotlinx-io-bytestring:jar:0.7.0:runtime
+[INFO] |  |  +- io.ktor:ktor-events:jar:3.2.3:runtime
+[INFO] |  |  +- io.ktor:ktor-websocket-serialization:jar:3.2.3:runtime
+[INFO] |  |  |  \- io.ktor:ktor-serialization:jar:3.2.3:runtime
+[INFO] |  |  \- io.ktor:ktor-sse:jar:3.2.3:runtime
+[INFO] |  +- io.ktor:ktor-client-core-jvm:jar:3.2.3:compile
+[INFO] |  |  +- io.ktor:ktor-http-jvm:jar:3.2.3:compile
+[INFO] |  |  +- io.ktor:ktor-http-cio-jvm:jar:3.2.3:compile
+[INFO] |  |  |  +- io.ktor:ktor-network-jvm:jar:3.2.3:compile
+[INFO] |  |  |  \- io.ktor:ktor-io-jvm:jar:3.2.3:compile
+[INFO] |  |  +- io.ktor:ktor-events-jvm:jar:3.2.3:compile
+[INFO] |  |  +- io.ktor:ktor-websocket-serialization-jvm:jar:3.2.3:compile
+[INFO] |  |  +- io.ktor:ktor-sse-jvm:jar:3.2.3:compile
+[INFO] |  |  \- org.jetbrains.kotlinx:kotlinx-coroutines-slf4j:jar:1.10.2:runtime
+[INFO] |  +- io.ktor:ktor-client-cio:jar:3.2.3:compile
+[INFO] |  |  +- io.ktor:ktor-websockets:jar:3.2.3:runtime
+[INFO] |  |  \- io.ktor:ktor-network-tls:jar:3.2.3:runtime
+[INFO] |  |     \- io.ktor:ktor-network:jar:3.2.3:runtime
+[INFO] |  +- io.ktor:ktor-client-cio-jvm:jar:3.2.3:compile
+[INFO] |  |  +- io.ktor:ktor-websockets-jvm:jar:3.2.3:compile
+[INFO] |  |  \- io.ktor:ktor-network-tls-jvm:jar:3.2.3:compile
+[INFO] |  \- io.ktor:ktor-client-websockets:jar:3.2.3:compile
+[INFO] +- ai.platon.pulsar:browser4-skeleton:jar:4.12.0-rc.1-SNAPSHOT:compile
+[INFO] |  +- ai.platon.pulsar:pulsar-persist:jar:4.9.5:compile
+[INFO] |  |  \- ai.platon.gora:gora-core-shaded:jar:1.0.9-slim:compile
+[INFO] |  +- ai.platon.pulsar:pulsar-dom:jar:4.9.5:compile
+[INFO] |  +- ai.platon.pulsar:pulsar-h2:jar:1.4.197:compile
+[INFO] |  |  +- javax.servlet:javax.servlet-api:jar:3.1.0:compile
+[INFO] |  |  +- org.osgi:org.osgi.core:jar:4.2.0:compile
+[INFO] |  |  +- org.osgi:org.osgi.enterprise:jar:4.2.0:compile
+[INFO] |  |  \- org.locationtech.jts:jts-core:jar:1.15.0:compile
+[INFO] |  +- ai.platon.pulsar:pulsar-llm:jar:4.9.5:compile
+[INFO] |  |  \- dev.langchain4j:langchain4j-core:jar:1.5.0:compile
+[INFO] |  +- org.springframework:spring-context:jar:7.0.7:compile
+[INFO] |  |  +- org.springframework:spring-aop:jar:7.0.7:compile
+[INFO] |  |  +- org.springframework:spring-beans:jar:7.0.7:compile
+[INFO] |  |  \- org.springframework:spring-expression:jar:7.0.7:compile
+[INFO] |  +- com.github.ben-manes.caffeine:caffeine:jar:3.2.3:compile
+[INFO] |  |  \- com.google.errorprone:error_prone_annotations:jar:2.43.0:compile
+[INFO] |  +- com.google.code.crawler-commons:crawler-commons:jar:0.5:compile
+[INFO] |  |  \- org.apache.tika:tika-core:jar:3.2.2:compile
+[INFO] |  +- com.beust:jcommander:jar:1.82:compile
+[INFO] |  +- com.github.oshi:oshi-core:jar:6.6.6:compile
+[INFO] |  |  +- net.java.dev.jna:jna:jar:5.16.0:compile
+[INFO] |  |  \- net.java.dev.jna:jna-platform:jar:5.16.0:compile
+[INFO] |  +- io.dropwizard.metrics:metrics-graphite:jar:4.2.12:compile
+[INFO] |  |  \- com.rabbitmq:amqp-client:jar:5.27.1:compile
+[INFO] |  |     +- io.netty:netty-transport:jar:4.2.12.Final:compile
+[INFO] |  |     |  +- io.netty:netty-common:jar:4.2.12.Final:compile
+[INFO] |  |     |  +- io.netty:netty-buffer:jar:4.2.12.Final:compile
+[INFO] |  |     |  \- io.netty:netty-resolver:jar:4.2.12.Final:compile
+[INFO] |  |     +- io.netty:netty-codec:jar:4.2.12.Final:compile
+[INFO] |  |     |  +- io.netty:netty-codec-base:jar:4.2.12.Final:compile
+[INFO] |  |     |  +- io.netty:netty-codec-compression:jar:4.2.12.Final:compile
+[INFO] |  |     |  +- io.netty:netty-codec-protobuf:jar:4.2.12.Final:compile
+[INFO] |  |     |  \- io.netty:netty-codec-marshalling:jar:4.2.12.Final:compile
+[INFO] |  |     \- io.netty:netty-handler:jar:4.2.12.Final:compile
+[INFO] |  |        \- io.netty:netty-transport-native-unix-common:jar:4.2.12.Final:compile
+[INFO] |  \- org.jetbrains.kotlinx:kotlinx-coroutines-jdk8:jar:1.10.2:compile
+[INFO] +- ai.platon.pulsar:pulsar-ql-common:jar:4.9.5:compile
+[INFO] |  \- com.fasterxml.jackson.core:jackson-databind:jar:2.21.2:compile
+[INFO] +- ai.platon.pulsar:browser4-resources:jar:4.12.0-rc.1-SNAPSHOT:test
+[INFO] +- ai.platon.pulsar:pulsar-ql:jar:4.9.5:compile
+[INFO] |  +- ai.platon.pulsar:pulsar-parse:jar:4.9.5:compile
+[INFO] |  |  +- net.sourceforge.nekohtml:nekohtml:jar:1.9.22:compile
+[INFO] |  |  |  \- xerces:xercesImpl:jar:2.11.0:compile
+[INFO] |  |  |     \- xml-apis:xml-apis:jar:1.4.01:compile
+[INFO] |  |  \- org.apache.tika:tika-parser-html-module:jar:3.2.2:compile
+[INFO] |  \- com.udojava:EvalEx:jar:2.0:compile
+[INFO] +- io.modelcontextprotocol:kotlin-sdk-core-jvm:jar:0.8.1:compile
+[INFO] |  +- org.jetbrains.kotlinx:kotlinx-serialization-json-jvm:jar:1.9.0:compile
+[INFO] |  |  \- org.jetbrains.kotlinx:kotlinx-serialization-core-jvm:jar:1.9.0:compile
+[INFO] |  +- org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm:jar:1.10.2:compile
+[INFO] |  +- org.jetbrains.kotlinx:kotlinx-io-core-jvm:jar:0.8.2:compile
+[INFO] |  |  \- org.jetbrains.kotlinx:kotlinx-io-bytestring-jvm:jar:0.8.2:compile
+[INFO] |  +- org.jetbrains.kotlinx:kotlinx-collections-immutable-jvm:jar:0.4.0:compile
+[INFO] |  +- io.ktor:ktor-server-websockets-jvm:jar:3.2.3:runtime
+[INFO] |  \- io.github.oshai:kotlin-logging-jvm:jar:7.0.13:runtime
+[INFO] +- io.modelcontextprotocol:kotlin-sdk-server-jvm:jar:0.8.1:compile
+[INFO] |  +- io.ktor:ktor-server-core-jvm:jar:3.2.3:compile
+[INFO] |  |  +- com.typesafe:config:jar:1.4.3:compile
+[INFO] |  |  +- io.ktor:ktor-utils-jvm:jar:3.2.3:compile
+[INFO] |  |  +- io.ktor:ktor-serialization-jvm:jar:3.2.3:compile
+[INFO] |  |  \- org.fusesource.jansi:jansi:jar:2.4.2:runtime
+[INFO] |  \- io.ktor:ktor-server-sse-jvm:jar:3.2.3:compile
+[INFO] +- io.modelcontextprotocol:kotlin-sdk-client-jvm:jar:0.8.1:test
+[INFO] +- io.opentelemetry:opentelemetry-api:jar:1.55.0:compile (optional)
+[INFO] |  \- io.opentelemetry:opentelemetry-context:jar:1.55.0:compile (optional)
+[INFO] |     \- io.opentelemetry:opentelemetry-common:jar:1.55.0:compile (optional)
+[INFO] +- io.opentelemetry:opentelemetry-sdk:jar:1.55.0:compile (optional)
+[INFO] |  +- io.opentelemetry:opentelemetry-sdk-common:jar:1.55.0:compile (optional)
+[INFO] |  +- io.opentelemetry:opentelemetry-sdk-trace:jar:1.55.0:compile (optional)
+[INFO] |  +- io.opentelemetry:opentelemetry-sdk-metrics:jar:1.55.0:compile (optional)
+[INFO] |  \- io.opentelemetry:opentelemetry-sdk-logs:jar:1.55.0:compile (optional)
+[INFO] +- io.opentelemetry:opentelemetry-exporter-otlp:jar:1.55.0:compile (optional)
+[INFO] |  +- io.opentelemetry:opentelemetry-exporter-otlp-common:jar:1.55.0:runtime (optional)
+[INFO] |  |  \- io.opentelemetry:opentelemetry-exporter-common:jar:1.55.0:runtime (optional)
+[INFO] |  +- io.opentelemetry:opentelemetry-exporter-sender-okhttp:jar:1.55.0:runtime (optional)
+[INFO] |  |  \- com.squareup.okhttp3:okhttp-jvm:jar:5.2.1:runtime (optional)
+[INFO] |  |     \- com.squareup.okio:okio-jvm:jar:3.16.1:compile
+[INFO] |  \- io.opentelemetry:opentelemetry-sdk-extension-autoconfigure-spi:jar:1.55.0:runtime (optional)
+[INFO] +- io.opentelemetry.semconv:opentelemetry-semconv:jar:1.37.0:compile (optional)
+[INFO] +- io.micrometer:micrometer-core:jar:1.16.5:compile (optional)
+[INFO] |  +- org.jspecify:jspecify:jar:1.0.0:compile
+[INFO] |  +- io.micrometer:micrometer-commons:jar:1.16.5:compile
+[INFO] |  +- io.micrometer:micrometer-observation:jar:1.16.5:compile
+[INFO] |  +- org.hdrhistogram:HdrHistogram:jar:2.2.2:runtime (optional)
+[INFO] |  \- org.latencyutils:LatencyUtils:jar:2.0.3:runtime (optional)
+[INFO] +- io.micrometer:micrometer-registry-prometheus:jar:1.16.5:compile (optional)
+[INFO] |  +- io.prometheus:prometheus-metrics-core:jar:1.4.3:compile (optional)
+[INFO] |  |  +- io.prometheus:prometheus-metrics-model:jar:1.4.3:compile (optional)
+[INFO] |  |  \- io.prometheus:prometheus-metrics-config:jar:1.4.3:compile (optional)
+[INFO] |  +- io.prometheus:prometheus-metrics-tracer-common:jar:1.4.3:compile (optional)
+[INFO] |  \- io.prometheus:prometheus-metrics-exposition-formats:jar:1.4.3:runtime (optional)
+[INFO] |     \- io.prometheus:prometheus-metrics-exposition-textformats:jar:1.4.3:runtime (optional)
+[INFO] +- jakarta.annotation:jakarta.annotation-api:jar:3.0.0:compile
+[INFO] +- org.mockito:mockito-core:jar:5.20.0:test
+[INFO] |  +- net.bytebuddy:byte-buddy:jar:1.17.8:test
+[INFO] |  +- net.bytebuddy:byte-buddy-agent:jar:1.17.8:test
+[INFO] |  \- org.objenesis:objenesis:jar:3.3:test
+[INFO] +- io.mockk:mockk:jar:1.14.6:test
+[INFO] |  +- io.mockk:mockk-dsl:jar:1.14.6:test
+[INFO] |  +- io.mockk:mockk-agent:jar:1.14.6:test
+[INFO] |  +- io.mockk:mockk-agent-api:jar:1.14.6:test
+[INFO] |  \- io.mockk:mockk-core:jar:1.14.6:test
+[INFO] +- io.mockk:mockk-jvm:jar:1.14.6:test
+[INFO] |  +- io.mockk:mockk-dsl-jvm:jar:1.14.6:test
+[INFO] |  +- io.mockk:mockk-agent-jvm:jar:1.14.6:test
+[INFO] |  +- io.mockk:mockk-agent-api-jvm:jar:1.14.6:test
+[INFO] |  +- io.mockk:mockk-core-jvm:jar:1.14.6:test
+[INFO] |  +- junit:junit:jar:4.13.2:test
+[INFO] |  |  \- org.hamcrest:hamcrest-core:jar:3.0:test
+[INFO] |  |     \- org.hamcrest:hamcrest:jar:3.0:test
+[INFO] |  \- org.junit.jupiter:junit-jupiter:jar:6.0.3:test
+[INFO] |     \- org.junit.jupiter:junit-jupiter-params:jar:6.0.3:test
+[INFO] +- org.yaml:snakeyaml:jar:2.5:compile
+[INFO] +- org.jetbrains.kotlin:kotlin-stdlib:jar:2.2.21:compile
+[INFO] |  \- org.jetbrains:annotations:jar:13.0:compile
+[INFO] +- org.jetbrains.kotlin:kotlin-reflect:jar:2.2.21:compile
+[INFO] +- org.jetbrains.kotlinx:kotlinx-coroutines-core:jar:1.10.2:compile
+[INFO] \- org.jetbrains.kotlin:kotlin-test-junit5:jar:2.2.21:test
+[INFO]    +- org.jetbrains.kotlin:kotlin-test:jar:2.2.21:test
+[INFO]    +- org.junit.jupiter:junit-jupiter-api:jar:6.0.3:test
+[INFO]    |  +- org.opentest4j:opentest4j:jar:1.3.0:test
+[INFO]    |  +- org.junit.platform:junit-platform-commons:jar:6.0.3:test
+[INFO]    |  \- org.apiguardian:apiguardian-api:jar:1.1.2:test
+[INFO]    +- org.junit.jupiter:junit-jupiter-engine:jar:6.0.3:test
+[INFO]    |  \- org.junit.platform:junit-platform-engine:jar:6.0.3:test
+[INFO]    \- org.junit.platform:junit-platform-launcher:jar:6.0.3:test
+[INFO]
+[INFO] -------------------< ai.platon.pulsar:browser4-pdk >--------------------
+[INFO] Building Browser4 Plugin Development Kit 4.12.0-rc.1-SNAPSHOT    [12/24]
+[INFO]   from browser4-pdk\pom.xml
+[INFO] --------------------------------[ pom ]---------------------------------
+[INFO]
+[INFO] --- dependency:3.9.0:tree (default-cli) @ browser4-pdk ---
+[INFO] ai.platon.pulsar:browser4-pdk:pom:4.12.0-rc.1-SNAPSHOT
+[INFO] \- org.jetbrains.kotlin:kotlin-stdlib:jar:2.3.21:compile
+[INFO]    \- org.jetbrains:annotations:jar:13.0:compile
+[INFO] Copying ai.platon.pulsar:browser4-pdk:pom:4.12.0-rc.1-SNAPSHOT to project local repository
+[INFO] Copying ai.platon.pulsar:browser4-pdk:pom:consumer:4.12.0-rc.1-SNAPSHOT to project local repository
+[INFO]
+[INFO] -----------------< ai.platon.pulsar:browser4-captcha >------------------
+[INFO] Building Browser4 Captcha 4.12.0-rc.1-SNAPSHOT                   [13/24]
+[INFO]   from browser4-plugins\browser4-captcha\pom.xml
+[INFO] --------------------------------[ jar ]---------------------------------
+[INFO]
+[INFO] --- dependency:3.9.0:tree (default-cli) @ browser4-captcha ---
+[INFO] ai.platon.pulsar:browser4-captcha:jar:4.12.0-rc.1-SNAPSHOT
+[INFO] +- ai.platon.pulsar:browser4-skeleton:jar:4.12.0-rc.1-SNAPSHOT:provided
+[INFO] |  +- ai.platon.pulsar:browser4-common:jar:4.12.0-rc.1-SNAPSHOT:provided
+[INFO] |  |  +- org.springframework:spring-core:jar:7.0.7:provided
+[INFO] |  |  |  \- commons-logging:commons-logging:jar:1.3.6:provided
+[INFO] |  |  +- org.apache.httpcomponents.client5:httpclient5:jar:5.5.2:provided
+[INFO] |  |  |  +- org.apache.httpcomponents.core5:httpcore5:jar:5.3.6:provided
+[INFO] |  |  |  \- org.apache.httpcomponents.core5:httpcore5-h2:jar:5.3.6:provided
+[INFO] |  |  +- commons-codec:commons-codec:jar:1.19.0:provided
+[INFO] |  |  +- org.apache.commons:commons-lang3:jar:3.19.0:provided
+[INFO] |  |  +- org.apache.commons:commons-math3:jar:3.6.1:provided
+[INFO] |  |  +- org.slf4j:slf4j-api:jar:2.0.17:provided
+[INFO] |  |  \- ch.qos.logback:logback-classic:jar:1.5.32:provided
+[INFO] |  |     \- ch.qos.logback:logback-core:jar:1.5.32:provided
+[INFO] |  +- ai.platon.pulsar:pulsar-common:jar:4.9.5:provided
+[INFO] |  |  +- commons-io:commons-io:jar:2.16.1:provided
+[INFO] |  |  +- com.fasterxml.jackson.dataformat:jackson-dataformat-properties:jar:2.21.2:provided
+[INFO] |  |  +- com.fasterxml.jackson.datatype:jackson-datatype-jsr310:jar:2.21.2:provided
+[INFO] |  |  \- org.nibor.autolink:autolink:jar:0.11.0:provided
+[INFO] |  +- ai.platon.pulsar:pulsar-persist:jar:4.9.5:provided
+[INFO] |  |  \- ai.platon.gora:gora-core-shaded:jar:1.0.9-slim:provided
+[INFO] |  +- ai.platon.pulsar:pulsar-dom:jar:4.9.5:provided
+[INFO] |  |  \- com.udojava:EvalEx:jar:2.0:provided
+[INFO] |  +- ai.platon.pulsar:pulsar-ql-common:jar:4.9.5:provided
+[INFO] |  +- ai.platon.pulsar:pulsar-h2:jar:1.4.197:provided
+[INFO] |  |  +- javax.servlet:javax.servlet-api:jar:3.1.0:provided
+[INFO] |  |  +- org.osgi:org.osgi.core:jar:4.2.0:provided
+[INFO] |  |  +- org.osgi:org.osgi.enterprise:jar:4.2.0:provided
+[INFO] |  |  \- org.locationtech.jts:jts-core:jar:1.15.0:provided
+[INFO] |  +- ai.platon.pulsar:pulsar-llm:jar:4.9.5:provided
+[INFO] |  |  \- dev.langchain4j:langchain4j-core:jar:1.5.0:provided
+[INFO] |  +- org.springframework:spring-context:jar:7.0.7:provided
+[INFO] |  |  +- org.springframework:spring-aop:jar:7.0.7:provided
+[INFO] |  |  +- org.springframework:spring-beans:jar:7.0.7:provided
+[INFO] |  |  +- org.springframework:spring-expression:jar:7.0.7:provided
+[INFO] |  |  \- io.micrometer:micrometer-observation:jar:1.16.5:provided
+[INFO] |  |     \- io.micrometer:micrometer-commons:jar:1.16.5:provided
+[INFO] |  +- org.apache.commons:commons-collections4:jar:4.4:provided
+[INFO] |  +- com.github.ben-manes.caffeine:caffeine:jar:3.2.3:provided
+[INFO] |  |  +- org.jspecify:jspecify:jar:1.0.0:provided
+[INFO] |  |  \- com.google.errorprone:error_prone_annotations:jar:2.43.0:provided
+[INFO] |  +- com.google.code.crawler-commons:crawler-commons:jar:0.5:provided
+[INFO] |  |  \- org.apache.tika:tika-core:jar:3.2.2:provided
+[INFO] |  +- com.beust:jcommander:jar:1.82:provided
+[INFO] |  +- com.github.oshi:oshi-core:jar:6.6.6:provided
+[INFO] |  |  +- net.java.dev.jna:jna:jar:5.16.0:provided
+[INFO] |  |  \- net.java.dev.jna:jna-platform:jar:5.16.0:provided
+[INFO] |  +- io.dropwizard.metrics:metrics-graphite:jar:4.2.12:provided
+[INFO] |  |  \- com.rabbitmq:amqp-client:jar:5.27.1:provided
+[INFO] |  |     +- io.netty:netty-transport:jar:4.2.12.Final:provided
+[INFO] |  |     |  +- io.netty:netty-common:jar:4.2.12.Final:provided
+[INFO] |  |     |  +- io.netty:netty-buffer:jar:4.2.12.Final:provided
+[INFO] |  |     |  \- io.netty:netty-resolver:jar:4.2.12.Final:provided
+[INFO] |  |     +- io.netty:netty-codec:jar:4.2.12.Final:provided
+[INFO] |  |     |  +- io.netty:netty-codec-base:jar:4.2.12.Final:provided
+[INFO] |  |     |  +- io.netty:netty-codec-compression:jar:4.2.12.Final:provided
+[INFO] |  |     |  +- io.netty:netty-codec-protobuf:jar:4.2.12.Final:provided
+[INFO] |  |     |  \- io.netty:netty-codec-marshalling:jar:4.2.12.Final:provided
+[INFO] |  |     \- io.netty:netty-handler:jar:4.2.12.Final:provided
+[INFO] |  |        \- io.netty:netty-transport-native-unix-common:jar:4.2.12.Final:provided
+[INFO] |  \- org.jetbrains.kotlinx:kotlinx-coroutines-jdk8:jar:1.10.2:provided
+[INFO] +- ai.platon.pulsar:browser4-browser:jar:4.12.0-rc.1-SNAPSHOT:provided
+[INFO] |  +- ai.platon.pulsar:pulsar-jsoup:jar:1.14.3:provided
+[INFO] |  +- ai.platon.cdt:cdt-kotlin-client:jar:4.8.0:provided
+[INFO] |  +- com.fasterxml.jackson.dataformat:jackson-dataformat-yaml:jar:2.21.2:provided
+[INFO] |  |  \- com.fasterxml.jackson.core:jackson-core:jar:2.21.2:provided
+[INFO] |  +- io.dropwizard.metrics:metrics-core:jar:4.2.12:provided
+[INFO] |  +- io.ktor:ktor-client-core:jar:3.2.3:provided
+[INFO] |  |  +- io.ktor:ktor-http:jar:3.2.3:provided
+[INFO] |  |  |  +- io.ktor:ktor-utils:jar:3.2.3:provided
+[INFO] |  |  |  \- org.jetbrains.kotlinx:kotlinx-serialization-core:jar:1.9.0:provided
+[INFO] |  |  +- io.ktor:ktor-http-cio:jar:3.2.3:provided
+[INFO] |  |  |  \- io.ktor:ktor-io:jar:3.2.3:provided
+[INFO] |  |  |     \- org.jetbrains.kotlinx:kotlinx-io-core:jar:0.7.0:provided
+[INFO] |  |  |        \- org.jetbrains.kotlinx:kotlinx-io-bytestring:jar:0.7.0:provided
+[INFO] |  |  +- io.ktor:ktor-events:jar:3.2.3:provided
+[INFO] |  |  +- io.ktor:ktor-websocket-serialization:jar:3.2.3:provided
+[INFO] |  |  |  \- io.ktor:ktor-serialization:jar:3.2.3:provided
+[INFO] |  |  \- io.ktor:ktor-sse:jar:3.2.3:provided
+[INFO] |  +- io.ktor:ktor-client-core-jvm:jar:3.2.3:provided
+[INFO] |  |  +- io.ktor:ktor-http-jvm:jar:3.2.3:provided
+[INFO] |  |  |  +- io.ktor:ktor-utils-jvm:jar:3.2.3:provided
+[INFO] |  |  |  \- org.jetbrains.kotlinx:kotlinx-serialization-core-jvm:jar:1.9.0:provided
+[INFO] |  |  +- io.ktor:ktor-http-cio-jvm:jar:3.2.3:provided
+[INFO] |  |  |  +- io.ktor:ktor-network-jvm:jar:3.2.3:provided
+[INFO] |  |  |  \- io.ktor:ktor-io-jvm:jar:3.2.3:provided
+[INFO] |  |  +- io.ktor:ktor-events-jvm:jar:3.2.3:provided
+[INFO] |  |  +- io.ktor:ktor-websocket-serialization-jvm:jar:3.2.3:provided
+[INFO] |  |  |  \- io.ktor:ktor-serialization-jvm:jar:3.2.3:provided
+[INFO] |  |  +- io.ktor:ktor-sse-jvm:jar:3.2.3:provided
+[INFO] |  |  \- org.jetbrains.kotlinx:kotlinx-coroutines-slf4j:jar:1.10.2:provided
+[INFO] |  +- io.ktor:ktor-client-cio:jar:3.2.3:provided
+[INFO] |  |  +- io.ktor:ktor-websockets:jar:3.2.3:provided
+[INFO] |  |  \- io.ktor:ktor-network-tls:jar:3.2.3:provided
+[INFO] |  |     \- io.ktor:ktor-network:jar:3.2.3:provided
+[INFO] |  +- io.ktor:ktor-client-cio-jvm:jar:3.2.3:provided
+[INFO] |  |  +- io.ktor:ktor-websockets-jvm:jar:3.2.3:provided
+[INFO] |  |  \- io.ktor:ktor-network-tls-jvm:jar:3.2.3:provided
+[INFO] |  \- io.ktor:ktor-client-websockets:jar:3.2.3:provided
+[INFO] +- ai.platon.pulsar:browser4-protocol:jar:4.12.0-rc.1-SNAPSHOT:provided
+[INFO] +- ai.platon.pulsar:browser4-agentic:jar:4.12.0-rc.1-SNAPSHOT:provided
+[INFO] |  +- ai.platon.pulsar:pulsar-ql:jar:4.9.5:provided
+[INFO] |  |  \- ai.platon.pulsar:pulsar-parse:jar:4.9.5:provided
+[INFO] |  |     +- net.sourceforge.nekohtml:nekohtml:jar:1.9.22:provided
+[INFO] |  |     |  \- xerces:xercesImpl:jar:2.11.0:provided
+[INFO] |  |     |     \- xml-apis:xml-apis:jar:1.4.01:provided
+[INFO] |  |     \- org.apache.tika:tika-parser-html-module:jar:3.2.2:provided
+[INFO] |  +- io.modelcontextprotocol:kotlin-sdk-core-jvm:jar:0.8.1:provided
+[INFO] |  |  +- org.jetbrains.kotlinx:kotlinx-serialization-json-jvm:jar:1.9.0:provided
+[INFO] |  |  +- org.jetbrains.kotlinx:kotlinx-io-core-jvm:jar:0.8.2:provided
+[INFO] |  |  |  \- org.jetbrains.kotlinx:kotlinx-io-bytestring-jvm:jar:0.8.2:provided
+[INFO] |  |  +- org.jetbrains.kotlinx:kotlinx-collections-immutable-jvm:jar:0.4.0:provided
+[INFO] |  |  +- io.ktor:ktor-server-websockets-jvm:jar:3.2.3:provided
+[INFO] |  |  \- io.github.oshai:kotlin-logging-jvm:jar:7.0.13:provided
+[INFO] |  +- io.modelcontextprotocol:kotlin-sdk-server-jvm:jar:0.8.1:provided
+[INFO] |  |  +- io.ktor:ktor-server-core-jvm:jar:3.2.3:provided
+[INFO] |  |  |  +- com.typesafe:config:jar:1.4.3:provided
+[INFO] |  |  |  \- org.fusesource.jansi:jansi:jar:2.4.2:provided
+[INFO] |  |  \- io.ktor:ktor-server-sse-jvm:jar:3.2.3:provided
+[INFO] |  +- jakarta.annotation:jakarta.annotation-api:jar:3.0.0:provided
+[INFO] |  \- org.yaml:snakeyaml:jar:2.5:provided
+[INFO] +- org.springframework.boot:spring-boot-autoconfigure:jar:4.0.6:provided
+[INFO] |  \- org.springframework.boot:spring-boot:jar:4.0.6:provided
+[INFO] +- org.jetbrains.kotlin:kotlin-stdlib:jar:2.2.21:provided
+[INFO] |  \- org.jetbrains:annotations:jar:13.0:provided
+[INFO] +- org.jetbrains.kotlin:kotlin-reflect:jar:2.2.21:provided
+[INFO] +- org.jetbrains.kotlinx:kotlinx-coroutines-core:jar:1.10.2:provided
+[INFO] |  \- org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm:jar:1.10.2:provided
+[INFO] +- com.squareup.okhttp3:okhttp:jar:4.12.0:provided
+[INFO] |  +- com.squareup.okio:okio:jar:3.6.0:provided
+[INFO] |  |  \- com.squareup.okio:okio-jvm:jar:3.6.0:provided
+[INFO] |  |     \- org.jetbrains.kotlin:kotlin-stdlib-common:jar:1.9.10:provided
+[INFO] |  \- org.jetbrains.kotlin:kotlin-stdlib-jdk8:jar:2.2.21:provided
+[INFO] |     \- org.jetbrains.kotlin:kotlin-stdlib-jdk7:jar:2.2.21:provided
+[INFO] +- com.fasterxml.jackson.module:jackson-module-kotlin:jar:2.21.2:provided
+[INFO] |  +- com.fasterxml.jackson.core:jackson-databind:jar:2.21.2:provided
+[INFO] |  \- com.fasterxml.jackson.core:jackson-annotations:jar:2.21:provided
+[INFO] +- org.jetbrains.kotlin:kotlin-test-junit5:jar:2.2.21:test
+[INFO] |  +- org.jetbrains.kotlin:kotlin-test:jar:2.2.21:test
+[INFO] |  +- org.junit.jupiter:junit-jupiter-api:jar:6.0.3:test
+[INFO] |  |  +- org.opentest4j:opentest4j:jar:1.3.0:test
+[INFO] |  |  +- org.junit.platform:junit-platform-commons:jar:6.0.3:test
+[INFO] |  |  \- org.apiguardian:apiguardian-api:jar:1.1.2:test
+[INFO] |  +- org.junit.jupiter:junit-jupiter-engine:jar:6.0.3:test
+[INFO] |  |  \- org.junit.platform:junit-platform-engine:jar:6.0.3:test
+[INFO] |  \- org.junit.platform:junit-platform-launcher:jar:6.0.3:test
+[INFO] \- org.springframework.boot:spring-boot-test:jar:4.0.6:test
+[INFO]    \- org.springframework:spring-test:jar:7.0.7:test
+[INFO]
+[INFO] ------------------< ai.platon.pulsar:browser4-media >-------------------
+[INFO] Building Browser4 Media 4.12.0-rc.1-SNAPSHOT                     [14/24]
+[INFO]   from browser4-plugins\browser4-media\pom.xml
+[INFO] --------------------------------[ jar ]---------------------------------
+[INFO]
+[INFO] --- dependency:3.9.0:tree (default-cli) @ browser4-media ---
+[INFO] ai.platon.pulsar:browser4-media:jar:4.12.0-rc.1-SNAPSHOT
+[INFO] +- ai.platon.pulsar:browser4-skeleton:jar:4.12.0-rc.1-SNAPSHOT:provided
+[INFO] |  +- ai.platon.pulsar:browser4-common:jar:4.12.0-rc.1-SNAPSHOT:provided
+[INFO] |  |  +- org.springframework:spring-core:jar:7.0.7:provided
+[INFO] |  |  |  \- commons-logging:commons-logging:jar:1.3.6:provided
+[INFO] |  |  +- org.apache.httpcomponents.client5:httpclient5:jar:5.5.2:provided
+[INFO] |  |  |  +- org.apache.httpcomponents.core5:httpcore5:jar:5.3.6:provided
+[INFO] |  |  |  \- org.apache.httpcomponents.core5:httpcore5-h2:jar:5.3.6:provided
+[INFO] |  |  +- commons-codec:commons-codec:jar:1.19.0:provided
+[INFO] |  |  +- org.apache.commons:commons-lang3:jar:3.19.0:provided
+[INFO] |  |  +- org.apache.commons:commons-math3:jar:3.6.1:provided
+[INFO] |  |  +- org.slf4j:slf4j-api:jar:2.0.17:provided
+[INFO] |  |  \- ch.qos.logback:logback-classic:jar:1.5.32:provided
+[INFO] |  |     \- ch.qos.logback:logback-core:jar:1.5.32:provided
+[INFO] |  +- ai.platon.pulsar:pulsar-common:jar:4.9.5:provided
+[INFO] |  |  +- commons-io:commons-io:jar:2.16.1:provided
+[INFO] |  |  +- com.fasterxml.jackson.dataformat:jackson-dataformat-properties:jar:2.21.2:provided
+[INFO] |  |  +- com.fasterxml.jackson.datatype:jackson-datatype-jsr310:jar:2.21.2:provided
+[INFO] |  |  \- org.nibor.autolink:autolink:jar:0.11.0:provided
+[INFO] |  +- ai.platon.pulsar:pulsar-persist:jar:4.9.5:provided
+[INFO] |  |  \- ai.platon.gora:gora-core-shaded:jar:1.0.9-slim:provided
+[INFO] |  +- ai.platon.pulsar:pulsar-dom:jar:4.9.5:provided
+[INFO] |  |  \- com.udojava:EvalEx:jar:2.0:provided
+[INFO] |  +- ai.platon.pulsar:pulsar-ql-common:jar:4.9.5:provided
+[INFO] |  +- ai.platon.pulsar:pulsar-h2:jar:1.4.197:provided
+[INFO] |  |  +- javax.servlet:javax.servlet-api:jar:3.1.0:provided
+[INFO] |  |  +- org.osgi:org.osgi.core:jar:4.2.0:provided
+[INFO] |  |  +- org.osgi:org.osgi.enterprise:jar:4.2.0:provided
+[INFO] |  |  \- org.locationtech.jts:jts-core:jar:1.15.0:provided
+[INFO] |  +- ai.platon.pulsar:pulsar-llm:jar:4.9.5:provided
+[INFO] |  |  \- dev.langchain4j:langchain4j-core:jar:1.5.0:provided
+[INFO] |  +- org.springframework:spring-context:jar:7.0.7:provided
+[INFO] |  |  +- org.springframework:spring-aop:jar:7.0.7:provided
+[INFO] |  |  +- org.springframework:spring-beans:jar:7.0.7:provided
+[INFO] |  |  +- org.springframework:spring-expression:jar:7.0.7:provided
+[INFO] |  |  \- io.micrometer:micrometer-observation:jar:1.16.5:provided
+[INFO] |  |     \- io.micrometer:micrometer-commons:jar:1.16.5:provided
+[INFO] |  +- org.apache.commons:commons-collections4:jar:4.4:provided
+[INFO] |  +- com.github.ben-manes.caffeine:caffeine:jar:3.2.3:provided
+[INFO] |  |  +- org.jspecify:jspecify:jar:1.0.0:provided
+[INFO] |  |  \- com.google.errorprone:error_prone_annotations:jar:2.43.0:provided
+[INFO] |  +- com.google.code.crawler-commons:crawler-commons:jar:0.5:provided
+[INFO] |  |  \- org.apache.tika:tika-core:jar:3.2.2:provided
+[INFO] |  +- com.beust:jcommander:jar:1.82:provided
+[INFO] |  +- com.github.oshi:oshi-core:jar:6.6.6:provided
+[INFO] |  |  +- net.java.dev.jna:jna:jar:5.16.0:provided
+[INFO] |  |  \- net.java.dev.jna:jna-platform:jar:5.16.0:provided
+[INFO] |  +- io.dropwizard.metrics:metrics-graphite:jar:4.2.12:provided
+[INFO] |  |  \- com.rabbitmq:amqp-client:jar:5.27.1:provided
+[INFO] |  |     +- io.netty:netty-transport:jar:4.2.12.Final:provided
+[INFO] |  |     |  +- io.netty:netty-common:jar:4.2.12.Final:provided
+[INFO] |  |     |  +- io.netty:netty-buffer:jar:4.2.12.Final:provided
+[INFO] |  |     |  \- io.netty:netty-resolver:jar:4.2.12.Final:provided
+[INFO] |  |     +- io.netty:netty-codec:jar:4.2.12.Final:provided
+[INFO] |  |     |  +- io.netty:netty-codec-base:jar:4.2.12.Final:provided
+[INFO] |  |     |  +- io.netty:netty-codec-compression:jar:4.2.12.Final:provided
+[INFO] |  |     |  +- io.netty:netty-codec-protobuf:jar:4.2.12.Final:provided
+[INFO] |  |     |  \- io.netty:netty-codec-marshalling:jar:4.2.12.Final:provided
+[INFO] |  |     \- io.netty:netty-handler:jar:4.2.12.Final:provided
+[INFO] |  |        \- io.netty:netty-transport-native-unix-common:jar:4.2.12.Final:provided
+[INFO] |  \- org.jetbrains.kotlinx:kotlinx-coroutines-jdk8:jar:1.10.2:provided
+[INFO] +- ai.platon.pulsar:browser4-browser:jar:4.12.0-rc.1-SNAPSHOT:provided
+[INFO] |  +- ai.platon.pulsar:pulsar-jsoup:jar:1.14.3:provided
+[INFO] |  +- ai.platon.cdt:cdt-kotlin-client:jar:4.8.0:provided
+[INFO] |  +- com.fasterxml.jackson.dataformat:jackson-dataformat-yaml:jar:2.21.2:provided
+[INFO] |  |  \- com.fasterxml.jackson.core:jackson-core:jar:2.21.2:provided
+[INFO] |  +- io.dropwizard.metrics:metrics-core:jar:4.2.12:provided
+[INFO] |  +- io.ktor:ktor-client-core:jar:3.2.3:provided
+[INFO] |  |  +- io.ktor:ktor-http:jar:3.2.3:provided
+[INFO] |  |  |  +- io.ktor:ktor-utils:jar:3.2.3:provided
+[INFO] |  |  |  \- org.jetbrains.kotlinx:kotlinx-serialization-core:jar:1.9.0:provided
+[INFO] |  |  +- io.ktor:ktor-http-cio:jar:3.2.3:provided
+[INFO] |  |  |  \- io.ktor:ktor-io:jar:3.2.3:provided
+[INFO] |  |  |     \- org.jetbrains.kotlinx:kotlinx-io-core:jar:0.7.0:provided
+[INFO] |  |  |        \- org.jetbrains.kotlinx:kotlinx-io-bytestring:jar:0.7.0:provided
+[INFO] |  |  +- io.ktor:ktor-events:jar:3.2.3:provided
+[INFO] |  |  +- io.ktor:ktor-websocket-serialization:jar:3.2.3:provided
+[INFO] |  |  |  \- io.ktor:ktor-serialization:jar:3.2.3:provided
+[INFO] |  |  \- io.ktor:ktor-sse:jar:3.2.3:provided
+[INFO] |  +- io.ktor:ktor-client-core-jvm:jar:3.2.3:provided
+[INFO] |  |  +- io.ktor:ktor-http-jvm:jar:3.2.3:provided
+[INFO] |  |  |  +- io.ktor:ktor-utils-jvm:jar:3.2.3:provided
+[INFO] |  |  |  \- org.jetbrains.kotlinx:kotlinx-serialization-core-jvm:jar:1.9.0:provided
+[INFO] |  |  +- io.ktor:ktor-http-cio-jvm:jar:3.2.3:provided
+[INFO] |  |  |  +- io.ktor:ktor-network-jvm:jar:3.2.3:provided
+[INFO] |  |  |  \- io.ktor:ktor-io-jvm:jar:3.2.3:provided
+[INFO] |  |  +- io.ktor:ktor-events-jvm:jar:3.2.3:provided
+[INFO] |  |  +- io.ktor:ktor-websocket-serialization-jvm:jar:3.2.3:provided
+[INFO] |  |  |  \- io.ktor:ktor-serialization-jvm:jar:3.2.3:provided
+[INFO] |  |  +- io.ktor:ktor-sse-jvm:jar:3.2.3:provided
+[INFO] |  |  \- org.jetbrains.kotlinx:kotlinx-coroutines-slf4j:jar:1.10.2:provided
+[INFO] |  +- io.ktor:ktor-client-cio:jar:3.2.3:provided
+[INFO] |  |  +- io.ktor:ktor-websockets:jar:3.2.3:provided
+[INFO] |  |  \- io.ktor:ktor-network-tls:jar:3.2.3:provided
+[INFO] |  |     \- io.ktor:ktor-network:jar:3.2.3:provided
+[INFO] |  +- io.ktor:ktor-client-cio-jvm:jar:3.2.3:provided
+[INFO] |  |  +- io.ktor:ktor-websockets-jvm:jar:3.2.3:provided
+[INFO] |  |  \- io.ktor:ktor-network-tls-jvm:jar:3.2.3:provided
+[INFO] |  \- io.ktor:ktor-client-websockets:jar:3.2.3:provided
+[INFO] +- ai.platon.pulsar:browser4-protocol:jar:4.12.0-rc.1-SNAPSHOT:provided
+[INFO] +- ai.platon.pulsar:browser4-agentic:jar:4.12.0-rc.1-SNAPSHOT:provided
+[INFO] |  +- ai.platon.pulsar:pulsar-ql:jar:4.9.5:provided
+[INFO] |  |  \- ai.platon.pulsar:pulsar-parse:jar:4.9.5:provided
+[INFO] |  |     +- net.sourceforge.nekohtml:nekohtml:jar:1.9.22:provided
+[INFO] |  |     |  \- xerces:xercesImpl:jar:2.11.0:provided
+[INFO] |  |     |     \- xml-apis:xml-apis:jar:1.4.01:provided
+[INFO] |  |     \- org.apache.tika:tika-parser-html-module:jar:3.2.2:provided
+[INFO] |  +- io.modelcontextprotocol:kotlin-sdk-core-jvm:jar:0.8.1:provided
+[INFO] |  |  +- org.jetbrains.kotlinx:kotlinx-serialization-json-jvm:jar:1.9.0:provided
+[INFO] |  |  +- org.jetbrains.kotlinx:kotlinx-io-core-jvm:jar:0.8.2:provided
+[INFO] |  |  |  \- org.jetbrains.kotlinx:kotlinx-io-bytestring-jvm:jar:0.8.2:provided
+[INFO] |  |  +- org.jetbrains.kotlinx:kotlinx-collections-immutable-jvm:jar:0.4.0:provided
+[INFO] |  |  +- io.ktor:ktor-server-websockets-jvm:jar:3.2.3:provided
+[INFO] |  |  \- io.github.oshai:kotlin-logging-jvm:jar:7.0.13:provided
+[INFO] |  +- io.modelcontextprotocol:kotlin-sdk-server-jvm:jar:0.8.1:provided
+[INFO] |  |  +- io.ktor:ktor-server-core-jvm:jar:3.2.3:provided
+[INFO] |  |  |  +- com.typesafe:config:jar:1.4.3:provided
+[INFO] |  |  |  \- org.fusesource.jansi:jansi:jar:2.4.2:provided
+[INFO] |  |  \- io.ktor:ktor-server-sse-jvm:jar:3.2.3:provided
+[INFO] |  +- jakarta.annotation:jakarta.annotation-api:jar:3.0.0:provided
+[INFO] |  \- org.yaml:snakeyaml:jar:2.5:provided
+[INFO] +- org.springframework.boot:spring-boot-autoconfigure:jar:4.0.6:provided
+[INFO] |  \- org.springframework.boot:spring-boot:jar:4.0.6:provided
+[INFO] +- org.jetbrains.kotlin:kotlin-stdlib:jar:2.2.21:provided
+[INFO] |  \- org.jetbrains:annotations:jar:13.0:provided
+[INFO] +- org.jetbrains.kotlin:kotlin-reflect:jar:2.2.21:provided
+[INFO] +- org.jetbrains.kotlinx:kotlinx-coroutines-core:jar:1.10.2:provided
+[INFO] |  \- org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm:jar:1.10.2:provided
+[INFO] +- com.squareup.okhttp3:okhttp:jar:4.12.0:provided
+[INFO] |  +- com.squareup.okio:okio:jar:3.6.0:provided
+[INFO] |  |  \- com.squareup.okio:okio-jvm:jar:3.6.0:provided
+[INFO] |  |     \- org.jetbrains.kotlin:kotlin-stdlib-common:jar:1.9.10:provided
+[INFO] |  \- org.jetbrains.kotlin:kotlin-stdlib-jdk8:jar:2.2.21:provided
+[INFO] |     \- org.jetbrains.kotlin:kotlin-stdlib-jdk7:jar:2.2.21:provided
+[INFO] +- com.fasterxml.jackson.module:jackson-module-kotlin:jar:2.21.2:provided
+[INFO] |  +- com.fasterxml.jackson.core:jackson-databind:jar:2.21.2:provided
+[INFO] |  \- com.fasterxml.jackson.core:jackson-annotations:jar:2.21:provided
+[INFO] +- org.jetbrains.kotlin:kotlin-test-junit5:jar:2.2.21:test
+[INFO] |  +- org.jetbrains.kotlin:kotlin-test:jar:2.2.21:test
+[INFO] |  +- org.junit.jupiter:junit-jupiter-api:jar:6.0.3:test
+[INFO] |  |  +- org.opentest4j:opentest4j:jar:1.3.0:test
+[INFO] |  |  +- org.junit.platform:junit-platform-commons:jar:6.0.3:test
+[INFO] |  |  \- org.apiguardian:apiguardian-api:jar:1.1.2:test
+[INFO] |  +- org.junit.jupiter:junit-jupiter-engine:jar:6.0.3:test
+[INFO] |  |  \- org.junit.platform:junit-platform-engine:jar:6.0.3:test
+[INFO] |  \- org.junit.platform:junit-platform-launcher:jar:6.0.3:test
+[INFO] \- org.springframework.boot:spring-boot-test:jar:4.0.6:test
+[INFO]    \- org.springframework:spring-test:jar:7.0.7:test
+[INFO]
+[INFO] ------------------< ai.platon.pulsar:browser4-images >------------------
+[INFO] Building Browser4 Images 4.12.0-rc.1-SNAPSHOT                    [15/24]
+[INFO]   from browser4-plugins\browser4-images\pom.xml
+[INFO] --------------------------------[ jar ]---------------------------------
+[INFO]
+[INFO] --- dependency:3.9.0:tree (default-cli) @ browser4-images ---
+[INFO] ai.platon.pulsar:browser4-images:jar:4.12.0-rc.1-SNAPSHOT
+[INFO] +- ai.platon.pulsar:browser4-skeleton:jar:4.12.0-rc.1-SNAPSHOT:provided
+[INFO] |  +- ai.platon.pulsar:browser4-common:jar:4.12.0-rc.1-SNAPSHOT:provided
+[INFO] |  |  +- org.springframework:spring-core:jar:7.0.7:provided
+[INFO] |  |  |  \- commons-logging:commons-logging:jar:1.3.6:provided
+[INFO] |  |  +- org.apache.httpcomponents.client5:httpclient5:jar:5.5.2:provided
+[INFO] |  |  |  +- org.apache.httpcomponents.core5:httpcore5:jar:5.3.6:provided
+[INFO] |  |  |  \- org.apache.httpcomponents.core5:httpcore5-h2:jar:5.3.6:provided
+[INFO] |  |  +- commons-codec:commons-codec:jar:1.19.0:provided
+[INFO] |  |  +- org.apache.commons:commons-lang3:jar:3.19.0:provided
+[INFO] |  |  +- org.apache.commons:commons-math3:jar:3.6.1:provided
+[INFO] |  |  +- org.slf4j:slf4j-api:jar:2.0.17:provided
+[INFO] |  |  \- ch.qos.logback:logback-classic:jar:1.5.32:provided
+[INFO] |  |     \- ch.qos.logback:logback-core:jar:1.5.32:provided
+[INFO] |  +- ai.platon.pulsar:pulsar-common:jar:4.9.5:provided
+[INFO] |  |  +- commons-io:commons-io:jar:2.16.1:provided
+[INFO] |  |  +- com.fasterxml.jackson.module:jackson-module-kotlin:jar:2.21.2:provided
+[INFO] |  |  +- com.fasterxml.jackson.dataformat:jackson-dataformat-properties:jar:2.21.2:provided
+[INFO] |  |  +- com.fasterxml.jackson.datatype:jackson-datatype-jsr310:jar:2.21.2:provided
+[INFO] |  |  \- org.nibor.autolink:autolink:jar:0.11.0:provided
+[INFO] |  +- ai.platon.pulsar:pulsar-persist:jar:4.9.5:provided
+[INFO] |  |  \- ai.platon.gora:gora-core-shaded:jar:1.0.9-slim:provided
+[INFO] |  +- ai.platon.pulsar:pulsar-dom:jar:4.9.5:provided
+[INFO] |  |  \- com.udojava:EvalEx:jar:2.0:provided
+[INFO] |  +- ai.platon.pulsar:pulsar-ql-common:jar:4.9.5:provided
+[INFO] |  |  \- com.fasterxml.jackson.core:jackson-databind:jar:2.21.2:provided
+[INFO] |  +- ai.platon.pulsar:pulsar-h2:jar:1.4.197:provided
+[INFO] |  |  +- javax.servlet:javax.servlet-api:jar:3.1.0:provided
+[INFO] |  |  +- org.osgi:org.osgi.core:jar:4.2.0:provided
+[INFO] |  |  +- org.osgi:org.osgi.enterprise:jar:4.2.0:provided
+[INFO] |  |  \- org.locationtech.jts:jts-core:jar:1.15.0:provided
+[INFO] |  +- ai.platon.pulsar:pulsar-llm:jar:4.9.5:provided
+[INFO] |  |  \- dev.langchain4j:langchain4j-core:jar:1.5.0:provided
+[INFO] |  +- org.springframework:spring-context:jar:7.0.7:provided
+[INFO] |  |  +- org.springframework:spring-aop:jar:7.0.7:provided
+[INFO] |  |  +- org.springframework:spring-beans:jar:7.0.7:provided
+[INFO] |  |  +- org.springframework:spring-expression:jar:7.0.7:provided
+[INFO] |  |  \- io.micrometer:micrometer-observation:jar:1.16.5:provided
+[INFO] |  |     \- io.micrometer:micrometer-commons:jar:1.16.5:provided
+[INFO] |  +- org.apache.commons:commons-collections4:jar:4.4:provided
+[INFO] |  +- com.github.ben-manes.caffeine:caffeine:jar:3.2.3:provided
+[INFO] |  |  +- org.jspecify:jspecify:jar:1.0.0:provided
+[INFO] |  |  \- com.google.errorprone:error_prone_annotations:jar:2.43.0:provided
+[INFO] |  +- com.google.code.crawler-commons:crawler-commons:jar:0.5:provided
+[INFO] |  |  \- org.apache.tika:tika-core:jar:3.2.2:provided
+[INFO] |  +- com.beust:jcommander:jar:1.82:provided
+[INFO] |  +- com.github.oshi:oshi-core:jar:6.6.6:provided
+[INFO] |  |  +- net.java.dev.jna:jna:jar:5.16.0:provided
+[INFO] |  |  \- net.java.dev.jna:jna-platform:jar:5.16.0:provided
+[INFO] |  +- io.dropwizard.metrics:metrics-graphite:jar:4.2.12:provided
+[INFO] |  |  \- com.rabbitmq:amqp-client:jar:5.27.1:provided
+[INFO] |  |     +- io.netty:netty-transport:jar:4.2.12.Final:provided
+[INFO] |  |     |  +- io.netty:netty-common:jar:4.2.12.Final:provided
+[INFO] |  |     |  +- io.netty:netty-buffer:jar:4.2.12.Final:provided
+[INFO] |  |     |  \- io.netty:netty-resolver:jar:4.2.12.Final:provided
+[INFO] |  |     +- io.netty:netty-codec:jar:4.2.12.Final:provided
+[INFO] |  |     |  +- io.netty:netty-codec-base:jar:4.2.12.Final:provided
+[INFO] |  |     |  +- io.netty:netty-codec-compression:jar:4.2.12.Final:provided
+[INFO] |  |     |  +- io.netty:netty-codec-protobuf:jar:4.2.12.Final:provided
+[INFO] |  |     |  \- io.netty:netty-codec-marshalling:jar:4.2.12.Final:provided
+[INFO] |  |     \- io.netty:netty-handler:jar:4.2.12.Final:provided
+[INFO] |  |        \- io.netty:netty-transport-native-unix-common:jar:4.2.12.Final:provided
+[INFO] |  \- org.jetbrains.kotlinx:kotlinx-coroutines-jdk8:jar:1.10.2:provided
+[INFO] +- ai.platon.pulsar:browser4-browser:jar:4.12.0-rc.1-SNAPSHOT:provided
+[INFO] |  +- ai.platon.pulsar:pulsar-jsoup:jar:1.14.3:provided
+[INFO] |  +- ai.platon.cdt:cdt-kotlin-client:jar:4.8.0:provided
+[INFO] |  |  \- com.fasterxml.jackson.core:jackson-annotations:jar:2.21:provided
+[INFO] |  +- com.fasterxml.jackson.dataformat:jackson-dataformat-yaml:jar:2.21.2:provided
+[INFO] |  |  \- com.fasterxml.jackson.core:jackson-core:jar:2.21.2:provided
+[INFO] |  +- io.dropwizard.metrics:metrics-core:jar:4.2.12:provided
+[INFO] |  +- io.ktor:ktor-client-core:jar:3.2.3:provided
+[INFO] |  |  +- io.ktor:ktor-http:jar:3.2.3:provided
+[INFO] |  |  |  +- io.ktor:ktor-utils:jar:3.2.3:provided
+[INFO] |  |  |  \- org.jetbrains.kotlinx:kotlinx-serialization-core:jar:1.9.0:provided
+[INFO] |  |  +- io.ktor:ktor-http-cio:jar:3.2.3:provided
+[INFO] |  |  |  \- io.ktor:ktor-io:jar:3.2.3:provided
+[INFO] |  |  |     \- org.jetbrains.kotlinx:kotlinx-io-core:jar:0.7.0:provided
+[INFO] |  |  |        \- org.jetbrains.kotlinx:kotlinx-io-bytestring:jar:0.7.0:provided
+[INFO] |  |  +- io.ktor:ktor-events:jar:3.2.3:provided
+[INFO] |  |  +- io.ktor:ktor-websocket-serialization:jar:3.2.3:provided
+[INFO] |  |  |  \- io.ktor:ktor-serialization:jar:3.2.3:provided
+[INFO] |  |  \- io.ktor:ktor-sse:jar:3.2.3:provided
+[INFO] |  +- io.ktor:ktor-client-core-jvm:jar:3.2.3:provided
+[INFO] |  |  +- io.ktor:ktor-http-jvm:jar:3.2.3:provided
+[INFO] |  |  |  +- io.ktor:ktor-utils-jvm:jar:3.2.3:provided
+[INFO] |  |  |  \- org.jetbrains.kotlinx:kotlinx-serialization-core-jvm:jar:1.9.0:provided
+[INFO] |  |  +- io.ktor:ktor-http-cio-jvm:jar:3.2.3:provided
+[INFO] |  |  |  +- io.ktor:ktor-network-jvm:jar:3.2.3:provided
+[INFO] |  |  |  \- io.ktor:ktor-io-jvm:jar:3.2.3:provided
+[INFO] |  |  +- io.ktor:ktor-events-jvm:jar:3.2.3:provided
+[INFO] |  |  +- io.ktor:ktor-websocket-serialization-jvm:jar:3.2.3:provided
+[INFO] |  |  |  \- io.ktor:ktor-serialization-jvm:jar:3.2.3:provided
+[INFO] |  |  +- io.ktor:ktor-sse-jvm:jar:3.2.3:provided
+[INFO] |  |  \- org.jetbrains.kotlinx:kotlinx-coroutines-slf4j:jar:1.10.2:provided
+[INFO] |  +- io.ktor:ktor-client-cio:jar:3.2.3:provided
+[INFO] |  |  +- io.ktor:ktor-websockets:jar:3.2.3:provided
+[INFO] |  |  \- io.ktor:ktor-network-tls:jar:3.2.3:provided
+[INFO] |  |     \- io.ktor:ktor-network:jar:3.2.3:provided
+[INFO] |  +- io.ktor:ktor-client-cio-jvm:jar:3.2.3:provided
+[INFO] |  |  +- io.ktor:ktor-websockets-jvm:jar:3.2.3:provided
+[INFO] |  |  \- io.ktor:ktor-network-tls-jvm:jar:3.2.3:provided
+[INFO] |  \- io.ktor:ktor-client-websockets:jar:3.2.3:provided
+[INFO] +- ai.platon.pulsar:browser4-protocol:jar:4.12.0-rc.1-SNAPSHOT:provided
+[INFO] +- ai.platon.pulsar:browser4-agentic:jar:4.12.0-rc.1-SNAPSHOT:provided
+[INFO] |  +- ai.platon.pulsar:pulsar-ql:jar:4.9.5:provided
+[INFO] |  |  \- ai.platon.pulsar:pulsar-parse:jar:4.9.5:provided
+[INFO] |  |     +- net.sourceforge.nekohtml:nekohtml:jar:1.9.22:provided
+[INFO] |  |     |  \- xerces:xercesImpl:jar:2.11.0:provided
+[INFO] |  |     |     \- xml-apis:xml-apis:jar:1.4.01:provided
+[INFO] |  |     \- org.apache.tika:tika-parser-html-module:jar:3.2.2:provided
+[INFO] |  +- io.modelcontextprotocol:kotlin-sdk-core-jvm:jar:0.8.1:provided
+[INFO] |  |  +- org.jetbrains.kotlinx:kotlinx-serialization-json-jvm:jar:1.9.0:provided
+[INFO] |  |  +- org.jetbrains.kotlinx:kotlinx-io-core-jvm:jar:0.8.2:provided
+[INFO] |  |  |  \- org.jetbrains.kotlinx:kotlinx-io-bytestring-jvm:jar:0.8.2:provided
+[INFO] |  |  +- org.jetbrains.kotlinx:kotlinx-collections-immutable-jvm:jar:0.4.0:provided
+[INFO] |  |  +- io.ktor:ktor-server-websockets-jvm:jar:3.2.3:provided
+[INFO] |  |  \- io.github.oshai:kotlin-logging-jvm:jar:7.0.13:provided
+[INFO] |  +- io.modelcontextprotocol:kotlin-sdk-server-jvm:jar:0.8.1:provided
+[INFO] |  |  +- io.ktor:ktor-server-core-jvm:jar:3.2.3:provided
+[INFO] |  |  |  +- com.typesafe:config:jar:1.4.3:provided
+[INFO] |  |  |  \- org.fusesource.jansi:jansi:jar:2.4.2:provided
+[INFO] |  |  \- io.ktor:ktor-server-sse-jvm:jar:3.2.3:provided
+[INFO] |  +- jakarta.annotation:jakarta.annotation-api:jar:3.0.0:provided
+[INFO] |  \- org.yaml:snakeyaml:jar:2.5:provided
+[INFO] +- org.springframework.boot:spring-boot-autoconfigure:jar:4.0.6:provided
+[INFO] |  \- org.springframework.boot:spring-boot:jar:4.0.6:provided
+[INFO] +- org.jetbrains.kotlin:kotlin-stdlib:jar:2.2.21:provided
+[INFO] |  \- org.jetbrains:annotations:jar:13.0:provided
+[INFO] +- org.jetbrains.kotlin:kotlin-reflect:jar:2.2.21:provided
+[INFO] +- org.jetbrains.kotlinx:kotlinx-coroutines-core:jar:1.10.2:provided
+[INFO] |  \- org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm:jar:1.10.2:provided
+[INFO] +- com.squareup.okhttp3:okhttp:jar:4.12.0:provided
+[INFO] |  +- com.squareup.okio:okio:jar:3.6.0:provided
+[INFO] |  |  \- com.squareup.okio:okio-jvm:jar:3.6.0:provided
+[INFO] |  |     \- org.jetbrains.kotlin:kotlin-stdlib-common:jar:1.9.10:provided
+[INFO] |  \- org.jetbrains.kotlin:kotlin-stdlib-jdk8:jar:2.2.21:provided
+[INFO] |     \- org.jetbrains.kotlin:kotlin-stdlib-jdk7:jar:2.2.21:provided
+[INFO] +- org.jetbrains.kotlin:kotlin-test-junit5:jar:2.2.21:test
+[INFO] |  +- org.jetbrains.kotlin:kotlin-test:jar:2.2.21:test
+[INFO] |  +- org.junit.jupiter:junit-jupiter-api:jar:6.0.3:test
+[INFO] |  |  +- org.opentest4j:opentest4j:jar:1.3.0:test
+[INFO] |  |  +- org.junit.platform:junit-platform-commons:jar:6.0.3:test
+[INFO] |  |  \- org.apiguardian:apiguardian-api:jar:1.1.2:test
+[INFO] |  +- org.junit.jupiter:junit-jupiter-engine:jar:6.0.3:test
+[INFO] |  |  \- org.junit.platform:junit-platform-engine:jar:6.0.3:test
+[INFO] |  \- org.junit.platform:junit-platform-launcher:jar:6.0.3:test
+[INFO] \- org.springframework.boot:spring-boot-test:jar:4.0.6:test
+[INFO]    \- org.springframework:spring-test:jar:7.0.7:test
+[INFO]
+[INFO] -------------------< ai.platon.pulsar:browser4-pptx >-------------------
+[INFO] Building Browser4 PPTX 4.12.0-rc.1-SNAPSHOT                      [16/24]
+[INFO]   from browser4-plugins\browser4-pptx\pom.xml
+[INFO] --------------------------------[ jar ]---------------------------------
+[INFO]
+[INFO] --- dependency:3.9.0:tree (default-cli) @ browser4-pptx ---
+[INFO] ai.platon.pulsar:browser4-pptx:jar:4.12.0-rc.1-SNAPSHOT
+[INFO] +- ai.platon.pulsar:browser4-skeleton:jar:4.12.0-rc.1-SNAPSHOT:provided
+[INFO] |  +- ai.platon.pulsar:browser4-common:jar:4.12.0-rc.1-SNAPSHOT:provided
+[INFO] |  |  +- org.springframework:spring-core:jar:7.0.7:provided
+[INFO] |  |  |  \- commons-logging:commons-logging:jar:1.3.6:provided
+[INFO] |  |  +- org.apache.httpcomponents.client5:httpclient5:jar:5.5.2:provided
+[INFO] |  |  |  +- org.apache.httpcomponents.core5:httpcore5:jar:5.3.6:provided
+[INFO] |  |  |  \- org.apache.httpcomponents.core5:httpcore5-h2:jar:5.3.6:provided
+[INFO] |  |  +- org.apache.commons:commons-lang3:jar:3.19.0:compile
+[INFO] |  |  +- org.slf4j:slf4j-api:jar:2.0.17:provided
+[INFO] |  |  \- ch.qos.logback:logback-classic:jar:1.5.32:provided
+[INFO] |  |     \- ch.qos.logback:logback-core:jar:1.5.32:provided
+[INFO] |  +- ai.platon.pulsar:pulsar-common:jar:4.9.5:provided
+[INFO] |  |  +- com.fasterxml.jackson.module:jackson-module-kotlin:jar:2.21.2:provided
+[INFO] |  |  +- com.fasterxml.jackson.dataformat:jackson-dataformat-properties:jar:2.21.2:provided
+[INFO] |  |  +- com.fasterxml.jackson.datatype:jackson-datatype-jsr310:jar:2.21.2:provided
+[INFO] |  |  \- org.nibor.autolink:autolink:jar:0.11.0:provided
+[INFO] |  +- ai.platon.pulsar:pulsar-persist:jar:4.9.5:provided
+[INFO] |  |  \- ai.platon.gora:gora-core-shaded:jar:1.0.9-slim:provided
+[INFO] |  +- ai.platon.pulsar:pulsar-dom:jar:4.9.5:provided
+[INFO] |  |  \- com.udojava:EvalEx:jar:2.0:provided
+[INFO] |  +- ai.platon.pulsar:pulsar-ql-common:jar:4.9.5:provided
+[INFO] |  |  \- com.fasterxml.jackson.core:jackson-databind:jar:2.21.2:provided
+[INFO] |  +- ai.platon.pulsar:pulsar-h2:jar:1.4.197:provided
+[INFO] |  |  +- javax.servlet:javax.servlet-api:jar:3.1.0:provided
+[INFO] |  |  +- org.osgi:org.osgi.core:jar:4.2.0:provided
+[INFO] |  |  +- org.osgi:org.osgi.enterprise:jar:4.2.0:provided
+[INFO] |  |  \- org.locationtech.jts:jts-core:jar:1.15.0:provided
+[INFO] |  +- ai.platon.pulsar:pulsar-llm:jar:4.9.5:provided
+[INFO] |  |  \- dev.langchain4j:langchain4j-core:jar:1.5.0:provided
+[INFO] |  +- org.springframework:spring-context:jar:7.0.7:provided
+[INFO] |  |  +- org.springframework:spring-aop:jar:7.0.7:provided
+[INFO] |  |  +- org.springframework:spring-beans:jar:7.0.7:provided
+[INFO] |  |  +- org.springframework:spring-expression:jar:7.0.7:provided
+[INFO] |  |  \- io.micrometer:micrometer-observation:jar:1.16.5:provided
+[INFO] |  |     \- io.micrometer:micrometer-commons:jar:1.16.5:provided
+[INFO] |  +- org.apache.commons:commons-collections4:jar:4.4:compile
+[INFO] |  +- com.github.ben-manes.caffeine:caffeine:jar:3.2.3:provided
+[INFO] |  |  +- org.jspecify:jspecify:jar:1.0.0:provided
+[INFO] |  |  \- com.google.errorprone:error_prone_annotations:jar:2.43.0:provided
+[INFO] |  +- com.google.code.crawler-commons:crawler-commons:jar:0.5:provided
+[INFO] |  |  \- org.apache.tika:tika-core:jar:3.2.2:provided
+[INFO] |  +- com.beust:jcommander:jar:1.82:provided
+[INFO] |  +- com.github.oshi:oshi-core:jar:6.6.6:provided
+[INFO] |  |  +- net.java.dev.jna:jna:jar:5.16.0:provided
+[INFO] |  |  \- net.java.dev.jna:jna-platform:jar:5.16.0:provided
+[INFO] |  +- io.dropwizard.metrics:metrics-graphite:jar:4.2.12:provided
+[INFO] |  |  \- com.rabbitmq:amqp-client:jar:5.27.1:provided
+[INFO] |  |     +- io.netty:netty-transport:jar:4.2.12.Final:provided
+[INFO] |  |     |  +- io.netty:netty-common:jar:4.2.12.Final:provided
+[INFO] |  |     |  +- io.netty:netty-buffer:jar:4.2.12.Final:provided
+[INFO] |  |     |  \- io.netty:netty-resolver:jar:4.2.12.Final:provided
+[INFO] |  |     +- io.netty:netty-codec:jar:4.2.12.Final:provided
+[INFO] |  |     |  +- io.netty:netty-codec-base:jar:4.2.12.Final:provided
+[INFO] |  |     |  +- io.netty:netty-codec-compression:jar:4.2.12.Final:provided
+[INFO] |  |     |  +- io.netty:netty-codec-protobuf:jar:4.2.12.Final:provided
+[INFO] |  |     |  \- io.netty:netty-codec-marshalling:jar:4.2.12.Final:provided
+[INFO] |  |     \- io.netty:netty-handler:jar:4.2.12.Final:provided
+[INFO] |  |        \- io.netty:netty-transport-native-unix-common:jar:4.2.12.Final:provided
+[INFO] |  \- org.jetbrains.kotlinx:kotlinx-coroutines-jdk8:jar:1.10.2:provided
+[INFO] +- ai.platon.pulsar:browser4-browser:jar:4.12.0-rc.1-SNAPSHOT:provided
+[INFO] |  +- ai.platon.pulsar:pulsar-jsoup:jar:1.14.3:provided
+[INFO] |  +- ai.platon.cdt:cdt-kotlin-client:jar:4.8.0:provided
+[INFO] |  |  \- com.fasterxml.jackson.core:jackson-annotations:jar:2.21:provided
+[INFO] |  +- com.fasterxml.jackson.dataformat:jackson-dataformat-yaml:jar:2.21.2:provided
+[INFO] |  |  \- com.fasterxml.jackson.core:jackson-core:jar:2.21.2:provided
+[INFO] |  +- io.dropwizard.metrics:metrics-core:jar:4.2.12:provided
+[INFO] |  +- io.ktor:ktor-client-core:jar:3.2.3:provided
+[INFO] |  |  +- io.ktor:ktor-http:jar:3.2.3:provided
+[INFO] |  |  |  +- io.ktor:ktor-utils:jar:3.2.3:provided
+[INFO] |  |  |  \- org.jetbrains.kotlinx:kotlinx-serialization-core:jar:1.9.0:provided
+[INFO] |  |  +- io.ktor:ktor-http-cio:jar:3.2.3:provided
+[INFO] |  |  |  \- io.ktor:ktor-io:jar:3.2.3:provided
+[INFO] |  |  |     \- org.jetbrains.kotlinx:kotlinx-io-core:jar:0.7.0:provided
+[INFO] |  |  |        \- org.jetbrains.kotlinx:kotlinx-io-bytestring:jar:0.7.0:provided
+[INFO] |  |  +- io.ktor:ktor-events:jar:3.2.3:provided
+[INFO] |  |  +- io.ktor:ktor-websocket-serialization:jar:3.2.3:provided
+[INFO] |  |  |  \- io.ktor:ktor-serialization:jar:3.2.3:provided
+[INFO] |  |  \- io.ktor:ktor-sse:jar:3.2.3:provided
+[INFO] |  +- io.ktor:ktor-client-core-jvm:jar:3.2.3:provided
+[INFO] |  |  +- io.ktor:ktor-http-jvm:jar:3.2.3:provided
+[INFO] |  |  |  +- io.ktor:ktor-utils-jvm:jar:3.2.3:provided
+[INFO] |  |  |  \- org.jetbrains.kotlinx:kotlinx-serialization-core-jvm:jar:1.9.0:provided
+[INFO] |  |  +- io.ktor:ktor-http-cio-jvm:jar:3.2.3:provided
+[INFO] |  |  |  +- io.ktor:ktor-network-jvm:jar:3.2.3:provided
+[INFO] |  |  |  \- io.ktor:ktor-io-jvm:jar:3.2.3:provided
+[INFO] |  |  +- io.ktor:ktor-events-jvm:jar:3.2.3:provided
+[INFO] |  |  +- io.ktor:ktor-websocket-serialization-jvm:jar:3.2.3:provided
+[INFO] |  |  |  \- io.ktor:ktor-serialization-jvm:jar:3.2.3:provided
+[INFO] |  |  +- io.ktor:ktor-sse-jvm:jar:3.2.3:provided
+[INFO] |  |  \- org.jetbrains.kotlinx:kotlinx-coroutines-slf4j:jar:1.10.2:provided
+[INFO] |  +- io.ktor:ktor-client-cio:jar:3.2.3:provided
+[INFO] |  |  +- io.ktor:ktor-websockets:jar:3.2.3:provided
+[INFO] |  |  \- io.ktor:ktor-network-tls:jar:3.2.3:provided
+[INFO] |  |     \- io.ktor:ktor-network:jar:3.2.3:provided
+[INFO] |  +- io.ktor:ktor-client-cio-jvm:jar:3.2.3:provided
+[INFO] |  |  +- io.ktor:ktor-websockets-jvm:jar:3.2.3:provided
+[INFO] |  |  \- io.ktor:ktor-network-tls-jvm:jar:3.2.3:provided
+[INFO] |  \- io.ktor:ktor-client-websockets:jar:3.2.3:provided
+[INFO] +- ai.platon.pulsar:browser4-protocol:jar:4.12.0-rc.1-SNAPSHOT:provided
+[INFO] +- ai.platon.pulsar:browser4-agentic:jar:4.12.0-rc.1-SNAPSHOT:provided
+[INFO] |  +- ai.platon.pulsar:pulsar-ql:jar:4.9.5:provided
+[INFO] |  |  \- ai.platon.pulsar:pulsar-parse:jar:4.9.5:provided
+[INFO] |  |     +- net.sourceforge.nekohtml:nekohtml:jar:1.9.22:provided
+[INFO] |  |     |  \- xerces:xercesImpl:jar:2.11.0:provided
+[INFO] |  |     |     \- xml-apis:xml-apis:jar:1.4.01:provided
+[INFO] |  |     \- org.apache.tika:tika-parser-html-module:jar:3.2.2:provided
+[INFO] |  +- io.modelcontextprotocol:kotlin-sdk-core-jvm:jar:0.8.1:provided
+[INFO] |  |  +- org.jetbrains.kotlinx:kotlinx-serialization-json-jvm:jar:1.9.0:provided
+[INFO] |  |  +- org.jetbrains.kotlinx:kotlinx-io-core-jvm:jar:0.8.2:provided
+[INFO] |  |  |  \- org.jetbrains.kotlinx:kotlinx-io-bytestring-jvm:jar:0.8.2:provided
+[INFO] |  |  +- org.jetbrains.kotlinx:kotlinx-collections-immutable-jvm:jar:0.4.0:provided
+[INFO] |  |  +- io.ktor:ktor-server-websockets-jvm:jar:3.2.3:provided
+[INFO] |  |  \- io.github.oshai:kotlin-logging-jvm:jar:7.0.13:provided
+[INFO] |  +- io.modelcontextprotocol:kotlin-sdk-server-jvm:jar:0.8.1:provided
+[INFO] |  |  +- io.ktor:ktor-server-core-jvm:jar:3.2.3:provided
+[INFO] |  |  |  +- com.typesafe:config:jar:1.4.3:provided
+[INFO] |  |  |  \- org.fusesource.jansi:jansi:jar:2.4.2:provided
+[INFO] |  |  \- io.ktor:ktor-server-sse-jvm:jar:3.2.3:provided
+[INFO] |  +- jakarta.annotation:jakarta.annotation-api:jar:3.0.0:provided
+[INFO] |  \- org.yaml:snakeyaml:jar:2.5:provided
+[INFO] +- org.springframework.boot:spring-boot-autoconfigure:jar:4.0.6:provided
+[INFO] |  \- org.springframework.boot:spring-boot:jar:4.0.6:provided
+[INFO] +- org.jetbrains.kotlin:kotlin-stdlib:jar:2.2.21:provided
+[INFO] |  \- org.jetbrains:annotations:jar:13.0:provided
+[INFO] +- org.jetbrains.kotlin:kotlin-reflect:jar:2.2.21:provided
+[INFO] +- org.jetbrains.kotlinx:kotlinx-coroutines-core:jar:1.10.2:provided
+[INFO] |  \- org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm:jar:1.10.2:provided
+[INFO] +- com.squareup.okhttp3:okhttp:jar:4.12.0:provided
+[INFO] |  +- com.squareup.okio:okio:jar:3.6.0:provided
+[INFO] |  |  \- com.squareup.okio:okio-jvm:jar:3.6.0:provided
+[INFO] |  |     \- org.jetbrains.kotlin:kotlin-stdlib-common:jar:1.9.10:provided
+[INFO] |  \- org.jetbrains.kotlin:kotlin-stdlib-jdk8:jar:2.2.21:provided
+[INFO] |     \- org.jetbrains.kotlin:kotlin-stdlib-jdk7:jar:2.2.21:provided
+[INFO] +- org.apache.poi:poi:jar:5.4.0:compile
+[INFO] |  +- commons-codec:commons-codec:jar:1.19.0:compile
+[INFO] |  +- org.apache.commons:commons-math3:jar:3.6.1:compile
+[INFO] |  +- commons-io:commons-io:jar:2.18.0:compile
+[INFO] |  +- com.zaxxer:SparseBitSet:jar:1.3:compile
+[INFO] |  \- org.apache.logging.log4j:log4j-api:jar:2.25.4:compile
+[INFO] +- org.apache.poi:poi-ooxml:jar:5.4.0:compile
+[INFO] |  +- org.apache.poi:poi-ooxml-lite:jar:5.4.0:compile
+[INFO] |  +- org.apache.xmlbeans:xmlbeans:jar:5.3.0:compile
+[INFO] |  +- org.apache.commons:commons-compress:jar:1.27.1:compile
+[INFO] |  \- com.github.virtuald:curvesapi:jar:1.08:compile
+[INFO] +- org.jetbrains.kotlin:kotlin-test-junit5:jar:2.2.21:test
+[INFO] |  +- org.jetbrains.kotlin:kotlin-test:jar:2.2.21:test
+[INFO] |  +- org.junit.jupiter:junit-jupiter-api:jar:6.0.3:test
+[INFO] |  |  +- org.opentest4j:opentest4j:jar:1.3.0:test
+[INFO] |  |  +- org.junit.platform:junit-platform-commons:jar:6.0.3:test
+[INFO] |  |  \- org.apiguardian:apiguardian-api:jar:1.1.2:test
+[INFO] |  +- org.junit.jupiter:junit-jupiter-engine:jar:6.0.3:test
+[INFO] |  |  \- org.junit.platform:junit-platform-engine:jar:6.0.3:test
+[INFO] |  \- org.junit.platform:junit-platform-launcher:jar:6.0.3:test
+[INFO] \- org.springframework.boot:spring-boot-test:jar:4.0.6:test
+[INFO]    \- org.springframework:spring-test:jar:7.0.7:test
+[INFO]
+[INFO] -----------------< ai.platon.pulsar:browser4-markdown >-----------------
+[INFO] Building Browser4 Markdown 4.12.0-rc.1-SNAPSHOT                  [17/24]
+[INFO]   from browser4-plugins\browser4-markdown\pom.xml
+[INFO] --------------------------------[ jar ]---------------------------------
+[INFO]
+[INFO] --- dependency:3.9.0:tree (default-cli) @ browser4-markdown ---
+[INFO] ai.platon.pulsar:browser4-markdown:jar:4.12.0-rc.1-SNAPSHOT
+[INFO] +- ai.platon.pulsar:browser4-skeleton:jar:4.12.0-rc.1-SNAPSHOT:provided
+[INFO] |  +- ai.platon.pulsar:browser4-common:jar:4.12.0-rc.1-SNAPSHOT:provided
+[INFO] |  |  +- org.springframework:spring-core:jar:7.0.7:provided
+[INFO] |  |  |  \- commons-logging:commons-logging:jar:1.3.6:provided
+[INFO] |  |  +- org.apache.httpcomponents.client5:httpclient5:jar:5.5.2:provided
+[INFO] |  |  |  +- org.apache.httpcomponents.core5:httpcore5:jar:5.3.6:provided
+[INFO] |  |  |  \- org.apache.httpcomponents.core5:httpcore5-h2:jar:5.3.6:provided
+[INFO] |  |  +- org.slf4j:slf4j-api:jar:2.0.17:provided
+[INFO] |  |  \- ch.qos.logback:logback-classic:jar:1.5.32:provided
+[INFO] |  |     \- ch.qos.logback:logback-core:jar:1.5.32:provided
+[INFO] |  +- ai.platon.pulsar:pulsar-common:jar:4.9.5:provided
+[INFO] |  |  +- commons-io:commons-io:jar:2.16.1:provided
+[INFO] |  |  +- com.fasterxml.jackson.module:jackson-module-kotlin:jar:2.21.2:provided
+[INFO] |  |  +- com.fasterxml.jackson.dataformat:jackson-dataformat-properties:jar:2.21.2:provided
+[INFO] |  |  +- com.fasterxml.jackson.datatype:jackson-datatype-jsr310:jar:2.21.2:provided
+[INFO] |  |  \- org.nibor.autolink:autolink:jar:0.11.0:provided
+[INFO] |  +- ai.platon.pulsar:pulsar-persist:jar:4.9.5:provided
+[INFO] |  |  \- ai.platon.gora:gora-core-shaded:jar:1.0.9-slim:provided
+[INFO] |  +- ai.platon.pulsar:pulsar-dom:jar:4.9.5:provided
+[INFO] |  |  \- com.udojava:EvalEx:jar:2.0:provided
+[INFO] |  +- ai.platon.pulsar:pulsar-ql-common:jar:4.9.5:provided
+[INFO] |  |  \- com.fasterxml.jackson.core:jackson-databind:jar:2.21.2:provided
+[INFO] |  +- ai.platon.pulsar:pulsar-h2:jar:1.4.197:provided
+[INFO] |  |  +- javax.servlet:javax.servlet-api:jar:3.1.0:provided
+[INFO] |  |  +- org.osgi:org.osgi.core:jar:4.2.0:provided
+[INFO] |  |  +- org.osgi:org.osgi.enterprise:jar:4.2.0:provided
+[INFO] |  |  \- org.locationtech.jts:jts-core:jar:1.15.0:provided
+[INFO] |  +- ai.platon.pulsar:pulsar-llm:jar:4.9.5:provided
+[INFO] |  |  \- dev.langchain4j:langchain4j-core:jar:1.5.0:provided
+[INFO] |  +- org.springframework:spring-context:jar:7.0.7:provided
+[INFO] |  |  +- org.springframework:spring-aop:jar:7.0.7:provided
+[INFO] |  |  +- org.springframework:spring-beans:jar:7.0.7:provided
+[INFO] |  |  +- org.springframework:spring-expression:jar:7.0.7:provided
+[INFO] |  |  \- io.micrometer:micrometer-observation:jar:1.16.5:provided
+[INFO] |  |     \- io.micrometer:micrometer-commons:jar:1.16.5:provided
+[INFO] |  +- org.apache.commons:commons-collections4:jar:4.4:provided
+[INFO] |  +- com.github.ben-manes.caffeine:caffeine:jar:3.2.3:provided
+[INFO] |  |  +- org.jspecify:jspecify:jar:1.0.0:provided
+[INFO] |  |  \- com.google.errorprone:error_prone_annotations:jar:2.43.0:provided
+[INFO] |  +- com.google.code.crawler-commons:crawler-commons:jar:0.5:provided
+[INFO] |  |  \- org.apache.tika:tika-core:jar:3.2.2:provided
+[INFO] |  +- com.beust:jcommander:jar:1.82:provided
+[INFO] |  +- com.github.oshi:oshi-core:jar:6.6.6:provided
+[INFO] |  |  +- net.java.dev.jna:jna:jar:5.16.0:provided
+[INFO] |  |  \- net.java.dev.jna:jna-platform:jar:5.16.0:provided
+[INFO] |  +- io.dropwizard.metrics:metrics-graphite:jar:4.2.12:provided
+[INFO] |  |  \- com.rabbitmq:amqp-client:jar:5.27.1:provided
+[INFO] |  |     +- io.netty:netty-transport:jar:4.2.12.Final:provided
+[INFO] |  |     |  +- io.netty:netty-common:jar:4.2.12.Final:provided
+[INFO] |  |     |  +- io.netty:netty-buffer:jar:4.2.12.Final:provided
+[INFO] |  |     |  \- io.netty:netty-resolver:jar:4.2.12.Final:provided
+[INFO] |  |     +- io.netty:netty-codec:jar:4.2.12.Final:provided
+[INFO] |  |     |  +- io.netty:netty-codec-base:jar:4.2.12.Final:provided
+[INFO] |  |     |  +- io.netty:netty-codec-compression:jar:4.2.12.Final:provided
+[INFO] |  |     |  +- io.netty:netty-codec-protobuf:jar:4.2.12.Final:provided
+[INFO] |  |     |  \- io.netty:netty-codec-marshalling:jar:4.2.12.Final:provided
+[INFO] |  |     \- io.netty:netty-handler:jar:4.2.12.Final:provided
+[INFO] |  |        \- io.netty:netty-transport-native-unix-common:jar:4.2.12.Final:provided
+[INFO] |  \- org.jetbrains.kotlinx:kotlinx-coroutines-jdk8:jar:1.10.2:provided
+[INFO] +- ai.platon.pulsar:browser4-browser:jar:4.12.0-rc.1-SNAPSHOT:provided
+[INFO] |  +- ai.platon.cdt:cdt-kotlin-client:jar:4.8.0:provided
+[INFO] |  |  \- com.fasterxml.jackson.core:jackson-annotations:jar:2.21:provided
+[INFO] |  +- com.fasterxml.jackson.dataformat:jackson-dataformat-yaml:jar:2.21.2:provided
+[INFO] |  |  \- com.fasterxml.jackson.core:jackson-core:jar:2.21.2:provided
+[INFO] |  +- io.dropwizard.metrics:metrics-core:jar:4.2.12:provided
+[INFO] |  +- io.ktor:ktor-client-core:jar:3.2.3:provided
+[INFO] |  |  +- io.ktor:ktor-http:jar:3.2.3:provided
+[INFO] |  |  |  +- io.ktor:ktor-utils:jar:3.2.3:provided
+[INFO] |  |  |  \- org.jetbrains.kotlinx:kotlinx-serialization-core:jar:1.9.0:provided
+[INFO] |  |  +- io.ktor:ktor-http-cio:jar:3.2.3:provided
+[INFO] |  |  |  \- io.ktor:ktor-io:jar:3.2.3:provided
+[INFO] |  |  |     \- org.jetbrains.kotlinx:kotlinx-io-core:jar:0.7.0:provided
+[INFO] |  |  |        \- org.jetbrains.kotlinx:kotlinx-io-bytestring:jar:0.7.0:provided
+[INFO] |  |  +- io.ktor:ktor-events:jar:3.2.3:provided
+[INFO] |  |  +- io.ktor:ktor-websocket-serialization:jar:3.2.3:provided
+[INFO] |  |  |  \- io.ktor:ktor-serialization:jar:3.2.3:provided
+[INFO] |  |  \- io.ktor:ktor-sse:jar:3.2.3:provided
+[INFO] |  +- io.ktor:ktor-client-core-jvm:jar:3.2.3:provided
+[INFO] |  |  +- io.ktor:ktor-http-jvm:jar:3.2.3:provided
+[INFO] |  |  |  +- io.ktor:ktor-utils-jvm:jar:3.2.3:provided
+[INFO] |  |  |  \- org.jetbrains.kotlinx:kotlinx-serialization-core-jvm:jar:1.9.0:provided
+[INFO] |  |  +- io.ktor:ktor-http-cio-jvm:jar:3.2.3:provided
+[INFO] |  |  |  +- io.ktor:ktor-network-jvm:jar:3.2.3:provided
+[INFO] |  |  |  \- io.ktor:ktor-io-jvm:jar:3.2.3:provided
+[INFO] |  |  +- io.ktor:ktor-events-jvm:jar:3.2.3:provided
+[INFO] |  |  +- io.ktor:ktor-websocket-serialization-jvm:jar:3.2.3:provided
+[INFO] |  |  |  \- io.ktor:ktor-serialization-jvm:jar:3.2.3:provided
+[INFO] |  |  +- io.ktor:ktor-sse-jvm:jar:3.2.3:provided
+[INFO] |  |  \- org.jetbrains.kotlinx:kotlinx-coroutines-slf4j:jar:1.10.2:provided
+[INFO] |  +- io.ktor:ktor-client-cio:jar:3.2.3:provided
+[INFO] |  |  +- io.ktor:ktor-websockets:jar:3.2.3:provided
+[INFO] |  |  \- io.ktor:ktor-network-tls:jar:3.2.3:provided
+[INFO] |  |     \- io.ktor:ktor-network:jar:3.2.3:provided
+[INFO] |  +- io.ktor:ktor-client-cio-jvm:jar:3.2.3:provided
+[INFO] |  |  +- io.ktor:ktor-websockets-jvm:jar:3.2.3:provided
+[INFO] |  |  \- io.ktor:ktor-network-tls-jvm:jar:3.2.3:provided
+[INFO] |  \- io.ktor:ktor-client-websockets:jar:3.2.3:provided
+[INFO] +- ai.platon.pulsar:browser4-protocol:jar:4.12.0-rc.1-SNAPSHOT:provided
+[INFO] +- ai.platon.pulsar:browser4-agentic:jar:4.12.0-rc.1-SNAPSHOT:provided
+[INFO] |  +- ai.platon.pulsar:pulsar-ql:jar:4.9.5:provided
+[INFO] |  |  \- ai.platon.pulsar:pulsar-parse:jar:4.9.5:provided
+[INFO] |  |     +- net.sourceforge.nekohtml:nekohtml:jar:1.9.22:provided
+[INFO] |  |     |  \- xerces:xercesImpl:jar:2.11.0:provided
+[INFO] |  |     |     \- xml-apis:xml-apis:jar:1.4.01:provided
+[INFO] |  |     \- org.apache.tika:tika-parser-html-module:jar:3.2.2:provided
+[INFO] |  +- io.modelcontextprotocol:kotlin-sdk-core-jvm:jar:0.8.1:provided
+[INFO] |  |  +- org.jetbrains.kotlinx:kotlinx-serialization-json-jvm:jar:1.9.0:provided
+[INFO] |  |  +- org.jetbrains.kotlinx:kotlinx-io-core-jvm:jar:0.8.2:provided
+[INFO] |  |  |  \- org.jetbrains.kotlinx:kotlinx-io-bytestring-jvm:jar:0.8.2:provided
+[INFO] |  |  +- org.jetbrains.kotlinx:kotlinx-collections-immutable-jvm:jar:0.4.0:provided
+[INFO] |  |  +- io.ktor:ktor-server-websockets-jvm:jar:3.2.3:provided
+[INFO] |  |  \- io.github.oshai:kotlin-logging-jvm:jar:7.0.13:provided
+[INFO] |  +- io.modelcontextprotocol:kotlin-sdk-server-jvm:jar:0.8.1:provided
+[INFO] |  |  +- io.ktor:ktor-server-core-jvm:jar:3.2.3:provided
+[INFO] |  |  |  +- com.typesafe:config:jar:1.4.3:provided
+[INFO] |  |  |  \- org.fusesource.jansi:jansi:jar:2.4.2:provided
+[INFO] |  |  \- io.ktor:ktor-server-sse-jvm:jar:3.2.3:provided
+[INFO] |  +- jakarta.annotation:jakarta.annotation-api:jar:3.0.0:provided
+[INFO] |  \- org.yaml:snakeyaml:jar:2.5:provided
+[INFO] +- org.springframework.boot:spring-boot-autoconfigure:jar:4.0.6:provided
+[INFO] |  \- org.springframework.boot:spring-boot:jar:4.0.6:provided
+[INFO] +- org.jetbrains.kotlin:kotlin-stdlib:jar:2.2.21:provided
+[INFO] |  \- org.jetbrains:annotations:jar:13.0:provided
+[INFO] +- org.jetbrains.kotlin:kotlin-reflect:jar:2.2.21:provided
+[INFO] +- org.jetbrains.kotlinx:kotlinx-coroutines-core:jar:1.10.2:provided
+[INFO] |  \- org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm:jar:1.10.2:provided
+[INFO] +- com.squareup.okhttp3:okhttp:jar:4.12.0:provided
+[INFO] |  +- com.squareup.okio:okio:jar:3.6.0:provided
+[INFO] |  |  \- com.squareup.okio:okio-jvm:jar:3.6.0:provided
+[INFO] |  |     \- org.jetbrains.kotlin:kotlin-stdlib-common:jar:1.9.10:provided
+[INFO] |  \- org.jetbrains.kotlin:kotlin-stdlib-jdk8:jar:2.2.21:provided
+[INFO] |     \- org.jetbrains.kotlin:kotlin-stdlib-jdk7:jar:2.2.21:provided
+[INFO] +- ai.platon.pulsar:pulsar-jsoup:jar:1.14.3:provided
+[INFO] |  +- org.apache.commons:commons-lang3:jar:3.19.0:provided
+[INFO] |  +- org.apache.commons:commons-math3:jar:3.3:provided
+[INFO] |  +- commons-codec:commons-codec:jar:1.19.0:provided
+[INFO] |  \- com.google.guava:guava:jar:30.1-jre:provided
+[INFO] |     +- com.google.guava:failureaccess:jar:1.0.1:provided
+[INFO] |     +- com.google.guava:listenablefuture:jar:9999.0-empty-to-avoid-conflict-with-guava:provided
+[INFO] |     +- com.google.code.findbugs:jsr305:jar:3.0.0:provided
+[INFO] |     +- org.checkerframework:checker-qual:jar:3.5.0:provided
+[INFO] |     \- com.google.j2objc:j2objc-annotations:jar:1.3:provided
+[INFO] +- org.jetbrains.kotlin:kotlin-test-junit5:jar:2.2.21:test
+[INFO] |  +- org.jetbrains.kotlin:kotlin-test:jar:2.2.21:test
+[INFO] |  +- org.junit.jupiter:junit-jupiter-api:jar:6.0.3:test
+[INFO] |  |  +- org.opentest4j:opentest4j:jar:1.3.0:test
+[INFO] |  |  +- org.junit.platform:junit-platform-commons:jar:6.0.3:test
+[INFO] |  |  \- org.apiguardian:apiguardian-api:jar:1.1.2:test
+[INFO] |  +- org.junit.jupiter:junit-jupiter-engine:jar:6.0.3:test
+[INFO] |  |  \- org.junit.platform:junit-platform-engine:jar:6.0.3:test
+[INFO] |  \- org.junit.platform:junit-platform-launcher:jar:6.0.3:test
+[INFO] \- org.springframework.boot:spring-boot-test:jar:4.0.6:test
+[INFO]    \- org.springframework:spring-test:jar:7.0.7:test
+[INFO]
+[INFO] -----------------< ai.platon.pulsar:browser4-plugins >------------------
+[INFO] Building Browser4 Plugins 4.12.0-rc.1-SNAPSHOT                   [18/24]
+[INFO]   from browser4-plugins\pom.xml
+[INFO] --------------------------------[ pom ]---------------------------------
+[INFO]
+[INFO] --- dependency:3.9.0:tree (default-cli) @ browser4-plugins ---
+[INFO] ai.platon.pulsar:browser4-plugins:pom:4.12.0-rc.1-SNAPSHOT
+[INFO] +- org.jetbrains.kotlin:kotlin-stdlib:jar:2.2.21:compile
+[INFO] |  \- org.jetbrains:annotations:jar:13.0:compile
+[INFO] +- org.jetbrains.kotlin:kotlin-reflect:jar:2.2.21:compile
+[INFO] +- org.jetbrains.kotlinx:kotlinx-coroutines-core:jar:1.10.2:compile
+[INFO] |  \- org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm:jar:1.10.2:compile
+[INFO] \- org.jetbrains.kotlin:kotlin-test-junit5:jar:2.2.21:test
+[INFO]    +- org.jetbrains.kotlin:kotlin-test:jar:2.2.21:test
+[INFO]    +- org.junit.jupiter:junit-jupiter-api:jar:6.0.3:test
+[INFO]    |  +- org.opentest4j:opentest4j:jar:1.3.0:test
+[INFO]    |  +- org.junit.platform:junit-platform-commons:jar:6.0.3:test
+[INFO]    |  +- org.apiguardian:apiguardian-api:jar:1.1.2:test
+[INFO]    |  \- org.jspecify:jspecify:jar:1.0.0:test
+[INFO]    +- org.junit.jupiter:junit-jupiter-engine:jar:6.0.3:test
+[INFO]    |  \- org.junit.platform:junit-platform-engine:jar:6.0.3:test
+[INFO]    \- org.junit.platform:junit-platform-launcher:jar:6.0.3:test
+[INFO] Copying ai.platon.pulsar:browser4-plugins:pom:4.12.0-rc.1-SNAPSHOT to project local repository
+[INFO] Copying ai.platon.pulsar:browser4-plugins:pom:consumer:4.12.0-rc.1-SNAPSHOT to project local repository
+[INFO]
+[INFO] ---------------< ai.platon.pulsar:browser4-agent-tools >----------------
+[INFO] Building Browser4 Agent Tools 4.12.0-rc.1-SNAPSHOT               [19/24]
+[INFO]   from browser4-agent-tools\pom.xml
+[INFO] --------------------------------[ jar ]---------------------------------
+[INFO]
+[INFO] --- dependency:3.9.0:tree (default-cli) @ browser4-agent-tools ---
+[INFO] ai.platon.pulsar:browser4-agent-tools:jar:4.12.0-rc.1-SNAPSHOT
+[INFO] +- ai.platon.pulsar:browser4-skeleton:jar:4.12.0-rc.1-SNAPSHOT:compile
+[INFO] |  +- ai.platon.pulsar:browser4-common:jar:4.12.0-rc.1-SNAPSHOT:compile
+[INFO] |  |  +- org.springframework:spring-core:jar:7.0.7:compile
+[INFO] |  |  |  \- commons-logging:commons-logging:jar:1.3.2:compile
+[INFO] |  |  +- org.apache.httpcomponents.client5:httpclient5:jar:5.5.2:compile
+[INFO] |  |  |  +- org.apache.httpcomponents.core5:httpcore5:jar:5.3.6:compile
+[INFO] |  |  |  \- org.apache.httpcomponents.core5:httpcore5-h2:jar:5.3.6:compile
+[INFO] |  |  +- commons-codec:commons-codec:jar:1.19.0:compile
+[INFO] |  |  +- org.apache.commons:commons-lang3:jar:3.19.0:compile
+[INFO] |  |  +- org.slf4j:slf4j-api:jar:2.0.17:compile
+[INFO] |  |  \- ch.qos.logback:logback-classic:jar:1.5.32:compile
+[INFO] |  |     \- ch.qos.logback:logback-core:jar:1.5.32:compile
+[INFO] |  +- ai.platon.pulsar:browser4-browser:jar:4.12.0-rc.1-SNAPSHOT:compile
+[INFO] |  |  +- ai.platon.cdt:cdt-kotlin-client:jar:4.8.0:compile
+[INFO] |  |  |  +- org.jetbrains.kotlin:kotlin-stdlib-jdk8:jar:2.2.21:compile
+[INFO] |  |  |  |  \- org.jetbrains.kotlin:kotlin-stdlib-jdk7:jar:2.2.21:compile
+[INFO] |  |  |  \- com.fasterxml.jackson.core:jackson-annotations:jar:2.21:compile
+[INFO] |  |  +- com.fasterxml.jackson.dataformat:jackson-dataformat-yaml:jar:2.21.2:compile
+[INFO] |  |  |  \- com.fasterxml.jackson.core:jackson-core:jar:2.21.2:compile
+[INFO] |  |  +- io.dropwizard.metrics:metrics-core:jar:4.2.12:compile
+[INFO] |  |  +- io.ktor:ktor-client-core:jar:3.2.3:compile
+[INFO] |  |  |  +- io.ktor:ktor-http:jar:3.2.3:runtime
+[INFO] |  |  |  |  +- io.ktor:ktor-utils:jar:3.2.3:runtime
+[INFO] |  |  |  |  \- org.jetbrains.kotlinx:kotlinx-serialization-core:jar:1.9.0:runtime
+[INFO] |  |  |  +- io.ktor:ktor-http-cio:jar:3.2.3:runtime
+[INFO] |  |  |  |  \- io.ktor:ktor-io:jar:3.2.3:runtime
+[INFO] |  |  |  |     \- org.jetbrains.kotlinx:kotlinx-io-core:jar:0.7.0:runtime
+[INFO] |  |  |  |        \- org.jetbrains.kotlinx:kotlinx-io-bytestring:jar:0.7.0:runtime
+[INFO] |  |  |  +- io.ktor:ktor-events:jar:3.2.3:runtime
+[INFO] |  |  |  +- io.ktor:ktor-websocket-serialization:jar:3.2.3:runtime
+[INFO] |  |  |  |  \- io.ktor:ktor-serialization:jar:3.2.3:runtime
+[INFO] |  |  |  \- io.ktor:ktor-sse:jar:3.2.3:runtime
+[INFO] |  |  +- io.ktor:ktor-client-core-jvm:jar:3.2.3:compile
+[INFO] |  |  |  +- io.ktor:ktor-http-jvm:jar:3.2.3:compile
+[INFO] |  |  |  +- io.ktor:ktor-http-cio-jvm:jar:3.2.3:compile
+[INFO] |  |  |  |  +- io.ktor:ktor-network-jvm:jar:3.2.3:compile
+[INFO] |  |  |  |  \- io.ktor:ktor-io-jvm:jar:3.2.3:compile
+[INFO] |  |  |  +- io.ktor:ktor-events-jvm:jar:3.2.3:compile
+[INFO] |  |  |  +- io.ktor:ktor-websocket-serialization-jvm:jar:3.2.3:compile
+[INFO] |  |  |  +- io.ktor:ktor-sse-jvm:jar:3.2.3:compile
+[INFO] |  |  |  \- org.jetbrains.kotlinx:kotlinx-coroutines-slf4j:jar:1.10.2:runtime
+[INFO] |  |  +- io.ktor:ktor-client-cio:jar:3.2.3:compile
+[INFO] |  |  |  +- io.ktor:ktor-websockets:jar:3.2.3:runtime
+[INFO] |  |  |  \- io.ktor:ktor-network-tls:jar:3.2.3:runtime
+[INFO] |  |  |     \- io.ktor:ktor-network:jar:3.2.3:runtime
+[INFO] |  |  +- io.ktor:ktor-client-cio-jvm:jar:3.2.3:compile
+[INFO] |  |  |  +- io.ktor:ktor-websockets-jvm:jar:3.2.3:compile
+[INFO] |  |  |  \- io.ktor:ktor-network-tls-jvm:jar:3.2.3:compile
+[INFO] |  |  \- io.ktor:ktor-client-websockets:jar:3.2.3:compile
+[INFO] |  +- ai.platon.pulsar:pulsar-common:jar:4.9.5:compile
+[INFO] |  |  +- commons-io:commons-io:jar:2.16.1:compile
+[INFO] |  |  +- com.squareup.okhttp3:okhttp:jar:4.12.0:compile
+[INFO] |  |  |  \- com.squareup.okio:okio:jar:3.6.0:compile
+[INFO] |  |  |     \- com.squareup.okio:okio-jvm:jar:3.6.0:compile
+[INFO] |  |  |        \- org.jetbrains.kotlin:kotlin-stdlib-common:jar:1.9.10:compile
+[INFO] |  |  +- com.fasterxml.jackson.module:jackson-module-kotlin:jar:2.21.2:compile
+[INFO] |  |  +- com.fasterxml.jackson.dataformat:jackson-dataformat-properties:jar:2.21.2:compile
+[INFO] |  |  +- com.fasterxml.jackson.datatype:jackson-datatype-jsr310:jar:2.21.2:compile
+[INFO] |  |  \- org.nibor.autolink:autolink:jar:0.11.0:compile
+[INFO] |  +- ai.platon.pulsar:pulsar-persist:jar:4.9.5:compile
+[INFO] |  |  \- ai.platon.gora:gora-core-shaded:jar:1.0.9-slim:compile
+[INFO] |  +- ai.platon.pulsar:pulsar-ql-common:jar:4.9.5:compile
+[INFO] |  |  \- com.fasterxml.jackson.core:jackson-databind:jar:2.21.2:compile
+[INFO] |  +- ai.platon.pulsar:pulsar-h2:jar:1.4.197:compile
+[INFO] |  |  +- javax.servlet:javax.servlet-api:jar:3.1.0:compile
+[INFO] |  |  +- org.osgi:org.osgi.core:jar:4.2.0:compile
+[INFO] |  |  +- org.osgi:org.osgi.enterprise:jar:4.2.0:compile
+[INFO] |  |  \- org.locationtech.jts:jts-core:jar:1.15.0:compile
+[INFO] |  +- ai.platon.pulsar:pulsar-llm:jar:4.9.5:compile
+[INFO] |  |  \- dev.langchain4j:langchain4j-core:jar:1.5.0:compile
+[INFO] |  +- org.springframework:spring-context:jar:7.0.7:compile
+[INFO] |  |  +- org.springframework:spring-aop:jar:7.0.7:compile
+[INFO] |  |  +- org.springframework:spring-beans:jar:7.0.7:compile
+[INFO] |  |  +- org.springframework:spring-expression:jar:7.0.7:compile
+[INFO] |  |  \- io.micrometer:micrometer-observation:jar:1.16.5:compile
+[INFO] |  |     \- io.micrometer:micrometer-commons:jar:1.16.5:compile
+[INFO] |  +- org.apache.commons:commons-collections4:jar:4.4:compile
+[INFO] |  +- com.google.code.crawler-commons:crawler-commons:jar:0.5:compile
+[INFO] |  +- com.beust:jcommander:jar:1.82:compile
+[INFO] |  +- com.github.oshi:oshi-core:jar:6.6.6:compile
+[INFO] |  |  +- net.java.dev.jna:jna:jar:5.16.0:compile
+[INFO] |  |  \- net.java.dev.jna:jna-platform:jar:5.16.0:compile
+[INFO] |  +- io.dropwizard.metrics:metrics-graphite:jar:4.2.12:compile
+[INFO] |  |  \- com.rabbitmq:amqp-client:jar:5.27.1:compile
+[INFO] |  |     +- io.netty:netty-transport:jar:4.2.12.Final:compile
+[INFO] |  |     |  +- io.netty:netty-common:jar:4.2.12.Final:compile
+[INFO] |  |     |  +- io.netty:netty-buffer:jar:4.2.12.Final:compile
+[INFO] |  |     |  \- io.netty:netty-resolver:jar:4.2.12.Final:compile
+[INFO] |  |     +- io.netty:netty-codec:jar:4.2.12.Final:compile
+[INFO] |  |     |  +- io.netty:netty-codec-base:jar:4.2.12.Final:compile
+[INFO] |  |     |  +- io.netty:netty-codec-compression:jar:4.2.12.Final:compile
+[INFO] |  |     |  +- io.netty:netty-codec-protobuf:jar:4.2.12.Final:compile
+[INFO] |  |     |  \- io.netty:netty-codec-marshalling:jar:4.2.12.Final:compile
+[INFO] |  |     \- io.netty:netty-handler:jar:4.2.12.Final:compile
+[INFO] |  |        \- io.netty:netty-transport-native-unix-common:jar:4.2.12.Final:compile
+[INFO] |  \- org.jetbrains.kotlinx:kotlinx-coroutines-jdk8:jar:1.10.2:compile
+[INFO] +- ai.platon.pulsar:browser4-parse:jar:4.12.0-rc.1-SNAPSHOT:compile
+[INFO] |  +- ai.platon.pulsar:browser4-resources:jar:4.12.0-rc.1-SNAPSHOT:compile
+[INFO] |  +- ai.platon.pulsar:pulsar-jsoup:jar:1.14.3:compile
+[INFO] |  +- net.sourceforge.nekohtml:nekohtml:jar:1.9.22:compile
+[INFO] |  |  \- xerces:xercesImpl:jar:2.11.0:compile
+[INFO] |  |     \- xml-apis:xml-apis:jar:1.4.01:compile
+[INFO] |  +- org.apache.tika:tika-core:jar:3.2.2:compile
+[INFO] |  \- org.apache.tika:tika-parser-html-module:jar:3.2.2:compile
+[INFO] +- ai.platon.pulsar:browser4-agentic:jar:4.12.0-rc.1-SNAPSHOT:compile
+[INFO] |  +- ai.platon.pulsar:browser4-protocol:jar:4.12.0-rc.1-SNAPSHOT:compile
+[INFO] |  +- io.modelcontextprotocol:kotlin-sdk-core-jvm:jar:0.8.1:compile
+[INFO] |  |  +- org.jetbrains.kotlinx:kotlinx-serialization-json-jvm:jar:1.9.0:compile
+[INFO] |  |  |  \- org.jetbrains.kotlinx:kotlinx-serialization-core-jvm:jar:1.9.0:compile
+[INFO] |  |  +- org.jetbrains.kotlinx:kotlinx-io-core-jvm:jar:0.8.2:compile
+[INFO] |  |  |  \- org.jetbrains.kotlinx:kotlinx-io-bytestring-jvm:jar:0.8.2:compile
+[INFO] |  |  +- org.jetbrains.kotlinx:kotlinx-collections-immutable-jvm:jar:0.4.0:compile
+[INFO] |  |  +- io.ktor:ktor-server-websockets-jvm:jar:3.2.3:runtime
+[INFO] |  |  \- io.github.oshai:kotlin-logging-jvm:jar:7.0.13:runtime
+[INFO] |  +- io.modelcontextprotocol:kotlin-sdk-server-jvm:jar:0.8.1:compile
+[INFO] |  |  +- io.ktor:ktor-server-core-jvm:jar:3.2.3:compile
+[INFO] |  |  |  +- com.typesafe:config:jar:1.4.3:compile
+[INFO] |  |  |  +- io.ktor:ktor-utils-jvm:jar:3.2.3:compile
+[INFO] |  |  |  +- io.ktor:ktor-serialization-jvm:jar:3.2.3:compile
+[INFO] |  |  |  \- org.fusesource.jansi:jansi:jar:2.4.2:runtime
+[INFO] |  |  \- io.ktor:ktor-server-sse-jvm:jar:3.2.3:compile
+[INFO] |  +- jakarta.annotation:jakarta.annotation-api:jar:3.0.0:compile
+[INFO] |  \- org.yaml:snakeyaml:jar:2.5:compile
+[INFO] +- ai.platon.pulsar:pulsar-ql:jar:4.9.5:compile
+[INFO] |  +- ai.platon.pulsar:pulsar-parse:jar:4.9.5:compile
+[INFO] |  \- com.udojava:EvalEx:jar:2.0:compile
+[INFO] +- com.github.ben-manes.caffeine:caffeine:jar:3.2.3:compile
+[INFO] |  +- org.jspecify:jspecify:jar:1.0.0:compile
+[INFO] |  \- com.google.errorprone:error_prone_annotations:jar:2.43.0:compile
+[INFO] +- org.springframework.boot:spring-boot-test:jar:4.0.6:test
+[INFO] |  +- org.springframework.boot:spring-boot:jar:4.0.6:test
+[INFO] |  \- org.springframework:spring-test:jar:7.0.7:test
+[INFO] +- ai.platon.pulsar:pulsar-dom:jar:4.9.5:compile
+[INFO] |  \- org.apache.commons:commons-math3:jar:3.6.1:compile
+[INFO] +- org.jetbrains.kotlin:kotlin-stdlib:jar:2.2.21:compile
+[INFO] |  \- org.jetbrains:annotations:jar:13.0:compile
+[INFO] +- org.jetbrains.kotlin:kotlin-reflect:jar:2.2.21:compile
+[INFO] +- org.jetbrains.kotlinx:kotlinx-coroutines-core:jar:1.10.2:compile
+[INFO] |  \- org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm:jar:1.10.2:compile
+[INFO] \- org.jetbrains.kotlin:kotlin-test-junit5:jar:2.2.21:test
+[INFO]    +- org.jetbrains.kotlin:kotlin-test:jar:2.2.21:test
+[INFO]    +- org.junit.jupiter:junit-jupiter-api:jar:6.0.3:test
+[INFO]    |  +- org.opentest4j:opentest4j:jar:1.3.0:test
+[INFO]    |  +- org.junit.platform:junit-platform-commons:jar:6.0.3:test
+[INFO]    |  \- org.apiguardian:apiguardian-api:jar:1.1.2:test
+[INFO]    +- org.junit.jupiter:junit-jupiter-engine:jar:6.0.3:test
+[INFO]    |  \- org.junit.platform:junit-platform-engine:jar:6.0.3:test
+[INFO]    \- org.junit.platform:junit-platform-launcher:jar:6.0.3:test
+[INFO]
+[INFO] -------------------< ai.platon.pulsar:browser4-boot >-------------------
+[INFO] Building Browser4 Boot 4.12.0-rc.1-SNAPSHOT                      [20/24]
+[INFO]   from browser4-boot\pom.xml
+[INFO] --------------------------------[ jar ]---------------------------------
+[INFO]
+[INFO] --- dependency:3.9.0:tree (default-cli) @ browser4-boot ---
+[INFO] ai.platon.pulsar:browser4-boot:jar:4.12.0-rc.1-SNAPSHOT
+[INFO] +- ai.platon.pulsar:pulsar-persist:jar:4.9.5:compile
+[INFO] |  +- ai.platon.gora:gora-core-shaded:jar:1.0.9-slim:compile
+[INFO] |  +- ai.platon.pulsar:pulsar-common:jar:4.9.5:compile
+[INFO] |  |  +- org.apache.httpcomponents.client5:httpclient5:jar:5.5.2:compile
+[INFO] |  |  |  +- org.apache.httpcomponents.core5:httpcore5:jar:5.3.6:compile
+[INFO] |  |  |  \- org.apache.httpcomponents.core5:httpcore5-h2:jar:5.3.6:compile
+[INFO] |  |  +- commons-io:commons-io:jar:2.16.1:compile
+[INFO] |  |  +- commons-codec:commons-codec:jar:1.19.0:compile
+[INFO] |  |  +- org.apache.commons:commons-lang3:jar:3.19.0:compile
+[INFO] |  |  +- org.apache.commons:commons-math3:jar:3.6.1:compile
+[INFO] |  |  +- com.squareup.okhttp3:okhttp:jar:4.12.0:compile
+[INFO] |  |  |  +- com.squareup.okio:okio:jar:3.6.0:compile
+[INFO] |  |  |  |  \- com.squareup.okio:okio-jvm:jar:3.6.0:compile
+[INFO] |  |  |  |     \- org.jetbrains.kotlin:kotlin-stdlib-common:jar:1.9.10:compile
+[INFO] |  |  |  \- org.jetbrains.kotlin:kotlin-stdlib-jdk8:jar:2.2.21:compile
+[INFO] |  |  |     \- org.jetbrains.kotlin:kotlin-stdlib-jdk7:jar:2.2.21:compile
+[INFO] |  |  +- com.fasterxml.jackson.dataformat:jackson-dataformat-yaml:jar:2.21.2:compile
+[INFO] |  |  +- org.jetbrains.kotlin:kotlin-serialization:jar:2.3.21:compile
+[INFO] |  |  |  \- org.jetbrains.kotlin:kotlin-gradle-plugin-api:jar:2.3.21:compile
+[INFO] |  |  |     +- org.jetbrains.kotlin:kotlin-gradle-plugin-annotations:jar:2.3.21:compile
+[INFO] |  |  |     +- org.jetbrains.kotlin:kotlin-native-utils:jar:2.3.21:compile
+[INFO] |  |  |     |  \- org.jetbrains.kotlin:kotlin-util-io:jar:2.3.21:compile
+[INFO] |  |  |     +- org.jetbrains.kotlin:kotlin-tooling-core:jar:2.3.21:compile
+[INFO] |  |  |     \- org.jetbrains.kotlin:kotlin-build-tools-api:jar:2.3.21:compile
+[INFO] |  |  +- org.nibor.autolink:autolink:jar:0.11.0:compile
+[INFO] |  |  +- org.slf4j:slf4j-api:jar:2.0.17:compile
+[INFO] |  |  +- ch.qos.logback:logback-classic:jar:1.5.32:compile
+[INFO] |  |  |  \- ch.qos.logback:logback-core:jar:1.5.32:compile
+[INFO] |  |  \- org.apache.logging.log4j:log4j-core:jar:2.25.4:compile
+[INFO] |  |     \- org.apache.logging.log4j:log4j-api:jar:2.25.4:compile
+[INFO] |  +- ai.platon.pulsar:pulsar-jsoup:jar:1.14.3:compile
+[INFO] |  +- org.springframework:spring-context:jar:7.0.7:compile
+[INFO] |  |  +- org.springframework:spring-aop:jar:7.0.7:compile
+[INFO] |  |  +- org.springframework:spring-beans:jar:7.0.7:compile
+[INFO] |  |  +- org.springframework:spring-expression:jar:7.0.7:compile
+[INFO] |  |  \- io.micrometer:micrometer-observation:jar:1.16.5:compile
+[INFO] |  |     \- io.micrometer:micrometer-commons:jar:1.16.5:compile
+[INFO] |  +- com.fasterxml.jackson.dataformat:jackson-dataformat-properties:jar:2.21.2:compile
+[INFO] |  |  +- com.fasterxml.jackson.core:jackson-databind:jar:2.21.2:compile
+[INFO] |  |  \- com.fasterxml.jackson.core:jackson-core:jar:2.21.2:compile
+[INFO] |  +- com.fasterxml.jackson.datatype:jackson-datatype-jsr310:jar:2.21.2:compile
+[INFO] |  |  \- com.fasterxml.jackson.core:jackson-annotations:jar:2.21:compile
+[INFO] |  \- com.fasterxml.jackson.module:jackson-module-kotlin:jar:2.21.2:compile
+[INFO] +- ai.platon.pulsar:browser4-skeleton:jar:4.12.0-rc.1-SNAPSHOT:compile
+[INFO] |  +- ai.platon.pulsar:browser4-common:jar:4.12.0-rc.1-SNAPSHOT:compile
+[INFO] |  +- ai.platon.pulsar:browser4-browser:jar:4.12.0-rc.1-SNAPSHOT:compile
+[INFO] |  |  +- ai.platon.cdt:cdt-kotlin-client:jar:4.8.0:compile
+[INFO] |  |  +- io.dropwizard.metrics:metrics-core:jar:4.2.12:compile
+[INFO] |  |  +- io.ktor:ktor-client-core:jar:3.2.3:compile
+[INFO] |  |  |  +- io.ktor:ktor-http:jar:3.2.3:runtime
+[INFO] |  |  |  |  +- io.ktor:ktor-utils:jar:3.2.3:runtime
+[INFO] |  |  |  |  \- org.jetbrains.kotlinx:kotlinx-serialization-core:jar:1.9.0:runtime
+[INFO] |  |  |  +- io.ktor:ktor-http-cio:jar:3.2.3:runtime
+[INFO] |  |  |  |  \- io.ktor:ktor-io:jar:3.2.3:runtime
+[INFO] |  |  |  |     \- org.jetbrains.kotlinx:kotlinx-io-core:jar:0.7.0:runtime
+[INFO] |  |  |  |        \- org.jetbrains.kotlinx:kotlinx-io-bytestring:jar:0.7.0:runtime
+[INFO] |  |  |  +- io.ktor:ktor-events:jar:3.2.3:runtime
+[INFO] |  |  |  +- io.ktor:ktor-websocket-serialization:jar:3.2.3:runtime
+[INFO] |  |  |  |  \- io.ktor:ktor-serialization:jar:3.2.3:runtime
+[INFO] |  |  |  \- io.ktor:ktor-sse:jar:3.2.3:runtime
+[INFO] |  |  +- io.ktor:ktor-client-core-jvm:jar:3.2.3:compile
+[INFO] |  |  |  +- io.ktor:ktor-http-jvm:jar:3.2.3:compile
+[INFO] |  |  |  +- io.ktor:ktor-http-cio-jvm:jar:3.2.3:compile
+[INFO] |  |  |  |  +- io.ktor:ktor-network-jvm:jar:3.2.3:compile
+[INFO] |  |  |  |  \- io.ktor:ktor-io-jvm:jar:3.2.3:compile
+[INFO] |  |  |  +- io.ktor:ktor-events-jvm:jar:3.2.3:compile
+[INFO] |  |  |  +- io.ktor:ktor-websocket-serialization-jvm:jar:3.2.3:compile
+[INFO] |  |  |  +- io.ktor:ktor-sse-jvm:jar:3.2.3:compile
+[INFO] |  |  |  \- org.jetbrains.kotlinx:kotlinx-coroutines-slf4j:jar:1.10.2:runtime
+[INFO] |  |  +- io.ktor:ktor-client-cio:jar:3.2.3:compile
+[INFO] |  |  |  +- io.ktor:ktor-websockets:jar:3.2.3:runtime
+[INFO] |  |  |  \- io.ktor:ktor-network-tls:jar:3.2.3:runtime
+[INFO] |  |  |     \- io.ktor:ktor-network:jar:3.2.3:runtime
+[INFO] |  |  +- io.ktor:ktor-client-cio-jvm:jar:3.2.3:compile
+[INFO] |  |  |  +- io.ktor:ktor-websockets-jvm:jar:3.2.3:compile
+[INFO] |  |  |  \- io.ktor:ktor-network-tls-jvm:jar:3.2.3:compile
+[INFO] |  |  \- io.ktor:ktor-client-websockets:jar:3.2.3:compile
+[INFO] |  +- ai.platon.pulsar:pulsar-dom:jar:4.9.5:compile
+[INFO] |  +- ai.platon.pulsar:pulsar-ql-common:jar:4.9.5:compile
+[INFO] |  +- ai.platon.pulsar:pulsar-h2:jar:1.4.197:compile
+[INFO] |  |  +- javax.servlet:javax.servlet-api:jar:3.1.0:compile
+[INFO] |  |  +- org.osgi:org.osgi.core:jar:4.2.0:compile
+[INFO] |  |  +- org.osgi:org.osgi.enterprise:jar:4.2.0:compile
+[INFO] |  |  \- org.locationtech.jts:jts-core:jar:1.15.0:compile
+[INFO] |  +- ai.platon.pulsar:pulsar-llm:jar:4.9.5:compile
+[INFO] |  |  \- dev.langchain4j:langchain4j-core:jar:1.5.0:compile
+[INFO] |  +- org.apache.commons:commons-collections4:jar:4.4:compile
+[INFO] |  +- com.github.ben-manes.caffeine:caffeine:jar:3.2.3:compile
+[INFO] |  |  +- org.jspecify:jspecify:jar:1.0.0:compile
+[INFO] |  |  \- com.google.errorprone:error_prone_annotations:jar:2.43.0:compile
+[INFO] |  +- com.google.code.crawler-commons:crawler-commons:jar:0.5:compile
+[INFO] |  |  \- org.apache.tika:tika-core:jar:3.2.2:compile
+[INFO] |  +- com.beust:jcommander:jar:1.82:compile
+[INFO] |  +- com.github.oshi:oshi-core:jar:6.6.6:compile
+[INFO] |  |  +- net.java.dev.jna:jna:jar:5.16.0:compile
+[INFO] |  |  \- net.java.dev.jna:jna-platform:jar:5.16.0:compile
+[INFO] |  +- io.dropwizard.metrics:metrics-graphite:jar:4.2.12:compile
+[INFO] |  |  \- com.rabbitmq:amqp-client:jar:5.27.1:compile
+[INFO] |  |     +- io.netty:netty-transport:jar:4.2.12.Final:compile
+[INFO] |  |     |  +- io.netty:netty-common:jar:4.2.12.Final:compile
+[INFO] |  |     |  +- io.netty:netty-buffer:jar:4.2.12.Final:compile
+[INFO] |  |     |  \- io.netty:netty-resolver:jar:4.2.12.Final:compile
+[INFO] |  |     +- io.netty:netty-codec:jar:4.2.12.Final:compile
+[INFO] |  |     |  +- io.netty:netty-codec-base:jar:4.2.12.Final:compile
+[INFO] |  |     |  +- io.netty:netty-codec-compression:jar:4.2.12.Final:compile
+[INFO] |  |     |  +- io.netty:netty-codec-protobuf:jar:4.2.12.Final:compile
+[INFO] |  |     |  \- io.netty:netty-codec-marshalling:jar:4.2.12.Final:compile
+[INFO] |  |     \- io.netty:netty-handler:jar:4.2.12.Final:compile
+[INFO] |  |        \- io.netty:netty-transport-native-unix-common:jar:4.2.12.Final:compile
+[INFO] |  \- org.jetbrains.kotlinx:kotlinx-coroutines-jdk8:jar:1.10.2:compile
+[INFO] +- ai.platon.pulsar:browser4-protocol:jar:4.12.0-rc.1-SNAPSHOT:compile
+[INFO] +- ai.platon.pulsar:browser4-agentic:jar:4.12.0-rc.1-SNAPSHOT:compile
+[INFO] |  +- io.modelcontextprotocol:kotlin-sdk-core-jvm:jar:0.8.1:compile
+[INFO] |  |  +- org.jetbrains.kotlinx:kotlinx-serialization-json-jvm:jar:1.9.0:compile
+[INFO] |  |  |  \- org.jetbrains.kotlinx:kotlinx-serialization-core-jvm:jar:1.9.0:compile
+[INFO] |  |  +- org.jetbrains.kotlinx:kotlinx-io-core-jvm:jar:0.8.2:compile
+[INFO] |  |  |  \- org.jetbrains.kotlinx:kotlinx-io-bytestring-jvm:jar:0.8.2:compile
+[INFO] |  |  +- org.jetbrains.kotlinx:kotlinx-collections-immutable-jvm:jar:0.4.0:compile
+[INFO] |  |  +- io.ktor:ktor-server-websockets-jvm:jar:3.2.3:runtime
+[INFO] |  |  \- io.github.oshai:kotlin-logging-jvm:jar:7.0.13:runtime
+[INFO] |  +- io.modelcontextprotocol:kotlin-sdk-server-jvm:jar:0.8.1:compile
+[INFO] |  |  +- io.ktor:ktor-server-core-jvm:jar:3.2.3:compile
+[INFO] |  |  |  +- com.typesafe:config:jar:1.4.3:compile
+[INFO] |  |  |  +- io.ktor:ktor-utils-jvm:jar:3.2.3:compile
+[INFO] |  |  |  +- io.ktor:ktor-serialization-jvm:jar:3.2.3:compile
+[INFO] |  |  |  \- org.fusesource.jansi:jansi:jar:2.4.2:runtime
+[INFO] |  |  \- io.ktor:ktor-server-sse-jvm:jar:3.2.3:compile
+[INFO] |  +- jakarta.annotation:jakarta.annotation-api:jar:3.0.0:compile
+[INFO] |  \- org.yaml:snakeyaml:jar:2.5:compile
+[INFO] +- ai.platon.pulsar:pulsar-ql:jar:4.9.5:compile
+[INFO] |  +- ai.platon.pulsar:pulsar-parse:jar:4.9.5:compile
+[INFO] |  |  +- net.sourceforge.nekohtml:nekohtml:jar:1.9.22:compile
+[INFO] |  |  |  \- xerces:xercesImpl:jar:2.11.0:compile
+[INFO] |  |  |     \- xml-apis:xml-apis:jar:1.4.01:compile
+[INFO] |  |  \- org.apache.tika:tika-parser-html-module:jar:3.2.2:compile
+[INFO] |  \- com.udojava:EvalEx:jar:2.0:compile
+[INFO] +- org.springframework.boot:spring-boot:jar:4.0.6:compile
+[INFO] |  \- org.springframework:spring-core:jar:7.0.7:compile
+[INFO] |     \- commons-logging:commons-logging:jar:1.3.2:compile
+[INFO] +- org.springframework.boot:spring-boot-autoconfigure:jar:4.0.6:compile
+[INFO] +- org.springframework:spring-test:jar:7.0.7:test
+[INFO] +- org.springframework.boot:spring-boot-test:jar:4.0.6:test
+[INFO] +- org.mockito.kotlin:mockito-kotlin:jar:5.4.0:test
+[INFO] |  \- org.mockito:mockito-core:jar:5.20.0:test
+[INFO] |     +- net.bytebuddy:byte-buddy:jar:1.17.8:test
+[INFO] |     +- net.bytebuddy:byte-buddy-agent:jar:1.17.8:test
+[INFO] |     \- org.objenesis:objenesis:jar:3.3:test
+[INFO] +- org.jetbrains.kotlin:kotlin-stdlib:jar:2.2.21:compile
+[INFO] |  \- org.jetbrains:annotations:jar:13.0:compile
+[INFO] +- org.jetbrains.kotlin:kotlin-reflect:jar:2.2.21:compile
+[INFO] +- org.jetbrains.kotlinx:kotlinx-coroutines-core:jar:1.10.2:compile
+[INFO] |  \- org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm:jar:1.10.2:compile
+[INFO] \- org.jetbrains.kotlin:kotlin-test-junit5:jar:2.2.21:test
+[INFO]    +- org.jetbrains.kotlin:kotlin-test:jar:2.2.21:test
+[INFO]    +- org.junit.jupiter:junit-jupiter-api:jar:6.0.3:test
+[INFO]    |  +- org.opentest4j:opentest4j:jar:1.3.0:test
+[INFO]    |  +- org.junit.platform:junit-platform-commons:jar:6.0.3:test
+[INFO]    |  \- org.apiguardian:apiguardian-api:jar:1.1.2:test
+[INFO]    +- org.junit.jupiter:junit-jupiter-engine:jar:6.0.3:test
+[INFO]    |  \- org.junit.platform:junit-platform-engine:jar:6.0.3:test
+[INFO]    \- org.junit.platform:junit-platform-launcher:jar:6.0.3:test
+[INFO]
+[INFO] -----------------< ai.platon.pulsar:browser4-pdk-bom >------------------
+[INFO] Building Browser4 PDK BOM 4.12.0-rc.1-SNAPSHOT                   [21/24]
+[INFO]   from browser4-pdk\browser4-pdk-bom\pom.xml
+[INFO] --------------------------------[ pom ]---------------------------------
+[INFO]
+[INFO] --- dependency:3.11.0:tree (default-cli) @ browser4-pdk-bom ---
+[INFO] ai.platon.pulsar:browser4-pdk-bom:pom:4.12.0-rc.1-SNAPSHOT
+[INFO] Copying ai.platon.pulsar:browser4-pdk-bom:pom:4.12.0-rc.1-SNAPSHOT to project local repository
+[INFO] Copying ai.platon.pulsar:browser4-pdk-bom:pom:consumer:4.12.0-rc.1-SNAPSHOT to project local repository
+[INFO]
+[INFO] -------------< ai.platon.pulsar:browser4-plugin-archetype >-------------
+[INFO] Building Browser4 Plugin Archetype 4.12.0-rc.1-SNAPSHOT          [22/24]
+[INFO]   from browser4-pdk\browser4-plugin-archetype\pom.xml
+[INFO] --------------------------[ maven-archetype ]---------------------------
+[INFO]
+[INFO] --- dependency:3.9.0:tree (default-cli) @ browser4-plugin-archetype ---
+[INFO] ai.platon.pulsar:browser4-plugin-archetype:maven-archetype:4.12.0-rc.1-SNAPSHOT
+[INFO] \- org.jetbrains.kotlin:kotlin-stdlib:jar:2.3.21:compile
+[INFO]    \- org.jetbrains:annotations:jar:13.0:compile
+[INFO]
+[INFO] -------------< ai.platon.pulsar:browser4-pdk-test-plugin >--------------
+[INFO] Building Browser4 PDK Test Plugin 4.12.0-rc.1-SNAPSHOT           [23/24]
+[INFO]   from browser4-pdk\browser4-pdk-test-plugin\pom.xml
+[INFO] --------------------------------[ jar ]---------------------------------
+[INFO]
+[INFO] --- dependency:3.9.0:tree (default-cli) @ browser4-pdk-test-plugin ---
+[INFO] ai.platon.pulsar:browser4-pdk-test-plugin:jar:4.12.0-rc.1-SNAPSHOT
+[INFO] +- ai.platon.pulsar:browser4-skeleton:jar:4.12.0-rc.1-SNAPSHOT:provided
+[INFO] |  +- ai.platon.pulsar:pulsar-common:jar:4.9.5:provided
+[INFO] |  |  +- commons-io:commons-io:jar:2.16.1:provided
+[INFO] |  |  +- com.squareup.okhttp3:okhttp:jar:4.12.0:provided
+[INFO] |  |  |  \- com.squareup.okio:okio:jar:3.6.0:provided
+[INFO] |  |  |     \- com.squareup.okio:okio-jvm:jar:3.6.0:provided
+[INFO] |  |  |        \- org.jetbrains.kotlin:kotlin-stdlib-common:jar:1.9.10:provided
+[INFO] |  |  +- com.fasterxml.jackson.module:jackson-module-kotlin:jar:2.21.2:provided
+[INFO] |  |  +- com.fasterxml.jackson.dataformat:jackson-dataformat-properties:jar:2.21.2:provided
+[INFO] |  |  +- com.fasterxml.jackson.datatype:jackson-datatype-jsr310:jar:2.21.2:provided
+[INFO] |  |  \- org.nibor.autolink:autolink:jar:0.11.0:provided
+[INFO] |  +- ai.platon.pulsar:pulsar-persist:jar:4.9.5:provided
+[INFO] |  |  \- ai.platon.gora:gora-core-shaded:jar:1.0.9-slim:provided
+[INFO] |  +- ai.platon.pulsar:pulsar-dom:jar:4.9.5:provided
+[INFO] |  |  \- com.udojava:EvalEx:jar:2.0:provided
+[INFO] |  +- ai.platon.pulsar:pulsar-ql-common:jar:4.9.5:provided
+[INFO] |  |  \- com.fasterxml.jackson.core:jackson-databind:jar:2.21.2:provided
+[INFO] |  +- ai.platon.pulsar:pulsar-h2:jar:1.4.197:provided
+[INFO] |  |  +- javax.servlet:javax.servlet-api:jar:3.1.0:provided
+[INFO] |  |  +- org.osgi:org.osgi.core:jar:4.2.0:provided
+[INFO] |  |  +- org.osgi:org.osgi.enterprise:jar:4.2.0:provided
+[INFO] |  |  \- org.locationtech.jts:jts-core:jar:1.15.0:provided
+[INFO] |  +- ai.platon.pulsar:pulsar-llm:jar:4.9.5:provided
+[INFO] |  |  \- dev.langchain4j:langchain4j-core:jar:1.5.0:provided
+[INFO] |  +- org.springframework:spring-context:jar:7.0.7:provided
+[INFO] |  |  +- org.springframework:spring-aop:jar:7.0.7:provided
+[INFO] |  |  +- org.springframework:spring-beans:jar:7.0.7:provided
+[INFO] |  |  +- org.springframework:spring-expression:jar:7.0.7:provided
+[INFO] |  |  \- io.micrometer:micrometer-observation:jar:1.16.5:provided
+[INFO] |  |     \- io.micrometer:micrometer-commons:jar:1.16.5:provided
+[INFO] |  +- org.apache.commons:commons-collections4:jar:4.4:provided
+[INFO] |  +- com.github.ben-manes.caffeine:caffeine:jar:3.2.3:provided
+[INFO] |  |  +- org.jspecify:jspecify:jar:1.0.0:provided
+[INFO] |  |  \- com.google.errorprone:error_prone_annotations:jar:2.43.0:provided
+[INFO] |  +- com.google.code.crawler-commons:crawler-commons:jar:0.5:provided
+[INFO] |  |  \- org.apache.tika:tika-core:jar:3.2.2:provided
+[INFO] |  +- com.beust:jcommander:jar:1.82:provided
+[INFO] |  +- com.github.oshi:oshi-core:jar:6.6.6:provided
+[INFO] |  |  +- net.java.dev.jna:jna:jar:5.16.0:provided
+[INFO] |  |  \- net.java.dev.jna:jna-platform:jar:5.16.0:provided
+[INFO] |  +- io.dropwizard.metrics:metrics-graphite:jar:4.2.12:provided
+[INFO] |  |  \- com.rabbitmq:amqp-client:jar:5.27.1:provided
+[INFO] |  |     +- io.netty:netty-transport:jar:4.2.12.Final:provided
+[INFO] |  |     |  +- io.netty:netty-common:jar:4.2.12.Final:provided
+[INFO] |  |     |  +- io.netty:netty-buffer:jar:4.2.12.Final:provided
+[INFO] |  |     |  \- io.netty:netty-resolver:jar:4.2.12.Final:provided
+[INFO] |  |     +- io.netty:netty-codec:jar:4.2.12.Final:provided
+[INFO] |  |     |  +- io.netty:netty-codec-base:jar:4.2.12.Final:provided
+[INFO] |  |     |  +- io.netty:netty-codec-compression:jar:4.2.12.Final:provided
+[INFO] |  |     |  +- io.netty:netty-codec-protobuf:jar:4.2.12.Final:provided
+[INFO] |  |     |  \- io.netty:netty-codec-marshalling:jar:4.2.12.Final:provided
+[INFO] |  |     \- io.netty:netty-handler:jar:4.2.12.Final:provided
+[INFO] |  |        \- io.netty:netty-transport-native-unix-common:jar:4.2.12.Final:provided
+[INFO] |  +- org.jetbrains.kotlinx:kotlinx-coroutines-jdk8:jar:1.10.2:provided
+[INFO] |  \- org.jetbrains.kotlin:kotlin-reflect:jar:2.2.21:provided
+[INFO] +- ai.platon.pulsar:browser4-browser:jar:4.12.0-rc.1-SNAPSHOT:provided
+[INFO] |  +- ai.platon.pulsar:pulsar-jsoup:jar:1.14.3:provided
+[INFO] |  +- ai.platon.cdt:cdt-kotlin-client:jar:4.8.0:provided
+[INFO] |  |  +- org.jetbrains.kotlin:kotlin-stdlib-jdk8:jar:2.2.21:provided
+[INFO] |  |  |  \- org.jetbrains.kotlin:kotlin-stdlib-jdk7:jar:2.2.21:provided
+[INFO] |  |  \- com.fasterxml.jackson.core:jackson-annotations:jar:2.21:provided
+[INFO] |  +- com.fasterxml.jackson.dataformat:jackson-dataformat-yaml:jar:2.21.2:provided
+[INFO] |  |  \- com.fasterxml.jackson.core:jackson-core:jar:2.21.2:provided
+[INFO] |  +- io.dropwizard.metrics:metrics-core:jar:4.2.12:provided
+[INFO] |  +- io.ktor:ktor-client-core:jar:3.2.3:provided
+[INFO] |  |  +- io.ktor:ktor-http:jar:3.2.3:provided
+[INFO] |  |  |  +- io.ktor:ktor-utils:jar:3.2.3:provided
+[INFO] |  |  |  \- org.jetbrains.kotlinx:kotlinx-serialization-core:jar:1.9.0:provided
+[INFO] |  |  +- io.ktor:ktor-http-cio:jar:3.2.3:provided
+[INFO] |  |  |  \- io.ktor:ktor-io:jar:3.2.3:provided
+[INFO] |  |  |     \- org.jetbrains.kotlinx:kotlinx-io-core:jar:0.7.0:provided
+[INFO] |  |  |        \- org.jetbrains.kotlinx:kotlinx-io-bytestring:jar:0.7.0:provided
+[INFO] |  |  +- io.ktor:ktor-events:jar:3.2.3:provided
+[INFO] |  |  +- io.ktor:ktor-websocket-serialization:jar:3.2.3:provided
+[INFO] |  |  |  \- io.ktor:ktor-serialization:jar:3.2.3:provided
+[INFO] |  |  \- io.ktor:ktor-sse:jar:3.2.3:provided
+[INFO] |  +- io.ktor:ktor-client-core-jvm:jar:3.2.3:provided
+[INFO] |  |  +- io.ktor:ktor-http-jvm:jar:3.2.3:provided
+[INFO] |  |  |  +- io.ktor:ktor-utils-jvm:jar:3.2.3:provided
+[INFO] |  |  |  \- org.jetbrains.kotlinx:kotlinx-serialization-core-jvm:jar:1.9.0:provided
+[INFO] |  |  +- io.ktor:ktor-http-cio-jvm:jar:3.2.3:provided
+[INFO] |  |  |  +- io.ktor:ktor-network-jvm:jar:3.2.3:provided
+[INFO] |  |  |  \- io.ktor:ktor-io-jvm:jar:3.2.3:provided
+[INFO] |  |  +- io.ktor:ktor-events-jvm:jar:3.2.3:provided
+[INFO] |  |  +- io.ktor:ktor-websocket-serialization-jvm:jar:3.2.3:provided
+[INFO] |  |  |  \- io.ktor:ktor-serialization-jvm:jar:3.2.3:provided
+[INFO] |  |  +- io.ktor:ktor-sse-jvm:jar:3.2.3:provided
+[INFO] |  |  \- org.jetbrains.kotlinx:kotlinx-coroutines-slf4j:jar:1.10.2:provided
+[INFO] |  +- io.ktor:ktor-client-cio:jar:3.2.3:provided
+[INFO] |  |  +- io.ktor:ktor-websockets:jar:3.2.3:provided
+[INFO] |  |  \- io.ktor:ktor-network-tls:jar:3.2.3:provided
+[INFO] |  |     \- io.ktor:ktor-network:jar:3.2.3:provided
+[INFO] |  +- io.ktor:ktor-client-cio-jvm:jar:3.2.3:provided
+[INFO] |  |  +- io.ktor:ktor-websockets-jvm:jar:3.2.3:provided
+[INFO] |  |  \- io.ktor:ktor-network-tls-jvm:jar:3.2.3:provided
+[INFO] |  \- io.ktor:ktor-client-websockets:jar:3.2.3:provided
+[INFO] +- ai.platon.pulsar:browser4-common:jar:4.12.0-rc.1-SNAPSHOT:provided
+[INFO] |  +- org.springframework:spring-core:jar:7.0.7:provided
+[INFO] |  |  \- commons-logging:commons-logging:jar:1.3.6:provided
+[INFO] |  +- org.apache.httpcomponents.client5:httpclient5:jar:5.5.2:provided
+[INFO] |  |  +- org.apache.httpcomponents.core5:httpcore5:jar:5.3.6:provided
+[INFO] |  |  \- org.apache.httpcomponents.core5:httpcore5-h2:jar:5.3.6:provided
+[INFO] |  +- commons-codec:commons-codec:jar:1.19.0:provided
+[INFO] |  +- org.apache.commons:commons-lang3:jar:3.19.0:provided
+[INFO] |  +- org.apache.commons:commons-math3:jar:3.6.1:provided
+[INFO] |  +- org.slf4j:slf4j-api:jar:2.0.17:provided
+[INFO] |  \- ch.qos.logback:logback-classic:jar:1.5.32:provided
+[INFO] |     \- ch.qos.logback:logback-core:jar:1.5.32:provided
+[INFO] +- ai.platon.pulsar:browser4-protocol:jar:4.12.0-rc.1-SNAPSHOT:provided
+[INFO] +- ai.platon.pulsar:browser4-agentic:jar:4.12.0-rc.1-SNAPSHOT:provided
+[INFO] |  +- ai.platon.pulsar:pulsar-ql:jar:4.9.5:provided
+[INFO] |  |  \- ai.platon.pulsar:pulsar-parse:jar:4.9.5:provided
+[INFO] |  |     +- net.sourceforge.nekohtml:nekohtml:jar:1.9.22:provided
+[INFO] |  |     |  \- xerces:xercesImpl:jar:2.11.0:provided
+[INFO] |  |     |     \- xml-apis:xml-apis:jar:1.4.01:provided
+[INFO] |  |     \- org.apache.tika:tika-parser-html-module:jar:3.2.2:provided
+[INFO] |  +- io.modelcontextprotocol:kotlin-sdk-core-jvm:jar:0.8.1:provided
+[INFO] |  |  +- org.jetbrains.kotlinx:kotlinx-serialization-json-jvm:jar:1.9.0:provided
+[INFO] |  |  +- org.jetbrains.kotlinx:kotlinx-io-core-jvm:jar:0.8.2:provided
+[INFO] |  |  |  \- org.jetbrains.kotlinx:kotlinx-io-bytestring-jvm:jar:0.8.2:provided
+[INFO] |  |  +- org.jetbrains.kotlinx:kotlinx-collections-immutable-jvm:jar:0.4.0:provided
+[INFO] |  |  +- io.ktor:ktor-server-websockets-jvm:jar:3.2.3:provided
+[INFO] |  |  \- io.github.oshai:kotlin-logging-jvm:jar:7.0.13:provided
+[INFO] |  +- io.modelcontextprotocol:kotlin-sdk-server-jvm:jar:0.8.1:provided
+[INFO] |  |  +- io.ktor:ktor-server-core-jvm:jar:3.2.3:provided
+[INFO] |  |  |  +- com.typesafe:config:jar:1.4.3:provided
+[INFO] |  |  |  \- org.fusesource.jansi:jansi:jar:2.4.2:provided
+[INFO] |  |  \- io.ktor:ktor-server-sse-jvm:jar:3.2.3:provided
+[INFO] |  +- jakarta.annotation:jakarta.annotation-api:jar:3.0.0:provided
+[INFO] |  \- org.yaml:snakeyaml:jar:2.5:provided
+[INFO] +- org.springframework.boot:spring-boot-autoconfigure:jar:4.0.6:provided
+[INFO] |  \- org.springframework.boot:spring-boot:jar:4.0.6:provided
+[INFO] +- org.jetbrains.kotlin:kotlin-stdlib:jar:2.2.21:provided
+[INFO] |  \- org.jetbrains:annotations:jar:13.0:provided
+[INFO] +- org.jetbrains.kotlinx:kotlinx-coroutines-core:jar:1.10.2:provided
+[INFO] |  \- org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm:jar:1.10.2:provided
+[INFO] +- org.jetbrains.kotlin:kotlin-test-junit5:jar:2.2.21:test
+[INFO] |  +- org.jetbrains.kotlin:kotlin-test:jar:2.2.21:test
+[INFO] |  +- org.junit.jupiter:junit-jupiter-api:jar:6.0.3:test
+[INFO] |  |  +- org.opentest4j:opentest4j:jar:1.3.0:test
+[INFO] |  |  +- org.junit.platform:junit-platform-commons:jar:6.0.3:test
+[INFO] |  |  \- org.apiguardian:apiguardian-api:jar:1.1.2:test
+[INFO] |  +- org.junit.jupiter:junit-jupiter-engine:jar:6.0.3:test
+[INFO] |  |  \- org.junit.platform:junit-platform-engine:jar:6.0.3:test
+[INFO] |  \- org.junit.platform:junit-platform-launcher:jar:6.0.3:test
+[INFO] \- org.springframework.boot:spring-boot-starter-test:jar:4.0.6:test
+[INFO]    +- org.springframework.boot:spring-boot-starter:jar:4.0.6:test
+[INFO]    |  \- org.springframework.boot:spring-boot-starter-logging:jar:4.0.6:test
+[INFO]    |     +- org.apache.logging.log4j:log4j-to-slf4j:jar:2.25.4:test
+[INFO]    |     |  \- org.apache.logging.log4j:log4j-api:jar:2.25.4:test
+[INFO]    |     \- org.slf4j:jul-to-slf4j:jar:2.0.17:test
+[INFO]    +- org.springframework.boot:spring-boot-test:jar:4.0.6:test
+[INFO]    +- org.springframework.boot:spring-boot-test-autoconfigure:jar:4.0.6:test
+[INFO]    +- com.jayway.jsonpath:json-path:jar:2.10.0:test
+[INFO]    +- jakarta.xml.bind:jakarta.xml.bind-api:jar:4.0.4:test
+[INFO]    |  \- jakarta.activation:jakarta.activation-api:jar:2.1.4:test
+[INFO]    +- net.minidev:json-smart:jar:2.6.0:test
+[INFO]    |  \- net.minidev:accessors-smart:jar:2.6.0:test
+[INFO]    |     \- org.ow2.asm:asm:jar:9.7.1:test
+[INFO]    +- org.assertj:assertj-core:jar:3.27.7:test
+[INFO]    |  \- net.bytebuddy:byte-buddy:jar:1.17.8:test
+[INFO]    +- org.awaitility:awaitility:jar:4.3.0:test
+[INFO]    +- org.hamcrest:hamcrest:jar:3.0:test
+[INFO]    +- org.junit.jupiter:junit-jupiter:jar:6.0.3:test
+[INFO]    |  \- org.junit.jupiter:junit-jupiter-params:jar:6.0.3:test
+[INFO]    +- org.mockito:mockito-core:jar:5.20.0:test
+[INFO]    |  +- net.bytebuddy:byte-buddy-agent:jar:1.17.8:test
+[INFO]    |  \- org.objenesis:objenesis:jar:3.3:test
+[INFO]    +- org.mockito:mockito-junit-jupiter:jar:5.20.0:test
+[INFO]    +- org.skyscreamer:jsonassert:jar:1.5.3:test
+[INFO]    |  \- com.vaadin.external.google:android-json:jar:0.0.20131108.vaadin1:test
+[INFO]    +- org.springframework:spring-test:jar:7.0.7:test
+[INFO]    \- org.xmlunit:xmlunit-core:jar:2.10.4:test
+[INFO]
+[INFO] -------------------< ai.platon.pulsar:browser4-rest >-------------------
+[INFO] Building Browser4 Rest 4.12.0-rc.1-SNAPSHOT                      [24/24]
+[INFO]   from browser4-rest\pom.xml
+[INFO] --------------------------------[ jar ]---------------------------------
+[INFO] Loaded 50 auto-discovered prefixes for remote repository ow2-snapshot (prefixes-ow2-snapshot-40669f8efefaadb4c1705a2585cefc8851f735ac.txt)
+[INFO]
+[INFO] --- dependency:3.9.0:tree (default-cli) @ browser4-rest ---
+[INFO] ai.platon.pulsar:browser4-rest:jar:4.12.0-rc.1-SNAPSHOT
+[INFO] +- ai.platon.pulsar:browser4-browser:jar:4.12.0-rc.1-SNAPSHOT:compile
+[INFO] |  +- ai.platon.pulsar:browser4-common:jar:4.12.0-rc.1-SNAPSHOT:compile
+[INFO] |  |  +- org.apache.httpcomponents.client5:httpclient5:jar:5.5.2:compile
+[INFO] |  |  |  +- org.apache.httpcomponents.core5:httpcore5:jar:5.3.6:compile
+[INFO] |  |  |  \- org.apache.httpcomponents.core5:httpcore5-h2:jar:5.3.6:compile
+[INFO] |  |  +- commons-codec:commons-codec:jar:1.19.0:compile
+[INFO] |  |  +- org.apache.commons:commons-lang3:jar:3.19.0:compile
+[INFO] |  |  +- org.apache.commons:commons-math3:jar:3.6.1:compile
+[INFO] |  |  \- ch.qos.logback:logback-classic:jar:1.5.32:compile
+[INFO] |  |     \- ch.qos.logback:logback-core:jar:1.5.32:compile
+[INFO] |  +- ai.platon.pulsar:pulsar-common:jar:4.9.5:compile
+[INFO] |  |  +- commons-io:commons-io:jar:2.16.1:compile
+[INFO] |  |  +- com.squareup.okhttp3:okhttp:jar:4.12.0:compile
+[INFO] |  |  |  \- com.squareup.okio:okio:jar:3.6.0:compile
+[INFO] |  |  |     \- com.squareup.okio:okio-jvm:jar:3.6.0:compile
+[INFO] |  |  |        \- org.jetbrains.kotlin:kotlin-stdlib-common:jar:1.9.10:compile
+[INFO] |  |  +- com.fasterxml.jackson.dataformat:jackson-dataformat-properties:jar:2.21.2:compile
+[INFO] |  |  +- com.fasterxml.jackson.datatype:jackson-datatype-jsr310:jar:2.21.2:compile
+[INFO] |  |  \- org.nibor.autolink:autolink:jar:0.11.0:compile
+[INFO] |  +- ai.platon.pulsar:pulsar-jsoup:jar:1.14.3:compile
+[INFO] |  +- ai.platon.cdt:cdt-kotlin-client:jar:4.8.0:compile
+[INFO] |  |  \- org.jetbrains.kotlin:kotlin-stdlib-jdk8:jar:2.2.21:compile
+[INFO] |  |     \- org.jetbrains.kotlin:kotlin-stdlib-jdk7:jar:2.2.21:compile
+[INFO] |  +- com.fasterxml.jackson.dataformat:jackson-dataformat-yaml:jar:2.21.2:compile
+[INFO] |  |  \- com.fasterxml.jackson.core:jackson-core:jar:2.21.2:compile
+[INFO] |  +- io.dropwizard.metrics:metrics-core:jar:4.2.12:compile
+[INFO] |  +- io.ktor:ktor-client-core:jar:3.2.3:compile
+[INFO] |  |  +- io.ktor:ktor-http:jar:3.2.3:runtime
+[INFO] |  |  |  +- io.ktor:ktor-utils:jar:3.2.3:runtime
+[INFO] |  |  |  \- org.jetbrains.kotlinx:kotlinx-serialization-core:jar:1.9.0:runtime
+[INFO] |  |  +- io.ktor:ktor-http-cio:jar:3.2.3:runtime
+[INFO] |  |  |  \- io.ktor:ktor-io:jar:3.2.3:runtime
+[INFO] |  |  |     \- org.jetbrains.kotlinx:kotlinx-io-core:jar:0.7.0:runtime
+[INFO] |  |  |        \- org.jetbrains.kotlinx:kotlinx-io-bytestring:jar:0.7.0:runtime
+[INFO] |  |  +- io.ktor:ktor-events:jar:3.2.3:runtime
+[INFO] |  |  +- io.ktor:ktor-websocket-serialization:jar:3.2.3:runtime
+[INFO] |  |  |  \- io.ktor:ktor-serialization:jar:3.2.3:runtime
+[INFO] |  |  \- io.ktor:ktor-sse:jar:3.2.3:runtime
+[INFO] |  +- io.ktor:ktor-client-core-jvm:jar:3.2.3:compile
+[INFO] |  |  +- io.ktor:ktor-http-jvm:jar:3.2.3:compile
+[INFO] |  |  |  +- io.ktor:ktor-utils-jvm:jar:3.2.3:compile
+[INFO] |  |  |  \- org.jetbrains.kotlinx:kotlinx-serialization-core-jvm:jar:1.9.0:compile
+[INFO] |  |  +- io.ktor:ktor-http-cio-jvm:jar:3.2.3:compile
+[INFO] |  |  |  +- io.ktor:ktor-network-jvm:jar:3.2.3:compile
+[INFO] |  |  |  \- io.ktor:ktor-io-jvm:jar:3.2.3:compile
+[INFO] |  |  +- io.ktor:ktor-events-jvm:jar:3.2.3:compile
+[INFO] |  |  +- io.ktor:ktor-websocket-serialization-jvm:jar:3.2.3:compile
+[INFO] |  |  |  \- io.ktor:ktor-serialization-jvm:jar:3.2.3:compile
+[INFO] |  |  +- io.ktor:ktor-sse-jvm:jar:3.2.3:compile
+[INFO] |  |  \- org.jetbrains.kotlinx:kotlinx-coroutines-slf4j:jar:1.10.2:runtime
+[INFO] |  +- io.ktor:ktor-client-cio:jar:3.2.3:compile
+[INFO] |  |  +- io.ktor:ktor-websockets:jar:3.2.3:runtime
+[INFO] |  |  \- io.ktor:ktor-network-tls:jar:3.2.3:runtime
+[INFO] |  |     \- io.ktor:ktor-network:jar:3.2.3:runtime
+[INFO] |  +- io.ktor:ktor-client-cio-jvm:jar:3.2.3:compile
+[INFO] |  |  +- io.ktor:ktor-websockets-jvm:jar:3.2.3:compile
+[INFO] |  |  \- io.ktor:ktor-network-tls-jvm:jar:3.2.3:compile
+[INFO] |  \- io.ktor:ktor-client-websockets:jar:3.2.3:compile
+[INFO] +- ai.platon.pulsar:browser4-resources:jar:4.12.0-rc.1-SNAPSHOT:compile
+[INFO] +- ai.platon.pulsar:browser4-skeleton:jar:4.12.0-rc.1-SNAPSHOT:compile
+[INFO] |  +- ai.platon.pulsar:pulsar-persist:jar:4.9.5:compile
+[INFO] |  |  \- ai.platon.gora:gora-core-shaded:jar:1.0.9-slim:compile
+[INFO] |  +- ai.platon.pulsar:pulsar-dom:jar:4.9.5:compile
+[INFO] |  +- ai.platon.pulsar:pulsar-h2:jar:1.4.197:compile
+[INFO] |  |  +- javax.servlet:javax.servlet-api:jar:3.1.0:compile
+[INFO] |  |  +- org.osgi:org.osgi.core:jar:4.2.0:compile
+[INFO] |  |  +- org.osgi:org.osgi.enterprise:jar:4.2.0:compile
+[INFO] |  |  \- org.locationtech.jts:jts-core:jar:1.15.0:compile
+[INFO] |  +- ai.platon.pulsar:pulsar-llm:jar:4.9.5:compile
+[INFO] |  |  \- dev.langchain4j:langchain4j-core:jar:1.5.0:compile
+[INFO] |  +- org.springframework:spring-context:jar:7.0.7:compile
+[INFO] |  |  +- org.springframework:spring-aop:jar:7.0.7:compile
+[INFO] |  |  +- org.springframework:spring-beans:jar:7.0.7:compile
+[INFO] |  |  \- org.springframework:spring-expression:jar:7.0.7:compile
+[INFO] |  +- org.apache.commons:commons-collections4:jar:4.4:compile
+[INFO] |  +- com.google.code.crawler-commons:crawler-commons:jar:0.5:compile
+[INFO] |  |  \- org.apache.tika:tika-core:jar:3.2.2:compile
+[INFO] |  +- com.beust:jcommander:jar:1.82:compile
+[INFO] |  +- com.github.oshi:oshi-core:jar:6.6.6:compile
+[INFO] |  |  +- net.java.dev.jna:jna:jar:5.16.0:compile
+[INFO] |  |  \- net.java.dev.jna:jna-platform:jar:5.16.0:compile
+[INFO] |  +- io.dropwizard.metrics:metrics-graphite:jar:4.2.12:compile
+[INFO] |  |  \- com.rabbitmq:amqp-client:jar:5.27.1:compile
+[INFO] |  |     +- io.netty:netty-transport:jar:4.2.12.Final:compile
+[INFO] |  |     |  +- io.netty:netty-common:jar:4.2.12.Final:compile
+[INFO] |  |     |  +- io.netty:netty-buffer:jar:4.2.12.Final:compile
+[INFO] |  |     |  \- io.netty:netty-resolver:jar:4.2.12.Final:compile
+[INFO] |  |     +- io.netty:netty-codec:jar:4.2.12.Final:compile
+[INFO] |  |     |  +- io.netty:netty-codec-base:jar:4.2.12.Final:compile
+[INFO] |  |     |  +- io.netty:netty-codec-compression:jar:4.2.12.Final:compile
+[INFO] |  |     |  +- io.netty:netty-codec-protobuf:jar:4.2.12.Final:compile
+[INFO] |  |     |  \- io.netty:netty-codec-marshalling:jar:4.2.12.Final:compile
+[INFO] |  |     \- io.netty:netty-handler:jar:4.2.12.Final:compile
+[INFO] |  |        \- io.netty:netty-transport-native-unix-common:jar:4.2.12.Final:compile
+[INFO] |  \- org.jetbrains.kotlinx:kotlinx-coroutines-jdk8:jar:1.10.2:compile
+[INFO] +- ai.platon.pulsar:browser4-protocol:jar:4.12.0-rc.1-SNAPSHOT:compile
+[INFO] +- ai.platon.pulsar:browser4-boot:jar:4.12.0-rc.1-SNAPSHOT:compile
+[INFO] |  \- org.springframework.boot:spring-boot:jar:4.0.6:compile
+[INFO] +- ai.platon.pulsar:browser4-agentic:jar:4.12.0-rc.1-SNAPSHOT:compile
+[INFO] |  +- io.modelcontextprotocol:kotlin-sdk-core-jvm:jar:0.8.1:compile
+[INFO] |  |  +- org.jetbrains.kotlinx:kotlinx-serialization-json-jvm:jar:1.9.0:compile
+[INFO] |  |  +- org.jetbrains.kotlinx:kotlinx-io-core-jvm:jar:0.8.2:compile
+[INFO] |  |  |  \- org.jetbrains.kotlinx:kotlinx-io-bytestring-jvm:jar:0.8.2:compile
+[INFO] |  |  +- org.jetbrains.kotlinx:kotlinx-collections-immutable-jvm:jar:0.4.0:compile
+[INFO] |  |  +- io.ktor:ktor-server-websockets-jvm:jar:3.2.3:runtime
+[INFO] |  |  \- io.github.oshai:kotlin-logging-jvm:jar:7.0.13:runtime
+[INFO] |  +- io.modelcontextprotocol:kotlin-sdk-server-jvm:jar:0.8.1:compile
+[INFO] |  |  +- io.ktor:ktor-server-core-jvm:jar:3.2.3:compile
+[INFO] |  |  |  +- com.typesafe:config:jar:1.4.3:compile
+[INFO] |  |  |  \- org.fusesource.jansi:jansi:jar:2.4.2:runtime
+[INFO] |  |  \- io.ktor:ktor-server-sse-jvm:jar:3.2.3:compile
+[INFO] |  +- jakarta.annotation:jakarta.annotation-api:jar:3.0.0:compile
+[INFO] |  \- org.yaml:snakeyaml:jar:2.5:compile
+[INFO] +- ai.platon.pulsar:browser4-agent-tools:jar:4.12.0-rc.1-SNAPSHOT:compile
+[INFO] |  \- ai.platon.pulsar:browser4-parse:jar:4.12.0-rc.1-SNAPSHOT:compile
+[INFO] |     +- net.sourceforge.nekohtml:nekohtml:jar:1.9.22:compile
+[INFO] |     |  \- xerces:xercesImpl:jar:2.11.0:compile
+[INFO] |     |     \- xml-apis:xml-apis:jar:1.4.01:compile
+[INFO] |     \- org.apache.tika:tika-parser-html-module:jar:3.2.2:compile
+[INFO] +- ai.platon.pulsar:pulsar-ql-common:jar:4.9.5:compile
+[INFO] |  \- com.fasterxml.jackson.core:jackson-databind:jar:2.21.2:compile
+[INFO] +- ai.platon.pulsar:pulsar-ql:jar:4.9.5:compile
+[INFO] |  +- ai.platon.pulsar:pulsar-parse:jar:4.9.5:compile
+[INFO] |  \- com.udojava:EvalEx:jar:2.0:compile
+[INFO] +- com.github.ben-manes.caffeine:caffeine:jar:3.2.3:compile
+[INFO] |  +- org.jspecify:jspecify:jar:1.0.0:compile
+[INFO] |  \- com.google.errorprone:error_prone_annotations:jar:2.43.0:compile
+[INFO] +- org.springframework.boot:spring-boot-autoconfigure:jar:4.0.6:compile
+[INFO] +- org.springframework.boot:spring-boot-starter-web:jar:4.0.6:compile
+[INFO] |  +- org.springframework.boot:spring-boot-http-converter:jar:4.0.6:compile
+[INFO] |  |  \- org.springframework:spring-web:jar:7.0.7:compile
+[INFO] |  \- org.springframework.boot:spring-boot-webmvc:jar:4.0.6:compile
+[INFO] |     +- org.springframework.boot:spring-boot-servlet:jar:4.0.6:compile
+[INFO] |     \- org.springframework:spring-webmvc:jar:7.0.7:compile
+[INFO] +- org.springframework.boot:spring-boot-starter-jetty:jar:4.0.6:compile
+[INFO] |  +- org.springframework.boot:spring-boot-starter:jar:4.0.6:compile
+[INFO] |  |  \- org.springframework.boot:spring-boot-starter-logging:jar:4.0.6:compile
+[INFO] |  |     +- org.apache.logging.log4j:log4j-to-slf4j:jar:2.25.4:compile
+[INFO] |  |     |  \- org.apache.logging.log4j:log4j-api:jar:2.25.4:compile
+[INFO] |  |     \- org.slf4j:jul-to-slf4j:jar:2.0.17:compile
+[INFO] |  +- org.springframework.boot:spring-boot-starter-jetty-runtime:jar:4.0.6:compile
+[INFO] |  |  +- org.springframework.boot:spring-boot-web-server:jar:4.0.6:compile
+[INFO] |  |  +- jakarta.servlet:jakarta.servlet-api:jar:6.1.0:compile
+[INFO] |  |  +- jakarta.websocket:jakarta.websocket-api:jar:2.2.0:compile
+[INFO] |  |  +- jakarta.websocket:jakarta.websocket-client-api:jar:2.2.0:compile
+[INFO] |  |  +- org.apache.tomcat.embed:tomcat-embed-el:jar:11.0.21:compile
+[INFO] |  |  +- org.eclipse.jetty.ee11.websocket:jetty-ee11-websocket-jakarta-server:jar:12.1.8:compile
+[INFO] |  |  |  +- org.eclipse.jetty.ee11:jetty-ee11-annotations:jar:12.1.8:compile
+[INFO] |  |  |  |  +- org.eclipse.jetty:jetty-annotations:jar:12.1.8:compile
+[INFO] |  |  |  |  +- org.eclipse.jetty.ee11:jetty-ee11-plus:jar:12.1.8:compile
+[INFO] |  |  |  |  |  +- jakarta.enterprise:jakarta.enterprise.cdi-api:jar:4.1.0:compile
+[INFO] |  |  |  |  |  |  \- jakarta.inject:jakarta.inject-api:jar:2.0.1:compile
+[INFO] |  |  |  |  |  +- jakarta.enterprise:jakarta.enterprise.lang-model:jar:4.1.0:compile
+[INFO] |  |  |  |  |  +- jakarta.interceptor:jakarta.interceptor-api:jar:2.2.0:compile
+[INFO] |  |  |  |  |  +- jakarta.transaction:jakarta.transaction-api:jar:2.0.1:compile
+[INFO] |  |  |  |  |  \- org.eclipse.jetty:jetty-plus:jar:12.1.8:compile
+[INFO] |  |  |  |  \- org.ow2.asm:asm-commons:jar:9.9.1:compile
+[INFO] |  |  |  |     \- org.ow2.asm:asm-tree:jar:9.9.1:compile
+[INFO] |  |  |  +- org.eclipse.jetty.ee11.websocket:jetty-ee11-websocket-jakarta-client:jar:12.1.8:compile
+[INFO] |  |  |  |  +- org.eclipse.jetty:jetty-client:jar:12.1.8:compile
+[INFO] |  |  |  |  |  \- org.eclipse.jetty:jetty-alpn-client:jar:12.1.8:compile
+[INFO] |  |  |  |  +- org.eclipse.jetty.ee11.websocket:jetty-ee11-websocket-jakarta-common:jar:12.1.8:compile
+[INFO] |  |  |  |  \- org.eclipse.jetty.websocket:jetty-websocket-core-client:jar:12.1.8:compile
+[INFO] |  |  |  \- org.eclipse.jetty.ee11.websocket:jetty-ee11-websocket-servlet:jar:12.1.8:compile
+[INFO] |  |  |     \- org.eclipse.jetty.websocket:jetty-websocket-core-server:jar:12.1.8:compile
+[INFO] |  |  \- org.eclipse.jetty.ee11.websocket:jetty-ee11-websocket-jetty-server:jar:12.1.8:compile
+[INFO] |  |     +- org.eclipse.jetty.ee11:jetty-ee11-servlet:jar:12.1.8:compile
+[INFO] |  |     |  \- org.eclipse.jetty:jetty-security:jar:12.1.8:compile
+[INFO] |  |     +- org.eclipse.jetty.websocket:jetty-websocket-jetty-api:jar:12.1.8:compile
+[INFO] |  |     +- org.eclipse.jetty.websocket:jetty-websocket-jetty-common:jar:12.1.8:compile
+[INFO] |  |     |  \- org.eclipse.jetty.websocket:jetty-websocket-core-common:jar:12.1.8:compile
+[INFO] |  |     \- org.eclipse.jetty.websocket:jetty-websocket-jetty-server:jar:12.1.8:compile
+[INFO] |  +- org.springframework.boot:spring-boot-jetty:jar:4.0.6:compile
+[INFO] |  |  +- org.eclipse.jetty.ee11:jetty-ee11-webapp:jar:12.1.8:compile
+[INFO] |  |  |  +- org.eclipse.jetty:jetty-session:jar:12.1.8:compile
+[INFO] |  |  |  +- org.eclipse.jetty:jetty-xml:jar:12.1.8:compile
+[INFO] |  |  |  |  \- org.eclipse.jetty:jetty-util:jar:12.1.8:compile
+[INFO] |  |  |  \- org.eclipse.jetty.ee:jetty-ee-webapp:jar:12.1.8:compile
+[INFO] |  |  +- org.eclipse.jetty.compression:jetty-compression-server:jar:12.1.8:runtime
+[INFO] |  |  |  +- org.eclipse.jetty:jetty-server:jar:12.1.8:compile
+[INFO] |  |  |  |  +- org.eclipse.jetty:jetty-http:jar:12.1.8:compile
+[INFO] |  |  |  |  \- org.eclipse.jetty:jetty-io:jar:12.1.8:compile
+[INFO] |  |  |  \- org.eclipse.jetty.compression:jetty-compression-common:jar:12.1.8:compile
+[INFO] |  |  \- org.eclipse.jetty.compression:jetty-compression-gzip:jar:12.1.8:compile
+[INFO] |  \- org.slf4j:slf4j-api:jar:2.0.17:compile
+[INFO] +- org.springframework.boot:spring-boot-starter-websocket:jar:4.0.6:compile
+[INFO] |  +- org.springframework.boot:spring-boot-starter-webmvc:jar:4.0.6:compile
+[INFO] |  |  \- org.springframework.boot:spring-boot-starter-jackson:jar:4.0.6:compile
+[INFO] |  |     \- org.springframework.boot:spring-boot-jackson:jar:4.0.6:compile
+[INFO] |  |        \- tools.jackson.core:jackson-databind:jar:3.1.2:compile
+[INFO] |  |           \- tools.jackson.core:jackson-core:jar:3.1.2:compile
+[INFO] |  \- org.springframework.boot:spring-boot-websocket:jar:4.0.6:compile
+[INFO] |     +- org.springframework:spring-messaging:jar:7.0.7:compile
+[INFO] |     \- org.springframework:spring-websocket:jar:7.0.7:compile
+[INFO] +- org.springframework.boot:spring-boot-starter-webflux:jar:4.0.6:compile
+[INFO] |  +- org.springframework.boot:spring-boot-starter-reactor-netty:jar:4.0.6:compile
+[INFO] |  |  \- org.springframework.boot:spring-boot-reactor-netty:jar:4.0.6:compile
+[INFO] |  |     +- io.projectreactor.netty:reactor-netty-http:jar:1.3.5:compile
+[INFO] |  |     |  +- io.netty:netty-codec-http:jar:4.2.12.Final:compile
+[INFO] |  |     |  +- io.netty:netty-codec-http2:jar:4.2.12.Final:compile
+[INFO] |  |     |  +- io.netty:netty-codec-http3:jar:4.2.12.Final:compile
+[INFO] |  |     |  |  +- io.netty:netty-codec-classes-quic:jar:4.2.12.Final:compile
+[INFO] |  |     |  |  +- io.netty:netty-codec-native-quic:jar:linux-x86_64:4.2.12.Final:runtime
+[INFO] |  |     |  |  +- io.netty:netty-codec-native-quic:jar:linux-aarch_64:4.2.12.Final:runtime
+[INFO] |  |     |  |  +- io.netty:netty-codec-native-quic:jar:osx-x86_64:4.2.12.Final:runtime
+[INFO] |  |     |  |  +- io.netty:netty-codec-native-quic:jar:osx-aarch_64:4.2.12.Final:runtime
+[INFO] |  |     |  |  \- io.netty:netty-codec-native-quic:jar:windows-x86_64:4.2.12.Final:runtime
+[INFO] |  |     |  +- io.netty:netty-resolver-dns:jar:4.2.12.Final:compile
+[INFO] |  |     |  |  \- io.netty:netty-codec-dns:jar:4.2.12.Final:compile
+[INFO] |  |     |  +- io.netty:netty-resolver-dns-native-macos:jar:osx-x86_64:4.2.12.Final:runtime
+[INFO] |  |     |  |  \- io.netty:netty-resolver-dns-classes-macos:jar:4.2.12.Final:runtime
+[INFO] |  |     |  +- io.netty:netty-transport-native-epoll:jar:linux-x86_64:4.2.12.Final:runtime
+[INFO] |  |     |  |  \- io.netty:netty-transport-classes-epoll:jar:4.2.12.Final:runtime
+[INFO] |  |     |  \- io.projectreactor.netty:reactor-netty-core:jar:1.3.5:compile
+[INFO] |  |     |     \- io.netty:netty-handler-proxy:jar:4.2.12.Final:compile
+[INFO] |  |     |        \- io.netty:netty-codec-socks:jar:4.2.12.Final:compile
+[INFO] |  |     \- org.springframework.boot:spring-boot-netty:jar:4.0.6:runtime
+[INFO] |  +- org.springframework.boot:spring-boot-reactor:jar:4.0.6:compile
+[INFO] |  \- org.springframework.boot:spring-boot-webflux:jar:4.0.6:compile
+[INFO] |     +- org.springframework.boot:spring-boot-http-codec:jar:4.0.6:compile
+[INFO] |     \- org.springframework:spring-webflux:jar:7.0.7:compile
+[INFO] +- org.jetbrains.kotlinx:kotlinx-coroutines-reactor:jar:1.10.2:compile
+[INFO] |  +- org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm:jar:1.10.2:compile
+[INFO] |  +- io.projectreactor:reactor-core:jar:3.8.5:compile
+[INFO] |  |  \- org.reactivestreams:reactive-streams:jar:1.0.4:compile
+[INFO] |  \- org.jetbrains.kotlinx:kotlinx-coroutines-reactive:jar:1.10.2:compile
+[INFO] +- org.springframework.boot:spring-boot-starter-actuator:jar:4.0.6:compile
+[INFO] |  +- org.springframework.boot:spring-boot-starter-micrometer-metrics:jar:4.0.6:compile
+[INFO] |  |  \- org.springframework.boot:spring-boot-micrometer-metrics:jar:4.0.6:compile
+[INFO] |  |     \- org.springframework.boot:spring-boot-micrometer-observation:jar:4.0.6:compile
+[INFO] |  +- org.springframework.boot:spring-boot-actuator-autoconfigure:jar:4.0.6:compile
+[INFO] |  |  \- org.springframework.boot:spring-boot-actuator:jar:4.0.6:compile
+[INFO] |  +- org.springframework.boot:spring-boot-health:jar:4.0.6:compile
+[INFO] |  +- io.micrometer:micrometer-observation:jar:1.16.5:compile
+[INFO] |  |  \- io.micrometer:micrometer-commons:jar:1.16.5:compile
+[INFO] |  \- io.micrometer:micrometer-jakarta9:jar:1.16.5:compile
+[INFO] |     \- io.micrometer:micrometer-core:jar:1.16.5:compile
+[INFO] |        +- org.hdrhistogram:HdrHistogram:jar:2.2.2:runtime
+[INFO] |        \- org.latencyutils:LatencyUtils:jar:2.0.3:runtime
+[INFO] +- com.fasterxml.jackson.module:jackson-module-kotlin:jar:2.21.2:compile
+[INFO] |  \- com.fasterxml.jackson.core:jackson-annotations:jar:2.21:compile
+[INFO] +- ai.platon.pulsar:pulsar-tests-common:jar:4.12.0-rc.1-SNAPSHOT:test
+[INFO] |  \- org.jetbrains.kotlinx:kotlinx-serialization-json:jar:1.9.0:test
+[INFO] +- org.springframework.boot:spring-boot-test:jar:4.0.6:test
+[INFO] |  \- org.springframework:spring-test:jar:7.0.7:test
+[INFO] +- org.springframework.boot:spring-boot-starter-test:jar:4.0.6:test
+[INFO] |  +- org.springframework.boot:spring-boot-test-autoconfigure:jar:4.0.6:test
+[INFO] |  +- com.jayway.jsonpath:json-path:jar:2.10.0:test
+[INFO] |  +- jakarta.xml.bind:jakarta.xml.bind-api:jar:4.0.4:test
+[INFO] |  |  \- jakarta.activation:jakarta.activation-api:jar:2.1.4:test
+[INFO] |  +- net.minidev:json-smart:jar:2.6.0:test
+[INFO] |  |  \- net.minidev:accessors-smart:jar:2.6.0:test
+[INFO] |  |     \- org.ow2.asm:asm:jar:9.7.1:compile
+[INFO] |  +- org.assertj:assertj-core:jar:3.27.7:test
+[INFO] |  |  \- net.bytebuddy:byte-buddy:jar:1.17.8:test
+[INFO] |  +- org.awaitility:awaitility:jar:4.3.0:test
+[INFO] |  +- org.hamcrest:hamcrest:jar:3.0:test
+[INFO] |  +- org.junit.jupiter:junit-jupiter:jar:6.0.3:test
+[INFO] |  |  \- org.junit.jupiter:junit-jupiter-params:jar:6.0.3:test
+[INFO] |  +- org.mockito:mockito-core:jar:5.20.0:test
+[INFO] |  |  +- net.bytebuddy:byte-buddy-agent:jar:1.17.8:test
+[INFO] |  |  \- org.objenesis:objenesis:jar:3.3:test
+[INFO] |  +- org.mockito:mockito-junit-jupiter:jar:5.20.0:test
+[INFO] |  +- org.skyscreamer:jsonassert:jar:1.5.3:test
+[INFO] |  |  \- com.vaadin.external.google:android-json:jar:0.0.20131108.vaadin1:test
+[INFO] |  +- org.springframework:spring-core:jar:7.0.7:compile
+[INFO] |  |  \- commons-logging:commons-logging:jar:1.3.2:compile
+[INFO] |  \- org.xmlunit:xmlunit-core:jar:2.10.4:test
+[INFO] +- org.mockito.kotlin:mockito-kotlin:jar:5.4.0:test
+[INFO] +- org.jetbrains.kotlin:kotlin-stdlib:jar:2.2.21:compile
+[INFO] |  \- org.jetbrains:annotations:jar:13.0:compile
+[INFO] +- org.jetbrains.kotlin:kotlin-reflect:jar:2.2.21:compile
+[INFO] +- org.jetbrains.kotlinx:kotlinx-coroutines-core:jar:1.10.2:compile
+[INFO] \- org.jetbrains.kotlin:kotlin-test-junit5:jar:2.2.21:test
+[INFO]    +- org.jetbrains.kotlin:kotlin-test:jar:2.2.21:test
+[INFO]    +- org.junit.jupiter:junit-jupiter-api:jar:6.0.3:test
+[INFO]    |  +- org.opentest4j:opentest4j:jar:1.3.0:test
+[INFO]    |  +- org.junit.platform:junit-platform-commons:jar:6.0.3:test
+[INFO]    |  \- org.apiguardian:apiguardian-api:jar:1.1.2:test
+[INFO]    +- org.junit.jupiter:junit-jupiter-engine:jar:6.0.3:test
+[INFO]    |  \- org.junit.platform:junit-platform-engine:jar:6.0.3:test
+[INFO]    \- org.junit.platform:junit-platform-launcher:jar:6.0.3:test
+[INFO] ------------------------------------------------------------------------
+[INFO] Reactor Summary for Browser4 4.12.0-rc.1-SNAPSHOT:
+[INFO]
+[INFO] Browser4 Dependencies .............................. SUCCESS [  0.477 s]
+[INFO] Browser4 ........................................... SUCCESS [  0.297 s]
+[INFO] Browser4 Common .................................... SUCCESS [  0.065 s]
+[INFO] Browser4 Tests Common .............................. SUCCESS [  0.211 s]
+[INFO] Browser4 Resources ................................. SUCCESS [  0.016 s]
+[INFO] Browser4 Browser ................................... SUCCESS [  0.055 s]
+[INFO] Browser4 Skeleton .................................. SUCCESS [  0.153 s]
+[INFO] Browser4 Core ...................................... SUCCESS [  0.019 s]
+[INFO] Browser4 Protocol .................................. SUCCESS [  0.043 s]
+[INFO] Browser4 Parse ..................................... SUCCESS [  0.081 s]
+[INFO] Browser4 Agentic ................................... SUCCESS [  0.108 s]
+[INFO] Browser4 Plugin Development Kit .................... SUCCESS [  0.014 s]
+[INFO] Browser4 Captcha ................................... SUCCESS [  0.054 s]
+[INFO] Browser4 Media ..................................... SUCCESS [  0.039 s]
+[INFO] Browser4 Images .................................... SUCCESS [  0.032 s]
+[INFO] Browser4 PPTX ...................................... SUCCESS [  0.055 s]
+[INFO] Browser4 Markdown .................................. SUCCESS [  0.048 s]
+[INFO] Browser4 Plugins ................................... SUCCESS [  0.017 s]
+[INFO] Browser4 Agent Tools ............................... SUCCESS [  0.037 s]
+[INFO] Browser4 Boot ...................................... SUCCESS [  0.030 s]
+[INFO] Browser4 PDK BOM ................................... SUCCESS [  0.008 s]
+[INFO] Browser4 Plugin Archetype .......................... SUCCESS [  0.192 s]
+[INFO] Browser4 PDK Test Plugin ........................... SUCCESS [  0.028 s]
+[INFO] Browser4 Rest ...................................... SUCCESS [  0.140 s]
+[INFO] ------------------------------------------------------------------------
+[INFO] BUILD SUCCESS
+[INFO] ------------------------------------------------------------------------
+[INFO] Total time:  3.325 s
+[INFO] Finished at: 2026-07-14T05:03:22+08:00
+[INFO] ------------------------------------------------------------------------

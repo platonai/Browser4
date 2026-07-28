@@ -1,17 +1,17 @@
 package ai.platon.browser4.chrome
 
-import ai.platon.browser4.chrome.detail.*
 import ai.platon.browser4.chrome.dom.model.AriaSnapshotOptions
-import ai.platon.browser4.chrome.dom.model.ViewportSpec
-import ai.platon.browser4.chrome.handler.ClickableDOM
-import ai.platon.browser4.chrome.handler.DialogHandler
-import ai.platon.browser4.chrome.handler.EmulationHandler
-import ai.platon.browser4.chrome.handler.PageHandler
-import ai.platon.browser4.chrome.handler.RemoteChromeProtocol
-import ai.platon.browser4.chrome.handler.ScreenshotHandler
-import ai.platon.browser4.chrome.handler.transport.ChromeImpl
-import ai.platon.browser4.chrome.handler.util.CheckableElementJs
-import ai.platon.browser4.chrome.handler.util.withNodeObjectId
+import ai.platon.browser4.chrome.network.*
+import ai.platon.browser4.api.snapshot.ViewportSpec
+import ai.platon.browser4.chrome.protocol.ClickableDOM
+import ai.platon.browser4.chrome.protocol.DialogHandler
+import ai.platon.browser4.chrome.protocol.EmulationHandler
+import ai.platon.browser4.chrome.protocol.PageHandler
+import ai.platon.browser4.chrome.protocol.ScreenshotHandler
+import ai.platon.browser4.chrome.protocol.transport.ChromeImpl
+import ai.platon.browser4.chrome.protocol.transport.ExtensionChromeService
+import ai.platon.browser4.chrome.protocol.util.CheckableElementJs
+import ai.platon.browser4.chrome.protocol.util.withNodeObjectId
 import ai.platon.browser4.chrome.util.ChromeDriverException
 import ai.platon.browser4.chrome.util.ChromeIOException
 import ai.platon.browser4.chrome.util.Credentials
@@ -26,18 +26,18 @@ import ai.platon.cdt.kt.protocol.types.network.ErrorReason
 import ai.platon.cdt.kt.protocol.types.network.LoadNetworkResourceOptions
 import ai.platon.cdt.kt.protocol.types.network.ResourceType
 import ai.platon.cdt.kt.protocol.types.runtime.CallArgument
-import ai.platon.pulsar.browser.AbstractWebDriver
-import ai.platon.pulsar.browser.WebDriver
-import ai.platon.pulsar.browser.common.*
-import ai.platon.pulsar.browser.impl.BrowserProtocol
-import ai.platon.pulsar.browser.impl.BrowserTab
-import ai.platon.pulsar.browser.impl.NetworkResourceResponse
-import ai.platon.pulsar.browser.impl.NodeRef
-import ai.platon.pulsar.chrome.dom.SnapshotService
-import ai.platon.pulsar.chrome.dom.model.BrowserUseState
-import ai.platon.pulsar.chrome.dom.model.NanoDOMTree
-import ai.platon.pulsar.chrome.dom.model.PageTarget
-import ai.platon.pulsar.chrome.dom.model.SnapshotOptions
+import ai.platon.browser4.api.AbstractWebDriver
+import ai.platon.browser4.api.WebDriver
+import ai.platon.browser4.api.model.*
+import ai.platon.browser4.api.BrowserProtocol
+import ai.platon.browser4.api.model.BrowserTab
+import ai.platon.browser4.api.model.NetworkResourceResponse
+import ai.platon.browser4.api.model.NodeRef
+import ai.platon.browser4.api.snapshot.SnapshotService
+import ai.platon.browser4.api.model.BrowserUseState
+import ai.platon.browser4.api.model.NanoDOMTree
+import ai.platon.browser4.api.model.PageTarget
+import ai.platon.browser4.api.model.SnapshotOptions
 import ai.platon.pulsar.common.*
 import ai.platon.pulsar.common.browser.BrowserType
 import ai.platon.pulsar.common.math.geometric.OffsetD
@@ -48,20 +48,19 @@ import com.fasterxml.jackson.annotation.JsonInclude
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.fasterxml.jackson.module.kotlin.readValue
-import com.google.common.annotations.Beta
+
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import org.apache.commons.lang3.StringUtils
-import org.apache.commons.lang3.SystemUtils
+import kotlin.math.abs
+import kotlin.math.max
+import kotlin.math.roundToLong
 import java.nio.file.Files
 import java.time.Duration
 import java.time.Instant
 import java.util.concurrent.atomic.AtomicBoolean
-import kotlin.math.abs
-import kotlin.math.max
-import kotlin.math.roundToLong
 import kotlin.random.Random
 
 open class PulsarWebDriver constructor(
@@ -70,6 +69,29 @@ open class PulsarWebDriver constructor(
     val browserProtocol: BrowserProtocol,
     override val browser: PulsarBrowser
 ) : AbstractWebDriver(uniqueID, browser) {
+    companion object {
+        private val jsonMapper: ObjectMapper = jacksonObjectMapper()
+        private val nonNullJsonMapper: ObjectMapper = jacksonObjectMapper()
+            .setDefaultPropertyInclusion(JsonInclude.Include.NON_NULL)
+
+        // -----------------------------------------------------------------------
+        // Injected JavaScript — extracted from inline string literals for
+        // testability, syntax highlighting, and to eliminate Kotlin ${'$'} escaping.
+        // -----------------------------------------------------------------------
+
+        /** Used by [selectOption] to manipulate <select> elements via CDP callFunctionOn. */
+        val SELECT_OPTION_JS = """function(jsonValues){const values=JSON.parse(jsonValues);const element=this;if(!element||element.tagName!=='SELECT'){throw new Error('Element is not a <select> element');}const optionsToSelect=new Set(values);const selectedValues=[];let hasChanged=false;if(!element.multiple){for(let i=0;i<element.options.length;i++){const option=element.options[i];if(optionsToSelect.has(option.value)||optionsToSelect.has(option.label)||optionsToSelect.has(option.text)){if(!option.selected){option.selected=true;hasChanged=true;}selectedValues.push(option.value);break;}}}else{for(let i=0;i<element.options.length;i++){const option=element.options[i];const shouldSelect=optionsToSelect.has(option.value)||optionsToSelect.has(option.label)||optionsToSelect.has(option.text);if(shouldSelect!=option.selected){option.selected=shouldSelect;hasChanged=true;}if(shouldSelect){selectedValues.push(option.value);}}}if(hasChanged){element.dispatchEvent(new Event('input',{bubbles:true}));element.dispatchEvent(new Event('change',{bubbles:true}));}return selectedValues;}"""
+
+        /** Used by [generateLocator] to build a unique CSS selector for an element. */
+        val GENERATE_LOCATOR_JS = """element=>{if(!element||element.nodeType!==1)return null;function cssEscape(v){if(typeof CSS!=='undefined'&&CSS.escape)return CSS.escape(v);return v.replace(/[!"#$%&'()*+,./:;<=>?@[\]^`{|}~]/g,'\\$&');}function segmentFor(el){var tag=el.tagName.toLowerCase();if(el.id)return '#'+cssEscape(el.id);if(el.classList&&el.classList.length>0){var classes=Array.from(el.classList).filter(function(c){return!/[A-Z]/.test(c)&&!/^[a-z]+-[a-z0-9]{6,}$/.test(c)&&c.indexOf('_')===-1&&c.length>1;});if(classes.length>0)return tag+'.'+classes.map(cssEscape).join('.');}if(el.parentNode){var siblings=Array.from(el.parentNode.children);var sameTag=siblings.filter(function(s){return s.tagName===el.tagName;});if(sameTag.length>1){return tag+':nth-of-type('+(sameTag.indexOf(el)+1)+')';}}return tag;}var parts=[];var cur=element;while(cur&&cur.nodeType===1){parts.unshift(segmentFor(cur));if(cur.id)break;if(cur.tagName.toLowerCase()==='body')break;cur=cur.parentNode;}return parts.join(' > ');}"""
+
+        /** Used by [selectFirstTextOrNull] to walk a DOM subtree collecting text. */
+        val SELECT_FIRST_TEXT_JS = """function(){try{const el=this;const excluded=new Set(['SCRIPT','STYLE','NOSCRIPT','TEMPLATE']);let text='';const walker=document.createTreeWalker(el,NodeFilter.SHOW_TEXT,{acceptNode(node){const p=node.parentNode;return p&&!excluded.has(p.nodeName)?NodeFilter.FILTER_ACCEPT:NodeFilter.FILTER_REJECT;}});let n;while((n=walker.nextNode())){text+=n.nodeValue;}return text;}catch(e){return null;}}"""
+
+        /** Used by [trySubmitFormOnEnter] as a safety net for CDP-dispatched Enter key. */
+        val TRY_SUBMIT_FORM_ON_ENTER_JS = """(()=>{const el=document.activeElement;if(!el)return false;const tag=el.tagName;if(tag==='TEXTAREA')return false;if(tag!=='INPUT'&&tag!=='SELECT')return false;if(tag==='INPUT'){const t=(el.type||'text').toLowerCase();if(t==='radio'||t==='checkbox'||t==='file'||t==='button'||t==='reset'||t==='submit'||t==='image'||t==='hidden'){return false;}}const form=el.closest('form');if(!form)return false;if(typeof form.requestSubmit==='function'){try{form.requestSubmit();return true;}catch(e){}}form.submit();return true;})()"""
+    }
+
     private data class StorageStatePayload(
         val cookies: List<Map<String, Any?>> = emptyList(),
         val origins: List<StorageStateOriginPayload> = emptyList(),
@@ -106,22 +128,58 @@ open class PulsarWebDriver constructor(
     private val screenshot = ScreenshotHandler(page, browserProtocol)
     private val emulator get() = EmulationHandler(browserProtocol, keyboard, mouse)
 
-    val dialogHandler = DialogHandler(browserProtocol)
-
     private val rpc = RobustRPC(this)
-    private val networkManager by lazy { NetworkManager(rpc, browserProtocol) }
+    private val networkManager by lazy { NetworkManager(rpc, browserProtocol, browser.chrome is ExtensionChromeService) }
     private val messageWriter = MultiSinkMessageWriter()
 
     private val driverHelper get() = WebDriverHelper(this, rpc, page, browserProtocol)
 
+    /**
+     * Handler for native JavaScript dialogs (alert, confirm, prompt).
+     *
+     * Subscribes to CDP [Page.javascriptDialogOpening] events so click/dblclick
+     * handlers can detect when a dialog is blocking the page and act before
+     * the post-click health check (which requires page responsiveness) hangs.
+     *
+     * Created lazily so the CDP subscription is established only when the
+     * page is fully initialised (inside [enableAPIAgents0]), not during
+     * constructor invocation.
+     */
+    val dialogHandler: DialogHandler by lazy {
+        DialogHandler(browserProtocol).also { handler ->
+            browserProtocol.remoteDevToolsOrNull?.let { devTools ->
+                handler.subscribe(devTools)
+            }
+        }
+    }
+
     private val closed = AtomicBoolean()
+
+    /**
+     * The last ChromeDriverException that was caught and swallowed (returning null to the caller).
+     * Callers can check this field to distinguish "no result" from "error occurred".
+     * */
+    @Volatile
+    var lastError: ChromeDriverException? = null
 
     var navigateUrl: String? = chromeTab.url
     private var credentials: Credentials? = null
 
+    /** Cached pre-compiled regex patterns for [probabilisticBlockedURLs] to avoid recompilation on every network request. */
+    @Volatile
+    private var cachedProbabilisticBlockedRegexes: List<Regex>? = null
+
     val isNetworkIdle get() = networkManager.isIdle
 
     var fingerprintApplier: ((WebDriver) -> Unit)? = null
+
+    /**
+     * Shared helper: suppress ChromeIOException when the tab is already closed (normal operational state).
+     * Re-throws if the tab is still open — the exception then indicates a real problem.
+     */
+    private fun propagateIfOpen(e: ChromeIOException) {
+        if (e.isOpen && browserProtocol.isOpen) throw e
+    }
 
     /**
      * Expose the underlying implementation, used for diagnosis purpose
@@ -132,13 +190,6 @@ open class PulsarWebDriver constructor(
 
     init {
         fingerprintApplier?.invoke(this)
-
-        // Subscribe to CDP dialog events so click/dblclick handlers can detect
-        // blocking dialogs before attempting post-click snapshots.
-        val devTools = (browserProtocol as? RemoteChromeProtocol)?.remoteDevToolsOrNull
-        if (devTools != null) {
-            dialogHandler.subscribe(devTools)
-        }
     }
 
     override val isOpen get() = browserProtocol.isOpen
@@ -149,9 +200,23 @@ open class PulsarWebDriver constructor(
             return state
         }
 
-        if (!browserProtocol.isTargetAlive()) {
+        // Extension-attached drivers use chrome.debugger.sendCommand (per-tab
+        // CDP) through the Chrome Extension relay.  Browser-level commands
+        // like Target.getTargets are not available — they fail even when the
+        // tab is perfectly healthy.  Use isPageAlive() (→ Page.getFrameTree)
+        // instead: a page-level command that works on every page type
+        // (about:blank, images, normal pages, etc.) without requiring a
+        // JavaScript execution context.
+        val alive = if (browser.chrome is ExtensionChromeService) {
+            browserProtocol.isPageAlive()
+        } else {
+            browserProtocol.isTargetAlive()
+        }
+
+        if (!alive) {
             return CheckState(
-                ResourceStatus.SC_SERVICE_UNAVAILABLE, "WebDriver service unavailable - the target page is not alive"
+                ResourceStatus.SC_SERVICE_UNAVAILABLE,
+                "WebDriver service unavailable - the target page is not alive"
             )
         }
 
@@ -164,6 +229,8 @@ open class PulsarWebDriver constructor(
 
     @Throws(WebDriverException::class)
     override suspend fun navigate(entry: NavigateEntry) {
+        navigateUrl = entry.userTypedUrl
+
         navigateHistory.add(entry)
         this.navigateEntry = entry
         // Keep navigateUrl in sync so currentUrl() fallback returns the latest navigation
@@ -247,7 +314,7 @@ open class PulsarWebDriver constructor(
     }
 
     override suspend fun saveStorageState(): String {
-        val mapper = jacksonObjectMapper().setDefaultPropertyInclusion(JsonInclude.Include.NON_NULL)
+        val mapper = nonNullJsonMapper
         val cookies = getCookies().map { toStorageStateCookie(it) }
         val origins = listOfNotNull(captureCurrentOriginLocalStorage())
         return mapper.writerWithDefaultPrettyPrinter().writeValueAsString(
@@ -259,7 +326,7 @@ open class PulsarWebDriver constructor(
     }
 
     override suspend fun loadStorageState(state: String): String {
-        val mapper = jacksonObjectMapper().setDefaultPropertyInclusion(JsonInclude.Include.NON_NULL)
+        val mapper = nonNullJsonMapper
         val payload = mapper.readValue<StorageStatePayload>(state)
         val cookies = payload.cookies.map(::normalizeCookieForSet)
         if (cookies.isNotEmpty()) {
@@ -368,69 +435,16 @@ open class PulsarWebDriver constructor(
 
     @Throws(WebDriverException::class)
     override suspend fun generateLocator(selector: String): String? {
-        val jsFunction = """
-            element => {
-                if (!element || element.nodeType !== 1) return null;
-
-                function cssEscape(v) {
-                    if (typeof CSS !== 'undefined' && CSS.escape) return CSS.escape(v);
-                    return v.replace(/[!"#${'$'}%&'()*+,./:;<=>?@[\]^`{|}~]/g, '\\${'$'}&');
-                }
-
-                function segmentFor(el) {
-                    var tag = el.tagName.toLowerCase();
-                    if (el.id) return '#' + cssEscape(el.id);
-                    if (el.classList && el.classList.length > 0) {
-                        var classes = Array.from(el.classList).filter(function(c) {
-                            return !/[A-Z]/.test(c) &&
-                                   !/^[a-z]+-[a-z0-9]{6,}${'$'}/.test(c) &&
-                                   c.indexOf('_') === -1 &&
-                                   c.length > 1;
-                        });
-                        if (classes.length > 0) return tag + '.' + classes.map(cssEscape).join('.');
-                    }
-                    if (el.parentNode) {
-                        var siblings = Array.from(el.parentNode.children);
-                        var sameTag = siblings.filter(function(s) { return s.tagName === el.tagName; });
-                        if (sameTag.length > 1) {
-                            return tag + ':nth-of-type(' + (sameTag.indexOf(el) + 1) + ')';
-                        }
-                    }
-                    return tag;
-                }
-
-                var parts = [];
-                var cur = element;
-                while (cur && cur.nodeType === 1) {
-                    parts.unshift(segmentFor(cur));
-                    if (cur.id) break;
-                    if (cur.tagName.toLowerCase() === 'body') break;
-                    cur = cur.parentNode;
-                }
-                return parts.join(' > ');
-            }
-        """.trimIndent()
-
-        val result = evaluateValue(selector, jsFunction)
+        val result = evaluateValue(selector, GENERATE_LOCATOR_JS)
         return result?.toString()?.takeIf { it.isNotEmpty() && it != "null" }
     }
 
     override suspend fun currentUrl(): String {
-        val docUrl = evaluate("document.URL", "")
-        // When a tab has just been created, document.URL may still be "about:blank"
-        // even though navigation to the target URL has been initiated.  Fall back
-        // to the navigateUrl / userTypedUrl tracked at tab creation time.
-        if (docUrl.isNullOrBlank() || docUrl == "about:blank") {
-            return navigateUrl ?: userTypedUrl().takeIf { it.isNotEmpty() } ?: docUrl.orEmpty()
-        }
-        return docUrl
+        return evaluate("document.URL", navigateUrl ?: "")
     }
 
     @Throws(WebDriverException::class)
     override suspend fun exists(selector: String): Boolean {
-//        return rpc.predicateOnPage("exists") {
-//            page.exists(selector)
-//        }
         return page.exists(selector)
     }
 
@@ -448,6 +462,7 @@ open class PulsarWebDriver constructor(
         }
     }
 
+    @Suppress("unused") // Retained as an experimental alternative to AbstractWebDriver.waitForNavigation
     @Throws(WebDriverException::class)
     private suspend fun waitForNavigationExperimental(oldUrl: String, timeout: Duration): Duration {
         val startTime = Instant.now()
@@ -550,11 +565,7 @@ open class PulsarWebDriver constructor(
         } catch (e: ChromeDriverException) {
             rpc.interceptChromeException(e, "mouseWheelDown")
         } catch (e: ChromeIOException) {
-            if (!e.isOpen || !browserProtocol.isOpen) {
-                // Tab closed — normal operational state, no need to propagate
-            } else {
-                throw e
-            }
+            propagateIfOpen(e)
         }
     }
 
@@ -580,11 +591,7 @@ open class PulsarWebDriver constructor(
         } catch (e: ChromeDriverException) {
             rpc.interceptChromeException(e, "mouseWheelUp")
         } catch (e: ChromeIOException) {
-            if (!e.isOpen || !browserProtocol.isOpen) {
-                // Tab closed — normal operational state, no need to propagate
-            } else {
-                throw e
-            }
+            propagateIfOpen(e)
         }
     }
 
@@ -603,7 +610,8 @@ open class PulsarWebDriver constructor(
     override suspend fun mouseWheel(deltaX: Double, deltaY: Double) {
         val m = mouse ?: throw IllegalWebDriverStateException("Mouse not available", driver = this)
         rpc.invokeOnPage("mouseWheel") {
-            // Primary: CDP mouse wheel — dispatches trusted wheel DOM events.
+            // Primary: CDP mouse wheel — dispatches trusted wheel DOM events that
+            // page listeners can observe (required for interactive fixtures).
             // Fallback: JS window.scrollBy() when CDP fails (bypasses the
             // Input.dispatchMouseEvent wheel race condition crbug.com/444929150).
             try {
@@ -624,7 +632,8 @@ open class PulsarWebDriver constructor(
                 val point = emulator.getInteractPoint(node, "center", useRandomOffset = true)
                     ?: return@invokeOnElement
                 // Primary: CDP mouse wheel — dispatches trusted wheel DOM events.
-                // Fallback: JS element.scrollBy() when CDP fails.
+                // Fallback: JS element.scrollBy() when CDP fails (bypasses the
+                // Input.dispatchMouseEvent wheel race condition crbug.com/444929150).
                 try {
                     val m = mouse ?: return@invokeOnElement
                     withTimeout(wheelTimeout(deltaX, deltaY)) {
@@ -638,11 +647,7 @@ open class PulsarWebDriver constructor(
         } catch (e: ChromeDriverException) {
             rpc.interceptChromeException(e, "mouseWheel")
         } catch (e: ChromeIOException) {
-            if (!e.isOpen || !browserProtocol.isOpen) {
-                // Tab closed — normal operational state
-            } else {
-                throw e
-            }
+            propagateIfOpen(e)
         }
     }
 
@@ -731,91 +736,83 @@ open class PulsarWebDriver constructor(
         }
     }
 
+    /**
+     * Whether native JavaScript dialogs (alert, confirm, prompt) should be
+     * auto-accepted when detected after a click or dblclick operation.
+     *
+     * When enabled, [dialogHandler.drainAutoDismiss] is called before each
+     * click to clear any stale dialogs, and any dialog that opens during the
+     * click is accepted immediately via CDP [Page.handleJavaScriptDialog].
+     *
+     * Useful for batch/crawl/automation workloads where manual dialog
+     * handling is not feasible.
+     */
+    var autoDismissDialogs: Boolean
+        get() = dialogHandler.isAutoDismissEnabled
+        set(value) {
+            if (value) dialogHandler.enableAutoDismiss() else dialogHandler.disableAutoDismiss()
+        }
+
     @Throws(WebDriverException::class)
     override suspend fun click(selector: String, count: Int) {
+        // Drain any stale dialog before clicking — a leftover dialog from a
+        // previous operation would block CDP health checks and deadlock the
+        // current click.  DialogHandler handles the deferral/no-op when the
+        // queue is empty.
+        dialogHandler.dismissAllPending()
+
         rpc.invokeOnElement(selector, "click", scrollIntoView = true) { node ->
             waitForScrollSettled(selector)
-            val delayMillis = randomDelayMillis("click")
-            emulator.click(node, count, position = "center", modifier = null, delayMillis = delayMillis)
-            // debugElementOnPoint(node)
+            val isWindows = org.apache.commons.lang3.SystemUtils.IS_OS_WINDOWS
+            // On Windows, CDP Input.dispatchMouseEvent (mousePressed/mouseReleased)
+            // does not reliably trigger DOM click events in headless Chrome.
+            // Use a DOM click as the sole mechanism (skip CDP mouse events to
+            // avoid double-firing).  On Linux/macOS the CDP path works reliably.
+            if (isWindows) {
+                emulator.click(
+                    node, count, position = "center", modifier = null,
+                    delayMillis = 0, dispatchCdpMouseEvents = false,
+                )
+                dispatchDomClick(node, count)
+            } else {
+                val delayMillis = randomDelayMillis("click")
+                emulator.click(node, count, position = "center", modifier = null, delayMillis = delayMillis)
+            }
         }
-        // Auto-dismiss any dialog that was triggered by this click (prevents
-        // deadlock when post-click snapshots attempt CDP communication while
-        // a JavaScript dialog blocks the page's JS thread).
+
+        // If the click triggered a dialog and auto-dismiss is enabled, accept
+        // it now.  This prevents the post-click health check inside
+        // invokeOnElement → invokeWithRetry from hanging because the page's
+        // main thread is blocked by the dialog.
         dialogHandler.drainAutoDismiss()
     }
 
     @Throws(WebDriverException::class)
     override suspend fun click(selector: String, modifier: String) {
+        // Drain stale dialogs before clicking (see single-click note above).
+        dialogHandler.dismissAllPending()
+
         rpc.invokeOnElement(selector, "click", scrollIntoView = true) { node ->
             val delayMillis = randomDelayMillis("click")
             waitForScrollSettled(selector)
             emulator.click(node, 1, position = "center", modifier = modifier, delayMillis = delayMillis)
+            // No DOM fallback for modifier clicks: the CDP modifier bitmask
+            // (Ctrl/Shift/Alt/Meta) has no equivalent in HTMLElement.click()
+            // or dispatchEvent, and adding a DOM fallback on top of CDP would
+            // double-fire on Windows where both paths work.
         }
+
         dialogHandler.drainAutoDismiss()
     }
 
     @Throws(WebDriverException::class)
     override suspend fun selectOption(selector: String, values: List<String>): List<String> {
-        val mapper = jacksonObjectMapper()
-        val jsonValues = mapper.writeValueAsString(values)
-
-        val functionDeclaration = """
-            function(jsonValues) {
-                const values = JSON.parse(jsonValues);
-                const element = this;
-                if (!element || element.tagName !== 'SELECT') {
-                    throw new Error('Element is not a <select> element');
-                }
-
-                const optionsToSelect = new Set(values);
-                const selectedValues = [];
-                let hasChanged = false;
-
-                // Handle single select: only select the first match
-                if (!element.multiple) {
-                    for (let i = 0; i < element.options.length; i++) {
-                        const option = element.options[i];
-                        if (optionsToSelect.has(option.value) || optionsToSelect.has(option.label) || optionsToSelect.has(option.text)) {
-                            if (!option.selected) {
-                                option.selected = true;
-                                hasChanged = true;
-                            }
-                            selectedValues.push(option.value);
-                            break;
-                        }
-                    }
-                } else {
-                    // Handle multiple select
-                    // Deselect all, then select specified ones.
-                    for (let i = 0; i < element.options.length; i++) {
-                        const option = element.options[i];
-                        const shouldSelect = optionsToSelect.has(option.value) || optionsToSelect.has(option.label) || optionsToSelect.has(option.text);
-
-                        if (shouldSelect != option.selected) {
-                            option.selected = shouldSelect;
-                            hasChanged = true;
-                        }
-
-                        if (shouldSelect) {
-                            selectedValues.push(option.value);
-                        }
-                    }
-                }
-
-                if (hasChanged) {
-                    element.dispatchEvent(new Event('input', { bubbles: true }));
-                    element.dispatchEvent(new Event('change', { bubbles: true }));
-                }
-
-                return selectedValues;
-            }
-        """.trimIndent()
+        val jsonValues = jsonMapper.writeValueAsString(values)
 
         val result = rpc.invokeOnElement(selector, "selectOption") { node ->
             withNodeObjectId(browserProtocol, node) { objectId ->
                 val res = browserProtocol.callFunctionOn(
-                    functionDeclaration,
+                    SELECT_OPTION_JS,
                     objectId = objectId,
                     arguments = listOf(CallArgument(value = jsonValues)),
                     returnByValue = true
@@ -843,20 +840,155 @@ open class PulsarWebDriver constructor(
     }
 
     /**
-     * focus on an element with [selector] and dblclick it with [modifier] pressed
-     * */
+     * Double-click on the element identified by [selector], optionally with a
+     * [modifier] key held.
+     *
+     * Unlike [click], `dblclick` does **not** require the element to be
+     * focusable — many real-world double-click targets are generic `<div>`
+     * elements with event listeners but no `tabindex`.  The element is scrolled
+     * into view and the dblclick sequence is dispatched without an explicit
+     * `DOM.focus()` call.
+     */
     @Throws(WebDriverException::class)
     override suspend fun dblclick(selector: String, modifier: String) {
-        rpc.invokeOnElement(selector, "dblclick") {
-            // Use queryLocator to avoid focusability pre-check that fails on
-            // non-focusable elements (<div> without tabindex, etc.).
-            // dispatchDomClick (called by emulator.click) handles focus internally.
-            val node = page.dom.queryLocator(selector) ?: return@invokeOnElement
-            emulator.click(node, 2)
+        // Drain stale dialogs before double-clicking (same rationale as click).
+        dialogHandler.dismissAllPending()
+
+        rpc.invokeOnElement(selector, "dblclick", scrollIntoView = true) { node ->
+            val isWindows = org.apache.commons.lang3.SystemUtils.IS_OS_WINDOWS
+            val hasModifier = modifier.isNotBlank()
+            if (isWindows && !hasModifier) {
+                // Windows, no modifier: use DOM click as sole mechanism to
+                // avoid double-firing from CDP mouse events + synthetic DOM.
+                emulator.click(
+                    node, 2, position = "center", modifier = null,
+                    delayMillis = 0, dispatchCdpMouseEvents = false,
+                )
+                dispatchDomClick(node, 2)
+            } else if (hasModifier) {
+                // Any platform with a modifier (Shift/Ctrl/Alt/Meta): use CDP
+                // path — the modifier bitmask has no equivalent in
+                // HTMLElement.click() or MouseEvent dispatch.
+                emulator.click(node, 2, position = "center", modifier = modifier)
+            } else {
+                // Non-Windows, no modifier: standard CDP double-click.
+                emulator.click(node, 2)
+            }
             gap("dblclick")
         }
-        // Auto-dismiss any dialog triggered by this dblclick (same rationale as click).
+
         dialogHandler.drainAutoDismiss()
+    }
+
+    /**
+     * Dispatch DOM click(s) on the given element matching the W3C UI Events
+     * standard event sequence.
+     *
+     * On Windows, CDP `Input.dispatchMouseEvent` does not reliably trigger
+     * DOM click events in headless Chrome.  This method produces the full
+     * event sequence as the sole click mechanism:
+     *
+     *   `pointerdown → mousedown → pointerup → mouseup → click`
+     *
+     * where `click` uses [HTMLElement.click] to trigger default actions
+     * (navigation, form submission).  For count = 2 the sequence repeats
+     * twice and ends with `dblclick`.
+     *
+     * [HTMLElement.click] per spec only fires `click` — it does not fire
+     * `pointerdown`, `pointerup`, `mousedown`, `mouseup`, or `dblclick`,
+     * so those are dispatched explicitly with correct property values
+     * (`buttons` = 1 during press, 0 on release; `detail` = click count).
+     * Coordinates are taken from the element's bounding rect center.
+     *
+     * @param node  The element to click.
+     * @param count Number of consecutive clicks (1 = single, 2 = double).
+     */
+    private suspend fun dispatchDomClick(node: NodeRef, count: Int) {
+        withNodeObjectId(browserProtocol, node) { objectId ->
+            when (count) {
+                1 -> {
+                    browserProtocol.callFunctionOn(
+                        """function() {
+                             if (this instanceof HTMLElement) {
+                               var r = this.getBoundingClientRect();
+                               var cx = r.left + r.width / 2;
+                               var cy = r.top + r.height / 2;
+                               var detail = 1;
+                               emitClick(this, cx, cy, detail);
+                             }
+                             function emitClick(el, cx, cy, d) {
+                               var ptr = new PointerEvent('pointerdown', {bubbles:true,cancelable:true,view:window,pointerId:1,pointerType:'mouse',isPrimary:true,clientX:cx,clientY:cy,buttons:1,button:0,detail:d});
+                               var md  = new MouseEvent('mousedown', {bubbles:true,cancelable:true,view:window,clientX:cx,clientY:cy,buttons:1,button:0,detail:d});
+                               el.dispatchEvent(ptr);
+                               el.dispatchEvent(md);
+                               ptr = new PointerEvent('pointerup', {bubbles:true,cancelable:true,view:window,pointerId:1,pointerType:'mouse',isPrimary:true,clientX:cx,clientY:cy,buttons:0,button:0,detail:d});
+                               var mu  = new MouseEvent('mouseup', {bubbles:true,cancelable:true,view:window,clientX:cx,clientY:cy,buttons:0,button:0,detail:d});
+                               el.dispatchEvent(ptr);
+                               el.dispatchEvent(mu);
+                               el.click();
+                             }
+                           }""",
+                        objectId = objectId,
+                        returnByValue = false,
+                        userGesture = true,
+                    )
+                }
+                2 -> {
+                    browserProtocol.callFunctionOn(
+                        """function() {
+                             if (this instanceof HTMLElement) {
+                               var r = this.getBoundingClientRect();
+                               var cx = r.left + r.width / 2;
+                               var cy = r.top + r.height / 2;
+                               emitClick(this, cx, cy, 1);
+                               emitClick(this, cx, cy, 2);
+                               this.dispatchEvent(new MouseEvent('dblclick', {bubbles:true,cancelable:true,view:window,detail:2}));
+                             }
+                             function emitClick(el, cx, cy, d) {
+                               var ptr = new PointerEvent('pointerdown', {bubbles:true,cancelable:true,view:window,pointerId:1,pointerType:'mouse',isPrimary:true,clientX:cx,clientY:cy,buttons:1,button:0,detail:d});
+                               var md  = new MouseEvent('mousedown', {bubbles:true,cancelable:true,view:window,clientX:cx,clientY:cy,buttons:1,button:0,detail:d});
+                               el.dispatchEvent(ptr);
+                               el.dispatchEvent(md);
+                               ptr = new PointerEvent('pointerup', {bubbles:true,cancelable:true,view:window,pointerId:1,pointerType:'mouse',isPrimary:true,clientX:cx,clientY:cy,buttons:0,button:0,detail:d});
+                               var mu  = new MouseEvent('mouseup', {bubbles:true,cancelable:true,view:window,clientX:cx,clientY:cy,buttons:0,button:0,detail:d});
+                               el.dispatchEvent(ptr);
+                               el.dispatchEvent(mu);
+                               el.click();
+                             }
+                           }""",
+                        objectId = objectId,
+                        returnByValue = false,
+                        userGesture = true,
+                    )
+                }
+                else -> {
+                    repeat(count) { i ->
+                        browserProtocol.callFunctionOn(
+                            """function(detail) {
+                                 if (this instanceof HTMLElement) {
+                                   var r = this.getBoundingClientRect();
+                                   var cx = r.left + r.width / 2;
+                                   var cy = r.top + r.height / 2;
+                                   var ptr = new PointerEvent('pointerdown', {bubbles:true,cancelable:true,view:window,pointerId:1,pointerType:'mouse',isPrimary:true,clientX:cx,clientY:cy,buttons:1,button:0,detail:detail});
+                                   var md  = new MouseEvent('mousedown', {bubbles:true,cancelable:true,view:window,clientX:cx,clientY:cy,buttons:1,button:0,detail:detail});
+                                   this.dispatchEvent(ptr);
+                                   this.dispatchEvent(md);
+                                   ptr = new PointerEvent('pointerup', {bubbles:true,cancelable:true,view:window,pointerId:1,pointerType:'mouse',isPrimary:true,clientX:cx,clientY:cy,buttons:0,button:0,detail:detail});
+                                   var mu  = new MouseEvent('mouseup', {bubbles:true,cancelable:true,view:window,clientX:cx,clientY:cy,buttons:0,button:0,detail:detail});
+                                   this.dispatchEvent(ptr);
+                                   this.dispatchEvent(mu);
+                                   this.click();
+                                 }
+                               }""",
+                            objectId = objectId,
+                            returnByValue = false,
+                            userGesture = true,
+                            arguments = listOf(CallArgument(value = i + 1)),
+                        )
+                    }
+                }
+            }
+        }
     }
 
     @Throws(WebDriverException::class)
@@ -868,18 +1000,28 @@ open class PulsarWebDriver constructor(
         }
     }
 
+    /**
+     * Accept (OK) the current JavaScript dialog (alert, confirm, prompt).
+     *
+     * Uses a direct CDP [Page.handleJavaScriptDialog] call — bypassing
+     * [rpc.invokeOnPage] — because native dialogs block the page's main
+     * thread, making any health check that requires page responsiveness
+     * (e.g. [Runtime.evaluate]) hang or time out.  The CDP dialog command
+     * is browser-level and completes even while the page is blocked.
+     */
     @Throws(WebDriverException::class)
     override suspend fun dialogAccept(promptText: String?) {
-        rpc.invokeOnPage("dialogAccept") {
-            browserProtocol.handleJavaScriptDialog(accept = true, promptText = promptText)
-        }
+        browserProtocol.handleJavaScriptDialog(accept = true, promptText = promptText)
     }
 
+    /**
+     * Dismiss (Cancel) the current JavaScript dialog.
+     *
+     * Same direct-CDP rationale as [dialogAccept].
+     */
     @Throws(WebDriverException::class)
     override suspend fun dialogDismiss() {
-        rpc.invokeOnPage("dialogDismiss") {
-            browserProtocol.handleJavaScriptDialog(accept = false)
-        }
+        browserProtocol.handleJavaScriptDialog(accept = false)
     }
 
     @Throws(WebDriverException::class)
@@ -918,8 +1060,18 @@ open class PulsarWebDriver constructor(
 
     @Throws(WebDriverException::class)
     override suspend fun fill(selector: String, text: String) {
-        rpc.invokeOnElement(selector, "fill", focus = true) { node ->
-            // TODO: check if the element is editable
+        // Match the pattern used by type(): resolve the element first, then
+        // explicitly focus inside the lambda.  A fill that cannot run must
+        // never silently succeed (ok=true with nothing filled, observed in
+        // CI's Docker headless Chrome): unresolved/unfocusable elements throw
+        // here, making the failure visible and letting invokeWithRetry retry
+        // transient CDP focus failures.
+        val filled = rpc.invokeOnElement(selector, "fill") {
+            val node = page.focusOnSelector(selector)
+                ?: throw WebDriverException(
+                    "fill failed: element cannot be focused | selector: $selector",
+                    driver = this
+                )
 
             clear(node)
 
@@ -935,12 +1087,121 @@ open class PulsarWebDriver constructor(
                 // Non-text elements don't support setSelectionRange — ignore.
             }
 
-            // Small delay between key presses so each Input.insertText CDP
-            // round-trip completes before the next one starts, preventing
-            // races that can drop input events on the page.
-            keyboard?.type(text, 10)
+            // Inter-character delay for Input.insertText CDP calls.
+            //
+            // Keyboard.type() dispatches each character via Input.insertText,
+            // which sends a CDP command to Chrome.  Chrome processes the command
+            // synchronously (the CDP response confirms the text was delivered),
+            // but the resulting DOM events (input, keypress) are dispatched
+            // asynchronously on the page's event loop.  If the next insertText
+            // arrives before the prior one's DOM events have fully propagated,
+            // Chrome may coalesce or drop input events — the page never sees
+            // the missing characters and syncState() is never called.
+            //
+            // This is especially acute in Docker headless Chrome where the
+            // event loop runs under constrained CPU/Memory, so DOM event
+            // processing is slower than on a developer workstation.
+            //
+            // A hardcoded 10ms was tried (commit d904be750) but proved
+            // insufficient in CI; a single-digit-ms gap is not enough headroom
+            // for Chrome's async event pipeline under load.
+            //
+            // Using randomDelayMillis("type") — the same 90-240ms bucket that
+            // type() uses (InteractSettings.DEFAULT_DELAY_POLICY) — gives each
+            // insertText → DOM-event cycle enough time to complete before the
+            // next character arrives, matching type()'s proven reliability.
+            keyboard?.type(text, randomDelayMillis("type"))
 
             gap("fill")
+
+            // Verify the text actually landed. Despite the delays above, fill()
+            // was still observed to silently no-op in CI's Docker headless Chrome
+            // (value stayed empty with ok=true) while type() worked — the exact
+            // mechanism (dropped insertText events / focus loss under CPU
+            // pressure) could not be reproduced outside that environment.
+            //
+            // Trigger only when the field can actually hold typed text and is
+            // still EMPTY after typing: that is precisely the observed failure
+            // mode, and it cannot false-positive on masked/transforming inputs
+            // (non-empty value), readOnly/disabled fields (input blocked by
+            // design), or contenteditable elements (no value property, where
+            // keyboard input works fine).
+            if (text.isNotEmpty() && isTextHoldingElement(node) && getLiveValueOrEmpty(node).isEmpty()) {
+                logger.warn(
+                    "fill: typed text did not land, falling back to JS value set | selector: {} | text: '{}'",
+                    selector, text
+                )
+                setValueViaJs(node, text)
+
+                if (getLiveValueOrEmpty(node).isEmpty()) {
+                    // Throw so invokeWithRetry retries instead of reporting a
+                    // phantom success (ok=true with nothing filled).
+                    throw WebDriverException(
+                        "fill failed: value is still empty after typing and JS fallback | selector: $selector",
+                        driver = this
+                    )
+                }
+            }
+
+            true
+        } ?: false
+
+        if (!filled) {
+            // The fill lambda never ran: either the element lookup inside
+            // invokeOnElement returned null, or the driver reported itself
+            // unhealthy.  Fail loudly instead of silently.
+            throw WebDriverException(
+                "fill failed: element not found or driver unavailable | selector: $selector",
+                driver = this
+            )
+        }
+    }
+
+    /**
+     * Whether the element can hold typed text: exposes a writable `value`
+     * property (input/textarea) and is neither readOnly nor disabled.
+     * Contenteditable and plain elements do not qualify, and [fill]'s
+     * verification must skip them: keyboard input works for them via
+     * Input.insertText, and an empty/blocked value is by design.
+     */
+    @Throws(WebDriverException::class)
+    private suspend fun isTextHoldingElement(node: NodeRef): Boolean {
+        return withNodeObjectId(browserProtocol, node) { objectId ->
+            browserProtocol.callFunctionOn(
+                """function() {
+                    return this
+                        && typeof this.value !== 'undefined'
+                        && !this.readOnly
+                        && !this.disabled;
+                }""",
+                objectId = objectId,
+                returnByValue = true
+            ).result.value as? Boolean ?: false
+        } ?: false
+    }
+
+    /**
+     * Last-resort value setter used by [fill] when trusted keyboard input does
+     * not land. Sets the value property directly and dispatches bubbling
+     * `input`/`change` events so page listeners (and framework two-way
+     * bindings) observe the change, mirroring the observable effect of
+     * `Input.insertText` (which also fires `input` but no key events).
+     */
+    @Throws(WebDriverException::class)
+    private suspend fun setValueViaJs(node: NodeRef, text: String) {
+        withNodeObjectId(browserProtocol, node) { objectId ->
+            browserProtocol.callFunctionOn(
+                """function(text) {
+                    if (typeof this.focus === 'function') { this.focus(); }
+                    this.value = text;
+                    this.dispatchEvent(new Event('input', { bubbles: true }));
+                    this.dispatchEvent(new Event('change', { bubbles: true }));
+                }""",
+                objectId = objectId,
+                returnByValue = false,
+                userGesture = true,
+                arguments = listOf(CallArgument(value = text)),
+            )
         }
     }
 
@@ -1063,56 +1324,38 @@ open class PulsarWebDriver constructor(
     private suspend fun trySubmitFormOnEnter() {
         runCatching {
             browserProtocol.evaluate(
-                expression = """
-                    (() => {
-                        const el = document.activeElement;
-                        if (!el) return false;
-                        const tag = el.tagName;
-                        if (tag === 'TEXTAREA') return false;
-                        if (tag !== 'INPUT' && tag !== 'SELECT') return false;
-                        if (tag === 'INPUT') {
-                            const t = (el.type || 'text').toLowerCase();
-                            if (t === 'radio' || t === 'checkbox' || t === 'file' ||
-                                t === 'button' || t === 'reset' || t === 'submit' ||
-                                t === 'image' || t === 'hidden') {
-                                return false;
-                            }
-                        }
-                        const form = el.closest('form');
-                        if (!form) return false;
-                        if (typeof form.requestSubmit === 'function') {
-                            try { form.requestSubmit(); return true; } catch (e) {}
-                        }
-                        form.submit();
-                        return true;
-                    })()
-                """.trimIndent(),
+                expression = TRY_SUBMIT_FORM_ON_ENTER_JS,
                 returnByValue = true,
             )
+        }.onFailure {
+            logger.debug("Safety-net form submission after Enter key failed: {}", it.brief())
         }
     }
 
+    /**
+     * Dispatches a `keydown` event via DOM API (JavaScript dispatchEvent).
+     *
+     * NOTE: CDP `Input.dispatchKeyEvent` (used by [keyboard?.down]) is unreliable for
+     * keydown/keyup on some platforms — the events may not reach page listeners.
+     * We use DOM event dispatch instead, which produces `isTrusted: false` events but
+     * reliably triggers page-side handlers. Tracked as TODO: revisit once CDP key event
+     * reliability is addressed upstream.
+     */
     @Throws(WebDriverException::class)
     override suspend fun keyDown(key: String) {
         rpc.invokeOnPage("keyDown") {
-            if (alwaysTrue() || SystemUtils.IS_OS_WINDOWS) {
-                // TODO: keydown 事件不太可靠，先用 DOM 事件模拟，后续优化
-                dispatchDomKeyboardEvent("keydown", key)
-            } else {
-                keyboard?.down(key)
-            }
+            dispatchDomKeyboardEvent("keydown", key)
         }
     }
 
+    /**
+     * Dispatches a `keyup` event via DOM API (JavaScript dispatchEvent).
+     * See [keyDown] for rationale on using DOM events instead of CDP.
+     */
     @Throws(WebDriverException::class)
     override suspend fun keyUp(key: String) {
         rpc.invokeOnPage("keyUp") {
-            if (alwaysTrue() || SystemUtils.IS_OS_WINDOWS) {
-                // TODO: keyup 事件不太可靠，先用 DOM 事件模拟，后续优化
-                dispatchDomKeyboardEvent("keyup", key)
-            } else {
-                keyboard?.up(key)
-            }
+            dispatchDomKeyboardEvent("keyup", key)
         }
     }
 
@@ -1193,7 +1436,7 @@ open class PulsarWebDriver constructor(
      * This override resolves both `backend:N` and `eN` (snapshot) node references
      * (which `document.querySelector` cannot handle) via [page.dom.queryLocator]
      * before dispatching the HTML5 drag sequence through CDP.  Plain CSS selectors
-     * delegate to the default JS-based implementation.
+     * delegate to the default JS-based implementation in [WebDriver.drag].
      */
     @Throws(WebDriverException::class)
     override suspend fun drag(sourceSelector: String, targetSelector: String) {
@@ -1263,17 +1506,19 @@ open class PulsarWebDriver constructor(
                         awaitPromise = true
                     )
 
-                    // Parse the JSON result to check for errors
                     val json = (result.result.value as? String) ?: "{}"
                     val parsed = runCatching { jacksonObjectMapper().readTree(json) }.getOrNull()
                     if (parsed?.get("ok")?.asBoolean() != true) {
-                        val error = parsed?.get("error")?.asText() ?: "Drag operation failed"
-                        throw WebDriverException(error, driver = this@PulsarWebDriver)
+                        val error = parsed?.get("error")?.asText() ?: "Unknown drag failure"
+                        throw WebDriverException(
+                            "Failed to drag '$sourceSelector' to '$targetSelector': $error",
+                            driver = this@PulsarWebDriver
+                        )
                     }
-
-                    gap("drag")
                 }
             }
+
+            gap()
         }
     }
 
@@ -1295,12 +1540,12 @@ open class PulsarWebDriver constructor(
     }
 
     @Throws(WebDriverException::class)
-    override suspend fun ariaSnapshot(): String {
+    override suspend fun ariaSnapshot(boxes: Boolean): String {
         return rpc.invokeDeferredSilently("ariaSnapshot") { page.ariaSnapshot() } ?: ""
     }
 
     @Throws(WebDriverException::class)
-    override suspend fun ariaSnapshot(viewports: String): String {
+    override suspend fun ariaSnapshot(viewports: String, boxes: Boolean): String {
         val viewportIndices = ViewportSpec.parse(viewports) ?: return ariaSnapshot()
         return rpc.invokeDeferredSilently("ariaSnapshot") { page.ariaSnapshot(viewportIndices) } ?: ""
     }
@@ -1310,7 +1555,6 @@ open class PulsarWebDriver constructor(
         return rpc.invokeDeferredSilently("ariaSnapshot") { page.ariaSnapshot(options) } ?: ""
     }
 
-    @Beta
     @Throws(WebDriverException::class)
     override suspend fun querySelectorAll(selector: String): List<NodeRef> {
         return rpc.invokeOnPage("select") { page.dom.queryLocatorAll(selector) } ?: listOf()
@@ -1322,37 +1566,9 @@ open class PulsarWebDriver constructor(
             when {
                 node.isNull() -> null
                 else -> {
-                    val functionDeclaration = """
-function() {
-  try {
-    const el = this;
-    const excluded = new Set(['SCRIPT','STYLE','NOSCRIPT','TEMPLATE']);
-    let text = '';
-    const walker = document.createTreeWalker(
-      el,
-      NodeFilter.SHOW_TEXT,
-      {
-        acceptNode(node) {
-          const p = node.parentNode;
-          return p && !excluded.has(p.nodeName)
-            ? NodeFilter.FILTER_ACCEPT
-            : NodeFilter.FILTER_REJECT;
-        }
-      }
-    );
-    let n;
-    while ((n = walker.nextNode())) {
-      text += n.nodeValue;
-    }
-    return text;
-  } catch (e) {
-    return null;
-  }
-}
-                    """.trimIndent()
                     withNodeObjectId(browserProtocol, node) { objectId ->
                         val remoteObject = browserProtocol.callFunctionOn(
-                            functionDeclaration, objectId = objectId, returnByValue = true
+                            SELECT_FIRST_TEXT_JS, objectId = objectId, returnByValue = true
                         )
                         // TODO: performance issue for large text (memory copy)
                         remoteObject.result.value?.toString()
@@ -1366,13 +1582,13 @@ function() {
     override suspend fun selectTextAll(selector: String): List<String> {
         val safeSelector = page.dom.normalizeSelector(selector, true) ?: selector
         val json = evaluate("__pulsar_utils__.selectTextAll('$safeSelector')")?.toString() ?: "[]"
-        return jacksonObjectMapper().readValue(json)
+        return jsonMapper.readValue(json)
     }
 
     override suspend fun selectAttributes(selector: String): Map<String, String> {
         val safeSelector = page.dom.normalizeSelector(selector, true) ?: selector
         val json = evaluate("__pulsar_utils__.selectAttributes('$safeSelector')")?.toString() ?: return mapOf()
-        val attributes: List<String> = jacksonObjectMapper().readValue(json)
+        val attributes: List<String> = jsonMapper.readValue(json)
         return attributes.zipWithNext().associate { it }
     }
 
@@ -1380,26 +1596,26 @@ function() {
     override suspend fun selectAttributeAll(selector: String, attrName: String, start: Int, limit: Int): List<String> {
         val end = start + limit
         val safeSelector = page.dom.normalizeSelector(selector, true) ?: selector
-        val encodedAttrName = jacksonObjectMapper().writeValueAsString(attrName)
+        val encodedAttrName = jsonMapper.writeValueAsString(attrName)
 
         val expression = "__pulsar_utils__.selectAttributeAll('$safeSelector', $encodedAttrName, $start, $end)"
         val json = evaluate(expression)?.toString() ?: return listOf()
-        return jacksonObjectMapper().readValue(json)
+        return jsonMapper.readValue(json)
     }
 
     @Throws(WebDriverException::class)
     override suspend fun setAttribute(selector: String, attrName: String, attrValue: String) {
         val safeSelector = page.dom.normalizeSelector(selector, true) ?: selector
-        val encodedName = jacksonObjectMapper().writeValueAsString(attrName)
-        val encodedValue = jacksonObjectMapper().writeValueAsString(attrValue)
+        val encodedName = jsonMapper.writeValueAsString(attrName)
+        val encodedValue = jsonMapper.writeValueAsString(attrValue)
         evaluate("__pulsar_utils__.setAttribute('$safeSelector', $encodedName, $encodedValue)")
     }
 
     @Throws(WebDriverException::class)
     override suspend fun setAttributeAll(selector: String, attrName: String, attrValue: String) {
         val safeSelector = page.dom.normalizeSelector(selector, true) ?: selector
-        val encodedName = jacksonObjectMapper().writeValueAsString(attrName)
-        val encodedValue = jacksonObjectMapper().writeValueAsString(attrValue)
+        val encodedName = jsonMapper.writeValueAsString(attrName)
+        val encodedValue = jsonMapper.writeValueAsString(attrValue)
         evaluate("__pulsar_utils__.setAttributeAll('$safeSelector', $encodedName, $encodedValue)")
     }
 
@@ -1407,7 +1623,7 @@ function() {
     @Throws(WebDriverException::class)
     override suspend fun selectFirstPropertyValueOrNull(selector: String, propName: String): String? {
         val safeSelector = page.dom.normalizeSelector(selector, true) ?: selector
-        val encodedPropName = jacksonObjectMapper().writeValueAsString(propName)
+        val encodedPropName = jsonMapper.writeValueAsString(propName)
         return evaluateValue("__pulsar_utils__.selectFirstPropertyValue('$safeSelector', $encodedPropName)")?.toString()
     }
 
@@ -1417,40 +1633,40 @@ function() {
     ): List<String> {
         val end = start + limit
         val safeSelector = page.dom.normalizeSelector(selector, true) ?: selector
-        val encodedPropName = jacksonObjectMapper().writeValueAsString(propName)
+        val encodedPropName = jsonMapper.writeValueAsString(propName)
         val expression = "__pulsar_utils__.selectPropertyValueAll('$safeSelector', $encodedPropName, $start, $end)"
         val json = evaluate(expression)?.toString() ?: return listOf()
-        return jacksonObjectMapper().readValue(json)
+        return jsonMapper.readValue(json)
     }
 
     @Throws(WebDriverException::class)
     override suspend fun setProperty(selector: String, propName: String, propValue: String) {
         val safeSelector = page.dom.normalizeSelector(selector, true) ?: selector
-        val encodedName = jacksonObjectMapper().writeValueAsString(propName)
-        val encodedValue = jacksonObjectMapper().writeValueAsString(propValue)
+        val encodedName = jsonMapper.writeValueAsString(propName)
+        val encodedValue = jsonMapper.writeValueAsString(propValue)
         evaluate("__pulsar_utils__.setProperty('$safeSelector', $encodedName, $encodedValue)")
     }
 
     @Throws(WebDriverException::class)
     override suspend fun setPropertyAll(selector: String, propName: String, propValue: String) {
         val safeSelector = page.dom.normalizeSelector(selector, true) ?: selector
-        val encodedName = jacksonObjectMapper().writeValueAsString(propName)
-        val encodedValue = jacksonObjectMapper().writeValueAsString(propValue)
+        val encodedName = jsonMapper.writeValueAsString(propName)
+        val encodedValue = jsonMapper.writeValueAsString(propValue)
         evaluate("__pulsar_utils__.setPropertyAll('$safeSelector', $encodedName, $encodedValue)")
     }
 
     @Throws(WebDriverException::class)
     override suspend fun clickTextMatches(selector: String, pattern: String, count: Int) {
         val safeSelector = page.dom.normalizeSelector(selector, true) ?: selector
-        val encodedPattern = jacksonObjectMapper().writeValueAsString(pattern)
+        val encodedPattern = jsonMapper.writeValueAsString(pattern)
         evaluate("__pulsar_utils__.clickTextMatches('$safeSelector', $encodedPattern)")
     }
 
     @Throws(WebDriverException::class)
     override suspend fun clickMatches(selector: String, attrName: String, pattern: String, count: Int) {
         val safeSelector = page.dom.normalizeSelector(selector, true) ?: selector
-        val encodedAttrName = jacksonObjectMapper().writeValueAsString(attrName)
-        val encodedPattern = jacksonObjectMapper().writeValueAsString(pattern)
+        val encodedAttrName = jsonMapper.writeValueAsString(attrName)
+        val encodedPattern = jsonMapper.writeValueAsString(pattern)
         evaluate("__pulsar_utils__.clickMatches('$safeSelector', $encodedAttrName, $encodedPattern)")
     }
 
@@ -1462,6 +1678,8 @@ function() {
                 ClickableDOM.create(browserProtocol, node)?.clickablePoint()?.value
             }
         } catch (e: ChromeDriverException) {
+            lastError = e
+            logger.warn("Failed to get clickablePoint for [{}] | {}", selector, e.message)
             rpc.interceptChromeException(e, "clickablePoint")
         }
 
@@ -1476,6 +1694,8 @@ function() {
                 ClickableDOM.create(browserProtocol, node)?.boundingBox()
             }
         } catch (e: ChromeDriverException) {
+            lastError = e
+            logger.warn("Failed to get boundingBox for [{}] | {}", selector, e.message)
             rpc.interceptChromeException(e, "boundingBox")
         }
 
@@ -1494,6 +1714,8 @@ function() {
                 screenshot.screenshot(fullPage)
             }
         } catch (e: ChromeDriverException) {
+            lastError = e
+            logger.warn("Failed to take screenshot (fullPage=$fullPage) | {}", e.message)
             rpc.interceptChromeException(e, "screenshot")
             null
         }
@@ -1511,6 +1733,8 @@ function() {
             // Force the page stop all navigations and pending resource fetches.
             rpc.invokeOnPage("screenshot") { screenshot.screenshot(selector) }
         } catch (e: ChromeDriverException) {
+            lastError = e
+            logger.warn("Failed to take screenshot for [{}] | {}", selector, e.message)
             rpc.interceptChromeException(e, "screenshot")
             null
         }
@@ -1522,6 +1746,8 @@ function() {
             // Force the page stop all navigations and pending resource fetches.
             rpc.invokeOnPage("screenshot") { screenshot.screenshot(rect) }
         } catch (e: ChromeDriverException) {
+            lastError = e
+            logger.warn("Failed to take screenshot for rect {} | {}", rect, e.message)
             rpc.interceptChromeException(e, "screenshot")
             null
         }
@@ -1685,7 +1911,7 @@ function() {
      * Navigate to the page and inject scripts.
      * */
     private suspend fun navigateInvaded(entry: NavigateEntry) {
-        val url = entry.url
+        val url = entry.userTypedUrl
 
         addScriptToEvaluateOnNewDocument()
 
@@ -1749,15 +1975,15 @@ function() {
     }
 
     private suspend fun onRequestWillBeSent(entry: NavigateEntry, event: RequestWillBeSent) {
-        if (!entry.url.startsWith("http")) {
+        if (!entry.userTypedUrl.startsWith("http")) {
             // This can happen for the following cases:
             // 1. non-http resources, for example, ftp, ws, etc.
             // 2. chrome's internal page, for example, about:blank, chrome://settings/, chrome://settings/system, etc.
             return
         }
 
-        if (!URLUtils.isStandard(entry.url)) {
-            logger.warn("Invalid url to sent to the browser | {}", entry.url)
+        if (!URLUtils.isStandard(entry.userTypedUrl)) {
+            logger.warn("Invalid url to sent to the browser | {}", entry.userTypedUrl)
             return
         }
 
@@ -1784,7 +2010,16 @@ function() {
         }
 
         if (resourceBlockProbability > 1e-6) {
-            if (probabilisticBlockedURLs.any { url.matches(it.toRegex()) }) {
+            // Pre-compile regex patterns once per call; the underlying list rarely changes.
+            val regexes = cachedProbabilisticBlockedRegexes
+            val patterns = if (regexes != null && regexes.size == probabilisticBlockedURLs.size) {
+                regexes
+            } else {
+                probabilisticBlockedURLs.map { it.toRegex() }.also {
+                    cachedProbabilisticBlockedRegexes = it
+                }
+            }
+            if (patterns.any { url.matches(it) }) {
                 return Random.nextInt(100) / 100.0f < resourceBlockProbability
             }
         }
@@ -1960,7 +2195,7 @@ function() {
                 logger.debug(
                     "Injected Browser4 runtime into Isolated World (context: {}) | {}",
                     contextId,
-                    StringUtils.abbreviateMiddle(userTypedUrl(), "...", 200)
+                    StringUtils.abbreviateMiddle(navigateUrl, "...", 200)
                 )
                 val evaluate = browserProtocol.evaluate("typeof(__pulsar_utils__)", contextId = contextId)
                 if (evaluate.result.value != "function") {
@@ -2075,7 +2310,7 @@ function() {
     }
 
     private fun serialize(cookie: Cookie): Map<String, String> {
-        val mapper = jacksonObjectMapper().setDefaultPropertyInclusion(JsonInclude.Include.NON_NULL)
+        val mapper = nonNullJsonMapper
         return mapper.readValue(mapper.writeValueAsString(cookie))
     }
 
@@ -2176,7 +2411,7 @@ function() {
     }
 
     private suspend fun dispatchDomKeyboardEvent(type: String, key: String) {
-        val safeKey = jacksonObjectMapper().writeValueAsString(key)
+        val safeKey = jsonMapper.writeValueAsString(key)
         evaluate(
             """
                 (() => {

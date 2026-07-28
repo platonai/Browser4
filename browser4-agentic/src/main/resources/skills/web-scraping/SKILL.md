@@ -121,4 +121,3 @@ Validates skill configuration and environment. Always returns true for this skil
 
 - [Form Filling Skill](../form-filling/SKILL.md)
 - [Data Validation Skill](../data-validation/SKILL.md)
-- [Skills Framework Documentation](/docs/skills-framework.md)

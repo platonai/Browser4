@@ -7,78 +7,24 @@ import ai.platon.pulsar.agentic.model.ActionDescription
 import ai.platon.pulsar.agentic.model.AgentHistory
 import ai.platon.pulsar.agentic.model.ExecutionContext
 import ai.platon.pulsar.agentic.tools.specs.ToolSpecification
-import ai.platon.pulsar.common.AppContext
-import ai.platon.pulsar.common.NetUtil
 import ai.platon.pulsar.common.Strings
-import ai.platon.pulsar.common.config.AppConstants
-import ai.platon.pulsar.common.config.AppConstants.SEARCH_ENGINE_URLS
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.common.serialize.json.Pson
 import ai.platon.pulsar.external.ModelResponse
 import ai.platon.pulsar.external.ResponseState
 import com.fasterxml.jackson.databind.node.JsonNodeFactory
 import kotlinx.coroutines.*
-import java.nio.file.Files
 import java.time.Duration
 import java.time.Instant
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.min
-import kotlin.time.Duration.Companion.hours
 import kotlin.time.Duration.Companion.milliseconds
-import kotlin.time.Duration.Companion.minutes
 
-/**
- * Configuration for enhanced error handling, retry mechanisms and agent behavior.
- *
- * Each field tunes a specific aspect of the autonomous loop:
- * - maxSteps: Upper bound of observe->act iterations in a single resolve session.
- * - maxRetries: Retries for the high-level resolve() in case of transient/timeout errors.
- * - baseRetryDelayMs/maxRetryDelayMs: Exponential backoff parameters.
- * - consecutiveNoOpLimit: Abort after N consecutive steps without actionable tool calls.
- * - actionGenerationTimeoutMs / llmInferenceTimeoutMs: Timeouts for model inference.
- * - screenshotCaptureTimeoutMs / screenshotEveryNSteps: Screenshot cadence & timeout.
- * - memoryCleanupIntervalSteps / maxHistorySize: In-memory history retention & cleanup.
- * - enableAdaptiveDelays: Adds short delays based on average step execution time.
- * - enablePreActionValidation: Validates tool calls before execution for safety.
- * - actTimeoutMs / resolveTimeoutMs: Overall upper bound for act() and resolve().
- * - maxResultsToTry: Number of candidate actions to attempt per model generation in act().
- * - domSettleTimeoutMs / domSettleCheckIntervalMs: Stabilization of DOM before each step.
- * - allowLocalhost / allowedPorts: URL safety policy.
- * - maxSelectorLength / denyUnknownActions: Selector validation & unknown action policy.
- */
-data class AgentConfig(
-    val maxSteps: Int = 100,
-    val maxRetries: Int = 3,
-    val baseRetryDelayMs: Long = 1_000,
-    val maxRetryDelayMs: Long = 30_000,
-    val consecutiveNoOpLimit: Int = 5,
-    val actionGenerationTimeoutMs: Long = 30_000,
-    val screenshotCaptureTimeoutMs: Long = 5_000,
-    val enableStructuredLogging: Boolean = false,
-    val logInferenceToFile: Boolean = true,
-    val enableDebugMode: Boolean = false,
-    val enablePerformanceMetrics: Boolean = true,
-    val maxHistorySize: Int = 100,
-    val enableAdaptiveDelays: Boolean = true,
-    val enablePreActionValidation: Boolean = true,
-    // New configuration options for fixes
-    val actTimeoutMs: Long = 10.minutes.inWholeMilliseconds,
-    val llmInferenceTimeoutMs: Long = 10.minutes.inWholeMilliseconds,
-    val maxResultsToTry: Int = 3,
-    val domSettleTimeoutMs: Long = 5000,
-    val domSettleCheckIntervalMs: Long = 100,
-    val allowLocalhost: Boolean = false,
-    val allowedPorts: Set<Int> = setOf(80, 443, 8080, 8443, 3000, 5000, 8000, 9000),
-    val maxSelectorLength: Int = 1000,
-    val denyUnknownActions: Boolean = false,
-    // Overall timeout for resolve() to avoid indefinite hangs
-    val resolveTimeoutMs: Long = 24.hours.inWholeMilliseconds,
-    // Circuit breaker configuration
-    val maxConsecutiveLLMFailures: Int = 5,
-    val maxConsecutiveValidationFailures: Int = 8,
-)
+// File-level constants previously in companion object
+private const val COMPACT_INLINE_SESSION_LENGTH = 160
+private const val COMPACT_INLINE_INSTRUCTION_LENGTH = 100
 
 open class RobustBrowserAgent(
     session: AgenticSession, val maxSteps: Int = 100, config: AgentConfig = AgentConfig(maxSteps = maxSteps)
@@ -86,34 +32,34 @@ open class RobustBrowserAgent(
     private val logger = getLogger(RobustBrowserAgent::class)
     private val slogger = StructuredAgentLogger(logger, config)
 
-    protected val closed = AtomicBoolean(false)
+    private val closed = AtomicBoolean(false)
     val isClosed: Boolean get() = closed.get()
 
     // A dedicated scope for all agent work so close() can cancel promptly
-    protected val agentJob = SupervisorJob()
-    protected val agentScope = CoroutineScope(Dispatchers.Default + agentJob)
+    private val agentJob = SupervisorJob()
+    private val agentScope = CoroutineScope(Dispatchers.Default + agentJob)
 
-    protected val stepExecutionTimes = ConcurrentHashMap<Int, Long>()
+    private val stepExecutionTimes = ConcurrentHashMap<Int, Long>()
 
     // New components for better separation of concerns
-    protected val circuitBreaker = CircuitBreaker(
+    private val circuitBreaker = CircuitBreaker(
         maxLLMFailures = config.maxConsecutiveLLMFailures,
         maxValidationFailures = config.maxConsecutiveValidationFailures,
         maxExecutionFailures = 3
     )
-    protected val retryStrategy = RetryStrategy(
+    private val retryStrategy = RetryStrategy(
         maxRetries = config.maxRetries, baseDelayMs = config.baseRetryDelayMs, maxDelayMs = config.maxRetryDelayMs
     )
-    protected val retryCounter = AtomicInteger(0)
+    private val retryCounter = AtomicInteger(0)
 
-    companion object {
-        // Magic numbers extracted as named constants
-        private const val COMPACT_INLINE_SESSION_LENGTH = 160
-        private const val COMPACT_INLINE_INSTRUCTION_LENGTH = 100
-        private const val HISTORY_CLEANUP_BUFFER = 10
-        private const val RECENT_STATE_HISTORY_SIZE = 20
-        private const val MAX_STEP_EXECUTION_TIMES_SIZE = 200
-    }
+    private val transcriptPersister = TranscriptPersister(
+        stateManager = stateManager,
+        stateHistory = stateHistory,
+        slogger = slogger,
+        agentUuid = uuid,
+        circuitBreaker = circuitBreaker,
+        retryCounter = retryCounter,
+    )
 
     /**
      * High-level problem resolution entry. Builds an ActionOptions and delegates to resolve(ActionOptions).
@@ -137,17 +83,14 @@ open class RobustBrowserAgent(
         onWillRun(action)
 
         try {
-            // Avoid passing a distinct Job to withContext (structured concurrency violation warning).
-            // We still inherit caller cancellation while switching dispatcher as configured by agentScope.
             val ctx = agentScope.coroutineContext.minusKey(Job)
 
             val result = withContext(ctx) { resolveProblemInCoroutine(action) }
 
             onDidRun(action, result.result)
         } catch (e: CancellationException) {
-            // Properly propagate cancellation as per Kotlin coroutines best practices
             logger.info("🛑 run.cancelled reason={}", e.message ?: "user cancellation")
-            throw e // Always re-throw CancellationException
+            throw e
         } finally {
             stateManager.writeAllProcessTrace()
         }
@@ -262,7 +205,6 @@ open class RobustBrowserAgent(
             }.onFailure { logger.warn("Failed to record close trace: ${it.message}") }
 
             // Cancel agent job - this will propagate cancellation to all child jobs
-            // Note: We don't wait for completion here to avoid blocking the caller
             runCatching {
                 agentJob.cancel(CancellationException("USER interrupted via close()"))
             }.onFailure {
@@ -286,9 +228,7 @@ open class RobustBrowserAgent(
         return stateHistory.states.lastOrNull()?.toString() ?: "(no history)"
     }
 
-    protected data class ResolveResult(
-        val context: ExecutionContext, val result: ActResult
-    )
+    // ─── Resolution pipeline ──────────────────────────────────────────────────
 
     private suspend fun resolveProblemInCoroutine(action: ActionOptions): ResolveResult {
         val instruction = action.action
@@ -316,7 +256,6 @@ open class RobustBrowserAgent(
             }
 
             val dur = Duration.between(sessionStartTime, Instant.now()).toMillis()
-            // Not a single-step action, keep it out of AgentState history
             stateManager.addTrace(
                 result.context.agentState, event = "resolveDone", items = mapOf(
                     "session" to baseContext.sid, "success" to result.result.isSuccess, "durationMs" to dur
@@ -342,21 +281,114 @@ open class RobustBrowserAgent(
         }
     }
 
-    private fun handleObserveException(e: Exception, context: ExecutionContext) {
-        val failures = try {
-            circuitBreaker.recordFailure(CircuitBreaker.FailureType.LLM_FAILURE)
-        } catch (cbError: CircuitBreakerTrippedException) {
-            throw PerceptiveAgentError.PermanentError(cbError.message ?: "Circuit breaker tripped", cbError)
+    private suspend fun resolveProblemWithRetry(action: ActionOptions, context: ExecutionContext): ResolveResult {
+        var lastError: Exception? = null
+        val sid = context.sid
+        val activeContext = stateManager.getActiveContext()
+
+        for (attempt in 0..config.maxRetries) {
+            try {
+                val result = doRunAgentLoop(action, activeContext, attempt)
+                return result
+            } catch (e: Exception) {
+                lastError = e
+                logger.error("💥 resolve.unexpected attempt={} sid={} msg={}", attempt + 1, sid, e.message, e)
+
+                cleanupPartialState(activeContext)
+                stateManager.buildBaseExecutionContext(action, "resolve-init-recovery")
+            }
         }
 
-        logger.error("🤖❌ action.gen.fail sid={} failures={} msg={}", context.sid, failures, e.message, e)
+        val actResult = ActResultHelper.failed(lastError ?: Exception("Unknown error"), action.action)
+
+        return ResolveResult(activeContext, actResult)
     }
 
-    protected suspend fun prepareStep(
+    private suspend fun doRunAgentLoop(
+        initActionOptions: ActionOptions, initContext: ExecutionContext, attempt: Int
+    ): ResolveResult {
+        initializeResolution(initContext, attempt)
+        var consecutiveNoOps = 0
+        var context = initContext
+        val startTime = Instant.now()
+        try {
+            val action = initActionOptions.copy(fromRunLoop = true)
+
+            while (!isClosed && context.step < config.maxSteps) {
+                val stepResult: StepProcessingResult
+                try {
+                    context = prepareStep(action, context, consecutiveNoOps)
+
+                    stepResult = step(action, context, consecutiveNoOps)
+
+                    require(stepResult.context.step == context.step) { "Step check failed" }
+                    require(stepResult.context.agentState.actionDescription != null) { "Check failed: stepResult.context.agentState.actionDescription != null" }
+
+                    context = stepResult.context
+                    consecutiveNoOps = stepResult.consecutiveNoOps
+                } finally {
+                    stateManager.addToHistory(context.agentState)
+                }
+
+                if (stepResult.shouldStop) {
+                    break
+                }
+            }
+
+            val actResult = buildFinalActResult(initContext.instruction, context, startTime)
+
+            return ResolveResult(context, actResult)
+        } catch (e: CancellationException) {
+            logger.info(
+                "🛑 doResolve.cancelled sid={} steps={} reason={}",
+                context.sid,
+                context.step,
+                e.message ?: "user interruption"
+            )
+
+            val result = ActResultHelper.failed(e, initContext.instruction)
+            return ResolveResult(context, result)
+        } catch (e: Exception) {
+            throw handleResolutionFailure(e, context, startTime)
+        }
+    }
+
+    private suspend fun step(action: ActionOptions, context: ExecutionContext, noOpsIn: Int): StepProcessingResult {
+        var consecutiveNoOps = noOpsIn
+
+        // Execute the tool call with enhanced error handling
+        val actResult = act(action)
+
+        if (actResult.isComplete) {
+            onTaskCompletion(actResult, context)
+            return StepProcessingResult(context, consecutiveNoOps, true)
+        }
+
+        if (!actResult.isSuccess) {
+            // Only count failures of browser-interaction actions as no-ops.
+            // Non-browser actions (fs, agent, system) can fail for reasons
+            // unrelated to page state and should not trigger no-op detection.
+            val lastToolCall = actResult.detail?.actionDescription?.toolCall
+            val lastDomain = lastToolCall?.domain
+            if (ToolSpecification.isBrowserInteraction(lastDomain)) {
+                consecutiveNoOps++
+                val stop = handleConsecutiveNoOps(consecutiveNoOps, actResult, context)
+                if (stop) {
+                    return StepProcessingResult(context, consecutiveNoOps, true)
+                }
+            }
+        }
+
+        delay(calculateAdaptiveDelay().milliseconds)
+        return StepProcessingResult(context, consecutiveNoOps, false)
+    }
+
+    // ─── Step preparation ─────────────────────────────────────────────────────
+
+    private suspend fun prepareStep(
         action: ActionOptions, ctxIn: ExecutionContext, noOpsIn: Int
     ): ExecutionContext {
         val context = buildExecutionContextForStep(action, "step", ctxIn)
-        // Note: action.context check removed as it's redundant with context parameter
 
         val prevAgentState = context.prevAgentState ?: return context
         require(prevAgentState == ctxIn.agentState)
@@ -396,25 +428,13 @@ open class RobustBrowserAgent(
         context.prevAgentState?.toolCallResult?.actionDescription?.toolCall
             ?: context.prevAgentState?.actionDescription?.toolCall
 
-    private suspend fun selectBestSearchEngine(): String {
-        val searchURL = SEARCH_ENGINE_URLS.firstOrNull {
-            withContext(Dispatchers.IO) { NetUtil.testHttpNetwork(it) }
-        }
-
-        if (searchURL != null) {
-            return searchURL
-        }
-
-        return if (AppContext.isCN) AppConstants.SEARCH_ENGINE_URL else AppConstants.SEARCH_ENGINE_EN_URL
-    }
-
-    protected suspend fun buildExecutionContextForStep(
+    private suspend fun buildExecutionContextForStep(
         action: ActionOptions, event: String, ctxIn: ExecutionContext
     ): ExecutionContext {
         val driver = activeDriver
         val url = driver.url()
         if (url.isBlank() || url == "about:blank") {
-            val searchURL = selectBestSearchEngine()
+            val searchURL = SearchEngineSelector.selectBest()
             driver.navigate(searchURL)
         }
 
@@ -426,91 +446,7 @@ open class RobustBrowserAgent(
         return activeContext
     }
 
-    private suspend fun doRunAgentLoop(
-        initActionOptions: ActionOptions, initContext: ExecutionContext, attempt: Int
-    ): ResolveResult {
-        initializeResolution(initContext, attempt)
-        var consecutiveNoOps = 0
-        var context = initContext
-        val startTime = Instant.now()
-        try {
-            val action = initActionOptions.copy(fromRunLoop = true)
-
-            while (!isClosed && context.step < config.maxSteps) {
-                val stepResult: StepProcessingResult
-                try {
-                    context = prepareStep(action, context, consecutiveNoOps)
-
-                    stepResult = step(action, context, consecutiveNoOps)
-
-                    require(stepResult.context.step == context.step) { "Step check failed" }
-                    require(stepResult.context.agentState.actionDescription != null) { "Check failed: stepResult.context.agentState.actionDescription != null" }
-
-                    // The finalize step has no tool call
-                    // require(stepResult.context.agentState.toolCallResult != null) { "Check failed: stepResult.context.agentState.toolCallResult != null" }
-
-                    context = stepResult.context
-                    consecutiveNoOps = stepResult.consecutiveNoOps
-                } finally {
-                    stateManager.addToHistory(context.agentState)
-                }
-
-                if (stepResult.shouldStop) {
-                    break
-                }
-            }
-
-            val actResult = buildFinalActResult(initContext.instruction, context, startTime)
-
-            return ResolveResult(context, actResult)
-        } catch (e: CancellationException) {
-            // Log cancellation and return gracefully, allowing cleanup to occur
-            logger.info(
-                "🛑 doResolve.cancelled sid={} steps={} reason={}",
-                context.sid,
-                context.step,
-                e.message ?: "user interruption"
-            )
-
-            val result = ActResultHelper.failed(e, initContext.instruction)
-            return ResolveResult(context, result)
-        } catch (e: Exception) {
-            throw handleResolutionFailure(e, context, startTime)
-        }
-    }
-
-    /**
-     * Enhanced execution with comprehensive error handling and retry mechanisms
-     * Returns the final summary with enhanced error handling.
-     */
-    private suspend fun resolveProblemWithRetry(action: ActionOptions, context: ExecutionContext): ResolveResult {
-        var lastError: Exception? = null
-        val sid = context.sid
-        // activeContext = context
-        val activeContext = stateManager.getActiveContext()
-
-        for (attempt in 0..config.maxRetries) {
-            try {
-                val result = doRunAgentLoop(action, activeContext, attempt)
-                // activeContext = result.context
-                // stateManager.setActiveContext(result.context)
-
-                return result
-            } catch (e: Exception) {
-                lastError = e
-                logger.error("💥 resolve.unexpected attempt={} sid={} msg={}", attempt + 1, sid, e.message, e)
-
-                cleanupPartialState(activeContext)
-                stateManager.buildBaseExecutionContext(action, "resolve-init-recovery")
-            }
-        }
-
-        val actResult = ActResultHelper.failed(lastError ?: Exception("Unknown error"), action.action)
-
-        return ResolveResult(activeContext, actResult)
-    }
-
-    protected suspend fun initializeResolution(initContext: ExecutionContext, attempt: Int) {
+    private suspend fun initializeResolution(initContext: ExecutionContext, attempt: Int) {
         val sid = initContext.sid
         logger.info(
             "🚀 agent.start sid={} step={} url={} instr='{}' attempt={} maxSteps={} maxRetries={}",
@@ -524,45 +460,41 @@ open class RobustBrowserAgent(
         )
     }
 
-    data class StepProcessingResult(
-        val context: ExecutionContext, val consecutiveNoOps: Int, val shouldStop: Boolean
-    )
+    // ─── Error handling ───────────────────────────────────────────────────────
 
-    suspend fun step(action: ActionOptions, context: ExecutionContext, noOpsIn: Int): StepProcessingResult {
-        var consecutiveNoOps = noOpsIn
-
-        // Execute the tool call with enhanced error handling
-        val actResult = act(action)
-
-        if (actResult.isComplete) {
-            onTaskCompletion(actResult, context)
-            return StepProcessingResult(context, consecutiveNoOps, true)
+    private fun handleObserveException(e: Exception, context: ExecutionContext) {
+        val failures = try {
+            circuitBreaker.recordFailure(CircuitBreaker.FailureType.LLM_FAILURE)
+        } catch (cbError: CircuitBreakerTrippedException) {
+            throw PerceptiveAgentError.PermanentError(cbError.message ?: "Circuit breaker tripped", cbError)
         }
 
-        if (!actResult.isSuccess) {
-            // Only count failures of browser-interaction actions as no-ops.
-            // Non-browser actions (fs, agent, system) can fail for reasons
-            // unrelated to page state and should not trigger no-op detection.
-            val lastToolCall = actResult.detail?.actionDescription?.toolCall
-            val lastDomain = lastToolCall?.domain
-            if (ToolSpecification.isBrowserInteraction(lastDomain)) {
-                consecutiveNoOps++
-                val stop = handleConsecutiveNoOps(consecutiveNoOps, actResult, context)
-                if (stop) {
-                    return StepProcessingResult(context, consecutiveNoOps, true)
-                }
-            }
-        }
-
-        delay(calculateAdaptiveDelay().milliseconds)
-        return StepProcessingResult(context, consecutiveNoOps, false)
+        logger.error("🤖❌ action.gen.fail sid={} failures={} msg={}", context.sid, failures, e.message, e)
     }
 
-    protected fun classifyError(e: Exception, step: Int) = retryStrategy.classifyError(e, "step $step")
+    private fun handleResolutionFailure(
+        e: Exception, context: ExecutionContext, startTime: Instant
+    ): PerceptiveAgentError {
+        val executionTime = Duration.between(startTime, Instant.now())
+        logger.error(
+            "💥 agent.fail sid={} steps={} dur={} err={}", context.sid, context.step, executionTime, e.message, e
+        )
+        runCatching { stateManager.removeLastIfStep(context.step) }.onFailure {
+            logger.warn(
+                "⚠️ rollback failed sid={} step={} msg={}",
+                context.sid,
+                context.step,
+                e.message
+            )
+        }
+        return classifyError(e, context.step)
+    }
 
-    protected fun calculateRetryDelay(attempt: Int) = retryStrategy.calculateDelay(attempt)
+    private fun classifyError(e: Exception, step: Int) = retryStrategy.classifyError(e, "step $step")
 
-    protected fun cleanupPartialState(context: ExecutionContext) {
+    private fun calculateRetryDelay(attempt: Int) = retryStrategy.calculateDelay(attempt)
+
+    private fun cleanupPartialState(context: ExecutionContext) {
         try {
             logger.info("🧹 cleanup.partial sid={} step={}", context.sid, context.step)
             circuitBreaker.reset()
@@ -571,84 +503,9 @@ open class RobustBrowserAgent(
         }
     }
 
-    protected suspend fun summarize(goal: String, ctxIn: ExecutionContext): SummarizeResult {
-        val step = ctxIn.step + 1
-        val context = stateManager.buildExecutionContext(goal, step, event = "summary", baseContext = ctxIn)
-        stateManager.setActiveContext(context)
+    // ─── NoOp handling ────────────────────────────────────────────────────────
 
-        return try {
-            val (system, user) = promptBuilder.buildSummaryPrompt(goal, stateHistory)
-            slogger.info("📝⏳ Generating final summary", context)
-            val response = cta.chatModel.callUmSm(user, system)
-            slogger.info(
-                "📝✅ Summary generated successfully",
-                context,
-                mapOf("responseLength" to response.content.length, "responseState" to response.state)
-            )
-            SummarizeResult(context, response)
-        } catch (e: Exception) {
-            slogger.logError("📝❌ Summary generation failed", e, context.sessionId)
-            SummarizeResult(
-                context, modelResponse = ModelResponse("Failed to generate summary: ${e.message}", ResponseState.OTHER)
-            )
-        }
-    }
-
-    data class SummarizeResult(
-        val context: ExecutionContext, val modelResponse: ModelResponse
-    )
-
-    protected suspend fun generateFinalSummary(instruction: String, context: ExecutionContext): SummarizeResult {
-        return try {
-            val result = summarize(instruction, context)
-            stateManager.addTrace(
-                context.agentState,
-                event = "final",
-                items = mapOf("summaryPreview" to result.modelResponse.content.take(200)),
-                message = "🧾 FINAL"
-            )
-            persistTranscript(instruction, result.modelResponse, context)
-            result
-        } catch (e: Exception) {
-            logger.error("📝❌ agent.summary.fail sid={} msg={}", context.sid, e.message, e)
-            SummarizeResult(
-                context = context, ModelResponse("Failed to generate summary: ${e.message}", ResponseState.OTHER)
-            )
-        }
-    }
-
-    protected fun persistTranscript(instruction: String, finalResp: ModelResponse, context: ExecutionContext) {
-        runCatching {
-            val ts = Instant.now().toEpochMilli()
-            val path = stateManager.resolveSessionLogDir(context.sessionId).resolve("session-${ts}.log")
-            slogger.info("🧾💾 Persisting execution transcript", context)
-            val sb = StringBuilder()
-            sb.appendLine("SESSION_ID: $uuid")
-            sb.appendLine("TASK_ID: ${context.sessionId}")
-            sb.appendLine("TIMESTAMP: ${Instant.now()}")
-            sb.appendLine("INSTRUCTION: $instruction")
-            sb.appendLine("RESPONSE_STATE: ${finalResp.state}")
-            sb.appendLine("EXECUTION_HISTORY:")
-            stateHistory.states.forEach { sb.appendLine(it) }
-            sb.appendLine()
-            sb.appendLine("FINAL_SUMMARY:")
-            sb.appendLine(finalResp.content)
-            sb.appendLine()
-            sb.appendLine("Retry count: ${retryCounter.get()}")
-            val failureCounts = circuitBreaker.getFailureCounts()
-            sb.appendLine("Circuit breaker - LLM failures: ${failureCounts[CircuitBreaker.FailureType.LLM_FAILURE]}")
-            sb.appendLine("Circuit breaker - Validation failures: ${failureCounts[CircuitBreaker.FailureType.VALIDATION_FAILURE]}")
-            sb.appendLine("Circuit breaker - Execution failures: ${failureCounts[CircuitBreaker.FailureType.EXECUTION_FAILURE]}")
-            Files.writeString(path, sb)
-            slogger.info(
-                "🧾✅ Transcript persisted successfully",
-                context,
-                mapOf("lines" to stateHistory.size + 10, "path" to path.toUri())
-            )
-        }.onFailure { e -> slogger.logError("🧾❌ Failed to persist transcript", e, context.sessionId) }
-    }
-
-    protected suspend fun handleConsecutiveNoOps(
+    private suspend fun handleConsecutiveNoOps(
         consecutiveNoOps: Int,
         result: ActResult,
         context: ExecutionContext
@@ -681,13 +538,13 @@ open class RobustBrowserAgent(
         return false
     }
 
-    protected fun calculateConsecutiveNoOpDelay(consecutiveNoOps: Int): Long {
+    private fun calculateConsecutiveNoOpDelay(consecutiveNoOps: Int): Long {
         val baseDelay = 250L
         val exponentialDelay = baseDelay * consecutiveNoOps
         return min(exponentialDelay, 5000L)
     }
 
-    protected fun calculateAdaptiveDelay(): Long {
+    private fun calculateAdaptiveDelay(): Long {
         if (!config.enableAdaptiveDelays) return 100L
         val avgStepTime = stepExecutionTimes.values.takeIf { it.isNotEmpty() }?.average() ?: 0.0
         return when {
@@ -697,12 +554,14 @@ open class RobustBrowserAgent(
         }
     }
 
-    protected suspend fun onTaskCompletion(actResult: ActResult, context: ExecutionContext) {
+    // ─── Task completion ──────────────────────────────────────────────────────
+
+    private suspend fun onTaskCompletion(actResult: ActResult, context: ExecutionContext) {
         val actionDescription = actResult.detail?.actionDescription ?: return
         onTaskCompletion(actionDescription, context)
     }
 
-    protected suspend fun onTaskCompletion(action: ActionDescription, context: ExecutionContext) {
+    private suspend fun onTaskCompletion(action: ActionDescription, context: ExecutionContext) {
         val step = context.step
         val sid = context.sessionId
 
@@ -727,6 +586,8 @@ open class RobustBrowserAgent(
         }
     }
 
+    // ─── Final act result & summary ───────────────────────────────────────────
+
     private suspend fun buildFinalActResult(
         instruction: String, cxtIn: ExecutionContext, startTime: Instant
     ): ActResult {
@@ -749,21 +610,45 @@ open class RobustBrowserAgent(
         )
     }
 
-    private fun handleResolutionFailure(
-        e: Exception, context: ExecutionContext, startTime: Instant
-    ): PerceptiveAgentError {
-        val executionTime = Duration.between(startTime, Instant.now())
-        logger.error(
-            "💥 agent.fail sid={} steps={} dur={} err={}", context.sid, context.step, executionTime, e.message, e
-        )
-        runCatching { stateManager.removeLastIfStep(context.step) }.onFailure {
-            logger.warn(
-                "⚠️ rollback failed sid={} step={} msg={}",
-                context.sid,
-                context.step,
-                e.message
+    private suspend fun generateFinalSummary(instruction: String, context: ExecutionContext): SummarizeResult {
+        return try {
+            val result = summarize(instruction, context)
+            stateManager.addTrace(
+                context.agentState,
+                event = "final",
+                items = mapOf("summaryPreview" to result.modelResponse.content.take(200)),
+                message = "🧾 FINAL"
+            )
+            transcriptPersister.persist(instruction, result.modelResponse, context)
+            result
+        } catch (e: Exception) {
+            logger.error("📝❌ agent.summary.fail sid={} msg={}", context.sid, e.message, e)
+            SummarizeResult(
+                context = context, ModelResponse("Failed to generate summary: ${e.message}", ResponseState.OTHER)
             )
         }
-        return classifyError(e, context.step)
+    }
+
+    private suspend fun summarize(goal: String, ctxIn: ExecutionContext): SummarizeResult {
+        val step = ctxIn.step + 1
+        val context = stateManager.buildExecutionContext(goal, step, event = "summary", baseContext = ctxIn)
+        stateManager.setActiveContext(context)
+
+        return try {
+            val (system, user) = promptBuilder.buildSummaryPrompt(goal, stateHistory)
+            slogger.info("📝⏳ Generating final summary", context)
+            val response = cta.chatModel.callUmSm(user, system)
+            slogger.info(
+                "📝✅ Summary generated successfully",
+                context,
+                mapOf("responseLength" to response.content.length, "responseState" to response.state)
+            )
+            SummarizeResult(context, response)
+        } catch (e: Exception) {
+            slogger.logError("📝❌ Summary generation failed", e, context.sessionId)
+            SummarizeResult(
+                context, modelResponse = ModelResponse("Failed to generate summary: ${e.message}", ResponseState.OTHER)
+            )
+        }
     }
 }

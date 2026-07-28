@@ -40,7 +40,7 @@ open class BasicBrowserAgent(
     private val _baseDir: Path = AgentPaths.resolveTimedDirectory(_startTime).resolve(_uuid.toString())
     private val _logDir = getAgentLogDir()
 
-    protected val cta by lazy { ContextToAction(session.sessionConfig) }
+    internal val cta by lazy { ContextToAction(session.sessionConfig) }
     protected val inference by lazy { InferenceEngine(this) }
     protected val snapshotService get() = inference.snapshotService
     protected val promptBuilder = PromptBuilder()
@@ -641,9 +641,11 @@ open class BasicBrowserAgent(
 
             // Only capture screenshot when the previous action was a browser-interaction action
             // (or on the first step when no previous action exists), to reduce token usage.
+            // Additionally, skip screenshots when the model is known to not support vision
+            // (e.g., text-only models like DeepSeek) to avoid API errors.
             val lastActionDomain = context.agentState.prevState?.actionDomain
             val needsScreenshot = ToolSpecification.isBrowserInteraction(lastActionDomain)
-            val screenshotB64 = if (needsScreenshot) activeDriver.screenshot() else null
+            val screenshotB64 = if (needsScreenshot && cta.isVisionSupported) activeDriver.screenshot() else null
             val context = context.copy(screenshotB64 = screenshotB64)
 
             val actionDescription = withTimeout(config.llmInferenceTimeoutMs.milliseconds) {

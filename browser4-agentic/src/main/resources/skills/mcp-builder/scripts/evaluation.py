@@ -303,6 +303,14 @@ def parse_env_vars(env_list: list[str]) -> dict[str, str]:
 
 
 async def main():
+    # Ensure UTF-8 output on Windows (avoids GBK UnicodeEncodeError for emoji)
+    if sys.platform == 'win32':
+        for stream in (sys.stdout, sys.stderr):
+            try:
+                stream.reconfigure(encoding='utf-8', errors='replace')
+            except Exception:
+                pass
+
     parser = argparse.ArgumentParser(
         description="Evaluate MCP servers using test questions",
         formatter_class=argparse.RawDescriptionHelpFormatter,

@@ -138,4 +138,3 @@ class ExtendedDataValidationSkill : DataValidationSkill() {
 
 - [Web Scraping Skill](../web-scraping/SKILL.md)
 - [Form Filling Skill](../form-filling/SKILL.md)
-- [Skills Framework Documentation](/docs/skills-framework.md)

@@ -1,7 +1,7 @@
 package ai.platon.pulsar.agentic.inference
 
-import ai.platon.browser4.chrome.dom.DOMSerializer
-import ai.platon.pulsar.chrome.dom.model.TabState
+import ai.platon.browser4.api.model.DOMSerializer
+import ai.platon.browser4.api.model.TabState
 import ai.platon.pulsar.agentic.inference.action.OBSERVE_RESPONSE_COMPLETE_SCHEMA
 import ai.platon.pulsar.agentic.inference.action.OBSERVE_RESPONSE_ELEMENT_SCHEMA
 import ai.platon.pulsar.agentic.inference.history.DefaultHistoryRenderStrategy
