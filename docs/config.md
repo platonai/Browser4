@@ -181,6 +181,10 @@ docker run -d -p 8182:8182 `
     * `HEADLESS`: Runs without a graphical window.
     * `SUPERVISED`: Linux-only; uses Xvfb for headless GUI simulation.
 
+* **`browser.enabled`** *(default: `true`)*
+  Enables the built-in `browser4-browser` runtime plugin wiring.
+  Set `browser.enabled=false` to disable browser runtime beans.
+
 ### 📦 `browser.profile.mode` Comparison Table
 
 | Mode           | Description                                                                 | User Data Directory Behavior                             | Use Case            |
