@@ -651,6 +651,107 @@ $hasSessionRef = $output -match 'test-session'
 Assert-Returns -Label 'Session: -NoSession suppresses module load' -Actual $hasSessionRef -Expected $false
 
 # ═══════════════════════════════════════════════════════════════════
+# TESTS: RWS dir display flags (--tree, --files, --absolute, --metadata)
+# ═══════════════════════════════════════════════════════════════════
+Write-Host "━━━ RWS dir: --tree (default tasks root) ━━━" -ForegroundColor Cyan
+
+$output = pwsh -NoProfile -Command "& '$testPs1Abs' rws dir --tree *>&1" *>&1 | Out-String
+Assert-ContainsString -Label 'RWS tree: contains tree header' -Haystack $output -Needle 'Task directory tree:'
+$hasTreeChar = $output -match "`u{251C}" -or $output -match "`u{2514}"
+Assert-Returns -Label 'RWS tree: contains box-drawing chars' -Actual $hasTreeChar -Expected $true
+Assert-ContainsString -Label 'RWS tree: contains expected dir' -Haystack $output -Needle 'mock-site/'
+Assert-ContainsString -Label 'RWS tree: contains .md file' -Haystack $output -Needle '.md'
+
+Write-Host "━━━ RWS dir: --files (flat list) ━━━" -ForegroundColor Cyan
+
+$output = pwsh -NoProfile -Command "& '$testPs1Abs' rws dir --files *>&1" *>&1 | Out-String
+Assert-ContainsString -Label 'RWS files: contains header' -Haystack $output -Needle 'Task files in:'
+Assert-ContainsString -Label 'RWS files: shows relative path' -Haystack $output -Needle 'mock-site'
+Assert-ContainsString -Label 'RWS files: shows Total count' -Haystack $output -Needle 'Total:'
+
+Write-Host "━━━ RWS dir: --absolute ━━━" -ForegroundColor Cyan
+
+$output = pwsh -NoProfile -Command "& '$testPs1Abs' rws dir --absolute *>&1" *>&1 | Out-String
+$hasFullPath = $output -match 'D:'
+Assert-Returns -Label 'RWS absolute: contains absolute drive paths' -Actual $hasFullPath -Expected $true
+Assert-ContainsString -Label 'RWS absolute: shows Total count' -Haystack $output -Needle 'Total:'
+
+Write-Host "━━━ RWS dir: --metadata ━━━" -ForegroundColor Cyan
+
+$output = pwsh -NoProfile -Command "& '$testPs1Abs' rws dir --metadata *>&1" *>&1 | Out-String
+Assert-ContainsString -Label 'RWS metadata: has Size column' -Haystack $output -Needle 'Size'
+Assert-ContainsString -Label 'RWS metadata: has Last Modified column' -Haystack $output -Needle 'Last Modified'
+Assert-ContainsString -Label 'RWS metadata: shows KB unit' -Haystack $output -Needle 'KB'
+
+Write-Host "━━━ RWS dir: --files --metadata (combined) ━━━" -ForegroundColor Cyan
+
+$output = pwsh -NoProfile -Command "& '$testPs1Abs' rws dir --files --metadata *>&1" *>&1 | Out-String
+Assert-ContainsString -Label 'RWS files+metadata: has Size' -Haystack $output -Needle 'Size'
+Assert-ContainsString -Label 'RWS files+metadata: has relative path' -Haystack $output -Needle 'mock-site'
+
+Write-Host "━━━ RWS dir: --tree with specific path ━━━" -ForegroundColor Cyan
+
+$output = pwsh -NoProfile -Command "& '$testPs1Abs' rws dir --tree mock-site *>&1" *>&1 | Out-String
+Assert-ContainsString -Label 'RWS tree path: resolves to tasks/mock-site' -Haystack $output -Needle 'tasks'
+Assert-ContainsString -Label 'RWS tree path: shows .md files' -Haystack $output -Needle '.md'
+
+Write-Host "━━━ RWS dir: short path resolves relative to tasks root ━━━" -ForegroundColor Cyan
+
+$output = pwsh -NoProfile -Command "& '$testPs1Abs' rws dir --files real-world/generic *>&1" *>&1 | Out-String
+Assert-ContainsString -Label 'RWS short path: finds generic dir' -Haystack $output -Needle 'generic'
+
+Write-Host "━━━ RWS dir: -Show with display flag ━━━" -ForegroundColor Cyan
+
+$output = pwsh -NoProfile -Command "& '$testPs1Abs' -Show rws dir --tree *>&1" *>&1 | Out-String
+Assert-ContainsString -Label 'RWS show: prints SHOW banner' -Haystack $output -Needle '[SHOW]'
+Assert-ContainsString -Label 'RWS show: mentions --tree' -Haystack $output -Needle '--tree'
+Assert-ContainsString -Label 'RWS show: has resolved path' -Haystack $output -Needle 'resolved:'
+
+Write-Host "━━━ RWS dir: nonexistent path reports error ━━━" -ForegroundColor Cyan
+
+$output = pwsh -NoProfile -Command "& '$testPs1Abs' rws dir --tree no-such-dir-xyz *>&1" *>&1 | Out-String
+Assert-ContainsString -Label 'RWS bad path: reports Directory not found' -Haystack $output -Needle 'Directory not found'
+
+Write-Host "━━━ RWS dir: short form -t flag ━━━" -ForegroundColor Cyan
+
+$output = pwsh -NoProfile -Command "& '$testPs1Abs' rws dir -t *>&1" *>&1 | Out-String
+Assert-ContainsString -Label 'RWS -t: shows tree header' -Haystack $output -Needle 'Task directory tree:'
+
+Write-Host "━━━ RWS dir: short form -f with -m ━━━" -ForegroundColor Cyan
+
+$output = pwsh -NoProfile -Command "& '$testPs1Abs' rws dir -f -m *>&1" *>&1 | Out-String
+Assert-ContainsString -Label 'RWS -f -m: has Size column' -Haystack $output -Needle 'Size'
+
+Write-Host "━━━ RWS dir: short form -a with -m ━━━" -ForegroundColor Cyan
+
+$output = pwsh -NoProfile -Command "& '$testPs1Abs' rws dir -a -m *>&1" *>&1 | Out-String
+Assert-ContainsString -Label 'RWS -a -m: has absolute paths' -Haystack $output -Needle 'Total:'
+
+Write-Host "━━━ RWS dir: short form -t with path ━━━" -ForegroundColor Cyan
+
+$output = pwsh -NoProfile -Command "& '$testPs1Abs' rws dir -t mock-site *>&1" *>&1 | Out-String
+Assert-ContainsString -Label 'RWS -t mock-site: shows .md files' -Haystack $output -Needle '.md'
+
+Write-Host "━━━ RWS dir: --interactive Shows ━━━" -ForegroundColor Cyan
+
+$output = pwsh -NoProfile -Command "& '$testPs1Abs' -Show rws dir --interactive *>&1" *>&1 | Out-String
+Assert-ContainsString -Label 'RWS interactive show: prints SHOW banner' -Haystack $output -Needle '[SHOW]'
+Assert-ContainsString -Label 'RWS interactive show: mentions interactive picker' -Haystack $output -Needle 'interactive'
+
+$output = pwsh -NoProfile -Command "& '$testPs1Abs' -Show rws dir -Interactive *>&1" *>&1 | Out-String
+Assert-ContainsString -Label 'RWS -Interactive: short form works' -Haystack $output -Needle '[SHOW]'
+
+Write-Host "━━━ RWS dir: backward compat — no flags lists directories ━━━" -ForegroundColor Cyan
+
+$output = pwsh -NoProfile -Command "& '$testPs1Abs' rws dir *>&1" *>&1 | Out-String
+Assert-ContainsString -Label 'RWS backward: shows Available scenario directories' -Haystack $output -Needle 'Available scenario directories'
+Assert-ContainsString -Label 'RWS backward: lists mock-site' -Haystack $output -Needle 'mock-site'
+Assert-ContainsString -Label 'RWS backward: shows Usage hint' -Haystack $output -Needle 'Usage:'
+# Verify display keywords are NOT triggered when no flag is given
+$hasTreeBanner = $output -match 'Task directory tree:'
+Assert-Returns -Label 'RWS backward: no tree banner without --tree' -Actual $hasTreeBanner -Expected $false
+
+# ═══════════════════════════════════════════════════════════════════
 # Summary
 # ═══════════════════════════════════════════════════════════════════
 Write-Host ''
