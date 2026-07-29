@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Browser4 CLI Mouse Fixture</title>
+  <style>
+    body { margin: 0; font-family: sans-serif; min-height: 2400px; }
+    section { margin: 16px; padding: 12px; border: 1px solid #ddd; border-radius: 4px; }
+    section h2 { margin: 0 0 8px; font-size: 14px; color: #555; }
+
+    .click-grid { display: flex; gap: 8px; flex-wrap: wrap; }
+    .click-btn {
+      padding: 8px 16px; border: 1px solid #888; cursor: pointer;
+      background: #f5f5f5; border-radius: 4px; user-select: none;
+    }
+    #tiny-target { width: 10px; height: 10px; background: #f00; border: none; padding: 0; font-size: 0; }
+
+    #mouse-track-area {
+      width: 480px; height: 320px;
+      background: rgba(0,128,255,0.06); border: 1px dashed #08f;
+      position: relative;
+    }
+
+    #scroll-container {
+      width: 300px; height: 200px; overflow: auto;
+      border: 2px solid #4a4; background: #fafffa;
+    }
+    #scroll-container .scroll-content {
+      width: 800px; height: 800px;
+      background: linear-gradient(135deg, #efe 0%, #cfc 100%);
+    }
+    #scroll-container-x {
+      width: 300px; height: 100px; overflow-x: auto; overflow-y: hidden;
+      border: 2px solid #a4a; background: #fffaff;
+    }
+    #scroll-container-x .scroll-content-x {
+      width: 1200px; height: 100%;
+      background: linear-gradient(90deg, #fef 0%, #fcf 100%);
+    }
+
+    .drag-source {
+      width: 120px; height: 40px; margin: 4px;
+      border: 1px solid #555; background: #ffd;
+      display: flex; align-items: center; justify-content: center;
+      cursor: grab; user-select: none;
+    }
+    .drag-target {
+      width: 200px; height: 60px; margin: 4px;
+      border: 2px dashed #888; background: #f8f8f8;
+      display: flex; align-items: center; justify-content: center;
+    }
+    #nested-drag-outer {
+      width: 240px; height: 100px; margin: 4px;
+      border: 2px dashed #88f; background: #f0f0ff;
+      display: flex; align-items: center; justify-content: center;
+    }
+    #nested-drag-inner {
+      width: 100px; height: 40px;
+      border: 1px solid #55f; background: #ddf;
+      display: flex; align-items: center; justify-content: center;
+    }
+
+    #hover-zone {
+      width: 200px; height: 60px; border: 2px solid #c80;
+      display: flex; align-items: center; justify-content: center;
+    }
+
+    #context-target {
+      width: 200px; height: 60px; border: 2px solid #808;
+      display: flex; align-items: center; justify-content: center;
+    }
+
+    #overlap-container {
+      position: relative; width: 300px; height: 120px;
+    }
+    #overlap-back {
+      position: absolute; top: 0; left: 0;
+      width: 200px; height: 80px; background: #eef; border: 1px solid #88f;
+      display: flex; align-items: center; justify-content: center;
+    }
+    #overlap-front {
+      position: absolute; top: 30px; left: 50px;
+      width: 140px; height: 70px; background: #fee; border: 1px solid #f88;
+      z-index: 2; display: flex; align-items: center; justify-content: center;
+    }
+
+    #corner-tl { position: fixed; top: 0; left: 0; width: 20px; height: 20px; background: rgba(255,0,0,0.2); }
+    #corner-br { position: fixed; bottom: 0; right: 0; width: 20px; height: 20px; background: rgba(0,0,255,0.2); }
+
+    #state-log {
+      margin: 16px; padding: 8px; background: #f8f8f8;
+      border: 1px solid #ccc; white-space: pre-wrap; font-family: monospace; font-size: 12px;
+      max-height: 300px; overflow-y: auto;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <!-- Click Targets -->
+    <section id="click-section">
+      <h2>Click Targets</h2>
+      <div class="click-grid">
+        <button id="click-target" class="click-btn" type="button">Click (left)</button>
+        <button id="dblclick-target" class="click-btn" type="button">Double Click</button>
+        <button id="rightclick-target" class="click-btn" type="button">Right Click</button>
+        <button id="middleclick-target" class="click-btn" type="button">Middle Click</button>
+        <button id="click-count-target" class="click-btn" type="button">Click Count</button>
+        <button id="modifier-click-target" class="click-btn" type="button">Modifier Click</button>
+        <button id="tiny-target" class="click-btn" type="button" title="10x10 tiny target"></button>
+      </div>
+    </section>
+
+    <!-- Mouse Track Area -->
+    <section id="mouse-section">
+      <h2>Mouse Track Area (480×320)</h2>
+      <div id="mouse-track-area"></div>
+    </section>
+
+    <!-- Scroll Containers -->
+    <section id="scroll-section">
+      <h2>Scroll Containers</h2>
+      <div style="display:flex; gap:16px; flex-wrap:wrap;">
+        <div>
+          <h3>Vertical + Horizontal</h3>
+          <div id="scroll-container">
+            <div id="scroll-inner" class="scroll-content"></div>
+          </div>
+        </div>
+        <div>
+          <h3>Horizontal Only</h3>
+          <div id="scroll-container-x">
+            <div id="scroll-inner-x" class="scroll-content-x"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Drag & Drop -->
+    <section id="drag-section">
+      <h2>Drag &amp; Drop</h2>
+      <div>
+        <div id="drag-source" class="drag-source" draggable="true">drag source 1</div>
+        <div id="drag-source2" class="drag-source" draggable="true">drag source 2</div>
+        <div id="drag-target" class="drag-target">drop target 1</div>
+        <div id="drag-target2" class="drag-target">drop target 2</div>
+        <div id="drag-source3" class="drag-source" draggable="true">drag source 3 (offset)</div>
+        <div id="nested-drag-outer">
+          outer
+          <div id="nested-drag-inner">inner</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Hover Zone -->
+    <section id="hover-section">
+      <h2>Hover Zone</h2>
+      <div id="hover-zone">Hover over me</div>
+    </section>
+
+    <!-- Context Menu -->
+    <section id="context-section">
+      <h2>Context Menu</h2>
+      <div id="context-target">Right-click for context menu</div>
+    </section>
+
+    <!-- Overlapping Elements -->
+    <section id="overlap-section">
+      <h2>Overlapping Elements</h2>
+      <div id="overlap-container">
+        <div id="overlap-back">Back layer</div>
+        <div id="overlap-front">Front layer</div>
+      </div>
+    </section>
+
+    <!-- Boundary Targets -->
+    <div id="corner-tl" title="top-left corner (0,0)"></div>
+    <div id="corner-br" title="bottom-right corner"></div>
+
+    <!-- State Log -->
+    <pre id="state-log"></pre>
+  </main>
+
+  <script>
+    window.__browser4State = {
+      // Click
+      clickCount: 0,
+      clickButton: '',
+      clickPosition: null,
+      doubleClickCount: 0,
+      rightClickCount: 0,
+      middleClickCount: 0,
+      clickCountClicks: 0,
+      modifierClick: { count: 0, shiftKey: false, ctrlKey: false, altKey: false, metaKey: false },
+      tinyClickCount: 0,
+
+      // Mouse move
+      lastMouse: null,
+      mouseEnteredTrackArea: false,
+      mouseLeftTrackArea: false,
+
+      // Mouse down/up
+      mouseDownCount: 0,
+      mouseDownButton: '',
+      mouseDownPosition: null,
+      mouseUpCount: 0,
+      mouseUpButton: '',
+      mouseUpPosition: null,
+
+      // Wheel
+      wheelEvents: [],
+      scrollContainerScrollTop: 0,
+      scrollContainerScrollLeft: 0,
+      scrollContainerXScrollLeft: 0,
+
+      // Drag
+      dragStarted: '',
+      dragDropped: { target: '', source: '' },
+      dragStarted2: '',
+      dragDropped2: { target: '', source: '' },
+      dragStarted3: '',
+      dragOffset: null,
+
+      // Hover
+      hovered: false,
+      hoverEnterCount: 0,
+      hoverLeaveCount: 0,
+
+      // Context menu
+      contextMenuFired: false,
+      contextMenuPosition: null,
+
+      // Overlapping
+      overlapBackClicks: 0,
+      overlapFrontClicks: 0,
+
+      // Corner
+      cornerTLClicks: 0,
+      cornerBRClicks: 0,
+
+      // Nested drag
+      nestedDragOuterEnter: 0,
+      nestedDragInnerEnter: 0,
+    };
+
+    var S = window.__browser4State;
+
+    function syncState() {
+      document.getElementById('state-log').textContent = JSON.stringify(S);
+    }
+
+    // ── Click targets ─────────────────────────────────────────────
+
+    document.getElementById('click-target').addEventListener('click', function(e) {
+      S.clickCount += 1;
+      S.clickButton = 'left';
+      S.clickPosition = [Math.round(e.clientX), Math.round(e.clientY)];
+      syncState();
+    });
+
+    document.getElementById('dblclick-target').addEventListener('dblclick', function() {
+      S.doubleClickCount += 1;
+      syncState();
+    });
+
+    document.getElementById('rightclick-target').addEventListener('contextmenu', function(e) {
+      e.preventDefault();
+      S.rightClickCount += 1;
+      syncState();
+    });
+    document.getElementById('rightclick-target').addEventListener('mousedown', function(e) {
+      if (e.button === 2) S.rightClickCount += 1;
+      syncState();
+    });
+
+    document.getElementById('middleclick-target').addEventListener('mousedown', function(e) {
+      if (e.button === 1) S.middleClickCount += 1;
+      syncState();
+    });
+    document.getElementById('middleclick-target').addEventListener('auxclick', function(e) {
+      e.preventDefault();
+      if (e.button === 1) S.middleClickCount += 1;
+      syncState();
+    });
+
+    document.getElementById('click-count-target').addEventListener('click', function(e) {
+      S.clickCountClicks = (e.detail || 1);
+      syncState();
+    });
+
+    document.getElementById('modifier-click-target').addEventListener('click', function(e) {
+      S.modifierClick.count += 1;
+      S.modifierClick.shiftKey = e.shiftKey;
+      S.modifierClick.ctrlKey = e.ctrlKey;
+      S.modifierClick.altKey = e.altKey;
+      S.modifierClick.metaKey = e.metaKey;
+      syncState();
+    });
+
+    document.getElementById('tiny-target').addEventListener('click', function() {
+      S.tinyClickCount += 1;
+      syncState();
+    });
+
+    // ── Mouse track area ──────────────────────────────────────────
+
+    var trackArea = document.getElementById('mouse-track-area');
+    trackArea.addEventListener('mousemove', function(e) {
+      S.lastMouse = [Math.round(e.clientX), Math.round(e.clientY)];
+      syncState();
+    });
+    trackArea.addEventListener('mousedown', function(e) {
+      S.mouseDownCount += 1;
+      S.mouseDownButton = ['left','middle','right'][e.button] || 'unknown';
+      S.mouseDownPosition = [Math.round(e.clientX), Math.round(e.clientY)];
+      syncState();
+    });
+    trackArea.addEventListener('mouseup', function(e) {
+      S.mouseUpCount += 1;
+      S.mouseUpButton = ['left','middle','right'][e.button] || 'unknown';
+      S.mouseUpPosition = [Math.round(e.clientX), Math.round(e.clientY)];
+      syncState();
+    });
+    trackArea.addEventListener('mouseenter', function() {
+      S.mouseEnteredTrackArea = true;
+      S.mouseLeftTrackArea = false;
+      syncState();
+    });
+    trackArea.addEventListener('mouseleave', function() {
+      S.mouseLeftTrackArea = true;
+      syncState();
+    });
+
+    // ── Wheel ─────────────────────────────────────────────────────
+
+    document.addEventListener('wheel', function(e) {
+      S.wheelEvents.push({
+        deltaX: Math.round(e.deltaX),
+        deltaY: Math.round(e.deltaY),
+        clientX: Math.round(e.clientX),
+        clientY: Math.round(e.clientY),
+        targetId: e.target.id || '',
+      });
+      if (S.wheelEvents.length > 50) S.wheelEvents.shift();
+      syncState();
+    }, { passive: false });
+
+    var scrollContainer = document.getElementById('scroll-container');
+    scrollContainer.addEventListener('scroll', function() {
+      S.scrollContainerScrollTop = scrollContainer.scrollTop;
+      S.scrollContainerScrollLeft = scrollContainer.scrollLeft;
+      syncState();
+    });
+
+    var scrollContainerX = document.getElementById('scroll-container-x');
+    scrollContainerX.addEventListener('scroll', function() {
+      S.scrollContainerXScrollLeft = scrollContainerX.scrollLeft;
+      syncState();
+    });
+
+    // ── Drag & Drop ───────────────────────────────────────────────
+
+    function setupDragSource(el, sourceName, startedKey) {
+      el.addEventListener('dragstart', function(e) {
+        S[startedKey] = sourceName;
+        e.dataTransfer.setData('text/plain', sourceName);
+        syncState();
+      });
+    }
+
+    function setupDropTarget(el, targetName, droppedSourceKey, droppedTargetKey) {
+      el.addEventListener('dragover', function(e) { e.preventDefault(); });
+      el.addEventListener('drop', function(e) {
+        e.preventDefault();
+        S[droppedTargetKey] = targetName;
+        S[droppedSourceKey] = e.dataTransfer.getData('text/plain');
+        syncState();
+      });
+    }
+
+    setupDragSource(document.getElementById('drag-source'), 'drag-source-1', 'dragStarted');
+    setupDropTarget(document.getElementById('drag-target'), 'drop-target-1', 'dragDropped', 'dragDropped');
+
+    setupDragSource(document.getElementById('drag-source2'), 'drag-source-2', 'dragStarted2');
+    setupDropTarget(document.getElementById('drag-target2'), 'drop-target-2', 'dragDropped2', 'dragDropped2');
+
+    // Drag source 3: tracks offset (for dragAndDrop with delta)
+    var ds3 = document.getElementById('drag-source3');
+    ds3.addEventListener('dragstart', function(e) {
+      S.dragStarted3 = 'drag-source-3';
+      S.dragOffset = null;
+      e.dataTransfer.setData('text/plain', 'drag-source-3');
+      syncState();
+    });
+    document.addEventListener('drop', function(e) {
+      if (S.dragStarted3 === 'drag-source-3') {
+        S.dragOffset = [Math.round(e.clientX), Math.round(e.clientY)];
+        syncState();
+      }
+    });
+
+    // Nested drag elements
+    var nestedOuter = document.getElementById('nested-drag-outer');
+    var nestedInner = document.getElementById('nested-drag-inner');
+    nestedOuter.addEventListener('dragenter', function() { S.nestedDragOuterEnter += 1; syncState(); });
+    nestedInner.addEventListener('dragenter', function() { S.nestedDragInnerEnter += 1; syncState(); });
+
+    // ── Hover ─────────────────────────────────────────────────────
+
+    var hoverZone = document.getElementById('hover-zone');
+    hoverZone.addEventListener('mouseenter', function() {
+      S.hovered = true;
+      S.hoverEnterCount += 1;
+      syncState();
+    });
+    hoverZone.addEventListener('mouseleave', function() {
+      S.hovered = false;
+      S.hoverLeaveCount += 1;
+      syncState();
+    });
+
+    // ── Context menu ──────────────────────────────────────────────
+
+    document.getElementById('context-target').addEventListener('contextmenu', function(e) {
+      e.preventDefault();
+      S.contextMenuFired = true;
+      S.contextMenuPosition = [Math.round(e.clientX), Math.round(e.clientY)];
+      syncState();
+    });
+
+    // ── Overlapping elements ──────────────────────────────────────
+
+    document.getElementById('overlap-back').addEventListener('click', function() {
+      S.overlapBackClicks += 1;
+      syncState();
+    });
+    document.getElementById('overlap-front').addEventListener('click', function() {
+      S.overlapFrontClicks += 1;
+      syncState();
+    });
+
+    // ── Corner targets ────────────────────────────────────────────
+
+    document.getElementById('corner-tl').addEventListener('click', function() {
+      S.cornerTLClicks += 1;
+      syncState();
+    });
+    document.getElementById('corner-br').addEventListener('click', function() {
+      S.cornerBRClicks += 1;
+      syncState();
+    });
+
+    // ── Initial sync ──────────────────────────────────────────────
+
+    syncState();
+  </script>
+</body>
+</html>
