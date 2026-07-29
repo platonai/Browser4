@@ -59,6 +59,7 @@ function Get-IssuesDirectories {
         Review         = Join-Path $issuesRoot 'review'
         ReviewDone     = Join-Path $issuesRoot 'review' 'done'
         ReviewDiscard  = Join-Path $issuesRoot 'review' 'done' 'discard'
+        Archive        = Join-Path $issuesRoot 'archive'
     }
 }
 
@@ -68,8 +69,8 @@ function Find-IssuesFiles {
         Find all .issues.md files in draft and review directories.
     .DESCRIPTION
         Scans draft/ and review/ recursively for *.issues.md files,
-        EXCLUDING review/done/ and review/done/discard/ subdirectories
-        (those contain already-processed files).
+        EXCLUDING archive/, review/done/, and review/done/discard/
+        subdirectories (those contain already-processed or archived files).
     .PARAMETER IncludeDone
         Also scan review/done/ directories.
     .OUTPUTS
@@ -93,6 +94,9 @@ function Find-IssuesFiles {
     $discardNormalized = if (Test-Path -LiteralPath $dirs.ReviewDiscard) {
         (Resolve-Path -LiteralPath $dirs.ReviewDiscard).Path
     } else { '' }
+    $archiveNormalized = if (Test-Path -LiteralPath $dirs.Archive) {
+        (Resolve-Path -LiteralPath $dirs.Archive).Path
+    } else { '' }
 
     $results = [System.Collections.ArrayList]::new()
     $seen = [System.Collections.Generic.HashSet[string]]::new()
@@ -104,8 +108,12 @@ function Find-IssuesFiles {
             Where-Object {
                 # Exclude files under review/done/ and review/done/discard/
                 # when -IncludeDone is not set and we are scanning Review
+                # Always exclude archive files — they are historical, not actionable
+                $full = $_.FullName
+                if ($archiveNormalized -and $full.StartsWith($archiveNormalized, [StringComparison]::OrdinalIgnoreCase)) {
+                    return $false
+                }
                 if (-not $IncludeDone) {
-                    $full = $_.FullName
                     if ($doneNormalized -and $full.StartsWith($doneNormalized, [StringComparison]::OrdinalIgnoreCase)) {
                         return $false
                     }
@@ -185,6 +193,67 @@ function Resolve-IssuesFile {
     }
 
     return $null
+}
+
+function Get-ReviewFileNavigationTarget {
+    <#
+    .SYNOPSIS
+        Returns the adjacent review file for a navigation direction.
+    .DESCRIPTION
+        Keeps file navigation independent from the current issue view so the
+        same behavior works in single-issue and all-issues displays.
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string[]]$Files,
+
+        [Parameter(Mandatory = $true)]
+        [string]$CurrentFilePath,
+
+        [Parameter(Mandatory = $true)]
+        [ValidateSet(-1, 1)]
+        [int]$Direction
+    )
+
+    $currentPath = [System.IO.Path]::GetFullPath($CurrentFilePath)
+    for ($i = 0; $i -lt $Files.Count; $i++) {
+        $candidatePath = [System.IO.Path]::GetFullPath($Files[$i])
+        if (-not $candidatePath.Equals($currentPath, [StringComparison]::OrdinalIgnoreCase)) {
+            continue
+        }
+
+        $targetIndex = $i + $Direction
+        if ($targetIndex -ge 0 -and $targetIndex -lt $Files.Count) {
+            return $Files[$targetIndex]
+        }
+        return $null
+    }
+
+    return $null
+}
+
+function Get-ReviewNavigationAction {
+    <#
+    .SYNOPSIS
+        Maps a console key to a review navigation action.
+    .DESCRIPTION
+        ConsoleKeyInfo.Key is stable across terminal hosts, unlike KeyChar,
+        which can lose Shift state in some PowerShell terminals.
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [ConsoleKeyInfo]$KeyInfo
+    )
+
+    $hasShift = ($KeyInfo.Modifiers -band [ConsoleModifiers]::Shift) -ne 0
+    switch ($KeyInfo.Key) {
+        ([ConsoleKey]::N) { return $(if ($hasShift) { 'next-file' } else { 'next-issue' }) }
+        ([ConsoleKey]::P) { return $(if ($hasShift) { 'prev-file' } else { 'prev-issue' }) }
+        ([ConsoleKey]::B) { return 'back-to-list' }
+        ([ConsoleKey]::L) { return 'back-to-list' }
+        ([ConsoleKey]::Escape) { return 'back-to-list' }
+        default { return $null }
+    }
 }
 
 # ── File parsing ───────────────────────────────────────────────────────────────
@@ -533,6 +602,54 @@ function Move-IssuesFile {
     return $destPath
 }
 
+function Move-IssuesFileToReady {
+    <#
+    .SYNOPSIS
+        Move a .issues.md file to main/1ready/ for Coworker execution.
+    .DESCRIPTION
+        Moves the file from its current location (draft/ or review/) into
+        the main task queue.  Handles filename collisions by appending a
+        numeric suffix.
+    .PARAMETER FilePath
+        Absolute path to the .issues.md file to move.
+    .OUTPUTS
+        Destination path string, or $null on failure.
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$FilePath
+    )
+
+    try {
+        $tasksRoot = Get-TasksRoot
+        $readyDir = Join-Path $tasksRoot 'main' '1ready'
+        if (-not (Test-Path -LiteralPath $readyDir)) {
+            New-Item -ItemType Directory -Path $readyDir -Force | Out-Null
+        }
+
+        $fileName = Split-Path -Leaf $FilePath
+        $destBaseName = [System.IO.Path]::GetFileNameWithoutExtension($fileName)
+        $destPath = Join-Path $readyDir $fileName
+
+        # Handle collisions
+        if (Test-Path -LiteralPath $destPath) {
+            $counter = 2
+            $ext = [System.IO.Path]::GetExtension($fileName)
+            while (Test-Path -LiteralPath $destPath) {
+                $destPath = Join-Path $readyDir "$destBaseName.$counter$ext"
+                $counter++
+            }
+        }
+
+        Move-Item -Path $FilePath -Destination $destPath -Force
+        Write-ConsoleLine -Message "Moved to 1ready → $destPath" -ForegroundColor Green
+        return $destPath
+    } catch {
+        Write-ConsoleLine -Message "Move to 1ready failed: $_" -ForegroundColor Red
+        return $null
+    }
+}
+
 # ── Display rendering ──────────────────────────────────────────────────────────
 
 function Write-ProgressBar {
@@ -799,7 +916,7 @@ function Show-IssueDisplay {
     Write-Host ' ║' -ForegroundColor DarkGray
 
     # Row 2
-    $r2 = '[e] notes  [m] mark-done  [d] discard  [q] quit  [?] help'
+    $r2 = '[e] notes  [m] mark-done  [d] discard  [b]/[l] list  [q] quit  [?] help'
     $r2Pad = $inner - $margin - $r2.Length
     if ($r2Pad -lt 1) { $r2Pad = 1 }
     Write-Host '║ ' -NoNewline -ForegroundColor DarkGray
@@ -809,6 +926,8 @@ function Show-IssueDisplay {
     Write-Host ' mark-done  ' -NoNewline -ForegroundColor White
     Write-Host '[d]' -NoNewline -ForegroundColor Cyan
     Write-Host ' discard  ' -NoNewline -ForegroundColor White
+    Write-Host '[b]/[l]' -NoNewline -ForegroundColor Cyan
+    Write-Host ' list  ' -NoNewline -ForegroundColor White
     Write-Host '[q]' -NoNewline -ForegroundColor Cyan
     Write-Host ' quit  ' -NoNewline -ForegroundColor White
     Write-Host '[?]' -NoNewline -ForegroundColor Cyan
@@ -897,7 +1016,7 @@ function Show-AllIssuesDisplay {
 
     Write-Host ''
     Write-Host ('═' * $inner) -ForegroundColor DarkGray
-    Write-Host "  Press a number (1-$total) to jump, [v] for single mode, [q] to quit" -ForegroundColor DarkGray
+    Write-Host "  Press a number (1-$total) to jump, [N]/[P] file, [v] single, [d] discard, [b] list, [q] quit" -ForegroundColor DarkGray
 }
 
 function Show-Help {
@@ -922,8 +1041,9 @@ function Show-Help {
     Write-Host '  [a]             AI review — get AI suggestion for current issue'
     Write-Host '  [A]             AI review ALL issues in this file'
     Write-Host '  [v]             Toggle view: single-issue / all-issues table'
-    Write-Host '  [m]             Mark file as DONE → moves to review/done/'
+    Write-Host '  [m]             Mark file as DONE → moves to 1ready/ for execution'
     Write-Host '  [d]             Discard file → moves to review/done/discard/'
+    Write-Host '  [b] / [l] / Esc Back to file list — re-pick a file'
     Write-Host '  [q]             Quit'
     Write-Host '  [?]             Show this help'
     Write-Host ''
@@ -947,18 +1067,15 @@ function Start-ReviewSession {
         [Parameter(Mandatory = $true)]
         [PSObject]$ParsedFile,
 
-        [string[]]$AllFiles = @()
+        [string[]]$AllFiles = @(),
+
+        [ValidateSet('single', 'all')]
+        [string]$InitialMode = 'single'
     )
 
     $totalIssues = $ParsedFile.Issues.Count
-    if ($totalIssues -eq 0) {
-        Write-ConsoleLine -Message "This file has no parsed issues." -ForegroundColor Yellow
-        Write-ConsoleLine -Message "Use 'coworker review' to select a different file, or discard this one." -ForegroundColor DarkGray
-        return
-    }
-
     $currentIdx = 0
-    $mode = 'single'  # 'single' or 'all'
+    $mode = if ($totalIssues -eq 0) { 'all' } else { $InitialMode }
     $running = $true
 
     # Helper: persist current state to disk silently
@@ -969,16 +1086,6 @@ function Start-ReviewSession {
         } catch {
             # Show error briefly but don't block
             return $false
-        }
-    }
-
-    # Find current file position in the file list for prev/next file nav
-    $currentFileIdx = -1
-    $normalizedPath = (Resolve-Path -LiteralPath $ParsedFile.FilePath).Path
-    for ($i = 0; $i -lt $AllFiles.Count; $i++) {
-        if ((Resolve-Path -LiteralPath $AllFiles[$i]).Path -eq $normalizedPath) {
-            $currentFileIdx = $i
-            break
         }
     }
 
@@ -1005,9 +1112,10 @@ function Start-ReviewSession {
         if (-not $key) { continue }
 
         $char = $key.KeyChar
+        $navigationAction = Get-ReviewNavigationAction -KeyInfo $key
 
         # ── Decision keys (1-6) ───────────────────────────────────────────
-        if ($char -ge '1' -and $char -le '6') {
+        if ($totalIssues -gt 0 -and $char -ge '1' -and $char -le '6') {
             $decIdx = [int][string]$char - 1
             $decision = $script:ReviewDecisions[$decIdx]
             $issue = $ParsedFile.Issues[$currentIdx]
@@ -1023,29 +1131,29 @@ function Start-ReviewSession {
         }
 
         # ── Navigation ────────────────────────────────────────────────────
-        if ($char -eq 'n') {
+        if ($navigationAction -eq 'next-issue') {
             if ($currentIdx -lt $totalIssues - 1) { $currentIdx++ }
             continue
         }
-        if ($char -eq 'p') {
+        if ($navigationAction -eq 'prev-issue') {
             if ($currentIdx -gt 0) { $currentIdx-- }
             continue
         }
 
-        # Next/previous file (uppercase N/P = Shift+n, Shift+p)
-        if ($char -eq 'N') {
+        # Next/previous file (Shift+N / Shift+P)
+        if ($navigationAction -eq 'next-file') {
             $null = Save-Now
-            if ($currentFileIdx -ge 0 -and $currentFileIdx -lt $AllFiles.Count - 1) {
-                return 'next-file'
+            if (Get-ReviewFileNavigationTarget -Files $AllFiles -CurrentFilePath $ParsedFile.FilePath -Direction 1) {
+                return "next-file-$mode"
             }
             Write-ConsoleLine -Message "Already at the last file." -ForegroundColor DarkGray
             Start-Sleep -Milliseconds 500
             continue
         }
-        if ($char -eq 'P') {
+        if ($navigationAction -eq 'prev-file') {
             $null = Save-Now
-            if ($currentFileIdx -gt 0) {
-                return 'prev-file'
+            if (Get-ReviewFileNavigationTarget -Files $AllFiles -CurrentFilePath $ParsedFile.FilePath -Direction -1) {
+                return "prev-file-$mode"
             }
             Write-ConsoleLine -Message "Already at the first file." -ForegroundColor DarkGray
             Start-Sleep -Milliseconds 500
@@ -1054,6 +1162,11 @@ function Start-ReviewSession {
 
         # ── Edit notes ────────────────────────────────────────────────────
         if ($char -eq 'e') {
+            if ($totalIssues -eq 0) {
+                Write-ConsoleLine -Message "This file has no parsed issues. Use [N]/[P] to navigate, [b] to return to the list, or [d] to discard." -ForegroundColor Yellow
+                Start-Sleep -Milliseconds 750
+                continue
+            }
             $issue = $ParsedFile.Issues[$currentIdx]
             Write-Host ''
             Write-Host 'Review notes (Enter to submit, empty to clear):' -ForegroundColor Cyan
@@ -1078,12 +1191,22 @@ function Start-ReviewSession {
 
         # ── AI Review ─────────────────────────────────────────────────────
         if ($char -eq 'a') {
+            if ($totalIssues -eq 0) {
+                Write-ConsoleLine -Message "This file has no parsed issues to review." -ForegroundColor Yellow
+                Start-Sleep -Milliseconds 750
+                continue
+            }
             $issue = $ParsedFile.Issues[$currentIdx]
             $aiResult = Invoke-AiReview -Issue $issue -ParsedFile $ParsedFile -Batch:$false
             if ($aiResult) { $null = Save-Now }
             continue
         }
         if ($char -eq 'A') {
+            if ($totalIssues -eq 0) {
+                Write-ConsoleLine -Message "This file has no parsed issues to review." -ForegroundColor Yellow
+                Start-Sleep -Milliseconds 750
+                continue
+            }
             $aiResult = Invoke-AiReview -ParsedFile $ParsedFile -Batch:$true
             if ($aiResult) { $null = Save-Now }
             continue
@@ -1091,12 +1214,19 @@ function Start-ReviewSession {
 
         # ── Toggle view mode ──────────────────────────────────────────────
         if ($char -eq 'v') {
-            $mode = if ($mode -eq 'single') { 'all' } else { 'single' }
+            if ($totalIssues -gt 0) {
+                $mode = if ($mode -eq 'single') { 'all' } else { 'single' }
+            }
             continue
         }
 
         # ── Mark done ─────────────────────────────────────────────────────
         if ($char -eq 'm') {
+            if ($totalIssues -eq 0) {
+                Write-ConsoleLine -Message "This file has no parsed issues. Use [d] to discard it instead." -ForegroundColor Yellow
+                Start-Sleep -Milliseconds 750
+                continue
+            }
             $null = Save-Now
 
             $unreviewed = @($ParsedFile.Issues | Where-Object { -not $_.Decision }).Count
@@ -1107,11 +1237,30 @@ function Start-ReviewSession {
             }
             Write-Host '  • Approved issues → keep full detail'
             Write-Host '  • Other issues → condensed abstract'
-            Write-Host '  • Original file → moved to review/done/'
+            Write-Host '  • Original file → moved to 1ready/ for execution'
             $confirm = Read-Host "Proceed? [y/N]"
             if ($confirm -match '^[yY]') {
                 try {
-                    $destPath = Move-IssuesFile -FilePath $ParsedFile.FilePath
+                    $tasksRoot = Get-TasksRoot
+                    $readyDir = Join-Path $tasksRoot 'main' '1ready'
+                    if (-not (Test-Path -LiteralPath $readyDir)) {
+                        New-Item -ItemType Directory -Path $readyDir -Force | Out-Null
+                    }
+                    $fileName = Split-Path -Leaf $ParsedFile.FilePath
+                    $destBaseName = [System.IO.Path]::GetFileNameWithoutExtension($fileName)
+                    $destPath = Join-Path $readyDir $fileName
+
+                    # Handle collisions
+                    if (Test-Path -LiteralPath $destPath) {
+                        $counter = 2
+                        $ext = [System.IO.Path]::GetExtension($fileName)
+                        while (Test-Path -LiteralPath $destPath) {
+                            $destPath = Join-Path $readyDir "$destBaseName.$counter$ext"
+                            $counter++
+                        }
+                    }
+
+                    Move-Item -Path $ParsedFile.FilePath -Destination $destPath -Force
                     Write-ConsoleLine -Message "Marked done → $destPath" -ForegroundColor Green
                     return 'done'
                 } catch {
@@ -1139,6 +1288,12 @@ function Start-ReviewSession {
                 }
             }
             continue
+        }
+
+        # ── Back to file list ────────────────────────────────────────────
+        if ($navigationAction -eq 'back-to-list') {
+            $null = Save-Now
+            return 'back-to-list'
         }
 
         # ── Help ──────────────────────────────────────────────────────────
@@ -1175,6 +1330,7 @@ function Invoke-AiReview {
     .DESCRIPTION
         Sends issue details to the AI agent and parses the response for a
         decision.  When -Batch is set, all issues are reviewed together.
+        Uses the Coworker-configured agent backend (claude > kimi > copilot).
     .PARAMETER ParsedFile
         The structured review file.
     .PARAMETER Issue
@@ -1191,29 +1347,24 @@ function Invoke-AiReview {
         [switch]$Batch
     )
 
-    # Check if an agent CLI is available
-    $agent = 'claude'
-    if (-not (Get-Command claude -ErrorAction SilentlyContinue)) {
-        if (Get-Command kimi -ErrorAction SilentlyContinue) {
-            $agent = 'kimi'
-        } elseif (Get-Command opencode -ErrorAction SilentlyContinue) {
-            $agent = 'opencode'
-        } else {
-            Write-ConsoleLine -Message "AI review requires 'claude', 'kimi', or 'opencode' on PATH." -ForegroundColor Red
-            Start-Sleep -Milliseconds 500
-            return $false
-        }
+    # Use the Coworker-configured agent backend (consistent with the rest of the system)
+    $agentCommand = Get-AgentCommand -RepoRoot (Get-WorkspaceRoot)
+    if (-not $agentCommand -or -not $agentCommand.Executable) {
+        Write-ConsoleLine -Message "AI review requires a configured agent (claude, kimi, or copilot)." -ForegroundColor Red
+        Write-ConsoleLine -Message "Check coworker/scripts/config.psd1 to configure the agent backend." -ForegroundColor DarkGray
+        Start-Sleep -Milliseconds 500
+        return $false
     }
 
     if ($Batch) {
-        return Invoke-AiReviewBatch -ParsedFile $ParsedFile -Agent $agent
+        return Invoke-AiReviewBatch -ParsedFile $ParsedFile
     } else {
-        return Invoke-AiReviewSingle -ParsedFile $ParsedFile -Issue $Issue -Agent $agent
+        return Invoke-AiReviewSingle -ParsedFile $ParsedFile -Issue $Issue
     }
 }
 
 function Invoke-AiReviewSingle {
-    param([PSObject]$ParsedFile, [PSObject]$Issue, [string]$Agent)
+    param([PSObject]$ParsedFile, [PSObject]$Issue)
 
     Write-ConsoleLine -Message "AI reviewing issue $($Issue.Number)..." -ForegroundColor Cyan
 
@@ -1263,12 +1414,12 @@ DECISION: <exact decision name>
 NOTES: <brief rationale — 1-3 sentences explaining why you chose this decision>
 "@
 
-    $result = Invoke-AgentPrompt -Prompt $prompt -Agent $Agent -Label "AI Review Issue $($Issue.Number)"
+    $result = Invoke-AgentPrompt -Prompt $prompt -Label "AI Review Issue $($Issue.Number)"
     return Apply-AiResult -ParsedFile $ParsedFile -IssueNumber $Issue.Number -ResultText $result
 }
 
 function Invoke-AiReviewBatch {
-    param([PSObject]$ParsedFile, [string]$Agent)
+    param([PSObject]$ParsedFile)
 
     Write-ConsoleLine -Message "AI reviewing all $($ParsedFile.Issues.Count) issues..." -ForegroundColor Cyan
 
@@ -1308,73 +1459,68 @@ DECISION: <decision>
 NOTES: <rationale — 1-2 sentences>
 "@
 
-    $result = Invoke-AgentPrompt -Prompt $prompt -Agent $Agent -Label 'AI Review All'
+    $result = Invoke-AgentPrompt -Prompt $prompt -Label 'AI Review All'
     return Apply-AiBatchResult -ParsedFile $ParsedFile -ResultText $result
 }
 
 function Invoke-AgentPrompt {
-    param([string]$Prompt, [string]$Agent, [string]$Label)
+    <#
+    .SYNOPSIS
+        Run a prompt through the Coworker-configured AI agent and return stdout.
+    .DESCRIPTION
+        Uses Start-AgentProcess from agent.ps1 for consistent agent invocation
+        across the Coworker system.  Captures stdout and returns it as a string.
+    .PARAMETER Prompt
+        The full prompt text to send to the agent.
+    .PARAMETER Label
+        Human-readable label for progress messages.
+    .OUTPUTS
+        String — agent stdout, or empty string on failure/timeout.
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Prompt,
+        [string]$Label = 'AI Review'
+    )
 
     try {
-        $tempFile = [System.IO.Path]::GetTempFileName()
-        $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
-        [System.IO.File]::WriteAllText($tempFile, $Prompt, $utf8NoBom)
-
+        $agentCommand = Get-AgentCommand -RepoRoot (Get-WorkspaceRoot)
         $stdOutPath = [System.IO.Path]::GetTempFileName()
         $stdErrPath = [System.IO.Path]::GetTempFileName()
 
         try {
-            $procInfo = New-Object System.Diagnostics.ProcessStartInfo
-            $procInfo.FileName = $Agent
-            $procInfo.RedirectStandardInput = $true
-            $procInfo.RedirectStandardOutput = $true
-            $procInfo.RedirectStandardError = $true
-            $procInfo.UseShellExecute = $false
-            $procInfo.CreateNoWindow = $true
-            $procInfo.StandardOutputEncoding = $utf8NoBom
-            $procInfo.StandardErrorEncoding = $utf8NoBom
-
-            switch ($Agent) {
-                'claude' {
-                    $procInfo.ArgumentList.Add('--dangerously-skip-permissions')
-                    $procInfo.ArgumentList.Add('-p')
-                    # Prompt is piped via stdin below to avoid command-line limits
-                }
-                'kimi' {
-                    $procInfo.ArgumentList.Add('-p')
-                    # Prompt via stdin
-                }
-                'opencode' {
-                    $procInfo.ArgumentList.Add('run')
-                    # Prompt via stdin
-                }
-            }
-
-            $proc = New-Object System.Diagnostics.Process
-            $proc.StartInfo = $procInfo
-            $proc.Start() | Out-Null
-
-            # Feed prompt via stdin
-            $proc.StandardInput.Write($Prompt)
-            $proc.StandardInput.Close()
+            $process = Start-AgentProcess -Executable $agentCommand.Executable `
+                -BaseArgs $agentCommand.BaseArgs `
+                -Prompt $Prompt `
+                -WorkingDirectory $agentCommand.WorkingDirectory `
+                -StdOutPath $stdOutPath `
+                -StdErrPath $stdErrPath `
+                -NoNewWindow `
+                -Backend $agentCommand.Backend
 
             $timeoutMs = 120000
-            if (-not $proc.WaitForExit($timeoutMs)) {
-                $proc.Kill()
-                Write-ConsoleLine -Message "AI review timed out." -ForegroundColor Yellow
+            if (-not $process.WaitForExit($timeoutMs)) {
+                $process.Kill()
+                Write-ConsoleLine -Message "$Label timed out after 120s." -ForegroundColor Yellow
                 Start-Sleep -Milliseconds 500
                 return ''
             }
 
-            $stdout = $proc.StandardOutput.ReadToEnd()
+            if ($process.ExitCode -ne 0) {
+                Write-ConsoleLine -Message "$Label exited with code $($process.ExitCode) — continuing." -ForegroundColor DarkGray
+            }
+
+            $stdout = ''
+            if (Test-Path $stdOutPath) {
+                $stdout = Get-Content -Path $stdOutPath -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
+            }
             return $stdout
         } finally {
-            Remove-Item $tempFile -ErrorAction SilentlyContinue
             Remove-Item $stdOutPath -ErrorAction SilentlyContinue
             Remove-Item $stdErrPath -ErrorAction SilentlyContinue
         }
     } catch {
-        Write-ConsoleLine -Message "AI review failed: $_" -ForegroundColor Red
+        Write-ConsoleLine -Message "$Label failed: $_" -ForegroundColor Red
         Start-Sleep -Milliseconds 500
         return ''
     }
@@ -1585,16 +1731,124 @@ function Show-FilePicker {
     return $null
 }
 
+# ── Inline (non-interactive) review ─────────────────────────────────────────────
+
+function Invoke-InlineReview {
+    <#
+    .SYNOPSIS
+        Non-interactive review pipeline: parse → AI review → write → move to ready.
+    .DESCRIPTION
+        Takes a .issues.md file, runs AI batch review on all issues, writes
+        decisions back to the file, and moves it to main/1ready/ for Coworker
+        execution.  No interactive prompts — designed for scripted/CI use.
+    .PARAMETER Path
+        Path to the .issues.md file to review (required).
+    .PARAMETER AutoApprove
+        If set, injects #auto-approve tag so the task goes straight to 5approved
+        after execution instead of stopping in 3complete for manual review.
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path,
+        [switch]$AutoApprove
+    )
+
+    # Resolve the file path
+    $filePath = Resolve-IssuesFile -Path $Path
+    if (-not $filePath) {
+        Write-ConsoleLine -Message "Error: File not found: $Path" -ForegroundColor Red
+        return
+    }
+
+    Write-ConsoleLine -Message "Inline review: $filePath" -ForegroundColor Cyan
+
+    # 1. Parse the issues file
+    try {
+        $parsed = Read-IssuesFile -FilePath $filePath
+    } catch {
+        Write-ConsoleLine -Message "Error reading file: $_" -ForegroundColor Red
+        return
+    }
+
+    if ($parsed.Issues.Count -eq 0) {
+        Write-ConsoleLine -Message "No issues found in file. Nothing to review." -ForegroundColor Yellow
+        return
+    }
+
+    Write-ConsoleLine -Message "Parsed $($parsed.Issues.Count) issue(s) from: $($parsed.Meta.Scenario)" -ForegroundColor DarkGray
+
+    # 2. Run AI batch review on all issues
+    $aiResult = Invoke-AiReview -ParsedFile $parsed -Batch
+    if (-not $aiResult) {
+        Write-ConsoleLine -Message "AI review returned no decisions. Defaulting unreviewed issues to DEFER..." -ForegroundColor Yellow
+        foreach ($issue in $parsed.Issues) {
+            if (-not $issue.Decision) {
+                $issue.Decision = 'DEFER'
+                $issue.Notes = '[AI review unavailable — defaulted to DEFER]'
+            }
+        }
+    }
+
+    # 3. Persist decisions back to the file
+    try {
+        Write-IssuesFile -ParsedFile $parsed
+        Write-ConsoleLine -Message "Decisions written back to file." -ForegroundColor DarkGray
+    } catch {
+        Write-ConsoleLine -Message "Error writing decisions: $_" -ForegroundColor Red
+        return
+    }
+
+    # 4. Inject #auto-approve if requested
+    if ($AutoApprove) {
+        $content = Get-Content -Path $parsed.FilePath -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
+        if ($content -notmatch '#auto-approve') {
+            $content = "$content`n`n#auto-approve"
+            Set-Content -Path $parsed.FilePath -Value $content -Encoding UTF8
+            Write-ConsoleLine -Message "Added #auto-approve tag." -ForegroundColor DarkGray
+        }
+    }
+
+    # 5. Move the reviewed file to 1ready/ for execution
+    $destPath = Move-IssuesFileToReady -FilePath $parsed.FilePath
+    if (-not $destPath) {
+        Write-ConsoleLine -Message "Error: Failed to move file to 1ready/." -ForegroundColor Red
+        return
+    }
+
+    # 6. Print summary table
+    $reviewed = @($parsed.Issues | Where-Object { $_.Decision }).Count
+    Write-Host ''
+    Write-Host ('═' * 50) -ForegroundColor DarkGray
+    Write-Host '  Review complete!' -ForegroundColor Green
+    Write-Host "  Destination : $destPath" -ForegroundColor White
+    Write-Host "  Issues      : $($parsed.Issues.Count) total, $reviewed reviewed" -ForegroundColor White
+    Write-Host ''
+    foreach ($issue in $parsed.Issues) {
+        $decColor = if ($script:DecisionColors.ContainsKey($issue.Decision)) { $script:DecisionColors[$issue.Decision] } else { 'White' }
+        $decLabel = if ($issue.Decision) { $issue.Decision } else { 'UNSET' }
+        $numStr = "$($issue.Number)".PadLeft(2)
+        $line = "  [$numStr] $decLabel".PadRight(32) + " $($issue.Title)"
+        Write-Host $line -ForegroundColor $decColor
+    }
+    Write-Host ''
+    Write-Host ('═' * 50) -ForegroundColor DarkGray
+}
+
 # ── Entry point ────────────────────────────────────────────────────────────────
 
 function Invoke-Review {
     <#
     .SYNOPSIS
-        Interactive review of .issues.md files from the terminal.
+        Review .issues.md files — interactively or inline (non-interactive).
     .DESCRIPTION
-        Lists .issues.md files and lets the user select one, or opens a
-        specific file when -Path or -Name is provided.  Enters an interactive
-        session for setting review decisions, adding notes, and finalizing.
+        Interactive mode (default): lists .issues.md files and lets the user
+        select one, or opens a specific file when -Path or -Name is provided.
+        Enters an interactive session for setting review decisions, adding
+        notes, and finalizing.
+
+        Inline mode (-Inline): requires -Path.  Runs AI batch review on all
+        issues, writes decisions, and moves the file to main/1ready/ without
+        any interactive prompts.
     .PARAMETER Path
         Specific .issues.md file to review.
     .PARAMETER Name
@@ -1603,13 +1857,32 @@ function Invoke-Review {
         Show available files and exit.
     .PARAMETER All
         Include review/done/ files in the listing.
+    .PARAMETER Inline
+        Run in non-interactive mode: AI review all issues and move to 1ready/.
+        Requires -Path.
+    .PARAMETER AutoApprove
+        When used with -Inline, injects #auto-approve tag so the task goes
+        straight to 5approved after execution.
     #>
     param(
         [string]$Path = '',
         [string]$Name = '',
         [switch]$List,
-        [switch]$All
+        [switch]$All,
+        [switch]$Inline,
+        [switch]$AutoApprove
     )
+
+    # ── Inline (non-interactive) mode ──────────────────────────────────────────
+    if ($Inline) {
+        if (-not $Path) {
+            Write-ConsoleLine -Message "Error: -Inline requires -Path to specify which file to review." -ForegroundColor Red
+            Write-ConsoleLine -Message "Usage: coworker review -Inline -Path <file> [-AutoApprove]" -ForegroundColor DarkGray
+            return
+        }
+        Invoke-InlineReview -Path $Path -AutoApprove:$AutoApprove
+        return
+    }
 
     $allFiles = Find-IssuesFiles -IncludeDone:$All
 
@@ -1673,34 +1946,44 @@ function Invoke-Review {
 
     # ── Interactive loop (supports file-to-file navigation) ──────────────────
     $currentParsed = $parsed
+    $reviewMode = 'single'
     while ($true) {
-        $result = Start-ReviewSession -ParsedFile $currentParsed -AllFiles $allFiles
+        $result = Start-ReviewSession -ParsedFile $currentParsed -AllFiles $allFiles -InitialMode $reviewMode
 
         if ($result -eq 'quit' -or $result -eq 'done' -or $result -eq 'discard') {
             break
         }
 
-        # Find next/prev file
-        $normalizedPath = (Resolve-Path -LiteralPath $currentParsed.FilePath).Path
-        $currentIdx = -1
-        for ($i = 0; $i -lt $allFiles.Count; $i++) {
-            if ((Resolve-Path -LiteralPath $allFiles[$i]).Path -eq $normalizedPath) {
-                $currentIdx = $i
+        # Back to file list — re-prompt file picker
+        if ($result -eq 'back-to-list') {
+            $allFiles = Find-IssuesFiles -IncludeDone:$All
+            $filePath = Show-FilePicker -Files $allFiles
+            if (-not $filePath) { break }
+            try {
+                $currentParsed = Read-IssuesFile -FilePath $filePath
+            } catch {
+                Write-ConsoleLine -Message "Error reading file: $_" -ForegroundColor Red
                 break
             }
+            $reviewMode = 'single'
+            continue
         }
 
-        $nextIdx = -1
-        if ($result -eq 'next-file' -and $currentIdx -lt $allFiles.Count - 1) {
-            $nextIdx = $currentIdx + 1
-        } elseif ($result -eq 'prev-file' -and $currentIdx -gt 0) {
-            $nextIdx = $currentIdx - 1
+        $direction = if ($result -like 'next-file-*') { 1 } elseif ($result -like 'prev-file-*') { -1 } else { 0 }
+        if ($result -like '*-all') {
+            $reviewMode = 'all'
+        } else {
+            $reviewMode = 'single'
         }
-
-        if ($nextIdx -lt 0) { break }
+        $nextFilePath = if ($direction) {
+            Get-ReviewFileNavigationTarget -Files $allFiles -CurrentFilePath $currentParsed.FilePath -Direction $direction
+        } else {
+            $null
+        }
+        if (-not $nextFilePath) { break }
 
         try {
-            $currentParsed = Read-IssuesFile -FilePath $allFiles[$nextIdx]
+            $currentParsed = Read-IssuesFile -FilePath $nextFilePath
         } catch {
             Write-ConsoleLine -Message "Error reading next file: $_" -ForegroundColor Red
             break

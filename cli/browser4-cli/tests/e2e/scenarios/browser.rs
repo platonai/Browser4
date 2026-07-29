@@ -894,11 +894,12 @@ pub(super) fn test_eval_return_types(ctx: &mut E2ECtx) {
     }
 
     // --- null ---
-    // The server may return "null" or an empty string for JavaScript null.
+    // The server returns "null" for JavaScript null. The CLI may append a
+    // diagnostic tip on the next line — only check the first line.
     let null_val = eval_text(ctx, "null");
-    let trimmed_null = null_val.trim();
+    let first_line = null_val.lines().next().unwrap_or("").trim();
     assert!(
-        trimmed_null == "null" || trimmed_null.is_empty(),
+        first_line == "null" || first_line.is_empty(),
         "Expected 'null' or empty string for `null`, got: {null_val}"
     );
 
@@ -1394,6 +1395,65 @@ pub(super) fn test_tab_commands(ctx: &mut E2ECtx) {
     assert_eq!(
         interactive_guid, final_guid,
         "GUID should be stable across tab-list calls. Before: {interactive_guid}, after: {final_guid}"
+    );
+
+    run_command(ctx, &["close"]);
+}
+
+pub(super) fn test_cdp_live_command(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    run_command(
+        ctx,
+        &["open", &ctx.interactive_url(), OPEN_PROFILE_MODE_ARG],
+    );
+    goto_interactive_page(ctx);
+
+    // Test 1: Runtime.evaluate — evaluate a simple JS expression
+    let eval_result = run_command(
+        ctx,
+        &[
+            "cdp",
+            "Runtime.evaluate",
+            "--json",
+            r#"{"expression":"1+1"}"#,
+        ],
+    );
+    assert!(
+        eval_result.stdout.contains("\"value\":2") || eval_result.stdout.contains("\"value\": 2"),
+        "Runtime.evaluate 1+1 should return value=2, got:\n{}",
+        eval_result.stdout
+    );
+
+    // Test 2: Page.getNavigationHistory — verify current URL appears in history
+    let history_result = run_command(ctx, &["cdp", "Page.getNavigationHistory"]);
+    let interactive_url = ctx.interactive_url();
+    assert!(
+        history_result.stdout.contains(&interactive_url),
+        "Page.getNavigationHistory should contain current URL '{}', got:\n{}",
+        interactive_url,
+        history_result.stdout
+    );
+
+    // Test 3: Browser.getVersion — simple info command, no params needed
+    let version_result = run_command(ctx, &["cdp", "Browser.getVersion"]);
+    assert!(
+        version_result.stdout.contains("\"product\""),
+        "Browser.getVersion should contain 'product' field, got:\n{}",
+        version_result.stdout
+    );
+
+    // Test 4: Invalid CDP method should produce an error.
+    // The server returns the CDP error as the MCP tool result content,
+    // so the CLI prints it. Use allowing_failure since exit code != 0 is expected.
+    let bad_result =
+        run_command_allowing_failure(ctx, &["cdp", "InvalidDomain.invalidMethod"]);
+    assert!(
+        !bad_result.stdout.is_empty() || !bad_result.stderr.is_empty() || bad_result.exit_code != 0,
+        "Invalid CDP method should produce error output or non-zero exit code.\n\
+         stdout:\n{}\nstderr:\n{}\nexit_code: {}",
+        bad_result.stdout,
+        bad_result.stderr,
+        bad_result.exit_code
     );
 
     run_command(ctx, &["close"]);

@@ -1,0 +1,374 @@
+{
+  "meta": {
+    "mode": "dev",
+    "date": "20260728-130926",
+    "scenario": "htmlsnapshot-inspect-discovery",
+    "source": "20260728-130926-htmlsnapshot-inspect-discovery.full.md"
+  },
+  "background": {
+    "task": "Successfully extracted **20 books with titles and prices** from `http://books.toscrape.com/`:\n\n| # | Title | Price |\n|---|-------|-------|\n| 1 | A Light in the Attic | £51.77 |\n| 2 | Tipping the Velvet | £53.74 |\n| 3 | Soumission | £50.10 |\n| 4 | Sharp Objects | £47.82 |\n| 5 | Sapiens: A Brief History of Humankind | £54.23 |\n| 6 | The Requiem Red | £22.65 |\n| 7 | The Dirty Little Secrets of Getting Your Dream Job | £33.34 |\n| 8 | The Coming Woman: A Novel Based on the Life of the Infamous Feminist, Victoria Woodhull | £17.93 |\n| 9 | The Boys in the Boat: Nine Americans and Their Epic Quest for Gold at the 1936 Berlin Olympics | £22.60 |\n| 10 | The Black Maria | £52.15 |\n| 11 | Starving Hearts (Triangular Trade Trilogy, #1) | £13.99 |\n| 12 | Shakespeare's Sonnets | £20.66 |\n| 13 | Set Me Free | £17.46 |\n| 14 | Scott Pilgrim's Precious Little Life (Scott Pilgrim #1) | £52.29 |\n| 15 | Rip it Up and Start Again | £35.02 |\n| 16 | Our Band Could Be Your Life: Scenes from the American Indie Underground, 1981-1991 | £57.25 |\n| 17 | Olio | £23.88 |\n| 18 | Mesaerion: The Best Science Fiction Stories 1800-1849 | £37.59 |\n| 19 | Libertarianism for Beginners | £51.33 |\n| 20 | It's Only the Himalayas | £45.17 |\n\nThe X-SQL approach additionally provided **full, untruncated titles** via the `title` attribute, while `get all text` returned truncated display text.\n\n---",
+    "executionContext": "### Commands used (in order):\n1. `./b4w.sh help` — learned available commands\n2. `./b4w.sh goto \"http://books.toscrape.com/\"` — navigated to target site\n3. `./b4w.sh htmlsnapshot` / `htmlsnapshot capture` — captured HTML snapshots\n4. `./b4w.sh htmlsnapshot inspect` — auto-discovered `.product_pod` repeating pattern (20 matches)\n5. `./b4w.sh htmlsnapshot inspect \"article.product_pod\" --max 5 --depth 3` — inspected with limits\n6. `./b4w.sh htmlsnapshot summary` — generated compressed page WPSI summary\n7. `./b4w.sh htmlsnapshot get all text \"article.product_pod h3 a\" --all` — extracted 20 book titles\n8. `./b4w.sh htmlsnapshot grep --selector-all \"article.product_pod\" \"h3\" --count` — validated selector → 20 matches\n9. `./b4w.sh htmlsnapshot query --sql @.test-sessions/books_final.sql` — X-SQL query for titles+prices (after discovering URL arg issue)\n10. `./b4w.sh htmlsnapshot inspect \".side_categories\" --max 10 --depth 3` — explored sidebar categories\n11. `./b4w.sh htmlsnapshot get all text \".side_categories li a\" --all` — extracted 51 sidebar category links\n\n### Key decisions:\n- Used `./b4w.sh` (bash wrapper) because `./b4w.ps1` has CRLF line endings that break on Linux\n- Used `--selector-all` (not `--selector`) for element count validation — `--selector` uses querySelector (first match only)\n- Discovered that `htmlsnapshot query` **with** a URL argument fails on this site, but **without** a URL argument works against the stored snapshot\n- Used `DOM_FIRST_ATTR(DOM, 'h3 a', 'title')` in X-SQL to get full untruncated titles\n\n### Workarounds required:\n- Backend restart (kill-all + goto) to fix H2 session pool exhaustion\n- Using `--json` flag to separate machine output from build log noise\n- Parsing double-encoded JSON (result string inside JSON envelope)\n- Running X-SQL without URL argument to work around scraper \"No content\" issue\n\n---\n\n```json\n{\n  \"issues\": [\n    {\n      \"title\": \"b4w.ps1 has CRLF line endings breaking Linux execution\",\n      \"severity\": \"Medium\",\n      \"category\": \"Reliability\",\n      \"reproduction\": \"./b4w.ps1 help on Linux\",\n      \"expected\": \"PowerShell wrapper executes browser4-cli\",\n      \"actual\": \"/usr/bin/env: 'pwsh\\\\r': No such file or directory\",\n      \"rootCause\": \"File b4w.ps1 checked into git with Windows CRLF line endings. The shebang line ends with \\\\r, causing env to try executing 'pwsh\\\\r' instead of 'pwsh'. Git's core.autocrlf setting or a missing .gitattributes entry likely causes this.\",\n      \"codePointer\": \"./b4w.ps1 line endings; potentially .gitattributes or git config\",\n      \"suggestion\": \"- Add a .gitattributes entry: `*.ps1 text eol=lf` to force LF line endings for PowerShell scripts\\n- Alternatively, convert CRLF→LF at build time or in a pre-commit hook\\n- Document the bash wrapper (b4w.sh) as the primary entry point for Linux/macOS users in the help output\"\n    },\n    {\n      \"title\": \"X-SQL query with URL argument fails with HTTP 417 and 'Session is already closed' H2 error\",\n      \"severity\": \"High\",\n      \"category\": \"Reliability\",\n      \"reproduction\": \"./b4w.sh htmlsnapshot query \\\"https://books.toscrape.com/\\\" --sql @query.sql (after the backend has been running for some time)\",\n      \"expected\": \"X-SQL query executes and returns results\",\n      \"actual\": \"statusCode: 417, resultSet: [], error: 'Session is already closed | #2/53' — H2 database session pool has closed connections that aren't being refreshed\",\n      \"rootCause\": \"In AbstractBrowser4SQLContext.getSession() (AbstractBrowser4SQLContext.kt:158), the H2 session pool returns already-closed sessions. The pool has 53 sessions but sessions can close over time without being properly invalidated/recreated. When a query tries to use a closed session, it fails with 'The object is already closed'.\",\n      \"codePointer\": \"browser4-agentic/.../AbstractBrowser4SQLContext.kt:getSession() line 158; also H2SessionFactory.kt:getSession()\",\n      \"suggestion\": \"- Validate H2 session before returning from pool; if closed, create a new one\\n- Add session health check with retry in getSession()\\n- Consider using H2 connection pooling with test-on-borrow semantics\\n- Add a clear error message to the CLI output when a 417 occurs — currently the JSON response has no 'message' field\"\n    },\n    {\n      \"title\": \"X-SQL scraper reports 'No content' for valid HTML pages when using URL argument\",\n      \"severity\": \"High\",\n      \"category\": \"Reliability\",\n      \"reproduction\": \"./b4w.sh htmlsnapshot query \\\"https://books.toscrape.com/\\\" --sql @simple.sql (with fresh backend)\",\n      \"expected\": \"X-SQL returns h3 text content from the page\",\n      \"actual\": \"statusCode: 200, resultSet: [] — page loads (200, 66KB) but log shows 'No content | Protocol Status: OK(200)'. The scraper's HTML parser finds no extractable content despite the page containing valid HTML with h3 elements.\",\n      \"rootCause\": \"In XSQLHyperlink (XSQLScrapeHyperlink.kt), the HTML parser pipeline processes the page but produces no content nodes. The parser may be rejecting the page's HTML structure or the DOM_LOAD_AND_SELECT function fails to match elements. The same selectors work via htmlsnapshot get all and via the stored-snapshot X-SQL path, so the issue is specific to the live-fetch scraper path.\",\n      \"codePointer\": \"browser4-agentic/.../XSQLScrapeHyperlink.kt; PrimerHtmlParser.kt; PageParser.kt\",\n      \"suggestion\": \"- Investigate why the live-fetch scraper pipeline produces 'No content' when the browser-loaded snapshot works fine\\n- Add a fallback: if scraper returns 0 results, try against the stored snapshot\\n- Surface a clear warning to the CLI when resultSet is empty despite successful page load — currently output is silent (status 'OK' with empty results)\"\n    },\n    {\n      \"title\": \"No error message in JSON response when X-SQL query fails with 417\",\n      \"severity\": \"Medium\",\n      \"category\": \"UX\",\n      \"reproduction\": \"Run any X-SQL query that returns statusCode 417\",\n      \"expected\": \"JSON response includes a 'message' or 'error' field explaining the failure\",\n      \"actual\": \"JSON response has statusCode: 417 and status: 'Expectation Failed' but no message or error field to explain what went wrong\",\n      \"rootCause\": \"The backend error response builder doesn't include the exception message in the JSON envelope for 417 status codes. The error details are only available in server logs.\",\n      \"codePointer\": \"MCPToolController.kt or response builder for html_snapshot_query\",\n      \"suggestion\": \"- Always include a 'message' field in error JSON responses with human-readable error text\\n- For 417 specifically, include what expectation failed (e.g., 'SQL session is closed', 'Page has no extractable content')\"\n    },\n    {\n      \"title\": \"stdout/stderr mixing: build output leaks into stdout alongside JSON data\",\n      \"severity\": \"Medium\",\n      \"category\": \"UX\",\n      \"reproduction\": \"./b4w.sh htmlsnapshot get all text \\\"h3 a\\\" --all > output.json\",\n      \"expected\": \"output.json contains only the JSON array of results\",\n      \"actual\": \"output.json contains cargo build output ('Finished dev profile...', 'Running...') prepended before the JSON array, requiring manual filtering or --json flag\",\n      \"rootCause\": \"The dev-mode wrapper (b4w.sh) runs `cargo run` which outputs build status to stderr, but the CLI binary also outputs some informational messages to stdout before emitting the actual result. When redirecting stdout to a file, these lines mix with the JSON data.\",\n      \"codePointer\": \"cli/browser4-cli/src/main.rs or output formatting layer\",\n      \"suggestion\": \"- When a dev-mode build is needed, emit build progress only to stderr\\n- Document that --json is required for machine-readable output and redirect only stderr (2>/dev/null)\\n- Add a --no-build-output flag or auto-detect when stdout is not a TTY\"\n    },\n    {\n      \"title\": \"htmlsnapshot get all | --json returns double-encoded JSON (string inside envelope)\",\n      \"severity\": \"Low\",\n      \"category\": \"UX\",\n      \"reproduction\": \"./b4w.sh --json htmlsnapshot get all text \\\"h3 a\\\" --all\",\n      \"expected\": \"output.result contains a JSON array\",\n      \"actual\": \"output.result is a JSON-encoded string that must be parsed a second time (JSON.parse(JSON.parse(response).output.result))\",\n      \"rootCause\": \"The result data is serialized as a JSON string and then embedded inside the JSON envelope, creating a double-encoding. The caller must parse the outer envelope, then parse the inner result string.\",\n      \"codePointer\": \"CLI output formatting or backend serialization layer\",\n      \"suggestion\": \"- Embed the array directly as a JSON value in output.result, not as a string\\n- Or document the double-encoding clearly in the --json help text\"\n    },\n    {\n      \"title\": \"--selector vs --selector-all discoverability: grep uses querySelector by default\",\n      \"severity\": \"Medium\",\n      \"category\": \"Discoverability\",\n      \"reproduction\": \"./b4w.sh htmlsnapshot grep --selector \\\"article.product_pod\\\" \\\"h3\\\"\",\n      \"expected\": \"Grep searches all 20 product_pod elements for h3 matches\",\n      \"actual\": \"Grep searches only the FIRST product_pod element (querySelector semantics), returning 1 match. User must know to use --selector-all for querySelectorAll semantics.\",\n      \"rootCause\": \"The --selector flag uses querySelector (first match only) by default. This is documented in --help but the naming doesn't clearly distinguish between 'scope to a single element' vs 'scope to all matching elements'. Users familiar with JS would expect --selector to mean querySelectorAll.\",\n      \"codePointer\": \"cli/browser4-cli/src/ commands for htmlsnapshot grep\",\n      \"suggestion\": \"- Consider renaming: --selector → --scope (single) and --selector-all → --selector (all), matching user expectations\\n- Add a tip/hint when --selector matches only 1 element but the selector matches many on the page: 'Found 1/20 matches. Use --selector-all to search all 20 elements.'\\n- In the inspect output 'Try these next:' section, include --selector-all examples\"\n    },\n    {\n      \"title\": \"X-SQL query requires browser session despite docs saying it's independent\",\n      \"severity\": \"Medium\",\n      \"category\": \"Documentation\",\n      \"reproduction\": \"After kill-all, run ./b4w.sh htmlsnapshot query \\\"https://example.com\\\" --sql @query.sql\",\n      \"expected\": \"Query runs against scraped page (per docs: 'independent of the stored snapshot')\",\n      \"actual\": \"Error: No active browser session. Run 'browser4-cli open <url>' or 'browser4-cli goto <url>' first.\",\n      \"rootCause\": \"Despite documentation claiming query 're-fetches the page fresh via the scrape API (independent of the stored snapshot)', the command still validates that a browser session exists before proceeding. The session check may be an unnecessary precondition when a URL is provided.\",\n      \"codePointer\": \"MCPToolController.kt: html_snapshot_query handler — session validation logic\",\n      \"suggestion\": \"- Remove the browser session requirement when a URL argument is provided (query uses scrape API, not browser)\\n- Or update the docs to clarify that a browser session is required even for URL-based queries\"\n    },\n    {\n      \"title\": \"Titles truncated in get all text output — attribute extraction needed for full text\",\n      \"severity\": \"Low\",\n      \"category\": \"UX\",\n      \"reproduction\": \"./b4w.sh htmlsnapshot get all text \\\"article.product_pod h3 a\\\" --all\",\n      \"expected\": \"Full book titles\",\n      \"actual\": \"Truncated titles like 'A Light in the ...', 'Sapiens: A Brief History ...' — CSS text-overflow: ellipsis truncation is captured as visible text\",\n      \"rootCause\": \"The page uses CSS text-overflow: ellipsis to truncate long titles in the grid layout. The 'text' extraction mode captures the visible/rendered text content, not the semantic text. The full title is available in the <a> tag's 'title' attribute.\",\n      \"codePointer\": \"This is expected behavior for visible text extraction; could be addressed with documentation\",\n      \"suggestion\": \"- Add a tip in the get all output: 'Titles appear truncated due to CSS text-overflow. Use get all attr \\\"h3 a\\\" title for full titles.'\\n- htmlsnapshot inspect already captures this pattern (shows the title attribute value) — highlight it more prominently\"\n    },\n    {\n      \"title\": \"No indication that htmlsnapshot query URL mode fails until server logs are checked\",\n      \"severity\": \"Medium\",\n      \"category\": \"UX\",\n      \"reproduction\": \"Run X-SQL query with URL argument that returns empty resultSet with status OK\",\n      \"expected\": \"A warning or hint when 0 results are returned from a page that loaded successfully\",\n      \"actual\": \"Silent empty resultSet with status 'OK' — user has no idea why the query returned nothing. Only server logs reveal 'No content'.\",\n      \"rootCause\": \"The CLI/backend treats an empty resultSet as a valid result (status: 'OK') rather than a potential error condition. When pageStatusCode is 200 and pageContentBytes > 0 but resultSet is empty, something unusual happened that the user should know about.\",\n      \"codePointer\": \"XSQLScrapeHyperlink.kt or MCPToolController.kt — result formatting for empty resultSets\",\n      \"suggestion\": \"- When pageStatusCode is 200, contentBytes > 0, but resultSet is empty, emit a warning: 'Page loaded successfully but no elements matched the selector. Try htmlsnapshot inspect to discover valid selectors.'\\n- Include a 'matchedCount' field in the response to distinguish '0 matches found' from 'query execution error'\"\n    }\n  ],\n  \"assessment\": {\n    \"completionStatus\": \"Successful — all 9 task steps completed. 20 books extracted with titles and prices. Sidebar categories explored. Multiple workarounds applied for reliability issues.\",\n    \"successRate\": \"90% — 8 of 9 task steps worked smoothly on first attempt. X-SQL required debugging and workaround discovery (URL vs no-URL behavior).\",\n    \"issuesFound\": 10,\n    \"majorBlockers\": \"X-SQL query with URL argument is broken in two ways: (1) H2 session pool exhaustion causes 417 after backend uptime, (2) scraper parser returns 'No content' for valid pages even with fresh backend. Both required workarounds: backend restart + using stored-snapshot query mode.\",\n    \"mostConfusingAspects\": \"1. X-SQL query silently returns empty results with status 'OK' — no indication of what went wrong without checking server logs. 2. The difference between --selector (querySelector, first match) and --selector-all (querySelectorAll, all matches) is not obvious from naming alone. 3. The command requires a browser session even when using the scrape API with URL argument. 4. Build output mixes with JSON data when redirecting stdout.\",\n    \"mostValuableImprovements\": \"1. Fix the H2 session pool so X-SQL queries don't fail after backend uptime. 2. Fix the scraper parser so it can extract content from valid HTML pages. 3. Add clear error messages to JSON responses when queries fail or return empty results. 4. Add hints when --selector matches only 1 element to suggest --selector-all.\",\n    \"usabilityRating\": 6\n  }\n}\n```"
+  },
+  "issues": [
+    {
+      "number": 1,
+      "title": "X-SQL query with URL argument fails with HTTP 417 and 'Session is already closed' H2 error",
+      "severity": "High",
+      "category": "Reliability",
+      "sections": [
+        {
+          "body": "./b4w.sh htmlsnapshot query \"https://books.toscrape.com/\" --sql @query.sql (after the backend has been running for some time)",
+          "label": "Reproduction"
+        },
+        {
+          "body": "X-SQL query executes and returns results",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "statusCode: 417, resultSet: [], error: 'Session is already closed | #2/53' — H2 database session pool has closed connections that aren't being refreshed",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "In AbstractBrowser4SQLContext.getSession() (AbstractBrowser4SQLContext.kt:158), the H2 session pool returns already-closed sessions. The pool has 53 sessions but sessions can close over time without being properly invalidated/recreated. When a query tries to use a closed session, it fails with 'The object is already closed'.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "browser4-agentic/.../AbstractBrowser4SQLContext.kt:getSession() line 158; also H2SessionFactory.kt:getSession()",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Validate H2 session before returning from pool; if closed, create a new one\n- Add session health check with retry in getSession()\n- Consider using H2 connection pooling with test-on-borrow semantics\n- Add a clear error message to the CLI output when a 417 occurs — currently the JSON response has no 'message' field",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 2,
+      "title": "X-SQL scraper reports 'No content' for valid HTML pages when using URL argument",
+      "severity": "High",
+      "category": "Reliability",
+      "sections": [
+        {
+          "body": "./b4w.sh htmlsnapshot query \"https://books.toscrape.com/\" --sql @simple.sql (with fresh backend)",
+          "label": "Reproduction"
+        },
+        {
+          "body": "X-SQL returns h3 text content from the page",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "statusCode: 200, resultSet: [] — page loads (200, 66KB) but log shows 'No content | Protocol Status: OK(200)'. The scraper's HTML parser finds no extractable content despite the page containing valid HTML with h3 elements.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "In XSQLHyperlink (XSQLScrapeHyperlink.kt), the HTML parser pipeline processes the page but produces no content nodes. The parser may be rejecting the page's HTML structure or the DOM_LOAD_AND_SELECT function fails to match elements. The same selectors work via htmlsnapshot get all and via the stored-snapshot X-SQL path, so the issue is specific to the live-fetch scraper path.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "browser4-agentic/.../XSQLScrapeHyperlink.kt; PrimerHtmlParser.kt; PageParser.kt",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Investigate why the live-fetch scraper pipeline produces 'No content' when the browser-loaded snapshot works fine\n- Add a fallback: if scraper returns 0 results, try against the stored snapshot\n- Surface a clear warning to the CLI when resultSet is empty despite successful page load — currently output is silent (status 'OK' with empty results)",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 3,
+      "title": "b4w.ps1 has CRLF line endings breaking Linux execution",
+      "severity": "Medium",
+      "category": "Reliability",
+      "sections": [
+        {
+          "body": "./b4w.ps1 help on Linux",
+          "label": "Reproduction"
+        },
+        {
+          "body": "PowerShell wrapper executes browser4-cli",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "/usr/bin/env: 'pwsh\\r': No such file or directory",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "File b4w.ps1 checked into git with Windows CRLF line endings. The shebang line ends with \\r, causing env to try executing 'pwsh\\r' instead of 'pwsh'. Git's core.autocrlf setting or a missing .gitattributes entry likely causes this.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "./b4w.ps1 line endings; potentially .gitattributes or git config",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Add a .gitattributes entry: `*.ps1 text eol=lf` to force LF line endings for PowerShell scripts\n- Alternatively, convert CRLF→LF at build time or in a pre-commit hook\n- Document the bash wrapper (b4w.sh) as the primary entry point for Linux/macOS users in the help output",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 4,
+      "title": "No error message in JSON response when X-SQL query fails with 417",
+      "severity": "Medium",
+      "category": "UX",
+      "sections": [
+        {
+          "body": "Run any X-SQL query that returns statusCode 417",
+          "label": "Reproduction"
+        },
+        {
+          "body": "JSON response includes a 'message' or 'error' field explaining the failure",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "JSON response has statusCode: 417 and status: 'Expectation Failed' but no message or error field to explain what went wrong",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The backend error response builder doesn't include the exception message in the JSON envelope for 417 status codes. The error details are only available in server logs.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "MCPToolController.kt or response builder for html_snapshot_query",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Always include a 'message' field in error JSON responses with human-readable error text\n- For 417 specifically, include what expectation failed (e.g., 'SQL session is closed', 'Page has no extractable content')",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 5,
+      "title": "stdout/stderr mixing: build output leaks into stdout alongside JSON data",
+      "severity": "Medium",
+      "category": "UX",
+      "sections": [
+        {
+          "body": "./b4w.sh htmlsnapshot get all text \"h3 a\" --all > output.json",
+          "label": "Reproduction"
+        },
+        {
+          "body": "output.json contains only the JSON array of results",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "output.json contains cargo build output ('Finished dev profile...', 'Running...') prepended before the JSON array, requiring manual filtering or --json flag",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The dev-mode wrapper (b4w.sh) runs `cargo run` which outputs build status to stderr, but the CLI binary also outputs some informational messages to stdout before emitting the actual result. When redirecting stdout to a file, these lines mix with the JSON data.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "cli/browser4-cli/src/main.rs or output formatting layer",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- When a dev-mode build is needed, emit build progress only to stderr\n- Document that --json is required for machine-readable output and redirect only stderr (2>/dev/null)\n- Add a --no-build-output flag or auto-detect when stdout is not a TTY",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 6,
+      "title": "--selector vs --selector-all discoverability: grep uses querySelector by default",
+      "severity": "Medium",
+      "category": "Discoverability",
+      "sections": [
+        {
+          "body": "./b4w.sh htmlsnapshot grep --selector \"article.product_pod\" \"h3\"",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Grep searches all 20 product_pod elements for h3 matches",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "Grep searches only the FIRST product_pod element (querySelector semantics), returning 1 match. User must know to use --selector-all for querySelectorAll semantics.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The --selector flag uses querySelector (first match only) by default. This is documented in --help but the naming doesn't clearly distinguish between 'scope to a single element' vs 'scope to all matching elements'. Users familiar with JS would expect --selector to mean querySelectorAll.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "cli/browser4-cli/src/ commands for htmlsnapshot grep",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Consider renaming: --selector → --scope (single) and --selector-all → --selector (all), matching user expectations\n- Add a tip/hint when --selector matches only 1 element but the selector matches many on the page: 'Found 1/20 matches. Use --selector-all to search all 20 elements.'\n- In the inspect output 'Try these next:' section, include --selector-all examples",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 7,
+      "title": "X-SQL query requires browser session despite docs saying it's independent",
+      "severity": "Medium",
+      "category": "Documentation",
+      "sections": [
+        {
+          "body": "After kill-all, run ./b4w.sh htmlsnapshot query \"https://example.com\" --sql @query.sql",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Query runs against scraped page (per docs: 'independent of the stored snapshot')",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "Error: No active browser session. Run 'browser4-cli open <url>' or 'browser4-cli goto <url>' first.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "Despite documentation claiming query 're-fetches the page fresh via the scrape API (independent of the stored snapshot)', the command still validates that a browser session exists before proceeding. The session check may be an unnecessary precondition when a URL is provided.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "MCPToolController.kt: html_snapshot_query handler — session validation logic",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Remove the browser session requirement when a URL argument is provided (query uses scrape API, not browser)\n- Or update the docs to clarify that a browser session is required even for URL-based queries",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 8,
+      "title": "No indication that htmlsnapshot query URL mode fails until server logs are checked",
+      "severity": "Medium",
+      "category": "UX",
+      "sections": [
+        {
+          "body": "Run X-SQL query with URL argument that returns empty resultSet with status OK",
+          "label": "Reproduction"
+        },
+        {
+          "body": "A warning or hint when 0 results are returned from a page that loaded successfully",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "Silent empty resultSet with status 'OK' — user has no idea why the query returned nothing. Only server logs reveal 'No content'.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The CLI/backend treats an empty resultSet as a valid result (status: 'OK') rather than a potential error condition. When pageStatusCode is 200 and pageContentBytes > 0 but resultSet is empty, something unusual happened that the user should know about.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "XSQLScrapeHyperlink.kt or MCPToolController.kt — result formatting for empty resultSets",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- When pageStatusCode is 200, contentBytes > 0, but resultSet is empty, emit a warning: 'Page loaded successfully but no elements matched the selector. Try htmlsnapshot inspect to discover valid selectors.'\n- Include a 'matchedCount' field in the response to distinguish '0 matches found' from 'query execution error'",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 9,
+      "title": "htmlsnapshot get all | --json returns double-encoded JSON (string inside envelope)",
+      "severity": "Low",
+      "category": "UX",
+      "sections": [
+        {
+          "body": "./b4w.sh --json htmlsnapshot get all text \"h3 a\" --all",
+          "label": "Reproduction"
+        },
+        {
+          "body": "output.result contains a JSON array",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "output.result is a JSON-encoded string that must be parsed a second time (JSON.parse(JSON.parse(response).output.result))",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The result data is serialized as a JSON string and then embedded inside the JSON envelope, creating a double-encoding. The caller must parse the outer envelope, then parse the inner result string.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "CLI output formatting or backend serialization layer",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Embed the array directly as a JSON value in output.result, not as a string\n- Or document the double-encoding clearly in the --json help text",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 10,
+      "title": "Titles truncated in get all text output — attribute extraction needed for full text",
+      "severity": "Low",
+      "category": "UX",
+      "sections": [
+        {
+          "body": "./b4w.sh htmlsnapshot get all text \"article.product_pod h3 a\" --all",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Full book titles",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "Truncated titles like 'A Light in the ...', 'Sapiens: A Brief History ...' — CSS text-overflow: ellipsis truncation is captured as visible text",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The page uses CSS text-overflow: ellipsis to truncate long titles in the grid layout. The 'text' extraction mode captures the visible/rendered text content, not the semantic text. The full title is available in the <a> tag's 'title' attribute.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "This is expected behavior for visible text extraction; could be addressed with documentation",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Add a tip in the get all output: 'Titles appear truncated due to CSS text-overflow. Use get all attr \"h3 a\" title for full titles.'\n- htmlsnapshot inspect already captures this pattern (shows the title attribute value) — highlight it more prominently",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    }
+  ]
+}

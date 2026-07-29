@@ -81,14 +81,18 @@ param(
     # Skip the browser4-cli version check (forwarded to run-task.ps1).
     [switch] $SkipVersionCheck,
 
-    # Maximum minutes to wait for each individual task.
-    # 0 (default) means no timeout.  On timeout the task process is killed
-    # and the task is marked as TIMEOUT (exit code 124).
-    [int] $TimeoutMinutes = 0,
+    # Maximum minutes to wait for each individual task (default 60 = 1 hour).
+    # On timeout the task process is killed and the task is marked as
+    # TIMEOUT (exit code 124).  Set to 0 to disable the timeout.
+    [int] $TimeoutMinutes = 60,
 
     # Override the agent CLI to use (claude, kimi, or opencode).
     # When empty, auto-detects. Forwarded to run-task.ps1.
-    [string] $Agent = ''
+    [string] $Agent = '',
+
+    # Custom tasks directory. When set, overrides the default tasks/ directory.
+    # Used by test.ps1 rws --dir to run tasks from an arbitrary directory.
+    [string] $TasksDir = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -103,10 +107,10 @@ $script:StartTime = Get-Date
 # ═══════════════════════════════════════════════════════════════════════════════
 
 $script:ScriptsDir = $PSScriptRoot
-$script:TasksDir   = Join-Path $ScriptsDir '..\tasks'
+$script:TasksDir   = if ($TasksDir) { $TasksDir } else { Join-Path $ScriptsDir '..' 'tasks' }
 $script:RunnerPath = Join-Path $ScriptsDir 'run-task.ps1'
-# Repo root is 3 levels up from scripts/ (scripts -> tests -> browser4-cli -> repo root)
-$script:RepoRoot   = (Resolve-Path "$ScriptsDir/../../..").Path
+# Repo root is set by common.ps1 (dot-sourced above at line 103).
+# $script:RepoRoot is already available — no need to recompute.
 
 $script:DiscoveredFiles = Get-ChildItem -Path $TasksDir -Filter '*.md' -Recurse `
     | Sort-Object Name
@@ -206,18 +210,6 @@ function Write-Section {
     Write-Host "-- $Text --" -ForegroundColor Yellow
 }
 
-function Format-Duration {
-    param([TimeSpan] $Duration)
-    if ($Duration.TotalSeconds -lt 1) { return '<1s' }
-    if ($Duration.TotalMinutes -lt 1) {
-        return '{0:F1}s' -f $Duration.TotalSeconds
-    }
-    if ($Duration.TotalHours -lt 1) {
-        return '{0}m {1}s' -f $Duration.Minutes, $Duration.Seconds
-    }
-    return '{0}h {1}m {2}s' -f $Duration.Hours, $Duration.Minutes, $Duration.Seconds
-}
-
 # ═══════════════════════════════════════════════════════════════════════════════
 # Pre-flight: check that an agent CLI (claude, kimi, or opencode) and run-task.ps1 are available
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -287,9 +279,9 @@ foreach ($name in $Selected) {
             if ($SkipVersionCheck) {
                 $pwshArgs += '-SkipVersionCheck'
             }
-            if ($TimeoutMinutes -gt 0) {
-                $pwshArgs += '-TimeoutMinutes', $TimeoutMinutes
-            }
+            # Always forward the timeout value (even 0) so run-task.ps1
+            # receives the caller's intent rather than its own default.
+            $pwshArgs += '-TimeoutMinutes', $TimeoutMinutes
             if ($Agent) {
                 $pwshArgs += '-Agent', $Agent
             }

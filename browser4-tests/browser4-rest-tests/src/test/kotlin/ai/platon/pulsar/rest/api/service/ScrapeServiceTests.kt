@@ -13,6 +13,7 @@ import ai.platon.pulsar.external.ChatModelFactory
 import ai.platon.pulsar.rest.api.TestHelper
 import ai.platon.pulsar.rest.api.common.MockEcServerTestBase
 import ai.platon.pulsar.rest.api.config.MockEcServerConfiguration
+import ai.platon.pulsar.test.server.MockServerPorts
 import ai.platon.pulsar.rest.api.entities.ScrapeStatusRequest
 import org.junit.jupiter.api.Assumptions
 import org.junit.jupiter.api.BeforeEach
@@ -32,9 +33,9 @@ import kotlin.test.assertTrue
 @Import(MockEcServerConfiguration::class, Browser4AutoConfiguration::class)
 class ScrapeServiceTests : MockEcServerTestBase() {
 
-    private val productListURL = "http://localhost:18080/ec/b?node=1292115012"
+    private val productListURL get() = "${MockServerPorts.baseUrl()}/ec/b?node=1292115012"
 
-    private val productDetailURL = "http://localhost:18080/ec/dp/B0E000001"
+    private val productDetailURL get() = "${MockServerPorts.baseUrl()}/ec/dp/B0E000001"
 
     @Autowired
     private lateinit var config: ImmutableConfig

@@ -1,0 +1,318 @@
+{
+  "meta": {
+    "scenario": "Calabi-Yau",
+    "source": "20260728-144904-Calabi-Yau.full.md",
+    "date": "20260728-144904",
+    "mode": "dev"
+  },
+  "background": {
+    "executionContext": "**Commands used (in order):**\n1. `./b4w.ps1 help` — learned available commands (but wrapper failed for actual usage)\n2. `./b4w.sh goto \"https://www.amazon.com\"` — wrapper arg-passing failed\n3. `cargo run --manifest-path cli/browser4-cli/Cargo.toml -- goto \"https://www.amazon.com\"` — **workaround**: used cargo run directly because b4w wrappers failed in bash\n4. `cargo run ... -- snapshot -v 0 --stdout` — captured accessibility tree, found search box at `ref=e296`\n5. `cargo run ... -- fill e296 \"Calabi-Yau\" --submit` — searched Amazon\n6. `cargo run ... -- htmlsnapshot` — captured HTML snapshot (first attempt returned stale Wikipedia data)\n7. `cargo run ... -- snapshot -v 0 --stdout` — verified page (found session had reverted to Wikipedia)\n8. `cargo run ... -- goto \"https://www.amazon.com/s?k=Calabi-Yau\"` — re-navigated to search results\n9. `cargo run ... -- htmlsnapshot` — successfully captured Amazon results\n10. `cargo run ... -- htmlsnapshot inspect` — attempted product card discovery (returned Wikipedia data mixed in)\n11. `cargo run ... -- htmlsnapshot get all text \"a.a-link-normal.s-line-clamp-2\"` — extracted 19 product titles\n12. `cargo run ... -- htmlsnapshot get all text \"a.a-link-normal.s-no-hover\"` — failed: returned empty\n13. `cargo run ... -- htmlsnapshot get all attr \"a.a-link-normal.s-line-clamp-2\" href` — failed: returned empty\n14. `cargo run ... -- eval --file extract_products.js` — JavaScript extraction (first attempt failed — page reverted to Wikipedia)\n15. `cargo run ... -- eval \"JSON.stringify({url:...})\"` — verified page revert to Wikipedia\n16. `cargo run ... -- goto \"https://www.amazon.com/s?k=Calabi-Yau\"` && `eval --file inspect_dom.js` — verified page then investigated DOM structure\n17. `cargo run ... -- eval --file extract_all.js` — successfully extracted 16 products from page 1\n18. `cargo run ... -- goto \"https://www.amazon.com/s?k=Calabi-Yau&page=2\"` — navigated to page 2\n19. `cargo run ... -- eval --file extract_all.js` — extracted 18 products from page 2\n20. `cargo run ... -- -s amazon goto \"https://www.amazon.com/dp/B07RZMH6NW\"` — **workaround**: used named session `-s amazon` after discovering DEFAULT session instability\n21. `cargo run ... -- -s amazon eval --file extract_detail.js` — extracted detail page data for \"The Shape of a Life\"\n22. `cargo run ... -- -s amazon goto \"https://www.amazon.com/dp/B000QEKHT4\"` — visited Calabi Yau Space CD\n23. `cargo run ... -- -s amazon goto \"https://www.amazon.com/dp/9810206623\"` — visited Bestiary For Physicists\n\n**Key workarounds:**\n- Used `cargo run --manifest-path` instead of `./b4w.ps1` or `./b4w.sh` (wrapper argument passing broken in bash)\n- Used named session `-s amazon` instead of DEFAULT session (DEFAULT session kept reverting to Wikipedia)\n- Used `eval --file` instead of inline JS (avoided shell quoting issues)\n- Used `eval` for data extraction instead of `htmlsnapshot get` (htmlsnapshot returned inconsistent results)\n\n---",
+    "task": "**Search:** Searched for \"Calabi-Yau\" on Amazon.com across 2 result pages (32 total products).\n\n**Finding:** \"Calabi-Yau\" is a highly technical mathematical concept (manifolds used in string theory). Amazon's search results are almost entirely graduate-level mathematics/physics textbooks and electronic music MP3 tracks. There are no toys, models, posters, or youth-oriented products available.\n\n**Shortlist (10 best options for a 12-year-old boy):**\n\n| # | Product | Format | Rating | Price |\n|---|---------|--------|--------|-------|\n| 1 | **The Shape of a Life** by Shing-Tung Yau | Hardcover | 4.3★ (148) | TWD 624-1,201 |\n| 2 | Calabi Yau Space — Dopplereffekt | Audio CD | 4.5★ (4) | TWD 3,276 |\n| 3 | Calabi-Yau Manifolds: A Bestiary For Physicists | Paperback | 5.0★ (2) | TWD 3,889 |\n| 4 | Of Reality - Calabi-Yau | MP3 Music | — | — |\n| 5 | 6-Dimensional Calabi-Yau | MP3 Music | — | — |\n| 6 | Calabi-Yau Segment | MP3 Music | — | — |\n| 7 | The Calabi-Yau Manifold Spa | MP3 Music | — | — |\n| 8 | Calabi Yau Labyrinths | MP3 Music | — | — |\n| 9 | Calabi-Yau Model | MP3 Music | — | — |\n| 10 | Calabi Yau (various artists) | MP3 Music | — | — |\n\n**BEST PICK: \"The Shape of a Life: One Mathematician's Search for the Universe's Hidden Geometry\" by Shing-Tung Yau — Hardcover edition.**\n\nThis is the only product that combines accessibility for a bright 12-year-old, strong reviews (148 ratings, Editors' Pick), a tangible gift format, and direct relevance to Calabi-Yau manifolds. It's the inspiring autobiography of the Fields Medalist who co-discovered Calabi-Yau manifolds, having grown up poor in Hong Kong and risen to become one of the world's most distinguished mathematicians.\n\n---"
+  },
+  "issues": [
+    {
+      "number": 1,
+      "title": "b4w wrapper argument passing broken in bash/Linux environment",
+      "severity": "Critical",
+      "category": "Reliability",
+      "sections": [
+        {
+          "body": "./b4w.ps1 goto \"https://www.amazon.com\" or ./b4w.sh goto \"https://www.amazon.com\" from bash",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Arguments 'goto' and 'https://www.amazon.com' should pass through to the browser4-cli binary.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "The TopHelp text from b4w.ps1 is emitted, followed by the browser4-cli help text and 'Unknown command: —'. The binary never receives the correct arguments. The cargo output shows the entire help text being passed as arguments to the binary instead of 'goto' and the URL.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The b4w.sh script uses `exec pwsh -Command \"& '$SCRIPT_DIR/b4w.ps1' $ARGS\"` where $ARGS is individually quoted. The exec within a command substitution $(...) appears to cause argument corruption. Additionally, the b4w.ps1 script's $TopHelp heredoc contains em-dash characters ('—') that may trigger PowerShell string interpolation issues when combined with Invoke-Expression on line 478.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "b4w.sh lines 34-51 and b4w.ps1 lines 470-488",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Add a direct bash-native launcher (e.g. b4w binary wrapper) that doesn't require PowerShell as an intermediary on Linux\n- Fix b4w.sh to not use exec inside command substitution contexts\n- Replace Invoke-Expression in b4w.ps1 line 478 with a direct call operator invocation (e.g. & $Exe @CliArgs) to avoid string interpolation issues with special characters\n- Add a cargo alias or Makefile target so users on Linux can run `make run -- goto <url>` without wrestling with shell wrappers",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 2,
+      "title": "DEFAULT session spontaneously reverts to previous page (Wikipedia)",
+      "severity": "Critical",
+      "category": "Reliability",
+      "sections": [
+        {
+          "body": "1. Have a pre-existing DEFAULT session on Wikipedia. 2. goto to Amazon. 3. Wait or run several commands. 4. The browser silently returns to Wikipedia.",
+          "label": "Reproduction"
+        },
+        {
+          "body": "After goto navigates to Amazon, the session should stay on Amazon until explicitly navigated elsewhere.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "After successful goto to Amazon (confirmed by the CLI output showing 'Navigated to https://www.amazon.com'), subsequent commands (eval, htmlsnapshot) execute on Wikipedia instead. This happened 3+ times during the session. The page URL confirmed via eval showed 'https://en.wikipedia.org/wiki/Rust_(programming_language)'.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "Possible causes: (a) the backend's session reconnection logic restores the original session URL on reconnection; (b) a race condition where the navigation completes but the CDP connection drops, and on reconnect the backend loads the last-known URL from session state; (c) a browser extension or service worker in the pre-existing session triggers navigation back. Investigation needed: check PulsarWebDriver session reconnection logic and whether goto properly updates the backend's session URL state before the CDP page load event fires.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "browser4-core/browser4-browser/ — PulsarWebDriver session management and reconnection logic",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Ensure goto atomically updates the session's canonical URL in the backend before the CDP navigation completes\n- Add a post-navigation verification step that checks the actual page URL matches the requested URL\n- Log a warning if the page URL changes unexpectedly between commands\n- Document that pre-existing sessions may have stale state and recommend using fresh named sessions (-s <name>) for reliable automation",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 3,
+      "title": "htmlsnapshot inspect returns content from wrong page",
+      "severity": "High",
+      "category": "Reliability",
+      "sections": [
+        {
+          "body": "1. goto to Amazon search results. 2. htmlsnapshot capture (shows Amazon URL). 3. htmlsnapshot inspect 'div[data-component-type]'",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Inspect should analyze the most recently captured Amazon HTML snapshot.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "Inspect returned Wikipedia infobox data (tr, th.infobox-label, #mwDA) even though the capture step showed 'Snapshot: Amazon.com : Calabi-Yau'. The get command with a product-specific selector DID return Amazon data, suggesting inspect and get may read from different snapshot storage or the inspect command searches across all stored snapshots.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "Likely a storage isolation issue: htmlsnapshot commands may not properly scope to the most recent capture, or the inspect command searches a different snapshot index than get/query. The 'div[data-component-type]' selector may match elements in a previously stored Wikipedia snapshot that takes precedence in the inspection index.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "- htmlsnapshot inspect should operate exclusively on the most recently captured snapshot\n- Add a --session or --snapshot-id flag to explicitly target a specific snapshot\n- Display which snapshot is being inspected in the output header\n- Add a warning if inspect finds matches in a snapshot other than the most recent one",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 4,
+      "title": "htmlsnapshot get attr returns empty array for valid selectors",
+      "severity": "Medium",
+      "category": "Reliability",
+      "sections": [
+        {
+          "body": "After capturing an Amazon search results snapshot: htmlsnapshot get all attr 'a.a-link-normal.s-line-clamp-2' href",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Should return an array of href URLs from matching product title links.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "Returned empty array [], even though the same selector with 'get all text' successfully returned product titles.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "Possible mismatch between the DOM query used for text extraction (which uses textContent) vs attribute extraction (which may use a different traversal or query method). The href attributes may be stored on parent <a> elements while the text selector matches a child <span>, causing the attribute lookup to fail.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "- Document the selector-to-attribute mapping behavior clearly\n- Add an example showing how to extract href from link elements\n- Consider relaxing the element matching for attr extraction to climb to the nearest parent with the requested attribute",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 5,
+      "title": "Price extraction via htmlsnapshot get returns empty for Amazon price selectors",
+      "severity": "Medium",
+      "category": "Product",
+      "sections": [
+        {
+          "body": "htmlsnapshot get all text 'a.a-link-normal.s-no-hover' on an Amazon search results page snapshot",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Should return price text values.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "Returned empty array []. The elements exist in the DOM (visible in the htmlsnapshot interactive elements list) but the get command does not match them.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The stored HTML snapshot may strip or transform certain elements that contain prices (e.g., spans within links that use aria labels or dynamic content). Amazon prices are often rendered via JavaScript or use complex nested structures that don't survive the static HTML capture process.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "- Document which types of page content survive htmlsnapshot capture vs which require eval\n- Add a note in the interactive elements output indicating which elements' text may not be extractable via get\n- Consider adding JavaScript-rendered content capture to htmlsnapshot",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 6,
+      "title": "No built-in e-commerce product extraction recipe or template",
+      "severity": "Medium",
+      "category": "Discoverability",
+      "sections": [
+        {
+          "body": "Attempt to extract structured product data (title, price, rating, URL) from Amazon search results using only documented workflows.",
+          "label": "Reproduction"
+        },
+        {
+          "body": "A documented recipe, template, or built-in command for extracting product listings from common e-commerce sites.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "The htmlsnapshot-scenarios.md reference is mentioned in SKILL.md but contains patterns that don't work on the current Amazon DOM. Users must discover Amazon's actual DOM structure via eval, which requires JavaScript knowledge. The inspect command's auto-discovery didn't surface product card selectors.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "E-commerce sites frequently change their HTML structure. The documented scenarios may target older versions of Amazon's markup. The inspect auto-discovery algorithm appears to prioritize the largest container (entire page) over mid-level repeating patterns (product cards).",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "- Add an 'amazon' or 'ecommerce' subcommand that auto-detects and extracts product listings from major retailers\n- Improve inspect auto-discovery to prefer mid-level repeating containers (e.g., same-class siblings with similar child structure) over page-level containers\n- Add an 'eval --extract-products' built-in that bundles common e-commerce extraction scripts\n- Ship updated e-commerce scenario files that match current Amazon/Walmart/eBay DOM structures",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 7,
+      "title": "Help output is overwhelming for first-time users",
+      "severity": "Low",
+      "category": "UX",
+      "sections": [
+        {
+          "body": "Run any invalid command or ./b4w.ps1 help",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Concise help focused on the most common workflows, with progressive disclosure to detailed docs.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "The help output dumps all 100+ commands in alphabetical order with descriptions. The common workflows section at the top is helpful, but the full command list scrolls for pages. Category filtering (--help nav, --help extract) is mentioned but easy to miss.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The help command prints everything by default with category filtering as an opt-in. New users see an overwhelming wall of text.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "cli/browser4-cli/src/ — help text generation",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Default help should show only common workflows + category list (not all commands)\n- Add 'browser4-cli help --all' for the full listing\n- Group commands visually with headers and spacing\n- Add a 'quickstart' command that walks through the first session interactively",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 8,
+      "title": "Shell quoting for eval causes friction on Linux",
+      "severity": "Low",
+      "category": "UX",
+      "sections": [
+        {
+          "body": "cargo run ... -- eval \"JSON.stringify({url: location.href})\" — nested quotes require escaping",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Simple eval expressions should work without quote-escaping gymnastics.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "Nested quotes in eval expressions require careful escaping (e.g., escaping single quotes within the JSON string). The --file option mitigates this, but requires an extra step of writing a JS file first.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "Shell quote processing combined with cargo run's argument passing creates multiple levels of quote interpretation. The SKILL.md warns about this for Windows but it affects Linux too.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "- Add 'eval --json' flag that automatically JSON-stringifies the result, removing the need for manual JSON.stringify wrapping\n- Support eval --stdin for piping JS directly\n- Document the --file pattern as the recommended approach for all platforms, not just Windows",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 9,
+      "title": "b4w wrapper emits extraneous warning about short flags when none are used",
+      "severity": "Low",
+      "category": "UX",
+      "sections": [
+        {
+          "body": "Run any b4w command — the warning 'Short flags detected: -i, -i' appears even when -i is not in the user's command.",
+          "label": "Reproduction"
+        },
+        {
+          "body": "The short flag warning should only appear when short flags are actually used.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "The warning always appears because the b4w.ps1 script's $COMMON_INTERCEPTED check triggers on -i flags that appear in the script's own internal processing or cargo output, not just user-provided arguments.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The $COMMON_INTERCEPTED check on line 39-41 of b4w.ps1 scans $RemainingArgs which includes tokens from cargo output or internal argument processing, not just user-provided CLI arguments.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "b4w.ps1 lines 39-46",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Move the check to only scan arguments before they're passed to cargo/build steps\n- Or suppress the warning when the flags originate from internal tooling rather than user input",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    }
+  ]
+}

@@ -508,6 +508,14 @@ Examples:
                     break
                 current = current.parent
 
+    # Ensure UTF-8 output on Windows (avoids GBK UnicodeEncodeError for emoji)
+    if sys.platform == 'win32':
+        for stream in (sys.stdout, sys.stderr):
+            try:
+                stream.reconfigure(encoding='utf-8', errors='replace')
+            except Exception:
+                pass
+
     print(f"📂 Root directory: {root_dir}")
 
     # Convert paths to Path objects

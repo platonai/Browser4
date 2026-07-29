@@ -32,7 +32,7 @@ mod tips;
 
 use std::collections::{HashMap, HashSet};
 use std::io::{IsTerminal, Read};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use base64::Engine;
 use chrono::{Local, Utc};
@@ -56,11 +56,11 @@ use help::{
     public_command_name, resolve_category_alias, CATEGORY_TITLES,
 };
 use http::{
-    call_tool, call_tool_with_result, cancel_crawl, clear_crawls, crawl_request_timeout,
-    get_command_result, get_command_status, get_crawl_result, get_crawl_status,
-    get_swarm_result, get_swarm_status,
-    is_stale_session_error, make_client, submit_batch_commands, submit_crawl,
-    submit_plain_command, submit_swarm_payload, submit_swarm_query, CallToolResult,
+    call_tool, call_tool_with_result, call_tool_with_timeout_override, cancel_crawl,
+    clear_all_crawls, clear_crawls, crawl_request_timeout, get_command_result,
+    get_command_status, get_crawl_result, get_crawl_status, get_swarm_result,
+    get_swarm_status, is_stale_session_error, make_client, submit_batch_commands,
+    submit_crawl, submit_plain_command, submit_swarm_payload, submit_swarm_query, CallToolResult,
 };
 use managed_processes::{
     read_managed_server_processes, stop_browser4_server_forcibly, ManagedServerProcess,
@@ -69,7 +69,7 @@ use managed_processes::{
 use snapshot::{resolve_output_path, save_binary, save_snapshot, timestamped_filename};
 use state::{
     clear_all_state, clear_state, epoch_millis_to_display, format_async_task_list,
-    format_timestamp_display, prune_async_tasks, read_async_tasks, read_state,
+    format_timestamp_display, read_async_tasks, read_state,
     resolve_default_state_dir, resolve_ref, summarize_async_tasks, track_async_task,
     update_async_task_status, write_async_tasks, write_state, CliState, MousePosition,
     SessionKind, Table,
@@ -345,6 +345,7 @@ fn no_snapshot_commands() -> HashSet<&'static str> {
         "close",
         "disconnect",
         "close-all",
+        "session-default",
         "console",
         "delete-data",
         "kill-all",
@@ -396,6 +397,10 @@ fn no_snapshot_commands() -> HashSet<&'static str> {
         "swarm-status",
         "swarm-result",
         "swarm-list",
+        "tab-list",
+        "tab-new",
+        "tab-close",
+        "tab-select",
         "crawl",
         "crawl-status",
         "crawl-result",
@@ -519,6 +524,31 @@ fn persist_active_selector(
     write_state(&state, None, session_name).map_err(|e| e.to_string())
 }
 
+/// Guard against creating a second unnamed session.
+///
+/// When `session_name` is `None` (no `-s` flag), the CLI writes to the shared
+/// `cli-state.json` slot.  If that slot already holds an active session,
+/// creating a new one would silently displace it.  This check returns an
+/// error with guidance to use `-s <name>` instead.
+///
+/// Named sessions (`-s <name>`) are always allowed — they each get their
+/// own isolated state file.
+fn check_unnamed_slot_free(state_dir: Option<&Path>, session_name: Option<&str>) -> Result<(), String> {
+    if session_name.is_some() {
+        return Ok(());
+    }
+    let state = read_state(state_dir, None);
+    if let Some(ref existing_id) = state.session_id {
+        return Err(format!(
+            "An unnamed session already exists: {existing_id}\n\
+             Use `-s <name>` to create a named session instead, e.g.:\n  \
+             browser4-cli -s myname ...\n\
+             Or run `browser4-cli close` to end the current unnamed session first."
+        ));
+    }
+    Ok(())
+}
+
 async fn restore_active_selector(
     client: &Client,
     base_url: &str,
@@ -598,6 +628,22 @@ struct TabInfo {
     url: String,
     title: String,
     guid: Option<String>,
+}
+
+/// Normalize a tab GUID for display. Extension sessions use numeric Chrome tab
+/// IDs while regular sessions use 32-char hex strings. Prefix numeric GUIDs with
+/// `chrome:` so users and scripts can distinguish the source without guessing.
+fn format_guid_display(guid: Option<&str>) -> String {
+    match guid {
+        Some(g) if !g.is_empty() => {
+            if g.chars().all(|c| c.is_ascii_digit()) {
+                format!("chrome:{}", g)
+            } else {
+                g.to_string()
+            }
+        }
+        _ => "-".to_string(),
+    }
 }
 
 /// Parse the JSON response from a `browser_tabs` "list" action into a vec of
@@ -712,6 +758,16 @@ async fn create_session(
     new_state.last_accessed_at = Some(Utc::now().to_rfc3339());
     write_state(&new_state, None, session_name).map_err(|e| e.to_string())?;
     Ok(session_id)
+}
+
+/// Format the "Session opened" message.
+/// Named sessions show both the alias and the UUID so the user can track either.
+fn format_session_opened_message(session_name: Option<&str>, session_id: &str) -> String {
+    if let Some(name) = session_name {
+        format!("Session opened: {} ({})", name, session_id)
+    } else {
+        format!("Session opened: {}", session_id)
+    }
 }
 
 fn build_open_session_capabilities(tool_params: &Value) -> Value {
@@ -941,7 +997,7 @@ async fn post_command_snapshot(client: &Client, base_url: &str, session_id: &str
 
     let out_path = resolve_output_path(None, "snapshot", "yml");
     // Prepend a header comment documenting the snapshot.
-    let header = "# Auto-snapshot after command — full viewport (viewport 0).\n\
+    let header = "# Auto-snapshot after command — current viewport.\n\
                   # Use `browser4-cli snapshot grep <pattern>` to search the tree.\n";
     let snap_with_header = format!("{}\n{}", header, snap_result);
     if let Err(e) = save_snapshot(&out_path, &snap_with_header) {
@@ -960,7 +1016,7 @@ async fn post_command_snapshot(client: &Client, base_url: &str, session_id: &str
     cli_println!("[Snapshot]({})", out_path.display());
     if !json_active() {
         eprintln!(
-            "💡 Tip: Run `snapshot -v 0` to see interactive element refs"
+            "💡 Tip: Try `htmlsnapshot get text \"h1\"` to extract the page heading, or `htmlsnapshot inspect` to discover CSS selectors"
         );
     }
 }
@@ -1008,7 +1064,10 @@ async fn get_or_create_navigation_session(
             let capabilities = build_open_session_capabilities(tool_params);
             let new_id =
                 create_session(client, base_url, &state, session_name, Some(capabilities)).await?;
-            cli_println!("Session opened: {}", new_id);
+            cli_println!(
+                "{}",
+                format_session_opened_message(session_name, &new_id)
+            );
             new_id
         } else {
             existing_id
@@ -1033,6 +1092,28 @@ async fn get_or_create_navigation_session(
 
             if healthy {
                 attached_id.clone()
+            } else if force_new_session {
+                // The attached session is stale, and the caller explicitly
+                // wants a new session (e.g., `open` command).  Auto-evict
+                // the stale attached session so the unnamed slot is freed
+                // for the new Browser4 session.
+                cli_println!(
+                    "Attached session {} is no longer healthy — auto-evicting it to create a new Browser4 session.",
+                    attached_id
+                );
+                cli_println!(
+                    "Use 'attach --extension' or 'attach --cdp' to reconnect the attached browser later."
+                );
+                invalidate_session(&state, base_url, session_name);
+                let capabilities = build_open_session_capabilities(tool_params);
+                let new_id =
+                    create_session(client, base_url, &state, session_name, Some(capabilities))
+                        .await?;
+                cli_println!(
+                    "{}",
+                    format_session_opened_message(session_name, &new_id)
+                );
+                new_id
             } else {
                 let attach_cmd = match state.kind {
                     SessionKind::ExtensionAttached => "attach --extension",
@@ -1063,10 +1144,45 @@ async fn get_or_create_navigation_session(
             );
         }
     } else {
+        // When the user passes -s <id> and <id> happens to be the session_id
+        // of an existing attached session (e.g., extension), refuse to create a
+        // new Browser4 session under that name.  Creating a fresh session with
+        // the same identifier as an attached session silently overwrites the
+        // session metadata (connection type, etc.).  Direct the user toward
+        // the correct command for targeting the attached session.
+        if let Some(name) = session_name {
+            let default_state = read_state(None, None);
+            if default_state.session_id.as_deref() == Some(name)
+                && default_state.is_attached
+            {
+                let attach_cmd = if default_state.attach_type.as_deref() == Some("extension") {
+                    "attach --extension"
+                } else {
+                    "attach --cdp"
+                };
+                let conn_type = default_state
+                    .attach_type
+                    .as_deref()
+                    .unwrap_or("cdp");
+                return Err(format!(
+                    "'{}' is an existing {conn_type}-attached session, not a named Browser4 session.\n\
+                     Use '-s {}' directly with tab commands, e.g.:\n  \
+                     browser4-cli -s {} tab-list\n  \
+                     browser4-cli -s {} tab-new https://example.com\n\
+                     To reconnect to this session: `{}`.\n\
+                     To create a new Browser4 session: `open` (omit -s).",
+                    name, name, name, name, attach_cmd
+                ));
+            }
+        }
+
         let capabilities = build_open_session_capabilities(tool_params);
         let new_id =
             create_session(client, base_url, &state, session_name, Some(capabilities)).await?;
-        cli_println!("Session opened: {}", new_id);
+        cli_println!(
+            "{}",
+            format_session_opened_message(session_name, &new_id)
+        );
         new_id
     };
 
@@ -1079,7 +1195,10 @@ async fn get_or_create_navigation_session(
             json!({ "sessionId": session_id }),
         ).await {
             if !url_result.is_empty() {
-                let label = session_name.unwrap_or("DEFAULT");
+                let label = match session_name {
+                    Some(name) => format!("{} ({})", name, session_id),
+                    None => "DEFAULT".to_string(),
+                };
                 cli_println!("Using existing session {} (current page: {}).", label, url_result);
             }
         }
@@ -1224,6 +1343,35 @@ async fn handle_attach(
     session_name: Option<&str>,
     parsed_args: &HashMap<String, Value>,
 ) -> Result<(), String> {
+    // Block creation of a second unnamed session, unless the existing unnamed
+    // session is stale — in that case auto-evict it so the user doesn't have
+    // to manually `close` a dead session just to reclaim the unnamed slot.
+    if let Err(e) = check_unnamed_slot_free(None, session_name) {
+        let existing_state = read_state(None, None);
+        let existing_is_stale = if let Some(ref existing_id) = existing_state.session_id {
+            !session_is_active_in_state(client, base_url, existing_id).await
+        } else {
+            false
+        };
+        if existing_is_stale {
+            // Auto-evict the stale unnamed session so the new attach can proceed.
+            invalidate_session(&existing_state, base_url, None);
+            cli_println!(
+                "Replaced stale unnamed session {}. Creating new session.",
+                existing_state.session_id.as_deref().unwrap_or("?")
+            );
+        } else {
+            let hint = if parsed_args.get("extension").is_some() {
+                "browser4-cli -s <name> attach --extension"
+            } else if parsed_args.get("cdp").is_some() {
+                "browser4-cli -s <name> attach --cdp <endpoint>"
+            } else {
+                "browser4-cli -s <name> attach ..."
+            };
+            return Err(format!("{e}\nHint: {hint}"));
+        }
+    }
+
     // --cdp value
     let cdp_raw = parsed_args
         .get("cdp")
@@ -1520,7 +1668,10 @@ async fn handle_attach(
     json_field("cdp_endpoint", json!(&cdp_endpoint));
 
     cli_println!("Attached to browser at {}", cdp_endpoint);
-    cli_println!("Session opened: {}", session_id);
+    cli_println!(
+        "{}",
+        format_session_opened_message(session_name, &session_id)
+    );
 
     // Take an initial snapshot so the user can see the current state
     post_command_snapshot(client, &effective_base_url, &session_id).await;
@@ -1625,7 +1776,10 @@ async fn handle_open(
                 let retry_id =
                     create_session(client, base_url, &state, session_name, Some(capabilities))
                         .await?;
-                cli_println!("Session opened: {}", retry_id);
+                cli_println!(
+                    "{}",
+                    format_session_opened_message(session_name, &retry_id)
+                );
                 params["sessionId"] = json!(retry_id);
                 let retry_result = call_tool(client, base_url, tool_name, params)
                     .await
@@ -1662,6 +1816,18 @@ async fn handle_goto(
         .get("url")
         .and_then(|value| value.as_str())
         .unwrap_or("<unknown>");
+
+    // Check whether the browser is already at the target URL before
+    // navigating, so we can tell the user whether a navigation occurred.
+    let was_already_at_url = if reused_existing_session {
+        current_session_url(client, base_url, session_name)
+            .await
+            .map(|current| urls_match_for_display(&current, target_url))
+            .unwrap_or(false)
+    } else {
+        false
+    };
+
     let mut params = tool_params.clone();
     params["sessionId"] = json!(session_id.clone());
     let navigate_result = call_tool(client, base_url, tool_name, params.clone()).await;
@@ -1670,6 +1836,27 @@ async fn handle_goto(
             if !result.is_empty() {
                 cli_println!("{}", result);
             }
+            if was_already_at_url {
+                cli_println!("Already at {} — page unchanged.", target_url);
+            } else {
+                // Detect redirects: compare the final URL with the requested URL
+                let final_url = current_session_url(client, base_url, session_name)
+                    .await
+                    .unwrap_or_else(|_| target_url.to_string());
+                if !urls_match_for_display(&final_url, target_url) {
+                    cli_println!(
+                        "Navigated to {} (redirected from {})",
+                        final_url,
+                        target_url
+                    );
+                } else {
+                    cli_println!("Navigated to {}", target_url);
+                }
+                if !json_active() {
+                    cli_println!("Page loaded. Use `wait --load networkidle` if content appears incomplete (e.g. async-rendered SPAs).");
+                }
+            }
+            warn_if_url_has_encoded_quotes(target_url);
             post_command_snapshot(client, base_url, &session_id).await;
         }
         Err(err) => {
@@ -1694,7 +1881,10 @@ async fn handle_goto(
             let capabilities = build_open_session_capabilities(tool_params);
             let retry_id =
                 create_session(client, base_url, &state, session_name, Some(capabilities)).await?;
-            cli_println!("Session opened: {}", retry_id);
+            cli_println!(
+                "{}",
+                format_session_opened_message(session_name, &retry_id)
+            );
             params["sessionId"] = json!(retry_id.clone());
 
             match call_tool(client, base_url, tool_name, params).await {
@@ -1702,6 +1892,23 @@ async fn handle_goto(
                     if !result.is_empty() {
                         cli_println!("{}", result);
                     }
+                    // Detect redirects: compare the final URL with the requested URL
+                    let final_url = current_session_url(client, base_url, session_name)
+                        .await
+                        .unwrap_or_else(|_| target_url.to_string());
+                    if !urls_match_for_display(&final_url, target_url) {
+                        cli_println!(
+                            "Navigated to {} (redirected from {})",
+                            final_url,
+                            target_url
+                        );
+                    } else {
+                        cli_println!("Navigated to {}", target_url);
+                    }
+                    if !json_active() {
+                        cli_println!("Page loaded. Use `wait --load networkidle` if content appears incomplete (e.g. async-rendered SPAs).");
+                    }
+                    warn_if_url_has_encoded_quotes(target_url);
                     post_command_snapshot(client, base_url, &retry_id).await;
                 }
                 Err(retry_err) => {
@@ -1719,6 +1926,25 @@ async fn handle_goto(
     }
 
     Ok(())
+}
+
+/// Compare two URLs for display purposes — treats URLs that differ only by a
+/// trailing slash (or its absence) as equivalent.
+fn urls_match_for_display(a: &str, b: &str) -> bool {
+    a.trim_end_matches('/').trim().eq_ignore_ascii_case(b.trim_end_matches('/').trim())
+}
+
+/// Warn the user when a URL contains percent-encoded quotes (%22),
+/// which typically indicates malformed HTML href attributes.
+fn warn_if_url_has_encoded_quotes(target_url: &str) {
+    if target_url.contains("%22") {
+        let cleaned = target_url.replace("%22", "");
+        eprintln!(
+            "⚠️  URL contains encoded quotes (%22): {target_url}\n\
+             💡 This usually means the link element has malformed escaped-quote attributes.\n\
+             💡 Try the corrected URL instead: goto \"{cleaned}\""
+        );
+    }
 }
 
 fn is_timeout_error_message(error: &str) -> bool {
@@ -1907,14 +2133,52 @@ async fn verify_click_navigation(
             .unwrap_or("");
         // Suppress warning in --json or --quiet mode to keep machine output clean.
         let suppressed = json_active() || quiet_active();
-        if !ref_val.is_empty() && !suppressed {
-            eprintln!(
-                "⚠️  Click on {} did not result in navigation — page URL is unchanged. \
-                 The element may be off-screen; try scrolling it into view first or \
-                 use --follow to detect new-tab navigation.",
-                ref_val
-            );
+
+        if ref_val.is_empty() || suppressed {
+            return;
         }
+
+        // CDP click may not trigger navigation when the page intercepts
+        // clicks via JavaScript (e.g. Baidu search results with custom
+        // routing).  Try a JS-based click as a fallback — element.click()
+        // bypasses CDP event handling and triggers the page's own handlers.
+        let js_fallback = call_tool(
+            client,
+            base_url,
+            "browser_evaluate",
+            json!({
+                "sessionId": session_id,
+                "expression": "element => element.click()",
+                "ref": ref_val,
+            }),
+        )
+        .await;
+
+        if js_fallback.is_ok() {
+            // Check if the JS click triggered navigation
+            let url_after_js = call_tool(
+                client,
+                base_url,
+                "page_url",
+                json!({ "sessionId": session_id }),
+            )
+            .await
+            .ok();
+
+            let navigated = url_after_js.as_ref().map_or(false, |u| u != before);
+            if navigated {
+                // Suppress the warning — navigation succeeded via fallback
+                return;
+            }
+        }
+
+        eprintln!(
+            "⚠️  Click on {} did not result in navigation — page URL is unchanged. \
+             The site may intercept clicks via JavaScript (common on Baidu, etc.). \
+             Workaround: extract the link's href with `eval` and navigate with `goto`:\n  \
+             eval 'document.querySelector(\\'[data-ref=\"{}\"\\']')?.getAttribute(\\'href\\')'\n  goto <extracted-url>",
+            ref_val, ref_val
+        );
     }
 }
 
@@ -1985,29 +2249,33 @@ async fn handle_tab_list(
     .await?;
 
     let tabs = parse_tab_list(&result);
-    if tabs.is_empty() {
-        if json_active() {
-            cli_println!("[]");
-        } else {
-            cli_println!("No tabs found.");
-        }
-        return Ok(());
-    }
+
+    // Build structured tab data regardless of output mode.
+    // Normalize GUIDs for consistent display: numeric Chrome tab IDs from
+    // extension sessions get a `chrome:` prefix to distinguish them from
+    // the 32-char hex GUIDs used by regular Browser4 sessions.
+    let json_tabs: Vec<Value> = tabs
+        .iter()
+        .map(|t| {
+            json!({
+                "index": t.index,
+                "guid": format_guid_display(t.guid.as_deref()),
+                "url": t.url,
+                "title": t.title,
+            })
+        })
+        .collect();
 
     if json_active() {
-        // Machine-readable JSON (consistent with other commands' --json behavior)
-        let json_tabs: Vec<Value> = tabs
-            .iter()
-            .map(|t| {
-                json!({
-                    "index": t.index,
-                    "guid": t.guid,
-                    "url": t.url,
-                    "title": t.title,
-                })
-            })
-            .collect();
-        cli_println!("{}", serde_json::to_string_pretty(&json_tabs).unwrap_or_default());
+        // In --json mode, add tabs to the JSON envelope (cli_println! is
+        // suppressed, so we must use json_field).  Also include page metadata
+        // for context since tab-list does NOT trigger a post-command snapshot.
+        json_field("tabs", json!(json_tabs));
+        // Also set human-readable fields so the JSON envelope has context.
+        json_field("count", json!(tabs.len()));
+    } else if tabs.is_empty() {
+        cli_println!("No tabs found.");
+        return Ok(());
     } else {
         // Human-readable table: Index | GUID | Title | URL
         let idx_w = "Index".len().max(
@@ -2038,8 +2306,10 @@ async fn handle_tab_list(
             url_w = url_w,
         );
         for tab in &tabs {
-            let guid_display = tab.guid.as_deref().unwrap_or("-");
-            let title = if tab.title.len() > 60 {
+            let guid_display = format_guid_display(tab.guid.as_deref());
+            let title = if tab.title.is_empty() {
+                "(no title)".to_string()
+            } else if tab.title.len() > 60 {
                 format!("{}…", &tab.title[..59])
             } else {
                 tab.title.clone()
@@ -2079,13 +2349,22 @@ async fn handle_tab_new(
     })
     .await?;
 
-    cli_println!("{}", result);
-
     // Parse the new tab's GUID from the "new" action response so we can
     // reliably find it in the tab list regardless of internal ordering.
-    let new_guid: Option<String> = serde_json::from_str::<Value>(&result)
+    let new_guid_raw: Option<String> = serde_json::from_str::<Value>(&result)
         .ok()
         .and_then(|v| v.get("guid").and_then(|g| g.as_str().map(String::from)));
+
+    let new_guid: Option<String> = new_guid_raw.clone();
+
+    // Print a friendly message with the consistently-formatted GUID
+    // (extension sessions get a `chrome:` prefix just like tab-list output).
+    let guid_display = format_guid_display(new_guid_raw.as_deref());
+    let url = tool_params
+        .get("url")
+        .and_then(|v| v.as_str())
+        .unwrap_or("about:blank");
+    cli_println!("Created tab with GUID: {} ({})", guid_display, url);
 
     // Auto-switch to the newly created tab by listing tabs, locating the
     // entry whose guid matches, and issuing a select action.
@@ -2138,11 +2417,295 @@ async fn handle_tab_new(
             .and_then(|v| v.as_str())
             .unwrap_or("about:blank");
         cli_println!("Switched to tab {} ({})", new_index, url);
+        // In JSON mode, add the new tab's info to the envelope (cli_println!
+        // is suppressed, so we must use json_field).
+        json_field("tab", json!({
+            "index": new_index,
+            "url": url,
+            "guid": format_guid_display(new_tab.guid.as_deref()),
+        }));
     } else {
         // Couldn't parse the tab list; still show a tip
         if !json_active() {
             eprintln!("💡 Tip: Use `tab-select <index>` to switch to the new tab.");
         }
+    }
+
+    Ok(())
+}
+
+/// Handle `tab-select` with user-friendly output instead of raw driver JSON.
+async fn handle_tab_select(
+    client: &Client,
+    base_url: &str,
+    tool_params: &Value,
+    session_name: Option<&str>,
+) -> Result<(), String> {
+    // Resolve which tab will be selected before the switch so we can report
+    // its URL and index.
+    let list_before = with_session(client, base_url, session_name, false, |session_id| {
+        let client = client.clone();
+        let base_url = base_url.to_string();
+        async move {
+            call_tool(
+                &client,
+                &base_url,
+                "browser_tabs",
+                json!({ "sessionId": session_id, "action": "list" }),
+            )
+            .await
+        }
+    })
+    .await
+    .ok()
+    .and_then(|r| {
+        let tabs = parse_tab_list(&r);
+        if tabs.is_empty() {
+            None
+        } else {
+            Some(tabs)
+        }
+    });
+
+    // Perform the tab switch.
+    let _result = with_session(client, base_url, session_name, false, |session_id| {
+        let client = client.clone();
+        let base_url = base_url.to_string();
+        let mut params = tool_params.clone();
+        async move {
+            params["sessionId"] = json!(session_id);
+            call_tool(&client, &base_url, "browser_tabs", params).await
+        }
+    })
+    .await?;
+
+    // Resolve what was selected for a friendly message.
+    let index_opt = tool_params
+        .get("index")
+        .and_then(|v| v.as_u64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+        .map(|n| n as usize);
+    let guid_opt = tool_params
+        .get("tabId")
+        .and_then(|v| v.as_str())
+        .map(String::from);
+
+    if let Some(ref tabs) = list_before {
+        let target = tabs.iter().find(|t| {
+            if let Some(idx) = index_opt {
+                t.index == idx
+            } else if let Some(ref g) = guid_opt {
+                t.guid.as_deref() == Some(g.as_str())
+            } else {
+                false
+            }
+        });
+        if let Some(t) = target {
+            cli_println!("Switched to tab {} ({})", t.index, t.url);
+            json_field("selected_tab", json!({
+                "index": t.index,
+                "url": t.url,
+                "guid": format_guid_display(t.guid.as_deref()),
+            }));
+        } else {
+            cli_println!("Tab switched.");
+        }
+    } else {
+        cli_println!("Tab switched.");
+    }
+
+    Ok(())
+}
+
+/// Handle `tab-close` with user-friendly output instead of bare `true`.
+async fn handle_tab_close(
+    client: &Client,
+    base_url: &str,
+    tool_params: &Value,
+    session_name: Option<&str>,
+) -> Result<(), String> {
+    // Resolve which tab will be closed before the operation.
+    let tabs_before = with_session(client, base_url, session_name, false, |session_id| {
+        let client = client.clone();
+        let base_url = base_url.to_string();
+        async move {
+            call_tool(
+                &client,
+                &base_url,
+                "browser_tabs",
+                json!({ "sessionId": session_id, "action": "list" }),
+            )
+            .await
+        }
+    })
+    .await
+    .ok()
+    .and_then(|r| {
+        let tabs = parse_tab_list(&r);
+        if tabs.is_empty() {
+            None
+        } else {
+            Some(tabs)
+        }
+    });
+
+    let was_last_tab = tabs_before.as_ref().map_or(false, |t| t.len() == 1);
+
+    // Resolve which tab was targeted for a friendly message.
+    let index_opt = tool_params
+        .get("index")
+        .and_then(|v| v.as_u64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+        .map(|n| n as usize);
+    let guid_opt = tool_params
+        .get("tabId")
+        .and_then(|v| v.as_str())
+        .map(String::from);
+
+    let closed_tab_info = tabs_before.as_ref().and_then(|tabs| {
+        tabs.iter().find(|t| {
+            if let Some(idx) = index_opt {
+                t.index == idx
+            } else if let Some(ref g) = guid_opt {
+                t.guid.as_deref() == Some(g.as_str())
+            } else {
+                // No index, no guid → closing current tab (first tab)
+                t.index == 0
+            }
+        })
+    });
+
+    // Perform the close.
+    let close_result = with_session(client, base_url, session_name, false, |session_id| {
+        let client = client.clone();
+        let base_url = base_url.to_string();
+        let mut params = tool_params.clone();
+        async move {
+            params["sessionId"] = json!(session_id);
+            call_tool(&client, &base_url, "browser_tabs", params).await
+        }
+    })
+    .await;
+
+    // When the backend reports an error but the tab was actually closed
+    // (common with extension sessions where chrome.tabs.remove may fire an
+    // error callback even after successful removal), verify by listing tabs
+    // and treat as a success if the target tab is gone.
+    let close_err: Option<String> = match close_result {
+        Ok(_) => None,
+        Err(ref e) => Some(e.clone()),
+    };
+
+    if let Some(ref err_msg) = close_err {
+        // Check if the tab was actually removed despite the error.
+        let tabs_after = with_session(client, base_url, session_name, false, |session_id| {
+            let client = client.clone();
+            let base_url = base_url.to_string();
+            async move {
+                call_tool(
+                    &client,
+                    &base_url,
+                    "browser_tabs",
+                    json!({ "sessionId": session_id, "action": "list" }),
+                )
+                .await
+            }
+        })
+        .await
+        .ok()
+        .and_then(|r| {
+            let tabs = parse_tab_list(&r);
+            if tabs.is_empty() { None } else { Some(tabs) }
+        });
+
+        let tab_still_exists = tabs_after.as_ref().and_then(|tabs| {
+            tabs.iter().find(|t| {
+                if let Some(idx) = index_opt {
+                    t.index == idx
+                } else if let Some(ref g) = guid_opt {
+                    t.guid.as_deref() == Some(g.as_str())
+                } else {
+                    t.index == 0
+                }
+            })
+        }).is_some();
+
+        if !tab_still_exists {
+            // Tab is gone after the close attempt. Distinguish two cases:
+            // 1. Tab existed before close → extension-session callback race
+            //    (chrome.tabs.remove fired an error callback after success).
+            //    Treat as success with a clean informational note.
+            // 2. Tab was never in the list → the GUID/index was invalid.
+            //    Surface the real error (tab not found).
+            if closed_tab_info.is_some() {
+                // Case 1: tab was verified present before the close — the
+                // close succeeded but the backend callback raced. Show a
+                // clean note without the raw backend ERROR text.
+                if !json_active() {
+                    eprintln!(
+                        "Note: Tab closed (extension session — backend confirmation delayed)."
+                    );
+                }
+            } else {
+                // Case 2: tab was never present — the GUID/index is invalid.
+                // Surface a clean error message without raw backend traces.
+                if let Some(ref guid) = guid_opt {
+                    return Err(format!(
+                        "No tab found with GUID '{}'. Use `tab-list` to see current tabs.",
+                        guid
+                    ));
+                } else if let Some(idx) = index_opt {
+                    let count = tabs_before.as_ref().map_or(0, |t| t.len());
+                    return Err(format!(
+                        "Tab index {} is out of range. There {} {} tab{} (indices 0-{}).",
+                        idx,
+                        if count == 1 { "is" } else { "are" },
+                        count,
+                        if count == 1 { "" } else { "s" },
+                        if count > 0 { count - 1 } else { 0 }
+                    ));
+                } else {
+                    return Err("No tab to close — the current tab list is empty.".to_string());
+                }
+            }
+        } else {
+            // Tab still exists — the error is real.
+            return Err(err_msg.clone());
+        }
+    }
+
+    // Emit friendly close message.
+    if let Some(t) = closed_tab_info {
+        if let Some(ref guid) = t.guid {
+            cli_println!("Closed tab {} ({} — GUID: {})", t.index, t.url, guid);
+        } else {
+            cli_println!("Closed tab {} ({})", t.index, t.url);
+        }
+        json_field("closed_tab", json!({
+            "index": t.index,
+            "url": t.url,
+            "guid": format_guid_display(t.guid.as_deref()),
+        }));
+    } else if let Some(ref guid) = guid_opt {
+        cli_println!("Closed tab with GUID: {}", guid);
+        json_field("closed_tab", json!({
+            "guid": guid.clone(),
+        }));
+    } else if let Some(idx) = index_opt {
+        cli_println!("Closed tab {}", idx);
+        json_field("closed_tab", json!({
+            "index": idx,
+        }));
+    } else {
+        cli_println!("Closed current tab.");
+        json_field("closed_tab", json!({}));
+    }
+
+    // When closing the last tab, Chrome automatically creates a replacement
+    // tab (which may or may not be blank depending on Chrome's behavior) —
+    // warn the user so they understand the tab count didn't go to zero.
+    if was_last_tab && !json_active() {
+        eprintln!(
+            "Note: Chrome requires at least one open tab — a replacement tab was created."
+        );
     }
 
     Ok(())
@@ -2169,6 +2732,58 @@ async fn handle_close_all(client: &Client, base_url: &str) -> Result<(), String>
     if !close_summary.errors.is_empty() {
         eprintln!("close-all warnings: {}", close_summary.errors.join(" | "));
     }
+    Ok(())
+}
+
+/// Promote a named session to the default (unnamed) slot.
+///
+/// This command operates entirely on local state files — it does not contact the
+/// backend.  If the named session's browser tab has been killed externally, the
+/// promotion will succeed locally but subsequent commands will fail with
+/// backend errors.  Use `list` to verify the session is still active before
+/// promoting.
+async fn handle_session_default(tool_params: &Value) -> Result<(), String> {
+    let name = tool_params
+        .get("name")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "A session name is required: session-default <name>".to_string())?;
+
+    // Read the named session state.
+    let named_state = read_state(None, Some(name));
+    let named_id = named_state.session_id.as_deref().unwrap_or("?");
+    if named_state.session_id.is_none() {
+        return Err(format!(
+            "No session found with name '{}'. Use `list` to see all tracked sessions.",
+            name
+        ));
+    }
+
+    // Warn if an existing default session will be overwritten.
+    let existing_default = read_state(None, None);
+    if let Some(ref existing_id) = existing_default.session_id {
+        eprintln!(
+            "NOTE: Replacing existing default session ({}) with '{}' ({}).",
+            existing_id, name, named_id
+        );
+    }
+
+    // Write the named session state to the default (unnamed) slot.
+    let mut default_state = named_state.clone();
+    default_state.session_name = None; // Clear the name — it's now the default
+    default_state.last_accessed_at = Some(Utc::now().to_rfc3339());
+    write_state(&default_state, None, None).map_err(|e| e.to_string())?;
+
+    // Remove the named session file so it doesn't point to the same live
+    // session as the default slot — that would create a split state where
+    // closing one slot leaves a stale reference in the other.
+    clear_state(None, Some(name));
+
+    cli_println!("Session '{}' ({}) is now the DEFAULT session.", name, named_id);
+    cli_println!("Subsequent commands will target this session without needing -s.");
+    json_field("session_name", json!(name));
+    json_field("session_id", json!(named_id));
     Ok(())
 }
 
@@ -2577,7 +3192,7 @@ struct SessionRow {
     next_open: String,
 }
 
-async fn handle_list(client: &Client, base_url: &str) -> Result<(), String> {
+async fn handle_list(client: &Client, base_url: &str, verbose: bool) -> Result<(), String> {
     let (backend_sessions, backend_note): (Option<Vec<BackendSessionRecord>>, Option<String>) =
         match call_tool(client, base_url, "list_sessions", json!({})).await {
             Ok(result) => (Some(parse_backend_session_records(&result)), None),
@@ -2670,15 +3285,31 @@ async fn handle_list(client: &Client, base_url: &str) -> Result<(), String> {
         ]
     }).collect();
 
+    let session_id_max_width: usize = if verbose { 0 } else { 40 };
     let table = Table::new(&[
         "Name", "Session ID", "Status", "Created", "Last Access", "Connection", "Next open",
     ])
     .min_widths(&[4, 10, 8, 19, 19, 10, 9])
-    .max_widths(&[30, 40, 8, 19, 19, 50, 0])
+    .max_widths(&[30, session_id_max_width, 8, 19, 19, 50, 0])
     .truncate(true)
     .add_rows(&table_rows);
 
     cli_println!("{}", table.render().trim_end());
+
+    // Show empty-state message when no sessions are active
+    if rows.is_empty() {
+        cli_println!("\nNo active browser sessions.");
+    }
+
+    // Explain the (default) session if present — new users often wonder
+    // where it came from.
+    let has_default = rows.iter().any(|r| r.name == "(default)");
+    if has_default {
+        cli_println!(
+            "\n(default) = unnamed session auto-created by goto/open without -s <name>. \
+             It is safe to close or switch away from with `session-default <name>`."
+        );
+    }
 
     for row in &rows {
         json_sessions.push(json!({
@@ -2896,6 +3527,21 @@ fn session_is_active_in_records(records: &[BackendSessionRecord], session_id: &s
     records.iter().any(|record| {
         record.session_id == session_id && session_status_is_active(record.status.as_deref())
     })
+}
+
+/// Query the backend via `list_sessions` and check whether the given session
+/// is still active.  Returns `false` when the backend is unreachable (the
+/// session is effectively stale from the user's perspective) or when any
+/// error occurs.
+async fn session_is_active_in_state(
+    client: &Client,
+    base_url: &str,
+    session_id: &str,
+) -> bool {
+    match call_tool(client, base_url, "list_sessions", json!({})).await {
+        Ok(result) => session_is_active(&result, session_id),
+        Err(_) => false,
+    }
 }
 
 fn session_is_active(result: &str, session_id: &str) -> bool {
@@ -3486,7 +4132,7 @@ async fn handle_snapshot(
         )
     } else {
         format!(
-            "# Snapshot — full viewport (viewport 0 by default).\n\
+            "# Snapshot — current viewport (use -v N for other viewports, -v all for full page).\n\
              # Use `browser4-cli snapshot grep <pattern>` to search the tree.\n"
         )
     };
@@ -3625,7 +4271,8 @@ async fn handle_snapshot(
         // Hint: suggest --stdout to print inline instead of opening the file
         if !json_active() {
             eprintln!(
-                "💡 Tip: Use `--stdout` to print element refs inline instead of opening the snapshot file"
+                "💡 Tip: Use `--stdout` to print element refs inline instead of opening the snapshot file.\n\
+                 \x20  Use `snapshot grep <pattern>` to search the accessibility tree — it always shows matches inline."
             );
         }
         // Brief preview: show first few non-comment lines of the snapshot
@@ -3633,15 +4280,15 @@ async fn handle_snapshot(
             let preview_lines: Vec<&str> = snap
                 .lines()
                 .filter(|line| !line.starts_with('#') && !line.trim().is_empty())
-                .take(10)
+                .take(30)
                 .collect();
             if !preview_lines.is_empty() {
                 eprintln!("\n--- Snapshot preview (first {} lines) ---", preview_lines.len());
                 for line in &preview_lines {
                     eprintln!("{}", line);
                 }
-                if snap.lines().filter(|l| !l.starts_with('#') && !l.trim().is_empty()).count() > 10 {
-                    eprintln!("... (use --stdout or open the file for full content)");
+                if snap.lines().filter(|l| !l.starts_with('#') && !l.trim().is_empty()).count() > 30 {
+                    eprintln!("... (use --stdout for full output, --page N for more)");
                 }
                 eprintln!("---");
             }
@@ -3659,10 +4306,9 @@ async fn handle_snapshot(
         if is_nonzero_viewport && snap_lines <= 20 && !json_active() {
             eprintln!(
                 "⚠️  Viewport snapshot for '{}' contains only {} lines ({} nodes). \
-                 The accessibility tree may not have been re-expanded after scrolling. \
-                 This is a known server-side limitation. As a workaround, use \
-                 `snapshot -v 0` for the current viewport or `snapshot grep <pattern>` \
-                 to search the full tree.",
+                 The page may not have rendered content at this viewport yet. \
+                 Try `snapshot -v 0` for the current visible area or \
+                 `snapshot grep <pattern>` to search the full tree.",
                 viewport_val, snap_lines, snap_lines
             );
         }
@@ -3690,7 +4336,7 @@ async fn handle_snapshot(
         if snap_len > 10_240 && !has_filter {
             eprintln!(
                 "\n💡 Tip: Snapshot is large ({} KB, {} lines). To focus the output, read the page viewport by viewport — just like a human scrolls. Important content usually comes first:\n\
-                   --viewport, -v <N>       Capture a specific viewport (start with -v 0)\n\
+                   --viewport, -v <N>       Capture a specific viewport (-v 0 = current, -v 1 = next below)\n\
                    -s, --selector <CSS>     Scope to a CSS selector\n\
                    -i, --interactive        Only show interactive elements\n\
                    -d, --depth <N>           Limit tree depth\n\
@@ -3752,6 +4398,269 @@ async fn handle_snapshot_grep(
 
     let (page, page_size, show_all) = parse_page_opts(tool_params);
     run_grep_on_source(&source, grep_options, "snapshot", page, page_size, show_all)
+}
+
+/// List saved snapshot files with timestamps and sizes.
+fn handle_snapshot_list(args: &Value) -> Result<(), String> {
+    let snap_dir = snapshot::snapshot_dir();
+    if !snap_dir.is_dir() {
+        cli_println!("No snapshot directory found at {}", snap_dir.display());
+        cli_println!("Run a snapshot command first to create snapshot files.");
+        return Ok(());
+    }
+
+    let show_all = args.get("all").and_then(|v| v.as_bool()).unwrap_or(false);
+    let count_limit: usize = args
+        .get("count")
+        .and_then(|v| v.as_str().or_else(|| v.as_i64().map(|_| "")))
+        .and_then(|s| {
+            if s.is_empty() {
+                // numeric value from JSON
+                args.get("count")?.as_i64().map(|n| n as usize)
+            } else {
+                s.parse().ok()
+            }
+        })
+        .unwrap_or(20);
+
+    let mut entries: Vec<(String, u64, String)> = Vec::new(); // (name, size, modified)
+
+    // Collect main snapshot directory entries
+    if let Ok(iter) = std::fs::read_dir(&snap_dir) {
+        for entry in iter.flatten() {
+            let path = entry.path();
+            if path.extension().map_or(false, |ext| ext == "yml") {
+                if let Ok(meta) = path.metadata() {
+                    let size = meta.len();
+                    let modified = meta
+                        .modified()
+                        .ok()
+                        .and_then(|t| {
+                            let dt: chrono::DateTime<chrono::Utc> = t.into();
+                            Some(dt.format("%Y-%m-%d %H:%M:%S UTC").to_string())
+                        })
+                        .unwrap_or_else(|| "unknown".to_string());
+                    let name = path
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .to_string();
+                    entries.push((name, size, modified));
+                }
+            }
+        }
+    }
+
+    // Collect archive entries if --all
+    if show_all {
+        let archive_dir = snapshot::archive_dir();
+        if archive_dir.is_dir() {
+            if let Ok(date_dirs) = std::fs::read_dir(&archive_dir) {
+                for date_dir in date_dirs.flatten() {
+                    if date_dir.path().is_dir() {
+                        if let Ok(files) = std::fs::read_dir(date_dir.path()) {
+                            for file in files.flatten() {
+                                let path = file.path();
+                                if path.extension().map_or(false, |ext| ext == "yml") {
+                                    if let Ok(meta) = path.metadata() {
+                                        let size = meta.len();
+                                        let modified = meta
+                                            .modified()
+                                            .ok()
+                                            .and_then(|t| {
+                                                let dt: chrono::DateTime<chrono::Utc> = t.into();
+                                                Some(dt.format("%Y-%m-%d %H:%M:%S UTC").to_string())
+                                            })
+                                            .unwrap_or_else(|| "unknown".to_string());
+                                        let date_folder = date_dir
+                                            .file_name()
+                                            .to_string_lossy()
+                                            .to_string();
+                                        let fname = path
+                                            .file_name()
+                                            .unwrap_or_default()
+                                            .to_string_lossy()
+                                            .to_string();
+                                        let name = format!("archive/{}/{}", date_folder, fname);
+                                        entries.push((name, size, modified));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Sort by name descending (timestamp-based names sort chronologically)
+    entries.sort_by(|a, b| b.0.cmp(&a.0));
+
+    let total = entries.len();
+    if total == 0 {
+        cli_println!("No snapshot files found.");
+        return Ok(());
+    }
+
+    // Limit to requested count
+    if entries.len() > count_limit {
+        entries.truncate(count_limit);
+    }
+
+    cli_println!(
+        "Snapshots in {} (showing {} of {} total):\n",
+        snap_dir.display(),
+        entries.len(),
+        total
+    );
+
+    // Widths: name col gets most space, size gets fixed width
+    let max_name = entries.iter().map(|(n, _, _)| n.len()).max().unwrap_or(40).min(80);
+    for (name, size, modified) in &entries {
+        let size_str = if *size >= 1024 * 1024 {
+            format!("{:>6.1} MB", *size as f64 / (1024.0 * 1024.0))
+        } else if *size >= 1024 {
+            format!("{:>6.1} KB", *size as f64 / 1024.0)
+        } else {
+            format!("{:>6} B", size)
+        };
+        cli_println!("  {:width$}  {}  {}", name, size_str, modified, width = max_name);
+    }
+
+    if total > entries.len() {
+        cli_println!(
+            "\n... and {} more. Use --all to include archived snapshots, -n to adjust count.",
+            total - entries.len()
+        );
+    }
+
+    Ok(())
+}
+
+/// Remove old snapshot files from the snapshot directory.
+fn handle_snapshot_clean(args: &Value) -> Result<(), String> {
+    use std::fs;
+    use std::path::PathBuf;
+
+    let snap_dir = snapshot::snapshot_dir();
+    let archive_dir = snapshot::archive_dir();
+    let remove_all = args.get("all").and_then(|v| v.as_bool()).unwrap_or(false);
+    let dry_run = args.get("dry-run").and_then(|v| v.as_bool()).unwrap_or(false);
+    let keep: usize = args
+        .get("keep")
+        .and_then(|v| {
+            if let Some(s) = v.as_str() {
+                s.parse().ok()
+            } else if let Some(n) = v.as_i64() {
+                Some(n as usize)
+            } else {
+                None
+            }
+        })
+        .unwrap_or(100);
+
+    // Collect main directory entries
+    let mut to_delete: Vec<(PathBuf, u64)> = Vec::new();
+
+    if snap_dir.is_dir() {
+        let mut entries: Vec<(PathBuf, u64)> = Vec::new();
+        if let Ok(iter) = fs::read_dir(&snap_dir) {
+            for entry in iter.flatten() {
+                let path = entry.path();
+                if path.extension().map_or(false, |ext| ext == "yml") {
+                    if let Ok(meta) = path.metadata() {
+                        entries.push((path, meta.len()));
+                    }
+                }
+            }
+        }
+        // Sort by modification time, newest first
+        entries.sort_by(|a, b| {
+            let ta = fs::metadata(&a.0).ok().and_then(|m| m.modified().ok());
+            let tb = fs::metadata(&b.0).ok().and_then(|m| m.modified().ok());
+            tb.cmp(&ta) // newest first
+        });
+
+        if remove_all {
+            to_delete = entries;
+        } else if entries.len() > keep {
+            to_delete = entries.split_off(keep);
+        }
+    }
+
+    // Collect archive files if --all
+    if remove_all && archive_dir.is_dir() {
+        if let Ok(date_dirs) = fs::read_dir(&archive_dir) {
+            for date_dir in date_dirs.flatten() {
+                if date_dir.path().is_dir() {
+                    if let Ok(files) = fs::read_dir(date_dir.path()) {
+                        for file in files.flatten() {
+                            let path = file.path();
+                            if path.extension().map_or(false, |ext| ext == "yml") {
+                                if let Ok(meta) = path.metadata() {
+                                    to_delete.push((path, meta.len()));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if to_delete.is_empty() {
+        cli_println!("No snapshot files to clean up.");
+        return Ok(());
+    }
+
+    let total_size: u64 = to_delete.iter().map(|(_, s)| s).sum();
+    let total_size_str = if total_size >= 1024 * 1024 {
+        format!("{:.1} MB", total_size as f64 / (1024.0 * 1024.0))
+    } else if total_size >= 1024 {
+        format!("{:.1} KB", total_size as f64 / 1024.0)
+    } else {
+        format!("{} bytes", total_size)
+    };
+
+    if dry_run {
+        cli_println!(
+            "Would delete {} snapshot file(s) ({} total). Use without --dry-run to confirm.",
+            to_delete.len(),
+            total_size_str
+        );
+        for (path, _size) in &to_delete {
+            cli_println!("  - {}", path.display());
+        }
+        return Ok(());
+    }
+
+    let mut deleted = 0;
+    for (path, _) in &to_delete {
+        if let Err(e) = fs::remove_file(path) {
+            eprintln!("Warning: failed to delete {}: {e}", path.display());
+        } else {
+            deleted += 1;
+        }
+    }
+
+    cli_println!(
+        "Cleaned up {} snapshot file(s) ({} freed).",
+        deleted,
+        total_size_str
+    );
+
+    // Clean empty archive subdirectories if --all
+    if remove_all && archive_dir.is_dir() {
+        if let Ok(date_dirs) = fs::read_dir(&archive_dir) {
+            for date_dir in date_dirs.flatten() {
+                if date_dir.path().is_dir() {
+                    let _ = fs::remove_dir(date_dir.path()); // Only works if empty
+                }
+            }
+        }
+    }
+
+    Ok(())
 }
 
 async fn handle_screenshot(
@@ -3879,7 +4788,36 @@ async fn handle_tool_command_with_options(
             cli_println!("null");
         } else if result.is_empty() {
             cli_println!("\"\"");
-        } else if eval_json {
+        }
+        // When eval returns empty or null, the page context may have changed
+        // (e.g. after htmlsnapshot capture or other commands that interact
+        // with the browser). Give the user a diagnostic hint.
+        let expression = tool_params
+            .get("expression")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        if result.is_empty() || result == "null" {
+            if !json_active() {
+                cli_println!(
+                    "💡 Tip: Eval returned empty/null. The page context may be stale.\n\
+                       Try re-navigating with: goto <url>\n\
+                       Or check the current page: eval \"window.location.href\""
+                );
+                // If the expression looked like it should produce output (e.g.
+                // `document.title`), offer a specific suggestion.
+                if expression.contains("document.title")
+                    || expression.contains("document.body")
+                    || expression.contains("document.querySelector")
+                {
+                    cli_println!(
+                        "   `{}` returned empty — the page may have changed\n\
+                           since your last navigation. Run `goto` first to restore the page context.",
+                        expression
+                    );
+                }
+            }
+        }
+        if eval_json {
             // --json: ensure output is valid JSON. Try to parse the result
             // as JSON first (objects, arrays, numbers, booleans, null); if
             // that fails, wrap it as a JSON string.
@@ -4116,7 +5054,7 @@ async fn handle_extract(
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
     raw_init(raw);
-    let extract_args = {
+    let mut extract_args = {
         let mut a = tool_params.clone();
         if let Value::Object(ref mut m) = a {
             m.remove("filename");
@@ -4125,6 +5063,17 @@ async fn handle_extract(
         }
         a
     };
+
+    // Resolve @file references for --schema (mirrors --sql @file behavior).
+    // Shell wrappers (b4w.sh, b4w.ps1) struggle with inline JSON containing
+    // colons, commas, and quotes.  @file.json avoids shell quoting entirely.
+    if let Some(schema_val) = extract_args.get("schema").and_then(|v| v.as_str()) {
+        if let Some(file_path) = schema_val.strip_prefix('@') {
+            let resolved = resolve_sql_file(file_path)
+                .map_err(|e| format!("--schema @file: {e}"))?;
+            extract_args["schema"] = json!(resolved);
+        }
+    }
 
     let combined = with_session(client, base_url, session_name, false, |session_id| {
         let client = client.clone();
@@ -4625,7 +5574,7 @@ async fn handle_html_snapshot_capture(
     }
     cli_println!("     htmlsnapshot inspect  # discover recurring patterns");
     if !url.is_empty() {
-        cli_println!("     htmlsnapshot query --sql \"SELECT dom_text(dom) as text FROM load_and_select(@url, 'a')\"");
+        cli_println!("     htmlsnapshot query --sql \"SELECT DOM_TEXT(DOM) AS text FROM DOM_LOAD_AND_SELECT(@url, 'a')\"");
     }
 
     Ok(())
@@ -4713,6 +5662,9 @@ async fn handle_html_snapshot_get(
     // practical limits for single-field extraction so it defaults to --all.
     let paginate = (field == "html") && !empty_result;
 
+    // Determine if this is a "get all" (querySelectorAll) call vs a "get" (single element)
+    let is_get_all = tool_name.ends_with("_all");
+
     if empty_result {
         let display_selector = if selector.is_empty() { ":root" } else { selector };
         cli_println!("{}", text);
@@ -4720,6 +5672,29 @@ async fn handle_html_snapshot_get(
             "No elements matched \"{}\". Try `htmlsnapshot inspect \"{}\"` to discover valid selectors, or run `htmlsnapshot` to see the full DOM tree.",
             display_selector, display_selector
         );
+    } else if is_get_all && !json_active() {
+        // For "get all" mode, warn when only 0–1 results are returned.
+        // A low count often means the CSS selector doesn't match the page's
+        // current structure (e.g. changed class names, different layout).
+        cli_println!("{}", text);
+        let result_count = if text.trim().starts_with('[') {
+            // Parse the JSON array to count elements (server returns a JSON array for get_all)
+            serde_json::from_str::<Vec<serde_json::Value>>(&text)
+                .map(|arr| arr.len())
+                .ok()
+        } else {
+            // String payload — count by line as a rough approximation
+            Some(text.lines().count())
+        };
+        if let Some(count) = result_count {
+            if count <= 1 {
+                let display_selector = if selector.is_empty() { ":root" } else { selector };
+                cli_println!(
+                    "Only {} result(s) found for \"{}\". The page structure may have changed since the snapshot was captured. Try `htmlsnapshot inspect \"{}\"` to discover current selectors.",
+                    count, display_selector, display_selector
+                );
+            }
+        }
     } else if paginate {
         if let Some(ref pm) = server_pagination {
             // Server already paginated — display as-is with server footer.
@@ -4975,37 +5950,76 @@ async fn handle_html_snapshot_query(
         // Try to parse the server JSON and extract the resultSet
         match serde_json::from_str::<Value>(&result) {
             Ok(parsed) => {
-                let rows: Option<&Vec<Value>> = parsed
+                // Detect scrape-session failures (417 Expectation Failed, 500, etc.)
+                // and surface them as actionable error messages instead of
+                // silently showing an empty resultSet.
+                let status_code = parsed
+                    .get("statusCode")
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(200);
+                let status = parsed
+                    .get("status")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let result_set_empty = parsed
                     .get("resultSet")
-                    .and_then(|rs| rs.as_array());
+                    .and_then(|v| v.as_array())
+                    .map(|a| a.is_empty())
+                    .unwrap_or(true);
 
-                match rows {
-                    Some(rows) if format.as_str() != "json" => {
-                        // Format as table or CSV
-                        let summary = format!("\n{} row{} returned.\n", rows.len(), if rows.len() == 1 { "" } else { "s" });
-                        match format.as_str() {
-                            "csv" => format_csv(rows) + &summary,
-                            "table" => format_table(rows) + &summary,
-                            _ => unreachable!(),
-                        }
+                if status_code == 417 {
+                    cli_println!("### X-SQL Query Failed (417 Expectation Failed)");
+                    cli_println!("- The scrape session closed before the query could execute.");
+                    cli_println!("  This is a known backend race condition. Try these workarounds:");
+                    cli_println!("  1. Re-run the query — the session may recover on retry.");
+                    cli_println!("  2. Use `htmlsnapshot get` for simple extractions instead of X-SQL.");
+                    cli_println!("  3. Use `eval --file script.js` with DOM APIs for complex extraction.");
+                    cli_println!("  4. Ensure CSS selectors use single quotes in X-SQL (SQL string literal syntax).");
+                    if !json_active() {
+                        cli_println!("\n  Raw response:");
                     }
-                    _ => {
-                        // JSON format: pretty-print resultSet or full result
-                        let output_data = if let Some(result_set) = parsed.get("resultSet") {
-                            serde_json::to_string_pretty(result_set)
-                                .unwrap_or_else(|_| result.clone())
-                        } else if result_only {
-                            if !json_active() {
-                                eprintln!(
-                                    "⚠️  --result-only set but no 'resultSet' field found in response. \
-                                     Showing full result."
-                                );
+                    result.clone()
+                } else if status_code >= 500 && result_set_empty {
+                    cli_println!("### X-SQL Query Failed ({} {})", status_code, status);
+                    cli_println!("- The backend scrape engine encountered an error.");
+                    cli_println!("  Check the backend logs for details, or try `htmlsnapshot get` as an alternative.");
+                    if !json_active() {
+                        cli_println!("\n  Raw response:");
+                    }
+                    result.clone()
+                } else {
+                    let rows: Option<&Vec<Value>> = parsed
+                        .get("resultSet")
+                        .and_then(|rs| rs.as_array());
+
+                    match rows {
+                        Some(rows) if format.as_str() != "json" => {
+                            // Format as table or CSV
+                            let summary = format!("\n{} row{} returned.\n", rows.len(), if rows.len() == 1 { "" } else { "s" });
+                            match format.as_str() {
+                                "csv" => format_csv(rows) + &summary,
+                                "table" => format_table(rows) + &summary,
+                                _ => unreachable!(),
                             }
-                            result.clone()
-                        } else {
-                            result.clone()
-                        };
-                        output_data
+                        }
+                        _ => {
+                            // JSON format: pretty-print resultSet or full result
+                            let output_data = if let Some(result_set) = parsed.get("resultSet") {
+                                serde_json::to_string_pretty(result_set)
+                                    .unwrap_or_else(|_| result.clone())
+                            } else if result_only {
+                                if !json_active() {
+                                    eprintln!(
+                                        "⚠️  --result-only set but no 'resultSet' field found in response. \
+                                         Showing full result."
+                                    );
+                                }
+                                result.clone()
+                            } else {
+                                result.clone()
+                            };
+                            output_data
+                        }
                     }
                 }
             }
@@ -5038,6 +6052,11 @@ async fn handle_html_snapshot_query(
         cli_println!(
             "\n💡 Tip: Use --sql @file.sql to avoid shell quoting issues. \
              Write your X-SQL query to a file and reference it with @filename.sql."
+        );
+        cli_println!(
+            "   Also: CSS selectors in X-SQL must use single quotes (SQL string literal syntax). \
+             Double quotes are interpreted as SQL identifiers.\n\
+               Example: DOM_FIRST_TEXT(DOM, 'h1') — NOT DOM_FIRST_TEXT(DOM, \"h1\")"
         );
     }
 
@@ -5420,6 +6439,16 @@ fn format_summary_outline(yaml: &str, verbose: bool) -> String {
         } else {
             outline.push_str("  # Add --verbose to see internal scoring and score legend.\n");
         }
+
+        // Warn if any suggested selector contains backslash escapes
+        // (e.g. from HTML with literal quotes in attribute values).
+        let has_escaped = linkgroup_selectors.iter().any(|s| s.contains('\\'));
+        if has_escaped {
+            outline.push_str(
+                "  # ⚠️  Some selectors contain backslash-escaped characters and may need manual\n\
+                 \x20 #     un-escaping before use. Try simplified selectors like `#id` or `tag` instead.\n"
+            );
+        }
     }
 
     outline
@@ -5632,7 +6661,32 @@ async fn handle_html_snapshot_inspect(
         if let (Some(sel), Some(count)) = (speculative_selector, speculative_count) {
             render_speculative(sel, count);
         }
-        cli_println!("- No elements matched. Check the CSS selector and ensure a HTML snapshot has been captured (`browser4-cli htmlsnapshot`).");
+        // If the selector is :root (the default, meaning "everything") and there
+        // are 0 matches, the most likely cause is that no HTML snapshot has been
+        // captured yet. Make this very explicit.
+        if selector == ":root" {
+            cli_println!("");
+            cli_println!("  ⚠️  No HTML snapshot found. htmlsnapshot inspect requires a prior capture.");
+            cli_println!("  Run this first:  browser4-cli htmlsnapshot");
+            cli_println!("  Then re-run:     browser4-cli htmlsnapshot inspect");
+        } else {
+            cli_println!("- No elements matched. Check the CSS selector and ensure a HTML snapshot has been captured (`browser4-cli htmlsnapshot`).");
+        }
+        // Add actionable troubleshooting hints
+        if selector.starts_with('.') {
+            let class_hint = selector.trim_start_matches('.');
+            cli_println!("  💡 The selector looks like a class selector. If the page uses non-standard class names");
+            cli_println!("     (e.g. with embedded quotes or special characters), try an attribute selector instead:");
+            cli_println!("       htmlsnapshot inspect \"[class*=\"{}\"]\"", class_hint);
+            cli_println!("     Or search the raw HTML for this class name:");
+            cli_println!("       htmlsnapshot grep \"{}\"", class_hint);
+        } else {
+            cli_println!("  💡 Try these troubleshooting steps:");
+            cli_println!("       htmlsnapshot grep \"{}\"    # search raw HTML for matching text", selector.trim_matches(|c: char| c == '.' || c == '#' || c == '[' || c == ']' || c == '"' || c == '\'' || c == '=' || c == '*'));
+            cli_println!("       htmlsnapshot export          # inspect the actual HTML structure");
+            cli_println!("       htmlsnapshot inspect          # auto-discover recurring CSS selectors");
+            cli_println!("       htmlsnapshot inspect --max 10 --depth 3   # deeper discovery");
+        }
         json_field("matchCount", json!(0));
         json_field("selector", json!(selector));
         return Ok(());
@@ -5690,6 +6744,20 @@ async fn handle_html_snapshot_inspect(
                 }
                 if !text.is_empty() {
                     cli_println!("     text: \"{}\"", text);
+                }
+
+                // Truncation hints: when visible text ends with "..." (CSS text-overflow),
+                // the backend may suggest child-element attributes with fuller text.
+                if let Some(hints) = sample.get("truncationHints").and_then(|v| v.as_array()) {
+                    if !hints.is_empty() {
+                        cli_println!("     💡 Visible text appears truncated. For full values, try attribute extraction:");
+                        for hint in hints {
+                            let child_sel = hint.get("childSelector").and_then(|v| v.as_str()).unwrap_or("");
+                            let attr = hint.get("attribute").and_then(|v| v.as_str()).unwrap_or("");
+                            let sample_val = hint.get("sampleValue").and_then(|v| v.as_str()).unwrap_or("");
+                            cli_println!("        DOM_FIRST_ATTR(DOM, '{}', '{}') → \"{}\"", child_sel, attr, sample_val);
+                        }
+                    }
                 }
 
                 // Children
@@ -5833,7 +6901,7 @@ async fn handle_html_snapshot_inspect(
             cli_println!("     htmlsnapshot get attr \"a[href]\" href --limit 20  # link URLs");
             cli_println!("     htmlsnapshot get attr \"img[src]:expr(width > 200 && height > 200)\" src --limit 20  # large images only");
             if let Some(first) = actionable.first() {
-                cli_println!("     htmlsnapshot query --sql \"SELECT dom_text(dom) as text FROM load_and_select(@url, '{}')\"", first);
+                cli_println!("     htmlsnapshot query --sql \"SELECT DOM_TEXT(DOM) AS text FROM DOM_LOAD_AND_SELECT(@url, '{}')\"", first);
             }
         } else {
             // Fallback when no quality selectors found (e.g., all bare tags)
@@ -5917,26 +6985,69 @@ struct GrepOptions {
 }
 
 fn parse_grep_options(tool_params: &Value) -> Result<GrepOptions, String> {
+    // Extract pattern value, handling both string and numeric JSON values.
+    // Numeric positional args (e.g. `899`) get stored as JSON numbers by
+    // build_command_args(), so v.as_str() returns None for them.
+    fn value_to_str(v: &Value) -> Option<String> {
+        v.as_str().map(|s| s.to_string())
+            .or_else(|| v.as_i64().map(|n| n.to_string()))
+            .or_else(|| v.as_f64().map(|n| n.to_string()))
+    }
     let pattern = tool_params
         .get("pattern")
-        .and_then(|v| v.as_str())
+        .and_then(value_to_str)
         .filter(|s| !s.is_empty())
-        .unwrap_or("")
-        .to_string();
+        .unwrap_or_default();
 
     // Collect -e / --regexp patterns (supports both single string and array
     // of strings when the flag is repeated, e.g. -e price -e rating -e stars).
     let extra_patterns: Vec<String> = match tool_params.get("regexp") {
         Some(Value::Array(arr)) => arr
             .iter()
-            .filter_map(|v| v.as_str().map(String::from))
+            .filter_map(|v| value_to_str(v))
             .collect(),
-        Some(Value::String(s)) if !s.is_empty() => vec![s.clone()],
+        Some(v) => {
+            let s = value_to_str(v).unwrap_or_default();
+            if s.is_empty() { vec![] } else { vec![s] }
+        }
         _ => vec![],
     };
 
     if pattern.is_empty() && extra_patterns.is_empty() {
-        return Err("Pattern is required. Provide a positional pattern, or use -e PATTERN (repeatable) for multiple patterns.".to_string());
+        // Check if the user provided --selector or --selector-all — they may
+        // want to view all content within a scoped element rather than grep.
+        let has_selector = tool_params
+            .get("selector")
+            .and_then(|v| v.as_str())
+            .map(|s| !s.is_empty())
+            .unwrap_or(false);
+        let has_selector_all = tool_params
+            .get("selector-all")
+            .and_then(|v| v.as_str())
+            .map(|s| !s.is_empty())
+            .unwrap_or(false);
+
+        let mut msg = "Pattern is required. Provide a positional pattern, or use -e PATTERN (repeatable) for multiple patterns.".to_string();
+        if has_selector {
+            let sel = tool_params
+                .get("selector")
+                .and_then(|v| v.as_str())
+                .unwrap_or("<selector>");
+            msg.push_str(&format!(
+                "\nTo view all HTML within \"{}\" without filtering, use:\n  htmlsnapshot get all html \"{}\"",
+                sel, sel
+            ));
+        } else if has_selector_all {
+            let sel = tool_params
+                .get("selector-all")
+                .and_then(|v| v.as_str())
+                .unwrap_or("<selector>");
+            msg.push_str(&format!(
+                "\nTo view all HTML across all \"{}\" elements without filtering, use:\n  htmlsnapshot get all html \"{}\"",
+                sel, sel
+            ));
+        }
+        return Err(msg);
     }
 
     let parse_usize = |key: &str| -> Option<usize> {
@@ -6162,6 +7273,7 @@ fn strip_html_scripts_and_styles(html: &str) -> String {
     let mut result = String::with_capacity(html.len());
     let bytes = html.as_bytes();
     let mut i = 0;
+    let mut byte_start: usize = 0; // start of pending non-script/non-style content
     let len = bytes.len();
 
     while i < len {
@@ -6177,6 +7289,12 @@ fn strip_html_scripts_and_styles(html: &str) -> String {
             };
 
             if tag_len > 0 {
+                // Flush any pending non-script content before this tag.
+                // html[byte_start..i] is a slice of the original valid UTF-8
+                // string, so this preserves all characters (including CJK).
+                if byte_start < i {
+                    result.push_str(&html[byte_start..i]);
+                }
                 // Find the closing tag (case-insensitive)
                 let close_lower = close_tag.to_lowercase();
                 if let Some(end_pos) = lower[i + tag_len..].find(&close_lower) {
@@ -6188,13 +7306,20 @@ fn strip_html_scripts_and_styles(html: &str) -> String {
                         result.push('\n');
                     }
                     i = abs_end;
+                    byte_start = i; // resume after the closing tag
                     continue;
                 }
                 // No closing tag found — fall through and output the '<' char.
+                // Reset byte_start to include everything up to and including '<'.
+                byte_start = i;
             }
         }
-        result.push(bytes[i] as char);
         i += 1;
+    }
+
+    // Flush any remaining content after the last script/style block.
+    if byte_start < len {
+        result.push_str(&html[byte_start..]);
     }
 
     result
@@ -6387,17 +7512,16 @@ fn run_grep_on_source(
             }
         }
 
-        let prefix = if show_line_numbers {
-            format!("{}:", line_idx + 1)
+        let is_match = matched_indices.contains(&line_idx);
+        // Standard grep convention: ':' marks matching lines, '-' marks context.
+        let marker = if is_match { ":" } else { "-" };
+        let line_num = if show_line_numbers {
+            format!("{}{}", line_idx + 1, marker)
         } else {
             String::new()
         };
 
-        if matched_indices.contains(&line_idx) {
-            output_parts.push(format!("{}{}", prefix, lines[line_idx]));
-        } else {
-            output_parts.push(format!("{}-{}", prefix, lines[line_idx]));
-        }
+        output_parts.push(format!("{}{}", line_num, lines[line_idx]));
         last_printed = Some(line_idx);
     }
 
@@ -7277,7 +8401,7 @@ async fn handle_agent_run(
     }
 
     cli_println!(
-        "Use 'browser4-cli agent status {}' to check progress, or 'browser4-cli agent list' to view all tracked tasks.",
+        "Use 'agent status {}' to check progress, or 'agent list' to view all tracked tasks.",
         task_id
     );
 
@@ -7450,6 +8574,20 @@ async fn handle_agent_result(
     }
 
     let result = get_command_result(client, base_url, id).await?;
+
+    // Detect empty result: the agent completed successfully but commandResult
+    // is {} — the extracted data is likely in instructResults instead.  Point
+    // the user at `agent status --json` to inspect instructResults.
+    let trimmed = result.trim();
+    let is_empty_result = trimmed == "{}" || trimmed.is_empty();
+    if is_empty_result && !json_active() {
+        cli_println!("⚠️  The result is empty ({}).", if trimmed.is_empty() { "no output" } else { "{}" });
+        cli_println!("The agent task may have completed successfully but the extracted data was");
+        cli_println!("not serialized into commandResult. Try:");
+        cli_println!("  agent status {} --json   (check instructResults for extracted data)", id);
+        cli_println!("  agent status {}          (check processState and message)", id);
+    }
+
     cli_println!("{}", result);
     json_field("task_id", json!(id));
     json_field("raw", json!(&result));
@@ -7494,8 +8632,6 @@ async fn handle_agent_list(
             if entry.command != "agent" {
                 continue;
             }
-            let was_already_completed =
-                entry.last_status == "completed" || entry.last_status == "done";
             if let Ok(status_json) = get_command_status(client, base_url, &entry.task_id).await {
                 if let Ok(parsed) = serde_json::from_str::<Value>(&status_json) {
                     let process_state = parsed.get("processState").and_then(|v| v.as_str()).unwrap_or("");
@@ -7503,8 +8639,10 @@ async fn handle_agent_list(
                     let status_code = parse_status_code_from_json(&parsed);
                     entry.last_status = friendly_agent_status(process_state, is_done, &status_code);
                     // Prefer backend finishTime; fall back to local clock.
+                    // Only set completed_at when it hasn't been set yet — once set,
+                    // keep the first completion timestamp (don't overwrite on later polls).
                     let now_completed = entry.last_status == "completed" || entry.last_status.starts_with("failed");
-                    if !was_already_completed && now_completed {
+                    if now_completed && entry.completed_at.is_none() {
                         if let Some(ts) = parsed.get("finishTime").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
                             entry.completed_at = Some(ts.to_string());
                         } else {
@@ -7516,7 +8654,7 @@ async fn handle_agent_list(
         }
         let _ = write_async_tasks(&list, None);
     } else {
-        cli_println!("Note: Backend unreachable — showing cached statuses. Start the server for live status.");
+        cli_println!("Note: Backend unreachable — showing cached statuses. Run `agent run <task>` or `open <url>` to auto-start the backend for live status.");
     }
 
     let filtered: Vec<_> = list.tasks.iter().filter(|t| t.command == "agent").cloned().collect();
@@ -7932,6 +9070,21 @@ async fn handle_swarm_query(
         if !task_ids.is_empty() {
             swarm_wait_for_jobs(client, base_url, &task_ids).await?;
         }
+    } else {
+        // Without --wait, jobs are submitted asynchronously. The user needs
+        // a way to track progress — otherwise submitted-but-not-monitored
+        // jobs look like they're hung.
+        cli_println!(
+            "\n💡 Tip: Add --wait to track progress and see results automatically.\n\
+               Without --wait, use these commands to monitor:\n  \
+               swarm status <task-id>  — check if a job is done\n  \
+               swarm result <task-id>  — get the result when complete\n  \
+               swarm list             — see all tracked tasks"
+        );
+        cli_println!(
+            "   If jobs appear stuck, run `swarm list` to check their status,\n\
+               or `swarm list --clear` to remove stale entries from prior sessions."
+        );
     }
 
     Ok(())
@@ -7989,6 +9142,32 @@ fn friendly_crawl_status(status: &str) -> String {
         s if s.contains("NOT_FOUND") => "failed (not found)".to_string(),
         other => other.to_lowercase(),
     }
+}
+
+/// Parse a relative time string like "1h", "30m", "1d" into a chrono DateTime.
+/// Returns None if the string is unparseable.
+fn parse_relative_time(s: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+    let s = s.trim();
+    let (amount_str, unit) = if let Some(stripped) = s.strip_suffix('h') {
+        (stripped.trim(), "h")
+    } else if let Some(stripped) = s.strip_suffix('m') {
+        (stripped.trim(), "m")
+    } else if let Some(stripped) = s.strip_suffix('d') {
+        (stripped.trim(), "d")
+    } else if let Some(stripped) = s.strip_suffix('s') {
+        (stripped.trim(), "s")
+    } else {
+        return None;
+    };
+    let amount: f64 = amount_str.parse().ok()?;
+    let duration = match unit {
+        "s" => chrono::Duration::seconds(amount as i64),
+        "m" => chrono::Duration::minutes(amount as i64),
+        "h" => chrono::Duration::hours(amount as i64),
+        "d" => chrono::Duration::days(amount as i64),
+        _ => return None,
+    };
+    Some(chrono::Utc::now() - duration)
 }
 
 async fn handle_swarm_status(
@@ -8188,7 +9367,7 @@ async fn handle_swarm_list(
             }
         }
     } else {
-        cli_println!("Note: Backend unreachable — showing cached statuses. Start the server for live status.");
+        cli_println!("Note: Backend unreachable — showing cached statuses. Run `swarm query <url>` or `open <url>` to auto-start the backend for live status.");
     }
 
     // Persist updated statuses so prune_async_tasks works next time.
@@ -8354,16 +9533,23 @@ async fn handle_crawl_list(
 
     if backend_reachable {
         // Query backend for live status of each tracked crawl task.
+        let mut stale_ids: Vec<String> = Vec::new();
         for entry in list.tasks.iter_mut().filter(|t| t.command == "crawl") {
-            let was_already_completed =
-                entry.last_status == "completed" || entry.last_status == "done" || entry.last_status == "OK";
             if let Ok(text) = get_crawl_result(client, base_url, &entry.task_id).await {
                 if let Ok(parsed) = serde_json::from_str::<Value>(&text) {
                     if let Some(s) = parsed.get("status").and_then(|v| v.as_str()) {
-                        entry.last_status = friendly_crawl_status(s);
+                        let friendly = friendly_crawl_status(s);
+                        // If the server no longer knows about this task, mark it for removal
+                        // so it doesn't linger in the list as "not found"
+                        if friendly.contains("not found") {
+                            stale_ids.push(entry.task_id.clone());
+                        }
+                        entry.last_status = friendly;
                     }
+                    // Only set completed_at when it hasn't been set yet — once set,
+                    // keep the first completion timestamp (don't overwrite on later polls).
                     let now_completed = entry.last_status == "completed" || entry.last_status.starts_with("failed");
-                    if !was_already_completed && now_completed {
+                    if now_completed && entry.completed_at.is_none() {
                         if let Some(ts) = parsed.get("finishTime").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
                             entry.completed_at = Some(ts.to_string());
                         } else {
@@ -8373,24 +9559,219 @@ async fn handle_crawl_list(
                 }
             }
         }
+        // Remove stale entries that the server has already cleaned up
+        if !stale_ids.is_empty() {
+            list.tasks.retain(|t| !stale_ids.contains(&t.task_id));
+            // Routine housekeeping — only shows when stale tasks > 0
+            if stale_ids.len() > 20 {
+                cli_println!(
+                    "Pruned {} completed tasks from local tracking (routine cleanup).",
+                    stale_ids.len()
+                );
+            }
+        }
+        // Also prune tasks older than 24h to prevent unbounded accumulation
+        let age_cutoff = chrono::Utc::now() - chrono::Duration::hours(24);
+        let age_cutoff_str = age_cutoff.to_rfc3339();
+        let before = list.tasks.len();
+        list.tasks.retain(|t| t.command != "crawl" || t.submitted_at >= age_cutoff_str);
+        let _aged_out = before - list.tasks.len();
         let _ = write_async_tasks(&list, None);
     } else {
-        cli_println!("Note: Backend unreachable — showing cached statuses. Start the server for live status.");
+        cli_println!("Note: Backend unreachable — showing cached statuses. Run `crawl <url>` or `open <url>` to auto-start the backend for live status.");
     }
 
-    let filtered: Vec<_> = list.tasks.iter().filter(|t| t.command == "crawl").cloned().collect();
+    let mut filtered: Vec<_> = list.tasks.iter().filter(|t| t.command == "crawl").cloned().collect();
+
+    // Apply --status filter
+    if let Some(status_filter) = tool_params.get("status").and_then(|v| v.as_str()) {
+        let sf = status_filter.to_lowercase();
+        filtered.retain(|t| {
+            let s = t.last_status.to_lowercase();
+            match sf.as_str() {
+                "completed" => s == "completed" || s == "done" || s == "ok",
+                "running" => s == "running" || s == "queued" || s == "created",
+                "failed" => s.starts_with("failed") || s.contains("error") || s.contains("timeout"),
+                "queued" => s == "queued" || s == "created",
+                "not found" | "not-found" => s.contains("not found"),
+                _ => true, // unknown filter — show all
+            }
+        });
+        if filtered.is_empty() {
+            cli_println!("No crawl tasks matching status filter '{}'.", status_filter);
+            return Ok(());
+        }
+    }
+
+    // Apply --since filter
+    if let Some(since) = tool_params.get("since").and_then(|v| v.as_str()) {
+        if let Some(cutoff) = parse_relative_time(since) {
+            let cutoff_str = cutoff.to_rfc3339();
+            filtered.retain(|t| {
+                t.submitted_at.as_str() >= cutoff_str.as_str()
+            });
+        } else {
+            cli_println!("Warning: could not parse --since '{}'. Expected format: 1h, 30m, 1d", since);
+        }
+        if filtered.is_empty() {
+            cli_println!("No crawl tasks found within the last '{}'.", since);
+            return Ok(());
+        }
+    }
+
     if filtered.is_empty() {
         cli_println!("No tracked crawl tasks. Start one with 'crawl <url>'.");
         return Ok(());
     }
     cli_println!("{}", summarize_async_tasks(&filtered));
 
-    let limit = tool_params.get("limit").and_then(|v| v.as_u64()).map(|n| n as usize);
+    // Default to 20 most recent if no explicit limit
+    let limit = tool_params.get("limit").and_then(|v| v.as_u64()).map(|n| n as usize)
+        .or_else(|| {
+            // If no explicit limit and no filters applied, default to 20
+            if tool_params.get("status").is_none() && tool_params.get("since").is_none() {
+                Some(20)
+            } else {
+                None
+            }
+        });
     let offset = tool_params.get("offset").and_then(|v| v.as_u64()).map(|n| n as usize);
     let display = state::AsyncTaskList { tasks: filtered };
     cli_println!("{}", format_async_task_list(&display, limit, offset));
     cli_println!("\nTip: use 'crawl cancel <id>' to cancel a stuck task, 'crawl clear' to remove terminal tasks.");
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Experience handlers
+// ---------------------------------------------------------------------------
+
+async fn handle_experience_save(
+    client: &Client,
+    base_url: &str,
+    tool_params: &Value,
+) -> Result<(), String> {
+    let result = call_tool(client, base_url, "experience_save", tool_params.clone()).await?;
+    let parsed: Value = serde_json::from_str(&result).unwrap_or_default();
+    cli_println!("{}", serde_json::to_string_pretty(&parsed).unwrap_or(result));
+    json_field("result", parsed);
+    Ok(())
+}
+
+async fn handle_experience_query(
+    client: &Client,
+    base_url: &str,
+    tool_params: &Value,
+) -> Result<(), String> {
+    let result = call_tool(client, base_url, "experience_query", tool_params.clone()).await?;
+    let parsed: Value = serde_json::from_str(&result).unwrap_or_default();
+    if let (Some(tier), Some(confidence)) = (
+        parsed.get("tier").and_then(|v| v.as_str()),
+        parsed.get("confidence").and_then(|v| v.as_f64()),
+    ) {
+        cli_println!("Tier: {}  |  Confidence: {:.3}", tier, confidence);
+    }
+    if let Some(summary) = parsed.get("summary").and_then(|v| v.as_str()) {
+        cli_println!("{}", summary);
+    }
+    if let Some(selectors) = parsed.get("primary_selectors").and_then(|v| v.as_object()) {
+        if !selectors.is_empty() {
+            cli_println!("\nPrimary selectors:");
+            for (k, v) in selectors {
+                cli_println!("  {}: {}", k, v.as_str().unwrap_or("-"));
+            }
+        }
+    }
+    if let Some(warnings) = parsed.get("warnings").and_then(|v| v.as_array()) {
+        if !warnings.is_empty() {
+            cli_println!("\nWarnings:");
+            for w in warnings {
+                cli_println!("  ! {}", w.as_str().unwrap_or("-"));
+            }
+        }
+    }
+    json_field("result", parsed);
+    Ok(())
+}
+
+async fn handle_experience_list(
+    client: &Client,
+    base_url: &str,
+    tool_params: &Value,
+) -> Result<(), String> {
+    let result = call_tool(client, base_url, "experience_list", tool_params.clone()).await?;
+    let parsed: Value = serde_json::from_str(&result).unwrap_or_default();
+    let total = parsed.get("total").and_then(|v| v.as_u64()).unwrap_or(0);
+    let page = parsed.get("page").and_then(|v| v.as_u64()).unwrap_or(1);
+    let total_pages = parsed.get("total_pages").and_then(|v| v.as_u64()).unwrap_or(1);
+    cli_println!("Experience entries: {} total (page {}/{})", total, page, total_pages);
+    if let Some(entries) = parsed.get("entries").and_then(|v| v.as_array()) {
+        if entries.is_empty() {
+            cli_println!("No knowledge entries found. Run an agent task to build experience, then use 'experience-deep-learn' to promote facts.");
+        } else {
+            cli_println!("{:<25}  {:<20}  {:<6}  {:<10}  {:<10}  {}", "DOMAIN", "INTENT", "TIER", "CONF", "STATUS", "SITE TYPES");
+            cli_println!("{}", "-".repeat(110));
+            for entry in entries {
+                let domain = entry.get("domain").and_then(|v| v.as_str()).unwrap_or("-");
+                let intent = entry.get("intent").and_then(|v| v.as_str()).unwrap_or("-");
+                let tier = entry.get("retrieval_tier").and_then(|v| v.as_str()).unwrap_or("-");
+                let confidence = entry.get("confidence").and_then(|v| v.as_f64()).unwrap_or(0.0);
+                let status = entry.get("status").and_then(|v| v.as_str()).unwrap_or("-");
+                let site_types = entry.get("site_types").and_then(|v| v.as_array())
+                    .map(|a| a.iter().filter_map(|s| s.as_str()).collect::<Vec<_>>().join(", "))
+                    .unwrap_or_default();
+                cli_println!(
+                    "{:<25}  {:<20}  {:<6}  {:<10.3}  {:<10}  {}",
+                    truncate_str(domain, 25),
+                    truncate_str(intent, 20),
+                    tier,
+                    confidence,
+                    status,
+                    site_types,
+                );
+            }
+        }
+    }
+    json_field("result", parsed);
+    Ok(())
+}
+
+async fn handle_experience_deep_learn(
+    client: &Client,
+    base_url: &str,
+    tool_params: &Value,
+) -> Result<(), String> {
+    cli_println!("Running deep learning analysis (this may take a few seconds)...");
+    let result = call_tool(client, base_url, "experience_deep_learn", tool_params.clone()).await?;
+    let parsed: Value = serde_json::from_str(&result).unwrap_or_default();
+    if let Some(completed) = parsed.get("completed").and_then(|v| v.as_bool()) {
+        if !completed {
+            cli_println!("Deep learning skipped — confidence already high. Use --force to override.");
+        } else {
+            let promoted = parsed.get("promoted").and_then(|v| v.as_bool()).unwrap_or(false);
+            let status_after = parsed.get("status_after").and_then(|v| v.as_str()).unwrap_or("-");
+            let confidence = parsed.get("new_confidence").and_then(|v| v.as_f64()).unwrap_or(0.0);
+            let selectors = parsed.get("selectors_found").and_then(|v| v.as_i64()).unwrap_or(0);
+            cli_println!("Deep learning complete.");
+            cli_println!("  Status: {} (promoted: {})", status_after, promoted);
+            cli_println!("  Confidence: {:.3}", confidence);
+            cli_println!("  Selectors found: {}", selectors);
+        }
+    }
+    if let Some(msg) = parsed.get("message").and_then(|v| v.as_str()) {
+        cli_println!("{}", msg);
+    }
+    json_field("result", parsed);
+    Ok(())
+}
+
+/// Truncate a string to at most `max_len` characters, appending "…" if truncated.
+fn truncate_str(s: &str, max_len: usize) -> String {
+    if s.chars().count() <= max_len {
+        s.to_string()
+    } else {
+        format!("{}…", &s.chars().take(max_len.saturating_sub(1)).collect::<String>())
+    }
 }
 
 async fn handle_crawl_status(
@@ -8467,11 +9848,27 @@ async fn handle_crawl_cancel(
 async fn handle_crawl_clear(
     client: &Client,
     base_url: &str,
+    clear_all: bool,
 ) -> Result<(), String> {
-    let result = clear_crawls(client, base_url).await?;
+    let result = if clear_all {
+        clear_all_crawls(client, base_url).await?
+    } else {
+        clear_crawls(client, base_url).await?
+    };
     cli_println!("{}", result);
-    // Also clean local tracking
-    let _ = prune_async_tasks(None);
+    // Remove ALL crawl tasks from local tracking (server-side clear removes
+    // all terminal tasks; local entries pointing to cleared tasks show
+    // "not found" if left behind).
+    let mut list = read_async_tasks(None);
+    let before = list.tasks.len();
+    list.tasks.retain(|t| t.command != "crawl");
+    let removed = before - list.tasks.len();
+    if removed > 0 {
+        let _ = write_async_tasks(&list, None);
+    }
+    if removed > 0 {
+        cli_println!("Removed {} crawl task(s) from local tracking.", removed);
+    }
     Ok(())
 }
 
@@ -8727,6 +10124,35 @@ async fn handle_crawl(
 
     validate_crawl_format(&format)?;
 
+    // Warn when --format csv|json is used without --sql — the format flag only
+    // controls how X-SQL result sets are rendered; without --sql there is no
+    // structured result set to format.
+    if !has_sql && (format == "csv" || format == "json") {
+        cli_println!(
+            "Warning: --format {} has no effect without --sql. \
+             Use --sql to produce structured output, or omit --format for plain-text output.",
+            format.to_uppercase()
+        );
+    }
+
+    // Inform when depth >= 1 but no --out-link-selector: link discovery is skipped
+    {
+        let depth_raw = tool_params
+            .get("depth")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(1);
+        let has_out_link_selector = tool_params
+            .get("out-link-selector")
+            .and_then(|v| v.as_str())
+            .map(|s| !s.is_empty())
+            .unwrap_or(false);
+        if depth_raw >= 1 && !has_out_link_selector {
+            cli_println!(
+                "Note: Link discovery disabled (no --out-link-selector). Processing seed URLs only."
+            );
+        }
+    }
+
     let output_file = tool_params
         .get("output")
         .and_then(|v| v.as_str());
@@ -8739,7 +10165,6 @@ async fn handle_crawl(
         resolved_args.as_deref(),
     );
 
-    let primary_url = &urls[0];
     let task_id = submit_crawl(client, base_url, &server_params).await?;
     let task_id = task_id.trim().trim_matches('"').to_string();
     cli_println!("Crawl task submitted: {}", task_id);
@@ -8749,11 +10174,50 @@ async fn handle_crawl(
     }
     json_field("task_id", json!(task_id));
 
+    // Build a compact description from command context instead of just the first URL.
+    // This makes `crawl list` entries distinguishable without needing to remember task IDs.
+    let depth = tool_params
+        .get("depth")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(1);
+    let refresh = tool_params
+        .get("refresh")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let crawl_background = tool_params
+        .get("background")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let crawl_desc = {
+        let mut parts: Vec<String> = Vec::new();
+        parts.push(format!("{} URLs", urls.len()));
+        if depth == 0 {
+            parts.push("depth 0".to_string());
+        } else {
+            parts.push(format!("depth {}", depth));
+        }
+        if has_sql {
+            parts.push("X-SQL".to_string());
+        }
+        if crawl_background {
+            parts.push("--bg".to_string());
+        }
+        if refresh {
+            parts.push("--refresh".to_string());
+        }
+        parts.join(", ")
+    };
+
     // Persist the task for cross-session tracking
-    let _ = track_async_task(&task_id, "crawl", primary_url, None);
+    let _ = track_async_task(&task_id, "crawl", &crawl_desc, None);
 
     let background = tool_params
         .get("background")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    let verbose = tool_params
+        .get("verbose")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
 
@@ -8769,9 +10233,15 @@ async fn handle_crawl(
     let timeout = crawl_request_timeout();
     let start = std::time::Instant::now();
     let mut last_report = std::time::Duration::ZERO;
-    let report_interval = std::time::Duration::from_secs(15);
+    // First progress report after 5s (quick feedback), then every 10s
+    let first_report_interval = std::time::Duration::from_secs(5);
+    let report_interval = std::time::Duration::from_secs(10);
+    let url_count = urls.len();
 
-    cli_println!("Waiting for crawl to complete (task {}). Use --background for long-running crawls.", task_id);
+    cli_println!(
+        "Waiting for crawl to complete (task {}, {} URLs). Use --background for long-running crawls.",
+        task_id, url_count
+    );
 
     loop {
         if start.elapsed() > timeout {
@@ -8800,21 +10270,25 @@ async fn handle_crawl(
 
         // Periodic progress indicator so foreground crawls don't look hung
         let elapsed = start.elapsed();
-        if elapsed - last_report >= report_interval {
+        let interval = if last_report == std::time::Duration::ZERO {
+            first_report_interval
+        } else {
+            report_interval
+        };
+        if elapsed - last_report >= interval {
             last_report = elapsed;
             if pages_found > 0 {
                 cli_println!(
-                    "Still crawling... {} pages found so far ({}s elapsed)",
+                    "Crawling... {}/{} pages found ({}s elapsed)",
                     pages_found,
+                    url_count,
                     elapsed.as_secs()
                 );
             } else {
                 cli_println!(
-                    "Still waiting for crawl to start... ({}s elapsed). \
-                     If the queue is congested, try stopping old tasks or using --background. \
-                     Run 'crawl cancel {}' to cancel this task.",
+                    "Crawling... waiting for first page ({}s elapsed, {} URLs queued)",
                     elapsed.as_secs(),
-                    task_id
+                    url_count
                 );
             }
         }
@@ -8838,6 +10312,22 @@ async fn handle_crawl(
 
                 // Format output
                 if has_sql {
+                    let extraction_error_count = if let Some(pages) = pages {
+                        pages.iter().filter(|p| p["extractionError"].as_str().is_some()).count()
+                    } else {
+                        0
+                    };
+
+                    // Detect rows where every field is an empty string (query ran but selectors
+                    // matched nothing — different from query-execution failure)
+                    let all_rows_empty = !all_extracted.is_empty() && all_extracted.iter().all(|row| {
+                        row.as_object().map_or(false, |obj|
+                            !obj.is_empty() && obj.values().all(|v|
+                                v.as_str().map_or(true, |s| s.is_empty())
+                            )
+                        )
+                    });
+
                     let extracted_output: String = if all_extracted.is_empty() {
                         "No extracted data.".to_string()
                     } else {
@@ -8848,6 +10338,35 @@ async fn handle_crawl(
                             "table" | _ => format_table(&all_extracted),
                         }
                     };
+
+                    // Summary line — always show extraction stats unless in JSON mode
+                    if all_extracted.is_empty() {
+                        let diag = if extraction_error_count > 0 {
+                            format!(
+                                "⚠ X-SQL query failed on {}/{} page(s). Try re-running with --verbose for per-page diagnostics.",
+                                extraction_error_count, page_count
+                            )
+                        } else {
+                            format!(
+                                "⚠ X-SQL returned 0 results across {} pages — check your selectors. \
+                                 Use 'htmlsnapshot inspect' to discover available selectors on the page.",
+                                page_count
+                            )
+                        };
+                        cli_println!("{}", diag);
+                    } else if all_rows_empty {
+                        cli_println!(
+                            "⚠ X-SQL returned {} rows but all fields are empty ({} pages crawled). \
+                             The query executed but selectors did not match any elements. \
+                             Verify selectors with 'htmlsnapshot inspect' or 'htmlsnapshot grep'.",
+                            all_extracted.len(), page_count
+                        );
+                    } else {
+                        cli_println!(
+                            "{} pages crawled, {} rows extracted.",
+                            page_count, all_extracted.len()
+                        );
+                    }
 
                     let summary = format!("Results written");
                     let output = write_crawl_output(&extracted_output, output_file, &summary)?;
@@ -8865,6 +10384,36 @@ async fn handle_crawl(
                     let mut page_lines: Vec<String> = Vec::new();
                     page_lines.push(format!("Crawl completed. {} pages found.", page_count));
 
+                    // Display per-seed-URL status when verbose
+                    if verbose {
+                        if let Some(seed_statuses) = parsed["seedStatuses"].as_array() {
+                            if !seed_statuses.is_empty() {
+                                page_lines.push(String::new());
+                                page_lines.push("  Seed URL Status:".to_string());
+                                for ss in seed_statuses {
+                                    let s_url = ss["url"].as_str().unwrap_or("");
+                                    let s_status = ss["status"].as_str().unwrap_or("");
+                                    let s_pages = ss["pagesReturned"].as_i64().unwrap_or(0);
+                                    let s_error = ss["error"].as_str().unwrap_or("");
+                                    let icon = match s_status {
+                                        "fetched" => "✓",
+                                        "skipped" => "⊘",
+                                        _ => "✗",
+                                    };
+                                    if s_error.is_empty() {
+                                        page_lines.push(format!(
+                                            "    {} {} → {} page(s)", icon, s_url, s_pages
+                                        ));
+                                    } else {
+                                        page_lines.push(format!(
+                                            "    {} {} → {} (error: {})", icon, s_url, s_pages, s_error
+                                        ));
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     // Display diagnostic info when 0 pages found (e.g. selector matched no elements)
                     if page_count == 0 {
                         if let Some(diag) = parsed["diagnostic"].as_str() {
@@ -8880,11 +10429,47 @@ async fn handle_crawl(
                             let page_url = page["url"].as_str().unwrap_or("");
                             let page_title = page["title"].as_str().unwrap_or("");
                             let page_depth = page["depth"].as_i64().unwrap_or(0);
-                            page_lines.push(format!(
-                                "  depth={} | {} | {}",
-                                page_depth, page_url, page_title
-                            ));
+                            let extraction_error = page["extractionError"].as_str();
+                            let content_len = page["contentLength"].as_i64().unwrap_or(-1);
+                            // Show fetch errors inline even in non-verbose mode so the
+                            // user isn't misled by "Crawl completed" for failed pages.
+                            if let Some(err) = extraction_error {
+                                page_lines.push(format!(
+                                    "  depth={} | {} | ⚠ {}",
+                                    page_depth, page_url, err
+                                ));
+                            } else if content_len == 0 {
+                                page_lines.push(format!(
+                                    "  depth={} | {} | ⚠ fetch returned 0 bytes",
+                                    page_depth, page_url
+                                ));
+                            } else {
+                                page_lines.push(format!(
+                                    "  depth={} | {} | {}",
+                                    page_depth, page_url, page_title
+                                ));
+                            }
+                            if verbose {
+                                if extraction_error.is_none() && has_sql && page["extracted"].as_array().map_or(false, |a| a.is_empty()) {
+                                    page_lines.push("    ⚠ X-SQL extraction returned 0 rows".to_string());
+                                }
+                            }
                         }
+                    }
+                    // Show a summary when pages had errors so the user doesn't see
+                    // "Crawl completed. N pages found." and assume all succeeded.
+                    let error_count = pages.map(|p| {
+                        p.iter().filter(|pg| {
+                            pg["extractionError"].as_str().is_some() ||
+                            pg["contentLength"].as_i64().unwrap_or(-1) == 0
+                        }).count()
+                    }).unwrap_or(0);
+                    if error_count > 0 {
+                        page_lines.push(format!(
+                            "\n⚠ {} of {} page(s) had fetch or extraction errors. \
+                             Use --verbose for per-page diagnostics.",
+                            error_count, page_count
+                        ));
                     }
                     let page_output = page_lines.join("\n");
                     let page_summary = format!("Crawl completed. {} pages found.", page_count);
@@ -10783,6 +12368,67 @@ async fn handle_plugin_remove(
     Ok(())
 }
 
+/// Convert camelCase to snake_case.
+///
+/// Examples: "detectVideos" → "detect_videos", "download" → "download",
+/// "getInfo" → "get_info".
+fn camel_to_snake(s: &str) -> String {
+    let mut result = String::with_capacity(s.len() + 4);
+    for (i, ch) in s.char_indices() {
+        if ch.is_uppercase() {
+            if i > 0 {
+                result.push('_');
+            }
+            result.push(ch.to_ascii_lowercase());
+        } else {
+            result.push(ch);
+        }
+    }
+    result
+}
+
+/// Resolve which MCP tool to invoke from a plugin-<domain> command.
+///
+/// If the first positional argument matches a known method (after converting to
+/// snake_case and prefixing with the domain), that specific tool is selected and
+/// the method name is stripped from the positional args.  Otherwise falls back
+/// to the first matching tool alphabetically.
+fn resolve_plugin_method(
+    tools: &[&str],
+    domain: &str,
+    matching: &[&&str],
+    raw_parsed: &mut HashMap<String, Value>,
+) -> String {
+    // Get the positional args and look at the first one after the command name.
+    let positionals = raw_parsed
+        .get("_")
+        .and_then(|v| v.as_array())
+        .map(|a| a.iter().collect::<Vec<_>>())
+        .unwrap_or_default();
+
+    // The first positional (_[0]) is the command itself (e.g. "plugin-media").
+    // The second positional (_[1]) is the candidate method name.
+    if positionals.len() >= 2 {
+        if let Some(candidate) = positionals[1].as_str() {
+            let snake_method = camel_to_snake(candidate);
+            let candidate_tool = format!("{}_{}", domain, snake_method);
+            if tools.contains(&candidate_tool.as_str()) {
+                // Remove the method name from positionals so it isn't
+                // passed as a tool parameter.
+                if let Some(arr) = raw_parsed.get_mut("_").and_then(|v| v.as_array_mut()) {
+                    if arr.len() > 1 {
+                        arr.remove(1);
+                    }
+                }
+                return candidate_tool;
+            }
+        }
+    }
+
+    // Fall back: use the first matching tool alphabetically
+    matching[0].to_string()
+}
+
 /// Handle a dynamic plugin command (plugin-<name>) that has no hardcoded
 /// CommandDef.  Discovers the matching MCP tool from the server's /mcp/tools
 /// endpoint and executes it generically.
@@ -10854,11 +12500,13 @@ async fn handle_dynamic_plugin_command(
         ));
     }
 
-    // Use the first matching tool
-    let tool_name = matching[0].to_string();
-
     // Parse remaining args generically: pass through all --key value pairs
-    let raw_parsed = parse_raw_args(&global.args, None, None);
+    let mut raw_parsed = parse_raw_args(&global.args, None, None);
+
+    // Try to resolve a specific method from the first positional argument.
+    // Supports: plugin-media detectVideos, plugin-media download --url ..., etc.
+    let tool_name = resolve_plugin_method(&tools, domain, &matching, &mut raw_parsed);
+
     let mut tool_params = serde_json::Map::new();
     for (key, value) in &raw_parsed {
         if key != "_" {
@@ -10870,6 +12518,7 @@ async fn handle_dynamic_plugin_command(
     let session_name = global.session_name.as_deref();
 
     // Execute the tool
+    let timeout_override = global.timeout_secs;
     let result = with_session(
         client,
         base_url,
@@ -10881,7 +12530,9 @@ async fn handle_dynamic_plugin_command(
             let tool_name = tool_name.clone();
             let mut params = Value::Object(tool_params.clone());
             params["sessionId"] = json!(session_id);
-            async move { call_tool(&client, &base_url, &tool_name, params).await }
+            async move {
+                call_tool_with_timeout_override(&client, &base_url, &tool_name, params, timeout_override).await
+            }
         },
     )
     .await
@@ -11789,44 +13440,24 @@ async fn handle_status(client: &Client, base_url: &str) -> Result<(), String> {
     json_field("cli_version", json!(VERSION));
     json_field("server_url", json!(base_url));
 
-    // Check installed runtime
+    // Show installed runtime bundle info (informational only).
     if let Some(metadata) = daemon::read_installed_browser4_runtime_metadata() {
-        cli_println!("Installed version: {}", metadata.tag);
-        cli_println!("Installed at: {}", metadata.installed_at);
+        cli_println!("Installed bundle: {} (at {})", metadata.tag, metadata.installed_at);
         json_field("installed_version", json!(&metadata.tag));
         json_field("installed_at", json!(&metadata.installed_at));
-
-        // Compare CLI version with the installed backend version.
-        // The installed tag may have a "v" prefix (e.g. "v4.11.22").
-        let installed_ver = metadata.tag.trim().trim_start_matches('v');
-        let cli_ver = VERSION.trim();
-        if installed_ver != cli_ver {
-            cli_println!(
-                "⚠  Version mismatch: CLI is {} but installed backend is {}.",
-                cli_ver, metadata.tag
-            );
-            cli_println!(
-                "   The CLI was built from local source while the backend runs from a pre-installed bundle."
-            );
-            cli_println!(
-                "   Test results may reflect the installed backend's behavior, not the current source tree."
-            );
-            cli_println!(
-                "   To use the locally-built backend, run: cd browser4-rest && mvn spring-boot:run"
-            );
-            json_field("version_mismatch", json!(true));
-        } else {
-            json_field("version_mismatch", json!(false));
-        }
     } else {
-        cli_println!("Installed version: not installed (run 'browser4-cli install')");
+        cli_println!("Installed bundle: not installed (run 'browser4-cli install')");
         json_field("installed_version", json!(null));
         json_field("installed_at", json!(null));
     }
 
-    // Check server health
+    // Check server health and, if reachable, get the running backend's actual
+    // version.  Comparing against the live backend prevents false "version
+    // mismatch" warnings when the installed bundle is a different version than
+    // the locally-built dev backend.
     let health_url = format!("{base_url}/actuator/health");
     let health;
+    let mut server_version: Option<String> = None;
     match client.get(&health_url).send().await {
         Ok(response) => {
             if response.status().is_success() {
@@ -11844,6 +13475,25 @@ async fn handle_status(client: &Client, base_url: &str) -> Result<(), String> {
                         health = "ERROR";
                     }
                 }
+
+                // Query the running backend for its actual version so we compare
+                // CLI version against the live server, not a stale installed bundle.
+                if health == "UP" {
+                    let build_url = format!("{base_url}/api/system/build");
+                    if let Ok(build_resp) = client.get(&build_url).send().await {
+                        if let Ok(body) = build_resp.text().await {
+                            if let Ok(parsed) = serde_json::from_str::<Value>(&body) {
+                                server_version = parsed.get("version")
+                                    .and_then(|v| v.as_str())
+                                    .map(|s| s.to_string());
+                                if let Some(ref ver) = server_version {
+                                    cli_println!("Server version: {}", ver);
+                                    json_field("server_version", json!(ver));
+                                }
+                            }
+                        }
+                    }
+                }
             } else {
                 cli_println!("Server health: DOWN (HTTP {})", response.status());
                 health = "DOWN";
@@ -11855,6 +13505,48 @@ async fn handle_status(client: &Client, base_url: &str) -> Result<(), String> {
         }
     }
     json_field("health", json!(health));
+
+    // Version comparison: use the live server version if available; fall back
+    // to the installed bundle only when the server is unreachable.
+    if let Some(ref server_ver) = server_version {
+        if server_ver != VERSION {
+            cli_println!(
+                "⚠  Version mismatch: CLI is {} but running backend is {}.",
+                VERSION, server_ver
+            );
+            cli_println!(
+                "   The CLI and backend were built from different versions of the source tree."
+            );
+            cli_println!(
+                "   Rebuild both to match:  mvn install -pl browser4-rest -am && cargo build --manifest-path cli/browser4-cli/Cargo.toml"
+            );
+            json_field("version_mismatch", json!(true));
+        } else {
+            json_field("version_mismatch", json!(false));
+        }
+    } else if health == "UNREACHABLE" || health == "DOWN" {
+        // Server not reachable — compare against installed bundle as fallback.
+        if let Some(ref metadata) =
+            daemon::read_installed_browser4_runtime_metadata()
+        {
+            let installed_ver = metadata.tag.trim().trim_start_matches('v');
+            if installed_ver != VERSION.trim() {
+                cli_println!(
+                    "⚠  Version mismatch: CLI is {} but installed backend is {}.",
+                    VERSION, metadata.tag
+                );
+                cli_println!(
+                    "   The backend is not running, so the installed bundle version is shown."
+                );
+                cli_println!(
+                    "   Start the backend to compare against the live server version."
+                );
+                json_field("version_mismatch", json!(true));
+            } else {
+                json_field("version_mismatch", json!(false));
+            }
+        }
+    }
 
     Ok(())
 }
@@ -12565,6 +14257,7 @@ fn should_ensure_server_running(command: &str) -> bool {
         && command != "disconnect"
         && command != "close-all"
         && command != "kill-all"
+        && command != "session-default"
         && command != "list"
         && command != "install"
         && command != "uninstall"
@@ -12583,6 +14276,8 @@ fn should_ensure_server_running(command: &str) -> bool {
         && command != "skills-path"
         && command != "skills-unpack"
         && command != "loop"
+        && command != "snapshot-list"
+        && command != "snapshot-clean"
 }
 
 /// Commands that require a web page to already be loaded in the browser.
@@ -12734,9 +14429,21 @@ fn rewrite_prefixed_command(args: &[String]) -> Option<Vec<String>> {
         }
         return None;
     }
+    // `experience deep learn` is a two-level subcommand — rewrite to the flat
+    // `experience-deep-learn` form so the dispatch matches it correctly.
+    if prefix == "experience" && sub == "deep" {
+        if let Some(inner) = args.get(2) {
+            if inner == "learn" {
+                let mut rewritten = vec!["experience-deep-learn".to_string()];
+                rewritten.extend(args[3..].iter().cloned());
+                return Some(rewritten);
+            }
+        }
+    }
     let rewritten_command = match prefix {
         "swarm" => format!("swarm-{}", sub),
         "agent" => format!("agent-{}", sub),
+        "experience" => format!("experience-{}", sub),
         "htmlsnapshot" => format!("htmlsnapshot-{}", sub),
         "snapshot" => format!("snapshot-{}", sub),
         "skills" => format!("skills-{}", sub),
@@ -12781,6 +14488,10 @@ fn preferred_spaced_command_form(command: &str) -> Option<&'static str> {
         "htmlsnapshot-inspect" => Some("htmlsnapshot inspect"),
         "doctor-log" => Some("doctor log"),
         "doctor-metrics" => Some("doctor metrics"),
+        "experience-save" => Some("experience save"),
+        "experience-query" => Some("experience query"),
+        "experience-list" => Some("experience list"),
+        "experience-deep-learn" => Some("experience deep-learn"),
         "plugin-list" => Some("plugin list"),
         "plugin-info" => Some("plugin info"),
         "plugin-install" => Some("plugin install"),
@@ -12790,6 +14501,8 @@ fn preferred_spaced_command_form(command: &str) -> Option<&'static str> {
         "skills-path" => Some("skills path"),
         "skills-unpack" => Some("skills unpack"),
         "snapshot-grep" => Some("snapshot grep"),
+        "snapshot-list" => Some("snapshot list"),
+        "snapshot-clean" => Some("snapshot clean"),
         "webdb-export" => Some("webdb export"),
         "webdb-normalize" => Some("webdb normalize"),
         _ => None,
@@ -12820,6 +14533,7 @@ fn normalize_command_invocation(global: &args::GlobalFlags) -> (String, args::Gl
             proxy_url: global.proxy_url.clone(),
             show_tip: global.show_tip,
             pretty: global.pretty,
+            timeout_secs: global.timeout_secs,
             args: rewritten,
         };
         (cmd, new_global, true)
@@ -13699,7 +15413,9 @@ async fn main() {
     let (command, effective_global, from_spaced_prefix) = normalize_command_invocation(&global);
 
     if let Err(err) = run(&command, &effective_global, from_spaced_prefix).await {
-        if json_mode {
+        // json_mode covers global --json; json_active() covers subcommand-level
+        // --json (e.g. "tab-list --json") which enables JSON inside run().
+        if json_mode || json_active() {
             // Use println! directly -- cli_println! checks json_active()
             // which is true here (json_init was called inside run()),
             // and we MUST emit the JSON error envelope regardless.
@@ -13793,7 +15509,10 @@ async fn run(
     from_spaced_prefix: bool,
 ) -> Result<(), CliError> {
     // Initialise JSON output accumulator when --json is active.
-    if global.json {
+    // Use a mutable local so subcommand-level --json (e.g. "tab-list --json")
+    // can also enable it after the command-specific args are parsed.
+    let mut json_enabled = global.json;
+    if json_enabled {
         json_init();
     }
     // Initialise quiet mode when -q / --quiet is active.
@@ -13978,6 +15697,15 @@ async fn run(
     // Validate required positional arguments (fast-fail for malformed commands).
     validate_required_args(cmd_def, &parsed)?;
 
+    // Support --json after the command name (e.g. "tab-list --json").  When
+    // --json appears before the command it is captured by parse_global_flags;
+    // this handles the post-command position so users don't have to remember
+    // flag ordering.
+    if !json_enabled && parsed.get("json").and_then(|v| v.as_bool()).unwrap_or(false) {
+        json_enabled = true;
+        json_init();
+    }
+
     // Resolve tool name and parameters
     let tool_name = (cmd_def.tool_name_fn)(&parsed);
     let mut tool_params = (cmd_def.tool_params_fn)(&parsed);
@@ -14065,8 +15793,15 @@ async fn run(
         "kill-all" => {
             handle_kill_all().await?;
         }
+        "session-default" => {
+            handle_session_default(&tool_params).await?;
+        }
         "list" => {
-            handle_list(&client, &base_url).await?;
+            let verbose = tool_params
+                .get("verbose")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            handle_list(&client, &base_url, verbose).await?;
         }
         "install" => {
             handle_install(&tool_params).await?;
@@ -14456,13 +16191,14 @@ async fn run(
                     }
                 }
 
-            // Strip --file, --stdin, --base64, and --json keys so they aren't sent to the server
+            // Strip --file, --stdin, --js, --base64, and --json keys so they aren't sent to the server
             // (they're CLI-side only — the content has already been read and
             // inserted as the "expression" parameter above; --json controls
             // local output formatting, not a server parameter).
             if let Value::Object(ref mut m) = tool_params {
                 m.remove("file");
                 m.remove("stdin");
+                m.remove("js");
                 m.remove("base64");
                 m.remove("json");
             }
@@ -14711,10 +16447,23 @@ async fn run(
             handle_crawl_cancel(&client, &base_url, &tool_params).await?;
         }
         "crawl-clear" => {
-            handle_crawl_clear(&client, &base_url).await?;
+            let clear_all = tool_params.get("all").and_then(|v| v.as_bool()).unwrap_or(false);
+            handle_crawl_clear(&client, &base_url, clear_all).await?;
         }
         "crawl-list" => {
             handle_crawl_list(&client, &base_url, &tool_params).await?;
+        }
+        "experience-save" => {
+            handle_experience_save(&client, &base_url, &tool_params).await?;
+        }
+        "experience-query" => {
+            handle_experience_query(&client, &base_url, &tool_params).await?;
+        }
+        "experience-list" => {
+            handle_experience_list(&client, &base_url, &tool_params).await?;
+        }
+        "experience-deep-learn" => {
+            handle_experience_deep_learn(&client, &base_url, &tool_params).await?;
         }
         "loop" => {
             handle_loop(&client, &base_url, global).await?;
@@ -14813,6 +16562,12 @@ async fn run(
             )
             .await?;
         }
+        "snapshot-list" => {
+            handle_snapshot_list(&tool_params)?;
+        }
+        "snapshot-clean" => {
+            handle_snapshot_clean(&tool_params)?;
+        }
         "generate-locator" => {
             handle_generate_locator(
                 &client,
@@ -14849,6 +16604,24 @@ async fn run(
         }
         "tab-new" => {
             handle_tab_new(
+                &client,
+                &base_url,
+                &tool_params,
+                global.session_name.as_deref(),
+            )
+            .await?;
+        }
+        "tab-select" => {
+            handle_tab_select(
+                &client,
+                &base_url,
+                &tool_params,
+                global.session_name.as_deref(),
+            )
+            .await?;
+        }
+        "tab-close" => {
+            handle_tab_close(
                 &client,
                 &base_url,
                 &tool_params,
@@ -14964,7 +16737,7 @@ async fn run(
     // Use println! directly — cli_println! checks json_active() which is
     // true for the entire command lifetime, and we MUST emit the JSON
     // envelope regardless.  (Same pattern as the error envelope below.)
-    if global.json {
+    if json_enabled {
         if let Some(fields) = json_finish() {
             println!(
                 "{}",
@@ -16069,6 +17842,7 @@ mod tests {
             proxy_url: None,
             show_tip: false,
             pretty: false,
+            timeout_secs: None,
             args: vec![
                 "agent".to_string(),
                 "status".to_string(),
@@ -16094,6 +17868,7 @@ mod tests {
             proxy_url: None,
             show_tip: false,
             pretty: false,
+            timeout_secs: None,
             args: vec!["agent-run".to_string(), "task".to_string()],
         };
 
@@ -16235,6 +18010,55 @@ mod tests {
         assert_eq!(compiled.steps[0]["tool"], json!("browser_press_key"));
         assert_eq!(compiled.steps[0]["arguments"]["ref"], json!("#type-target"));
         assert_eq!(compiled.steps[0]["arguments"]["key"], json!("!"));
+    }
+
+    #[test]
+    fn rewrite_prefixed_command_handles_experience_save() {
+        let rewritten = rewrite_prefixed_command(&[
+            "experience".to_string(),
+            "save".to_string(),
+            "https://example.com".to_string(),
+            r#"{"steps":[]}"#.to_string(),
+        ])
+        .unwrap();
+        assert_eq!(rewritten[0], "experience-save");
+        assert_eq!(rewritten[1], "https://example.com");
+        assert_eq!(rewritten[2], r#"{"steps":[]}"#);
+    }
+
+    #[test]
+    fn rewrite_prefixed_command_handles_experience_deep_learn() {
+        let rewritten = rewrite_prefixed_command(&[
+            "experience".to_string(),
+            "deep".to_string(),
+            "learn".to_string(),
+            "https://example.com".to_string(),
+            "extract product".to_string(),
+        ])
+        .unwrap();
+        assert_eq!(rewritten[0], "experience-deep-learn");
+        assert_eq!(rewritten[1], "https://example.com");
+        assert_eq!(rewritten[2], "extract product");
+    }
+
+    #[test]
+    fn preferred_spaced_command_form_includes_experience_commands() {
+        assert_eq!(
+            preferred_spaced_command_form("experience-save"),
+            Some("experience save")
+        );
+        assert_eq!(
+            preferred_spaced_command_form("experience-query"),
+            Some("experience query")
+        );
+        assert_eq!(
+            preferred_spaced_command_form("experience-list"),
+            Some("experience list")
+        );
+        assert_eq!(
+            preferred_spaced_command_form("experience-deep-learn"),
+            Some("experience deep-learn")
+        );
     }
 
     #[test]
@@ -18538,8 +20362,8 @@ mod tests {
         let csv = format_csv(&rows);
         let lines: Vec<&str> = csv.trim().lines().collect();
         assert_eq!(lines.len(), 3, "expected header + 2 data rows, got:\n{csv}");
-        // serde_json uses BTreeMap ordering → alphabetical keys: "title", "url"
-        assert_eq!(lines[0], "title,url");
+        // serde_json preserve_order → insertion-order keys: "url", "title"
+        assert_eq!(lines[0], "url,title");
         assert!(lines[1].contains("https://a.com"));
         assert!(lines[1].contains("Page A"));
         assert!(lines[2].contains("https://b.com"));
@@ -18548,7 +20372,7 @@ mod tests {
 
     #[test]
     fn format_csv_columns_ordered_by_first_appearance() {
-        // serde_json uses BTreeMap ordering within each object (sorted keys).
+        // preserve_order feature uses IndexMap → insertion-order keys within each object.
         // Columns appear in the order they are first encountered across rows.
         let rows = vec![
             json!({"url": "https://c.com", "depth": "2"}),
@@ -18557,12 +20381,12 @@ mod tests {
         let csv = format_csv(&rows);
         let header = csv.lines().next().unwrap();
         let cols: Vec<&str> = header.split(',').collect();
-        // BTreeMap order: Row 0 has "depth" then "url" (d < u).
-        // Row 1 adds "title" (new), "url" already seen.
-        // Result: depth, url, title
+        // Row 0 insertion order: url, depth.
+        // Row 1 insertion order: title, url (url already seen).
+        // Result: url, depth, title
         assert_eq!(cols.len(), 3, "expected 3 columns, got: {cols:?}");
-        assert_eq!(cols[0], "depth");
-        assert_eq!(cols[1], "url");
+        assert_eq!(cols[0], "url");
+        assert_eq!(cols[1], "depth");
         assert_eq!(cols[2], "title");
     }
 
@@ -18805,7 +20629,7 @@ mod tests {
     fn build_crawl_server_params_injects_resolved_sql() {
         let tool_params = json!({"url": "https://example.com"});
         let urls = vec!["https://example.com".to_string()];
-        let sql = "SELECT dom_first_text(dom, 'h1') FROM load_and_select(@url, ':root')";
+        let sql = "SELECT DOM_FIRST_TEXT(DOM, 'h1') FROM DOM_LOAD_AND_SELECT(@url, ':root')";
         let result = build_crawl_server_params(&tool_params, &urls, Some(sql), None);
         assert_eq!(result["sql"], json!(sql));
     }
@@ -19648,5 +21472,169 @@ mod tests {
         assert!(read.is_attached, "invalidate_session preserves is_attached");
         assert_eq!(read.attach_type.as_deref(), Some("extension"),
             "invalidate_session preserves attach_type for potential reconnect");
+    }
+
+    // -----------------------------------------------------------------------
+    // check_unnamed_slot_free tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn unnamed_slot_free_when_no_state_file() {
+        let tmp = test_temp_dir();
+        let dir = tmp.path();
+        // No state file at all — should be free.
+        assert!(check_unnamed_slot_free(Some(dir), None).is_ok());
+        // Named sessions always pass.
+        assert!(check_unnamed_slot_free(Some(dir), Some("mysession")).is_ok());
+        // A state file without session_id should also be free.
+        write_state(&CliState::default(), Some(dir), None).unwrap();
+        assert!(check_unnamed_slot_free(Some(dir), None).is_ok());
+    }
+
+    #[test]
+    fn unnamed_slot_blocked_when_occupied() {
+        let tmp = test_temp_dir();
+        let dir = tmp.path();
+        let state = CliState {
+            session_id: Some("s-abc123".to_string()),
+            base_url: "http://localhost:8182".to_string(),
+            ..CliState::default()
+        };
+        write_state(&state, Some(dir), None).unwrap();
+
+        let err = check_unnamed_slot_free(Some(dir), None).unwrap_err();
+        assert!(err.contains("already exists"), "expected 'already exists' in: {err}");
+        assert!(err.contains("s-abc123"), "expected session id in: {err}");
+        assert!(err.contains("-s <name>"), "expected -s hint in: {err}");
+    }
+
+    #[test]
+    fn unnamed_slot_freed_after_close_state_cleared() {
+        let tmp = test_temp_dir();
+        let dir = tmp.path();
+        let state = CliState {
+            session_id: Some("s-xyz".to_string()),
+            base_url: "http://localhost:8182".to_string(),
+            ..CliState::default()
+        };
+        write_state(&state, Some(dir), None).unwrap();
+
+        // Should be blocked
+        assert!(check_unnamed_slot_free(Some(dir), None).is_err());
+
+        // Simulate close: clear state
+        clear_state(Some(dir), None);
+
+        // Now it's free
+        assert!(check_unnamed_slot_free(Some(dir), None).is_ok());
+    }
+
+    #[test]
+    fn named_sessions_never_blocked_by_unnamed_slot() {
+        let tmp = test_temp_dir();
+        let dir = tmp.path();
+        // Occupy the unnamed slot
+        let state = CliState {
+            session_id: Some("s-default".to_string()),
+            base_url: "http://localhost:8182".to_string(),
+            ..CliState::default()
+        };
+        write_state(&state, Some(dir), None).unwrap();
+
+        // Named sessions should always be allowed
+        assert!(check_unnamed_slot_free(Some(dir), Some("auth")).is_ok());
+        assert!(check_unnamed_slot_free(Some(dir), Some("scraper")).is_ok());
+    }
+
+    // =====================================================================
+    // camel_to_snake tests
+    // =====================================================================
+
+    #[test]
+    fn test_camel_to_snake_already_lowercase() {
+        assert_eq!(camel_to_snake("download"), "download");
+        assert_eq!(camel_to_snake("compress"), "compress");
+    }
+
+    #[test]
+    fn test_camel_to_snake_single_word() {
+        assert_eq!(camel_to_snake("getInfo"), "get_info");
+    }
+
+    #[test]
+    fn test_camel_to_snake_multi_word() {
+        assert_eq!(camel_to_snake("detectVideos"), "detect_videos");
+        assert_eq!(camel_to_snake("extractAudio"), "extract_audio");
+    }
+
+    #[test]
+    fn test_camel_to_snake_no_uppercase() {
+        assert_eq!(camel_to_snake("process"), "process");
+        assert_eq!(camel_to_snake("trim"), "trim");
+    }
+
+    // =====================================================================
+    // resolve_plugin_method tests
+    // =====================================================================
+
+    #[test]
+    fn test_resolve_plugin_method_with_valid_method() {
+        let tools = vec!["media_detect_videos", "media_download", "media_get_info"];
+        let matching: Vec<&&str> = tools.iter().collect();
+        let mut args = HashMap::from([
+            ("_".to_string(), json!(["plugin-media", "download"])),
+        ]);
+        let result = resolve_plugin_method(&tools, "media", &matching, &mut args);
+        assert_eq!(result, "media_download");
+        // The method name should be stripped from positionals
+        let pos = args.get("_").and_then(|v| v.as_array()).unwrap();
+        assert_eq!(pos.len(), 1);
+        assert_eq!(pos[0].as_str().unwrap(), "plugin-media");
+    }
+
+    #[test]
+    fn test_resolve_plugin_method_camel_case_conversion() {
+        let tools = vec!["media_detect_videos", "media_download", "media_get_info"];
+        let matching: Vec<&&str> = tools.iter().collect();
+        let mut args = HashMap::from([
+            ("_".to_string(), json!(["plugin-media", "detectVideos"])),
+        ]);
+        let result = resolve_plugin_method(&tools, "media", &matching, &mut args);
+        assert_eq!(result, "media_detect_videos");
+    }
+
+    #[test]
+    fn test_resolve_plugin_method_falls_back_to_first() {
+        let tools = vec!["media_compress", "media_detect_videos", "media_download"];
+        let matching: Vec<&&str> = tools.iter().collect();
+        let mut args = HashMap::from([
+            ("_".to_string(), json!(["plugin-media", "someUrl"])),
+        ]);
+        let result = resolve_plugin_method(&tools, "media", &matching, &mut args);
+        // Falls back to first matching (alphabetically) since "someUrl" doesn't match a method
+        assert_eq!(result, "media_compress");
+        // Positionals unchanged
+        let pos = args.get("_").and_then(|v| v.as_array()).unwrap();
+        assert_eq!(pos.len(), 2); // still has both entries
+    }
+
+    #[test]
+    fn test_resolve_plugin_method_no_positionals() {
+        let tools = vec!["media_compress", "media_download"];
+        let matching: Vec<&&str> = tools.iter().collect();
+        let mut args = HashMap::new();
+        let result = resolve_plugin_method(&tools, "media", &matching, &mut args);
+        assert_eq!(result, "media_compress"); // first match
+    }
+
+    #[test]
+    fn test_resolve_plugin_method_only_command() {
+        let tools = vec!["pptx_generate", "pptx_convert"];
+        let matching: Vec<&&str> = tools.iter().collect();
+        let mut args = HashMap::from([
+            ("_".to_string(), json!(["plugin-pptx"])),
+        ]);
+        let result = resolve_plugin_method(&tools, "pptx", &matching, &mut args);
+        assert_eq!(result, "pptx_generate"); // first match (no method specified)
     }
 }

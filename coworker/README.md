@@ -62,7 +62,7 @@ Tasks with the `#auto-approve` tag skip `3done` and go directly from `2working` 
    ```powershell
    .\coworker\scripts\coworker-scheduler.ps1
    # or single-shot:
-   .\coworker\scripts\run-coworker.ps1
+   .\coworker\scripts\engineer.ps1
    ```
 4. **Review** — Task moves to `main/3done` after execution. Review the changes.
 5. **Approve** — Move the task to `main/5approved` to have it automatically committed and pushed by the periodic runner.

@@ -25,6 +25,8 @@ pub struct GlobalFlags {
     pub show_tip: bool,
     /// `--pretty` — pretty-print JSON output
     pub pretty: bool,
+    /// `--timeout <seconds>` — override the default HTTP timeout for tool calls
+    pub timeout_secs: Option<u64>,
     /// Remaining arguments (command + its args/options)
     pub args: Vec<String>,
 }
@@ -65,13 +67,19 @@ pub fn parse_global_flags(argv: &[String]) -> GlobalFlags {
     while i < argv.len() {
         let arg = &argv[i];
         if arg.starts_with("-s=") {
-            flags.session_name = Some(arg["-s=".len()..].to_string());
+            if !seen_command {
+                flags.session_name = Some(arg["-s=".len()..].to_string());
+            }
         } else if arg.starts_with("--session=") {
-            flags.session_name = Some(arg["--session=".len()..].to_string());
+            if !seen_command {
+                flags.session_name = Some(arg["--session=".len()..].to_string());
+            }
         } else if arg == "-s" || arg == "--session" {
-            if i + 1 < argv.len() && !argv[i + 1].starts_with('-') {
-                i += 1;
-                flags.session_name = Some(argv[i].clone());
+            if !seen_command {
+                if i + 1 < argv.len() && !argv[i + 1].starts_with('-') {
+                    i += 1;
+                    flags.session_name = Some(argv[i].clone());
+                }
             }
         } else if !seen_command && arg == "--json" {
             flags.json = true;
@@ -81,6 +89,13 @@ pub fn parse_global_flags(argv: &[String]) -> GlobalFlags {
             flags.show_tip = true;
         } else if !seen_command && arg == "--pretty" {
             flags.pretty = true;
+        } else if arg.starts_with("--timeout=") {
+            flags.timeout_secs = arg["--timeout=".len()..].parse().ok();
+        } else if arg == "--timeout" {
+            if i + 1 < argv.len() {
+                i += 1;
+                flags.timeout_secs = argv[i].parse().ok();
+            }
         } else if arg.starts_with("--server=") {
             flags.server_url = Some(arg["--server=".len()..].to_string());
         } else if arg == "--server" {

@@ -1,0 +1,254 @@
+{
+  "meta": {
+    "mode": "dev",
+    "source": "20260728-150328-amazon.full.md",
+    "scenario": "amazon",
+    "date": "20260728-150328"
+  },
+  "background": {
+    "executionContext": "**Commands used:**\n1. `./b4w.ps1 help` — learned available commands\n2. `./b4w.ps1 goto \"https://www.amazon.com/\"` — navigated to Amazon (daemon auto-started)\n3. `./b4w.ps1 snapshot -v 0 --stdout` — captured accessibility tree to find search box (`e143331`)\n4. `./b4w.ps1 fill e143331 \"pens to draw on whiteboards\" --submit` — searched (single command!)\n5. `./b4w.ps1 snapshot -v 0 --stdout` — attempted to read results (63KB output, too large)\n6. `./b4w.ps1 htmlsnapshot capture` — captured HTML snapshot with interactive elements list\n7. `./b4w.ps1 htmlsnapshot inspect` — attempted auto-discovery (picked up navigation, not products)\n8. `./b4w.ps1 htmlsnapshot get all text \"a.a-link-normal.s-line-clamp-4\" --limit 10` — extracted titles\n9. `./b4w.ps1 htmlsnapshot get all text \"span.a-price-whole\" --limit 10` — extracted prices\n10. `./b4w.ps1 htmlsnapshot get all text \"span.a-icon-alt\" --limit 10` — extracted ratings\n11. `./b4w.ps1 htmlsnapshot get all attr \"a.a-link-normal.s-line-clamp-4\" href --limit 10` — extracted URLs\n12. Manually correlated the four arrays and composed the comparison markdown\n\n**Key decisions:**\n- Used interactive elements list from `htmlsnapshot capture` to identify product title CSS selectors (`a.a-link-normal.s-line-clamp-4`) instead of `htmlsnapshot inspect` which picked up navigation patterns\n- Used `--submit` flag on `fill` to combine typing + Enter into one command\n- Manually matched title/price/rating/URL arrays since `get all` calls are independent\n- Skipped review count extraction after two selector attempts failed\n\n**Workarounds required:**\n- Avoided reading full snapshot (63KB) — used `htmlsnapshot` commands instead\n- Used the interactive elements summary from `htmlsnapshot capture` to discover selectors when `inspect` failed\n- Manually correlated four independent extraction results\n\n---\n\n## C & D: Issues and Assessment\n\n```json\n{\n  \"issues\": [\n    {\n      \"title\": \"Snapshot output impractical for content-rich pages\",\n      \"severity\": \"Medium\",\n      \"category\": \"UX\",\n      \"reproduction\": \"./b4w.ps1 snapshot -v 0 --stdout on amazon.com search results\",\n      \"expected\": \"Manageable output that lets a user find product elements without being overwhelmed. Pagination, summary, or automatic viewport scoping should keep output under a few KB.\",\n      \"actual\": \"Output was 63.1KB and was truncated by the tool harness. The snapshot contains thousands of lines of accessibility tree — far too much for a human or agent to scan for individual product elements.\",\n      \"rootCause\": \"The accessibility tree includes every DOM node (including deeply nested generics, hidden navigation elements, etc.). Viewport pagination (-v 0) limits depth but e-commerce pages with dense product grids still produce massive trees. The SKILL.md warns about this but the default experience for a new user following the core loop is poor.\",\n      \"codePointer\": \"cli/browser4-cli/src/snapshot.rs — snapshot rendering logic\",\n      \"suggestion\": \"- Add a `--compact` or `--summary` mode that shows only interactive elements (links, buttons, inputs) with their text and refs, skipping structural generics\\n- Auto-detect when snapshot exceeds a threshold and suggest `htmlsnapshot capture` instead\\n- Consider making `--stdout` default to a more concise format, with `--full` for the complete tree\"\n    },\n    {\n      \"title\": \"htmlsnapshot inspect defaults to analyzing wrong DOM pattern\",\n      \"severity\": \"Medium\",\n      \"category\": \"Discoverability\",\n      \"reproduction\": \"./b4w.ps1 htmlsnapshot inspect (with no selector argument) on an Amazon search results page\",\n      \"expected\": \"Auto-discovery identifies the most prominent repeating pattern — product cards with title, price, rating — and suggests selectors for them.\",\n      \"actual\": \"Analyzed <div> elements and picked up navigation keyboard shortcut elements from a hidden shortcuts menu as the repeating pattern. Suggested selectors like `span.shortcut-key.nav-assistant-card-font` which are useless for product extraction.\",\n      \"rootCause\": \"The inspect command defaults to analyzing `div` elements. The hidden navigation menu (`#shortcut-menu`) contains repeating div structures that score high as a pattern. Product cards on Amazon use complex nested divs and the inspect heuristics don't prioritize visible, high-value content areas over hidden navigation.\",\n      \"codePointer\": \"browser4-rest/ — htmlsnapshot inspect logic (likely in an HTML snapshot analysis service)\",\n      \"suggestion\": \"- Prioritize visible content areas over hidden/offscreen elements (the navigation was at box=-9988, clearly offscreen)\\n- Weight elements by viewport visibility and text content richness\\n- When inspect is called without arguments, try multiple common container selectors (div[data-*], li, article) and report the best\\n- Allow `htmlsnapshot inspect \\\"div[data-component-type]\\\"` to be documented as the recommended pattern for Amazon-style product grids\"\n    },\n    {\n      \"title\": \"Short flag warning repeated on every invocation\",\n      \"severity\": \"Low\",\n      \"category\": \"UX\",\n      \"reproduction\": \"./b4w.ps1 snapshot -v 0 --stdout (any command with short -v flag)\",\n      \"expected\": \"Warning shown once per session, or suppressed when using the documented dev-mode wrapper. Alternatively, document that --viewport is the preferred form.\",\n      \"actual\": \"Every invocation with `-v 0` produces: '⚠ Short flags detected: -v. PowerShell may intercept these in other contexts... Prefer long-form equivalents: --output, --interactive, --viewport'\",\n      \"rootCause\": \"The b4w.ps1 wrapper detects short flags and emits a warning unconditionally. It doesn't track whether the warning was already shown this session.\",\n      \"codePointer\": \"b4w.ps1 — short flag detection logic\",\n      \"suggestion\": \"- Show the warning at most once per session (use a temp file or env var to track)\\n- Or: add a `--no-warn-short-flags` option to suppress it\\n- Or: document `--viewport` as the primary form in the SKILL.md core loop examples, since that's what new users will copy-paste\"\n    },\n    {\n      \"title\": \"No built-in product card extraction for e-commerce pages\",\n      \"severity\": \"High\",\n      \"category\": \"Product\",\n      \"reproduction\": \"Try to extract correlated product data (title + price + rating + URL) from an Amazon/Best Buy/Walmart search results page.\",\n      \"expected\": \"A single command or documented workflow that produces a table of product data: `./b4w.ps1 htmlsnapshot extract-products` or `./b4w.ps1 htmlsnapshot query --preset amazon-search`.\",\n      \"actual\": \"User must: manually discover selectors for each field (often requiring Amazon-specific CSS knowledge), run 4+ separate `get all` commands, and manually correlate the arrays — which is error-prone and time-consuming. The SKILL.md explicitly warns: 'Multiple get all calls produce unaligned arrays.'\",\n      \"rootCause\": \"The extraction system is powerful but low-level. There is no abstraction for the common 'extract product listings from a search results page' use case. X-SQL can do correlated extraction but requires writing a full SQL query with domain-specific functions (DOM_FIRST_TEXT, DOM_FIRST_ATTR), which is a steep learning curve for a first-time user.\",\n      \"codePointer\": \"\",\n      \"suggestion\": \"- Add an `htmlsnapshot extract-products` command with built-in heuristics for common e-commerce patterns (product cards with title/price/rating/image)\\n- Provide preset X-SQL templates for Amazon, eBay, Walmart, etc. in the documentation\\n- Add a `--correlate` flag to `get all` that groups results by parent container when given multiple selectors\\n- Document the X-SQL approach more prominently in the core loop section of SKILL.md\"\n    },\n    {\n      \"title\": \"Extracted prices lack currency context\",\n      \"severity\": \"Low\",\n      \"category\": \"Product\",\n      \"reproduction\": \"./b4w.ps1 htmlsnapshot get all text \\\"span.a-price-whole\\\" --limit 10 on Amazon with non-USD delivery address\",\n      \"expected\": \"Prices include currency symbol (¥1,031) or the currency is indicated in the output metadata.\",\n      \"actual\": \"Prices extracted as bare numbers: \\\"1,031\\\", \\\"1,146\\\". No currency symbol or code. User must infer currency from page context (the 'Deliver to Japan' header).\",\n      \"rootCause\": \"Amazon's price rendering splits the currency symbol (¥) and the numeric amount into separate DOM elements. `span.a-price-whole` only contains the numeric part. The currency symbol is in a separate `span.a-price-symbol` element.\",\n      \"codePointer\": \"\",\n      \"suggestion\": \"- Document in SKILL.md that for Amazon prices, extract both `span.a-price-symbol` and `span.a-price-whole`\\n- Consider adding a `--price` convenience selector that combines symbol + whole + fraction\"\n    },\n    {\n      \"title\": \"htmlsnapshot capture then get workflow requires Amazon-specific CSS knowledge\",\n      \"severity\": \"Medium\",\n      \"category\": \"Discoverability\",\n      \"reproduction\": \"New user tries to extract product data from Amazon without knowing Amazon's CSS class naming conventions.\",\n      \"expected\": \"Documentation or tool output guides the user to the right selectors for common sites, or the tool auto-discovers them.\",\n      \"actual\": \"User must know that Amazon product titles use `a.a-link-normal.s-line-clamp-4`, prices use `span.a-price-whole`, ratings use `span.a-icon-alt`. The `htmlsnapshot capture` interactive elements summary helped discover these, but the connection between 'interactive elements' and data extraction is not obvious to a first-time user.\",\n      \"rootCause\": \"The interactive elements list from `htmlsnapshot capture` shows CSS selectors as a side effect of listing clickable elements. This is an accidental discovery path — it's not documented as a way to find extraction selectors.\",\n      \"codePointer\": \"\",\n      \"suggestion\": \"- Document the pattern explicitly in SKILL.md: 'After htmlsnapshot capture, look at the Interactive Elements list for CSS class names you can use with htmlsnapshot get'\\n- Add a 'Common selectors found' section to htmlsnapshot capture output that groups elements by their CSS classes and suggests which to use for data extraction\\n- Add site-specific recipe docs (or link to htmlsnapshot-scenarios.md more prominently)\"\n    },\n    {\n      \"title\": \"No feedback when htmlsnapshot get all returns empty results\",\n      \"severity\": \"Low\",\n      \"category\": \"UX\",\n      \"reproduction\": \"./b4w.ps1 htmlsnapshot get all text \\\"span.a-size-base.s-underline-text\\\" --limit 10\",\n      \"expected\": \"Clear error or suggestion: 'No elements matched. Did you mean...?' with similar selectors that do exist on the page.\",\n      \"actual\": \"Returns `[]` and a message: 'No elements matched... Try htmlsnapshot inspect' — but inspect also doesn't help because the selector genuinely doesn't exist. The suggestion to run inspect is generic and doesn't help find the right selector.\",\n      \"rootCause\": \"The error handler has no knowledge of which selectors DO exist on the page. It always suggests inspect as a fallback.\",\n      \"codePointer\": \"browser4-rest/ — htmlsnapshot get error handling\",\n      \"suggestion\": \"- When no elements match, run a quick analysis of the page's available CSS classes and suggest similar ones (edit distance)\\n- Show a sample of classes that ARE on the page: 'Available classes include: a-price-whole, a-icon-alt, a-link-normal...'\\n- This would turn a dead-end error into a discovery aid\"\n    }\n  ],\n  \"assessment\": {\n    \"completionStatus\": \"Successful — the task was completed and the comparison file was written to ./target/comparison.md with detailed product data for all 4 products\",\n    \"successRate\": \"90% — all major steps (navigation, search, extraction, file writing) succeeded. The only partial failure was inability to extract review counts after two attempts, which was not critical to the comparison.\",\n    \"issuesFound\": 7,\n    \"majorBlockers\": \"The largest friction point was the lack of a correlated extraction workflow. Extracting title + price + rating + URL for 4 products required 4 separate commands and manual array correlation. For a new user unfamiliar with Amazon's CSS structure, discovering the right selectors would be a significant barrier. The htmlsnapshot inspect command, which should help with discovery, analyzed hidden navigation elements instead of visible product cards.\",\n    \"mostConfusingAspects\": \"1) htmlsnapshot inspect analyzed offscreen keyboard shortcuts instead of visible product cards. 2) The core loop (snapshot → read snapshot → find refs) breaks down on content-heavy pages where the snapshot is impractically large. 3) The jump from 'I can see products on the page' to 'I have structured data I can write to a file' requires understanding multiple extraction approaches (get, get all, query, eval, extract) with different trade-offs.\",\n    \"mostValuableImprovements\": \"1) An htmlsnapshot extract-products command for e-commerce pages would eliminate the biggest workflow gap. 2) htmlsnapshot inspect should prioritize visible, text-rich content over hidden navigation. 3) The capture output's Interactive Elements section should explicitly guide users toward extraction selectors. 4) Snapshot output should have a compact/interactive-only mode for content-heavy pages.\",\n    \"usabilityRating\": 6\n  }\n}\n```",
+    "task": "The comparison file has been written to `/home/vincent/workspace/Browser4-4.12/target/comparison.md`. It contains a detailed comparison of the top 4 whiteboard marker products from Amazon, including titles, prices, ratings, URLs, key features, and a summary comparison table with observations."
+  },
+  "issues": [
+    {
+      "number": 1,
+      "title": "No built-in product card extraction for e-commerce pages",
+      "severity": "High",
+      "category": "Product",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "Try to extract correlated product data (title + price + rating + URL) from an Amazon/Best Buy/Walmart search results page."
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "A single command or documented workflow that produces a table of product data: `./b4w.ps1 htmlsnapshot extract-products` or `./b4w.ps1 htmlsnapshot query --preset amazon-search`."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "User must: manually discover selectors for each field (often requiring Amazon-specific CSS knowledge), run 4+ separate `get all` commands, and manually correlate the arrays — which is error-prone and time-consuming. The SKILL.md explicitly warns: 'Multiple get all calls produce unaligned arrays.'"
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "The extraction system is powerful but low-level. There is no abstraction for the common 'extract product listings from a search results page' use case. X-SQL can do correlated extraction but requires writing a full SQL query with domain-specific functions (DOM_FIRST_TEXT, DOM_FIRST_ATTR), which is a steep learning curve for a first-time user."
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Add an `htmlsnapshot extract-products` command with built-in heuristics for common e-commerce patterns (product cards with title/price/rating/image)\n- Provide preset X-SQL templates for Amazon, eBay, Walmart, etc. in the documentation\n- Add a `--correlate` flag to `get all` that groups results by parent container when given multiple selectors\n- Document the X-SQL approach more prominently in the core loop section of SKILL.md"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 2,
+      "title": "Snapshot output impractical for content-rich pages",
+      "severity": "Medium",
+      "category": "UX",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "./b4w.ps1 snapshot -v 0 --stdout on amazon.com search results"
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "Manageable output that lets a user find product elements without being overwhelmed. Pagination, summary, or automatic viewport scoping should keep output under a few KB."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "Output was 63.1KB and was truncated by the tool harness. The snapshot contains thousands of lines of accessibility tree — far too much for a human or agent to scan for individual product elements."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "The accessibility tree includes every DOM node (including deeply nested generics, hidden navigation elements, etc.). Viewport pagination (-v 0) limits depth but e-commerce pages with dense product grids still produce massive trees. The SKILL.md warns about this but the default experience for a new user following the core loop is poor."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "cli/browser4-cli/src/snapshot.rs — snapshot rendering logic"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Add a `--compact` or `--summary` mode that shows only interactive elements (links, buttons, inputs) with their text and refs, skipping structural generics\n- Auto-detect when snapshot exceeds a threshold and suggest `htmlsnapshot capture` instead\n- Consider making `--stdout` default to a more concise format, with `--full` for the complete tree"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 3,
+      "title": "htmlsnapshot inspect defaults to analyzing wrong DOM pattern",
+      "severity": "Medium",
+      "category": "Discoverability",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "./b4w.ps1 htmlsnapshot inspect (with no selector argument) on an Amazon search results page"
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "Auto-discovery identifies the most prominent repeating pattern — product cards with title, price, rating — and suggests selectors for them."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "Analyzed <div> elements and picked up navigation keyboard shortcut elements from a hidden shortcuts menu as the repeating pattern. Suggested selectors like `span.shortcut-key.nav-assistant-card-font` which are useless for product extraction."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "The inspect command defaults to analyzing `div` elements. The hidden navigation menu (`#shortcut-menu`) contains repeating div structures that score high as a pattern. Product cards on Amazon use complex nested divs and the inspect heuristics don't prioritize visible, high-value content areas over hidden navigation."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "browser4-rest/ — htmlsnapshot inspect logic (likely in an HTML snapshot analysis service)"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Prioritize visible content areas over hidden/offscreen elements (the navigation was at box=-9988, clearly offscreen)\n- Weight elements by viewport visibility and text content richness\n- When inspect is called without arguments, try multiple common container selectors (div[data-*], li, article) and report the best\n- Allow `htmlsnapshot inspect \"div[data-component-type]\"` to be documented as the recommended pattern for Amazon-style product grids"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 4,
+      "title": "htmlsnapshot capture then get workflow requires Amazon-specific CSS knowledge",
+      "severity": "Medium",
+      "category": "Discoverability",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "New user tries to extract product data from Amazon without knowing Amazon's CSS class naming conventions."
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "Documentation or tool output guides the user to the right selectors for common sites, or the tool auto-discovers them."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "User must know that Amazon product titles use `a.a-link-normal.s-line-clamp-4`, prices use `span.a-price-whole`, ratings use `span.a-icon-alt`. The `htmlsnapshot capture` interactive elements summary helped discover these, but the connection between 'interactive elements' and data extraction is not obvious to a first-time user."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "The interactive elements list from `htmlsnapshot capture` shows CSS selectors as a side effect of listing clickable elements. This is an accidental discovery path — it's not documented as a way to find extraction selectors."
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Document the pattern explicitly in SKILL.md: 'After htmlsnapshot capture, look at the Interactive Elements list for CSS class names you can use with htmlsnapshot get'\n- Add a 'Common selectors found' section to htmlsnapshot capture output that groups elements by their CSS classes and suggests which to use for data extraction\n- Add site-specific recipe docs (or link to htmlsnapshot-scenarios.md more prominently)"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 5,
+      "title": "Short flag warning repeated on every invocation",
+      "severity": "Low",
+      "category": "UX",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "./b4w.ps1 snapshot -v 0 --stdout (any command with short -v flag)"
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "Warning shown once per session, or suppressed when using the documented dev-mode wrapper. Alternatively, document that --viewport is the preferred form."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "Every invocation with `-v 0` produces: '⚠ Short flags detected: -v. PowerShell may intercept these in other contexts... Prefer long-form equivalents: --output, --interactive, --viewport'"
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "The b4w.ps1 wrapper detects short flags and emits a warning unconditionally. It doesn't track whether the warning was already shown this session."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "b4w.ps1 — short flag detection logic"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Show the warning at most once per session (use a temp file or env var to track)\n- Or: add a `--no-warn-short-flags` option to suppress it\n- Or: document `--viewport` as the primary form in the SKILL.md core loop examples, since that's what new users will copy-paste"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 6,
+      "title": "Extracted prices lack currency context",
+      "severity": "Low",
+      "category": "Product",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "./b4w.ps1 htmlsnapshot get all text \"span.a-price-whole\" --limit 10 on Amazon with non-USD delivery address"
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "Prices include currency symbol (¥1,031) or the currency is indicated in the output metadata."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "Prices extracted as bare numbers: \"1,031\", \"1,146\". No currency symbol or code. User must infer currency from page context (the 'Deliver to Japan' header)."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "Amazon's price rendering splits the currency symbol (¥) and the numeric amount into separate DOM elements. `span.a-price-whole` only contains the numeric part. The currency symbol is in a separate `span.a-price-symbol` element."
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Document in SKILL.md that for Amazon prices, extract both `span.a-price-symbol` and `span.a-price-whole`\n- Consider adding a `--price` convenience selector that combines symbol + whole + fraction"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 7,
+      "title": "No feedback when htmlsnapshot get all returns empty results",
+      "severity": "Low",
+      "category": "UX",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "./b4w.ps1 htmlsnapshot get all text \"span.a-size-base.s-underline-text\" --limit 10"
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "Clear error or suggestion: 'No elements matched. Did you mean...?' with similar selectors that do exist on the page."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "Returns `[]` and a message: 'No elements matched... Try htmlsnapshot inspect' — but inspect also doesn't help because the selector genuinely doesn't exist. The suggestion to run inspect is generic and doesn't help find the right selector."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "The error handler has no knowledge of which selectors DO exist on the page. It always suggests inspect as a fallback."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "browser4-rest/ — htmlsnapshot get error handling"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- When no elements match, run a quick analysis of the page's available CSS classes and suggest similar ones (edit distance)\n- Show a sample of classes that ARE on the page: 'Available classes include: a-price-whole, a-icon-alt, a-link-normal...'\n- This would turn a dead-end error into a discovery aid"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    }
+  ]
+}

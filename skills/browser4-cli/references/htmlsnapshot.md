@@ -26,7 +26,7 @@ browser4-cli htmlsnapshot                                # capture fresh static 
 browser4-cli htmlsnapshot get <field> [selector] [name] [--page N] [--page-size N] [--all]  # extract text/html/attr via CSS; html paginated at 2K lines, text not paginated
 browser4-cli htmlsnapshot query [url] --sql <query>      # X-SQL query against DOM (url defaults to current page)
 browser4-cli htmlsnapshot summary                        # compressed page summary (WPSI)
-browser4-cli htmlsnapshot export [--file <path>]         # save snapshot HTML to file
+browser4-cli htmlsnapshot export [--file <path>] [--clean]  # save snapshot HTML to file
 browser4-cli htmlsnapshot get all <field> [selector] [name] [--offset N] [--limit N] [--page N] [--page-size N] [--all]  # extract ALL matches; html paginated at 2K lines, text not paginated
 browser4-cli htmlsnapshot grep [OPTIONS] <pattern> [--page N] [--page-size N] [--all]  # search snapshot HTML with regex; paginated by default (2K lines)
 browser4-cli htmlsnapshot inspect [selector] [--max N] [--depth D]  # analyze DOM structure, suggest CSS selectors
@@ -89,12 +89,12 @@ If `htmlsnapshot get` returns an empty string when the page clearly has matching
 
 The `--sql` flag is **required**. Use `@url` as a placeholder for the target URL.
 
-X-SQL uses the **H2 database** SQL dialect with DOM UDFs. Only simple `SELECT ... FROM load_and_select(url, cssQuery)` queries are supported — no CTEs, subqueries, `EXPLODE`, or joins.
+X-SQL uses the **H2 database** SQL dialect with DOM UDFs. Only simple `SELECT ... FROM DOM_LOAD_AND_SELECT(url, cssQuery)` queries are supported — no CTEs, subqueries, `EXPLODE`, or joins.
 
 > **Important:** `@url` must appear **unquoted** in SQL. `SQLTemplate.createSQL(url)` handles escaping internally.
-> - ✅ `FROM load_and_select(@url, ':root')`
-> - ❌ `FROM load_and_select('@url', ':root')`
-> - ❌ `FROM load_and_select('.', ':root')` — the literal `'.'` is not a valid URL. Use the `@url` placeholder to reference the current page.
+> - ✅ `FROM DOM_LOAD_AND_SELECT(@url, ':root')`
+> - ❌ `FROM DOM_LOAD_AND_SELECT('@url', ':root')`
+> - ❌ `FROM DOM_LOAD_AND_SELECT('.', ':root')` — the literal `'.'` is not a valid URL. Use the `@url` placeholder to reference the current page.
 
 ### Three ways to provide the SQL query
 
@@ -105,15 +105,17 @@ Prefix the `--sql` value with `@` to read from a `.sql` file:
 # Write query to file (no escaping needed)
 cat > query.sql << 'SQLEOF'
 SELECT
-  dom_base_uri(dom) AS url,
-  dom_first_text(dom, '#productTitle') AS title
-FROM load_and_select(@url, 'body')
-WHERE dom_first_text(dom, '#productTitle') != 'Sponsored'
+  DOM_BASE_URI(dom) AS url,
+  DOM_FIRST_TEXT(dom, '#productTitle') AS title
+FROM DOM_LOAD_AND_SELECT(@url, 'body')
+WHERE DOM_FIRST_TEXT(dom, '#productTitle') != 'Sponsored'
 SQLEOF
 
 # Run it
 browser4-cli htmlsnapshot query "https://www.amazon.com/dp/B08PP5MSVB" --sql @query.sql
 ```
+
+> **Note:** X-SQL function names are case-insensitive. `DOM_FIRST_TEXT` and `dom_first_text` are equivalent. This reference uses UPPERCASE for clarity.
 
 **2. Stdin (for piped/scripted workflows — also avoids quoting):**
 
@@ -141,8 +143,8 @@ browser4-cli htmlsnapshot query "https://example.com" --sql "$(base64 -w0 query.
 ```bash
 # Simple queries without quotes in selectors work inline:
 browser4-cli htmlsnapshot query --sql "
-  SELECT dom_base_uri(dom) AS url, dom_first_text(dom, 'h1') AS title
-  FROM load_and_select(@url, 'body');
+  SELECT DOM_BASE_URI(dom) AS url, DOM_FIRST_TEXT(dom, 'h1') AS title
+  FROM DOM_LOAD_AND_SELECT(@url, 'body');
 "
 
 # Queries with quoted selectors or != require escaping — prefer @file, --sql-stdin, or --sql-base64
@@ -160,10 +162,10 @@ browser4-cli htmlsnapshot summary
 
 ## Export
 
-Save full snapshot HTML to a local file. The exported HTML is pretty-formatted for direct use with tools like `grep`.
+Save full snapshot HTML to a local file. The exported HTML is pretty-formatted for direct use with tools like `grep`. Use `--clean` to produce a minimal HTML file suitable for LLM consumption — strips `<script>`, `<style>`, `<noscript>`, comments, and non-standard attributes while preserving semantic structure.
 
 ```bash
-browser4-cli htmlsnapshot export [--file page-snapshot.html]
+browser4-cli htmlsnapshot export [--file page-snapshot.html] [--clean]
 ```
 
 ## Grep — Search snapshot HTML

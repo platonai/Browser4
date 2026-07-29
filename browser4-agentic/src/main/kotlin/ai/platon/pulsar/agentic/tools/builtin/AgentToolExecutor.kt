@@ -172,16 +172,16 @@ class AgentToolExecutor : AbstractToolExecutor() {
 
         fun extractHelp(): String {
             val help = $$"""
-使用 `agent.extract` 满足高级数据提取要求：
+Use `agent.extract` for advanced data extraction requirements:
 
-- 对提取结果格式有严格要求
-- 提取结果存在内嵌对象
-- 其他数据提取工具无法满足要求
+- When you need strict control over the extraction result format
+- When the extraction result contains nested objects
+- When other data extraction tools cannot meet your requirements
 
-参数说明：
+Parameters:
 
-1. `instruction`: 准确描述 1. 数据提取目标 2. 数据提取要求
-2. `schema`: JSON 格式描述的数据提取结果 schema 要求，遵循如下模式：
+1. `instruction`: Accurately describe (1) the data extraction target and (2) the extraction requirements
+2. `schema`: JSON description of the extraction result schema, following this pattern:
 
 ```kotlin
 class ExtractionField(
@@ -195,7 +195,7 @@ class ExtractionField(
 class ExtractionSchema(fields: List<ExtractionField>)
 ```
 
-对应的 JSON 描述：
+JSON description:
 
 ```json
 {
@@ -242,7 +242,7 @@ class ExtractionSchema(fields: List<ExtractionField>)
 }
 ```
 
-示例：
+Example:
 
 ```json
 {

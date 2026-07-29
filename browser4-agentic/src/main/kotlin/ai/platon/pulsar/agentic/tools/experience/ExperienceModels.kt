@@ -1,5 +1,6 @@
 package ai.platon.pulsar.agentic.tools.experience
 
+import com.fasterxml.jackson.annotation.JsonAlias
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties
 import com.fasterxml.jackson.annotation.JsonInclude
 import com.fasterxml.jackson.annotation.JsonProperty
@@ -117,19 +118,19 @@ data class ActionStep(
 @JsonIgnoreProperties(ignoreUnknown = true)
 @JsonInclude(JsonInclude.Include.NON_NULL)
 data class ExecutionTrace(
-    @JsonProperty("task_type") val taskType: String? = null,
+    @JsonProperty("task_type") @JsonAlias("taskType") val taskType: String? = null,
     @JsonProperty("intent") val intent: String? = null,
     @JsonProperty("url") val url: String,
     @JsonProperty("steps") val steps: List<ActionStep> = emptyList(),
     @JsonProperty("outcome") val outcome: String = "success",
     @JsonProperty("timestamp") val timestamp: Instant = Instant.now(),
-    @JsonProperty("extraction_results") val extractionResults: Map<String, Any?>? = null,
-    @JsonProperty("final_page_url") val finalPageUrl: String? = null,
-    @JsonProperty("final_page_title") val finalPageTitle: String? = null,
-    @JsonProperty("wpsi_summary") val wpsiSummary: String? = null,
-    @JsonProperty("inspect_output") val inspectOutput: String? = null,
-    @JsonProperty("error_message") val errorMessage: String? = null,
-    @JsonProperty("duration_ms") val durationMs: Long? = null,
+    @JsonProperty("extraction_results") @JsonAlias("extractionResults") val extractionResults: Map<String, Any?>? = null,
+    @JsonProperty("final_page_url") @JsonAlias("finalPageUrl") val finalPageUrl: String? = null,
+    @JsonProperty("final_page_title") @JsonAlias("finalPageTitle") val finalPageTitle: String? = null,
+    @JsonProperty("wpsi_summary") @JsonAlias("wpsiSummary") val wpsiSummary: String? = null,
+    @JsonProperty("inspect_output") @JsonAlias("inspectOutput") val inspectOutput: String? = null,
+    @JsonProperty("error_message") @JsonAlias("errorMessage") val errorMessage: String? = null,
+    @JsonProperty("duration_ms") @JsonAlias("durationMs") val durationMs: Long? = null,
 )
 
 // =============================================================================
@@ -171,7 +172,7 @@ data class ExperienceSaveResult(
     @JsonProperty("trace_path") val tracePath: String? = null,
     @JsonProperty("confidence") val confidence: Double = 0.50,
     @JsonProperty("retrieval_tier") val retrievalTier: String = "P4",
-    @JsonProperty("failure_category") val failureCategory: String? = null,
+    @JsonProperty("failure_category") @JsonInclude(JsonInclude.Include.ALWAYS) val failureCategory: String? = null,
     @JsonProperty("message") val message: String? = null,
 )
 
@@ -185,7 +186,7 @@ data class DeepLearnResult(
     @JsonProperty("completed") val completed: Boolean = true,
     @JsonProperty("domain") val domain: String,
     @JsonProperty("intent") val intent: String,
-    @JsonProperty("status_before") val statusBefore: VerificationStatus? = null,
+    @JsonProperty("status_before") @JsonInclude(JsonInclude.Include.ALWAYS) val statusBefore: VerificationStatus? = null,
     @JsonProperty("status_after") val statusAfter: VerificationStatus = VerificationStatus.HYPOTHESIS,
     @JsonProperty("promoted") val promoted: Boolean = false,
     @JsonProperty("new_confidence") val newConfidence: Double = 0.0,

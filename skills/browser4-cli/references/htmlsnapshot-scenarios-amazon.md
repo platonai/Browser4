@@ -283,12 +283,12 @@ For the most efficient single-command workflow, combine all fields into one X-SQ
 ```bash
 browser4-cli htmlsnapshot query --sql "
   SELECT
-    dom_first_text(dom, 'h2 a.a-link-normal') AS title,
-    dom_first_text(dom, 'span.a-offscreen') AS price,
-    dom_first_text(dom, 'span.a-icon-alt') AS rating,
-    dom_first_attr(dom, 'img.s-image', 'src') AS image_url
-  FROM load_and_select(@url, '.s-result-item[data-component-type=s-search-result]')
-  WHERE dom_first_text(dom, 'h2 a.a-link-normal') IS NOT NULL
+    DOM_FIRST_TEXT(dom, 'h2 a.a-link-normal') AS title,
+    DOM_FIRST_TEXT(dom, 'span.a-offscreen') AS price,
+    DOM_FIRST_TEXT(dom, 'span.a-icon-alt') AS rating,
+    DOM_FIRST_ATTR(dom, 'img.s-image', 'src') AS image_url
+  FROM DOM_LOAD_AND_SELECT(@url, '.s-result-item[data-component-type=s-search-result]')
+  WHERE DOM_FIRST_TEXT(dom, 'h2 a.a-link-normal') IS NOT NULL
 "
 ```
 
@@ -303,10 +303,10 @@ browser4-cli htmlsnapshot export --file "amazon-search-wireless-mouse-$(date +%Y
 # For scheduled monitoring, combine with load options (see audit scenarios)
 echo "
   SELECT
-    dom_first_text(dom, 'h2 a.a-link-normal') AS title,
-    dom_first_text(dom, 'span.a-offscreen') AS price
-  FROM load_and_select(@url, '.s-result-item[data-component-type=\"s-search-result\"]')
-  WHERE dom_first_text(dom, 'h2 a.a-link-normal') IS NOT NULL
+    DOM_FIRST_TEXT(dom, 'h2 a.a-link-normal') AS title,
+    DOM_FIRST_TEXT(dom, 'span.a-offscreen') AS price
+  FROM DOM_LOAD_AND_SELECT(@url, '.s-result-item[data-component-type=\"s-search-result\"]')
+  WHERE DOM_FIRST_TEXT(dom, 'h2 a.a-link-normal') IS NOT NULL
 " > search-results.sql
 
 browser4-cli htmlsnapshot query "
@@ -467,9 +467,9 @@ browser4-cli htmlsnapshot get all text "#feature-bullets ul.a-unordered-list li 
 
 # Structured feature extraction with X-SQL
 browser4-cli htmlsnapshot query --sql "
-  SELECT dom_first_text(dom, 'span.a-list-item') AS feature
-  FROM load_and_select(@url, '#feature-bullets li')
-  WHERE dom_first_text(dom, 'span.a-list-item') IS NOT NULL
+  SELECT DOM_FIRST_TEXT(dom, 'span.a-list-item') AS feature
+  FROM DOM_LOAD_AND_SELECT(@url, '#feature-bullets li')
+  WHERE DOM_FIRST_TEXT(dom, 'span.a-list-item') IS NOT NULL
 "
 
 # Technical specification table — get the full HTML
@@ -478,10 +478,10 @@ browser4-cli htmlsnapshot get html "#productDetails_techSpec_section_1"
 # Or extract specs as structured data with X-SQL
 browser4-cli htmlsnapshot query --sql "
   SELECT
-    dom_first_text(dom, 'th') AS spec_name,
-    dom_first_text(dom, 'td') AS spec_value
-  FROM load_and_select(@url, '#productDetails_techSpec_section_1 tr')
-  WHERE dom_first_text(dom, 'th') IS NOT NULL
+    DOM_FIRST_TEXT(dom, 'th') AS spec_name,
+    DOM_FIRST_TEXT(dom, 'td') AS spec_value
+  FROM DOM_LOAD_AND_SELECT(@url, '#productDetails_techSpec_section_1 tr')
+  WHERE DOM_FIRST_TEXT(dom, 'th') IS NOT NULL
 "
 ```
 
@@ -529,7 +529,7 @@ browser4-cli htmlsnapshot grep -o '\$[0-9]+\.[0-9]{2}'
 > **Why start with summary and inspect instead of jumping to extraction?** Scenario 1 demonstrated direct extraction using pre-known selectors. But when you encounter an unfamiliar product page — a different category, a new layout version, or an international Amazon locale — you cannot rely on assumptions. By starting with `summary` (structure overview) and `inspect` (selector discovery), you make the workflow robust against Amazon's frequent A/B tests and layout changes. Running `summary` before extraction is like reading the table of contents before diving into a book.
 >
 > **Known Amazon quirks for product pages:**
-> - **Split price DOM** — Amazon renders the dollar and cent portions in separate elements (`.a-price-whole` and `.a-price-fraction`). The `.a-offscreen` selector captures the combined screen-reader text, which is the most reliable single-source extraction. If `.a-offscreen` is empty, use X-SQL: `dom_first_text(dom, '.a-price-whole') || '.' || dom_first_text(dom, '.a-price-fraction')`.
+> - **Split price DOM** — Amazon renders the dollar and cent portions in separate elements (`.a-price-whole` and `.a-price-fraction`). The `.a-offscreen` selector captures the combined screen-reader text, which is the most reliable single-source extraction. If `.a-offscreen` is empty, use X-SQL: `DOM_FIRST_TEXT(dom, '.a-price-whole') || '.' || DOM_FIRST_TEXT(dom, '.a-price-fraction')`.
 > - **JS-rendered prices** — In some locales (Amazon.in, Amazon.com.au, Amazon.co.uk), prices may be lazy-loaded via JavaScript. If `get text ".a-price .a-offscreen"` returns empty, re-capture with `-njr 3` to force a server-rendered fallback.
 > - **Variable table ID** — The tech specs table ID (`#productDetails_techSpec_section_1`) varies by product category. Use `table.a-keyvalue.prodDetTable` as a more general fallback selector.
 > - **Product page A/B tests** — Amazon frequently runs A/B tests on product page layouts. The `#centerCol` selector may be replaced by `#leftCol` or an entirely different structure on some product categories or for some logged-in users. Always run `summary` + `inspect` first if your selectors unexpectedly fail.

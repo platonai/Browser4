@@ -202,7 +202,7 @@ pub(super) fn test_crawl_submission_live(ctx: &mut E2ECtx) {
     let crawl_status_result = run_command(ctx, &["crawl", "status", &task_id]);
     let crawl_status = parse_json_output(&crawl_status_result.stdout, "crawl status");
     assert_eq!(
-        crawl_status["id"].as_str(),
+        crawl_status["taskId"].as_str(),
         Some(task_id.as_str()),
         "Expected crawl status payload to reference task id '{task_id}', got:\n{}",
         crawl_status_result.stdout
@@ -212,7 +212,7 @@ pub(super) fn test_crawl_submission_live(ctx: &mut E2ECtx) {
     match wait_for_crawl_result(ctx, &task_id, 60_000) {
         Ok(crawl_result) => {
             assert_eq!(
-                crawl_result["id"].as_str(),
+                crawl_result["taskId"].as_str(),
                 Some(task_id.as_str()),
                 "Expected crawl result payload to reference task id '{task_id}', got:\n{crawl_result}"
             );

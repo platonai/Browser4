@@ -194,9 +194,9 @@ browser4-cli htmlsnapshot get text ".price"
 CARD_CLASS=$(browser4-cli get attr e11 class)
 # To get ALL prices, use X-SQL (since get returns only the first match):
 browser4-cli htmlsnapshot query --sql "
-  SELECT dom_first_text(dom, '.price') AS price,
-         dom_first_text(dom, 'h2') AS title
-  FROM load_and_select(@url, '.${CARD_CLASS}')
+  SELECT DOM_FIRST_TEXT(dom, '.price') AS price,
+         DOM_FIRST_TEXT(dom, 'h2') AS title
+  FROM DOM_LOAD_AND_SELECT(@url, '.${CARD_CLASS}')
 "
 # → [{"price": "$1,299", "title": "ThinkPad X1"},
 #    {"price": "$2,499", "title": "MacBook Pro"}]
@@ -236,8 +236,8 @@ browser4-cli htmlsnapshot get html "form#checkout"
 
 # ✅ GOOD: Structured extraction with X-SQL
 browser4-cli htmlsnapshot query --sql "
-  SELECT dom_first_text(dom, '.price') AS price
-  FROM load_and_select(@url, '.product-card')
+  SELECT DOM_FIRST_TEXT(dom, '.price') AS price
+  FROM DOM_LOAD_AND_SELECT(@url, '.product-card')
 "
 ```
 

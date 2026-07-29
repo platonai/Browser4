@@ -9,6 +9,10 @@
 
 $ErrorActionPreference = "Stop"
 
+# PS 5.1 compatibility: $IsWindows/$IsLinux/$IsMacOS were introduced in PS 6.
+# On PS 5.1 (Windows-only), all three are $null, so we fall back to env:OS.
+$IsWin = ($IsWindows -or $env:OS -eq 'Windows_NT')
+
 $repoRoot = (git rev-parse --show-toplevel 2>$null)
 if (-not $repoRoot) {
   Write-Host "Error: not in a git repository" -ForegroundColor Red
@@ -17,8 +21,8 @@ if (-not $repoRoot) {
 Set-Location $repoRoot
 
 # Resolve the Maven wrapper for this platform
-$MvnwScript = if ($IsWindows) { Join-Path $repoRoot 'mvnw.cmd' }
-              else              { Join-Path $repoRoot 'mvnw'     }
+$MvnwScript = if ($IsWin) { Join-Path $repoRoot 'mvnw.cmd' }
+              else        { Join-Path $repoRoot 'mvnw'     }
 
 # ═══════════════════════════════════════════════════════
 # Build-state tracking files (used by --resume and AI diagnosis)
@@ -59,7 +63,7 @@ function Write-SystemInfo {
   [void]$lines.Add("")
 
   # --- OS ---
-  if ($IsWindows) {
+  if ($IsWin) {
     $osName = "Windows"
     $osVer = [Environment]::OSVersion.VersionString
   }
@@ -79,7 +83,7 @@ function Write-SystemInfo {
 
   # --- CPU ---
   try {
-    if ($IsWindows) {
+    if ($IsWin) {
       $cpuName = ((Get-CimInstance Win32_Processor -ErrorAction Stop).Name -split '\s+')[0..6] -join ' '
       $cpuCores = (Get-CimInstance Win32_ComputerSystem -ErrorAction Stop).NumberOfLogicalProcessors
     }
@@ -100,7 +104,7 @@ function Write-SystemInfo {
 
   # --- Memory ---
   try {
-    if ($IsWindows) {
+    if ($IsWin) {
       $totalMemGB = [math]::Round((Get-CimInstance Win32_ComputerSystem -ErrorAction Stop).TotalPhysicalMemory / 1GB, 1)
     }
     elseif ($IsLinux) {

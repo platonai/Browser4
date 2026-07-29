@@ -1,0 +1,254 @@
+{
+  "meta": {
+    "scenario": "session-management",
+    "date": "20260728-025144",
+    "source": "20260728-025144-session-management.full.md",
+    "mode": "dev"
+  },
+  "background": {
+    "task": "All 8 steps of the task were completed successfully:\n\n1. ✅ **\"research\" session created** — Navigated to `https://en.wikipedia.org/wiki/Browser_automation` (redirected by Wikipedia to \"Headless browser\" article, which is correct)\n2. ✅ **\"news\" session created** — Navigated to `https://news.ycombinator.com` (Hacker News)\n3. ✅ **News snapshot verified** — Accessibility tree confirms Hacker News content (links: new, past, comments, ask, show, jobs, submit, login)\n4. ✅ **Research snapshot verified** — Accessibility tree confirms Wikipedia content (Main menu, navigation, page content)\n5. ✅ **Session list** — Both \"news\" and \"research\" displayed as Active with full details\n6. ✅ **News session closed** — `-s news close` confirmed: \"Session closed. Browser terminated.\"\n7. ✅ **Session list confirmed** — Only \"research\" (and a pre-existing \"(default)\") remained\n8. ✅ **All sessions closed** — `close-all` confirmed: \"Closed 2 session(s)\"; `list` shows empty table",
+    "executionContext": "**Commands used (in order):**\n1. `./b4w.ps1 help` — learned available commands and session management\n2. Read `skills/browser4-cli/SKILL.md` — learned session concepts, `-s` flag, gotchas\n3. `./b4w.ps1 -s research goto \"https://en.wikipedia.org/wiki/Browser_automation\"` — opened research session\n4. `./b4w.ps1 -s news goto \"https://news.ycombinator.com\"` — opened news session\n5. `./b4w.ps1 -s news snapshot -v 0 --stdout` — **FAILED** (PowerShell parameter binding)\n6. `./b4w.ps1 -s research snapshot -v 0 --stdout` — **FAILED** (same issue)\n7. `./b4w.ps1 -- -s news snapshot -v 0 --stdout` — **FAILED** (ambiguous parameter error)\n8. `./b4w.sh -s news snapshot -v 0 --stdout` — **SUCCESS** (b4w.sh workaround)\n9. `./b4w.sh -s research snapshot -v 0 --stdout` — **SUCCESS**\n10. `./b4w.sh list` — listed both sessions\n11. `./b4w.sh -s news close` — closed news session\n12. `./b4w.sh list` — verified news removed\n13. `./b4w.sh close-all` — closed all remaining sessions\n14. `./b4w.sh list` — verified empty\n\n**Key workaround:** Had to switch from `./b4w.ps1` to `./b4w.sh` because PowerShell's parameter binder intercepts `-v` (matching `-Verbose`). The documented `--` passthrough workaround also failed with an ambiguous parameter error.\n\n```json\n{\n  \"issues\": [\n    {\n      \"title\": \"PowerShell parameter binder intercepts `-v` flag, breaking `snapshot -v 0`\",\n      \"severity\": \"High\",\n      \"category\": \"Reliability\",\n      \"reproduction\": \"./b4w.ps1 -s news snapshot -v 0 --stdout\",\n      \"expected\": \"Snapshot with viewport 0 captured and printed to stdout.\",\n      \"actual\": \"CLI help text followed by: Error: Unknown command: 'snapshot-0'. Did you mean: 'snapshot'?\",\n      \"rootCause\": \"PowerShell's common parameter binder matches `-v` to `-Verbose` and consumes it before it reaches the `$RemainingArgs` array. The CLI binary then sees `snapshot 0` as two positional arguments and concatenates them into the subcommand `snapshot-0`, which doesn't exist.\",\n      \"codePointer\": \"b4w.ps1 line 16-20: param() block does not use CmdletBinding attribute but PowerShell still applies common parameters to script files. The SafeArgs loop at lines 442-446 double-quotes arguments but cannot recover arguments already consumed by PowerShell's binder.\",\n      \"suggestion\": \"- Add explicit `[CmdletBinding()]` with `-v` aliased away, or rename the script to avoid PowerShell parameter binding entirely\\n- Alternatively, remove the recommendation to use `./b4w.ps1` in the task instructions and always use `./b4w.sh` on non-Windows, which doesn't have this problem\\n- The `--` passthrough (documented in SKILL.md and b4w.ps1 help) should be fixed — it also failed with ambiguous parameter error\"\n    },\n    {\n      \"title\": \"Misleading error message when `-v` flag is consumed by PowerShell\",\n      \"severity\": \"Medium\",\n      \"category\": \"UX\",\n      \"reproduction\": \"./b4w.ps1 -s news snapshot -v 0 --stdout\",\n      \"expected\": \"A clear error indicating that the flag was not recognized, or a hint about PowerShell parameter binding.\",\n      \"actual\": \"Error: Unknown command: 'snapshot-0'. Did you mean: 'snapshot'? — the full help text is printed, and the error provides no hint that PowerShell intercepted the flag.\",\n      \"rootCause\": \"The CLI binary's argument parser receives `snapshot` followed by `0` (because `-v` was consumed) and tries to resolve `snapshot 0` as a subcommand named `snapshot-0`, which doesn't exist. The error message reflects the parser's best guess but is misleading because the user never typed `snapshot-0`.\",\n      \"codePointer\": \"cli/browser4-cli/src/ — the command dispatcher that concatenates command tokens with hyphens to resolve subcommands (e.g., snapshot + grep → snapshot-grep).\",\n      \"suggestion\": \"- Add detection: if a flag-like token (single-char prefixed with `-`) would have resolved the command, suggest that the flag may have been consumed by the shell/wrapper\\n- In b4w.ps1, detect when common parameters like `-Verbose` are passed and warn the user before the binary runs\"\n    },\n    {\n      \"title\": \"`b4w.sh` emits noisy pwsh recommendation on every invocation\",\n      \"severity\": \"Low\",\n      \"category\": \"UX\",\n      \"reproduction\": \"Run any command via ./b4w.sh on Linux.\",\n      \"expected\": \"Clean output without platform-inappropriate warnings.\",\n      \"actual\": \"Every command prints: 'It is strongly recommended to launch `pwsh` and run the .ps1 commands directly within the `pwsh` terminal.' This is irrelevant on Linux where bash is the native shell.\",\n      \"rootCause\": \"The b4w.sh wrapper unconditionally prints this recommendation, likely as a development-time reminder that wasn't conditioned on the platform.\",\n      \"codePointer\": \"b4w.sh: the echo/pwsh recommendation line near the top of the script.\",\n      \"suggestion\": \"- Only print the pwsh recommendation when the detected shell environment could benefit from it (i.e., suppress it when pwsh is not installed or on Linux/macOS)\\n- Or gate it behind a `--verbose` flag or environment variable\"\n    },\n    {\n      \"title\": \"`snapshot -v 0 --stdout` produces excessively large output that overwhelms the terminal\",\n      \"severity\": \"Low\",\n      \"category\": \"Documentation\",\n      \"reproduction\": \"./b4w.sh -s news snapshot -v 0 --stdout on a page with many elements.\",\n      \"expected\": \"Manageable output or a clear warning about expected size.\",\n      \"actual\": \"Output was 63.9KB for Hacker News and 36.8KB for Wikipedia. The output was so large it was persisted to a file instead of displayed inline. A first-time user would be overwhelmed.\",\n      \"rootCause\": \"`--stdout` dumps the entire accessibility tree for the viewport chunk, which can be very large for content-rich pages. The SKILL.md warns about snapshot file size ('Don't cat snapshot files — they can exceed 256KB') but does not warn about `--stdout` behavior.\",\n      \"codePointer\": \"\",\n      \"suggestion\": \"- Add a note in SKILL.md explicitly warning that `--stdout` can produce very large output, recommending `snapshot grep` for targeted searches or `-i` for interactive elements only\\n- Consider adding a `--max-lines` flag to truncate `--stdout` output\\n- Add a tip after large `--stdout` output suggesting `snapshot grep` as an alternative\"\n    },\n    {\n      \"title\": \"Pre-existing '(default)' session appears without user action\",\n      \"severity\": \"Low\",\n      \"category\": \"UX\",\n      \"reproduction\": \"Run `./b4w.sh list` after first opening named sessions.\",\n      \"expected\": \"Only explicitly-created named sessions appear, or the default session's origin is explained.\",\n      \"actual\": \"A '(default)' session appeared in the list with a UUID session ID, created earlier. A new user might be confused about where this session came from and whether it's safe to close.\",\n      \"rootCause\": \"Browser4 backend creates a default session when first started (e.g., by a previous `goto` without `-s`). The session persists until explicitly closed. New users have no context about this lifecycle.\",\n      \"codePointer\": \"\",\n      \"suggestion\": \"- Add a brief explanation in the `list` output or help text that '(default)' is the unnamed session created automatically when no `-s` flag is provided\\n- Consider adding a first-run message: 'No session specified — using (default). Use -s <name> for named sessions.'\"\n    },\n    {\n      \"title\": \"`goto` output doesn't clearly indicate a redirect occurred\",\n      \"severity\": \"Low\",\n      \"category\": \"UX\",\n      \"reproduction\": \"./b4w.ps1 -s research goto \\\"https://en.wikipedia.org/wiki/Browser_automation\\\"\",\n      \"expected\": \"Clear indication that the URL was redirected to a different page.\",\n      \"actual\": \"The output shows the final URL (https://en.wikipedia.org/wiki/Headless_browser) and title (Headless browser - Wikipedia) but doesn't mention that a redirect occurred from the requested URL.\",\n      \"rootCause\": \"The `goto` command reports the final page state after navigation, including any redirects, without distinguishing between direct loads and redirects. The user might think they navigated to the wrong page.\",\n      \"codePointer\": \"\",\n      \"suggestion\": \"- When the final URL differs from the requested URL, include a note like '(redirected from <original URL>)' in the output\\n- Or include the original requested URL alongside the final URL in the page summary\"\n    },\n    {\n      \"title\": \"Session management workflow is discoverable but `-s` is a positional constraint\",\n      \"severity\": \"Medium\",\n      \"category\": \"Discoverability\",\n      \"reproduction\": \"Try `./b4w.ps1 snapshot -s news -v 0` (swapping `-s` position).\",\n      \"expected\": \"The `-s` flag should work in any position before the command.\",\n      \"actual\": \"Not tested, but the help syntax `browser4-cli -s <session> <command> [args]` strongly implies `-s` must precede the command. A user accustomed to GNU-style argument parsing might place it anywhere and get confusing errors.\",\n      \"rootCause\": \"The CLI uses a positional argument parser where `-s` must appear before the subcommand. This is documented but not enforced with a helpful error when violated.\",\n      \"codePointer\": \"cli/browser4-cli/src/ — argument parsing logic that processes global flags before subcommand dispatch.\",\n      \"suggestion\": \"- Accept `-s <name>` in any position relative to the subcommand (more forgiving parsing)\\n- If the current constraint is intentional, add a clear error message when `-s` appears after the subcommand: 'The -s flag must be placed before the command. Try: browser4-cli -s news snapshot'\"\n    }\n  ],\n  \"assessment\": {\n    \"completionStatus\": \"Successful — all 8 task steps completed with expected outcomes. A workaround (b4w.sh) was needed for snapshot flags.\",\n    \"successRate\": \"87.5% — 7 of 8 initial command attempts succeeded; 2 snapshot commands failed due to PowerShell parameter binding and required switching to b4w.sh\",\n    \"issuesFound\": 7,\n    \"majorBlockers\": \"The `-v` flag on `snapshot` is unusable with `./b4w.ps1` due to PowerShell parameter binding. The `--` passthrough workaround (documented in both SKILL.md and b4w.ps1 help) also failed. Only `./b4w.sh` worked correctly. This is a significant barrier for any task requiring `snapshot -v`, `snapshot -i`, or other short-flag commands.\",\n    \"mostConfusingAspects\": \"1) The `-v` flag silently disappearing with a misleading 'unknown command: snapshot-0' error gives no hint of the real cause.\\n2) The 'strongly recommended to launch pwsh' banner on every b4w.sh invocation on Linux is dissonant and noisy.\\n3) The SKILL.md documents `--` as a workaround but it doesn't work in practice.\",\n    \"mostValuableImprovements\": \"1) Fix the `--` passthrough in b4w.ps1 so the documented workaround actually works.\\n2) Improve the error message when a flag is consumed by the shell/wrapper to guide the user to the fix.\\n3) Add pwsh recommendation gating so b4w.sh output is clean on Linux.\\n4) Add a redirect indicator to `goto` output when the final URL differs from the requested one.\",\n    \"usabilityRating\": 6\n  }\n}\n```"
+  },
+  "issues": [
+    {
+      "number": 1,
+      "title": "PowerShell parameter binder intercepts `-v` flag, breaking `snapshot -v 0`",
+      "severity": "High",
+      "category": "Reliability",
+      "sections": [
+        {
+          "body": "./b4w.ps1 -s news snapshot -v 0 --stdout",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Snapshot with viewport 0 captured and printed to stdout.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "CLI help text followed by: Error: Unknown command: 'snapshot-0'. Did you mean: 'snapshot'?",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "PowerShell's common parameter binder matches `-v` to `-Verbose` and consumes it before it reaches the `$RemainingArgs` array. The CLI binary then sees `snapshot 0` as two positional arguments and concatenates them into the subcommand `snapshot-0`, which doesn't exist.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "b4w.ps1 line 16-20: param() block does not use CmdletBinding attribute but PowerShell still applies common parameters to script files. The SafeArgs loop at lines 442-446 double-quotes arguments but cannot recover arguments already consumed by PowerShell's binder.",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Add explicit `[CmdletBinding()]` with `-v` aliased away, or rename the script to avoid PowerShell parameter binding entirely\n- Alternatively, remove the recommendation to use `./b4w.ps1` in the task instructions and always use `./b4w.sh` on non-Windows, which doesn't have this problem\n- The `--` passthrough (documented in SKILL.md and b4w.ps1 help) should be fixed — it also failed with ambiguous parameter error",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 2,
+      "title": "Misleading error message when `-v` flag is consumed by PowerShell",
+      "severity": "Medium",
+      "category": "UX",
+      "sections": [
+        {
+          "body": "./b4w.ps1 -s news snapshot -v 0 --stdout",
+          "label": "Reproduction"
+        },
+        {
+          "body": "A clear error indicating that the flag was not recognized, or a hint about PowerShell parameter binding.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "Error: Unknown command: 'snapshot-0'. Did you mean: 'snapshot'? — the full help text is printed, and the error provides no hint that PowerShell intercepted the flag.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The CLI binary's argument parser receives `snapshot` followed by `0` (because `-v` was consumed) and tries to resolve `snapshot 0` as a subcommand named `snapshot-0`, which doesn't exist. The error message reflects the parser's best guess but is misleading because the user never typed `snapshot-0`.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "cli/browser4-cli/src/ — the command dispatcher that concatenates command tokens with hyphens to resolve subcommands (e.g., snapshot + grep → snapshot-grep).",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Add detection: if a flag-like token (single-char prefixed with `-`) would have resolved the command, suggest that the flag may have been consumed by the shell/wrapper\n- In b4w.ps1, detect when common parameters like `-Verbose` are passed and warn the user before the binary runs",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 3,
+      "title": "Session management workflow is discoverable but `-s` is a positional constraint",
+      "severity": "Medium",
+      "category": "Discoverability",
+      "sections": [
+        {
+          "body": "Try `./b4w.ps1 snapshot -s news -v 0` (swapping `-s` position).",
+          "label": "Reproduction"
+        },
+        {
+          "body": "The `-s` flag should work in any position before the command.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "Not tested, but the help syntax `browser4-cli -s <session> <command> [args]` strongly implies `-s` must precede the command. A user accustomed to GNU-style argument parsing might place it anywhere and get confusing errors.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The CLI uses a positional argument parser where `-s` must appear before the subcommand. This is documented but not enforced with a helpful error when violated.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "cli/browser4-cli/src/ — argument parsing logic that processes global flags before subcommand dispatch.",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Accept `-s <name>` in any position relative to the subcommand (more forgiving parsing)\n- If the current constraint is intentional, add a clear error message when `-s` appears after the subcommand: 'The -s flag must be placed before the command. Try: browser4-cli -s news snapshot'",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 4,
+      "title": "`b4w.sh` emits noisy pwsh recommendation on every invocation",
+      "severity": "Low",
+      "category": "UX",
+      "sections": [
+        {
+          "body": "Run any command via ./b4w.sh on Linux.",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Clean output without platform-inappropriate warnings.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "Every command prints: 'It is strongly recommended to launch `pwsh` and run the .ps1 commands directly within the `pwsh` terminal.' This is irrelevant on Linux where bash is the native shell.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The b4w.sh wrapper unconditionally prints this recommendation, likely as a development-time reminder that wasn't conditioned on the platform.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "b4w.sh: the echo/pwsh recommendation line near the top of the script.",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Only print the pwsh recommendation when the detected shell environment could benefit from it (i.e., suppress it when pwsh is not installed or on Linux/macOS)\n- Or gate it behind a `--verbose` flag or environment variable",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 5,
+      "title": "`snapshot -v 0 --stdout` produces excessively large output that overwhelms the terminal",
+      "severity": "Low",
+      "category": "Documentation",
+      "sections": [
+        {
+          "body": "./b4w.sh -s news snapshot -v 0 --stdout on a page with many elements.",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Manageable output or a clear warning about expected size.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "Output was 63.9KB for Hacker News and 36.8KB for Wikipedia. The output was so large it was persisted to a file instead of displayed inline. A first-time user would be overwhelmed.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "`--stdout` dumps the entire accessibility tree for the viewport chunk, which can be very large for content-rich pages. The SKILL.md warns about snapshot file size ('Don't cat snapshot files — they can exceed 256KB') but does not warn about `--stdout` behavior.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "- Add a note in SKILL.md explicitly warning that `--stdout` can produce very large output, recommending `snapshot grep` for targeted searches or `-i` for interactive elements only\n- Consider adding a `--max-lines` flag to truncate `--stdout` output\n- Add a tip after large `--stdout` output suggesting `snapshot grep` as an alternative",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 6,
+      "title": "Pre-existing '(default)' session appears without user action",
+      "severity": "Low",
+      "category": "UX",
+      "sections": [
+        {
+          "body": "Run `./b4w.sh list` after first opening named sessions.",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Only explicitly-created named sessions appear, or the default session's origin is explained.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "A '(default)' session appeared in the list with a UUID session ID, created earlier. A new user might be confused about where this session came from and whether it's safe to close.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "Browser4 backend creates a default session when first started (e.g., by a previous `goto` without `-s`). The session persists until explicitly closed. New users have no context about this lifecycle.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "- Add a brief explanation in the `list` output or help text that '(default)' is the unnamed session created automatically when no `-s` flag is provided\n- Consider adding a first-run message: 'No session specified — using (default). Use -s <name> for named sessions.'",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 7,
+      "title": "`goto` output doesn't clearly indicate a redirect occurred",
+      "severity": "Low",
+      "category": "UX",
+      "sections": [
+        {
+          "body": "./b4w.ps1 -s research goto \"https://en.wikipedia.org/wiki/Browser_automation\"",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Clear indication that the URL was redirected to a different page.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "The output shows the final URL (https://en.wikipedia.org/wiki/Headless_browser) and title (Headless browser - Wikipedia) but doesn't mention that a redirect occurred from the requested URL.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The `goto` command reports the final page state after navigation, including any redirects, without distinguishing between direct loads and redirects. The user might think they navigated to the wrong page.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "- When the final URL differs from the requested URL, include a note like '(redirected from <original URL>)' in the output\n- Or include the original requested URL alongside the final URL in the page summary",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    }
+  ]
+}

@@ -227,6 +227,159 @@ pub(super) fn test_close_all_single_server(ctx: &mut E2ECtx) {
     );
 }
 
+// ---------------------------------------------------------------------------
+// session-default
+// ---------------------------------------------------------------------------
+
+pub(super) fn test_session_default_promotes_named_to_default(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let mock_server = MockBrowser4Server::start();
+    ctx.browser4_base_url = mock_server.base_url();
+
+    // Write a named session file.
+    let auth_path = state_file_path(&ctx.state_dir, Some("auth"));
+    fs::create_dir_all(auth_path.parent().unwrap()).expect("create sessions dir");
+    fs::write(
+        &auth_path,
+        serde_json::json!({
+            "sessionId": "swarm-session-auth",
+            "baseUrl": mock_server.base_url(),
+        })
+        .to_string(),
+    )
+    .expect("write auth state");
+
+    let result = run_command(ctx, &["session-default", "auth"]);
+    assert_eq!(result.exit_code, 0, "expected session-default to succeed");
+    assert!(
+        result.stdout.contains("now the DEFAULT session"),
+        "Expected success message in:\n{}",
+        result.stdout
+    );
+
+    // Default state file must now have the named session's ID.
+    assert_eq!(
+        read_persisted_session_id(&ctx.state_dir),
+        "swarm-session-auth"
+    );
+
+    // Named session file must be removed after promotion (prevents split state).
+    assert!(
+        !auth_path.exists(),
+        "expected named session file to be removed after promotion"
+    );
+}
+
+pub(super) fn test_session_default_warns_when_overwriting_default(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let mock_server = MockBrowser4Server::start();
+    ctx.browser4_base_url = mock_server.base_url();
+
+    // Write a default session.
+    let default_state = serde_json::json!({
+        "sessionId": "swarm-session-old",
+        "baseUrl": mock_server.base_url(),
+    });
+    fs::write(
+        state_file_path(&ctx.state_dir, None),
+        default_state.to_string(),
+    )
+    .expect("write default state");
+
+    // Write a named session.
+    let auth_path = state_file_path(&ctx.state_dir, Some("auth"));
+    fs::create_dir_all(auth_path.parent().unwrap()).expect("create sessions dir");
+    fs::write(
+        &auth_path,
+        serde_json::json!({
+            "sessionId": "swarm-session-auth",
+            "baseUrl": mock_server.base_url(),
+        })
+        .to_string(),
+    )
+    .expect("write auth state");
+
+    let result = run_command(ctx, &["session-default", "auth"]);
+    assert_eq!(result.exit_code, 0);
+
+    // Warning about replacing existing default must appear in stderr.
+    let combined = format!("{}\n{}", result.stdout, result.stderr);
+    assert!(
+        combined.contains("Replacing existing default session"),
+        "Expected overwrite warning, got stdout+stderr:\n{}",
+        combined
+    );
+    assert!(
+        combined.contains("swarm-session-old"),
+        "Expected old session ID in warning, got stdout+stderr:\n{}",
+        combined
+    );
+
+    // Named file must be removed.
+    assert!(!auth_path.exists());
+}
+
+pub(super) fn test_session_default_errors_on_nonexistent(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let mock_server = MockBrowser4Server::start();
+    ctx.browser4_base_url = mock_server.base_url();
+
+    let result = run_command_expecting_failure(
+        ctx,
+        &["session-default", "nonexistent"],
+        "No session found",
+    );
+    assert_ne!(result.exit_code, 0);
+}
+
+pub(super) fn test_session_default_updates_timestamp(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let mock_server = MockBrowser4Server::start();
+    ctx.browser4_base_url = mock_server.base_url();
+
+    // Write a named session with a known old timestamp.
+    let auth_path = state_file_path(&ctx.state_dir, Some("auth"));
+    fs::create_dir_all(auth_path.parent().unwrap()).expect("create sessions dir");
+    fs::write(
+        &auth_path,
+        serde_json::json!({
+            "sessionId": "swarm-session-auth",
+            "baseUrl": mock_server.base_url(),
+            "lastAccessedAt": "2020-01-01T00:00:00+00:00",
+        })
+        .to_string(),
+    )
+    .expect("write auth state");
+
+    let result = run_command(ctx, &["session-default", "auth"]);
+    assert_eq!(result.exit_code, 0);
+
+    // Read the default state and verify the timestamp was refreshed.
+    let default_path = state_file_path(&ctx.state_dir, None);
+    let raw = fs::read_to_string(&default_path).expect("read default state");
+    let parsed: serde_json::Value =
+        serde_json::from_str(&raw).expect("valid JSON");
+    let ts = parsed["lastAccessedAt"]
+        .as_str()
+        .expect("lastAccessedAt must exist");
+    // The old timestamp must have been replaced.
+    assert_ne!(
+        ts, "2020-01-01T00:00:00+00:00",
+        "Expected lastAccessedAt to be refreshed, but got old value: {}",
+        ts
+    );
+    // It should parse as a recent year (not the epoch default).
+    assert!(
+        ts.starts_with("202"),
+        "Expected recent timestamp, got: {}",
+        ts
+    );
+}
+
 pub(super) fn test_close_all_no_active_sessions(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
 
@@ -712,13 +865,8 @@ pub(super) fn test_status_installed_runtime(ctx: &mut E2ECtx) {
     assert_eq!(result.exit_code, 0);
 
     assert!(
-        result.stdout.contains("Installed version: v4.10.0"),
-        "Expected 'Installed version: v4.10.0' in:\n{}",
-        result.stdout
-    );
-    assert!(
-        result.stdout.contains("Installed at:"),
-        "Expected 'Installed at:' in:\n{}",
+        result.stdout.contains("Installed bundle: v4.10.0"),
+        "Expected 'Installed bundle: v4.10.0' in:\n{}",
         result.stdout
     );
 }
@@ -734,8 +882,8 @@ pub(super) fn test_status_no_installed_runtime(ctx: &mut E2ECtx) {
     assert_eq!(result.exit_code, 0);
 
     assert!(
-        result.stdout.contains("Installed version: not installed"),
-        "Expected 'Installed version: not installed' in:\n{}",
+        result.stdout.contains("Installed bundle: not installed"),
+        "Expected 'Installed bundle: not installed' in:\n{}",
         result.stdout
     );
 }
@@ -1178,7 +1326,7 @@ pub(super) fn test_named_session_reuses_opened_session(ctx: &mut E2ECtx) {
     assert!(
         open_result
             .stdout
-            .contains("Session opened: swarm-session-1"),
+            .contains("Session opened: amazon (swarm-session-1)"),
         "Expected named-session open output in:\n{}",
         open_result.stdout
     );
@@ -2051,7 +2199,7 @@ pub(super) fn test_agent_task_commands(ctx: &mut E2ECtx) {
     assert!(
         agent_run_result
             .stdout
-            .contains("browser4-cli agent status agent-task-1"),
+            .contains("agent status agent-task-1"),
         "Expected agent status hint in:\n{}",
         agent_run_result.stdout
     );
@@ -3803,10 +3951,11 @@ pub(super) fn test_upgrade_to_new_version(ctx: &mut E2ECtx) {
         "Expected 'upgraded successfully' in:\n{}",
         result.stdout
     );
+    // Restart hint is now emitted on stderr.
     assert!(
-        result.stdout.contains("Restart the server"),
-        "Expected restart hint in:\n{}",
-        result.stdout
+        result.stderr.contains("Restart the server"),
+        "Expected restart hint in stderr:\n{}",
+        result.stderr
     );
 }
 
@@ -4450,6 +4599,84 @@ pub(super) fn test_snapshot_grep_flags(ctx: &mut E2ECtx) {
         "expected snapshot-grep -i -v to succeed:\n{}", result.stderr);
     assert!(!result.stdout.contains("mock snapshot"),
         "Expected -i -v MOCK to exclude matching line:\n{}", result.stdout);
+}
+
+// ---------------------------------------------------------------------------
+// snapshot-grep -- Unicode / Chinese text matching
+// ---------------------------------------------------------------------------
+
+pub(super) fn test_snapshot_grep_unicode(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let mock_server = MockBrowser4Server::start();
+    ctx.browser4_base_url = mock_server.base_url();
+
+    // Simulate a snapshot that contains Chinese text in YAML format
+    // (mimicking what browser_snapshot returns for a Baidu search results page).
+    let chinese_snapshot = r#"- document:
+  - heading "百度一下"
+  - link "武汉龙虾节"
+  - text: 2026年武汉小龙虾消费季
+  - text: 汉口江滩三阳广场
+  - link "肥肥虾庄"
+  - text: 不嘬虾，枉夏天"#;
+    mock_server.set_browser_snapshot_response(chinese_snapshot);
+
+    run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG, "https://example.com"]);
+
+    // Basic Chinese text match — substring of a YAML node value
+    let result = run_command(ctx, &["snapshot", "grep", "龙虾节"]);
+    assert_eq!(result.exit_code, 0,
+        "expected snapshot-grep for Chinese text to succeed:\n{}", result.stderr);
+    assert!(result.stdout.contains("武汉龙虾节"),
+        "Expected '龙虾节' to match '武汉龙虾节':\n{}", result.stdout);
+
+    // Fixed-string match with full Chinese phrase
+    let result = run_command(ctx, &["snapshot", "grep", "-F", "不嘬虾，枉夏天"]);
+    assert_eq!(result.exit_code, 0,
+        "expected snapshot-grep -F to succeed for Chinese text:\n{}", result.stderr);
+    assert!(result.stdout.contains("不嘬虾，枉夏天"),
+        "Expected -F for Chinese text to match:\n{}", result.stdout);
+
+    // Case-insensitive match (no-op for CJK, but shouldn't break)
+    let result = run_command(ctx, &["snapshot", "grep", "-i", "汉口江滩"]);
+    assert_eq!(result.exit_code, 0,
+        "expected snapshot-grep -i for Chinese text to succeed:\n{}", result.stderr);
+    assert!(result.stdout.contains("汉口江滩"),
+        "Expected -i for Chinese text to match:\n{}", result.stdout);
+
+    // Text NOT in the snapshot
+    let result = run_command(ctx, &["snapshot", "grep", "不存在的文本"]);
+    assert_eq!(result.exit_code, 0,
+        "expected snapshot-grep for absent Chinese text to succeed:\n{}", result.stderr);
+    assert!(!result.stdout.contains("不存在的文本"),
+        "Expected absent Chinese text NOT to match:\n{}", result.stdout);
+
+    // -c (count) mode with Chinese text
+    let result = run_command(ctx, &["snapshot", "grep", "-c", "虾"]);
+    assert_eq!(result.exit_code, 0,
+        "expected snapshot-grep -c for Chinese text to succeed:\n{}", result.stderr);
+    let count: i32 = result.stdout.trim().parse().unwrap_or(-1);
+    assert!(count >= 3,
+        "Expected '虾' to appear at least 3 times (龙虾, 肥肥虾庄, 不嘬虾): got count={}:\n{}",
+        count, result.stdout);
+
+    // -F with literal Chinese characters containing regex-like patterns
+    // (ensures the regex engine doesn't misinterpret CJK chars as regex syntax)
+    let result = run_command(ctx, &["snapshot", "grep", "-F", "武汉"]);
+    assert_eq!(result.exit_code, 0,
+        "expected snapshot-grep -F for '武汉' to succeed:\n{}", result.stderr);
+    assert!(result.stdout.contains("武汉龙虾节"),
+        "Expected -F '武汉' to match:\n{}", result.stdout);
+
+    // Count mode should show correct count
+    let result = run_command(ctx, &["snapshot", "grep", "-c", "武汉"]);
+    assert_eq!(result.exit_code, 0,
+        "expected snapshot-grep -c for '武汉' to succeed:\n{}", result.stderr);
+    let count: i32 = result.stdout.trim().parse().unwrap_or(-1);
+    assert!(count >= 2,
+        "Expected '武汉' to appear at least 2 times: got count={}:\n{}",
+        count, result.stdout);
 }
 
 // ---------------------------------------------------------------------------

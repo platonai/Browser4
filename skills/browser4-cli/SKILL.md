@@ -10,6 +10,32 @@ tier: decision
 
 Browser automation CLI for AI agents — Chrome/Chromium via CDP with accessibility-tree snapshots.
 
+### Development Mode (Running from Source)
+
+When working from the repository (not using an installed `browser4-cli` binary), use the dev-mode
+wrappers in the repo root. All examples in this document use `browser4-cli` as the installed
+command — substitute accordingly for dev-mode work:
+
+| Platform | Command | Notes |
+|---|---|---|
+| **PowerShell** (Windows) | `./b4w.ps1 <command>` | Auto-builds from source when needed. Uses manual argument parsing — short flags (`-o`, `-i`, `-v`) are safe. Preferred on Windows. |
+| **Git Bash / Linux / macOS** | `./b4w.sh <command>` | Bash wrapper that individually quotes arguments before passing to pwsh. Avoids PowerShell parameter binding entirely. |
+| **CMD** (Windows) | `./b4w.bat <command>` | Uses `--%` stop-parsing token to prevent PowerShell from consuming `-i`/`-v` flags. |
+| **Cargo (any platform)** | `cargo run --manifest-path cli/browser4-cli/Cargo.toml -- <command>` | Slower (compiles each run unless `--quiet` is added). Good for one-off debugging. |
+
+**Example:** The installed command `browser4-cli snapshot -v 0` becomes `./b4w.ps1 snapshot -v 0` (PowerShell)
+or `./b4w.sh snapshot -v 0` (Git Bash) when running from source.
+
+**Shell selection guide:**
+- `b4w.ps1` — PowerShell (Windows): primary choice. Uses manual `$args` parsing so common
+  short flags (`-o`/`-i`/`-v`) are no longer intercepted by PowerShell's parameter binder.
+  Use long-form flags (`--output`, `--interactive`, `--viewport`) for cross-shell compatibility.
+- `b4w.sh` — Git Bash / Linux / macOS: individually quotes each argument to prevent
+  pwsh from interpreting dash-prefixed CLI flags as PowerShell parameters. Recommended
+  when running from bash environments.
+- `b4w.bat` — cmd.exe: uses PowerShell's `--%` stop-parsing token. Good fallback when
+  both `b4w.ps1` and `b4w.sh` encounter parameter binding issues.
+
 ## 1. Core Loop
 
 Every browser4-cli session follows this pattern:
@@ -28,11 +54,11 @@ Every browser4-cli session follows this pattern:
 
 ```bash
 browser4-cli goto "https://example.com"
-browser4-cli snapshot -v 0          # read the page; note refs
-browser4-cli fill <ref> "<value>"   # interact
+browser4-cli snapshot -v 0 --stdout       # read the page; note refs
+browser4-cli fill <ref> "<value>"         # interact
 browser4-cli press Enter
 browser4-cli wait --load networkidle
-browser4-cli snapshot -v 0 --auto-diff  # verify what changed
+browser4-cli snapshot -v 0 --auto-diff --stdout  # verify what changed
 browser4-cli htmlsnapshot get text "<css-selector>" --all
 ```
 
@@ -81,6 +107,59 @@ The `list` command displays a "Next open" column showing what happens when `goto
 - **Reuse** — reconnects to the existing browser window (session is active on the backend).
 - **Refresh** — opens a fresh window (session is stale or missing).
 
+### Tab Management
+
+Tab commands scope to a session — all operations affect the session targeted via `-s <session>` (or the DEFAULT session when `-s` is omitted).
+
+#### Tab Lifecycle
+
+```
+1. LIST     browser4-cli tab-list                    # See all tabs: index, GUID, title, URL
+2. CREATE   browser4-cli tab-new [url]               # Open a new tab (about:blank if URL omitted)
+3. SWITCH   browser4-cli tab-select <index>          # Switch by index
+           browser4-cli tab-select --guid <guid>    # Switch by stable GUID
+4. CLOSE    browser4-cli tab-close <index>           # Close by index
+           browser4-cli tab-close                   # Close current tab
+           browser4-cli tab-close --guid <guid>     # Close by GUID
+5. VERIFY   browser4-cli tab-list                    # Confirm state after changes
+```
+
+#### Key notes
+
+- **GUIDs:** `tab-list` shows a `GUID` column. Use `--guid` for stable targeting across tab reordering. Extension sessions show a `chrome:` prefix on numeric GUIDs; regular sessions use 32-char hex GUIDs.
+- **Machine-readable output:** Use `--json` either before or after the command: `browser4-cli --json tab-list` or `browser4-cli tab-list --json`. Output is a JSON envelope: `{"command":"tab-list","output":{"count":N,"tabs":[{"index":0,"guid":"...","url":"...","title":"..."}]},"status":"ok"}`. The `tabs` array and `count` are nested inside `output`.
+- **Session scoping:** Prefix tab commands with `-s <session-id>` to target a non-default session. The `list` command shows all tracked sessions and their IDs.
+- **Last-tab behavior:** Chrome requires at least one open tab. Closing the last tab silently creates a replacement `about:blank` — `tab-list` will still show 1 tab afterward.
+- **Tab insert position:** New tabs are inserted by Chrome (not Browser4). The position depends on Chrome's native behavior — typically after the active tab. Use `tab-list` to verify.
+- **No auto-snapshot:** `tab-list` and `tab-close` do NOT trigger automatic snapshots. After `tab-select`, run `snapshot` explicitly to get fresh element refs for the new active tab.
+- **Re-snapshot after switches:** `tab-select` changes the active page context. Capture a fresh snapshot before interacting with page elements in the new tab.
+- **Extension sessions:** When closing tabs on extension-attached sessions, the backend may report an error even though the tab was successfully closed (Chrome's `chrome.tabs.remove` callback can fire an error after the tab is already gone). The CLI verifies that the tab was actually removed and treats the operation as successful in this case. Extension sessions may also show "Stale" in `list` output after all tabs are closed — the session can be reconnected with `attach --extension`.
+- **Extension re-attach creates a fresh tab scope:** Each `attach --extension` establishes a new WebSocket connection and creates its own tab tracking scope. After re-attaching (e.g., after navigating to `chrome://version/` which drops the connection), only tabs created through the *new* connection are visible in `tab-list`. Tabs from the previous connection are still open in Chrome but are not tracked by the new session. To work with those tabs, either re-open them via `tab-new` in the new session, or use `-s <name>` to preserve a named session that survives re-attach.
+
+#### Examples
+
+```bash
+# List all tabs in the default session
+browser4-cli tab-list
+
+# Machine-readable tab data (both forms work)
+browser4-cli --json tab-list
+browser4-cli tab-list --json
+# Output: {"command":"tab-list","output":{"count":1,"tabs":[{"index":0,"guid":"...","url":"about:blank","title":"(no title)"}]},"status":"ok"}
+
+# Open a tab and switch to it
+browser4-cli tab-new https://httpbin.org/get
+# Output: Switched to tab 1 (https://httpbin.org/get)
+
+# Close by GUID (survives reordering)
+browser4-cli tab-close --guid 2AAA0C47D288D3943BA85D31AA8D084C
+
+# Cross-session tab operations
+browser4-cli -s ext-session tab-list
+browser4-cli -s ext-session tab-new https://example.com
+browser4-cli -s ext-session tab-select 0
+```
+
 ## 3. Command Map
 
 | Command family | Purpose | When to use | Full reference |
@@ -88,7 +167,8 @@ The `list` command displays a "Next open" column showing what happens when `goto
 | `goto`, `open`, `close`, `reload` | Navigation & session management | Every session starts here | — |
 | `snapshot` | Capture accessibility tree with refs | Before/after interactions | [htmlsnapshot.md](references/htmlsnapshot.md) |
 | `snapshot grep` | Search snapshot content with regex | Find elements by text or pattern | — |
-| `click`, `fill`, `type`, `press`, `select`, `check`, `drag` | Page interaction | Form filling, button clicks, navigation | — |
+| `click`, `dblclick`, `drag`, `hover`, `fill`, `type`, `press`, `select`, `check`, `generate-locator` | Page interaction | Form filling, button clicks, mouse actions, navigation | — |
+| `dialog-accept`, `dialog-dismiss` | Native JS dialog handling | After clicking buttons that trigger alert/confirm/prompt | — |
 | `htmlsnapshot get`, `get all` | Extract text/html/attr via CSS selectors | Single-field data extraction | [htmlsnapshot.md](references/htmlsnapshot.md) |
 | `htmlsnapshot query` | X-SQL queries for structured extraction | Multi-field, filtered, sorted data | [x-sql.md](references/x-sql.md) |
 | `eval` | Execute JavaScript in the page | Live DOM access, complex transforms | — |
@@ -101,7 +181,8 @@ The `list` command displays a "Next open" column showing what happens when `goto
 | `webdb export`, `webdb normalize` | Export cached pages, normalize URLs to database keys | Post-crawl content extraction, URL key lookup | [webdb.md](references/webdb.md) |
 | `skills`, `skills get`, `skills path`, `skills unpack` | Bundled AI agent skill files | Refresh agent instructions, unpack skill files | [skills.md](references/skills.md) |
 | `skill-list`, `skill-info`, `skill-install`, `skill-uninstall`, `skill-reload` | Backend skill management | Install/manage server-side skills | [skills.md](references/skills.md) |
-| `screenshot`, `scroll`, `wait`, `resize`, `tab-*` | Visual capture & viewport control | Screenshots, tab management. `tab-select` / `tab-close` accept `--guid <guid>` for stable tab IDs; use `tab-list --json` to see full GUIDs. Re-snapshot after tab switches. | — |
+| `screenshot`, `scroll`, `wait`, `resize` | Visual capture & viewport control | Screenshots, viewport sizing, scroll control | — |
+| `tab-list`, `tab-new`, `tab-select`, `tab-close` | Tab management | Multi-tab workflows, session-scoped tab operations. See §Tab Management below. | — |
 
 ### Refreshing This Skill
 
@@ -165,7 +246,7 @@ Need to process multiple pages?
 
 > **Warning:** Shell quoting on Windows — complex JS/SQL with nested quotes causes escaping issues. Prefer `--sql @file.sql` (read from file), `--sql-stdin` (piped), `--sql-base64` (encoded), or `eval --file`/`eval --stdin`/`eval --base64` (JS from file or base64). For `htmlsnapshot inspect`, use `@file`, `--stdin`, or `--selector-base64`. Never inline `--sql "..."` with double-quoted CSS selectors on Windows. See [shell-quoting.md](references/shell-quoting.md) for the full workaround workflow.
 
-> **Warning:** Don't cat snapshot files — they can exceed 256KB. Use viewport pagination (`snapshot -v 0`), `snapshot grep <pattern>`, or `snapshot --stdout --page 1` instead.
+> **Warning:** Don't cat snapshot files — they can exceed 256KB. The same applies to `--stdout`, which may dump large accessibility trees (63KB+ for content-rich pages). Use viewport pagination (`snapshot -v 0`), `snapshot grep <pattern>`, or `snapshot --stdout --page 1` instead. For targeted extraction, prefer `snapshot grep` or `htmlsnapshot` commands over full-tree dumps.
 
 > **Note:** Output pagination defaults — `get html`, `get all html`, and `grep` paginate at 2K lines. `get text` and `get all text` are not paginated by default. Use `--all` to disable pagination, or `--page N` for subsequent pages.
 
@@ -193,6 +274,66 @@ browser4-cli snapshot -v 0                        # capture snapshot first
 browser4-cli snapshot grep "See also"             # search for text in the full AX tree
 browser4-cli snapshot grep -i "price|rating"      # case-insensitive regex alternation
 browser4-cli snapshot grep -A 3 -B 1 "Checkout"   # show surrounding context lines
+```
+
+### Mouse Interactions
+
+```bash
+# Hover — reveal tooltips, expand menus, trigger hover effects
+browser4-cli hover <ref>                          # hover over an element
+browser4-cli snapshot grep "tooltip"              # verify tooltip appeared
+
+# Double-click — trigger dblclick handlers
+browser4-cli dblclick <ref>                       # double-click an element
+
+# Drag-and-drop — move elements between containers
+browser4-cli drag <source-ref> <target-ref>       # drag source onto target
+browser4-cli snapshot grep "new position"         # verify element was moved
+```
+
+### Dialog Handling
+
+Native browser dialogs (`alert()`, `confirm()`, `prompt()`) block the page's main thread. When a dialog appears (e.g., after clicking a button), `click` will time out. Handle the dialog with a separate command:
+
+```bash
+browser4-cli click "#alertBtn"                    # triggers alert — click will time out
+browser4-cli dialog-accept                        # dismiss the alert ("OK")
+
+browser4-cli click "#confirmBtn"                  # triggers confirm
+browser4-cli dialog-accept                        # click "OK" (returns true to page)
+
+browser4-cli click "#promptBtn"                   # triggers prompt
+browser4-cli dialog-accept "Hello from Browser4"  # fill prompt and accept
+
+browser4-cli dialog-dismiss                       # cancel/dismiss any dialog
+```
+
+**Note:** `dialog-accept` and `dialog-dismiss` must be run in a separate invocation — they cannot be part of the same command as the triggering `click`.
+
+### Verifying Results (verify-after-interaction)
+
+Every interaction should be followed by verification. These patterns show how to confirm your actions had the expected effect:
+
+```bash
+# After click — diff vs previous snapshot
+browser4-cli click <submit-ref>
+browser4-cli snapshot -v 0 --auto-diff --stdout   # shows only what changed
+
+# After hover — search for expected content
+browser4-cli hover <ref>
+browser4-cli snapshot grep "expected-tooltip-text"
+
+# After drag — confirm reordering
+browser4-cli drag <source> <target>
+browser4-cli snapshot grep "new order|reordered|moved"
+
+# After dialog — verify the interaction log
+browser4-cli click "#alertBtn" && browser4-cli dialog-accept
+browser4-cli snapshot grep "\[alert\]|\[confirm\]|\[prompt\]"
+
+# Generate resilient CSS selectors from snapshot refs
+browser4-cli generate-locator <ref>               # produces e.g. "#contactForm > button.primary"
+browser4-cli get text "#contactForm > button.primary"  # verify with the generated selector
 ```
 
 ### Static Data Extraction (Single Field)
@@ -256,6 +397,54 @@ element:expr(expression)
 
 Operators in expressions include `+`, `-`, `*`, `/`, `^`, `%`, `==`, `!=`, `<`, `>`, `<=`, `>=`, `&&`, `||`. Use parentheses for grouping.
 
+### Agent Task Lifecycle (Async)
+
+Agent tasks run asynchronously — submit a task, poll for completion, then fetch results:
+
+```bash
+# 1. Submit a natural-language task (returns <task-id>)
+browser4-cli agent run "Find the top 5 products and their prices on this page"
+
+# 2. Poll until complete (use --wait to block instead)
+browser4-cli agent status <task-id>
+# Look for: "processState": "done" or "isDone": true
+
+# 3. Get the result
+browser4-cli agent result <task-id>
+```
+
+**Alternative (blocking):** `browser4-cli agent run --wait "<task>"` polls every 2s for up to 10 minutes and prints the result when done.
+
+**Polling with `isDone`:** The JSON from `agent status` includes `isDone: true` when finished. Shell scripts can parse this:
+```bash
+while true; do
+  done=$(browser4-cli agent status <task-id> | grep -o '"isDone" *: *true')
+  [ -n "$done" ] && break
+  sleep 2
+done
+browser4-cli agent result <task-id>
+```
+
+**Status codes reference:**
+
+| statusCode | processState | Meaning |
+|-----------|-------------|---------|
+| (null) | `"created"` | Queued, not yet picked up |
+| 102 | `"in_progress"` | Agent is actively working |
+| 200 | `"done"` | Task completed successfully |
+| 417 | `"done"` | Expectation failed (e.g., missing LLM key) |
+| 4xx/5xx | `"done"` | Task failed — inspect `message` for details |
+
+**CLI status labels:**
+- `queued` — task submitted, waiting to start
+- `processing` — agent is working on the task
+- `completed` — task finished successfully (call `agent result`)
+- `failed (NNN)` — task failed with HTTP status NNN
+
+**Listing tasks:** `browser4-cli agent list` shows all tracked tasks with ID, description, started/finished times, and status.
+
+See **[agent.md](references/agent.md)** for full details including LLM key configuration, error recovery, and `extract`/`summarize` synchronous variants.
+
 ## 7. Reference Map
 
 Organized by task — follow the link that matches what you're trying to do:
@@ -304,6 +493,8 @@ browser4-cli install
 irm https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.ps1 | iex
 browser4-cli install
 ```
+
+> **PowerShell wrapper tip:** When running `b4w.ps1` directly in PowerShell, short flags like `-i` and `-v` may be intercepted by PowerShell's parameter binder (matching `-InformationAction` and `-Verbose`). Use `b4w.bat` from Command Prompt or `b4w.sh` from Git Bash to avoid this. When using `b4w.ps1` directly, pass flags after `--` (e.g. `./b4w.ps1 -- snapshot -i`) or quote arguments individually. See [shell-quoting.md](references/shell-quoting.md) for details.
 
 **Linux / macOS (bash):**
 ```bash

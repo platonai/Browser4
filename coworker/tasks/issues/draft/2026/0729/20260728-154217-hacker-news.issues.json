@@ -1,0 +1,13 @@
+{
+  "meta": {
+    "mode": "dev",
+    "source": "20260728-154217-hacker-news.full.md",
+    "date": "20260728-154217",
+    "scenario": "hacker-news"
+  },
+  "background": {
+    "task": "Successfully navigated to Hacker News, identified the top 3 stories, opened each one, and extracted content for meaningful summaries:\n\n| # | Story | Points | Summary |\n|---|-------|--------|---------|\n| 1 | **7.1 Earthquake in Japan** | 594 | M7.1 at 10km depth struck Kumamoto Prefecture; max intensity 7; widespread shaking across 15+ prefectures |\n| 2 | **New HIV vaccine shows unprecedented success** | 229 | First vaccine generating broadly neutralizing antibodies in primates; 14-year LJI/Scripps collaboration published in *Nature* |\n| 3 | **Kimi Linear: Efficient Attention Architecture** | 126 | First linear attention model outperforming full attention; 75% KV cache reduction, 6× decoding throughput, open-sourced |\n\nFull summaries: `.test-sessions/hn-summaries.md`",
+    "executionContext": "**Commands used (11 total):** `help` → `goto` HN → `snapshot -v 0 --stdout` → manual YAML parsing → `goto` story #1 → `htmlsnapshot` + `summary` + `get all text` → `goto` story #2 → `htmlsnapshot get text` + `get all text \"p\"` → `goto` story #3 → `htmlsnapshot get text \".abstract\"`\n\n**Key workaround:** Rather than clicking story links (which invalidates refs), I extracted URLs from the snapshot YAML by reading the `/url:` entries, then used `goto` for each. This avoided the click → re-snapshot → go-back cycle."
+  },
+  "issues": []
+}

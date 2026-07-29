@@ -610,6 +610,9 @@ struct MockBrowser4State {
     /// Custom command_result responses keyed by task ID. When set, these override
     /// the default response for `command_result`.
     custom_command_results: HashMap<String, String>,
+    /// Custom browser_snapshot response. When set, overrides the default mock
+    /// response for `browser_snapshot` tool calls (used by snapshot-grep, etc.).
+    custom_browser_snapshot_response: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -789,6 +792,24 @@ impl MockBrowser4Server {
             .insert(task_id.to_string(), response.to_string());
     }
 
+    /// Set a custom response for the `browser_snapshot` tool.  When set, every
+    /// `browser_snapshot` call returns this text instead of the default
+    /// `"mock snapshot"`.  Call [clear_browser_snapshot_response] to restore
+    /// the default.
+    fn set_browser_snapshot_response(&self, response: &str) {
+        self.state
+            .lock()
+            .expect("mock Browser4 state mutex poisoned")
+            .custom_browser_snapshot_response = Some(response.to_string());
+    }
+
+    fn clear_browser_snapshot_response(&self) {
+        self.state
+            .lock()
+            .expect("mock Browser4 state mutex poisoned")
+            .custom_browser_snapshot_response = None;
+    }
+
     /// Shut down the mock server's listener thread without dropping the recorded
     /// state. After calling this, further requests will fail with a connection
     /// error (simulating an unreachable backend).
@@ -915,6 +936,11 @@ fn serve_mock_browser4_request(mut stream: TcpStream, state: Arc<Mutex<MockBrows
                 write_http_response(&mut stream, "200 OK", "application/json", &response);
                 return;
             }
+
+            let tool_response_state = state
+                .lock()
+                .expect("mock Browser4 state mutex poisoned")
+                .clone();
 
             let text = match tool.as_str() {
                 "open_session" => {
@@ -1045,7 +1071,7 @@ fn serve_mock_browser4_request(mut stream: TcpStream, state: Arc<Mutex<MockBrows
                         format!("result for {task_id}")
                     }
                 }
-                "command_batch" => mock_command_batch_response(&arguments),
+                "command_batch" => mock_command_batch_response(&arguments, &tool_response_state),
                 "close_session" => "Session closed.".to_string(),
                 "close_all_sessions" => "All sessions closed.".to_string(),
                 "agent_extract" => {
@@ -1079,7 +1105,7 @@ fn serve_mock_browser4_request(mut stream: TcpStream, state: Arc<Mutex<MockBrows
                         r#"{{"method":"{method}"{params_str},"result":"mock-cdp-result"}}"#,
                     )
                 }
-                other => mock_browser_tool_text(other, &arguments),
+                other => mock_browser_tool_text(other, &arguments, &tool_response_state),
             };
 
             let response = serde_json::json!({
@@ -1362,7 +1388,11 @@ fn extract_swarm_task_id(route: &str, suffix: &str) -> Option<String> {
     None
 }
 
-fn mock_browser_tool_text(tool: &str, arguments: &serde_json::Value) -> String {
+fn mock_browser_tool_text(
+    tool: &str,
+    arguments: &serde_json::Value,
+    state: &MockBrowser4State,
+) -> String {
     match tool {
         "browser_evaluate" => {
             let expression = arguments
@@ -1380,12 +1410,18 @@ fn mock_browser_tool_text(tool: &str, arguments: &serde_json::Value) -> String {
         }
         "page_url" => "https://mock.browser4.local/current".to_string(),
         "page_title" => "Mock Browser4 Page".to_string(),
-        "browser_snapshot" => "mock snapshot".to_string(),
+        "browser_snapshot" => state
+            .custom_browser_snapshot_response
+            .clone()
+            .unwrap_or_else(|| "mock snapshot".to_string()),
         other => format!("mock response for {other}"),
     }
 }
 
-fn mock_command_batch_response(arguments: &serde_json::Value) -> String {
+fn mock_command_batch_response(
+    arguments: &serde_json::Value,
+    state: &MockBrowser4State,
+) -> String {
     let mut current_session_id = arguments
         .get("sessionId")
         .and_then(|value| value.as_str())
@@ -1441,7 +1477,7 @@ fn mock_command_batch_response(arguments: &serde_json::Value) -> String {
                 serde_json::json!({
                     "index": index,
                     "ok": true,
-                    "text": mock_browser_tool_text(tool, &step_arguments),
+                    "text": mock_browser_tool_text(tool, &step_arguments, state),
                 })
             }
             "snapshot" => serde_json::json!({
@@ -2549,15 +2585,53 @@ fn extract_submitted_task_id(output: &str) -> String {
 /// (pretty-print, line-wrapping, etc.).  If that fails we fall back to the
 /// legacy regex-based extraction for backward compatibility.
 fn extract_tab_index(output: &str, url: &str) -> usize {
-    // Primary path: parse as JSON array of {index, url} objects.
+    // Primary path: try the JSON envelope format first:
+    // {"status":"ok","command":"tab-list","output":{"count":N,"tabs":[...]}}
+    if let Ok(envelope) = serde_json::from_str::<serde_json::Value>(output) {
+        if let Some(tabs) = envelope
+            .get("output")
+            .and_then(|o| o.get("tabs"))
+            .and_then(|t| t.as_array())
+        {
+            for tab in tabs {
+                if let Some(tab_url) = tab.get("url").and_then(|v| v.as_str()) {
+                    if tab_url == url {
+                        // index can be either a JSON number or string
+                        if let Some(idx) = tab
+                            .get("index")
+                            .and_then(|v| {
+                                v.as_u64()
+                                    .map(|n| n as usize)
+                                    .or_else(|| v.as_str().and_then(|s| s.parse::<usize>().ok()))
+                            })
+                        {
+                            return idx;
+                        }
+                        panic!(
+                            "Found URL '{}' in tab-list but index field is missing or not parseable:\n{}",
+                            url, output
+                        );
+                    }
+                }
+            }
+            panic!("Could not find tab index for '{}' in:\n{}", url, output);
+        }
+    }
+
+    // Secondary path: parse as plain JSON array of {index, url} objects
+    // (legacy format).
     if let Ok(tabs) = serde_json::from_str::<Vec<serde_json::Value>>(output) {
         for tab in &tabs {
             if let Some(tab_url) = tab.get("url").and_then(|v| v.as_str()) {
                 if tab_url == url {
+                    // index can be either a JSON number or string
                     if let Some(idx) = tab
                         .get("index")
-                        .and_then(|v| v.as_str())
-                        .and_then(|s| s.parse::<usize>().ok())
+                        .and_then(|v| {
+                            v.as_u64()
+                                .map(|n| n as usize)
+                                .or_else(|| v.as_str().and_then(|s| s.parse::<usize>().ok()))
+                        })
                     {
                         return idx;
                     }
@@ -2615,7 +2689,33 @@ fn extract_tab_index(output: &str, url: &str) -> usize {
 ///
 /// The output can be JSON (--json mode) or human-readable table format.
 fn extract_tab_guid(output: &str, url: &str) -> String {
-    // Primary path: parse as JSON array of {index, guid, url} objects.
+    // Primary path: try the JSON envelope format first:
+    // {"status":"ok","command":"tab-list","output":{"count":N,"tabs":[...]}}
+    if let Ok(envelope) = serde_json::from_str::<serde_json::Value>(output) {
+        if let Some(tabs) = envelope
+            .get("output")
+            .and_then(|o| o.get("tabs"))
+            .and_then(|t| t.as_array())
+        {
+            for tab in tabs {
+                if let Some(tab_url) = tab.get("url").and_then(|v| v.as_str()) {
+                    if tab_url == url {
+                        if let Some(guid) = tab.get("guid").and_then(|v| v.as_str()) {
+                            return guid.to_string();
+                        }
+                        panic!(
+                            "Found URL '{}' in tab-list but guid field is missing:\n{}",
+                            url, output
+                        );
+                    }
+                }
+            }
+            panic!("Could not find tab guid for '{}' in:\n{}", url, output);
+        }
+    }
+
+    // Secondary path: parse as plain JSON array of {index, guid, url} objects
+    // (legacy format).
     if let Ok(tabs) = serde_json::from_str::<Vec<serde_json::Value>>(output) {
         for tab in &tabs {
             if let Some(tab_url) = tab.get("url").and_then(|v| v.as_str()) {
@@ -2677,9 +2777,16 @@ fn extract_swarm_submissions(output: &str) -> Vec<(String, String)> {
         .collect()
 }
 
+/// Parse the first JSON object from CLI stdout. Handles trailing advisory
+/// notes (e.g. "Note: resultSet is empty...") emitted after the JSON payload.
 fn parse_json_output(stdout: &str, command_name: &str) -> serde_json::Value {
     let payload = strip_snapshot_output(stdout);
-    serde_json::from_str(&payload).unwrap_or_else(|error| {
+    // Strip any trailing advisory note emitted after the JSON body.
+    let json_part = match payload.find("\nNote:") {
+        Some(idx) => &payload[..idx],
+        None => &payload,
+    };
+    serde_json::from_str(json_part).unwrap_or_else(|error| {
         panic!("Expected JSON payload from {command_name}, got:\n{payload}\nparse error: {error}")
     })
 }
@@ -2819,7 +2926,7 @@ fn wait_for_crawl_result(
             .as_i64()
             .map(|s| !(200..400).contains(&s))
             .unwrap_or(false);
-        if parsed["id"].as_str() == Some(task_id) && (is_done || has_terminal || has_error_status)
+        if parsed["taskId"].as_str() == Some(task_id) && (is_done || has_terminal || has_error_status)
         {
             ctx.record_step(
                 format!(
@@ -4043,6 +4150,8 @@ fn tested_commands(include_batch_command: bool) -> HashSet<&'static str> {
         "open",
         "list",
         "close",
+        // test_session_default_*
+        "session-default",
         // test_close_*, test_close_all_*
         "close-all",
         // test_kill_all_*
@@ -4590,6 +4699,10 @@ fn match_bool_flag(arg: &str, long: &str, short: &str) -> bool {
 /// otherwise returns the =value or short-alias next-arg.
 fn match_value_flag_start(arg: &str, long: &str, short: &str) -> Option<String> {
     if let Some(value) = arg.strip_prefix(&format!("--{long}=")) {
+        return Some(value.to_string());
+    }
+    // Support short-flag-with-equals form: -L=ALL, -s=pattern, etc.
+    if let Some(value) = arg.strip_prefix(&format!("{short}=")) {
         return Some(value.to_string());
     }
     if arg == format!("--{long}") || arg == short {

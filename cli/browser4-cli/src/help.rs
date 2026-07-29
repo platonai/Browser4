@@ -32,10 +32,16 @@ pub fn public_command_name(name: &str) -> &str {
         "htmlsnapshot-grep" => "htmlsnapshot grep",
         "htmlsnapshot-inspect" => "htmlsnapshot inspect",
         "snapshot-grep" => "snapshot grep",
+        "snapshot-list" => "snapshot list",
+        "snapshot-clean" => "snapshot clean",
         "webdb-export" => "webdb export",
         "webdb-normalize" => "webdb normalize",
         "doctor-log" => "doctor log",
         "doctor-metrics" => "doctor metrics",
+        "experience-save" => "experience save",
+        "experience-query" => "experience query",
+        "experience-list" => "experience list",
+        "experience-deep-learn" => "experience deep-learn",
         "plugin-list" => "plugin list",
         "plugin-info" => "plugin info",
         "plugin-install" => "plugin install",
@@ -117,14 +123,13 @@ pub fn commands_in_category(category_name: &str) -> Vec<CommandDef> {
 pub fn generate_help() -> String {
     let cmds = all_commands();
     let mut lines: Vec<String> = vec![
-        "Usage: browser4-cli <command> [args] [options]".to_string(),
-        "Usage: browser4-cli -s <session> <command> [args] [options]".to_string(),
+        "Usage: browser4-cli [-s <session>] <command> [args] [options]".to_string(),
     ];
 
     // Common workflows — show the 5 most common patterns
     lines.push("\nCommon workflows:".to_string());
     lines.push("  Navigate & inspect:".to_string());
-    lines.push("    goto <url>  →  snapshot -v 0  →  click <ref>  →  snapshot -v 0    # -v 0 = top-of-page chunk".to_string());
+    lines.push("    goto <url>  →  snapshot -v 0  →  click <ref>  →  snapshot -v 0    # -v 0 = current viewport".to_string());
     lines.push("  Extract data:".to_string());
     lines.push("    htmlsnapshot get text \"<css>\"           # single field".to_string());
     lines.push("    htmlsnapshot query --sql @query.sql       # structured extraction".to_string());
@@ -134,7 +139,7 @@ pub fn generate_help() -> String {
     lines.push("    eval --file script.js                     # read JS from file (no quoting issues)".to_string());
     lines.push("  Bulk crawl:".to_string());
     lines.push("    crawl <url> --out-link-selector \"...\" --depth 1 --sql @query.sql".to_string());
-    lines.push("\nFilter help by category:  --help nav | --help extract | --help session | --help kb | --help swarm | --help crawl".to_string());
+    lines.push("\nFilter help by category:  --help nav | --help extract | --help session | --help kb | --help agent | --help swarm | --help crawl".to_string());
 
     let mut first_category = true;
     for (cat_name, cat_title) in CATEGORY_TITLES {
@@ -155,10 +160,17 @@ pub fn generate_help() -> String {
         }
     }
 
+    lines.push("\nPlugin tools:".to_string());
+    lines.push("  Installed plugins expose their tools via the plugin-<name> <method> pattern:".to_string());
+    lines.push("    plugin-<name>              invoke the default tool for a plugin domain".to_string());
+    lines.push("    plugin-<name> <method>     invoke a specific method (e.g. plugin-media download --url ...)".to_string());
+    lines.push("    plugin                     list all available plugin tool domains".to_string());
+    lines.push("  Use `plugin list` to see installed plugins and their status.".to_string());
+
     lines.push("\nGlobal options:".to_string());
     lines.push(format_with_gap(
         "  --help [cmd|category]",
-        "print help (try: nav, extract, session, kb)",
+        "print help (try: nav, extract, session, kb, agent)",
         30,
     ));
     lines.push(format_with_gap("  --version", "print version", 30));
@@ -179,6 +191,11 @@ pub fn generate_help() -> String {
     ));
     lines.push(format_with_gap("  -s <name>", "named session label", 30));
     lines.push(format_with_gap(
+        "  --timeout <seconds>",
+        "override the default HTTP timeout for tool calls (e.g. --timeout 300 for long-running plugin tools)",
+        30,
+    ));
+    lines.push(format_with_gap(
         "  --server <url>",
         "override Browser4 server URL",
         30,
@@ -194,6 +211,10 @@ pub fn generate_help() -> String {
     lines.push(String::new());
     lines.push(
         "Run `browser4-cli help <command>` or `<command> --help` for detailed options and examples."
+            .to_string(),
+    );
+    lines.push(
+        "Dev mode: cargo run --manifest-path cli/browser4-cli/Cargo.toml -- <command>"
             .to_string(),
     );
 
@@ -319,10 +340,11 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push(
             "  # Pipe from stdin — ideal for heredocs and one-liners with complex quoting:".to_string(),
         );
-        lines.push("  browser4-cli eval --stdin << 'EOF'".to_string());
+        lines.push("  browser4-cli eval --js << 'EOF'".to_string());
         lines.push("  document.querySelector('a[href*=\"jobs\"]')?.textContent".to_string());
         lines.push("  EOF".to_string());
         lines.push("  echo 'document.title' | browser4-cli eval --stdin".to_string());
+        lines.push("  echo 'document.title' | browser4-cli eval --js   # --js is a shorthand for --stdin".to_string());
         lines.push("  # Base64 (inline, avoids quoting):".to_string());
         lines.push("  browser4-cli eval --base64 ZG9jdW1lbnQudGl0bGU=".to_string());
         lines.push("  # Inline (simple expressions only — avoid on Windows with complex JS):".to_string());
@@ -332,6 +354,21 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
 
     if cmd.name == "htmlsnapshot-query" {
         lines.push("Notes:".to_string());
+        lines.push(
+            "  - DOM_LOAD_AND_SELECT(@url, ...) re-fetches the page fresh via the scrape API."
+                .to_string(),
+        );
+        lines.push(
+            "    It does NOT use the stored snapshot from htmlsnapshot capture."
+                .to_string(),
+        );
+        lines.push(
+            "    htmlsnapshot capture is only needed for inspect/get/summary, not for query with @url."
+                .to_string(),
+        );
+        lines.push(
+            "  - Function names are case-insensitive (DOM_FIRST_TEXT = dom_first_text).".to_string(),
+        );
         lines.push(
             "  - Use --format table for human-readable output (json, csv, or table).".to_string(),
         );
@@ -349,7 +386,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push(String::new());
         lines.push("Examples:".to_string());
         lines.push(wrap_text(
-            "browser4-cli htmlsnapshot query --sql \"SELECT dom_first_text(dom, 'h1') AS title FROM load_and_select(@url, ':root')\"",
+            "browser4-cli htmlsnapshot query --sql \"SELECT DOM_FIRST_TEXT(DOM, 'h1') AS title FROM DOM_LOAD_AND_SELECT(@url, ':root')\"",
             "  ",
             2,
         ));
@@ -456,10 +493,11 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
             "  - Uses AI to extract structured data from the current page based on a natural-language instruction."
                 .to_string(),
         );
-        lines.push(
-            "  - --schema accepts a JSON schema to constrain the extracted data structure."
-                .to_string(),
-        );
+        lines.push(wrap_text(
+            "--schema accepts a JSON schema to constrain the extracted data.  Both standard JSON Schema ({\"type\":\"object\",\"properties\":{...}}) and the compact {fields:[{name,type,description,required}]} format are supported.  Use @file.json to avoid shell quoting issues.",
+            "  - ",
+            4,
+        ));
         lines.push(wrap_text(
             "Output is saved to a timestamped file by default. Use --stdout (or --raw) to print to stdout instead, or --filename to specify a custom path.",
             "  - ",
@@ -469,7 +507,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("Examples:".to_string());
         lines.push("  browser4-cli extract \"product name, price, ratings\"".to_string());
         lines.push(wrap_text(
-            "browser4-cli extract \"all contact info\" --schema '{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\"},\"email\":{\"type\":\"string\"}}}'",
+            "browser4-cli extract \"all contact info\" --schema @schema.json",
             "  ",
             2,
         ));
@@ -632,11 +670,23 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
     if cmd.name == "open" {
         lines.push("Notes:".to_string());
         lines.push(
-            "  - Reuses the saved session for the current slot only when the backend still reports it as active."
+            "  - `open` reconnects to the saved session for the current slot when the backend still reports it as active."
                 .to_string(),
         );
         lines.push(
-            "  - If the saved session is missing or stale, `open` refreshes it by creating a new session."
+            "    The command shows \"Using existing session\" and the current page URL when reconnecting."
+                .to_string(),
+        );
+        lines.push(
+            "  - If the saved session is missing or stale, `open` creates a new browser session."
+                .to_string(),
+        );
+        lines.push(
+            "  - `open` without a URL reconnects or creates a session at about:blank without navigating."
+                .to_string(),
+        );
+        lines.push(
+            "  - Use `-s <name>` to create a named session that can be targeted by subsequent commands."
                 .to_string(),
         );
         lines.push(String::new());
@@ -740,9 +790,14 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
             "  - ",
             4,
         ));
+        lines.push(
+            "  - Use --verbose to show full session IDs without truncation (UUIDs are 36 chars, truncated to 40 by default)."
+                .to_string(),
+        );
         lines.push(String::new());
         lines.push("Examples:".to_string());
         lines.push("  browser4-cli list".to_string());
+        lines.push("  browser4-cli list --verbose".to_string());
     }
 
     if cmd.name == "goto" {
@@ -823,8 +878,8 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push(
             r##"  browser4-cli swarm submit "https://www.amazon.com/dp/B08PP5MSVB" --sql ""##
                 .to_string()
-                + r#""SELECT dom_base_uri(dom) AS url, dom_first_text(dom, '#productTitle') AS title ""#
-                + r#""FROM load_and_select(@url, 'body')""#
+                + r#""SELECT DOM_BASE_URI(DOM) AS url, DOM_FIRST_TEXT(DOM, '#productTitle') AS title ""#
+                + r#""FROM DOM_LOAD_AND_SELECT(@url, 'body')""#
                 + r#"""#
         );
         lines.push(String::new());
@@ -875,8 +930,8 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push(
             r##"  browser4-cli swarm query "https://www.amazon.com/dp/B08PP5MSVB" --sql ""##
                 .to_string()
-                + r#""SELECT dom_base_uri(dom) AS url, dom_first_text(dom, '#productTitle') AS title ""#
-                + r#""FROM load_and_select(@url, 'body')""#
+                + r#""SELECT DOM_BASE_URI(DOM) AS url, DOM_FIRST_TEXT(DOM, '#productTitle') AS title ""#
+                + r#""FROM DOM_LOAD_AND_SELECT(@url, 'body')""#
                 + r#"""#
         );
         lines.push(String::new());
@@ -1011,7 +1066,11 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(
-            "  - --out-link-selector (-ol) specifies a CSS selector to extract links (required for depth >= 1)."
+            "  - --out-link-selector (-ol) specifies a CSS selector to extract links. Required for link discovery;"
+                .to_string(),
+        );
+        lines.push(
+            "    without it, only seed URLs are processed regardless of depth."
                 .to_string(),
         );
         lines.push(
@@ -1151,7 +1210,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
             4,
         ));
         lines.push(
-            "  - Export the full HTML snapshot from Browser4's page storage to a local file with `htmlsnapshot export --file <path>`."
+            "  - Export the full HTML snapshot from Browser4's page storage to a local file with `htmlsnapshot export --file <path>`. Add `--clean` to strip scripts, styles, and non-standard attributes."
                 .to_string(),
         );
         lines.push(wrap_text(
@@ -1193,7 +1252,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push(String::new());
         lines.push("  # Correlated multi-field extraction: title, price, and link per product".to_string());
         lines.push(wrap_text(
-            "browser4-cli htmlsnapshot query --sql \"SELECT dom_first_text(dom, '.title') AS title, dom_first_text(dom, '.price') AS price, dom_first_href(dom, 'a') AS link FROM load_and_select(@url, '.product')\"",
+            "browser4-cli htmlsnapshot query --sql \"SELECT DOM_FIRST_TEXT(DOM, '.title') AS title, DOM_FIRST_TEXT(DOM, '.price') AS price, DOM_FIRST_HREF(DOM, 'a') AS link FROM DOM_LOAD_AND_SELECT(@url, '.product')\"",
             "  ",
             2,
         ));
@@ -1212,7 +1271,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push(String::new());
         lines.push("  # Run an X-SQL query against the current page URL".to_string());
         lines.push(wrap_text(
-            "browser4-cli htmlsnapshot query --sql \"SELECT dom_first_text(dom, 'h1') AS title FROM load_and_select(@url, ':root')\"",
+            "browser4-cli htmlsnapshot query --sql \"SELECT DOM_FIRST_TEXT(DOM, 'h1') AS title FROM DOM_LOAD_AND_SELECT(@url, ':root')\"",
             "  ",
             2,
         ));
@@ -1229,8 +1288,9 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("  # Return only the resultSet array, omitting wrapper metadata".to_string());
         lines.push("  browser4-cli htmlsnapshot query --sql @query.sql --result-only".to_string());
         lines.push(String::new());
-        lines.push("  # Export the full snapshot HTML to a file".to_string());
+        lines.push("  # Export the full snapshot HTML to a file (add --clean for LLM consumption)".to_string());
         lines.push("  browser4-cli htmlsnapshot export --file snapshot.html".to_string());
+        lines.push("  browser4-cli htmlsnapshot export --file clean.html --clean".to_string());
         lines.push(String::new());
         lines.push("  # Generate a compressed page summary from the stored HTML snapshot".to_string());
         lines.push("  browser4-cli htmlsnapshot summary".to_string());
@@ -1579,7 +1639,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(
-            "  browser4-cli loop \"select dom.title from load_and_select('https://example.com')\" --count 5"
+            "  browser4-cli loop \"select dom.title from DOM_LOAD_AND_SELECT('https://example.com')\" --count 5"
                 .to_string(),
         );
         lines.push("  browser4-cli loop --list".to_string());
@@ -1682,6 +1742,171 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("Examples:".to_string());
         lines.push("  browser4-cli skills unpack".to_string());
         lines.push("  browser4-cli skills unpack /custom/path".to_string());
+    }
+
+    if cmd.name == "tab-new" {
+        lines.push(String::new());
+        lines.push("Notes:".to_string());
+        lines.push(
+            "  - When no URL is given, the new tab opens with about:blank."
+                .to_string(),
+        );
+        lines.push(
+            "  - Tab insertion position is determined by Chrome (not Browser4). In most"
+                .to_string(),
+        );
+        lines.push(
+            "    cases the new tab appears immediately after the currently active tab."
+                .to_string(),
+        );
+        lines.push(
+            "  - After creation, the CLI auto-selects the new tab and prints its index."
+                .to_string(),
+        );
+        lines.push(
+            "  - Use the printed index or GUID from tab-list to reference the tab in"
+                .to_string(),
+        );
+        lines.push(
+            "    subsequent commands (tab-select, tab-close)."
+                .to_string(),
+        );
+        lines.push(String::new());
+        lines.push("Examples:".to_string());
+        lines.push("  browser4-cli tab-new".to_string());
+        lines.push("  browser4-cli tab-new https://example.com".to_string());
+        lines.push("  browser4-cli -s <session> tab-new https://httpbin.org/get".to_string());
+    }
+
+    if cmd.name == "tab-list" {
+        lines.push(String::new());
+        lines.push("Notes:".to_string());
+        lines.push(
+            "  - Outputs a table with Index, GUID, Title, and URL columns by default."
+                .to_string(),
+        );
+        lines.push(
+            "  - Use --json as a global flag (BEFORE the command) for machine-readable"
+                .to_string(),
+        );
+        lines.push(
+            "    output: `browser4-cli --json tab-list` returns { tabs: [...], count: N }."
+                .to_string(),
+        );
+        lines.push(
+            "  - GUIDs from extension sessions are prefixed with `chrome:` to distinguish"
+                .to_string(),
+        );
+        lines.push(
+            "    them from regular Browser4 session GUIDs (32-char hex)."
+                .to_string(),
+        );
+        lines.push(
+            "  - After a tab-list, the current tab's page metadata is NOT captured —"
+                .to_string(),
+        );
+        lines.push(
+            "    tab-list is read-only and does not trigger a snapshot. Run `snapshot`"
+                .to_string(),
+        );
+        lines.push(
+            "    explicitly if you need element refs after a tab switch."
+                .to_string(),
+        );
+        lines.push(String::new());
+        lines.push("Examples:".to_string());
+        lines.push("  browser4-cli tab-list".to_string());
+        lines.push("  browser4-cli --json tab-list".to_string());
+        lines.push("  browser4-cli -s <session> tab-list".to_string());
+    }
+
+    if cmd.name == "tab-close" {
+        lines.push(String::new());
+        lines.push("Notes:".to_string());
+        lines.push(
+            "  - Zero-based indexing — the first tab is index 0."
+                .to_string(),
+        );
+        lines.push(
+            "  - Closing a tab shifts the indices of all subsequent tabs down by 1."
+                .to_string(),
+        );
+        lines.push(
+            "    Run tab-list to see the updated indices."
+                .to_string(),
+        );
+        lines.push(
+            "  - When the last tab is closed, Chrome automatically creates a replacement"
+                .to_string(),
+        );
+        lines.push(
+            "    tab — tab-list will still show 1 tab afterward."
+                .to_string(),
+        );
+        lines.push(
+            "  - Use --guid <guid> for stable targeting across tab reordering. GUIDs are"
+                .to_string(),
+        );
+        lines.push(
+            "    printed by tab-list and survive index shifts."
+                .to_string(),
+        );
+        lines.push(
+            "  - On extension sessions, the backend may report an error even when the"
+                .to_string(),
+        );
+        lines.push(
+            "    close succeeded. The CLI verifies the tab was actually removed and treats"
+                .to_string(),
+        );
+        lines.push(
+            "    it as successful in that case."
+                .to_string(),
+        );
+        lines.push(String::new());
+        lines.push("Examples:".to_string());
+        lines.push("  browser4-cli tab-close 1           # Close tab at index 1".to_string());
+        lines.push("  browser4-cli tab-close              # Close the current tab".to_string());
+        lines.push("  browser4-cli tab-close --guid <guid> # Close by stable GUID".to_string());
+        lines.push("  browser4-cli -s <session> tab-close 0".to_string());
+    }
+
+    if cmd.name == "tab-select" {
+        lines.push(String::new());
+        lines.push("Notes:".to_string());
+        lines.push(
+            "  - Zero-based indexing — the first tab is index 0."
+                .to_string(),
+        );
+        lines.push(
+            "  - New tabs are inserted after the currently active tab (Chrome default)."
+                .to_string(),
+        );
+        lines.push(
+            "    Existing tabs beyond the insertion point shift their indices. Run tab-list"
+                .to_string(),
+        );
+        lines.push(
+            "    after creating new tabs to see the actual layout."
+                .to_string(),
+        );
+        lines.push(
+            "  - After switching tabs, capture a fresh snapshot to get valid element refs"
+                .to_string(),
+        );
+        lines.push(
+            "    for the new active page. Snapshot refs do not carry over between tabs."
+                .to_string(),
+        );
+        lines.push(
+            "  - Use --guid <guid> for stable targeting across tab reordering."
+                .to_string(),
+        );
+        lines.push(String::new());
+        lines.push("Examples:".to_string());
+        lines.push("  browser4-cli tab-select 0           # Select the first tab".to_string());
+        lines.push("  browser4-cli tab-select 2           # Select tab at index 2".to_string());
+        lines.push("  browser4-cli tab-select --guid <guid> # Select by stable GUID".to_string());
     }
 
     lines.join("\n")
@@ -1899,9 +2124,9 @@ mod tests {
         let help = generate_command_help(open);
         assert!(help.contains("browser4-cli open [url]"));
         assert!(help
-            .contains("Open a browser session or refresh the saved one if it is no longer active"));
+            .contains("Open a browser session or reconnect to an existing one"));
         assert!(help.contains("backend still reports it as active"));
-        assert!(help.contains("creating a new session"));
+        assert!(help.contains("creates a new browser session"));
     }
 
     #[test]
@@ -2106,7 +2331,7 @@ mod tests {
         assert!(help.contains("SwarmController.query(query)"));
         assert!(help.contains("--sql"));
         assert!(help.contains("@url"));
-        assert!(help.contains("load_and_select"));
+        assert!(help.contains("DOM_LOAD_AND_SELECT"));
         assert!(help.contains("query.sql"));
     }
 
@@ -2119,7 +2344,7 @@ mod tests {
         assert!(help.contains("--sql"));
         assert!(help.contains("@url"));
         assert!(help.contains("SwarmController.query(query)"));
-        assert!(help.contains("load_and_select"));
+        assert!(help.contains("DOM_LOAD_AND_SELECT"));
         assert!(help.contains("query.sql"));
         assert!(help.contains("seed file"));
         assert!(help.contains("inline X-SQL"));
@@ -2196,6 +2421,7 @@ mod tests {
         assert!(help.contains("browser4-cli htmlsnapshot query --sql-base64"));
         assert!(help.contains("browser4-cli htmlsnapshot query --sql @query.sql --result-only"));
         assert!(help.contains("browser4-cli htmlsnapshot export --file snapshot.html"));
+        assert!(help.contains("browser4-cli htmlsnapshot export --file clean.html --clean"));
         assert!(help.contains("browser4-cli htmlsnapshot summary"));
         // grep and inspect
         assert!(help.contains("htmlsnapshot grep [OPTIONS] <pattern>"));
@@ -2222,9 +2448,9 @@ mod tests {
         assert!(help.contains("use `htmlsnapshot query` with X-SQL's `DOM_LOAD_AND_SELECT`"));
         // correlated multi-field example
         assert!(help.contains("Correlated multi-field extraction: title, price, and link per product"));
-        assert!(help.contains("dom_first_text(dom, '.title') AS title, dom_first_text(dom, '.price') AS"));
-        assert!(help.contains("price, dom_first_href"));
-        assert!(help.contains("FROM load_and_select(@url, '.product')"));
+        assert!(help.contains("DOM_FIRST_TEXT(DOM, '.title') AS title, DOM_FIRST_TEXT(DOM, '.price') AS"));
+        assert!(help.contains("price, DOM_FIRST_HREF"));
+        assert!(help.contains("FROM DOM_LOAD_AND_SELECT(@url, '.product')"));
     }
 
     #[test]
@@ -2245,7 +2471,8 @@ mod tests {
         let cmd = cmds.iter().find(|c| c.name == "htmlsnapshot-query").unwrap();
         let help = generate_command_help(cmd);
         assert!(help.contains("browser4-cli htmlsnapshot query [url]"));
-        assert!(help.contains("Run X-SQL against the HTML snapshot stored in Browser4's page storage via the scrape API"));
+        assert!(help.contains("DOM_LOAD_AND_SELECT(@url, ...) re-fetches the page fresh via the scrape API"));
+        assert!(help.contains("htmlsnapshot capture is only needed for inspect/get/summary"));
         assert!(help.contains("--sql"));
         assert!(help.contains("--sql-stdin"));
         assert!(help.contains("--sql-base64"));
@@ -2269,6 +2496,7 @@ mod tests {
         assert!(help.contains("browser4-cli htmlsnapshot export"));
         assert!(help.contains("Export snapshot HTML from Browser4's page storage to a local file"));
         assert!(help.contains("--file"));
+        assert!(help.contains("--clean"));
         assert!(!help.contains("browser4-cli htmlsnapshot-export"));
     }
 

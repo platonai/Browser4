@@ -138,7 +138,7 @@ class CommandControllerE2ETest : RestAPITestBase() {
      *   "id": "5eb69939-f42f-431d-a485-d47a10901871",
      *   "statusCode": 200,
      *   "event": "PerceptiveAgent.onDidRun",
-     *   "processState": "done",
+     *   "processState": "completed",
      *   "pageStatusCode": 201,
      *   "pageContentBytes": 0,
      *   "message": "The browser has been successfully opened and is currently displaying the Microsoft Bing (cn.bing.com) homepage.",

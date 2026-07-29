@@ -113,17 +113,17 @@ class PulsarSessionManager(
      */
     fun getOrCreateSession(capabilities: Map<String, String?>? = null): ManagedSession {
         val normalizedCapabilities = normalizeCapabilities(capabilities = capabilities)
-        val sessionId = normalizedCapabilities.getValue(SESSION_ID_CAPABILITY).toString()
+        val requestedId = normalizedCapabilities.getValue(SESSION_ID_CAPABILITY).toString()
 
         // Route SWARM sessions before computeIfAbsent (see explanation above).
-        if (sessionId.equals(SWARM_SESSION_ID, ignoreCase = true)) {
+        if (requestedId.equals(SWARM_SESSION_ID, ignoreCase = true)) {
             return ensureSwarmSession(capabilities)
         }
 
-        val session = sessions.computeIfAbsent(sessionId) {
-            createManagedSession(sessionId, normalizedCapabilities)
+        val session = sessions.computeIfAbsent(requestedId) {
+            createManagedSession(requestedId, normalizedCapabilities)
         }
-        val activeSession = resolveHealthySession(sessionId, normalizedCapabilities, session)
+        val activeSession = resolveHealthySession(requestedId, normalizedCapabilities, session)
         activeSession.lastAccessedAt = System.currentTimeMillis()
         return activeSession
     }
@@ -603,14 +603,19 @@ class PulsarSessionManager(
         val sessionId = when {
             explicitSessionId.equals(DEFAULT_SESSION_ID, ignoreCase = true) -> generateDefaultSessionId()
             explicitSessionId.equals(SWARM_SESSION_ID, ignoreCase = true) -> SWARM_SESSION_ID
-            hasExplicitSessionId -> explicitSessionId.trim()
+            hasExplicitSessionId -> displayNameToSessionId.getOrDefault(
+                explicitSessionId.trim(),
+                explicitSessionId.trim()
+            )
             requestedSessionId.isNullOrBlank() || requestedSessionId.equals(
                 DEFAULT_SESSION_ID,
                 ignoreCase = true
             ) -> generateDefaultSessionId()
 
             requestedSessionId.equals(SWARM_SESSION_ID, ignoreCase = true) -> SWARM_SESSION_ID
-            else -> requestedSessionId
+            else -> displayNameToSessionId.computeIfAbsent(requestedSessionId) {
+                UUID.randomUUID().toString()
+            }
         }
 
         val requestedProfileMode = BrowserProfileMode.fromString(

@@ -43,6 +43,7 @@ jobs:
       skip_binary_build: ${{ steps.prepare.outputs.skip_binary_build }}
       dry_run: ${{ steps.prepare.outputs.dry_run }}
       tag: ${{ steps.prepare.outputs.tag }}
+      release_tag: ${{ steps.prepare.outputs.release_tag }}
 
     steps:
       - name: Checkout repository
@@ -82,6 +83,7 @@ jobs:
           if [[ "$TAG_NAME" == "$TAG_REF" ]]; then
             TAG_NAME="v${CLI_VERSION}-cli"
           fi
+          RELEASE_TAG="${TAG_NAME%%-cli*}"
 
           REMOTE_VERSION="unknown"
           LOOKUP_STATUS="failed"
@@ -102,11 +104,13 @@ jobs:
           echo "skip_binary_build=$INPUT_SKIP_BINARY_BUILD" >> "$GITHUB_OUTPUT"
           echo "dry_run=$DRY_RUN" >> "$GITHUB_OUTPUT"
           echo "tag=$TAG_NAME" >> "$GITHUB_OUTPUT"
+          echo "release_tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
 
           {
             echo "## 📦 browser4-cli npm Publish"
             echo ""
             echo "- **Tag**: $TAG_NAME"
+            echo "- **Target Release Tag**: $RELEASE_TAG"
             echo "- **Package**: $PACKAGE_NAME"
             echo "- **Local Version**: $CLI_VERSION"
             echo "- **Remote Version**: $REMOTE_VERSION"
@@ -390,6 +394,16 @@ jobs:
             echo "- **Dry Run**: ${{ needs.prepare.outputs.dry_run }}"
           } >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Ensure binaries exist when publish is required
+        if: steps.check.outputs.should_publish == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ needs.build-binaries.result }}" = "skipped" ]; then
+            echo "::error::CLI binary build was skipped, but npm publish is required. Re-run with skip_binary_build=false."
+            exit 1
+          fi
+
       - name: Download all CLI binary artifacts
         if: steps.check.outputs.should_publish == 'true'
         uses: actions/download-artifact@v7
@@ -520,13 +534,13 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
   github-release:
-    name: Update latest GitHub Release
+    name: Update GitHub Release
     needs: [prepare, test, build-binaries]
     if: |
       always() &&
       needs.prepare.result == 'success' &&
       needs.test.result == 'success' &&
-      (needs.build-binaries.result == 'success' || needs.build-binaries.result == 'skipped') &&
+      needs.build-binaries.result == 'success' &&
       needs.prepare.outputs.dry_run != 'true'
     runs-on: ubuntu-latest
     permissions:
@@ -581,14 +595,16 @@ jobs:
 
           echo "All $ACTUAL_COUNT platform binaries are present and valid"
 
-      - name: Resolve latest release
+      - name: Resolve target release
         id: latest
         shell: bash
+        env:
+          RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
         run: |
           set -euo pipefail
 
-          if ! LATEST_JSON=$(gh release view --repo "${{ github.repository }}" --json tagName,body,url 2>/dev/null); then
-            echo "::error::No latest release found. The main release workflow (release.yml) must publish a release first."
+          if ! LATEST_JSON=$(gh release view "$RELEASE_TAG" --repo "${{ github.repository }}" --json tagName,body,url 2>/dev/null); then
+            echo "::error::Release '$RELEASE_TAG' not found. The main release workflow (release.yml) must publish that release first."
             exit 1
           fi
 
@@ -602,10 +618,10 @@ jobs:
           # Save existing body for later modification
           echo "$LATEST_BODY" > existing_body.md
 
-          echo "Latest release: $LATEST_TAG"
+          echo "Target release: $LATEST_TAG"
           echo "Release URL: $LATEST_URL"
 
-      - name: Upload CLI binaries to latest release
+      - name: Upload CLI binaries to target release
         id: upload
         shell: bash
         run: |
@@ -710,7 +726,7 @@ jobs:
             echo "## 🚀 browser4-cli GitHub Release Update"
             echo ""
             echo "- **CLI Version**: ${{ needs.prepare.outputs.cli_version }}"
-            echo "- **Latest Release**: ${{ steps.latest.outputs.tag }}"
+            echo "- **Target Release**: ${{ steps.latest.outputs.tag }}"
             echo "- **Release URL**: ${{ steps.latest.outputs.url }}"
             echo "- **Platform Binaries**: 7 uploaded"
             echo "- **Notes Updated**: ${{ steps.update_release_notes.outcome || 'skipped' }}"

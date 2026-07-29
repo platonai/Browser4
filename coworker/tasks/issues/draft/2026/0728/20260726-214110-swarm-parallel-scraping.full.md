@@ -1,0 +1,314 @@
+All steps completed. Here are the full deliverables:
+
+---
+
+## A. Task Result
+
+Successfully extracted product data from 10 MockSite product pages using the swarm:
+
+| Category | Product ID | Title | Price | Image |
+|---|---|---|---|---|
+| Electronics | B0E000001 | 4K OLED TV 55 | $899.99 | /ec/static/img/placeholder.png |
+| Electronics | B0E000002 | Wireless Noise-Cancelling Headphones | $199.99 | /ec/static/img/placeholder.png |
+| Electronics | B0E000003 | Portable Bluetooth Speaker | $49.99 | /ec/static/img/placeholder.png |
+| Electronics | B0E000004 | Smartphone 128GB | $599.00 | /ec/static/img/placeholder.png |
+| Electronics | B0E000005 | USB-C Hub 7-in-1 | $29.95 | /ec/static/img/placeholder.png |
+| Electronics | B0E000006 | Wireless Mouse | $24.99 | /ec/static/img/placeholder.png |
+| Home | B0H000001 | Vacuum Cleaner Smart | $159.99 | /ec/static/img/placeholder.png |
+| Home | B0H000002 | Air Purifier | $129.50 | /ec/static/img/placeholder.png |
+| Home | B0H000003 | Essential Oil Diffuser | $22.99 | /ec/static/img/placeholder.png |
+| Home | B0H000004 | LED Desk Lamp | $35.99 | /ec/static/img/placeholder.png |
+
+The plain `swarm submit` job correctly returned `pageContentBytes: 4569` with an empty `resultSet` (only a `url` field), confirming the page was fetched but no extraction was performed — exactly as documented.
+
+---
+
+## B. Execution Trace
+
+### Commands Used
+
+```
+./b4w.ps1 help
+./b4w.ps1 swarm create --display-mode HEADLESS --max-browser-contexts 2 --max-open-tabs 4
+./b4w.ps1 swarm query --sql @extract_products.sql --seed-file ./seed_urls.txt --refresh
+./b4w.ps1 swarm submit http://localhost:18080/ec/dp/B0E000001 --refresh
+./b4w.ps1 swarm status <task-id>
+./b4w.ps1 swarm result <task-id>
+./b4w.ps1 swarm list
+./b4w.ps1 swarm list --clear
+./b4w.ps1 swarm query http://localhost:18080/ec/dp/B0E000001 --sql @extract_products.sql --refresh --wait
+./b4w.ps1 swarm query --sql @extract_products.sql --seed-file ./seed_urls.txt --refresh --wait
+./b4w.ps1 swarm submit http://localhost:18080/ec/dp/B0E000001 --refresh --wait
+./b4w.ps1 doctor --verbose
+./b4w.ps1 doctor log pulsar --tail
+./b4w.ps1 swarm close
+```
+
+### Major Steps
+
+1. Read SKILL.md and swarm reference docs to understand commands
+2. Verified MockSite availability (HTTP 200) and inspected product page HTML
+3. Created swarm session with HEADLESS mode, 2 contexts, 4 tabs
+4. Created seed file (10 URLs) and X-SQL query file (`DOM_FIRST_TEXT` for title/price, `DOM_FIRST_ATTR` for image)
+5. Submitted extraction jobs — **first attempt failed** (all 11 tasks: 417 Expectation Failed, H2 "Session is already closed")
+6. Diagnosed via `doctor log` → identified race condition in H2 session lifecycle
+7. Cleared stale tasks, recreated swarm, retried with `--wait` flag → **all succeeded**
+8. Compared `swarm query` (structured extraction) vs `swarm submit` (page fetch only)
+9. Listed tasks, confirmed all 11 completed, closed swarm
+
+### Workarounds Required
+
+- **Major:** First batch submission without `--wait` caused all 11 parallel tasks to fail with H2 session closure race condition. Workaround: use `--wait` flag which appears to serialize or properly manage H2 session lifecycle.
+- **Major:** `swarm list --clear` needed before recreating swarm to remove stale failed tasks (docs mention this but it's easy to miss).
+
+---
+
+## C. Issues Found
+
+### Issue 1: H2 session race condition causes mass task failure without `--wait`
+
+**Severity:** Critical
+
+**Category:** Reliability
+
+**Reproduction:**
+```
+./b4w.ps1 swarm create --display-mode HEADLESS --max-browser-contexts 2 --max-open-tabs 4
+./b4w.ps1 swarm query --sql @query.sql --seed-file ./urls.txt --refresh
+```
+Submit 10+ URLs via seed file to swarm query without `--wait`. Most or all tasks fail with `statusCode: 417` / `lifecycleState: "failed (expectation failed)"`.
+
+**Expected:** All tasks should complete successfully, regardless of whether `--wait` is used. `--wait` should only affect whether the CLI blocks, not whether the backend succeeds.
+
+**Actual:** Without `--wait`, 8 out of 10 tasks failed immediately (within 1 second). With `--wait`, all 10 succeeded. The backend log reveals the root cause:
+```
+WARN a.p.p.a.c.s.AbstractBrowser4SQLContext - Session is already closed | #5/24
+org.h2.jdbc.JdbcSQLException: The object is already closed [90007-197]
+```
+
+**Root Cause:** When swarm workers execute X-SQL queries in parallel, the H2 database session pool in `AbstractBrowser4SQLContext` is being closed prematurely. The `--wait` flag appears to alter the execution path (possibly serializing or keeping the session alive long enough). The `AbstractBrowser4SQLContext.getSession()` at line 158 is returning an already-closed H2 session.
+
+**Code Pointer:** `browser4-agentic/.../AbstractBrowser4SQLContext.kt:158` — `getSession()` method returns closed session. Also `browser4-agentic/.../H2SessionFactory.kt:99` — `getSession()` in the factory.
+
+**AI Suggested Improvement:**
+- Ensure H2 session lifecycle is tied to the swarm session, not individual task completion — sessions should not be closed while queued/processing tasks remain
+- Add a check in `getSession()` to create a new session if the existing one is closed, rather than returning a closed session
+- Add integration test that submits 10+ parallel X-SQL tasks to swarm without `--wait` and verifies all complete
+
+**Human Review:**
+- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+- [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
+- [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- **Notes:**
+
+---
+
+### Issue 2: Failed tasks report empty error message and `isDone: false`
+
+**Severity:** High
+
+**Category:** Reliability
+
+**Reproduction:** Trigger any swarm task failure (e.g., Issue 1 above). Run `swarm status <failed-task-id>` and `swarm result <failed-task-id>`.
+
+**Expected:** `swarm status` should show `isDone: true` for terminal states (failed). `message` or `error` should contain a human-readable error description.
+
+**Actual:**
+```json
+{
+  "isDone": false,
+  "lifecycleState": "failed (expectation failed)",
+  "message": "",
+  "statusCode": 417
+}
+```
+And `swarm result` returns `"error": null` with an empty `resultSet`. The user sees no explanation of what failed. The actual error (`org.h2.jdbc.JdbcSQLException: The object is already closed`) is only visible in the backend log.
+
+**Root Cause:** The swarm task status reporting has two bugs: (1) `isDone` is not set to `true` when `lifecycleState` transitions to a terminal `failed` state — the condition that sets `isDone` likely only triggers on `completed` lifecycle state. (2) The exception message from the H2 error is not propagated to the task's `message` or `error` fields.
+
+**Code Pointer:** Backend swarm task status endpoint — the logic mapping lifecycleState to isDone. Also `XSQLScrapeHyperlink.kt` or `AbstractScrapeHyperlink.kt` — error handling that fails to populate `message`/`error`.
+
+**AI Suggested Improvement:**
+- Set `isDone: true` for ALL terminal lifecycle states (failed, completed, cancelled), not just `completed`
+- Propagate the root exception message to the `message` field when a task fails — even a truncated version is infinitely better than an empty string
+- Consider adding an `errorCode` field (e.g., `H2_SESSION_CLOSED`) for programmatic error handling
+
+**Human Review:**
+- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+- [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
+- [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- **Notes:**
+
+---
+
+### Issue 3: Debug output leaks into user-facing CLI output
+
+**Severity:** Low
+
+**Category:** UX
+
+**Reproduction:**
+```
+./b4w.ps1 swarm query --sql @query.sql --seed-file ./urls.txt --refresh
+```
+
+**Expected:** Clean, structured output with task IDs and URLs.
+
+**Actual:** The line `Finding browser4 root from "/home/vincent/workspace/Browser4-4.12"` appears in stdout before the actual task submission output. This looks like a debug log line that leaked into production output.
+
+**Root Cause:** A `println` or `logger.info` statement in the CLI's startup/initialization path is writing to stdout instead of being gated behind a verbose/debug flag. The `--quiet` flag presumably suppresses it, but it shouldn't appear in default output mode.
+
+**Code Pointer:** CLI code that resolves the browser4 root directory — likely in the startup/init path before command dispatch.
+
+**AI Suggested Improvement:**
+- Gate the "Finding browser4 root" message behind `--verbose` flag or debug logging level
+- Or move it to stderr so it doesn't pollute structured stdout output
+
+**Human Review:**
+- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+- [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
+- [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- **Notes:**
+
+---
+
+### Issue 4: `swarm submit` vs `swarm query` naming confusion
+
+**Severity:** Medium
+
+**Category:** Discoverability
+
+**Reproduction:** Read the swarm documentation and try to understand when to use each command.
+
+**Expected:** Command names should clearly signal their purpose. A new user should immediately understand the difference.
+
+**Actual:** The distinction between `swarm submit` and `swarm query` is subtle:
+- `swarm submit` — fetches pages, optionally with `--sql` (but docs say "prefer `swarm query`")
+- `swarm query` — requires `--sql`, designed for structured extraction
+- Both accept URLs, `--seed-file`, `--refresh`, `--wait`
+
+The doc itself says: *"Prefer `swarm query` over `swarm submit --sql` for X-SQL extraction — it enforces `--sql` as required."* This implies `swarm submit` also accepts `--sql`, creating an overlapping API surface. A new user reading the help output sees both and doesn't know which to pick.
+
+**Root Cause:** The two commands evolved separately rather than being designed as a coherent pair. `submit` was likely the original command, then `query` was added as a specialized variant. The docs acknowledge the overlap but don't resolve it.
+
+**Code Pointer:** N/A — design issue.
+
+**AI Suggested Improvement:**
+- Consider consolidating into a single `swarm submit` command where `--sql` is optional and clearly documented: without `--sql` = fetch only, with `--sql` = fetch + extract
+- Or rename `swarm query` to `swarm extract` to better signal its purpose vs `swarm submit` (fetch-only)
+- Add a "Quick comparison" table to `swarm --help` showing the two commands side by side
+
+**Human Review:**
+- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+- [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
+- [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- **Notes:**
+
+---
+
+### Issue 5: `--wait` documentation doesn't mention its impact on reliability
+
+**Severity:** Medium
+
+**Category:** Documentation
+
+**Reproduction:** Read the swarm reference doc section on `--wait`. It says: *"Block until all submitted jobs complete (polls every 2s, 5-minute timeout).*"
+
+**Expected:** Documentation should mention if `--wait` changes execution behavior beyond just blocking the CLI. If it affects task scheduling or resource lifecycle, that should be documented.
+
+**Actual:** The docs present `--wait` as purely a convenience flag ("block until done"). But in practice, using `--wait` vs not using it changed whether 0% or 100% of tasks succeeded (see Issue 1). This is either a bug or an undocumented behavioral difference.
+
+**Root Cause:** The docs describe `--wait` as a client-side polling convenience, but it may trigger a different code path on the backend (e.g., the CLI keeping a connection open which prevents premature H2 session cleanup).
+
+**Code Pointer:** `swarm.md` lines 62, 77, 91 — the `--wait` documentation sections.
+
+**AI Suggested Improvement:**
+- Fix the underlying race condition (Issue 1) so `--wait` is purely a convenience flag as documented
+- If `--wait` genuinely changes backend behavior, document this explicitly: "Using `--wait` is recommended for batches of 5+ URLs to ensure proper resource lifecycle management"
+- Add a warning in the docs: "For seed files with many URLs, use `--wait` to avoid task failures"
+
+**Human Review:**
+- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+- [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
+- [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- **Notes:**
+
+---
+
+### Issue 6: `pageContentBytes` returned as raw integer — not human-readable
+
+**Severity:** Low
+
+**Category:** UX
+
+**Reproduction:** Run `swarm result <id>` for any completed task.
+
+**Expected:** Page size shown in human-readable format (e.g., "4.5 KB") alongside or instead of raw bytes.
+
+**Actual:** `"pageContentBytes": 4569` — the user must mentally divide by 1024 to understand the page size.
+
+**Root Cause:** The result JSON serializes the raw byte count from the backend without any formatting layer.
+
+**Code Pointer:** Backend result serialization for swarm task results.
+
+**AI Suggested Improvement:**
+- Add a `pageContentSize` field with human-readable formatting (e.g., `"4.5 KiB"`)
+- Or format it in the CLI's default (non-JSON) output mode while keeping raw bytes in `--json` mode
+
+**Human Review:**
+- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+- [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
+- [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- **Notes:**
+
+---
+
+## D. Overall Assessment
+
+### Task Completion Status
+**Completed** — all 9 steps executed successfully after working around the H2 session race condition.
+
+### Estimated Task Success Rate
+- **First attempt:** 0% (0/11 tasks succeeded — all failed with H2 session closed)
+- **Second attempt (with `--wait`):** 100% (11/11 tasks succeeded)
+- **Overall:** 50% success rate, 100% with workaround
+
+### Number of Issues Found
+**6 issues:** 1 Critical, 1 High, 2 Medium, 2 Low
+
+### Major Blockers
+1. **H2 session race condition** (Issue 1) — completely blocked progress on first attempt. Required diagnosing backend logs, clearing stale tasks, and using `--wait` workaround.
+2. **Silent failures** (Issue 2) — the empty error messages made diagnosis much harder than it should have been. A new user would have no idea what went wrong.
+
+### Most Confusing Aspects
+1. The `swarm submit` vs `swarm query` distinction — both accept URLs and `--sql`, but docs say to prefer one over the other. The naming doesn't clearly differentiate them.
+2. The "Finding browser4 root" debug line in output — makes the tool feel unpolished.
+3. The `--wait` flag's undocumented impact on reliability — it's presented as a convenience but appears to change backend behavior.
+
+### Most Valuable Improvements
+1. **Fix the H2 session lifecycle** — this is the only thing that caused actual task failure. Everything else worked smoothly.
+2. **Propagate error messages to task status/results** — the current silent failures make debugging nearly impossible without backend log access.
+3. **Add a `swarm query` example with `--wait` as the recommended pattern** in the Quick Start section of the docs.
+
+### What Worked Well
+- The SKILL.md documentation is comprehensive and well-organized
+- The X-SQL syntax is intuitive and well-documented — writing the extraction query was straightforward
+- `--wait` with the progress summary is a great UX when it works
+- `swarm list` provides clear task tracking with status, timing, and command type
+- The `@file` syntax for SQL files avoids shell quoting issues entirely
+- Error messages in `swarm status` include helpful tips (e.g., the note about empty resultSet when `--sql` is missing)
+
+### Overall Usability Rating
+**7/10** — When it works, the swarm workflow is clean, fast, and well-documented. The critical H2 session bug and silent error reporting are the main detractors. Fixing these two issues would bring it to 8.5/10.

@@ -1,9 +1,25 @@
 #!/bin/bash
 
-. "$(dirname "$0")/bin/tools/install-powershell.sh"
+# b4w.sh — Git Bash / Linux / macOS wrapper for browser4-cli.
+#
+# This script is the recommended way to run browser4-cli from Git Bash on
+# Windows.  Running `./b4w.ps1` directly from Git Bash may cause the shell
+# working directory to reset to the user home directory after each command
+# (a side-effect of how PowerShell inherits and reports CWD from bash).
+# This wrapper avoids that by using `exec pwsh` with individually-quoted
+# arguments, which also prevents dash-prefixed flags from being consumed
+# as PowerShell parameter names.
+#
+# Usage: ./b4w.sh [args...]          (same as ./b4w.ps1 [args...])
+#
+# Shell selection guide:
+#   b4w.sh   — Git Bash / Linux / macOS (auto-quotes args for pwsh safety)
+#   b4w.ps1  — PowerShell (direct, now uses manual arg parsing to avoid
+#              -o/-i/-v interception; preferred on Windows where pwsh is the
+#              primary shell)
+#   b4w.bat  — cmd.exe (uses --% stop-parsing to avoid flag interception)
 
-echo "It is strongly recommended to launch \`pwsh\` and run the .ps1 commands directly within the \`pwsh\` terminal."
-echo ""
+. "$(dirname "$0")/bin/tools/install-powershell.sh"
 
 # When PowerShell receives arguments from bash, dash-prefixed flags like
 # --sql, --stdout, -v can be misinterpreted as PowerShell parameter names

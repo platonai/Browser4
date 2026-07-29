@@ -39,12 +39,12 @@ browser4-cli htmlsnapshot query --sql "
   SELECT
     'H1 count' AS check_name,
     CAST(COUNT(*) AS VARCHAR) AS value
-  FROM load_and_select(@url, 'h1')
+  FROM DOM_LOAD_AND_SELECT(@url, 'h1')
   UNION ALL
   SELECT
     'H2 count',
     CAST(COUNT(*) AS VARCHAR)
-  FROM load_and_select(@url, 'h2')
+  FROM DOM_LOAD_AND_SELECT(@url, 'h2')
 "
 ```
 
@@ -53,9 +53,9 @@ browser4-cli htmlsnapshot query --sql "
 ```bash
 browser4-cli htmlsnapshot query --sql "
   SELECT
-    dom_first_attr(dom, 'img', 'src') AS image_src,
-    dom_first_attr(dom, 'img', 'alt') AS alt_text
-  FROM load_and_select(@url, 'img:not([alt])')
+    DOM_FIRST_ATTR(dom, 'img', 'src') AS image_src,
+    DOM_FIRST_ATTR(dom, 'img', 'alt') AS alt_text
+  FROM DOM_LOAD_AND_SELECT(@url, 'img:not([alt])')
 "
 ```
 
@@ -64,11 +64,11 @@ browser4-cli htmlsnapshot query --sql "
 ```bash
 browser4-cli htmlsnapshot query --sql "
   SELECT
-    dom_first_attr(dom, 'meta[name=description]', 'content') AS meta_description,
-    dom_first_attr(dom, 'meta[name=keywords]', 'content') AS meta_keywords,
-    dom_first_attr(dom, 'link[rel=canonical]', 'href') AS canonical_url,
-    dom_first_text(dom, 'title') AS title_tag
-  FROM load_and_select(@url, ':root')
+    DOM_FIRST_ATTR(dom, 'meta[name=description]', 'content') AS meta_description,
+    DOM_FIRST_ATTR(dom, 'meta[name=keywords]', 'content') AS meta_keywords,
+    DOM_FIRST_ATTR(dom, 'link[rel=canonical]', 'href') AS canonical_url,
+    DOM_FIRST_TEXT(dom, 'title') AS title_tag
+  FROM DOM_LOAD_AND_SELECT(@url, ':root')
 "
 ```
 
@@ -77,10 +77,10 @@ browser4-cli htmlsnapshot query --sql "
 ```bash
 browser4-cli htmlsnapshot query --sql "
   SELECT
-    dom_first_text(dom, 'a') AS link_text,
-    dom_first_attr(dom, 'a', 'href') AS href,
-    dom_first_attr(dom, 'a', 'rel') AS rel
-  FROM load_and_select(@url, 'a[href^=http]')
+    DOM_FIRST_TEXT(dom, 'a') AS link_text,
+    DOM_FIRST_ATTR(dom, 'a', 'href') AS href,
+    DOM_FIRST_ATTR(dom, 'a', 'rel') AS rel
+  FROM DOM_LOAD_AND_SELECT(@url, 'a[href^=http]')
 "
 ```
 
@@ -131,11 +131,11 @@ browser4-cli htmlsnapshot grep --selector head '<meta'
 # The -i 1h caches the page for 1 hour; -njr 3 skips JS rendering (3 retries)
 browser4-cli htmlsnapshot query "https://competitor.com/product/123 -i 1h -njr 3" --sql "
   SELECT
-    dom_base_uri(dom) AS url,
-    dom_first_text(dom, '.product-price') AS price,
-    dom_first_text(dom, '.stock-status') AS stock,
-    dom_first_text(dom, 'h1') AS title
-  FROM load_and_select(@url, 'body')
+    DOM_BASE_URI(dom) AS url,
+    DOM_FIRST_TEXT(dom, '.product-price') AS price,
+    DOM_FIRST_TEXT(dom, '.stock-status') AS stock,
+    DOM_FIRST_TEXT(dom, 'h1') AS title
+  FROM DOM_LOAD_AND_SELECT(@url, 'body')
 "
 ```
 
@@ -146,10 +146,10 @@ Save the query to a file:
 **pricing.sql:**
 ```sql
 SELECT
-  dom_base_uri(dom) AS url,
-  dom_first_text(dom, 'h1') AS product,
-  dom_first_text(dom, '.price') AS price
-FROM load_and_select(@url, 'body')
+  DOM_BASE_URI(dom) AS url,
+  DOM_FIRST_TEXT(dom, 'h1') AS product,
+  DOM_FIRST_TEXT(dom, '.price') AS price
+FROM DOM_LOAD_AND_SELECT(@url, 'body')
 ```
 
 Then run it against each URL:

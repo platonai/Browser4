@@ -1,0 +1,298 @@
+{
+  "meta": {
+    "mode": "dev",
+    "source": "20260728-170703-plugin-media-video-detection.full.md",
+    "date": "20260728-170703",
+    "scenario": "plugin-media-video-detection"
+  },
+  "background": {
+    "task": "### Step 1-2: Video Detection on w3schools HTML5 Video Page\n\n`media.detectVideos` found **2 video sources**:\n\n| # | Tag | URL | MIME | Dimensions | Controls | HLS/DASH |\n|---|-----|-----|------|------------|----------|-----------|\n| 1 | `video` | `https://www.w3schools.com/html/mov_bbb.mp4` | (none) | 320×176 | Yes | No |\n| 2 | `source` | `https://www.w3schools.com/html/mov_bbb.ogg` | `video/ogg` | 320×176 | (inherited) | No |\n\n- **By tag type:** 1 `<video>`, 1 `<source>`, 0 `<iframe>` embeds\n- **HLS/DASH streams:** None detected\n- **⚠ Limitation:** The page actually has 2 `<video>` elements and 4 `<source>` children, but the URL-based deduplication collapsed them\n\n### Step 3: Media Download\n\n| Property | Value |\n|---|---|\n| **success** | `true` ✓ |\n| **bytesDownloaded** | 788,493 (> 0) ✓ |\n| **filePath** | `.test-sessions/mov_bbb.mp4` — exists on disk ✓ |\n| **contentType** | `video/mp4` |\n\n### Step 4: YouTube Page\n\n`media.detectVideos` on `html_youtube.asp` returned `[]` — **no video sources detected**. The page references YouTube in tutorial code examples but does not embed live YouTube iframes in the current browser context.\n\n### Step 5: Tryit Editor (iframe video)\n\n- **Eval:** `iframeResult` (same-origin) contains 1 `<video>` element\n- **media.detectVideos:** `[]` — detection does not search inside iframe content documents\n\n### Step 6: Media Info (ffprobe)\n\n| Property | Value |\n|---|---|\n| **Format** | MP4 (ISO Base Media) |\n| **Duration** | 10.027 seconds |\n| **Resolution** | 320 × 176 |\n| **Codec** | H.264 (video), AAC (audio) |\n| **Bitrate** | ~629 kbps |\n| **Streams** | 4 total: 1 video (h264) + 2 audio (aac) + 1 data |",
+    "executionContext": "- **Commands used:** `help`, `plugin list`, `plugin install`, `kill-all`, `goto` ×3, `plugin-media` ×3, `eval` ×6, `snapshot`, `list`, direct `curl` MCP calls ×2\n- **Code modified:** `browser4-rest/.../MCPToolController.kt:771-777` — fixed snake_case → camelCase method name resolution in `dispatchToCustomExecutor`\n- **Workarounds:** Manual plugin install, server restart, code fix + JAR repackaging, direct HTTP calls for specific tools (CLI plugin command only invokes first matching tool)\n\n# C & D: Issues Found & Overall Assessment\n\n```json\n{\n  \"issues\": [\n    {\n      \"title\": \"snake_case/camelCase mismatch in custom executor dispatch breaks plugin tools\",\n      \"severity\": \"Critical\",\n      \"category\": \"Product\",\n      \"reproduction\": \"./b4w.ps1 plugin-media after installing browser4-media plugin\",\n      \"expected\": \"media.detectVideos returns video source list from the current page\",\n      \"actual\": \"ERROR: media_detect_videos failed: Unsupported media method: detect_videos. Supported: detectVideos, download, process, extractAudio, trim, compress, getInfo.\",\n      \"rootCause\": \"dispatchToCustomExecutor() extracts the method name from the MCP tool name as a raw snake_case substring (e.g. 'detect_videos'), but the ToolExecutor.callFunctionOn() when-block expects camelCase method names (e.g. 'detectVideos'). The resolveMcpToolCall() path (used by the agent dispatch) correctly reverse-looks up method names via tool specs, but dispatchToCustomExecutor() does not.\",\n      \"codePointer\": \"browser4-rest/src/main/kotlin/ai/platon/pulsar/rest/mcp/controller/MCPToolController.kt:dispatchToCustomExecutor() lines 771-776\",\n      \"suggestion\": \"- Convert the raw snake_case method name to camelCase by reverse-matching through executor.getToolSpecs() keys using toMcpToolName(domain, specMethod) == toolName\\n- Alternatively, add a general-purpose snakeToCamelCase() utility and apply it to all methods extracted from MCP tool names\\n- Add a unit test that verifies media_detect_videos → detectVideos resolution\"\n    },\n    {\n      \"title\": \"plugin-<domain> command only invokes the first matching tool — no way to select a specific tool\",\n      \"severity\": \"High\",\n      \"category\": \"UX\",\n      \"reproduction\": \"./b4w.ps1 plugin-media — always calls media_detect_videos regardless of intent\",\n      \"expected\": \"A way to specify which tool to call, e.g. plugin-media download <url> or plugin-media.getInfo <file>\",\n      \"actual\": \"handle_dynamic_plugin_command() takes the first matching tool name (matching[0]) and calls it. All 7 media tools match prefix 'media_', and only media_detect_videos is ever invoked. Other tools like download, getInfo are unreachable via the CLI.\",\n      \"rootCause\": \"The CLI's handle_dynamic_plugin_command() at main.rs:11992-12012 filters tools by domain prefix, then unconditionally uses matching[0]. There is no subcommand or method-selection mechanism. The design assumes one tool per domain, but plugins typically register multiple tools.\",\n      \"codePointer\": \"cli/browser4-cli/src/main.rs:handle_dynamic_plugin_command() lines 11992-12012\",\n      \"suggestion\": \"- Extend the CLI to accept plugin-<domain>.<method> format (e.g. plugin-media.download)\\n- Or use an additional positional argument: plugin-media download <args>\\n- The second non-prefixed positional arg could be matched against known tool names in the domain\\n- Update help output to list available subcommands when plugin-<domain> is run bare\"\n    },\n    {\n      \"title\": \"Aggressive URL-based deduplication in VideoDetector loses distinct video elements\",\n      \"severity\": \"High\",\n      \"category\": \"Product\",\n      \"reproduction\": \"Navigate to https://www.w3schools.com/html/html5_video.asp and run media.detectVideos\",\n      \"expected\": \"4 results: 2 <video> elements (one with controls, one without) and 4 <source> children\",\n      \"actual\": \"2 results: 1 <video> and 1 <source>. The second <video> and 3 <source> children were lost because they had the same resolvedUrl as the first occurrences.\",\n      \"rootCause\": \"VideoDetector.parseResult() at line 104 applies .distinctBy { it.resolvedUrl ?: it.srcUrl } which treats elements with the same media URL as duplicates. Different DOM elements (separate <video> tags, separate <source> children) that happen to reference the same URL are incorrectly collapsed.\",\n      \"codePointer\": \"browser4-plugins/browser4-media/src/main/kotlin/ai/platon/pulsar/media/service/VideoDetector.kt:parseResult() line 104\",\n      \"suggestion\": \"- Use a compound key for deduplication: tagName + resolvedUrl, or include a DOM path/sequence number\\n- Or remove distinctBy entirely and let consumers deduplicate as needed — the raw detection should report what exists in the DOM\\n- Add a 'sourceIndex' or 'elementIndex' field to VideoSource so consumers can distinguish multiple elements with the same URL\"\n    },\n    {\n      \"title\": \"VideoDetector does not search inside iframe content documents\",\n      \"severity\": \"Medium\",\n      \"category\": \"Product\",\n      \"reproduction\": \"Navigate to https://www.w3schools.com/html/tryit.asp?filename=tryhtml5_video and run media.detectVideos\",\n      \"expected\": \"Detection finds the <video> element inside the iframeResult iframe (same-origin), or at minimum reports that videos exist but are inside iframes\",\n      \"actual\": \"Returns []. No videos detected.\",\n      \"rootCause\": \"The DETECTION_SCRIPT runs document.querySelectorAll('video') in the main page context only. It does not attempt to access iframe.contentDocument for same-origin iframes. The <iframe> detection logic only checks iframe src attributes for known player domains (YouTube, Vimeo, etc.), not for embedded video content.\",\n      \"codePointer\": \"browser4-plugins/browser4-media/src/main/kotlin/ai/platon/pulsar/media/service/VideoDetector.kt:DETECTION_SCRIPT\",\n      \"suggestion\": \"- Extend the detection script to iterate over same-origin iframes and query for video elements inside them\\n- For cross-origin iframes, at minimum report them as potential video containers\\n- Add an isInIframe field to VideoSource to indicate the detection context\"\n    },\n    {\n      \"title\": \"Plugin tools are undocumented in CLI help and invisible to users\",\n      \"severity\": \"Medium\",\n      \"category\": \"Discoverability\",\n      \"reproduction\": \"Run ./b4w.ps1 help or ./b4w.ps1 --help agent and look for media tools\",\n      \"expected\": \"Plugin tools appear in help output or at minimum there is a hint about how to discover them\",\n      \"actual\": \"No mention of plugin tools in help output. Running ./b4w.ps1 plugin (bare) gives error 'Unsupported command form: plugin. Use browser4-cli plugin <subcommand> instead.' No hint to use plugin-media or how to list available tool domains.\",\n      \"rootCause\": \"The CLI help system only documents built-in commands. Dynamic plugin commands (plugin-<domain>) are discovered at runtime from the server's /mcp/tools endpoint, but this discovery is not surfaced in help output. The bare 'plugin' command is blocked by preferred_spaced_command_form() before reaching the dynamic plugin handler.\",\n      \"codePointer\": \"cli/browser4-cli/src/main.rs: lines 15080-15090 (preferred_spaced_command_form blocks bare 'plugin') and help generation code\",\n      \"suggestion\": \"- Add a 'Plugin Tools' section to the main help output listing available plugin-<domain> commands\\n- Fix the bare 'plugin' command to work and list available tool domains (it already has the code for this at line 11981-11989 but can't be reached)\\n- Add a '--help plugins' category filter\\n- Consider listing plugin tools in the output of ./b4w.ps1 --help agent\"\n    },\n    {\n      \"title\": \"Complex return types wrapped in description maps lose structured data\",\n      \"severity\": \"Medium\",\n      \"category\": \"UX\",\n      \"reproduction\": \"Call media.download or media.getInfo — observe the response format\",\n      \"expected\": \"Clean JSON with fields like {\\\"success\\\": true, \\\"filePath\\\": \\\"...\\\", \\\"bytesDownloaded\\\": 788493}\",\n      \"actual\": \"Result wrapped in {\\\"type\\\":\\\"...DownloadResult\\\",\\\"description\\\":\\\"DownloadResult(url=..., filePath=..., ...)\\\"} — a toString() representation in a description field. Consumers must parse the description string to extract field values.\",\n      \"rootCause\": \"AbstractToolExecutor.callFunctionOn(ToolCall, Any) at line 76-86 wraps non-primitive, non-collection results in a description map to prevent Jackson from walking into internal object graphs. While this prevents serialization errors, it makes the output effectively unparseable for machine consumers.\",\n      \"codePointer\": \"browser4-agentic/src/main/kotlin/ai/platon/pulsar/agentic/tools/builtin/AbstractToolExecutor.kt: lines 76-86\",\n      \"suggestion\": \"- Add a marker interface (e.g. SafeToSerialize) that domain result classes can implement to opt into direct JSON serialization\\n- Or annotate result data classes with Jackson annotations so they serialize cleanly\\n- As a minimum, include a 'fields' map alongside the description so machines can access individual fields without parsing\"\n    },\n    {\n      \"title\": \"Media plugin must be manually installed — not part of default dev setup\",\n      \"severity\": \"Low\",\n      \"category\": \"Documentation\",\n      \"reproduction\": \"Start fresh with only the repository. Run ./b4w.ps1 plugin list\",\n      \"expected\": \"browser4-media appears in the plugin list or there are docs explaining how to enable it\",\n      \"actual\": \"The plugin JAR exists at browser4-plugins/browser4-media/target/ but is not installed. User must discover the plugin install command and know the JAR path. No README or CLAUDE.md mentions this requirement.\",\n      \"rootCause\": \"The dev mode auto-starts the backend from a pre-built runtime bundle. Plugins are not automatically installed — they must be explicitly installed via plugin install. There is no documentation linking the task (testing the media plugin) to the setup steps required.\",\n      \"codePointer\": \"\",\n      \"suggestion\": \"- Add browser4-media to the default set of plugins included in the dev runtime bundle\\n- Or document in CLAUDE.md that plugin testing requires manual plugin install steps\\n- Add a --with-plugins flag or similar to the dev server startup that auto-installs all locally-built plugins\"\n    },\n    {\n      \"title\": \"Server restart required after plugin install with no auto-restart option\",\n      \"severity\": \"Low\",\n      \"category\": \"UX\",\n      \"reproduction\": \"./b4w.ps1 plugin install <jar> then try to use the plugin\",\n      \"expected\": \"Plugin activates immediately or CLI offers to restart the server\",\n      \"actual\": \"Plugin installs but shows 'inactive (restart required)'. User must manually kill-all and restart. No hint about the activation workflow.\",\n      \"rootCause\": \"Plugin JARs are loaded at JVM startup by Spring Boot's classpath scanning. Hot-reload of plugin JARs is not implemented. The CLI's plugin install command could detect when the server is running and offer a restart.\",\n      \"codePointer\": \"cli/browser4-cli/src/main.rs:handle_plugin_install()\",\n      \"suggestion\": \"- After plugin install, if the server is running, print a clear message: 'Run browser4-cli kill-all then retry your command to activate'\\n- Or add a --restart flag to plugin install that kills and restarts the server automatically\\n- Consider implementing hot-deploy for plugins in dev mode\"\n    }\n  ],\n  \"assessment\": {\n    \"completionStatus\": \"Partially Successful — All task steps were completed but required a code fix to the dispatch layer, manual JAR patching, and direct HTTP calls to work around CLI limitations. The media plugin's core functionality (detection, download, ffprobe) works correctly once the dispatch bug is fixed.\",\n    \"successRate\": \"75% — 6 of 8 task sub-steps succeeded directly; 2 required workarounds (dispatch bug fix, direct HTTP calls for tool selection)\",\n    \"issuesFound\": 8,\n    \"majorBlockers\": \"The snake_case/camelCase dispatch bug (Issue 1) completely prevented plugin tool invocation from the CLI. Without the code fix, no plugin tools could be called. The CLI's inability to select a specific tool within a plugin domain (Issue 2) required using curl for download and getInfo.\",\n    \"mostConfusingAspects\": \"1) Discovering that plugin tools exist at all — no mention in help, bare 'plugin' command rejected. 2) Figuring out the invocation syntax (plugin-media vs media.detectVideos vs other forms). 3) Understanding why the command that was found (plugin-media) produced a cryptic 'Unsupported method' error instead of a clear 'use plugin-media.detectVideos' suggestion. 4) Realizing that plugin-media always calls the same tool and there's no way to reach download/getInfo through the CLI.\",\n    \"mostValuableImprovements\": \"1) Fix the snake_case/camelCase dispatch bug — this is a one-line logical fix that unblocks all plugin tools. 2) Support plugin-<domain>.<method> syntax so users can invoke specific tools. 3) Add plugin tool discovery to help output and make bare 'plugin' command work. 4) Improve structured output for tool results — the current description-map wrapping makes machine consumption impossible.\",\n    \"usabilityRating\": 4\n  }\n}\n```"
+  },
+  "issues": [
+    {
+      "number": 1,
+      "title": "snake_case/camelCase mismatch in custom executor dispatch breaks plugin tools",
+      "severity": "Critical",
+      "category": "Product",
+      "sections": [
+        {
+          "body": "./b4w.ps1 plugin-media after installing browser4-media plugin",
+          "label": "Reproduction"
+        },
+        {
+          "body": "media.detectVideos returns video source list from the current page",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "ERROR: media_detect_videos failed: Unsupported media method: detect_videos. Supported: detectVideos, download, process, extractAudio, trim, compress, getInfo.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "dispatchToCustomExecutor() extracts the method name from the MCP tool name as a raw snake_case substring (e.g. 'detect_videos'), but the ToolExecutor.callFunctionOn() when-block expects camelCase method names (e.g. 'detectVideos'). The resolveMcpToolCall() path (used by the agent dispatch) correctly reverse-looks up method names via tool specs, but dispatchToCustomExecutor() does not.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "browser4-rest/src/main/kotlin/ai/platon/pulsar/rest/mcp/controller/MCPToolController.kt:dispatchToCustomExecutor() lines 771-776",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Convert the raw snake_case method name to camelCase by reverse-matching through executor.getToolSpecs() keys using toMcpToolName(domain, specMethod) == toolName\n- Alternatively, add a general-purpose snakeToCamelCase() utility and apply it to all methods extracted from MCP tool names\n- Add a unit test that verifies media_detect_videos → detectVideos resolution",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 2,
+      "title": "plugin-<domain> command only invokes the first matching tool — no way to select a specific tool",
+      "severity": "High",
+      "category": "UX",
+      "sections": [
+        {
+          "body": "./b4w.ps1 plugin-media — always calls media_detect_videos regardless of intent",
+          "label": "Reproduction"
+        },
+        {
+          "body": "A way to specify which tool to call, e.g. plugin-media download <url> or plugin-media.getInfo <file>",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "handle_dynamic_plugin_command() takes the first matching tool name (matching[0]) and calls it. All 7 media tools match prefix 'media_', and only media_detect_videos is ever invoked. Other tools like download, getInfo are unreachable via the CLI.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The CLI's handle_dynamic_plugin_command() at main.rs:11992-12012 filters tools by domain prefix, then unconditionally uses matching[0]. There is no subcommand or method-selection mechanism. The design assumes one tool per domain, but plugins typically register multiple tools.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "cli/browser4-cli/src/main.rs:handle_dynamic_plugin_command() lines 11992-12012",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Extend the CLI to accept plugin-<domain>.<method> format (e.g. plugin-media.download)\n- Or use an additional positional argument: plugin-media download <args>\n- The second non-prefixed positional arg could be matched against known tool names in the domain\n- Update help output to list available subcommands when plugin-<domain> is run bare",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 3,
+      "title": "Aggressive URL-based deduplication in VideoDetector loses distinct video elements",
+      "severity": "High",
+      "category": "Product",
+      "sections": [
+        {
+          "body": "Navigate to https://www.w3schools.com/html/html5_video.asp and run media.detectVideos",
+          "label": "Reproduction"
+        },
+        {
+          "body": "4 results: 2 <video> elements (one with controls, one without) and 4 <source> children",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "2 results: 1 <video> and 1 <source>. The second <video> and 3 <source> children were lost because they had the same resolvedUrl as the first occurrences.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "VideoDetector.parseResult() at line 104 applies .distinctBy { it.resolvedUrl ?: it.srcUrl } which treats elements with the same media URL as duplicates. Different DOM elements (separate <video> tags, separate <source> children) that happen to reference the same URL are incorrectly collapsed.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "browser4-plugins/browser4-media/src/main/kotlin/ai/platon/pulsar/media/service/VideoDetector.kt:parseResult() line 104",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Use a compound key for deduplication: tagName + resolvedUrl, or include a DOM path/sequence number\n- Or remove distinctBy entirely and let consumers deduplicate as needed — the raw detection should report what exists in the DOM\n- Add a 'sourceIndex' or 'elementIndex' field to VideoSource so consumers can distinguish multiple elements with the same URL",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 4,
+      "title": "VideoDetector does not search inside iframe content documents",
+      "severity": "Medium",
+      "category": "Product",
+      "sections": [
+        {
+          "body": "Navigate to https://www.w3schools.com/html/tryit.asp?filename=tryhtml5_video and run media.detectVideos",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Detection finds the <video> element inside the iframeResult iframe (same-origin), or at minimum reports that videos exist but are inside iframes",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "Returns []. No videos detected.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The DETECTION_SCRIPT runs document.querySelectorAll('video') in the main page context only. It does not attempt to access iframe.contentDocument for same-origin iframes. The <iframe> detection logic only checks iframe src attributes for known player domains (YouTube, Vimeo, etc.), not for embedded video content.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "browser4-plugins/browser4-media/src/main/kotlin/ai/platon/pulsar/media/service/VideoDetector.kt:DETECTION_SCRIPT",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Extend the detection script to iterate over same-origin iframes and query for video elements inside them\n- For cross-origin iframes, at minimum report them as potential video containers\n- Add an isInIframe field to VideoSource to indicate the detection context",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 5,
+      "title": "Plugin tools are undocumented in CLI help and invisible to users",
+      "severity": "Medium",
+      "category": "Discoverability",
+      "sections": [
+        {
+          "body": "Run ./b4w.ps1 help or ./b4w.ps1 --help agent and look for media tools",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Plugin tools appear in help output or at minimum there is a hint about how to discover them",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "No mention of plugin tools in help output. Running ./b4w.ps1 plugin (bare) gives error 'Unsupported command form: plugin. Use browser4-cli plugin <subcommand> instead.' No hint to use plugin-media or how to list available tool domains.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The CLI help system only documents built-in commands. Dynamic plugin commands (plugin-<domain>) are discovered at runtime from the server's /mcp/tools endpoint, but this discovery is not surfaced in help output. The bare 'plugin' command is blocked by preferred_spaced_command_form() before reaching the dynamic plugin handler.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "cli/browser4-cli/src/main.rs: lines 15080-15090 (preferred_spaced_command_form blocks bare 'plugin') and help generation code",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Add a 'Plugin Tools' section to the main help output listing available plugin-<domain> commands\n- Fix the bare 'plugin' command to work and list available tool domains (it already has the code for this at line 11981-11989 but can't be reached)\n- Add a '--help plugins' category filter\n- Consider listing plugin tools in the output of ./b4w.ps1 --help agent",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 6,
+      "title": "Complex return types wrapped in description maps lose structured data",
+      "severity": "Medium",
+      "category": "UX",
+      "sections": [
+        {
+          "body": "Call media.download or media.getInfo — observe the response format",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Clean JSON with fields like {\"success\": true, \"filePath\": \"...\", \"bytesDownloaded\": 788493}",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "Result wrapped in {\"type\":\"...DownloadResult\",\"description\":\"DownloadResult(url=..., filePath=..., ...)\"} — a toString() representation in a description field. Consumers must parse the description string to extract field values.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "AbstractToolExecutor.callFunctionOn(ToolCall, Any) at line 76-86 wraps non-primitive, non-collection results in a description map to prevent Jackson from walking into internal object graphs. While this prevents serialization errors, it makes the output effectively unparseable for machine consumers.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "browser4-agentic/src/main/kotlin/ai/platon/pulsar/agentic/tools/builtin/AbstractToolExecutor.kt: lines 76-86",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Add a marker interface (e.g. SafeToSerialize) that domain result classes can implement to opt into direct JSON serialization\n- Or annotate result data classes with Jackson annotations so they serialize cleanly\n- As a minimum, include a 'fields' map alongside the description so machines can access individual fields without parsing",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 7,
+      "title": "Media plugin must be manually installed — not part of default dev setup",
+      "severity": "Low",
+      "category": "Documentation",
+      "sections": [
+        {
+          "body": "Start fresh with only the repository. Run ./b4w.ps1 plugin list",
+          "label": "Reproduction"
+        },
+        {
+          "body": "browser4-media appears in the plugin list or there are docs explaining how to enable it",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "The plugin JAR exists at browser4-plugins/browser4-media/target/ but is not installed. User must discover the plugin install command and know the JAR path. No README or CLAUDE.md mentions this requirement.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The dev mode auto-starts the backend from a pre-built runtime bundle. Plugins are not automatically installed — they must be explicitly installed via plugin install. There is no documentation linking the task (testing the media plugin) to the setup steps required.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "- Add browser4-media to the default set of plugins included in the dev runtime bundle\n- Or document in CLAUDE.md that plugin testing requires manual plugin install steps\n- Add a --with-plugins flag or similar to the dev server startup that auto-installs all locally-built plugins",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 8,
+      "title": "Server restart required after plugin install with no auto-restart option",
+      "severity": "Low",
+      "category": "UX",
+      "sections": [
+        {
+          "body": "./b4w.ps1 plugin install <jar> then try to use the plugin",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Plugin activates immediately or CLI offers to restart the server",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "Plugin installs but shows 'inactive (restart required)'. User must manually kill-all and restart. No hint about the activation workflow.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "Plugin JARs are loaded at JVM startup by Spring Boot's classpath scanning. Hot-reload of plugin JARs is not implemented. The CLI's plugin install command could detect when the server is running and offer a restart.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "cli/browser4-cli/src/main.rs:handle_plugin_install()",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- After plugin install, if the server is running, print a clear message: 'Run browser4-cli kill-all then retry your command to activate'\n- Or add a --restart flag to plugin install that kills and restarts the server automatically\n- Consider implementing hot-deploy for plugins in dev mode",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    }
+  ]
+}

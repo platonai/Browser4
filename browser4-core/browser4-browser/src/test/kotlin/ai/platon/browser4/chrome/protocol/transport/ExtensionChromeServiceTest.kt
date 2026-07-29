@@ -318,6 +318,24 @@ class ExtensionChromeServiceTest {
     }
 
     @Test
+    @DisplayName("chrome.debugger.onDetach cancels all pending requests")
+    fun testDebuggerDetachCancelsPendingRequests() {
+        // Register a pending CDP request
+        val requestId = service.nextId()
+        val future = service.registerRequest(requestId)
+        assertFalse(future.isDone)
+
+        // Fire onDetach for a tab
+        service.handleIncomingMessage(
+            """{"method":"chrome.debugger.onDetach","params":[{"tabId":99}]}"""
+        )
+
+        // The pending future must be cancelled so that CDP commands fail fast
+        // instead of blocking for the 30s per-command timeout.
+        assertTrue(future.isCancelled, "Pending CDP requests should be cancelled on debugger detach")
+    }
+
+    @Test
     @DisplayName("extension.initialized populates tab cache from array")
     fun testExtensionInitialized() {
         service.handleIncomingMessage(

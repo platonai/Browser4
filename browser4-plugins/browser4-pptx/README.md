@@ -23,7 +23,7 @@ The module is a Browser4 plugin. Place `browser4-pptx-<version>.jar` on the appl
 ```json
 {
   "name": "browser4-pptx",
-  "version": "4.12.0-rc.1",
+  "version": "4.12.1-SNAPSHOT",
   "description": "Convert web pages to PowerPoint (PPTX) files",
   "dependsOn": ["browser4-protocol", "browser4-agentic"],
   "autoConfigurationClasses": ["ai.platon.pulsar.pptx.config.PptxAutoConfiguration"]
@@ -135,7 +135,7 @@ All properties use the `pptx.` prefix.
 
 ## Dependencies
 
-**Provided at runtime (not bundled):** Browser4 core (skeleton, browser, protocol, agentic), Spring Boot auto-configure, Kotlin stdlib/reflect/coroutines, OkHttp.
+**Provided at runtime (not bundled):** Browser4 core (skeleton, browser, protocol, agentic), Spring Boot auto-configure, Kotlin stdlib/coroutines, OkHttp.
 
 **Bundled in plugin JAR:** Apache POI (`poi`, `poi-ooxml`).
 

@@ -4,6 +4,7 @@ import ai.platon.browser4.chrome.dom.model.AriaSnapshotOptions
 import ai.platon.browser4.chrome.network.*
 import ai.platon.browser4.api.snapshot.ViewportSpec
 import ai.platon.browser4.chrome.protocol.ClickableDOM
+import ai.platon.browser4.chrome.protocol.DialogHandler
 import ai.platon.browser4.chrome.protocol.EmulationHandler
 import ai.platon.browser4.chrome.protocol.PageHandler
 import ai.platon.browser4.chrome.protocol.ScreenshotHandler
@@ -132,6 +133,25 @@ open class PulsarWebDriver constructor(
     private val messageWriter = MultiSinkMessageWriter()
 
     private val driverHelper get() = WebDriverHelper(this, rpc, page, browserProtocol)
+
+    /**
+     * Handler for native JavaScript dialogs (alert, confirm, prompt).
+     *
+     * Subscribes to CDP [Page.javascriptDialogOpening] events so click/dblclick
+     * handlers can detect when a dialog is blocking the page and act before
+     * the post-click health check (which requires page responsiveness) hangs.
+     *
+     * Created lazily so the CDP subscription is established only when the
+     * page is fully initialised (inside [enableAPIAgents0]), not during
+     * constructor invocation.
+     */
+    val dialogHandler: DialogHandler by lazy {
+        DialogHandler(browserProtocol).also { handler ->
+            browserProtocol.remoteDevToolsOrNull?.let { devTools ->
+                handler.subscribe(devTools)
+            }
+        }
+    }
 
     private val closed = AtomicBoolean()
 
@@ -716,8 +736,31 @@ open class PulsarWebDriver constructor(
         }
     }
 
+    /**
+     * Whether native JavaScript dialogs (alert, confirm, prompt) should be
+     * auto-accepted when detected after a click or dblclick operation.
+     *
+     * When enabled, [dialogHandler.drainAutoDismiss] is called before each
+     * click to clear any stale dialogs, and any dialog that opens during the
+     * click is accepted immediately via CDP [Page.handleJavaScriptDialog].
+     *
+     * Useful for batch/crawl/automation workloads where manual dialog
+     * handling is not feasible.
+     */
+    var autoDismissDialogs: Boolean
+        get() = dialogHandler.isAutoDismissEnabled
+        set(value) {
+            if (value) dialogHandler.enableAutoDismiss() else dialogHandler.disableAutoDismiss()
+        }
+
     @Throws(WebDriverException::class)
     override suspend fun click(selector: String, count: Int) {
+        // Drain any stale dialog before clicking — a leftover dialog from a
+        // previous operation would block CDP health checks and deadlock the
+        // current click.  DialogHandler handles the deferral/no-op when the
+        // queue is empty.
+        dialogHandler.dismissAllPending()
+
         rpc.invokeOnElement(selector, "click", scrollIntoView = true) { node ->
             waitForScrollSettled(selector)
             val isWindows = org.apache.commons.lang3.SystemUtils.IS_OS_WINDOWS
@@ -736,10 +779,19 @@ open class PulsarWebDriver constructor(
                 emulator.click(node, count, position = "center", modifier = null, delayMillis = delayMillis)
             }
         }
+
+        // If the click triggered a dialog and auto-dismiss is enabled, accept
+        // it now.  This prevents the post-click health check inside
+        // invokeOnElement → invokeWithRetry from hanging because the page's
+        // main thread is blocked by the dialog.
+        dialogHandler.drainAutoDismiss()
     }
 
     @Throws(WebDriverException::class)
     override suspend fun click(selector: String, modifier: String) {
+        // Drain stale dialogs before clicking (see single-click note above).
+        dialogHandler.dismissAllPending()
+
         rpc.invokeOnElement(selector, "click", scrollIntoView = true) { node ->
             val delayMillis = randomDelayMillis("click")
             waitForScrollSettled(selector)
@@ -749,6 +801,8 @@ open class PulsarWebDriver constructor(
             // or dispatchEvent, and adding a DOM fallback on top of CDP would
             // double-fire on Windows where both paths work.
         }
+
+        dialogHandler.drainAutoDismiss()
     }
 
     @Throws(WebDriverException::class)
@@ -786,12 +840,21 @@ open class PulsarWebDriver constructor(
     }
 
     /**
-     * focus on an element with [selector] and dblclick it with [modifier] pressed
-     * */
+     * Double-click on the element identified by [selector], optionally with a
+     * [modifier] key held.
+     *
+     * Unlike [click], `dblclick` does **not** require the element to be
+     * focusable — many real-world double-click targets are generic `<div>`
+     * elements with event listeners but no `tabindex`.  The element is scrolled
+     * into view and the dblclick sequence is dispatched without an explicit
+     * `DOM.focus()` call.
+     */
     @Throws(WebDriverException::class)
     override suspend fun dblclick(selector: String, modifier: String) {
-        rpc.invokeOnElement(selector, "dblclick") {
-            val node = page.focusOnSelector(selector) ?: return@invokeOnElement
+        // Drain stale dialogs before double-clicking (same rationale as click).
+        dialogHandler.dismissAllPending()
+
+        rpc.invokeOnElement(selector, "dblclick", scrollIntoView = true) { node ->
             val isWindows = org.apache.commons.lang3.SystemUtils.IS_OS_WINDOWS
             val hasModifier = modifier.isNotBlank()
             if (isWindows && !hasModifier) {
@@ -813,6 +876,8 @@ open class PulsarWebDriver constructor(
             }
             gap("dblclick")
         }
+
+        dialogHandler.drainAutoDismiss()
     }
 
     /**
@@ -935,18 +1000,28 @@ open class PulsarWebDriver constructor(
         }
     }
 
+    /**
+     * Accept (OK) the current JavaScript dialog (alert, confirm, prompt).
+     *
+     * Uses a direct CDP [Page.handleJavaScriptDialog] call — bypassing
+     * [rpc.invokeOnPage] — because native dialogs block the page's main
+     * thread, making any health check that requires page responsiveness
+     * (e.g. [Runtime.evaluate]) hang or time out.  The CDP dialog command
+     * is browser-level and completes even while the page is blocked.
+     */
     @Throws(WebDriverException::class)
     override suspend fun dialogAccept(promptText: String?) {
-        rpc.invokeOnPage("dialogAccept") {
-            browserProtocol.handleJavaScriptDialog(accept = true, promptText = promptText)
-        }
+        browserProtocol.handleJavaScriptDialog(accept = true, promptText = promptText)
     }
 
+    /**
+     * Dismiss (Cancel) the current JavaScript dialog.
+     *
+     * Same direct-CDP rationale as [dialogAccept].
+     */
     @Throws(WebDriverException::class)
     override suspend fun dialogDismiss() {
-        rpc.invokeOnPage("dialogDismiss") {
-            browserProtocol.handleJavaScriptDialog(accept = false)
-        }
+        browserProtocol.handleJavaScriptDialog(accept = false)
     }
 
     @Throws(WebDriverException::class)
@@ -1340,6 +1415,110 @@ open class PulsarWebDriver constructor(
             }
         } catch (e: ChromeDriverException) {
             rpc.interceptChromeException(e, "dragAndDrop")
+        }
+    }
+
+    /**
+     * Returns `true` if [selector] is a snapshot element reference (e.g. `e5`,
+     * `e79`) that must be resolved via CDP backend node ID rather than
+     * `document.querySelector`.
+     */
+    private fun isSnapshotRef(selector: String): Boolean {
+        val trimmed = selector.trim()
+        return trimmed.startsWith("e") && trimmed.length > 1
+                && trimmed.substring(1).all { it.isDigit() }
+    }
+
+    /**
+     * Drags the element identified by [sourceSelector] onto the element identified
+     * by [targetSelector].
+     *
+     * This override resolves both `backend:N` and `eN` (snapshot) node references
+     * (which `document.querySelector` cannot handle) via [page.dom.queryLocator]
+     * before dispatching the HTML5 drag sequence through CDP.  Plain CSS selectors
+     * delegate to the default JS-based implementation in [WebDriver.drag].
+     */
+    @Throws(WebDriverException::class)
+    override suspend fun drag(sourceSelector: String, targetSelector: String) {
+        val needsSourceResolution = sourceSelector.startsWith("backend:") || isSnapshotRef(sourceSelector)
+        val needsTargetResolution = targetSelector.startsWith("backend:") || isSnapshotRef(targetSelector)
+
+        if (!needsSourceResolution && !needsTargetResolution) {
+            super.drag(sourceSelector, targetSelector)
+            return
+        }
+
+        rpc.invokeOnPage("drag") {
+            val sourceNode = page.dom.queryLocator(sourceSelector)
+                ?: throw WebDriverException("Source element was not found: $sourceSelector", driver = this@PulsarWebDriver)
+            val targetNode = page.dom.queryLocator(targetSelector)
+                ?: throw WebDriverException("Target element was not found: $targetSelector", driver = this@PulsarWebDriver)
+
+            withNodeObjectId(browserProtocol, sourceNode) { sourceObjectId ->
+                withNodeObjectId(browserProtocol, targetNode) { targetObjectId ->
+                    val script = """
+                        function() {
+                            const source = this;
+                            const target = arguments[0];
+                            if (typeof DataTransfer === 'undefined' || typeof DragEvent === 'undefined') {
+                                return JSON.stringify({
+                                    ok: false,
+                                    error: 'HTML5 drag-and-drop APIs are not available in the current page context'
+                                });
+                            }
+
+                            const sourceRect = source.getBoundingClientRect();
+                            const targetRect = target.getBoundingClientRect();
+                            const sourceX = Math.round(sourceRect.left + sourceRect.width / 2);
+                            const sourceY = Math.round(sourceRect.top + sourceRect.height / 2);
+                            const targetX = Math.round(targetRect.left + targetRect.width / 2);
+                            const targetY = Math.round(targetRect.top + targetRect.height / 2);
+                            const dataTransfer = new DataTransfer();
+
+                            const fire = (element, type, clientX, clientY) => {
+                                const event = new DragEvent(type, {
+                                    bubbles: true,
+                                    cancelable: true,
+                                    composed: true,
+                                    dataTransfer,
+                                    clientX,
+                                    clientY
+                                });
+                                element.dispatchEvent(event);
+                            };
+
+                            fire(source, 'dragstart', sourceX, sourceY);
+                            fire(target, 'dragenter', targetX, targetY);
+                            fire(target, 'dragover', targetX, targetY);
+                            fire(target, 'drop', targetX, targetY);
+                            fire(source, 'dragend', targetX, targetY);
+
+                            return JSON.stringify({ ok: true });
+                        }
+                    """.trimIndent()
+
+                    val result = browserProtocol.callFunctionOn(
+                        script,
+                        objectId = sourceObjectId,
+                        arguments = listOf(CallArgument(objectId = targetObjectId)),
+                        returnByValue = true,
+                        userGesture = true,
+                        awaitPromise = true
+                    )
+
+                    val json = (result.result.value as? String) ?: "{}"
+                    val parsed = runCatching { jacksonObjectMapper().readTree(json) }.getOrNull()
+                    if (parsed?.get("ok")?.asBoolean() != true) {
+                        val error = parsed?.get("error")?.asText() ?: "Unknown drag failure"
+                        throw WebDriverException(
+                            "Failed to drag '$sourceSelector' to '$targetSelector': $error",
+                            driver = this@PulsarWebDriver
+                        )
+                    }
+                }
+            }
+
+            gap()
         }
     }
 

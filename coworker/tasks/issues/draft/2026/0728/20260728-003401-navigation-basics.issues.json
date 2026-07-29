@@ -1,0 +1,338 @@
+{
+  "meta": {
+    "source": "20260728-003401-navigation-basics.full.md",
+    "date": "20260728-003401",
+    "scenario": "navigation-basics",
+    "mode": "dev"
+  },
+  "background": {
+    "task": "All 8 task steps completed successfully:\n1. ✅ Navigated to `https://en.wikipedia.org/wiki/Web_scraping`\n2. ✅ Captured page snapshots and identified accessible elements\n3. ✅ Located \"Data scraping\" link in the \"See also\" section and clicked it (navigated to `https://en.wikipedia.org/wiki/Data_scraping`)\n4. ✅ Used `go-back` to return to Web scraping, then `go-forward` to Data scraping\n5. ✅ Reloaded the Data scraping page\n6. ✅ Checked server status — server is UP (but with version mismatch: CLI 4.12.1 vs backend v4.11.15)\n7. ✅ Listed active sessions — 1 DEFAULT session active\n8. ✅ Closed the session cleanly",
+    "executionContext": "**Commands used (19 total):**\n`help` → `goto` → `snapshot -v 0` (FAILED) → `-- snapshot -v 0` (FAILED) → `snapshot -v 0` (via b4w.sh) → `snapshot grep` ×3 → `scroll` → `snapshot -v 0` → `snapshot -v 7` → `snapshot grep` → `click` → `go-back` → `go-forward` → `reload` → `status` → `list` → `close`\n\n**Key workarounds:** Switched from `b4w.ps1` to `b4w.sh` due to PowerShell flag interception; used regex-based `snapshot grep` instead of viewport pagination for deep page content; tried multiple regex patterns before matching the heading.\n\n---"
+  },
+  "issues": [
+    {
+      "number": 1,
+      "title": "PowerShell intercepts `-v` flag on snapshot command",
+      "severity": "High",
+      "category": "Reliability",
+      "sections": [
+        {
+          "body": "./b4w.ps1 snapshot -v 0",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Snapshot captures viewport 0 (top-of-page chunk).",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "PowerShell consumes `-v` as `-Verbose` common parameter. The CLI receives `snapshot 0` instead of `snapshot -v 0`, resulting in error: \"Unknown command: 'snapshot-0'. Did you mean: 'snapshot'?\"",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "b4w.ps1's param() block does not declare `-v`, so PowerShell's common parameter resolution matches `-v` to `-Verbose` before the `ValueFromRemainingArguments` parameter receives it. The `$SafeArgs` quoting in the script body (lines 442-446) quotes arguments after param binding, so it cannot prevent the interception.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "b4w.ps1:param() block (lines 16-19) — need a defined parameter or explicit parameter attribute to prevent PowerShell from consuming `-v`.",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Add [switch]$v or [string]$Viewport parameter to b4w.ps1's param() block to capture `-v` and forward it as a raw string to the binary\n- Alternatively, detect that $RemainingArgs contains 'snapshot' with '0' but no '-v', and emit a clear warning: \"The -v flag was intercepted by PowerShell. Use b4w.sh or quote '-v' to prevent this.\"\n- Update the error message to detect this specific case and suggest the correct invocation",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 2,
+      "title": "Documented `--` passthrough does not work for b4w.ps1 flag interception",
+      "severity": "High",
+      "category": "Documentation",
+      "sections": [
+        {
+          "body": "./b4w.ps1 -- snapshot -v 0",
+          "label": "Reproduction"
+        },
+        {
+          "body": "The `--` token should be stripped and remaining args passed to the CLI binary, as documented in SKILL.md and the b4w.ps1 top-level help.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "PowerShell error: \"Parameter cannot be processed because the parameter name '' is ambiguous. Possible matches include: -Rebuild -RemainingArgs -Verbose ...\"",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "PowerShell treats `--` as a parameter name attempt (since it starts with `-`) and tries to bind it to the script's param() block before the script body runs. The script's `--` handling at lines 61-67 never executes because PowerShell rejects the invocation at the parameter binding stage. This is a fundamental PowerShell limitation — `--` is NOT a native stop-parsing token for script/function calls.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "SKILL.md line 421 and b4w.ps1 help text line 150 — documentation incorrectly claims `--` works as a passthrough for b4w.ps1.",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Update documentation to remove the `./b4w.ps1 -- snapshot -i` recommendation; it doesn't work\n- Instead document: use `b4w.sh` on Linux/macOS/Git Bash, or quote individual flags: `./b4w.ps1 snapshot '-v' '0'`\n- Add a `b4w.ps1 snapshot` wrapper subcommand that explicitly handles snapshot flags to avoid the interception entirely",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 3,
+      "title": "Version mismatch: CLI 4.12.1 but backend is v4.11.15",
+      "severity": "Medium",
+      "category": "Product",
+      "sections": [
+        {
+          "body": "./b4w.sh status",
+          "label": "Reproduction"
+        },
+        {
+          "body": "The locally-built CLI should pair with a locally-built backend of the same version, or the status command should clearly indicate how to run the matching backend.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "Status shows: \"CLI version: 4.12.1\" but \"Installed version: v4.11.15\" with warning: \"Version mismatch: CLI is 4.12.1 but installed backend is v4.11.15.\" The suggestion to run `mvn spring-boot:run` requires manual setup.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The dev-mode daemon auto-starts a pre-installed backend JAR (from a prior `browser4-cli install`) rather than building and running the backend from the local source tree. The CLI is built from local Rust sources via cargo, but the backend JAR is from the installed bundle.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "b4w.ps1: daemon/backend startup logic — should prefer locally-built JAR over installed bundle.",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Auto-detect a locally-built backend JAR (e.g., browser4-rest/target/*.jar) and prefer it over the installed bundle\n- If no local JAR exists, offer to build it with `mvn package -pl browser4-rest -am -DskipTests`\n- Make the version mismatch warning more prominent and actionable for dev-mode users\n- Consider a `--dev-backend` flag that explicitly builds and runs the backend from source",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 4,
+      "title": "`snapshot -v 0` captures absolute page position, not current scroll viewport",
+      "severity": "Medium",
+      "category": "UX",
+      "sections": [
+        {
+          "body": "1. Scroll down 5000px with `scroll down 5000`\n2. Run `snapshot -v 0`\n3. Observe the output shows page header elements (y=0-66), not content at scroll position ~5000",
+          "label": "Reproduction"
+        },
+        {
+          "body": "After scrolling, `snapshot -v 0` should capture the currently visible viewport (around y=5000). Or the documentation should clearly state that `-v` captures absolute page chunks regardless of scroll position.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "The snapshot shows banner/navigation elements from the absolute top of the page (y=0), even though the browser viewport is scrolled to y=5000. The user must calculate which viewport chunk corresponds to their desired content (e.g., `-v 6` for y=6198-7231).",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The viewport pagination (`-v N`) uses absolute page coordinates rather than the browser's current scroll offset. This is confusing because `-v 0` intuitively means \"current viewport\" to most users, not \"absolute top chunk.\"",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "cli/browser4-cli/src/ — snapshot command viewport logic should consider current scroll position as an offset.",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Add a `--current` flag that captures the currently visible viewport (using scroll position as base offset)\n- Rename or clarify: `-v` = \"viewport chunk N from top of page\", add `-c` = \"current visible viewport\"\n- Document the absolute-position behavior prominently in `snapshot --help`",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 5,
+      "title": "Viewport pagination fails after scrolling due to accessibility tree limitation",
+      "severity": "Medium",
+      "category": "Reliability",
+      "sections": [
+        {
+          "body": "1. Navigate to a long page\n2. `scroll down 5000`\n3. `snapshot -v 7`",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Viewport 7 (y=7231-8264) should contain page content including the \"See also\" section at y=6721.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "Snapshot shows only 15 nodes with warning: \"Viewport snapshot for '7' contains only 15 lines (15 nodes). The accessibility tree may not have been re-expanded after scrolling. This is a known server-side limitation.\"",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The Chromium accessibility tree is lazily expanded — only nodes near the visible viewport are populated. After programmatic scrolling, the tree may not have re-expanded to cover the new viewport area. The backend doesn't force a full tree expansion before capturing viewport chunks.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "browser4-core/ — PulsarWebDriver accessibility tree expansion logic.",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- After scrolling, force a full accessibility tree expansion (e.g., via `DOM.getDocument` with depth=-1 or repeated `Accessibility.getPartialAXTree` calls)\n- Detect when the tree is sparse for the requested viewport and automatically re-expand it\n- Add a `snapshot --full-tree` flag that forces complete accessibility tree population before capturing\n- At minimum, improve the warning to suggest actionable workarounds",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 6,
+      "title": "Default help output is overwhelming and poorly organized for first-time users",
+      "severity": "Medium",
+      "category": "Discoverability",
+      "sections": [
+        {
+          "body": "./b4w.ps1 help",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Concise overview of major command categories with examples, and clear pointers to drill down. A new user should be able to find the key commands (goto, snapshot, click) within seconds.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "The default help dumps ALL commands in a flat list spanning ~120+ lines. Category filtering (`--help nav`, `--help extract`) is mentioned only in a single line buried among the command list. The \"Common workflows\" section at the top is helpful but easily missed in the wall of text. There are no usage examples inline with command descriptions.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The help system is organized as a monolithic dump with category filtering as an afterthought. There is no progressive disclosure — everything is shown at once.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "cli/browser4-cli/src/main.rs or cli/browser4-cli/src/cli.rs — help text generation and command categorization.",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Default help should show only the most common commands (goto, snapshot, click, fill, extract, status, close) with one-line examples\n- End default help with: \"Run `--help all` for the full command list, or `--help <category>` for specific areas\"\n- Make category filtering more prominent: show available categories at the top of default help\n- Add a `quickstart` command that walks through the core loop interactively",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 7,
+      "title": "b4w.sh emits noisy 'use pwsh' warning on every invocation",
+      "severity": "Low",
+      "category": "UX",
+      "sections": [
+        {
+          "body": "Run any command via `./b4w.sh`.",
+          "label": "Reproduction"
+        },
+        {
+          "body": "The command runs silently (aside from its normal output).",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "Every invocation prints: \"It is strongly recommended to launch `pwsh` and run the .ps1 commands directly within the `pwsh` terminal.\" This adds noise and makes scanning command output harder.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "b4w.sh likely includes this warning unconditionally as a preamble, possibly to steer users away from the bash wrapper due to known quoting issues.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "b4w.sh — warning preamble logic.",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Show the warning only once per session (e.g., via a marker file or env var)\n- Or suppress it entirely when inside the repo (dev-mode context)\n- Or make it a stderr message that can be silenced with `-q`",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 8,
+      "title": "snapshot grep regex $ anchor does not match line endings as expected",
+      "severity": "Low",
+      "category": "Reliability",
+      "sections": [
+        {
+          "body": "./b4w.sh snapshot grep -A 30 'See also$'",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Matches lines ending with 'See also' — should find the heading line.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "0 matches found, even though 'See also' appears at the end of lines in the snapshot. Using '.See.also' (dots as wildcards) works instead.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The snapshot YAML may have trailing whitespace, invisible characters, or the grep implementation may not support `$` anchor semantics the same way as standard grep. Alternatively, the snapshot content may have additional text on the same line (like the heading level or ref) that prevents `$` from matching 'See also' as a line-ending.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "cli/browser4-cli/src/ — snapshot grep implementation.",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Document the regex flavor/dialect supported by `snapshot grep` (is it PCRE? Rust regex?)\n- Add a `--fixed-string` flag for literal substring matching without regex interpretation\n- Trim trailing whitespace from snapshot lines before writing",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 9,
+      "title": "No inline element refs by default — extra step needed to see refs",
+      "severity": "Low",
+      "category": "UX",
+      "sections": [
+        {
+          "body": "Run `snapshot -v 0` without `--stdout`.",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Element refs should be immediately visible so the user can compose the next command (e.g., `click e123`).",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "The output shows: \"[Snapshot](/path/to/file.yml)\" with a 10-line preview, followed by a tip: \"Use `--stdout` to print element refs inline.\" The user must either open the file or re-run with `--stdout` to see refs.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The snapshot file can be very large (42KB+), so the default behavior writes to a file to avoid flooding stdout. However, for small pages or viewport-chunked snapshots, inline output would be more usable.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "cli/browser4-cli/src/snapshot.rs — snapshot output rendering.",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Default to `--stdout` when the snapshot is under a certain size threshold (e.g., <100 lines)\n- Show element refs in the preview section (currently the preview shows only structure)\n- Add a summary line: \"Interactive elements: e1343 (button), e1595 (link), e1611 (button), ...\" listing available refs",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    }
+  ]
+}

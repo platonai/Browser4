@@ -1,0 +1,214 @@
+{
+  "meta": {
+    "source": "20260728-115557-agent-status-result-tracking.full.md",
+    "date": "20260728-115557",
+    "mode": "dev",
+    "scenario": "agent-status-result-tracking"
+  },
+  "background": {
+    "task": "**Task:** Verified the full `agent run` → `agent status` → `agent result` → `agent list` lifecycle.\n\n**Outcome:** All 11 steps passed successfully. The agent task completed (LLM key was configured), returned a substantive page summary about Lie groups, and the `--clear` flag correctly removed all tracked tasks.\n\n| Step | Verification | Result |\n|------|-------------|--------|\n| 1 | `agent run` submits task, returns UUID | ✓ `c4f3aab0-...` |\n| 2 | `agent list` shows task with agent command, standard status label | ✓ `processing` (not `done`) |\n| 3 | `agent status` returns valid JSON with integer statusCode, processState, boolean isDone | ✓ `statusCode:102`, `processState:in_progress`, `isDone:false` |\n| 4 | Poll until isDone or failed | ✓ Reached `isDone:true` at poll 3 (~15s) |\n| 5 | `agent result` returns non-null content | ✓ Full page summary about Lie groups |\n| 6 | `agent list` shows terminal status | ✓ `completed` (not `done`) |\n| 7 | `agent list` third call — no auto-prune | ✓ All tasks persist |\n| 8 | Submit 2 new tasks | ✓ Two new UUIDs returned |\n| 9 | `agent list` shows all 5 tasks | ✓ 5 tasks listed |\n| 10 | `agent list --clear` | ✓ \"Cleared 5 tracked agent task(s).\" |\n| 11 | `agent list` final | ✓ \"No tracked async tasks.\" |",
+    "executionContext": "**Commands used:**\n1. `./b4w.sh agent run \"Navigate to https://en.wikipedia.org/wiki/Li_group and describe what a Lie group is\"`\n2. `./b4w.sh agent list`\n3. `./b4w.sh agent status c4f3aab0-8c6b-4326-a5f1-b12c932165bd`\n4. `./b4w.sh agent status c4f3aab0-...` (polled 8 times, 3s intervals)\n5. `./b4w.sh agent result c4f3aab0-8c6b-4326-a5f1-b12c932165bd`\n6. `./b4w.sh agent list`\n7. `./b4w.sh agent list` (third call)\n8. `./b4w.sh agent run \"summarize the key features of Rust\"` and `./b4w.sh agent run \"explain monads in functional programming\"`\n9. `./b4w.sh agent list`\n10. `./b4w.sh agent list --clear`\n11. `./b4w.sh agent list`\n\n**Important decisions:**\n- Switched from `./b4w.ps1` to `./b4w.sh` because `pwsh` wasn't resolvable from the CRLF shebang in `b4w.ps1` on Linux (though `pwsh` binary exists at `/opt/microsoft/powershell/7/pwsh`).\n- Discovered 3 pre-existing tasks from prior sessions during the first `agent list` call — continued testing alongside them since the task spec focuses on lifecycle behavior.\n\n**Workarounds:** Used `./b4w.sh` instead of `./b4w.ps1` as documented in SKILL.md for Linux environments.\n\n## C & D: Issues and Assessment\n\n```json\n{\n  \"issues\": [\n    {\n      \"title\": \"b4w.ps1 has CRLF line endings — shebang fails on Linux\",\n      \"severity\": \"Medium\",\n      \"category\": \"Reliability\",\n      \"reproduction\": \"./b4w.ps1 help\",\n      \"expected\": \"The script executes via pwsh and displays help output.\",\n      \"actual\": \"Error: /usr/bin/env: 'pwsh\\\\r': No such file or directory. The CR character in the shebang line causes env to look for 'pwsh\\\\r' instead of 'pwsh'.\",\n      \"rootCause\": \"The b4w.ps1 file has Windows-style CRLF line endings. The shebang line `#!/usr/bin/env pwsh` is followed by `\\\\r\\\\n`, and on Linux the kernel passes the `\\\\r` as part of the interpreter name to `env`. The file should have LF-only line endings for cross-platform compatibility.\",\n      \"codePointer\": \"b4w.ps1:1 — the shebang line with trailing CR\",\n      \"suggestion\": \"- Convert b4w.ps1 to LF line endings (git can handle this via .gitattributes with `*.ps1 text eol=lf` or `*.ps1 text=auto`)\\n- Add a pre-commit hook or CI check that validates no CRLF in shell scripts and shebang-bearing files\\n- Document in SKILL.md that Linux/macOS users should prefer b4w.sh (already partially documented, but the error message is cryptic)\"\n    },\n    {\n      \"title\": \"processState value is 'completed' but documented as 'done'\",\n      \"severity\": \"Medium\",\n      \"category\": \"Documentation\",\n      \"reproduction\": \"1. Submit an agent task that completes successfully.\\n2. Run `agent status <task-id>` after the task finishes.\\n3. Observe `\\\"processState\\\": \\\"completed\\\"` in the JSON output.\\n4. Compare with SKILL.md status code table which says `processState` is `\\\"done\\\"` for statusCode 200.\",\n      \"expected\": \"SKILL.md documentation should match the actual output, or the output should match the documentation.\",\n      \"actual\": \"The JSON output contains `\\\"processState\\\": \\\"completed\\\"` for a successfully finished task, but the SKILL.md reference table says the value should be `\\\"done\\\"` for statusCode 200 and 417.\",\n      \"rootCause\": \"The backend likely changed the processState value from \\\"done\\\" to \\\"completed\\\" at some point, but the SKILL.md documentation was not updated to reflect this change. The value \\\"completed\\\" is actually more descriptive and user-friendly, so the code is probably correct and the docs are stale.\",\n      \"codePointer\": \"skills/browser4-cli/SKILL.md: the Agent Task Lifecycle status codes reference table\",\n      \"suggestion\": \"- Update the SKILL.md status codes table to show `\\\"completed\\\"` instead of `\\\"done\\\"` for statusCode 200 and 417\\n- Add a row showing the `\\\"status\\\"` field values (\\\"Processing\\\", \\\"OK\\\") alongside processState for clarity\\n- Consider adding API versioning or a changelog so documentation can stay synchronized with backend changes\"\n    },\n    {\n      \"title\": \"agent status JSON is very verbose — includes full pageSummary on every poll\",\n      \"severity\": \"Medium\",\n      \"category\": \"UX\",\n      \"reproduction\": \"Run `agent status <task-id>` for a completed task. Each poll returns ~4-5KB of JSON containing the full `commandResult.pageSummary` text.\",\n      \"expected\": \"Polling for task completion should return lightweight status info (statusCode, processState, isDone) without the full result payload. The full result should only be returned by `agent result`.\",\n      \"actual\": \"Every `agent status` call after task completion returns the full pageSummary text inline in the JSON, making polling-heavy workflows expensive in terms of bandwidth and parsing overhead. For an 8-poll cycle like in this test, ~32KB+ of redundant data was transmitted.\",\n      \"rootCause\": \"The backend `agent status` endpoint appears to return the full task result object including `commandResult` once the task completes, rather than separating status metadata from result data. The `commandResult` field is duplicated in every status poll after completion.\",\n      \"codePointer\": \"\",\n      \"suggestion\": \"- Return only status metadata (id, statusCode, processState, isDone, lastModifiedTime) from `agent status` and reserve the full result payload for `agent result`\\n- Alternatively, add a `--lightweight` or `--no-result` flag to `agent status` to suppress the result payload\\n- At minimum, truncate or omit the `commandResult` field from status polls when `isDone` is true, since the user will fetch it via `agent result` anyway\"\n    },\n    {\n      \"title\": \"agent --help does not show --clear flag for agent list\",\n      \"severity\": \"Low\",\n      \"category\": \"Discoverability\",\n      \"reproduction\": \"Run `agent --help` and observe the `agent list` entry. It shows only 'List all tracked agent tasks and their status' with no mention of --clear. Contrast with `agent list --help` which documents --clear, --limit, and --offset.\",\n      \"expected\": \"`agent --help` should at least hint at `agent list --clear` or indicate that additional flags are available (e.g., 'see agent list --help for more options').\",\n      \"actual\": \"`agent --help` shows a one-line summary for each subcommand with no indication that `agent list` has additional flags. A user who only reads `agent --help` would never discover `--clear`.\",\n      \"rootCause\": \"The top-level `agent --help` output is a condensed summary. It doesn't surface subcommand-specific flags. This is a design choice to keep help concise, but it hides discoverable functionality.\",\n      \"codePointer\": \"\",\n      \"suggestion\": \"- Add a note to the `agent list` line in `agent --help`: '... (supports --clear, --limit, --offset)'\\n- Or add a line at the bottom of `agent --help`: 'Run agent list --help for additional options.'\\n- Consider adding `agent clear` as a standalone subcommand for better discoverability — it's semantically odd to clear tasks via a flag on `list`\"\n    },\n    {\n      \"title\": \"Task descriptions are truncated in agent list — similar tasks become indistinguishable\",\n      \"severity\": \"Low\",\n      \"category\": \"UX\",\n      \"reproduction\": \"Submit multiple agent tasks with long descriptions that share a common prefix (e.g., 'Navigate to https://en.wikipedia.org/wi…'). Run `agent list`.\",\n      \"expected\": \"There should be a way to see the full description, either via a `--verbose` flag, wider output, or a dedicated `agent info <id>` command.\",\n      \"actual\": \"Descriptions are truncated at a fixed width with an ellipsis character. When multiple tasks share the same long prefix (e.g., multiple Wikipedia navigation tasks), all appear identical in the list.\",\n      \"rootCause\": \"The `agent list` table format uses a fixed column width for DESCRIPTION. For very long descriptions, truncation with ellipsis is necessary for readability, but there's no mechanism to expand or differentiate similar entries.\",\n      \"codePointer\": \"\",\n      \"suggestion\": \"- Add a `--verbose` flag to `agent list` that shows full descriptions (possibly wrapped)\\n- Consider displaying a short hash/ID suffix in the DESCRIPTION column when truncation occurs\\n- Add `agent info <id>` as a command that shows full details for a single task (description, full status, timing)\"\n    },\n    {\n      \"title\": \"Pre-existing tasks from prior sessions appear in fresh agent list\",\n      \"severity\": \"Low\",\n      \"category\": \"UX\",\n      \"reproduction\": \"Start a fresh testing session. Run `agent list` before submitting any tasks yourself.\",\n      \"expected\": \"A first-time user would expect an empty task list. Seeing 3 pre-existing tasks (some 'completed', one 'queued') is confusing and makes the user wonder if they did something wrong or if the tool is shared.\",\n      \"actual\": \"The first `agent list` call showed 3 tasks from prior sessions (submitted at 19:32, 19:46). One was still 'queued' and later transitioned to 'failed (417)' during our testing.\",\n      \"rootCause\": \"Agent tasks are persisted to disk and survive across CLI sessions. This is by design for long-running or async tasks that may span multiple CLI invocations. However, there's no session-scoped isolation or indication that tasks belong to different sessions.\",\n      \"codePointer\": \"\",\n      \"suggestion\": \"- Add a session identifier or timestamp grouping to `agent list` output so users can distinguish their current session's tasks from prior sessions\\n- Consider adding `agent list --since <time>` or `agent list --session` to filter by recency\\n- Display a notice on first `agent list` when pre-existing tasks are found: 'Showing N tasks from prior sessions. Use --clear to remove them.'\\n- Alternatively, namespace tasks by session (-s flag) so different workflows don't interfere\"\n    }\n  ],\n  \"assessment\": {\n    \"completionStatus\": \"Successful — all 11 lifecycle steps passed. The agent task ran to completion, returned meaningful results, and --clear removed all tracked tasks cleanly.\",\n    \"successRate\": \"100% — every command in the lifecycle produced correct, non-null output with the expected vocabulary and JSON structure.\",\n    \"issuesFound\": 6,\n    \"majorBlockers\": \"None. The b4w.ps1 CRLF issue required switching to b4w.sh, but this is a documented alternative and worked flawlessly.\",\n    \"mostConfusingAspects\": \"1. The processState documentation discrepancy ('done' vs 'completed') would cause confusion for anyone writing scripts that parse the JSON. 2. Pre-existing tasks appearing in a 'fresh' session makes a new user question whether the tool is working correctly. 3. The verbose JSON from agent status makes polling feel heavyweight and wastes bandwidth — it's counterintuitive that 'checking status' returns the full result.\",\n    \"mostValuableImprovements\": \"1. Fix the processState documentation to match actual behavior (one-line change). 2. Make agent status return lightweight status-only JSON, reserving the full payload for agent result. 3. Add agent-specific lifecycle examples to b4w.sh --help output (currently agent commands are listed but without the lifecycle workflow pattern). 4. Fix b4w.ps1 line endings for cross-platform reliability.\",\n    \"usabilityRating\": 7\n  }\n}\n```"
+  },
+  "issues": [
+    {
+      "number": 1,
+      "title": "b4w.ps1 has CRLF line endings — shebang fails on Linux",
+      "severity": "Medium",
+      "category": "Reliability",
+      "sections": [
+        {
+          "body": "./b4w.ps1 help",
+          "label": "Reproduction"
+        },
+        {
+          "body": "The script executes via pwsh and displays help output.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "Error: /usr/bin/env: 'pwsh\\r': No such file or directory. The CR character in the shebang line causes env to look for 'pwsh\\r' instead of 'pwsh'.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The b4w.ps1 file has Windows-style CRLF line endings. The shebang line `#!/usr/bin/env pwsh` is followed by `\\r\\n`, and on Linux the kernel passes the `\\r` as part of the interpreter name to `env`. The file should have LF-only line endings for cross-platform compatibility.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "b4w.ps1:1 — the shebang line with trailing CR",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Convert b4w.ps1 to LF line endings (git can handle this via .gitattributes with `*.ps1 text eol=lf` or `*.ps1 text=auto`)\n- Add a pre-commit hook or CI check that validates no CRLF in shell scripts and shebang-bearing files\n- Document in SKILL.md that Linux/macOS users should prefer b4w.sh (already partially documented, but the error message is cryptic)",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 2,
+      "title": "processState value is 'completed' but documented as 'done'",
+      "severity": "Medium",
+      "category": "Documentation",
+      "sections": [
+        {
+          "body": "1. Submit an agent task that completes successfully.\n2. Run `agent status <task-id>` after the task finishes.\n3. Observe `\"processState\": \"completed\"` in the JSON output.\n4. Compare with SKILL.md status code table which says `processState` is `\"done\"` for statusCode 200.",
+          "label": "Reproduction"
+        },
+        {
+          "body": "SKILL.md documentation should match the actual output, or the output should match the documentation.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "The JSON output contains `\"processState\": \"completed\"` for a successfully finished task, but the SKILL.md reference table says the value should be `\"done\"` for statusCode 200 and 417.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The backend likely changed the processState value from \"done\" to \"completed\" at some point, but the SKILL.md documentation was not updated to reflect this change. The value \"completed\" is actually more descriptive and user-friendly, so the code is probably correct and the docs are stale.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "skills/browser4-cli/SKILL.md: the Agent Task Lifecycle status codes reference table",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Update the SKILL.md status codes table to show `\"completed\"` instead of `\"done\"` for statusCode 200 and 417\n- Add a row showing the `\"status\"` field values (\"Processing\", \"OK\") alongside processState for clarity\n- Consider adding API versioning or a changelog so documentation can stay synchronized with backend changes",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 3,
+      "title": "agent status JSON is very verbose — includes full pageSummary on every poll",
+      "severity": "Medium",
+      "category": "UX",
+      "sections": [
+        {
+          "body": "Run `agent status <task-id>` for a completed task. Each poll returns ~4-5KB of JSON containing the full `commandResult.pageSummary` text.",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Polling for task completion should return lightweight status info (statusCode, processState, isDone) without the full result payload. The full result should only be returned by `agent result`.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "Every `agent status` call after task completion returns the full pageSummary text inline in the JSON, making polling-heavy workflows expensive in terms of bandwidth and parsing overhead. For an 8-poll cycle like in this test, ~32KB+ of redundant data was transmitted.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The backend `agent status` endpoint appears to return the full task result object including `commandResult` once the task completes, rather than separating status metadata from result data. The `commandResult` field is duplicated in every status poll after completion.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "- Return only status metadata (id, statusCode, processState, isDone, lastModifiedTime) from `agent status` and reserve the full result payload for `agent result`\n- Alternatively, add a `--lightweight` or `--no-result` flag to `agent status` to suppress the result payload\n- At minimum, truncate or omit the `commandResult` field from status polls when `isDone` is true, since the user will fetch it via `agent result` anyway",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 4,
+      "title": "agent --help does not show --clear flag for agent list",
+      "severity": "Low",
+      "category": "Discoverability",
+      "sections": [
+        {
+          "body": "Run `agent --help` and observe the `agent list` entry. It shows only 'List all tracked agent tasks and their status' with no mention of --clear. Contrast with `agent list --help` which documents --clear, --limit, and --offset.",
+          "label": "Reproduction"
+        },
+        {
+          "body": "`agent --help` should at least hint at `agent list --clear` or indicate that additional flags are available (e.g., 'see agent list --help for more options').",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "`agent --help` shows a one-line summary for each subcommand with no indication that `agent list` has additional flags. A user who only reads `agent --help` would never discover `--clear`.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The top-level `agent --help` output is a condensed summary. It doesn't surface subcommand-specific flags. This is a design choice to keep help concise, but it hides discoverable functionality.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "- Add a note to the `agent list` line in `agent --help`: '... (supports --clear, --limit, --offset)'\n- Or add a line at the bottom of `agent --help`: 'Run agent list --help for additional options.'\n- Consider adding `agent clear` as a standalone subcommand for better discoverability — it's semantically odd to clear tasks via a flag on `list`",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 5,
+      "title": "Task descriptions are truncated in agent list — similar tasks become indistinguishable",
+      "severity": "Low",
+      "category": "UX",
+      "sections": [
+        {
+          "body": "Submit multiple agent tasks with long descriptions that share a common prefix (e.g., 'Navigate to https://en.wikipedia.org/wi…'). Run `agent list`.",
+          "label": "Reproduction"
+        },
+        {
+          "body": "There should be a way to see the full description, either via a `--verbose` flag, wider output, or a dedicated `agent info <id>` command.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "Descriptions are truncated at a fixed width with an ellipsis character. When multiple tasks share the same long prefix (e.g., multiple Wikipedia navigation tasks), all appear identical in the list.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The `agent list` table format uses a fixed column width for DESCRIPTION. For very long descriptions, truncation with ellipsis is necessary for readability, but there's no mechanism to expand or differentiate similar entries.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "- Add a `--verbose` flag to `agent list` that shows full descriptions (possibly wrapped)\n- Consider displaying a short hash/ID suffix in the DESCRIPTION column when truncation occurs\n- Add `agent info <id>` as a command that shows full details for a single task (description, full status, timing)",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 6,
+      "title": "Pre-existing tasks from prior sessions appear in fresh agent list",
+      "severity": "Low",
+      "category": "UX",
+      "sections": [
+        {
+          "body": "Start a fresh testing session. Run `agent list` before submitting any tasks yourself.",
+          "label": "Reproduction"
+        },
+        {
+          "body": "A first-time user would expect an empty task list. Seeing 3 pre-existing tasks (some 'completed', one 'queued') is confusing and makes the user wonder if they did something wrong or if the tool is shared.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "The first `agent list` call showed 3 tasks from prior sessions (submitted at 19:32, 19:46). One was still 'queued' and later transitioned to 'failed (417)' during our testing.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "Agent tasks are persisted to disk and survive across CLI sessions. This is by design for long-running or async tasks that may span multiple CLI invocations. However, there's no session-scoped isolation or indication that tasks belong to different sessions.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "- Add a session identifier or timestamp grouping to `agent list` output so users can distinguish their current session's tasks from prior sessions\n- Consider adding `agent list --since <time>` or `agent list --session` to filter by recency\n- Display a notice on first `agent list` when pre-existing tasks are found: 'Showing N tasks from prior sessions. Use --clear to remove them.'\n- Alternatively, namespace tasks by session (-s flag) so different workflows don't interfere",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    }
+  ]
+}

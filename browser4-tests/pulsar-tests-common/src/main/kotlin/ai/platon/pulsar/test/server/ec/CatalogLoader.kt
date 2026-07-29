@@ -22,6 +22,7 @@ class CatalogLoader {
     fun getProduct(id: String) = productsById[id]
     fun getProductsByCategory(id: String) = productsByCategory[id].orEmpty()
     fun allCategories() = catalog.categories
+    fun allProducts() = catalog.products
 
     private fun load(): Catalog {
         val resourcePath = "/static/generated/mock-amazon/data/products.json"

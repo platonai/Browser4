@@ -770,12 +770,18 @@ class MCPToolController(
         executor: ToolExecutor,
         request: MCPToolCallRequest,
     ): ResponseEntity<MCPToolCallResponse> {
-        // Derive method name from tool name: "pptx_generate" → "generate"
-        val method = if (toolName.startsWith("${domain}_")) {
+        // Derive method name from tool name: "pptx_generate" → "generate".
+        // The raw substring is snake_case (e.g. "detect_videos"); resolve it
+        // back to the executor's native camelCase method name (e.g. "detectVideos")
+        // by reverse-matching through the executor's registered tool specs.
+        val rawMethod = if (toolName.startsWith("${domain}_")) {
             toolName.substring(domain.length + 1)
         } else {
             toolName
         }
+        val method = executor.getToolSpecs().keys.firstOrNull { specMethod ->
+            toMcpToolName(domain, specMethod) == toolName
+        } ?: rawMethod
 
         // Resolve the receiver: for executors that require a WebDriver (e.g., pptx),
         // extract the session ID and get the session's driver.
@@ -1076,6 +1082,25 @@ class MCPToolController(
             "tab", "system" -> snake
             else -> "${domain}_$snake"
         }
+    }
+
+    /**
+     * Convert snake_case back to camelCase.
+     * Inverse of the snake_case portion of [toMcpToolName].
+     *
+     * Examples: "detect_videos" → "detectVideos", "generate" → "generate",
+     * "get_info" → "getInfo", "html_snapshot_capture" → "htmlSnapshotCapture".
+     *
+     * This is needed in [dispatchToCustomExecutor] because the MCP tool name
+     * is snake_cased (e.g. "media_detect_videos") but custom executors like
+     * [MediaToolExecutor] match on the original camelCase method name
+     * ("detectVideos").
+     */
+    internal fun snakeToCamelCase(snake: String): String {
+        if (!snake.contains('_')) return snake
+        return snake.split('_').mapIndexed { index, part ->
+            if (index == 0) part else part.replaceFirstChar { it.uppercase() }
+        }.joinToString("")
     }
 
     private fun normalizeFrontendToolCall(toolName: String, args: Map<String, Any?>): NormalizedToolCall {
@@ -1549,7 +1574,8 @@ internal fun inspectDocument(
         if (mBox.isNotBlank()) sample.put("box", mBox)
         // Text: full descendant text ≤5 words / ≤5 CJK chars
         // (ownText is often empty — e.g. <a><em>$</em><span>140</span></a>)
-        val ownText = truncateText(m.text().trim())
+        val rawFullText = m.text().trim()
+        val ownText = truncateText(rawFullText)
         if (ownText.isNotBlank()) sample.put("text", ownText)
 
         // Direct children (also in Section 8 format)
@@ -1565,6 +1591,33 @@ internal fun inspectDocument(
             children.add(cObj)
         }
         sample.set<ArrayNode>("children", children)
+
+        // ── Truncation detection ──────────────────────────────────────────
+        // When visible text ends with "..." (CSS text-overflow: ellipsis or
+        // HTML-source truncation), check child elements for title/aria-label/alt
+        // attributes that contain fuller text. Surface these as alternative
+        // selectors for DOM_FIRST_ATTR-based extraction.
+        if (rawFullText.endsWith("...") && rawFullText.length > 4) {
+            val truncationHints = pulsarObjectMapper().createArrayNode()
+            for (child in m.children()) {
+                val childEl = child as? org.jsoup.nodes.Element ?: continue
+                for (attr in listOf("title", "aria-label", "alt")) {
+                    val attrVal = childEl.attr(attr).trim()
+                    if (attrVal.isNotBlank() && attrVal.length > rawFullText.length) {
+                        val hint = pulsarObjectMapper().createObjectNode()
+                        hint.put("childSelector", buildElementRef(childEl))
+                        hint.put("attribute", attr)
+                        hint.put("sampleValue", truncateText(attrVal, maxWords = 8))
+                        hint.put("fullTextLength", attrVal.length)
+                        truncationHints.add(hint)
+                        break  // one hint per child — prefer first matching attr
+                    }
+                }
+            }
+            if (truncationHints.size() > 0) {
+                sample.set<ArrayNode>("truncationHints", truncationHints)
+            }
+        }
         samples.add(sample)
     }
 
@@ -1598,7 +1651,9 @@ internal fun inspectDocument(
             if (descTag in structuralTags) continue
 
             val descClass = desc.className()
+                .replace("\"", "").replace("'", "")  // strip literal quotes (defense against malformed HTML)
             val descId = desc.id()
+                .replace("\"", "").replace("'", "")  // same for id
             val descText = desc.ownText().trim().take(80)
 
             // Build selector candidates: class/id first, then attribute, then bare tag
@@ -1766,7 +1821,61 @@ internal fun inspectDocument(
         suggestions.add(sug)
     }
 
-    // Reuse visual link groups detected early (visual geometry first algorithm)
+    // ── Singleton element detection ────────────────────────────────────────
+    // Find semantic singleton elements that auto-discovery may miss because
+    // they don't repeat. These include: elements with id attributes, heading
+    // elements, and elements containing price-like text patterns.
+    val singletonSuggestions = pulsarObjectMapper().createArrayNode()
+    val seenSingletonIds = mutableSetOf<String>()
+
+    // Helper: build a selector for an element and add it to suggestions
+    fun suggestSingleton(el: org.jsoup.nodes.Element, category: String, note: String) {
+        val sel = buildElementRef(el)
+        if (!seenSingletonIds.add(sel)) return
+        val text = truncateText(el.text().trim())
+        val obj = pulsarObjectMapper().createObjectNode()
+        obj.put("selector", sel)
+        obj.put("tag", el.tagName().lowercase())
+        obj.put("category", category)
+        if (text.isNotBlank()) obj.put("textPreview", text)
+        if (note.isNotBlank()) obj.put("note", note)
+        singletonSuggestions.add(obj)
+    }
+
+    // 1. Elements with id attributes (stable, semantic targets)
+    for (el in document.select("[id]")) {
+        val id = el.id()
+        if (id.isBlank() || id.any { it == '"' || it == '\'' }) continue
+        // Skip structural/repeating ids
+        if (id.matches(Regex("^(header|footer|nav|sidebar|main|content|root|app|wrapper|container)$", RegexOption.IGNORE_CASE))) continue
+        val tag = el.tagName().lowercase()
+        suggestSingleton(el, "id-element", "Semantic ID: $tag#$id")
+    }
+
+    // 2. Heading elements (h1-h6) — key content landmarks
+    for (tag in listOf("h1", "h2", "h3")) {
+        for (el in document.select(tag)) {
+            val text = el.text().trim()
+            if (text.isBlank()) continue
+            suggestSingleton(el, "heading", "Heading: $text")
+        }
+    }
+
+    // 3. Elements with price-like text patterns
+    val pricePattern = Regex("""[$€¥£]\s*\d+(?:[,.]\d+)?|\d+(?:[,.]\d+)\s*[$€¥£]""")
+    val seenPriceEls = mutableSetOf<String>()
+    for (el in document.select("*")) {
+        val ownText = el.ownText().trim()
+        if (ownText.isBlank()) continue
+        if (pricePattern.containsMatchIn(ownText)) {
+            val sel = buildElementRef(el)
+            if (seenPriceEls.add(sel)) {
+                suggestSingleton(el, "price", "Price pattern: $ownText")
+            }
+        }
+    }
+
+    // Build response
     return pulsarObjectMapper().createObjectNode().apply {
         put("matchCount", matchCount)
         put("selector", effectiveSelector)
@@ -1784,6 +1893,9 @@ internal fun inspectDocument(
         }
         set<ArrayNode>("samples", samples)
         set<ArrayNode>("suggestions", suggestions)
+        if (singletonSuggestions.size() > 0) {
+            set<ArrayNode>("singletonSuggestions", singletonSuggestions)
+        }
         if (visualLinkGroups.isNotEmpty()) {
             set<ArrayNode>("linkGroups", linkGroupsToJson(visualLinkGroups))
         }
@@ -1837,6 +1949,7 @@ internal fun findClosestId(el: org.jsoup.nodes.Element, maxLevels: Int = 6): Str
 /** Format up to 2 CSS classes as `.class1.class2`, or empty string if none. */
 internal fun formatClassList(el: org.jsoup.nodes.Element): String {
     val cls = el.className().trim()
+        .replace("\"", "").replace("'", "")  // strip literal quotes (defense against malformed HTML)
     if (cls.isBlank()) return ""
     val classes = cls.split("\\s+".toRegex()).take(2)
     return classes.joinToString("") { ".$it" }

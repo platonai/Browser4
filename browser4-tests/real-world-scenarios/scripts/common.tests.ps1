@@ -20,9 +20,9 @@ Tests common.ps1 functionality:
   1. Mode detection ($browser4cliMode → $helpCmd, $skillPath)
   2. $generalPrompt content and structure
   3. Invoke-Agent function signature and argument forwarding
-  4. Path resolution ($IssuesReadyDir, $RepoRoot)
+  4. Path resolution ($IssuesDraftDir, $RepoRoot)
   5. ConvertFrom-IssuesSection parsing
-  6. Write-IssuesToReadyQueue file output
+  6. Write-IssuesToDraft file output
   7. Invoke-Agent backward compatibility
 
 .NOTES
@@ -519,13 +519,13 @@ Write-Host '━━━ Path Resolution ━━━' -ForegroundColor Yellow
     $browser4cliMode = 'dev'
     . "$PSScriptRoot/common.ps1"
 
-    Write-TestGroup '$script:IssuesReadyDir is an absolute path'
-    $isAbs = [System.IO.Path]::IsPathRooted([string]$script:IssuesReadyDir)
-    Assert-True 'IssuesReadyDir is absolute' $isAbs
+    Write-TestGroup '$script:IssuesDraftDir is an absolute path'
+    $isAbs = [System.IO.Path]::IsPathRooted([string]$script:IssuesDraftDir)
+    Assert-True 'IssuesDraftDir is absolute' $isAbs
 
-    Write-TestGroup '$script:IssuesReadyDir ends with the expected suffix'
+    Write-TestGroup '$script:IssuesDraftDir ends with the expected suffix'
     $expectedSuffix = 'issues\draft'
-    $normalized = ([string]$script:IssuesReadyDir) -replace '[/\\]', '\'
+    $normalized = ([string]$script:IssuesDraftDir) -replace '[/\\]', '\'
     Assert-True "Ends with $expectedSuffix" $normalized.EndsWith($expectedSuffix)
 
     Write-TestGroup '$script:RepoRoot resolves to an existing directory'
@@ -795,17 +795,17 @@ Make it stable.
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Test group 13: Write-IssuesToReadyQueue
+# Test group 13: Write-IssuesToDraft
 # ═══════════════════════════════════════════════════════════════════════════════
 
 Write-Host ''
-Write-Host '━━━ Write-IssuesToReadyQueue ━━━' -ForegroundColor Yellow
+Write-Host '━━━ Write-IssuesToDraft ━━━' -ForegroundColor Yellow
 
 & {
     $browser4cliMode = 'dev'
     . "$PSScriptRoot/common.ps1"
 
-    # Use a temp directory to avoid polluting the real ready queue
+    # Use a temp directory to avoid polluting the real issues draft directory
     $tempDir = Join-Path ([System.IO.Path]::GetTempPath()) "b4cli-test-$(Get-Random)"
     New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
 
@@ -846,7 +846,7 @@ OK.
 '@
 
         Write-TestGroup 'Writes full.md file'
-        Write-IssuesToReadyQueue -ScenarioName 'unit-test' -Content $sampleContent -OutputDirectory $tempDir
+        Write-IssuesToDraft -ScenarioName 'unit-test' -Content $sampleContent -OutputDirectory $tempDir
         $fullFiles = Get-ChildItem -Path $tempDir -Filter '*.full.md'
         Assert-Equal 'Exactly 1 full.md file' 1 $fullFiles.Count
 
@@ -1228,8 +1228,8 @@ Write-Host '━━━ run-task.ps1 Timeout Parameter ━━━' -ForegroundColor
     $scriptContent = Get-Content -LiteralPath $taskRunnerPath -Raw -Encoding UTF8
 
     Write-TestGroup 'Has $TimeoutMinutes parameter in param block'
-    $hasTimeoutParam = $scriptContent -match '\[\s*int\s*\]\s*\$TimeoutMinutes\s*=\s*0'
-    Assert-True 'Script declares [int] $TimeoutMinutes = 0' $hasTimeoutParam
+    $hasTimeoutParam = $scriptContent -match '\[\s*int\s*\]\s*\$TimeoutMinutes\s*=\s*60'
+    Assert-True 'Script declares [int] $TimeoutMinutes = 60' $hasTimeoutParam
 
     Write-TestGroup 'Has timeout forwarding logic to Invoke-Agent'
     $hasForwarding = $scriptContent -match '\$invokeParams\[''TimeoutSeconds''\]\s*=\s*\$TimeoutMinutes\s*\*\s*60'
@@ -1248,14 +1248,13 @@ Write-Host ''
 Write-Host '━━━ Timeout Conversion Logic ━━━' -ForegroundColor Yellow
 
 & {
-    Write-TestGroup 'TimeoutMinutes=0 → no TimeoutSeconds key'
+    Write-TestGroup 'TimeoutMinutes=0 → TimeoutSeconds=0 (no timeout)'
     $TimeoutMinutes = 0
     $invokeParams = @{ Prompt = 'test' }
-    if ($TimeoutMinutes -gt 0) {
-        $invokeParams['TimeoutSeconds'] = $TimeoutMinutes * 60
-    }
-    Assert-True 'No TimeoutSeconds when TimeoutMinutes is 0' `
-        (-not $invokeParams.ContainsKey('TimeoutSeconds'))
+    # Always forward (matching run-task.ps1 behavior):
+    # $TimeoutMinutes * 60 = 0, which means "no timeout" downstream
+    $invokeParams['TimeoutSeconds'] = $TimeoutMinutes * 60
+    Assert-Equal 'TimeoutSeconds is 0 (no timeout) when TimeoutMinutes is 0' 0 $invokeParams['TimeoutSeconds']
 
     Write-TestGroup 'TimeoutMinutes=5 → TimeoutSeconds=300'
     $TimeoutMinutes = 5
@@ -1280,6 +1279,707 @@ Write-Host '━━━ Timeout Conversion Logic ━━━' -ForegroundColor Yello
         $invokeParams['TimeoutSeconds'] = $TimeoutMinutes * 60
     }
     Assert-Equal 'TimeoutSeconds is 60 (1 * 60)' 60 $invokeParams['TimeoutSeconds']
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Test group 21: NativeCommandOutputHandler — C# class compiles and handles errors
+# ═══════════════════════════════════════════════════════════════════════════════
+
+Write-Host ''
+Write-Host '━━━ NativeCommandOutputHandler: Error Resilience ━━━' -ForegroundColor Yellow
+
+& {
+    $browser4cliMode = 'dev'
+    . "$PSScriptRoot/common.ps1"
+
+    # DataReceivedEventArgs has an internal constructor — use reflection.
+    $ctorInfo = [System.Diagnostics.DataReceivedEventArgs].GetConstructor(
+        [System.Reflection.BindingFlags]'NonPublic,Public,Instance',
+        $null, [Type[]]@([string]), $null)
+
+    Write-TestGroup 'C# handler type is compiled and loadable'
+    $handlerType = [NativeCommandOutputHandler]
+    Assert-True 'NativeCommandOutputHandler type exists' ($null -ne $handlerType)
+
+    Write-TestGroup 'Handler can be instantiated with a valid path'
+    $tempFile = [System.IO.Path]::GetTempFileName()
+    try {
+        $handler = New-Object NativeCommandOutputHandler $tempFile
+        Assert-True 'Handler instance created' ($null -ne $handler)
+    } finally {
+        Remove-Item $tempFile -ErrorAction SilentlyContinue
+    }
+
+    Write-TestGroup 'Handler writes data to capture file correctly'
+    $tempFile = [System.IO.Path]::GetTempFileName()
+    try {
+        $handler = New-Object NativeCommandOutputHandler $tempFile
+        $testLine = 'Test output line'
+        $eventArgs = $ctorInfo.Invoke(@($testLine))
+        $handler.OnOutputReceived($null, $eventArgs)
+
+        $content = [System.IO.File]::ReadAllText($tempFile, [System.Text.UTF8Encoding]::new($false))
+        Assert-True 'Capture file contains test line' $content.Contains($testLine)
+    } finally {
+        Remove-Item $tempFile -ErrorAction SilentlyContinue
+    }
+
+    Write-TestGroup 'Handler survives write to invalid path (try-catch prevents crash)'
+    $invalidPath = 'Z:\nonexistent\path\file.txt'
+    $handler = New-Object NativeCommandOutputHandler $invalidPath
+    $testLine = 'This write should fail gracefully'
+    $eventArgs = $ctorInfo.Invoke(@($testLine))
+    $threw = $false
+    try {
+        $handler.OnOutputReceived($null, $eventArgs)
+    } catch {
+        $threw = $true
+    }
+    Assert-True 'Handler does not throw on write failure (try-catch works)' (-not $threw)
+
+    Write-TestGroup 'Multiple writes accumulate in capture file'
+    $tempFile = [System.IO.Path]::GetTempFileName()
+    try {
+        $handler = New-Object NativeCommandOutputHandler $tempFile
+        $handler.OnOutputReceived($null, ($ctorInfo.Invoke(@('Line A'))))
+        $handler.OnOutputReceived($null, ($ctorInfo.Invoke(@('Line B'))))
+        $handler.OnOutputReceived($null, ($ctorInfo.Invoke(@('Line C'))))
+        $content = [System.IO.File]::ReadAllText($tempFile, [System.Text.UTF8Encoding]::new($false))
+        Assert-True 'All three lines captured' ($content.Contains('Line A') -and $content.Contains('Line B') -and $content.Contains('Line C'))
+    } finally {
+        Remove-Item $tempFile -ErrorAction SilentlyContinue
+    }
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Test group 22: Start-NativeCommand — WaitForExit fix present
+# ═══════════════════════════════════════════════════════════════════════════════
+
+Write-Host ''
+Write-Host '━━━ Start-NativeCommand: WaitForExit Fix ━━━' -ForegroundColor Yellow
+
+& {
+    $browser4cliMode = 'dev'
+    . "$PSScriptRoot/common.ps1"
+
+    Write-TestGroup 'Start-NativeCommand function exists'
+    Assert-True 'Function is defined' ($null -ne (Get-Command Start-NativeCommand -ErrorAction SilentlyContinue))
+
+    # Static analysis: verify the parameterless WaitForExit() call exists
+    # after the heartbeat loop and before CancelOutputRead()
+    $commonPath = Join-Path $PSScriptRoot 'common.ps1'
+    $commonContent = Get-Content -LiteralPath $commonPath -Raw -Encoding UTF8
+
+    Write-TestGroup 'Parameterless WaitForExit() is called before CancelOutputRead'
+    # Extract the drain section between the heartbeat loop and the timeout check
+    $drainSection = ''
+    if ($commonContent -match '(?s)# ── Drain final output.+?# ── Timeout:') {
+        $drainSection = $Matches[0]
+    }
+    $hasWaitForExit = $drainSection -match '\$proc\.WaitForExit\(\)'
+    Assert-True 'WaitForExit() (parameterless) is called in drain section' $hasWaitForExit
+
+    Write-TestGroup 'WaitForExit() is called BEFORE CancelOutputRead (code calls)'
+    # Use $proc. prefix to avoid matching comment text like
+    # "CancelOutputRead() may discard data that hasn't been delivered"
+    $waitPos = $drainSection.IndexOf('$proc.WaitForExit()')
+    $cancelPos = $drainSection.IndexOf('$proc.CancelOutputRead()')
+    Assert-True 'WaitForExit() appears before CancelOutputRead()' ($waitPos -ge 0 -and $cancelPos -ge 0 -and $waitPos -lt $cancelPos)
+
+    Write-TestGroup 'WaitForExit() is wrapped in try-catch'
+    $hasTryCatch = $drainSection -match '(?s)try\s*\{\s*\$proc\.WaitForExit\(\)'
+    Assert-True 'WaitForExit() is wrapped in try-catch' $hasTryCatch
+
+    Write-TestGroup 'Heartbeat loop polls HasExited before the drain section'
+    $hasHeartbeatLoop = $commonContent -match 'while\s*\(-not\s*\$proc\.HasExited\)'
+    Assert-True 'Heartbeat loop exists (polls HasExited)' $hasHeartbeatLoop
+
+    Write-TestGroup 'C# handler has try-catch for File.AppendAllText'
+    Assert-True 'Handler has try-catch' ($commonContent -match '(?s)try\s*\{.*File\.AppendAllText')
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Test group 23: Truncation detection — simulated content validation
+# ═══════════════════════════════════════════════════════════════════════════════
+
+Write-Host ''
+Write-Host '━━━ Truncation Detection ━━━' -ForegroundColor Yellow
+
+& {
+    $browser4cliMode = 'dev'
+    . "$PSScriptRoot/common.ps1"
+
+    Write-TestGroup 'Full output with all sections is NOT flagged as truncated'
+    $fullOutput = @'
+### A. Task Result
+Task completed successfully.
+
+### B. Execution Trace
+Used commands: open, goto, tab-list.
+
+### C. Issues Found
+
+### Issue 1: Test issue
+**Severity:** Medium
+**Category:** UX
+
+### D. Overall Assessment
+All good, rating 8/10.
+'@
+    $hasSections = $fullOutput -match '(?i)(###?\s+[ABCD][.\s])'
+    Assert-True 'Full output has structured sections' $hasSections
+
+    $looksTruncated = (-not $hasSections) -and (
+        ($fullOutput -match '(?i)is above\.?\s*$') -or
+        ($fullOutput.Length -lt 500 -and $fullOutput -match '(?i)(report|issues?|evaluation)\s+(is|are|complete)')
+    )
+    Assert-True 'Full output is NOT flagged truncated' (-not $looksTruncated)
+
+    Write-TestGroup 'Closing-only output ("is above") IS flagged as truncated'
+    $closingOnly = 'The evaluation is complete. All testing has been performed, and the full report with 10 documented issues is above.'
+    $hasSections2 = $closingOnly -match '(?i)(###?\s+[ABCD][.\s])'
+    $looksTruncated2 = (-not $hasSections2) -and (
+        ($closingOnly -match '(?i)is above\.?\s*$') -or
+        ($closingOnly.Length -lt 500 -and $closingOnly -match '(?i)(report|issues?|evaluation)\s+(is|are|complete)')
+    )
+    Assert-True 'Closing-only output IS flagged truncated' $looksTruncated2
+
+    Write-TestGroup 'Short completion message ("report is complete") IS flagged'
+    $shortComplete = 'The full report is complete.'
+    $hasSections3 = $shortComplete -match '(?i)(###?\s+[ABCD][.\s])'
+    $looksTruncated3 = (-not $hasSections3) -and (
+        ($shortComplete -match '(?i)is above\.?\s*$') -or
+        ($shortComplete.Length -lt 500 -and $shortComplete -match '(?i)(report|issues?|evaluation)\s+(is|are|complete)')
+    )
+    Assert-True 'Short completion message IS flagged truncated' $looksTruncated3
+
+    Write-TestGroup 'Long output without sections but without closing markers is NOT flagged'
+    $longRandom = ('Random agent output without structured sections. ' * 30).Trim()
+    $hasSections4 = $longRandom -match '(?i)(###?\s+[ABCD][.\s])'
+    $looksTruncated4 = (-not $hasSections4) -and (
+        ($longRandom -match '(?i)is above\.?\s*$') -or
+        ($longRandom.Length -lt 500 -and $longRandom -match '(?i)(report|issues?|evaluation)\s+(is|are|complete)')
+    )
+    Assert-True 'Long random output NOT flagged truncated' (-not $looksTruncated4)
+
+    Write-TestGroup 'Output with ### C. Issues Found section is NOT flagged'
+    $hasCIssue = @'
+Some preamble text.
+
+### C. Issues Found
+
+### Issue 1: Something broken
+**Severity:** High
+**Category:** Product
+'@
+    $hasSections5 = $hasCIssue -match '(?i)(###?\s+[ABCD][.\s])'
+    $looksTruncated5 = (-not $hasSections5) -and (
+        ($hasCIssue -match '(?i)is above\.?\s*$') -or
+        ($hasCIssue.Length -lt 500 -and $hasCIssue -match '(?i)(report|issues?|evaluation)\s+(is|are|complete)')
+    )
+    Assert-True 'Output with C section NOT flagged truncated' (-not $looksTruncated5)
+
+    Write-TestGroup 'Truncation pattern detects "is above" at end of line'
+    $endOfLine = "The report is above.`n"
+    $aboveMatch = $endOfLine -match '(?i)is above\.?\s*$'
+    Assert-True 'Matches "is above." at end' $aboveMatch
+
+    Write-TestGroup 'Truncation pattern does NOT match "above" mid-sentence'
+    $midSentence = 'The above report contains 10 issues.'
+    $aboveMatch2 = $midSentence -match '(?i)is above\.?\s*$'
+    Assert-True 'Does NOT match "above" mid-sentence' (-not $aboveMatch2)
+
+    Write-TestGroup 'Truncation detection variable exists in common.ps1'
+    $commonPath = Join-Path $PSScriptRoot 'common.ps1'
+    $commonContent = Get-Content -LiteralPath $commonPath -Raw -Encoding UTF8
+    Assert-True 'looksTruncated variable exists' ($commonContent -match 'looksTruncated')
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Test group 24: ConvertFrom-JsonEvaluation — JSON issue extraction
+# ═══════════════════════════════════════════════════════════════════════════════
+
+Write-Host ''
+Write-Host '━━━ ConvertFrom-JsonEvaluation ━━━' -ForegroundColor Yellow
+
+& {
+    $browser4cliMode = 'dev'
+    . "$PSScriptRoot/common.ps1"
+
+    Write-TestGroup 'Function exists'
+    Assert-True 'ConvertFrom-JsonEvaluation is defined' `
+        ($null -ne (Get-Command ConvertFrom-JsonEvaluation -ErrorAction SilentlyContinue))
+
+    Write-TestGroup 'Returns $null when no JSON block is present'
+    $noJson = @'
+### A. Task Result
+Done.
+
+### C. Issues Found
+### Issue 1: Something
+**Severity:** High
+'@
+    $result = ConvertFrom-JsonEvaluation -Content $noJson
+    Assert-True 'No JSON block → $null' ($null -eq $result)
+
+    Write-TestGroup 'Returns $null for content without issues array'
+    $emptyJson = @'
+```json
+{ "meta": { "version": "1.0" } }
+```
+'@
+    $result = ConvertFrom-JsonEvaluation -Content $emptyJson
+    Assert-True 'JSON without issues array → $null' ($null -eq $result)
+
+    Write-TestGroup 'Returns $null for malformed JSON'
+    $badJson = @'
+```json
+{ this is not valid json at all }
+```
+'@
+    $result = ConvertFrom-JsonEvaluation -Content $badJson
+    Assert-True 'Malformed JSON → $null' ($null -eq $result)
+
+    Write-TestGroup 'Returns $null for empty JSON block'
+    $empty = @'
+```json
+```
+'@
+    $result = ConvertFrom-JsonEvaluation -Content $empty
+    Assert-True 'Empty JSON block → $null' ($null -eq $result)
+
+    Write-TestGroup 'Parses a single issue with all fields populated'
+    $singleIssue = @'
+```json
+{
+  "issues": [
+    {
+      "title": "Help text missing examples",
+      "severity": "Medium",
+      "category": "Documentation",
+      "reproduction": "Run browser4-cli help",
+      "expected": "Help includes usage examples",
+      "actual": "No examples shown",
+      "rootCause": "Help templates lack example sections",
+      "codePointer": "cli/browser4-cli/src/help.rs:render_help()",
+      "suggestion": "- Add an Examples section\n- Include 2-3 common patterns"
+    }
+  ]
+}
+```
+'@
+    $raw = ConvertFrom-JsonEvaluation -Content $singleIssue
+    $result = $raw.Issues
+    Assert-Equal 'Found 1 issue' 1 $result.Count
+    Assert-Equal 'Title' 'Help text missing examples' $result[0].Title
+    Assert-Equal 'Severity' 'Medium' $result[0].Severity
+    Assert-Equal 'Category' 'Documentation' $result[0].Category
+    Assert-Equal 'Reproduction' 'Run browser4-cli help' $result[0].Reproduction
+    Assert-Equal 'Expected' 'Help includes usage examples' $result[0].Expected
+    Assert-Equal 'Actual' 'No examples shown' $result[0].Actual
+    Assert-Equal 'RootCause' 'Help templates lack example sections' $result[0].RootCause
+    Assert-Equal 'CodePointer' 'cli/browser4-cli/src/help.rs:render_help()' $result[0].CodePointer
+    Assert-True 'Suggestion contains bullet items' $result[0].Suggestion.Contains('- Add an Examples')
+    Assert-True 'Review template generated' $result[0].Review.Contains('[ ] **ACCEPT**')
+
+    Write-TestGroup 'Parses multiple issues'
+    $multiIssue = @'
+```json
+{
+  "issues": [
+    {
+      "title": "First issue",
+      "severity": "Critical",
+      "category": "Product",
+      "reproduction": "Step 1",
+      "expected": "Works",
+      "actual": "Broken",
+      "rootCause": "Bug",
+      "codePointer": "",
+      "suggestion": "Fix it"
+    },
+    {
+      "title": "Second issue",
+      "severity": "Low",
+      "category": "UX",
+      "reproduction": "Step 2",
+      "expected": "Smooth",
+      "actual": "Clunky",
+      "rootCause": "",
+      "codePointer": "",
+      "suggestion": ""
+    }
+  ]
+}
+```
+'@
+    $raw = ConvertFrom-JsonEvaluation -Content $multiIssue
+    $result = $raw.Issues
+    Assert-Equal 'Found 2 issues' 2 $result.Count
+    Assert-Equal 'First title' 'First issue' $result[0].Title
+    Assert-Equal 'First severity' 'Critical' $result[0].Severity
+    Assert-Equal 'Second title' 'Second issue' $result[1].Title
+    Assert-Equal 'Second severity' 'Low' $result[1].Severity
+    Assert-Equal 'Second rootCause is empty string' '' $result[1].RootCause
+    Assert-Equal 'Second suggestion is empty string' '' $result[1].Suggestion
+
+    Write-TestGroup 'Parses assessment object when present'
+    $withAssessment = @'
+```json
+{
+  "issues": [
+    {
+      "title": "Test",
+      "severity": "High",
+      "category": "Reliability",
+      "reproduction": "",
+      "expected": "",
+      "actual": "",
+      "rootCause": "",
+      "codePointer": "",
+      "suggestion": ""
+    }
+  ],
+  "assessment": {
+    "completionStatus": "Partially Successful",
+    "successRate": "80%",
+    "issuesFound": 1,
+    "majorBlockers": "",
+    "mostConfusingAspects": "Error messages are cryptic",
+    "mostValuableImprovements": "Better error handling",
+    "usabilityRating": 6
+  }
+}
+```
+'@
+    $raw = ConvertFrom-JsonEvaluation -Content $withAssessment
+    Assert-Equal 'Still found 1 issue' 1 $raw.Issues.Count
+
+    $a = $raw.Assessment
+    Assert-NotNullOrEmpty 'Assessment is not null' 'not-null'
+    Assert-Equal 'CompletionStatus' 'Partially Successful' $a.CompletionStatus
+    Assert-Equal 'SuccessRate' '80%' $a.SuccessRate
+    Assert-Equal 'IssuesFound' 1 $a.IssuesFound
+    Assert-Equal 'MostConfusingAspects' 'Error messages are cryptic' $a.MostConfusingAspects
+    Assert-Equal 'MostValuableImprovements' 'Better error handling' $a.MostValuableImprovements
+    Assert-Equal 'UsabilityRating' 6 $a.UsabilityRating
+    Assert-Equal 'MajorBlockers is empty string' '' $a.MajorBlockers
+
+    Write-TestGroup 'Handles missing optional fields (agent omits empty fields)'
+    $minimalJson = @'
+```json
+{
+  "issues": [
+    {
+      "title": "Minimal issue",
+      "severity": "High",
+      "category": "Product"
+    }
+  ]
+}
+```
+'@
+    $raw = ConvertFrom-JsonEvaluation -Content $minimalJson
+    $result = $raw.Issues
+    Assert-Equal 'Found 1 issue from minimal JSON' 1 $result.Count
+    Assert-Equal 'Title preserved' 'Minimal issue' $result[0].Title
+    Assert-Equal 'Missing fields default to empty string' '' $result[0].Reproduction
+    Assert-Equal 'Missing Expected is empty' '' $result[0].Expected
+    Assert-Equal 'Review template still generated' $result[0].Review.Contains('[ ] **ACCEPT**') $true
+
+    Write-TestGroup 'Handles missing assessment object entirely'
+    Assert-True 'Assessment is $null when omitted' ($null -eq $raw.Assessment)
+
+    Write-TestGroup 'Picks the first valid JSON block when multiple are present'
+    $multiBlock = @'
+```json
+{ "unrelated": true }
+```
+```json
+{
+  "issues": [
+    {
+      "title": "Second block issue",
+      "severity": "Medium",
+      "category": "Documentation",
+      "reproduction": "",
+      "expected": "",
+      "actual": "",
+      "rootCause": "",
+      "codePointer": "",
+      "suggestion": ""
+    }
+  ]
+}
+```
+'@
+    $raw = ConvertFrom-JsonEvaluation -Content $multiBlock
+    $result = $raw.Issues
+    Assert-Equal 'Found issue from second JSON block' 1 $result.Count
+    Assert-Equal 'Title from second block' 'Second block issue' $result[0].Title
+
+    Write-TestGroup 'Handles JSON block with indentation variations'
+    $indentedJson = @'
+Some text before.
+
+    ```json
+    {
+      "issues": [
+        {
+          "title": "Indented block",
+          "severity": "Low",
+          "category": "UX",
+          "reproduction": "",
+          "expected": "",
+          "actual": "",
+          "rootCause": "",
+          "codePointer": "",
+          "suggestion": ""
+        }
+      ]
+    }
+    ```
+
+Some text after.
+'@
+    $raw = ConvertFrom-JsonEvaluation -Content $indentedJson
+    $result = $raw.Issues
+    Assert-Equal 'Found 1 issue from indented JSON block' 1 $result.Count
+    Assert-Equal 'Title from indented block' 'Indented block' $result[0].Title
+
+    Write-TestGroup 'Review template contains all 5 decision checkboxes'
+    $singleJson = @'
+```json
+{
+  "issues": [
+    {
+      "title": "T",
+      "severity": "Low",
+      "category": "UX",
+      "reproduction": "",
+      "expected": "",
+      "actual": "",
+      "rootCause": "",
+      "codePointer": "",
+      "suggestion": ""
+    }
+  ]
+}
+```
+'@
+    $raw = ConvertFrom-JsonEvaluation -Content $singleJson
+    $review = $raw.Issues[0].Review
+    Assert-True 'Contains ACCEPT' $review.Contains('[ ] **ACCEPT**')
+    Assert-True 'Contains ACCEPT with improvements' $review.Contains('[ ] **ACCEPT with improvements**')
+    Assert-True 'Contains DEFER' $review.Contains('[ ] **DEFER**')
+    Assert-True 'Contains WONTFIX' $review.Contains('[ ] **WONTFIX**')
+    Assert-True 'Contains REJECT' $review.Contains('[ ] **REJECT**')
+    Assert-True 'Contains Notes' $review.Contains('**Notes:**')
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Test group 25: Write-IssuesToDraft — JSON evaluation path
+# ═══════════════════════════════════════════════════════════════════════════════
+
+Write-Host ''
+Write-Host '━━━ Write-IssuesToDraft / JSON Path ━━━' -ForegroundColor Yellow
+
+& {
+    $browser4cliMode = 'dev'
+    . "$PSScriptRoot/common.ps1"
+
+    $tempDir = Join-Path ([System.IO.Path]::GetTempPath()) "b4cli-json-draft-$(Get-Random)"
+    New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
+
+    try {
+        Write-TestGroup 'JSON evaluation: writes both .full.md and .issues.md'
+        $jsonContent = @'
+## Task Result
+Completed.
+
+## Execution Trace
+Steps taken.
+
+```json
+{
+  "issues": [
+    {
+      "title": "JSON-parsed issue",
+      "severity": "Critical",
+      "category": "Product",
+      "reproduction": "Run cmd",
+      "expected": "Works",
+      "actual": "Fails",
+      "rootCause": "Missing validation",
+      "codePointer": "src/validate.rs:42",
+      "suggestion": "- Add validation\n- Add test"
+    }
+  ],
+  "assessment": {
+    "completionStatus": "Successful",
+    "successRate": "95%",
+    "issuesFound": 1,
+    "majorBlockers": "None",
+    "mostConfusingAspects": "Naming",
+    "mostValuableImprovements": "Error messages",
+    "usabilityRating": 8
+  }
+}
+```
+'@
+        Write-IssuesToDraft -ScenarioName 'json-test' -Content $jsonContent -OutputDirectory $tempDir
+
+        $fullFiles = Get-ChildItem -Path $tempDir -Filter '*.full.md'
+        $issueFiles = Get-ChildItem -Path $tempDir -Filter '*.issues.md'
+        Assert-Equal 'Exactly 1 full.md' 1 $fullFiles.Count
+        Assert-Equal 'Exactly 1 issues.md' 1 $issueFiles.Count
+
+        $issueContent = Get-Content -Path $issueFiles[0].FullName -Raw -Encoding UTF8
+
+        Write-TestGroup 'JSON path: issues section contains parsed issue'
+        Assert-True 'Contains issue title' $issueContent.Contains('JSON-parsed issue')
+        Assert-True 'Contains severity' $issueContent.Contains('**Severity:** Critical')
+        Assert-True 'Contains category' $issueContent.Contains('**Category:** Product')
+
+        Write-TestGroup 'JSON path: detail sections are present'
+        Assert-True 'Contains Reproduction' $issueContent.Contains('#### Reproduction')
+        Assert-True 'Contains Expected Behavior' $issueContent.Contains('#### Expected Behavior')
+        Assert-True 'Contains Actual Behavior' $issueContent.Contains('#### Actual Behavior')
+        Assert-True 'Contains Root Cause Analysis' $issueContent.Contains('#### Root Cause Analysis')
+        Assert-True 'Contains Code Pointer' $issueContent.Contains('#### Code Pointer')
+        Assert-True 'Contains AI Suggested Improvement' $issueContent.Contains('#### AI Suggested Improvement')
+        Assert-True 'Contains Human Review section' $issueContent.Contains('#### Human Review')
+        Assert-True 'Human Review has checkboxes' $issueContent.Contains('[ ] **ACCEPT**')
+
+        Write-TestGroup 'JSON path: Overall Assessment section is present'
+        Assert-True 'Contains Overall Assessment heading' $issueContent.Contains('## Overall Assessment')
+        Assert-True 'Contains Completion Status' $issueContent.Contains('**Completion Status:** Successful')
+        Assert-True 'Contains Success Rate' $issueContent.Contains('**Success Rate:** 95%')
+        Assert-True 'Contains Issues Found count' $issueContent.Contains('**Issues Found:** 1')
+        Assert-True 'Contains Most Confusing Aspects' $issueContent.Contains('**Most Confusing Aspects:** Naming')
+        Assert-True 'Contains Most Valuable Improvements' $issueContent.Contains('**Most Valuable Improvements:** Error messages')
+        Assert-True 'Contains Usability Rating' $issueContent.Contains('**Usability Rating:** 8/10')
+        Assert-True 'MajorBlockers with value "None" is included' $issueContent.Contains('**Major Blockers:** None')
+
+        Write-TestGroup 'JSON path: reproduction guide is present'
+        Assert-True 'Contains How to Reproduce' $issueContent.Contains('## How to Reproduce')
+        Assert-True 'Contains Common Setup' $issueContent.Contains('### Common Setup')
+        Assert-True 'Contains Per-Issue Reproduction Steps' $issueContent.Contains('### Per-Issue Reproduction Steps')
+
+        Write-TestGroup 'JSON path: source reference is present'
+        Assert-True 'Contains Source link' $issueContent.Contains('**Source:**')
+        Assert-True 'Contains Mode' $issueContent.Contains('**Mode:** dev')
+
+        Write-TestGroup 'JSON path: background context is extracted'
+        Assert-True 'Contains Scenario Background' $issueContent.Contains('## Scenario Background')
+        Assert-True 'Contains Task subsection' $issueContent.Contains('### Task')
+
+        Write-TestGroup 'JSON path: .issues.json file is written'
+        $jsonFiles = Get-ChildItem -Path $tempDir -Filter '*.issues.json'
+        Assert-Equal 'Exactly 1 issues.json' 1 $jsonFiles.Count
+        Assert-True 'JSON file is non-empty' ($jsonFiles[0].Length -gt 10)
+
+        Write-TestGroup 'JSON path: .issues.json contains valid JSON'
+        $jsonText = Get-Content -Path $jsonFiles[0].FullName -Raw -Encoding UTF8
+        $parsed = $jsonText | ConvertFrom-Json
+        Assert-Equal 'meta.scenario' 'json-test' $parsed.meta.scenario
+        Assert-Equal 'meta.mode' 'dev' $parsed.meta.mode
+        Assert-True 'meta.source references full.md' $parsed.meta.source.Contains('.full.md')
+        Assert-Equal 'issues count' 1 $parsed.issues.Count
+        Assert-Equal 'issue title' 'JSON-parsed issue' $parsed.issues[0].title
+        Assert-Equal 'issue severity' 'Critical' $parsed.issues[0].severity
+        Assert-Equal 'issue category' 'Product' $parsed.issues[0].category
+        Assert-Equal 'sections count' 6 $parsed.issues[0].sections.Count
+        Assert-Equal 'first section label' 'Reproduction' $parsed.issues[0].sections[0].label
+        Assert-NotNullOrEmpty 'background.task is present' $parsed.background.task
+        Assert-True 'review.decision is null (no human review yet)' ($null -eq $parsed.issues[0].review.decision)
+    }
+    finally {
+        Remove-Item -Path $tempDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Test group 26: $generalPrompt — JSON format section
+# ═══════════════════════════════════════════════════════════════════════════════
+
+Write-Host ''
+Write-Host '━━━ $generalPrompt / JSON Format Section ━━━' -ForegroundColor Yellow
+
+& {
+    $browser4cliMode = 'dev'
+    . "$PSScriptRoot/common.ps1"
+
+    Write-TestGroup 'Prompt contains JSON format alternative section'
+    Assert-True 'Contains "Alternative JSON format"' `
+        $generalPrompt.Contains('Alternative JSON format')
+
+    Write-TestGroup 'Prompt declares JSON as preferred'
+    Assert-True 'Contains "preferred"' $generalPrompt.Contains('preferred')
+
+    Write-TestGroup 'Prompt states JSON ensures reliable machine parsing'
+    Assert-True 'Contains "machine parsing"' $generalPrompt.Contains('machine parsing')
+
+    Write-TestGroup 'Prompt states markdown is backward-compatible fallback'
+    Assert-True 'Contains "backward-compatible"' $generalPrompt.Contains('backward-compatible')
+
+    Write-TestGroup 'Prompt contains JSON schema with issues array'
+    Assert-True 'Contains "issues" array' $generalPrompt.Contains('"issues"')
+
+    Write-TestGroup 'Prompt contains JSON schema with assessment object'
+    Assert-True 'Contains "assessment" object' $generalPrompt.Contains('"assessment"')
+
+    Write-TestGroup 'Prompt includes all issue fields in JSON schema'
+    $issueFields = @('title', 'severity', 'category', 'reproduction',
+                     'expected', 'actual', 'rootCause', 'codePointer', 'suggestion')
+    foreach ($field in $issueFields) {
+        Assert-True "Contains field: $field" $generalPrompt.Contains("""$field""")
+    }
+
+    Write-TestGroup 'Prompt includes all assessment fields in JSON schema'
+    $assessmentFields = @('completionStatus', 'successRate', 'issuesFound',
+                          'majorBlockers', 'mostConfusingAspects',
+                          'mostValuableImprovements', 'usabilityRating')
+    foreach ($field in $assessmentFields) {
+        Assert-True "Contains assessment field: $field" $generalPrompt.Contains("""$field""")
+    }
+
+    Write-TestGroup 'Prompt severity values in JSON schema'
+    Assert-True 'Contains Critical' $generalPrompt.Contains('Critical')
+    Assert-True 'Contains High' $generalPrompt.Contains('High')
+    Assert-True 'Contains Medium' $generalPrompt.Contains('Medium')
+    Assert-True 'Contains Low' $generalPrompt.Contains('Low')
+
+    Write-TestGroup 'Prompt category values in JSON schema'
+    $categories = @('Product', 'Documentation', 'UX', 'Reliability', 'Discoverability')
+    foreach ($cat in $categories) {
+        Assert-True "Contains category: $cat" $generalPrompt.Contains($cat)
+    }
+
+    Write-TestGroup 'JSON rules: empty fields should be empty string'
+    Assert-True 'Contains empty string rule' $generalPrompt.Contains('empty string ""')
+
+    Write-TestGroup 'JSON rules: severity must be one of enumerated values'
+    Assert-True 'Contains severity rule' ($generalPrompt -match 'severity.*must be one of')
+
+    Write-TestGroup 'JSON rules: category must be one of enumerated values'
+    Assert-True 'Contains category rule' ($generalPrompt -match 'category.*must be one of')
+
+    Write-TestGroup 'JSON rules: Place block after Sections A and B'
+    Assert-True 'Contains placement rule' $generalPrompt.Contains('Place the JSON block after Sections A and B')
+
+    Write-TestGroup 'JSON rules: issuesFound is integer type'
+    Assert-True 'issuesFound is integer' ($generalPrompt -match 'issuesFound.*integer')
+
+    Write-TestGroup 'JSON rules: usabilityRating is integer 1-10'
+    Assert-True 'usabilityRating is integer 1-10' ($generalPrompt -match 'usabilityRating.*integer.*1.*10')
+
+    Write-TestGroup 'Prompt still contains markdown format (backward compatibility)'
+    Assert-True 'Contains "### Issue N:" markdown format' $generalPrompt.Contains('### Issue N:')
+    Assert-True 'Contains "**Severity:**" markdown format' $generalPrompt.Contains('**Severity:**')
+
+    Write-TestGroup 'Prompt still contains D. Overall Assessment section'
+    Assert-True 'Contains D. Overall Assessment' $generalPrompt.Contains('### D. Overall Assessment')
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════

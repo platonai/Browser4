@@ -19,22 +19,25 @@ const val PLACEHOLDER_PAGE_CONTENT = "page_content"
 @ContextConfiguration(initializers = [PulsarTestContextInitializer::class])
 @Import(MockEcServerConfiguration::class)
 class PromptsTest : MockEcServerTestBase() {
-    private val request = CommandRequest(
-        url = MOCK_PRODUCT_DETAIL_URL,
-        onBrowserLaunchedActions = listOf(
-            "clear browser cookies",
-            "goto the website homepage",
-        ),
-        onPageReadyActions = listOf(
-            "move cursor to the element with id 'title' and click it",
-            "scroll to middle",
-            "scroll to top",
-            "get the text of the element with id 'title'"
-        ),
-        pageSummaryPrompt = "Tell me something about the page",
-        dataExtractionRules = "Extract the title and price of the product",
-        uriExtractionRules = "Links containing /dp/"
-    )
+    // Lazy to defer URL resolution until after Spring starts the mock server
+    private val request by lazy {
+        CommandRequest(
+            url = MOCK_PRODUCT_DETAIL_URL,
+            onBrowserLaunchedActions = listOf(
+                "clear browser cookies",
+                "goto the website homepage",
+            ),
+            onPageReadyActions = listOf(
+                "move cursor to the element with id 'title' and click it",
+                "scroll to middle",
+                "scroll to top",
+                "get the text of the element with id 'title'"
+            ),
+            pageSummaryPrompt = "Tell me something about the page",
+            dataExtractionRules = "Extract the title and price of the product",
+            uriExtractionRules = "Links containing /dp/"
+        )
+    }
     private val textContent = "This is a sample product page with title 'Sample Product' and price '$19.99'."
 
     @Test

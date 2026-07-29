@@ -91,9 +91,10 @@ class HTMLSnapshotToolExecutor(
             method = "export",
             arguments = listOf(
                 ToolSpec.Arg("sessionId", "String", null),
+                ToolSpec.Arg("clean", "Boolean", "false"),
             ),
             returnType = "String",
-            description = "Export the full, pretty-printed HTML of the current page."
+            description = "Export the full, pretty-printed HTML of the current page. Set clean=true to strip <script>, <style>, and non-standard attributes (keeps the vi attribute)."
         )
 
         toolSpec["summary"] = ToolSpec(
@@ -128,7 +129,7 @@ class HTMLSnapshotToolExecutor(
         return when (functionName) {
             "capture" -> capture(args)
             "scrape" -> scrape(args)
-            "scrape_all" -> scrapeAll(args)
+            "scrape_all", "scrapeAll" -> scrapeAll(args)
             "query" -> query(args)
             "export" -> export(args)
             "summary" -> summary(args)
@@ -316,6 +317,7 @@ class HTMLSnapshotToolExecutor(
 
     private suspend fun export(args: Map<String, Any?>): String {
         val sessionId = requireSessionId(args)
+        val clean = paramBool(args, "clean", "export", required = false, default = false) ?: false
         val managed = sessionManager.getSession(sessionId)
             ?: throw IllegalArgumentException("Session not found: $sessionId")
 
@@ -324,8 +326,76 @@ class HTMLSnapshotToolExecutor(
             val url = pulsarSession.normalize(driver.currentUrl())
             val page = pulsarSession.getOrNull(url.urlString) ?: pulsarSession.capture(managed.driver)
             val document = pulsarSession.parse(page)
+
+            if (clean) {
+                cleanDocument(document)
+            }
+
             document.outerHtml
         }
+    }
+
+    /**
+     * Strip scripts, styles, and non-standard attributes from HTML.
+     *
+     * Removes:
+     * - `<script>` and `<style>` elements (including their content)
+     * - `<noscript>` elements
+     * - HTML comments (within elements)
+     * - Non-standard attributes on all elements (keeps `vi`, standard HTML5 attrs,
+     *   `aria-*`, `role`, `data-*`, and microdata `item*` attrs)
+     */
+    private fun cleanDocument(document: ai.platon.pulsar.dom.FeaturedDocument) {
+        document.select("script, style, noscript").remove()
+
+        for (el in document.select("*")) {
+            val comments = el.childNodes().filterIsInstance<org.jsoup.nodes.Comment>()
+            for (c in comments) {
+                c.remove()
+            }
+
+            val attrsToRemove = el.attributes().asList()
+                .map { it.key }
+                .filter { key -> !STANDARD_HTML_ATTRIBUTES.contains(key) && !isStandardAttributePrefix(key) }
+                .toList()
+            for (key in attrsToRemove) {
+                el.removeAttr(key)
+            }
+        }
+    }
+
+    private fun isStandardAttributePrefix(name: String): Boolean {
+        return name.startsWith("aria-") ||
+            name.startsWith("data-") ||
+            (name.startsWith("item") && (name == "itemscope" || name == "itemtype" ||
+                name == "itemprop" || name == "itemid" || name == "itemref"))
+    }
+
+    companion object {
+        private val STANDARD_HTML_ATTRIBUTES: Set<String> = setOf(
+            "accesskey", "autocapitalize", "autofocus", "class", "contenteditable",
+            "dir", "draggable", "enterkeyhint", "hidden", "id", "inert", "inputmode",
+            "is", "lang", "nonce", "popover", "slot", "spellcheck", "style",
+            "tabindex", "title", "translate", "writingsuggestions",
+            "accept", "action", "align", "alt", "async", "autocomplete",
+            "autoplay", "charset", "checked", "cite", "cols", "colspan",
+            "content", "controls", "coords", "crossorigin", "datetime", "decoding",
+            "default", "defer", "dirname", "disabled", "download",
+            "enctype", "for", "form", "formaction", "formenctype", "formmethod",
+            "formnovalidate", "formtarget", "headers", "height", "high", "href",
+            "hreflang", "http-equiv", "integrity", "kind", "label", "list",
+            "loading", "loop", "low", "max", "maxlength", "media", "method",
+            "min", "minlength", "multiple", "muted", "name", "nomodule",
+            "novalidate", "open", "optimum", "pattern", "ping", "placeholder",
+            "playsinline", "popovertarget", "popovertargetaction", "poster",
+            "preload", "readonly", "referrerpolicy", "rel", "required",
+            "reversed", "rows", "rowspan", "sandbox", "scope", "selected",
+            "shape", "size", "sizes", "span", "src", "srcdoc", "srclang",
+            "srcset", "start", "step", "target", "type", "usemap", "value",
+            "width", "wrap",
+            "role",
+            "vi",
+        )
     }
 
     private suspend fun summary(args: Map<String, Any?>): String {

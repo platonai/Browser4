@@ -32,7 +32,7 @@ object ViewportSpec {
             // Try as a single integer first (handles negative numbers like "-1")
             val singleIdx = trimmed.toIntOrNull()
             if (singleIdx != null) {
-                indices.add(singleIdx.coerceAtLeast(0))
+                indices.add(singleIdx)  // Negative allowed: scroll-relative offset (e.g. -1 = above current viewport)
             } else if (trimmed.contains("-")) {
                 val parts = trimmed.split("-", limit = 2)
                 val start = parts[0].trim().toIntOrNull() ?: continue

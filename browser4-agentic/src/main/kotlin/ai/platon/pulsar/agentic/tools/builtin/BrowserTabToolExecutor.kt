@@ -1,5 +1,6 @@
 package ai.platon.pulsar.agentic.tools.builtin
 
+import ai.platon.browser4.chrome.PulsarWebDriver
 import ai.platon.browser4.chrome.dom.model.AriaSnapshotOptions
 import ai.platon.pulsar.agentic.model.ToolSpec
 import ai.platon.pulsar.agentic.tools.specs.ToolSpecGenerator
@@ -623,9 +624,19 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
 
             "click" -> {
                 val urlBefore = driver.currentUrl()
+                // Auto-dismiss-dialogs: accept any native dialog that appears
+                // during the click (alert, confirm, prompt).  Useful for
+                // automation/batch workloads where manual dialog handling is
+                // not feasible.  The driver property is reset after the click
+                // so the mode does not leak to subsequent operations.
+                val wasAutoDismiss = args["autoDismissDialogs"] == true && driver is PulsarWebDriver
+                if (wasAutoDismiss) {
+                    (driver as PulsarWebDriver).autoDismissDialogs = true
+                }
+                try {
                 when {
                     args.containsKey("selector") && args.containsKey("count") && !args.containsKey("modifier") -> {
-                        validateArgs(args, allowed("selector", "count"), setOf("selector", "count"), functionName)
+                        validateArgs(args, allowed("selector", "count", "autoDismissDialogs"), setOf("selector", "count"), functionName)
                         driver.click(
                             selector = paramString(args, "selector", functionName)!!,
                             count = paramInt(args, "count", functionName)!!
@@ -633,7 +644,7 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
                     }
 
                     args.containsKey("selector") && args.containsKey("modifier") && !args.containsKey("count") -> {
-                        validateArgs(args, allowed("selector", "modifier"), setOf("selector", "modifier"), functionName)
+                        validateArgs(args, allowed("selector", "modifier", "autoDismissDialogs"), setOf("selector", "modifier"), functionName)
                         driver.click(
                             selector = paramString(args, "selector", functionName)!!,
                             modifier = paramString(args, "modifier", functionName)!!
@@ -641,20 +652,30 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
                     }
 
                     args.containsKey("selector") && !args.containsKey("count") && !args.containsKey("modifier") -> {
-                        validateArgs(args, allowed("selector"), setOf("selector"), functionName)
+                        validateArgs(args, allowed("selector", "autoDismissDialogs"), setOf("selector"), functionName)
                         driver.click(selector = paramString(args, "selector", functionName)!!)
                     }
 
                     else -> throw IllegalArgumentException("click requires 'selector' plus optionally one of 'count' or 'modifier'")
+                }
+                } finally {
+                    if (wasAutoDismiss) {
+                        (driver as PulsarWebDriver).autoDismissDialogs = false
+                    }
                 }
                 waitForPotentialNavigation(driver, urlBefore)
             }
 
             "dblclick" -> {
                 val urlBefore = driver.currentUrl()
+                val wasAutoDismiss = args["autoDismissDialogs"] == true && driver is PulsarWebDriver
+                if (wasAutoDismiss) {
+                    (driver as PulsarWebDriver).autoDismissDialogs = true
+                }
+                try {
                 validateArgs(
                     args,
-                    if (args.containsKey("modifier")) allowed("selector", "modifier") else allowed("selector"),
+                    if (args.containsKey("modifier")) allowed("selector", "modifier", "autoDismissDialogs") else allowed("selector", "autoDismissDialogs"),
                     setOf("selector"),
                     functionName
                 )
@@ -665,6 +686,11 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
                     )
                 } else {
                     driver.dblclick(selector = paramString(args, "selector", functionName)!!)
+                }
+                } finally {
+                    if (wasAutoDismiss) {
+                        (driver as PulsarWebDriver).autoDismissDialogs = false
+                    }
                 }
                 waitForPotentialNavigation(driver, urlBefore)
             }

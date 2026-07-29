@@ -293,6 +293,24 @@ pub async fn call_tool(
         .map(|r| r.text)
 }
 
+/// Like [call_tool] but allows overriding the default HTTP timeout.
+/// Pass [None] to use the tool-specific default timeout.
+pub async fn call_tool_with_timeout_override(
+    client: &Client,
+    base_url: &str,
+    tool: &str,
+    args: Value,
+    timeout_override_secs: Option<u64>,
+) -> Result<String, String> {
+    let timeout = match timeout_override_secs {
+        Some(secs) => std::time::Duration::from_secs(secs),
+        None => effective_timeout(tool, &args),
+    };
+    call_tool_with_timeout(client, base_url, tool, args, Some(timeout))
+        .await
+        .map(|r| r.text)
+}
+
 /// Like [call_tool] but also returns any server-side pagination metadata present
 /// in the response.
 pub async fn call_tool_with_result(
@@ -391,6 +409,14 @@ async fn call_tool_with_timeout(
 
     let text = extract_mcp_text_payload(&data)
         .ok_or_else(|| "MCP response did not contain a readable payload.".to_string())?;
+
+    // Defensive check: some backend errors may arrive as text content without
+    // `isError: true` (e.g. error messages from legacy tool executors).  Treat
+    // a leading "ERROR:" prefix as a hard error so the CLI exits non-zero and
+    // scripts can detect failure reliably.
+    if text.starts_with("ERROR:") {
+        return Err(text.trim_start_matches("ERROR: ").to_string());
+    }
 
     let pagination = data
         .get("_pagination")
@@ -683,6 +709,15 @@ pub async fn clear_crawls(
     send_rest_request(client.post(url)).await
 }
 
+/// Clear ALL crawl tasks (including active ones) via `CrawlController.clearAllCrawls()`.
+pub async fn clear_all_crawls(
+    client: &Client,
+    base_url: &str,
+) -> Result<String, String> {
+    let url = build_endpoint_url(base_url, "/api/crawl/clear-all");
+    send_rest_request(client.post(url)).await
+}
+
 /// Get the status of a crawl task via `CrawlController.getStatus(id)`.
 pub async fn get_crawl_status(
     client: &Client,
@@ -936,7 +971,7 @@ mod tests {
         });
         assert_eq!(
             extract_mcp_text_payload(&payload).as_deref(),
-            Some("{\"results\":[],\"sessionId\":\"s-1\"}")
+            Some("{\"sessionId\":\"s-1\",\"results\":[]}")
         );
     }
 

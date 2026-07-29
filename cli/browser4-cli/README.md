@@ -6,14 +6,14 @@ See [`cli/README.md`](../README.md) for the user-facing documentation.
 ## Running from source
 
 ```bash
-# From the repo root:
-cargo run --manifest-path cli/browser4-cli/Cargo.toml -- <command>
+# From the repo root (omit --quiet to see build status):
+cargo run --quiet --manifest-path cli/browser4-cli/Cargo.toml -- <command>
 
 # From this directory:
-cd cli/browser4-cli && cargo run -- <command>
+cd cli/browser4-cli && cargo run --quiet -- <command>
 ```
 
-The backend server starts automatically in dev mode. Build the CLI with `cargo build` (debug) or `cargo build --release` (optimized).
+The backend server starts automatically in dev mode. Build the CLI with `cargo build` (debug) or `cargo build --release` (optimized). Add `--quiet` to `cargo run` to suppress "Finished" / "Running" build-status lines.
 
 ## Commands
 
@@ -151,7 +151,7 @@ The backend server starts automatically in dev mode. Build the CLI with `cargo b
 | `htmlsnapshot capture` | Capture a static HTML snapshot and return metadata |
 | `htmlsnapshot get <field> [selector] [name]` | Extract elements from the stored HTML snapshot (text, html, attr) |
 | `htmlsnapshot query [url]` | Run X-SQL against the stored HTML snapshot |
-| `htmlsnapshot export` | Export snapshot HTML to a local file |
+| `htmlsnapshot export` | Export snapshot HTML to a local file (--clean strips scripts/styles/non-standard attrs) |
 | `htmlsnapshot summary` | Generate a compressed Web Page Summary Index (WPSI) from the stored HTML snapshot |
 | `htmlsnapshot grep [OPTIONS] <pattern>` | Search snapshot HTML with regex patterns and grep-style output |
 | `generate-locator <ref>` | Generate a unique CSS selector path for an element |

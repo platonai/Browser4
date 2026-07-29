@@ -10,10 +10,12 @@ import ai.platon.pulsar.common.serialize.json.Pson
 import ai.platon.pulsar.common.serialize.json.prettyPulsarObjectMapper
 import ai.platon.pulsar.common.sleepSeconds
 import kotlinx.coroutines.runBlocking
+import org.junit.jupiter.api.Tag
 import java.nio.file.Files
 import kotlin.test.Test
 import kotlin.test.assertTrue
 
+@Tag("Integration")
 class ChromeImplLauncherTest {
     private val USER_DATA_DIR_REGEX = ".+pulsar-.+/context/cx.+".toRegex()
 

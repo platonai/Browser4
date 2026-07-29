@@ -61,16 +61,16 @@ browser4-cli goto "https://www.amazon.com/s?k=mechanical+keyboard"
 browser4-cli htmlsnapshot
 
 # Step 2: Run the X-SQL query with its own URL + load options.
-# `load_and_select(@url, ...)` makes its own HTTP request (server-side);
+# `DOM_LOAD_AND_SELECT(@url, ...)` makes its own HTTP request (server-side);
 # -i 1h caches that request for 1 hour — critical for avoiding quota exhaustion.
 browser4-cli htmlsnapshot query "https://www.amazon.com/s?k=mechanical+keyboard -i 1h" --sql "
   SELECT
-    dom_first_text(dom, 'h2 .a-link-normal') AS title,
-    dom_first_text(dom, '.a-price .a-offscreen') AS price,
-    dom_first_text(dom, '.a-icon-alt') AS rating,
-    dom_first_attr(dom, 'img.s-image:expr(width >= 200 && height >= 200)', 'src') AS image_url
-  FROM load_and_select(@url, '.s-result-item[data-component-type=s-search-result]')
-  WHERE dom_first_text(dom, 'h2 .a-link-normal') IS NOT NULL
+    DOM_FIRST_TEXT(dom, 'h2 .a-link-normal') AS title,
+    DOM_FIRST_TEXT(dom, '.a-price .a-offscreen') AS price,
+    DOM_FIRST_TEXT(dom, '.a-icon-alt') AS rating,
+    DOM_FIRST_ATTR(dom, 'img.s-image:expr(width >= 200 && height >= 200)', 'src') AS image_url
+  FROM DOM_LOAD_AND_SELECT(@url, '.s-result-item[data-component-type=s-search-result]')
+  WHERE DOM_FIRST_TEXT(dom, 'h2 .a-link-normal') IS NOT NULL
 "
 ```
 
@@ -103,12 +103,12 @@ browser4-cli goto "https://news.ycombinator.com"
 
 browser4-cli htmlsnapshot query --sql "
   SELECT
-    dom_first_text(dom, '.titleline > a') AS headline,
-    dom_base_uri(dom) AS article_url,
-    dom_first_text(dom, '.score') AS points,
-    dom_first_text(dom, '.hnuser') AS author
-  FROM load_and_select(@url, 'tr.athing')
-  WHERE dom_first_text(dom, '.titleline > a') IS NOT NULL
+    DOM_FIRST_TEXT(dom, '.titleline > a') AS headline,
+    DOM_BASE_URI(dom) AS article_url,
+    DOM_FIRST_TEXT(dom, '.score') AS points,
+    DOM_FIRST_TEXT(dom, '.hnuser') AS author
+  FROM DOM_LOAD_AND_SELECT(@url, 'tr.athing')
+  WHERE DOM_FIRST_TEXT(dom, '.titleline > a') IS NOT NULL
 "
 ```
 
@@ -146,12 +146,12 @@ browser4-cli goto "https://www.linkedin.com/jobs/search?keywords=senior%20fronte
 
 browser4-cli htmlsnapshot query --sql "
   SELECT
-    dom_first_text(dom, '.job-card-list__title') AS title,
-    dom_first_text(dom, '.job-card-container__company-name') AS company,
-    dom_first_text(dom, '.job-card-container__metadata-item') AS location,
-    dom_first_text(dom, '.job-search-card__salary-info') AS salary
-  FROM load_and_select(@url, '.job-card-container')
-  WHERE dom_first_text(dom, '.job-card-list__title') IS NOT NULL
+    DOM_FIRST_TEXT(dom, '.job-card-list__title') AS title,
+    DOM_FIRST_TEXT(dom, '.job-card-container__company-name') AS company,
+    DOM_FIRST_TEXT(dom, '.job-card-container__metadata-item') AS location,
+    DOM_FIRST_TEXT(dom, '.job-search-card__salary-info') AS salary
+  FROM DOM_LOAD_AND_SELECT(@url, '.job-card-container')
+  WHERE DOM_FIRST_TEXT(dom, '.job-card-list__title') IS NOT NULL
 "
 ```
 
@@ -204,12 +204,12 @@ browser4-cli goto "https://pubmed.ncbi.nlm.nih.gov/?term=machine+learning+drug+d
 
 browser4-cli htmlsnapshot query --sql "
   SELECT
-    dom_first_text(dom, '.docsum-title') AS title,
-    dom_first_text(dom, '.full-author-list') AS authors,
-    dom_first_text(dom, '.docsum-journal-citation') AS citation,
-    dom_first_attr(dom, '.docsum-title', 'href') AS link
-  FROM load_and_select(@url, '.docsum-content')
-  WHERE dom_first_text(dom, '.docsum-title') IS NOT NULL
+    DOM_FIRST_TEXT(dom, '.docsum-title') AS title,
+    DOM_FIRST_TEXT(dom, '.full-author-list') AS authors,
+    DOM_FIRST_TEXT(dom, '.docsum-journal-citation') AS citation,
+    DOM_FIRST_ATTR(dom, '.docsum-title', 'href') AS link
+  FROM DOM_LOAD_AND_SELECT(@url, '.docsum-content')
+  WHERE DOM_FIRST_TEXT(dom, '.docsum-title') IS NOT NULL
 "
 ```
 
@@ -254,12 +254,12 @@ browser4-cli goto "https://www.zillow.com/homes/san-francisco_rb/"
 
 browser4-cli htmlsnapshot query --sql "
   SELECT
-    dom_first_text(dom, '[data-test=property-card-address]') AS address,
-    dom_first_text(dom, '[data-test=property-card-price]') AS price,
-    dom_first_text(dom, '.beds-container') AS beds,
-    dom_first_text(dom, '.baths-container') AS baths,
-    dom_first_text(dom, '.sqft-container') AS sqft
-  FROM load_and_select(@url, '[data-test=property-card]')
+    DOM_FIRST_TEXT(dom, '[data-test=property-card-address]') AS address,
+    DOM_FIRST_TEXT(dom, '[data-test=property-card-price]') AS price,
+    DOM_FIRST_TEXT(dom, '.beds-container') AS beds,
+    DOM_FIRST_TEXT(dom, '.baths-container') AS baths,
+    DOM_FIRST_TEXT(dom, '.sqft-container') AS sqft
+  FROM DOM_LOAD_AND_SELECT(@url, '[data-test=property-card]')
 "
 ```
 
@@ -279,16 +279,16 @@ Use a `WHERE` clause to filter results based on extracted field values — more 
 ```bash
 browser4-cli htmlsnapshot query --sql "
   SELECT
-    dom_first_text(dom, '[data-test=property-card-address]') AS address,
-    dom_first_text(dom, '[data-test=property-card-price]') AS price,
-    dom_first_text(dom, '.beds-container') AS beds
-  FROM load_and_select(@url, '[data-test=property-card]')
-  WHERE dom_first_text(dom, '[data-test=property-card-address]') IS NOT NULL
-    AND CAST(dom_first_text(dom, '.beds-container') AS INT) >= 3
+    DOM_FIRST_TEXT(dom, '[data-test=property-card-address]') AS address,
+    DOM_FIRST_TEXT(dom, '[data-test=property-card-price]') AS price,
+    DOM_FIRST_TEXT(dom, '.beds-container') AS beds
+  FROM DOM_LOAD_AND_SELECT(@url, '[data-test=property-card]')
+  WHERE DOM_FIRST_TEXT(dom, '[data-test=property-card-address]') IS NOT NULL
+    AND CAST(DOM_FIRST_TEXT(dom, '.beds-container') AS INT) >= 3
 "
 ```
 
-> **Note:** PowerCSS `:expr()` selectors (e.g., `div:expr(width>400)`) query by visual features like size and position — they cannot call X-SQL DOM functions like `dom_first_text()`. Use a `WHERE` clause to filter by extracted text values, as shown above.
+> **Note:** PowerCSS `:expr()` selectors (e.g., `div:expr(width>400)`) query by visual features like size and position — they cannot call X-SQL DOM functions like `DOM_FIRST_TEXT()`. Use a `WHERE` clause to filter by extracted text values, as shown above.
 
 ---
 

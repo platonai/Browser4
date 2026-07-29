@@ -36,7 +36,10 @@ data class AgentTaskStatus(
      * */
     var processState: String = "created",
 
-    var message: String? = null, // additional message, e.g. the action flow
+    var message: String? = null, // human-readable status description
+
+    /** Internal event trace for debugging — concatenated lifecycle event names. */
+    var eventTrace: String? = null,
 
     var request: PageVisitRequest? = null,
     var instructResults: MutableList<PGInstructResult> = mutableListOf()
@@ -136,7 +139,22 @@ fun AgentTaskStatus.failed(statusCode: Int): AgentTaskStatus {
 
 fun AgentTaskStatus.emitEvent(event: String) {
     this.event = event
-    message = if (message != null) "$message,$event" else event
+    // Keep the internal event trace for debugging separate from the user-facing message.
+    eventTrace = if (eventTrace != null) "$eventTrace,$event" else event
+    // Generate a concise human-readable status description instead of the raw event chain.
+    message = when {
+        "created" in event -> "Task created, waiting to start"
+        "onWillRun" in event -> "Agent starting up"
+        "onWillAct" in event -> "Agent planning next action"
+        "onDidAct" in event -> "Agent completed an action"
+        "onWillGenerate" in event -> "Agent generating response"
+        "onDidGenerate" in event -> "Agent response generated"
+        "onError" in event -> "Agent encountered an error"
+        "onDidRun" in event -> "Agent run completed, finalizing"
+        "onWillFail" in event -> "Agent task failing"
+        "onDidFail" in event -> "Agent task failed"
+        else -> "Agent is working"
+    }
 }
 
 fun AgentTaskStatus.done() {

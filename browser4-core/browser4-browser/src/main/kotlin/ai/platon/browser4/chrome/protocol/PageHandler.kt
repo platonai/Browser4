@@ -99,10 +99,13 @@ class PageHandler constructor(
         val serializableTree = buState.domState.serializableTree
 
         val sortedIndices = viewportIndices.distinct().sorted()
+        val scrollY = scrollState.y
+        // Viewport indices are scroll-relative: index 0 = current visible area,
+        // index 1 = one viewport below current, index -1 = one viewport above.
         // Merge contiguous viewport ranges into Y-axis ranges and build a combined NanoTree
         val nanoTrees = mergeViewportRanges(sortedIndices).map { (startIdx, endIdx) ->
-            val startY = (startIdx * viewportHeight).coerceAtLeast(0.0)
-            val endY = (endIdx + 1) * viewportHeight
+            val startY = (scrollY + startIdx * viewportHeight).coerceAtLeast(0.0)
+            val endY = scrollY + (endIdx + 1) * viewportHeight
             serializableTree.toNanoTreeInRange(startY, endY)
         }
 
@@ -148,9 +151,11 @@ class PageHandler constructor(
             val serializableTree = buState.domState.serializableTree
 
             val sortedIndices = viewportIndices.distinct().sorted()
+            val scrollY = scrollState.y
+            // Viewport indices are scroll-relative: index 0 = current visible area.
             val nanoTrees = mergeViewportRanges(sortedIndices).map { (startIdx, endIdx) ->
-                val startY = (startIdx * viewportHeight).coerceAtLeast(0.0)
-                val endY = (endIdx + 1) * viewportHeight
+                val startY = (scrollY + startIdx * viewportHeight).coerceAtLeast(0.0)
+                val endY = scrollY + (endIdx + 1) * viewportHeight
                 serializableTree.toNanoTreeInRange(startY, endY)
             }
             nanoTrees.joinToString("\n---\n") { NanoAriaSnapshotRenderer.render(it, resolvedOptions) }
@@ -233,7 +238,7 @@ class PageHandler constructor(
             appendLine("# This page has ${s.viewportsTotal} viewports (page chunks split by viewport height). $viewportLabel.")
             appendLine("# To read the page viewport by viewport (like a human scrolling):")
             if (currentViewport > 0) {
-                appendLine("#   snapshot -v 0          # view the top of the page")
+                appendLine("#   snapshot -v 0          # current visible area")
             }
             if (currentViewport < s.viewportsTotal - 1) {
                 val next = currentViewport + 1

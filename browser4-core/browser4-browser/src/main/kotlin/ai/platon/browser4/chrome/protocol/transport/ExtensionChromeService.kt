@@ -257,8 +257,19 @@ class ExtensionChromeService(
             "chrome.debugger.onDetach" -> {
                 val sourceJson = params?.get(0) ?: return
                 val tabId = sourceJson.get("tabId")?.asText() ?: return
+                logger.warn(
+                    "Debugger detached from tab {} | sessionId={} | cancelling {} pending requests",
+                    tabId, sessionId, pendingRequests.size
+                )
                 devToolsServices[tabId]?.close()
                 devToolsServices.remove(tabId)
+                // Cancel all pending CDP requests so they fail fast rather than
+                // waiting for the 30s timeout.  Chrome detaches the debugger when
+                // navigating to chrome:// and other privileged pages, which would
+                // otherwise cause every in-flight CDP command to block until the
+                // per-command timeout expires (compounded by RobustRPC retries).
+                pendingRequests.values.forEach { it.cancel(true) }
+                pendingRequests.clear()
             }
 
             "extension.initialized" -> {

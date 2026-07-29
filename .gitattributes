@@ -7,10 +7,13 @@
 *.sh      text eol=lf
 *.bash    text eol=lf
 *.zsh     text eol=lf
+b4w       text eol=lf
 *.cmd     text eol=crlf
 *.bat     text eol=crlf
-# PowerShell works cross-platform; CRLF preferred on Windows
-*.ps1     text eol=crlf
+# PowerShell scripts must use LF for shebang compatibility on Linux/macOS.
+# b4w.ps1 starts with `#!/usr/bin/env pwsh` — CRLF causes the kernel to
+# look for `pwsh\r` instead of `pwsh`, producing "No such file or directory".
+*.ps1     text eol=lf
 
 # Source code, configs, and docs: prefer LF universally
 *.java    text eol=lf

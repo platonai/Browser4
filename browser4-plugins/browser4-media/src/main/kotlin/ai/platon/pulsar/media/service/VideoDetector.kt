@@ -120,24 +120,30 @@ open class VideoDetector {
          * - `<link rel="preload">` for media assets
          * - `window.Hls` / `window.dashjs` global player objects
          */
+        // Uses a named function + invocation pattern (not IIFE) to avoid breakage
+        // by the JS confuser pipeline (JsUtils.toCDPCompatibleExpression + confuser.confuse())
+        // which incorrectly wraps parenthesized function expressions.
         private val DETECTION_SCRIPT = """
-(function() {
-    var results = [];
-    var seen = {};
+var __b4_video_results = [];
+var __b4_video_seen = {};
 
-    function add(item) {
-        var key = item.resolvedUrl || item.srcUrl || '';
-        if (key && seen[key]) return;
-        if (key) seen[key] = true;
-        results.push(item);
-    }
+function __b4_video_add(item) {
+    var key = item.resolvedUrl || item.srcUrl || '';
+    if (key && __b4_video_seen[key]) return;
+    if (key) __b4_video_seen[key] = true;
+    __b4_video_results.push(item);
+}
 
+var videoExt = /\.(mp4|webm|mkv|mov|avi|flv|wmv|ts|m3u8|mpd)([?#].*)?$/i;
+var playerDomains = /(youtube\.com|youtube-nocookie\.com|vimeo\.com|dailymotion\.com|bilibili\.com|youku\.com|twitch\.tv)/i;
+
+function __b4_scan_videos(doc) {
     // 1. <video> elements
-    var videos = document.querySelectorAll('video');
+    var videos = doc.querySelectorAll('video');
     for (var i = 0; i < videos.length; i++) {
         var el = videos[i];
         var src = el.currentSrc || el.src || '';
-        add({
+        __b4_video_add({
             tagName: 'video',
             srcUrl: el.getAttribute('src') || src || null,
             resolvedUrl: src || el.getAttribute('src') || null,
@@ -146,8 +152,8 @@ open class VideoDetector {
             height: el.videoHeight || el.height || null,
             hasControls: el.controls || false,
             posterUrl: el.poster || null,
-            isHls: /\.m3u8([?#].*)?$$/.test(src),
-            isDash: /\.mpd([?#].*)?$$/.test(src),
+            isHls: /\.m3u8([?#].*)?$/.test(src),
+            isDash: /\.mpd([?#].*)?$/.test(src),
             isIframe: false
         });
 
@@ -156,7 +162,7 @@ open class VideoDetector {
         for (var j = 0; j < sources.length; j++) {
             var s = sources[j];
             var sSrc = s.src || s.getAttribute('src') || '';
-            add({
+            __b4_video_add({
                 tagName: 'source',
                 srcUrl: s.getAttribute('src') || sSrc || null,
                 resolvedUrl: sSrc || null,
@@ -165,21 +171,20 @@ open class VideoDetector {
                 height: el.videoHeight || el.height || null,
                 hasControls: el.controls || false,
                 posterUrl: el.poster || null,
-                isHls: /\.m3u8([?#].*)?$$/.test(sSrc),
-                isDash: /\.mpd([?#].*)?$$/.test(sSrc),
+                isHls: /\.m3u8([?#].*)?$/.test(sSrc),
+                isDash: /\.mpd([?#].*)?$/.test(sSrc),
                 isIframe: false
             });
         }
     }
 
     // 2. <a> links pointing to video files
-    var anchors = document.querySelectorAll('a[href]');
-    var videoExt = /\.(mp4|webm|mkv|mov|avi|flv|wmv|ts|m3u8|mpd)([?#].*)?$$/i;
+    var anchors = doc.querySelectorAll('a[href]');
     for (var k = 0; k < anchors.length; k++) {
         var a = anchors[k];
         var href = a.href || '';
         if (videoExt.test(href)) {
-            add({
+            __b4_video_add({
                 tagName: 'a',
                 srcUrl: a.getAttribute('href') || href || null,
                 resolvedUrl: href || null,
@@ -188,21 +193,20 @@ open class VideoDetector {
                 height: null,
                 hasControls: false,
                 posterUrl: null,
-                isHls: /\.m3u8([?#].*)?$$/.test(href),
-                isDash: /\.mpd([?#].*)?$$/.test(href),
+                isHls: /\.m3u8([?#].*)?$/.test(href),
+                isDash: /\.mpd([?#].*)?$/.test(href),
                 isIframe: false
             });
         }
     }
 
     // 3. Embedded iframe players (YouTube, Vimeo, Dailymotion, Bilibili)
-    var iframes = document.querySelectorAll('iframe[src]');
-    var playerDomains = /(youtube\.com|youtube-nocookie\.com|vimeo\.com|dailymotion\.com|bilibili\.com|youku\.com|twitch\.tv)/i;
+    var iframes = doc.querySelectorAll('iframe[src]');
     for (var m = 0; m < iframes.length; m++) {
         var iframe = iframes[m];
         var iframeSrc = iframe.src || '';
         if (playerDomains.test(iframeSrc)) {
-            add({
+            __b4_video_add({
                 tagName: 'iframe',
                 srcUrl: iframe.getAttribute('src') || iframeSrc || null,
                 resolvedUrl: iframeSrc || null,
@@ -219,12 +223,12 @@ open class VideoDetector {
     }
 
     // 4. <link rel="preload"> for media assets
-    var links = document.querySelectorAll('link[rel="preload"][as]');
+    var links = doc.querySelectorAll('link[rel="preload"][as]');
     for (var n = 0; n < links.length; n++) {
         var link = links[n];
         var linkHref = link.href || '';
         if (link.getAttribute('as') === 'media' || link.getAttribute('as') === 'video' || videoExt.test(linkHref)) {
-            add({
+            __b4_video_add({
                 tagName: 'link',
                 srcUrl: link.getAttribute('href') || linkHref || null,
                 resolvedUrl: linkHref || null,
@@ -233,67 +237,85 @@ open class VideoDetector {
                 height: null,
                 hasControls: false,
                 posterUrl: null,
-                isHls: /\.m3u8([?#].*)?$$/.test(linkHref),
-                isDash: /\.mpd([?#].*)?$$/.test(linkHref),
+                isHls: /\.m3u8([?#].*)?$/.test(linkHref),
+                isDash: /\.mpd([?#].*)?$/.test(linkHref),
                 isIframe: false
             });
         }
     }
+}
 
-    // 5. Check for global Hls.js / dash.js instances
+// ---- Scan top-level document ----
+__b4_scan_videos(document);
+
+// ---- Scan same-origin iframes ----
+// For iframes whose contentDocument is accessible (same-origin), recursively
+// scan for video elements. Cross-origin iframes are silently skipped.
+var allIframes = document.querySelectorAll('iframe');
+for (var fi = 0; fi < allIframes.length; fi++) {
     try {
-        if (typeof Hls !== 'undefined' && Hls.instances) {
-            for (var p = 0; p < Hls.instances.length; p++) {
-                var hls = Hls.instances[p];
-                if (hls.url) {
-                    add({
-                        tagName: 'hlsjs',
-                        srcUrl: hls.url,
-                        resolvedUrl: hls.url,
-                        type: 'application/vnd.apple.mpegurl',
-                        width: null,
-                        height: null,
-                        hasControls: false,
-                        posterUrl: null,
-                        isHls: true,
-                        isDash: false,
-                        isIframe: false
-                    });
-                }
+        var frameDoc = allIframes[fi].contentDocument || allIframes[fi].contentWindow.document;
+        if (frameDoc) {
+            __b4_scan_videos(frameDoc);
+        }
+    } catch(e) {
+        // Cross-origin iframe — cannot access, skip silently
+    }
+}
+
+// 5. Check for global Hls.js / dash.js instances (top-level only)
+try {
+    if (typeof Hls !== 'undefined' && Hls.instances) {
+        for (var p = 0; p < Hls.instances.length; p++) {
+            var hls = Hls.instances[p];
+            if (hls.url) {
+                __b4_video_add({
+                    tagName: 'hlsjs',
+                    srcUrl: hls.url,
+                    resolvedUrl: hls.url,
+                    type: 'application/vnd.apple.mpegurl',
+                    width: null,
+                    height: null,
+                    hasControls: false,
+                    posterUrl: null,
+                    isHls: true,
+                    isDash: false,
+                    isIframe: false
+                });
             }
         }
-    } catch(e) {}
+    }
+} catch(e) {}
 
-    try {
-        if (typeof dashjs !== 'undefined') {
-            var players = dashjs.getMediaPlayers ? dashjs.getMediaPlayers() : [];
-            if (!players || !players.length && dashjs.MediaPlayer) {
-                players = [dashjs.MediaPlayer];
-            }
-            for (var q = 0; q < players.length; q++) {
-                var dp = players[q];
-                var dpUrl = dp.getSource ? dp.getSource() : (dp.url || '');
-                if (dpUrl) {
-                    add({
-                        tagName: 'dashjs',
-                        srcUrl: typeof dpUrl === 'string' ? dpUrl : '',
-                        resolvedUrl: typeof dpUrl === 'string' ? dpUrl : '',
-                        type: 'application/dash+xml',
-                        width: dp.getVideoElement ? (dp.getVideoElement().videoWidth || null) : null,
-                        height: dp.getVideoElement ? (dp.getVideoElement().videoHeight || null) : null,
-                        hasControls: false,
-                        posterUrl: null,
-                        isHls: false,
-                        isDash: true,
-                        isIframe: false
-                    });
-                }
+try {
+    if (typeof dashjs !== 'undefined') {
+        var players = dashjs.getMediaPlayers ? dashjs.getMediaPlayers() : [];
+        if (!players || !players.length && dashjs.MediaPlayer) {
+            players = [dashjs.MediaPlayer];
+        }
+        for (var q = 0; q < players.length; q++) {
+            var dp = players[q];
+            var dpUrl = dp.getSource ? dp.getSource() : (dp.url || '');
+            if (dpUrl) {
+                __b4_video_add({
+                    tagName: 'dashjs',
+                    srcUrl: typeof dpUrl === 'string' ? dpUrl : '',
+                    resolvedUrl: typeof dpUrl === 'string' ? dpUrl : '',
+                    type: 'application/dash+xml',
+                    width: dp.getVideoElement ? (dp.getVideoElement().videoWidth || null) : null,
+                    height: dp.getVideoElement ? (dp.getVideoElement().videoHeight || null) : null,
+                    hasControls: false,
+                    posterUrl: null,
+                    isHls: false,
+                    isDash: true,
+                    isIframe: false
+                });
             }
         }
-    } catch(e) {}
+    }
+} catch(e) {}
 
-    return JSON.stringify(results);
-})()
+JSON.stringify(__b4_video_results)
 """.trimIndent()
     }
 }

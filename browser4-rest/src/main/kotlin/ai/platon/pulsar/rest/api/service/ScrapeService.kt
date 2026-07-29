@@ -56,9 +56,28 @@ class ScrapeService(
      * */
     fun executeQuery(request: ScrapeRequest): ScrapeResponse {
         try {
-            val hyperlink = createScrapeHyperlink(request)
-            session.submit(hyperlink)
-            val response = hyperlink.get(120, TimeUnit.SECONDS)
+            val response = executeQueryOnce(request)
+
+            // Auto-recovery: if the scrape session was recreated (417), the
+            // WebDB cache is empty.  Try to pre-load the target page and
+            // re-execute the query so the X-SQL UDF can find the data.
+            if (response.statusCode == ResourceStatus.SC_EXPECTATION_FAILED) {
+                val extractedUrl = extractUrlFromSql(request.sql)
+                if (extractedUrl != null) {
+                    logger.info("X-SQL scrape session closed (417). Pre-loading '{}' and retrying.", extractedUrl)
+                    try {
+                        runBlocking { session.load(extractedUrl, "-refresh") }
+                        val retryResponse = executeQueryOnce(request)
+                        if (retryResponse.statusCode != ResourceStatus.SC_EXPECTATION_FAILED) {
+                            logger.info("X-SQL retry succeeded for '{}'", extractedUrl)
+                            return retryResponse
+                        }
+                    } catch (e: Exception) {
+                        logger.warn("X-SQL pre-load retry failed: {}", e.message)
+                    }
+                }
+            }
+
             return response
         } catch (e: TimeoutException) {
             logger.warn("Timeout executing query: >>>${request.sql}<<<", e)
@@ -67,6 +86,25 @@ class ScrapeService(
             logger.error("Unexpected error executing query: >>>${request.sql}<<<", e)
             return ScrapeResponse("", ResourceStatus.SC_INTERNAL_SERVER_ERROR, ProtocolStatusCodes.EXCEPTION)
         }
+    }
+
+    private fun executeQueryOnce(request: ScrapeRequest): ScrapeResponse {
+        val hyperlink = createScrapeHyperlink(request)
+        session.submit(hyperlink)
+        return hyperlink.get(120, TimeUnit.SECONDS)
+    }
+
+    /**
+     * Extract the URL from an X-SQL query string.
+     * Looks for patterns like `load_and_select('http://...', ...)` or
+     * `LOAD_AND_SELECT('http://...', ...)`.
+     */
+    private fun extractUrlFromSql(sql: String): String? {
+        val regex = Regex(
+            """(?:load_and_select|LOAD_AND_SELECT)\s*\(\s*'(https?://[^']+)'\s*,""",
+            RegexOption.IGNORE_CASE
+        )
+        return regex.find(sql)?.groupValues?.getOrNull(1)
     }
 
     /**

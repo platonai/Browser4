@@ -188,8 +188,10 @@ fn generate_skills_data(skills_dir: &Path, out_dir: &Path) {
 
     match fs::write(&out_path, &code) {
         Ok(_) => {
+            // Plain stdout (not cargo:warning) — only appears during actual rebuilds,
+            // not re-emitted from cache on every cargo run invocation.
             println!(
-                "cargo:warning=browser4-cli: embedded {} skill files from {}",
+                "browser4-cli: embedded {} skill files from {}",
                 files.len(),
                 skills_dir.display()
             );

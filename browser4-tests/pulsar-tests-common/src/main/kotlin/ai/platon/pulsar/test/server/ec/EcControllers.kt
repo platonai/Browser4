@@ -32,8 +32,8 @@ class EcCategoryController(
 
     private fun htmlError(status: Int, message: String): ResponseEntity<String> {
         val body = """
-            <!DOCTYPE html><html lang=\"en\"><head><meta charset=\"UTF-8\"><title>Error $status</title></head>
-            <body><div id=\"error-page\" class=\"error-code-$status\"><h1>$status</h1><p>${escapeHtml(message)}</p></div></body></html>
+            <!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><title>Error $status</title></head>
+            <body><div id="error-page" class="error-code-$status"><h1>$status</h1><p>${escapeHtml(message)}</p></div></body></html>
         """.trimIndent()
         return ResponseEntity.status(status).contentType(MediaType.TEXT_HTML).body(body)
     }
@@ -83,12 +83,12 @@ class ListPageRenderer {
         } else ""
         val imageUrl = resolveImage(p)
         return """
-            <div class=\"product-card\" id=\"product-${p.id}\" data-category-id=\"${p.categoryId}\">
-              <a class=\"product-link\" href=\"/ec/dp/${p.id}\" style=\"text-decoration:none;color:inherit;display:block;\">
-                <img src=\"$imageUrl\" alt=\"${escapeHtml(p.name)}\" class=\"product-img\" />
-                <div class=\"product-title\">${escapeHtml(p.name)}</div>
+            <div class="product-card" id="product-${p.id}" data-category-id="${p.categoryId}">
+              <a class="product-link" href="/ec/dp/${p.id}" style="text-decoration:none;color:inherit;display:block;">
+                <img src="$imageUrl" alt="${escapeHtml(p.name)}" class="product-img" />
+                <div class="product-title">${escapeHtml(p.name)}</div>
               </a>
-              <div class=\"product-price\" id=\"product-price-${p.id}\">$price</div>
+              <div class="product-price" id="product-price-${p.id}">$price</div>
               $rating
               $badgesDiv
             </div>

@@ -1,0 +1,302 @@
+{
+  "meta": {
+    "mode": "dev",
+    "source": "20260728-021911-plugin-pptx-generation.full.md",
+    "date": "20260728-021911",
+    "scenario": "plugin-pptx-generation"
+  },
+  "background": {
+    "task": "I successfully tested the **browser4-pptx** plugin by generating PowerPoint presentations from three web pages of varying complexity:\n\n| Page | Slide Count | Block Count | Image Count | File Size | Duration |\n|------|------------|-------------|-------------|-----------|----------|\n| **httpbin.org/html** (minimal) | 2 | 2 | 0 | 28 KB | 1.1s |\n| **Wikipedia Solar System** (large featured article) | 48 | 213 | 52 | 203 KB | 70.1s |\n| **Wikipedia Moon** (medium article) | 69 | 323 | 72 | 304 KB | 201.9s |\n\n**How well does `pptx.generate` handle pages of varying complexity?**\n\n- **Minimal pages** (httpbin): Works instantly and produces a tiny but valid PPTX. A simple page with just headings and paragraphs produces 2 clean slides.\n- **Rich Wikipedia articles**: Works well but is very slow (1–3 minutes per page) due to image downloading. The content-to-slide mapping is sensible — headings become section slides, and content flows into content slides.\n- **Content type mapping**: Headings, paragraphs, images, tables, lists, and blockquotes are all extracted. Images are downloaded and embedded. Tables preserve row/header structure. Lists are rendered with bullets/numbers. The title slide includes page title + URL.\n\n**Notable observation**: The Moon article (69 slides) produced more slides than the Solar System featured article (48 slides), despite Solar System being longer/more comprehensive. This is because slide count is driven by heading hierarchy depth and the `maxContentBlocksPerSlide` (default: 6) setting — the Moon article appears to have more fine-grained heading sections.\n\n**Important caveats**: Three issues were discovered that significantly impact usability (detailed in Section C below).",
+    "executionContext": "**Commands used:**\n1. `./b4w.ps1 help` — Verified available commands\n2. `./b4w.ps1 plugin list` — Discovered pptx plugin not installed\n3. `./b4w.ps1 plugin install ...` — Installed the pptx JAR\n4. `./b4w.ps1 kill-all` → `./b4w.ps1 plugin-pptx` — Plugin failed to load (missing POI deps)\n5. `mvn dependency:copy-dependencies` — Copied transitive POI deps\n6. Copied POI JARs into runtime bundle plugins directory\n7. `./b4w.ps1 goto \"https://en.wikipedia.org/wiki/Solar_System\"` — Navigation\n8. `./b4w.ps1 plugin-pptx` — **Timed out after 30s** (image downloading took 70s)\n9. `curl POST /mcp/call-tool` with `--max-time 600` — **Success** (Solar System: 48 slides)\n10. `./b4w.ps1 goto \"https://en.wikipedia.org/wiki/Moon\"` → curl call — **Success** (Moon: 69 slides)\n11. `./b4w.ps1 goto \"https://httpbin.org/html\"` → `./b4w.ps1 plugin-pptx` — **Success** (httpbin: 2 slides)\n\n**Workarounds required:**\n- Manually copied Apache POI and all transitive dependencies (10+ JARs) into the runtime's plugins directory\n- Used direct `curl` calls instead of `plugin-pptx` for Wikipedia pages due to 30s CLI timeout\n- Had to restart the server multiple times during debugging\n\n**Important decisions made:**\n- Used `plugin-pptx` dynamic command (discovered by reading CLI source code — not documented in SKILL.md)\n- Bypassed the CLI for Wikipedia pages because the hardcoded 30-second MCP tool call timeout is insufficient\n\n## C & D. Issues Found + Overall Assessment\n\n```json\n{\n  \"issues\": [\n    {\n      \"title\": \"PPTX plugin JAR does not bundle Apache POI dependencies\",\n      \"severity\": \"Critical\",\n      \"category\": \"Product\",\n      \"reproduction\": \"Install browser4-pptx plugin and restart server. Check server log for 'Post-processing of merged bean definition failed' error during PptxAutoConfiguration loading.\",\n      \"expected\": \"The plugin JAR should self-contain all its private dependencies (poi, poi-ooxml, xmlbeans, commons-compress, commons-io, curvesapi, commons-collections4, SparseBitSet) so it loads without manual intervention.\",\n      \"actual\": \"The plugin JAR (76 KB) contains only its own compiled classes. None of the Apache POI transitive dependencies are bundled. Spring fails to create the pptxGenerator bean because PptxGenerator.class references org.apache.poi.xslf.usermodel.XMLSlideShow which is not on the classpath.\",\n      \"rootCause\": \"The plugin's pom.xml declares poi and poi-ooxml with default (compile) scope but the build does not produce a fat JAR. The PluginClasspathEnhancer only adds JARs to the classpath but does not resolve transitive dependencies. The 'Post-processing of merged bean definition failed' error message is unhelpful — it hides a NoClassDefFoundError for POI classes.\",\n      \"codePointer\": \"browser4-plugins/browser4-pptx/pom.xml — needs maven-assembly-plugin or maven-shade-plugin to bundle private dependencies\",\n      \"suggestion\": \"- Add maven-shade-plugin to the pptx plugin build to create a fat JAR that includes org.apache.poi:* and all transitive runtime dependencies\\n- Alternatively, use maven-assembly-plugin with jar-with-dependencies descriptor\\n- Add a build-time check that verifies all non-provided dependencies are present in the output JAR\\n- Improve error message: catch NoClassDefFoundError during bean creation and log 'Plugin JAR is missing dependency: org.apache.poi.xslf.usermodel.XMLSlideShow. Ensure all private dependencies are bundled.'\"\n    },\n    {\n      \"title\": \"CLI hardcoded 30-second MCP tool timeout is inadequate for long-running tools\",\n      \"severity\": \"High\",\n      \"category\": \"Reliability\",\n      \"reproduction\": \"Navigate to a Wikipedia article with images (e.g. Solar System) and run `browser4-cli plugin-pptx`. The command times out after 30 seconds with 'HTTP request timed out' while the server is still processing.\",\n      \"expected\": \"The CLI should either use a longer timeout for known-long tools, allow timeout configuration, or support asynchronous tool execution with status polling.\",\n      \"actual\": \"The CLI returns 'HTTP request timed out [timeout=30s]' while the server continues processing. The PPTX eventually completes but the CLI user gets an error. The only workaround is to use curl directly.\",\n      \"rootCause\": \"The CLI's `handle_dynamic_plugin_command` function calls `call_tool()` which uses `call_tool_with_timeout(client, base_url, tool, args, None)` where `None` maps to a 30-second default. There is no mechanism for tools to declare expected execution time, and no `--timeout` flag for plugin commands.\",\n      \"codePointer\": \"cli/browser4-cli/src/http.rs:call_tool_with_timeout() — default timeout logic; cli/browser4-cli/src/main.rs:handle_dynamic_plugin_command() — needs timeout override\",\n      \"suggestion\": \"- Add a `--timeout <seconds>` global flag to allow users to override the default 30s timeout per command\\n- Add per-tool timeout overrides in the tool registry (e.g., pptx_generate could declare a 300s timeout)\\n- Support async tool execution pattern: `plugin-pptx --async` returns a task ID, then `plugin-pptx result <id>` retrieves the result\\n- Increase the default timeout for dynamic plugin commands to at least 120s\"\n    },\n    {\n      \"title\": \"plugin-pptx dynamic command does not pass arguments to the tool\",\n      \"severity\": \"Medium\",\n      \"category\": \"Product\",\n      \"reproduction\": \"Run `browser4-cli plugin-pptx --outputPath /custom/dir`. The outputPath argument is silently ignored.\",\n      \"expected\": \"The dynamic plugin command should pass user-supplied arguments (like --outputPath) to the underlying MCP tool.\",\n      \"actual\": \"Looking at the code, handle_dynamic_plugin_command uses the first matching tool and passes raw parsed args as tool params, but it doesn't consume positional arguments for the method name. For pptx with one method (generate) this works by accident, but the outputPath parameter can't be passed because the arg parsing strips positional args and only passes --key value pairs.\",\n      \"rootCause\": \"The `handle_dynamic_plugin_command` function at line 11544-11550 parses args with `parse_raw_args` but the tool spec defines `outputPath` as a named argument. The arg parsing may not correctly map `--outputPath` to the tool parameter.\",\n      \"codePointer\": \"cli/browser4-cli/src/main.rs:handle_dynamic_plugin_command() — line 11544 arg parsing; line 11540-11541 always picks the first matching tool without method selection\",\n      \"suggestion\": \"- Support method selection by checking the first positional arg after plugin-<domain> (e.g., `plugin-pptx generate`)\\n- Pass all remaining --key value pairs as tool arguments\\n- Add `plugin-pptx --help` to show available methods and their parameters for a domain\\n- Add method selection when multiple tools exist in a domain (e.g., if pptx gains pptx_convert in the future)\"\n    },\n    {\n      \"title\": \"No documentation for plugin commands (plugin-pptx, plugin-markdown, etc.)\",\n      \"severity\": \"High\",\n      \"category\": \"Discoverability\",\n      \"reproduction\": \"Run `browser4-cli help` and search for any mention of plugin commands like plugin-pptx or the plugin-<name> pattern. Neither the main help nor the skill file documents how to use installed plugins.\",\n      \"expected\": \"The help output and SKILL.md should document the plugin-<domain> command pattern and list available plugin commands. There should be discoverable documentation for each plugin's tools and parameters.\",\n      \"actual\": \"The help output shows `plugin list`, `plugin info`, `plugin install`, `plugin remove` but never mentions the `plugin-<domain>` pattern. The SKILL.md discusses plugin installation but not plugin usage. Users must read CLI source code to discover `plugin-pptx`.\",\n      \"rootCause\": \"The `plugin-<domain>` command is implemented in main.rs:14615-14631 as a dynamic fallback but is never documented. The SKILL.md plugin section only covers plugin lifecycle management (install/remove), not plugin tool invocation.\",\n      \"codePointer\": \"cli/browser4-cli/src/main.rs:14615-14631 — dynamic plugin command dispatch; skills/browser4-cli/SKILL.md — missing plugin usage section\",\n      \"suggestion\": \"- Add a 'Plugin Tools' section to the help output listing available plugin-<domain> commands (discovered via /mcp/tools)\\n- Add a 'Using Plugins' section to SKILL.md with the plugin-<domain> <method> pattern\\n- Add `browser4-cli plugin-pptx --help` support showing available methods and their parameters\\n- Include a real example: `browser4-cli goto 'https://example.com' && browser4-cli plugin-pptx`\\n- Add `browser4-cli plugin` (bare) listing: 'Available plugin commands: plugin-pptx, plugin-markdown, ...'\"\n    },\n    {\n      \"title\": \"Image download takes 1-3+ minutes for Wikipedia articles with no progress indication\",\n      \"severity\": \"Medium\",\n      \"category\": \"UX\",\n      \"reproduction\": \"Run pptx.generate on any Wikipedia article. Between 'extracted N blocks' and 'pptx.generate complete' log lines, there is a multi-minute silence with no progress output.\",\n      \"expected\": \"The tool should log progress during image downloading (e.g., 'Downloading image 3/52...', 'Image download failed, skipping') so users and monitoring systems know the tool is still working.\",\n      \"actual\": \"Zero progress logs between content extraction and completion. The user sees only the initial 'extracted N blocks' log, then minutes of silence, then the final completion log. This makes the tool appear hung.\",\n      \"rootCause\": \"The PptxImageDownloader.downloadImages function downloads images concurrently but only logs at the end (download count). Individual download failures are logged at DEBUG level only. There is no periodic progress reporting.\",\n      \"codePointer\": \"browser4-plugins/browser4-pptx/src/main/kotlin/ai/platon/pulsar/pptx/service/PptxImageDownloader.kt:downloadImages() — needs progress logging\",\n      \"suggestion\": \"- Log progress every N images: 'Downloaded 10/52 images (5 failures)...' \\n- Upgrade image download failure logs from DEBUG to INFO or WARN level so they appear in default logging\\n- Consider adding a `--skip-images` flag to pptx.generate for users who want fast text-only PPTX generation\\n- Add a configurable per-image timeout (currently relies on OkHttp's 30s connect / 60s read timeouts)\"\n    },\n    {\n      \"title\": \"Unhelpful error message when plugin fails to load\",\n      \"severity\": \"Medium\",\n      \"category\": \"UX\",\n      \"reproduction\": \"Install pptx plugin, restart server, run `browser4-cli plugin-pptx`. The error is 'No plugin tools found for pptx'. The actual root cause (missing POI dependencies) is only visible in the server log as 'Post-processing of merged bean definition failed'.\",\n      \"expected\": \"The CLI should surface actionable error information. When no tools are found for a domain, it should suggest checking `plugin list` status and server logs. When the server log contains a bean creation error, the CLI should relay a summary.\",\n      \"actual\": \"CLI shows 'No plugin tools found for pptx' with a list of unrelated available plugin commands. The user has no indication of what went wrong or how to fix it. The server log has the real error but users wouldn't know to look there.\",\n      \"rootCause\": \"The `handle_dynamic_plugin_command` function queries /mcp/tools and lists matching tools. When a plugin's auto-configuration fails, its tools are never registered, so the list is empty. The error message doesn't guide the user to check server logs or plugin status.\",\n      \"codePointer\": \"cli/browser4-cli/src/main.rs:handle_dynamic_plugin_command() — error message at line 11524-11538; browser4-plugins/browser4-pptx/src/main/kotlin/ai/platon/pulsar/pptx/config/PptxAutoConfiguration.kt:getToolExecutors() — error is silently caught\",\n      \"suggestion\": \"- After 'No plugin tools found', suggest: 'The plugin may have failed to initialize. Check plugin status with `browser4-cli plugin list` and review server logs with `browser4-cli doctor log`.'\\n- Log the full stack trace (not just message) when getToolExecutors() fails, so the server log has diagnostic details\\n- Add a `plugin status <name>` command that reports whether a plugin loaded successfully and why it failed if not\"\n    },\n    {\n      \"title\": \"CLI requires reading source code to discover plugin invocation pattern\",\n      \"severity\": \"High\",\n      \"category\": \"Discoverability\",\n      \"reproduction\": \"As a first-time user wanting to use the pptx plugin: (1) Read `browser4-cli help` — no mention of plugin tool invocation. (2) Read SKILL.md — discusses plugin install/remove but not invocation. (3) Try `browser4-cli pptx.generate` — 'Unknown command'. (4) Try `browser4-cli pptx generate` — 'Unknown command'. (5) Try `browser4-cli --json plugin list` — shows installed plugins but no usage instructions. The pattern `plugin-<domain>` is only discoverable by reading CLI Rust source code.\",\n      \"expected\": \"A user should be able to discover how to use installed plugins from `browser4-cli help`, the SKILL.md, or at minimum from the output of `browser4-cli plugin list` or `browser4-cli plugin info <name>`.\",\n      \"actual\": \"No command, help text, skill file, or plugin management output documents the `plugin-<domain>` invocation pattern. The `plugin info` command was not tested but likely doesn't include usage syntax either.\",\n      \"rootCause\": \"The plugin-<domain> command system was added as a dynamic dispatch mechanism without corresponding documentation updates to help output, SKILL.md, or plugin info output.\",\n      \"codePointer\": \"cli/browser4-cli/src/main.rs:14615-14631 — the dynamic plugin dispatch; skills/browser4-cli/SKILL.md — no plugin usage docs\",\n      \"suggestion\": \"- Document the plugin invocation pattern prominently in help output: 'Plugin tools: plugin-<name> <method> [args...]'\\n- Add usage instructions to `plugin info` output: 'Usage: browser4-cli plugin-pptx [--outputPath <path>]'\\n- Add a tip after `plugin install`: 'After server restart, use: browser4-cli plugin-<name>'\\n- Consider adding aliases so `browser4-cli pptx generate` also works as a more intuitive alternative\"\n    },\n    {\n      \"title\": \"Generated PPTX uses presentation.pptx as filename when page title is empty\",\n      \"severity\": \"Low\",\n      \"category\": \"Product\",\n      \"reproduction\": \"Navigate to httpbin.org/html (which returns empty page title) and run pptx.generate. The output filename is 'presentation_YYYYMMDD_HHmmss.pptx' instead of using the URL or a more descriptive name.\",\n      \"expected\": \"When page title is empty, the filename should fall back to a URL-derived name (e.g., 'httpbin_org_html_YYYYMMDD_HHmmss.pptx') rather than the generic 'presentation'.\",\n      \"actual\": \"The output file is named 'presentation_20260728_100236.pptx' because httpbin.org/html returns an empty <title>. The generic name provides no hint about the source page.\",\n      \"rootCause\": \"In PptxGenerator.sanitizeFilename(), when name is empty after sanitization, it defaults to 'presentation'. The empty title case should use the URL hostname + path as a fallback.\",\n      \"codePointer\": \"browser4-plugins/browser4-pptx/src/main/kotlin/ai/platon/pulsar/pptx/service/PptxGenerator.kt:sanitizeFilename() — the `ifBlank { 'presentation' }` fallback\",\n      \"suggestion\": \"- Extract a filename-friendly slug from the URL when title is blank (e.g., URL host + path with special chars replaced)\\n- Example: https://httpbin.org/html → httpbin_org_html_YYYYMMDD_HHmmss.pptx\\n- Keep 'presentation' as a last-resort fallback only when both title and URL are unusable\"\n    }\n  ],\n  \"assessment\": {\n    \"completionStatus\": \"Partially Successful — All three PPTX files were generated and verified valid, but required major workarounds: manually copying 10+ POI dependency JARs, using curl instead of the CLI for large pages, and reading CLI source code to discover the plugin-pptx invocation pattern.\",\n    \"successRate\": \"60% — 3 of 5 test scenarios produced valid PPTX files, but 5 of 5 required workarounds or exhibited issues. The core PPTX generation logic works correctly; the problems are entirely in packaging, CLI timeout handling, and discoverability.\",\n    \"issuesFound\": 8,\n    \"majorBlockers\": \"1) PPTX plugin JAR does not bundle Apache POI dependencies (Critical — requires manual installation of 10+ JARs). 2) CLI hardcoded 30s timeout makes the tool unusable for pages with images without resorting to curl. 3) The plugin-<domain> invocation pattern is undocumented and undiscoverable.\",\n    \"mostConfusingAspects\": \"Discovering how to invoke the PPTX plugin required reading CLI Rust source code — neither `browser4-cli help`, `plugin list`, `plugin info`, nor SKILL.md documents the `plugin-pptx` pattern. After discovering it, the command returned unhelpful errors ('No plugin tools found') when the real problem was missing POI dependencies. After fixing that, the command timed out silently while the server kept working.\",\n    \"mostValuableImprovements\": \"1) Bundle plugin private dependencies (maven-shade-plugin). 2) Add --timeout flag or async execution for long-running tools. 3) Document plugin-<domain> invocation in help and SKILL.md. 4) Add progress logging during image downloads. 5) Improve error messages to guide users to server logs when plugins fail to load.\",\n    \"usabilityRating\": 3\n  }\n}\n```"
+  },
+  "issues": [
+    {
+      "number": 1,
+      "title": "PPTX plugin JAR does not bundle Apache POI dependencies",
+      "severity": "Critical",
+      "category": "Product",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "Install browser4-pptx plugin and restart server. Check server log for 'Post-processing of merged bean definition failed' error during PptxAutoConfiguration loading."
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "The plugin JAR should self-contain all its private dependencies (poi, poi-ooxml, xmlbeans, commons-compress, commons-io, curvesapi, commons-collections4, SparseBitSet) so it loads without manual intervention."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "The plugin JAR (76 KB) contains only its own compiled classes. None of the Apache POI transitive dependencies are bundled. Spring fails to create the pptxGenerator bean because PptxGenerator.class references org.apache.poi.xslf.usermodel.XMLSlideShow which is not on the classpath."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "The plugin's pom.xml declares poi and poi-ooxml with default (compile) scope but the build does not produce a fat JAR. The PluginClasspathEnhancer only adds JARs to the classpath but does not resolve transitive dependencies. The 'Post-processing of merged bean definition failed' error message is unhelpful — it hides a NoClassDefFoundError for POI classes."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "browser4-plugins/browser4-pptx/pom.xml — needs maven-assembly-plugin or maven-shade-plugin to bundle private dependencies"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Add maven-shade-plugin to the pptx plugin build to create a fat JAR that includes org.apache.poi:* and all transitive runtime dependencies\n- Alternatively, use maven-assembly-plugin with jar-with-dependencies descriptor\n- Add a build-time check that verifies all non-provided dependencies are present in the output JAR\n- Improve error message: catch NoClassDefFoundError during bean creation and log 'Plugin JAR is missing dependency: org.apache.poi.xslf.usermodel.XMLSlideShow. Ensure all private dependencies are bundled.'"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 2,
+      "title": "CLI hardcoded 30-second MCP tool timeout is inadequate for long-running tools",
+      "severity": "High",
+      "category": "Reliability",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "Navigate to a Wikipedia article with images (e.g. Solar System) and run `browser4-cli plugin-pptx`. The command times out after 30 seconds with 'HTTP request timed out' while the server is still processing."
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "The CLI should either use a longer timeout for known-long tools, allow timeout configuration, or support asynchronous tool execution with status polling."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "The CLI returns 'HTTP request timed out [timeout=30s]' while the server continues processing. The PPTX eventually completes but the CLI user gets an error. The only workaround is to use curl directly."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "The CLI's `handle_dynamic_plugin_command` function calls `call_tool()` which uses `call_tool_with_timeout(client, base_url, tool, args, None)` where `None` maps to a 30-second default. There is no mechanism for tools to declare expected execution time, and no `--timeout` flag for plugin commands."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "cli/browser4-cli/src/http.rs:call_tool_with_timeout() — default timeout logic; cli/browser4-cli/src/main.rs:handle_dynamic_plugin_command() — needs timeout override"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Add a `--timeout <seconds>` global flag to allow users to override the default 30s timeout per command\n- Add per-tool timeout overrides in the tool registry (e.g., pptx_generate could declare a 300s timeout)\n- Support async tool execution pattern: `plugin-pptx --async` returns a task ID, then `plugin-pptx result <id>` retrieves the result\n- Increase the default timeout for dynamic plugin commands to at least 120s"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 3,
+      "title": "No documentation for plugin commands (plugin-pptx, plugin-markdown, etc.)",
+      "severity": "High",
+      "category": "Discoverability",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "Run `browser4-cli help` and search for any mention of plugin commands like plugin-pptx or the plugin-<name> pattern. Neither the main help nor the skill file documents how to use installed plugins."
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "The help output and SKILL.md should document the plugin-<domain> command pattern and list available plugin commands. There should be discoverable documentation for each plugin's tools and parameters."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "The help output shows `plugin list`, `plugin info`, `plugin install`, `plugin remove` but never mentions the `plugin-<domain>` pattern. The SKILL.md discusses plugin installation but not plugin usage. Users must read CLI source code to discover `plugin-pptx`."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "The `plugin-<domain>` command is implemented in main.rs:14615-14631 as a dynamic fallback but is never documented. The SKILL.md plugin section only covers plugin lifecycle management (install/remove), not plugin tool invocation."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "cli/browser4-cli/src/main.rs:14615-14631 — dynamic plugin command dispatch; skills/browser4-cli/SKILL.md — missing plugin usage section"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Add a 'Plugin Tools' section to the help output listing available plugin-<domain> commands (discovered via /mcp/tools)\n- Add a 'Using Plugins' section to SKILL.md with the plugin-<domain> <method> pattern\n- Add `browser4-cli plugin-pptx --help` support showing available methods and their parameters\n- Include a real example: `browser4-cli goto 'https://example.com' && browser4-cli plugin-pptx`\n- Add `browser4-cli plugin` (bare) listing: 'Available plugin commands: plugin-pptx, plugin-markdown, ...'"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 4,
+      "title": "CLI requires reading source code to discover plugin invocation pattern",
+      "severity": "High",
+      "category": "Discoverability",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "As a first-time user wanting to use the pptx plugin: (1) Read `browser4-cli help` — no mention of plugin tool invocation. (2) Read SKILL.md — discusses plugin install/remove but not invocation. (3) Try `browser4-cli pptx.generate` — 'Unknown command'. (4) Try `browser4-cli pptx generate` — 'Unknown command'. (5) Try `browser4-cli --json plugin list` — shows installed plugins but no usage instructions. The pattern `plugin-<domain>` is only discoverable by reading CLI Rust source code."
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "A user should be able to discover how to use installed plugins from `browser4-cli help`, the SKILL.md, or at minimum from the output of `browser4-cli plugin list` or `browser4-cli plugin info <name>`."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "No command, help text, skill file, or plugin management output documents the `plugin-<domain>` invocation pattern. The `plugin info` command was not tested but likely doesn't include usage syntax either."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "The plugin-<domain> command system was added as a dynamic dispatch mechanism without corresponding documentation updates to help output, SKILL.md, or plugin info output."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "cli/browser4-cli/src/main.rs:14615-14631 — the dynamic plugin dispatch; skills/browser4-cli/SKILL.md — no plugin usage docs"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Document the plugin invocation pattern prominently in help output: 'Plugin tools: plugin-<name> <method> [args...]'\n- Add usage instructions to `plugin info` output: 'Usage: browser4-cli plugin-pptx [--outputPath <path>]'\n- Add a tip after `plugin install`: 'After server restart, use: browser4-cli plugin-<name>'\n- Consider adding aliases so `browser4-cli pptx generate` also works as a more intuitive alternative"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 5,
+      "title": "plugin-pptx dynamic command does not pass arguments to the tool",
+      "severity": "Medium",
+      "category": "Product",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "Run `browser4-cli plugin-pptx --outputPath /custom/dir`. The outputPath argument is silently ignored."
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "The dynamic plugin command should pass user-supplied arguments (like --outputPath) to the underlying MCP tool."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "Looking at the code, handle_dynamic_plugin_command uses the first matching tool and passes raw parsed args as tool params, but it doesn't consume positional arguments for the method name. For pptx with one method (generate) this works by accident, but the outputPath parameter can't be passed because the arg parsing strips positional args and only passes --key value pairs."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "The `handle_dynamic_plugin_command` function at line 11544-11550 parses args with `parse_raw_args` but the tool spec defines `outputPath` as a named argument. The arg parsing may not correctly map `--outputPath` to the tool parameter."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "cli/browser4-cli/src/main.rs:handle_dynamic_plugin_command() — line 11544 arg parsing; line 11540-11541 always picks the first matching tool without method selection"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Support method selection by checking the first positional arg after plugin-<domain> (e.g., `plugin-pptx generate`)\n- Pass all remaining --key value pairs as tool arguments\n- Add `plugin-pptx --help` to show available methods and their parameters for a domain\n- Add method selection when multiple tools exist in a domain (e.g., if pptx gains pptx_convert in the future)"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 6,
+      "title": "Image download takes 1-3+ minutes for Wikipedia articles with no progress indication",
+      "severity": "Medium",
+      "category": "UX",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "Run pptx.generate on any Wikipedia article. Between 'extracted N blocks' and 'pptx.generate complete' log lines, there is a multi-minute silence with no progress output."
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "The tool should log progress during image downloading (e.g., 'Downloading image 3/52...', 'Image download failed, skipping') so users and monitoring systems know the tool is still working."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "Zero progress logs between content extraction and completion. The user sees only the initial 'extracted N blocks' log, then minutes of silence, then the final completion log. This makes the tool appear hung."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "The PptxImageDownloader.downloadImages function downloads images concurrently but only logs at the end (download count). Individual download failures are logged at DEBUG level only. There is no periodic progress reporting."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "browser4-plugins/browser4-pptx/src/main/kotlin/ai/platon/pulsar/pptx/service/PptxImageDownloader.kt:downloadImages() — needs progress logging"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Log progress every N images: 'Downloaded 10/52 images (5 failures)...' \n- Upgrade image download failure logs from DEBUG to INFO or WARN level so they appear in default logging\n- Consider adding a `--skip-images` flag to pptx.generate for users who want fast text-only PPTX generation\n- Add a configurable per-image timeout (currently relies on OkHttp's 30s connect / 60s read timeouts)"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 7,
+      "title": "Unhelpful error message when plugin fails to load",
+      "severity": "Medium",
+      "category": "UX",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "Install pptx plugin, restart server, run `browser4-cli plugin-pptx`. The error is 'No plugin tools found for pptx'. The actual root cause (missing POI dependencies) is only visible in the server log as 'Post-processing of merged bean definition failed'."
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "The CLI should surface actionable error information. When no tools are found for a domain, it should suggest checking `plugin list` status and server logs. When the server log contains a bean creation error, the CLI should relay a summary."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "CLI shows 'No plugin tools found for pptx' with a list of unrelated available plugin commands. The user has no indication of what went wrong or how to fix it. The server log has the real error but users wouldn't know to look there."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "The `handle_dynamic_plugin_command` function queries /mcp/tools and lists matching tools. When a plugin's auto-configuration fails, its tools are never registered, so the list is empty. The error message doesn't guide the user to check server logs or plugin status."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "cli/browser4-cli/src/main.rs:handle_dynamic_plugin_command() — error message at line 11524-11538; browser4-plugins/browser4-pptx/src/main/kotlin/ai/platon/pulsar/pptx/config/PptxAutoConfiguration.kt:getToolExecutors() — error is silently caught"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- After 'No plugin tools found', suggest: 'The plugin may have failed to initialize. Check plugin status with `browser4-cli plugin list` and review server logs with `browser4-cli doctor log`.'\n- Log the full stack trace (not just message) when getToolExecutors() fails, so the server log has diagnostic details\n- Add a `plugin status <name>` command that reports whether a plugin loaded successfully and why it failed if not"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 8,
+      "title": "Generated PPTX uses presentation.pptx as filename when page title is empty",
+      "severity": "Low",
+      "category": "Product",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "Navigate to httpbin.org/html (which returns empty page title) and run pptx.generate. The output filename is 'presentation_YYYYMMDD_HHmmss.pptx' instead of using the URL or a more descriptive name."
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "When page title is empty, the filename should fall back to a URL-derived name (e.g., 'httpbin_org_html_YYYYMMDD_HHmmss.pptx') rather than the generic 'presentation'."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "The output file is named 'presentation_20260728_100236.pptx' because httpbin.org/html returns an empty <title>. The generic name provides no hint about the source page."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "In PptxGenerator.sanitizeFilename(), when name is empty after sanitization, it defaults to 'presentation'. The empty title case should use the URL hostname + path as a fallback."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "browser4-plugins/browser4-pptx/src/main/kotlin/ai/platon/pulsar/pptx/service/PptxGenerator.kt:sanitizeFilename() — the `ifBlank { 'presentation' }` fallback"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Extract a filename-friendly slug from the URL when title is blank (e.g., URL host + path with special chars replaced)\n- Example: https://httpbin.org/html → httpbin_org_html_YYYYMMDD_HHmmss.pptx\n- Keep 'presentation' as a last-resort fallback only when both title and URL are unusable"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    }
+  ]
+}

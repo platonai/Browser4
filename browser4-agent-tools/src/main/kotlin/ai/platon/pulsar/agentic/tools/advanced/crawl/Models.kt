@@ -52,7 +52,7 @@ data class ScrapeResponse(
     val status: String get() = ResourceStatus.getStatusText(statusCode)
 
     /** Set when the task is first created (submitted). */
-    var createdTime: Instant = Instant.now()
+    var createdTime: Instant? = Instant.now()
 
     /** Set when a worker first picks up the task (first PROCESSING transition). */
     var startedTime: Instant? = null
@@ -66,7 +66,7 @@ data class ScrapeResponse(
     companion object {
         fun notFound(id: String) = ScrapeResponse(
             id, ResourceStatus.SC_NOT_FOUND, ResourceStatus.SC_NOT_FOUND
-        )
+        ).apply { createdTime = null }
 
         fun failed(id: String, statusCode: Int, pageStatusCode: Int) =
             ScrapeResponse(id, statusCode = statusCode, pageStatusCode = pageStatusCode)

@@ -1,0 +1,182 @@
+{
+  "meta": {
+    "source": "20260728-143937-agent-status-result-tracking.full.md",
+    "scenario": "agent-status-result-tracking",
+    "date": "20260728-143937",
+    "mode": "dev"
+  },
+  "background": {
+    "task": "All 11 steps of the agent lifecycle evaluation completed successfully:\n\n1. **`agent run`** → Task submitted: `24e92fbb-13f4-49e1-a01b-c489b006eb5d`\n2. **`agent list`** → Task appeared with correct TASK ID, COMMAND \"agent\", STATUS \"processing\"\n3. **`agent status`** → Valid JSON, `statusCode` integer (102), `processState` \"in_progress\", `isDone` false\n4. **Polled** → Task transitioned to `isDone: true`, `statusCode: 200`, `processState: \"completed\"` after ~20 seconds\n5. **`agent result`** → Non-null JSON with `pageSummary` field — agent navigated to the URL and correctly noted the \"Li group\" misspelling\n6. **`agent list`** → STATUS column showed `completed` (not the deprecated `done` label)\n7. **`agent list`** (third time) → Terminal task persisted — no auto-prune behavior\n8. **Two new `agent run`** → Both submitted successfully (`f6a40d8f-...` and `d57dc646-...`)\n9. **`agent list`** → All 5 tasks visible (3 completed + 2 processing)\n10. **`agent list --clear`** → `Cleared 5 tracked agent task(s).` with exit code 0\n11. **`agent list`** → `No tracked async tasks.` — all tasks removed",
+    "executionContext": "| Step | Command | Key Observations |\n|------|---------|-----------------|\n| Prep | `./b4w.ps1 help` | Full help rendered; agent commands listed under \"Agent:\" section |\n| Prep | Read `SKILL.md` | Agent lifecycle documented with status code table and polling pattern |\n| 1 | `agent run \"Navigate to Wikipedia...\"` | Task ID printed with guidance to use `agent status` or `agent list` |\n| 2 | `agent list` | 3 pre-existing tasks from prior runs visible; new task showed \"processing\" |\n| 3 | `agent status <id>` | Raw JSON returned (not JSON-enveloped); valid structure |\n| 4 | Poll loop (3s intervals) | Task completed in ~20s; statusCode changed 102→200 |\n| 5 | `agent result <id>` | Returned JSON with pageSummary; not enveloped |\n| 6 | `agent list` | Task showed \"completed\" (correct lifecycle label) |\n| 7 | `agent list` (repeat) | Persistence confirmed — no auto-prune |\n| 8 | Two `agent run` | Both submitted; IDs printed with guidance text |\n| 9 | `agent list` | All 5 tasks visible, sorted latest-first |\n| 10 | `agent list --clear` | \"Cleared 5 tracked agent task(s).\" — flag worked but requires drilling down |\n| 11 | `agent list` | \"No tracked async tasks.\" confirmed |\n\n**Workarounds required:** None. All commands worked as specified on first attempt.\n\n```json\n{\n  \"issues\": [\n    {\n      \"title\": \"--help agent omits --clear, --limit, --offset flags for agent list\",\n      \"severity\": \"Medium\",\n      \"category\": \"Discoverability\",\n      \"reproduction\": \"Run `./b4w.ps1 --help agent` and observe that `agent list` is listed with no flags.\",\n      \"expected\": \"The --help agent output should mention key flags like --clear, --limit, --offset for agent list, similar to how other commands surface their options.\",\n      \"actual\": \"`--help agent` shows: `agent list — List all tracked agent tasks and their status` with no flag hints. Users must run `agent list --help` (two levels deep) to discover --clear.\",\n      \"rootCause\": \"The category-level help filter (`--help agent`) only renders subcommand names and one-line descriptions. It does not enumerate per-subcommand flags. The implementation likely iterates over subcommands and prints their `about` strings without including their argument/flag definitions.\",\n      \"codePointer\": \"cli/browser4-cli/src/ — likely in the help rendering or clap configuration where category filters are applied\",\n      \"suggestion\": \"- Extend `--help agent` to show a brief flags summary per subcommand (e.g., `agent list [--clear] [--limit N] [--offset N]`)\\n- Alternatively, add a hint at the bottom: \\\"Run `agent list --help` for detailed options.\\\"\"\n    },\n    {\n      \"title\": \"SKILL.md agent lifecycle section missing --clear, --limit, --offset documentation\",\n      \"severity\": \"Medium\",\n      \"category\": \"Documentation\",\n      \"reproduction\": \"Read skills/browser4-cli/SKILL.md §Agent Task Lifecycle and note the absence of --clear, --limit, or --offset flags.\",\n      \"expected\": \"The SKILL.md should document the full `agent list` interface including --clear (for task pruning), --limit (for pagination), and --offset.\",\n      \"actual\": \"Only basic `agent list` usage is shown. The --clear flag (essential for task lifecycle cleanup) is undocumented in the skill file.\",\n      \"rootCause\": \"The SKILL.md agent section was written to cover the basic submit→poll→retrieve workflow. Task management flags (--clear, --limit, --offset) were added to the CLI but not backported to the skill documentation.\",\n      \"codePointer\": \"skills/browser4-cli/SKILL.md:400-446 (Agent Task Lifecycle section)\",\n      \"suggestion\": \"- Add a \\\"Task Management\\\" subsection documenting `agent list --clear`, `--limit`, and `--offset`\\n- Include an example showing the full lifecycle including cleanup: `agent list --clear`\"\n    },\n    {\n      \"title\": \"Pre-existing tasks from prior sessions visible on first agent list\",\n      \"severity\": \"Low\",\n      \"category\": \"UX\",\n      \"reproduction\": \"Run `agent list` as a new user. If any prior CLI session submitted agent tasks, they appear in the list.\",\n      \"expected\": \"A new user's first `agent list` should either show no tasks or clearly distinguish between the current session's tasks and tasks from prior sessions.\",\n      \"actual\": \"When I ran `agent list`, 3 tasks from prior test runs appeared alongside my newly submitted task. A first-time user would be confused seeing tasks they didn't create.\",\n      \"rootCause\": \"Agent tasks are persisted to a shared task store on disk (likely in the Browser4 backend's data directory). There is no session-scoping or automatic expiry — tasks accumulate across CLI sessions until explicitly cleared.\",\n      \"codePointer\": \"\",\n      \"suggestion\": \"- Consider auto-clearing terminal tasks on CLI startup or session close, or scoping the task store to a session identifier\\n- Alternatively, add a note in the output when pre-existing tasks are shown: \\\"Showing N tasks (M from prior sessions)\\\"\\n- Document in SKILL.md that tasks persist across sessions and must be manually cleared\"\n    },\n    {\n      \"title\": \"agent status outputs raw JSON by default instead of JSON-enveloped format\",\n      \"severity\": \"Low\",\n      \"category\": \"UX\",\n      \"reproduction\": \"Run `agent status <id>` and observe raw JSON output. Compare with `agent status <id> --json` which produces a JSON-enveloped format with command/status wrapper.\",\n      \"expected\": \"Either default output should be JSON-enveloped (consistent with other commands), or the documentation should clearly explain the difference between default and --json output.\",\n      \"actual\": \"Default `agent status` outputs bare JSON (`{\\\"id\\\":...,\\\"statusCode\\\":...}`). With `--json`, output is wrapped (`{\\\"command\\\":\\\"agent-status\\\",\\\"output\\\":{\\\"raw\\\":{...}},\\\"status\\\":\\\"ok\\\"}`). This inconsistency means a script parsing `agent status` output gets different structures depending on the --json flag.\",\n      \"rootCause\": \"The agent status command's default output path bypasses the standard JSON envelope that other commands use. The --json flag re-enables the envelope. This appears to be intentional (raw JSON is more ergonomic for human reading) but creates an inconsistency.\",\n      \"codePointer\": \"\",\n      \"suggestion\": \"- Document this behavior explicitly in both --help output and SKILL.md\\n- Consider making the envelope the default for machine consistency, with a --raw flag for bare JSON\"\n    },\n    {\n      \"title\": \"Command ordering inconsistent between main help and --help agent\",\n      \"severity\": \"Low\",\n      \"category\": \"UX\",\n      \"reproduction\": \"Compare `./b4w.ps1 help` agent section with `./b4w.ps1 --help agent` output.\",\n      \"expected\": \"Commands should appear in the same order across all help views.\",\n      \"actual\": \"Main help lists: run, status, result, list. `--help agent` lists: run, list, result, status. The lifecycle order (run→status→result→list) is more logical and should be consistent.\",\n      \"rootCause\": \"The main help and the category filter likely use different ordering logic — possibly alphabetical vs. declaration order in the clap configuration.\",\n      \"codePointer\": \"\",\n      \"suggestion\": \"- Unify command ordering across all help views to follow the logical lifecycle: agent run → agent status → agent result → agent list\"\n    }\n  ],\n  \"assessment\": {\n    \"completionStatus\": \"Successful — all 11 task steps completed without errors. The agent run → status → result → list → clear lifecycle works correctly end-to-end.\",\n    \"successRate\": \"100% — every command produced expected output with correct exit codes. No workarounds were needed.\",\n    \"issuesFound\": 5,\n    \"majorBlockers\": \"\",\n    \"mostConfusingAspects\": \"1) The --clear flag is hidden two levels deep in the help hierarchy — visible in `agent list --help` but not in `--help agent`. 2) The agent status command outputs different JSON structures with and without --json, which could trip up script authors. 3) Pre-existing tasks from prior sessions appear in agent list without any indication they're from a different session.\",\n    \"mostValuableImprovements\": \"1) Surface --clear, --limit, --offset flags in `--help agent` output. 2) Document task management flags in SKILL.md's agent lifecycle section. 3) Add session-scoping or staleness indicators to persisted tasks.\",\n    \"usabilityRating\": 8\n  }\n}\n```"
+  },
+  "issues": [
+    {
+      "number": 1,
+      "title": "--help agent omits --clear, --limit, --offset flags for agent list",
+      "severity": "Medium",
+      "category": "Discoverability",
+      "sections": [
+        {
+          "body": "Run `./b4w.ps1 --help agent` and observe that `agent list` is listed with no flags.",
+          "label": "Reproduction"
+        },
+        {
+          "body": "The --help agent output should mention key flags like --clear, --limit, --offset for agent list, similar to how other commands surface their options.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "`--help agent` shows: `agent list — List all tracked agent tasks and their status` with no flag hints. Users must run `agent list --help` (two levels deep) to discover --clear.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The category-level help filter (`--help agent`) only renders subcommand names and one-line descriptions. It does not enumerate per-subcommand flags. The implementation likely iterates over subcommands and prints their `about` strings without including their argument/flag definitions.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "cli/browser4-cli/src/ — likely in the help rendering or clap configuration where category filters are applied",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Extend `--help agent` to show a brief flags summary per subcommand (e.g., `agent list [--clear] [--limit N] [--offset N]`)\n- Alternatively, add a hint at the bottom: \"Run `agent list --help` for detailed options.\"",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 2,
+      "title": "SKILL.md agent lifecycle section missing --clear, --limit, --offset documentation",
+      "severity": "Medium",
+      "category": "Documentation",
+      "sections": [
+        {
+          "body": "Read skills/browser4-cli/SKILL.md §Agent Task Lifecycle and note the absence of --clear, --limit, or --offset flags.",
+          "label": "Reproduction"
+        },
+        {
+          "body": "The SKILL.md should document the full `agent list` interface including --clear (for task pruning), --limit (for pagination), and --offset.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "Only basic `agent list` usage is shown. The --clear flag (essential for task lifecycle cleanup) is undocumented in the skill file.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The SKILL.md agent section was written to cover the basic submit→poll→retrieve workflow. Task management flags (--clear, --limit, --offset) were added to the CLI but not backported to the skill documentation.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "skills/browser4-cli/SKILL.md:400-446 (Agent Task Lifecycle section)",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Add a \"Task Management\" subsection documenting `agent list --clear`, `--limit`, and `--offset`\n- Include an example showing the full lifecycle including cleanup: `agent list --clear`",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 3,
+      "title": "Pre-existing tasks from prior sessions visible on first agent list",
+      "severity": "Low",
+      "category": "UX",
+      "sections": [
+        {
+          "body": "Run `agent list` as a new user. If any prior CLI session submitted agent tasks, they appear in the list.",
+          "label": "Reproduction"
+        },
+        {
+          "body": "A new user's first `agent list` should either show no tasks or clearly distinguish between the current session's tasks and tasks from prior sessions.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "When I ran `agent list`, 3 tasks from prior test runs appeared alongside my newly submitted task. A first-time user would be confused seeing tasks they didn't create.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "Agent tasks are persisted to a shared task store on disk (likely in the Browser4 backend's data directory). There is no session-scoping or automatic expiry — tasks accumulate across CLI sessions until explicitly cleared.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "- Consider auto-clearing terminal tasks on CLI startup or session close, or scoping the task store to a session identifier\n- Alternatively, add a note in the output when pre-existing tasks are shown: \"Showing N tasks (M from prior sessions)\"\n- Document in SKILL.md that tasks persist across sessions and must be manually cleared",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 4,
+      "title": "agent status outputs raw JSON by default instead of JSON-enveloped format",
+      "severity": "Low",
+      "category": "UX",
+      "sections": [
+        {
+          "body": "Run `agent status <id>` and observe raw JSON output. Compare with `agent status <id> --json` which produces a JSON-enveloped format with command/status wrapper.",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Either default output should be JSON-enveloped (consistent with other commands), or the documentation should clearly explain the difference between default and --json output.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "Default `agent status` outputs bare JSON (`{\"id\":...,\"statusCode\":...}`). With `--json`, output is wrapped (`{\"command\":\"agent-status\",\"output\":{\"raw\":{...}},\"status\":\"ok\"}`). This inconsistency means a script parsing `agent status` output gets different structures depending on the --json flag.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The agent status command's default output path bypasses the standard JSON envelope that other commands use. The --json flag re-enables the envelope. This appears to be intentional (raw JSON is more ergonomic for human reading) but creates an inconsistency.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "- Document this behavior explicitly in both --help output and SKILL.md\n- Consider making the envelope the default for machine consistency, with a --raw flag for bare JSON",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 5,
+      "title": "Command ordering inconsistent between main help and --help agent",
+      "severity": "Low",
+      "category": "UX",
+      "sections": [
+        {
+          "body": "Compare `./b4w.ps1 help` agent section with `./b4w.ps1 --help agent` output.",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Commands should appear in the same order across all help views.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "Main help lists: run, status, result, list. `--help agent` lists: run, list, result, status. The lifecycle order (run→status→result→list) is more logical and should be consistent.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The main help and the category filter likely use different ordering logic — possibly alphabetical vs. declaration order in the clap configuration.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "- Unify command ordering across all help views to follow the logical lifecycle: agent run → agent status → agent result → agent list",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    }
+  ]
+}

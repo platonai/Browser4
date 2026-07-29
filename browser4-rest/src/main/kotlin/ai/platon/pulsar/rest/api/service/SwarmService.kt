@@ -107,7 +107,7 @@ class SwarmService(
             response.id?.let { id ->
                 // Skip terminal entries whose TTL has expired — they were evicted
                 // from the cache before shutdown and should not be revived.
-                if (response.isDone && response.createdTime.isBefore(ttlCutoff)) {
+                if (response.isDone && response.createdTime?.isBefore(ttlCutoff) == true) {
                     logger.debug("Skipping expired swarm task {} during restore (created={})", id, response.createdTime)
                     return@restore
                 }
@@ -123,7 +123,7 @@ class SwarmService(
         val ttlCutoff = now.minusSeconds(taskTtlMinutes * 60L)
 
         val stale = responseCache.asMap().entries.filter {
-            it.value.isDone && it.value.createdTime.isBefore(ttlCutoff)
+            it.value.isDone && it.value.createdTime?.isBefore(ttlCutoff) == true
         }
         if (stale.isEmpty()) return
 

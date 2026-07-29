@@ -49,9 +49,15 @@ class PrivacyContextManagerTests {
     @AfterTest
     fun tearDown() {
         driverPoolManager.close()
-        Files.walk(contextPathBase)
-            .filter { it.fileName.toString().startsWith("cx.") }
-            .forEach { Files.delete(it) }
+        try {
+            if (Files.exists(contextPathBase)) {
+                Files.walk(contextPathBase)
+                    .filter { it.fileName.toString().startsWith("cx.") }
+                    .forEach { Files.delete(it) }
+            }
+        } catch (_: java.nio.file.NoSuchFileException) {
+            // Directory may have been cleaned up concurrently
+        }
     }
 
     @Test
@@ -144,10 +150,17 @@ class PrivacyContextManagerTests {
             }
         }, 2, 1, TimeUnit.SECONDS)
 
-        producer.awaitTermination(15, TimeUnit.SECONDS)
+        producer.shutdown()
+        closer.shutdown()
+
+        producer.awaitTermination(10, TimeUnit.SECONDS)
+        closer.awaitTermination(10, TimeUnit.SECONDS)
 
         producer.shutdownNow()
         closer.shutdownNow()
+
+        producer.awaitTermination(5, TimeUnit.SECONDS)
+        closer.awaitTermination(5, TimeUnit.SECONDS)
     }
 
     @Test

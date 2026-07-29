@@ -31,7 +31,7 @@ class HtmlRenderer(private val catalogService: CatalogService) {
         }
     }
 
-    fun renderHome(): String {
+    fun renderHome(featuredProducts: List<Product> = emptyList()): String {
         val links = catalogService.allCategories().joinToString("\n") { c ->
             """
             <li class="category-item" data-category-id="${c.id}">
@@ -39,8 +39,14 @@ class HtmlRenderer(private val catalogService: CatalogService) {
             </li>
             """.trimIndent()
         }
+        val featured = if (featuredProducts.isNotEmpty()) {
+            featuredProducts.joinToString("\n") { productCard(it) }
+        } else {
+            "<p>No featured products available.</p>"
+        }
         return homeTemplate
             .replace("<!--CATEGORY_LINKS-->", links)
+            .replace("<!--FEATURED_PRODUCTS-->", featured)
             .replace("{{TITLE}}", "Mock EC Home")
     }
 

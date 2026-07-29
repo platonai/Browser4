@@ -82,9 +82,23 @@ echo 'a[href]' | browser4-cli htmlsnapshot inspect --stdin
 | | `--stdin` | `echo 'a[href]' \| htmlsnapshot inspect --stdin` |
 | | `--selector-base64` | `--selector-base64 <base64>` |
 
+## PowerShell-Specific: `@` Splatting
+
+In **PowerShell**, `@` is the [splatting operator](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_splatting). When an unquoted argument starts with `@`, PowerShell tries to interpret it as a splat variable:
+
+```powershell
+# This FAILS — PowerShell sees @file as a splat variable:
+browser4-cli crawl --sql @.test-sessions/extract.sql
+
+# This WORKS — quoting prevents splat interpretation:
+browser4-cli crawl --sql "@.test-sessions/extract.sql"
+```
+
+**Always quote `@file` paths in PowerShell.** The quotes are stripped before the argument reaches the CLI, so the `@` prefix is still recognized.
+
 ## Why This Works
 
 - **`--file`** — File content is read directly; the shell never interprets it.
 - **`--stdin`** — Stdin content is passed as raw bytes; no shell interpolation.
 - **`--base64`** — Base64 strings contain only alphanumeric characters and `+/=` — safe in any shell.
-- **`@file`** — The `@` prefix tells the CLI to read from a file instead of interpreting the argument as a CSS selector / SQL string.
+- **`@file`** — The `@` prefix tells the CLI to read from a file instead of interpreting the argument as a CSS selector / SQL string. **In PowerShell, always quote `@file` paths** (`"@path/to/file"`) to prevent `@` from being interpreted as the splatting operator.

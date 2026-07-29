@@ -709,6 +709,110 @@ Describe 'Cross-format consistency' {
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# Move-IssuesFileToReady tests
+# ═══════════════════════════════════════════════════════════════════════════════
+
+function global:Move-IssuesFileToReady {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$FilePath,
+        [string]$TasksRootOverride = ''
+    )
+
+    $tasksRoot = if ($TasksRootOverride) { $TasksRootOverride } else { $global:ReviewTestRoot }
+    $readyDir = Join-Path $tasksRoot 'main' '1ready'
+    if (-not (Test-Path -LiteralPath $readyDir)) {
+        New-Item -ItemType Directory -Path $readyDir -Force | Out-Null
+    }
+
+    $fileName = Split-Path -Leaf $FilePath
+    $destBaseName = [System.IO.Path]::GetFileNameWithoutExtension($fileName)
+    $destPath = Join-Path $readyDir $fileName
+
+    if (Test-Path -LiteralPath $destPath) {
+        $counter = 2
+        $ext = [System.IO.Path]::GetExtension($fileName)
+        while (Test-Path -LiteralPath $destPath) {
+            $destPath = Join-Path $readyDir "$destBaseName.$counter$ext"
+            $counter++
+        }
+    }
+
+    Move-Item -Path $FilePath -Destination $destPath -Force
+    return $destPath
+}
+
+Describe 'Move-IssuesFileToReady' {
+
+    BeforeEach { Initialize-Fixture }
+    AfterEach  { Remove-Fixture }
+
+    It 'moves a file from an issues directory to main/1ready/' {
+        # Set up a mock tasks directory structure
+        $tasksRoot = Join-Path $global:ReviewTestRoot 'tasks'
+        $issuesDraft = Join-Path $tasksRoot 'issues' 'draft'
+        New-Item -ItemType Directory -Path $issuesDraft -Force | Out-Null
+
+        $sourcePath = Join-Path $issuesDraft 'test-review.issues.md'
+        Set-Content -Path $sourcePath -Value '# test file' -Encoding UTF8
+
+        $destPath = Move-IssuesFileToReady -FilePath $sourcePath -TasksRootOverride $tasksRoot
+
+        $destPath | Should -Not -BeNullOrEmpty
+        Test-Path -LiteralPath $destPath | Should -BeTrue
+        $destPath | Should -Match '1ready[\\/]test-review\.issues\.md$'
+        Test-Path -LiteralPath $sourcePath | Should -BeFalse
+    }
+
+    It 'handles filename collisions by appending a numeric suffix' {
+        $tasksRoot = Join-Path $global:ReviewTestRoot 'tasks'
+        $readyDir = Join-Path $tasksRoot 'main' '1ready'
+        $issuesDraft = Join-Path $tasksRoot 'issues' 'draft'
+        New-Item -ItemType Directory -Path $issuesDraft -Force | Out-Null
+        New-Item -ItemType Directory -Path $readyDir -Force | Out-Null
+
+        # Pre-create a file with the same name in 1ready
+        $existingPath = Join-Path $readyDir 'collision.issues.md'
+        Set-Content -Path $existingPath -Value 'existing' -Encoding UTF8
+
+        $sourcePath = Join-Path $issuesDraft 'collision.issues.md'
+        Set-Content -Path $sourcePath -Value 'new content' -Encoding UTF8
+
+        $destPath = Move-IssuesFileToReady -FilePath $sourcePath -TasksRootOverride $tasksRoot
+
+        $destPath | Should -Not -BeNullOrEmpty
+        # Should get collision.2.issues.md or similar
+        $destName = Split-Path -Leaf $destPath
+        $destName | Should -Not -BeExactly 'collision.issues.md'
+        $destName | Should -Match 'collision\.issues\.\d+\.md'
+        Test-Path -LiteralPath $destPath | Should -BeTrue
+        # Original existing file should remain untouched
+        Test-Path -LiteralPath $existingPath | Should -BeTrue
+        $existingContent = (Get-Content -Path $existingPath -Raw).Trim()
+        $existingContent | Should -BeExactly 'existing'
+    }
+
+    It 'creates the 1ready directory if it does not exist' {
+        $tasksRoot = Join-Path $global:ReviewTestRoot 'tasks'
+        $issuesDraft = Join-Path $tasksRoot 'issues' 'draft'
+        New-Item -ItemType Directory -Path $issuesDraft -Force | Out-Null
+
+        # main/1ready does NOT exist yet
+        $readyDir = Join-Path $tasksRoot 'main' '1ready'
+        Test-Path -LiteralPath $readyDir | Should -BeFalse
+
+        $sourcePath = Join-Path $issuesDraft 'auto-create.issues.md'
+        Set-Content -Path $sourcePath -Value '# test' -Encoding UTF8
+
+        $destPath = Move-IssuesFileToReady -FilePath $sourcePath -TasksRootOverride $tasksRoot
+
+        $destPath | Should -Not -BeNullOrEmpty
+        Test-Path -LiteralPath $readyDir | Should -BeTrue
+        Test-Path -LiteralPath $destPath | Should -BeTrue
+    }
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # Decision list — must match issue-model.js DECISIONS array exactly
 # ═══════════════════════════════════════════════════════════════════════════════
 

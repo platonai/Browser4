@@ -179,4 +179,21 @@ class PluginControllerTest {
 
         assertEquals(HttpStatus.NOT_FOUND, response.statusCode)
     }
+
+    @Test
+    fun `removePlugin returns 409 when file is locked or I-O error occurs`() {
+        val service = Mockito.mock(PluginService::class.java)
+        Mockito.`when`(service.removePlugin("browser4-media"))
+            .thenThrow(IllegalStateException(
+                "Failed to delete plugin 'browser4-media-4.12.1-SNAPSHOT.jar': " +
+                    "The process cannot access the file because it is being used by another process. " +
+                    "Stop the application, delete the file manually, then restart."
+            ))
+        val controller = PluginController(service)
+
+        val response = controller.removePlugin("browser4-media")
+
+        assertEquals(409, response.statusCode.value())
+        assertNull(response.body)
+    }
 }

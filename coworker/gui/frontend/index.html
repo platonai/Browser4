@@ -131,6 +131,15 @@ body {
 .app-brand svg { flex-shrink: 0; }
 .app-brand h1 { font-size: 1.05rem; font-weight: 600; margin: 0; color: #f1f5f9; letter-spacing: -0.01em; }
 .header-right { display: flex; align-items: center; gap: 10px; }
+.header-nav { display: flex; align-items: center; gap: 4px; }
+.header-nav a {
+  color: rgba(255,255,255,0.6); text-decoration: none;
+  font-size: 0.72rem; padding: 3px 10px; border-radius: var(--radius-sm);
+  transition: all var(--transition); font-weight: 500;
+  border: 1px solid transparent;
+}
+.header-nav a:hover { color: #fff; background: rgba(255,255,255,0.08); }
+.header-nav a.active { color: #fff; background: rgba(255,255,255,0.12); border-color: rgba(255,255,255,0.2); }
 .app-header .total-badge {
   display: flex; align-items: center; gap: 6px;
   background: rgba(255,255,255,0.1); color: #e2e8f0;
@@ -551,9 +560,13 @@ dialog .delete-warning {
   <div class="app-brand">
     <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="M3 9h18"/><path d="M9 21V9"/><circle cx="7.5" cy="6" r="1" fill="currentColor" stroke="none"/><circle cx="12.5" cy="6" r="1" fill="currentColor" stroke="none"/><circle cx="17.5" cy="6" r="1" fill="currentColor" stroke="none"/></svg>
     <h1>Coworker Task Manager</h1>
-    <a href="/issues/review" style="color:#a78bfa;font-size:0.72rem;text-decoration:none;margin-left:6px;opacity:0.75;" title="Review issue files">→ Review</a>
   </div>
   <div class="header-right">
+    <nav class="header-nav">
+      <a href="/" class="active">Tasks</a>
+      <a href="/issues/review">Review</a>
+      <a href="/logs">Logs</a>
+    </nav>
     <div class="total-badge">
       <span>pipeline</span>
       <strong id="total-badge">—</strong>

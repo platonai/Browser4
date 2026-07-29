@@ -146,8 +146,9 @@ function Resolve-TaskNames {
     .DESCRIPTION
         Each requested name is matched against the discovered list. Names
         without the .md extension are automatically appended with .md for
-        matching. Unmatched names produce a warning and are excluded from
-        the result.
+        matching. Names containing wildcards (*, ?) are matched using
+        PowerShell's -like operator against discovered task base names.
+        Unmatched names produce a warning and are excluded from the result.
     .PARAMETER Requested
         Array of task names from the user (with or without .md extension).
     .PARAMETER Discovered
@@ -169,6 +170,16 @@ function Resolve-TaskNames {
             $mdName
         } elseif ($name -in $Discovered) {
             $name
+        } elseif ($name.Contains('*') -or $name.Contains('?')) {
+            $matched = $Discovered | Where-Object {
+                $discBase = [System.IO.Path]::GetFileNameWithoutExtension($_)
+                $discBase -like $name -or $_ -like $name
+            }
+            if ($matched) {
+                $matched
+            } else {
+                Write-Host "WARNING: '$name' does not match any discovered tasks." -ForegroundColor Yellow
+            }
         } else {
             Write-Host "WARNING: '$name' not found among discovered tasks, skipping." -ForegroundColor Yellow
         }
@@ -265,46 +276,354 @@ function Read-TaskFile {
     }
 }
 
+# ── Duration formatting ──────────────────────────────────────────────────────
+
+function Format-Duration {
+    <#
+    .SYNOPSIS
+        Formats a TimeSpan into a human-readable string.
+    .DESCRIPTION
+        Returns '<1s' for sub-second durations, 'N.Ns' for seconds,
+        'Nm Ns' for minutes, and 'Nh Nm Ns' for hours.
+    .PARAMETER Duration
+        The TimeSpan to format.
+    .OUTPUTS
+        String like '<1s', '2.5s', '2m 30s', or '1h 30m 0s'.
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [TimeSpan] $Duration
+    )
+    if ($Duration.TotalSeconds -lt 1) { return '<1s' }
+    if ($Duration.TotalMinutes -lt 1) {
+        return '{0:F1}s' -f $Duration.TotalSeconds
+    }
+    if ($Duration.TotalHours -lt 1) {
+        return '{0}m {1}s' -f $Duration.Minutes, $Duration.Seconds
+    }
+    return '{0}h {1}m {2}s' -f $Duration.Hours, $Duration.Minutes, $Duration.Seconds
+}
+
 # ── Compiled output handler (C#) ──────────────────────────────────────────────
 # DataReceived events fire on .NET threadpool threads.  PowerShell scriptblocks
 # cast to delegates require a Runspace on the executing thread, which threadpool
 # threads do not have — causing "There is no Runspace available to run scripts
 # in this thread."  A compiled C# class avoids PowerShell entirely for event
 # handling and works reliably on any thread.
-if (-not $script:_NativeCommandHandlerCompiled) {
+# Detect whether the already-loaded type has the GetTail method (added 2026-07-26).
+# On re-runs within the same pwsh session the type may be stale — force a
+# recompile if the old version is loaded.
+# Determine whether the handler type is available and whether it has
+# checkpoint support (the 3-arg constructor added July 2026).  Three states:
+#   1. Type doesn't exist  → compile it fresh
+#   2. Type exists, has checkpoints → use as-is
+#   3. Type exists, OLD (no checkpoints) → use old 1-arg ctor, skip checkpoints
+# State 3 happens when a pwsh session survives across a git checkout that
+# changed the C# source — the old type is still loaded and Add-Type can't
+# replace it without restarting the session.
+#
+# IMPORTANT: GetMethod() returns null for missing methods — it does NOT throw.
+# We must check the return value, not rely on try/catch.
+$script:HandlerHasCheckpoints = $false
+$typeExists = $false
+$method = $null
+try { $null = [NativeCommandOutputHandler]; $typeExists = $true } catch { }
+
+if ($typeExists) {
+    try { $method = [NativeCommandOutputHandler].GetMethod('GetCheckpointStepCount') } catch { }
+    if ($null -ne $method) {
+        # State 2: type exists with checkpoint support
+        $script:HandlerHasCheckpoints = $true
+    } else {
+        # State 3: old version loaded — degrade gracefully
+        if (-not $script:_OldHandlerWarningShown) {
+            Write-Host '  Note: NativeCommandOutputHandler (old) loaded — checkpoint files unavailable.' -ForegroundColor DarkGray
+            Write-Host '  Restart your PowerShell session for real-time step checkpoints.' -ForegroundColor DarkGray
+            $script:_OldHandlerWarningShown = $true
+        }
+    }
+} else {
+    # State 1: type doesn't exist — compile fresh
     Add-Type -TypeDefinition @'
 using System;
 using System.IO;
 using System.Text;
+using System.Text.RegularExpressions;
+using System.Collections.Generic;
 
 public class NativeCommandOutputHandler
 {
     private readonly string _capturePath;
     private readonly UTF8Encoding _utf8;
+    private readonly string[] _ringBuffer;
+    private int _ringIndex;
+    private int _ringCount;
+    private readonly object _lock;
+
+    // ── Checkpoint support ──────────────────────────────────────────────
+    private readonly string _checkpointDir;
+    private readonly string _checkpointScenario;
+    private readonly object _checkpointLock;
+    private readonly List<StepRecord> _steps;
+    private string _currentStepId;
+    private string _currentStepLabel;
+    private DateTime _currentStepStart;
+
+    // Regex patterns for step markers the agent emits
+    private static readonly Regex _stepStartRx = new Regex(
+        @">>>\s+STEP\s+(\S+):\s*(.+)",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex _stepEndRx = new Regex(
+        @"<<<\s+STEP\s+(\S+):\s+(PASS|FAIL)\s*[—\-–]\s*(.+)",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex _abortRx = new Regex(
+        @"!!!\s+ABORT\s+at\s+step\s+(\S+):\s*(.+)\s*!!!",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     public NativeCommandOutputHandler(string capturePath)
+        : this(capturePath, null, null) { }
+
+    public NativeCommandOutputHandler(string capturePath,
+                                       string checkpointDir,
+                                       string checkpointScenario)
     {
         _capturePath = capturePath;
         _utf8 = new UTF8Encoding(false);
+        _ringBuffer = new string[10];
+        _ringIndex = 0;
+        _ringCount = 0;
+        _lock = new object();
+
+        _checkpointDir = checkpointDir;
+        _checkpointScenario = checkpointScenario;
+        _checkpointLock = new object();
+        _steps = new List<StepRecord>();
     }
 
     public void OnOutputReceived(object sender, System.Diagnostics.DataReceivedEventArgs e)
     {
-        if (e.Data != null)
+        if (e.Data == null) return;
+
+        Console.WriteLine(e.Data);
+        try
         {
-            Console.WriteLine(e.Data);
             File.AppendAllText(_capturePath, e.Data + Environment.NewLine, _utf8);
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine(
+                "[NativeCommandOutputHandler] Failed to write capture line: " + ex.Message);
+        }
+
+        lock (_lock)
+        {
+            _ringBuffer[_ringIndex] = e.Data;
+            _ringIndex = (_ringIndex + 1) % _ringBuffer.Length;
+            if (_ringCount < _ringBuffer.Length) _ringCount++;
+        }
+
+        // ── Checkpoint detection (runs when checkpointing is enabled) ──
+        if (_checkpointDir != null)
+        {
+            TryDetectStepMarker(e.Data);
+        }
+    }
+
+    private void TryDetectStepMarker(string line)
+    {
+        // Step start: >>> STEP 3/7: description
+        var startMatch = _stepStartRx.Match(line);
+        if (startMatch.Success)
+        {
+            _currentStepId = startMatch.Groups[1].Value.Trim();
+            _currentStepLabel = startMatch.Groups[2].Value.Trim();
+            _currentStepStart = DateTime.UtcNow;
+            return;
+        }
+
+        // Abort: !!! ABORT at step N: reason !!!
+        var abortMatch = _abortRx.Match(line);
+        if (abortMatch.Success)
+        {
+            var stepId = abortMatch.Groups[1].Value.Trim();
+            var reason = abortMatch.Groups[2].Value.Trim();
+            WriteCheckpoint(stepId, "ABORT", reason);
+            WriteProgressFile();
+            return;
+        }
+
+        // Step complete: <<< STEP 3/7: PASS — summary
+        var endMatch = _stepEndRx.Match(line);
+        if (endMatch.Success)
+        {
+            var stepId = endMatch.Groups[1].Value.Trim();
+            var result = endMatch.Groups[2].Value.Trim();
+            var summary = endMatch.Groups[3].Value.Trim();
+            WriteCheckpoint(stepId, result, summary);
+            WriteProgressFile();
+        }
+    }
+
+    private void WriteCheckpoint(string stepId, string result, string summary)
+    {
+        lock (_checkpointLock)
+        {
+            var elapsed = (_currentStepStart != default(DateTime))
+                ? (DateTime.UtcNow - _currentStepStart).TotalMilliseconds
+                : 0.0;
+
+            var rec = new StepRecord
+            {
+                step = stepId,
+                label = _currentStepLabel ?? "",
+                result = result,
+                summary = summary,
+                timestamp = DateTime.UtcNow.ToString("o"),
+                elapsedMs = (long)elapsed
+            };
+            _steps.Add(rec);
+
+            try
+            {
+                var json = StepRecordToJson(rec);
+                var safeId = stepId.Replace('/', '-').Replace('\\', '-');
+                var fileName = string.Format("{0}-step-{1}.json",
+                    _checkpointScenario, safeId);
+                var filePath = Path.Combine(_checkpointDir, fileName);
+                File.WriteAllText(filePath, json, _utf8);
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine(
+                    "[NativeCommandOutputHandler] Failed to write step checkpoint: " + ex.Message);
+            }
+        }
+    }
+
+    private void WriteProgressFile()
+    {
+        lock (_checkpointLock)
+        {
+            try
+            {
+                var sb = new StringBuilder();
+                sb.Append("{\n");
+                sb.AppendFormat("  \"scenario\": {0},\n",
+                    JsonEscape(_checkpointScenario));
+                sb.AppendFormat("  \"lastStep\": {0},\n",
+                    JsonEscape(_steps.Count > 0 ? _steps[_steps.Count - 1].step : ""));
+                sb.AppendFormat("  \"lastUpdate\": {0},\n",
+                    JsonEscape(DateTime.UtcNow.ToString("o")));
+                sb.AppendFormat("  \"stepCount\": {0},\n", _steps.Count);
+                sb.Append("  \"steps\": [\n");
+                for (int i = 0; i < _steps.Count; i++)
+                {
+                    if (i > 0) sb.Append(",\n");
+                    sb.Append("    ");
+                    sb.Append(StepRecordToJson(_steps[i]));
+                }
+                sb.Append("\n  ]\n}");
+                var filePath = Path.Combine(_checkpointDir,
+                    _checkpointScenario + "-progress.json");
+                File.WriteAllText(filePath, sb.ToString(), _utf8);
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine(
+                    "[NativeCommandOutputHandler] Failed to write progress file: " + ex.Message);
+            }
+        }
+    }
+
+    private static string StepRecordToJson(StepRecord r)
+    {
+        var sb = new StringBuilder();
+        sb.Append("{");
+        sb.AppendFormat("\"step\":{0},", JsonEscape(r.step));
+        sb.AppendFormat("\"label\":{0},", JsonEscape(r.label));
+        sb.AppendFormat("\"result\":{0},", JsonEscape(r.result));
+        sb.AppendFormat("\"summary\":{0},", JsonEscape(r.summary));
+        sb.AppendFormat("\"timestamp\":{0},", JsonEscape(r.timestamp));
+        sb.AppendFormat("\"elapsedMs\":{0}", r.elapsedMs);
+        sb.Append("}");
+        return sb.ToString();
+    }
+
+    private static string JsonEscape(string s)
+    {
+        if (string.IsNullOrEmpty(s)) return "\"\"";
+        var sb = new StringBuilder();
+        sb.Append('"');
+        foreach (char c in s)
+        {
+            switch (c)
+            {
+                case '"': sb.Append("\\\""); break;
+                case '\\': sb.Append("\\\\"); break;
+                case '\n': sb.Append("\\n"); break;
+                case '\r': sb.Append("\\r"); break;
+                case '\t': sb.Append("\\t"); break;
+                default: sb.Append(c); break;
+            }
+        }
+        sb.Append('"');
+        return sb.ToString();
+    }
+
+    private class StepRecord
+    {
+        public string step;
+        public string label;
+        public string result;
+        public string summary;
+        public string timestamp;
+        public long elapsedMs;
+    }
+
+    /// <summary>
+    /// Returns the last <paramref name="maxLines"/> lines received, oldest
+    /// first.  Returns null when no output has been received yet.
+    /// </summary>
+    public string GetTail(int maxLines = 10)
+    {
+        lock (_lock)
+        {
+            if (_ringCount == 0) return null;
+            int n = maxLines < _ringCount ? maxLines : _ringCount;
+            int start = _ringCount < _ringBuffer.Length ? 0 : _ringIndex;
+            var sb = new StringBuilder();
+            for (int i = _ringCount - n; i < _ringCount; i++)
+            {
+                int idx = (start + i) % _ringBuffer.Length;
+                if (i > _ringCount - n) sb.Append('\n');
+                sb.Append(_ringBuffer[idx]);
+            }
+            return sb.ToString();
+        }
+    }
+
+    /// <summary>
+    /// Returns the number of completed checkpoint steps seen so far.
+    /// Used as a recompilation sentinel (GetMethod check above) and
+    /// available for heartbeat display.
+    /// </summary>
+    public int GetCheckpointStepCount()
+    {
+        lock (_checkpointLock ?? _lock)
+        {
+            return _steps?.Count ?? 0;
         }
     }
 }
-'@
-    $script:_NativeCommandHandlerCompiled = $true
-}
+'@ -ErrorAction Stop
+        $script:_NativeCommandHandlerCompiled = $true
+        $script:HandlerHasCheckpoints = $true
+    }
 
 # ── Path resolution ──────────────────────────────────────────────────────────
 # Repo root is 3 levels up from scripts/ (scripts -> tests -> browser4-tests -> repo root)
 $script:RepoRoot = (Resolve-Path "$PSScriptRoot/../../..").Path
-$script:IssuesReadyDir = [System.IO.Path]::GetFullPath(
+$script:IssuesDraftDir = [System.IO.Path]::GetFullPath(
     (Join-Path $script:RepoRoot 'coworker' 'tasks' 'issues' 'draft')
 )
 
@@ -345,6 +664,7 @@ You are evaluating the usability, discoverability, and reliability of browser4-c
 Before performing any browser interaction:
 
 0. Verify your working directory is the repository root: `$($RepoRootPath)`. If `pwd` is anything other than this directory, navigate there immediately with `cd "$RepoRootPath"`. All browser4-cli commands use `$($cliInvocation)` which works from the repo root — stay in this directory for all commands.
+    **IMPORTANT — Temporary files:** Create ALL temporary, intermediate, and scratch files (scripts, data dumps, HTML snapshots, JSON exports, markdown drafts, log files, etc.) inside `./.test-sessions/` (not the repo root). Before creating any file, ensure the directory exists with `mkdir -p .test-sessions`. Do NOT pollute the repository root with temporary files — every generated file that is not a permanent project asset belongs under `.test-sessions/`.
 1. Run `$($helpCmd)`.
 2. Read `$($skillPath)` completely.
 3. Learn the available commands, workflows, and conventions directly from the documentation.
@@ -466,6 +786,46 @@ Leave the checkboxes empty — they are for the human reviewer to fill in.
 
 Use `---` (horizontal rule) to separate issues.
 
+#### Alternative JSON format (preferred for machine processing):
+
+As an alternative to the markdown format above, you may deliver Sections C (Issues Found) and D (Overall Assessment) as a **single JSON code block**. This format is **preferred** — it ensures reliable machine parsing, while the markdown format above is a backward-compatible fallback. Sections A (Task Result) and B (Execution Trace) must still be written as prose above the JSON block.
+
+``````json
+{
+  "issues": [
+    {
+      "title": "Brief descriptive title",
+      "severity": "Critical",
+      "category": "Product",
+      "reproduction": "Exact command(s) or steps to reproduce the issue.",
+      "expected": "What should have happened.",
+      "actual": "What actually happened.",
+      "rootCause": "Your best analysis of the technical cause. Infer from observed behavior when possible; note what investigation is needed when uncertain. This is essential for an AI coder to fix the issue later.",
+      "codePointer": "File path and function name where a fix should likely be applied (e.g. cli/browser4-cli/src/snapshot.rs:render_snapshot()). Leave empty string if unknown.",
+      "suggestion": "- First concrete suggestion\n- Second concrete suggestion\n- Additional suggestions as needed"
+    }
+  ],
+  "assessment": {
+    "completionStatus": "Successful / Partially Successful / Failed — describe the overall task outcome",
+    "successRate": "e.g. 80% — estimated percentage of task steps that succeeded",
+    "issuesFound": 8,
+    "majorBlockers": "Description of any major blockers encountered, or empty string if none.",
+    "mostConfusingAspects": "Most confusing aspects for a first-time user.",
+    "mostValuableImprovements": "Most valuable suggested improvements.",
+    "usabilityRating": 5
+  }
+}
+``````
+
+**Rules for the JSON format:**
+
+- Every field is a string except **issuesFound** (integer) and **usabilityRating** (integer 1–10).
+- **severity** must be one of: Critical, High, Medium, Low.
+- **category** must be one of: Product, Documentation, UX, Reliability, Discoverability.
+- Empty/unavailable fields should be an empty string "", never omitted.
+- Use \n for multi-line content within string values (e.g. bullet lists in **suggestion**).
+- Place the JSON block after Sections A and B. It replaces Sections C and D entirely.
+
 ### D. Overall Assessment
 
 Include:
@@ -485,6 +845,7 @@ Include:
 * Prefer evidence gathered from actual usage over assumptions.
 * Record both major and minor usability issues.
 * The task is considered successful only if both the task itself and the usability evaluation are completed.
+* **ALL temporary files** (scripts, data files, HTML exports, JSON dumps, screenshots, logs, markdown drafts, etc.) **MUST** be created inside `./.test-sessions/`. Never write temporary files to the repository root. Before creating any file, run `mkdir -p .test-sessions` if the directory does not already exist.
 
 # Task
 
@@ -508,7 +869,7 @@ function ConvertFrom-IssuesSection {
         Returns an array of hashtables with fields: Title, Severity, Category,
         Reproduction, Expected, Actual, RootCause, CodePointer, Review, Suggestion.
         Returns empty array if no issues can be parsed (the full output is always
-        preserved by Write-IssuesToReadyQueue).
+        preserved by Write-IssuesToDraft).
     #>
     param(
         [Parameter(Mandatory = $true)]
@@ -697,6 +1058,118 @@ function ConvertFrom-IssuesSection {
 
     # Return as array (ArrayList.ToArray() avoids pipeline wrapping)
     return $results.ToArray()
+}
+
+# ── JSON evaluation extraction ─────────────────────────────────────────────────
+# Preferred format.  Detects a ```json code block containing the canonical
+# evaluation schema (issues array + optional assessment object) and returns
+# structured hashtables directly — no regex parsing needed.  Returns $null
+# when no valid JSON block is found, signalling the caller to fall back to
+# markdown parsing.
+
+function ConvertFrom-JsonEvaluation {
+    <#
+    .SYNOPSIS
+        Extract issues and assessment from a JSON code block in agent output.
+    .DESCRIPTION
+        Searches the agent output for ```json code blocks and attempts to parse
+        each as the evaluation JSON schema.  Returns structured hashtables on
+        success, or $null when no valid JSON is found so the caller can fall
+        back to markdown parsing.
+
+        The expected JSON schema mirrors the prompt instructions:
+
+          { "issues": [ { title, severity, category, reproduction, expected,
+              actual, rootCause, codePointer, suggestion } ],
+            "assessment": { completionStatus, successRate, issuesFound,
+              majorBlockers, mostConfusingAspects, mostValuableImprovements,
+              usabilityRating } }
+
+        Issues are returned in the same hashtable format as
+        ConvertFrom-IssuesSection so downstream code works unchanged.
+    .PARAMETER Content
+        The full raw agent output.
+    .OUTPUTS
+        Hashtable with keys Issues (array of hashtables) and Assessment
+        (hashtable), or $null if no valid JSON block is found.
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Content
+    )
+
+    $normalized = $Content -replace '\r\n', "`n"
+
+    # Find all ```json code blocks — try each one until we get a valid parse
+    $blockPattern = '(?s)```json\s*\n(.*?)```'
+    $blockMatches = [regex]::Matches($normalized, $blockPattern)
+
+    foreach ($blockMatch in $blockMatches) {
+        $jsonStr = $blockMatch.Groups[1].Value.Trim()
+        if (-not $jsonStr) { continue }
+
+        try {
+            $data = $jsonStr | ConvertFrom-Json -ErrorAction Stop
+        } catch {
+            # Not valid JSON — try the next block
+            continue
+        }
+
+        # Must have at least an issues array
+        if (-not $data.issues) { continue }
+
+        $issueArray = @($data.issues)  # @() guards against single-object unwrapping
+        if ($issueArray.Count -eq 0) { continue }
+
+        # ── Map JSON issues → hashtable array (same shape as ConvertFrom-IssuesSection) ──
+        $defaultReview = @'
+- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+- [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
+- [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- **Notes:**
+'@
+
+        $issues = [System.Collections.ArrayList]::new()
+        foreach ($iss in $issueArray) {
+            $issueNum = $issues.Count + 1
+            [void]$issues.Add(@{
+                Title        = [string]$iss.title
+                Severity     = [string]$iss.severity
+                Category     = [string]$iss.category
+                Reproduction = [string]$iss.reproduction
+                Expected     = [string]$iss.expected
+                Actual       = [string]$iss.actual
+                RootCause    = [string]$iss.rootCause
+                CodePointer  = [string]$iss.codePointer
+                Review       = $defaultReview
+                Suggestion   = [string]$iss.suggestion
+            })
+        }
+
+        # ── Map JSON assessment → hashtable (if present) ──────────────────────
+        $assessment = $null
+        if ($data.assessment) {
+            $a = $data.assessment
+            $assessment = @{
+                CompletionStatus        = if ($a.completionStatus)        { [string]$a.completionStatus }        else { '' }
+                SuccessRate             = if ($a.successRate)             { [string]$a.successRate }             else { '' }
+                IssuesFound             = if ($null -ne $a.issuesFound)   { [int]$a.issuesFound }                else { 0 }
+                MajorBlockers           = if ($a.majorBlockers)           { [string]$a.majorBlockers }           else { '' }
+                MostConfusingAspects    = if ($a.mostConfusingAspects)    { [string]$a.mostConfusingAspects }    else { '' }
+                MostValuableImprovements = if ($a.mostValuableImprovements) { [string]$a.mostValuableImprovements } else { '' }
+                UsabilityRating         = if ($null -ne $a.usabilityRating) { [int]$a.usabilityRating }           else { 0 }
+            }
+        }
+
+        return @{
+            Issues     = $issues.ToArray()
+            Assessment = $assessment
+        }
+    }
+
+    return $null
 }
 
 # ── Background context extraction ──────────────────────────────────────────────
@@ -902,8 +1375,7 @@ function ConvertTo-IssueJson {
         issues     = $issueArray
     }
 
-    $jsonSettings = [System.Web.Script.Serialization.JavaScriptSerializer]::new()
-    return $jsonSettings.Serialize($result)
+    return $result | ConvertTo-Json -Depth 10
 }
 
 function ConvertFrom-IssueJson {
@@ -924,8 +1396,7 @@ function ConvertFrom-IssueJson {
         [string]$Json
     )
 
-    $jsonSettings = [System.Web.Script.Serialization.JavaScriptSerializer]::new()
-    $data = $jsonSettings.DeserializeObject($Json)
+    $data = $Json | ConvertFrom-Json
 
     $issues = @()
     foreach ($iss in $data.issues) {
@@ -990,20 +1461,28 @@ function ConvertFrom-IssueJson {
 
 # ── Issue file output ─────────────────────────────────────────────────────────
 
-function Write-IssuesToReadyQueue {
+function Write-IssuesToDraft {
     <#
     .SYNOPSIS
-        Write the agent evaluation output to the issues draft ready queue.
+        Write the agent evaluation output to the issues draft directory.
     .DESCRIPTION
         Saves the complete agent output (containing A. Task Result, B. Execution Trace,
         C. Issues Found, D. Overall Assessment) as a markdown file in the
         issues/draft directory for downstream refinement.
 
         Also extracts background context (Sections A + B) and parses individual
-        issues from Section C, then writes a SINGLE consolidated issues file
-        (.issues.md) containing all issues, their reproduction context, and a
-        reproduction guide — because the issues discovered in a single scenario
-        are often interrelated and should be analyzed together.
+        issues from Section C, then writes three files:
+
+          - .full.md    — complete raw agent output (verbatim reference)
+          - .issues.md  — consolidated issues with background, reproduction
+                           guide, and overall assessment (markdown)
+          - .issues.json — canonical JSON per the schema shared with
+                            coworker/gui/frontend/issue-model.js
+                           (machine-readable, for GUI / CI consumption)
+
+        Issues discovered in a single scenario are kept together because they
+        are often interrelated — shared root causes, shared reproduction
+        environments, or cascading failures.
 
         Always writes the full output regardless of whether individual issues
         can be parsed.
@@ -1012,7 +1491,7 @@ function Write-IssuesToReadyQueue {
     .PARAMETER Content
         The full text output from the agent evaluation.
     .PARAMETER OutputDirectory
-        Optional override for the ready queue directory. Defaults to $IssuesReadyDir.
+        Optional override for the draft directory. Defaults to $IssuesDraftDir.
     #>
     param(
         [Parameter(Mandatory = $true)]
@@ -1021,7 +1500,7 @@ function Write-IssuesToReadyQueue {
         [Parameter(Mandatory = $true)]
         [string]$Content,
 
-        [string]$OutputDirectory = $script:IssuesReadyDir
+        [string]$OutputDirectory = $script:IssuesDraftDir
     )
 
     if ([string]::IsNullOrWhiteSpace($Content)) {
@@ -1049,8 +1528,17 @@ function Write-IssuesToReadyQueue {
     # 2) Extract background context (Sections A + B) for AI reproduction
     $bg = Extract-BackgroundContext -Content $Content
 
-    # 3) Parse individual issues from Section C
-    $issues = ConvertFrom-IssuesSection -Content $Content
+    # 3) Parse issues — try JSON first (preferred, more reliable), fall back to
+    #    markdown parsing when no valid JSON block is found.
+    $jsonEval = ConvertFrom-JsonEvaluation -Content $Content
+    if ($jsonEval) {
+        $issues = $jsonEval.Issues
+        $assessment = $jsonEval.Assessment
+        Write-Host "  Parsed $($issues.Count) issue(s) from JSON block" -ForegroundColor DarkGray
+    } else {
+        $issues = ConvertFrom-IssuesSection -Content $Content
+        $assessment = $null
+    }
 
     # 4) Write a SINGLE consolidated issues file with background context and
     #    reproduction guide.  Writing all issues together preserves their
@@ -1141,6 +1629,33 @@ function Write-IssuesToReadyQueue {
             $consBody += "---`n`n"
         }
 
+        # ── Overall assessment (JSON-parsed evaluations only) ───────────────
+        if ($assessment) {
+            $consBody += "## Overall Assessment`n`n"
+            if ($assessment.CompletionStatus) {
+                $consBody += "**Completion Status:** $($assessment.CompletionStatus)`n`n"
+            }
+            if ($assessment.SuccessRate) {
+                $consBody += "**Success Rate:** $($assessment.SuccessRate)`n`n"
+            }
+            if ($assessment.IssuesFound -gt 0) {
+                $consBody += "**Issues Found:** $($assessment.IssuesFound)`n`n"
+            }
+            if ($assessment.MajorBlockers) {
+                $consBody += "**Major Blockers:** $($assessment.MajorBlockers)`n`n"
+            }
+            if ($assessment.MostConfusingAspects) {
+                $consBody += "**Most Confusing Aspects:** $($assessment.MostConfusingAspects)`n`n"
+            }
+            if ($assessment.MostValuableImprovements) {
+                $consBody += "**Most Valuable Improvements:** $($assessment.MostValuableImprovements)`n`n"
+            }
+            if ($assessment.UsabilityRating -gt 0) {
+                $consBody += "**Usability Rating:** $($assessment.UsabilityRating)/10`n`n"
+            }
+            $consBody += "---`n`n"
+        }
+
         # ── Reproduction guide ──────────────────────────────────────────────
         # Synthesize a practical reproduction guide that an AI coder can follow.
         $consBody += "## How to Reproduce`n`n"
@@ -1180,6 +1695,20 @@ function Write-IssuesToReadyQueue {
     } else {
         Write-Host "  (No individual issues parsed -- full output + background context saved)" -ForegroundColor DarkGray
     }
+
+    # 5) Write the canonical JSON file for machine consumption (GUI, CI, etc.)
+    $jsonFileName = "$timestamp-$safeName.issues.json"
+    $jsonFilePath = Join-Path $OutputDirectory $jsonFileName
+    $absoluteJsonPath = [System.IO.Path]::GetFullPath($jsonFilePath)
+    $modeLabel = if ($browser4cliMode -eq 'production') { 'production' } else { 'dev' }
+    $jsonOutput = ConvertTo-IssueJson -ScenarioName $ScenarioName `
+        -SourceFile $fullFileName `
+        -Timestamp $timestamp `
+        -Mode $modeLabel `
+        -Background $bg `
+        -Issues $issues
+    [System.IO.File]::WriteAllText($absoluteJsonPath, $jsonOutput, $utf8NoBom)
+    Write-Host "  Wrote issues JSON: $absoluteJsonPath" -ForegroundColor DarkGray
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1264,7 +1793,16 @@ function Start-NativeCommand {
         # Maximum seconds to wait before killing the process.
         # 0 (default) means no timeout.  Exit code 124 is returned on timeout
         # (matching the Unix `timeout` command convention).
-        [int] $TimeoutSeconds = 0
+        [int] $TimeoutSeconds = 0,
+
+        # ── Checkpoint support ──────────────────────────────────────────
+        # When both parameters are provided the output handler writes a
+        # per-step checkpoint JSON after every `<<< STEP N: PASS|FAIL`
+        # marker, plus a cumulative <scenario>-progress.json file.
+        # Checkpoints are written in real time as the agent emits markers.
+        [string] $CheckpointDir = '',
+
+        [string] $CheckpointScenario = ''
     )
 
     $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
@@ -1301,7 +1839,15 @@ function Start-NativeCommand {
     # PowerShell scriptblocks cast to delegates.  DataReceived events fire
     # on .NET threadpool threads where no PowerShell Runspace is guaranteed;
     # pure-C# handlers avoid "There is no Runspace available" crashes.
-    $nativeHandler = New-Object NativeCommandOutputHandler $capturePath
+    if ($CheckpointDir -and $CheckpointScenario -and $script:HandlerHasCheckpoints) {
+        # Ensure checkpoint dir exists before the handler starts writing
+        if (-not (Test-Path -LiteralPath $CheckpointDir)) {
+            New-Item -ItemType Directory -Path $CheckpointDir -Force | Out-Null
+        }
+        $nativeHandler = New-Object NativeCommandOutputHandler $capturePath, $CheckpointDir, $CheckpointScenario
+    } else {
+        $nativeHandler = New-Object NativeCommandOutputHandler $capturePath
+    }
     $streamHandler = [Delegate]::CreateDelegate(
         [System.Diagnostics.DataReceivedEventHandler],
         $nativeHandler,
@@ -1479,12 +2025,48 @@ function Start-NativeCommand {
                 [Console]::WriteLine(
                     "  · ${cmdLabel} — running (${mins}m ${secs}s elapsed, heartbeat #${heartbeatCount})"
                 )
+
+                # When checkpoints are enabled, show how many steps completed
+                if ($CheckpointDir -and $CheckpointScenario -and $script:HandlerHasCheckpoints) {
+                    $stepCount = $nativeHandler.GetCheckpointStepCount()
+                    if ($stepCount -gt 0) {
+                        [Console]::WriteLine(
+                            "  · Checkpoints: $stepCount step(s) completed → .test-sessions/${CheckpointScenario}-progress.json"
+                        )
+                    }
+                }
+
+                # Show the last 10 lines of agent output so the heartbeat is
+                # meaningful — the user can see what the agent is doing instead
+                # of just staring at an elapsed-time counter.
+                $tail = $nativeHandler.GetTail()
+                if ($tail) {
+                    [Console]::WriteLine('  ══ last 10 lines ══')
+                    $maxWidth = try { [Math]::Min([Console]::WindowWidth - 4, 160) } catch { 156 }
+                    foreach ($line in ($tail -split "`n")) {
+                        # Truncate long lines so they don't wrap awkwardly
+                        if ($line.Length -gt $maxWidth) {
+                            $line = $line.Substring(0, $maxWidth - 1) + [char]0x2026  # '…'
+                        }
+                        [Console]::WriteLine("  │ ${line}")
+                    }
+                    [Console]::WriteLine('  ══════════════════')
+                } else {
+                    [Console]::WriteLine('  · (no output yet)')
+                }
+
                 $lastHeartbeatSec = $elapsed
             }
         }
 
         # ── Drain final output ─────────────────────────────────────────────
         # The process has exited but async reads may still have data in flight.
+        # WaitForExit() (parameterless) blocks until all OutputDataReceived /
+        # ErrorDataReceived event handlers have finished processing — without
+        # this, CancelOutputRead() may discard data that hasn't been delivered
+        # yet, losing most of the captured output.
+        try { $proc.WaitForExit() } catch { }
+
         # Cancel the async readers, then drain synchronously to capture
         # everything that remains.
         try { $proc.CancelOutputRead() } catch { }
@@ -1663,6 +2245,166 @@ function Assert-Browser4CliLatest {
     return 1
 }
 
+# ── Workflow pre-flight checks ─────────────────────────────────────────────────
+# Runs BEFORE the expensive agent invocation so common environment problems
+# (missing CLI, dead backend) are caught in seconds instead of waiting 5-20
+# minutes for the agent to discover them.
+
+function Test-WorkflowPreflight {
+    <#
+    .SYNOPSIS
+        Quick pre-flight checks before launching the expensive agent call.
+    .DESCRIPTION
+        Verifies that the CLI is available and the backend responds.  These checks
+        run in seconds — failing fast here avoids waiting minutes for an agent
+        to discover the same problem.
+
+        In dev mode, the first CLI invocation auto-starts the backend, so a
+        successful `help` call confirms both the CLI binary and backend are
+        functional.  In production mode it confirms the CLI is installed and
+        can reach the backend.
+
+        Returns $true when all checks pass, $false otherwise.  Callers may still
+        proceed on failure (the agent will diagnose further), but should print
+        a prominent warning.
+    .PARAMETER Silent
+        Suppress informational messages.  Failures are always reported.
+    .OUTPUTS
+        Boolean — $true when all checks pass.
+    #>
+    param(
+        [switch] $Silent
+    )
+
+    $allPassed = $true
+    $checkCount = 2
+
+    if (-not $Silent) {
+        Write-Host ''
+        Write-Host '=== Pre-flight checks ===' -ForegroundColor Cyan
+    }
+
+    # ── Check 1: CLI availability ──────────────────────────────────────────
+    if (-not $Silent) {
+        Write-Host "  [1/$checkCount] CLI ($cliInvocation) ... " -NoNewline
+    }
+    try {
+        $versionOut = & $cliInvocation --version 2>&1 | Out-String
+        if ($LASTEXITCODE -and $LASTEXITCODE -ne 0) {
+            throw "exit code $LASTEXITCODE"
+        }
+        if (-not $Silent) {
+            $ver = ($versionOut -replace '\s+', ' ').Trim()
+            Write-Host "OK ($ver)" -ForegroundColor Green
+        }
+    } catch {
+        $allPassed = $false
+        if (-not $Silent) {
+            Write-Host 'FAIL' -ForegroundColor Red
+            Write-Host "    CLI not functional: $_" -ForegroundColor Red
+            if ($browser4cliMode -eq 'production') {
+                Write-Host '    Ensure browser4-cli is installed and on PATH.' -ForegroundColor DarkGray
+            } else {
+                Write-Host '    The CLI may need to be built. Try running ./b4w.ps1 directly first.' -ForegroundColor DarkGray
+            }
+        }
+    }
+
+    # ── Check 2: Backend responds ──────────────────────────────────────────
+    if (-not $Silent) {
+        Write-Host "  [2/$checkCount] Backend ... " -NoNewline
+    }
+    try {
+        # Stopwatch for backend start timing (dev mode auto-starts the JAR)
+        $sw = [System.Diagnostics.Stopwatch]::StartNew()
+        $helpOut = & $cliInvocation help 2>&1 | Out-String
+        $sw.Stop()
+        if ($LASTEXITCODE -and $LASTEXITCODE -ne 0) {
+            throw "exit code $LASTEXITCODE"
+        }
+        if ($helpOut -match 'Usage:' -or $helpOut -match 'Commands:' -or $helpOut -match 'SUBCOMMANDS:') {
+            if (-not $Silent) {
+                $dur = [Math]::Round($sw.Elapsed.TotalSeconds, 1)
+                Write-Host "OK (${dur}s)" -ForegroundColor Green
+            }
+        } else {
+            throw 'help output does not contain expected sections'
+        }
+    } catch {
+        $allPassed = $false
+        if (-not $Silent) {
+            Write-Host 'FAIL' -ForegroundColor Red
+            Write-Host "    Backend not responding: $_" -ForegroundColor Red
+            if ($browser4cliMode -ne 'production') {
+                Write-Host '    In dev mode the backend auto-starts. Check Java and port availability.' -ForegroundColor DarkGray
+            } else {
+                Write-Host '    Ensure the Browser4 backend server is running.' -ForegroundColor DarkGray
+            }
+        }
+    }
+
+    # ── Summary ────────────────────────────────────────────────────────────
+    if (-not $Silent) {
+        if ($allPassed) {
+            Write-Host 'Pre-flight: ALL CHECKS PASSED' -ForegroundColor Green
+        } else {
+            Write-Host 'Pre-flight: SOME CHECKS FAILED — agent will run but may encounter errors' -ForegroundColor Yellow
+        }
+        Write-Host ''
+    }
+
+    return $allPassed
+}
+
+# ── Workflow banner ────────────────────────────────────────────────────────────
+# Prints a standardized header so users know what to expect before the agent
+# starts.  The estimated duration sets expectations and the step count provides
+# a reference for the progress markers the agent emits.
+
+function Write-WorkflowBanner {
+    <#
+    .SYNOPSIS
+        Print a standardized workflow banner before launching the agent.
+    .DESCRIPTION
+        Shows the workflow name, step count, and estimated duration so users
+        know what to expect.  The agent will emit `>>> STEP N/M` markers as it
+        progresses through steps, giving real-time visibility via the heartbeat
+        tail display.
+    .PARAMETER WorkflowName
+        Human-readable name shown in the banner.
+    .PARAMETER StepCount
+        Total number of verification steps the agent will execute (used for
+        progress-marker reference).
+    .PARAMETER EstimatedDuration
+        Human-readable duration estimate (e.g. "5–10 minutes").
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string] $WorkflowName,
+
+        [Parameter(Mandatory = $true)]
+        [int] $StepCount,
+
+        [string] $EstimatedDuration = '5–15 minutes'
+    )
+
+    $width = 64
+    $line = [string]::new([char]0x2500, $width)
+
+    Write-Host ''
+    Write-Host "  $line" -ForegroundColor Cyan
+    Write-Host "   Workflow : $WorkflowName" -ForegroundColor Cyan
+    Write-Host "   Steps    : $StepCount" -ForegroundColor Cyan
+    Write-Host "   Estimate : $EstimatedDuration" -ForegroundColor Cyan
+    Write-Host "  $line" -ForegroundColor Cyan
+    Write-Host ''
+
+    $agent = Get-ScenarioAgent
+    Write-Host "  Agent will emit >>> STEP N/$StepCount markers in real time." -ForegroundColor DarkGray
+    Write-Host "  Watch the heartbeat tail (every 30–120 s) for current step." -ForegroundColor DarkGray
+    Write-Host ''
+}
+
 # ── Agent invocation ────────────────────────────────────────────────────────
 
 function Get-ScenarioAgent {
@@ -1692,7 +2434,7 @@ function Invoke-Agent {
     .DESCRIPTION
         Runs the agent CLI resolved by Get-ScenarioAgent with the given prompt.
         When -ScenarioName is provided, captures output and writes evaluation
-        results to the issues draft ready queue.  When -ScenarioName is omitted,
+        results to the issues draft directory.  When -ScenarioName is omitted,
         preserves the original behavior (direct call, real-time output, no capture).
 
         In capture mode, output is simultaneously streamed to the console (so the
@@ -1709,7 +2451,7 @@ function Invoke-Agent {
         task-specific instructions.
     .PARAMETER ScenarioName
         Optional scenario name (e.g. "amazon", "hacker-news"). When provided, output
-        is captured and written to the issues ready queue at $IssuesReadyDir.
+        is captured and written to the issues draft directory at $IssuesDraftDir.
     .PARAMETER OutputFile
         Optional explicit path to save the raw agent output. Auto-generated from
         ScenarioName and timestamp when omitted.
@@ -1769,6 +2511,15 @@ function Invoke-Agent {
         }
     }
 
+    # ── Ensure .test-sessions directory exists ────────────────────────────────
+    # Agents are instructed to create temp files here.  Pre-create the directory
+    # so the agent doesn't fail on the very first `mkdir -p .test-sessions` call.
+    $testSessionsDir = Join-Path $script:RepoRoot '.test-sessions'
+    if (-not (Test-Path -LiteralPath $testSessionsDir)) {
+        New-Item -ItemType Directory -Path $testSessionsDir -Force | Out-Null
+        Write-Host "  Created .test-sessions/ for agent temp files" -ForegroundColor DarkGray
+    }
+
     # ── Resolve capture file path ──────────────────────────────────────────
     # Write directly to the final output path (not a temp file) so partial
     # output survives crashes.  The known path in target/ also makes it easy
@@ -1806,6 +2557,11 @@ function Invoke-Agent {
     if ($TimeoutSeconds -gt 0) {
         $startParams['TimeoutSeconds'] = $TimeoutSeconds
     }
+    # Enable real-time checkpoint files when a scenario name is provided
+    if ($ScenarioName) {
+        $startParams['CheckpointDir'] = $testSessionsDir
+        $startParams['CheckpointScenario'] = $ScenarioName
+    }
     $exitCode = Start-NativeCommand @startParams
 
     # ── Post-processing (only when capture was requested) ───────────────────
@@ -1830,8 +2586,49 @@ function Invoke-Agent {
         return
     }
 
-    # Write to the issues ready queue
+    # ── Checkpoint summary ──────────────────────────────────────────────────
     if ($ScenarioName) {
-        Write-IssuesToReadyQueue -ScenarioName $ScenarioName -Content $capturedOutput
+        $progressFile = Join-Path $testSessionsDir "$ScenarioName-progress.json"
+        if (Test-Path -LiteralPath $progressFile) {
+            try {
+                $progress = Get-Content -LiteralPath $progressFile -Raw -Encoding UTF8 | ConvertFrom-Json
+                $stepCount = $progress.stepCount
+                $lastStep = $progress.lastStep
+                if ($stepCount -gt 0) {
+                    Write-Host ''
+                    Write-Host "  Checkpoint summary ($ScenarioName): $stepCount step(s) completed" -ForegroundColor Cyan
+                    foreach ($step in $progress.steps) {
+                        $color = if ($step.result -eq 'PASS') { 'Green' } elseif ($step.result -eq 'ABORT') { 'Red' } else { 'Yellow' }
+                        Write-Host "    $($step.step): " -NoNewline
+                        Write-Host "$($step.result)" -ForegroundColor $color -NoNewline
+                        Write-Host " — $($step.summary)"
+                    }
+                    Write-Host "    Full: .test-sessions/${ScenarioName}-progress.json" -ForegroundColor DarkGray
+                }
+            } catch {
+                Write-Host "  (checkpoint progress file could not be parsed)" -ForegroundColor DarkGray
+            }
+        }
+    }
+
+    # ── Truncation detection ────────────────────────────────────────────────
+    # Detect when the capture file contains only a closing statement (e.g.
+    # "The full report with N issues is above") without the actual report
+    # content.  This indicates the async output capture lost most of the data.
+    $hasStructuredSections = $capturedOutput -match '(?i)(###?\s+[ABCD][.\s])'
+    $looksTruncated = (-not $hasStructuredSections) -and (
+        ($capturedOutput -match '(?i)is above\.?\s*$') -or
+        ($capturedOutput.Length -lt 500 -and $capturedOutput -match '(?i)(report|issues?|evaluation)\s+(is|are|complete)')
+    )
+    if ($looksTruncated) {
+        Write-Host "  WARNING: Captured output may be truncated — only $($capturedOutput.Length) chars, no structured sections found." -ForegroundColor Yellow
+        Write-Host "    The agent output was likely lost by the async capture mechanism." -ForegroundColor DarkGray
+        Write-Host "    Full raw output saved to: $captureFile" -ForegroundColor DarkGray
+        Write-Host "    Re-running the scenario may produce a complete capture." -ForegroundColor DarkGray
+    }
+
+    # Write to the issues draft directory
+    if ($ScenarioName) {
+        Write-IssuesToDraft -ScenarioName $ScenarioName -Content $capturedOutput
     }
 }

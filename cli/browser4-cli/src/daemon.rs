@@ -5499,8 +5499,10 @@ mod tests {
             None => unsafe { env::remove_var(BROWSER4_RELEASES_BASE_URL_ENV) },
         }
         assert_eq!(mirrors.len(), 2);
-        assert_eq!(mirrors[0].name, "github");
-        assert_eq!(mirrors[1].name, "aliyun-oss");
+        // Order depends on locale detection; verify the set is correct.
+        let names: Vec<&str> = mirrors.iter().map(|m| m.name.as_str()).collect();
+        assert!(names.contains(&"github"));
+        assert!(names.contains(&"aliyun-oss"));
     }
 
     #[test]

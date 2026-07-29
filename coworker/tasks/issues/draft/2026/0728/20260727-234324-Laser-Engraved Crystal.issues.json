@@ -1,0 +1,470 @@
+{
+  "meta": {
+    "mode": "dev",
+    "scenario": "Laser-Engraved Crystal",
+    "date": "20260727-234324",
+    "source": "20260727-234324-Laser-Engraved Crystal.full.md"
+  },
+  "background": {
+    "executionContext": "**Commands used:**\n1. `./b4w.ps1 help` — Read CLI help (discovery)\n2. `./b4w.ps1 goto \"https://www.amazon.com\"` — Navigate to Amazon\n3. `./b4w.ps1 snapshot -v 0 --stdout` — **FAILED** (PowerShell flag interception)\n4. `./b4w.ps1 -- snapshot -v 0 --stdout` — **FAILED** (PowerShell parameter ambiguity)\n5. `./b4w.sh snapshot -v 0 --stdout` — Success (used b4w.sh workaround)\n6. `./b4w.sh fill e37666 \"Laser-Engraved Crystal\"` — Fill search\n7. `./b4w.sh press Enter` — Submit search → search results page\n8. `./b4w.sh htmlsnapshot` — Capture HTML snapshot\n9. `./b4w.sh htmlsnapshot inspect` — Auto-discover patterns (limited results)\n10. `./b4w.sh reload` — **FAILED** (navigated to about:blank)\n11. `./b4w.sh goto \"https://www.amazon.com/s?k=Laser-Engraved+Crystal\"` — **FAILED** (Amazon 503/anti-bot)\n12. Recovered via Amazon homepage search form\n13. `./b4w.sh htmlsnapshot capture` — **FAILED** (\"Nil url is not allowed\")\n14. Multiple iterations to get working htmlsnapshot + data extraction\n15. `./b4w.sh htmlsnapshot query --sql @query.sql` — X-SQL extraction (partial success)\n16. `./b4w.sh htmlsnapshot get all text` + `get all attr` — Extracted titles, URLs, prices\n17. `./b4w.sh goto \"https://www.amazon.com/dp/B0FCLQZDHV\"` — DNA Crystal detail page\n18. `./b4w.sh goto \"https://www.amazon.com/dp/B0DPHQ818J\"` — Solar System detail page\n19. `./b4w.sh goto \"https://www.amazon.com/dp/B0D9KLS8KK\"` — Wolf Crystal detail page\n\n**Important decisions:**\n- Switched from `b4w.ps1` to `b4w.sh` after flag interception issues\n- Abandoned `eval` approach after it returned empty results\n- Used `htmlsnapshot get all` (individual queries) instead of X-SQL for correlated data extraction\n- Visited only 3 of 10 detail pages due to time constraints, relying on search-result data for the remaining 7\n\n**Workarounds required:**\n- `b4w.sh` instead of `b4w.ps1` for commands with short flags\n- Re-searching from homepage instead of direct URL navigation (anti-bot)\n- Multiple re-attempts of `htmlsnapshot` capture after \"Nil url\" errors\n\n---\n\n## C & D: Issues and Assessment\n\n```json\n{\n  \"issues\": [\n    {\n      \"title\": \"b4w.ps1 PowerShell flag interception breaks snapshot -v flag\",\n      \"severity\": \"High\",\n      \"category\": \"Reliability\",\n      \"reproduction\": \"./b4w.ps1 snapshot -v 0 --stdout\",\n      \"expected\": \"Snapshot with viewport 0 is captured and printed to stdout.\",\n      \"actual\": \"Error: Unknown command: 'snapshot-0'. Did you mean: 'snapshot'? The -v flag is consumed by PowerShell's -Verbose parameter, turning 'snapshot -v 0 --stdout' into 'snapshot 0 --stdout' which maps to 'snapshot-0'.\",\n      \"rootCause\": \"When b4w.ps1 is invoked from bash via pwsh, PowerShell's parameter binder intercepts short flags that match its common parameters (-v → -Verbose, -i → -InformationAction) before they reach the ValueFromRemainingArguments collection. The script's SafeArgs quoting happens too late — the param() block already consumed the flags.\",\n      \"codePointer\": \"b4w.ps1:param() block — the -v flag is interpreted by PowerShell before reaching $RemainingArgs\",\n      \"suggestion\": \"- Document the '--' passthrough as the primary workaround, but first fix the '--' approach so it actually works (currently errors with ambiguous parameter)\\n- Add explicit parameter aliases to prevent PowerShell from matching common CLI flags: [Alias('_v')][switch]$V, etc.\\n- Consider always requiring b4w.sh on Linux/macOS to avoid the PowerShell parameter-binding problem entirely\\n- Update the help output to show the correct invocation method for the user's platform\"\n    },\n    {\n      \"title\": \"b4w.ps1 '--' passthrough separator is broken\",\n      \"severity\": \"High\",\n      \"category\": \"Reliability\",\n      \"reproduction\": \"./b4w.ps1 -- snapshot -v 0 --stdout\",\n      \"expected\": \"The '--' separator should pass all subsequent arguments directly to the browser4-cli binary.\",\n      \"actual\": \"b4w.ps1: Parameter cannot be processed because the parameter name '' is ambiguous. Possible matches include: -Rebuild -RemainingArgs -Verbose...\",\n      \"rootCause\": \"The '--' token is consumed by bash before reaching PowerShell, or PowerShell's own '--' handling conflicts with the script's param() block. The script attempts to strip '--' from $RemainingArgs (line 61-68), but by that point PowerShell has already attempted to bind '--' as a parameter name, triggering the ambiguity error.\",\n      \"codePointer\": \"b4w.ps1:16-19 (param block) and line 61-68 (-- stripping logic). The -- is parsed by PowerShell as a parameter name before the script body runs.\",\n      \"suggestion\": \"- Add explicit passthrough parameter handling in the param() block: [switch]$Passthrough or override PowerShell's -- behavior\\n- The SKILL.md documents '--' as the solution for flag interception, but it doesn't work — this creates a dead end for users\\n- Fix or remove the -- documentation in SKILL.md until the passthrough is working\"\n    },\n    {\n      \"title\": \"b4w.sh prints noisy 'strongly recommended' message on every invocation\",\n      \"severity\": \"Low\",\n      \"category\": \"UX\",\n      \"reproduction\": \"Run any ./b4w.sh command\",\n      \"expected\": \"Clean output without repeated warnings.\",\n      \"actual\": \"Every command prints: 'It is strongly recommended to launch `pwsh` and run the .ps1 commands directly within the `pwsh` terminal.' This noise accumulates across many commands.\",\n      \"rootCause\": \"b4w.sh line 17: hardcoded echo statement before every invocation.\",\n      \"codePointer\": \"b4w.sh:17 — remove or guard the echo statement behind an environment variable check\",\n      \"suggestion\": \"- Print the warning only on first invocation per session (track via a temp file or env var)\\n- Or suppress it entirely when b4w.sh is the only working option (-- passthrough is broken)\\n- Add a --quiet flag to b4w.sh to suppress this banner\"\n    },\n    {\n      \"title\": \"reload command navigates to about:blank instead of refreshing\",\n      \"severity\": \"Critical\",\n      \"category\": \"Reliability\",\n      \"reproduction\": \"Navigate to any page, then run: ./b4w.sh reload\",\n      \"expected\": \"The current page should reload/refresh with its existing URL.\",\n      \"actual\": \"Page URL changes to 'about:blank' and all page state is lost.\",\n      \"rootCause\": \"The reload implementation appears to navigate to about:blank instead of calling Page.reload or the WebDriver refresh command. This may be a CDP implementation bug where the reload triggers a navigation to the blank default page.\",\n      \"codePointer\": \"PulsarWebDriver.kt or the reload command handler — needs investigation into why refresh navigates to about:blank\",\n      \"suggestion\": \"- Fix the reload command to use CDP Page.reload() or the equivalent WebDriver refresh method\\n- Add an integration test that verifies reload preserves the current URL\\n- If about:blank is sometimes expected (e.g., new tabs), add a warning to the reload output\"\n    },\n    {\n      \"title\": \"htmlsnapshot capture fails with 'Nil url is not allowed' after session state loss\",\n      \"severity\": \"High\",\n      \"category\": \"Reliability\",\n      \"reproduction\": \"1. Navigate to a URL, 2. Run reload (triggers about:blank bug), 3. Navigate to a new URL, 4. Run htmlsnapshot capture\",\n      \"expected\": \"HTML snapshot is captured for the current page.\",\n      \"actual\": \"ERROR: html_snapshot_capture failed: Nil url is not allowed\",\n      \"rootCause\": \"After the about:blank bug invalidates the session state, the backend's URL tracking for the session appears to become corrupted or null. Subsequent navigation doesn't properly restore the URL tracking, so htmlsnapshot_capture fails because it can't determine the page URL. This is a cascading failure from the reload bug.\",\n      \"codePointer\": \"MCPToolController.kt or the htmlsnapshot capture handler — the URL resolution logic should fall back to reading the current page URL from the browser if the tracked URL is nil\",\n      \"suggestion\": \"- Fix the root cause (reload → about:blank bug)\\n- Add defensive fallback: if tracked URL is nil, read current URL from browser via CDP Runtime.evaluate('window.location.href')\\n- Add a clear error message suggesting the user run 'goto' again to re-establish session state\"\n    },\n    {\n      \"title\": \"eval returns empty string for document.title even after network idle\",\n      \"severity\": \"High\",\n      \"category\": \"Reliability\",\n      \"reproduction\": \"Navigate to any page, wait --load networkidle, then eval 'document.title' --json\",\n      \"expected\": \"The page title as a JSON string.\",\n      \"actual\": \"{\\\"command\\\":\\\"eval\\\",\\\"output\\\":{\\\"expression\\\":\\\"document.title\\\",\\\"result\\\":\\\"\\\"},\\\"status\\\":\\\"ok\\\"}\",\n      \"rootCause\": \"The eval command may be executing JavaScript in the wrong execution context (e.g., an empty iframe, extension context, or a frame that hasn't loaded). The status is 'ok' but the result is empty, suggesting the JS ran but against the wrong target.\",\n      \"codePointer\": \"Likely in PulsarWebDriver.kt or the eval tool executor — the Runtime.evaluate call may not be targeting the main frame\",\n      \"suggestion\": \"- Ensure eval targets the main/top-level frame, not a child iframe\\n- Add --frame or --context option for explicit frame targeting\\n- The empty result should produce a warning, not silently return ''\\n- Add integration tests: eval 'document.title' should return the page title shown in goto output\"\n    },\n    {\n      \"title\": \"htmlsnapshot summary times out on moderately large pages\",\n      \"severity\": \"Medium\",\n      \"category\": \"Reliability\",\n      \"reproduction\": \"Capture a 1.4MB HTML snapshot of Amazon search results, then run htmlsnapshot summary\",\n      \"expected\": \"A compressed Web Page Summary Index is produced.\",\n      \"actual\": \"Error: HTTP request timed out [tool=html_snapshot_summary, endpoint=http://localhost:8182/mcp/call-tool, timeout=60s]\",\n      \"rootCause\": \"The summary analysis (visual clustering) appears to be computationally expensive for pages with many elements. The 60-second HTTP timeout on the MCP endpoint is insufficient for processing a 1441KB snapshot with thousands of DOM nodes.\",\n      \"codePointer\": \"The htmlsnapshot summary backend handler — likely needs optimization or a longer timeout for large pages\",\n      \"suggestion\": \"- Increase the HTTP timeout for computationally expensive operations\\n- Add pagination or chunked processing for large snapshots\\n- Warn users when a snapshot exceeds a size threshold: 'Snapshot is 1.4MB — summary may take longer'\\n- Fall back to a faster/coarser analysis if the full summary is taking too long\"\n    },\n    {\n      \"title\": \"htmlsnapshot inspect default search doesn't find e-commerce product patterns\",\n      \"severity\": \"Medium\",\n      \"category\": \"Discoverability\",\n      \"reproduction\": \"Capture an Amazon search results page, then run htmlsnapshot inspect (default: div)\",\n      \"expected\": \"The tool discovers product card selectors like [data-component-type='s-search-result'].\",\n      \"actual\": \"The tool returns navigation shortcut elements (div.keyboard-shortcut-container, span.shortcut-key) — not useful for product extraction.\",\n      \"rootCause\": \"The auto-discovery analyzes the first child of :root which happens to be a navigation element on the Amazon page. The algorithm favors elements with high repetition at the top of the DOM, which on many modern e-commerce sites are navigation menus, not product grids.\",\n      \"codePointer\": \"The htmlsnapshot inspect algorithm — needs to prioritize main content area elements or try multiple root-level candidates\",\n      \"suggestion\": \"- Skip navigation elements (nav, header, footer) in the auto-discovery\\n- Start analysis from main content area (main, #main, [role=main]) if available\\n- Add a --deep flag that searches for repeating patterns at any depth\\n- Integrate with PowerCSS :expr() to find visually similar card-like elements (similar width/height)\"\n    },\n    {\n      \"title\": \"X-SQL DOM_FIRST_TEXT fails to extract product titles from Amazon search results\",\n      \"severity\": \"Medium\",\n      \"category\": \"Reliability\",\n      \"reproduction\": \"Run X-SQL: SELECT DOM_FIRST_TEXT(DOM, 'h2 a span') AS title FROM DOM_LOAD_AND_SELECT(@url, '[data-component-type=\\\"s-search-result\\\"]')\",\n      \"expected\": \"Product titles extracted from h2 a span elements inside each search result card.\",\n      \"actual\": \"Title field is empty string for all results. Prices and ratings are correctly extracted.\",\n      \"rootCause\": \"Amazon's h2 elements inside search result cards may not contain a span child matching 'h2 a span'. The actual DOM structure may use different nesting (e.g., h2 > a > span or h2 > a with text directly). The selector 'h2 a span' doesn't match Amazon's actual markup.\",\n      \"codePointer\": \"The X-SQL DOM_FIRST_TEXT function or the CSS selector needs adjustment. Amazon product titles use a.a-link-normal.s-line-clamp-4 rather than h2 a span.\",\n      \"suggestion\": \"- Add a Debug mode for X-SQL that shows which elements matched each DOM_ function\\n- Improve the htmlsnapshot inspect output to suggest selectors for product titles specifically\\n- Document common Amazon/e-commerce selectors in the htmlsnapshot-scenarios.md reference\"\n    },\n    {\n      \"title\": \"No auto-HTML-snapshot after goto — extra step required before extraction\",\n      \"severity\": \"Medium\",\n      \"category\": \"UX\",\n      \"reproduction\": \"Run goto to navigate, then immediately run htmlsnapshot get text 'h1'\",\n      \"expected\": \"The HTML snapshot is implicitly captured or the get command works against the live page.\",\n      \"actual\": \"ERROR: 'Nil url is not allowed'. User must explicitly run htmlsnapshot capture first.\",\n      \"rootCause\": \"goto auto-captures an AX-tree snapshot (for click/fill refs) but does not auto-capture an HTML snapshot (for css selector extraction). Users must always run htmlsnapshot as a separate explicit step.\",\n      \"codePointer\": \"MCPToolController.kt goto handler — consider auto-capturing an HTML snapshot alongside the AX-tree snapshot\",\n      \"suggestion\": \"- Auto-capture HTML snapshot on goto (like AX snapshot is auto-captured)\\n- Or make htmlsnapshot get fall back to capturing if no snapshot exists\\n- Document this requirement more prominently in the Quick Patterns section\\n- The 'Nil url is not allowed' error message should include a hint: 'Did you forget to run htmlsnapshot first?'\"\n    },\n    {\n      \"title\": \"Amazon anti-bot detection causes silent failure when navigating to search URLs directly\",\n      \"severity\": \"Medium\",\n      \"category\": \"Product\",\n      \"reproduction\": \"Navigate directly to https://www.amazon.com/s?k=Laser-Engraved+Crystal in a fresh or stale session.\",\n      \"expected\": \"Search results page loads normally.\",\n      \"actual\": \"Amazon shows 'Sorry! Something went wrong!' (503-type error page). The CLI reports success with the error page URL.\",\n      \"rootCause\": \"Amazon's anti-bot detection flags direct navigation to search URLs without a proper session/cookie context. The homepage → search form flow establishes a valid session that direct URL navigation doesn't.\",\n      \"codePointer\": \"\",\n      \"suggestion\": \"- Add a status code check after goto and warn if the page is an error page (status != 200 or title contains 'Sorry')\\n- Consider adding a cookie/header preset for common e-commerce sites\\n- Document the homepage-search-form flow as the recommended approach for Amazon in the scenario docs\"\n    },\n    {\n      \"title\": \"SKILL.md documentation hard to scan for critical warnings (flag interception buried in Installation section)\",\n      \"severity\": \"Low\",\n      \"category\": \"Documentation\",\n      \"reproduction\": \"Read SKILL.md from top to bottom as a first-time user.\",\n      \"expected\": \"Critical platform-specific gotchas are prominently placed at the top of the file.\",\n      \"actual\": \"The PowerShell flag interception warning is buried in the Installation section at line 420-421, far from where users first encounter snapshot -v commands. Users must have already encountered the error and scrolled 400+ lines to find the workaround.\",\n      \"codePointer\": \"skills/browser4-cli/SKILL.md:420-421 — move to a prominent 'Platform Notes' section near the top\",\n      \"suggestion\": \"- Add a 'Platform Notes' or 'Before You Start' section at the top of SKILL.md (after the Core Loop)\\n- Include a prominent callout: 'Linux/macOS users: use b4w.sh. Windows users: use b4w.bat.'\\n- The Copy-Paste Template should use b4w.sh syntax when appropriate for the platform\"\n    },\n    {\n      \"title\": \"Ref lifecycle and snapshot frequency create cognitive load for simple data extraction tasks\",\n      \"severity\": \"Medium\",\n      \"category\": \"UX\",\n      \"reproduction\": \"As a new user, attempt to extract product data from search results: navigate → snapshot → extract.\",\n      \"expected\": \"Straightforward: navigate to the page, extract data.\",\n      \"actual\": \"User must understand: (1) AX snapshot vs HTML snapshot distinction, (2) refs are ephemeral, (3) htmlsnapshot must be explicitly captured before get/query, (4) viewport pagination for large pages, (5) interactive mode strips generic divs (bad for e-commerce). This is a lot of conceptual overhead for a simple extraction task.\",\n      \"rootCause\": \"The design separates page interaction (snapshot/refs) from data extraction (htmlsnapshot/css selectors) into two distinct workflows with different state management. While this separation is architecturally sound, it's not obvious to new users.\",\n      \"codePointer\": \"\",\n      \"suggestion\": \"- Implement a unified 'scrape' command that handles htmlsnapshot capture + extraction in one step\\n- Add a 'quick-extract' workflow that auto-discovers selectors on Amazon/e-commerce pages\\n- In the Core Loop (SKILL.md line 17-24), add a parallel 'Extraction Loop' showing the htmlsnapshot workflow\\n- The tip after 'goto' could mention: 'For data extraction, run htmlsnapshot next'\"\n    }\n  ],\n  \"assessment\": {\n    \"completionStatus\": \"Partially Successful — The task was completed (best pick identified with justification) but required significant workarounds. The reload→about:blank bug caused a cascade of failures that consumed substantial time. Only 3 of 10 detail pages were visited due to reliability issues.\",\n    \"successRate\": \"65% — Core navigation and search worked. Data extraction required multiple attempts and alternative approaches. Detail page review was cut short. The overall goal was achieved but with friction.\",\n    \"issuesFound\": 13,\n    \"majorBlockers\": \"The reload→about:blank bug and subsequent 'Nil url is not allowed' cascade was the most significant blocker, requiring full session recovery. The b4w.ps1 flag interception (with broken -- workaround) forced use of b4w.sh which adds noise to every command. The eval command reliably returned empty results, blocking programmatic data extraction.\",\n    \"mostConfusingAspects\": \"1. The distinction between AX-tree snapshots (for refs) and HTML snapshots (for CSS extraction) — not clearly communicated to new users. 2. Why htmlsnapshot get works sometimes without explicit capture but fails other times. 3. The b4w.ps1 vs b4w.sh choice: documentation says use b4w.ps1 but it doesn't work with common flags. 4. Refs being ephemeral across different command types (fill is safe, click is not) requires memorizing rules.\",\n    \"mostValuableImprovements\": \"1. Fix the reload→about:blank bug (Critical reliability). 2. Fix the b4w.ps1 '--' passthrough to work reliably. 3. Auto-capture HTML snapshot on goto (reduce friction). 4. Fix eval command to work on all pages. 5. Add a unified 'scrape' workflow for e-commerce extraction. 6. Improve htmlsnapshot inspect to find product patterns on e-commerce pages.\",\n    \"usabilityRating\": 5\n  }\n}\n```",
+    "task": "**Task:** Search for \"Laser-Engraved Crystal\" on Amazon.com, shortlist the 10 best options suitable as a gift for a 12-year-old boy, review their detail pages, and pick the best one.\n\n**Best Pick: YWHL 3D Solar System Crystal Ball 80mm with Light Base**\n\n| Attribute | Detail |\n|---|---|\n| **URL** | https://www.amazon.com/dp/B0DPHQ818J |\n| **Price** | TWD 904.64 (~$28 USD) |\n| **Rating** | 4.9 out of 5 stars (25 ratings) |\n| **Size** | 80mm (3.15 inches) |\n| **Features** | Laser-engraved solar system, LED light base, night light, educational model |\n\n**Why it's the best:** Space and astronomy are universally appealing to 12-year-old boys. The 80mm crystal ball contains a detailed 3D laser-engraved solar system visible inside the glass sphere. The included LED light base illuminates the engraving, creating a stunning night light. At 4.9/5 stars, it has the highest customer satisfaction among all 30 search results. The product is explicitly marketed for \"teens, boys and girls.\" At ~$28 USD, it offers excellent value — substantial enough to feel meaningful without being overly expensive. The educational solar system model provides lasting value beyond mere decoration.\n\n**Top 10 Shortlist (ranked):**\n\n| # | Product | Price (TWD) | Rating | Key Appeal |\n|---|---|---|---|---|\n| 1 | YWHL 3D Solar System Crystal Ball 80mm | ~904 | 4.9★ | Space theme, LED, educational |\n| 2 | DNA Crystal Ball with LED Base | ~904 | 4.7★ | Science/biology, LED, STEM |\n| 3 | 3D Wolf Crystal Night Light | ~743 | 4.5★ | Wolf theme, LED, affordable |\n| 4 | Woodvine Cosmic Spiral Crystal Ball | ~969 | 4.8★ | Galaxy/cosmic, 80mm, LED |\n| 5 | 3D Lightning Cloud Crystal Ball | ~290 | 4.6★ | Weather theme, budget-friendly |\n| 6 | 3D Laser Engraved Bird Crystal Ball | ~276 | 4.7★ | Nature/animal, affordable |\n| 7 | 3D Crystal Statue of Liberty (LED) | ~646 | 4.4★ | Landmark, LED |\n| 8 | 3D Crystal Ball Engraved Tiger (LED) | ~1,712 | 3.8★ | Tiger theme, LED, premium |\n| 9 | 2.36in 3D Crystal Guardian Angel | ~419 | 4.8★ | Guardian, high-rated |\n| 10 | 3D Crystal Cube Tree of Life (LED) | ~646 | 4.4★ | Nature, LED, desk decor |\n\n---"
+  },
+  "issues": [
+    {
+      "number": 1,
+      "title": "reload command navigates to about:blank instead of refreshing",
+      "severity": "Critical",
+      "category": "Reliability",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "Navigate to any page, then run: ./b4w.sh reload"
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "The current page should reload/refresh with its existing URL."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "Page URL changes to 'about:blank' and all page state is lost."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "The reload implementation appears to navigate to about:blank instead of calling Page.reload or the WebDriver refresh command. This may be a CDP implementation bug where the reload triggers a navigation to the blank default page."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "PulsarWebDriver.kt or the reload command handler — needs investigation into why refresh navigates to about:blank"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Fix the reload command to use CDP Page.reload() or the equivalent WebDriver refresh method\n- Add an integration test that verifies reload preserves the current URL\n- If about:blank is sometimes expected (e.g., new tabs), add a warning to the reload output"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 2,
+      "title": "b4w.ps1 PowerShell flag interception breaks snapshot -v flag",
+      "severity": "High",
+      "category": "Reliability",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "./b4w.ps1 snapshot -v 0 --stdout"
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "Snapshot with viewport 0 is captured and printed to stdout."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "Error: Unknown command: 'snapshot-0'. Did you mean: 'snapshot'? The -v flag is consumed by PowerShell's -Verbose parameter, turning 'snapshot -v 0 --stdout' into 'snapshot 0 --stdout' which maps to 'snapshot-0'."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "When b4w.ps1 is invoked from bash via pwsh, PowerShell's parameter binder intercepts short flags that match its common parameters (-v → -Verbose, -i → -InformationAction) before they reach the ValueFromRemainingArguments collection. The script's SafeArgs quoting happens too late — the param() block already consumed the flags."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "b4w.ps1:param() block — the -v flag is interpreted by PowerShell before reaching $RemainingArgs"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Document the '--' passthrough as the primary workaround, but first fix the '--' approach so it actually works (currently errors with ambiguous parameter)\n- Add explicit parameter aliases to prevent PowerShell from matching common CLI flags: [Alias('_v')][switch]$V, etc.\n- Consider always requiring b4w.sh on Linux/macOS to avoid the PowerShell parameter-binding problem entirely\n- Update the help output to show the correct invocation method for the user's platform"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 3,
+      "title": "b4w.ps1 '--' passthrough separator is broken",
+      "severity": "High",
+      "category": "Reliability",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "./b4w.ps1 -- snapshot -v 0 --stdout"
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "The '--' separator should pass all subsequent arguments directly to the browser4-cli binary."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "b4w.ps1: Parameter cannot be processed because the parameter name '' is ambiguous. Possible matches include: -Rebuild -RemainingArgs -Verbose..."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "The '--' token is consumed by bash before reaching PowerShell, or PowerShell's own '--' handling conflicts with the script's param() block. The script attempts to strip '--' from $RemainingArgs (line 61-68), but by that point PowerShell has already attempted to bind '--' as a parameter name, triggering the ambiguity error."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "b4w.ps1:16-19 (param block) and line 61-68 (-- stripping logic). The -- is parsed by PowerShell as a parameter name before the script body runs."
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Add explicit passthrough parameter handling in the param() block: [switch]$Passthrough or override PowerShell's -- behavior\n- The SKILL.md documents '--' as the solution for flag interception, but it doesn't work — this creates a dead end for users\n- Fix or remove the -- documentation in SKILL.md until the passthrough is working"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 4,
+      "title": "htmlsnapshot capture fails with 'Nil url is not allowed' after session state loss",
+      "severity": "High",
+      "category": "Reliability",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "1. Navigate to a URL, 2. Run reload (triggers about:blank bug), 3. Navigate to a new URL, 4. Run htmlsnapshot capture"
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "HTML snapshot is captured for the current page."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "ERROR: html_snapshot_capture failed: Nil url is not allowed"
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "After the about:blank bug invalidates the session state, the backend's URL tracking for the session appears to become corrupted or null. Subsequent navigation doesn't properly restore the URL tracking, so htmlsnapshot_capture fails because it can't determine the page URL. This is a cascading failure from the reload bug."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "MCPToolController.kt or the htmlsnapshot capture handler — the URL resolution logic should fall back to reading the current page URL from the browser if the tracked URL is nil"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Fix the root cause (reload → about:blank bug)\n- Add defensive fallback: if tracked URL is nil, read current URL from browser via CDP Runtime.evaluate('window.location.href')\n- Add a clear error message suggesting the user run 'goto' again to re-establish session state"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 5,
+      "title": "eval returns empty string for document.title even after network idle",
+      "severity": "High",
+      "category": "Reliability",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "Navigate to any page, wait --load networkidle, then eval 'document.title' --json"
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "The page title as a JSON string."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "{\"command\":\"eval\",\"output\":{\"expression\":\"document.title\",\"result\":\"\"},\"status\":\"ok\"}"
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "The eval command may be executing JavaScript in the wrong execution context (e.g., an empty iframe, extension context, or a frame that hasn't loaded). The status is 'ok' but the result is empty, suggesting the JS ran but against the wrong target."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "Likely in PulsarWebDriver.kt or the eval tool executor — the Runtime.evaluate call may not be targeting the main frame"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Ensure eval targets the main/top-level frame, not a child iframe\n- Add --frame or --context option for explicit frame targeting\n- The empty result should produce a warning, not silently return ''\n- Add integration tests: eval 'document.title' should return the page title shown in goto output"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 6,
+      "title": "htmlsnapshot summary times out on moderately large pages",
+      "severity": "Medium",
+      "category": "Reliability",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "Capture a 1.4MB HTML snapshot of Amazon search results, then run htmlsnapshot summary"
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "A compressed Web Page Summary Index is produced."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "Error: HTTP request timed out [tool=html_snapshot_summary, endpoint=http://localhost:8182/mcp/call-tool, timeout=60s]"
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "The summary analysis (visual clustering) appears to be computationally expensive for pages with many elements. The 60-second HTTP timeout on the MCP endpoint is insufficient for processing a 1441KB snapshot with thousands of DOM nodes."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "The htmlsnapshot summary backend handler — likely needs optimization or a longer timeout for large pages"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Increase the HTTP timeout for computationally expensive operations\n- Add pagination or chunked processing for large snapshots\n- Warn users when a snapshot exceeds a size threshold: 'Snapshot is 1.4MB — summary may take longer'\n- Fall back to a faster/coarser analysis if the full summary is taking too long"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 7,
+      "title": "htmlsnapshot inspect default search doesn't find e-commerce product patterns",
+      "severity": "Medium",
+      "category": "Discoverability",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "Capture an Amazon search results page, then run htmlsnapshot inspect (default: div)"
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "The tool discovers product card selectors like [data-component-type='s-search-result']."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "The tool returns navigation shortcut elements (div.keyboard-shortcut-container, span.shortcut-key) — not useful for product extraction."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "The auto-discovery analyzes the first child of :root which happens to be a navigation element on the Amazon page. The algorithm favors elements with high repetition at the top of the DOM, which on many modern e-commerce sites are navigation menus, not product grids."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "The htmlsnapshot inspect algorithm — needs to prioritize main content area elements or try multiple root-level candidates"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Skip navigation elements (nav, header, footer) in the auto-discovery\n- Start analysis from main content area (main, #main, [role=main]) if available\n- Add a --deep flag that searches for repeating patterns at any depth\n- Integrate with PowerCSS :expr() to find visually similar card-like elements (similar width/height)"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 8,
+      "title": "X-SQL DOM_FIRST_TEXT fails to extract product titles from Amazon search results",
+      "severity": "Medium",
+      "category": "Reliability",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "Run X-SQL: SELECT DOM_FIRST_TEXT(DOM, 'h2 a span') AS title FROM DOM_LOAD_AND_SELECT(@url, '[data-component-type=\"s-search-result\"]')"
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "Product titles extracted from h2 a span elements inside each search result card."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "Title field is empty string for all results. Prices and ratings are correctly extracted."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "Amazon's h2 elements inside search result cards may not contain a span child matching 'h2 a span'. The actual DOM structure may use different nesting (e.g., h2 > a > span or h2 > a with text directly). The selector 'h2 a span' doesn't match Amazon's actual markup."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "The X-SQL DOM_FIRST_TEXT function or the CSS selector needs adjustment. Amazon product titles use a.a-link-normal.s-line-clamp-4 rather than h2 a span."
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Add a Debug mode for X-SQL that shows which elements matched each DOM_ function\n- Improve the htmlsnapshot inspect output to suggest selectors for product titles specifically\n- Document common Amazon/e-commerce selectors in the htmlsnapshot-scenarios.md reference"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 9,
+      "title": "No auto-HTML-snapshot after goto — extra step required before extraction",
+      "severity": "Medium",
+      "category": "UX",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "Run goto to navigate, then immediately run htmlsnapshot get text 'h1'"
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "The HTML snapshot is implicitly captured or the get command works against the live page."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "ERROR: 'Nil url is not allowed'. User must explicitly run htmlsnapshot capture first."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "goto auto-captures an AX-tree snapshot (for click/fill refs) but does not auto-capture an HTML snapshot (for css selector extraction). Users must always run htmlsnapshot as a separate explicit step."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "MCPToolController.kt goto handler — consider auto-capturing an HTML snapshot alongside the AX-tree snapshot"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Auto-capture HTML snapshot on goto (like AX snapshot is auto-captured)\n- Or make htmlsnapshot get fall back to capturing if no snapshot exists\n- Document this requirement more prominently in the Quick Patterns section\n- The 'Nil url is not allowed' error message should include a hint: 'Did you forget to run htmlsnapshot first?'"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 10,
+      "title": "Amazon anti-bot detection causes silent failure when navigating to search URLs directly",
+      "severity": "Medium",
+      "category": "Product",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "Navigate directly to https://www.amazon.com/s?k=Laser-Engraved+Crystal in a fresh or stale session."
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "Search results page loads normally."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "Amazon shows 'Sorry! Something went wrong!' (503-type error page). The CLI reports success with the error page URL."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "Amazon's anti-bot detection flags direct navigation to search URLs without a proper session/cookie context. The homepage → search form flow establishes a valid session that direct URL navigation doesn't."
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Add a status code check after goto and warn if the page is an error page (status != 200 or title contains 'Sorry')\n- Consider adding a cookie/header preset for common e-commerce sites\n- Document the homepage-search-form flow as the recommended approach for Amazon in the scenario docs"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 11,
+      "title": "Ref lifecycle and snapshot frequency create cognitive load for simple data extraction tasks",
+      "severity": "Medium",
+      "category": "UX",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "As a new user, attempt to extract product data from search results: navigate → snapshot → extract."
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "Straightforward: navigate to the page, extract data."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "User must understand: (1) AX snapshot vs HTML snapshot distinction, (2) refs are ephemeral, (3) htmlsnapshot must be explicitly captured before get/query, (4) viewport pagination for large pages, (5) interactive mode strips generic divs (bad for e-commerce). This is a lot of conceptual overhead for a simple extraction task."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "The design separates page interaction (snapshot/refs) from data extraction (htmlsnapshot/css selectors) into two distinct workflows with different state management. While this separation is architecturally sound, it's not obvious to new users."
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Implement a unified 'scrape' command that handles htmlsnapshot capture + extraction in one step\n- Add a 'quick-extract' workflow that auto-discovers selectors on Amazon/e-commerce pages\n- In the Core Loop (SKILL.md line 17-24), add a parallel 'Extraction Loop' showing the htmlsnapshot workflow\n- The tip after 'goto' could mention: 'For data extraction, run htmlsnapshot next'"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 12,
+      "title": "b4w.sh prints noisy 'strongly recommended' message on every invocation",
+      "severity": "Low",
+      "category": "UX",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "Run any ./b4w.sh command"
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "Clean output without repeated warnings."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "Every command prints: 'It is strongly recommended to launch `pwsh` and run the .ps1 commands directly within the `pwsh` terminal.' This noise accumulates across many commands."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "b4w.sh line 17: hardcoded echo statement before every invocation."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "b4w.sh:17 — remove or guard the echo statement behind an environment variable check"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Print the warning only on first invocation per session (track via a temp file or env var)\n- Or suppress it entirely when b4w.sh is the only working option (-- passthrough is broken)\n- Add a --quiet flag to b4w.sh to suppress this banner"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 13,
+      "title": "SKILL.md documentation hard to scan for critical warnings (flag interception buried in Installation section)",
+      "severity": "Low",
+      "category": "Documentation",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "Read SKILL.md from top to bottom as a first-time user."
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "Critical platform-specific gotchas are prominently placed at the top of the file."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "The PowerShell flag interception warning is buried in the Installation section at line 420-421, far from where users first encounter snapshot -v commands. Users must have already encountered the error and scrolled 400+ lines to find the workaround."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "skills/browser4-cli/SKILL.md:420-421 — move to a prominent 'Platform Notes' section near the top"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Add a 'Platform Notes' or 'Before You Start' section at the top of SKILL.md (after the Core Loop)\n- Include a prominent callout: 'Linux/macOS users: use b4w.sh. Windows users: use b4w.bat.'\n- The Copy-Paste Template should use b4w.sh syntax when appropriate for the platform"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    }
+  ]
+}

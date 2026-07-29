@@ -155,9 +155,16 @@ body {
 .app-brand { display: flex; align-items: center; gap: 10px; }
 .app-brand svg { flex-shrink: 0; }
 .app-brand h1 { font-size: 1.05rem; font-weight: 600; margin: 0; color: #f1f5f9; letter-spacing: -0.01em; }
-.app-brand .nav-link { color: #a78bfa; font-size: 0.72rem; text-decoration: none; margin-left: 6px; opacity: 0.75; }
-.app-brand .nav-link:hover { opacity: 1; }
 .header-right { display: flex; align-items: center; gap: 10px; }
+.header-nav { display: flex; align-items: center; gap: 4px; }
+.header-nav a {
+  color: rgba(255,255,255,0.6); text-decoration: none;
+  font-size: 0.72rem; padding: 3px 10px; border-radius: var(--radius-sm);
+  transition: all var(--transition); font-weight: 500;
+  border: 1px solid transparent;
+}
+.header-nav a:hover { color: #fff; background: rgba(255,255,255,0.08); }
+.header-nav a.active { color: #fff; background: rgba(255,255,255,0.12); border-color: rgba(255,255,255,0.2); }
 .header-stats { display: flex; align-items: center; gap: 12px; }
 .header-stats .stat-item {
   display: flex; align-items: center; gap: 5px;
@@ -503,6 +510,31 @@ body {
 /* ═══════════════════════════════════════════════════════════════════════
    Issue Card
    ═══════════════════════════════════════════════════════════════════════ */
+@keyframes decision-flash {
+  0%   { box-shadow: 0 0 0 0 var(--accent); }
+  50%  { box-shadow: 0 0 0 4px var(--accent-light), 0 0 20px rgba(108,92,231,0.3); }
+  100% { box-shadow: 0 0 0 0 var(--accent); }
+}
+@keyframes decision-flash-good {
+  0%   { box-shadow: 0 0 0 0 var(--accept-color); }
+  50%  { box-shadow: 0 0 0 4px var(--accept-border), 0 0 20px rgba(56,161,105,0.35); }
+  100% { box-shadow: 0 0 0 0 var(--accept-color); }
+}
+@keyframes decision-flash-bad {
+  0%   { box-shadow: 0 0 0 0 var(--reject-color); }
+  50%  { box-shadow: 0 0 0 4px var(--reject-border), 0 0 20px rgba(229,62,62,0.35); }
+  100% { box-shadow: 0 0 0 0 var(--reject-color); }
+}
+@keyframes decision-flash-warn {
+  0%   { box-shadow: 0 0 0 0 var(--warning); }
+  50%  { box-shadow: 0 0 0 4px var(--warning-border), 0 0 20px rgba(214,158,46,0.35); }
+  100% { box-shadow: 0 0 0 0 var(--warning); }
+}
+.issue-card.flash-decision       { animation: decision-flash 0.45s ease-out; }
+.issue-card.flash-decision-good  { animation: decision-flash-good 0.45s ease-out; }
+.issue-card.flash-decision-bad   { animation: decision-flash-bad 0.45s ease-out; }
+.issue-card.flash-decision-warn  { animation: decision-flash-warn 0.45s ease-out; }
+
 .issue-card {
   background: var(--bg-surface); border: 1px solid var(--border);
   border-radius: var(--radius); margin-bottom: 1rem;
@@ -519,6 +551,14 @@ body {
   padding: 12px 1.25rem;
   display: flex; align-items: flex-start; justify-content: space-between;
   gap: 10px; cursor: pointer; user-select: none;
+  position: sticky; top: 0; z-index: 10;
+  background: var(--bg-surface);
+  border-bottom: 1px solid transparent;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+.issue-card-header.stuck {
+  border-bottom-color: var(--border);
+  box-shadow: var(--shadow-sm);
 }
 .issue-card-header:hover { background: var(--bg-hover); border-radius: var(--radius) var(--radius) 0 0; }
 .issue-card-header .issue-title {
@@ -831,6 +871,51 @@ body {
 .quick-jump button:disabled { opacity: 0.35; cursor: not-allowed; }
 
 /* ═══════════════════════════════════════════════════════════════════════
+   Shortcut Help Overlay
+   ═══════════════════════════════════════════════════════════════════════ */
+.shortcut-overlay {
+  position: fixed; inset: 0; z-index: 10000;
+  background: rgba(0,0,0,0.4);
+  display: flex; align-items: center; justify-content: center;
+  backdrop-filter: blur(3px);
+}
+.shortcut-overlay.hidden { display: none; }
+.shortcut-modal {
+  background: var(--bg-surface); border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg); max-width: 620px; width: 92vw;
+  max-height: 82vh; overflow: hidden; display: flex; flex-direction: column;
+}
+.shortcut-modal-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 1.25rem; border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.shortcut-modal-header h2 { margin: 0; font-size: 0.95rem; font-weight: 600; }
+.shortcut-modal-body {
+  padding: 1rem 1.25rem 1.25rem; overflow-y: auto; flex: 1;
+  display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem 1rem;
+}
+.shortcut-group h3 {
+  font-size: 0.68rem; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.04em; color: var(--text-muted);
+  margin: 0 0 5px; padding-bottom: 3px; border-bottom: 1px solid var(--border-light);
+}
+.shortcut-row {
+  display: flex; align-items: baseline; gap: 5px;
+  padding: 2px 0; font-size: 0.77rem; flex-wrap: wrap;
+}
+.shortcut-row kbd {
+  font-size: 0.64rem; font-family: var(--font-mono);
+  background: var(--bg-inset); border: 1px solid var(--border);
+  border-radius: 3px; padding: 1px 5px; white-space: nowrap;
+  flex-shrink: 0; line-height: 1.5;
+}
+.shortcut-row span { color: var(--text-secondary); line-height: 1.4; }
+@media (max-width: 500px) {
+  .shortcut-modal-body { grid-template-columns: 1fr; }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
    Floating Review Decision Panel
    ═══════════════════════════════════════════════════════════════════════ */
 .review-float-panel {
@@ -960,9 +1045,13 @@ body {
   <div class="app-brand">
     <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/><path d="M9 14l2 2 4-4"/></svg>
     <h1>Issue Review</h1>
-    <a href="/" class="nav-link" title="Back to Task Manager">← Tasks</a>
   </div>
   <div class="header-right">
+    <nav class="header-nav">
+      <a href="/">Tasks</a>
+      <a href="/issues/review" class="active">Review</a>
+      <a href="/logs">Logs</a>
+    </nav>
     <div class="header-stats" id="header-stats">
       <div class="stat-item"><span class="stat-num" id="stat-files">—</span> files</div>
       <div class="stat-divider"></div>
@@ -1029,6 +1118,7 @@ body {
         <!-- AI actions -->
         <div class="tb-group">
           <button id="btn-mode-toggle" class="tb-btn accent" onclick="toggleReviewMode()" title="Switch between one-at-a-time and all-issues view">📋</button>
+          <button id="btn-collapse-all" class="tb-btn" onclick="toggleCollapseAll()" title="Expand or collapse all issue cards" style="display:none">⊞</button>
           <button id="btn-ai-review-all" class="tb-btn accent" onclick="triggerAiReviewAll()" title="AI review ALL issues in this file at once. Detects duplicates, sees cross-issue context.">🤖🤖 Review All <span class="kb-hint">Shift+Ctrl+A</span></button>
           <button id="btn-ai-review-dir" class="tb-btn accent" onclick="triggerAiReviewDirectory()" title="AI review ALL issues in ALL files in the current directory.">📂🤖 Review Dir <span class="kb-hint">Shift+Ctrl+D</span></button>
         </div>
@@ -1047,20 +1137,64 @@ body {
         <p>Select a file to review its issues</p>
         <div class="shortcut-hints">
           <strong>Keyboard shortcuts:</strong><br>
-          <kbd>Shift+1</kbd>-<kbd>Shift+6</kbd> Select decision<br>
-          <kbd>Shift+A</kbd> AI review issue &nbsp;|&nbsp;
-          <kbd>Shift+Ctrl+A</kbd> AI review all<br>
-          <kbd>Shift+Ctrl+D</kbd> AI review directory<br>
+          <kbd>Shift+1</kbd>-<kbd>Shift+6</kbd> Select decision &nbsp;|&nbsp;
+          <kbd>Shift+A</kbd> AI review issue<br>
+          <kbd>Shift+Ctrl+A</kbd> AI review all &nbsp;|&nbsp;
+          <kbd>Shift+Ctrl+D</kbd> AI review directory &nbsp;|&nbsp;
           <kbd>Shift+Ctrl+M</kbd> Mark all done<br>
-          <kbd>Shift+D</kbd> Discard file<br>
-          <kbd>Alt+←</kbd>/<kbd>Alt+→</kbd> Prev/next issue<br>
-          <kbd>Shift+P</kbd>/<kbd>Shift+N</kbd> Prev/next file<br>
+          <kbd>N</kbd>/<kbd>P</kbd> Next/prev file &nbsp;|&nbsp;
+          <kbd>Alt+←</kbd>/<kbd>Alt+→</kbd> Prev/next issue &nbsp;|&nbsp;
+          <kbd>Shift+D</kbd> Discard file &nbsp;|&nbsp;
+          <kbd>B</kbd>/<kbd>Esc</kbd> Back to file list &nbsp;|&nbsp;
           <kbd>Ctrl+S</kbd> Save
         </div>
       </div>
     </div>
 
   </section>
+</div>
+
+<!-- ═══════ SHORTCUT HELP OVERLAY ═══════ -->
+<div class="shortcut-overlay hidden" id="shortcut-overlay" onclick="hideShortcutHelp()">
+  <div class="shortcut-modal" onclick="event.stopPropagation()">
+    <div class="shortcut-modal-header">
+      <h2>⌨ Keyboard Shortcuts</h2>
+      <button class="float-close-btn" onclick="hideShortcutHelp()">×</button>
+    </div>
+    <div class="shortcut-modal-body">
+      <div class="shortcut-group">
+        <h3>Review Decisions</h3>
+        <div class="shortcut-row"><kbd>Shift+1</kbd><span>ACCEPT</span></div>
+        <div class="shortcut-row"><kbd>Shift+2</kbd><span>ACCEPT with improvements</span></div>
+        <div class="shortcut-row"><kbd>Shift+3</kbd><span>DEFER</span></div>
+        <div class="shortcut-row"><kbd>Shift+4</kbd><span>WONTFIX</span></div>
+        <div class="shortcut-row"><kbd>Shift+5</kbd><span>REJECT</span></div>
+        <div class="shortcut-row"><kbd>Shift+6</kbd><span>DUPLICATE</span></div>
+      </div>
+      <div class="shortcut-group">
+        <h3>Navigation</h3>
+        <div class="shortcut-row"><kbd>N</kbd><kbd>P</kbd><span>Next / previous file</span></div>
+        <div class="shortcut-row"><kbd>Alt+←</kbd><kbd>Alt+→</kbd><span>Issue prev / next (single)</span></div>
+        <div class="shortcut-row"><kbd>Shift+J</kbd><kbd>Shift+K</kbd><span>Issue prev / next (all)</span></div>
+        <div class="shortcut-row"><kbd>V</kbd><span>Toggle single / all-issues</span></div>
+        <div class="shortcut-row"><kbd>B</kbd><kbd>Esc</kbd><span>Back to file list</span></div>
+      </div>
+      <div class="shortcut-group">
+        <h3>Actions</h3>
+        <div class="shortcut-row"><kbd>Shift+A</kbd><span>AI review this issue</span></div>
+        <div class="shortcut-row"><kbd>Shift+Ctrl+A</kbd><span>AI review ALL in file</span></div>
+        <div class="shortcut-row"><kbd>Shift+Ctrl+D</kbd><span>AI review directory</span></div>
+        <div class="shortcut-row"><kbd>Shift+Ctrl+M</kbd><span>Mark all done in dir</span></div>
+        <div class="shortcut-row"><kbd>Shift+D</kbd><span>Discard file</span></div>
+        <div class="shortcut-row"><kbd>Ctrl+S</kbd><span>Save</span></div>
+      </div>
+      <div class="shortcut-group">
+        <h3>Other</h3>
+        <div class="shortcut-row"><kbd>?</kbd><span>Show this help</span></div>
+        <div class="shortcut-row"><kbd>Ctrl+K</kbd><span>Focus file filter</span></div>
+      </div>
+    </div>
+  </div>
 </div>
 
 <!-- ═══════ FLOATING REVIEW PANEL ═══════ -->
@@ -1767,12 +1901,12 @@ function toggleTreeDir(el) {
 }
 
 // ── File selection & parsing ──
-async function selectFile(path) {
+async function selectFile(path, reviewMode) {
   state.selectedFilePath = path;
   state.dirty = false;
   state.parsed = null;
   state.selectedFileContent = null;
-  state.reviewMode = 'single';  // always start in single-issue mode
+  state.reviewMode = reviewMode || 'single';
   state.currentIssueIndex = 0;
   focusedIssueIndex = 0;
   updateSaveState();
@@ -1907,6 +2041,8 @@ function renderReview() {
   if (btnAiReviewAll) { btnAiReviewAll.style.display = showToolbar ? '' : 'none'; }
   var btnModeToggle = document.getElementById('btn-mode-toggle');
   if (btnModeToggle) { btnModeToggle.style.display = showToolbar ? '' : 'none'; }
+  var btnCollapseAll = document.getElementById('btn-collapse-all');
+  if (btnCollapseAll) { btnCollapseAll.style.display = (showToolbar && state.reviewMode !== 'single') ? '' : 'none'; }
 
   // Clamp issue index
   if (state.currentIssueIndex >= state.parsed.issues.length) {
@@ -1946,7 +2082,29 @@ function renderAllIssues() {
     }
   }
 
+  // Add navigation hints at the bottom
+  html += '<div style="padding: 0.75rem 0; font-size: 0.72rem; color: var(--text-muted); text-align: center; border-top: 1px solid var(--border-light); margin-top: 0.5rem;">';
+  html += '<kbd>N</kbd>/<kbd>P</kbd> file &nbsp;·&nbsp; ';
+  html += '<kbd>Shift+J</kbd>/<kbd>Shift+K</kbd> issue &nbsp;·&nbsp; ';
+  html += '<kbd>Shift+1</kbd>-<kbd>Shift+6</kbd> decision &nbsp;·&nbsp; ';
+  html += '<kbd>Shift+D</kbd> discard &nbsp;·&nbsp; <kbd>B</kbd>/<kbd>Esc</kbd> back to list';
+  html += '</div>';
+
   content.innerHTML = html;
+
+  // Auto-scroll to first unreviewed issue (skip if all done)
+  if (state.parsed.issues.length > 0) {
+    var firstUnreviewed = -1;
+    for (var i = 0; i < state.parsed.issues.length; i++) {
+      if (!state.parsed.issues[i].review.decision) { firstUnreviewed = i; break; }
+    }
+    if (firstUnreviewed >= 0) {
+      setTimeout(function() {
+        var card = document.getElementById("issue-card-" + firstUnreviewed);
+        if (card) { card.scrollIntoView({ behavior: "smooth", block: "start" }); }
+      }, 100);
+    }
+  }
 }
 
 function renderSingleIssue() {
@@ -2012,6 +2170,14 @@ function renderSingleIssue() {
     html += '<div class="section-body">' + marked.parse(sec.body) + '</div>';
     html += '</div>';
   }
+
+  // Navigation hints
+  html += '<div style="padding: 0.5rem 0; font-size: 0.7rem; color: var(--text-muted); text-align: center; border-top: 1px solid var(--border-light);">';
+  html += '<kbd>N</kbd>/<kbd>P</kbd> file &nbsp;·&nbsp; ';
+  html += '<kbd>Alt+←</kbd>/<kbd>Alt+→</kbd> issue &nbsp;·&nbsp; ';
+  html += '<kbd>Shift+1</kbd>-<kbd>Shift+6</kbd> decision &nbsp;·&nbsp; ';
+  html += '<kbd>Shift+D</kbd> discard &nbsp;·&nbsp; <kbd>B</kbd>/<kbd>Esc</kbd> back to list';
+  html += '</div>';
 
   // Review decision is now in the floating panel — populated below
   html += '</div>'; // .single-issue-view
@@ -2183,6 +2349,17 @@ function setDecision(index, decision) {
     if (notesEl) { notesEl.focus(); notesEl.setSelectionRange(notesEl.value.length, notesEl.value.length); }
   } else {
     updateIssueCardUI(index);
+    // Flash the card for instant visual feedback
+    var card = document.getElementById("issue-card-" + index);
+    if (card) {
+      var dec = issue.review.decision;
+      var fc = !dec ? "flash-decision"
+        : (dec === "ACCEPT" || dec === "ACCEPT with improvements") ? "flash-decision-good"
+        : (dec === "REJECT") ? "flash-decision-bad"
+        : "flash-decision-warn";
+      card.classList.add(fc);
+      setTimeout(function() { card.classList.remove(fc); }, 450);
+    }
   }
 
   // Update file counts and progress in tree (no full rebuild)
@@ -2873,6 +3050,25 @@ function toggleReviewMode() {
   }
 }
 
+function clearSelection() {
+  state.selectedFilePath = null;
+  state.parsed = null;
+  state.selectedFileContent = null;
+  state.dirty = false;
+  state.currentIssueIndex = 0;
+  cancelAutoSave();
+  updateSaveState();
+  hideFloatPanel();
+  document.getElementById('review-header').style.display = 'none';
+  document.getElementById('review-content').innerHTML =
+    '<div class="review-placeholder">' +
+    '<svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/><path d="M9 14l2 2 4-4"/></svg>' +
+    '<p>Select a file to review its issues</p>' +
+    '</div>';
+  renderFileList();
+  updateStats();
+}
+
 function updateSaveState() {
   var btnFloat = document.getElementById('float-btn-save');
   var chip = document.getElementById('save-chip');
@@ -3110,8 +3306,25 @@ function getDecisionDescription(decision) {
   }
 }
 
+// ── Shortcut Help Overlay ──
+function showShortcutHelp() {
+  var overlay = document.getElementById("shortcut-overlay");
+  if (overlay) overlay.classList.remove("hidden");
+}
+function hideShortcutHelp() {
+  var overlay = document.getElementById("shortcut-overlay");
+  if (overlay) overlay.classList.add("hidden");
+}
+
 // ── Keyboard Shortcuts ──
 document.addEventListener('keydown', function(e) {
+  // ? — show shortcut help overlay (works everywhere)
+  if (!e.ctrlKey && !e.altKey && !e.metaKey && (e.key === '?' || (e.shiftKey && e.key === '/'))) {
+    e.preventDefault();
+    showShortcutHelp();
+    return;
+  }
+
   // Ctrl+S — save (always works, no textarea conflict)
   if (e.ctrlKey && e.key === 's') {
     e.preventDefault();
@@ -3184,13 +3397,13 @@ document.addEventListener('keydown', function(e) {
     return;
   }
 
-  // Shift+N / Shift+P → prev/next file
-  if (e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey && (e.key === 'N' || e.key === 'n')) {
+  // N/n / P/p → next/prev file (matches CLI [N]/[P] convention)
+  if (!e.ctrlKey && !e.altKey && !e.metaKey && (e.key === 'n' || e.key === 'N')) {
     e.preventDefault();
     navigateFile(1);
     return;
   }
-  if (e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey && (e.key === 'P' || e.key === 'p')) {
+  if (!e.ctrlKey && !e.altKey && !e.metaKey && (e.key === 'p' || e.key === 'P')) {
     e.preventDefault();
     navigateFile(-1);
     return;
@@ -3205,6 +3418,18 @@ document.addEventListener('keydown', function(e) {
   if (e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey && (e.key === 'K' || e.key === 'k') && state.reviewMode !== 'single') {
     e.preventDefault();
     navigateIssue(-1);
+    return;
+  }
+
+  // B / Shift+B / Escape → back to file list (uppercase B only to avoid interfering with typing in notes)
+  if (!e.ctrlKey && !e.altKey && !e.metaKey && e.key === 'B') {
+    e.preventDefault();
+    clearSelection();
+    return;
+  }
+  if (e.key === 'Escape') {
+    e.preventDefault();
+    clearSelection();
     return;
   }
 });
@@ -3252,12 +3477,29 @@ async function navigateToFile(direction) {
   if (newIdx < 0 || newIdx >= state.filteredFiles.length) return;
   if (newIdx === currentIdx) return;
 
-  selectFile(state.filteredFiles[newIdx].path);
+  // Preserve current review mode when navigating between files
+  var prevMode = state.reviewMode;
+  selectFile(state.filteredFiles[newIdx].path, prevMode);
 }
 
-// Quick keyboard-only file nav (no auto-save)
-function navigateFile(direction) {
+// Keyboard-driven file navigation (auto-saves first)
+async function navigateFile(direction) {
   if (state.filteredFiles.length === 0) return;
+
+  // Auto-save current file before navigating away
+  if (state.dirty && state.selectedFilePath) {
+    cancelAutoSave();
+    try {
+      var newContent = reconstructFile();
+      await apiPost('/api/task?path=' + encodeURIComponent(state.selectedFilePath), { content: newContent });
+      state.selectedFileContent = newContent;
+      state.parsed._originalContent = newContent;
+      state.dirty = false;
+    } catch (e) {
+      // Continue navigation even if save fails
+    }
+  }
+
   var currentIdx = -1;
   for (var i = 0; i < state.filteredFiles.length; i++) {
     if (state.filteredFiles[i].path === state.selectedFilePath) { currentIdx = i; break; }
@@ -3265,7 +3507,10 @@ function navigateFile(direction) {
   var newIdx = currentIdx + direction;
   if (newIdx < 0 || newIdx >= state.filteredFiles.length) return;
   if (newIdx === currentIdx) return;
-  selectFile(state.filteredFiles[newIdx].path);
+
+  // Preserve current review mode when navigating between files
+  var prevMode = state.reviewMode;
+  selectFile(state.filteredFiles[newIdx].path, prevMode);
 }
 
 // ── Expand/Collapse ──
@@ -3290,6 +3535,17 @@ function collapseAll() {
   var icons = document.querySelectorAll('.collapse-icon');
   for (var i = 0; i < bodies.length; i++) { bodies[i].classList.remove('open'); }
   for (var j = 0; j < icons.length; j++) { icons[j].classList.remove('open'); }
+}
+
+var _allCollapsed = false;
+function toggleCollapseAll() {
+  _allCollapsed = !_allCollapsed;
+  if (_allCollapsed) { collapseAll(); } else { expandAll(); }
+  var btn = document.getElementById('btn-collapse-all');
+  if (btn) {
+    btn.textContent = _allCollapsed ? '⊟' : '⊞';
+    btn.title = _allCollapsed ? 'Expand all issue cards' : 'Collapse all issue cards';
+  }
 }
 
 // ── Escape helpers ──

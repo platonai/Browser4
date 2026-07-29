@@ -1,0 +1,338 @@
+{
+  "meta": {
+    "source": "20260729-070839-crawl-link-discovery.full.md",
+    "scenario": "crawl-link-discovery",
+    "date": "20260729-070839",
+    "mode": "dev"
+  },
+  "background": {
+    "executionContext": "**Commands executed:** `help`, `goto`, `htmlsnapshot`, `eval`, `crawl` (5× with various `--out-link-selector` values), `crawl --seed-file` (6× with various formats), `crawl list`, `crawl status`, `crawl clear`, `htmlsnapshot get all`.\n\n**Workarounds:** (1) Used `eval` JavaScript to manually extract product URLs instead of `--out-link-selector`. (2) Used `--json` global flag to see actual crawl errors hidden by human-readable output. (3) Accepted that `--format` flags are non-functional without `--sql`.\n\n**Key discovery:** An existing issues report from yesterday (20260728-153336) documents the same bugs with ACCEPT verdicts — they remain unfixed. The protocol-handler bug has **worsened**: yesterday 1 of 10 pages loaded; today 0 of 10.\n\n---\n\n## C & D: Issues Found & Overall Assessment\n\n```json\n{\n  \"issues\": [\n    {\n      \"title\": \"Crawl link discovery returns 0 elements for ALL CSS selectors — depth >= 1 completely broken\",\n      \"severity\": \"Critical\",\n      \"category\": \"Reliability\",\n      \"reproduction\": \"./b4w.ps1 crawl 'https://books.toscrape.com/' --out-link-selector 'a' --depth 1 --top-links 5 --refresh --format table\",\n      \"expected\": \"Links matching the 'a' CSS selector extracted from the portal page (~94 links visible via htmlsnapshot).\",\n      \"actual\": \"Crawl completes with 0 pages found. Diagnostic: 'The page loaded but the CSS selector 'a' matched zero elements.' Multiple selectors tested ('a', 'h3 a', 'a[href*=\\\"catalogue\\\"]') all produce 0 results despite 94 anchors confirmed via htmlsnapshot and eval.\",\n      \"rootCause\": \"The crawl link-discovery path uses a Jsoup fetch/parse pipeline (session.loadDocument() → document.select(selector)) that differs from the browser-based DOM used by htmlsnapshot/goto. The Jsoup pipeline either fails to fetch the page or produces a document model where selectors don't match. The appendSelectorIfMissing() function in LoadOptions.kt may also corrupt selectors. Previously reported 2026-07-28, ACCEPTed, still unfixed.\",\n      \"codePointer\": \"browser4-rest/src/main/kotlin/ai/platon/pulsar/rest/api/service/CrawlService.kt:extractOutLinks() ~line 780; browser4-core/browser4-skeleton/src/main/kotlin/ai/platon/pulsar/skeleton/common/options/LoadOptions.kt:correctOutLinkSelector() ~line 988\",\n      \"suggestion\": \"- Investigate why Jsoup's document.select() returns 0 results when browser DOM shows 94 anchors — the fetch/parse pipeline may not be rendering the page correctly\\n- Debug appendSelectorIfMissing() in pulsar-dom external JAR to confirm it does not corrupt CSS selectors\\n- Add integration test verifying link discovery on books.toscrape.com (94 expected links)\\n- When link discovery returns 0 results, check document.select('*').size and document.html.length before blaming the selector\"\n    },\n    {\n      \"title\": \"Crawl fetch returns 0 bytes for ALL pages — 'protocol handler not ready' on every single URL\",\n      \"severity\": \"Critical\",\n      \"category\": \"Reliability\",\n      \"reproduction\": \"./b4w.ps1 --json crawl --seed-file .test-sessions/books-seed.txt --depth 0 (10 book detail URLs from books.toscrape.com)\",\n      \"expected\": \"All 10 pages load with content (12KB+ each) and titles.\",\n      \"actual\": \"All 10 pages return contentLength: 0 with extractionError: 'fetch returned 0 bytes (possible protocol handler not ready)'. Text-mode output silently reports 'Crawl completed. 10 pages found.' with empty titles — misleading the user. JSON mode reveals the truth. This has worsened since yesterday when 1 of 10 pages worked.\",\n      \"rootCause\": \"The HTTP protocol handler used for page fetching (likely OkHttp or equivalent) is never properly initialized or crashes before any request. The error 'protocol handler not ready' suggests the handler lifecycle is not managed: it may be a singleton that fails to initialize, or a per-thread resource that isn't set up for crawl worker threads. Previously reported 2026-07-28, ACCEPTed, still unfixed and now affects ALL pages (was partial before).\",\n      \"codePointer\": \"browser4-core — FetchComponent or protocol handler initialization and lifecycle management\",\n      \"suggestion\": \"- Investigate protocol handler lifecycle — ensure proper initialization before first fetch in crawl context\\n- Add retry logic for 'protocol handler not ready' errors (at least 3 retries with exponential backoff)\\n- Consider instantiating a fresh protocol handler per request rather than sharing a singleton\\n- Add a pre-flight health check before each crawl to verify the handler is ready, failing fast with a clear error\"\n    },\n    {\n      \"title\": \"Crawl --sql flag returns 'No extracted data' — X-SQL extraction through crawl is non-functional\",\n      \"severity\": \"Critical\",\n      \"category\": \"Reliability\",\n      \"reproduction\": \"./b4w.ps1 crawl --seed-file .test-sessions/books-seed.txt --depth 0 --sql @.test-sessions/extract-books.sql --format table (query uses load_and_select(@url, 'body') with dom_first_text for title, price, availability)\",\n      \"expected\": \"Structured table output with url, title, price, and availability columns from 10 book detail pages.\",\n      \"actual\": \"'No extracted data.' — crawl completes but returns zero rows. Known from memory as: 'CrawlToolExecutor drops sql/urls params (critical), and load_and_select needs cached pages (high)'.\",\n      \"rootCause\": \"CrawlToolExecutor drops or mishandles the --sql and URL parameters passed to the X-SQL query engine. Additionally, load_and_select may require pages to be pre-cached (via htmlsnapshot capture or prior fetch), which the crawl pipeline doesn't do. Previously documented, still unfixed.\",\n      \"codePointer\": \"browser4-rest — CrawlToolExecutor SQL parameter handling; browser4-core — load_and_select cache dependency\",\n      \"suggestion\": \"- Fix CrawlToolExecutor to correctly forward --sql and URL parameters to the X-SQL engine\\n- Remove or document the load_and_select cached-page dependency — either auto-cache pages before query, or switch to a fetch-on-demand model\\n- Add a clear error message when --sql fails, distinguishing 'query syntax error' from 'parameter forwarding failure' from 'page not cached'\"\n    },\n    {\n      \"title\": \"--format csv and --format json silently produce plain text when used without --sql\",\n      \"severity\": \"High\",\n      \"category\": \"UX\",\n      \"reproduction\": \"./b4w.ps1 crawl --seed-file .test-sessions/books-seed.txt --depth 0 --format csv --output results.csv\",\n      \"expected\": \"CSV output contains comma-separated values with headers, or at minimum a loud warning that --format requires --sql.\",\n      \"actual\": \"Output file contains human-readable plain text: 'Crawl completed. 10 pages found.' followed by pipe-separated lines. No CSV structure. The --format flag is silently ignored without --sql. Previously reported 2026-07-28, ACCEPTed, still unfixed.\",\n      \"rootCause\": \"--format controls how X-SQL result sets are formatted. Without --sql, there is no structured result set, so the flag is a no-op. The design is intentional but the flag documentation doesn't mention the --sql dependency, and no warning is emitted.\",\n      \"codePointer\": \"cli/browser4-cli/src/commands.rs — crawl output formatting logic; skills/browser4-cli/references/crawl.md — --format flag documentation\",\n      \"suggestion\": \"- When --format csv/json is specified without --sql, emit structured output from page metadata (url, title, content_length) as default columns\\n- At minimum, emit a prominent warning: 'Warning: --format has no effect without --sql. Use --sql to produce structured output.'\\n- Document the --sql dependency explicitly in the --format flag description in help output and crawl.md\"\n    },\n    {\n      \"title\": \"Crawl startup delay — consistently 80-100 seconds before processing begins\",\n      \"severity\": \"High\",\n      \"category\": \"Reliability\",\n      \"reproduction\": \"Any crawl invocation with seed file (3-10 URLs).\",\n      \"expected\": \"Crawl processing begins within a few seconds of submission.\",\n      \"actual\": \"Every crawl shows 'Still waiting for crawl to start...' at 16-second intervals. Minimum wait was ~80 seconds for a 3-URL crawl. The 10-URL crawl with --sql took ~100 seconds. Previously reported 2026-07-28, ACCEPTed, still present.\",\n      \"rootCause\": \"The crawl task scheduler uses a 16-second polling interval and the worker pool has contention or serialization issues. New tasks queue behind existing ones even after they complete.\",\n      \"codePointer\": \"browser4-rest — crawl task scheduler, worker pool, or session lifecycle\",\n      \"suggestion\": \"- Reduce the polling interval from 16s to 2-3s for initial task pickup\\n- Ensure completed tasks immediately release worker threads and session resources\\n- Investigate whether crawl sessions share a global lock that causes serialization\\n- Add a progress indicator during the waiting period (e.g., 'Queue position: 3')\"\n    },\n    {\n      \"title\": \"Diagnostic message misleading — blames user's CSS selector when backend parsing is the root cause\",\n      \"severity\": \"Medium\",\n      \"category\": \"Discoverability\",\n      \"reproduction\": \"./b4w.ps1 crawl 'https://books.toscrape.com/' --out-link-selector 'a' --depth 1\",\n      \"expected\": \"Clear error indicating the backend failed to parse the page, with actionable debugging guidance.\",\n      \"actual\": \"Diagnostic says 'The page loaded but the CSS selector 'a' matched zero elements. Verify the selector or check that the page content loaded correctly.' It suggests trying 'snapshot' or 'htmlsnapshot' — implying the user's selector is wrong when the page clearly has 94 anchors via htmlsnapshot. Wastes user time trying different selectors. Previously reported 2026-07-28, ACCEPTed.\",\n      \"rootCause\": \"CrawlService.kt diagnostic logic assumes document.select(selector) returning 0 means the selector is the problem. It never checks whether the document itself has any DOM elements at all.\",\n      \"codePointer\": \"browser4-rest/src/main/kotlin/ai/platon/pulsar/rest/api/service/CrawlService.kt:~525-537\",\n      \"suggestion\": \"- Before blaming the selector, verify the document has DOM elements: check document.select('a').size or document.html.length\\n- If document has 0 anchors total, report a PARSE FAILURE, not a 'selector wrong' message\\n- Add a 'document diagnostic' section: anchors found, HTML size, base URI\"\n    },\n    {\n      \"title\": \"htmlsnapshot get all fails with internal error 'Unsupported html_snapshot method: scrapeAll'\",\n      \"severity\": \"Medium\",\n      \"category\": \"Reliability\",\n      \"reproduction\": \"./b4w.ps1 goto 'https://books.toscrape.com/' → ./b4w.ps1 htmlsnapshot → ./b4w.ps1 htmlsnapshot get all text 'a' --limit 5\",\n      \"expected\": \"Array of text content from first 5 anchor elements on the page.\",\n      \"actual\": \"ERROR: html_snapshot_scrape_all failed: Unsupported html_snapshot method: scrapeAll. Even after explicitly running `htmlsnapshot` first as suggested by the error tip, the same error persists.\",\n      \"rootCause\": \"The 'get all' subcommand uses an internal method called 'scrapeAll' which is not implemented or registered in the backend's htmlsnapshot method dispatcher. The error message suggests running 'htmlsnapshot' first, but this doesn't help since the method itself is missing.\",\n      \"codePointer\": \"browser4-rest — htmlsnapshot method dispatcher (scrapeAll method registration); browser4-core — HtmlSnapshot component\",\n      \"suggestion\": \"- Implement the scrapeAll method in the htmlsnapshot backend, or fix the method routing to use the correct implementation\\n- If scrapeAll is intentionally unsupported, replace the error with a clear deprecation/unsupported notice pointing to the working alternative (eval with querySelectorAll)\\n- Update the 'htmlsnapshot' tips section which currently recommends 'get all' as a working command\"\n    },\n    {\n      \"title\": \"Crawl text-mode output silently hides 0-byte fetch errors — user sees success when all pages failed\",\n      \"severity\": \"Medium\",\n      \"category\": \"UX\",\n      \"reproduction\": \"./b4w.ps1 crawl --seed-file .test-sessions/books-seed.txt --depth 0 --format table\",\n      \"expected\": \"Clear indication that pages failed to load (0 bytes, protocol handler errors).\",\n      \"actual\": \"Output shows 'Crawl completed. 10 pages found.' with a list of URLs and empty title columns. No mention of fetch errors. Only the JSON output (via --json flag) reveals 'contentLength: 0' and 'extractionError: fetch returned 0 bytes' for every page. A user relying on text output would believe the crawl succeeded.\",\n      \"rootCause\": \"The human-readable output formatter only shows the page listing; extraction errors are suppressed. The success message 'X pages found' counts pages that failed to load alongside working ones — 'found' is ambiguous.\",\n      \"codePointer\": \"cli/browser4-cli/src/commands.rs — crawl output formatting\",\n      \"suggestion\": \"- Show a warning summary in text output when pages have errors: '10 pages processed (10 had fetch errors)'\\n- Distinguish 'pages found' from 'pages successfully loaded' in the completion message\\n- Add --verbose flag to show per-page error details in text mode\\n- Make 0-byte fetches more visible in the listing (e.g., 'ERROR' instead of empty title)\"\n    },\n    {\n      \"title\": \"Crawl list shows truncated descriptions instead of useful command summaries\",\n      \"severity\": \"Low\",\n      \"category\": \"UX\",\n      \"reproduction\": \"./b4w.ps1 crawl list (after running multiple crawls)\",\n      \"expected\": \"DESCRIPTION column shows the first seed URL or seed file path, or URL count — enough to identify each task.\",\n      \"actual\": \"DESCRIPTION column truncates long URLs with '...' (e.g., 'https://books.toscrape.com/catalogue/a-…'). The seed-file crawls show the first URL from the file rather than the seed file path or count, making tasks indistinguishable.\",\n      \"rootCause\": \"The crawl list output truncates description to a fixed width. For seed-file crawls, the description is the concatenated URL list rather than the file path or count.\",\n      \"codePointer\": \"cli/browser4-cli/src/ — crawl list output formatting\",\n      \"suggestion\": \"- Show seed file path (or 'N URLs' for inline URLs) as description rather than the first URL\\n- Add a 'URLs' column showing count\\n- Support --verbose flag to show untruncated descriptions\"\n    }\n  ],\n  \"assessment\": {\n    \"completionStatus\": \"Partially Successful — The crawl command's core features (link discovery, page fetching, X-SQL extraction, structured output) are all broken by unfixed backend bugs. Only administrative commands (crawl list, status, clear) and seed-file argument parsing work correctly. The task goals requiring link discovery, content extraction, and formatted output were blocked. Seed-file crawling, crawl list/status/clear, and the workaround-based data extraction path (goto → eval → manual seed file) were the only functioning workflows.\",\n    \"successRate\": \"20% — 1 of 5 task steps fully succeeded (crawl list). Seed-file creation worked but crawl couldn't fetch content. Link discovery, CSV/JSON output, and X-SQL extraction all failed due to backend bugs.\",\n    \"issuesFound\": 9,\n    \"majorBlockers\": \"Three Critical bugs make crawl unusable: (1) Link discovery returns 0 elements for all CSS selectors — the core depth>=1 crawl feature is completely broken. (2) Protocol handler returns 0 bytes for ALL pages — not a single page loaded successfully. (3) --sql X-SQL extraction returns 'No extracted data' — structured extraction through crawl is non-functional. Combined, these mean crawl can neither discover links, load pages, nor extract data — the three fundamental crawl operations are all broken.\",\n    \"mostConfusingAspects\": \"For a first-time user: (a) The diagnostic blames your CSS selector when the backend is the problem — hours could be wasted trying different selectors. (b) Text output says '10 pages found' when all 10 pages have 0 bytes and fetch errors — only the --json flag reveals the truth. (c) --format csv/json produce identical plain-text output with no warning. (d) Goto and htmlsnapshot work fine on the same page, but crawl can't find a single link — the inconsistency is baffling. (e) The 80-100 second startup delay feels like a hang with no useful progress indicator.\",\n    \"mostValuableImprovements\": \"1) Fix link discovery so depth>=1 crawl works — this is crawl's documented primary use case. 2) Fix the protocol handler lifecycle so pages actually load. 3) Fix --sql parameter forwarding in CrawlToolExecutor. 4) Make --format emit a clear warning when used without --sql, or generate structured output from page metadata. 5) Show fetch errors in text-mode output — don't silently report success when pages have 0 bytes. 6) Reduce the 16s polling interval to 2-3s. 7) Fix htmlsnapshot get all's 'scrapeAll' internal error.\",\n    \"usabilityRating\": 2\n  }\n}\n```",
+    "task": "**Partially Successful.** The crawl command's core features — link discovery, page content fetching, and X-SQL extraction — are all broken. Only administrative commands (`crawl list`, `crawl status`, `crawl clear`) and seed-file argument parsing function correctly. The actual crawl task goals were blocked by backend bugs."
+  },
+  "issues": [
+    {
+      "number": 1,
+      "title": "Crawl link discovery returns 0 elements for ALL CSS selectors — depth >= 1 completely broken",
+      "severity": "Critical",
+      "category": "Reliability",
+      "sections": [
+        {
+          "body": "./b4w.ps1 crawl 'https://books.toscrape.com/' --out-link-selector 'a' --depth 1 --top-links 5 --refresh --format table",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Links matching the 'a' CSS selector extracted from the portal page (~94 links visible via htmlsnapshot).",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "Crawl completes with 0 pages found. Diagnostic: 'The page loaded but the CSS selector 'a' matched zero elements.' Multiple selectors tested ('a', 'h3 a', 'a[href*=\"catalogue\"]') all produce 0 results despite 94 anchors confirmed via htmlsnapshot and eval.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The crawl link-discovery path uses a Jsoup fetch/parse pipeline (session.loadDocument() → document.select(selector)) that differs from the browser-based DOM used by htmlsnapshot/goto. The Jsoup pipeline either fails to fetch the page or produces a document model where selectors don't match. The appendSelectorIfMissing() function in LoadOptions.kt may also corrupt selectors. Previously reported 2026-07-28, ACCEPTed, still unfixed.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "browser4-rest/src/main/kotlin/ai/platon/pulsar/rest/api/service/CrawlService.kt:extractOutLinks() ~line 780; browser4-core/browser4-skeleton/src/main/kotlin/ai/platon/pulsar/skeleton/common/options/LoadOptions.kt:correctOutLinkSelector() ~line 988",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Investigate why Jsoup's document.select() returns 0 results when browser DOM shows 94 anchors — the fetch/parse pipeline may not be rendering the page correctly\n- Debug appendSelectorIfMissing() in pulsar-dom external JAR to confirm it does not corrupt CSS selectors\n- Add integration test verifying link discovery on books.toscrape.com (94 expected links)\n- When link discovery returns 0 results, check document.select('*').size and document.html.length before blaming the selector",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 2,
+      "title": "Crawl fetch returns 0 bytes for ALL pages — 'protocol handler not ready' on every single URL",
+      "severity": "Critical",
+      "category": "Reliability",
+      "sections": [
+        {
+          "body": "./b4w.ps1 --json crawl --seed-file .test-sessions/books-seed.txt --depth 0 (10 book detail URLs from books.toscrape.com)",
+          "label": "Reproduction"
+        },
+        {
+          "body": "All 10 pages load with content (12KB+ each) and titles.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "All 10 pages return contentLength: 0 with extractionError: 'fetch returned 0 bytes (possible protocol handler not ready)'. Text-mode output silently reports 'Crawl completed. 10 pages found.' with empty titles — misleading the user. JSON mode reveals the truth. This has worsened since yesterday when 1 of 10 pages worked.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The HTTP protocol handler used for page fetching (likely OkHttp or equivalent) is never properly initialized or crashes before any request. The error 'protocol handler not ready' suggests the handler lifecycle is not managed: it may be a singleton that fails to initialize, or a per-thread resource that isn't set up for crawl worker threads. Previously reported 2026-07-28, ACCEPTed, still unfixed and now affects ALL pages (was partial before).",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "browser4-core — FetchComponent or protocol handler initialization and lifecycle management",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Investigate protocol handler lifecycle — ensure proper initialization before first fetch in crawl context\n- Add retry logic for 'protocol handler not ready' errors (at least 3 retries with exponential backoff)\n- Consider instantiating a fresh protocol handler per request rather than sharing a singleton\n- Add a pre-flight health check before each crawl to verify the handler is ready, failing fast with a clear error",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 3,
+      "title": "Crawl --sql flag returns 'No extracted data' — X-SQL extraction through crawl is non-functional",
+      "severity": "Critical",
+      "category": "Reliability",
+      "sections": [
+        {
+          "body": "./b4w.ps1 crawl --seed-file .test-sessions/books-seed.txt --depth 0 --sql @.test-sessions/extract-books.sql --format table (query uses load_and_select(@url, 'body') with dom_first_text for title, price, availability)",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Structured table output with url, title, price, and availability columns from 10 book detail pages.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "'No extracted data.' — crawl completes but returns zero rows. Known from memory as: 'CrawlToolExecutor drops sql/urls params (critical), and load_and_select needs cached pages (high)'.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "CrawlToolExecutor drops or mishandles the --sql and URL parameters passed to the X-SQL query engine. Additionally, load_and_select may require pages to be pre-cached (via htmlsnapshot capture or prior fetch), which the crawl pipeline doesn't do. Previously documented, still unfixed.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "browser4-rest — CrawlToolExecutor SQL parameter handling; browser4-core — load_and_select cache dependency",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Fix CrawlToolExecutor to correctly forward --sql and URL parameters to the X-SQL engine\n- Remove or document the load_and_select cached-page dependency — either auto-cache pages before query, or switch to a fetch-on-demand model\n- Add a clear error message when --sql fails, distinguishing 'query syntax error' from 'parameter forwarding failure' from 'page not cached'",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 4,
+      "title": "--format csv and --format json silently produce plain text when used without --sql",
+      "severity": "High",
+      "category": "UX",
+      "sections": [
+        {
+          "body": "./b4w.ps1 crawl --seed-file .test-sessions/books-seed.txt --depth 0 --format csv --output results.csv",
+          "label": "Reproduction"
+        },
+        {
+          "body": "CSV output contains comma-separated values with headers, or at minimum a loud warning that --format requires --sql.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "Output file contains human-readable plain text: 'Crawl completed. 10 pages found.' followed by pipe-separated lines. No CSV structure. The --format flag is silently ignored without --sql. Previously reported 2026-07-28, ACCEPTed, still unfixed.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "--format controls how X-SQL result sets are formatted. Without --sql, there is no structured result set, so the flag is a no-op. The design is intentional but the flag documentation doesn't mention the --sql dependency, and no warning is emitted.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "cli/browser4-cli/src/commands.rs — crawl output formatting logic; skills/browser4-cli/references/crawl.md — --format flag documentation",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- When --format csv/json is specified without --sql, emit structured output from page metadata (url, title, content_length) as default columns\n- At minimum, emit a prominent warning: 'Warning: --format has no effect without --sql. Use --sql to produce structured output.'\n- Document the --sql dependency explicitly in the --format flag description in help output and crawl.md",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 5,
+      "title": "Crawl startup delay — consistently 80-100 seconds before processing begins",
+      "severity": "High",
+      "category": "Reliability",
+      "sections": [
+        {
+          "body": "Any crawl invocation with seed file (3-10 URLs).",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Crawl processing begins within a few seconds of submission.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "Every crawl shows 'Still waiting for crawl to start...' at 16-second intervals. Minimum wait was ~80 seconds for a 3-URL crawl. The 10-URL crawl with --sql took ~100 seconds. Previously reported 2026-07-28, ACCEPTed, still present.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The crawl task scheduler uses a 16-second polling interval and the worker pool has contention or serialization issues. New tasks queue behind existing ones even after they complete.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "browser4-rest — crawl task scheduler, worker pool, or session lifecycle",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Reduce the polling interval from 16s to 2-3s for initial task pickup\n- Ensure completed tasks immediately release worker threads and session resources\n- Investigate whether crawl sessions share a global lock that causes serialization\n- Add a progress indicator during the waiting period (e.g., 'Queue position: 3')",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 6,
+      "title": "Diagnostic message misleading — blames user's CSS selector when backend parsing is the root cause",
+      "severity": "Medium",
+      "category": "Discoverability",
+      "sections": [
+        {
+          "body": "./b4w.ps1 crawl 'https://books.toscrape.com/' --out-link-selector 'a' --depth 1",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Clear error indicating the backend failed to parse the page, with actionable debugging guidance.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "Diagnostic says 'The page loaded but the CSS selector 'a' matched zero elements. Verify the selector or check that the page content loaded correctly.' It suggests trying 'snapshot' or 'htmlsnapshot' — implying the user's selector is wrong when the page clearly has 94 anchors via htmlsnapshot. Wastes user time trying different selectors. Previously reported 2026-07-28, ACCEPTed.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "CrawlService.kt diagnostic logic assumes document.select(selector) returning 0 means the selector is the problem. It never checks whether the document itself has any DOM elements at all.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "browser4-rest/src/main/kotlin/ai/platon/pulsar/rest/api/service/CrawlService.kt:~525-537",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Before blaming the selector, verify the document has DOM elements: check document.select('a').size or document.html.length\n- If document has 0 anchors total, report a PARSE FAILURE, not a 'selector wrong' message\n- Add a 'document diagnostic' section: anchors found, HTML size, base URI",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 7,
+      "title": "htmlsnapshot get all fails with internal error 'Unsupported html_snapshot method: scrapeAll'",
+      "severity": "Medium",
+      "category": "Reliability",
+      "sections": [
+        {
+          "body": "./b4w.ps1 goto 'https://books.toscrape.com/' → ./b4w.ps1 htmlsnapshot → ./b4w.ps1 htmlsnapshot get all text 'a' --limit 5",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Array of text content from first 5 anchor elements on the page.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "ERROR: html_snapshot_scrape_all failed: Unsupported html_snapshot method: scrapeAll. Even after explicitly running `htmlsnapshot` first as suggested by the error tip, the same error persists.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The 'get all' subcommand uses an internal method called 'scrapeAll' which is not implemented or registered in the backend's htmlsnapshot method dispatcher. The error message suggests running 'htmlsnapshot' first, but this doesn't help since the method itself is missing.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "browser4-rest — htmlsnapshot method dispatcher (scrapeAll method registration); browser4-core — HtmlSnapshot component",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Implement the scrapeAll method in the htmlsnapshot backend, or fix the method routing to use the correct implementation\n- If scrapeAll is intentionally unsupported, replace the error with a clear deprecation/unsupported notice pointing to the working alternative (eval with querySelectorAll)\n- Update the 'htmlsnapshot' tips section which currently recommends 'get all' as a working command",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 8,
+      "title": "Crawl text-mode output silently hides 0-byte fetch errors — user sees success when all pages failed",
+      "severity": "Medium",
+      "category": "UX",
+      "sections": [
+        {
+          "body": "./b4w.ps1 crawl --seed-file .test-sessions/books-seed.txt --depth 0 --format table",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Clear indication that pages failed to load (0 bytes, protocol handler errors).",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "Output shows 'Crawl completed. 10 pages found.' with a list of URLs and empty title columns. No mention of fetch errors. Only the JSON output (via --json flag) reveals 'contentLength: 0' and 'extractionError: fetch returned 0 bytes' for every page. A user relying on text output would believe the crawl succeeded.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The human-readable output formatter only shows the page listing; extraction errors are suppressed. The success message 'X pages found' counts pages that failed to load alongside working ones — 'found' is ambiguous.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "cli/browser4-cli/src/commands.rs — crawl output formatting",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Show a warning summary in text output when pages have errors: '10 pages processed (10 had fetch errors)'\n- Distinguish 'pages found' from 'pages successfully loaded' in the completion message\n- Add --verbose flag to show per-page error details in text mode\n- Make 0-byte fetches more visible in the listing (e.g., 'ERROR' instead of empty title)",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 9,
+      "title": "Crawl list shows truncated descriptions instead of useful command summaries",
+      "severity": "Low",
+      "category": "UX",
+      "sections": [
+        {
+          "body": "./b4w.ps1 crawl list (after running multiple crawls)",
+          "label": "Reproduction"
+        },
+        {
+          "body": "DESCRIPTION column shows the first seed URL or seed file path, or URL count — enough to identify each task.",
+          "label": "Expected Behavior"
+        },
+        {
+          "body": "DESCRIPTION column truncates long URLs with '...' (e.g., 'https://books.toscrape.com/catalogue/a-…'). The seed-file crawls show the first URL from the file rather than the seed file path or count, making tasks indistinguishable.",
+          "label": "Actual Behavior"
+        },
+        {
+          "body": "The crawl list output truncates description to a fixed width. For seed-file crawls, the description is the concatenated URL list rather than the file path or count.",
+          "label": "Root Cause Analysis"
+        },
+        {
+          "body": "cli/browser4-cli/src/ — crawl list output formatting",
+          "label": "Code Pointer"
+        },
+        {
+          "body": "- Show seed file path (or 'N URLs' for inline URLs) as description rather than the first URL\n- Add a 'URLs' column showing count\n- Support --verbose flag to show untruncated descriptions",
+          "label": "AI Suggested Improvement"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "meta": {
+    "scenario": "crawl-link-options",
+    "date": "20260729-071943",
+    "source": "20260729-071943-crawl-link-options.full.md",
+    "mode": "dev"
+  },
+  "background": {
+    "task": "",
+    "executionContext": ""
+  },
+  "issues": []
+}

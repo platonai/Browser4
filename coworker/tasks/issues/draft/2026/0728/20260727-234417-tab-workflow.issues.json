@@ -1,0 +1,270 @@
+{
+  "meta": {
+    "scenario": "tab-workflow",
+    "mode": "dev",
+    "source": "20260727-234417-tab-workflow.full.md",
+    "date": "20260727-234417"
+  },
+  "background": {
+    "executionContext": "**Commands used:** `kill-all`, `open`, `goto`, `tab-list`, `tab-list --json`, `tab-new`, `tab-new <url>`, `tab-select <index>`, `tab-select --guid <guid>`, `tab-close`, `tab-close <index>`, `tab-close --guid <guid>`, `snapshot --interactive`, `attach --extension`, `list`, `-s <session-id> tab-list`\n\n**Major steps:** Smoke test → Part A (17 steps of regular session tab lifecycle) → Part B (8 steps of extension session tab lifecycle) → Part C (10 steps of mixed-session isolation testing)\n\n**Workarounds required:**\n1. PowerShell `-i` flag conflict: Used `--interactive` instead of `-i` for snapshot\n2. No `session` command: Used `-s <session-id>` prefix for per-command session targeting\n3. Chrome tab insert position differs from task assumptions: Adapted to actual tab order\n\n```json\n{\n  \"issues\": [\n    {\n      \"title\": \"No session-switching command exists (session/switch/use)\",\n      \"severity\": \"Critical\",\n      \"category\": \"Discoverability\",\n      \"reproduction\": \"In a multi-session environment (regular + extension), run `./b4w.ps1 session <session-id>`, `./b4w.ps1 switch <id>`, or `./b4w.ps1 use <id>`. All return 'Unknown command'.\",\n      \"expected\": \"A command like `session <id>` should exist to change which session is marked DEFAULT, so tab commands and navigation auto-target the intended session without requiring `-s` on every command.\",\n      \"actual\": \"No `session`, `switch`, `use`, or `default` command exists. The only way to target a non-default session is the `-s <session-id>` global flag on every individual command. The `--help session` category shows sessionStorage commands, not browser session management.\",\n      \"rootCause\": \"The CLI and SKILL.md both lack a dedicated command for changing the default session. Multi-session management currently requires per-command `-s` flags, which is tedious and error-prone. The SKILL.md (line 106) documents `-s` for cross-session targeting but never explains how to change the persistent default.\",\n      \"codePointer\": \"\",\n      \"suggestion\": \"- Add a `session <name-or-id>` command that changes the DEFAULT marker to the specified session\\n- Add a `session` subcommand (or `switch`/`use` alias) to the Browser sessions command group in help output\\n- Document the command in SKILL.md under §2 Key Concepts > Sessions, with examples for multi-session workflows\\n- Consider adding `--default` flag to `attach` and `open` to set the new session as default\"\n    },\n    {\n      \"title\": \"tab-close --guid with nonexistent GUID reports misleading success\",\n      \"severity\": \"High\",\n      \"category\": \"Reliability\",\n      \"reproduction\": \"./b4w.ps1 tab-close --guid \\\"nonexistent-guid-12345\\\"\",\n      \"expected\": \"Error message: 'Tab with GUID nonexistent-guid-12345 not found'. Non-zero exit code. No false success claim.\",\n      \"actual\": \"Output: 'Note: Tab was closed but the backend reported: ERROR: browser_tabs failed: Tab 'nonexistent-guid-12345' not found ... Closed tab with GUID: nonexistent-guid-12345'. Exit code 0. The CLI claims success ('Closed tab with GUID') while simultaneously noting the backend reported it wasn't found.\",\n      \"rootCause\": \"The CLI layer appears to interpret the backend error response as a successful close, likely because the extension-session error-recovery path (documented in SKILL.md line 110 for 'chrome.tabs.remove callback firing after tab is gone') is incorrectly applied here. The CLI fails to distinguish between 'tab was closed but backend reported error' (valid for extension sessions) and 'tab was never found/closed' (invalid GUID).\",\n      \"codePointer\": \"\",\n      \"suggestion\": \"- Distinguish between 'backend error after successful close' and 'backend error because tab not found' — only apply the recovery note for the former\\n- Return non-zero exit code when the backend reports tab-not-found for GUID-based operations\\n- Remove the 'Closed tab with GUID: ...' success message when the backend reports the tab was not found\\n- Add a dedicated error message: 'Error: No tab found with GUID <guid>' instead of the misleading success\"\n    },\n    {\n      \"title\": \"PowerShell -i flag conflicts with snapshot interactive mode\",\n      \"severity\": \"Medium\",\n      \"category\": \"UX\",\n      \"reproduction\": \"./b4w.ps1 snapshot -i or ./b4w.ps1 -- snapshot -i\",\n      \"expected\": \"snapshot -i should launch interactive snapshot mode.\",\n      \"actual\": \"PowerShell error: 'Parameter cannot be processed because the parameter name 'i' is ambiguous. Possible matches include: -InformationAction -InformationVariable.' The `--` separator also fails. Users must use the long form `--interactive`.\",\n      \"rootCause\": \"The b4w.ps1 PowerShell wrapper script passes short flags through PowerShell's parameter binder, which intercepts `-i` as matching `-InformationAction`. The SKILL.md documents this (line 420): 'short flags like -i and -v may be intercepted by PowerShell's parameter binder'. However, it suggests using b4w.bat or b4w.sh instead — but the evaluation instructions require ./b4w.ps1.\",\n      \"codePointer\": \"\",\n      \"suggestion\": \"- Update b4w.ps1 to use `--%` (stop-parsing symbol) or `@args` splatting to pass all arguments through without PowerShell parameter binding\\n- Or document `--interactive` as the preferred long form for PowerShell users in the snapshot help output\\n- Add a tip after `snapshot` help that mentions the `-i` → `--interactive` substitution on PowerShell\"\n    },\n    {\n      \"title\": \"Extension session tab-close shows confusing dual-message output\",\n      \"severity\": \"Medium\",\n      \"category\": \"UX\",\n      \"reproduction\": \"In an extension session, run `./b4w.ps1 tab-close 1` or `./b4w.ps1 -s <ext-session> tab-close`.\",\n      \"expected\": \"Clean output: 'Closed tab 1 (url — GUID: chrome:xxx)'. Possibly a note about extension behavior, but in a non-alarming format.\",\n      \"actual\": \"'Note: Tab was closed but the backend reported: ERROR: browser_tabs failed: closeTab ... Closed tab 1 (url — GUID: xxx)'. The ERROR text looks like a failure even though the operation succeeded. The Java method signature in the help text is confusing.\",\n      \"rootCause\": \"Per SKILL.md line 110, 'chrome.tabs.remove callback can fire an error after the tab is already gone'. The CLI correctly handles this (verifies removal and treats as success) but presents the backend error verbatim before the success message, creating a WARNING-then-OK pattern that reads like a failure.\",\n      \"codePointer\": \"\",\n      \"suggestion\": \"- Suppress the raw backend ERROR text when the CLI has verified the tab was actually removed\\n- Replace with a single informational note: 'Tab closed (extension session — backend confirmation delayed)'\\n- Or demote the ERROR to a debug-level message and show only 'Closed tab N (url — GUID: xxx)' on stdout\\n- Remove the Java method signature from user-facing output (it belongs in --verbose/debug mode only)\"\n    },\n    {\n      \"title\": \"Extension session GUID format changes from chrome: prefix to hex after session becomes stale\",\n      \"severity\": \"Medium\",\n      \"category\": \"Reliability\",\n      \"reproduction\": \"1. Create extension session, observe GUIDs like chrome:217100829\\n2. Close all tabs via extension session\\n3. Create a new tab via extension session\\n4. GUID is now hex (e.g. E931A329...) instead of chrome:-prefixed\",\n      \"expected\": \"GUID format should be consistent for a given session type. Extension sessions should always show chrome:-prefixed GUIDs.\",\n      \"actual\": \"After the extension session becomes 'Stale' (all tabs closed), new tabs show 32-char hex GUIDs instead of chrome:-prefixed GUIDs, even though the session's CONNECTION column still shows 'Extension'.\",\n      \"rootCause\": \"When the extension session becomes stale, the tab management likely falls back to a different code path (possibly CDP-based) that generates hex GUIDs instead of using Chrome extension tab IDs. The session metadata still shows 'Extension' but the GUID format no longer reflects the extension origin.\",\n      \"codePointer\": \"\",\n      \"suggestion\": \"- Ensure GUID format is determined by session type (from session metadata), not by the current connection state\\n- Cache the session connection type at creation time and use it for GUID formatting throughout the session lifecycle\\n- If the session reverts to a non-extension transport, update the CONNECTION column to reflect this change\"\n    },\n    {\n      \"title\": \"tab-list --json output format differs from documentation\",\n      \"severity\": \"Low\",\n      \"category\": \"Documentation\",\n      \"reproduction\": \"Run `./b4w.ps1 tab-list --json` and compare with SKILL.md documentation.\",\n      \"expected\": \"Documentation (SKILL.md line 104) says output includes a 'tabs' array with 'index', 'guid', 'url', 'title' plus a 'count' field.\",\n      \"actual\": \"Output is wrapped in a JSON envelope: {\\\"command\\\":\\\"tab-list\\\",\\\"output\\\":{\\\"count\\\":1,\\\"tabs\\\":[...]},\\\"status\\\":\\\"ok\\\"}. The 'tabs' array and 'count' are nested inside 'output', not at the top level. Also, '--json' works both as a command-level flag (`tab-list --json`) and as a global flag (`--json tab-list`), but the documentation only mentions the global form.\",\n      \"rootCause\": \"The documentation describes the inner payload structure but omits the outer envelope (command, output, status). The envelope is a general CLI convention applied to all --json output, but the SKILL.md example implies the tabs array is at the top level.\",\n      \"codePointer\": \"\",\n      \"suggestion\": \"- Update SKILL.md line 104 to show the full JSON envelope structure with a note that tabs are nested inside output\\n- Document both `--json tab-list` and `tab-list --json` as valid invocation forms\\n- Add a JSON output example showing the exact format\"\n    },\n    {\n      \"title\": \"Error messages include raw Java method signatures in user-facing output\",\n      \"severity\": \"Low\",\n      \"category\": \"UX\",\n      \"reproduction\": \"./b4w.ps1 tab-select 99 or ./b4w.ps1 tab-close --guid \\\"bogus\\\"\",\n      \"expected\": \"Clean, human-readable error: 'Error: Tab index 99 is out of range. There are 3 tabs (indices 0-2).'\",\n      \"actual\": \"'ERROR: browser_tabs failed: Tab index '99' out of range; found 3 tabs help: Switch to a specific browser tab by its zero-based index or GUID\\\\nbrowser.switchTab(Arg(name=index, type=Int, defaultValue=null), Arg(name=tabId, type=String, defaultValue=null))'\",\n      \"rootCause\": \"The CLI is surfacing internal Java method signatures (browser.switchTab/browser.closeTab with Arg definitions) as part of the user-facing error output. These signatures are useful for developers but confusing for end users.\",\n      \"codePointer\": \"\",\n      \"suggestion\": \"- Strip Java method signatures from default output; show them only in --verbose/debug mode\\n- Format error messages as: 'Error: <human-readable description>' followed by 'Suggestion: <actionable hint>'\\n- Move the method signature to a debug/trace log level\"\n    },\n    {\n      \"title\": \"Goto command navigation message inconsistent — says 'already at' but actually navigates\",\n      \"severity\": \"Low\",\n      \"category\": \"UX\",\n      \"reproduction\": \"When switching to a tab that already has example.com loaded and running `goto https://example.com`.\",\n      \"expected\": \"Clear indication: either 'Already at https://example.com' (no navigation) or 'Navigated to https://example.com' (navigation occurred).\",\n      \"actual\": \"Sometimes produces 'Using existing session DEFAULT (current page: https://example.com/).' and shows a full snapshot output. The behavior is ambiguous — it's unclear whether a navigation actually occurred or the page was left as-is.\",\n      \"rootCause\": \"The goto command always triggers a page load check but doesn't clearly distinguish between 'page was already at this URL, no navigation needed' and 'navigation occurred to this URL'. The snapshot output is always generated regardless.\",\n      \"codePointer\": \"\",\n      \"suggestion\": \"- Add explicit 'Already at <url> — no navigation needed' message when the current URL matches the target\\n- Or add 'Navigated to <url>' vs 'Already at <url>' distinction in the output\\n- Consider skipping the snapshot when no navigation occurred (add --force-snapshot flag for users who want it)\"\n    }\n  ],\n  \"assessment\": {\n    \"completionStatus\": \"Successful — All 31 steps completed across Part A (Regular), Part B (Extension), and Part C (Mixed). Full tab lifecycle verified: create, list, select, close, GUID operations, error handling, session isolation, cross-session independence. Two step-level failures recorded (A.16: misleading GUID error; C.5: no session-switching command) but both were worked around.\",\n    \"successRate\": \"94% — 29 of 31 steps passed cleanly. Two steps produced failures: A.16 (misleading success for invalid GUID close) and C.5 (no session-switching command). Both had workarounds available.\",\n    \"issuesFound\": 8,\n    \"majorBlockers\": \"No session-switching command exists. Users in multi-session environments must prefix every command with `-s <session-id>` to target a non-default session. This is tedious and error-prone for workflows that alternate between sessions.\",\n    \"mostConfusingAspects\": \"1. No `session` command to change the default session (had to discover this by trial and error). 2. Extension session tab-close outputs ERROR followed by success — hard to tell if the operation actually worked. 3. The `--help session` category shows sessionStorage commands, not browser session management, which is misleading. 4. Chrome tab insert positions are unpredictable (dependent on native Chrome behavior).\",\n    \"mostValuableImprovements\": \"1. Add a `session <id>` command to switch the default session. 2. Fix the misleading success message for tab-close with invalid GUID. 3. Clean up extension session close output to not show raw ERROR text. 4. Add a 'Quick Start' or 'Common Workflows' section showing multi-session usage patterns.\",\n    \"usabilityRating\": 6\n  }\n}\n```",
+    "task": "The browser4-cli tab management subsystem was exercised across all three session types (Regular, Extension, and Mixed) with the following outcomes:\n\n- **Tab creation** (`tab-new`): Works correctly with and without URLs, returns GUIDs, auto-switches to new tabs across all session types.\n- **Tab listing** (`tab-list`): Produces consistent human-readable tables and JSON output; correctly scoped to the current session; no cross-session tab leakage observed.\n- **Tab selection** (`tab-select`): Works by both index and GUID; correctly changes the active page context.\n- **Tab closing** (`tab-close`): Works by index, by GUID, and without args (current tab); tabs are re-indexed compactly after close.\n- **Session isolation**: Tab operations in one session never affect tabs in another session; CONNECTION type remains correct.\n- **Error handling**: Invalid index produces a clear error; invalid GUID produces a **misleading success message** (see Issue 2).\n\n**One critical gap**: There is no `session` command to switch the default session in multi-session environments, requiring `-s <session-id>` on every command targeting a non-default session."
+  },
+  "issues": [
+    {
+      "number": 1,
+      "title": "No session-switching command exists (session/switch/use)",
+      "severity": "Critical",
+      "category": "Discoverability",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "In a multi-session environment (regular + extension), run `./b4w.ps1 session <session-id>`, `./b4w.ps1 switch <id>`, or `./b4w.ps1 use <id>`. All return 'Unknown command'."
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "A command like `session <id>` should exist to change which session is marked DEFAULT, so tab commands and navigation auto-target the intended session without requiring `-s` on every command."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "No `session`, `switch`, `use`, or `default` command exists. The only way to target a non-default session is the `-s <session-id>` global flag on every individual command. The `--help session` category shows sessionStorage commands, not browser session management."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "The CLI and SKILL.md both lack a dedicated command for changing the default session. Multi-session management currently requires per-command `-s` flags, which is tedious and error-prone. The SKILL.md (line 106) documents `-s` for cross-session targeting but never explains how to change the persistent default."
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Add a `session <name-or-id>` command that changes the DEFAULT marker to the specified session\n- Add a `session` subcommand (or `switch`/`use` alias) to the Browser sessions command group in help output\n- Document the command in SKILL.md under §2 Key Concepts > Sessions, with examples for multi-session workflows\n- Consider adding `--default` flag to `attach` and `open` to set the new session as default"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 2,
+      "title": "tab-close --guid with nonexistent GUID reports misleading success",
+      "severity": "High",
+      "category": "Reliability",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "./b4w.ps1 tab-close --guid \"nonexistent-guid-12345\""
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "Error message: 'Tab with GUID nonexistent-guid-12345 not found'. Non-zero exit code. No false success claim."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "Output: 'Note: Tab was closed but the backend reported: ERROR: browser_tabs failed: Tab 'nonexistent-guid-12345' not found ... Closed tab with GUID: nonexistent-guid-12345'. Exit code 0. The CLI claims success ('Closed tab with GUID') while simultaneously noting the backend reported it wasn't found."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "The CLI layer appears to interpret the backend error response as a successful close, likely because the extension-session error-recovery path (documented in SKILL.md line 110 for 'chrome.tabs.remove callback firing after tab is gone') is incorrectly applied here. The CLI fails to distinguish between 'tab was closed but backend reported error' (valid for extension sessions) and 'tab was never found/closed' (invalid GUID)."
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Distinguish between 'backend error after successful close' and 'backend error because tab not found' — only apply the recovery note for the former\n- Return non-zero exit code when the backend reports tab-not-found for GUID-based operations\n- Remove the 'Closed tab with GUID: ...' success message when the backend reports the tab was not found\n- Add a dedicated error message: 'Error: No tab found with GUID <guid>' instead of the misleading success"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 3,
+      "title": "PowerShell -i flag conflicts with snapshot interactive mode",
+      "severity": "Medium",
+      "category": "UX",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "./b4w.ps1 snapshot -i or ./b4w.ps1 -- snapshot -i"
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "snapshot -i should launch interactive snapshot mode."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "PowerShell error: 'Parameter cannot be processed because the parameter name 'i' is ambiguous. Possible matches include: -InformationAction -InformationVariable.' The `--` separator also fails. Users must use the long form `--interactive`."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "The b4w.ps1 PowerShell wrapper script passes short flags through PowerShell's parameter binder, which intercepts `-i` as matching `-InformationAction`. The SKILL.md documents this (line 420): 'short flags like -i and -v may be intercepted by PowerShell's parameter binder'. However, it suggests using b4w.bat or b4w.sh instead — but the evaluation instructions require ./b4w.ps1."
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Update b4w.ps1 to use `--%` (stop-parsing symbol) or `@args` splatting to pass all arguments through without PowerShell parameter binding\n- Or document `--interactive` as the preferred long form for PowerShell users in the snapshot help output\n- Add a tip after `snapshot` help that mentions the `-i` → `--interactive` substitution on PowerShell"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 4,
+      "title": "Extension session tab-close shows confusing dual-message output",
+      "severity": "Medium",
+      "category": "UX",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "In an extension session, run `./b4w.ps1 tab-close 1` or `./b4w.ps1 -s <ext-session> tab-close`."
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "Clean output: 'Closed tab 1 (url — GUID: chrome:xxx)'. Possibly a note about extension behavior, but in a non-alarming format."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "'Note: Tab was closed but the backend reported: ERROR: browser_tabs failed: closeTab ... Closed tab 1 (url — GUID: xxx)'. The ERROR text looks like a failure even though the operation succeeded. The Java method signature in the help text is confusing."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "Per SKILL.md line 110, 'chrome.tabs.remove callback can fire an error after the tab is already gone'. The CLI correctly handles this (verifies removal and treats as success) but presents the backend error verbatim before the success message, creating a WARNING-then-OK pattern that reads like a failure."
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Suppress the raw backend ERROR text when the CLI has verified the tab was actually removed\n- Replace with a single informational note: 'Tab closed (extension session — backend confirmation delayed)'\n- Or demote the ERROR to a debug-level message and show only 'Closed tab N (url — GUID: xxx)' on stdout\n- Remove the Java method signature from user-facing output (it belongs in --verbose/debug mode only)"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 5,
+      "title": "Extension session GUID format changes from chrome: prefix to hex after session becomes stale",
+      "severity": "Medium",
+      "category": "Reliability",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "1. Create extension session, observe GUIDs like chrome:217100829\n2. Close all tabs via extension session\n3. Create a new tab via extension session\n4. GUID is now hex (e.g. E931A329...) instead of chrome:-prefixed"
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "GUID format should be consistent for a given session type. Extension sessions should always show chrome:-prefixed GUIDs."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "After the extension session becomes 'Stale' (all tabs closed), new tabs show 32-char hex GUIDs instead of chrome:-prefixed GUIDs, even though the session's CONNECTION column still shows 'Extension'."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "When the extension session becomes stale, the tab management likely falls back to a different code path (possibly CDP-based) that generates hex GUIDs instead of using Chrome extension tab IDs. The session metadata still shows 'Extension' but the GUID format no longer reflects the extension origin."
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Ensure GUID format is determined by session type (from session metadata), not by the current connection state\n- Cache the session connection type at creation time and use it for GUID formatting throughout the session lifecycle\n- If the session reverts to a non-extension transport, update the CONNECTION column to reflect this change"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 6,
+      "title": "tab-list --json output format differs from documentation",
+      "severity": "Low",
+      "category": "Documentation",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "Run `./b4w.ps1 tab-list --json` and compare with SKILL.md documentation."
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "Documentation (SKILL.md line 104) says output includes a 'tabs' array with 'index', 'guid', 'url', 'title' plus a 'count' field."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "Output is wrapped in a JSON envelope: {\"command\":\"tab-list\",\"output\":{\"count\":1,\"tabs\":[...]},\"status\":\"ok\"}. The 'tabs' array and 'count' are nested inside 'output', not at the top level. Also, '--json' works both as a command-level flag (`tab-list --json`) and as a global flag (`--json tab-list`), but the documentation only mentions the global form."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "The documentation describes the inner payload structure but omits the outer envelope (command, output, status). The envelope is a general CLI convention applied to all --json output, but the SKILL.md example implies the tabs array is at the top level."
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Update SKILL.md line 104 to show the full JSON envelope structure with a note that tabs are nested inside output\n- Document both `--json tab-list` and `tab-list --json` as valid invocation forms\n- Add a JSON output example showing the exact format"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 7,
+      "title": "Error messages include raw Java method signatures in user-facing output",
+      "severity": "Low",
+      "category": "UX",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "./b4w.ps1 tab-select 99 or ./b4w.ps1 tab-close --guid \"bogus\""
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "Clean, human-readable error: 'Error: Tab index 99 is out of range. There are 3 tabs (indices 0-2).'"
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "'ERROR: browser_tabs failed: Tab index '99' out of range; found 3 tabs help: Switch to a specific browser tab by its zero-based index or GUID\\nbrowser.switchTab(Arg(name=index, type=Int, defaultValue=null), Arg(name=tabId, type=String, defaultValue=null))'"
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "The CLI is surfacing internal Java method signatures (browser.switchTab/browser.closeTab with Arg definitions) as part of the user-facing error output. These signatures are useful for developers but confusing for end users."
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Strip Java method signatures from default output; show them only in --verbose/debug mode\n- Format error messages as: 'Error: <human-readable description>' followed by 'Suggestion: <actionable hint>'\n- Move the method signature to a debug/trace log level"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 8,
+      "title": "Goto command navigation message inconsistent — says 'already at' but actually navigates",
+      "severity": "Low",
+      "category": "UX",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "When switching to a tab that already has example.com loaded and running `goto https://example.com`."
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "Clear indication: either 'Already at https://example.com' (no navigation) or 'Navigated to https://example.com' (navigation occurred)."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "Sometimes produces 'Using existing session DEFAULT (current page: https://example.com/).' and shows a full snapshot output. The behavior is ambiguous — it's unclear whether a navigation actually occurred or the page was left as-is."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "The goto command always triggers a page load check but doesn't clearly distinguish between 'page was already at this URL, no navigation needed' and 'navigation occurred to this URL'. The snapshot output is always generated regardless."
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Add explicit 'Already at <url> — no navigation needed' message when the current URL matches the target\n- Or add 'Navigated to <url>' vs 'Already at <url>' distinction in the output\n- Consider skipping the snapshot when no navigation occurred (add --force-snapshot flag for users who want it)"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    }
+  ]
+}
