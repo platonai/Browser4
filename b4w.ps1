@@ -122,9 +122,8 @@ $CliArgs = $RemainingArgs
 if ($RemainingArgs -and ($RemainingArgs[0] -eq '--' -or $RemainingArgs[0] -eq '--%')) {
     # Strip the passthrough / stop-parsing token so it doesn't interfere
     # with subcommand routing below.  -- is the conventional passthrough
-    # separator.  --% (PowerShell stop-parsing symbol) may arrive as a
-    # literal argument when b4w.bat calls pwsh -File ... --% %* ¡ª
-    # pwsh.exe's native command-line parser doesn't always consume it.
+    # separator.  --% (PowerShell stop-parsing symbol) may still arrive as
+    # a literal argument when callers pass it explicitly.
     $CliArgs = $RemainingArgs[1..($RemainingArgs.Count - 1)]
 }
 
