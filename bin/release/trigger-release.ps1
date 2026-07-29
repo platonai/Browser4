@@ -63,80 +63,98 @@ if ($version -notmatch "^\d+\.\d+\.\d+(?:-rc\.\d+)?$") {
 }
 
 # ═══════════════════════════════════════════════════════════════════
-# Version guard: verify current version is exactly the next patch
-# after the last GitHub release. If not, ask for confirmation.
+# Prerelease checks: version consistency across all files (VERSION,
+# pom.xml, Cargo.toml, package.json) and next-patch guard against
+# the last GitHub release.  Delegates to version.mjs so there is a
+# single source of truth for all version-comparison logic.
 # ═══════════════════════════════════════════════════════════════════
 
-function Get-SemverBase {
-    param([string]$V)
-    # Strip leading 'v' and trailing -rc.N / -SNAPSHOT suffix
-    $v = $V -replace '^v', ''
-    $v = $v -replace '-(rc\.\d+|SNAPSHOT)$', ''
-    return $v
+Write-Host ""
+Write-Host "Running prerelease checks (version.mjs prerelease-check)..."
+
+$checkScript = "$repoRoot\bin\version.mjs"
+if (!(Test-Path $checkScript)) {
+    Write-Error "version.mjs not found at: $checkScript"
+    exit 1
 }
 
-function Get-LastReleaseTag {
-    # Try GitHub Releases first
-    try {
-        $tag = gh release list --limit 1 --json tagName --jq '.[0].tagName' 2>$null
-        if ($tag) { return $tag.Trim() }
-    } catch { }
+# Capture stdout only — prerelease-check writes JSON to stdout and
+# exits 0 (all OK) or 1 (issues found).
+$checkOutput = node $checkScript prerelease-check 2>$null
+$checkExitCode = $LASTEXITCODE
 
-    # Fallback: git tags sorted by version (only stable semver tags)
-    try {
-        $tag = git tag --list 'v*' --sort=-v:refname 2>$null |
-            Where-Object { $_ -match '^v\d+\.\d+\.\d+$' } |
-            Select-Object -First 1
-        if ($tag) { return $tag.Trim() }
-    } catch { }
-
-    # Last resort: git describe
-    try {
-        $tag = git describe --tags --abbrev=0 2>$null
-        if ($tag) { return $tag.Trim() }
-    } catch { }
-
-    return $null
+if ($null -eq $checkExitCode) {
+    Write-Error "Failed to run node. Is Node.js installed and on PATH?"
+    exit 1
 }
 
-$lastReleaseTag = Get-LastReleaseTag
+# Parse JSON output from version.mjs
+$parseOk = $true
+try {
+    if ($checkOutput -is [array]) {
+        $checkJson = ($checkOutput -join "`n") | ConvertFrom-Json
+    } else {
+        $checkJson = $checkOutput | ConvertFrom-Json
+    }
+} catch {
+    $parseOk = $false
+    Write-Warning "Could not parse prerelease-check output."
+    if ($checkOutput) {
+        Write-Host "Raw output:"
+        Write-Host $checkOutput
+    }
+    $confirm = Read-Host "Continue anyway? (y/n)"
+    if ($confirm -ne 'y') {
+        Write-Host "Cancelled"
+        exit 0
+    }
+    Write-Host "Proceeding despite parse failure..."
+}
 
-if ($lastReleaseTag) {
-    $lastBase = Get-SemverBase $lastReleaseTag
-    $currentBase = Get-SemverBase $version
-
-    Write-Host "`nLast GitHub release: $lastReleaseTag"
-    Write-Host "Current version:     v$version"
-
-    if ($lastBase -match '^(\d+)\.(\d+)\.(\d+)') {
-        $expectedNext = "$($matches[1]).$($matches[2]).$([int]$matches[3] + 1)"
-
-        if ($currentBase -ne $expectedNext) {
-            Write-Host ""
-            Write-Warning "Version mismatch: current version is not the next patch after the last release"
-            Write-Host "  Last release:         $lastReleaseTag  (base: $lastBase)"
-            Write-Host "  Expected next patch:  v$expectedNext"
-            Write-Host "  Current version:      v$version  (base: $currentBase)"
-            Write-Host ""
-            $confirm = Read-Host "Continue anyway? (y/n)"
-            if ($confirm -ne 'y') {
-                Write-Host "Cancelled"
-                exit 0
-            }
-            Write-Host "Proceeding despite version mismatch..."
+if ($parseOk) {
+    if ($checkExitCode -eq 0) {
+        # All checks passed
+        Write-Host "[OK] All version files consistent (v$($checkJson.currentVersion))"
+        if ($checkJson.lastRelease) {
+            Write-Host "[OK] v$($checkJson.currentVersion) is the next patch after $($checkJson.lastRelease)"
         } else {
-            Write-Host "[OK] v$version is exactly the next patch after $lastReleaseTag"
+            Write-Host "[OK] First release — no previous release to compare against"
         }
     } else {
-        Write-Warning "Could not parse last release version: $lastReleaseTag"
+        # Issues found — display them clearly and ask for confirmation
+        Write-Host ""
+        Write-Warning "Prerelease checks found issues:"
+        Write-Host ""
+
+        if (-not $checkJson.consistent) {
+            Write-Host "  Version inconsistency across files:"
+            foreach ($issue in $checkJson.issues) {
+                Write-Host "    - $issue"
+            }
+            Write-Host ""
+            Write-Host "  Run 'node bin/version.mjs sync' to fix version mismatches."
+            Write-Host ""
+        }
+
+        if (-not $checkJson.isNextPatch) {
+            Write-Host "  Version is not the next patch after the last release:"
+            Write-Host "    Last release:       $($checkJson.lastRelease)"
+            Write-Host "    Current version:    v$($checkJson.currentVersion)"
+            if ($checkJson.expectedNextPatch) {
+                Write-Host "    Expected next patch: v$($checkJson.expectedNextPatch)"
+            }
+            Write-Host ""
+            Write-Host "  Run 'node bin/version.mjs auto' to auto-bump to the next patch."
+            Write-Host ""
+        }
+
         $confirm = Read-Host "Continue anyway? (y/n)"
         if ($confirm -ne 'y') {
             Write-Host "Cancelled"
             exit 0
         }
+        Write-Host "Proceeding despite version issues..."
     }
-} else {
-    Write-Host "`nNo previous GitHub release found (first release?). Proceeding..."
 }
 
 $newTag = "v$version"
