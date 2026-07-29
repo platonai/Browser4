@@ -89,13 +89,14 @@ The crawl's link-discovery pipeline requires a Spring bean 'ai.platon.pulsar.loo
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Critical — core crawl feature is completely non-functional due to missing `TaskLoops` Spring bean. Clear repro, well-analyzed root cause. The `load_and_select` pipeline silently returns zero matches with no user-visible error, making this a priority fix.
 
 ---
 
@@ -133,8 +134,9 @@ Combination of the TaskLoops bean missing (Issue 2) and the protocol handler iss
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
-- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
+- [x] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: DUPLICATE] Describes the same broken crawl link-discovery symptom as Issue 1, just framed from the user/product perspective ("documented workflow can't complete"). The root cause section itself references Issues 1 and 4. No distinct actionable item beyond fixing those two.
 
 ---
 
@@ -170,13 +172,14 @@ The b4w.ps1 file uses Windows CRLF line terminators. The shebang line ends with 
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] High severity — completely blocks Linux users from running the primary entry-point script. Fix is straightforward (`.gitattributes` `text eol=lf` or `dos2unix`). The existing `b4w.sh` wrapper mitigates but doesn't excuse the shebang being broken.
 
 ---
 
@@ -214,13 +217,14 @@ The HTTP protocol handler (likely OkHttp or similar) used for page fetching appe
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] High severity — protocol handler dies after first successful fetch, reliably breaking any crawl with more than one page. Distinct root cause from Issue 1 (handler lifecycle vs. bean registration). The 100% repro rate and specific error message make this diagnosable.
 
 ---
 
@@ -258,13 +262,14 @@ The htmlsnapshot query code path uses a different X-SQL execution pipeline than 
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Two code paths for the same operation (X-SQL extraction) produce different results — a correctness problem. The 417 with empty resultSet while the page loaded fine suggests a validation/setup divergence between `htmlsnapshot query` and `crawl --sql` pipelines. Unifying them is the right fix.
 
 ---
 
@@ -302,12 +307,13 @@ The crawl backend appears to have a fixed polling interval (16s) and the queue/w
 #### Human Review
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [x] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT with improvements] 80-96s startup is a real usability problem, but the suggested `--nowait` flag adds API surface. Better approach: fix the root cause (stuck tasks holding worker threads, pessimistic polling) rather than adding a workaround flag. The polling interval reduction is a good quick win; ensure completed tasks release workers immediately is the proper fix.
 
 ---
 
@@ -340,13 +346,14 @@ The SQL engine accepts both uppercase and lowercase function names, but document
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Legitimate documentation inconsistency. Both forms work (case-insensitive SQL engine) but mixed conventions confuse users who copy examples between docs. Recommend standardizing on uppercase `DOM_*` to match SQL convention, plus a one-line note about case-insensitivity.
 
 ---
 
@@ -384,12 +391,13 @@ The --format flag is a formatter for structured X-SQL result sets. Without --sql
 #### Human Review
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [x] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT with improvements] Silently ignoring `--format` without `--sql` is a real UX trap — users get plain text when they asked for CSV/JSON. However, auto-emitting default structured output (URL+title) changes behavior silently. Better: emit a clear warning to stderr ("--format requires --sql; outputting plain text") and document the dependency in `--help`. This preserves predictability while eliminating the silent-failure UX.
 
 ---
 
@@ -426,13 +434,14 @@ The file resolution logic for --sql @file writes a debug/info log message to std
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Diagnostic noise on stderr breaks JSON parsing and is unprofessional for a CLI tool. The fix is trivial — gate the message behind `--verbose` or use a proper logging framework. The JSON-output flag should suppress all non-error stderr by convention.
 
 ---
 

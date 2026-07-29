@@ -2357,7 +2357,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: false,
             args: &[ArgDef { name: "instruction", description: "What data to extract, e.g. 'product name, price, ratings'", optional: false }],
             options: &[
-                OptionDef { name: "schema", description: "JSON schema to constrain the extracted data structure", is_bool: false, short: None },
+                OptionDef { name: "schema", description: "JSON Schema or {fields:[...]} format to constrain extracted data.  Supports @file.json to avoid shell quoting.", is_bool: false, short: None },
                 OptionDef { name: "filename", description: "Save extracted content to a file instead of printing to stdout", is_bool: false, short: None },
                 OptionDef { name: "raw", description: "Print extracted content directly to stdout (alias for --stdout)", is_bool: true, short: None },
                 OptionDef { name: "stdout", description: "Print extracted content directly to stdout", is_bool: true, short: None },

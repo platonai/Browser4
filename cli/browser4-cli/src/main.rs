@@ -4996,7 +4996,7 @@ async fn handle_extract(
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
     raw_init(raw);
-    let extract_args = {
+    let mut extract_args = {
         let mut a = tool_params.clone();
         if let Value::Object(ref mut m) = a {
             m.remove("filename");
@@ -5005,6 +5005,17 @@ async fn handle_extract(
         }
         a
     };
+
+    // Resolve @file references for --schema (mirrors --sql @file behavior).
+    // Shell wrappers (b4w.sh, b4w.ps1) struggle with inline JSON containing
+    // colons, commas, and quotes.  @file.json avoids shell quoting entirely.
+    if let Some(schema_val) = extract_args.get("schema").and_then(|v| v.as_str()) {
+        if let Some(file_path) = schema_val.strip_prefix('@') {
+            let resolved = resolve_sql_file(file_path)
+                .map_err(|e| format!("--schema @file: {e}"))?;
+            extract_args["schema"] = json!(resolved);
+        }
+    }
 
     let combined = with_session(client, base_url, session_name, false, |session_id| {
         let client = client.clone();
@@ -8466,6 +8477,20 @@ async fn handle_agent_result(
     }
 
     let result = get_command_result(client, base_url, id).await?;
+
+    // Detect empty result: the agent completed successfully but commandResult
+    // is {} — the extracted data is likely in instructResults instead.  Point
+    // the user at `agent status --json` to inspect instructResults.
+    let trimmed = result.trim();
+    let is_empty_result = trimmed == "{}" || trimmed.is_empty();
+    if is_empty_result && !json_active() {
+        cli_println!("⚠️  The result is empty ({}).", if trimmed.is_empty() { "no output" } else { "{}" });
+        cli_println!("The agent task may have completed successfully but the extracted data was");
+        cli_println!("not serialized into commandResult. Try:");
+        cli_println!("  agent status {} --json   (check instructResults for extracted data)", id);
+        cli_println!("  agent status {}          (check processState and message)", id);
+    }
+
     cli_println!("{}", result);
     json_field("task_id", json!(id));
     json_field("raw", json!(&result));

@@ -224,13 +224,14 @@ In AbstractBrowser4SQLContext.getSession() (AbstractBrowser4SQLContext.kt:158), 
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Classic H2 connection-pool staleness bug — sessions close over time without pool invalidation. Fix with test-on-borrow (validate before returning) or connection-validation timeout in the pool config. This is the highest-priority fix in the batch.
 
 ---
 
@@ -267,13 +268,14 @@ In XSQLHyperlink (XSQLScrapeHyperlink.kt), the HTML parser pipeline processes th
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] The live-fetch scraper path produces different results than the stored-snapshot path for identical selectors — this is a parser pipeline divergence, not a selector problem. Needs debugging of the XSQLScrapeHyperlink→PageParser chain to find where DOM nodes are dropped that the browser-loaded path retains.
 
 ---
 
@@ -310,13 +312,14 @@ File b4w.ps1 checked into git with Windows CRLF line endings. The shebang line e
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Trivial fix — add `*.ps1 text eol=lf` to `.gitattributes` and re-normalize the file. The bash wrapper (`b4w.sh`) already exists for Linux; `.ps1` is a secondary entry point but still shouldn't be broken on checkout.
 
 ---
 
@@ -352,13 +355,14 @@ The backend error response builder doesn't include the exception message in the 
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Error responses should always carry a human-readable `message` field regardless of status code. Fix in the response builder used by `html_snapshot_query` (and audit other 4xx/5xx paths for the same gap). Related to Issue 1 but independently actionable — even after the session bug is fixed, other 417 causes won't be diagnosable without this.
 
 ---
 
@@ -395,13 +399,14 @@ The dev-mode wrapper (b4w.sh) runs `cargo run` which outputs build status to std
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] `cargo run` in the dev wrapper emits build progress to stdout, which is also the JSON data channel. Fix: have `b4w.sh` redirect cargo's stdout to stderr, or detect `!isatty(stdout)` in the CLI binary and suppress non-JSON output. The `--json` flag already exists as a workaround but the default behavior is wrong for piping.
 
 ---
 
@@ -439,12 +444,13 @@ The --selector flag uses querySelector (first match only) by default. This is do
 #### Human Review
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [x] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT with improvements] Renaming flags would break scripts — reject that part. Instead, adopt the hint approach: when `--selector` matches 1 element but `document.querySelectorAll(theSelector).length > 1`, emit a tip to stderr suggesting `--selector-all`. Also add `--selector-all` examples to the `inspect` output's "Try these next:" section. Low implementation cost, high discoverability payoff.
 
 ---
 
@@ -480,13 +486,14 @@ Despite documentation claiming query 're-fetches the page fresh via the scrape A
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] The session gate is semantically wrong — `htmlsnapshot query` with a URL argument uses the scrape API, not the browser session. Remove the precondition when `url` is present. If the check was intentional (rate-limiting, auth), replace it with a scrape-specific guard rather than a browser-session one, and update the docs to reflect the actual requirement.
 
 ---
 
@@ -522,13 +529,14 @@ The CLI/backend treats an empty resultSet as a valid result (status: 'OK') rathe
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Silent empty resultSet with pageStatusCode=200 and contentBytes>0 is a diagnosable anomaly — the tool knows something went wrong. Add a `warning` field to the response envelope surfaced by the CLI. Related to Issue 2 (same root cause) but independently valuable: even after the parser is fixed, other pages will hit this path, and the signal prevents users from mistaking "no matches" for "query worked, page has nothing."
 
 ---
 
@@ -564,13 +572,14 @@ The result data is serialized as a JSON string and then embedded inside the JSON
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Double-encoding forces every consumer to `JSON.parse` twice. Fix by embedding the array as a native JSON value in `output.result` rather than a string. This is a serialization-layer fix — the data is already structured at the point it's wrapped; it's being stringified once too many times.
 
 ---
 
@@ -607,12 +616,13 @@ The page uses CSS text-overflow: ellipsis to truncate long titles in the grid la
 #### Human Review
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [x] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT with improvements] Expected behavior for `text` extraction (captures rendered text, not semantic text). No code change needed — add an advisory line to `get all text` output when the page uses `text-overflow: ellipsis`, pointing users to `get all attr <selector> title` for full values. `inspect` already surfaces `title` attributes; make the connection explicit in the output footer.
 
 ---
 

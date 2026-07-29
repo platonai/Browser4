@@ -175,11 +175,12 @@ The b4w.ps1 file uses Windows-style CRLF line endings. On Linux, the kernel proc
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
-- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+- [x] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI review unavailable — defaulted to DEFER]
 
 ---
 
@@ -214,11 +215,12 @@ The htmlsnapshot's text extraction appears to use the rendered/visible text rath
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
-- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+- [x] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI review unavailable — defaulted to DEFER]
 
 ---
 
@@ -257,11 +259,12 @@ The CLI's argument parser does not reject unknown flags — it silently drops th
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
-- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+- [x] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI review unavailable — defaulted to DEFER]
 
 ---
 
@@ -296,11 +299,12 @@ The htmlsnapshot grep feature was designed for content search/display, not for c
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
-- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+- [x] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI review unavailable — defaulted to DEFER]
 
 ---
 
@@ -335,11 +339,12 @@ The htmlsnapshot text extraction doesn't differentiate between actual text endin
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
-- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+- [x] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI review unavailable — defaulted to DEFER]
 
 ---
 
@@ -374,11 +379,12 @@ Grep inherits the same pagination default as `get html` commands, but grep's pri
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
-- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+- [x] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI review unavailable — defaulted to DEFER]
 
 ---
 

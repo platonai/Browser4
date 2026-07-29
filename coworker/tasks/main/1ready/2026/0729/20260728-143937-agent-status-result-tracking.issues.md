@@ -73,11 +73,12 @@ The category-level help filter (`--help agent`) only renders subcommand names an
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
-- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+- [x] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI review unavailable — defaulted to DEFER]
 
 ---
 
@@ -115,11 +116,12 @@ The SKILL.md agent section was written to cover the basic submit→poll→retrie
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
-- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+- [x] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI review unavailable — defaulted to DEFER]
 
 ---
 
@@ -154,11 +156,12 @@ Agent tasks are persisted to a shared task store on disk (likely in the Browser4
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
-- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+- [x] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI review unavailable — defaulted to DEFER]
 
 ---
 
@@ -192,11 +195,12 @@ The agent status command's default output path bypasses the standard JSON envelo
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
-- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+- [x] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI review unavailable — defaulted to DEFER]
 
 ---
 
@@ -229,11 +233,12 @@ The main help and the category filter likely use different ordering logic — po
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
-- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+- [x] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI review unavailable — defaulted to DEFER]
 
 ---
 

@@ -492,10 +492,11 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
             "  - Uses AI to extract structured data from the current page based on a natural-language instruction."
                 .to_string(),
         );
-        lines.push(
-            "  - --schema accepts a JSON schema to constrain the extracted data structure."
-                .to_string(),
-        );
+        lines.push(wrap_text(
+            "--schema accepts a JSON schema to constrain the extracted data.  Both standard JSON Schema ({\"type\":\"object\",\"properties\":{...}}) and the compact {fields:[{name,type,description,required}]} format are supported.  Use @file.json to avoid shell quoting issues.",
+            "  - ",
+            4,
+        ));
         lines.push(wrap_text(
             "Output is saved to a timestamped file by default. Use --stdout (or --raw) to print to stdout instead, or --filename to specify a custom path.",
             "  - ",
@@ -505,7 +506,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("Examples:".to_string());
         lines.push("  browser4-cli extract \"product name, price, ratings\"".to_string());
         lines.push(wrap_text(
-            "browser4-cli extract \"all contact info\" --schema '{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\"},\"email\":{\"type\":\"string\"}}}'",
+            "browser4-cli extract \"all contact info\" --schema @schema.json",
             "  ",
             2,
         ));

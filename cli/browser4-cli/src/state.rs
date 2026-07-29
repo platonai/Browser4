@@ -801,10 +801,15 @@ pub fn format_async_task_list(
     ));
 
     for entry in &page {
-        let desc = if entry.description.len() > desc_w {
-            format!("{}…", &entry.description[..desc_w - 1])
-        } else {
-            entry.description.clone()
+        // Collapse whitespace and replace newlines so the description stays on
+        // one line and doesn't break table formatting.  Agent task descriptions
+        // can contain embedded \n from multi-line user input.
+        let mut desc = entry.description
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        if desc.len() > desc_w {
+            desc = format!("{}…", &desc[..desc_w - 1]);
         };
         let status = if entry.last_status.is_empty() {
             "pending".to_string()

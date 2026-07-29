@@ -156,12 +156,13 @@ Even with -v 0 (single viewport), the AX tree for content-rich pages contains hu
 #### Human Review
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [x] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT with improvements] Valid UX concern — 64KB of YAML for a first-time user is overwhelming. The highest-impact fix is adding a `--brief`/`--summary` flag that prints only page title, URL, heading hierarchy, and element counts. Updating the SKILL.md template to warn about volume and suggest `snapshot grep` as an alternative is a cheap, immediate mitigation. Cross-reference with Issue 6: both concern snapshot output design; a combined snapshot output overhaul would address both.
 
 ---
 
@@ -198,13 +199,14 @@ The close command supports -s targeting but neither the help text nor the SKILL.
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Clear documentation gap — the feature exists (close with `-s`) but is undiscoverable. Updating help text and adding a "Closing sessions" subsection to SKILL.md §2 is low-effort and high-value. Cross-reference with Issue 5: both are about close-command messaging; the doc fix here and the message fix there should land together for consistency.
 
 ---
 
@@ -241,13 +243,14 @@ The CLI's argument parser unconditionally emits a warning when short flags like 
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] The SKILL.md explicitly claims b4w.ps1 makes short flags safe, yet every invocation emits a warning that contradicts that claim. This erodes user trust in both the docs and the tool. The cleanest fix: suppress the short-flag warning when `B4W_WRAPPER` or similar env var is set by b4w.ps1, or check `argv[0]` for `b4w.ps1`. Simply removing the warning for `-v`/`-o`/`-i` outright (since b4w.ps1 now handles them) is also reasonable.
 
 ---
 
@@ -282,11 +285,12 @@ The unnamed default session persists from prior commands or is auto-created on f
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
-- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+- [x] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: DEFER] The auto-created default session is a side effect of the session-laziness design — any command that touches a session creates one if none exists. Changing this could break workflows that rely on implicit default sessions. The footnote in `list` output already mitigates confusion. Revisit if user feedback accumulates, but for now the cost of changing auto-creation semantics outweighs the minor discoverability benefit.
 
 ---
 
@@ -323,13 +327,14 @@ The close command's output message is generic and assumes closing the browser en
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Trivial fix with disproportionate UX impact — "Browser terminated" when other sessions are still alive is actively misleading. The close handler already knows whether `-s` was used; just branch the output message. Cross-reference with Issue 2: the doc and message fixes should be a single PR. Reserve "Browser terminated" only for closing the last session.
 
 ---
 
@@ -367,12 +372,13 @@ Snapshot output uses YAML comments for viewport metadata and regular YAML for th
 #### Human Review
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [x] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT with improvements] The hybrid YAML-comment-plus-YAML-body format is non-standard and unparseable by YAML tools — this undermines the choice of YAML as output format. Moving viewport metadata into top-level YAML keys and including page URL/title in the `--stdout` stream would make output self-contained and machine-readable. However, this is a format-breaking change that downstream consumers (scripts, coworker tasks) may depend on. Coordinate with Issue 1: if a `--brief` flag is added, the full-format cleanup can happen independently without breaking quick-view workflows.
 
 ---
 
