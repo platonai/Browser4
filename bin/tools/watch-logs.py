@@ -18,10 +18,14 @@ Tabs:
          coworker, build, startup, combined, git)
     r    RWS test output (target/*.raw.md + .test-sessions/*-progress.json)
     g    Git log (toggle compact/detail)
+    ↑↓   Scroll up/down one line (pauses auto-follow)
+    PgUp/PgDn  Scroll up/down one page
+    Home/End   Jump to top / resume bottom-follow
     space  Pause/resume scrolling
     c    Clear buffer
     y    Copy buffer to clipboard
-    ^F   Filter (regex)
+    ^F, /  Filter/search (regex with highlight, F3=next Shift+F3=prev)
+    Esc   Clear filter
     q    Quit
 """
 
@@ -270,6 +274,14 @@ class LogView(Container):
         self.rich_log: RichLog | None = None
         self._stop_event = asyncio.Event()
         self._filter_compiled: re.Pattern | None = None
+        # ── Scroll & search state ─────────────────────────────────────────
+        # _scroll_from_bottom: 0 = follow bottom; >0 = N lines scrolled up
+        self._scroll_from_bottom: int = 0
+        self._search_pattern: str = ""
+        self._search_matches: list[int] = []  # line indices in _full filtered buffer
+        self._search_idx: int = -1
+        self._last_filtered_count: int = 0
+        self._status_label: Label | None = None
 
     # ── Compose ────────────────────────────────────────────────────────────
 
@@ -281,7 +293,10 @@ class LogView(Container):
             wrap=False,
         )
         self.rich_log.auto_scroll = True
+        self.rich_log.border = None
         yield self.rich_log
+        self._status_label = Label("", classes="log-status")
+        yield self._status_label
 
     # ── Lifecycle ───────────────────────────────────────────────────────────
 
@@ -612,21 +627,73 @@ class LogView(Container):
 
     # ── Display ─────────────────────────────────────────────────────────────
 
+    def _get_filtered(self) -> list[str]:
+        """Return the buffer filtered by current regex, as a plain list."""
+        result: list[str] = []
+        for line in self._buffer:
+            if self._filter_compiled and not self._filter_compiled.search(line):
+                continue
+            result.append(line)
+        return result
+
     def _refresh_display(self) -> None:
-        """Rebuild RichLog content from buffer, applying filter."""
-        if self.paused or self.rich_log is None:
+        """Rebuild RichLog content from buffer, applying filter and scroll."""
+        if self.rich_log is None:
             return
 
-        self.rich_log.clear()
+        # Freeze display when explicitly paused
+        if self.paused:
+            return
+
         is_git = self.source["paths"][0] == "__git__"
         is_rws = self.source["paths"][0] == "__rws__"
 
-        for line in list(self._buffer):
-            # Apply filter
-            if self._filter_compiled:
-                if not self._filter_compiled.search(line):
-                    continue
+        filtered = self._get_filtered()
+        total = len(filtered)
 
+        # ── Visible height ──────────────────────────────────────────────────
+        try:
+            visible_h = max(8, self.rich_log.container_size.height)
+        except Exception:
+            visible_h = 40  # fallback
+
+        # ── Detect new lines arriving at the bottom ─────────────────────────
+        new_lines = total - self._last_filtered_count
+        if new_lines > 0 and self._scroll_from_bottom > 0:
+            self._scroll_from_bottom += new_lines
+        self._last_filtered_count = total
+
+        # ── Compute visible window ──────────────────────────────────────────
+        if self._scroll_from_bottom <= 0:
+            # Follow bottom
+            start = max(0, total - visible_h)
+            self._scroll_from_bottom = 0
+        else:
+            # Scrolled up — pin view N lines above the bottom
+            start = max(0, total - visible_h - self._scroll_from_bottom)
+
+        visible = filtered[start : start + visible_h]
+
+        # ── Update search matches (full filtered buffer) ────────────────────
+        if self._search_pattern:
+            try:
+                pat = re.compile(self._search_pattern, re.IGNORECASE)
+                self._search_matches = [
+                    i for i, line in enumerate(filtered) if pat.search(line)
+                ]
+            except re.error:
+                self._search_matches = []
+
+        # ── Render ──────────────────────────────────────────────────────────
+        self.rich_log.clear()
+        self.rich_log.auto_scroll = (self._scroll_from_bottom == 0)
+
+        SEARCH_HIGHLIGHT = Style.parse("reverse bold yellow")
+
+        for i, line in enumerate(visible):
+            actual_idx = start + i
+
+            # Colorize
             if is_git:
                 if self._git_detail:
                     text = colorize_git_detail(line)
@@ -639,30 +706,217 @@ class LogView(Container):
             else:
                 text = colorize_line(line)
 
+            # Search highlight overlay
+            if self._search_pattern and actual_idx in self._search_matches:
+                try:
+                    text.highlight_regex(self._search_pattern, style=SEARCH_HIGHLIGHT)
+                except Exception:
+                    pass
+
+            # Highlight the "current" match line with a stronger style
+            if (
+                self._search_idx >= 0
+                and self._search_matches
+                and actual_idx == self._search_matches[self._search_idx]
+            ):
+                try:
+                    text.highlight_regex(
+                        self._search_pattern,
+                        style=Style.parse("reverse bold white on dark_orange"),
+                    )
+                except Exception:
+                    pass
+
             self.rich_log.write(text)
 
+        # ── Status label ────────────────────────────────────────────────────
+        self._update_status(total, start, visible_h)
+
+    def _update_status(self, total: int, start: int, visible_h: int) -> None:
+        """Refresh the per-tab status bar."""
+        if not self._status_label:
+            return
+
+        pct = (min(start + visible_h, total) * 100 // max(total, 1)) if total else 0
+        parts: list[str] = []
+
+        parts.append(f"L: {start + 1}-{min(start + visible_h, total)}/{total} ({pct}%)")
+
+        if self._search_pattern:
+            match_count = len(self._search_matches)
+            cur = self._search_idx + 1 if self._search_idx >= 0 else 0
+            parts.append(f"│ match {cur}/{match_count}" if match_count else "│ 0 matches")
+            parts.append(f'"{self._search_pattern}"')
+
+        if self._scroll_from_bottom > 0:
+            parts.append("│ ↥ scroll")
+        elif self.paused:
+            parts.append("│ PAUSED")
+        else:
+            parts.append("│ LIVE")
+
+        if self._filter_compiled:
+            parts.append(f"│ filter active")
+
+        self._status_label.update("  ".join(parts))
+
     def _write_line(self, text: Text) -> None:
-        """Write a single line directly to RichLog."""
+        """Write a single line directly to RichLog (used when no buffering needed)."""
         if self.rich_log and not self.paused:
             self.rich_log.write(text)
 
-    # ── Actions ─────────────────────────────────────────────────────────────
+    # ── Scroll actions ─────────────────────────────────────────────────────
+
+    def action_scroll_up(self) -> None:
+        """Scroll up one line."""
+        filtered = self._get_filtered()
+        try:
+            visible_h = max(8, self.rich_log.container_size.height)
+        except Exception:
+            visible_h = 40
+        max_scroll = max(0, len(filtered) - visible_h)
+        self._scroll_from_bottom += 1
+        if self._scroll_from_bottom > max_scroll:
+            self._scroll_from_bottom = max_scroll
+        self._refresh_display()
+
+    def action_scroll_down(self) -> None:
+        """Scroll down one line (toward bottom)."""
+        if self._scroll_from_bottom <= 0:
+            return  # already at bottom
+        self._scroll_from_bottom -= 1
+        self._refresh_display()
+
+    def action_scroll_page_up(self) -> None:
+        """Scroll up one page."""
+        filtered = self._get_filtered()
+        try:
+            visible_h = max(8, self.rich_log.container_size.height)
+        except Exception:
+            visible_h = 40
+        max_scroll = max(0, len(filtered) - visible_h)
+        self._scroll_from_bottom += max(1, visible_h - 2)
+        if self._scroll_from_bottom > max_scroll:
+            self._scroll_from_bottom = max_scroll
+        self._refresh_display()
+
+    def action_scroll_page_down(self) -> None:
+        """Scroll down one page."""
+        if self._scroll_from_bottom <= 0:
+            return
+        try:
+            visible_h = max(8, self.rich_log.container_size.height)
+        except Exception:
+            visible_h = 40
+        self._scroll_from_bottom = max(0, self._scroll_from_bottom - max(1, visible_h - 2))
+        self._refresh_display()
+
+    def action_scroll_home(self) -> None:
+        """Jump to top of buffer."""
+        filtered = self._get_filtered()
+        try:
+            visible_h = max(8, self.rich_log.container_size.height)
+        except Exception:
+            visible_h = 40
+        self._scroll_from_bottom = max(0, len(filtered) - visible_h)
+        self._refresh_display()
+
+    def action_scroll_end(self) -> None:
+        """Jump to bottom and resume following."""
+        self._scroll_from_bottom = 0
+        self._refresh_display()
+
+    # ── Search actions ──────────────────────────────────────────────────────
+
+    def action_search_next(self) -> None:
+        """Jump to next search match."""
+        if not self._search_matches:
+            return
+        # Rebuild matches against current filtered buffer
+        self._refresh_search_matches()
+        if not self._search_matches:
+            return
+        self._search_idx = (self._search_idx + 1) % len(self._search_matches)
+        self._jump_to_match()
+
+    def action_search_prev(self) -> None:
+        """Jump to previous search match."""
+        if not self._search_matches:
+            return
+        self._refresh_search_matches()
+        if not self._search_matches:
+            return
+        self._search_idx = (self._search_idx - 1) % len(self._search_matches)
+        self._jump_to_match()
+
+    def _refresh_search_matches(self) -> None:
+        """Recompute search matches from current filtered buffer."""
+        if not self._search_pattern:
+            self._search_matches = []
+            self._search_idx = -1
+            return
+        filtered = self._get_filtered()
+        try:
+            pat = re.compile(self._search_pattern, re.IGNORECASE)
+            self._search_matches = [
+                i for i, line in enumerate(filtered) if pat.search(line)
+            ]
+        except re.error:
+            self._search_matches = []
+
+    def _jump_to_match(self) -> None:
+        """Scroll so the current search match is visible."""
+        if self._search_idx < 0 or self._search_idx >= len(self._search_matches):
+            return
+        target_line = self._search_matches[self._search_idx]
+        filtered = self._get_filtered()
+        total = len(filtered)
+        try:
+            visible_h = max(8, self.rich_log.container_size.height)
+        except Exception:
+            visible_h = 40
+        # Place target in the middle third of the viewport
+        offset_from_bottom = max(0, total - target_line - visible_h // 3)
+        self._scroll_from_bottom = offset_from_bottom
+        self._refresh_display()
+
+    def action_search_set(self, pattern: str) -> None:
+        """Set the search pattern (non-filtering highlight + F3 navigation)."""
+        pattern = pattern.strip()
+        self._search_pattern = pattern
+        self._search_idx = -1
+        if pattern:
+            self._refresh_search_matches()
+            if self._search_matches:
+                self._search_idx = 0
+                self._jump_to_match()
+                return
+        self._refresh_display()
+
+    # ── Standard actions ────────────────────────────────────────────────────
 
     def action_toggle_pause(self) -> None:
         """Toggle paused state."""
         self.paused = not self.paused
         if not self.paused:
+            self._scroll_from_bottom = 0
             self._refresh_display()
 
     def action_clear(self) -> None:
         """Clear the display buffer."""
         self._buffer.clear()
         self._git_last_hash = ""
+        self._scroll_from_bottom = 0
+        self._search_matches = []
+        self._search_idx = -1
+        self._last_filtered_count = 0
         if self.rich_log:
             self.rich_log.clear()
+        if self._status_label:
+            self._status_label.update("")
 
     def action_set_filter(self, pattern: str) -> None:
-        """Apply a regex filter to the display."""
+        """Apply a regex filter to the display (also sets search pattern)."""
         pattern = pattern.strip()
         if pattern:
             try:
@@ -672,6 +926,15 @@ class LogView(Container):
         else:
             self._filter_compiled = None
         self.filter_regex = pattern
+        # Also set as search pattern for F3 navigation
+        self._search_pattern = pattern
+        self._search_idx = -1
+        self._scroll_from_bottom = 0
+        self._last_filtered_count = 0
+        if pattern:
+            self._refresh_search_matches()
+            if self._search_matches:
+                self._search_idx = 0
         self._refresh_display()
 
     def action_toggle_git_detail(self) -> None:
@@ -715,6 +978,13 @@ class WatchLogsApp(App):
         height: 1fr;
         background: $surface;
     }
+    .log-status {
+        dock: bottom;
+        height: 1;
+        background: $panel;
+        color: $text-muted;
+        padding: 0 1;
+    }
     #filter-input {
         dock: top;
         height: 3;
@@ -749,10 +1019,19 @@ class WatchLogsApp(App):
         Binding("9", "switch_tab(9)", "Combined", show=False),
         Binding("r", "rws_tab", "RWS tests"),
         Binding("g", "git_tab", "Git log"),
+        Binding("up", "scroll_up", "↑", show=False),
+        Binding("down", "scroll_down", "↓", show=False),
+        Binding("pageup", "scroll_page_up", "PgUp", show=False),
+        Binding("pagedown", "scroll_page_down", "PgDn", show=False),
+        Binding("home", "scroll_home", "Home", show=False),
+        Binding("end", "scroll_end", "End", show=False),
         Binding("space", "pause", "Pause"),
         Binding("c", "clear", "Clear"),
-        Binding("y", "copy", "Yank (copy)"),
+        Binding("y", "copy", "Yank"),
+        Binding("f3", "search_next", "Next match", show=False),
+        Binding("shift+f3", "search_prev", "Prev match", show=False),
         Binding("ctrl+f", "show_filter", "Filter"),
+        Binding("slash", "show_filter", "Filter", show=False),
         Binding("escape", "clear_filter", "Clear filter", show=False),
         Binding("q", "quit", "Quit"),
     ]
@@ -889,6 +1168,40 @@ class WatchLogsApp(App):
         view = self._active_view
         if view:
             view.action_set_filter("")
+
+    # ── Scroll & search actions (routed to active view) ─────────────────────
+
+    def action_scroll_up(self) -> None:
+        if (view := self._active_view):
+            view.action_scroll_up()
+
+    def action_scroll_down(self) -> None:
+        if (view := self._active_view):
+            view.action_scroll_down()
+
+    def action_scroll_page_up(self) -> None:
+        if (view := self._active_view):
+            view.action_scroll_page_up()
+
+    def action_scroll_page_down(self) -> None:
+        if (view := self._active_view):
+            view.action_scroll_page_down()
+
+    def action_scroll_home(self) -> None:
+        if (view := self._active_view):
+            view.action_scroll_home()
+
+    def action_scroll_end(self) -> None:
+        if (view := self._active_view):
+            view.action_scroll_end()
+
+    def action_search_next(self) -> None:
+        if (view := self._active_view):
+            view.action_search_next()
+
+    def action_search_prev(self) -> None:
+        if (view := self._active_view):
+            view.action_search_prev()
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         """Apply filter on Enter."""
