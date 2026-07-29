@@ -253,8 +253,8 @@ if ($CliArgs -and $CliArgs[0] -eq 'b4w' -and $CliArgs[1] -eq 'install') {
         }
 
         Write-Host ""
-        Write-Host "b4w installed globally!" -ForegroundColor Green
-        Write-Host "  Launcher : $globalLauncher"
+        Write-Host "b4w installed successfully!" -ForegroundColor Green
+        Write-Host "  bash launcher: $globalLauncher"
         Write-Host "  Repo     : $ScriptDir"
         Write-Host ""
         Write-Host "Restart your shell (or run 'hash -r' / reopen the terminal)"
