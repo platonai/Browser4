@@ -161,12 +161,15 @@ body {
   border-bottom: 1px solid var(--border);
   padding: 5px 0.75rem;
   flex-shrink: 0;
-  display: inline-flex; align-items: stretch; gap: 4px;
+  display: flex; align-items: stretch; gap: 6px;
+  align-self: flex-start;
   box-shadow: var(--shadow-sm);
+  border-radius: var(--radius-sm);
 }
 .source-dropdown { position: relative; }
 .source-dropdown-btn {
   display: flex; align-items: center; gap: 5px;
+  white-space: nowrap;
   padding: 6px 10px;
   font-size: 0.72rem; font-weight: 500;
   cursor: pointer; user-select: none;
