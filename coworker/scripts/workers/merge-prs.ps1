@@ -171,7 +171,7 @@ try {
         $prTitle = $pr.title
         $prBranch = $pr.headRefName
 
-        Write-Host "`n── PR #$prNum: $prTitle ──" -ForegroundColor Yellow
+        Write-Host "`n── PR #${prNum}: $prTitle ──" -ForegroundColor Yellow
 
         # Try direct merge first
         $mergeOutput = & gh pr merge $prNum $MergeMethod --delete-branch 2>&1
@@ -323,11 +323,8 @@ After resolving all conflicts, commit the merge. Do NOT push — the script hand
     # ── Tests failed — create coworker task ────────────────────────────────
     Write-Host "`nTests FAILED (exit $testExitCode). Creating coworker task..." -ForegroundColor Red
 
-    $tasksRoot = Join-Path $repoRoot 'coworker\tasks\main'
-    $readyDir = Join-Path $tasksRoot '1ready'
-    if (-not (Test-Path $readyDir)) {
-        New-Item -ItemType Directory -Path $readyDir -Force | Out-Null
-    }
+    Ensure-CoworkerPipelineDirectories -Pipeline 'main'
+    $readyDir = Get-CoworkerStageDirectory -PipelineName 'main' -StageId '1ready'
 
     $timestamp = Get-Date -Format 'yyyyMMdd-HHmmss'
     $taskFileName = "fix-tests-after-pr-merge-$timestamp.md"

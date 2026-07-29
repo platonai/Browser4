@@ -36,32 +36,8 @@ function Ensure-DraftPlaceholders {
     }
 }
 
-function Resolve-UniquePath {
-    param(
-        [Parameter(Mandatory=$true)]
-        [string]$Directory,
-        [Parameter(Mandatory=$true)]
-        [string]$BaseName,
-        [Parameter(Mandatory=$true)]
-        [string]$Extension
-    )
-
-    $candidateName = "$BaseName$Extension"
-    $candidatePath = Join-Path $Directory $candidateName
-    if (!(Test-Path $candidatePath)) {
-        return @{ Path = $candidatePath; FileName = $candidateName }
-    }
-
-    $counter = 2
-    while ($true) {
-        $nextName = "$BaseName.$counter$Extension"
-        $nextPath = Join-Path $Directory $nextName
-        if (!(Test-Path $nextPath)) {
-            return @{ Path = $nextPath; FileName = $nextName }
-        }
-        $counter++
-    }
-}
+# Resolve-UniquePath is now defined in Paths.ps1 (canonical location).
+# The function is available because workflow.ps1 is dot-sourced after config.ps1.
 
 function Get-TaskBaseName {
     param(
