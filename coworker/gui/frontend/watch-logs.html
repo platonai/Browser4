@@ -161,12 +161,13 @@ body {
   border-bottom: 1px solid var(--border);
   padding: 4px 0.75rem;
   flex-shrink: 0;
-  display: flex; align-items: center; gap: 6px;
+  display: flex; align-items: center; gap: 5px;
   box-shadow: var(--shadow-sm);
 }
-.source-dropdown { position: relative; flex-shrink: 0; }
+.source-dropdown { position: relative; flex: 1; }
 .source-dropdown-btn {
-  display: inline-flex; align-items: center; gap: 5px;
+  display: flex; align-items: center; justify-content: space-between;
+  width: 100%; gap: 5px;
   padding: 5px 10px;
   font-size: 0.72rem; font-weight: 500;
   cursor: pointer; user-select: none;
