@@ -154,51 +154,68 @@ body {
 .theme-toggle:hover { background: rgba(255,255,255,0.15); border-color: rgba(255,255,255,0.25); }
 
 /* ═══════════════════════════════════════════════════════════════════════
-   Source Tabs
+   Source Dropdowns
    ═══════════════════════════════════════════════════════════════════════ */
 .source-tabs {
   background: var(--bg-surface);
   border-bottom: 1px solid var(--border);
   padding: 4px 0.75rem;
   flex-shrink: 0;
-  display: flex; align-items: center; gap: 2px;
-  overflow-x: auto; white-space: nowrap;
+  display: flex; align-items: center; gap: 6px;
   box-shadow: var(--shadow-sm);
 }
-.source-tab {
-  display: inline-flex; align-items: center; gap: 4px;
-  padding: 4px 8px;
-  font-size: 0.7rem; font-weight: 500;
+.source-dropdown { position: relative; flex-shrink: 0; }
+.source-dropdown-btn {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 5px 10px;
+  font-size: 0.72rem; font-weight: 500;
   cursor: pointer; user-select: none;
-  border: 1px solid transparent;
-  background: transparent; color: var(--text-secondary);
+  border: 1px solid var(--border);
+  background: var(--bg-raised); color: var(--text-secondary);
   border-radius: var(--radius-sm);
   transition: all var(--transition);
-  flex-shrink: 0;
 }
-.source-tab:hover { color: var(--text-primary); background: var(--bg-hover); }
-.source-tab.active {
-  color: var(--text-on-dark);
-  background: var(--accent);
-  border-color: var(--accent);
+.source-dropdown-btn:hover { color: var(--text-primary); border-color: var(--text-muted); }
+.source-dropdown-btn .arrow {
+  font-size: 0.5rem; transition: transform var(--transition);
+  opacity: 0.5; margin-left: -1px;
 }
-.source-tab .tab-key {
+.source-dropdown.open .source-dropdown-btn { border-color: var(--accent); color: var(--text-primary); }
+.source-dropdown.open .source-dropdown-btn .arrow { transform: rotate(180deg); opacity: 1; }
+.source-dropdown-btn .cur-key {
   font-size: 0.58rem; font-weight: 700;
-  background: rgba(0,0,0,0.12); color: inherit;
+  background: var(--accent-bg); color: var(--accent);
   border-radius: 3px; padding: 0px 4px; min-width: 16px;
   text-align: center; line-height: 1.6;
-  opacity: 0.7;
 }
-.source-tab.active .tab-key { background: rgba(255,255,255,0.2); opacity: 1; }
-.source-group-label {
-  font-size: 0.58rem; font-weight: 600;
-  color: var(--text-muted); letter-spacing: 0.05em;
-  padding: 2px 6px 2px 10px; text-transform: uppercase;
-  flex-shrink: 0; user-select: none;
-  border-left: 2px solid var(--border);
-  margin-left: 6px; line-height: 1.3;
+.source-dropdown-menu {
+  display: none; position: absolute; top: 100%; left: 0;
+  margin-top: 2px; min-width: 170px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-md);
+  z-index: 200; padding: 3px 0;
 }
-.source-group-label:first-child { border-left: none; margin-left: 0; padding-left: 2px; }
+.source-dropdown.open .source-dropdown-menu { display: block; }
+.source-dropdown-item {
+  display: flex; align-items: center; gap: 6px;
+  padding: 5px 12px; cursor: pointer;
+  font-size: 0.73rem; color: var(--text-primary);
+  transition: background 0.1s;
+}
+.source-dropdown-item:hover { background: var(--bg-hover); }
+.source-dropdown-item.active { background: var(--bg-selected); color: var(--accent); font-weight: 600; }
+.source-dropdown-item .item-key {
+  font-size: 0.6rem; font-weight: 700;
+  background: var(--bg-inset); color: var(--text-muted);
+  border-radius: 3px; padding: 0px 4px; min-width: 16px;
+  text-align: center; line-height: 1.6;
+}
+.source-dropdown-item.active .item-key { background: var(--accent-bg); color: var(--accent); }
+.source-dropdown-item .item-desc {
+  font-size: 0.62rem; color: var(--text-muted); margin-left: auto;
+}
 /* ═══════════════════════════════════════════════════════════════════════
    Main Log Display
    ═══════════════════════════════════════════════════════════════════════ */
@@ -328,8 +345,8 @@ body {
    Responsive
    ═══════════════════════════════════════════════════════════════════════ */
 @media (max-width: 768px) {
-  .source-tabs { padding: 3px 0.5rem; }
-  .source-tab { padding: 3px 6px; font-size: 0.65rem; }
+  .source-tabs { padding: 3px 0.5rem; gap: 4px; }
+  .source-dropdown-btn { padding: 4px 8px; font-size: 0.68rem; }
   .log-display { font-size: 0.7rem; }
 }
 </style>
@@ -356,7 +373,7 @@ body {
 
 <!-- ═══════ SOURCE TABS ═══════ -->
 <nav class="source-tabs" id="source-tabs">
-  <!-- Populated by JS -->
+  <!-- Populated by JS — dropdown groups -->
 </nav>
 
 <!-- ═══════ LOG VIEWER ═══════ -->
@@ -492,31 +509,63 @@ var SOURCE_GROUPS = [
 
 function renderTabs() {
   var container = document.getElementById('source-tabs');
+  var activeLabel = state.activeSource ? state.activeSource.label : null;
   var html = '';
-  var lastGroup = '';
-  for (var i = 0; i < LOG_SOURCES.length; i++) {
-    var src = LOG_SOURCES[i];
-    // Emit group label when group changes
-    if (src.group !== lastGroup) {
-      var g = SOURCE_GROUPS.find(function(g) { return g.id === src.group; });
-      if (g) html += '<span class="source-group-label">' + escHtml(g.label) + '</span>';
-      lastGroup = src.group;
+  for (var g = 0; g < SOURCE_GROUPS.length; g++) {
+    var group = SOURCE_GROUPS[g];
+    var members = LOG_SOURCES.filter(function(s) { return s.group === group.id; });
+    var activeMember = members.find(function(s) { return s.label === activeLabel; });
+    var curLabel = activeMember ? activeMember.label : group.label;
+    var curKey = activeMember ? activeMember.key : '';
+
+    html += '<div class="source-dropdown" data-group="' + group.id + '">';
+    html += '<div class="source-dropdown-btn" onclick="toggleDropdown(\'' + group.id + '\', event)">';
+    html += escHtml(group.label);
+    if (curKey) html += '<span class="cur-key">' + escHtml(curKey) + '</span>';
+    html += '<span class="arrow">▾</span>';
+    html += '</div>';
+    html += '<div class="source-dropdown-menu">';
+    for (var m = 0; m < members.length; m++) {
+      var src = members[m];
+      var activeClass = (src.label === activeLabel) ? ' active' : '';
+      html += '<div class="source-dropdown-item' + activeClass + '" data-source="' + src.label +
+        '" onclick="selectSourceById(\'' + src.label + '\'); closeAllDropdowns();">' +
+        '<span class="item-key">' + escHtml(src.key) + '</span>' +
+        escHtml(src.label) +
+        '<span class="item-desc">' + escHtml(src.desc) + '</span></div>';
     }
-    html += '<div class="source-tab" data-source="' + src.label +
-      '" onclick="selectSourceById(\'' + src.label + '\')" title="' +
-      escHtml(src.desc) + ' (' + src.key + ')">' +
-      '<span class="tab-key">' + escHtml(src.key) + '</span>' +
-      escHtml(src.label) + '</div>';
+    html += '</div></div>';
   }
   container.innerHTML = html;
 }
 
-function updateTabHighlight() {
-  var tabs = document.querySelectorAll('.source-tab');
-  for (var i = 0; i < tabs.length; i++) {
-    var label = tabs[i].getAttribute('data-source');
-    tabs[i].classList.toggle('active', state.activeSource && state.activeSource.label === label);
+var openDropdown = null;
+
+function toggleDropdown(groupId, event) {
+  event.stopPropagation();
+  var dropdown = document.querySelector('.source-dropdown[data-group="' + groupId + '"]');
+  if (!dropdown) return;
+  var wasOpen = dropdown.classList.contains('open');
+  closeAllDropdowns();
+  if (!wasOpen) {
+    dropdown.classList.add('open');
+    openDropdown = groupId;
   }
+}
+
+function closeAllDropdowns() {
+  var all = document.querySelectorAll('.source-dropdown.open');
+  for (var i = 0; i < all.length; i++) all[i].classList.remove('open');
+  openDropdown = null;
+}
+
+// Close dropdowns when clicking outside
+document.addEventListener('click', function(e) {
+  if (!e.target.closest('.source-dropdown')) closeAllDropdowns();
+});
+
+function updateTabHighlight() {
+  renderTabs(); // simpler to re-render since it's just 3 dropdowns
 }
 
 // ── Source Selection ───────────────────────────────────────────────────
