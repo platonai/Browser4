@@ -2777,9 +2777,16 @@ fn extract_swarm_submissions(output: &str) -> Vec<(String, String)> {
         .collect()
 }
 
+/// Parse the first JSON object from CLI stdout. Handles trailing advisory
+/// notes (e.g. "Note: resultSet is empty...") emitted after the JSON payload.
 fn parse_json_output(stdout: &str, command_name: &str) -> serde_json::Value {
     let payload = strip_snapshot_output(stdout);
-    serde_json::from_str(&payload).unwrap_or_else(|error| {
+    // Strip any trailing advisory note emitted after the JSON body.
+    let json_part = match payload.find("\nNote:") {
+        Some(idx) => &payload[..idx],
+        None => &payload,
+    };
+    serde_json::from_str(json_part).unwrap_or_else(|error| {
         panic!("Expected JSON payload from {command_name}, got:\n{payload}\nparse error: {error}")
     })
 }
@@ -2919,7 +2926,7 @@ fn wait_for_crawl_result(
             .as_i64()
             .map(|s| !(200..400).contains(&s))
             .unwrap_or(false);
-        if parsed["id"].as_str() == Some(task_id) && (is_done || has_terminal || has_error_status)
+        if parsed["taskId"].as_str() == Some(task_id) && (is_done || has_terminal || has_error_status)
         {
             ctx.record_step(
                 format!(

@@ -894,11 +894,12 @@ pub(super) fn test_eval_return_types(ctx: &mut E2ECtx) {
     }
 
     // --- null ---
-    // The server may return "null" or an empty string for JavaScript null.
+    // The server returns "null" for JavaScript null. The CLI may append a
+    // diagnostic tip on the next line — only check the first line.
     let null_val = eval_text(ctx, "null");
-    let trimmed_null = null_val.trim();
+    let first_line = null_val.lines().next().unwrap_or("").trim();
     assert!(
-        trimmed_null == "null" || trimmed_null.is_empty(),
+        first_line == "null" || first_line.is_empty(),
         "Expected 'null' or empty string for `null`, got: {null_val}"
     );
 

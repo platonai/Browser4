@@ -865,13 +865,8 @@ pub(super) fn test_status_installed_runtime(ctx: &mut E2ECtx) {
     assert_eq!(result.exit_code, 0);
 
     assert!(
-        result.stdout.contains("Installed version: v4.10.0"),
-        "Expected 'Installed version: v4.10.0' in:\n{}",
-        result.stdout
-    );
-    assert!(
-        result.stdout.contains("Installed at:"),
-        "Expected 'Installed at:' in:\n{}",
+        result.stdout.contains("Installed bundle: v4.10.0"),
+        "Expected 'Installed bundle: v4.10.0' in:\n{}",
         result.stdout
     );
 }
@@ -887,8 +882,8 @@ pub(super) fn test_status_no_installed_runtime(ctx: &mut E2ECtx) {
     assert_eq!(result.exit_code, 0);
 
     assert!(
-        result.stdout.contains("Installed version: not installed"),
-        "Expected 'Installed version: not installed' in:\n{}",
+        result.stdout.contains("Installed bundle: not installed"),
+        "Expected 'Installed bundle: not installed' in:\n{}",
         result.stdout
     );
 }
@@ -2204,7 +2199,7 @@ pub(super) fn test_agent_task_commands(ctx: &mut E2ECtx) {
     assert!(
         agent_run_result
             .stdout
-            .contains("browser4-cli agent status agent-task-1"),
+            .contains("agent status agent-task-1"),
         "Expected agent status hint in:\n{}",
         agent_run_result.stdout
     );
@@ -3956,10 +3951,11 @@ pub(super) fn test_upgrade_to_new_version(ctx: &mut E2ECtx) {
         "Expected 'upgraded successfully' in:\n{}",
         result.stdout
     );
+    // Restart hint is now emitted on stderr.
     assert!(
-        result.stdout.contains("Restart the server"),
-        "Expected restart hint in:\n{}",
-        result.stdout
+        result.stderr.contains("Restart the server"),
+        "Expected restart hint in stderr:\n{}",
+        result.stderr
     );
 }
 
