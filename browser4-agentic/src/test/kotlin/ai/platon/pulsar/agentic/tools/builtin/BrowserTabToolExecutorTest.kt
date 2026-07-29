@@ -193,6 +193,9 @@ class BrowserTabToolExecutorTest {
             val driver = Mockito.mock(WebDriver::class.java)
             `when`(driver.evaluateValue("window.innerWidth")).thenReturn(1920)
             `when`(driver.evaluateValue("window.innerHeight")).thenReturn(1080)
+            // scrollToViewport returns the actual scrollY after scrolling;
+            // starting from top (scrollY=0): 0 + 2*1080 = 2160
+            `when`(driver.scrollToViewport(2.0)).thenReturn(2160.0)
 
             executor.callFunctionOn(
                 ToolCall("tab", "screenshot", mutableMapOf<String, Any?>("viewport" to 2)),
@@ -200,23 +203,45 @@ class BrowserTabToolExecutorTest {
             )
 
             verify(driver).scrollToViewport(2.0)
+            // Rect uses the actual scrollY returned by scrollToViewport
             verify(driver).screenshot(ai.platon.pulsar.common.math.geometric.RectD(0.0, 2160.0, 1920.0, 1080.0))
         }
     }
 
     @Test
-    fun `screenshot viewport clamps negative index to zero`() {
+    fun `screenshot viewport negative scrolls up from current position`() {
         runBlocking {
             val driver = Mockito.mock(WebDriver::class.java)
             `when`(driver.evaluateValue("window.innerWidth")).thenReturn(1920)
             `when`(driver.evaluateValue("window.innerHeight")).thenReturn(1080)
+            // Starting from scrollY=2160 (viewport 2), -1 scrolls up one: 2160 + (-1*1080) = 1080
+            `when`(driver.scrollToViewport(-1.0)).thenReturn(1080.0)
 
             executor.callFunctionOn(
                 ToolCall("tab", "screenshot", mutableMapOf<String, Any?>("viewport" to -1)),
                 driver
             )
 
-            verify(driver).scrollToViewport(0.0)
+            verify(driver).scrollToViewport(-1.0)
+            verify(driver).screenshot(ai.platon.pulsar.common.math.geometric.RectD(0.0, 1080.0, 1920.0, 1080.0))
+        }
+    }
+
+    @Test
+    fun `screenshot viewport negative at top clamps to zero`() {
+        runBlocking {
+            val driver = Mockito.mock(WebDriver::class.java)
+            `when`(driver.evaluateValue("window.innerWidth")).thenReturn(1920)
+            `when`(driver.evaluateValue("window.innerHeight")).thenReturn(1080)
+            // Starting from top (scrollY=0): 0 + (-1*1080) = -1080, clamped to 0
+            `when`(driver.scrollToViewport(-1.0)).thenReturn(0.0)
+
+            executor.callFunctionOn(
+                ToolCall("tab", "screenshot", mutableMapOf<String, Any?>("viewport" to -1)),
+                driver
+            )
+
+            verify(driver).scrollToViewport(-1.0)
             verify(driver).screenshot(ai.platon.pulsar.common.math.geometric.RectD(0.0, 0.0, 1920.0, 1080.0))
 
             // ── awaitPromise tests ──────────────────────────────────────────────

@@ -68,9 +68,17 @@ class ViewportSpecTest {
     }
 
     @Test
-    @DisplayName("indices less than 0 are clamped to 0")
-    fun testClampedToZero() {
-        assertEquals(listOf(0), ViewportSpec.parse("-1"))
+    @DisplayName("negative single indices are allowed (scroll-relative offset)")
+    fun testNegativeIndicesAllowed() {
+        assertEquals(listOf(-1), ViewportSpec.parse("-1"))
+        assertEquals(listOf(-3), ViewportSpec.parse("-3"))
+    }
+
+    @Test
+    @DisplayName("range endpoints are clamped to 0 (negative ranges not meaningful)")
+    fun testNegativeInRangeClamped() {
+        // Range with negative start: start clamped to 0
+        assertEquals(listOf(0, 1, 2, 3), ViewportSpec.parse("-1-3"))
     }
 
     @Test
