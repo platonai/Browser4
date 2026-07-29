@@ -204,6 +204,11 @@ function Print-Usage {
     Write-Host "  rws         Run real-world scenario tests (requires a mode)"
     Write-Host "              sc, scenarios <names...>  run named tasks via run-tests.ps1"
     Write-Host "              dir, directory <path>     run all .md tasks in a directory"
+    Write-Host "              dir --tree, -t  [path]  tree view of task directories (display only)"
+    Write-Host "              dir --files, -f [path]  list .md task files (display only)"
+    Write-Host "              dir --absolute, -a [path]  list files with absolute paths"
+    Write-Host "              dir --metadata, -m [path]  list files with size and date"
+    Write-Host "              dir --interactive, -Interactive  pick directories interactively"
     Write-Host "              task <file>               run a single task via run-task.ps1"
     Write-Host "  session     List or view persisted test sessions (list, view)"
     Write-Host "              list --all | --count N   Paginate session listing (default: 15)"
@@ -247,6 +252,14 @@ function Print-Usage {
     Write-Host "  test.ps1 rws sc amazon --timeout 30 # Run with 30-minute per-task timeout"
     Write-Host "  test.ps1 rws sc amazon --production # Run against installed CLI"
     Write-Host "  test.ps1 rws task tasks/real-world/generic/amazon.md  # Run a single task file"
+    Write-Host "  test.ps1 rws dir --tree              # Tree view of all task directories"
+    Write-Host "  test.ps1 rws dir --files             # List all .md task files"
+    Write-Host "  test.ps1 rws dir --absolute          # List files with absolute paths"
+    Write-Host "  test.ps1 rws dir --metadata          # List files with size and date"
+    Write-Host "  test.ps1 rws dir --tree tasks/real-world  # Tree view of a specific dir"
+    Write-Host "  test.ps1 rws dir -t mock-site              # Short form of --tree"
+    Write-Host "  test.ps1 rws dir -f -m                     # Short forms for --files --metadata"
+    Write-Host "  test.ps1 rws dir --interactive             # Interactive directory picker"
     Write-Host "  test.ps1 main                       # Run all Browser4 main tests"
     Write-Host "  test.ps1 session list               # List all past test sessions"
     Write-Host "  test.ps1 session view 20260724T1917 # View a specific session (prefix match)"
@@ -564,6 +577,234 @@ To use a different port:
     Invoke-CommandAndReport -ScriptBlock { & $mvnwScript @mvnArgs } -Label 'MockSiteBoot' -PreExecPath $mockSiteModuleDir
 }
 
+function Show-RwsDirectoryTree {
+    <#
+    .SYNOPSIS
+        Render a directory tree of .md task files and subdirectories.
+    .DESCRIPTION
+        Recursively walks a directory, printing a tree view with box-drawing
+        characters.  Only .md files are shown; empty directories appear as
+        bare directory names with a trailing slash.
+    .PARAMETER Path
+        Root directory to render.
+    .PARAMETER Prefix
+        Internal — prefix string for indentation nesting.
+    #>
+    param(
+        [Parameter(Mandatory)]
+        [string]$Path,
+        [string]$Prefix = ''
+    )
+
+    $dirs  = @(Get-ChildItem -Path $Path -Directory | Sort-Object Name)
+    $files = @(Get-ChildItem -Path $Path -File -Filter '*.md' | Sort-Object Name)
+    $items = @($dirs) + @($files)
+    $count = $items.Count
+
+    for ($i = 0; $i -lt $count; $i++) {
+        $item = $items[$i]
+        $isLast = ($i -eq $count - 1)
+
+        if ($isLast) {
+            $connector  = [char]0x2514 + [char]0x2500 + [char]0x2500 + ' '
+            $childPrefix = "$Prefix    "
+        } else {
+            $connector  = [char]0x251C + [char]0x2500 + [char]0x2500 + ' '
+            $childPrefix = "$Prefix$([char]0x2502)   "
+        }
+
+        if ($item.PSIsContainer) {
+            Write-Host "$Prefix$connector$($item.Name)/" -ForegroundColor Cyan
+            Show-RwsDirectoryTree -Path $item.FullName -Prefix $childPrefix
+        } else {
+            Write-Host "$Prefix$connector$($item.Name)"
+        }
+    }
+}
+
+function Show-RwsFileListing {
+    <#
+    .SYNOPSIS
+        List discovered .md task files with optional formatting.
+    .DESCRIPTION
+        Recursively finds all .md files under the given path and prints
+        them as a flat list.
+
+        -Absolute   Print absolute paths instead of relative.
+        -Metadata   Add a table header with human-readable size and
+                    last-modified timestamp.
+    .PARAMETER Path
+        Root directory to search.
+    .PARAMETER Absolute
+        Show absolute paths instead of paths relative to $Path.
+    .PARAMETER Metadata
+        Include size and last-modified date for each file.
+    #>
+    param(
+        [Parameter(Mandatory)]
+        [string]$Path,
+        [switch]$Absolute,
+        [switch]$Metadata
+    )
+
+    $files = @(Get-ChildItem -Path $Path -Recurse -File -Filter '*.md' | Sort-Object FullName)
+
+    if ($files.Count -eq 0) {
+        Write-Host "No .md task files found in: $Path" -ForegroundColor Yellow
+        return
+    }
+
+    if ($Metadata) {
+        # Measure the longest display path for aligned columns.
+        $maxNameLen = 0
+        $entries = foreach ($f in $files) {
+            $displayPath = if ($Absolute) {
+                $f.FullName
+            } else {
+                [System.IO.Path]::GetRelativePath($Path, $f.FullName)
+            }
+            if ($displayPath.Length -gt $maxNameLen) { $maxNameLen = $displayPath.Length }
+            [PSCustomObject]@{ DisplayPath = $displayPath; File = $f }
+        }
+
+        $header = "{0,-$maxNameLen}  {1,10}  {2}" -f 'File', 'Size', 'Last Modified'
+        Write-Host $header -ForegroundColor Cyan
+        Write-Host ('-' * ($maxNameLen + 40))
+
+        foreach ($e in $entries) {
+            $size = if ($e.File.Length -gt 1MB) {
+                "$([math]::Round($e.File.Length / 1MB, 1)) MB"
+            } elseif ($e.File.Length -gt 1KB) {
+                "$([math]::Round($e.File.Length / 1KB, 1)) KB"
+            } else {
+                "$($e.File.Length) B"
+            }
+            $date = $e.File.LastWriteTime.ToString('yyyy-MM-dd HH:mm')
+            $row = "{0,-$maxNameLen}  {1,10}  {2}" -f $e.DisplayPath, $size, $date
+            Write-Host $row
+        }
+    } else {
+        foreach ($f in $files) {
+            $displayPath = if ($Absolute) { $f.FullName } else { [System.IO.Path]::GetRelativePath($Path, $f.FullName) }
+            Write-Host $displayPath
+        }
+    }
+
+    Write-Host ''
+    Write-Host "Total: $($files.Count) file(s)" -ForegroundColor DarkGray
+}
+
+function Show-InteractiveDirPicker {
+    <#
+    .SYNOPSIS
+        Interactive directory picker for RWS task directories.
+    .DESCRIPTION
+        Lists all directories under the tasks root that contain .md task
+        files, lets the user select one or more using arrow keys, and
+        returns the selected directory paths.
+
+        Controls:
+          ↑/↓       Navigate
+          Space     Toggle selection
+          a         Select all
+          n         Deselect all
+          Enter     Confirm (if nothing selected, returns ALL directories)
+          Esc / q   Cancel (returns empty list)
+
+    .PARAMETER TasksRoot
+        Root directory to search for task directories.
+    #>
+    param(
+        [Parameter(Mandatory)]
+        [string]$TasksRoot
+    )
+
+    if (-not (Test-Path -LiteralPath $TasksRoot -PathType Container)) {
+        Write-Error "Tasks root not found: $TasksRoot"
+        return @()
+    }
+
+    $dirs = @(Get-ChildItem -Path $TasksRoot -Directory -Recurse |
+        Where-Object { @(Get-ChildItem -Path $_.FullName -File -Filter '*.md').Count -gt 0 } |
+        Sort-Object FullName)
+
+    if ($dirs.Count -eq 0) {
+        Write-Host 'No directories with .md task files found.' -ForegroundColor Yellow
+        return @()
+    }
+
+    # Build display items: relative path + task count
+    $items = foreach ($d in $dirs) {
+        $rel = [System.IO.Path]::GetRelativePath($TasksRoot, $d.FullName)
+        $count = @(Get-ChildItem -Path $d.FullName -File -Filter '*.md').Count
+        "$rel  ($count task$(if ($count -ne 1) { 's' }))"
+    }
+
+    $selected = @($false) * $items.Count
+    $cursor = 0
+    $anySelected = $false
+
+    while ($true) {
+        # -- Redraw ----------------------------------------------------------
+        [Console]::Clear()
+        Write-Host 'Select directories (' -NoNewline
+        Write-Host 'Space' -NoNewline -ForegroundColor Green
+        Write-Host ' to toggle, ' -NoNewline
+        Write-Host 'Enter' -NoNewline -ForegroundColor Green
+        Write-Host ' to confirm, ' -NoNewline
+        Write-Host 'Esc/q' -NoNewline -ForegroundColor Yellow
+        Write-Host ' to cancel)'
+        Write-Host ''
+
+        $anySelected = $false
+        for ($i = 0; $i -lt $items.Count; $i++) {
+            if ($selected[$i]) { $anySelected = $true }
+            $mark = if ($selected[$i]) { '[x]' } else { '[ ]' }
+            if ($i -eq $cursor) {
+                Write-Host " $mark " -NoNewline
+                Write-Host $items[$i] -ForegroundColor Green
+            } else {
+                Write-Host " $mark $($items[$i])"
+            }
+        }
+
+        Write-Host ''
+        Write-Host 'Arrow keys: navigate   Space: toggle   a: select all   n: deselect all' -ForegroundColor DarkGray
+        Write-Host 'Enter: confirm' -NoNewline
+        if ($anySelected) {
+            Write-Host ' (will run selected directories)' -ForegroundColor Cyan
+        } else {
+            Write-Host ' (nothing selected — will run ALL directories)' -ForegroundColor Yellow
+        }
+
+        # -- Read key --------------------------------------------------------
+        $key = [Console]::ReadKey($true)
+        switch ($key.Key) {
+            'UpArrow'    { $cursor = [Math]::Max(0, $cursor - 1) }
+            'DownArrow'  { $cursor = [Math]::Min($items.Count - 1, $cursor + 1) }
+            'Spacebar'   { $selected[$cursor] = -not $selected[$cursor] }
+            'A'          { for ($j = 0; $j -lt $selected.Count; $j++) { $selected[$j] = $true } }
+            'N'          { for ($j = 0; $j -lt $selected.Count; $j++) { $selected[$j] = $false } }
+            'Escape'     { Write-Host ''; Write-Host 'Cancelled.' -ForegroundColor Yellow; return @() }
+            'Q'          { Write-Host ''; Write-Host 'Cancelled.' -ForegroundColor Yellow; return @() }
+            'Enter'      {
+                $result = @()
+                for ($j = 0; $j -lt $dirs.Count; $j++) {
+                    if ($selected[$j]) { $result += $dirs[$j].FullName }
+                }
+                # If nothing selected, run all directories
+                if ($result.Count -eq 0) {
+                    Write-Host ''
+                    Write-Host 'No directories selected. Running ALL directories...' -ForegroundColor Yellow
+                    Start-Sleep -Seconds 1
+                    return @($dirs | ForEach-Object { $_.FullName })
+                }
+                return $result
+            }
+        }
+    }
+}
+
 function Invoke-RealWorldScenarioTests([string[]]$additionalArgs) {
     $rwsScriptsDir = Join-Path $repoRoot 'browser4-tests' 'real-world-scenarios' 'scripts'
     $scenarioRunner = Join-Path $rwsScriptsDir 'run-tests.ps1'
@@ -575,6 +816,12 @@ function Invoke-RealWorldScenarioTests([string[]]$additionalArgs) {
     $taskFile = $null
     $taskDir = $null
     $setProduction = $false
+    $dirShowTree     = $false  # --tree
+    $dirShowFiles    = $false  # --files (also implied by --absolute / --metadata)
+    $dirShowAbsolute = $false  # --absolute  (modifier)
+    $dirShowMetadata = $false  # --metadata  (modifier)
+    $dirInteractive  = $false  # -i / --interactive
+    $dirDisplayPath  = ''      # optional path for display mode
     $passThroughArgs = @()
 
     $i = 0
@@ -617,22 +864,55 @@ function Invoke-RealWorldScenarioTests([string[]]$additionalArgs) {
         }
         elseif ($arg -in 'dir', 'directory', '--dir', '--directory') {
             $mode = 'dir'
-            if (($i + 1) -lt $additionalArgs.Count -and $additionalArgs[$i + 1] -in '--list', '-List') {
-                # List available directories, don't run
-                $taskDir = '--list'
-                $modeLabel = 'real-world scenario dir (list)'
-                $i += 2
+            $i++
+            # Collect display flags and optional path that follow the
+            # 'dir' keyword.  Flags and path can appear in any order:
+            #   rws dir --tree path
+            #   rws dir path --tree
+            #   rws dir --files --metadata
+            $dirTokens = @()
+            while ($i -lt $additionalArgs.Count) {
+                $next = $additionalArgs[$i]
+                if ($next -in '--tree', '-Tree', '-t') {
+                    $dirShowTree = $true; $i++; continue
+                }
+                if ($next -in '--files', '-Files', '-f') {
+                    $dirShowFiles = $true; $i++; continue
+                }
+                if ($next -in '--absolute', '-Absolute', '-a') {
+                    $dirShowAbsolute = $true; $dirShowFiles = $true; $i++; continue
+                }
+                if ($next -in '--metadata', '-Metadata', '-m') {
+                    $dirShowMetadata = $true; $dirShowFiles = $true; $i++; continue
+                }
+                if ($next -in '--interactive', '-Interactive') {
+                    $dirInteractive = $true; $i++; continue
+                }
+                if ($next -in '--list', '-List') {
+                    $dirTokens += '--list'; $i++; continue
+                }
+                if (-not $next.StartsWith('-')) {
+                    $dirTokens += $next; $i++; continue
+                }
+                break
             }
-            elseif (($i + 1) -lt $additionalArgs.Count -and -not $additionalArgs[$i + 1].StartsWith('-')) {
-                $taskDir = $additionalArgs[$i + 1]
-                $modeLabel = "real-world scenario dir: $taskDir"
-                $i += 2
-            }
-            else {
-                # No directory path given — list directories
-                $taskDir = '--list'
-                $modeLabel = 'real-world scenario dir (list)'
-                $i++
+
+            if (-not ($dirShowTree -or $dirShowFiles -or $dirInteractive)) {
+                # Run mode (existing behavior)
+                if ($dirTokens -contains '--list' -or $dirTokens.Count -eq 0) {
+                    $taskDir = '--list'
+                    $modeLabel = 'real-world scenario dir (list)'
+                } else {
+                    $taskDir = $dirTokens[0]
+                    $modeLabel = "real-world scenario dir: $taskDir"
+                }
+            } else {
+                # Display-only mode — save the optional path for later
+                if ($dirTokens.Count -gt 0 -and $dirTokens[0] -ne '--list') {
+                    $dirDisplayPath = $dirTokens[0]
+                }
+                $displayKind = if ($dirShowTree) { 'tree' } else { 'files' }
+                $modeLabel = "real-world scenario dir (display: $displayKind)"
             }
         }
         elseif ($arg -in 'task', '--task' -and ($i + 1) -lt $additionalArgs.Count) {
@@ -686,6 +966,11 @@ function Invoke-RealWorldScenarioTests([string[]]$additionalArgs) {
         Write-Host '  sc, scenarios <names...>  Run named agent-scenario tasks via run-tests.ps1'
         Write-Host '  dir, directory <path>     Run all .md task files in a directory'
         Write-Host '  dir, directory --list     List available scenario directories'
+        Write-Host '  dir --tree, -t [path]  Show directory tree view (display only)'
+        Write-Host '  dir --files, -f [path]  List .md task files (display only)'
+        Write-Host '  dir --absolute, -a [path]  List .md task files with absolute paths'
+        Write-Host '  dir --metadata, -m [path]  List .md task files with size and date'
+        Write-Host '  dir --interactive, -Interactive  Pick directories interactively (arrow keys)'
         Write-Host '  task <file>               Run a single task file via run-task.ps1'
         Write-Host ''
         Write-Host 'Options:'
@@ -705,6 +990,155 @@ function Invoke-RealWorldScenarioTests([string[]]$additionalArgs) {
         Write-Host '  test.ps1 rws task tasks/amazon.md         # Run a single task file'
         Write-Host '  test.ps1 rws sc amazon --production       # Run against installed CLI'
         Write-Host '  test.ps1 rws dir --list                    # List available scenario directories'
+        Write-Host '  test.ps1 rws dir --tree                    # Tree view of all task directories'
+        Write-Host '  test.ps1 rws dir --files                   # List all .md task files'
+        Write-Host '  test.ps1 rws dir --absolute                # List files with absolute paths'
+        Write-Host '  test.ps1 rws dir --metadata                # List files with size and date'
+        Write-Host '  test.ps1 rws dir --tree tasks/real-world   # Tree view of a specific directory'
+        Write-Host '  test.ps1 rws dir -t mock-site               # Short form of --tree'
+        Write-Host '  test.ps1 rws dir -f -m                      # Short forms for --files --metadata'
+        Write-Host '  test.ps1 rws dir --interactive              # Interactive directory picker'
+        exit 0
+    }
+
+    # -- Interactive-mode for dir (-i / --interactive) ------------------------
+    if ($mode -eq 'dir' -and $dirInteractive) {
+        $tasksRoot = Join-Path $repoRoot 'browser4-tests' 'real-world-scenarios' 'tasks'
+
+        # Honor -Show / -DryRun
+        if ($script:Show) {
+            Write-CommandBanner -Label '[SHOW] Would launch interactive directory picker' `
+                -Subtitle "  rws dir --interactive  (tasks root: $tasksRoot)"
+            exit 0
+        }
+        if ($script:DryRun) {
+            Write-CommandBanner -Label '[DRY RUN] Would launch interactive directory picker' `
+                -Subtitle "  rws dir --interactive  (tasks root: $tasksRoot)"
+            exit 0
+        }
+
+        Write-CommandBanner -Label 'Launching interactive directory picker...'
+
+        $pickedDirs = Show-InteractiveDirPicker -TasksRoot $tasksRoot
+
+        if ($pickedDirs.Count -eq 0) {
+            Write-Host ''
+            exit 0
+        }
+
+        Write-Host ''
+        Write-Host "Running $(if ($pickedDirs.Count -eq 1) { '1 directory' } else { "$($pickedDirs.Count) directories" })..." -ForegroundColor Cyan
+
+        # -- Run each selected directory ----------------------------------------
+        $runner = Join-Path $repoRoot 'browser4-tests' 'real-world-scenarios' 'scripts' 'run-tests.ps1'
+        if (-not (Test-Path $runner)) {
+            Write-Error "Scenario runner not found at $runner"
+            exit 1
+        }
+
+        $overallExit = 0
+        foreach ($dirPath in $pickedDirs) {
+            $relPath = [System.IO.Path]::GetRelativePath($tasksRoot, $dirPath)
+            Write-Host ''
+            Write-Host "=== Running: $relPath ===" -ForegroundColor Cyan
+
+            $pwshArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $runner, '-TasksDir', $dirPath) + $passThroughArgs
+
+            $proc = Start-Process -FilePath 'pwsh' -ArgumentList $pwshArgs `
+                -NoNewWindow -Wait -PassThru
+
+            if ($proc.ExitCode -ne 0) {
+                Write-Host "[FAIL] $relPath (exit $($proc.ExitCode))" -ForegroundColor Red
+                $overallExit = 1
+            } else {
+                Write-Host "[PASS] $relPath" -ForegroundColor Green
+            }
+        }
+
+        Write-CommandBanner -Label "Interactive run complete ($($pickedDirs.Count) dir(s))" `
+            -Icon $(if ($overallExit -eq 0) { '[PASS]' } else { '[FAIL]' })
+
+        exit $overallExit
+    }
+
+    # -- Display-mode resolution for dir (--tree, --files, --absolute, --metadata)
+    if ($mode -eq 'dir' -and ($dirShowTree -or $dirShowFiles)) {
+        $tasksRoot = Join-Path $repoRoot 'browser4-tests' 'real-world-scenarios' 'tasks'
+
+        # Determine the directory to display
+        $displayPath = if ($dirDisplayPath) {
+            $dirDisplayPath
+        } elseif ($taskDir -and $taskDir -ne '--list') {
+            $taskDir
+        } else {
+            $tasksRoot
+        }
+
+        # Save the original user-provided path before normalization,
+        # so we can try alternative lookups if resolution fails.
+        $originalDisplayPath = $displayPath
+
+        if (-not [System.IO.Path]::IsPathRooted($displayPath)) {
+            $displayPath = Join-Path $repoRoot $displayPath
+        }
+        $displayPath = [System.IO.Path]::GetFullPath($displayPath)
+
+        # If the path doesn't exist, try resolving relative to the tasks root
+        # so users can type just "mock-site" or "real-world/generic".
+        if (-not (Test-Path -LiteralPath $displayPath -PathType Container)) {
+            $altPath = Join-Path $tasksRoot $originalDisplayPath
+            if (-not [System.IO.Path]::IsPathRooted($altPath)) {
+                $altPath = Join-Path $repoRoot $altPath
+            }
+            $altPath = [System.IO.Path]::GetFullPath($altPath)
+            if (Test-Path -LiteralPath $altPath -PathType Container) {
+                $displayPath = $altPath
+            }
+        }
+
+        # Honor -Show / -DryRun
+        if ($script:Show) {
+            $flagList = @()
+            if ($dirShowTree) { $flagList += '--tree' }
+            if ($dirShowFiles) { $flagList += '--files' }
+            if ($dirShowAbsolute) { $flagList += '--absolute' }
+            if ($dirShowMetadata) { $flagList += '--metadata' }
+            Write-CommandBanner -Label '[SHOW] Would show:' `
+                -Subtitle "  rws dir $($flagList -join ' ') $originalDisplayPath (resolved: $displayPath)"
+            exit 0
+        }
+
+        if ($script:DryRun) {
+            $flagList = @()
+            if ($dirShowTree) { $flagList += '--tree' }
+            if ($dirShowFiles) { $flagList += '--files' }
+            if ($dirShowAbsolute) { $flagList += '--absolute' }
+            if ($dirShowMetadata) { $flagList += '--metadata' }
+            Write-CommandBanner -Label '[DRY RUN] Would show:' `
+                -Subtitle "  rws dir $($flagList -join ' ') $originalDisplayPath (resolved: $displayPath)"
+            exit 0
+        }
+
+        if (-not (Test-Path -LiteralPath $displayPath -PathType Container)) {
+            Write-Error "Directory not found: $displayPath"
+            exit 1
+        }
+
+        if ($dirShowTree) {
+            Write-Host ''
+            Write-Host "Task directory tree: $displayPath" -ForegroundColor Cyan
+            Write-Host ''
+            Show-RwsDirectoryTree -Path $displayPath
+            Write-Host ''
+        } else {
+            Write-Host ''
+            Write-Host "Task files in: $displayPath" -ForegroundColor Cyan
+            Write-Host ''
+            Show-RwsFileListing -Path $displayPath `
+                -Absolute:$dirShowAbsolute `
+                -Metadata:$dirShowMetadata
+        }
+
         exit 0
     }
 
