@@ -46,7 +46,7 @@ param(
     [string]$Command,
 
     [int]$Port = 8090,
-    [string]$Host = '127.0.0.1',
+    [string]$HostAddress = '127.0.0.1',
     [switch]$OpenBrowser,
 
     [string]$ConfigPath,
@@ -155,7 +155,7 @@ function Start-GuiServer {
     $guiArgs = @(
         $guiServerPath,
         '--port', $Port,
-        '--host', $Host,
+        '--host', $HostAddress,
         '--tasks-root', $tasksRoot
     )
     if ($OpenBrowser) { $guiArgs += '--open-browser' }
@@ -174,7 +174,7 @@ function Start-GuiServer {
         if ($p -and -not $p.HasExited) { $p.Kill() }
     } | Out-Null
 
-    Write-Host "[coworker] GUI server started (PID $guiPid) → http://${Host}:${Port}"
+    Write-Host "[coworker] GUI server started (PID $guiPid) → http://${HostAddress}:${Port}"
 
     return $proc
 }
@@ -250,7 +250,7 @@ if ($Command -eq 'gui') {
         exit 1
     }
     Write-Host '[coworker] GUI server running. Press Ctrl+C to stop.'
-    Write-Host "[coworker] Open → http://${Host}:${Port}"
+    Write-Host "[coworker] Open → http://${HostAddress}:${Port}"
     try {
         $guiProc.WaitForExit()
     } finally {
@@ -280,7 +280,7 @@ $guiProc = Start-GuiServer -ReturnProcess
 if ($Background) {
     $null = Invoke-Scheduler -ReturnProcess
     Write-Host '[coworker] This terminal can be closed.'
-    Write-Host '[coworker] GUI server →' "http://${Host}:${Port}"
+    Write-Host '[coworker] GUI server →' "http://${HostAddress}:${Port}"
     if ($null -ne $guiProc) {
         Write-Host "[coworker] To stop GUI: Stop-Process $($guiProc.Id)"
     }
