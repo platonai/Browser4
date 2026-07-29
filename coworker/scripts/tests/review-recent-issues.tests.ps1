@@ -22,9 +22,12 @@ function global:Test-IsAlreadyReviewed {
         [Parameter(Mandatory)] [string]$ReviewDoneDir,
         [Parameter(Mandatory)] [string]$ReviewDiscardDir
     )
-    $normalized = [System.IO.Path]::GetFullPath($FilePath)
-    $doneNorm = [System.IO.Path]::GetFullPath($ReviewDoneDir)
-    $discardNorm = [System.IO.Path]::GetFullPath($ReviewDiscardDir)
+    # Normalize backslashes to forward slashes for cross-platform StartsWith.
+    # [System.IO.Path]::GetFullPath on Unix does NOT convert \ to /, so we do
+    # it explicitly after resolving the path.
+    $normalized = ([System.IO.Path]::GetFullPath($FilePath)) -replace '\\', '/'
+    $doneNorm = ([System.IO.Path]::GetFullPath($ReviewDoneDir)) -replace '\\', '/'
+    $discardNorm = ([System.IO.Path]::GetFullPath($ReviewDiscardDir)) -replace '\\', '/'
     return ($normalized.StartsWith($doneNorm, [StringComparison]::OrdinalIgnoreCase) -or
             $normalized.StartsWith($discardNorm, [StringComparison]::OrdinalIgnoreCase))
 }
@@ -489,7 +492,7 @@ Describe 'Move-DraftToReview' {
 
             $destPath = Move-DraftToReview -File $file -DraftBase $draftDir -ReviewDir $reviewDir
 
-            $destPath | Should -Match 'review\\2026\\0709\\my-issues\.issues\.md$'
+            $destPath | Should -Match 'review[\\/]2026[\\/]0709[\\/]my-issues\.issues\.md$'
             Test-Path -LiteralPath $destPath | Should -BeTrue
             Test-Path -LiteralPath $file.FullName | Should -BeFalse
         } finally { Remove-TestRoot $root }
@@ -504,7 +507,7 @@ Describe 'Move-DraftToReview' {
 
             $destPath = Move-DraftToReview -File $file -DraftBase $draftDir -ReviewDir $reviewDir
 
-            $destPath | Should -Match 'review\\root-file\.issues\.md$'
+            $destPath | Should -Match 'review[\\/]root-file\.issues\.md$'
             Test-Path -LiteralPath $destPath | Should -BeTrue
         } finally { Remove-TestRoot $root }
     }
@@ -569,7 +572,7 @@ Describe 'Move-DraftToReview' {
 
             $destPath = Move-DraftToReview -File $file -DraftBase $draftDir -ReviewDir $reviewDir -DryRun
 
-            $destPath | Should -Match 'review\\dryrun\.issues\.md$'
+            $destPath | Should -Match 'review[\\/]dryrun\.issues\.md$'
             Test-Path -LiteralPath $file.FullName | Should -BeTrue
             Test-Path -LiteralPath $destPath | Should -BeFalse
         } finally { Remove-TestRoot $root }
@@ -622,7 +625,7 @@ Describe 'Integration: DryRun pipeline' {
             }
 
             @($movedPaths).Length | Should -Be 2
-            foreach ($p in $movedPaths) { $p | Should -Match 'review\\' }
+            foreach ($p in $movedPaths) { $p | Should -Match 'review[\\/]' }
 
             $names = $draftResults | ForEach-Object { $_.FileInfo.Name } | Sort-Object
             $names -contains 'recent-a.issues.md' | Should -BeTrue
@@ -677,7 +680,7 @@ Describe 'Integration: DryRun pipeline' {
             $movedDraft = Move-DraftToReview -File $draftResults[0].FileInfo `
                 -DraftBase $draftDir -ReviewDir $reviewDir -DryRun
 
-            $movedDraft | Should -Match 'review\\draft-file\.issues\.md$'
+            $movedDraft | Should -Match 'review[\\/]draft-file\.issues\.md$'
         } finally { Remove-TestRoot $root }
     }
 }
@@ -748,7 +751,7 @@ Describe 'Edge cases' {
             @($results).Length | Should -Be 1
 
             $destPath = Move-DraftToReview -File $file -DraftBase $draftDir -ReviewDir $reviewDir
-            $destPath | Should -Match 'review\\2026\\0709\\a\\b\\c\\d\\deep-file\.issues\.md$'
+            $destPath | Should -Match 'review[\\/]2026[\\/]0709[\\/]a[\\/]b[\\/]c[\\/]d[\\/]deep-file\.issues\.md$'
             Test-Path -LiteralPath $destPath | Should -BeTrue
         } finally { Remove-TestRoot $root }
     }
