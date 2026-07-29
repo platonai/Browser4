@@ -450,14 +450,36 @@ class LogView(Container):
             with open(fp, "r", encoding="utf-8", errors="replace") as f:
                 f.seek(last_pos)
                 label = self._label_for(fp)
+                new_lines: list[str] = []
                 for line in f:
                     line = line.rstrip("\n\r")
                     if label:
-                        self._buffer.append(f"[{label}] {line}")
-                    else:
-                        self._buffer.append(line)
+                        line = f"[{label}] {line}"
+                    self._buffer.append(line)
+                    new_lines.append(line)
             self._file_positions[fp] = current_size
-            self._refresh_display()
+
+            if not new_lines or self.paused:
+                return
+
+            # ── Display strategy ──────────────────────────────────────────
+            if self._scroll_from_bottom == 0 and not self._filter_compiled:
+                # Following bottom, no filter: append directly to RichLog.
+                # This avoids clearing and rebuilding the entire display,
+                # preserving any mouse text selection in the terminal.
+                self._write_colorized_block(new_lines)
+                self._update_search_and_status()
+            elif self._filter_compiled:
+                # Filter is active — need a full rebuild to correctly
+                # show/hide new lines based on the regex.
+                self._refresh_display()
+            else:
+                # Scrolled up, no filter: track offset so the user's view
+                # stays pinned, but don't touch the display at all.  This
+                # also preserves mouse selection while the user is reading
+                # or selecting text.
+                self._scroll_from_bottom += len(new_lines)
+                self._update_search_and_status()
         except Exception:
             pass
 
@@ -636,8 +658,81 @@ class LogView(Container):
             result.append(line)
         return result
 
+    def _write_colorized_block(self, lines: list[str]) -> None:
+        """Write colorized lines directly to RichLog without clearing.
+
+        Used when following the bottom — appends new lines instead of
+        rebuilding the entire display, preserving mouse text selection.
+        """
+        if not self.rich_log:
+            return
+
+        is_git = self.source["paths"][0] == "__git__"
+        is_rws = self.source["paths"][0] == "__rws__"
+        SEARCH_HIGHLIGHT = Style.parse("reverse bold yellow")
+
+        for line in lines:
+            # ── Colorize ──────────────────────────────────────────────────
+            if is_git:
+                if self._git_detail:
+                    text = colorize_git_detail(line)
+                else:
+                    text = colorize_git_compact(line)
+            elif is_rws:
+                text = colorize_rws_line(line)
+            elif line.startswith("──── git log"):
+                text = Text(line, style=Style.parse("dark_cyan"))
+            else:
+                text = colorize_line(line)
+
+            # ── Search highlight overlay ──────────────────────────────────
+            if self._search_pattern:
+                try:
+                    text.highlight_regex(
+                        self._search_pattern, style=SEARCH_HIGHLIGHT
+                    )
+                except Exception:
+                    pass
+
+            self.rich_log.write(text)
+
+    def _update_search_and_status(self) -> None:
+        """Update search matches and status bar without clearing display.
+
+        Used after appending new lines (to avoid a full clear+rebuild that
+        would destroy mouse text selection).
+        """
+        filtered = self._get_filtered()
+        total = len(filtered)
+        try:
+            visible_h = max(8, self.rich_log.container_size.height)
+        except Exception:
+            visible_h = 40
+
+        # Rebuild search matches against current filtered buffer
+        if self._search_pattern:
+            try:
+                pat = re.compile(self._search_pattern, re.IGNORECASE)
+                self._search_matches = [
+                    i for i, line in enumerate(filtered) if pat.search(line)
+                ]
+            except re.error:
+                self._search_matches = []
+
+        self._last_filtered_count = total
+        self._update_status(
+            total,
+            max(0, total - visible_h - max(0, self._scroll_from_bottom)),
+            visible_h,
+        )
+
     def _refresh_display(self) -> None:
-        """Rebuild RichLog content from buffer, applying filter and scroll."""
+        """Rebuild RichLog content from buffer, applying filter and scroll.
+
+        This does a full clear+rebuild every time.  Normal data arrival
+        while following the bottom is handled by the append path in
+        _read_new_lines instead — this keeps mouse text selection intact.
+        """
         if self.rich_log is None:
             return
 
