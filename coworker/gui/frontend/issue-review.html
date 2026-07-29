@@ -155,9 +155,16 @@ body {
 .app-brand { display: flex; align-items: center; gap: 10px; }
 .app-brand svg { flex-shrink: 0; }
 .app-brand h1 { font-size: 1.05rem; font-weight: 600; margin: 0; color: #f1f5f9; letter-spacing: -0.01em; }
-.app-brand .nav-link { color: #a78bfa; font-size: 0.72rem; text-decoration: none; margin-left: 6px; opacity: 0.75; }
-.app-brand .nav-link:hover { opacity: 1; }
 .header-right { display: flex; align-items: center; gap: 10px; }
+.header-nav { display: flex; align-items: center; gap: 4px; }
+.header-nav a {
+  color: rgba(255,255,255,0.6); text-decoration: none;
+  font-size: 0.72rem; padding: 3px 10px; border-radius: var(--radius-sm);
+  transition: all var(--transition); font-weight: 500;
+  border: 1px solid transparent;
+}
+.header-nav a:hover { color: #fff; background: rgba(255,255,255,0.08); }
+.header-nav a.active { color: #fff; background: rgba(255,255,255,0.12); border-color: rgba(255,255,255,0.2); }
 .header-stats { display: flex; align-items: center; gap: 12px; }
 .header-stats .stat-item {
   display: flex; align-items: center; gap: 5px;
@@ -1038,9 +1045,13 @@ body {
   <div class="app-brand">
     <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/><path d="M9 14l2 2 4-4"/></svg>
     <h1>Issue Review</h1>
-    <a href="/" class="nav-link" title="Back to Task Manager">← Tasks</a>
   </div>
   <div class="header-right">
+    <nav class="header-nav">
+      <a href="/">Tasks</a>
+      <a href="/issues/review" class="active">Review</a>
+      <a href="/logs">Logs</a>
+    </nav>
     <div class="header-stats" id="header-stats">
       <div class="stat-item"><span class="stat-num" id="stat-files">—</span> files</div>
       <div class="stat-divider"></div>

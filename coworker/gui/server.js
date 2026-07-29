@@ -1135,6 +1135,339 @@ app.get('/api/issue-review/feedback', (req, res) => {
   res.json(stats);
 });
 
+// ═══════════════════════════════════════════════════════════════════════════
+// Log Dashboard API
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ── Log source definitions ──────────────────────────────────────────────
+
+const LOG_SOURCES = [
+  { key: "1", label: "pulsar",  desc: "Root backend",         paths: ["logs/pulsar.log"] },
+  { key: "2", label: "server",  desc: "Server / framework",   paths: ["logs/pulsar.s.log"] },
+  { key: "3", label: "browser", desc: "Browser / CDP ops",    paths: ["logs/pulsar.bs.log"] },
+  { key: "4", label: "api",     desc: "Scrape API tasks",     paths: ["logs/pulsar.api.log"] },
+  { key: "5", label: "pages",   desc: "Page processing",      paths: ["logs/pulsar.pg.log"] },
+  { key: "6", label: "coworker","desc": "Coworker task runner",paths: ["__coworker__"] },
+  { key: "7", label: "build",   desc: "Spring Boot build",    paths: [".build/spring-boot.log"] },
+  { key: "8", label: "startup", desc: "Server startup log",   paths: ["__startup__"] },
+  { key: "9", label: "combined","desc": "pulsar + server + browser", paths: ["logs/pulsar.log", "logs/pulsar.s.log", "logs/pulsar.bs.log"] },
+  { key: "0", label: "git",     desc: "Git log",              paths: ["__git__"] },
+  { key: "r", label: "rws",     desc: "RWS test output",      paths: ["__rws__"] },
+];
+
+// ── Helpers ─────────────────────────────────────────────────────────────
+
+function resolveRepoRoot() {
+  let d = path.resolve(__dirname, '..', '..');
+  while (d !== path.dirname(d)) {
+    if (fs.existsSync(path.join(d, '.git'))) return d;
+    d = path.dirname(d);
+  }
+  return path.resolve(__dirname, '..', '..');
+}
+
+const REPO_ROOT = resolveRepoRoot();
+
+function findLatestLogFile(dir, globPattern, excludePattern) {
+  if (!fs.existsSync(dir)) return null;
+  const results = [];
+  function walk(d) {
+    if (!fs.existsSync(d)) return;
+    for (const entry of fs.readdirSync(d, { withFileTypes: true })) {
+      if (entry.name.startsWith('.')) continue;
+      const full = path.join(d, entry.name);
+      if (entry.isDirectory()) { walk(full); }
+      else {
+        // Simple glob: * matches any sequence
+        const regex = new RegExp('^' + globPattern.replace(/\*/g, '.*').replace(/\?/g, '.') + '$', 'i');
+        if (regex.test(entry.name)) {
+          if (excludePattern && new RegExp(excludePattern).test(entry.name)) continue;
+          try { results.push({ path: full, mtime: fs.statSync(full).mtimeMs }); }
+          catch(e) {}
+        }
+      }
+    }
+  }
+  walk(dir);
+  results.sort((a, b) => b.mtime - a.mtime);
+  return results.length > 0 ? results[0].path : null;
+}
+
+function resolveSourcePaths(source) {
+  const resolved = [];
+  const sentinel = source.paths[0] || '';
+
+  for (const p of source.paths) {
+    if (p === '__coworker__') {
+      const home = process.env.HOME || process.env.USERPROFILE || '.';
+      const cowDir = path.join(home, '.browser4-coworker', 'tasks', '300logs');
+      const latest = findLatestLogFile(cowDir, '*.log', '\\.std(out|err)$');
+      if (latest) resolved.push(latest);
+    } else if (p === '__startup__') {
+      const tempDir = process.env.BROWSER4_SERVER_LOG_DIR ||
+        path.join(process.env.HOME || process.env.USERPROFILE || '.', '.browser4', 'logs');
+      const latest = findLatestLogFile(tempDir, 'browser4-server-*.log', null);
+      if (latest) resolved.push(latest);
+    } else if (p === '__git__' || p === '__rws__') {
+      // Handled separately
+      resolved.push(p);
+    } else {
+      resolved.push(path.join(REPO_ROOT, p));
+    }
+  }
+  return resolved;
+}
+
+function labelFor(fp, source) {
+  if (source.paths.length <= 1) return '';
+  const name = path.basename(fp);
+  if (name.includes('pulsar.bs')) return 'browser';
+  if (name.includes('pulsar.s')) return 'server';
+  if (name.includes('pulsar')) return 'pulsar';
+  if (name.endsWith('.raw.md')) {
+    const stem = name.replace('.raw.md', '');
+    const parts = stem.split('-');
+    return parts.length > 1 ? parts.slice(1).join('-') : stem;
+  }
+  if (name.endsWith('-progress.json')) return name.replace('-progress.json', '');
+  if (name === 'test-session.json') return 'session';
+  return '';
+}
+
+function readTailLines(filePath, numLines) {
+  if (!fs.existsSync(filePath)) return { lines: [], size: 0 };
+  try {
+    const fd = fs.openSync(filePath, 'r');
+    const stat = fs.statSync(filePath);
+    const size = stat.size;
+    if (size === 0) { fs.closeSync(fd); return { lines: [], size: 0 }; }
+
+    // Estimate: average line ~200 bytes, read last numLines*200 bytes
+    const estBytes = numLines * 200;
+    const start = Math.max(0, size - estBytes);
+    const buf = Buffer.alloc(size - start);
+    fs.readSync(fd, buf, 0, buf.length, start);
+    fs.closeSync(fd);
+
+    let text = buf.toString('utf-8');
+    // If we started mid-line, drop the partial first line
+    if (start > 0) {
+      const nlIdx = text.indexOf('\n');
+      if (nlIdx >= 0) text = text.substring(nlIdx + 1);
+    }
+    const allLines = text.split(/\r?\n/);
+    // Take last numLines
+    const lines = allLines.slice(-numLines);
+    return { lines, size };
+  } catch(e) {
+    return { lines: [], size: 0 };
+  }
+}
+
+function readNewLines(filePath, lastPos) {
+  if (!fs.existsSync(filePath)) return { lines: [], size: lastPos };
+  try {
+    const stat = fs.statSync(filePath);
+    const currentSize = stat.size;
+    if (currentSize <= lastPos) return { lines: [], size: lastPos };
+
+    const fd = fs.openSync(filePath, 'r');
+    const buf = Buffer.alloc(currentSize - lastPos);
+    fs.readSync(fd, buf, 0, buf.length, lastPos);
+    fs.closeSync(fd);
+
+    const text = buf.toString('utf-8');
+    const lines = text.split(/\r?\n/);
+    // Remove trailing empty line from split
+    if (lines.length > 0 && lines[lines.length - 1] === '') lines.pop();
+    return { lines, size: currentSize };
+  } catch(e) {
+    return { lines: [], size: lastPos };
+  }
+}
+
+// ── RWS helpers ─────────────────────────────────────────────────────────
+
+function resolveRwsPaths() {
+  const resolved = [];
+  const targetDir = path.join(REPO_ROOT, 'target');
+  if (fs.existsSync(targetDir)) {
+    const rawFiles = [];
+    for (const entry of fs.readdirSync(targetDir, { withFileTypes: true })) {
+      if (entry.isFile() && entry.name.endsWith('.raw.md')) {
+        try {
+          rawFiles.push({ path: path.join(targetDir, entry.name), mtime: fs.statSync(path.join(targetDir, entry.name)).mtimeMs });
+        } catch(e) {}
+      }
+    }
+    rawFiles.sort((a, b) => b.mtime - a.mtime);
+    for (const rf of rawFiles.slice(0, 5)) resolved.push(rf.path);
+  }
+
+  const tsDir = path.join(REPO_ROOT, '.test-sessions');
+  if (fs.existsSync(tsDir)) {
+    // Progress files
+    const progFiles = [];
+    for (const entry of fs.readdirSync(tsDir, { withFileTypes: true })) {
+      if (entry.isFile() && entry.name.endsWith('-progress.json')) {
+        try {
+          progFiles.push({ path: path.join(tsDir, entry.name), mtime: fs.statSync(path.join(tsDir, entry.name)).mtimeMs });
+        } catch(e) {}
+      }
+    }
+    progFiles.sort((a, b) => b.mtime - a.mtime);
+    for (const pf of progFiles.slice(0, 5)) resolved.push(pf.path);
+
+    // Most recent test-session.json
+    const sessionFiles = [];
+    function findSessionFiles(d) {
+      if (!fs.existsSync(d)) return;
+      for (const entry of fs.readdirSync(d, { withFileTypes: true })) {
+        if (entry.name.startsWith('.')) continue;
+        const full = path.join(d, entry.name);
+        if (entry.isDirectory()) { findSessionFiles(full); }
+        else if (entry.name === 'test-session.json') {
+          try { sessionFiles.push({ path: full, mtime: fs.statSync(full).mtimeMs }); } catch(e) {}
+        }
+      }
+    }
+    findSessionFiles(tsDir);
+    sessionFiles.sort((a, b) => b.mtime - a.mtime);
+    if (sessionFiles.length > 0) resolved.push(sessionFiles[0].path);
+  }
+
+  return resolved;
+}
+
+// ── Routes ──────────────────────────────────────────────────────────────
+
+// GET /logs — serve the log dashboard SPA
+app.get('/logs', (_req, res) => {
+  res.sendFile(path.join(__dirname, 'frontend', 'watch-logs.html'));
+});
+
+// POST /api/logs/tail — read tail of log files for a source
+app.post('/api/logs/tail', (req, res) => {
+  const { source: sourceKey, lines } = req.body;
+  const numLines = parseInt(lines) || 200;
+
+  const source = LOG_SOURCES.find(s => s.label === sourceKey || s.key === sourceKey);
+  if (!source) return res.status(400).json({ error: `Unknown source: ${sourceKey}` });
+
+  const sentinel = source.paths[0] || '';
+
+  if (sentinel === '__rws__') {
+    const rwsPaths = resolveRwsPaths();
+    const allLines = [];
+    const positions = {};
+    for (const fp of rwsPaths) {
+      const label = labelFor(fp, source);
+      const result = readTailLines(fp, Math.floor(numLines / Math.max(1, rwsPaths.length)));
+      for (const line of result.lines) {
+        allLines.push(label ? `[${label}] ${line}` : line);
+      }
+      positions[fp] = result.size;
+    }
+    return res.json({ lines: allLines, positions, message: rwsPaths.length === 0 ? 'No RWS files found' : null });
+  }
+
+  const resolved = resolveSourcePaths(source);
+  const allLines = [];
+  const positions = {};
+
+  for (const fp of resolved) {
+    const label = labelFor(fp, source);
+    const result = readTailLines(fp, Math.floor(numLines / Math.max(1, resolved.length)));
+    for (const line of result.lines) {
+      allLines.push(label ? `[${label}] ${line}` : line);
+    }
+    positions[fp] = result.size;
+  }
+
+  if (allLines.length === 0 && resolved.length === 0) {
+    allLines.push('(no log files found)');
+  }
+
+  res.json({ lines: allLines, positions });
+});
+
+// POST /api/logs/poll — poll for new content since given positions
+app.post('/api/logs/poll', (req, res) => {
+  const { source: sourceKey, positions } = req.body;
+  const pos = positions || {};
+
+  const source = LOG_SOURCES.find(s => s.label === sourceKey || s.key === sourceKey);
+  if (!source) return res.status(400).json({ error: `Unknown source: ${sourceKey}` });
+
+  const sentinel = source.paths[0] || '';
+
+  if (sentinel === '__rws__') {
+    const rwsPaths = resolveRwsPaths();
+    const allLines = [];
+    const newPositions = {};
+    // Add newly discovered files
+    for (const fp of rwsPaths) {
+      const lastPos = pos[fp] || 0;
+      const label = labelFor(fp, source);
+      const result = readNewLines(fp, lastPos);
+      for (const line of result.lines) {
+        allLines.push(label ? `[${label}] ${line}` : line);
+      }
+      newPositions[fp] = result.size;
+    }
+    // Keep positions for files that still exist
+    for (const fp of Object.keys(pos)) {
+      if (!(fp in newPositions)) newPositions[fp] = pos[fp];
+    }
+    return res.json({ lines: allLines, positions: newPositions });
+  }
+
+  const resolved = resolveSourcePaths(source);
+  const allLines = [];
+  const newPositions = {};
+
+  for (const fp of resolved) {
+    const lastPos = pos[fp] || 0;
+    const label = labelFor(fp, source);
+    const result = readNewLines(fp, lastPos);
+    for (const line of result.lines) {
+      allLines.push(label ? `[${label}] ${line}` : line);
+    }
+    newPositions[fp] = result.size;
+  }
+
+  res.json({ lines: allLines, positions: newPositions });
+});
+
+// GET /api/logs/git — fetch git log output
+app.get('/api/logs/git', (req, res) => {
+  const n = Math.min(parseInt(req.query.lines) || 50, 100);
+  const detail = req.query.detail === '1';
+  const now = new Date();
+  const timeStr = now.toTimeString().slice(0, 5);
+
+  let args;
+  let header;
+  if (detail) {
+    args = ['git', '-C', REPO_ROOT, 'log',
+      '--format=commit %H%d%nAuthor: %an <%ae>%nDate:   %ad%n%n    %B%n',
+      '--date=local', '--all', `--max-count=${n}`];
+    header = `──── git log detail (all branches, last ${n}) — ${timeStr} ────`;
+  } else {
+    args = ['git', '-C', REPO_ROOT, 'log',
+      '--oneline', '--graph', '--all', '--decorate', `-${n}`];
+    header = `──── git log (all branches, last ${n}) — ${timeStr} ────`;
+  }
+
+  execFile(args[0], args.slice(1), { timeout: 15000, maxBuffer: 1024 * 1024 }, (err, stdout) => {
+    if (err) {
+      return res.json({ lines: [`(git log error: ${err.message})`], header: '──── git log ────' });
+    }
+    const lines = (stdout || '').split(/\r?\n/);
+    res.json({ lines, header });
+  });
+});
+
 // ── Start server ────────────────────────────────────────────────────────
 
 app.listen(PORT, HOST, () => {

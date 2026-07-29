@@ -92,6 +92,16 @@
             Arguments       = @('-Update', '-MaxTasks', '2')
         }
         @{
+            Name            = 'merge-prs'
+            Description     = 'Merge open PRs authored by the current user targeting the current branch, resolve conflicts, and run tests. Runs hourly.'
+            Enabled         = $true
+            IntervalSeconds = 3600
+            WindowStyle     = 'Hidden'
+            PendingPaths    = @()
+            ScriptPath      = 'coworker\scripts\workers\merge-prs.ps1'
+            Arguments       = @()
+        }
+        @{
             Name            = 'review-recent-issues'
             Description     = 'Find .issues.md files from the last 3 days in draft/ and review/, move draft files to review/, and run inline AI review on each.'
             Enabled         = $true
