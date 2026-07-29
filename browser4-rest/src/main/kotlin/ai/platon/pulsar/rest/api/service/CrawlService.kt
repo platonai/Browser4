@@ -184,11 +184,18 @@ class CrawlService(
 
         val job = crawlScope.launch {
             try {
-                // Mark started when work begins
-                val existing = taskStore.getIfPresent(taskId)
-                if (existing != null && existing.startedTime == null) {
-                    existing.startedTime = java.time.Instant.now()
-                }
+                // Mark as "PROCESSING" as soon as the worker picks up the task.
+                // Without this, the CLI sees "CREATED" for the entire duration
+                // of the crawl (which can be 80-100s for many URLs), making it
+                // appear as if nothing is happening.
+                val processing = CrawlResponse(
+                    taskId = taskId,
+                    status = "PROCESSING",
+                    pagesFound = 0,
+                    startedTime = java.time.Instant.now()
+                )
+                taskStore.put(taskId, processing)
+                onStatusChanged(processing)
                 val result = withTimeout(CRAWL_TASK_TIMEOUT_MS) {
                     withContext(Dispatchers.IO) {
                     val results = mutableListOf<CrawlPageResult>()
@@ -502,7 +509,11 @@ class CrawlService(
         val session = AgenticContexts.createSession()
         val results = Collections.synchronizedList(mutableListOf<CrawlPageResult>())
         try {
-            val options = parseOptions(session, request.args)
+            // Always add -refresh so the portal page is loaded with fresh content.
+            // Without this, cached empty/malformed pages cause link discovery to
+            // return 0 elements even when the page has many anchors in the live DOM.
+            val effectiveArgs = buildEffectiveArgs(request.args)
+            val options = parseOptions(session, effectiveArgs)
             if (options.outLinkSelector.isNullOrBlank()) {
                 // If X-SQL extraction was requested but no out-link selector is configured,
                 // auto-switch to depth=0 behavior (bulk fetch + extraction).  This prevents
@@ -523,17 +534,42 @@ class CrawlService(
             val outLinks = extractOutLinks(session, request.url, options)
 
             if (outLinks.isEmpty()) {
-                val message = "No out-links found on portal page. " +
-                    "The page loaded but the CSS selector '${options.outLinkSelector}' " +
-                    "matched zero elements. Verify the selector or check that the " +
-                    "page content loaded correctly."
-                logger.info("Crawl {}: {}", taskId, message)
-                // Write diagnostic to taskStore so the CLI can display it
+                // Build a diagnostic that checks document health before blaming the selector.
+                // extractOutLinks already logged document.select("a").size and html.length;
+                // produce a user-facing diagnostic that distinguishes "page was empty" from
+                // "page had content but selector didn't match".
+                val diagnostic = try {
+                    val normOptions = session.normalize(options)
+                    val document = session.loadDocument(request.url, normOptions)
+                    val allAnchors = document.select("a").size
+                    val htmlLength = document.html.length
+                    val totalElements = document.select("*").size
+                    when {
+                        htmlLength < 200 && allAnchors == 0 ->
+                            "Portal page returned near-empty content (${htmlLength} bytes, " +
+                            "$totalElements total elements, 0 anchors). " +
+                            "The page may not have loaded correctly. Try --refresh, " +
+                            "verify the URL is reachable, or check network connectivity."
+                        allAnchors > 0 ->
+                            "The page has $allAnchors anchors and ${htmlLength}B of HTML, " +
+                            "but the CSS selector '${options.outLinkSelector}' matched zero " +
+                            "elements. Try a broader selector (e.g., 'a') or use " +
+                            "'htmlsnapshot inspect' to discover valid selectors."
+                        else ->
+                            "No out-links found. The page has 0 anchors and ${htmlLength}B " +
+                            "of HTML (${totalElements} elements). The page may have loaded " +
+                            "but contains no links — verify the URL."
+                    }
+                } catch (e: Exception) {
+                    "Failed to load portal page: ${e.message}. " +
+                    "Verify the URL is accessible and retry."
+                }
+                logger.info("Crawl {}: {}", taskId, diagnostic)
                 taskStore.put(taskId, CrawlResponse(
                     taskId = taskId,
                     status = ResourceStatus.getStatusText(ResourceStatus.SC_OK),
                     pagesFound = 0,
-                    diagnostic = message
+                    diagnostic = diagnostic
                 ))
                 return emptyList()
             }
@@ -547,9 +583,11 @@ class CrawlService(
             val pendingCount = AtomicInteger(outLinks.size)
             val allCompleted = CompletableDeferred<Unit>()
 
-            // Submit each out-link as a ParsableHyperlink so we can collect results
+            // Submit each out-link as a ParsableHyperlink so we can collect results.
+            // Include -refresh so each out-link is fetched fresh — without it, internal
+            // HTTP caches or stale protocol state can cause 0-byte responses.
             outLinks.forEach { linkUrl ->
-                val hyperlink = ParsableHyperlink("$linkUrl -parse") { _page: WebPage, _document: FeaturedDocument ->
+                val hyperlink = ParsableHyperlink("$linkUrl -parse -refresh") { _page: WebPage, _document: FeaturedDocument ->
                     val extractionResult = if (request.sql != null) {
                         executeSqlQuery(session, linkUrl, request.sql)
                     } else Pair(null, null)
@@ -610,7 +648,8 @@ class CrawlService(
         val session = AgenticContexts.createSession()
         val results = Collections.synchronizedList(mutableListOf<CrawlPageResult>())
         try {
-            val options = parseOptions(session, request.args)
+            val effectiveArgs = buildEffectiveArgs(request.args)
+            val options = parseOptions(session, effectiveArgs)
             val maxDepth = request.depth
             val visited = ConcurrentHashMap.newKeySet<String>()
 
@@ -727,6 +766,20 @@ class CrawlService(
     // Helpers
     // ------------------------------------------------------------------
 
+    /**
+     * Ensure -refresh is present in the args string so portal/link pages are
+     * always loaded with fresh content.  Stale internal HTTP caches are the
+     * root cause of both "0 elements for any CSS selector" (Issue 1) and
+     * "0 byte fetch" (Issue 2).
+     */
+    private fun buildEffectiveArgs(rawArgs: String): String {
+        return when {
+            rawArgs.isBlank() -> "-refresh"
+            rawArgs.contains("-refresh") -> rawArgs
+            else -> "$rawArgs -refresh"
+        }
+    }
+
     private fun parseOptions(session: PulsarSession, args: String): LoadOptions {
         return if (args.isBlank()) {
             session.options()
@@ -748,6 +801,22 @@ class CrawlService(
         sql: String
     ): Pair<List<Map<String, Any?>>?, String?> {
         return try {
+            // Pre-load the page into the session's WebDB so load_and_select
+            // UDFs find the page in the local cache.  Without this the X-SQL
+            // engine may silently return 0 rows even when the page was loaded
+            // earlier in a different session lifecycle stage.
+            try {
+                runBlocking {
+                    withTimeout(10_000L) {
+                        session.load(pageUrl, "-refresh")
+                    }
+                }
+                logger.debug("Crawl X-SQL: pre-loaded '{}' into session cache", pageUrl)
+            } catch (preloadError: Exception) {
+                logger.debug("Crawl X-SQL: pre-load of '{}' not needed or failed: {}",
+                    pageUrl, preloadError.message)
+            }
+
             val processedSql = SQLTemplate(sql).createSQL(pageUrl)
             logger.info("Crawl X-SQL: executing query on '{}': {}", pageUrl, processedSql.take(300))
 

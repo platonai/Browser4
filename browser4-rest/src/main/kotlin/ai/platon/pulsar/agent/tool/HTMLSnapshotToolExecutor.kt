@@ -129,7 +129,7 @@ class HTMLSnapshotToolExecutor(
         return when (functionName) {
             "capture" -> capture(args)
             "scrape" -> scrape(args)
-            "scrape_all" -> scrapeAll(args)
+            "scrape_all", "scrapeAll" -> scrapeAll(args)
             "query" -> query(args)
             "export" -> export(args)
             "summary" -> summary(args)

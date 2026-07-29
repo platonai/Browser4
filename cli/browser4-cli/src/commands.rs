@@ -2637,7 +2637,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "sql", description: "X-SQL query to extract structured data from each crawled page. Use @url as the page URL placeholder. Prefix with @ to read from file (e.g. --sql @query.sql)", is_bool: false, short: None },
                 OptionDef { name: "sql-stdin", description: "Read X-SQL query from stdin (avoids shell quoting issues on Windows)", is_bool: true, short: None },
                 OptionDef { name: "sql-base64", description: "Base64-encoded X-SQL query (avoid shell quoting issues on Windows)", is_bool: false, short: None },
-                OptionDef { name: "format", description: "Output format for extracted data: json, csv, or table (default: table)", is_bool: false, short: None },
+                OptionDef { name: "format", description: "Output format for X-SQL extracted data (requires --sql): json, csv, or table (default: table). Has no effect without --sql.", is_bool: false, short: None },
                 OptionDef { name: "output", description: "Write results to a file instead of stdout", is_bool: false, short: Some("o") },
                 OptionDef { name: "out-link-selector", description: "CSS selector to extract links from each page", is_bool: false, short: Some("ol") },
                 OptionDef { name: "out-link-pattern", description: "Regex pattern to filter extracted links (default: .+)", is_bool: false, short: Some("olp") },

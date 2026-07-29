@@ -10113,6 +10113,17 @@ async fn handle_crawl(
 
     validate_crawl_format(&format)?;
 
+    // Warn when --format csv|json is used without --sql — the format flag only
+    // controls how X-SQL result sets are rendered; without --sql there is no
+    // structured result set to format.
+    if !has_sql && (format == "csv" || format == "json") {
+        cli_println!(
+            "Warning: --format {} has no effect without --sql. \
+             Use --sql to produce structured output, or omit --format for plain-text output.",
+            format.to_uppercase()
+        );
+    }
+
     let output_file = tool_params
         .get("output")
         .and_then(|v| v.as_str());
@@ -10390,18 +10401,46 @@ async fn handle_crawl(
                             let page_title = page["title"].as_str().unwrap_or("");
                             let page_depth = page["depth"].as_i64().unwrap_or(0);
                             let extraction_error = page["extractionError"].as_str();
-                            page_lines.push(format!(
-                                "  depth={} | {} | {}",
-                                page_depth, page_url, page_title
-                            ));
+                            let content_len = page["contentLength"].as_i64().unwrap_or(-1);
+                            // Show fetch errors inline even in non-verbose mode so the
+                            // user isn't misled by "Crawl completed" for failed pages.
+                            if let Some(err) = extraction_error {
+                                page_lines.push(format!(
+                                    "  depth={} | {} | ⚠ {}",
+                                    page_depth, page_url, err
+                                ));
+                            } else if content_len == 0 {
+                                page_lines.push(format!(
+                                    "  depth={} | {} | ⚠ fetch returned 0 bytes",
+                                    page_depth, page_url
+                                ));
+                            } else {
+                                page_lines.push(format!(
+                                    "  depth={} | {} | {}",
+                                    page_depth, page_url, page_title
+                                ));
+                            }
                             if verbose {
-                                if let Some(err) = extraction_error {
-                                    page_lines.push(format!("    ⚠ X-SQL extraction error: {}", err));
-                                } else if has_sql && page["extracted"].as_array().map_or(false, |a| a.is_empty()) {
+                                if extraction_error.is_none() && has_sql && page["extracted"].as_array().map_or(false, |a| a.is_empty()) {
                                     page_lines.push("    ⚠ X-SQL extraction returned 0 rows".to_string());
                                 }
                             }
                         }
+                    }
+                    // Show a summary when pages had errors so the user doesn't see
+                    // "Crawl completed. N pages found." and assume all succeeded.
+                    let error_count = pages.map(|p| {
+                        p.iter().filter(|pg| {
+                            pg["extractionError"].as_str().is_some() ||
+                            pg["contentLength"].as_i64().unwrap_or(-1) == 0
+                        }).count()
+                    }).unwrap_or(0);
+                    if error_count > 0 {
+                        page_lines.push(format!(
+                            "\n⚠ {} of {} page(s) had fetch or extraction errors. \
+                             Use --verbose for per-page diagnostics.",
+                            error_count, page_count
+                        ));
                     }
                     let page_output = page_lines.join("\n");
                     let page_summary = format!("Crawl completed. {} pages found.", page_count);
