@@ -607,11 +607,25 @@ function Invoke-RealWorldScenarioTests([string[]]$additionalArgs) {
             $modeLabel = "real-world scenarios: $($scenarioNames -join ', ')"
             $passThroughArgs += $scenarioNames
         }
-        elseif (($arg -in 'dir', 'directory', '--dir', '--directory') -and (($i + 1) -lt $additionalArgs.Count)) {
+        elseif ($arg -in 'dir', 'directory', '--dir', '--directory') {
             $mode = 'dir'
-            $taskDir = $additionalArgs[$i + 1]
-            $modeLabel = "real-world scenario dir: $taskDir"
-            $i += 2
+            if (($i + 1) -lt $additionalArgs.Count -and $additionalArgs[$i + 1] -in '--list', '-List') {
+                # List available directories, don't run
+                $taskDir = '--list'
+                $modeLabel = 'real-world scenario dir (list)'
+                $i += 2
+            }
+            elseif (($i + 1) -lt $additionalArgs.Count -and -not $additionalArgs[$i + 1].StartsWith('-')) {
+                $taskDir = $additionalArgs[$i + 1]
+                $modeLabel = "real-world scenario dir: $taskDir"
+                $i += 2
+            }
+            else {
+                # No directory path given — list directories
+                $taskDir = '--list'
+                $modeLabel = 'real-world scenario dir (list)'
+                $i++
+            }
         }
         elseif ($arg -in 'task', '--task' -and ($i + 1) -lt $additionalArgs.Count) {
             $mode = 'task'
@@ -663,6 +677,7 @@ function Invoke-RealWorldScenarioTests([string[]]$additionalArgs) {
         Write-Host 'Modes (required, pick one):'
         Write-Host '  sc, scenarios <names...>  Run named agent-scenario tasks via run-tests.ps1'
         Write-Host '  dir, directory <path>     Run all .md task files in a directory'
+        Write-Host '  dir, directory --list     List available scenario directories'
         Write-Host '  task <file>               Run a single task file via run-task.ps1'
         Write-Host ''
         Write-Host 'Options:'
@@ -681,11 +696,30 @@ function Invoke-RealWorldScenarioTests([string[]]$additionalArgs) {
         Write-Host '  test.ps1 rws dir tasks/real-world/generic # Run all .md tasks in a directory'
         Write-Host '  test.ps1 rws task tasks/amazon.md         # Run a single task file'
         Write-Host '  test.ps1 rws sc amazon --production       # Run against installed CLI'
+        Write-Host '  test.ps1 rws dir --list                    # List available scenario directories'
         exit 0
     }
 
     # -- Resolve dir path relative to repo root ------------------------------
     if ($mode -eq 'dir' -and $taskDir) {
+        if ($taskDir -eq '--list') {
+            # List available subdirectories
+            $tasksRoot = Join-Path $repoRoot 'browser4-tests' 'real-world-scenarios' 'tasks'
+            Write-Host ''
+            Write-Host 'Available scenario directories:' -ForegroundColor Cyan
+            $dirs = Get-ChildItem -Path $tasksRoot -Directory -Recurse | Sort-Object FullName
+            foreach ($d in $dirs) {
+                $rel = [System.IO.Path]::GetRelativePath($tasksRoot, $d.FullName)
+                Write-Host "  $rel"
+            }
+            Write-Host ''
+            Write-Host 'Usage: test.ps1 rws dir <relative-or-absolute-path>' -ForegroundColor Cyan
+            Write-Host '  test.ps1 rws dir tasks/real-world/generic' -ForegroundColor Cyan
+            Write-Host '  test.ps1 rws dir tasks/real-world/browser4' -ForegroundColor Cyan
+            Write-Host '  test.ps1 rws dir tasks/mock-site' -ForegroundColor Cyan
+            Write-Host ''
+            exit 0
+        }
         if (-not [System.IO.Path]::IsPathRooted($taskDir)) {
             $taskDir = Join-Path $repoRoot $taskDir
         }

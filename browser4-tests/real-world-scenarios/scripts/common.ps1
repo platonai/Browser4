@@ -146,8 +146,9 @@ function Resolve-TaskNames {
     .DESCRIPTION
         Each requested name is matched against the discovered list. Names
         without the .md extension are automatically appended with .md for
-        matching. Unmatched names produce a warning and are excluded from
-        the result.
+        matching. Names containing wildcards (*, ?) are matched using
+        PowerShell's -like operator against discovered task base names.
+        Unmatched names produce a warning and are excluded from the result.
     .PARAMETER Requested
         Array of task names from the user (with or without .md extension).
     .PARAMETER Discovered
@@ -169,6 +170,16 @@ function Resolve-TaskNames {
             $mdName
         } elseif ($name -in $Discovered) {
             $name
+        } elseif ($name.Contains('*') -or $name.Contains('?')) {
+            $matched = $Discovered | Where-Object {
+                $discBase = [System.IO.Path]::GetFileNameWithoutExtension($_)
+                $discBase -like $name -or $_ -like $name
+            }
+            if ($matched) {
+                $matched
+            } else {
+                Write-Host "WARNING: '$name' does not match any discovered tasks." -ForegroundColor Yellow
+            }
         } else {
             Write-Host "WARNING: '$name' not found among discovered tasks, skipping." -ForegroundColor Yellow
         }
