@@ -36,7 +36,7 @@
 
     <groupId>ai.platon.pulsar</groupId>
     <artifactId>browser4-pdk</artifactId>
-    <version>4.12.1-SNAPSHOT</version>
+    <version>4.12.2-SNAPSHOT</version>
     <packaging>pom</packaging>
 
     <name>Browser4 Plugin Development Kit</name>
