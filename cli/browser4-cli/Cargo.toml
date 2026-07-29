@@ -23,7 +23,7 @@ harness = false
 [dependencies]
 reqwest = { version = "0.13.2", default-features = false, features = ["blocking", "json", "rustls", "multipart"] }
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+serde_json = { version = "1", features = ["preserve_order"] }
 tokio = { version = "1.13.1", features = ["macros", "rt", "rt-multi-thread", "signal", "time"] }
 dirs = "6.0.0"
 base64 = "0.22"

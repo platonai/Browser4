@@ -100,9 +100,9 @@ browser4-cli swarm query --sql @query.sql --seed-file ./urls.txt --refresh
 browser4-cli swarm query --sql @query.sql --seed-file ./urls.txt --refresh --wait
 ```
 
-Core X-SQL pattern: `SELECT <fn>(dom, <selector>) FROM load_and_select(@url, '<scope>');`
+Core X-SQL pattern: `SELECT <fn>(dom, <selector>) FROM DOM_LOAD_AND_SELECT(@url, '<scope>');`
 
-Common extraction functions: `dom_base_uri`, `dom_first_text`, `dom_all_texts`, `dom_first_href`, `dom_all_hrefs`, `dom_first_src`, `dom_first_slim_html`, `dom_all_slim_html`, `dom_first_attr`. Full reference: [x-sql.md](x-sql.md).
+Common extraction functions: `DOM_BASE_URI`, `DOM_FIRST_TEXT`, `DOM_ALL_TEXTS`, `DOM_FIRST_HREF`, `DOM_ALL_HREFS`, `DOM_FIRST_SRC`, `DOM_FIRST_SLIM_HTML`, `DOM_ALL_SLIM_HTML`, `DOM_FIRST_ATTR`. Full reference: [x-sql.md](x-sql.md).
 
 ### 4. Poll Status & Fetch Results
 

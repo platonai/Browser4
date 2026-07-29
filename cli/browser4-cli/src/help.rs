@@ -1066,7 +1066,11 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(
-            "  - --out-link-selector (-ol) specifies a CSS selector to extract links (required for depth >= 1)."
+            "  - --out-link-selector (-ol) specifies a CSS selector to extract links. Required for link discovery;"
+                .to_string(),
+        );
+        lines.push(
+            "    without it, only seed URLs are processed regardless of depth."
                 .to_string(),
         );
         lines.push(

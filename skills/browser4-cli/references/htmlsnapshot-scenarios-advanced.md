@@ -153,8 +153,8 @@ browser4-cli htmlsnapshot summary
 
 # 2. Now write targeted X-SQL knowing the structure
 browser4-cli htmlsnapshot query --sql "
-  SELECT dom_first_text(dom, 'h2') AS category, dom_first_text(dom, 'li') AS item
-  FROM load_and_select(@url, 'ul.product-list')
+  SELECT DOM_FIRST_TEXT(dom, 'h2') AS category, DOM_FIRST_TEXT(dom, 'li') AS item
+  FROM DOM_LOAD_AND_SELECT(@url, 'ul.product-list')
 "
 ```
 
@@ -241,10 +241,10 @@ browser4-cli htmlsnapshot get all text ".product_pod p.price_color"
 # Or run a structured X-SQL query with the discovered selectors
 browser4-cli htmlsnapshot query --sql "
   SELECT
-    dom_first_text(dom, 'h3 a') AS title,
-    dom_first_text(dom, 'p.price_color') AS price,
-    dom_first_text(dom, 'p.instock.availability') AS availability
-  FROM load_and_select(@url, '.product_pod')
+    DOM_FIRST_TEXT(dom, 'h3 a') AS title,
+    DOM_FIRST_TEXT(dom, 'p.price_color') AS price,
+    DOM_FIRST_TEXT(dom, 'p.instock.availability') AS availability
+  FROM DOM_LOAD_AND_SELECT(@url, '.product_pod')
 "
 ```
 
@@ -293,9 +293,9 @@ browser4-cli htmlsnapshot get all text "$CONTAINER p.price_color" --limit 5
 # 4. Once validated, run full extraction with htmlsnapshot query
 browser4-cli htmlsnapshot query --sql "
   SELECT
-    dom_first_text(dom, 'h3 a') AS title,
-    dom_first_text(dom, 'p.price_color') AS price
-  FROM load_and_select(@url, '$CONTAINER')
+    DOM_FIRST_TEXT(dom, 'h3 a') AS title,
+    DOM_FIRST_TEXT(dom, 'p.price_color') AS price
+  FROM DOM_LOAD_AND_SELECT(@url, '$CONTAINER')
 "
 ```
 

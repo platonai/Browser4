@@ -42,8 +42,8 @@
         }
       ],
       "review": {
-        "decision": null,
-        "notes": ""
+        "decision": "ACCEPT_WITH_IMPROVEMENTS",
+        "notes": "Root cause corrected: NOT a Kotlin/Java TreeMap — server-side ResultSetUtils.kt correctly uses LinkedHashMap. The actual culprit is serde_json on the Rust CLI side, which deserializes JSON objects into BTreeMap (alphabetically sorted). Confirmed by existing test comment at main.rs:20336: 'serde_json uses BTreeMap ordering → alphabetical keys'. Recommended fix: enable serde_json's 'preserve_order' feature in Cargo.toml, which switches from BTreeMap to IndexMap — one-line change, no code changes needed in format_csv/format_table."
       }
     },
     {
@@ -74,8 +74,8 @@
         }
       ],
       "review": {
-        "decision": null,
-        "notes": ""
+        "decision": "ACCEPT",
+        "notes": "Scope is wider than reported: 14+ files affected. x-sql.md reference files use UPPERCASE, scenario/cookbook files use lowercase, htmlsnapshot.md is internally mixed. Standardizing on UPPERCASE for SQL function references (already done in x-sql.md) and lowercase for examples would be pragmatic. Adding a case-insensitivity note to crawl.md resolves the immediate confusion."
       }
     },
     {
@@ -106,8 +106,8 @@
         }
       ],
       "review": {
-        "decision": null,
-        "notes": ""
+        "decision": "ACCEPT",
+        "notes": "Confirmed in 3 locations: help.rs:1068 (Notes prose), crawl.md:26 (doc note), but absent from commands.rs:2642 (option definition). The silent-degrade behavior is correct UX — many users use crawl for SQL extraction without link discovery. Three locations need text updates. Adding an informational note when depth>=1 but no selector would also help."
       }
     }
   ]

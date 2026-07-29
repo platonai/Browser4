@@ -971,7 +971,7 @@ mod tests {
         });
         assert_eq!(
             extract_mcp_text_payload(&payload).as_deref(),
-            Some("{\"results\":[],\"sessionId\":\"s-1\"}")
+            Some("{\"sessionId\":\"s-1\",\"results\":[]}")
         );
     }
 

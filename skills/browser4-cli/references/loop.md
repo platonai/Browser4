@@ -39,10 +39,10 @@ The task string is submitted to the Browser4 server via the `command_run` MCP to
 The server auto-detects the command type:
 
 - **Natural language**: e.g., `"load https://example.com and extract the page title"`
-- **X-SQL**: e.g., `"select dom.title from load_and_select('https://example.com')"`
+- **X-SQL**: e.g., `"select dom.title from DOM_LOAD_AND_SELECT('https://example.com')"`
 
 ```bash
-browser4-cli loop "select dom.title, dom.url from load_and_select('https://news.ycombinator.com')" --count 5
+browser4-cli loop "select dom.title, dom.url from DOM_LOAD_AND_SELECT('https://news.ycombinator.com')" --count 5
 ```
 
 ### Shell (`--shell`)

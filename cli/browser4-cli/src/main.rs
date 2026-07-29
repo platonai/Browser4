@@ -10124,6 +10124,24 @@ async fn handle_crawl(
         );
     }
 
+    // Inform when depth >= 1 but no --out-link-selector: link discovery is skipped
+    {
+        let depth_raw = tool_params
+            .get("depth")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(1);
+        let has_out_link_selector = tool_params
+            .get("out-link-selector")
+            .and_then(|v| v.as_str())
+            .map(|s| !s.is_empty())
+            .unwrap_or(false);
+        if depth_raw >= 1 && !has_out_link_selector {
+            cli_println!(
+                "Note: Link discovery disabled (no --out-link-selector). Processing seed URLs only."
+            );
+        }
+    }
+
     let output_file = tool_params
         .get("output")
         .and_then(|v| v.as_str());
@@ -20333,8 +20351,8 @@ mod tests {
         let csv = format_csv(&rows);
         let lines: Vec<&str> = csv.trim().lines().collect();
         assert_eq!(lines.len(), 3, "expected header + 2 data rows, got:\n{csv}");
-        // serde_json uses BTreeMap ordering → alphabetical keys: "title", "url"
-        assert_eq!(lines[0], "title,url");
+        // serde_json preserve_order → insertion-order keys: "url", "title"
+        assert_eq!(lines[0], "url,title");
         assert!(lines[1].contains("https://a.com"));
         assert!(lines[1].contains("Page A"));
         assert!(lines[2].contains("https://b.com"));
@@ -20343,7 +20361,7 @@ mod tests {
 
     #[test]
     fn format_csv_columns_ordered_by_first_appearance() {
-        // serde_json uses BTreeMap ordering within each object (sorted keys).
+        // preserve_order feature uses IndexMap → insertion-order keys within each object.
         // Columns appear in the order they are first encountered across rows.
         let rows = vec![
             json!({"url": "https://c.com", "depth": "2"}),
@@ -20352,12 +20370,12 @@ mod tests {
         let csv = format_csv(&rows);
         let header = csv.lines().next().unwrap();
         let cols: Vec<&str> = header.split(',').collect();
-        // BTreeMap order: Row 0 has "depth" then "url" (d < u).
-        // Row 1 adds "title" (new), "url" already seen.
-        // Result: depth, url, title
+        // Row 0 insertion order: url, depth.
+        // Row 1 insertion order: title, url (url already seen).
+        // Result: url, depth, title
         assert_eq!(cols.len(), 3, "expected 3 columns, got: {cols:?}");
-        assert_eq!(cols[0], "depth");
-        assert_eq!(cols[1], "url");
+        assert_eq!(cols[0], "url");
+        assert_eq!(cols[1], "depth");
         assert_eq!(cols[2], "title");
     }
 
