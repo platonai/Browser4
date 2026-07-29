@@ -795,17 +795,24 @@ async function cmdBump(args) {
 /** Get the latest GitHub release tag, falling back to git tags. */
 function getLatestReleaseTag() {
   try {
-    // Try gh CLI first (gives us actual GitHub Releases)
-    const raw = execSync("gh release list --limit 1 --json tagName,name --jq '.[0].tagName'", {
+    // Try gh CLI first (gives us actual GitHub Releases).
+    // Parse JSON in Node rather than using --jq, so the command works on
+    // Windows (cmd.exe doesn't handle single quotes in --jq '…').
+    const raw = execSync("gh release list --limit 1 --json tagName", {
       cwd: REPO_ROOT, stdio: ["ignore", "pipe", "ignore"],
       timeout: 10_000,
     }).toString().trim();
-    if (raw) return raw;
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed.length > 0 && parsed[0].tagName) {
+        return parsed[0].tagName;
+      }
+    }
   } catch { /* fall through */ }
 
-  // Fallback: latest semver-sorted tag
+  // Fallback: latest stable semver tag (exclude -rc.N, -ci.N, etc.)
   try {
-    const tag = execSync("git tag --sort=-v:refname | grep -E '^v?[0-9]+\\.[0-9]+\\.[0-9]+' | head -1", {
+    const tag = execSync("git tag --sort=-v:refname | grep -E '^v?[0-9]+\\.[0-9]+\\.[0-9]+$' | head -1", {
       cwd: REPO_ROOT, stdio: ["ignore", "pipe", "ignore"],
     }).toString().trim();
     if (tag) return tag;
@@ -1161,6 +1168,116 @@ function cmdCheck() {
 }
 
 // ---------------------------------------------------------------------------
+// Subcommand: prerelease-check (used by trigger-release.ps1)
+// ---------------------------------------------------------------------------
+
+function cmdPrereleaseCheck() {
+  const result = {
+    consistent: true,
+    isNextPatch: false,
+    lastRelease: null,
+    currentVersion: null,
+    expectedNextPatch: null,
+    issues: [],
+  };
+
+  // ── Phase 1: File-level version consistency ─────────────────────────
+  const versionFileVersion = readBackendVersion();
+  const cliVersion = stripSnapshot(versionFileVersion);
+  result.currentVersion = cliVersion;
+
+  // Check pom.xml version
+  const pomPath = join(REPO_ROOT, "pom.xml");
+  if (existsSync(pomPath)) {
+    let pomContent = readFileSync(pomPath, "utf-8");
+    const pomWithoutParent = pomContent.replace(/<parent>[\s\S]*?<\/parent>/m, "");
+    const pomVersionMatch = pomWithoutParent.match(/<version>([^<]+)<\/version>/);
+    if (pomVersionMatch) {
+      const pomVersion = pomVersionMatch[1];
+      if (pomVersion !== versionFileVersion) {
+        result.consistent = false;
+        result.issues.push(`pom.xml: "${pomVersion}" (expected "${versionFileVersion}")`);
+      }
+    } else {
+      result.consistent = false;
+      result.issues.push("pom.xml: cannot parse <version>");
+    }
+  } else {
+    result.consistent = false;
+    result.issues.push("pom.xml: file not found");
+  }
+
+  // Check Cargo.toml
+  const cargoPath = join(REPO_ROOT, "cli", "browser4-cli", "Cargo.toml");
+  if (existsSync(cargoPath)) {
+    const cargoContent = readFileSync(cargoPath, "utf-8");
+    const cargoMatch = cargoContent.match(/\[package\][\s\S]*?version\s*=\s*"([^"]+)"/);
+    if (cargoMatch) {
+      const cargoVersion = cargoMatch[1];
+      if (cargoVersion !== cliVersion) {
+        result.consistent = false;
+        result.issues.push(`Cargo.toml: "${cargoVersion}" (expected "${cliVersion}")`);
+      }
+    } else {
+      result.consistent = false;
+      result.issues.push("Cargo.toml: cannot parse package.version");
+    }
+  }
+
+  // Check package.json
+  const packageJsonPath = join(REPO_ROOT, "cli", "package.json");
+  if (existsSync(packageJsonPath)) {
+    try {
+      const pj = JSON.parse(readFileSync(packageJsonPath, "utf-8"));
+      if (pj.version !== cliVersion) {
+        result.consistent = false;
+        result.issues.push(`package.json: "${pj.version}" (expected "${cliVersion}")`);
+      }
+    } catch {
+      result.consistent = false;
+      result.issues.push("package.json: cannot parse version");
+    }
+  }
+
+  // ── Phase 2: Next-patch check against last release ──────────────────
+  const lastReleaseTag = getLatestReleaseTag();
+  result.lastRelease = lastReleaseTag;
+
+  if (lastReleaseTag) {
+    // Strip 'v' prefix and any prerelease suffix to get the base semver
+    const lastBase = lastReleaseTag.replace(/^v/, "").replace(/-.*$/, "");
+    const bumpResult = checkVersionBump(lastBase, cliVersion);
+
+    // "already published" note means the version hasn't been bumped at all
+    result.isNextPatch = bumpResult.ok && !bumpResult.note;
+
+    if (!result.isNextPatch) {
+      if (bumpResult.reason) {
+        result.issues.push(bumpResult.reason);
+      } else if (bumpResult.note) {
+        result.issues.push(`Version ${cliVersion} is already published as ${lastReleaseTag}`);
+      }
+
+      // Compute expected next patch from last release
+      const lastParsed = parseSemver(lastBase);
+      if (lastParsed) {
+        result.expectedNextPatch = `${lastParsed.major}.${lastParsed.minor}.${lastParsed.patch + 1}`;
+      }
+    }
+  } else {
+    // No previous release found — first release is always OK
+    result.isNextPatch = true;
+  }
+
+  // ── Output ───────────────────────────────────────────────────────────
+  console.log(JSON.stringify(result, null, 2));
+
+  if (!result.consistent || !result.isNextPatch) {
+    process.exit(1);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Main: parse subcommand
 // ---------------------------------------------------------------------------
 
@@ -1194,6 +1311,7 @@ function printUsage() {
   console.log("");
   console.log("  Cross-cutting");
   console.log("    check             Check version consistency across all files");
+  console.log("    prerelease-check  Check consistency + next-patch guard (JSON output)");
 }
 
 const args = process.argv.slice(2);
@@ -1229,6 +1347,9 @@ switch (command) {
     break;
   case "check":
     cmdCheck();
+    break;
+  case "prerelease-check":
+    cmdPrereleaseCheck();
     break;
   default:
     console.error(`Unknown command: ${command}`);
