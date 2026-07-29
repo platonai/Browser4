@@ -29,6 +29,7 @@ Then open **http://127.0.0.1:8090**.
 |-------|------|-------------|
 | `GET /` | `frontend/index.html` | Main Coworker Task Manager — pipeline dashboard with stage tabs and file tree |
 | `GET /issues/review` | `frontend/issue-review.html` | Issue Review SPA — review `.issues.md` files from the `issues/review` queue |
+| `GET /logs` | `frontend/watch-logs.html` | Log Dashboard — real-time log viewer for all Browser4 log sources |
 
 ## API
 
@@ -76,9 +77,10 @@ When the "Auto-approve" checkbox is checked in the Issue Review SPA, the mark-do
 ├── package.json       # express + cors only
 ├── server.js          # All routes (~680 LOC)
 ├── frontend/
-│   ├── index.html     # Task Manager SPA
-│   ├── issue-review.html  # Issue Review SPA
-│   └── issue-model.js     # Shared issue model library
+│   ├── index.html          # Task Manager SPA
+│   ├── issue-review.html   # Issue Review SPA
+│   ├── watch-logs.html     # Log Dashboard SPA
+│   └── issue-model.js      # Shared issue model library
 └── README.md
 ```
 

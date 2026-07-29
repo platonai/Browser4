@@ -1,0 +1,1082 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Log Dashboard — Browser4</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+<style>
+/* ═══════════════════════════════════════════════════════════════════════
+   Design Tokens — Light & Dark
+   ═══════════════════════════════════════════════════════════════════════ */
+:root {
+  --font: system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'SF Mono', 'Cascadia Code', 'Consolas', 'Fira Code', monospace;
+  --radius-sm: 6px; --radius: 10px; --radius-lg: 14px;
+  --transition: 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+html[data-theme="light"] {
+  --bg-root:        #f7f5f2;
+  --bg-surface:     #ffffff;
+  --bg-raised:      #fafaf9;
+  --bg-inset:       #f1efec;
+  --bg-hover:       #f3f0ed;
+  --bg-selected:    #eeecfa;
+  --border:         #e4e1dd;
+  --border-light:   #f0edea;
+  --text-primary:   #1e1b2e;
+  --text-secondary: #5c586b;
+  --text-muted:     #9e99aa;
+  --text-on-dark:   #f2f0f5;
+  --accent:         #6c5ce7;
+  --accent-light:   #a29bfe;
+  --accent-bg:      #f4f2ff;
+  --accent-border:  #d5d1f5;
+  --danger:         #e53e3e;
+  --danger-bg:      #fff5f5;
+  --success:        #38a169;
+  --success-bg:     #f0fff4;
+  --info:           #3b82f6;
+  --info-bg:        #eff6ff;
+  --warning:        #d69e2e;
+  --warning-bg:     #fffff0;
+  --header-bg:      #1a1730;
+  --header-bg-end:  #2d2752;
+  --shadow-sm:      0 1px 2px rgba(0,0,0,0.04);
+  --shadow:         0 1px 3px rgba(0,0,0,0.05), 0 1px 2px rgba(0,0,0,0.03);
+  --shadow-md:      0 4px 14px rgba(0,0,0,0.06);
+  --scrollbar-thumb:#d0ccc7;
+  --log-bg:         #fafaf9;
+  --log-text:       #1e1b2e;
+  --log-dim:        #9e99aa;
+  --log-red:        #e53e3e;
+  --log-yellow:     #b7791f;
+  --log-cyan:       #2b6cb0;
+  --log-green:      #276749;
+  --log-white:      #1e1b2e;
+  --log-magenta:    #6c5ce7;
+  --search-highlight-bg: #fefcbf;
+  --search-current-bg:   #fbd38d;
+}
+
+html[data-theme="dark"] {
+  --bg-root:        #0b1120;
+  --bg-surface:     #0f1923;
+  --bg-raised:      #152233;
+  --bg-inset:       #0a1018;
+  --bg-hover:       #182a3f;
+  --bg-selected:    #1a2e4a;
+  --border:         #1e2d42;
+  --border-light:   #18273a;
+  --text-primary:   #e2e0e8;
+  --text-secondary: #a4a0b8;
+  --text-muted:     #6b6580;
+  --text-on-dark:   #f2f0f5;
+  --accent:         #a78bfa;
+  --accent-light:   #c4b5fd;
+  --accent-bg:      #1e2040;
+  --accent-border:  #3d3570;
+  --danger:         #fc8181;
+  --danger-bg:      #2d1520;
+  --success:        #68d391;
+  --success-bg:     #13281e;
+  --info:           #60a5fa;
+  --info-bg:        #152238;
+  --warning:        #fbbf24;
+  --warning-bg:     #2d2410;
+  --header-bg:      #090d1c;
+  --header-bg-end:  #141f36;
+  --shadow-sm:      0 1px 2px rgba(0,0,0,0.18);
+  --shadow:         0 1px 3px rgba(0,0,0,0.24), 0 1px 2px rgba(0,0,0,0.16);
+  --shadow-md:      0 4px 14px rgba(0,0,0,0.28);
+  --scrollbar-thumb:#2d3a5c;
+  --log-bg:         #0a0e14;
+  --log-text:       #d4d0d8;
+  --log-dim:        #5c5870;
+  --log-red:        #ff6b6b;
+  --log-yellow:     #ffd166;
+  --log-cyan:       #5ccfe6;
+  --log-green:      #7fd97f;
+  --log-white:      #e2e0e8;
+  --log-magenta:    #c4b5fd;
+  --search-highlight-bg: #5c4820;
+  --search-current-bg:   #7c5020;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   Base
+   ═══════════════════════════════════════════════════════════════════════ */
+* { box-sizing: border-box; }
+body {
+  margin: 0; min-height: 100vh; display: flex; flex-direction: column;
+  font-family: var(--font); background: var(--bg-root); color: var(--text-primary);
+}
+* { scrollbar-width: thin; scrollbar-color: var(--scrollbar-thumb) transparent; }
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--scrollbar-thumb); border-radius: 10px; border: 2px solid transparent; background-clip: padding-box; }
+::-webkit-scrollbar-corner { background: transparent; }
+
+/* ═══════════════════════════════════════════════════════════════════════
+   Header
+   ═══════════════════════════════════════════════════════════════════════ */
+.app-header {
+  background: linear-gradient(135deg, var(--header-bg) 0%, var(--header-bg-end) 100%);
+  color: #f1f5f9;
+  padding: 0 1.25rem; height: 44px;
+  display: flex; align-items: center; justify-content: space-between;
+  flex-shrink: 0; z-index: 100;
+  box-shadow: 0 1px 0 rgba(255,255,255,0.06) inset, 0 2px 10px rgba(0,0,0,0.25);
+}
+.app-brand { display: flex; align-items: center; gap: 10px; }
+.app-brand svg { flex-shrink: 0; }
+.app-brand h1 { font-size: 0.95rem; font-weight: 600; margin: 0; color: #f1f5f9; letter-spacing: -0.01em; }
+.header-right { display: flex; align-items: center; gap: 10px; }
+.header-nav { display: flex; align-items: center; gap: 4px; }
+.header-nav a {
+  color: rgba(255,255,255,0.6); text-decoration: none;
+  font-size: 0.72rem; padding: 3px 10px; border-radius: var(--radius-sm);
+  transition: all var(--transition); font-weight: 500;
+  border: 1px solid transparent;
+}
+.header-nav a:hover { color: #fff; background: rgba(255,255,255,0.08); }
+.header-nav a.active { color: #fff; background: rgba(255,255,255,0.12); border-color: rgba(255,255,255,0.2); }
+.theme-toggle {
+  display: flex; align-items: center; justify-content: center;
+  width: 30px; height: 30px; border-radius: 50%;
+  border: 1px solid rgba(255,255,255,0.15);
+  background: rgba(255,255,255,0.06);
+  color: #e2e8f0; cursor: pointer;
+  font-size: 0.9rem; transition: all var(--transition);
+  line-height: 1; padding: 0;
+}
+.theme-toggle:hover { background: rgba(255,255,255,0.15); border-color: rgba(255,255,255,0.25); }
+
+/* ═══════════════════════════════════════════════════════════════════════
+   Source Tabs
+   ═══════════════════════════════════════════════════════════════════════ */
+.source-tabs {
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border);
+  padding: 4px 0.75rem;
+  flex-shrink: 0;
+  display: flex; align-items: center; gap: 2px;
+  overflow-x: auto; white-space: nowrap;
+  box-shadow: var(--shadow-sm);
+}
+.source-tab {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 5px 12px;
+  font-size: 0.74rem; font-weight: 500;
+  cursor: pointer; user-select: none;
+  border: 1px solid transparent;
+  background: transparent; color: var(--text-secondary);
+  border-radius: var(--radius-sm);
+  transition: all var(--transition);
+  flex-shrink: 0;
+}
+.source-tab:hover { color: var(--text-primary); background: var(--bg-hover); }
+.source-tab.active {
+  color: var(--text-on-dark);
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.source-tab .tab-key {
+  font-size: 0.58rem; font-weight: 700;
+  background: rgba(0,0,0,0.12); color: inherit;
+  border-radius: 3px; padding: 0px 4px; min-width: 16px;
+  text-align: center; line-height: 1.6;
+  opacity: 0.7;
+}
+.source-tab.active .tab-key { background: rgba(255,255,255,0.2); opacity: 1; }
+.source-tab .tab-desc {
+  font-size: 0.62rem; opacity: 0.6; font-weight: 400;
+}
+.source-tab.active .tab-desc { opacity: 0.85; }
+
+/* ═══════════════════════════════════════════════════════════════════════
+   Main Log Display
+   ═══════════════════════════════════════════════════════════════════════ */
+.log-viewer {
+  flex: 1; display: flex; flex-direction: column;
+  overflow: hidden; position: relative;
+  background: var(--log-bg);
+}
+.log-display {
+  flex: 1; overflow-y: auto; overflow-x: auto;
+  font-family: var(--font-mono); font-size: 0.78rem;
+  line-height: 1.55; padding: 4px 0;
+  color: var(--log-text);
+  user-select: text; -webkit-user-select: text;
+  outline: none;
+}
+.log-display:focus { outline: none; }
+.log-line {
+  white-space: pre; padding: 0 12px;
+  min-height: 1.55em;
+}
+.log-line:hover { background: rgba(128,128,128,0.04); }
+
+/* ── Severity color spans ───────────────────────────────────────────── */
+.sev-FATAL, .sev-ERROR, .sev-SEVERE { color: var(--log-red); font-weight: 700; }
+.sev-WARN, .sev-WARNING { color: var(--log-yellow); }
+.sev-INFO { color: var(--log-white); }
+.sev-DEBUG, .sev-TRACE { color: var(--log-dim); }
+.sev-dim { color: var(--log-dim); }
+
+/* ── Git-specific ───────────────────────────────────────────────────── */
+.git-header { color: var(--log-cyan); }
+.git-commit { color: var(--log-yellow); font-weight: 700; }
+.git-author { color: var(--log-cyan); }
+.git-date   { color: var(--log-dim); }
+.git-message { color: var(--log-white); }
+.git-graph  { color: var(--log-dim); }
+.git-ref-head { color: var(--log-cyan); font-weight: 700; }
+.git-ref-tag  { color: var(--log-yellow); font-weight: 700; }
+.git-ref-remote { color: var(--log-green); }
+
+/* ── RWS-specific ───────────────────────────────────────────────────── */
+.rws-step-start { color: var(--log-cyan); font-weight: 700; }
+.rws-step-pass  { color: var(--log-green); font-weight: 700; }
+.rws-step-fail  { color: var(--log-red); font-weight: 700; }
+.rws-abort      { color: var(--log-red); font-weight: 700; background: rgba(255,0,0,0.1); }
+.rws-progress   { color: var(--log-dim); }
+
+/* ── Search highlight ───────────────────────────────────────────────── */
+.log-line .search-match { background: var(--search-highlight-bg); border-radius: 2px; }
+.log-line .search-current { background: var(--search-current-bg); border-radius: 2px; font-weight: 700; }
+
+/* ═══════════════════════════════════════════════════════════════════════
+   Status Bar
+   ═══════════════════════════════════════════════════════════════════════ */
+.log-status {
+  height: 26px; padding: 0 12px;
+  display: flex; align-items: center; gap: 12px;
+  background: var(--bg-surface);
+  border-top: 1px solid var(--border);
+  font-size: 0.7rem; color: var(--text-muted);
+  flex-shrink: 0; user-select: none;
+}
+.log-status .status-badge {
+  font-weight: 600; font-size: 0.65rem;
+  padding: 1px 7px; border-radius: 10px;
+}
+.log-status .status-badge.live { background: var(--success-bg); color: var(--success); }
+.log-status .status-badge.paused { background: var(--warning-bg); color: var(--warning); }
+.log-status .status-badge.filtered { background: var(--info-bg); color: var(--info); }
+
+/* ═══════════════════════════════════════════════════════════════════════
+   Filter Bar
+   ═══════════════════════════════════════════════════════════════════════ */
+.filter-bar {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 12px;
+  background: var(--bg-raised);
+  border-top: 1px solid var(--accent-border);
+  flex-shrink: 0;
+}
+.filter-bar input {
+  flex: 1; padding: 4px 10px; border-radius: var(--radius-sm);
+  border: 1px solid var(--border); font-size: 0.78rem;
+  font-family: var(--font-mono);
+  background: var(--bg-inset); color: var(--text-primary);
+  transition: all var(--transition);
+}
+.filter-bar input:focus { outline: none; border-color: var(--accent); background: var(--bg-surface); }
+.filter-bar input::placeholder { color: var(--text-muted); }
+.filter-bar .filter-hint {
+  font-size: 0.65rem; color: var(--text-muted); white-space: nowrap;
+}
+.filter-bar .filter-count {
+  font-size: 0.7rem; color: var(--info); font-weight: 600; white-space: nowrap;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   Empty / Loading state
+   ═══════════════════════════════════════════════════════════════════════ */
+.log-placeholder {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  height: 100%; color: var(--text-muted); font-size: 0.85rem; gap: 0.5rem;
+}
+.log-placeholder .placeholder-icon { font-size: 2.5rem; opacity: 0.3; }
+
+/* ═══════════════════════════════════════════════════════════════════════
+   Toast
+   ═══════════════════════════════════════════════════════════════════════ */
+.toast-container {
+  position: fixed; bottom: 2rem; right: 1.25rem; z-index: 9999;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.toast {
+  padding: 10px 16px; border-radius: var(--radius);
+  font-size: 0.8rem; font-weight: 500;
+  box-shadow: var(--shadow-md);
+  animation: toastSlideIn 0.25s ease-out;
+  max-width: 380px; display: flex; align-items: center; gap: 8px;
+}
+.toast.error { background: var(--danger-bg); color: var(--danger); border: 1px solid var(--danger-bg); }
+.toast.success { background: var(--success-bg); color: var(--success); border: 1px solid var(--success-bg); }
+.toast.info { background: var(--info-bg); color: var(--info); border: 1px solid var(--info-bg); }
+@keyframes toastSlideIn { from { opacity: 0; transform: translateX(16px); } to { opacity: 1; transform: translateX(0); } }
+
+/* ═══════════════════════════════════════════════════════════════════════
+   Responsive
+   ═══════════════════════════════════════════════════════════════════════ */
+@media (max-width: 768px) {
+  .source-tabs { padding: 3px 0.5rem; }
+  .source-tab { padding: 4px 8px; font-size: 0.7rem; }
+  .source-tab .tab-desc { display: none; }
+  .log-display { font-size: 0.7rem; }
+}
+</style>
+</head>
+<body>
+
+<!-- ═══════ HEADER ═══════ -->
+<header class="app-header">
+  <div class="app-brand">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/>
+    </svg>
+    <h1>Browser4 Log Dashboard</h1>
+  </div>
+  <div class="header-right">
+    <nav class="header-nav">
+      <a href="/">Tasks</a>
+      <a href="/issues/review">Review</a>
+      <a href="/logs" class="active">Logs</a>
+    </nav>
+    <button class="theme-toggle" id="theme-toggle" title="Toggle dark mode" onclick="toggleTheme()">☀</button>
+  </div>
+</header>
+
+<!-- ═══════ SOURCE TABS ═══════ -->
+<nav class="source-tabs" id="source-tabs">
+  <!-- Populated by JS -->
+</nav>
+
+<!-- ═══════ LOG VIEWER ═══════ -->
+<main class="log-viewer" id="log-viewer">
+  <div class="log-display" id="log-display" tabindex="-1">
+    <div class="log-placeholder">
+      <span class="placeholder-icon">📋</span>
+      <p>Select a log source to begin</p>
+    </div>
+  </div>
+  <div class="log-status" id="log-status">
+    <span>Ready</span>
+  </div>
+</main>
+
+<!-- ═══════ FILTER BAR ═══════ -->
+<div class="filter-bar" id="filter-bar" style="display:none;">
+  <span style="color:var(--accent);flex-shrink:0;">🔍</span>
+  <input type="text" id="filter-input" placeholder="regex filter (Enter to apply, Esc to clear)" autocomplete="off">
+  <span class="filter-hint">F3 next · Shift+F3 prev</span>
+  <span class="filter-count" id="filter-count"></span>
+</div>
+
+<!-- ═══════ TOAST ═══════ -->
+<div class="toast-container" id="toast-container"></div>
+
+<!-- ═══════ SCRIPTS ═══════ -->
+<script>
+// ── Theme ──────────────────────────────────────────────────────────────
+(function() {
+  var saved = localStorage.getItem('coworker-gui-theme');
+  if (saved) document.documentElement.setAttribute('data-theme', saved);
+  if (!saved) document.documentElement.setAttribute('data-theme', 'dark');
+})();
+
+function toggleTheme() {
+  var current = document.documentElement.getAttribute('data-theme');
+  var next = current === 'dark' ? 'light' : 'dark';
+  document.documentElement.setAttribute('data-theme', next);
+  localStorage.setItem('coworker-gui-theme', next);
+  document.getElementById('theme-toggle').textContent = next === 'dark' ? '☀' : '🌙';
+}
+
+(function setThemeIcon() {
+  var current = document.documentElement.getAttribute('data-theme');
+  document.getElementById('theme-toggle').textContent = current === 'dark' ? '☀' : '🌙';
+})();
+
+// ── Log Source Definitions ─────────────────────────────────────────────
+var LOG_SOURCES = [
+  { key: "1", label: "pulsar",  desc: "Root backend",         paths: ["logs/pulsar.log"] },
+  { key: "2", label: "server",  desc: "Server / framework",   paths: ["logs/pulsar.s.log"] },
+  { key: "3", label: "browser", desc: "Browser / CDP ops",    paths: ["logs/pulsar.bs.log"] },
+  { key: "4", label: "api",     desc: "Scrape API tasks",     paths: ["logs/pulsar.api.log"] },
+  { key: "5", label: "pages",   desc: "Page processing",      paths: ["logs/pulsar.pg.log"] },
+  { key: "6", label: "coworker","desc": "Coworker task runner",paths: ["__coworker__"] },
+  { key: "7", label: "build",   desc: "Spring Boot build",    paths: [".build/spring-boot.log"] },
+  { key: "8", label: "startup", desc: "Server startup log",   paths: ["__startup__"] },
+  { key: "9", label: "combined","desc": "pulsar + server + browser", paths: ["logs/pulsar.log", "logs/pulsar.s.log", "logs/pulsar.bs.log"] },
+  { key: "0", label: "git",     desc: "Git log",              paths: ["__git__"] },
+  { key: "r", label: "rws",     desc: "RWS test output",      paths: ["__rws__"] },
+];
+
+// ── State ──────────────────────────────────────────────────────────────
+var state = {
+  activeSource: null,
+  positions: {},
+  paused: false,
+  filterRegex: null,
+  filterPattern: '',
+  searchPattern: '',
+  searchMatches: [],
+  searchIdx: -1,
+  scrollFromBottom: 0,
+  pollTimer: null,
+  gitDetail: false,
+  gitLastHash: '',
+  maxLines: 5000,
+  pollInterval: 500,
+};
+
+// ── API ────────────────────────────────────────────────────────────────
+async function apiGet(url) {
+  var res = await fetch(url);
+  if (!res.ok) {
+    var body = await res.json().catch(function() { return { error: res.statusText }; });
+    throw new Error(body.error || 'HTTP ' + res.status);
+  }
+  return res.json();
+}
+
+async function apiPost(url, body) {
+  var res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    var eb = await res.json().catch(function() { return { error: res.statusText }; });
+    throw new Error(eb.error || 'HTTP ' + res.status);
+  }
+  return res.json();
+}
+
+// ── Toast ──────────────────────────────────────────────────────────────
+function showToast(message, type) {
+  type = type || 'info';
+  var icons = { error: '⚠', success: '✓', info: 'ℹ' };
+  var container = document.getElementById('toast-container');
+  var toast = document.createElement('div');
+  toast.className = 'toast ' + type;
+  toast.innerHTML = '<span class="toast-icon">' + (icons[type] || '') + '</span>' + escHtml(message);
+  container.appendChild(toast);
+  setTimeout(function() {
+    toast.style.opacity = '0'; toast.style.transition = 'opacity 0.3s';
+    setTimeout(function() { toast.remove(); }, 300);
+  }, 3000);
+}
+
+// ── Init ───────────────────────────────────────────────────────────────
+async function init() {
+  renderTabs();
+  selectSource(LOG_SOURCES[0]);
+  document.addEventListener('keydown', handleKeyboard);
+}
+
+// ── Tab Rendering ──────────────────────────────────────────────────────
+function renderTabs() {
+  var container = document.getElementById('source-tabs');
+  var html = '';
+  for (var i = 0; i < LOG_SOURCES.length; i++) {
+    var src = LOG_SOURCES[i];
+    html += '<div class="source-tab" data-source="' + src.label +
+      '" onclick="selectSourceById(\'' + src.label + '\')" title="' +
+      escHtml(src.desc) + ' (' + src.key + ')">' +
+      '<span class="tab-key">' + escHtml(src.key) + '</span>' +
+      escHtml(src.label) +
+      '<span class="tab-desc">' + escHtml(src.desc) + '</span></div>';
+  }
+  container.innerHTML = html;
+}
+
+function updateTabHighlight() {
+  var tabs = document.querySelectorAll('.source-tab');
+  for (var i = 0; i < tabs.length; i++) {
+    var label = tabs[i].getAttribute('data-source');
+    tabs[i].classList.toggle('active', state.activeSource && state.activeSource.label === label);
+  }
+}
+
+// ── Source Selection ───────────────────────────────────────────────────
+function selectSourceById(label) {
+  var src = findSource(label);
+  if (src) selectSource(src);
+}
+
+function findSource(keyOrLabel) {
+  for (var i = 0; i < LOG_SOURCES.length; i++) {
+    if (LOG_SOURCES[i].key === keyOrLabel || LOG_SOURCES[i].label === keyOrLabel)
+      return LOG_SOURCES[i];
+  }
+  return null;
+}
+
+async function selectSource(src) {
+  stopPolling();
+  state.activeSource = src;
+  state.positions = {};
+  state.paused = false;
+  state.filterRegex = null;
+  state.filterPattern = '';
+  state.searchPattern = '';
+  state.searchMatches = [];
+  state.searchIdx = -1;
+  state.scrollFromBottom = 0;
+  if (src.label !== 'git') { state.gitDetail = false; state.gitLastHash = ''; }
+
+  updateTabHighlight();
+  clearLogDisplay();
+  updateStatusBar();
+
+  var sentinel = src.paths[0] || '';
+  if (sentinel === '__git__') {
+    state.pollInterval = 10000;
+    await fetchGitLog();
+  } else if (sentinel === '__rws__') {
+    state.pollInterval = 2000;
+    await fetchRwsTail();
+  } else {
+    state.pollInterval = 500;
+    await fetchLogTail();
+  }
+  startPolling();
+  document.getElementById('log-display').focus();
+}
+
+// ── Log Display ────────────────────────────────────────────────────────
+function clearLogDisplay() {
+  var display = document.getElementById('log-display');
+  display.innerHTML = '';
+  var anchor = document.createElement('div');
+  anchor.id = 'log-anchor';
+  anchor.style.height = '1px';
+  display.appendChild(anchor);
+}
+
+function getLogLines() {
+  return document.getElementById('log-display').querySelectorAll('.log-line');
+}
+
+function getVisibleLineCount() {
+  return Math.max(10, Math.floor(document.getElementById('log-display').clientHeight / 20));
+}
+
+// ── Colorization ───────────────────────────────────────────────────────
+var SEVERITY_RE = /\b(FATAL|ERROR|SEVERE|WARN|WARNING|INFO|DEBUG|TRACE)\b/gi;
+
+function colorizeLine(line, source) {
+  var sentinel = source.paths[0] || '';
+  if (sentinel === '__git__') return colorizeGitLine(line);
+  if (sentinel === '__rws__') return colorizeRwsLine(line);
+  if (/^────/.test(line)) return '<span class="git-header">' + escHtml(line) + '</span>';
+  return colorizeSeverity(line);
+}
+
+function colorizeSeverity(line) {
+  var html = escHtml(line);
+  SEVERITY_RE.lastIndex = 0;
+  return html.replace(SEVERITY_RE, function(match) {
+    var upper = match.toUpperCase();
+    if (upper === 'FATAL' || upper === 'ERROR' || upper === 'SEVERE')
+      return '<span class="sev-ERROR">' + match + '</span>';
+    if (upper === 'WARN' || upper === 'WARNING')
+      return '<span class="sev-WARN">' + match + '</span>';
+    if (upper === 'INFO')
+      return '<span class="sev-INFO">' + match + '</span>';
+    return '<span class="sev-DEBUG">' + match + '</span>';
+  });
+}
+
+function colorizeGitLine(line) {
+  var html = escHtml(line);
+  if (!line.trim()) return html;
+  if (state.gitDetail) {
+    if (/^commit\s/.test(line)) return '<span class="git-commit">' + html + '</span>';
+    if (/^Author:/.test(line)) return '<span class="git-author">' + html + '</span>';
+    if (/^Date:/.test(line)) return '<span class="git-date">' + html + '</span>';
+    if (/^    /.test(line)) return '<span class="git-message">' + html + '</span>';
+    return '<span class="sev-dim">' + html + '</span>';
+  }
+  if (line.indexOf('(HEAD') >= 0)
+    return '<span class="git-ref-head">' + html + '</span>';
+  if (line.indexOf('(tag:') >= 0)
+    return '<span class="git-ref-tag">' + html + '</span>';
+  if (line.indexOf('(origin') >= 0 || line.indexOf('(upstream') >= 0)
+    return '<span class="git-ref-remote">' + html + '</span>';
+  if (/^\s*\*/.test(line))
+    return '<span class="sev-INFO">' + html + '</span>';
+  return '<span class="git-graph">' + html + '</span>';
+}
+
+function colorizeRwsLine(line) {
+  var html = escHtml(line);
+  if (/!!!\s+ABORT/.test(line))
+    return '<span class="rws-abort">' + html + '</span>';
+  if (/<<<\s+STEP\s+\S+:\s+FAIL/.test(line))
+    return '<span class="rws-step-fail">' + html + '</span>';
+  if (/<<<\s+STEP\s+\S+:\s+PASS/.test(line))
+    return '<span class="rws-step-pass">' + html + '</span>';
+  if (/>>>\s+STEP\s+/.test(line))
+    return '<span class="rws-step-start">' + html + '</span>';
+  if (/·/.test(line) && (line.indexOf('running') >= 0 ||
+      line.indexOf('Checkpoints:') >= 0 || line.indexOf('step(s) completed') >= 0))
+    return '<span class="rws-progress">' + html + '</span>';
+  return colorizeSeverity(line);
+}
+
+// ── Append / DOM management ────────────────────────────────────────────
+function appendLines(lines, source) {
+  if (!lines || lines.length === 0) return;
+  var display = document.getElementById('log-display');
+  var wasAtBottom = isAtBottom();
+  var anchor = document.getElementById('log-anchor');
+  var fragment = document.createDocumentFragment();
+  for (var i = 0; i < lines.length; i++) {
+    var div = document.createElement('div');
+    div.className = 'log-line';
+    div.innerHTML = colorizeLine(lines[i], source);
+    fragment.appendChild(div);
+  }
+  if (anchor) display.insertBefore(fragment, anchor);
+  else display.appendChild(fragment);
+
+  if (state.filterRegex) applyFilterToDOM();
+  if (state.searchPattern) highlightSearchMatches();
+
+  var allLines = getLogLines();
+  while (allLines.length > state.maxLines) allLines[0].remove();
+
+  if (wasAtBottom && state.scrollFromBottom === 0 && !state.paused) scrollToBottom();
+  else if (state.scrollFromBottom > 0) state.scrollFromBottom += lines.length;
+
+  updateStatusBar();
+}
+
+function isAtBottom() {
+  var d = document.getElementById('log-display');
+  return d.scrollHeight - d.scrollTop - d.clientHeight < 50;
+}
+
+function scrollToBottom() {
+  var d = document.getElementById('log-display');
+  d.scrollTop = d.scrollHeight;
+  state.scrollFromBottom = 0;
+}
+
+function onLogScroll() {
+  if (state.paused) return;
+  if (isAtBottom()) { state.scrollFromBottom = 0; }
+  else {
+    var d = document.getElementById('log-display');
+    var dist = d.scrollHeight - d.scrollTop - d.clientHeight;
+    state.scrollFromBottom = Math.max(0, Math.floor(dist / 20));
+  }
+  updateStatusBar();
+}
+
+function scrollByLines(delta) {
+  var d = document.getElementById('log-display');
+  d.scrollTop = Math.max(0, Math.min(d.scrollHeight - d.clientHeight, d.scrollTop + delta * 20));
+  onLogScroll();
+}
+
+function scrollToLine(lineIdx) {
+  var d = document.getElementById('log-display');
+  d.scrollTop = Math.min(d.scrollHeight - d.clientHeight, Math.max(0, lineIdx * 20 - d.clientHeight / 3));
+  onLogScroll();
+}
+
+// ── Filter / Search ────────────────────────────────────────────────────
+function setFilter(pattern) {
+  pattern = (pattern || '').trim();
+  state.filterPattern = pattern;
+  state.searchPattern = pattern;
+  if (pattern) {
+    try { state.filterRegex = new RegExp(pattern, 'i'); }
+    catch(e) { state.filterRegex = new RegExp(pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'); }
+  } else { state.filterRegex = null; }
+  state.searchMatches = [];
+  state.searchIdx = -1;
+  applyFilterToDOM();
+  updateSearchMatches();
+  if (pattern && state.searchMatches.length > 0) { state.searchIdx = 0; scrollToSearchMatch(); }
+  state.scrollFromBottom = 0;
+  updateStatusBar();
+}
+
+function applyFilterToDOM() {
+  var lines = getLogLines();
+  if (!state.filterRegex) {
+    for (var i = 0; i < lines.length; i++) lines[i].style.display = '';
+    return;
+  }
+  for (var i = 0; i < lines.length; i++)
+    lines[i].style.display = state.filterRegex.test(lines[i].textContent || '') ? '' : 'none';
+}
+
+function highlightSearchMatches() {
+  if (!state.searchPattern) return;
+  var lines = getLogLines();
+  try { var regex = new RegExp('(' + state.searchPattern + ')', 'gi'); }
+  catch(e) { return; }
+  for (var i = 0; i < lines.length; i++) {
+    if (lines[i].style.display === 'none') continue;
+    highlightInElement(lines[i], regex);
+  }
+}
+
+function highlightInElement(el, regex) {
+  regex.lastIndex = 0;
+  var walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, null, false);
+  var textNodes = [];
+  while (walker.nextNode()) textNodes.push(walker.currentNode);
+  for (var t = 0; t < textNodes.length; t++) {
+    var node = textNodes[t];
+    var parent = node.parentNode;
+    if (parent.className && (parent.className.indexOf('search-match') >= 0 ||
+        parent.className.indexOf('search-current') >= 0)) continue;
+    var text = node.textContent;
+    regex.lastIndex = 0;
+    if (!regex.test(text)) continue;
+    regex.lastIndex = 0;
+    var frag = document.createDocumentFragment();
+    var lastIdx = 0, match;
+    while ((match = regex.exec(text)) !== null) {
+      if (match.index > lastIdx)
+        frag.appendChild(document.createTextNode(text.substring(lastIdx, match.index)));
+      var span = document.createElement('span');
+      span.className = 'search-match';
+      span.textContent = match[0];
+      frag.appendChild(span);
+      lastIdx = regex.lastIndex;
+      if (match[0] === '') regex.lastIndex++;
+    }
+    if (lastIdx < text.length)
+      frag.appendChild(document.createTextNode(text.substring(lastIdx)));
+    node.parentNode.replaceChild(frag, node);
+  }
+}
+
+function updateSearchMatches() {
+  state.searchMatches = [];
+  if (!state.searchPattern) { state.searchIdx = -1; return; }
+  var lines = getLogLines();
+  try { var regex = new RegExp(state.searchPattern, 'i'); } catch(e) { return; }
+  for (var i = 0; i < lines.length; i++) {
+    if (lines[i].style.display === 'none') continue;
+    if (regex.test(lines[i].textContent || '')) state.searchMatches.push(i);
+  }
+  if (state.searchIdx >= state.searchMatches.length)
+    state.searchIdx = state.searchMatches.length > 0 ? 0 : -1;
+}
+
+function scrollToSearchMatch() {
+  if (state.searchIdx < 0 || state.searchIdx >= state.searchMatches.length) return;
+  var matchLineIdx = state.searchMatches[state.searchIdx];
+  scrollToLine(matchLineIdx);
+  var lines = getLogLines();
+  for (var i = 0; i < lines.length; i++) {
+    var currents = lines[i].querySelectorAll('.search-current');
+    for (var s = 0; s < currents.length; s++) {
+      currents[s].classList.remove('search-current');
+      currents[s].classList.add('search-match');
+    }
+  }
+  if (matchLineIdx < lines.length) {
+    var matches = lines[matchLineIdx].querySelectorAll('.search-match');
+    for (var m = 0; m < matches.length; m++) {
+      matches[m].classList.remove('search-match');
+      matches[m].classList.add('search-current');
+    }
+  }
+}
+
+// ── Status Bar ─────────────────────────────────────────────────────────
+function updateStatusBar() {
+  var status = document.getElementById('log-status');
+  var lines = getLogLines();
+  var total = lines.length;
+  var visibleH = getVisibleLineCount();
+  var visibleStart = Math.max(0, total - visibleH - state.scrollFromBottom);
+  var pct = total > 0 ? Math.round(Math.min(visibleStart + visibleH, total) * 100 / total) : 0;
+
+  var parts = [];
+  parts.push('L: ' + (visibleStart + 1) + '-' + Math.min(visibleStart + visibleH, total) + '/' + total + ' (' + pct + '%)');
+
+  if (state.filterPattern) {
+    parts.push('| <span class="status-badge filtered">/' + escHtml(state.filterPattern) + '/</span>');
+    if (state.searchMatches.length > 0)
+      parts.push('match ' + (state.searchIdx + 1) + '/' + state.searchMatches.length);
+  }
+
+  if (state.paused)
+    parts.push('<span class="status-badge paused">PAUSED</span>');
+  else if (state.scrollFromBottom > 0)
+    parts.push('<span class="status-badge paused">↥ SCROLLED</span>');
+  else
+    parts.push('<span class="status-badge live">LIVE</span>');
+
+  parts.push('<span style="opacity:0.5;">' + (state.activeSource ? state.activeSource.label : '—') + '</span>');
+  status.innerHTML = parts.join(' ');
+}
+
+// ── Data Fetching ──────────────────────────────────────────────────────
+async function fetchLogTail() {
+  try {
+    var data = await apiPost('/api/logs/tail', { source: state.activeSource.label, lines: 200 });
+    if (data.positions) state.positions = data.positions;
+    if (data.lines && data.lines.length > 0) appendLines(data.lines, state.activeSource);
+  } catch(e) { showToast('Failed to load logs: ' + e.message, 'error'); }
+}
+
+async function pollForUpdates() {
+  if (state.paused || !state.activeSource) return;
+  var sentinel = state.activeSource.paths[0] || '';
+  try {
+    if (sentinel === '__git__') { await fetchGitLog(); }
+    else if (sentinel === '__rws__') { await pollRwsUpdates(); }
+    else {
+      var data = await apiPost('/api/logs/poll', { source: state.activeSource.label, positions: state.positions });
+      if (data.positions) state.positions = data.positions;
+      if (data.lines && data.lines.length > 0) appendLines(data.lines, state.activeSource);
+    }
+  } catch(e) {}
+}
+
+async function fetchGitLog() {
+  try {
+    var n = 50;
+    var data = await apiGet('/api/logs/git?lines=' + n + '&detail=' + (state.gitDetail ? '1' : '0'));
+    if (data.lines && data.lines.length > 0) {
+      if (data.lines[0] === state.gitLastHash) return;
+      state.gitLastHash = data.lines[0];
+      var display = document.getElementById('log-display');
+      display.innerHTML = '';
+      var anchor = document.createElement('div');
+      anchor.id = 'log-anchor'; anchor.style.height = '1px';
+      display.appendChild(anchor);
+      state.scrollFromBottom = 0;
+      appendLines(['', data.header], state.activeSource);
+      appendLines(data.lines, state.activeSource);
+    }
+  } catch(e) {}
+}
+
+async function fetchRwsTail() {
+  try {
+    var data = await apiPost('/api/logs/tail', { source: 'rws', lines: 200 });
+    if (data.positions) state.positions = data.positions;
+    if (data.lines && data.lines.length > 0) appendLines(data.lines, state.activeSource);
+    else appendLines(['(waiting for RWS output — run a test to see results)'], state.activeSource);
+  } catch(e) {
+    appendLines(['(waiting for RWS output — run a test to see results)'], state.activeSource);
+  }
+}
+
+async function pollRwsUpdates() {
+  try {
+    var data = await apiPost('/api/logs/poll', { source: 'rws', positions: state.positions });
+    if (data.positions) {
+      for (var key in data.positions) state.positions[key] = data.positions[key];
+    }
+    if (data.lines && data.lines.length > 0) appendLines(data.lines, state.activeSource);
+  } catch(e) {}
+}
+
+// ── Polling Loop ───────────────────────────────────────────────────────
+function startPolling() { stopPolling(); schedulePoll(); }
+function stopPolling() {
+  if (state.pollTimer) { clearTimeout(state.pollTimer); state.pollTimer = null; }
+}
+function schedulePoll() {
+  state.pollTimer = setTimeout(function() {
+    pollForUpdates().then(function() { schedulePoll(); });
+  }, state.pollInterval);
+}
+
+// ── Actions ────────────────────────────────────────────────────────────
+function actionTogglePause() {
+  state.paused = !state.paused;
+  if (!state.paused) { state.scrollFromBottom = 0; scrollToBottom(); pollForUpdates(); }
+  updateStatusBar();
+  showToast((state.activeSource ? state.activeSource.label : 'log') + ': ' +
+    (state.paused ? 'PAUSED' : 'LIVE'), state.paused ? 'info' : 'success');
+}
+
+function actionClear() {
+  clearLogDisplay();
+  state.positions = {};
+  state.gitLastHash = '';
+  state.searchMatches = [];
+  state.searchIdx = -1;
+  state.scrollFromBottom = 0;
+  updateStatusBar();
+}
+
+function actionCopy() {
+  var lines = getLogLines();
+  var text = '';
+  for (var i = 0; i < lines.length; i++) text += (lines[i].textContent || '') + '\n';
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(function() {
+      showToast('Copied ' + lines.length + ' lines to clipboard', 'success');
+    }).catch(function() { showToast('Failed to copy to clipboard', 'error'); });
+  } else {
+    var ta = document.createElement('textarea');
+    ta.value = text; ta.style.position = 'fixed'; ta.style.left = '-9999px';
+    document.body.appendChild(ta); ta.select();
+    try { document.execCommand('copy'); showToast('Copied ' + lines.length + ' lines to clipboard', 'success'); }
+    catch(e) { showToast('Failed to copy to clipboard', 'error'); }
+    document.body.removeChild(ta);
+  }
+}
+
+function actionScrollUp() { scrollByLines(1); }
+function actionScrollDown() { scrollByLines(-1); }
+function actionScrollPageUp() { scrollByLines(getVisibleLineCount() - 2); }
+function actionScrollPageDown() { scrollByLines(-(getVisibleLineCount() - 2)); }
+function actionScrollHome() { document.getElementById('log-display').scrollTop = 0; onLogScroll(); }
+function actionScrollEnd() { scrollToBottom(); updateStatusBar(); }
+
+function actionSearchNext() {
+  updateSearchMatches();
+  if (state.searchMatches.length === 0) return;
+  state.searchIdx = (state.searchIdx + 1) % state.searchMatches.length;
+  scrollToSearchMatch();
+  updateStatusBar();
+}
+
+function actionSearchPrev() {
+  updateSearchMatches();
+  if (state.searchMatches.length === 0) return;
+  state.searchIdx = (state.searchIdx - 1 + state.searchMatches.length) % state.searchMatches.length;
+  scrollToSearchMatch();
+  updateStatusBar();
+}
+
+function actionShowFilter() {
+  var bar = document.getElementById('filter-bar');
+  var input = document.getElementById('filter-input');
+  bar.style.display = 'flex';
+  input.value = state.filterPattern || '';
+  input.focus();
+  input.select();
+}
+
+function actionClearFilter() {
+  document.getElementById('filter-bar').style.display = 'none';
+  document.getElementById('filter-input').value = '';
+  setFilter('');
+  var lines = getLogLines();
+  for (var i = 0; i < lines.length; i++) lines[i].style.display = '';
+  document.getElementById('filter-count').textContent = '';
+  updateStatusBar();
+  scrollToBottom();
+  document.getElementById('log-display').focus();
+}
+
+function actionToggleGitDetail() {
+  if (!state.activeSource || state.activeSource.label !== 'git') return;
+  state.gitDetail = !state.gitDetail;
+  state.gitLastHash = '';
+  clearLogDisplay();
+  fetchGitLog();
+  showToast('Git log: ' + (state.gitDetail ? 'detail' : 'compact'), 'info');
+}
+
+// ── Keyboard Handling ──────────────────────────────────────────────────
+function handleKeyboard(e) {
+  if (e.target.id === 'filter-input') {
+    if (e.key === 'Escape') { actionClearFilter(); e.preventDefault(); }
+    if (e.key === 'F3') { if (e.shiftKey) actionSearchPrev(); else actionSearchNext(); e.preventDefault(); }
+    return;
+  }
+  var tag = e.target.tagName;
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+
+  var key = e.key;
+  var handled = true;
+
+  if (key >= '0' && key <= '9') {
+    var src = LOG_SOURCES.find(function(s) { return s.key === key; });
+    if (src) selectSource(src);
+    e.preventDefault(); return;
+  }
+  if (key === 'r' || key === 'R') {
+    if (!state.activeSource || state.activeSource.label !== 'rws') {
+      var rwsSrc = findSource('rws'); if (rwsSrc) selectSource(rwsSrc);
+    }
+    e.preventDefault(); return;
+  }
+  if (key === 'g' || key === 'G') {
+    if (state.activeSource && state.activeSource.label === 'git') actionToggleGitDetail();
+    else { var gitSrc = findSource('git'); if (gitSrc) selectSource(gitSrc); }
+    e.preventDefault(); return;
+  }
+
+  switch (key) {
+    case 'ArrowUp': actionScrollUp(); break;
+    case 'ArrowDown': actionScrollDown(); break;
+    case 'PageUp': actionScrollPageUp(); break;
+    case 'PageDown': actionScrollPageDown(); break;
+    case 'Home': actionScrollHome(); break;
+    case 'End': actionScrollEnd(); break;
+    case ' ':
+      if (!e.ctrlKey && !e.metaKey) actionTogglePause();
+      else handled = false;
+      break;
+    case 'c': case 'C':
+      if (!e.ctrlKey && !e.metaKey) actionClear(); else handled = false;
+      break;
+    case 'y': case 'Y':
+      if (!e.ctrlKey && !e.metaKey) actionCopy(); else handled = false;
+      break;
+    case '/':
+      if (!e.ctrlKey) actionShowFilter(); else handled = false;
+      break;
+    case 'Escape':
+      if (document.getElementById('filter-bar').style.display !== 'none') actionClearFilter();
+      else handled = false;
+      break;
+    case 'F3':
+      if (e.shiftKey) actionSearchPrev(); else actionSearchNext();
+      break;
+    default: handled = false;
+  }
+  if (e.ctrlKey && !e.metaKey && (key === 'f' || key === 'F')) { actionShowFilter(); handled = true; }
+  if (handled) e.preventDefault();
+}
+
+// ── Filter input events ────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', function() {
+  var fi = document.getElementById('filter-input');
+  fi.addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') {
+      setFilter(fi.value);
+      document.getElementById('filter-count').textContent =
+        state.searchMatches.length > 0 ? state.searchMatches.length + ' matches' :
+        (state.filterPattern ? '0 matches' : '');
+      document.getElementById('log-display').focus();
+      e.preventDefault();
+    }
+  });
+
+  // Attach scroll listener
+  document.getElementById('log-display').addEventListener('scroll', onLogScroll);
+});
+
+// ── Escape helpers ─────────────────────────────────────────────────────
+function escHtml(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+// ── Start ──────────────────────────────────────────────────────────────
+init();
+</script>
+</body>
+</html>
