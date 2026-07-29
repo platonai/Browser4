@@ -1,0 +1,294 @@
+{
+  "meta": {
+    "scenario": "navigation-basics",
+    "source": "20260728-160311-navigation-basics.full.md",
+    "mode": "dev",
+    "date": "20260728-160311"
+  },
+  "background": {
+    "executionContext": "| Step | Command | Notes |\n|------|---------|-------|\n| 1 | `./b4w.ps1 goto \"https://en.wikipedia.org/wiki/Web_scraping\"` | Auto-started backend daemon; reused existing DEFAULT session |\n| 2a | `./b4w.ps1 snapshot -v 0 --stdout` | Output was 43KB — too large for inline viewing |\n| 2b | `./b4w.ps1 snapshot grep \"See also\"` | Found TOC entries but not body content |\n| 2c | `./b4w.ps1 htmlsnapshot` | Captured static HTML; showed 483 links, 5 buttons |\n| 2d | `./b4w.ps1 htmlsnapshot get all` | Attempted CSS selectors — returned empty arrays for `#See_also a` |\n| 2e | `./b4w.ps1 scroll down 3000` | Scrolled to lower portion of page |\n| 2f | `./b4w.ps1 click e1605` | Clicked TOC \"See also\" link to navigate to section |\n| 2g | `./b4w.ps1 snapshot grep -A 80 'region \"See also\"'` | Successfully found all 20 \"See also\" links with refs |\n| 3 | `./b4w.ps1 click e2529` | Navigated to \"Data scraping\" article |\n| 4a | `./b4w.ps1 go-back` | Returned to Web scraping#See_also |\n| 4b | `./b4w.ps1 go-forward` | Returned to Data scraping |\n| 5 | `./b4w.ps1 reload` | Refreshed Data scraping page |\n| 6 | `./b4w.ps1 status` | Server health UP, version 4.12.1-SNAPSHOT, version mismatch warning |\n| 7 | `./b4w.ps1 list` | Showed 2 sessions: DEFAULT (SWARM) and amazon |\n| 8 | `./b4w.ps1 close` | Session closed cleanly |\n\nKey workaround: The \"See also\" section content was not directly visible in the initial viewport 0. I had to scroll, then click the TOC link, then re-snapshot to find the section body content with element refs.\n\n---\n\n```json\n{\n  \"issues\": [\n    {\n      \"title\": \"Snapshot output overwhelms first-time users (43KB+)\",\n      \"severity\": \"Medium\",\n      \"category\": \"UX\",\n      \"reproduction\": \"./b4w.ps1 snapshot -v 0 --stdout on https://en.wikipedia.org/wiki/Web_scraping\",\n      \"expected\": \"A manageable, scannable output or clear guidance on how to navigate large snapshots.\",\n      \"actual\": \"43.3KB of YAML dumped to stdout. The output was too large to view inline and required piping through grep to find relevant content.\",\n      \"rootCause\": \"Wikipedia pages have large accessibility trees with hundreds of nodes. Viewport 0 of a content-rich page still produces massive output. The SKILL.md warns about this (\\\"Don't cat snapshot files — they can exceed 256KB\\\") and recommends `snapshot grep` as an alternative, but the default `snapshot -v 0` behavior (which the docs teach as the first command after goto) dumps the full viewport tree without any size warning.\",\n      \"codePointer\": \"cli/browser4-cli/src/snapshot.rs\",\n      \"suggestion\": \"- Add a size warning when snapshot output exceeds a threshold (e.g., 500 lines) suggesting `snapshot grep` or `--page N` as alternatives\\n- Consider making `snapshot -v 0` output paginated by default (like `get html` already does at 2K lines)\\n- Add a `--summary` flag to show only interactive elements (buttons, inputs, links) with refs, which is what most users actually need\"\n    },\n    {\n      \"title\": \"htmlsnapshot CSS selector fails on Wikipedia section IDs\",\n      \"severity\": \"Medium\",\n      \"category\": \"Product\",\n      \"reproduction\": \"./b4w.ps1 htmlsnapshot get all text '#See_also a' --limit 20\",\n      \"expected\": \"A list of link texts from the 'See also' section.\",\n      \"actual\": \"Empty array `[]` with message 'No elements matched \\\"#See_also a\\\"'.\",\n      \"rootCause\": \"Wikipedia's HTML may use sanitized/namespaced IDs or the static HTML snapshot captures a DOM structure where the `id` attribute differs from what appears in URL fragments. The `#See_also` anchor exists in the URL fragment but may not be present as a CSS-selectable ID in the captured DOM. The htmlsnapshot `inspect` command is suggested as a fallback in the error message, but this adds an extra step.\",\n      \"codePointer\": \"\",\n      \"suggestion\": \"- Improve error messages to suggest checking whether the ID might be namespaced or transformed (e.g., Wikipedia uses `mw-headline` spans inside headings)\\n- Add a `--debug-selector` flag to htmlsnapshot get that shows all IDs/classes present in the DOM to help users self-diagnose selector failures\\n- Include an example in docs showing how to extract Wikipedia sections specifically\"\n    },\n    {\n      \"title\": \"Version mismatch warning between CLI and backend in dev mode\",\n      \"severity\": \"Low\",\n      \"category\": \"UX\",\n      \"reproduction\": \"./b4w.ps1 status\",\n      \"expected\": \"Clear indication that the version difference is expected in dev mode, or no warning at all.\",\n      \"actual\": \"\\\"⚠ Version mismatch: CLI is 4.12.1 but running backend is 4.12.1-SNAPSHOT. The CLI and backend were built from different versions of the source tree. Rebuild both to match: mvn install -pl browser4-rest -am && cargo build...\\\"\",\n      \"rootCause\": \"When running from source in dev mode, the CLI reports its version from the Cargo.toml (4.12.1) while the backend reports 4.12.1-SNAPSHOT from the Maven POM. These are semantically the same version (SNAPSHOT just means it's a dev build). The warning is misleading and suggests a rebuild that won't fix the discrepancy.\",\n      \"codePointer\": \"cli/browser4-cli/src/ (status command handler)\",\n      \"suggestion\": \"- Suppress the version mismatch warning when running in dev mode (detected by cargo build profile or when CLI and backend are both -SNAPSHOT or close enough)\\n- Change the message to note that minor version suffix differences are normal in development\\n- Consider normalizing version strings before comparison (strip -SNAPSHOT suffix)\"\n    },\n    {\n      \"title\": \"PowerShell short-flag warning on every snapshot command\",\n      \"severity\": \"Low\",\n      \"category\": \"UX\",\n      \"reproduction\": \"./b4w.ps1 snapshot -v 0 --stdout\",\n      \"expected\": \"Clean output without warnings for documented usage patterns.\",\n      \"actual\": \"\\\"⚠ Short flags detected: -v. PowerShell may intercept these in other contexts (b4w.sh, direct pwsh). Prefer long-form equivalents: --output, --interactive, --viewport\\\"\",\n      \"rootCause\": \"The b4w.ps1 wrapper detects short flags and emits a warning. This warning appears even when using b4w.ps1 correctly (which is the documented primary choice on the platform where the issue exists). The warning creates noise for a command that the user was told to use.\",\n      \"codePointer\": \"b4w.ps1 (root-level PowerShell wrapper)\",\n      \"suggestion\": \"- Suppress the short-flag warning when running under b4w.ps1 (since the wrapper already handles argument parsing correctly)\\n- Only emit the warning when actual PowerShell parameter binding issues are likely (e.g., when running under direct pwsh without the wrapper)\\n- Update the documentation to consistently use long-form flags (already recommended for cross-shell compatibility, but the examples still use short flags)\"\n    },\n    {\n      \"title\": \"No obvious way to navigate to a specific section by name\",\n      \"severity\": \"Low\",\n      \"category\": \"Discoverability\",\n      \"reproduction\": \"A user wants to go to the 'See also' section of a Wikipedia page. They must: 1) take a snapshot, 2) search for the TOC link ref, 3) click it, 4) re-snapshot.\",\n      \"expected\": \"A command like `click --text 'See also'` or a `scroll-to-section` command that navigates to a named section.\",\n      \"actual\": \"The workflow requires multiple round-trips: snapshot → grep → identify ref → click → re-snapshot. This is a 4-step process for what is conceptually a single action.\",\n      \"rootCause\": \"The snapshot model requires explicit refs for all interactions. There is no text-based element targeting without first obtaining a ref from a snapshot. This is by design (refs are backend node IDs), but it creates high interaction cost for simple navigation tasks.\",\n      \"codePointer\": \"\",\n      \"suggestion\": \"- Consider adding a `click --text '<text>'` flag that auto-snapshots, finds the first element with matching accessible text, and clicks it in one command\\n- Add a `scroll-to '<heading text>'` command for section navigation\\n- Document the TOC-click-then-snapshot pattern more prominently as a known workflow\"\n    },\n    {\n      \"title\": \"Session list shows 'SWARM' as session ID for default session\",\n      \"severity\": \"Low\",\n      \"category\": \"UX\",\n      \"reproduction\": \"./b4w.ps1 list (after using goto without -s)\",\n      \"expected\": \"A human-readable session ID or name for the default session.\",\n      \"actual\": \"The Session ID column shows 'SWARM' for the unnamed default session, which is confusing — it suggests a swarm operation is running when it's actually a normal browsing session.\",\n      \"rootCause\": \"The default session appears to have been created or re-used from a prior swarm operation. The backend may be reusing a swarm-created session ID for the unnamed default session, leaking implementation details into the user-facing output.\",\n      \"codePointer\": \"browser4-rest/ (session listing / MCPToolController)\",\n      \"suggestion\": \"- Display a more descriptive label for the default session (e.g., 'default' or 'browsing session')\\n- If 'SWARM' is an internal session type, translate it to a user-friendly label in the list output\\n- Add a 'Type' column to differentiate between regular, swarm, and extension sessions\"\n    },\n    {\n      \"title\": \"Ref lifecycle break after scrolling — refs from pre-scroll snapshot become stale\",\n      \"severity\": \"Medium\",\n      \"category\": \"Product\",\n      \"reproduction\": \"1) Take snapshot at viewport 0 (shows top of page). 2) Scroll down. 3) Try to click a ref from the original snapshot.\",\n      \"expected\": \"Either refs should survive scrolling, or the tool should warn that refs become invalid after scroll.\",\n      \"actual\": \"After scrolling, the TOC ref coordinates changed (y went from 678 to 3566 then 7132), indicating the snapshot coordinate system shifts. The ref=e1605 link still worked when clicked post-scroll, but the documentation doesn't clearly state whether scroll invalidates refs or not.\",\n      \"rootCause\": \"The accessibility tree refs (backend node IDs) survive scroll since the DOM structure doesn't change — only the viewport position changes. However, the snapshot coordinates (box values) shift, which could confuse users trying to verify they're targeting the right element. The SKILL.md 'Ref Lifecycle' section lists safe/unsafe operations but doesn't mention scrolling.\",\n      \"codePointer\": \"skills/browser4-cli/SKILL.md (Ref Lifecycle section)\",\n      \"suggestion\": \"- Add 'scroll' to the 'Safe (refs survive)' list in the Ref Lifecycle documentation\\n- Clarify that refs survive scroll but snapshot box coordinates change\\n- Consider adding a `--scroll-to-ref <ref>` option to auto-scroll elements into view before interacting\"\n    },\n    {\n      \"title\": \"No progress indicator during page navigation\",\n      \"severity\": \"Low\",\n      \"category\": \"UX\",\n      \"reproduction\": \"./b4w.ps1 goto 'https://en.wikipedia.org/wiki/Web_scraping'\",\n      \"expected\": \"Some indication of loading progress (e.g., spinner, 'loading...', or status messages).\",\n      \"actual\": \"The command blocks silently until the page loads, then returns the result. On slow connections, the user has no feedback about what's happening.\",\n      \"rootCause\": \"The CLI sends the goto command and waits synchronously for the backend response. There is no streaming progress feedback during the wait.\",\n      \"codePointer\": \"cli/browser4-cli/src/ (goto command handler)\",\n      \"suggestion\": \"- Add a spinner or elapsed-time indicator during blocking navigation operations\\n- Stream page load events (e.g., 'connecting...', 'loading DOM...', 'network idle...') if the CDP protocol supports it\\n- At minimum, print 'Navigating to <url>...' before the request so the user knows the command is in progress\"\n    }\n  ],\n  \"assessment\": {\n    \"completionStatus\": \"Successful — all 8 task steps completed without major errors. Navigation, snapshot, element interaction, history navigation, reload, status check, session listing, and session close all worked correctly.\",\n    \"successRate\": \"100% — every command executed successfully on the first attempt with no retries needed.\",\n    \"issuesFound\": 8,\n    \"majorBlockers\": \"\",\n    \"mostConfusingAspects\": \"1) The snapshot output was overwhelming (43KB) and required grep-based workflows to find relevant content — the 'snapshot -v 0' taught as the first step produces too much output for practical use. 2) CSS selector extraction with htmlsnapshot failed silently on Wikipedia section IDs, requiring fallback to the accessibility-tree snapshot approach. 3) The ref-based interaction model requires multiple round-trips for simple actions like 'click the See also link' — the user must snapshot, grep, identify a ref, click, then re-snapshot.\",\n    \"mostValuableImprovements\": \"1) Paginate snapshot output by default or add a --summary mode showing only interactive elements with refs. 2) Add text-based element targeting (e.g., `click --text 'See also'`) to reduce the snapshot→grep→click→snapshot cycle to a single command. 3) Suppress the spurious version mismatch warning in dev mode. 4) Improve the session list to show user-friendly session types instead of internal identifiers like 'SWARM'.\",\n    \"usabilityRating\": 6\n  }\n}\n```",
+    "task": "All 8 steps of the task were completed successfully:\n\n1. Navigated to `https://en.wikipedia.org/wiki/Web_scraping`\n2. Took a snapshot of the page (using `snapshot -v 0 --stdout` and `snapshot grep` to locate elements)\n3. Identified links in the \"See also\" section (found ~20 links via `snapshot grep -A 80 'region \"See also\"'`) and clicked \"Data scraping\" (ref=e2529)\n4. Used `go-back` to return to Web scraping, then `go-forward` to return to Data scraping\n5. Used `reload` to refresh the Data scraping page\n6. Checked status via `status` — server UP, version 4.12.1-SNAPSHOT\n7. Listed sessions via `list` — showed DEFAULT session (SWARM) and amazon session\n8. Closed the current session via `close`"
+  },
+  "issues": [
+    {
+      "number": 1,
+      "title": "Snapshot output overwhelms first-time users (43KB+)",
+      "severity": "Medium",
+      "category": "UX",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "./b4w.ps1 snapshot -v 0 --stdout on https://en.wikipedia.org/wiki/Web_scraping"
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "A manageable, scannable output or clear guidance on how to navigate large snapshots."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "43.3KB of YAML dumped to stdout. The output was too large to view inline and required piping through grep to find relevant content."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "Wikipedia pages have large accessibility trees with hundreds of nodes. Viewport 0 of a content-rich page still produces massive output. The SKILL.md warns about this (\"Don't cat snapshot files — they can exceed 256KB\") and recommends `snapshot grep` as an alternative, but the default `snapshot -v 0` behavior (which the docs teach as the first command after goto) dumps the full viewport tree without any size warning."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "cli/browser4-cli/src/snapshot.rs"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Add a size warning when snapshot output exceeds a threshold (e.g., 500 lines) suggesting `snapshot grep` or `--page N` as alternatives\n- Consider making `snapshot -v 0` output paginated by default (like `get html` already does at 2K lines)\n- Add a `--summary` flag to show only interactive elements (buttons, inputs, links) with refs, which is what most users actually need"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 2,
+      "title": "htmlsnapshot CSS selector fails on Wikipedia section IDs",
+      "severity": "Medium",
+      "category": "Product",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "./b4w.ps1 htmlsnapshot get all text '#See_also a' --limit 20"
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "A list of link texts from the 'See also' section."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "Empty array `[]` with message 'No elements matched \"#See_also a\"'."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "Wikipedia's HTML may use sanitized/namespaced IDs or the static HTML snapshot captures a DOM structure where the `id` attribute differs from what appears in URL fragments. The `#See_also` anchor exists in the URL fragment but may not be present as a CSS-selectable ID in the captured DOM. The htmlsnapshot `inspect` command is suggested as a fallback in the error message, but this adds an extra step."
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Improve error messages to suggest checking whether the ID might be namespaced or transformed (e.g., Wikipedia uses `mw-headline` spans inside headings)\n- Add a `--debug-selector` flag to htmlsnapshot get that shows all IDs/classes present in the DOM to help users self-diagnose selector failures\n- Include an example in docs showing how to extract Wikipedia sections specifically"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 3,
+      "title": "Ref lifecycle break after scrolling — refs from pre-scroll snapshot become stale",
+      "severity": "Medium",
+      "category": "Product",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "1) Take snapshot at viewport 0 (shows top of page). 2) Scroll down. 3) Try to click a ref from the original snapshot."
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "Either refs should survive scrolling, or the tool should warn that refs become invalid after scroll."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "After scrolling, the TOC ref coordinates changed (y went from 678 to 3566 then 7132), indicating the snapshot coordinate system shifts. The ref=e1605 link still worked when clicked post-scroll, but the documentation doesn't clearly state whether scroll invalidates refs or not."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "The accessibility tree refs (backend node IDs) survive scroll since the DOM structure doesn't change — only the viewport position changes. However, the snapshot coordinates (box values) shift, which could confuse users trying to verify they're targeting the right element. The SKILL.md 'Ref Lifecycle' section lists safe/unsafe operations but doesn't mention scrolling."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "skills/browser4-cli/SKILL.md (Ref Lifecycle section)"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Add 'scroll' to the 'Safe (refs survive)' list in the Ref Lifecycle documentation\n- Clarify that refs survive scroll but snapshot box coordinates change\n- Consider adding a `--scroll-to-ref <ref>` option to auto-scroll elements into view before interacting"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 4,
+      "title": "Version mismatch warning between CLI and backend in dev mode",
+      "severity": "Low",
+      "category": "UX",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "./b4w.ps1 status"
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "Clear indication that the version difference is expected in dev mode, or no warning at all."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "\"⚠ Version mismatch: CLI is 4.12.1 but running backend is 4.12.1-SNAPSHOT. The CLI and backend were built from different versions of the source tree. Rebuild both to match: mvn install -pl browser4-rest -am && cargo build...\""
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "When running from source in dev mode, the CLI reports its version from the Cargo.toml (4.12.1) while the backend reports 4.12.1-SNAPSHOT from the Maven POM. These are semantically the same version (SNAPSHOT just means it's a dev build). The warning is misleading and suggests a rebuild that won't fix the discrepancy."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "cli/browser4-cli/src/ (status command handler)"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Suppress the version mismatch warning when running in dev mode (detected by cargo build profile or when CLI and backend are both -SNAPSHOT or close enough)\n- Change the message to note that minor version suffix differences are normal in development\n- Consider normalizing version strings before comparison (strip -SNAPSHOT suffix)"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 5,
+      "title": "PowerShell short-flag warning on every snapshot command",
+      "severity": "Low",
+      "category": "UX",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "./b4w.ps1 snapshot -v 0 --stdout"
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "Clean output without warnings for documented usage patterns."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "\"⚠ Short flags detected: -v. PowerShell may intercept these in other contexts (b4w.sh, direct pwsh). Prefer long-form equivalents: --output, --interactive, --viewport\""
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "The b4w.ps1 wrapper detects short flags and emits a warning. This warning appears even when using b4w.ps1 correctly (which is the documented primary choice on the platform where the issue exists). The warning creates noise for a command that the user was told to use."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "b4w.ps1 (root-level PowerShell wrapper)"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Suppress the short-flag warning when running under b4w.ps1 (since the wrapper already handles argument parsing correctly)\n- Only emit the warning when actual PowerShell parameter binding issues are likely (e.g., when running under direct pwsh without the wrapper)\n- Update the documentation to consistently use long-form flags (already recommended for cross-shell compatibility, but the examples still use short flags)"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 6,
+      "title": "No obvious way to navigate to a specific section by name",
+      "severity": "Low",
+      "category": "Discoverability",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "A user wants to go to the 'See also' section of a Wikipedia page. They must: 1) take a snapshot, 2) search for the TOC link ref, 3) click it, 4) re-snapshot."
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "A command like `click --text 'See also'` or a `scroll-to-section` command that navigates to a named section."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "The workflow requires multiple round-trips: snapshot → grep → identify ref → click → re-snapshot. This is a 4-step process for what is conceptually a single action."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "The snapshot model requires explicit refs for all interactions. There is no text-based element targeting without first obtaining a ref from a snapshot. This is by design (refs are backend node IDs), but it creates high interaction cost for simple navigation tasks."
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Consider adding a `click --text '<text>'` flag that auto-snapshots, finds the first element with matching accessible text, and clicks it in one command\n- Add a `scroll-to '<heading text>'` command for section navigation\n- Document the TOC-click-then-snapshot pattern more prominently as a known workflow"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 7,
+      "title": "Session list shows 'SWARM' as session ID for default session",
+      "severity": "Low",
+      "category": "UX",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "./b4w.ps1 list (after using goto without -s)"
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "A human-readable session ID or name for the default session."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "The Session ID column shows 'SWARM' for the unnamed default session, which is confusing — it suggests a swarm operation is running when it's actually a normal browsing session."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "The default session appears to have been created or re-used from a prior swarm operation. The backend may be reusing a swarm-created session ID for the unnamed default session, leaking implementation details into the user-facing output."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "browser4-rest/ (session listing / MCPToolController)"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Display a more descriptive label for the default session (e.g., 'default' or 'browsing session')\n- If 'SWARM' is an internal session type, translate it to a user-friendly label in the list output\n- Add a 'Type' column to differentiate between regular, swarm, and extension sessions"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 8,
+      "title": "No progress indicator during page navigation",
+      "severity": "Low",
+      "category": "UX",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "./b4w.ps1 goto 'https://en.wikipedia.org/wiki/Web_scraping'"
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "Some indication of loading progress (e.g., spinner, 'loading...', or status messages)."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "The command blocks silently until the page loads, then returns the result. On slow connections, the user has no feedback about what's happening."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "The CLI sends the goto command and waits synchronously for the backend response. There is no streaming progress feedback during the wait."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "cli/browser4-cli/src/ (goto command handler)"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Add a spinner or elapsed-time indicator during blocking navigation operations\n- Stream page load events (e.g., 'connecting...', 'loading DOM...', 'network idle...') if the CDP protocol supports it\n- At minimum, print 'Navigating to <url>...' before the request so the user knows the command is in progress"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    }
+  ]
+}

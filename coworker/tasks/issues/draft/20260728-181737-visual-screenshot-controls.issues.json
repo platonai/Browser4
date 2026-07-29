@@ -1,0 +1,298 @@
+{
+  "meta": {
+    "date": "20260728-181737",
+    "source": "20260728-181737-visual-screenshot-controls.full.md",
+    "mode": "dev",
+    "scenario": "visual-screenshot-controls"
+  },
+  "background": {
+    "task": "All 10 steps of the task completed successfully:\n\n1. ✅ Resized viewport to 1280×900\n2. ✅ Navigated to `https://en.wikipedia.org/wiki/Large_language_model`\n3. ✅ Waited for network idle\n4. ✅ Took default viewport screenshot\n5. ✅ Scrolled down 6 times (4800px total) to load article content\n6. ✅ Waited for \"Training\" section heading text to be visible\n7. ✅ Took full-page screenshot (`22154px` tall, 8-page PDF) saved to `.test-sessions/full-page-llm-article.png`\n8. ✅ Scrolled back to top (position 0.0)\n9. ✅ Waited 2 seconds, took top-of-page screenshot saved to `.test-sessions/top-of-page.png`\n10. ✅ Saved page as PDF (8 pages) to `.test-sessions/llm-article.pdf`",
+    "executionContext": "**Commands used (in order):**\n\n| Step | Command | \n|------|---------|\n| Prep | `./b4w.ps1 help` |\n| Prep | Read `skills/browser4-cli/SKILL.md` |\n| 1 | `./b4w.ps1 resize 1280 900` | \n| 2 | `./b4w.ps1 goto \"https://en.wikipedia.org/wiki/Large_language_model\"` |\n| 3 | `./b4w.ps1 wait --load networkidle` |\n| 4 | `./b4w.ps1 screenshot` (default, auto-saved) |\n| 5 | `./b4w.ps1 scroll down 800` ×6 |\n| 6 | `./b4w.ps1 wait --text \"Training\" --timeout 10000` |\n| 7 | `./b4w.ps1 screenshot --full-page --filename .test-sessions/full-page-llm-article.png` |\n| 8 | `./b4w.ps1 scroll up 5000` |\n| 9 | `./b4w.ps1 wait 2000` + `./b4w.ps1 screenshot --filename .test-sessions/top-of-page.png` |\n| 10 | `./b4w.ps1 pdf --filename .test-sessions/llm-article.pdf` |\n\n**Key decisions:**\n- Used `--filename` with relative paths for custom output locations; discovered that `--filename` resolves relative to CWD when the path contains a `/`\n- Had to guess the pixel value for `scroll up` (used 5000) since there's no \"scroll to top\" command\n- Used `--text` wait mode since it was the most natural way to verify content reached a certain section\n\n**Workarounds:**\n- For scrolling back to top, guessed `5000px` based on accumulated scroll-down distance\n\n---\n\n## C & D: Issues and Assessment\n\n```json\n{\n  \"issues\": [\n    {\n      \"title\": \"Viewport dimensions drift after full-page screenshot\",\n      \"severity\": \"High\",\n      \"category\": \"Reliability\",\n      \"reproduction\": \"1. resize 1280 900\\n2. goto any URL\\n3. screenshot (verify: 1600×1125 physical / 1280×900 CSS)\\n4. screenshot --full-page\\n5. scroll up 5000\\n6. screenshot\\n7. eval 'window.innerWidth' → 1728 not 1280\",\n      \"expected\": \"Viewport should remain at 1280×900 CSS pixels after full-page screenshot.\",\n      \"actual\": \"Viewport grew from 1280×900 (1600×1125 physical at 1.25 DPR) to 1728×1034 (2160×1292 physical). The resize command's effect was silently undone or mutated by a subsequent operation — likely the full-page screenshot temporarily adjusting the viewport and failing to restore it.\",\n      \"rootCause\": \"The full-page screenshot likely uses CDP to temporarily set the viewport height to the full page height (or uses Emulation.setDeviceMetricsOverride) and fails to restore the original dimensions afterward. The resize command may also set the outer window size rather than the inner content area, leading to confusion about what '1280×900' actually means.\",\n      \"codePointer\": \"browser4-core/browser4-browser/ — PulsarWebDriver screenshot/fullPage logic or the CDP Page.captureScreenshot invocation that temporarily resizes the viewport.\",\n      \"suggestion\": \"- After full-page screenshot, restore the original viewport dimensions explicitly via CDP\\n- Consider using `Page.captureScreenshot` with `captureBeyondViewport: true` instead of resizing the viewport\\n- Add a `--viewport` flag to `resize` that distinguishes between CSS pixels and device pixels\\n- Verify and report actual viewport dimensions after resize (e.g., \\\"Resized to 1280×900 (inner: 1280×900, DPR: 1.25)\\\")\"\n    },\n    {\n      \"title\": \"Full-page screenshot saves as JPEG despite .png extension\",\n      \"severity\": \"Medium\",\n      \"category\": \"Reliability\",\n      \"reproduction\": \"1. goto any URL\\n2. screenshot --full-page --filename output.png\\n3. file output.png → \\\"JPEG image data\\\" despite .png extension\",\n      \"expected\": \"File extension should match the actual image format, or the format should be documented.\",\n      \"actual\": \"The file has a `.png` extension but contains JPEG data. This is misleading — tools that check magic bytes will correctly identify it as JPEG, but users and scripts relying on the extension will be confused.\",\n      \"rootCause\": \"Likely the full-page screenshot path uses CDP's `Page.captureScreenshot` which returns JPEG by default for large screenshots (smaller file size), but the CLI always appends `.png` to the filename regardless of the actual format.\",\n      \"codePointer\": \"cli/browser4-cli/src/ — screenshot command handler that determines the output filename extension.\",\n      \"suggestion\": \"- Detect the actual image format from the CDP response and use the correct extension (.jpg for JPEG, .png for PNG)\\n- Or force PNG format for consistency with the extension\\n- Or allow a `--format png|jpeg` flag so users can choose\"\n    },\n    {\n      \"title\": \"Hidden help categories not discoverable\",\n      \"severity\": \"Medium\",\n      \"category\": \"Discoverability\",\n      \"reproduction\": \"1. Run `b4w.ps1 help`\\n2. Read the filter line: \\\"Filter help by category: --help nav | --help extract | --help session | --help kb | --help agent | --help swarm | --help crawl\\\"\\n3. Try `--help capture`, `--help mouse`, `--help core`, `--help kb` — all work but aren't listed\",\n      \"expected\": \"All valid help category filters should be listed in the main help output.\",\n      \"actual\": \"The main help only advertises 7 filter categories (nav, extract, session, kb, agent, swarm, crawl) but `capture`, `mouse`, and `core` also work. The Global options section also lists a subset: \\\"try: nav, extract, session, kb, agent\\\".\",\n      \"rootCause\": \"The help category filter list in the CLI's help text is hardcoded and was not updated when new categories (capture, mouse, core) were added. Two different lists exist (the Filter line at top and the Global options hint at bottom) with different contents.\",\n      \"codePointer\": \"cli/browser4-cli/src/ — help text generation, likely in main.rs or a help module.\",\n      \"suggestion\": \"- Generate the category filter list dynamically from registered categories instead of hardcoding\\n- Unify the two lists (filter line and Global options hint) to avoid inconsistency\\n- Add `capture`, `mouse`, and `core` to the advertised categories\"\n    },\n    {\n      \"title\": \"No 'scroll to top' or 'scroll to bottom' convenience command\",\n      \"severity\": \"Low\",\n      \"category\": \"UX\",\n      \"reproduction\": \"1. scroll down 3000\\n2. Try to scroll back to top — must guess pixel amount (scroll up 3000) or use eval with window.scrollTo()\",\n      \"expected\": \"A shorthand command like `scroll top` or `scroll bottom` so users don't have to track how far they've scrolled.\",\n      \"actual\": \"Only pixel-based relative scrolling is available via `scroll <direction> <pixels>`. Users must remember or guess how far they scrolled down to get back to the top.\",\n      \"rootCause\": \"The scroll command only supports relative pixel offsets. Positional targets (top, bottom) were not implemented.\",\n      \"codePointer\": \"cli/browser4-cli/src/ — scroll command implementation.\",\n      \"suggestion\": \"- Support `scroll top` and `scroll bottom` as aliases that scroll to position 0 and document height respectively\\n- Consider `scroll to <pixels>` for absolute positioning as a complement to the relative `scroll <direction> <pixels>`\"\n    },\n    {\n      \"title\": \"Wait command output lacks context about what was waited for\",\n      \"severity\": \"Low\",\n      \"category\": \"UX\",\n      \"reproduction\": \"1. wait --load networkidle\\n2. Output: \\\"✓ Wait complete\\\" — no indication of what condition was satisfied or how long it took.\",\n      \"expected\": \"Output should include the condition that was satisfied, e.g., \\\"✓ Network idle reached (took 1.2s)\\\" or \\\"✓ Text 'Training' found on page\\\".\",\n      \"actual\": \"Uniform \\\"✓ Wait complete\\\" for all wait modes. Users can't tell from the output whether anything actually happened or the condition was already met.\",\n      \"rootCause\": \"The wait command uses a generic success message regardless of the wait mode, discarding mode-specific context that would help users understand what happened.\",\n      \"codePointer\": \"cli/browser4-cli/src/ — wait command output formatting.\",\n      \"suggestion\": \"- Include the wait mode in the output: \\\"✓ Network idle reached\\\", \\\"✓ Text 'X' found\\\", \\\"✓ Element 'e1' appeared\\\"\\n- Include elapsed time: \\\"(took 1.2s)\\\" or \\\"(already satisfied)\\\"\\n- Distinguish between \\\"waited and found\\\" vs \\\"already satisfied\\\" for debuggability\"\n    },\n    {\n      \"title\": \"Resize command unclear about outer window vs inner viewport\",\n      \"severity\": \"Low\",\n      \"category\": \"Documentation\",\n      \"reproduction\": \"1. resize 1280 900 → \\\"✓ Resized to 1280×900\\\"\\n2. eval 'window.innerWidth' → 1728 (not 1280)\\n3. Confusion: what does 1280×900 actually control?\",\n      \"expected\": \"The command should clarify whether it resizes the outer browser window, the inner content area (viewport), and whether device pixel ratio affects the result. Output should report the actual resulting viewport dimensions.\",\n      \"actual\": \"The output says \\\"1280×900\\\" but the actual viewport CSS dimensions are different (1728×1034 in testing). The relationship between the requested size and the actual viewport is opaque to the user.\",\n      \"rootCause\": \"The resize command likely sets the outer window size via CDP `Browser.setWindowBounds`, but the inner content area is smaller due to browser chrome (title bar, toolbars). The device pixel ratio also affects physical vs CSS pixel dimensions. None of this is explained.\",\n      \"codePointer\": \"browser4-core/browser4-browser/ — PulsarWebDriver resize logic.\",\n      \"suggestion\": \"- Report both requested and actual viewport dimensions: \\\"Resized window to 1280×900 (viewport: 1280×858, DPR: 1.25)\\\"\\n- Document the distinction between outer window size and inner viewport in `resize --help`\\n- Consider adding a `--viewport` flag that targets the inner content area directly via CDP Emulation\"\n    },\n    {\n      \"title\": \"Default screenshot save location is not obvious to first-time users\",\n      \"severity\": \"Low\",\n      \"category\": \"UX\",\n      \"reproduction\": \"1. screenshot (no --filename)\\n2. Output shows path under .browser4-cli/snapshot/ with timestamp filename\\n3. User may not know where .browser4-cli/ lives or how to find the file later\",\n      \"expected\": \"The output should make it easy to locate and use the file, perhaps with a relative path from CWD or a copyable command.\",\n      \"actual\": \"Output shows an absolute path which is helpful, but the directory `.browser4-cli/` is a hidden directory (dot-prefixed) that new users might not know about. The clickable link format in the terminal is good though.\",\n      \"rootCause\": \"Design choice to store artifacts in `.browser4-cli/snapshot/`. This is fine for power users but could be surfaced more clearly for newcomers.\",\n      \"codePointer\": \"\",\n      \"suggestion\": \"- Add a tip after the first screenshot: \\\"Screenshots are saved to .browser4-cli/snapshot/. Use --filename to choose a custom location.\\\"\\n- Consider `screenshot --open` to open the file in the system viewer\\n- List recent screenshots in the session summary\"\n    },\n    {\n      \"title\": \"Scroll, resize, wait, screenshot scattered across unrelated help categories\",\n      \"severity\": \"Low\",\n      \"category\": \"UX\",\n      \"reproduction\": \"1. Look for viewport-related commands in help\\n2. resize/wait are under \\\"Core\\\", scroll under \\\"Mouse\\\", screenshot/pdf under \\\"Capture\\\"\\n3. No unified \\\"Viewport\\\" or \\\"Page control\\\" category exists\",\n      \"expected\": \"Viewport and page control commands should be grouped together for easy discovery.\",\n      \"actual\": \"Related commands are scattered: resize and wait in Core, scroll in Mouse, screenshot and pdf in Capture. A user looking for 'how to control the page view' must scan three different sections.\",\n      \"rootCause\": \"Commands are organized by implementation mechanism (mouse events, CDP capture, core utilities) rather than by user intent (viewport control).\",\n      \"codePointer\": \"cli/browser4-cli/src/ — help text command grouping/organization.\",\n      \"suggestion\": \"- Add a \\\"Viewport\\\" or \\\"Page\\\" help category grouping resize, scroll, wait, screenshot, and pdf\\n- Keep existing categories for backward compatibility but cross-reference via \\\"See also --help viewport\\\"\"\n    }\n  ],\n  \"assessment\": {\n    \"completionStatus\": \"Successful — all 10 task steps completed. Three output files produced: full-page screenshot (6.9MB, 22154px tall), top-of-page screenshot (523KB), and 8-page PDF (2.4MB).\",\n    \"successRate\": \"100% — every command executed without errors and produced the expected output.\",\n    \"issuesFound\": 8,\n    \"majorBlockers\": \"None. No command failures or work-stopping errors occurred. The task was completed smoothly.\",\n    \"mostConfusingAspects\": \"1. The resize command says '1280×900' but the actual viewport is 1728×1034 — the relationship between requested size and actual viewport is opaque.\\n2. The viewport silently changed size after the full-page screenshot operation, with no warning or indication.\\n3. Default screenshot files go to a hidden .browser4-cli/ directory — new users wouldn't know to look there.\\n4. The full-page screenshot file has a .png extension but contains JPEG data — confusing and potentially breaking for downstream tools.\",\n    \"mostValuableImprovements\": \"1. Fix viewport drift after full-page screenshot — this is a correctness bug that silently changes browser state.\\n2. List all help category filters (capture, mouse, core) in the main help output — low-effort, high-impact discoverability fix.\\n3. Add scroll top/bottom convenience commands — small addition that eliminates an entire class of guesswork.\\n4. Make wait output descriptive — '✓ Network idle reached (took 1.2s)' is far more useful than '✓ Wait complete'.\",\n    \"usabilityRating\": 7\n  }\n}\n```"
+  },
+  "issues": [
+    {
+      "number": 1,
+      "title": "Viewport dimensions drift after full-page screenshot",
+      "severity": "High",
+      "category": "Reliability",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "1. resize 1280 900\n2. goto any URL\n3. screenshot (verify: 1600×1125 physical / 1280×900 CSS)\n4. screenshot --full-page\n5. scroll up 5000\n6. screenshot\n7. eval 'window.innerWidth' → 1728 not 1280"
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "Viewport should remain at 1280×900 CSS pixels after full-page screenshot."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "Viewport grew from 1280×900 (1600×1125 physical at 1.25 DPR) to 1728×1034 (2160×1292 physical). The resize command's effect was silently undone or mutated by a subsequent operation — likely the full-page screenshot temporarily adjusting the viewport and failing to restore it."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "The full-page screenshot likely uses CDP to temporarily set the viewport height to the full page height (or uses Emulation.setDeviceMetricsOverride) and fails to restore the original dimensions afterward. The resize command may also set the outer window size rather than the inner content area, leading to confusion about what '1280×900' actually means."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "browser4-core/browser4-browser/ — PulsarWebDriver screenshot/fullPage logic or the CDP Page.captureScreenshot invocation that temporarily resizes the viewport."
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- After full-page screenshot, restore the original viewport dimensions explicitly via CDP\n- Consider using `Page.captureScreenshot` with `captureBeyondViewport: true` instead of resizing the viewport\n- Add a `--viewport` flag to `resize` that distinguishes between CSS pixels and device pixels\n- Verify and report actual viewport dimensions after resize (e.g., \"Resized to 1280×900 (inner: 1280×900, DPR: 1.25)\")"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 2,
+      "title": "Full-page screenshot saves as JPEG despite .png extension",
+      "severity": "Medium",
+      "category": "Reliability",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "1. goto any URL\n2. screenshot --full-page --filename output.png\n3. file output.png → \"JPEG image data\" despite .png extension"
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "File extension should match the actual image format, or the format should be documented."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "The file has a `.png` extension but contains JPEG data. This is misleading — tools that check magic bytes will correctly identify it as JPEG, but users and scripts relying on the extension will be confused."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "Likely the full-page screenshot path uses CDP's `Page.captureScreenshot` which returns JPEG by default for large screenshots (smaller file size), but the CLI always appends `.png` to the filename regardless of the actual format."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "cli/browser4-cli/src/ — screenshot command handler that determines the output filename extension."
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Detect the actual image format from the CDP response and use the correct extension (.jpg for JPEG, .png for PNG)\n- Or force PNG format for consistency with the extension\n- Or allow a `--format png|jpeg` flag so users can choose"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 3,
+      "title": "Hidden help categories not discoverable",
+      "severity": "Medium",
+      "category": "Discoverability",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "1. Run `b4w.ps1 help`\n2. Read the filter line: \"Filter help by category: --help nav | --help extract | --help session | --help kb | --help agent | --help swarm | --help crawl\"\n3. Try `--help capture`, `--help mouse`, `--help core`, `--help kb` — all work but aren't listed"
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "All valid help category filters should be listed in the main help output."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "The main help only advertises 7 filter categories (nav, extract, session, kb, agent, swarm, crawl) but `capture`, `mouse`, and `core` also work. The Global options section also lists a subset: \"try: nav, extract, session, kb, agent\"."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "The help category filter list in the CLI's help text is hardcoded and was not updated when new categories (capture, mouse, core) were added. Two different lists exist (the Filter line at top and the Global options hint at bottom) with different contents."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "cli/browser4-cli/src/ — help text generation, likely in main.rs or a help module."
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Generate the category filter list dynamically from registered categories instead of hardcoding\n- Unify the two lists (filter line and Global options hint) to avoid inconsistency\n- Add `capture`, `mouse`, and `core` to the advertised categories"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 4,
+      "title": "No 'scroll to top' or 'scroll to bottom' convenience command",
+      "severity": "Low",
+      "category": "UX",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "1. scroll down 3000\n2. Try to scroll back to top — must guess pixel amount (scroll up 3000) or use eval with window.scrollTo()"
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "A shorthand command like `scroll top` or `scroll bottom` so users don't have to track how far they've scrolled."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "Only pixel-based relative scrolling is available via `scroll <direction> <pixels>`. Users must remember or guess how far they scrolled down to get back to the top."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "The scroll command only supports relative pixel offsets. Positional targets (top, bottom) were not implemented."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "cli/browser4-cli/src/ — scroll command implementation."
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Support `scroll top` and `scroll bottom` as aliases that scroll to position 0 and document height respectively\n- Consider `scroll to <pixels>` for absolute positioning as a complement to the relative `scroll <direction> <pixels>`"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 5,
+      "title": "Wait command output lacks context about what was waited for",
+      "severity": "Low",
+      "category": "UX",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "1. wait --load networkidle\n2. Output: \"✓ Wait complete\" — no indication of what condition was satisfied or how long it took."
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "Output should include the condition that was satisfied, e.g., \"✓ Network idle reached (took 1.2s)\" or \"✓ Text 'Training' found on page\"."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "Uniform \"✓ Wait complete\" for all wait modes. Users can't tell from the output whether anything actually happened or the condition was already met."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "The wait command uses a generic success message regardless of the wait mode, discarding mode-specific context that would help users understand what happened."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "cli/browser4-cli/src/ — wait command output formatting."
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Include the wait mode in the output: \"✓ Network idle reached\", \"✓ Text 'X' found\", \"✓ Element 'e1' appeared\"\n- Include elapsed time: \"(took 1.2s)\" or \"(already satisfied)\"\n- Distinguish between \"waited and found\" vs \"already satisfied\" for debuggability"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 6,
+      "title": "Resize command unclear about outer window vs inner viewport",
+      "severity": "Low",
+      "category": "Documentation",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "1. resize 1280 900 → \"✓ Resized to 1280×900\"\n2. eval 'window.innerWidth' → 1728 (not 1280)\n3. Confusion: what does 1280×900 actually control?"
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "The command should clarify whether it resizes the outer browser window, the inner content area (viewport), and whether device pixel ratio affects the result. Output should report the actual resulting viewport dimensions."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "The output says \"1280×900\" but the actual viewport CSS dimensions are different (1728×1034 in testing). The relationship between the requested size and the actual viewport is opaque to the user."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "The resize command likely sets the outer window size via CDP `Browser.setWindowBounds`, but the inner content area is smaller due to browser chrome (title bar, toolbars). The device pixel ratio also affects physical vs CSS pixel dimensions. None of this is explained."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "browser4-core/browser4-browser/ — PulsarWebDriver resize logic."
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Report both requested and actual viewport dimensions: \"Resized window to 1280×900 (viewport: 1280×858, DPR: 1.25)\"\n- Document the distinction between outer window size and inner viewport in `resize --help`\n- Consider adding a `--viewport` flag that targets the inner content area directly via CDP Emulation"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 7,
+      "title": "Default screenshot save location is not obvious to first-time users",
+      "severity": "Low",
+      "category": "UX",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "1. screenshot (no --filename)\n2. Output shows path under .browser4-cli/snapshot/ with timestamp filename\n3. User may not know where .browser4-cli/ lives or how to find the file later"
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "The output should make it easy to locate and use the file, perhaps with a relative path from CWD or a copyable command."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "Output shows an absolute path which is helpful, but the directory `.browser4-cli/` is a hidden directory (dot-prefixed) that new users might not know about. The clickable link format in the terminal is good though."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "Design choice to store artifacts in `.browser4-cli/snapshot/`. This is fine for power users but could be surfaced more clearly for newcomers."
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Add a tip after the first screenshot: \"Screenshots are saved to .browser4-cli/snapshot/. Use --filename to choose a custom location.\"\n- Consider `screenshot --open` to open the file in the system viewer\n- List recent screenshots in the session summary"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 8,
+      "title": "Scroll, resize, wait, screenshot scattered across unrelated help categories",
+      "severity": "Low",
+      "category": "UX",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "1. Look for viewport-related commands in help\n2. resize/wait are under \"Core\", scroll under \"Mouse\", screenshot/pdf under \"Capture\"\n3. No unified \"Viewport\" or \"Page control\" category exists"
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "Viewport and page control commands should be grouped together for easy discovery."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "Related commands are scattered: resize and wait in Core, scroll in Mouse, screenshot and pdf in Capture. A user looking for 'how to control the page view' must scan three different sections."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "Commands are organized by implementation mechanism (mouse events, CDP capture, core utilities) rather than by user intent (viewport control)."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "cli/browser4-cli/src/ — help text command grouping/organization."
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Add a \"Viewport\" or \"Page\" help category grouping resize, scroll, wait, screenshot, and pdf\n- Keep existing categories for backward compatibility but cross-reference via \"See also --help viewport\""
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    }
+  ]
+}

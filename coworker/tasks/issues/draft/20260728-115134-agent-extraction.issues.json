@@ -1,0 +1,134 @@
+{
+  "meta": {
+    "date": "20260728-115134",
+    "source": "20260728-115134-agent-extraction.full.md",
+    "mode": "dev",
+    "scenario": "agent-extraction"
+  },
+  "background": {
+    "task": "### Partially Successful (Estimated 55% success rate)\n\nThe task required navigating Wikipedia, extracting structured data, summarizing content, and running an autonomous agent. Results:\n\n| Step | Status | Notes |\n|------|--------|-------|\n| 1. Navigate to Python page | ✅ | Worked on first attempt |\n| 2. Extract with JSON schema (inline) | ✅ | Required `pwsh` directly; `b4w.sh` mangled JSON |\n| 3. Extract with custom schema file | ✅ | Same — worked via `pwsh`, not `b4w.sh` |\n| 4. Summarize entire page | ✅ | Good quality summary generated |\n| 5. Summarize History section only | ⚠️ | `#History` selector captured only \"History\" text; workaround: used `#mw-content-text` selector + focused prompt |\n| 6. Submit autonomous agent task | ✅ | Task submitted, ID returned |\n| 7. Poll agent status | ✅ | Polled successfully; completed with statusCode 200 |\n| 8. Retrieve agent results | ❌ | Returned `{}` — data lost despite successful completion |\n| 9. Compare sync vs async | ✅ | Analysis below |\n\n### Key Data Extracted\n\n**Non-LLM** (`htmlsnapshot get text \".infobox\"`):\n- Name: Python | First appeared: 20 February 1991 | Developer: Python Software Foundation | Typing: Duck, dynamic, strong | License: Python Software Foundation License\n\n**LLM extract with schema:**\n```json\n{\"name\":\"Python\",\"first_release_year\":1991,\"developer\":\"Python Software Foundation\",\"typing_discipline\":\"Duck, dynamic, strong; optional type annotations\",\"license\":\"Python Software Foundation License\"}\n```\n\n---",
+    "executionContext": "26 commands executed. Major phases:\n1. **Discovery:** Read SKILL.md, agent.md references, ran `help`\n2. **Initial attempt:** `./b4w.ps1` failed (CRLF); switched to `./b4w.sh`\n3. **LLM features failed:** All LLM commands returned langchain4j config error\n4. **Non-LLM fallback:** Used `htmlsnapshot get text` which worked perfectly for infobox\n5. **Backend recovery:** Required `kill-all` after backend degraded (timeouts everywhere)\n6. **Post-restart:** All LLM features worked; agent task completed but returned empty\n\n### Comparison: Synchronous vs Asynchronous Approaches\n\n| Aspect | `extract`/`summarize` (Sync) | `agent run` (Async) |\n|--------|------------------------------|---------------------|\n| **Latency** | Blocks; ~25-30s for Wikipedia | Returns immediately; ~30-45s total |\n| **Output** | Saves to file; structured JSON | Returns inline; `{}` in this test |\n| **Error visibility** | Immediate error on stdout | Must poll; error in status JSON |\n| **Page context** | Operates on current page only | Can navigate anywhere |\n| **Suitability** | Single-page extraction/summarization | Multi-step, multi-page tasks |\n| **Reliability** | Worked consistently (after restart) | Failed to return data |\n\n**Recommendation:** Use `extract`/`summarize` for single-page operations where you control the context. Use `agent run` for autonomous multi-step workflows where navigation is part of the task — but verify results carefully.\n\n---"
+  },
+  "issues": [
+    {
+      "number": 1,
+      "title": "CRLF line endings in b4w.ps1 break direct execution on Linux",
+      "severity": "High |",
+      "category": "Reliability\n\n-",
+      "sections": [
+        {
+          "body": "`./b4w.ps1 help` → `/usr/bin/env: 'pwsh\\r': No such file or directory`\n-",
+          "label": "Reproduction"
+        },
+        {
+          "body": "b4w.ps1 uses CRLF line terminators; the kernel treats `\\r` as part of the shebang executable name\n- **Fix:** Convert to LF line endings; add `.gitattributes` rule `*.ps1 text eol=lf`\n",
+          "label": "Root Cause Analysis"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 2,
+      "title": "LLM features fail with obscure JAR path error instead of 'no API key configured'",
+      "severity": "Critical |",
+      "category": "Reliability\n\n-",
+      "sections": [
+        {
+          "body": "Without API key: `./b4w.sh extract '...'` → `ServiceConfigurationError: ...langchain4j-http-client-jdk-1.5.0.jar`\n-",
+          "label": "Reproduction"
+        },
+        {
+          "body": "No pre-flight LLM config check at tool dispatch level; raw Java exception propagates\n- **Fix:** Add LLM config check before invoking any agent tool; catch and translate the error\n",
+          "label": "Root Cause Analysis"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 3,
+      "title": "b4w.sh wrapper mangles JSON arguments containing colons",
+      "severity": "High |",
+      "category": "Reliability\n\n-",
+      "sections": [
+        {
+          "body": "`--schema '{\"type\":\"object\",...}'` → `error: too many arguments: expected 1, received 2`\n-",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Shell tokenization splits JSON at colons/commas before b4w.sh's quoting loop\n- **Fix:** Add `--schema-file` flag; support `@file.json` syntax\n",
+          "label": "Root Cause Analysis"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 4,
+      "title": "Backend degrades over time requiring kill-all to recover",
+      "severity": "High |",
+      "category": "Reliability\n\n-",
+      "sections": [
+        {
+          "body": "After ~15 min: all commands timeout; Chrome fails to launch; only `kill-all` recovers\n-",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Likely resource leak from failed agent attempts; Chrome process dies without backend detection\n- **Fix:** Add browser process heartbeat; auto-restart Chrome; resource cleanup in error paths\n",
+          "label": "Root Cause Analysis"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 5,
+      "title": "Agent task completes with statusCode 200 but returns empty result",
+      "severity": "Critical |",
+      "category": "Product\n\n-",
+      "sections": [
+        {
+          "body": "`agent result <id>` → `{}` despite statusCode 200, pageContentBytes 510008, event \"fields\"\n-",
+          "label": "Reproduction"
+        },
+        {
+          "body": "instructResults data not serialized into commandResult; extraction step likely failed silently\n- **Fix:** Investigate result serialization; surface instructResults when commandResult is empty\n",
+          "label": "Root Cause Analysis"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 6,
+      "title": "Summarize --selector only captures matched element text, not section content",
+      "severity": "Medium |",
+      "category": "Documentation\n\n-",
+      "sections": [
+        {
+          "body": "`--selector \"#History\"` → LLM: \"content not provided\" (selector matched only the `<span>` with text \"History\")\n-",
+          "label": "Reproduction"
+        },
+        {
+          "body": "Wikipedia sections have IDs on heading `<span>` elements; content is in following siblings\n- **Fix:** Document selector scope; add Wikipedia-specific example; consider `--section` flag\n\n---\n\n### Issues 7-13: Additional findings\n\n7. **No `--schema-file` flag** for extract — inline JSON fragile across shells (Discoverability, Medium)\n8. **Agent silently changes page context** — subsequent commands operate on agent's last page (UX, Medium)\n9. **Version mismatch warnings** noisy in dev mode (UX, Low)\n10. **htmlsnapshot summary times out** on large pages (Reliability, Low)\n11. **Doctor detects LLM issue but tools don't fail-fast** with clear message (Discoverability, Medium)\n12. **agent list shows failed tasks as 'queued'** — misleading; no `agent clear` (UX, Low)\n13. **Extract output format** undocumented — data embedded in string inside wrapper JSON (Documentation, Medium)\n",
+          "label": "Root Cause Analysis"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    }
+  ]
+}

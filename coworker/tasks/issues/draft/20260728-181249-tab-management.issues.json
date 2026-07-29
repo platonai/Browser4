@@ -1,0 +1,186 @@
+{
+  "meta": {
+    "source": "20260728-181249-tab-management.full.md",
+    "date": "20260728-181249",
+    "mode": "dev",
+    "scenario": "tab-management"
+  },
+  "background": {
+    "executionContext": "**Commands used (chronologically):**\n1. `./b4w.ps1 goto \"https://en.wikipedia.org/wiki/Web_scraping\"`\n2. `./b4w.ps1 tab-list`\n3. `./b4w.ps1 tab-new \"https://news.ycombinator.com\"`\n4. `./b4w.ps1 tab-new \"https://en.wikipedia.org/wiki/Data_mining\"`\n5. `./b4w.ps1 tab-list`\n6. `./b4w.ps1 tab-select 0` → `./b4w.ps1 snapshot -v 0 --stdout`\n7. `./b4w.ps1 tab-select 2` → `./b4w.ps1 snapshot -v 0 --stdout`\n8. `./b4w.ps1 tab-close 2`\n9. `./b4w.ps1 tab-list`\n10. `./b4w.ps1 tab-select 0` → snapshot, `./b4w.ps1 tab-select 1` → snapshot\n\n**Important decisions:**\n- Used `b4w.ps1` wrapper as instructed, despite the SKILL.md noting `b4w.sh` for Linux. This was the correct choice per the task invocation rules.\n- Used `--stdout` on snapshots to avoid opening files for verification.\n- Used numeric tab indices throughout since tab positions were stable (no reordering between operations).\n\n**Workarounds required:**\n- The `snapshot -v 0 --stdout` command produces a short-flags warning on every invocation. The warning itself is contradictory (tells you to use `b4w.sh` while also warning `b4w.sh` may intercept flags). Functionally harmless but noisy.\n- Tab indices shifted when inserting new tabs (Chrome inserts after the active tab, not at the end), requiring a `tab-list` to verify positions — as documented.\n\n---\n\n```json\n{\n  \"issues\": [\n    {\n      \"title\": \"Short flag warning on b4w.ps1 contradicts documentation and itself\",\n      \"severity\": \"Low\",\n      \"category\": \"UX\",\n      \"reproduction\": \"Run `./b4w.ps1 snapshot -v 0 --stdout` from Linux/bash.\",\n      \"expected\": \"The SKILL.md states b4w.ps1 uses manual $args parsing so short flags are safe. The CLI should either not warn on b4w.ps1, or the warning should be accurate for the current context.\",\n      \"actual\": \"Every invocation produces: '⚠ Short flags detected: -v PowerShell may intercept these in other contexts (b4w.sh, direct pwsh). Prefer long-form equivalents: --output, --interactive, --viewport Or use b4w.sh / b4w.bat (cmd.exe) for full compatibility.' The warning says short flags may be intercepted in b4w.sh, then recommends b4w.sh as a fix — self-contradictory. The suggestion to use --output for -v is wrong (--viewport is the correct equivalent).\",\n      \"rootCause\": \"The warning is emitted unconditionally when short flags matching PowerShell common parameters are detected, regardless of which wrapper script is in use. When running via b4w.sh on Linux, the pwsh parameter binding issue doesn't apply, yet the warning fires anyway. The warning text also has a logic error in its recommendation chain.\",\n      \"codePointer\": \"cli/browser4-cli/src/main.rs or the b4w.ps1 script — wherever the short-flag detection and warning logic lives\",\n      \"suggestion\": \"- Detect which wrapper is in use and skip the warning when b4w.ps1 is the entry point (since it handles short flags correctly)\\n- Fix the contradictory recommendation: if b4w.sh may intercept flags, don't recommend it as a fix\\n- Correct the flag mapping: -v maps to --viewport, not --output\"\n    },\n    {\n      \"title\": \"Compilation output noise on every command\",\n      \"severity\": \"Low\",\n      \"category\": \"UX\",\n      \"reproduction\": \"Run any `./b4w.ps1` command. Every invocation prints 'Finished `dev` profile [unoptimized + debuginfo] target(s) in X.XXs' before the actual command output.\",\n      \"expected\": \"The compilation status line should be suppressed or shown only when a rebuild actually occurred. Alternatively, it could go to stderr so it doesn't pollute command output.\",\n      \"actual\": \"Every command starts with the cargo build status line, adding visual noise and making it harder to scan command output.\",\n      \"rootCause\": \"The b4w.ps1/b4w.sh wrappers run `cargo run` which always prints build status to stdout. There's no --quiet flag being passed to suppress it when nothing was rebuilt.\",\n      \"codePointer\": \"b4w.ps1 and b4w.sh wrapper scripts — the cargo run invocation\",\n      \"suggestion\": \"- Pass `--quiet` to cargo run so the build status line only appears when there's an error or actual recompilation\\n- Or redirect the cargo build output to stderr so it doesn't mix with command results\"\n    },\n    {\n      \"title\": \"tab-new insertion position is surprising for new users\",\n      \"severity\": \"Low\",\n      \"category\": \"Discoverability\",\n      \"reproduction\": \"1. `tab-new url1` (creates tab 1). 2. `tab-new url2`. The second tab becomes index 1, pushing url1 to index 2, because Chrome inserts after the active tab.\",\n      \"expected\": \"A first-time user might expect tab-new to always append at the end (index 2), or the CLI to provide an option for append vs. insert-after-current behavior.\",\n      \"actual\": \"Tabs are inserted by Chrome after the active tab, which is documented in SKILL.md but still surprising during first use. The user must run tab-list to discover the actual ordering.\",\n      \"rootCause\": \"Browser4 delegates tab creation to Chrome's native CDP method, which inserts after the active tab per Chrome's default behavior. Browser4 does not reorder or reposition tabs after creation.\",\n      \"codePointer\": \"\",\n      \"suggestion\": \"- Add a brief note in the tab-new output indicating the insertion position (e.g., 'Inserted after current tab at index N')\\n- Consider adding a --position flag (start/end/after-current) if CDP supports it\"\n    },\n    {\n      \"title\": \"Snapshot output is verbose even with -v 0 and lacks clear page identification\",\n      \"severity\": \"Medium\",\n      \"category\": \"UX\",\n      \"reproduction\": \"Run `./b4w.ps1 snapshot -v 0 --stdout` on a Wikipedia article. The output starts with viewport metadata then immediately dumps a deep accessibility tree.\",\n      \"expected\": \"The snapshot output should prominently display the page URL and title at the top for quick context verification, before the accessibility tree.\",\n      \"actual\": \"The viewport metadata block shows technical details (viewportHeight, viewportsTotal, hidden heights) but not the page URL or title. The user must separately reference tab-list or the previous goto output to confirm which page they're looking at. The accessibility tree starts with a deeply nested generic container, requiring significant scrolling to find actual page content.\",\n      \"rootCause\": \"The snapshot YAML output format focuses on the accessibility tree structure and viewport metadata. Page identification (URL/title) is shown by the goto command but is not included in snapshot output.\",\n      \"codePointer\": \"cli/browser4-cli/src/snapshot.rs — the snapshot rendering/formatting logic\",\n      \"suggestion\": \"- Include page URL and title in the snapshot header (e.g., '# Page: Web scraping - Wikipedia — https://en.wikipedia.org/wiki/Web_scraping')\\n- This would make standalone snapshots self-describing for context verification without needing to cross-reference tab-list\"\n    },\n    {\n      \"title\": \"No visual feedback after tab-select beyond a one-line confirmation\",\n      \"severity\": \"Low\",\n      \"category\": \"UX\",\n      \"reproduction\": \"Run `tab-select 0`. Output: 'Switched to tab 0 (url)'. No snapshot or page preview is shown.\",\n      \"expected\": \"While the no-auto-snapshot behavior is documented, a first-time user might expect some lightweight page identification (title) after switching, or an optional --snapshot flag on tab-select to combine switch+verify in one command.\",\n      \"actual\": \"The user must always run a separate snapshot command after tab-select to verify the correct tab is active. This adds an extra command for every tab switch.\",\n      \"rootCause\": \"tab-select only activates the tab via CDP. It does not trigger any page content inspection. This is by design (documented) but adds friction for interactive tab-hopping workflows.\",\n      \"codePointer\": \"\",\n      \"suggestion\": \"- Add an optional `--snapshot` flag to `tab-select` that automatically captures a snapshot after switching\\n- Or at minimum print the page title alongside the URL in the 'Switched to tab N' message\"\n    }\n  ],\n  \"assessment\": {\n    \"completionStatus\": \"Successful — all 10 task steps completed without errors. Tab management (create, list, select, close) and snapshot verification all worked correctly.\",\n    \"successRate\": \"100% — every command executed successfully on the first attempt with no retries needed.\",\n    \"issuesFound\": 5,\n    \"majorBlockers\": \"\",\n    \"mostConfusingAspects\": \"1. The tab-new insertion order (Chrome inserts after the active tab, not at the end) — required running tab-list to discover actual indices. 2. The persistent short-flag warning on every snapshot command, which contradicts the documentation's claim that b4w.ps1 handles short flags safely. 3. Snapshot output doesn't identify which page it belongs to — the user has to cross-reference with tab-list to be sure.\",\n    \"mostValuableImprovements\": \"1. Add page URL/title to snapshot output headers for self-describing context. 2. Fix the contradictory short-flag warning (suppress it when running via b4w.ps1, or fix the recommendation text). 3. Suppress compilation output on no-op rebuilds with --quiet. 4. Add page title to tab-select output for instant context verification.\",\n    \"usabilityRating\": 7\n  }\n}\n```",
+    "task": "All 10 task steps completed successfully:\n\n| Step | Action | Result |\n|------|--------|--------|\n| 1 | `goto` Wikipedia \"Web scraping\" | ✅ Page loaded |\n| 2 | `tab-list` (initial) | ✅ 1 tab: Web scraping at index 0 |\n| 3 | `tab-new` Hacker News | ✅ Created at index 1, auto-switched |\n| 4 | `tab-new` Wikipedia \"Data mining\" | ✅ Created index 1, HN pushed to index 2 |\n| 5 | `tab-list` (3 tabs) | ✅ All three tabs visible with correct indices |\n| 6 | `tab-select 0` + `snapshot` | ✅ Web scraping content confirmed |\n| 7 | `tab-select 2` + `snapshot` | ✅ Hacker News content confirmed |\n| 8 | `tab-close 2` | ✅ HN tab closed |\n| 9 | `tab-list` (verify removal) | ✅ Only 2 tabs remain |\n| 10 | `tab-select 0`/`1` + snapshots | ✅ Both remaining tabs verified |"
+  },
+  "issues": [
+    {
+      "number": 1,
+      "title": "Snapshot output is verbose even with -v 0 and lacks clear page identification",
+      "severity": "Medium",
+      "category": "UX",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "Run `./b4w.ps1 snapshot -v 0 --stdout` on a Wikipedia article. The output starts with viewport metadata then immediately dumps a deep accessibility tree."
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "The snapshot output should prominently display the page URL and title at the top for quick context verification, before the accessibility tree."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "The viewport metadata block shows technical details (viewportHeight, viewportsTotal, hidden heights) but not the page URL or title. The user must separately reference tab-list or the previous goto output to confirm which page they're looking at. The accessibility tree starts with a deeply nested generic container, requiring significant scrolling to find actual page content."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "The snapshot YAML output format focuses on the accessibility tree structure and viewport metadata. Page identification (URL/title) is shown by the goto command but is not included in snapshot output."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "cli/browser4-cli/src/snapshot.rs — the snapshot rendering/formatting logic"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Include page URL and title in the snapshot header (e.g., '# Page: Web scraping - Wikipedia — https://en.wikipedia.org/wiki/Web_scraping')\n- This would make standalone snapshots self-describing for context verification without needing to cross-reference tab-list"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 2,
+      "title": "Short flag warning on b4w.ps1 contradicts documentation and itself",
+      "severity": "Low",
+      "category": "UX",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "Run `./b4w.ps1 snapshot -v 0 --stdout` from Linux/bash."
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "The SKILL.md states b4w.ps1 uses manual $args parsing so short flags are safe. The CLI should either not warn on b4w.ps1, or the warning should be accurate for the current context."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "Every invocation produces: '⚠ Short flags detected: -v PowerShell may intercept these in other contexts (b4w.sh, direct pwsh). Prefer long-form equivalents: --output, --interactive, --viewport Or use b4w.sh / b4w.bat (cmd.exe) for full compatibility.' The warning says short flags may be intercepted in b4w.sh, then recommends b4w.sh as a fix — self-contradictory. The suggestion to use --output for -v is wrong (--viewport is the correct equivalent)."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "The warning is emitted unconditionally when short flags matching PowerShell common parameters are detected, regardless of which wrapper script is in use. When running via b4w.sh on Linux, the pwsh parameter binding issue doesn't apply, yet the warning fires anyway. The warning text also has a logic error in its recommendation chain."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "cli/browser4-cli/src/main.rs or the b4w.ps1 script — wherever the short-flag detection and warning logic lives"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Detect which wrapper is in use and skip the warning when b4w.ps1 is the entry point (since it handles short flags correctly)\n- Fix the contradictory recommendation: if b4w.sh may intercept flags, don't recommend it as a fix\n- Correct the flag mapping: -v maps to --viewport, not --output"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 3,
+      "title": "Compilation output noise on every command",
+      "severity": "Low",
+      "category": "UX",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "Run any `./b4w.ps1` command. Every invocation prints 'Finished `dev` profile [unoptimized + debuginfo] target(s) in X.XXs' before the actual command output."
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "The compilation status line should be suppressed or shown only when a rebuild actually occurred. Alternatively, it could go to stderr so it doesn't pollute command output."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "Every command starts with the cargo build status line, adding visual noise and making it harder to scan command output."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "The b4w.ps1/b4w.sh wrappers run `cargo run` which always prints build status to stdout. There's no --quiet flag being passed to suppress it when nothing was rebuilt."
+        },
+        {
+          "label": "Code Pointer",
+          "body": "b4w.ps1 and b4w.sh wrapper scripts — the cargo run invocation"
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Pass `--quiet` to cargo run so the build status line only appears when there's an error or actual recompilation\n- Or redirect the cargo build output to stderr so it doesn't mix with command results"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 4,
+      "title": "tab-new insertion position is surprising for new users",
+      "severity": "Low",
+      "category": "Discoverability",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "1. `tab-new url1` (creates tab 1). 2. `tab-new url2`. The second tab becomes index 1, pushing url1 to index 2, because Chrome inserts after the active tab."
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "A first-time user might expect tab-new to always append at the end (index 2), or the CLI to provide an option for append vs. insert-after-current behavior."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "Tabs are inserted by Chrome after the active tab, which is documented in SKILL.md but still surprising during first use. The user must run tab-list to discover the actual ordering."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "Browser4 delegates tab creation to Chrome's native CDP method, which inserts after the active tab per Chrome's default behavior. Browser4 does not reorder or reposition tabs after creation."
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Add a brief note in the tab-new output indicating the insertion position (e.g., 'Inserted after current tab at index N')\n- Consider adding a --position flag (start/end/after-current) if CDP supports it"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    },
+    {
+      "number": 5,
+      "title": "No visual feedback after tab-select beyond a one-line confirmation",
+      "severity": "Low",
+      "category": "UX",
+      "sections": [
+        {
+          "label": "Reproduction",
+          "body": "Run `tab-select 0`. Output: 'Switched to tab 0 (url)'. No snapshot or page preview is shown."
+        },
+        {
+          "label": "Expected Behavior",
+          "body": "While the no-auto-snapshot behavior is documented, a first-time user might expect some lightweight page identification (title) after switching, or an optional --snapshot flag on tab-select to combine switch+verify in one command."
+        },
+        {
+          "label": "Actual Behavior",
+          "body": "The user must always run a separate snapshot command after tab-select to verify the correct tab is active. This adds an extra command for every tab switch."
+        },
+        {
+          "label": "Root Cause Analysis",
+          "body": "tab-select only activates the tab via CDP. It does not trigger any page content inspection. This is by design (documented) but adds friction for interactive tab-hopping workflows."
+        },
+        {
+          "label": "AI Suggested Improvement",
+          "body": "- Add an optional `--snapshot` flag to `tab-select` that automatically captures a snapshot after switching\n- Or at minimum print the page title alongside the URL in the 'Switched to tab N' message"
+        }
+      ],
+      "review": {
+        "notes": "",
+        "decision": null
+      }
+    }
+  ]
+}
