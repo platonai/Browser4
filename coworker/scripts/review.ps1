@@ -1016,7 +1016,7 @@ function Show-AllIssuesDisplay {
 
     Write-Host ''
     Write-Host ('═' * $inner) -ForegroundColor DarkGray
-    Write-Host "  Press a number (1-$total) to jump, [N]/[P] file, [v] single, [b] list, [q] quit" -ForegroundColor DarkGray
+    Write-Host "  Press a number (1-$total) to jump, [N]/[P] file, [v] single, [d] discard, [b] list, [q] quit" -ForegroundColor DarkGray
 }
 
 function Show-Help {
