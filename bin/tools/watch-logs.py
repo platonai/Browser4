@@ -3,7 +3,8 @@
 Browser4 Log Dashboard — real-time TUI log monitor.
 
 A polished terminal dashboard for watching all Browser4 log sources:
-Kotlin backend, Rust CLI startup, Coworker tasks, build output, and git log.
+Kotlin backend, Rust CLI startup, Coworker tasks, build output, git log,
+and RWS (Real-World Scenario) test output.
 
 Requires: textual, watchfiles
 Install:  pip install textual watchfiles
@@ -11,6 +12,17 @@ Install:  pip install textual watchfiles
 Usage:
     python bin/tools/watch-logs.py
     python bin/tools/watch-logs.py --repo /path/to/browser4 --tail-lines 500
+
+Tabs:
+    0-9  Switch between log sources (pulsar, server, browser, api, pages,
+         coworker, build, startup, combined, git)
+    r    RWS test output (target/*.raw.md + .test-sessions/*-progress.json)
+    g    Git log (toggle compact/detail)
+    space  Pause/resume scrolling
+    c    Clear buffer
+    y    Copy buffer to clipboard
+    ^F   Filter (regex)
+    q    Quit
 """
 
 from __future__ import annotations
@@ -78,6 +90,12 @@ SEVERITY_RE = re.compile(
     r"\b(FATAL|ERROR|SEVERE|WARN|WARNING|INFO|DEBUG|TRACE)\b"
 )
 
+# RWS (Real-World Scenario) test output markers
+RWS_STEP_START_RE = re.compile(r">>>\s+STEP\s+(\S+):\s*(.+)")
+RWS_STEP_PASS_RE = re.compile(r"<<<\s+STEP\s+(\S+):\s+PASS")
+RWS_STEP_FAIL_RE = re.compile(r"<<<\s+STEP\s+(\S+):\s+FAIL")
+RWS_ABORT_RE = re.compile(r"!!!\s+ABORT\s+at\s+step\s+(\S+):\s*(.+)\s*!!!")
+
 LOG_SOURCES: list[dict] = [
     {"key": "1", "label": "pulsar",  "desc": "Root backend log",
      "paths": ["logs/pulsar.log"]},
@@ -99,6 +117,8 @@ LOG_SOURCES: list[dict] = [
      "paths": ["logs/pulsar.log", "logs/pulsar.s.log", "logs/pulsar.bs.log"]},
     {"key": "0", "label": "git",     "desc": "Git log",
      "paths": ["__git__"]},
+    {"key": "r", "label": "rws",     "desc": "RWS test output",
+     "paths": ["__rws__"]},
 ]
 
 
@@ -200,6 +220,27 @@ def colorize_git_detail(line: str) -> Text:
     return Text(line)
 
 
+def colorize_rws_line(line: str) -> Text:
+    """Colorize RWS test output: STEP markers, agent output, progress JSON."""
+    # Abort markers — bold red, highest priority
+    if RWS_ABORT_RE.search(line):
+        return Text(line, style=Style.parse("bold red"))
+    # Step fail — bold red
+    if RWS_STEP_FAIL_RE.search(line):
+        return Text(line, style=Style.parse("bold red"))
+    # Step pass — green
+    if RWS_STEP_PASS_RE.search(line):
+        return Text(line, style=Style.parse("green"))
+    # Step start — cyan
+    if RWS_STEP_START_RE.search(line):
+        return Text(line, style=Style.parse("cyan"))
+    # Heartbeat / progress lines — dim cyan
+    if "·" in line and ("running" in line or "Checkpoints:" in line or "step(s) completed" in line):
+        return Text(line, style=Style.parse("dim cyan"))
+    # Fall back to severity-based colorization for agent output
+    return colorize_line(line)
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # LogView — a single tab's log display + watcher
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -264,6 +305,8 @@ class LogView(Container):
 
         if sentinel == "__git__":
             self._git_task = asyncio.create_task(self._poll_git_log())
+        elif sentinel == "__rws__":
+            self._watcher_task = asyncio.create_task(self._watch_rws())
         else:
             self._watcher_task = asyncio.create_task(self._watch_files())
 
@@ -414,7 +457,99 @@ class LogView(Container):
             return "server"
         elif "pulsar" in name:
             return "pulsar"
+        elif name.endswith(".raw.md"):
+            # Extract scenario name from <timestamp>-<scenario>.raw.md
+            stem = name.replace(".raw.md", "")
+            parts = stem.split("-", 1)
+            return parts[1] if len(parts) > 1 else stem
+        elif name.endswith("-progress.json"):
+            return name.replace("-progress.json", "")
+        elif name == "test-session.json":
+            return "session"
         return ""
+
+    # ── RWS file watcher ────────────────────────────────────────────────────
+
+    def _resolve_rws_paths(self) -> list[Path]:
+        """Resolve __rws__ sentinel to actual file paths.
+
+        Finds the most recent raw capture files in target/ and progress
+        files in .test-sessions/.  Returns up to 5 of each type.
+        """
+        resolved: list[Path] = []
+
+        # Latest raw capture files in target/
+        target_dir = self.repo_root / "target"
+        if target_dir.exists():
+            raw_files = sorted(
+                target_dir.glob("*.raw.md"),
+                key=lambda f: f.stat().st_mtime,
+                reverse=True,
+            )
+            for rf in raw_files[:5]:
+                resolved.append(rf)
+
+        # Progress files in .test-sessions/
+        ts_dir = self.repo_root / ".test-sessions"
+        if ts_dir.exists():
+            prog_files = sorted(
+                ts_dir.glob("*-progress.json"),
+                key=lambda f: f.stat().st_mtime,
+                reverse=True,
+            )
+            for pf in prog_files[:5]:
+                resolved.append(pf)
+
+            # Most recent test-session.json
+            session_files = sorted(
+                ts_dir.glob("*/test-session.json"),
+                key=lambda f: f.stat().st_mtime,
+                reverse=True,
+            )
+            if session_files:
+                resolved.append(session_files[0])
+
+        return resolved
+
+    async def _watch_rws(self) -> None:
+        """Watch RWS output files with periodic re-scanning for new files.
+
+        Unlike _watch_files which resolves paths once, this method re-scans
+        every 2 seconds so newly created capture files (from freshly started
+        RWS tests) are picked up automatically.
+        """
+        if not self.rich_log:
+            return
+
+        while not self._stop_event.is_set():
+            # Re-scan for RWS files
+            resolved = self._resolve_rws_paths()
+
+            # Seed newly discovered files
+            for fp in resolved:
+                if fp not in self._file_positions:
+                    await self._read_tail(fp)
+
+            # Poll all tracked files for new content
+            for fp in list(self._file_positions.keys()):
+                try:
+                    if fp.exists():
+                        current_size = fp.stat().st_size
+                        if current_size > self._file_positions.get(fp, 0):
+                            await self._read_new_lines(fp)
+                except Exception:
+                    pass
+
+            # Show a status line when no files are found yet
+            if not resolved:
+                # Only show once — write directly to buffer to avoid flicker
+                if "rws:no-files" not in str(self._buffer):
+                    self._buffer.append(
+                        "(waiting for RWS output — run 'b4w test rws sc <name>' to start)"
+                    )
+                    self._refresh_display()
+
+            await asyncio.sleep(2)
 
     # ── Git log poller ──────────────────────────────────────────────────────
 
@@ -484,6 +619,7 @@ class LogView(Container):
 
         self.rich_log.clear()
         is_git = self.source["paths"][0] == "__git__"
+        is_rws = self.source["paths"][0] == "__rws__"
 
         for line in list(self._buffer):
             # Apply filter
@@ -496,6 +632,8 @@ class LogView(Container):
                     text = colorize_git_detail(line)
                 else:
                     text = colorize_git_compact(line)
+            elif is_rws:
+                text = colorize_rws_line(line)
             elif line.startswith("──── git log"):
                 text = Text(line, style=Style.parse("dark_cyan"))
             else:
@@ -609,6 +747,7 @@ class WatchLogsApp(App):
         Binding("7", "switch_tab(7)", "Build", show=False),
         Binding("8", "switch_tab(8)", "Startup", show=False),
         Binding("9", "switch_tab(9)", "Combined", show=False),
+        Binding("r", "rws_tab", "RWS tests"),
         Binding("g", "git_tab", "Git log"),
         Binding("space", "pause", "Pause"),
         Binding("c", "clear", "Clear"),
@@ -698,6 +837,14 @@ class WatchLogsApp(App):
                     view.action_toggle_git_detail()
             else:
                 tabs.active = "git"
+        except Exception:
+            pass
+
+    def action_rws_tab(self) -> None:
+        """Switch to RWS test output tab."""
+        try:
+            tabs = self.query_one(TabbedContent)
+            tabs.active = "rws"
         except Exception:
             pass
 
