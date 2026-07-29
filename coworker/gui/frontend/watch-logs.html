@@ -166,9 +166,9 @@ body {
   box-shadow: var(--shadow-sm);
 }
 .source-tab {
-  display: inline-flex; align-items: center; gap: 5px;
-  padding: 5px 12px;
-  font-size: 0.74rem; font-weight: 500;
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 4px 8px;
+  font-size: 0.7rem; font-weight: 500;
   cursor: pointer; user-select: none;
   border: 1px solid transparent;
   background: transparent; color: var(--text-secondary);
@@ -190,11 +190,6 @@ body {
   opacity: 0.7;
 }
 .source-tab.active .tab-key { background: rgba(255,255,255,0.2); opacity: 1; }
-.source-tab .tab-desc {
-  font-size: 0.62rem; opacity: 0.6; font-weight: 400;
-}
-.source-tab.active .tab-desc { opacity: 0.85; }
-
 /* ═══════════════════════════════════════════════════════════════════════
    Main Log Display
    ═══════════════════════════════════════════════════════════════════════ */
@@ -325,8 +320,7 @@ body {
    ═══════════════════════════════════════════════════════════════════════ */
 @media (max-width: 768px) {
   .source-tabs { padding: 3px 0.5rem; }
-  .source-tab { padding: 4px 8px; font-size: 0.7rem; }
-  .source-tab .tab-desc { display: none; }
+  .source-tab { padding: 3px 6px; font-size: 0.65rem; }
   .log-display { font-size: 0.7rem; }
 }
 </style>
@@ -490,8 +484,7 @@ function renderTabs() {
       '" onclick="selectSourceById(\'' + src.label + '\')" title="' +
       escHtml(src.desc) + ' (' + src.key + ')">' +
       '<span class="tab-key">' + escHtml(src.key) + '</span>' +
-      escHtml(src.label) +
-      '<span class="tab-desc">' + escHtml(src.desc) + '</span></div>';
+      escHtml(src.label) + '</div>';
   }
   container.innerHTML = html;
 }
