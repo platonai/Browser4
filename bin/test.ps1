@@ -465,6 +465,13 @@ function Invoke-MockSiteBoot([string[]]$additionalArgs) {
         }
     }
 
+    # Always default mock.site.port to $mockSitePort (18080) when not explicitly set.
+    # Without this, Spring Boot starts on a random port (--server.port=0), which
+    # contradicts the documented port used in seed files and help examples.
+    if (-not ($mockSiteJvmArgs | Where-Object { $_ -like '-Dmock.site.port=*' })) {
+        $mockSiteJvmArgs += "-Dmock.site.port=$mockSitePort"
+    }
+
     $portInUse = $false
     $occupyingPid = $null
 
@@ -527,6 +534,7 @@ To use a different port:
     }
 
     $mvnArgs = @(
+        '-am',
         '-DskipTests'
     ) + $passThroughArgs
 

@@ -9551,11 +9551,20 @@ async fn handle_crawl_list(
         // Remove stale entries that the server has already cleaned up
         if !stale_ids.is_empty() {
             list.tasks.retain(|t| !stale_ids.contains(&t.task_id));
-            cli_println!(
-                "Cleaned up {} stale crawl task(s) — server no longer has them.",
-                stale_ids.len()
-            );
+            // Routine housekeeping — only shows when stale tasks > 0
+            if stale_ids.len() > 20 {
+                cli_println!(
+                    "Pruned {} completed tasks from local tracking (routine cleanup).",
+                    stale_ids.len()
+                );
+            }
         }
+        // Also prune tasks older than 24h to prevent unbounded accumulation
+        let age_cutoff = chrono::Utc::now() - chrono::Duration::hours(24);
+        let age_cutoff_str = age_cutoff.to_rfc3339();
+        let before = list.tasks.len();
+        list.tasks.retain(|t| t.command != "crawl" || t.submitted_at >= age_cutoff_str);
+        let _aged_out = before - list.tasks.len();
         let _ = write_async_tasks(&list, None);
     } else {
         cli_println!("Note: Backend unreachable — showing cached statuses. Run `crawl <url>` or `open <url>` to auto-start the backend for live status.");
@@ -10116,7 +10125,6 @@ async fn handle_crawl(
         resolved_args.as_deref(),
     );
 
-    let primary_url = &urls[0];
     let task_id = submit_crawl(client, base_url, &server_params).await?;
     let task_id = task_id.trim().trim_matches('"').to_string();
     cli_println!("Crawl task submitted: {}", task_id);
@@ -10126,8 +10134,42 @@ async fn handle_crawl(
     }
     json_field("task_id", json!(task_id));
 
+    // Build a compact description from command context instead of just the first URL.
+    // This makes `crawl list` entries distinguishable without needing to remember task IDs.
+    let depth = tool_params
+        .get("depth")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(1);
+    let refresh = tool_params
+        .get("refresh")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let crawl_background = tool_params
+        .get("background")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let crawl_desc = {
+        let mut parts: Vec<String> = Vec::new();
+        parts.push(format!("{} URLs", urls.len()));
+        if depth == 0 {
+            parts.push("depth 0".to_string());
+        } else {
+            parts.push(format!("depth {}", depth));
+        }
+        if has_sql {
+            parts.push("X-SQL".to_string());
+        }
+        if crawl_background {
+            parts.push("--bg".to_string());
+        }
+        if refresh {
+            parts.push("--refresh".to_string());
+        }
+        parts.join(", ")
+    };
+
     // Persist the task for cross-session tracking
-    let _ = track_async_task(&task_id, "crawl", primary_url, None);
+    let _ = track_async_task(&task_id, "crawl", &crawl_desc, None);
 
     let background = tool_params
         .get("background")
@@ -10151,9 +10193,15 @@ async fn handle_crawl(
     let timeout = crawl_request_timeout();
     let start = std::time::Instant::now();
     let mut last_report = std::time::Duration::ZERO;
-    let report_interval = std::time::Duration::from_secs(15);
+    // First progress report after 5s (quick feedback), then every 10s
+    let first_report_interval = std::time::Duration::from_secs(5);
+    let report_interval = std::time::Duration::from_secs(10);
+    let url_count = urls.len();
 
-    cli_println!("Waiting for crawl to complete (task {}). Use --background for long-running crawls.", task_id);
+    cli_println!(
+        "Waiting for crawl to complete (task {}, {} URLs). Use --background for long-running crawls.",
+        task_id, url_count
+    );
 
     loop {
         if start.elapsed() > timeout {
@@ -10182,21 +10230,25 @@ async fn handle_crawl(
 
         // Periodic progress indicator so foreground crawls don't look hung
         let elapsed = start.elapsed();
-        if elapsed - last_report >= report_interval {
+        let interval = if last_report == std::time::Duration::ZERO {
+            first_report_interval
+        } else {
+            report_interval
+        };
+        if elapsed - last_report >= interval {
             last_report = elapsed;
             if pages_found > 0 {
                 cli_println!(
-                    "Still crawling... {} pages found so far ({}s elapsed)",
+                    "Crawling... {}/{} pages found ({}s elapsed)",
                     pages_found,
+                    url_count,
                     elapsed.as_secs()
                 );
             } else {
                 cli_println!(
-                    "Still waiting for crawl to start... ({}s elapsed). \
-                     If the queue is congested, try stopping old tasks or using --background. \
-                     Run 'crawl cancel {}' to cancel this task.",
+                    "Crawling... waiting for first page ({}s elapsed, {} URLs queued)",
                     elapsed.as_secs(),
-                    task_id
+                    url_count
                 );
             }
         }
@@ -10220,6 +10272,22 @@ async fn handle_crawl(
 
                 // Format output
                 if has_sql {
+                    let extraction_error_count = if let Some(pages) = pages {
+                        pages.iter().filter(|p| p["extractionError"].as_str().is_some()).count()
+                    } else {
+                        0
+                    };
+
+                    // Detect rows where every field is an empty string (query ran but selectors
+                    // matched nothing — different from query-execution failure)
+                    let all_rows_empty = !all_extracted.is_empty() && all_extracted.iter().all(|row| {
+                        row.as_object().map_or(false, |obj|
+                            !obj.is_empty() && obj.values().all(|v|
+                                v.as_str().map_or(true, |s| s.is_empty())
+                            )
+                        )
+                    });
+
                     let extracted_output: String = if all_extracted.is_empty() {
                         "No extracted data.".to_string()
                     } else {
@@ -10230,6 +10298,35 @@ async fn handle_crawl(
                             "table" | _ => format_table(&all_extracted),
                         }
                     };
+
+                    // Summary line — always show extraction stats unless in JSON mode
+                    if all_extracted.is_empty() {
+                        let diag = if extraction_error_count > 0 {
+                            format!(
+                                "⚠ X-SQL query failed on {}/{} page(s). Try re-running with --verbose for per-page diagnostics.",
+                                extraction_error_count, page_count
+                            )
+                        } else {
+                            format!(
+                                "⚠ X-SQL returned 0 results across {} pages — check your selectors. \
+                                 Use 'htmlsnapshot inspect' to discover available selectors on the page.",
+                                page_count
+                            )
+                        };
+                        cli_println!("{}", diag);
+                    } else if all_rows_empty {
+                        cli_println!(
+                            "⚠ X-SQL returned {} rows but all fields are empty ({} pages crawled). \
+                             The query executed but selectors did not match any elements. \
+                             Verify selectors with 'htmlsnapshot inspect' or 'htmlsnapshot grep'.",
+                            all_extracted.len(), page_count
+                        );
+                    } else {
+                        cli_println!(
+                            "{} pages crawled, {} rows extracted.",
+                            page_count, all_extracted.len()
+                        );
+                    }
 
                     let summary = format!("Results written");
                     let output = write_crawl_output(&extracted_output, output_file, &summary)?;

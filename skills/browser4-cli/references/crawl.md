@@ -246,6 +246,63 @@ browser4-cli crawl --seed-file urls.txt --depth 0 --sql-stdin --format table < q
 browser4-cli crawl --seed-file urls.txt --depth 0 --sql @extract.sql --format csv -o out.csv
 ```
 
+## Testing locally with MockSite
+
+The mock e-commerce site (`./bin/test.ps1 mock-site`) provides predictable
+product pages for testing crawl extraction without hitting live websites.
+
+### MockSite selectors
+
+MockSite's product pages use ID selectors (unlike the class selectors common on
+Amazon).  Always inspect the actual page before writing queries:
+
+```bash
+# Discover selectors for a page
+browser4-cli goto "http://localhost:18080/ec/dp/B0E000001"
+browser4-cli htmlsnapshot
+browser4-cli htmlsnapshot inspect
+
+# The inspect output shows element patterns including singleton IDs
+```
+
+Typical MockSite selectors:
+
+| Field | Selector |
+|---|---|
+| Product title | `#productTitle` |
+| Price | `#product-price` |
+| Description | `#feature-bullets` |
+| Category | `.breadcrumb` |
+
+### MockSite crawl example
+
+```bash
+# 1. Start MockSite
+./bin/test.ps1 mock-site
+
+# 2. Create a seed file
+echo "http://localhost:18080/ec/dp/B0E000001" > seed-urls.txt
+echo "http://localhost:18080/ec/dp/B0E000002" >> seed-urls.txt
+echo "http://localhost:18080/ec/dp/B0E000003" >> seed-urls.txt
+
+# 3. Create an X-SQL extract file
+cat > extract.sql << 'SQLEOF'
+SELECT
+  dom_base_uri(dom) AS url,
+  dom_first_text(dom, '#productTitle') AS title,
+  dom_first_text(dom, '#product-price') AS price
+FROM load_and_select(@url, 'body')
+SQLEOF
+
+# 4. Run the crawl
+browser4-cli crawl --seed-file seed-urls.txt --depth 0 --refresh \
+  --sql @extract.sql --format table
+```
+
+> **Tip:** When selectors don't match, use `htmlsnapshot grep` with `--selector`
+> to verify elements exist, or `htmlsnapshot inspect` to discover available
+> selectors.  MockSite uses IDs (`#productTitle`), not classes (`.title`).
+
 ## LoadOptions passthrough (`--args` / `-a`)
 
 Any [LoadOptions](load-options-guide.md) field can be passed through `-a`:
