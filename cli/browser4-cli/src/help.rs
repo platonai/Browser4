@@ -2,6 +2,9 @@
 
 use crate::commands::{all_commands, CommandDef};
 
+/// CLI version, set at build time from git tags or Cargo.toml.
+const VERSION: &str = env!("BROWSER4_CLI_VERSION");
+
 /// Maximum characters per line in help output.
 const MAX_LINE_WIDTH: usize = 120;
 
@@ -123,13 +126,14 @@ pub fn commands_in_category(category_name: &str) -> Vec<CommandDef> {
 pub fn generate_help() -> String {
     let cmds = all_commands();
     let mut lines: Vec<String> = vec![
-        "Usage: browser4-cli [-s <session>] <command> [args] [options]".to_string(),
+        format!("browser4-cli {} — Control a Browser4 server from the command line", VERSION),
+        format!("Usage: browser4-cli [-s <session>] <command> [args] [options]"),
     ];
 
-    // Common workflows — show the 5 most common patterns
-    lines.push("\nCommon workflows:".to_string());
+    // Common workflows — compact pipe-style
+    lines.push("\n── Common workflows ─────────────────────────────────────────────────".to_string());
     lines.push("  Navigate & inspect:".to_string());
-    lines.push("    goto <url>  →  snapshot -v 0  →  click <ref>  →  snapshot -v 0    # -v 0 = current viewport".to_string());
+    lines.push("    goto <url>  →  snapshot -v 0  →  click <ref>  →  snapshot -v 0".to_string());
     lines.push("  Extract data:".to_string());
     lines.push("    htmlsnapshot get text \"<css>\"           # single field".to_string());
     lines.push("    htmlsnapshot query --sql @query.sql       # structured extraction".to_string());
@@ -139,8 +143,8 @@ pub fn generate_help() -> String {
     lines.push("    eval --file script.js                     # read JS from file (no quoting issues)".to_string());
     lines.push("  Bulk crawl:".to_string());
     lines.push("    crawl <url> --out-link-selector \"...\" --depth 1 --sql @query.sql".to_string());
-    lines.push("\nFilter help by category:  --help nav | --help extract | --help session | --help kb | --help agent | --help swarm | --help crawl".to_string());
 
+    // Category listing — each category with its commands
     let mut first_category = true;
     for (cat_name, cat_title) in CATEGORY_TITLES {
         let cat_cmds: Vec<&CommandDef> = cmds
@@ -150,27 +154,34 @@ pub fn generate_help() -> String {
         if cat_cmds.is_empty() {
             continue;
         }
-        if !first_category {
-            lines.push("\n  ---".to_string());
+        if first_category {
+            lines.push("\n── Commands ─────────────────────────────────────────────────────────".to_string());
         }
         first_category = false;
-        lines.push(format!("\n{}:", cat_title));
+        lines.push(format!("\n  [{}]", cat_title));
         for cmd in cat_cmds {
             lines.push(generate_help_entry(cmd));
         }
     }
 
-    lines.push("\nPlugin tools:".to_string());
-    lines.push("  Installed plugins expose their tools via the plugin-<name> <method> pattern:".to_string());
+    // Plugin tools
+    lines.push("\n── Plugin tools ─────────────────────────────────────────────────────".to_string());
+    lines.push("  Installed plugins expose tools via the plugin-<name> <method> pattern:".to_string());
     lines.push("    plugin-<name>              invoke the default tool for a plugin domain".to_string());
     lines.push("    plugin-<name> <method>     invoke a specific method (e.g. plugin-media download --url ...)".to_string());
     lines.push("    plugin                     list all available plugin tool domains".to_string());
     lines.push("  Use `plugin list` to see installed plugins and their status.".to_string());
 
-    lines.push("\nGlobal options:".to_string());
+    // Global options
+    lines.push("\n── Global options ───────────────────────────────────────────────────".to_string());
     lines.push(format_with_gap(
         "  --help [cmd|category]",
-        "print help (try: nav, extract, session, kb, agent)",
+        "print help; try categories: nav, extract, session, kb, agent, swarm",
+        30,
+    ));
+    lines.push(format_with_gap(
+        "  --help-json",
+        "emit full command reference as machine-readable JSON (for AI / scripts)",
         30,
     ));
     lines.push(format_with_gap("  --version", "print version", 30));
@@ -201,13 +212,6 @@ pub fn generate_help() -> String {
         30,
     ));
 
-    // for developer only
-    // lines.push(format_with_gap(
-    //     "  --use-maven-startup",
-    //     "opt in to local maven spring-boot:run startup",
-    //     30,
-    // ));
-
     lines.push(String::new());
     lines.push(
         "Run `browser4-cli help <command>` or `<command> --help` for detailed options and examples."
@@ -219,6 +223,211 @@ pub fn generate_help() -> String {
     );
 
     lines.join("\n")
+}
+
+/// Generate compact quick-reference help for when no arguments are given.
+///
+/// Shows the most commonly used commands grouped by task, global flags, and
+/// pointers to discover more. Designed to fit in ~35 lines so an AI or human
+/// can scan it in a single glance.
+pub fn generate_quick_reference() -> String {
+    let mut lines: Vec<String> = Vec::new();
+
+    // Header
+    lines.push(format!("browser4-cli {} — Control a Browser4 server from the command line", VERSION));
+    lines.push(format!("Usage: browser4-cli [-s <session>] <command> [args] [options]"));
+
+    // ── Navigate & Inspect ──
+    lines.push(String::new());
+    lines.push("── Navigate & Inspect ─────────────────────────────────────────────".to_string());
+    lines.push(fmt_cmd("goto <url>", "Navigate to a URL (auto-opens session)"));
+    lines.push(fmt_cmd("snapshot [-v <N>]", "Capture page accessibility tree"));
+    lines.push(fmt_cmd("click <ref>", "Click an element"));
+    lines.push(fmt_cmd("fill <ref> \"<text>\"", "Fill a form field (--submit to press Enter)"));
+    lines.push(fmt_cmd("scroll <dx> <dy>", "Scroll the page by pixels"));
+    lines.push(fmt_cmd("screenshot [file]", "Capture a screenshot"));
+    lines.push(fmt_cmd("wait <target>", "Wait for element, text, URL, time, or page load"));
+
+    // ── Extract & Query ──
+    lines.push(String::new());
+    lines.push("── Extract & Query ─────────────────────────────────────────────────".to_string());
+    lines.push(fmt_cmd("htmlsnapshot", "Capture full HTML snapshot with metadata"));
+    lines.push(fmt_cmd("htmlsnapshot query", "Run X-SQL against stored or live pages"));
+    lines.push(fmt_cmd("extract \"<instr>\"", "AI-powered structured data extraction"));
+    lines.push(fmt_cmd("get <mode> <sel>", "Extract text, html, attr, box, or styles"));
+    lines.push(fmt_cmd("eval \"<js>\"", "Run JavaScript on the page"));
+    lines.push(fmt_cmd("crawl <url>", "Crawl websites with link discovery & X-SQL"));
+
+    // ── Sessions ──
+    lines.push(String::new());
+    lines.push("── Sessions ────────────────────────────────────────────────────────".to_string());
+    lines.push(fmt_cmd("open [url]", "Open or reconnect a browser session"));
+    lines.push(fmt_cmd("close", "Close the current session"));
+    lines.push(fmt_cmd("list", "List all browser sessions"));
+    lines.push(fmt_cmd("attach", "Attach to an external browser via CDP or extension"));
+
+    // ── Automation ──
+    lines.push(String::new());
+    lines.push("── Automation ──────────────────────────────────────────────────────".to_string());
+    lines.push(fmt_cmd("batch \"cmd1\" \"cmd2\"", "Execute multiple commands in one call"));
+    lines.push(fmt_cmd("agent run \"<task>\"", "Run autonomous AI agent task"));
+    lines.push(fmt_cmd("swarm create|submit", "Create swarm session or submit scrape jobs"));
+    lines.push(fmt_cmd("loop \"<task>\"", "Execute a task repeatedly on an interval"));
+
+    // ── Global flags ──
+    lines.push(String::new());
+    lines.push("── Global flags ────────────────────────────────────────────────────".to_string());
+    lines.push(fmt_cmd("-s <name>", "Named session label"));
+    lines.push(fmt_cmd("--json", "Machine-parseable JSON output"));
+    lines.push(fmt_cmd("-q, --quiet", "Suppress normal output"));
+    lines.push(fmt_cmd("--server <url>", "Override Browser4 server URL"));
+    lines.push(fmt_cmd("--timeout <s>", "Override HTTP timeout for tool calls"));
+    lines.push(fmt_cmd("--pretty", "Pretty-print JSON output"));
+
+    // ── Learn more ──
+    lines.push(String::new());
+    lines.push("── Learn more ──────────────────────────────────────────────────────".to_string());
+    lines.push("  browser4-cli --help              Full command reference by category".to_string());
+    lines.push("  browser4-cli --help <category>   Commands in a category (nav, extract, kb, agent, …)".to_string());
+    lines.push("  browser4-cli --help <command>    Detailed help: args, options, examples".to_string());
+    lines.push("  browser4-cli --help-json         Machine-readable reference (for AI / scripts)".to_string());
+
+    lines.join("\n")
+}
+
+/// Format a compact command entry: "  command     description" aligned at column 28.
+fn fmt_cmd(cmd: &str, desc: &str) -> String {
+    format_with_gap(&format!("  {}", cmd), desc, 28)
+}
+
+/// Generate machine-readable JSON help for AI agents and scripts.
+///
+/// When `sub_command` is `Some(name)`, output is scoped to that command only.
+/// When `None`, the full command catalog is emitted.
+pub fn generate_help_json(sub_command: Option<&str>) -> String {
+    let cmd_map = crate::commands::commands_map();
+
+    // If a specific command was requested, emit just that one.
+    if let Some(name) = sub_command {
+        if let Some(cmd) = cmd_map.get(name) {
+            let entry = command_to_json(cmd);
+            return serde_json::to_string_pretty(&serde_json::json!({
+                "cli": "browser4-cli",
+                "version": VERSION,
+                "command": entry,
+            }))
+            .unwrap_or_else(|_| "{}".to_string());
+        }
+        // Unknown command — return an error object
+        return serde_json::to_string_pretty(&serde_json::json!({
+            "error": format!("Unknown command: {}", name),
+        }))
+        .unwrap_or_else(|_| "{}".to_string());
+    }
+
+    // Full catalog: group commands by category.
+    let cmds = all_commands();
+    let mut categories_json: Vec<serde_json::Value> = Vec::new();
+
+    for (cat_name, cat_title) in CATEGORY_TITLES {
+        let cat_cmds: Vec<&CommandDef> = cmds
+            .iter()
+            .filter(|c| !c.hidden && c.category.as_str() == *cat_name)
+            .collect();
+        if cat_cmds.is_empty() {
+            continue;
+        }
+        let commands: Vec<serde_json::Value> = cat_cmds.iter().map(|c| command_to_json(c)).collect();
+        categories_json.push(serde_json::json!({
+            "name": cat_name,
+            "title": cat_title,
+            "commands": commands,
+        }));
+    }
+
+    // Global options
+    let global_options = serde_json::json!({
+        "-s, --session": {"type": "string", "description": "Named session label"},
+        "--json": {"type": "bool", "description": "Emit machine-parseable JSON to stdout"},
+        "-q, --quiet": {"type": "bool", "description": "Suppress normal output, only show errors"},
+        "--server": {"type": "string", "description": "Override Browser4 server URL"},
+        "--timeout": {"type": "int", "description": "Override HTTP timeout for tool calls (seconds)"},
+        "--proxy": {"type": "string", "description": "Manual HTTP proxy for downloads"},
+        "--pretty": {"type": "bool", "description": "Pretty-print JSON output"},
+        "-tip, --show-tip": {"type": "bool", "description": "Show relevant tips on stderr after commands"},
+        "--help-json": {"type": "bool", "description": "Emit this JSON help and exit"},
+    });
+
+    let output = serde_json::json!({
+        "cli": "browser4-cli",
+        "version": VERSION,
+        "usage": "browser4-cli [-s <session>] <command> [args] [options]",
+        "global_options": global_options,
+        "categories": categories_json,
+        "category_aliases": {
+            "nav": "navigation",
+            "kb": "keyboard",
+            "input": "keyboard",
+            "extract": "snapshot",
+            "extraction": "snapshot",
+            "data": "snapshot",
+            "session": "browsers",
+            "sessions": "browsers",
+            "cap": "export",
+            "capture": "export",
+            "ss": "snapshot",
+            "state": "storage",
+            "skill": "skills",
+            "plugin": "plugins",
+            "swarm": "swarm",
+            "crawl": "swarm",
+        },
+    });
+
+    serde_json::to_string_pretty(&output).unwrap_or_else(|_| "{}".to_string())
+}
+
+/// Convert a single CommandDef into a JSON value for machine-readable output.
+fn command_to_json(cmd: &CommandDef) -> serde_json::Value {
+    let args: Vec<serde_json::Value> = cmd
+        .args
+        .iter()
+        .map(|a| {
+            serde_json::json!({
+                "name": a.name,
+                "description": a.description,
+                "optional": a.optional,
+                "type": "string",
+            })
+        })
+        .collect();
+
+    let options: Vec<serde_json::Value> = cmd
+        .options
+        .iter()
+        .map(|o| {
+            let typ = if o.is_bool { "bool" } else { "string" };
+            let mut opt = serde_json::json!({
+                "name": o.name,
+                "description": o.description,
+                "type": typ,
+            });
+            if let Some(short) = o.short {
+                opt["short"] = serde_json::json!(short);
+            }
+            opt
+        })
+        .collect();
+
+    serde_json::json!({
+        "name": cmd.name,
+        "display_name": public_command_name(cmd.name),
+        "description": cmd.description,
+        "category": cmd.category.as_str(),
+        "args": args,
+        "options": options,
+        "batch_supported": cmd.batch_supported,
+    })
 }
 
 /// Generate per-command help text.
@@ -2087,7 +2296,7 @@ mod tests {
         assert!(help.contains("upgrade"));
         assert!(help.contains("ArrowLeft"));
         assert!(help.contains("Evaluate JavaScript expression on page or element"));
-        assert!(help.contains("Core:"));
+        assert!(help.contains("[Core]"));
         assert!(help.contains("batch"));
         assert!(help.contains("console"));
         assert!(help.contains("extract"));
@@ -2102,6 +2311,7 @@ mod tests {
         assert!(help.contains("suppresses tips, hints, and human-readable text"));
         assert!(help.contains("-q, --quiet"));
         assert!(help.contains("suppress normal output"));
+        assert!(help.contains("--help-json"));
     }
 
     #[test]
@@ -2668,5 +2878,100 @@ mod tests {
         // These categories should NOT appear since no commands use them
         assert!(!help.contains("\nNetwork:"));
         assert!(!help.contains("\nConfiguration:"));
+    }
+
+    // ── Quick reference tests ──────────────────────────────────────
+
+    #[test]
+    fn test_generate_quick_reference_contains_key_commands() {
+        let qr = generate_quick_reference();
+        assert!(qr.contains("browser4-cli"));
+        assert!(qr.contains("Usage:"));
+        // Navigation & inspect
+        assert!(qr.contains("goto <url>"));
+        assert!(qr.contains("snapshot [-v <N>]"));
+        assert!(qr.contains("click <ref>"));
+        assert!(qr.contains("fill <ref>"));
+        // Extract & query
+        assert!(qr.contains("htmlsnapshot"));
+        assert!(qr.contains("extract"));
+        assert!(qr.contains("eval"));
+        assert!(qr.contains("crawl <url>"));
+        // Sessions
+        assert!(qr.contains("open [url]"));
+        assert!(qr.contains("close"));
+        assert!(qr.contains("attach"));
+        // Automation
+        assert!(qr.contains("batch"));
+        assert!(qr.contains("agent run"));
+        assert!(qr.contains("swarm create|submit"));
+        // Global flags
+        assert!(qr.contains("--json"));
+        assert!(qr.contains("-s <name>"));
+        // Learn more pointers
+        assert!(qr.contains("--help-json"));
+        assert!(qr.contains("browser4-cli --help"));
+    }
+
+    #[test]
+    fn test_generate_quick_reference_is_compact() {
+        let qr = generate_quick_reference();
+        let lines: Vec<&str> = qr.lines().collect();
+        // Should be under 55 lines (well within reason for a quick reference)
+        assert!(lines.len() <= 55, "quick reference is {} lines, expected <= 55", lines.len());
+    }
+
+    // ── JSON help tests ────────────────────────────────────────────
+
+    #[test]
+    fn test_generate_help_json_full_catalog() {
+        let json = generate_help_json(None);
+        assert!(json.contains("\"cli\": \"browser4-cli\""));
+        assert!(json.contains("\"version\""));
+        assert!(json.contains("\"usage\""));
+        assert!(json.contains("\"global_options\""));
+        assert!(json.contains("\"categories\""));
+        assert!(json.contains("\"category_aliases\""));
+        // Should contain some well-known commands
+        assert!(json.contains("\"name\": \"goto\""));
+        assert!(json.contains("\"name\": \"snapshot\""));
+        assert!(json.contains("\"name\": \"click\""));
+        // Should be valid JSON
+        let _: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
+    }
+
+    #[test]
+    fn test_generate_help_json_specific_command() {
+        let json = generate_help_json(Some("goto"));
+        assert!(json.contains("\"name\": \"goto\""));
+        assert!(json.contains("\"display_name\": \"goto\""));
+        assert!(json.contains("Navigate to a URL"));
+        assert!(json.contains("\"url\""));
+        // Should be valid JSON
+        let v: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
+        assert!(v["command"].is_object());
+    }
+
+    #[test]
+    fn test_generate_help_json_unknown_command() {
+        let json = generate_help_json(Some("nonexistent-command"));
+        assert!(json.contains("\"error\""));
+        let v: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
+        assert!(v["error"].as_str().unwrap().contains("Unknown command"));
+    }
+
+    #[test]
+    fn test_generate_help_json_command_has_args_and_options() {
+        // crawl has both args and options — good for testing the full schema
+        let json = generate_help_json(Some("crawl"));
+        let v: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
+        let cmd = &v["command"];
+        assert!(cmd["args"].is_array());
+        assert!(cmd["options"].is_array());
+        assert!(cmd["batch_supported"].as_bool().is_some());
+        // crawl has url (optional positional) and many options
+        let has_depth = cmd["options"].as_array().unwrap().iter()
+            .any(|o| o["name"] == "depth");
+        assert!(has_depth, "crawl should have a --depth option");
     }
 }

@@ -25,6 +25,8 @@ pub struct GlobalFlags {
     pub show_tip: bool,
     /// `--pretty` — pretty-print JSON output
     pub pretty: bool,
+    /// `--help-json` — emit command reference as machine-readable JSON
+    pub help_json: bool,
     /// `--timeout <seconds>` — override the default HTTP timeout for tool calls
     pub timeout_secs: Option<u64>,
     /// Remaining arguments (command + its args/options)
@@ -89,6 +91,8 @@ pub fn parse_global_flags(argv: &[String]) -> GlobalFlags {
             flags.show_tip = true;
         } else if !seen_command && arg == "--pretty" {
             flags.pretty = true;
+        } else if !seen_command && arg == "--help-json" {
+            flags.help_json = true;
         } else if arg.starts_with("--timeout=") {
             flags.timeout_secs = arg["--timeout=".len()..].parse().ok();
         } else if arg == "--timeout" {
