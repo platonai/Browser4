@@ -337,6 +337,122 @@
             </build>
         </profile>
 
+        <!-- Deployment profile for publishing to Maven Central via Sonatype Central Portal.
+             Combines with the parent POM's "release" profile (sources, GPG, checksums)
+             and replaces javadoc with Dokka for Kotlin projects. -->
+        <profile>
+            <id>deploy</id>
+
+            <build>
+                <plugins>
+                    <!-- Attach sources -->
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-source-plugin</artifactId>
+                        <executions>
+                            <execution>
+                                <id>attach-sources</id>
+                                <goals>
+                                    <goal>jar-no-fork</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+
+                    <!-- Help maven-source-plugin works with kotlin -->
+                    <plugin>
+                        <groupId>org.codehaus.mojo</groupId>
+                        <artifactId>build-helper-maven-plugin</artifactId>
+                        <version>${version.build-helper-maven-plugin}</version>
+                        <executions>
+                            <execution>
+                                <phase>generate-sources</phase>
+                                <goals>
+                                    <goal>add-source</goal>
+                                </goals>
+                                <configuration>
+                                    <sources>
+                                        <source>src/main/kotlin</source>
+                                    </sources>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+
+                    <!-- Skip javadoc (use dokka instead for Kotlin) -->
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-javadoc-plugin</artifactId>
+                        <configuration>
+                            <skip>true</skip>
+                        </configuration>
+                    </plugin>
+
+                    <!-- Use Dokka for Kotlin documentation -->
+                    <plugin>
+                        <groupId>org.jetbrains.dokka</groupId>
+                        <artifactId>dokka-maven-plugin</artifactId>
+                        <version>${dokka.version}</version>
+                        <executions>
+                            <execution>
+                                <!-- generate javadoc.jar before package so gpg plugin can generate asc for it -->
+                                <phase>prepare-package</phase>
+                                <goals>
+                                    <goal>dokka</goal>
+                                    <goal>javadocJar</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                        <configuration>
+                            <skip>false</skip>
+                            <cacheRoot>default</cacheRoot>
+                            <jdkVersion>${javaVersion}</jdkVersion>
+                            <skipDeprecated>true</skipDeprecated>
+                            <reportUndocumented>true</reportUndocumented>
+                            <skipEmptyPackages>true</skipEmptyPackages>
+                            <includeNonPublic>false</includeNonPublic>
+                            <sourceDirectories>
+                                <dir>${project.basedir}/src/main/kotlin</dir>
+                            </sourceDirectories>
+                        </configuration>
+                    </plugin>
+
+                    <!-- GPG signing -->
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-gpg-plugin</artifactId>
+                        <configuration>
+                            <gpgArguments>
+                                <arg>--pinentry-mode</arg>
+                                <arg>loopback</arg>
+                            </gpgArguments>
+                        </configuration>
+                        <executions>
+                            <execution>
+                                <id>sign-artifacts</id>
+                                <phase>verify</phase>
+                                <goals>
+                                    <goal>sign</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+
+                    <!-- Publish to Sonatype Central Portal -->
+                    <plugin>
+                        <groupId>org.sonatype.central</groupId>
+                        <artifactId>central-publishing-maven-plugin</artifactId>
+                        <version>${central-publishing-maven-plugin.version}</version>
+                        <extensions>true</extensions>
+                        <configuration>
+                            <publishingServerId>central</publishingServerId>
+                            <autoPublish>true</autoPublish>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+
     </profiles>
 
     <build>
@@ -580,7 +696,8 @@
         <dokka.version>1.9.10</dokka.version>
 
         <jacoco-maven-plugin.version>0.8.15</jacoco-maven-plugin.version>
-        <central-publishing-maven-plugin.version>0.9.0</central-publishing-maven-plugin.version>
+        <version.build-helper-maven-plugin>3.6.0</version.build-helper-maven-plugin>
+        <central-publishing-maven-plugin.version>0.10.0</central-publishing-maven-plugin.version>
 
         <version.maven-assembly-plugin>3.8.0</version.maven-assembly-plugin>
         <version.maven-clean-plugin>3.5.0</version.maven-clean-plugin>
