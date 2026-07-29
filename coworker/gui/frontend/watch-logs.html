@@ -161,24 +161,18 @@ body {
   border-bottom: 1px solid var(--border);
   padding: 5px 0.75rem;
   flex-shrink: 0;
-  display: flex; align-items: stretch;
+  display: flex; align-items: stretch; gap: 6px;
   box-shadow: var(--shadow-sm);
 }
-.source-dropdown { position: relative; flex: 1; }
-.source-dropdown + .source-dropdown { margin-left: -1px; }
-.source-dropdown:first-child .source-dropdown-btn { border-radius: var(--radius-sm) 0 0 var(--radius-sm); }
-.source-dropdown:last-child  .source-dropdown-btn { border-radius: 0 var(--radius-sm) var(--radius-sm) 0; }
-.source-dropdown:first-child:last-child .source-dropdown-btn { border-radius: var(--radius-sm); }
+.source-dropdown { position: relative; }
 .source-dropdown-btn {
-  display: flex; align-items: center; justify-content: center;
-  width: 100%; height: 100%; gap: 5px;
+  display: flex; align-items: center; gap: 5px;
   padding: 6px 10px;
   font-size: 0.72rem; font-weight: 500;
   cursor: pointer; user-select: none;
   border: 1px solid var(--border);
   background: var(--bg-raised); color: var(--text-secondary);
   transition: all var(--transition);
-  position: relative; z-index: 1;
 }
 .source-dropdown.open .source-dropdown-btn { z-index: 201; }
 .source-dropdown-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
@@ -208,7 +202,7 @@ body {
 .source-dropdown.open .source-dropdown-btn .group-name { color: var(--accent); }
 .source-dropdown.open .source-dropdown-btn .cur-source { color: var(--text-primary); }
 .source-dropdown-menu {
-  display: none; position: absolute; top: 100%; left: 0; right: 0;
+  display: none; position: absolute; top: 100%; left: 0; min-width: 100%;
   margin-top: -1px;
   background: var(--bg-surface);
   border: 1px solid var(--accent);
