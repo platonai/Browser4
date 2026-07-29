@@ -389,8 +389,6 @@ function Invoke-Draft {
         New-Item -ItemType Directory -Path $draftDir -Force | Out-Null
     }
 
-    Ensure-DraftPlaceholders -DraftDirectory $draftDir
-
     # Use $Prompt as alias for $Content
     if ($Prompt -and -not $Content) { $Content = $Prompt }
 
@@ -420,6 +418,13 @@ function Invoke-Draft {
         if (-not $Content) {
             $Content = Read-MultilineInput -PromptMessage 'Prompt content' -EndToken '.'
         }
+    }
+
+    $hasTitleInput = -not [string]::IsNullOrWhiteSpace($Title)
+    $hasContentInput = -not [string]::IsNullOrWhiteSpace($Content)
+    if (-not $hasTitleInput -and -not $hasContentInput -and -not $Edit) {
+        Write-ConsoleLine -Message 'Draft not saved: title and content are both empty.' -ForegroundColor Yellow
+        return
     }
 
     # Determine filename

@@ -134,7 +134,12 @@ if ($CliArgs -and $CliArgs[0] -eq 'coworker') {
     $CoworkerScript = Join-Path $ScriptDir 'coworker\coworker.ps1'
     $CoworkerArgs = $CliArgs[1..$CliArgs.Length]
     if ($CoworkerArgs) {
-        & $CoworkerScript @CoworkerArgs
+        $CoworkerCommand = $CoworkerArgs[0]
+        $CoworkerRemaining = @()
+        if ($CoworkerArgs.Count -gt 1) {
+            $CoworkerRemaining = @($CoworkerArgs[1..($CoworkerArgs.Count - 1)])
+        }
+        & $CoworkerScript -Command $CoworkerCommand -Remaining $CoworkerRemaining
     } else {
         & $CoworkerScript
     }
