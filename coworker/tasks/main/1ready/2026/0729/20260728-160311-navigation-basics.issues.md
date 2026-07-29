@@ -69,13 +69,14 @@ Wikipedia pages have large accessibility trees with hundreds of nodes. Viewport 
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Real first-use papercut — 43KB dumped to terminal with no warning. The SKILL.md advice exists but isn't surfaced at runtime. A line-count threshold warning (suggesting `snapshot grep` or `--page N`) is cheap and high-impact.
 
 ---
 
@@ -109,12 +110,13 @@ Wikipedia's HTML may use sanitized/namespaced IDs or the static HTML snapshot ca
 #### Human Review
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [x] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT with improvements] Legitimate gap, but root cause is misdiagnosed — Wikipedia headings use `<span class="mw-headline" id="See_also">`, so `#See_also` is a valid CSS selector. The actual bug is likely that `htmlsnapshot get` operates on a static HTML capture that may differ from the live DOM or that the selector engine doesn't match deeply-nested IDs. Needs investigation before prescribing a fix; the `--debug-selector` suggestion is good regardless.
 
 ---
 
@@ -152,12 +154,13 @@ The accessibility tree refs (backend node IDs) survive scroll since the DOM stru
 #### Human Review
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [x] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT with improvements] The issue's own analysis confirms refs survive scroll (backend node IDs are stable). This is purely a documentation gap — add "scroll" to the Safe list in SKILL.md's Ref Lifecycle section and note that box coordinates shift with viewport. No code change needed.
 
 ---
 
@@ -194,13 +197,14 @@ When running from source in dev mode, the CLI reports its version from the Cargo
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Clear false-positive — `4.12.1` vs `4.12.1-SNAPSHOT` are the same version in dev. The warning actively misleads users into a rebuild that won't help. Strip `-SNAPSHOT` suffix before comparison, or suppress when either side carries it.
 
 ---
 
@@ -237,13 +241,14 @@ The b4w.ps1 wrapper detects short flags and emits a warning. This warning appear
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] The wrapper warns about its own documented usage pattern — `./b4w.ps1 snapshot -v 0` is exactly what examples show. Suppress the warning when argv was parsed by b4w.ps1 itself (detectable via env var or by checking the invoking shell context).
 
 ---
 
@@ -278,11 +283,12 @@ The snapshot model requires explicit refs for all interactions. There is no text
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
-- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+- [x] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: DEFER] This is a feature request for text-based targeting (`click --text`), not a bug. The ref-based interaction model is architectural — adding text-based targeting would require a snapshot round-trip under the hood anyway. Worth considering in a future interaction-model redesign but not actionable as a fix. Document the TOC-click-then-snapshot pattern better in the meantime.
 
 ---
 
@@ -319,13 +325,14 @@ The default session appears to have been created or re-used from a prior swarm o
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Internal session-type label leaking into user-facing output. A default unnamed session should display as "default" or the URL, not "SWARM". Simple label mapping in the list formatter.
 
 ---
 
@@ -362,13 +369,14 @@ The CLI sends the goto command and waits synchronously for the backend response.
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Silent blocking on slow connections is poor UX. A `Navigating to <url>...` prefix line before the request is trivial to add and gives immediate feedback. A spinner or elapsed-time indicator during the wait would be the fuller fix.
 
 ---
 

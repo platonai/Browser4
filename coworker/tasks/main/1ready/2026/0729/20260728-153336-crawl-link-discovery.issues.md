@@ -85,13 +85,14 @@ The crawl link-discovery path uses `session.loadDocument()` which fetches the pa
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Critical — crawl link discovery is completely broken at depth >= 1. Jsoup pipeline returns 0 elements when browser DOM has 94 anchors. This is the single most impactful bug: it makes multi-level crawl unusable. Fix the Jsoup fetch/parse path so it matches the browser DOM contract; regression-test on books.toscrape.com.
 
 ---
 
@@ -130,13 +131,14 @@ The HTTP protocol handler used for page fetching (likely OkHttp or similar) appe
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Critical — 9 of 10 pages produce 0 bytes due to protocol handler lifecycle failure. Shares root-cause territory with Issue 1 (both are fetch-pipeline bugs). Fix the handler lifecycle (singleton re-init or per-request instantiation) and add retry logic. Test with seed files of 10+ URLs.
 
 ---
 
@@ -174,13 +176,14 @@ The Jsoup document parser's title extraction (`document.title`) may be returning
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] High — titles empty on book detail pages despite successful fetch (12KB content). Likely the same Jsoup parsing defect as Issue 1: the document model differs from real DOM. Add a fallback CSS-query title extractor and log the raw `<title>` element when `document.title` is empty. Should be investigated alongside Issue 1.
 
 ---
 
@@ -218,13 +221,14 @@ The crawl task scheduler uses a 16-second polling interval and the worker pool a
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] High — 80–450s startup delay before any crawl processing begins, and background crawls timeout entirely. The 16s polling interval and apparent worker-pool serialization are the likely causes. Reduce initial poll interval to 2–3s, ensure completed tasks release workers promptly, and investigate whether a global lock serializes all crawl sessions. The "two background crawls never started" detail elevates this from perf to correctness.
 
 ---
 
@@ -262,13 +266,14 @@ The --format flag controls how X-SQL result sets are formatted into structured o
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] High — `--format csv` and `--format json` silently produce plain text when `--sql` is omitted. Users reasonably expect structured output from a `--format` flag. At minimum, emit a hard-to-miss warning. Better: when `--format` is set without `--sql`, emit structured output using default page-metadata columns (url, title, content_length). Document the `--sql` dependency in `--help` and `crawl.md`.
 
 ---
 
@@ -306,13 +311,14 @@ The diagnostic logic (CrawlService.kt lines 525-537) assumes that if document.se
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Medium — the diagnostic blames the user's selector when the real problem is that Jsoup parsed zero DOM elements at all. Fix: before suggesting the selector is wrong, check `document.select('a').size()` or `document.html.length`. If the document has zero anchors total, report a parsing failure, not a selector mismatch. This is downstream of Issue 1 but worth tracking separately — the diagnostic logic stays wrong even after the root cause is fixed.
 
 ---
 
@@ -349,13 +355,14 @@ The help category filtering may not be implemented in the Rust CLI, or the filte
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Medium — `--help crawl` returns full unfiltered help; same for all advertised categories. The help category routing is either unimplemented or the filter keys don't match. Fix the filter logic so each category shows only its own commands, and add `crawl --help` as a subcommand-specific help path.
 
 ---
 
@@ -392,13 +399,14 @@ The goto output format includes redirect info as a parenthetical note but it cou
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Low — redirect info is present but easy to miss in goto output, and entirely absent from crawl output. Surface redirects more prominently (dedicated notice line for goto; log entry for crawl). The suggested `--no-redirect` flag is a separate feature request; tackle the visibility issue first.
 
 ---
 
@@ -435,13 +443,14 @@ The crawl list output truncates the description field to a fixed width for table
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Low — truncated descriptions make `crawl list` hard to use at a glance. Show the first seed URL or seed file path instead of a truncated concatenation; add a seed-count column; support `--verbose` for full URLs. Straightforward formatting fix.
 
 ---
 

@@ -193,13 +193,14 @@ JsUtils.toCDPCompatibleExpression() in ai.platon.pulsar.common.js.JsUtils transf
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Critical correctness bug — `JsUtils.toCDPCompatibleExpression()` double-wraps already-invoked IIFEs, turning the returned JSON string into a spurious function call. This breaks the core captcha detection path entirely. Fix in `JsUtils` with a guard for `(function...{})(...)` / `(()=>{...})()` patterns.
 
 ---
 
@@ -237,13 +238,14 @@ cli/browser4-cli/src/main.rs:handle_dynamic_plugin_command() line 11993-12013: f
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] High-severity functional gap — `handle_dynamic_plugin_command()` takes `matching[0]` (first alphabetical match), making only `captcha_detect` reachable. All other captcha tools (`captcha_solve`, `captcha_getBalance`) are inaccessible via CLI. Related to Issue 8 (discoverability). Parse a subcommand from `args[1]` and match against `{domain}_{method}`.
 
 ---
 
@@ -284,13 +286,14 @@ The plugin state is likely cached/persisted separately from the JVM process. The
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] UX bug — plugin status reads from a stale local cache rather than querying the live server, so "inactive (restart required)" persists even after a full server restart despite the plugin actually being loaded. Query the live plugin registry; distinguish "installed on disk" from "active in running server."
 
 ---
 
@@ -327,13 +330,14 @@ The MCP tool response serialization uses Jackson's default toString() for comple
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] MCP response serialization falls back to Java `toString()` for complex return types like `CaptchaDetectionResult`, producing `{"type": "...", "description": "CaptchaDetectionResult(isPresent=false,...)"}` instead of structured JSON. Add `@JsonSerialize` on `CaptchaDetectionResult` or fix the MCP response handler to use Jackson for non-primitive returns.
 
 ---
 
@@ -373,13 +377,14 @@ The help system lists only built-in commands from commands_map(). Dynamic plugin
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] SKILL.md and `help` output have zero mention of the plugin command system or `plugin-<domain>` convention. Related to Issues 2 and 8 — together these form a cluster where the plugin system exists but is undocumented, undiscoverable, and only partially functional.
 
 ---
 
@@ -418,13 +423,14 @@ ChainedCaptchaDetector.detect() line 41: `catch (_: Exception) { // Continue to 
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] `ChainedCaptchaDetector` uses `catch (_: Exception) {}` with no logging; individual detectors log at `TRACE` (invisible by default). All detection failures are silent. Related to Issue 1 (the IIFE bug that triggers these silent catches), but independently worth fixing — logs should surface why detection failed even after the IIFE fix lands. Bump to `DEBUG`/`WARN` and log a collective summary when all detectors fail.
 
 ---
 
@@ -461,13 +467,14 @@ Detectors set `confidence = 0.95f` directly in the CaptchaDetectionResult.found(
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] All three detectors hardcode `confidence = 0.95f` regardless of signal strength. This is a product-quality issue — users can't distinguish a strong multi-signal match from a weak single-signal one. Compute confidence from weighted signals (API object, iframe, div, siteKey presence) and expose signal details in metadata.
 
 ---
 
@@ -509,13 +516,14 @@ The plugin-<name> command dispatch is implemented but not surfaced to users. plu
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] The `plugin-<name>` convention is the only invocation path but is surfaced nowhere — not in `help`, not in `plugin list` output, not in `plugin install` post-install messaging. Strongly related to Issues 2 (method selection) and 5 (documentation). Fix: add usage hints to `plugin list` output, a `plugin info <name>` command, and a plugins section in `help`.
 
 ---
 
@@ -554,11 +562,12 @@ The short-flag detection warning fires unconditionally whenever short flags are 
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
-- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+- [x] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: DEFER] Low-severity annoyance in the `b4w.ps1` dev wrapper — the short-flag warning fires unconditionally on every invocation even on non-PowerShell shells where the parameter-binding issue doesn't apply. Low impact; does not affect the product itself. Revisit when polishing the developer experience.
 
 ---
 
@@ -597,11 +606,12 @@ The b4w.ps1 wrapper script uses `cargo run` which checks timestamps and recompil
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
-- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+- [x] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: DEFER] `cargo run` rebuild overhead (~0.5s) in the `b4w.ps1` dev wrapper adds latency during development but does not affect end users or the released binary. A cached-binary check or `cargo build` + direct invocation pattern would help but is strictly a dev-workflow optimization, not a product concern.
 
 ---
 

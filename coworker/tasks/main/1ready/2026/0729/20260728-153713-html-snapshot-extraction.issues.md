@@ -188,12 +188,13 @@ The export command uses --file as a named flag rather than accepting a positiona
 #### Human Review
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [x] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT with improvements] The error message is genuinely unhelpful — "too many arguments: expected 0, received 1" gives zero guidance. At minimum, add a hint like "Did you mean `--file <path>`?" The optional-positional-arg shortcut is a lower-priority nice-to-have; the error message fix is cheap and high-value.
 
 ---
 
@@ -227,12 +228,13 @@ The page HTML itself contains the truncated text (the server renders truncated t
 #### Human Review
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [x] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT with improvements] This isn't a bug in browser4 — the page HTML genuinely contains truncated text, and browser4 correctly returns DOM text content. But the UX gap is real: users have no way to discover that the `title` attribute holds the full text. Adding a hint (when text ends with `...` and a `title` attribute exists on the element or a child) would close this discoverability gap without changing the correctness of `get text`. Covers Issue 7 as well.
 
 ---
 
@@ -265,13 +267,14 @@ The HTML snapshot storage or grep rendering pipeline is not preserving UTF-8 enc
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] This is a real UTF-8 encoding bug — the byte sequence `0xC2 0xA3` (£ in UTF-8) is being double-decoded or output through a Latin-1 path, producing `Â£`. Needs investigation of the snapshot serialization → storage → grep output pipeline to find where the encoding break occurs. Adding a smoke test for non-ASCII currency symbols is a good defensive measure.
 
 ---
 
@@ -310,11 +313,12 @@ The grep implementation supports a subset of standard grep flags. -o (only-match
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
-- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+- [x] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: DEFER] `-o/--only-matching` is a valid feature request but low priority. The workaround (export HTML and use external grep) is functional, and `-c` already covers line-counting. Queue this behind higher-impact work; the grep flag set can be expanded incrementally.
 
 ---
 
@@ -352,12 +356,13 @@ The CLI has two snapshot systems: accessibility-tree snapshots (for interaction 
 #### Human Review
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [x] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT with improvements] The conceptual gap between `snapshot` (accessibility-tree refs for interaction) and `htmlsnapshot` (CSS-selector extraction) is real for new users. Cross-linking their help text ("For data extraction with CSS selectors, use htmlsnapshot" / "For interactive element targeting with refs, use snapshot") is a one-line change in each that would close this gap. The renaming to `ax-snapshot` / `snapshot` is noted but DEFER as a breaking change needing migration planning.
 
 ---
 
@@ -395,12 +400,13 @@ The b4w.ps1 wrapper runs `cargo run` which checks dependencies and recompiles if
 #### Human Review
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [x] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT with improvements] The ~0.4s-per-invocation overhead is inherent to `cargo run`'s dependency check and cannot be eliminated without a pre-built binary distribution. The actionable fix is documentation: add a note in SKILL.md explaining this is cargo's normal behavior, not a rebuild. Users seeing "Finished dev profile" on every command assume something is wrong — clarifying this is expected prevents confusion.
 
 ---
 
@@ -442,8 +448,9 @@ The inspect output renders the textContent of matched elements, which is natural
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
-- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
+- [x] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: DUPLICATE] Same root cause as Issue 2 — server-rendered truncated text with full content in `title` attribute. The `inspect` and `get text` commands both surface the same gap. The fix for Issue 2 (hint when text ends with `...` and title attribute available) should apply to both commands; track as one.
 
 ---
 

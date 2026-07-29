@@ -78,13 +78,14 @@ ImageDetector.detect() calls driver.evaluate(DETECTION_SCRIPT) which uses CDP Ru
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Clear root cause — `driver.evaluate()` returns null for large JSON with `returnByValue=false`, while `evaluateValue()` works. The fix (one-line change in ImageDetector.kt:93) is trivial and correct. This is the blocker for the entire image plugin.
 
 ---
 
@@ -121,13 +122,14 @@ toMcpToolName() converts camelCase method names to snake_case for MCP tool names
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] The `/mcp/tools` endpoint advertises snake_case names that don't dispatch correctly because `dispatchToCustomExecutor()` derives the method name by substring without converting back to camelCase. A reverse lookup or case-insensitive match is needed. Combined with Issue 9, the dispatch path has two normalization gaps.
 
 ---
 
@@ -165,13 +167,14 @@ OkHttp client in ImageDownloader cannot reach external URLs in this environment 
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] The 30–120s timeout with "Network is unreachable" while system `curl` succeeds suggests a JVM-level networking issue (DNS, proxy, or IPv6 preference). The suggested timeout reduction (15s explicit) and browser-mediated fallback are pragmatic mitigations, but the root cause needs environment-specific diagnosis first. May be environment-specific rather than a code defect.
 
 ---
 
@@ -211,13 +214,14 @@ The status string is hardcoded or derived from a condition that never clears. In
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] The status string is almost certainly computed once at startup from a stale condition and never refreshed after plugin load completes. The fix should query the actual plugin runtime state rather than relying on a flag that doesn't clear. UX impact is real — users can't trust the plugin list output.
 
 ---
 
@@ -255,13 +259,14 @@ Plugin tools are registered as AI agent tools (for LLM use) but not exposed as C
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Plugin tools are only accessible via raw HTTP, making them invisible to CLI users. A generic `browser4-cli tool <domain>.<method> [args...]` command is the lowest-effort fix and would cover all future plugin tools. Related to Issue 7 (documentation) but addresses a different gap: code path vs documentation.
 
 ---
 
@@ -303,8 +308,9 @@ downloadAll depends on imageDetector.detect() which returns empty list (Issue 1)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
-- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
+- [x] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: DUPLICATE] Same root cause as Issue 1 — `detectImages` returns empty, so `downloadAll` correctly processes zero images. The all-zeros output is a faithful consequence. The secondary suggestion (warn when page has `<img>` tags but detection returns 0) is worth capturing as a follow-up improvement to the detection layer, not a separate bug.
 
 ---
 
@@ -341,13 +347,14 @@ Plugin tools are designed for AI agent consumption, not direct CLI use. But the 
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Plugin tools are discoverable only via `/mcp/tools` raw HTTP. SKILL.md and help output should document available plugin tools per installed plugin. Related to Issue 5 (CLI commands) — together they cover the full discoverability gap: how to find tools (docs) and how to call them (CLI).
 
 ---
 
@@ -386,11 +393,12 @@ JVM startup + Spring Boot initialization + Chrome browser launch all happen sequ
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
-- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+- [x] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: DEFER] 15s JVM + Spring Boot startup is inherent to the tech stack. Hot-reload for plugin JARs is a significant architectural feature, not a bug fix. The suggested progress indicator is a reasonable low-effort improvement, but the core complaint is latency, which can't be meaningfully reduced without substantial changes. Revisit if startup time regresses or a concrete hot-reload design is proposed.
 
 ---
 
@@ -428,12 +436,13 @@ Design choice to strip sessionId from normalized args since many tool executors 
 #### Human Review
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [x] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT with improvements] The strip-then-re-add pattern is fragile tech debt — if someone forgets the re-add step for a new executor, it silently breaks. The suggested improvement ("don't strip in the default normalizer; let individual normalizers decide") is cleaner. Low severity matches because it works today, but it's the kind of design flaw that reliably causes bugs when new executors are added.
 
 ---
 
@@ -470,13 +479,14 @@ OkHttp's IOException is passed through without enrichment. No differentiation be
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Related to Issue 3 (the connectivity itself) but addresses a distinct concern: error message quality. Catching specific `IOException` subclasses (`SocketTimeoutException`, `UnknownHostException`, `ConnectException`) and providing targeted messages is a straightforward improvement. The 120s observed timeout (vs OkHttp's 10s default) warrants investigation as part of the Issue 3 fix.
 
 ---
 

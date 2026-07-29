@@ -195,13 +195,14 @@ The root pom.xml defines maven-shade-plugin version 3.6.1 but no module (includi
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Build infrastructure bug — the shade plugin is declared in the POM but never configured for execution in browser4-pdk/pom.xml. The plugin JARs are thin JARs that fail at runtime. Fix is well-scoped: add shade execution to the PDK parent POM. The suggested build-time validation test is a good hardening measure.
 
 ---
 
@@ -242,13 +243,14 @@ Two compounding factors: (1) The per-image OkHttp read timeout is 60 seconds (ha
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Critical usability blocker — PPTX generation is unusable on any real web page. The 60s per-image timeout combined with 5-minute async request ceiling creates a guaranteed failure for content-rich pages. The suggested fast-failure pattern (10s per-image, skip after N consecutive failures, produce partial output) is the right approach. Reducing the per-image timeout alone won't fully solve this — the coroutineScope awaiting all downloads needs a deadline wrapper.
 
 ---
 
@@ -286,13 +288,14 @@ The dynamic plugin command dispatch in main.rs handles `plugin <domain>` generic
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Valid discoverability gap. `plugin <domain>` is the primary invocation path but is completely absent from help output. Only `plugin list/info/install/remove` appear. Dynamic plugin commands need CLI-side CommandDef entries or the help system needs to query `/mcp/tools` to surface available domains. This is the same root cause as Issue 8 (no CommandDef for dynamic commands) but addresses a different symptom (main help listing vs. per-command --help).
 
 ---
 
@@ -329,13 +332,14 @@ The CLI's handle_dynamic_plugin_command passes through arguments as-is without r
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Clear UX bug — relative paths should resolve to the user's CWD, not the server's. The CLI should resolve relative paths to absolute before sending them to the server. This is a one-line fix in `parse_raw_args` or `handle_dynamic_plugin_command` (check if arg looks like a path and call `std::fs::canonicalize`). Cross-cuts with Issue 10 (JSON output clarity) — the tool already returns `filePath` in its response, but the path is relative and therefore misleading.
 
 ---
 
@@ -372,13 +376,14 @@ In timeout_for_tool() (http.rs:129), the tool name 'pptx_generate' doesn't match
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Straightforward timeout configuration gap. `timeout_for_tool()` has categories for navigation, text_input, agent, snapshot, wait, batch, and crawl, but nothing for plugin/unknown tools. A catch-all `BROWSER4_CLI_PLUGIN_TIMEOUT_SECS` env var with a default of 300s would solve this. This compounds with Issue 2 — even if the server-side timeout is fixed, the CLI will kill the request at 30s unless the user discovers `BROWSER4_CLI_HTTP_TIMEOUT_SECS`.
 
 ---
 
@@ -415,13 +420,14 @@ The plugin list display logic reads plugin status from the file system or instal
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Status display bug — the plugin list reads installation metadata (which says "needs restart") rather than querying the runtime PluginManager. The fix is to query runtime state: check whether the plugin's tool executor is registered in CustomToolRegistry. The suggestion to show both install state and runtime state as separate columns is a good UX improvement beyond the immediate fix.
 
 ---
 
@@ -458,13 +464,14 @@ The PPTX generation runs on a coroutine dispatched to the IO thread pool. When t
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Resource cleanup bug — the coroutineScope in `downloadImages()` doesn't have cancellation-aware timeout handling, and OkHttp response bodies may leak on cancellation. This leaves the session's thread pool exhausted after a timeout. The `withTimeout()` wrapper and `finally`-block cleanup suggested are the right minimum fix. This is a consequence of Issue 2's timeout but is a distinct defect (the server should recover from timeout, even if the timeout itself should also be extended).
 
 ---
 
@@ -500,13 +507,14 @@ Dynamic plugin commands have no CommandDef with associated help text. The argume
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Valid discoverability gap, distinct from Issue 3. Individual plugin tool commands have no `--help` support because dynamic commands have no CommandDef. The fix should query the server's `/mcp/tools` endpoint for ToolSpec metadata (arguments, description) and generate help text dynamically. This could be implemented together with Issue 3's fix since both require a mechanism to surface tool metadata from the server to the CLI help system.
 
 ---
 
@@ -544,12 +552,13 @@ The shouldSkipText() function filters short text (<2 chars) and boilerplate term
 #### Human Review
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [x] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT with improvements] The boilerplate filter is a reasonable heuristic, not a bug — the issue itself confirms 'Planet' is NOT affected. The suggested improvements (configurable skip-patterns, DEBUG-level logging of skipped content, README documentation) are appropriate. Keep the current filter as the default but make it overridable. The false-positive risk for legitimate headings like "Contact" or "About" on real pages is real but low-severity — they'd be dropped silently with no user feedback today.
 
 ---
 
@@ -586,13 +595,14 @@ Unclear — possibly related to the 503 response being handled by the reqwest er
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] CLI should never silently exit 0 when the tool call fails. The `--json` error path in `call_tool_with_timeout` needs to ensure JSON error output is produced for all failure modes (503, timeout, connection refused) and exit code is non-zero. This is likely a gap in the reqwest error handling where certain HTTP error responses aren't serialized to JSON before exit. Cross-cuts with Issue 4 (the tool response format needs to be reliable).
 
 ---
 

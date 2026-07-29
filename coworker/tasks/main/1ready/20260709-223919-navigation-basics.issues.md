@@ -73,13 +73,14 @@ The accessibility tree is not automatically re-expanded after scrolling with `sc
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-
+[AI suggested: ACCEPT] Real server-side bug — the accessibility tree isn't re-expanded after programmatic scroll, making `snapshot -v 0` near-useless for scrolled content. This compounds with Issue 4 (no CSS selector fallback), leaving no reliable way to interact with elements outside the initial viewport. Should be prioritized as a core reliability fix.
 
 ---
 
@@ -123,10 +124,11 @@ Every command prints two lines of build status before actual output:
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
-- [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
+- [x] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-
+[AI suggested: WONTFIX] This is inherent Cargo tooling behavior, not a Browser4 code defect. The issue itself acknowledges "Not a code bug." The workarounds (pre-building with `cargo build`, using `cargo run -q`, or a shell alias) are user-side and don't belong in the codebase. No code change warranted.
 
 ---
 
@@ -166,12 +168,13 @@ The default behavior prioritizes file saving over inline viewing. The 10-line pr
 #### Human Review
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [x] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-
+[AI suggested: ACCEPT with improvements] The 10-line preview is genuinely too short for understanding page structure, and the discoverability of `--stdout` is poor. However, file-save as default is the right choice for large accessibility trees — switching to `--stdout`-by-default would dump hundreds of lines into the terminal on every invocation. Increase the preview to 30 lines and improve the hint text (e.g., "Showing 30 of 576 lines. Use --stdout for full output or --page N for more") rather than inverting the default.
 
 ---
 
@@ -210,13 +213,14 @@ The `click` command maps to `browser_click` MCP tool which requires a backend no
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-
+[AI suggested: ACCEPT] Legitimate product gap — the inability to target elements by CSS selector forces users into `eval` with JavaScript when snapshot refs are unavailable. This is especially painful because Issue 1 makes snapshot refs unreliable after scrolling. CSS selector support in click/type/fill would be a significant UX improvement and a natural extension of the existing `looks_like_selector_or_ref` path. Not a duplicate of Issue 1 (different layer — CLI vs. server), but the two issues amplify each other.
 
 ---
 
@@ -255,13 +259,14 @@ The `- ` prefix is the YAML list item marker for the accessibility tree, and the
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-
+[AI suggested: ACCEPT] Valid UX papercut — the mixed YAML-list-marker + grep-prefix format (`204:-                  - listitem ...`) is visually noisy and hard to scan. Standard grep conventions (`:` for matches, `-` for context) would be clearer. Low severity but high bang-for-buck fix.
 
 ---
 
@@ -300,13 +305,14 @@ The table rendering shows headers even when no sessions exist, with no empty-sta
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-
+[AI suggested: ACCEPT] Simple UX improvement — an empty table with headers but zero rows is ambiguous (did it work? is the backend down?). Adding an explicit "No active browser sessions" empty-state message is a low-effort, high-clarity fix. No cross-issue overlap; standalone improvement.
 
 ---
 

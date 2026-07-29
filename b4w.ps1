@@ -32,19 +32,11 @@ for ($i = 0; $i -lt $args.Count; $i++) {
     }
 }
 
-# Warn about short flags that PowerShell would have intercepted under a
-# param() block.  These are now safe with manual $args parsing, but the
-# warning educates users about the preferred long-form flags and provides
-# cross-platform alternatives.
-$COMMON_INTERCEPTED = @('-o', '-i', '-v')
-$interceptedFlags = @($RemainingArgs | Where-Object { $_ -in $COMMON_INTERCEPTED })
-if ($interceptedFlags.Count -gt 0) {
-    Write-Host "⚠  Short flags detected: $($interceptedFlags -join ', ')" -ForegroundColor Yellow
-    Write-Host "   PowerShell may intercept these in other contexts (b4w.sh, direct pwsh)." -ForegroundColor Yellow
-    Write-Host "   Prefer long-form equivalents: --output, --interactive, --viewport" -ForegroundColor Yellow
-    Write-Host "   Or use b4w.sh / b4w.bat (cmd.exe) for full compatibility." -ForegroundColor Yellow
-    Write-Host ""
-}
+# Short flags (-o, -i, -v) are safe in b4w.ps1 because manual $args
+# parsing prevents PowerShell from intercepting them.  No warning is
+# emitted here — users on other shells (b4w.sh, plain pwsh) should
+# use long-form equivalents (--output, --interactive, --viewport) or
+# b4w.bat (cmd.exe) for full compatibility.
 
 # Save the original working directory so we can restore it on exit.
 # Some operations (cargo build, cargo run) may change the process CWD,

@@ -95,7 +95,7 @@ The b4w.ps1 wrapper has been updated to handle short flags via manual $args pars
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-  Duplicate of Calabi-Yau #9 and amazon #5. The b4w.ps1 wrapper now handles short flags safely via manual `$args` parsing (no `param()` block), but the educational warning fires unconditionally. Fix: show at most once per session (env var), or update SKILL.md examples to use `--viewport` instead of `-v` as the primary documented form. Consolidate with the other short-flag issues.
+Duplicate of Calabi-Yau #9 and amazon #5. The b4w.ps1 wrapper now handles short flags safely via manual `$args` parsing (no `param()` block), but the educational warning fires unconditionally. Fix: show at most once per session (env var), or update SKILL.md examples to use `--viewport` instead of `-v` as the primary documented form. Consolidate with the other short-flag issues.
 
 **Severity:** Medium
 **Category:** Reliability
@@ -177,14 +177,14 @@ The inspect algorithm analyzes the first N elements of a broad selector (div) an
 
 #### Human Review
 
-- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-  Duplicate of amazon #3 (same root cause, independently confirmed). The inspect algorithm analyzes the first N elements of a broad selector and finds structural repetition. On Amazon it picked hidden keyboard-shortcut navigation (at box=-9988, clearly offscreen) instead of visible product cards. Fix: exclude hidden/offscreen elements, weight by viewport visibility and text-content richness. Consolidate with amazon #3.
+Same core need as Calabi-Yau #6 (DEFER) and amazon #1 (ACCEPT with improvements). The SKILL.md already documents X-SQL via `DOM_LOAD_AND_SELECT` for correlated extraction, but the learning curve is steep. Prefer the lower-risk approach from amazon #1: provide preset X-SQL templates (amazon-search, ebay-search) + prominently document the interactive-elements-list-as-selector-discovery pattern. A magic `extract-products` command with heuristics would be brittle.
 
 ---
 
@@ -227,7 +227,7 @@ get all uses querySelectorAll which returns elements in document order. Differen
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-  Same core need as Calabi-Yau #6 (DEFER) and amazon #1 (ACCEPT with improvements). The SKILL.md already documents X-SQL via `DOM_LOAD_AND_SELECT` for correlated extraction, but the learning curve is steep. Prefer the lower-risk approach from amazon #1: provide preset X-SQL templates (amazon-search, ebay-search) + prominently document the interactive-elements-list-as-selector-discovery pattern. A magic `extract-products` command with heuristics would be brittle.
+Duplicate of Calabi-Yau #8. The `--file` approach is already the documented escape hatch. ACCEPT the documentation improvement: add a prominent "@file is the safest cross-platform pattern" recommendation at the top of the extraction section. The `eval --json` suggestion from Calabi-Yau #8 is also worth considering.
 
 ---
 
@@ -262,13 +262,13 @@ Documentation was written primarily with Windows/PowerShell pain points in mind.
 #### Human Review
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [x] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
-- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [x] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-  Duplicate of Calabi-Yau #8. The `--file` approach is already the documented escape hatch. ACCEPT the documentation improvement: add a prominent "@file is the safest cross-platform pattern" recommendation at the top of the extraction section. The `eval --json` suggestion from Calabi-Yau #8 is also worth considering.
+The browser session inherits IP-based geolocation from the host. Adding `--locale`/`--country` flags to `goto` is a feature request for CDP geolocation override, not a bug fix. DEFER for now. Workaround: document how to use `cookie-set` or navigate to Amazon's delivery address page to change locale.
 
 ---
 
@@ -303,12 +303,12 @@ The browser session inherits the IP geolocation and any existing cookies. The se
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
-- [x] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
-- [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
+- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+- [x] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-  The browser session inherits IP-based geolocation from the host. Adding `--locale`/`--country` flags to `goto` is a feature request for CDP geolocation override, not a bug fix. DEFER for now. Workaround: document how to use `cookie-set` or navigate to Amazon's delivery address page to change locale.
+Amazon wraps sponsored links in `/sspa/click?...` tracking redirects. The tool correctly extracts what's in the DOM — this is Amazon's behavior, not a tool defect. Document the URL pattern difference (clean `/dp/ASIN` for organic vs `/sspa/click?...` for sponsored) in SKILL.md.
 
 ---
 
@@ -340,14 +340,14 @@ Amazon wraps sponsored result links in a click-tracking redirect. The actual pro
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
-- [x] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
+- [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-  Amazon wraps sponsored links in `/sspa/click?...` tracking redirects. The tool correctly extracts what's in the DOM — this is Amazon's behavior, not a tool defect. Document the URL pattern difference (clean `/dp/ASIN` for organic vs `/sspa/click?...` for sponsored) in SKILL.md.
+Valid UX concern. 6+ lines of output per `goto` becomes noise in multi-step workflows (this session had 8 detail page visits). A `--terse`/`--brief` flag showing only URL + title is a reasonable feature. The snapshot file path is rarely actionable in the terminal. Consider a persistent verbosity preference (`minimal`/`normal`/`verbose`).
 
 ---
 

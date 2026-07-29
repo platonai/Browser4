@@ -1305,6 +1305,16 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         level: ScenarioLevel::Basic,
     },
     ScenarioDef {
+        name: "test_e2e_snapshot_grep_unicode",
+        short_name: "test_snapshot_grep_unicode",
+        requires_browser4: false,
+        restart_browser4: false,
+        test_count: 1,
+        test_fn: mock_server::test_snapshot_grep_unicode,
+        group: Some("snapshot"),
+        level: ScenarioLevel::Basic,
+    },
+    ScenarioDef {
         name: "test_e2e_htmlsnapshot_capture",
         short_name: "test_htmlsnapshot_capture",
         requires_browser4: false,

@@ -198,13 +198,14 @@ dispatchToCustomExecutor() extracts the method name from the MCP tool name as a 
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Critical blocker — `dispatchToCustomExecutor()` extracts raw snake_case method names from MCP tool names but the executor's `when`-block expects camelCase. `resolveMcpToolCall()` already does this correctly via `toMcpToolName()` reverse-lookup; `dispatchToCustomExecutor()` needs the same treatment. Without this fix, no plugin tool (not just media) can be dispatched.
 
 ---
 
@@ -242,13 +243,14 @@ The CLI's handle_dynamic_plugin_command() at main.rs:11992-12012 filters tools b
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Legitimate UX defect — `handle_dynamic_plugin_command()` unconditionally takes `matching[0]`, making all but the first-alphabetical tool in a domain unreachable from the CLI. The suggested `plugin-<domain>.<method>` or positional-subcommand approach is sound. This is the primary reason Issue 1's fix alone won't unblock the media workflow — even after dispatch works, users still can't select which tool to call.
 
 ---
 
@@ -285,13 +287,14 @@ VideoDetector.parseResult() at line 104 applies .distinctBy { it.resolvedUrl ?: 
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] `.distinctBy { it.resolvedUrl ?: it.srcUrl }` collapses distinct DOM elements that share a media URL (e.g., two `<video>` tags referencing the same MP4, or multiple `<source>` children with the same URL). This is a data-loss bug, not an optimization — detection should report ground-truth DOM state. A compound key (`tagName + resolvedUrl + elementIndex`) or removing `distinctBy` entirely and pushing dedup to consumers is the right fix.
 
 ---
 
@@ -328,13 +331,14 @@ The DETECTION_SCRIPT runs document.querySelectorAll('video') in the main page co
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Valid enhancement — the detection script only queries the main document and treats iframes as opaque (checking only `src` for known player domains). Same-origin iframes should be traversed via `iframe.contentDocument.querySelectorAll('video')`. For cross-origin iframes, reporting them as "potential video containers" rather than silently skipping is a reasonable fallback. This is lower priority than Issues 1-3 but meaningfully limits real-world detection coverage.
 
 ---
 
@@ -372,13 +376,14 @@ The CLI help system only documents built-in commands. Dynamic plugin commands (p
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Plugin tools are invisible to users — no help output, no listing mechanism, and the bare `plugin` command is blocked by `preferred_spaced_command_form()` before it can reach the dynamic handler that could list domains. The combination of Issues 2 and 5 means a user must both know a plugin domain name exists and accept that only one tool in it works. Fixing `preferred_spaced_command_form()` to allow bare `plugin` to list domains is the smallest high-leverage change.
 
 ---
 
@@ -416,12 +421,13 @@ AbstractToolExecutor.callFunctionOn(ToolCall, Any) at line 76-86 wraps non-primi
 #### Human Review
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [x] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT with improvements] The description-map wrapping in `AbstractToolExecutor.callFunctionOn()` is a deliberate defense against Jackson serializing internal object graphs, but it degrades machine-readability to near-zero. The suggested marker interface (`SafeToSerialize`) is the right shape — opt-in, backward-compatible, puts the burden on plugin authors to ensure their result types are safe. Pair with a `fields` map on the existing description wrapper as a fallback for types that don't implement the interface.
 
 ---
 
@@ -454,13 +460,14 @@ The dev mode auto-starts the backend from a pre-built runtime bundle. Plugins ar
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Low-hanging documentation gap — the plugin JAR builds to `browser4-plugins/browser4-media/target/` but nothing tells the user to `plugin install` it, and the dev startup doesn't auto-install plugins despite the code living in the same repo. A one-line note in CLAUDE.md plus a `--with-plugins` dev flag would close this. Severity is low because it's a one-time setup friction, not an ongoing bug.
 
 ---
 
@@ -497,13 +504,14 @@ Plugin JARs are loaded at JVM startup by Spring Boot's classpath scanning. Hot-r
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
 - [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
+[AI suggested: ACCEPT] Post-install, the plugin shows `inactive (restart required)` with no guidance. The fix is trivial: detect a running server after install, print a clear action message, and optionally offer `--restart`. This pairs naturally with Issue 7 — together they turn a silent multi-step setup ritual into a guided workflow.
 
 ---
 

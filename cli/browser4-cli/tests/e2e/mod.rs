@@ -610,6 +610,9 @@ struct MockBrowser4State {
     /// Custom command_result responses keyed by task ID. When set, these override
     /// the default response for `command_result`.
     custom_command_results: HashMap<String, String>,
+    /// Custom browser_snapshot response. When set, overrides the default mock
+    /// response for `browser_snapshot` tool calls (used by snapshot-grep, etc.).
+    custom_browser_snapshot_response: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -789,6 +792,24 @@ impl MockBrowser4Server {
             .insert(task_id.to_string(), response.to_string());
     }
 
+    /// Set a custom response for the `browser_snapshot` tool.  When set, every
+    /// `browser_snapshot` call returns this text instead of the default
+    /// `"mock snapshot"`.  Call [clear_browser_snapshot_response] to restore
+    /// the default.
+    fn set_browser_snapshot_response(&self, response: &str) {
+        self.state
+            .lock()
+            .expect("mock Browser4 state mutex poisoned")
+            .custom_browser_snapshot_response = Some(response.to_string());
+    }
+
+    fn clear_browser_snapshot_response(&self) {
+        self.state
+            .lock()
+            .expect("mock Browser4 state mutex poisoned")
+            .custom_browser_snapshot_response = None;
+    }
+
     /// Shut down the mock server's listener thread without dropping the recorded
     /// state. After calling this, further requests will fail with a connection
     /// error (simulating an unreachable backend).
@@ -915,6 +936,11 @@ fn serve_mock_browser4_request(mut stream: TcpStream, state: Arc<Mutex<MockBrows
                 write_http_response(&mut stream, "200 OK", "application/json", &response);
                 return;
             }
+
+            let tool_response_state = state
+                .lock()
+                .expect("mock Browser4 state mutex poisoned")
+                .clone();
 
             let text = match tool.as_str() {
                 "open_session" => {
@@ -1045,7 +1071,7 @@ fn serve_mock_browser4_request(mut stream: TcpStream, state: Arc<Mutex<MockBrows
                         format!("result for {task_id}")
                     }
                 }
-                "command_batch" => mock_command_batch_response(&arguments),
+                "command_batch" => mock_command_batch_response(&arguments, &tool_response_state),
                 "close_session" => "Session closed.".to_string(),
                 "close_all_sessions" => "All sessions closed.".to_string(),
                 "agent_extract" => {
@@ -1079,7 +1105,7 @@ fn serve_mock_browser4_request(mut stream: TcpStream, state: Arc<Mutex<MockBrows
                         r#"{{"method":"{method}"{params_str},"result":"mock-cdp-result"}}"#,
                     )
                 }
-                other => mock_browser_tool_text(other, &arguments),
+                other => mock_browser_tool_text(other, &arguments, &tool_response_state),
             };
 
             let response = serde_json::json!({
@@ -1362,7 +1388,11 @@ fn extract_swarm_task_id(route: &str, suffix: &str) -> Option<String> {
     None
 }
 
-fn mock_browser_tool_text(tool: &str, arguments: &serde_json::Value) -> String {
+fn mock_browser_tool_text(
+    tool: &str,
+    arguments: &serde_json::Value,
+    state: &MockBrowser4State,
+) -> String {
     match tool {
         "browser_evaluate" => {
             let expression = arguments
@@ -1380,12 +1410,18 @@ fn mock_browser_tool_text(tool: &str, arguments: &serde_json::Value) -> String {
         }
         "page_url" => "https://mock.browser4.local/current".to_string(),
         "page_title" => "Mock Browser4 Page".to_string(),
-        "browser_snapshot" => "mock snapshot".to_string(),
+        "browser_snapshot" => state
+            .custom_browser_snapshot_response
+            .clone()
+            .unwrap_or_else(|| "mock snapshot".to_string()),
         other => format!("mock response for {other}"),
     }
 }
 
-fn mock_command_batch_response(arguments: &serde_json::Value) -> String {
+fn mock_command_batch_response(
+    arguments: &serde_json::Value,
+    state: &MockBrowser4State,
+) -> String {
     let mut current_session_id = arguments
         .get("sessionId")
         .and_then(|value| value.as_str())
@@ -1441,7 +1477,7 @@ fn mock_command_batch_response(arguments: &serde_json::Value) -> String {
                 serde_json::json!({
                     "index": index,
                     "ok": true,
-                    "text": mock_browser_tool_text(tool, &step_arguments),
+                    "text": mock_browser_tool_text(tool, &step_arguments, state),
                 })
             }
             "snapshot" => serde_json::json!({

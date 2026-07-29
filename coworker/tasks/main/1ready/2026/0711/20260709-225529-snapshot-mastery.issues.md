@@ -120,13 +120,14 @@ The snapshot command defines `-s, --selector` as a short flag for CSS selector s
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-
+[AI suggested: ACCEPT] Clear flag collision — `-s` is defined for both the global session option and snapshot's `--selector`, making `-s "#selector"` silently fail as a session lookup. The short flag must be removed or renamed; long-form `--selector` works fine as the unambiguous escape hatch.
 
 ---
 
@@ -172,13 +173,14 @@ Uncertain — the selector may be applied at a different layer (DOM serializatio
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-
+[AI suggested: ACCEPT] The `--selector` flag is parsed and forwarded but produces zero filtering on AX tree output — verified via `diff` showing identical output with and without valid CSS selectors. This is either a backend bug (selector ignored during AX tree generation) or a flag-forwarding gap in the CLI; needs investigation at the MCP dispatch layer.
 
 ---
 
@@ -221,13 +223,14 @@ The diff computation is likely a post-processing step that only attaches to the 
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-
+[AI suggested: ACCEPT] `--auto-diff` and `--stdout` don't compose — the diff section only attaches to file-based output paths. A reasonable user expects stdout mode to include diff annotations too. Accept as a legitimate UX gap; severity correctly placed at Medium since the file-mode workaround exists.
 
 ---
 
@@ -270,12 +273,13 @@ The auto-diff compares against the auto-captured snapshot from `goto`, which is 
 #### Human Review
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
-- [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
+- [x] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-
+[AI suggested: ACCEPT with improvements] The core observation is correct (goto's auto-snapshot poisons the baseline), but the suggested fix of "compare against last user-initiated snapshot" is the better long-term approach than adding a `--no-snapshot` flag — it fixes the UX for all users without requiring them to know about an obscure flag. The `--no-snapshot` flag could complement this. Also consider: the auto-snapshot is arguably useful on its own (gives you a ref-bearing snapshot of the page you just navigated to), so the fix should preserve that value while not breaking `--auto-diff`.
 
 ---
 
@@ -320,13 +324,14 @@ Possible race condition in state persistence or session validation. The state fi
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-
+[AI suggested: ACCEPT] Intermittent session failures where `list` shows Active but commands report "No active session" point to a race condition or stale state read. Accept as a real reliability concern; the suggested retry-with-delay and improved error messages are pragmatic first steps. Should also investigate whether the CLI state file write and read are properly synchronized.
 
 ---
 
@@ -363,13 +368,14 @@ The SKILL.md describes `--selector` in the snapshot flags list but doesn't provi
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-
+[AI suggested: ACCEPT] SKILL.md documents `--selector` without qualification, implying it works for all snapshot types. If Issue 2 confirms AX tree filtering isn't supported, the docs must state this explicitly. Keep this issue separate from Issue 2 — fixing the code doesn't remove the need for docs, and fixing the docs is independently valuable while the code fix is pending.
 
 ---
 
@@ -408,8 +414,9 @@ Same as Issue 2. The selector is either not forwarded to the grep operation or t
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [x] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-
+[AI suggested: DUPLICATE] Same root cause as Issue 2 — CSS selector scoping doesn't filter AX tree output. The grep variant exercises the same non-functional code path. Fold into Issue 2's fix; no separate work needed.
 
 ---
 
@@ -442,13 +449,14 @@ The SKILL.md is comprehensive but the snapshot-vs-htmlsnapshot distinction is di
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-
+[AI suggested: ACCEPT] The snapshot-vs-htmlsnapshot distinction is spread across multiple SKILL.md sections without a single clear rule. The suggested one-sentence rule ("snapshot for interaction refs, htmlsnapshot for content extraction") and comparison table are low-effort, high-impact improvements. This is a discoverability issue that affects every new user's first session.
 
 ---
 

@@ -1849,6 +1849,9 @@ async fn handle_goto(
                 } else {
                     cli_println!("Navigated to {}", target_url);
                 }
+                if !json_active() {
+                    cli_println!("Page loaded. Use `wait --load networkidle` if content appears incomplete (e.g. async-rendered SPAs).");
+                }
             }
             warn_if_url_has_encoded_quotes(target_url);
             post_command_snapshot(client, base_url, &session_id).await;
@@ -1898,6 +1901,9 @@ async fn handle_goto(
                         );
                     } else {
                         cli_println!("Navigated to {}", target_url);
+                    }
+                    if !json_active() {
+                        cli_println!("Page loaded. Use `wait --load networkidle` if content appears incomplete (e.g. async-rendered SPAs).");
                     }
                     warn_if_url_has_encoded_quotes(target_url);
                     post_command_snapshot(client, base_url, &retry_id).await;
@@ -2124,14 +2130,52 @@ async fn verify_click_navigation(
             .unwrap_or("");
         // Suppress warning in --json or --quiet mode to keep machine output clean.
         let suppressed = json_active() || quiet_active();
-        if !ref_val.is_empty() && !suppressed {
-            eprintln!(
-                "⚠️  Click on {} did not result in navigation — page URL is unchanged. \
-                 The element may be off-screen; try scrolling it into view first or \
-                 use --follow to detect new-tab navigation.",
-                ref_val
-            );
+
+        if ref_val.is_empty() || suppressed {
+            return;
         }
+
+        // CDP click may not trigger navigation when the page intercepts
+        // clicks via JavaScript (e.g. Baidu search results with custom
+        // routing).  Try a JS-based click as a fallback — element.click()
+        // bypasses CDP event handling and triggers the page's own handlers.
+        let js_fallback = call_tool(
+            client,
+            base_url,
+            "browser_evaluate",
+            json!({
+                "sessionId": session_id,
+                "expression": "element => element.click()",
+                "ref": ref_val,
+            }),
+        )
+        .await;
+
+        if js_fallback.is_ok() {
+            // Check if the JS click triggered navigation
+            let url_after_js = call_tool(
+                client,
+                base_url,
+                "page_url",
+                json!({ "sessionId": session_id }),
+            )
+            .await
+            .ok();
+
+            let navigated = url_after_js.as_ref().map_or(false, |u| u != before);
+            if navigated {
+                // Suppress the warning — navigation succeeded via fallback
+                return;
+            }
+        }
+
+        eprintln!(
+            "⚠️  Click on {} did not result in navigation — page URL is unchanged. \
+             The site may intercept clicks via JavaScript (common on Baidu, etc.). \
+             Workaround: extract the link's href with `eval` and navigate with `goto`:\n  \
+             eval 'document.querySelector(\\'[data-ref=\"{}\"\\']')?.getAttribute(\\'href\\')'\n  goto <extracted-url>",
+            ref_val, ref_val
+        );
     }
 }
 
@@ -5604,6 +5648,9 @@ async fn handle_html_snapshot_get(
     // practical limits for single-field extraction so it defaults to --all.
     let paginate = (field == "html") && !empty_result;
 
+    // Determine if this is a "get all" (querySelectorAll) call vs a "get" (single element)
+    let is_get_all = tool_name.ends_with("_all");
+
     if empty_result {
         let display_selector = if selector.is_empty() { ":root" } else { selector };
         cli_println!("{}", text);
@@ -5611,6 +5658,29 @@ async fn handle_html_snapshot_get(
             "No elements matched \"{}\". Try `htmlsnapshot inspect \"{}\"` to discover valid selectors, or run `htmlsnapshot` to see the full DOM tree.",
             display_selector, display_selector
         );
+    } else if is_get_all && !json_active() {
+        // For "get all" mode, warn when only 0–1 results are returned.
+        // A low count often means the CSS selector doesn't match the page's
+        // current structure (e.g. changed class names, different layout).
+        cli_println!("{}", text);
+        let result_count = if text.trim().starts_with('[') {
+            // Parse the JSON array to count elements (server returns a JSON array for get_all)
+            serde_json::from_str::<Vec<serde_json::Value>>(&text)
+                .map(|arr| arr.len())
+                .ok()
+        } else {
+            // String payload — count by line as a rough approximation
+            Some(text.lines().count())
+        };
+        if let Some(count) = result_count {
+            if count <= 1 {
+                let display_selector = if selector.is_empty() { ":root" } else { selector };
+                cli_println!(
+                    "Only {} result(s) found for \"{}\". The page structure may have changed since the snapshot was captured. Try `htmlsnapshot inspect \"{}\"` to discover current selectors.",
+                    count, display_selector, display_selector
+                );
+            }
+        }
     } else if paginate {
         if let Some(ref pm) = server_pagination {
             // Server already paginated — display as-is with server footer.
@@ -7189,6 +7259,7 @@ fn strip_html_scripts_and_styles(html: &str) -> String {
     let mut result = String::with_capacity(html.len());
     let bytes = html.as_bytes();
     let mut i = 0;
+    let mut byte_start: usize = 0; // start of pending non-script/non-style content
     let len = bytes.len();
 
     while i < len {
@@ -7204,6 +7275,12 @@ fn strip_html_scripts_and_styles(html: &str) -> String {
             };
 
             if tag_len > 0 {
+                // Flush any pending non-script content before this tag.
+                // html[byte_start..i] is a slice of the original valid UTF-8
+                // string, so this preserves all characters (including CJK).
+                if byte_start < i {
+                    result.push_str(&html[byte_start..i]);
+                }
                 // Find the closing tag (case-insensitive)
                 let close_lower = close_tag.to_lowercase();
                 if let Some(end_pos) = lower[i + tag_len..].find(&close_lower) {
@@ -7215,13 +7292,20 @@ fn strip_html_scripts_and_styles(html: &str) -> String {
                         result.push('\n');
                     }
                     i = abs_end;
+                    byte_start = i; // resume after the closing tag
                     continue;
                 }
                 // No closing tag found — fall through and output the '<' char.
+                // Reset byte_start to include everything up to and including '<'.
+                byte_start = i;
             }
         }
-        result.push(bytes[i] as char);
         i += 1;
+    }
+
+    // Flush any remaining content after the last script/style block.
+    if byte_start < len {
+        result.push_str(&html[byte_start..]);
     }
 
     result
@@ -15939,13 +16023,14 @@ async fn run(
                     }
                 }
 
-            // Strip --file, --stdin, --base64, and --json keys so they aren't sent to the server
+            // Strip --file, --stdin, --js, --base64, and --json keys so they aren't sent to the server
             // (they're CLI-side only — the content has already been read and
             // inserted as the "expression" parameter above; --json controls
             // local output formatting, not a server parameter).
             if let Value::Object(ref mut m) = tool_params {
                 m.remove("file");
                 m.remove("stdin");
+                m.remove("js");
                 m.remove("base64");
                 m.remove("json");
             }

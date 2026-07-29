@@ -340,10 +340,11 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push(
             "  # Pipe from stdin — ideal for heredocs and one-liners with complex quoting:".to_string(),
         );
-        lines.push("  browser4-cli eval --stdin << 'EOF'".to_string());
+        lines.push("  browser4-cli eval --js << 'EOF'".to_string());
         lines.push("  document.querySelector('a[href*=\"jobs\"]')?.textContent".to_string());
         lines.push("  EOF".to_string());
         lines.push("  echo 'document.title' | browser4-cli eval --stdin".to_string());
+        lines.push("  echo 'document.title' | browser4-cli eval --js   # --js is a shorthand for --stdin".to_string());
         lines.push("  # Base64 (inline, avoids quoting):".to_string());
         lines.push("  browser4-cli eval --base64 ZG9jdW1lbnQudGl0bGU=".to_string());
         lines.push("  # Inline (simple expressions only — avoid on Windows with complex JS):".to_string());

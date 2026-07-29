@@ -90,11 +90,12 @@ The evaluation framework uses a templating system that didn't apply variable sub
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
-- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+- [x] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-
+[AI suggested: DEFER] This is a bug in the evaluation harness's template-substitution pipeline, not in the browser4-cli product itself. The product team likely doesn't own the evaluation framework. Forward to the eval-infra owners.
 
 ---
 
@@ -130,13 +131,14 @@ The `-s` flag is a global option rendered by the top-level help generator, but p
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-
+[AI suggested: ACCEPT] `-s` is a foundational global flag that directly affects how `open` works — a user reading `open --help` should learn about named sessions there, not just at the top level. Low implementation cost: add a note and one example line to the `CommandDef`.
 
 ---
 
@@ -176,13 +178,14 @@ The `CommandDef` for `close` in `commands.rs` lacks notes and examples. This is 
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-
+[AI suggested: ACCEPT] `close` is destructive and has sibling commands (`close-all`, `kill-all`) with different semantics — the help should explain the distinction, session targeting via `-s`, and default-session behavior. Same fix pattern as Issue 2; these two should be addressed together for consistency.
 
 ---
 
@@ -218,13 +221,14 @@ The page metadata display in the `goto` command handler shows the final `documen
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-
+[AI suggested: ACCEPT] Silent redirects undermine user trust ("did I navigate to the wrong page?"). Showing the final URL alongside the requested URL when they differ is a one-line comparison in the `goto` handler. Low effort, meaningful clarity.
 
 ---
 
@@ -261,13 +265,14 @@ The `list` command handler queries session metadata from the backend but doesn't
 
 #### Human Review
 
-- [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
+- [x] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
 - [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-
+[AI suggested: ACCEPT] In multi-session workflows, `list` is the dashboard — without URL/title, users must `snapshot` each session just to identify which is which. This likely requires both CLI display changes and backend endpoint additions, so it's higher effort than Issues 2–4, but the UX payoff is real.
 
 ---
 
@@ -306,11 +311,12 @@ This is likely a deliberate design choice for large snapshots (200KB+), but the 
 
 - [ ] **ACCEPT** — issue confirmed valid; suggested improvement is correct
 - [ ] **ACCEPT with improvements** — issue valid but fix needs refinement (add details in Notes)
-- [ ] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
+- [x] **DEFER** — issue acknowledged but intentionally deferred (add rationale in Notes)
 - [ ] **WONTFIX** — issue acknowledged but will not be fixed (add rationale in Notes)
 - [ ] **REJECT** — issue invalid, not a problem, or already addressed
+- [ ] **DUPLICATE** — issue duplicates another existing issue (reference in Notes)
 - **Notes:**
-
+[AI suggested: DEFER] The file-default behavior is a deliberate design choice to avoid terminal flooding from large snapshots (200KB+), and `--stdout` already exists as the opt-in escape hatch. The adaptive-threshold idea (inline when small) is reasonable but adds complexity without a clear user-demand signal. Revisit if users consistently complain.
 
 ---
 

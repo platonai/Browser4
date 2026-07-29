@@ -4606,6 +4606,84 @@ pub(super) fn test_snapshot_grep_flags(ctx: &mut E2ECtx) {
 }
 
 // ---------------------------------------------------------------------------
+// snapshot-grep -- Unicode / Chinese text matching
+// ---------------------------------------------------------------------------
+
+pub(super) fn test_snapshot_grep_unicode(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let mock_server = MockBrowser4Server::start();
+    ctx.browser4_base_url = mock_server.base_url();
+
+    // Simulate a snapshot that contains Chinese text in YAML format
+    // (mimicking what browser_snapshot returns for a Baidu search results page).
+    let chinese_snapshot = r#"- document:
+  - heading "百度一下"
+  - link "武汉龙虾节"
+  - text: 2026年武汉小龙虾消费季
+  - text: 汉口江滩三阳广场
+  - link "肥肥虾庄"
+  - text: 不嘬虾，枉夏天"#;
+    mock_server.set_browser_snapshot_response(chinese_snapshot);
+
+    run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG, "https://example.com"]);
+
+    // Basic Chinese text match — substring of a YAML node value
+    let result = run_command(ctx, &["snapshot", "grep", "龙虾节"]);
+    assert_eq!(result.exit_code, 0,
+        "expected snapshot-grep for Chinese text to succeed:\n{}", result.stderr);
+    assert!(result.stdout.contains("武汉龙虾节"),
+        "Expected '龙虾节' to match '武汉龙虾节':\n{}", result.stdout);
+
+    // Fixed-string match with full Chinese phrase
+    let result = run_command(ctx, &["snapshot", "grep", "-F", "不嘬虾，枉夏天"]);
+    assert_eq!(result.exit_code, 0,
+        "expected snapshot-grep -F to succeed for Chinese text:\n{}", result.stderr);
+    assert!(result.stdout.contains("不嘬虾，枉夏天"),
+        "Expected -F for Chinese text to match:\n{}", result.stdout);
+
+    // Case-insensitive match (no-op for CJK, but shouldn't break)
+    let result = run_command(ctx, &["snapshot", "grep", "-i", "汉口江滩"]);
+    assert_eq!(result.exit_code, 0,
+        "expected snapshot-grep -i for Chinese text to succeed:\n{}", result.stderr);
+    assert!(result.stdout.contains("汉口江滩"),
+        "Expected -i for Chinese text to match:\n{}", result.stdout);
+
+    // Text NOT in the snapshot
+    let result = run_command(ctx, &["snapshot", "grep", "不存在的文本"]);
+    assert_eq!(result.exit_code, 0,
+        "expected snapshot-grep for absent Chinese text to succeed:\n{}", result.stderr);
+    assert!(!result.stdout.contains("不存在的文本"),
+        "Expected absent Chinese text NOT to match:\n{}", result.stdout);
+
+    // -c (count) mode with Chinese text
+    let result = run_command(ctx, &["snapshot", "grep", "-c", "虾"]);
+    assert_eq!(result.exit_code, 0,
+        "expected snapshot-grep -c for Chinese text to succeed:\n{}", result.stderr);
+    let count: i32 = result.stdout.trim().parse().unwrap_or(-1);
+    assert!(count >= 3,
+        "Expected '虾' to appear at least 3 times (龙虾, 肥肥虾庄, 不嘬虾): got count={}:\n{}",
+        count, result.stdout);
+
+    // -F with literal Chinese characters containing regex-like patterns
+    // (ensures the regex engine doesn't misinterpret CJK chars as regex syntax)
+    let result = run_command(ctx, &["snapshot", "grep", "-F", "武汉"]);
+    assert_eq!(result.exit_code, 0,
+        "expected snapshot-grep -F for '武汉' to succeed:\n{}", result.stderr);
+    assert!(result.stdout.contains("武汉龙虾节"),
+        "Expected -F '武汉' to match:\n{}", result.stdout);
+
+    // Count mode should show correct count
+    let result = run_command(ctx, &["snapshot", "grep", "-c", "武汉"]);
+    assert_eq!(result.exit_code, 0,
+        "expected snapshot-grep -c for '武汉' to succeed:\n{}", result.stderr);
+    let count: i32 = result.stdout.trim().parse().unwrap_or(-1);
+    assert!(count >= 2,
+        "Expected '武汉' to appear at least 2 times: got count={}:\n{}",
+        count, result.stdout);
+}
+
+// ---------------------------------------------------------------------------
 // htmlsnapshot
 // ---------------------------------------------------------------------------
 
