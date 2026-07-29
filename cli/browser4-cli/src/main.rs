@@ -53,7 +53,8 @@ use daemon::{
 };
 use help::{
     commands_in_category, generate_command_help, generate_help, generate_help_entry,
-    public_command_name, resolve_category_alias, CATEGORY_TITLES,
+    generate_help_json, generate_quick_reference, public_command_name,
+    resolve_category_alias, CATEGORY_TITLES,
 };
 use http::{
     call_tool, call_tool_with_result, call_tool_with_timeout_override, cancel_crawl,
@@ -14522,6 +14523,7 @@ fn normalize_command_invocation(global: &args::GlobalFlags) -> (String, args::Gl
             proxy_url: global.proxy_url.clone(),
             show_tip: global.show_tip,
             pretty: global.pretty,
+            help_json: global.help_json,
             timeout_secs: global.timeout_secs,
             args: rewritten,
         };
@@ -15511,37 +15513,40 @@ async fn run(
     // Initialise pretty-print mode when --pretty is active.
     pretty_init(global.pretty);
 
-    // Handle help or no command — these always print human-readable text.
-    if command.is_empty() || command == "help" || command == "--help" || command == "-h" {
-        // Resolve spaced prefixed help targets such as
-        // `help swarm create` / `help agent run`.
+    // ── Help dispatch ────────────────────────────────────────────────
+    //
+    // Progressive disclosure:
+    //   no args        → quick reference (~35 lines, most-used commands)
+    //   --help         → full command reference by category
+    //   --help <topic> → category or per-command details
+    //   --help-json    → machine-readable JSON (for AI agents / scripts)
+
+    // --help-json as a standalone flag (before any command)
+    if global.help_json {
+        let help_args: Vec<String> = global.args.iter().cloned().collect();
+        let sub = resolve_help_target(&help_args);
+        println!("{}", generate_help_json(sub.as_deref()));
+        return Ok(());
+    }
+
+    // --help-json as the command itself
+    if command == "--help-json" {
         let help_args: Vec<String> = global.args.iter().skip(1).cloned().collect();
-        let sub = if let Some(rewritten) = rewrite_prefixed_command(&help_args) {
-            Some(rewritten[0].clone())
-        } else {
-            if let Some(target) = global.args.get(1) {
-                // Accept the target as-is when it is already a known command
-                // (e.g. "agent-run" is valid even though the preferred form is
-                // "agent run").  The spaced-form preference is enforced during
-                // command dispatch, not during help lookups.
-                let cmd_map = commands_map();
-                if cmd_map.contains_key(target.as_str()) {
-                    Some(target.clone())
-                } else if let Some(preferred) = preferred_spaced_command_form(target) {
-                    return Err(CliError(
-                        ExitCode::Usage,
-                        format!(
-                            "Unsupported command form: {}. Use 'browser4-cli help {}' instead.",
-                            target, preferred
-                        ),
-                    ));
-                } else {
-                    Some(target.clone())
-                }
-            } else {
-                None
-            }
-        };
+        let sub = resolve_help_target(&help_args);
+        println!("{}", generate_help_json(sub.as_deref()));
+        return Ok(());
+    }
+
+    // No command at all → compact quick reference
+    if command.is_empty() {
+        cli_println!("{}", generate_quick_reference());
+        return Ok(());
+    }
+
+    // Explicit help request: `help`, `--help`, `-h`
+    if command == "help" || command == "--help" || command == "-h" {
+        let help_args: Vec<String> = global.args.iter().skip(1).cloned().collect();
+        let sub = resolve_help_target(&help_args);
         print_help(sub.as_deref());
         return Ok(());
     }
@@ -15560,6 +15565,13 @@ async fn run(
     // print the help for that command instead of complaining about the form.
     if global.args.iter().any(|a| a == "--help" || a == "-h") {
         print_help(Some(command));
+        return Ok(());
+    }
+
+    // When the user passes --help-json after a command (e.g. `htmlsnapshot --help-json`),
+    // print JSON help for that command.
+    if global.args.iter().any(|a| a == "--help-json") {
+        println!("{}", generate_help_json(Some(command)));
         return Ok(());
     }
 
@@ -16741,6 +16753,27 @@ async fn run(
     Ok(())
 }
 
+/// Resolve a help target from command-line arguments.
+///
+/// Handles spaced prefixed forms (`swarm create`, `agent run`) by rewriting
+/// them to internal flat names. Returns `None` when no target was given.
+fn resolve_help_target(args: &[String]) -> Option<String> {
+    if args.is_empty() {
+        return None;
+    }
+    if let Some(rewritten) = rewrite_prefixed_command(args) {
+        return Some(rewritten[0].clone());
+    }
+    let target = &args[0];
+    let cmd_map = commands_map();
+    if cmd_map.contains_key(target.as_str()) {
+        return Some(target.clone());
+    }
+    // Not a known flat command — return as-is; print_help will try
+    // prefix match, category alias, or report unknown.
+    Some(target.clone())
+}
+
 fn print_help(command_name: Option<&str>) {
     if let Some(name) = command_name {
         if name != "--help" {
@@ -17831,6 +17864,7 @@ mod tests {
             proxy_url: None,
             show_tip: false,
             pretty: false,
+            help_json: false,
             timeout_secs: None,
             args: vec![
                 "agent".to_string(),
@@ -17857,6 +17891,7 @@ mod tests {
             proxy_url: None,
             show_tip: false,
             pretty: false,
+            help_json: false,
             timeout_secs: None,
             args: vec!["agent-run".to_string(), "task".to_string()],
         };
