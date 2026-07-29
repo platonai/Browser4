@@ -449,6 +449,18 @@ Assert-ContainsString -Label 'Integrity: b4w bare prints help' -Haystack $srcTex
 Assert-ContainsString -Label 'Integrity: cli subcommand stripping' -Haystack $srcText -Needle "eq 'cli'"
 
 # ═══════════════════════════════════════════════════════════════════
+# TESTS: Source integrity — bootstrap (global invocation)
+# ═══════════════════════════════════════════════════════════════════
+Write-Host "━━━ Source integrity: bootstrap ━━━" -ForegroundColor Cyan
+
+Assert-ContainsString -Label 'Bootstrap: upward search loop' -Haystack $srcText -Needle 'while ($B4wSearchDir)'
+Assert-ContainsString -Label 'Bootstrap: checks for b4w.ps1 via Test-Path' -Haystack $srcText -Needle "Test-Path -Path `$B4wCandidate"
+Assert-ContainsString -Label 'Bootstrap: climbs to parent directory' -Haystack $srcText -Needle 'Split-Path $B4wSearchDir -Parent'
+Assert-ContainsString -Label 'Bootstrap: shows error outside repo' -Haystack $srcText -Needle 'b4w must be called from within a Browser4 source code repository'
+Assert-ContainsString -Label 'Bootstrap: delegates to found script' -Haystack $srcText -Needle '& $B4wFoundScript @args'
+Assert-ContainsString -Label 'Bootstrap: normalizes path for comparison' -Haystack $srcText -Needle '$B4wMyPathNormalized'
+
+# ═══════════════════════════════════════════════════════════════════
 # TESTS: Top-level help content completeness
 # ═══════════════════════════════════════════════════════════════════
 Write-Host "━━━ Top-level help content ━━━" -ForegroundColor Cyan

@@ -21,6 +21,48 @@
 # With manual args parsing, all tokens pass through to the $RemainingArgs
 # array without PowerShell trying to bind them to script parameters.
 
+# ── Global invocation bootstrap ────────────────────────────────────────────
+# When b4w is invoked via PATH (global command), search upward from the
+# calling directory to locate the correct b4w.ps1 for this repository.
+# This ensures that if you have multiple Browser4 checkouts, typing "b4w"
+# always uses the one corresponding to your current directory.
+#
+# If no b4w.ps1 is found in any parent directory, show an error — b4w is a
+# development-only tool and must be called from within a Browser4 source
+# code repository.
+
+$B4wMyPath = $MyInvocation.MyCommand.Path
+$B4wCallingDir = Get-Location
+$B4wFoundScript = $null
+$B4wSearchDir = $B4wCallingDir
+
+while ($B4wSearchDir) {
+    $B4wCandidate = Join-Path $B4wSearchDir 'b4w.ps1'
+    if (Test-Path -Path $B4wCandidate -PathType Leaf) {
+        $B4wFoundScript = (Resolve-Path $B4wCandidate).Path
+        break
+    }
+    $B4wParent = Split-Path $B4wSearchDir -Parent
+    if ($B4wParent -eq $B4wSearchDir) { break }
+    $B4wSearchDir = $B4wParent
+}
+
+if (-not $B4wFoundScript) {
+    Write-Host 'Error: b4w is a development-only tool.' -ForegroundColor Red
+    Write-Host ''
+    Write-Host 'b4w must be called from within a Browser4 source code repository.' -ForegroundColor Yellow
+    Write-Host 'Navigate to a Browser4 checkout and try again.' -ForegroundColor Yellow
+    exit 1
+}
+
+# If the found script is different from ourselves, delegate to it.
+$B4wMyPathNormalized = if (Test-Path $B4wMyPath) { (Resolve-Path $B4wMyPath).Path } else { $B4wMyPath }
+if ($B4wFoundScript -ne $B4wMyPathNormalized) {
+    & $B4wFoundScript @args
+    exit $LASTEXITCODE
+}
+# Otherwise, we ARE the correct b4w.ps1 — continue below.
+
 $Rebuild = $false
 $RemainingArgs = @()
 
