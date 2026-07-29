@@ -1,0 +1,416 @@
+name: Release Maven Central
+
+on:
+  # push:
+  #   tags:
+  #     - 'v[0-9]+.[0-9]+.[0-9]+'
+  #     - 'v[0-9]+.[0-9]+.[0-9]+-rc.[0-9]+'
+  #     - 'v[0-9]+.[0-9]+.[0-9]+-alpha.[0-9]+'
+  #     - 'v[0-9]+.[0-9]+.[0-9]+-beta.[0-9]+'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to publish (e.g., v4.12.0, v4.12.0-rc.1)'
+        required: true
+        type: string
+      skip_tests:
+        description: 'Skip tests during build'
+        required: false
+        default: true
+        type: boolean
+
+# Prevent concurrent Maven Central releases
+concurrency:
+  group: release-maven-${{ github.event.inputs.tag || github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  JAVA_VERSION: '17'
+  MAVEN_OPTS: '-Xmx3g -XX:+UseG1GC'
+
+jobs:
+  prepare:
+    name: Prepare release metadata
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      tag: ${{ steps.prepare.outputs.tag }}
+      version: ${{ steps.prepare.outputs.version }}
+      is_prerelease: ${{ steps.prepare.outputs.is_prerelease }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Prepare outputs
+        id: prepare
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ inputs.tag }}"
+            if [ -z "$TAG" ]; then
+              echo "❌ workflow_dispatch requires a tag input"
+              exit 1
+            fi
+            git fetch --tags --force
+            if ! git rev-parse --verify "refs/tags/$TAG" >/dev/null 2>&1; then
+              echo "❌ Tag not found in repository: $TAG"
+              exit 1
+            fi
+          else
+            TAG="${GITHUB_REF#refs/tags/}"
+          fi
+
+          VERSION="${TAG#v}"
+
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta|rc)\.[0-9]+)?$ ]]; then
+            echo "❌ Invalid version format: $VERSION"
+            echo "Expected: X.Y.Z, X.Y.Z-alpha.N, X.Y.Z-beta.N, or X.Y.Z-rc.N"
+            exit 1
+          fi
+
+          IS_PRERELEASE="false"
+          if [[ "$VERSION" == *"-"* ]]; then
+            IS_PRERELEASE="true"
+          fi
+
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "is_prerelease=$IS_PRERELEASE" >> "$GITHUB_OUTPUT"
+
+          {
+            echo "## 📦 Maven Central Release — $VERSION"
+            echo ""
+            echo "- **Tag**: \`$TAG\`"
+            echo "- **Version**: \`$VERSION\`"
+            echo "- **Prerelease**: $IS_PRERELEASE"
+            echo "- **Artifacts**: 21 library modules (POM + JAR + sources + javadoc + GPG signatures)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  deploy:
+    name: Deploy to Maven Central
+    runs-on: ubuntu-latest
+    needs: prepare
+    if: needs.prepare.result == 'success'
+    permissions:
+      contents: read
+    env:
+      GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+      MAVEN_GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+      CENTRAL_USERNAME: ${{ secrets.CENTRAL_USERNAME }}
+      CENTRAL_PASSWORD: ${{ secrets.CENTRAL_PASSWORD }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.prepare.outputs.tag }}
+
+      - name: Validate release secrets
+        shell: bash
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+
+          echo "=== Release secret preflight ==="
+          missing=0
+
+          if [ -z "${CENTRAL_USERNAME:-}" ]; then
+            echo "::error::Missing required secret: CENTRAL_USERNAME"
+            missing=1
+          else
+            echo "CENTRAL_USERNAME: configured"
+          fi
+
+          if [ -z "${CENTRAL_PASSWORD:-}" ]; then
+            echo "::error::Missing required secret: CENTRAL_PASSWORD"
+            missing=1
+          else
+            echo "CENTRAL_PASSWORD: configured"
+          fi
+
+          if [ -z "${GPG_PASSPHRASE:-}" ]; then
+            echo "::error::Missing required secret: GPG_PASSPHRASE"
+            missing=1
+          else
+            echo "GPG_PASSPHRASE: configured"
+          fi
+
+          if [ -z "${GPG_PRIVATE_KEY:-}" ]; then
+            echo "::error::Missing required secret: GPG_PRIVATE_KEY"
+            missing=1
+          else
+            echo "GPG_PRIVATE_KEY: configured"
+            if ! printf '%s' "$GPG_PRIVATE_KEY" | grep -q "BEGIN PGP PRIVATE KEY BLOCK"; then
+              echo "::error::GPG_PRIVATE_KEY does not look like an ASCII-armored private key block"
+              missing=1
+            fi
+          fi
+
+          if [ "$missing" -ne 0 ]; then
+            echo "::error::Release preflight failed. Configure the missing or invalid secrets and retry."
+            exit 1
+          fi
+
+          echo "✅ All release secrets validated"
+
+      - name: Setup Deploy Tooling
+        shell: bash
+        run: |
+          echo "::group::Installing Deploy Prerequisites"
+          if ! command -v jq &> /dev/null; then
+            sudo apt-get update -qq && sudo apt-get install -y jq
+          fi
+          if ! command -v python3 &> /dev/null; then
+            sudo apt-get install -y python3
+          fi
+          echo "✅ jq: $(jq --version)"
+          echo "✅ python3: $(python3 --version)"
+          echo "::endgroup::"
+
+      - name: Set up JDK ${{ env.JAVA_VERSION }} for Deployment
+        uses: actions/setup-java@v5
+        with:
+          distribution: 'temurin'
+          java-version: ${{ env.JAVA_VERSION }}
+          cache: maven
+          server-id: 'central'
+          server-username: MAVEN_USERNAME
+          server-password: MAVEN_PASSWORD
+          gpg-private-key: ${{ secrets.GPG_PRIVATE_KEY }}
+          gpg-passphrase: MAVEN_GPG_PASSPHRASE
+        env:
+          MAVEN_USERNAME: ${{ secrets.CENTRAL_USERNAME }}
+          MAVEN_PASSWORD: ${{ secrets.CENTRAL_PASSWORD }}
+          MAVEN_GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+
+      - name: Prepare Maven Wrapper
+        shell: bash
+        run: chmod +x ./mvnw
+
+      - name: Replace SNAPSHOT versions for release
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          python3 <<'PY'
+          from pathlib import Path
+          import os
+
+          repo_root = Path(os.environ["GITHUB_WORKSPACE"])
+          version_file = repo_root / "VERSION"
+          release_version = os.environ["RELEASE_VERSION"].strip()
+          snapshot_version = version_file.read_text(encoding="utf-8").splitlines()[0].strip()
+
+          if not snapshot_version:
+              raise SystemExit("VERSION file is empty")
+
+          print(f"=== Preparing release versions ===")
+          print(f"Snapshot version: {snapshot_version}")
+          print(f"Release version:  {release_version}")
+
+          # Update VERSION file
+          version_file.write_text(f"{release_version}\n", encoding="utf-8")
+
+          # Update all pom.xml files
+          updated_files = []
+          for pom_file in repo_root.rglob("pom.xml"):
+              original = pom_file.read_text(encoding="utf-8")
+              updated = original.replace(snapshot_version, release_version)
+              if updated != original:
+                  pom_file.write_text(updated, encoding="utf-8", newline="\n")
+                  updated_files.append(str(pom_file.relative_to(repo_root)))
+
+          if not updated_files:
+              raise SystemExit(f"No pom.xml files contained snapshot version {snapshot_version}")
+
+          print(f"Updated {len(updated_files)} pom.xml files:")
+          for path in updated_files:
+              print(f"  - {path}")
+
+          # Also update browser4-base.version if it references a SNAPSHOT of the same base
+          print(f"✅ Version replacement complete: {snapshot_version} → {release_version}")
+          PY
+
+      - name: Run Tests (if enabled)
+        id: tests
+        if: ${{ !inputs.skip_tests }}
+        shell: bash
+        run: |
+          echo "=== Running tests before deploy ==="
+          ./mvnw --batch-mode test --show-version --errors
+
+      - name: Deploy to Sonatype Central
+        if: success() || (steps.tests.outcome == 'skipped')
+        shell: bash
+        run: |
+          echo "=== Deploying to Maven Central ==="
+          echo ""
+          echo "Activating profiles: deploy, release"
+          echo "Modules: default reactor (21 library modules)"
+          echo ""
+          ./mvnw --batch-mode deploy -P deploy,release -DskipTests \
+            -Dgpg.passphrase="$GPG_PASSPHRASE" \
+            -Dgpg.batch=true \
+            -Dgpg.pinentry-mode=loopback \
+            --show-version --errors
+        env:
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+          MAVEN_USERNAME: ${{ secrets.CENTRAL_USERNAME }}
+          MAVEN_PASSWORD: ${{ secrets.CENTRAL_PASSWORD }}
+
+      - name: Deploy Summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## 🚀 Maven Central Deploy — ${{ needs.prepare.outputs.version }}"
+            echo ""
+            echo "| Field | Value |"
+            echo "|-------|-------|"
+            echo "| **Version** | \`${{ needs.prepare.outputs.version }}\` |"
+            echo "| **Tag** | \`${{ needs.prepare.outputs.tag }}\` |"
+            echo "| **Prerelease** | ${{ needs.prepare.outputs.is_prerelease }} |"
+            echo "| **Status** | ${{ job.status }} |"
+            echo ""
+            echo "### 📦 Published Modules (Maven Central)"
+            echo ""
+            echo "> **Group ID:** \`ai.platon.pulsar\`  "
+            echo "> **Version:** \`${{ needs.prepare.outputs.version }}\`"
+            echo ""
+            echo "**Core libraries:**"
+            echo ""
+            echo "| Artifact | Type | Description |"
+            echo "|----------|------|-------------|"
+            echo "| \`browser4-dependencies\` | pom | BOM — dependency management |"
+            echo "| \`browser4-common\` | jar | Common utilities |"
+            echo "| \`browser4-resources\` | jar | Resources and test resources |"
+            echo "| \`browser4-skeleton\` | jar | Plugin API skeleton |"
+            echo "| \`browser4-browser\` | jar | Browser abstraction (CDP) |"
+            echo "| \`browser4-protocol\` | jar | Protocol handlers |"
+            echo "| \`browser4-parse\` | jar | HTML parsing |"
+            echo ""
+            echo "**Agent & AI:**"
+            echo ""
+            echo "| Artifact | Type | Description |"
+            echo "|----------|------|-------------|"
+            echo "| \`browser4-agent-tools\` | jar | Agent tool executors (MCP) |"
+            echo "| \`browser4-agentic\` | jar | Agentic / AI layer |"
+            echo ""
+            echo "**Runtime:**"
+            echo ""
+            echo "| Artifact | Type | Description |"
+            echo "|----------|------|-------------|"
+            echo "| \`browser4-boot\` | jar | Spring Boot auto-configuration |"
+            echo "| \`browser4-rest\` | jar | REST API (MCP over HTTP) |"
+            echo ""
+            echo "**Plugin Development Kit:**"
+            echo ""
+            echo "| Artifact | Type | Description |"
+            echo "|----------|------|-------------|"
+            echo "| \`browser4-pdk\` | pom | PDK parent POM |"
+            echo "| \`browser4-pdk-bom\` | pom | PDK BOM — plugin dependency management |"
+            echo "| \`browser4-pdk-test-plugin\` | jar | PDK test reference plugin |"
+            echo "| \`browser4-plugin-archetype\` | jar | Maven archetype for new plugins |"
+            echo ""
+            echo "**Built-in plugins:**"
+            echo ""
+            echo "| Artifact | Type | Description |"
+            echo "|----------|------|-------------|"
+            echo "| \`browser4-captcha\` | jar | CAPTCHA solver |"
+            echo "| \`browser4-images\` | jar | Image processing |"
+            echo "| \`browser4-markdown\` | jar | Markdown export |"
+            echo "| \`browser4-media\` | jar | Media handling |"
+            echo "| \`browser4-pptx\` | jar | PPTX generation |"
+            echo ""
+            echo "**Testing:**"
+            echo ""
+            echo "| Artifact | Type | Description |"
+            echo "|----------|------|-------------|"
+            echo "| \`pulsar-tests-common\` | jar | Shared test utilities |"
+            echo ""
+            echo "### 🔗 Coordinates"
+            echo ""
+            echo "Add to your \`pom.xml\` to develop a Browser4 plugin:"
+            echo ""
+            echo '```xml'
+            echo '<dependencyManagement>'
+            echo '  <dependencies>'
+            echo '    <dependency>'
+            echo '      <groupId>ai.platon.pulsar</groupId>'
+            echo '      <artifactId>browser4-pdk-bom</artifactId>'
+            echo "      <version>${{ needs.prepare.outputs.version }}</version>"
+            echo '      <type>pom</type>'
+            echo '      <scope>import</scope>'
+            echo '    </dependency>'
+            echo '  </dependencies>'
+            echo '</dependencyManagement>'
+            echo ''
+            echo '<!-- Core plugin API -->'
+            echo '<dependency>'
+            echo '  <groupId>ai.platon.pulsar</groupId>'
+            echo '  <artifactId>browser4-skeleton</artifactId>'
+            echo '</dependency>'
+            echo ''
+            echo '<!-- Agent tools (optional) -->'
+            echo '<dependency>'
+            echo '  <groupId>ai.platon.pulsar</groupId>'
+            echo '  <artifactId>browser4-agent-tools</artifactId>'
+            echo '</dependency>'
+            echo '```'
+            echo ""
+            echo "> 📦 Published to [Maven Central](https://central.sonatype.com/) via Sonatype Central Portal"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  release-summary:
+    name: Release Summary
+    runs-on: ubuntu-latest
+    needs:
+      - prepare
+      - deploy
+    if: always()
+    permissions: {}
+
+    steps:
+      - name: Final Summary
+        shell: bash
+        run: |
+          {
+            echo "## 🏁 Maven Central Release — ${{ needs.prepare.outputs.version || 'N/A' }}"
+            echo ""
+            echo "| Step | Status |"
+            echo "|------|--------|"
+            echo "| Prepare | ${{ needs.prepare.result }} |"
+            echo "| Deploy | ${{ needs.deploy.result || 'skipped' }} |"
+            echo "| **Version** | \`${{ needs.prepare.outputs.version || 'N/A' }}\` |"
+            echo "| **Tag** | \`${{ needs.prepare.outputs.tag || 'N/A' }}\` |"
+            echo ""
+            if [ "${{ needs.deploy.result }}" = "success" ]; then
+              echo "✅ All library modules published to Maven Central."
+              echo ""
+              echo "Consumers can now depend on Browser4 artifacts without the full source tree:"
+              echo '```xml'
+              echo '<dependency>'
+              echo '  <groupId>ai.platon.pulsar</groupId>'
+              echo '  <artifactId>browser4-pdk</artifactId>'
+              echo "  <version>${{ needs.prepare.outputs.version }}</version>"
+              echo '</dependency>'
+              echo '```'
+            elif [ "${{ needs.deploy.result }}" = "failure" ]; then
+              echo "❌ Deployment failed. Review the Deploy job logs for details."
+            else
+              echo "⚠️ Deployment was skipped or cancelled."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
