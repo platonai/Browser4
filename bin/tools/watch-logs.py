@@ -133,6 +133,32 @@ def find_latest_log(directory: Path, pattern: str = "*.log",
     return None
 
 
+def copy_to_clipboard(text: str) -> bool:
+    """Copy *text* to the system clipboard. Returns True on success."""
+    if not text:
+        return False
+    try:
+        if sys.platform == "win32":
+            subprocess.run(
+                ["clip"], input=text, text=True,
+                creationflags=subprocess.CREATE_NO_WINDOW
+                if hasattr(subprocess, "CREATE_NO_WINDOW") else 0,
+                check=True,
+            )
+        elif sys.platform == "darwin":
+            subprocess.run(["pbcopy"], input=text, text=True, check=True)
+        else:
+            import shutil
+            for cmd in (["wl-copy"], ["xclip", "-selection", "clipboard"]):
+                if shutil.which(cmd[0]):
+                    subprocess.run(cmd, input=text, text=True, check=True)
+                    return True
+            return False
+        return True
+    except Exception:
+        return False
+
+
 def colorize_line(line: str) -> Text:
     """Apply Rich style to a log line based on severity level."""
     m = SEVERITY_RE.search(line)
@@ -514,6 +540,21 @@ class LogView(Container):
         """Toggle git log detail mode."""
         self.toggle_git_detail()
 
+    def action_copy(self) -> None:
+        """Copy buffer contents to the system clipboard."""
+        text = "\n".join(list(self._buffer))
+        if copy_to_clipboard(text):
+            self.notify(
+                f"Copied {len(self._buffer)} lines to clipboard",
+                timeout=2,
+            )
+        else:
+            self.notify(
+                "No clipboard tool found (install xclip/wl-clipboard on Linux)",
+                severity="warning",
+                timeout=3,
+            )
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Main App
@@ -571,6 +612,7 @@ class WatchLogsApp(App):
         Binding("g", "git_tab", "Git log"),
         Binding("space", "pause", "Pause"),
         Binding("c", "clear", "Clear"),
+        Binding("y", "copy", "Yank (copy)"),
         Binding("ctrl+f", "show_filter", "Filter"),
         Binding("escape", "clear_filter", "Clear filter", show=False),
         Binding("q", "quit", "Quit"),
@@ -672,6 +714,12 @@ class WatchLogsApp(App):
         view = self._active_view
         if view:
             view.action_clear()
+
+    def action_copy(self) -> None:
+        """Copy the active tab's buffer to clipboard."""
+        view = self._active_view
+        if view:
+            view.action_copy()
 
     def action_show_filter(self) -> None:
         """Show the filter input bar."""
