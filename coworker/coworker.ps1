@@ -399,7 +399,7 @@ function Invoke-Draft {
         exit 1
     }
 
-    $hasExplicitArgs = @($Title, $Content, $Prompt, $Name) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+    $hasExplicitArgs = @(@($Title, $Content, $Prompt, $Name) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
     if (-not $Interactive -and -not $NoInteractive -and $hasExplicitArgs.Count -eq 0 -and -not $Edit) {
         $Interactive = $true
     }
