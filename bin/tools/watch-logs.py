@@ -164,10 +164,14 @@ def copy_to_clipboard(text: str) -> bool:
     try:
         if sys.platform == "win32":
             subprocess.run(
-                ["clip"], input=text, text=True,
+                # clip.exe reads Unicode clipboard data as UTF-16LE. Passing
+                # text=True uses the active code page and can silently lose
+                # non-ASCII log messages while still returning success.
+                ["clip.exe"], input=text.encode("utf-16le"),
                 creationflags=subprocess.CREATE_NO_WINDOW
                 if hasattr(subprocess, "CREATE_NO_WINDOW") else 0,
                 check=True,
+                timeout=5,
             )
         elif sys.platform == "darwin":
             subprocess.run(["pbcopy"], input=text, text=True, check=True)
@@ -767,8 +771,6 @@ class LogView(Container):
             # Scrolled up — pin view N lines above the bottom
             start = max(0, total - visible_h - self._scroll_from_bottom)
 
-        visible = filtered[start : start + visible_h]
-
         # ── Update search matches (full filtered buffer) ────────────────────
         if self._search_pattern:
             try:
@@ -785,8 +787,7 @@ class LogView(Container):
 
         SEARCH_HIGHLIGHT = Style.parse("reverse bold yellow")
 
-        for i, line in enumerate(visible):
-            actual_idx = start + i
+        for actual_idx, line in enumerate(filtered):
 
             # Colorize
             if is_git:
@@ -823,6 +824,11 @@ class LogView(Container):
                     pass
 
             self.rich_log.write(text)
+
+        # RichLog owns the complete scrollback. Rebuilding only a
+        # viewport-sized slice discards the rest of the buffer and makes the
+        # viewer appear to contain only a few lines.
+        self.rich_log.scroll_to(y=start, animate=False, immediate=True)
 
         # ── Status label ────────────────────────────────────────────────────
         self._update_status(total, start, visible_h)
@@ -1167,6 +1173,11 @@ class WatchLogsApp(App):
         """Set up header and subtitle."""
         self.title = "Browser4 Log Dashboard"
         self.sub_title = str(self.repo_root.name)
+        # The hidden filter input otherwise retains focus and consumes
+        # single-key dashboard shortcuts such as y (copy).
+        if view := self._active_view:
+            if view.rich_log:
+                view.rich_log.focus()
         if not HAS_WATCHFILES:
             self.notify(
                 "watchfiles not installed — using polling fallback (pip install watchfiles)",
@@ -1183,7 +1194,7 @@ class WatchLogsApp(App):
         except Exception:
             return None
         for src in LOG_SOURCES:
-            if src["label"] == active:
+            if f"tab-{src['label']}" == active:
                 return self._log_views.get(src["label"])
         return None
 
@@ -1191,26 +1202,26 @@ class WatchLogsApp(App):
 
     def action_switch_tab(self, index: str) -> None:
         """Switch to a tab by number key (0-9)."""
-        i = int(index)
-        if 0 <= i < len(LOG_SOURCES):
-            label = LOG_SOURCES[i]["label"]
-            try:
-                tabs = self.query_one(TabbedContent)
-                tabs.active = label
-            except Exception:
-                pass
+        source = next((src for src in LOG_SOURCES if src["key"] == index), None)
+        if source is None:
+            return
+        try:
+            tabs = self.query_one(TabbedContent)
+            tabs.active = f"tab-{source['label']}"
+        except Exception:
+            pass
 
     def action_git_tab(self) -> None:
         """Switch to git tab, or toggle detail if already there."""
         try:
             tabs = self.query_one(TabbedContent)
-            if tabs.active == "git":
+            if tabs.active == "tab-git":
                 # Toggle detail mode
                 view = self._log_views.get("git")
                 if view:
                     view.action_toggle_git_detail()
             else:
-                tabs.active = "git"
+                tabs.active = "tab-git"
         except Exception:
             pass
 
@@ -1218,7 +1229,7 @@ class WatchLogsApp(App):
         """Switch to RWS test output tab."""
         try:
             tabs = self.query_one(TabbedContent)
-            tabs.active = "rws"
+            tabs.active = "tab-rws"
         except Exception:
             pass
 
@@ -1263,6 +1274,8 @@ class WatchLogsApp(App):
         view = self._active_view
         if view:
             view.action_set_filter("")
+            if view.rich_log:
+                view.rich_log.focus()
 
     # ── Scroll & search actions (routed to active view) ─────────────────────
 
@@ -1308,6 +1321,8 @@ class WatchLogsApp(App):
         inp = self.query_one("#filter-input", Input)
         if pattern:
             inp.value = pattern  # keep visible for reference
+        if view and view.rich_log:
+            view.rich_log.focus()
         self.notify(
             f"Filter: '{pattern}'" if pattern else "Filter cleared",
             timeout=2,
