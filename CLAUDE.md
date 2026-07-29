@@ -71,3 +71,8 @@ mvn test -pl browser4-rest -am -Dtest=MCPToolControllerTest
 | `mock_server.rs` | status test: `ctx.set_env()` canonical path |
 | `ArgumentNormalizersTest.kt` | 7 new tests |
 | `MCPToolControllerTest.kt` | 7 new focus-expression tests |
+
+## Development conventions
+
+- **Rust/Kotlin changes:** When the task touches Rust code (`cli/browser4-cli/`, `browser4-agentic/`, etc.) or the Kotlin/Spring backend (`browser4-rest/`, `browser4-core/`, Maven `pom.xml`), always use a git worktree (EnterWorktree) on a new branch.
+- **Everything else:** For docs (`.md`), PowerShell scripts (`.ps1`), Python scripts (`.py`), Node scripts, config files, and other non-compiled assets, **do not** create a branch or worktree — work directly in the current checkout. Commit directly to the current branch.
