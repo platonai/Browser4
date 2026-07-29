@@ -969,7 +969,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             hidden: false,
             batch_supported: true,
             args: &[
-                ArgDef { name: "ref", description: "Exact target element reference from the page snapshot", optional: false },
+                ArgDef { name: "ref", description: "Target element: snapshot ref (e5, backend:15) or CSS selector (#id, .class, tag[attr])", optional: false },
                 ArgDef { name: "button", description: "Button to click, defaults to left", optional: true },
             ],
             options: &[
@@ -995,7 +995,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             hidden: false,
             batch_supported: true,
             args: &[
-                ArgDef { name: "ref", description: "Exact target element reference from the page snapshot", optional: false },
+                ArgDef { name: "ref", description: "Target element: snapshot ref (e5, backend:15) or CSS selector (#id, .class, tag[attr])", optional: false },
                 ArgDef { name: "button", description: "Button to click, defaults to left", optional: true },
             ],
             options: &[
@@ -1025,7 +1025,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: true,
             args: &[
                 ArgDef { name: "startRef", description: "Exact source element reference from the page snapshot", optional: false },
-                ArgDef { name: "endRef", description: "Exact target element reference from the page snapshot", optional: false },
+                ArgDef { name: "endRef", description: "Target element: snapshot ref (e5, backend:15) or CSS selector (#id, .class, tag[attr])", optional: false },
             ],
             options: &[
                 OptionDef { name: "no-snapshot", description: "Skip the automatic post-command accessibility tree snapshot", is_bool: true, short: None },
@@ -1046,7 +1046,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             hidden: false,
             batch_supported: true,
             args: &[
-                ArgDef { name: "ref", description: "Exact target element reference from the page snapshot", optional: false },
+                ArgDef { name: "ref", description: "Target element: snapshot ref (e5, backend:15) or CSS selector (#id, .class, tag[attr])", optional: false },
                 ArgDef { name: "text", description: "Text to fill into the element", optional: false },
             ],
             options: &[
@@ -1073,7 +1073,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             category: Category::Mouse,
             hidden: false,
             batch_supported: true,
-            args: &[ArgDef { name: "ref", description: "Exact target element reference from the page snapshot", optional: false }],
+            args: &[ArgDef { name: "ref", description: "Target element: snapshot ref (e5, backend:15) or CSS selector (#id, .class, tag[attr])", optional: false }],
             options: &[
                 OptionDef { name: "no-snapshot", description: "Skip the automatic post-command accessibility tree snapshot", is_bool: true, short: None },
             ],
@@ -1088,7 +1088,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             hidden: false,
             batch_supported: true,
             args: &[
-                ArgDef { name: "ref", description: "Exact target element reference from the page snapshot", optional: false },
+                ArgDef { name: "ref", description: "Target element: snapshot ref (e5, backend:15) or CSS selector (#id, .class, tag[attr])", optional: false },
                 ArgDef { name: "val", description: "Value to select in the dropdown", optional: false },
             ],
             options: &[
@@ -1126,7 +1126,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             category: Category::Core,
             hidden: false,
             batch_supported: true,
-            args: &[ArgDef { name: "ref", description: "Exact target element reference from the page snapshot", optional: false }],
+            args: &[ArgDef { name: "ref", description: "Target element: snapshot ref (e5, backend:15) or CSS selector (#id, .class, tag[attr])", optional: false }],
             options: &[
                 OptionDef { name: "no-snapshot", description: "Skip the automatic post-command accessibility tree snapshot", is_bool: true, short: None },
             ],
@@ -1140,7 +1140,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             category: Category::Core,
             hidden: false,
             batch_supported: true,
-            args: &[ArgDef { name: "ref", description: "Exact target element reference from the page snapshot", optional: false }],
+            args: &[ArgDef { name: "ref", description: "Target element: snapshot ref (e5, backend:15) or CSS selector (#id, .class, tag[attr])", optional: false }],
             options: &[
                 OptionDef { name: "no-snapshot", description: "Skip the automatic post-command accessibility tree snapshot", is_bool: true, short: None },
             ],
@@ -1933,7 +1933,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             category: Category::Export,
             hidden: false,
             batch_supported: true,
-            args: &[ArgDef { name: "ref", description: "Exact target element reference from the page snapshot", optional: true }],
+            args: &[ArgDef { name: "ref", description: "Target element: snapshot ref (e5, backend:15) or CSS selector (#id, .class, tag[attr])", optional: true }],
             options: &[
                 OptionDef { name: "filename", description: "File name or path to save the screenshot to. Bare filenames are saved to the snapshot directory; paths (containing / or \\) are resolved relative to the current directory.", is_bool: false, short: None },
                 OptionDef { name: "full-page", description: "When true, takes a screenshot of the full scrollable page", is_bool: true, short: None },

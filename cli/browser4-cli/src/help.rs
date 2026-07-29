@@ -129,7 +129,7 @@ pub fn generate_help() -> String {
     // Common workflows — show the 5 most common patterns
     lines.push("\nCommon workflows:".to_string());
     lines.push("  Navigate & inspect:".to_string());
-    lines.push("    goto <url>  →  snapshot -v 0  →  click <ref>  →  snapshot -v 0    # -v 0 = top-of-page chunk".to_string());
+    lines.push("    goto <url>  →  snapshot -v 0  →  click <ref>  →  snapshot -v 0    # -v 0 = current viewport".to_string());
     lines.push("  Extract data:".to_string());
     lines.push("    htmlsnapshot get text \"<css>\"           # single field".to_string());
     lines.push("    htmlsnapshot query --sql @query.sql       # structured extraction".to_string());

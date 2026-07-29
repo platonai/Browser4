@@ -995,7 +995,7 @@ async fn post_command_snapshot(client: &Client, base_url: &str, session_id: &str
 
     let out_path = resolve_output_path(None, "snapshot", "yml");
     // Prepend a header comment documenting the snapshot.
-    let header = "# Auto-snapshot after command — full viewport (viewport 0).\n\
+    let header = "# Auto-snapshot after command — current viewport.\n\
                   # Use `browser4-cli snapshot grep <pattern>` to search the tree.\n";
     let snap_with_header = format!("{}\n{}", header, snap_result);
     if let Err(e) = save_snapshot(&out_path, &snap_with_header) {
@@ -3286,6 +3286,11 @@ async fn handle_list(client: &Client, base_url: &str, verbose: bool) -> Result<(
 
     cli_println!("{}", table.render().trim_end());
 
+    // Show empty-state message when no sessions are active
+    if rows.is_empty() {
+        cli_println!("\nNo active browser sessions.");
+    }
+
     // Explain the (default) session if present — new users often wonder
     // where it came from.
     let has_default = rows.iter().any(|r| r.name == "(default)");
@@ -4117,7 +4122,7 @@ async fn handle_snapshot(
         )
     } else {
         format!(
-            "# Snapshot — full viewport (viewport 0 by default).\n\
+            "# Snapshot — current viewport (use -v N for other viewports, -v all for full page).\n\
              # Use `browser4-cli snapshot grep <pattern>` to search the tree.\n"
         )
     };
@@ -4265,15 +4270,15 @@ async fn handle_snapshot(
             let preview_lines: Vec<&str> = snap
                 .lines()
                 .filter(|line| !line.starts_with('#') && !line.trim().is_empty())
-                .take(10)
+                .take(30)
                 .collect();
             if !preview_lines.is_empty() {
                 eprintln!("\n--- Snapshot preview (first {} lines) ---", preview_lines.len());
                 for line in &preview_lines {
                     eprintln!("{}", line);
                 }
-                if snap.lines().filter(|l| !l.starts_with('#') && !l.trim().is_empty()).count() > 10 {
-                    eprintln!("... (use --stdout or open the file for full content)");
+                if snap.lines().filter(|l| !l.starts_with('#') && !l.trim().is_empty()).count() > 30 {
+                    eprintln!("... (use --stdout for full output, --page N for more)");
                 }
                 eprintln!("---");
             }
@@ -4291,10 +4296,9 @@ async fn handle_snapshot(
         if is_nonzero_viewport && snap_lines <= 20 && !json_active() {
             eprintln!(
                 "⚠️  Viewport snapshot for '{}' contains only {} lines ({} nodes). \
-                 The accessibility tree may not have been re-expanded after scrolling. \
-                 This is a known server-side limitation. As a workaround, use \
-                 `snapshot -v 0` for the current viewport or `snapshot grep <pattern>` \
-                 to search the full tree.",
+                 The page may not have rendered content at this viewport yet. \
+                 Try `snapshot -v 0` for the current visible area or \
+                 `snapshot grep <pattern>` to search the full tree.",
                 viewport_val, snap_lines, snap_lines
             );
         }
@@ -4322,7 +4326,7 @@ async fn handle_snapshot(
         if snap_len > 10_240 && !has_filter {
             eprintln!(
                 "\n💡 Tip: Snapshot is large ({} KB, {} lines). To focus the output, read the page viewport by viewport — just like a human scrolls. Important content usually comes first:\n\
-                   --viewport, -v <N>       Capture a specific viewport (start with -v 0)\n\
+                   --viewport, -v <N>       Capture a specific viewport (-v 0 = current, -v 1 = next below)\n\
                    -s, --selector <CSS>     Scope to a CSS selector\n\
                    -i, --interactive        Only show interactive elements\n\
                    -d, --depth <N>           Limit tree depth\n\
@@ -7498,17 +7502,16 @@ fn run_grep_on_source(
             }
         }
 
-        let prefix = if show_line_numbers {
-            format!("{}:", line_idx + 1)
+        let is_match = matched_indices.contains(&line_idx);
+        // Standard grep convention: ':' marks matching lines, '-' marks context.
+        let marker = if is_match { ":" } else { "-" };
+        let line_num = if show_line_numbers {
+            format!("{}{}", line_idx + 1, marker)
         } else {
             String::new()
         };
 
-        if matched_indices.contains(&line_idx) {
-            output_parts.push(format!("{}{}", prefix, lines[line_idx]));
-        } else {
-            output_parts.push(format!("{}-{}", prefix, lines[line_idx]));
-        }
+        output_parts.push(format!("{}{}", line_num, lines[line_idx]));
         last_printed = Some(line_idx);
     }
 
