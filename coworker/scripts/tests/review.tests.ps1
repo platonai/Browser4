@@ -760,7 +760,7 @@ Describe 'Move-IssuesFileToReady' {
 
         $destPath | Should -Not -BeNullOrEmpty
         Test-Path -LiteralPath $destPath | Should -BeTrue
-        $destPath | Should -Match '1ready\\test-review\.issues\.md$'
+        $destPath | Should -Match '1ready[\\/]test-review\.issues\.md$'
         Test-Path -LiteralPath $sourcePath | Should -BeFalse
     }
 
